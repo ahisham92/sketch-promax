@@ -1,6 +1,6 @@
 # Sketch ProMax
 
-An AI agent for Autodesk Revit 2024, 2025 and 2026, powered by Claude. Ask in plain language; it reads, documents, audits and edits the open model through 77 tools. It asks for your approval before every change, and every change can be undone with Ctrl+Z.
+An AI agent for Autodesk Revit 2024, 2025, 2026 and 2027, powered by Claude. Ask in plain language; it reads, documents, audits and edits the open model through 80 tools. It asks for your approval before every change, and every change can be undone with Ctrl+Z.
 
 See [docs/PLAN.md](docs/PLAN.md) for the comparison with SketchPro, the roadmap and the architecture.
 
@@ -18,10 +18,10 @@ If your company manages your Claude account, IT may need to allow the desktop ap
 
 ## Install
 
-Requirements: Windows, Revit 2024/2025/2026, and the .NET 8 SDK to build.
+Requirements: Windows, Revit 2024 to 2027, and the .NET 8 and .NET 10 SDKs to build.
 
 ```powershell
-.\build.ps1      # builds the add-in for 2024, 2025, 2026 and the desktop-app connector into .\dist
+.\build.ps1      # builds the add-in for 2024 to 2027 and the desktop-app connector into .\dist
 .\install.ps1    # installs for your user, no admin needed
 ```
 
@@ -45,7 +45,7 @@ To publish an update: bump `<Version>` in both project files and push to `main`.
 
 **Documentation:**
 - Tag any category in a view (doors, windows, rooms, equipment...)
-- Dimension grids, walls, and door/window openings
+- Dimension grids, walls, and door/window openings; spot elevations on floors and roofs
 - Create floor, ceiling and structural plans per level with templates and naming patterns
 - Duplicate views
 - Apply view templates
@@ -57,7 +57,7 @@ To publish an update: bump `<Version>` in both project files and push to `main`.
 - Sections (along a line or through elements), building elevations (N/S/E/W), interior elevations per room, callouts, 3D views with section boxes
 - Visibility/graphics: hide, show or isolate categories and elements, color/halftone/transparency overrides, detail level, crop to elements, scope boxes
 - Text notes, detail lines and filled regions in any view
-- Align tags, turn leaders on/off, and find overlapping tags
+- Align tags, turn leaders on/off, find overlapping tags and move them apart
 - Format schedules: fields, headings, filters, sorting/grouping, itemize, totals
 - Drawing list (sheet index) schedule, placed on a sheet
 - Print to PDF; export DWG, IFC, Navisworks NWC and PNG/JPG images
@@ -72,6 +72,7 @@ To publish an update: bump `<Version>` in both project files and push to `main`.
 - Straight-run stairs with railings, railings along any path, room separation lines
 - Materials: create, color and assign (by parameter or by painting faces)
 - Ducts, pipes, cable trays and conduits along a path, with elbows
+- Curtain wall grid layouts at set spacings
 
 **View filters:** create rule-based filters, apply them to views or templates with colors, halftone, transparency or hide, and color-code a view by any parameter in one step (e.g. doors by fire rating) with a legend.
 
@@ -80,11 +81,13 @@ To publish an update: bump `<Version>` in both project files and push to `main`.
 - Redraw a hand sketch as clean linework in a drafting view
 - Place pictures or PDF pages into views and sheets
 
-**Several models:** list every connected Revit window and its open models, and switch between them by name, across Revit 2024, 2025 and 2026.
+**Several models:** list every connected Revit window and its open models, and switch between them by name, across Revit 2024 to 2027.
 
 **Linked models and families:** list links and query elements inside them; load families from a file or by searching Revit's content library.
 
 **Recipes and activity log:** save a workflow that worked as a recipe and rerun it later without the AI (with blanks like {level} filled in each time). Every tool call is logged per day in `%APPDATA%\SketchProMax\logs`, so Claude can report what it changed.
+
+**Coordination:** write issues (elements, snapshot and camera) to a BCF file for ACC, Navisworks, Solibri or BIMcollab.
 
 **Anything else:** Claude can write and run short Revit API code (C#) for what no dedicated tool covers, such as stairs, railings, materials, curtain walls or MEP. Read-only code runs freely; code that changes the model is shown to you first and is one Undo step.
 
@@ -116,12 +119,12 @@ To publish an update: bump `<Version>` in both project files and push to `main`.
 ```
 build.ps1 / install.ps1      Build everything into .\dist / install for the current user
 .github/workflows/release.yml  Publishes a GitHub Release for each new version on main
-src/SketchProMax/            The Revit add-in (net48 for Revit 2024, net8.0-windows for 2025/2026)
+src/SketchProMax/            The Revit add-in (net48 for Revit 2024, net8.0-windows for 2025/2026, net10.0-windows for 2027)
   App.cs                     Ribbon (Status, Settings), dispatcher, desktop-app bridge
   Agent/SystemPrompt         Instructions the desktop app receives from the connector
   Bridge/BridgeServer        Per-Revit-window named-pipe server the connector talks to
   Revit/                     Main-thread dispatcher (ExternalEvent), helpers, Revit 2024 dependency loader
-  Tools/                     The 75 IRevitTool implementations and the registry (CodeTools compiles C# with Roslyn)
+  Tools/                     The 78 IRevitTool implementations and the registry (CodeTools compiles C# with Roslyn)
   UI/                        Settings dialog
   Settings/                  Per-user settings (approval switch, auto-update, firm standards)
   Update/Updater             Self-update from GitHub Releases
@@ -137,4 +140,4 @@ src/SketchProMax.Mcp/        MCP server (stdio) the Claude desktop app launches;
 
 ## Status
 
-The add-in compiles for Revit 2024, 2025 and 2026, and the desktop-app connector has been tested end to end against a simulated Revit. It has not been run inside a real Revit session yet, so expect small fixes on first launch.
+The add-in compiles for Revit 2024 to 2027, and the desktop-app connector has been tested end to end against a simulated Revit. It has not been run inside a real Revit session yet, so expect small fixes on first launch.

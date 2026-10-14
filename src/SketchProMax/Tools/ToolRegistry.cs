@@ -101,6 +101,9 @@ public sealed class ToolRegistry
         new SetMaterialTool(),
         new CreateMepRunsTool(),
         new DimensionOpeningsTool(),
+        new AddSpotElevationsTool(),
+        new SetCurtainGridTool(),
+        new ExportBcfTool(),
 
         // Activity log
         new GetActivityLogTool(),

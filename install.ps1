@@ -1,5 +1,5 @@
 # Installs Sketch ProMax for the current Windows user (no admin rights needed):
-#   1. Copies the add-in into each installed Revit version's add-ins folder (2024, 2025, 2026).
+#   1. Copies the add-in into each installed Revit version's add-ins folder (2024 to 2027).
 #   2. Copies the MCP server to %LOCALAPPDATA%\SketchProMax\mcp.
 #   3. Registers it with the Claude desktop app, if installed, so you can chat at no extra cost.
 # Run .\build.ps1 first. Close Revit and the Claude desktop app before installing.
@@ -11,7 +11,7 @@ if (-not (Test-Path $dist)) { throw "Run .\build.ps1 first." }
 # Revit 2024 (.NET Framework) refuse to load them. Clear it.
 Get-ChildItem $PSScriptRoot -Recurse -File | Unblock-File
 
-foreach ($v in 2024, 2025, 2026) {
+foreach ($v in 2024, 2025, 2026, 2027) {
     $src = Join-Path $dist "Revit$v"
     $addins = Join-Path $env:APPDATA "Autodesk\Revit\Addins\$v"
     if (-not (Test-Path $src)) { continue }

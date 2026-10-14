@@ -230,14 +230,14 @@ public sealed class ArrangeTagsTool : IRevitTool
 {
     public string Name => "arrange_tags";
     public string Description =>
-        "Tidy tags in a view: report overlapping tags, align tag heads in a row or column (left/right/top/bottom or " +
+        "Tidy tags in a view: report overlapping tags, move overlapping tags apart (fix_overlaps), align tag heads in a row or column (left/right/top/bottom or " +
         "center lines), or turn leaders on/off. Pick tags by id, or all tags of a tag category in the view (e.g. 'Door Tags', 'Room Tags').";
     public string PropertiesJson => """
     {
       "view_id": {"type": "integer"},
       "tag_ids": {"type": "array", "items": {"type": "integer"}},
       "tag_category": {"type": "string"},
-      "action": {"type": "string", "enum": ["report_overlaps", "align_left", "align_right", "align_top", "align_bottom", "align_horizontal_center", "align_vertical_center", "leaders_on", "leaders_off"]}
+      "action": {"type": "string", "enum": ["report_overlaps", "fix_overlaps", "align_left", "align_right", "align_top", "align_bottom", "align_horizontal_center", "align_vertical_center", "leaders_on", "leaders_off"]}
     }
     """;
     public string[] Required => ["action"];
@@ -276,6 +276,34 @@ public sealed class ArrangeTagsTool : IRevitTool
         }
 
         using var t = RevitHelpers.StartTransaction(doc, "Arrange tags");
+        if (action == "fix_overlaps")
+        {
+            var moved = new HashSet<long>();
+            for (var pass = 0; pass < 6; pass++)
+            {
+                var boxes = tags.Select(x => (Tag: x, Box: x.get_BoundingBox(view))).Where(x => x.Box != null)
+                    .OrderBy(x => x.Box.Min.Y).ThenBy(x => x.Box.Min.X).ToList();
+                var any = false;
+                for (var i = 0; i < boxes.Count; i++)
+                    for (var j = i + 1; j < boxes.Count; j++)
+                    {
+                        BoundingBoxXYZ a = boxes[i].Box, b = boxes[j].Box;
+                        if (!(a.Min.X < b.Max.X && b.Min.X < a.Max.X && a.Min.Y < b.Max.Y && b.Min.Y < a.Max.Y)) continue;
+                        // Push the upper tag up just clear of the lower one, with a small gap; leaders keep it tied to its element.
+                        var shift = a.Max.Y - b.Min.Y + (a.Max.Y - a.Min.Y) * 0.15;
+                        var tag = boxes[j].Tag;
+                        if (!tag.HasLeader) tag.HasLeader = true;
+                        tag.TagHeadPosition += view.UpDirection * shift;
+                        boxes[j] = (tag, new BoundingBoxXYZ { Min = b.Min + XYZ.BasisY * shift, Max = b.Max + XYZ.BasisY * shift });
+                        moved.Add(tag.Id.Value);
+                        any = true;
+                    }
+                if (!any) break;
+                doc.Regenerate();
+            }
+            t.Commit();
+            return ToolResult.Ok(new { moved = moved.Count, ids = moved });
+        }
         if (action is "leaders_on" or "leaders_off")
         {
             foreach (var tag in tags) tag.HasLeader = action == "leaders_on";

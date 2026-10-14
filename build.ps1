@@ -1,11 +1,11 @@
 # Builds Sketch ProMax for every supported Revit version, plus the MCP server for the Claude desktop app.
 # Output goes to .\dist\ :
-#   dist\Revit2024\, dist\Revit2025\, dist\Revit2026\   add-in builds
+#   dist\Revit2024\ ... dist\Revit2027\   add-in builds
 #   dist\mcp\SketchProMax.Mcp.exe                       self-contained MCP server (no .NET install needed)
-# Usage: .\build.ps1 [-Configuration Release] [-Versions 2024,2025,2026]
+# Usage: .\build.ps1 [-Configuration Release] [-Versions 2024,2025,2026,2027]
 param(
     [string]$Configuration = "Release",
-    [int[]]$Versions = @(2024, 2025, 2026)
+    [int[]]$Versions = @(2024, 2025, 2026, 2027)
 )
 $ErrorActionPreference = "Stop"
 $dist = Join-Path $PSScriptRoot "dist"

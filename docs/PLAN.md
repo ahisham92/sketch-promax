@@ -24,7 +24,7 @@ Sources: [sketchpro.ai](https://sketchpro.ai/), [SketchPro Academy](https://sket
 ## 2. Scope decided (14 Oct 2026)
 
 - **Standalone:** Sketch ProMax must cover SketchPro's documentation work on its own, not just add to it.
-- **Revit 2024, 2025 and 2026.**
+- **Revit 2024, 2025, 2026 and 2027.**
 - **No extra cost:** chat from the Claude desktop app on the existing Claude plan. There is no in-Revit chat, since that would need a paid API key.
 - **Out of scope for now:** embodied carbon and building-code rule packs.
 
@@ -59,12 +59,12 @@ Sources: [sketchpro.ai](https://sketchpro.ai/), [SketchPro Academy](https://sket
 2. **Open.** Any `IRevitTool` you write appears in both chat surfaces. SketchPro has no public API.
 3. **Models, not just documents.** Levels, grids, walls, floors, roofs, openings, structure and furniture from a description.
 4. **Visual QA.** Claude looks at rendered sheets, not just data.
-5. **Revit 2024 to 2026 from one codebase,** and the model and data path are yours to choose.
+5. **Revit 2024 to 2027 from one codebase,** and the model and data path are yours to choose.
 6. **Transparent.** Every change is a named transaction with a confirm step, and tool calls are visible in the chat.
 
 ## 4. Roadmap
 
-**Done:** 65 Revit tools (documentation, modeling, view filters, images, views/graphics/annotation, schedules, exports, links, families, and a run-Revit-code catch-all), the desktop-app connector (MCP) with several Revit windows and versions at once, ribbon Status and Settings, self-update from GitHub Releases, and builds for Revit 2024/2025/2026.
+**Done:** 78 Revit tools (documentation, modeling, view filters, images, views/graphics/annotation, schedules, exports, links, families, stairs/railings/materials/MEP, BCF, recipes and activity log, and a run-Revit-code catch-all), the desktop-app connector (MCP) with several Revit windows and versions at once, ribbon Status and Settings, self-update from GitHub Releases, and builds for Revit 2024 to 2027.
 
 **Next (documentation depth):** dimension openings and room widths, elevation and section creation, interior elevations per room, legends and keynotes, schedule formatting (filters, grouping, totals), sheet-index and drawing-list automation, align/tidy tags (using visual QA), linked-model queries, a conversation log export.
 
@@ -101,7 +101,7 @@ Key decisions:
 - **Deterministic where it matters.** QA checks and future code checks are plain code. Claude interprets, explains and fixes; it doesn't do the counting.
 - **One front end: the Claude desktop app.** Each Revit window announces itself with a file in `%APPDATA%\SketchProMax\sessions` and listens on its own pipe. The connector pings them, drops stale ones, and routes calls to the window and model the user named (`list_revit_models`, `use_revit_model`), or to the only one open.
 - **No secrets.** No API key is stored or needed.
-- **Targets.** Revit 2024 (.NET Framework 4.8), 2025 and 2026 (.NET 8) build from the same source with `-p:RevitVersion=` (or `build.ps1` for all three). Modern C# on 4.8 comes from compiler polyfills (PolySharp). Revit 2027 (.NET 10) is wired in the project file but needs the .NET 10 SDK to build.
+- **Targets.** Revit 2024 (.NET Framework 4.8), 2025 and 2026 (.NET 8) and 2027 (.NET 10) build from the same source with `-p:RevitVersion=` (or `build.ps1` for all four). Modern C# on 4.8 comes from compiler polyfills (PolySharp).
 
 ## 6. Risks and open questions
 
