@@ -27,6 +27,7 @@ public sealed class App : IExternalApplication
         Dispatcher.Initialize();
         Bridge = new BridgeServer(ToolRegistry.CreateDefault(), Dispatcher, application.ControlledApplication.VersionNumber);
         Bridge.Start();
+        _ = Task.Run(() => ClaudeRegistration.Ensure());
         if (AgentSettings.Load().AutoUpdate) _ = Task.Run(CheckForUpdateAsync);
 
         const string tab = "Sketch ProMax";

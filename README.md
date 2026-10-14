@@ -25,7 +25,7 @@ Requirements: Windows, Revit 2024 to 2027, and the .NET 8 and .NET 10 SDKs to bu
 .\install.ps1    # installs for your user, no admin needed
 ```
 
-`install.ps1` copies the add-in into each installed Revit version, installs the connector to `%LOCALAPPDATA%\SketchProMax\mcp`, and registers it with the Claude desktop app if it's installed (your existing config is backed up to `claude_desktop_config.json.bak`).
+`install.ps1` copies the add-in into each installed Revit version, installs the connector to `%LOCALAPPDATA%\SketchProMax\mcp`, and registers it with the Claude desktop app, including the Microsoft Store version (your existing config is backed up to `claude_desktop_config.json.bak`). Revit repeats the registration at every start, so installing the Claude app later also works.
 
 Then:
 1. Start Revit, choose **Always Load**, and open a model. The **Sketch ProMax** tab appears on the ribbon.

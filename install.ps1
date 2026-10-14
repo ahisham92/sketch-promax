@@ -28,16 +28,33 @@ Copy-Item (Join-Path $dist "mcp\*") $mcpDir -Recurse -Force
 $exe = Join-Path $mcpDir "SketchProMax.Mcp.exe"
 Write-Host "Installed MCP server: $exe" -ForegroundColor Green
 
-$claudeDir = Join-Path $env:APPDATA "Claude"
-if (Test-Path $claudeDir) {
+# The Claude desktop app keeps its config in %APPDATA%\Claude, or, for the Microsoft Store / MSIX build,
+# in %LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude. Register in every place that exists, and
+# always in %APPDATA%\Claude so a later install of the app finds it too.
+$claudeDirs = @(Join-Path $env:APPDATA "Claude")
+$packages = Join-Path $env:LOCALAPPDATA "Packages"
+if (Test-Path $packages) {
+    Get-ChildItem $packages -Directory -Filter "Claude*" | ForEach-Object {
+        $claudeDirs += Join-Path $_.FullName "LocalCache\Roaming\Claude"
+    }
+}
+
+foreach ($claudeDir in $claudeDirs) {
+    New-Item -ItemType Directory -Force -Path $claudeDir | Out-Null
     $configPath = Join-Path $claudeDir "claude_desktop_config.json"
-    $config = if (Test-Path $configPath) { Get-Content $configPath -Raw | ConvertFrom-Json } else { [pscustomobject]@{} }
+    $config = [pscustomobject]@{}
+    if (Test-Path $configPath) {
+        $text = Get-Content $configPath -Raw
+        if ($text -and $text.Trim()) {
+            try { $config = $text | ConvertFrom-Json }
+            catch { Write-Warning "Skipping $configPath because it isn't valid JSON. Fix it, then run this again."; continue }
+        }
+        Copy-Item $configPath "$configPath.bak" -Force
+    }
     if (-not $config.PSObject.Properties["mcpServers"]) { $config | Add-Member mcpServers ([pscustomobject]@{}) }
     $config.mcpServers | Add-Member -Force "sketch-promax" ([pscustomobject]@{ command = $exe })
-    if (Test-Path $configPath) { Copy-Item $configPath "$configPath.bak" -Force }
     # Write without a byte-order mark; the Claude app rejects JSON that starts with one.
     [IO.File]::WriteAllText($configPath, ($config | ConvertTo-Json -Depth 10), (New-Object Text.UTF8Encoding $false))
-    Write-Host "Registered with the Claude desktop app. Restart it to load the Revit tools." -ForegroundColor Green
-} else {
-    Write-Host "Claude desktop app not found. Install it from https://claude.ai/download, then run this script again."
+    Write-Host "Registered with the Claude desktop app: $configPath" -ForegroundColor Green
 }
+Write-Host "Quit the Claude desktop app completely (system tray > Quit) and open it again to load the Revit tools." -ForegroundColor Green
