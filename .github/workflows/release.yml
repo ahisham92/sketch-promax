@@ -1,59 +1,69 @@
-# Builds Sketch ProMax on Windows and publishes it as a GitHub Release when a version tag (v0.6.0, ...) is pushed.
+# Publishes Sketch ProMax as a GitHub Release whenever main carries a version that has no release yet.
+# To ship an update: bump <Version> in both project files and push to main.
 # Installed copies of the add-in check the latest release when Revit starts and update themselves.
 name: Release
 
 on:
   push:
-    tags: ['v*']
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: write
 
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   release:
     runs-on: windows-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
 
+      - name: Read version and check for an existing release
+        id: version
+        shell: pwsh
+        run: |
+          $addin = ([xml](Get-Content src/SketchProMax/SketchProMax.csproj)).Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
+          $mcp = ([xml](Get-Content src/SketchProMax.Mcp/SketchProMax.Mcp.csproj)).Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
+          if ($addin -ne $mcp) { throw "Version mismatch: add-in $addin, connector $mcp" }
+          "version=$addin" >> $env:GITHUB_OUTPUT
+          gh release view "v$addin" --repo "${{ github.repository }}" *> $null
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "Release v$addin already exists; nothing to publish."
+            "exists=true" >> $env:GITHUB_OUTPUT
+          } else {
+            "exists=false" >> $env:GITHUB_OUTPUT
+          }
+          exit 0
+
       - uses: actions/setup-dotnet@v4
+        if: steps.version.outputs.exists == 'false'
         with:
           dotnet-version: '8.0.x'
 
-      - name: Check the tag matches the project version
-        if: startsWith(github.ref, 'refs/tags/')
-        shell: pwsh
-        run: |
-          $tag = "${{ github.ref_name }}".TrimStart('v')
-          $version = ([xml](Get-Content src/SketchProMax/SketchProMax.csproj)).Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
-          if ($tag -ne $version) { throw "Tag $tag does not match <Version>$version</Version> in SketchProMax.csproj" }
-
       - name: Build add-in (2024, 2025, 2026) and connector
+        if: steps.version.outputs.exists == 'false'
         shell: pwsh
         run: .\build.ps1
 
       - name: Package
+        if: steps.version.outputs.exists == 'false'
         shell: pwsh
         run: |
-          $version = ([xml](Get-Content src/SketchProMax/SketchProMax.csproj)).Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
           $pkg = "package\SketchProMax"
           New-Item -ItemType Directory -Force $pkg | Out-Null
           Copy-Item dist $pkg -Recurse
           Get-ChildItem $pkg -Recurse -Filter *.pdb | Remove-Item
           Copy-Item install.ps1, Install.cmd, README.md $pkg
-          Compress-Archive -Path $pkg -DestinationPath "SketchProMax-$version.zip"
-          "VERSION=$version" >> $env:GITHUB_ENV
+          Compress-Archive -Path $pkg -DestinationPath "SketchProMax-${{ steps.version.outputs.version }}.zip"
 
       - name: Publish release
-        if: startsWith(github.ref, 'refs/tags/')
+        if: steps.version.outputs.exists == 'false'
         shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release create "${{ github.ref_name }}" "SketchProMax-$env:VERSION.zip" --title "Sketch ProMax $env:VERSION" --generate-notes
-
-      - name: Keep the package (manual runs)
-        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: SketchProMax-${{ env.VERSION }}
-          path: SketchProMax-*.zip
+        run: |
+          $v = "${{ steps.version.outputs.version }}"
+          gh release create "v$v" "SketchProMax-$v.zip" --repo "${{ github.repository }}" --target "${{ github.sha }}" --title "Sketch ProMax $v" --generate-notes

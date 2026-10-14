@@ -37,7 +37,7 @@ Revit must be running with a model open for the tools to work. With "Ask before 
 
 Install once; after that Sketch ProMax updates itself. Each time Revit starts it checks this repository's latest GitHub Release. When there is a newer version it downloads it in the background and shows a notice; the new version runs the next time you open Revit (and restart the Claude desktop app). Your settings are kept. Turn this off, or check right away, from the ribbon's **Settings** and **Status** buttons.
 
-To publish an update: bump `<Version>` in both project files, then push a matching tag (`git tag v0.6.1 && git push origin v0.6.1`). The Release workflow builds on Windows and attaches `SketchProMax-<version>.zip`.
+To publish an update: bump `<Version>` in both project files and push to `main`. The Release workflow builds on Windows and publishes `SketchProMax-<version>.zip` as a GitHub Release.
 
 ## What it can do
 
@@ -100,7 +100,7 @@ To publish an update: bump `<Version>` in both project files, then push a matchi
 
 ```
 build.ps1 / install.ps1      Build everything into .\dist / install for the current user
-.github/workflows/release.yml  Builds and publishes a GitHub Release when a v* tag is pushed
+.github/workflows/release.yml  Publishes a GitHub Release for each new version on main
 src/SketchProMax/            The Revit add-in (net48 for Revit 2024, net8.0-windows for 2025/2026)
   App.cs                     Ribbon (Status, Settings), dispatcher, desktop-app bridge
   Agent/SystemPrompt         Instructions the desktop app receives from the connector
