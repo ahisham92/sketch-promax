@@ -116,6 +116,10 @@ public sealed class ToolRegistry
         new SetCoordinatesTool(),
         new ConvertCoordinatesTool(),
         new PlaceManyTool(),
+        new CreateMepOpeningsTool(),
+        new CutSlabTool(),
+        new AddSlabEdgesTool(),
+        new HollowCoreLayoutTool(),
 
         // Activity log
         new GetActivityLogTool(),
