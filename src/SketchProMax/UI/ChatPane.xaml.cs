@@ -15,6 +15,7 @@ public partial class ChatPane : Page, IDockablePaneProvider, IAgentHost
 {
     private AgentSession? _session;
     private CancellationTokenSource? _cts;
+    private readonly List<string> _attachments = [];
 
     public ChatPane()
     {
@@ -33,7 +34,10 @@ public partial class ChatPane : Page, IDockablePaneProvider, IAgentHost
         var text = Input.Text.Trim();
         if (text.Length == 0 || _cts != null) return;
         Input.Clear();
-        AddBubble(text, isUser: true);
+        var files = _attachments.ToList();
+        _attachments.Clear();
+        AttachmentsText.Text = "";
+        AddBubble(files.Count == 0 ? text : text + $"\n📎 {string.Join(", ", files.Select(System.IO.Path.GetFileName))}", isUser: true);
 
         try
         {
@@ -52,7 +56,7 @@ public partial class ChatPane : Page, IDockablePaneProvider, IAgentHost
             // Run the loop off the UI thread; host callbacks marshal back via Dispatcher.
             var session = _session;
             var ct = _cts.Token;
-            await Task.Run(() => session.SendAsync(text, this, ct), ct);
+            await Task.Run(() => session.SendAsync(text, this, ct, files), ct);
         }
         catch (OperationCanceledException)
         {
@@ -72,6 +76,25 @@ public partial class ChatPane : Page, IDockablePaneProvider, IAgentHost
     }
 
     private void OnStop(object sender, RoutedEventArgs e) => _cts?.Cancel();
+
+    private void OnAttach(object sender, RoutedEventArgs e)
+    {
+        var dialog = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "Attach pictures or PDFs",
+            Filter = "Images and PDFs|*.png;*.jpg;*.jpeg;*.gif;*.webp;*.pdf",
+            Multiselect = true,
+        };
+        if (dialog.ShowDialog() != true) return;
+        foreach (var file in dialog.FileNames)
+        {
+            var size = new System.IO.FileInfo(file).Length;
+            var limit = file.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase) ? 30_000_000 : 5_000_000;
+            if (size > limit) { AddBubble($"{System.IO.Path.GetFileName(file)} is too large to send ({size / 1_000_000} MB).", isUser: false); continue; }
+            if (!_attachments.Contains(file)) _attachments.Add(file);
+        }
+        AttachmentsText.Text = _attachments.Count == 0 ? "" : "📎 " + string.Join(", ", _attachments.Select(System.IO.Path.GetFileName));
+    }
 
     private void OnNewChat(object sender, RoutedEventArgs e)
     {

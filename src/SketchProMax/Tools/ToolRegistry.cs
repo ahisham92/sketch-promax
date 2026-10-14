@@ -47,6 +47,15 @@ public sealed class ToolRegistry
         new CreateRevisionTool(),
         new CloudElementsTool(),
         new UpdateTextNotesTool(),
+        // View filters and graphics
+        new ListViewFiltersTool(),
+        new CreateViewFilterTool(),
+        new ApplyViewFilterTool(),
+        new ColorByParameterTool(),
+        // Images, sketches and families from references
+        new ImportImageTool(),
+        new CreateDraftingViewTool(),
+        new CreateFamilyFromShapesTool(),
         // Modeling
         new CreateLevelsTool(),
         new CreateGridsTool(),

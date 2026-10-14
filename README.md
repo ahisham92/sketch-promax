@@ -1,6 +1,6 @@
 # Sketch ProMax
 
-An AI agent for Autodesk Revit 2024, 2025 and 2026, powered by Claude. Ask in plain language; it reads, documents, audits and edits the open model through 44 Revit tools. It asks for your approval before every change, and every change can be undone with Ctrl+Z.
+An AI agent for Autodesk Revit 2024, 2025 and 2026, powered by Claude. Ask in plain language; it reads, documents, audits and edits the open model through 51 Revit tools. It asks for your approval before every change, and every change can be undone with Ctrl+Z.
 
 See [docs/PLAN.md](docs/PLAN.md) for the comparison with SketchPro, the roadmap and the architecture.
 
@@ -57,6 +57,13 @@ Revit must be running with a model open for the tools to work. With "Ask before 
 - Any loaded family (furniture, equipment, fixtures) placed with rotation
 - Move, copy and rotate elements
 
+**View filters:** create rule-based filters, apply them to views or templates with colors, halftone, transparency or hide, and color-code a view by any parameter in one step (e.g. doors by fire rating) with a legend.
+
+**Pictures, sketches and cut sheets:** attach photos or PDFs in the Revit chat (📎) or the desktop app.
+- Build a Revit family from a product photo or manufacturer cut sheet
+- Redraw a hand sketch as clean linework in a drafting view
+- Place pictures or PDF pages into views and sheets
+
 **Model data:** set parameters in bulk, place rooms automatically, duplicate types with new values, swap types, manage worksets, delete elements.
 
 **QA:** deterministic model audit (unplaced/unbounded/unnumbered rooms, duplicate room numbers, untagged doors and windows, views not on sheets, empty sheets) and visual review of rendered views and sheets.
@@ -66,6 +73,9 @@ Revit must be running with a model open for the tools to work. With "Ask before 
 ### Try
 
 - "What's in this model?"
+- "Color the Level 1 plan by room department and give me the legend."
+- (attach a chair cut sheet) "Make a family from this and place 6 in the meeting room."
+- (attach a sketch photo) "Turn this sketch into a 1:10 drafting view."
 - "Set up 4 levels at 3.5 m, a 5 x 4 grid at 8 m spacing, columns at every grid intersection and beams along the grids on each level."
 - "Draw a 20 x 12 m building on Level 1 with 300 mm walls, a floor, a 30-degree hip roof with 600 mm overhang, and 4 windows on the south wall."
 - "Create floor plans for every level using the 'A - Floor Plan' template, named 'A - {level} - GA'."
@@ -85,7 +95,7 @@ src/SketchProMax/            The Revit add-in (net48 for Revit 2024, net8.0-wind
   Agent/                     Claude tool-use loop for the in-Revit pane (Anthropic C# SDK) and agent instructions
   Bridge/BridgeServer        Named-pipe server the desktop-app connector talks to
   Revit/                     Main-thread dispatcher (ExternalEvent), helpers, Revit 2024 dependency loader
-  Tools/                     The 44 IRevitTool implementations and the registry
+  Tools/                     The 51 IRevitTool implementations and the registry
   UI/                        Chat pane and settings dialog
   Settings/                  Per-user settings, DPAPI-encrypted API key
 src/SketchProMax.Mcp/        MCP server (stdio) the Claude desktop app launches; forwards tool calls to Revit

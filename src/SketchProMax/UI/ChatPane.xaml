@@ -20,11 +20,16 @@
       <StackPanel x:Name="Transcript" />
     </ScrollViewer>
 
-    <TextBlock x:Name="StatusText" Grid.Row="2" Foreground="Gray" Margin="0,4" TextWrapping="Wrap" />
+    <StackPanel Grid.Row="2" Margin="0,4">
+      <TextBlock x:Name="AttachmentsText" Foreground="SteelBlue" TextWrapping="Wrap" />
+      <TextBlock x:Name="StatusText" Foreground="Gray" TextWrapping="Wrap" />
+    </StackPanel>
 
     <DockPanel Grid.Row="3">
       <Button x:Name="SendButton" DockPanel.Dock="Right" Content="Send" Width="70" Margin="6,0,0,0" Click="OnSend" />
       <Button x:Name="StopButton" DockPanel.Dock="Right" Content="Stop" Width="60" Margin="6,0,0,0" Click="OnStop" IsEnabled="False" />
+      <Button x:Name="AttachButton" DockPanel.Dock="Left" Content="📎" Width="32" Margin="0,0,6,0" Click="OnAttach"
+              ToolTip="Attach pictures or PDFs (product photos, cut sheets, sketches)" />
       <TextBox x:Name="Input" MinHeight="60" MaxHeight="160" AcceptsReturn="True" TextWrapping="Wrap"
                VerticalScrollBarVisibility="Auto" PreviewKeyDown="OnInputKeyDown"
                ToolTip="Ask Sketch ProMax. Enter to send, Shift+Enter for a new line." />

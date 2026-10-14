@@ -48,7 +48,11 @@ Sources: [sketchpro.ai](https://sketchpro.ai/), [SketchPro Academy](https://sket
 | Quick select | `query_elements` + `select_elements` |
 | Mentor mode | Ask "explain as you go"; Claude narrates each step |
 | Modeling (SketchPro: families from references only) | **Beyond SketchPro:** `create_levels`, `create_grids`, `create_walls`, `create_floors`, `create_ceilings`, `create_roof`, `place_doors_windows`, `place_family_instances`, `place_columns`, `place_beams`, `move_copy_rotate` |
-| Families from images/PDFs, rendering, web viewer, voice | Not yet |
+| Families from images/PDFs | `create_family_from_shapes` (Claude reads the photo or cut sheet, builds solids, loads the family) |
+| 2D drafting from a sketch | `create_drafting_view` (lines, polylines, circles, arcs, text, line styles) |
+| (not in SketchPro) View filters | `create_view_filter`, `apply_view_filter`, `color_by_parameter`, `list_view_filters` |
+| Images in Revit | `import_image` (pictures and PDF pages into views and sheets); 📎 attachments in the Revit chat |
+| Rendering, web viewer, voice | Not yet |
 
 **Where Sketch ProMax is already better:**
 1. **No extra cost.** It runs on your Claude plan through the desktop app. SketchPro is sold per seat behind a demo.
@@ -60,7 +64,7 @@ Sources: [sketchpro.ai](https://sketchpro.ai/), [SketchPro Academy](https://sket
 
 ## 4. Roadmap
 
-**Done:** the 44 tools above (documentation and modeling), the in-Revit pane, the desktop-app connector (MCP), install scripts, and builds for Revit 2024/2025/2026.
+**Done:** the 51 tools above (documentation, modeling, view filters, images), the in-Revit pane, the desktop-app connector (MCP), install scripts, and builds for Revit 2024/2025/2026.
 
 **Next (documentation depth):** dimension openings and room widths, elevation and section creation, interior elevations per room, legends and keynotes, schedule formatting (filters, grouping, totals), sheet-index and drawing-list automation, align/tidy tags (using visual QA), linked-model queries, a conversation log export.
 

@@ -1,3 +1,4 @@
+using System.IO;
 using System.Text.Json;
 using Anthropic;
 using Anthropic.Models.Beta.Messages;
@@ -45,9 +46,9 @@ public sealed class AgentSession
 
     public void Reset() => _history.Clear();
 
-    public async Task SendAsync(string userText, IAgentHost host, CancellationToken ct)
+    public async Task SendAsync(string userText, IAgentHost host, CancellationToken ct, IReadOnlyList<string>? attachments = null)
     {
-        _history.Add(new BetaMessageParam { Role = Role.User, Content = userText });
+        _history.Add(new BetaMessageParam { Role = Role.User, Content = UserContent(userText, attachments ?? []) });
 
         for (int round = 0; round < _settings.MaxToolRounds; round++)
         {
@@ -171,6 +172,43 @@ public sealed class AgentSession
             };
         }
         return new BetaToolResultBlockParam { ToolUseID = call.ID, Content = result.Text, IsError = result.IsError };
+    }
+
+    /// <summary>
+    /// The user's text plus any attached pictures or PDFs (product photos, cut sheets, sketches) so Claude can see them.
+    /// File paths are listed too, so tools like import_image can use the same files.
+    /// </summary>
+    private static BetaMessageParamContent UserContent(string text, IReadOnlyList<string> files)
+    {
+        if (files.Count == 0) return text;
+        var blocks = new List<BetaContentBlockParam>();
+        foreach (var file in files)
+        {
+            var data = Convert.ToBase64String(File.ReadAllBytes(file));
+            switch (Path.GetExtension(file).ToLowerInvariant())
+            {
+                case ".pdf":
+                    blocks.Add(new BetaRequestDocumentBlock { Source = new BetaBase64PdfSource { Data = data } });
+                    break;
+                case ".png":
+                    blocks.Add(new BetaImageBlockParam { Source = new BetaBase64ImageSource { Data = data, MediaType = MediaType.ImagePng } });
+                    break;
+                case ".gif":
+                    blocks.Add(new BetaImageBlockParam { Source = new BetaBase64ImageSource { Data = data, MediaType = MediaType.ImageGif } });
+                    break;
+                case ".webp":
+                    blocks.Add(new BetaImageBlockParam { Source = new BetaBase64ImageSource { Data = data, MediaType = MediaType.ImageWebP } });
+                    break;
+                default:
+                    blocks.Add(new BetaImageBlockParam { Source = new BetaBase64ImageSource { Data = data, MediaType = MediaType.ImageJpeg } });
+                    break;
+            }
+        }
+        blocks.Add(new BetaTextBlockParam
+        {
+            Text = text + "\n\n(Attached files on this computer: " + string.Join("; ", files) + ")",
+        });
+        return blocks;
     }
 
     private static BetaToolUnion ToToolDefinition(IRevitTool tool)

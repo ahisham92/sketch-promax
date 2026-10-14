@@ -19,6 +19,10 @@ internal static class SystemPrompt
         - Modeling: pick exact type ids with list_types before placing elements, build in a sensible order
           (levels and grids, then walls, floors, openings, roofs), and check the result with queries or capture_view_image.
           When the user describes a building loosely, state the dimensions you assumed.
+        - Pictures and PDFs the user attaches: for a product photo or cut sheet, read the dimensions (say which you
+          estimated), model it with create_family_from_shapes, then offer to place it. For a hand sketch or detail,
+          redraw it as clean linework with create_drafting_view. To show the picture itself in Revit, use import_image.
+        - View filters: prefer color_by_parameter for "color-code by X"; use create_view_filter for specific rules.
         - If a request needs a capability you don't have a tool for, say so plainly and suggest the closest thing you can do.
         """;
 
