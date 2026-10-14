@@ -47,18 +47,20 @@ Sources: [sketchpro.ai](https://sketchpro.ai/), [SketchPro Academy](https://sket
 | Firm standards knowledge base | Firm standards in Settings, applied in every conversation |
 | Quick select | `query_elements` + `select_elements` |
 | Mentor mode | Ask "explain as you go"; Claude narrates each step |
+| Modeling (SketchPro: families from references only) | **Beyond SketchPro:** `create_levels`, `create_grids`, `create_walls`, `create_floors`, `create_ceilings`, `create_roof`, `place_doors_windows`, `place_family_instances`, `place_columns`, `place_beams`, `move_copy_rotate` |
 | Families from images/PDFs, rendering, web viewer, voice | Not yet |
 
 **Where Sketch ProMax is already better:**
 1. **No extra cost.** It runs on your Claude plan through the desktop app. SketchPro is sold per seat behind a demo.
 2. **Open.** Any `IRevitTool` you write appears in both chat surfaces. SketchPro has no public API.
-3. **Visual QA.** Claude looks at rendered sheets, not just data.
-4. **Revit 2024 to 2026 from one codebase,** and the model and data path are yours to choose.
-5. **Transparent.** Every change is a named transaction with a confirm step, and tool calls are visible in the chat.
+3. **Models, not just documents.** Levels, grids, walls, floors, roofs, openings, structure and furniture from a description.
+4. **Visual QA.** Claude looks at rendered sheets, not just data.
+5. **Revit 2024 to 2026 from one codebase,** and the model and data path are yours to choose.
+6. **Transparent.** Every change is a named transaction with a confirm step, and tool calls are visible in the chat.
 
 ## 4. Roadmap
 
-**Done:** the 34 tools above, the in-Revit pane, the desktop-app connector (MCP), install scripts, and builds for Revit 2024/2025/2026.
+**Done:** the 44 tools above (documentation and modeling), the in-Revit pane, the desktop-app connector (MCP), install scripts, and builds for Revit 2024/2025/2026.
 
 **Next (documentation depth):** dimension openings and room widths, elevation and section creation, interior elevations per room, legends and keynotes, schedule formatting (filters, grouping, totals), sheet-index and drawing-list automation, align/tidy tags (using visual QA), linked-model queries, a conversation log export.
 

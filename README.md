@@ -1,6 +1,6 @@
 # Sketch ProMax
 
-An AI agent for Autodesk Revit 2024, 2025 and 2026, powered by Claude. Ask in plain language; it reads, documents, audits and edits the open model through 34 Revit tools. It asks for your approval before every change, and every change can be undone with Ctrl+Z.
+An AI agent for Autodesk Revit 2024, 2025 and 2026, powered by Claude. Ask in plain language; it reads, documents, audits and edits the open model through 44 Revit tools. It asks for your approval before every change, and every change can be undone with Ctrl+Z.
 
 See [docs/PLAN.md](docs/PLAN.md) for the comparison with SketchPro, the roadmap and the architecture.
 
@@ -49,7 +49,15 @@ Revit must be running with a model open for the tools to work. With "Ask before 
 - Edit and translate text notes (e.g. English to Arabic)
 - Print to PDF
 
-**Model data:** set parameters in bulk, place rooms automatically, duplicate types with new values, swap types, manage worksets, create walls, delete elements.
+**Modeling:**
+- Levels (with plans) and grids, including rectangular grid layouts
+- Walls, floors and ceilings (from room boundaries or outlines), and flat, hip or gable roofs
+- Doors and windows inserted into walls
+- Structural columns at grid intersections and beams along grids
+- Any loaded family (furniture, equipment, fixtures) placed with rotation
+- Move, copy and rotate elements
+
+**Model data:** set parameters in bulk, place rooms automatically, duplicate types with new values, swap types, manage worksets, delete elements.
 
 **QA:** deterministic model audit (unplaced/unbounded/unnumbered rooms, duplicate room numbers, untagged doors and windows, views not on sheets, empty sheets) and visual review of rendered views and sheets.
 
@@ -58,6 +66,8 @@ Revit must be running with a model open for the tools to work. With "Ask before 
 ### Try
 
 - "What's in this model?"
+- "Set up 4 levels at 3.5 m, a 5 x 4 grid at 8 m spacing, columns at every grid intersection and beams along the grids on each level."
+- "Draw a 20 x 12 m building on Level 1 with 300 mm walls, a floor, a 30-degree hip roof with 600 mm overhang, and 4 windows on the south wall."
 - "Create floor plans for every level using the 'A - Floor Plan' template, named 'A - {level} - GA'."
 - "Make a cartoon set: A-001 cover, A-101 to A-104 for each level plan, plus placeholder sheets S-101 and M-101."
 - "Dimension the grids and the exterior walls on Level 1."
@@ -75,7 +85,7 @@ src/SketchProMax/            The Revit add-in (net48 for Revit 2024, net8.0-wind
   Agent/                     Claude tool-use loop for the in-Revit pane (Anthropic C# SDK) and agent instructions
   Bridge/BridgeServer        Named-pipe server the desktop-app connector talks to
   Revit/                     Main-thread dispatcher (ExternalEvent), helpers, Revit 2024 dependency loader
-  Tools/                     The 34 IRevitTool implementations and the registry
+  Tools/                     The 44 IRevitTool implementations and the registry
   UI/                        Chat pane and settings dialog
   Settings/                  Per-user settings, DPAPI-encrypted API key
 src/SketchProMax.Mcp/        MCP server (stdio) the Claude desktop app launches; forwards tool calls to Revit

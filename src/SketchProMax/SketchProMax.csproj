@@ -16,7 +16,7 @@
     <LangVersion>latest</LangVersion>
     <RootNamespace>SketchProMax</RootNamespace>
     <AssemblyName>SketchProMax</AssemblyName>
-    <Version>0.1.0</Version>
+    <Version>0.3.0</Version>
     <!-- Copy NuGet dependencies (Anthropic SDK) next to the add-in DLL. -->
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
     <OutputPath>bin\$(Configuration)\Revit$(RevitVersion)\</OutputPath>

@@ -47,13 +47,24 @@ public sealed class ToolRegistry
         new CreateRevisionTool(),
         new CloudElementsTool(),
         new UpdateTextNotesTool(),
+        // Modeling
+        new CreateLevelsTool(),
+        new CreateGridsTool(),
+        new CreateWallsTool(),
+        new CreateFloorsTool(),
+        new CreateCeilingsTool(),
+        new CreateRoofTool(),
+        new PlaceHostedFamiliesTool(),
+        new PlaceFamilyInstancesTool(),
+        new PlaceColumnsTool(),
+        new PlaceBeamsTool(),
+        new TransformElementsTool(),
         // Model data
         new SetParametersTool(),
         new PlaceRoomsTool(),
         new DuplicateTypeTool(),
         new ChangeTypeTool(),
         new WorksetsTool(),
-        new CreateWallsTool(),
         new DeleteElementsTool(),
     ]);
 }
