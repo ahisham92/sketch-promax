@@ -2,7 +2,9 @@ using Autodesk.Revit.UI;
 using SketchProMax.Bridge;
 using SketchProMax.Commands;
 using SketchProMax.Revit;
+using SketchProMax.Settings;
 using SketchProMax.Tools;
+using SketchProMax.Update;
 
 namespace SketchProMax;
 
@@ -25,6 +27,7 @@ public sealed class App : IExternalApplication
         Dispatcher.Initialize();
         Bridge = new BridgeServer(ToolRegistry.CreateDefault(), Dispatcher, application.ControlledApplication.VersionNumber);
         Bridge.Start();
+        if (AgentSettings.Load().AutoUpdate) _ = Task.Run(CheckForUpdateAsync);
 
         const string tab = "Sketch ProMax";
         application.CreateRibbonTab(tab);
@@ -41,6 +44,22 @@ public sealed class App : IExternalApplication
             AvailabilityClassName = typeof(AlwaysAvailable).FullName,
         });
         return Result.Succeeded;
+    }
+
+    public static string UpdateReadyMessage(string version) =>
+        $"Sketch ProMax {version} has been downloaded. It starts the next time you open Revit.\n\n" +
+        "Restart the Claude desktop app too (system tray > Quit, then open it again) so it picks up the new version.";
+
+    private static async Task CheckForUpdateAsync()
+    {
+        var staged = await Updater.CheckAsync(force: false).ConfigureAwait(false);
+        if (staged is null) return;
+        // Show the notice on Revit's main thread, when Revit is idle.
+        await Dispatcher.InvokeAsync(_ =>
+        {
+            TaskDialog.Show("Sketch ProMax update", UpdateReadyMessage(staged));
+            return true;
+        }).ConfigureAwait(false);
     }
 
     public Result OnShutdown(UIControlledApplication application)

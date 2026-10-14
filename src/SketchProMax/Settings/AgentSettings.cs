@@ -15,6 +15,9 @@ public sealed class AgentSettings
     /// <summary>Firm standards in plain English (naming, sheet numbering, tag styles...), given to Claude.</summary>
     public string FirmStandards { get; set; } = "";
 
+    /// <summary>Download new versions from GitHub when Revit starts; they take effect the next time Revit opens.</summary>
+    public bool AutoUpdate { get; set; } = true;
+
     public static string FilePath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "SketchProMax", "settings.json");
 

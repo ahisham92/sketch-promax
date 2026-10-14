@@ -3,6 +3,7 @@ using Autodesk.Revit.DB;
 using Autodesk.Revit.UI;
 using SketchProMax.Bridge;
 using SketchProMax.UI;
+using SketchProMax.Update;
 
 namespace SketchProMax.Commands;
 
@@ -35,9 +36,15 @@ public sealed class StatusCommand : IExternalCommand
                 (doc is null ? "Open a model, then " : $"Active model: {doc.Title}\n\n") +
                 "chat in the Claude desktop app, for example: \"What's in my Revit model?\"\n\n" +
                 "If the Revit tools don't appear in Claude, quit Claude completely (system tray > Quit) and start it again.",
+            FooterText = Updater.Describe(),
             ExpandedContent = $"Revit {commandData.Application.Application.VersionNumber}, session {BridgeServer.SessionId}",
         };
-        dialog.Show();
+        dialog.AddCommandLink(TaskDialogCommandLinkId.CommandLink1, "Check for updates now");
+        if (dialog.Show() != TaskDialogResult.CommandLink1) return Result.Succeeded;
+
+        // Checking blocks Revit briefly; downloading a new version can take a minute on slow connections.
+        var staged = Task.Run(() => Updater.CheckAsync(force: true)).GetAwaiter().GetResult();
+        TaskDialog.Show("Sketch ProMax", staged is null ? Updater.Describe() : App.UpdateReadyMessage(staged));
         return Result.Succeeded;
     }
 }

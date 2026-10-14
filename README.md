@@ -33,6 +33,12 @@ Then:
 
 Revit must be running with a model open for the tools to work. With "Ask before changing the model" on (the default), Revit shows a Yes/No dialog before every change.
 
+## Updates
+
+Install once; after that Sketch ProMax updates itself. Each time Revit starts it checks this repository's latest GitHub Release. When there is a newer version it downloads it in the background and shows a notice; the new version runs the next time you open Revit (and restart the Claude desktop app). Your settings are kept. Turn this off, or check right away, from the ribbon's **Settings** and **Status** buttons.
+
+To publish an update: bump `<Version>` in both project files, then push a matching tag (`git tag v0.6.1 && git push origin v0.6.1`). The Release workflow builds on Windows and attaches `SketchProMax-<version>.zip`.
+
 ## What it can do
 
 **Understand the model:** model summary, find elements by category/level/parameter, all parameters of an element, views and sheets, view templates, types, revisions, text notes, read any schedule, highlight elements.
@@ -94,6 +100,7 @@ Revit must be running with a model open for the tools to work. With "Ask before 
 
 ```
 build.ps1 / install.ps1      Build everything into .\dist / install for the current user
+.github/workflows/release.yml  Builds and publishes a GitHub Release when a v* tag is pushed
 src/SketchProMax/            The Revit add-in (net48 for Revit 2024, net8.0-windows for 2025/2026)
   App.cs                     Ribbon (Status, Settings), dispatcher, desktop-app bridge
   Agent/SystemPrompt         Instructions the desktop app receives from the connector
@@ -101,7 +108,8 @@ src/SketchProMax/            The Revit add-in (net48 for Revit 2024, net8.0-wind
   Revit/                     Main-thread dispatcher (ExternalEvent), helpers, Revit 2024 dependency loader
   Tools/                     The 51 IRevitTool implementations and the registry
   UI/                        Settings dialog
-  Settings/                  Per-user settings (approval switch, firm standards)
+  Settings/                  Per-user settings (approval switch, auto-update, firm standards)
+  Update/Updater             Self-update from GitHub Releases
 src/SketchProMax.Mcp/        MCP server (stdio) the Claude desktop app launches; finds open Revit windows and forwards tool calls
 ```
 

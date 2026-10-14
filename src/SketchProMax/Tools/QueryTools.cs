@@ -47,6 +47,7 @@ public sealed class GetModelContextTool : IRevitTool
             isWorkshared = doc.IsWorkshared,
             lengthUnit = RevitHelpers.LengthUnitLabel(doc),
             firmStandards = Settings.AgentSettings.Load().FirmStandards,
+            sketchProMax = Update.Updater.Describe(),
             activeView = new { id = view.Id.Value, name = view.Name, type = view.ViewType.ToString(), level = view.GenLevel?.Name },
             levels,
             selection,
