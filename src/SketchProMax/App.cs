@@ -25,6 +25,7 @@ public sealed class App : IExternalApplication
         DependencyResolver.Register();
 #endif
         Dispatcher.Initialize();
+        application.ControlledApplication.FailuresProcessing += FailureGuard.Handle;
         Bridge = new BridgeServer(ToolRegistry.CreateDefault(), Dispatcher, application.ControlledApplication.VersionNumber);
         Bridge.Start();
         _ = Task.Run(() => ClaudeRegistration.Ensure());
@@ -84,6 +85,7 @@ public sealed class App : IExternalApplication
     public Result OnShutdown(UIControlledApplication application)
     {
         Bridge?.Stop();
+        application.ControlledApplication.FailuresProcessing -= FailureGuard.Handle;
 #if NETFRAMEWORK
         DependencyResolver.Unregister();
 #endif

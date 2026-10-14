@@ -184,8 +184,11 @@ public sealed class BridgeServer
             if (app.ActiveUIDocument is null) return ToolResult.Error("No model is open in Revit. Ask the user to open one.");
             if (confirm && !Approve(tool, args)) return ToolResult.Error("The user rejected this change in Revit. Ask them how to proceed.");
             ToolResult result;
-            try { result = tool.Execute(app, new ToolArgs(args)); }
-            catch (Exception ex) { result = ToolResult.Error(Describe(tool, ex)); }
+            result = FailureGuard.Run(() =>
+            {
+                try { return tool.Execute(app, new ToolArgs(args)); }
+                catch (Exception ex) { return ToolResult.Error(Describe(tool, ex)); }
+            });
             ActivityLog.Write(app.ActiveUIDocument.Document.Title, tool, args, result);
             return Capped(result);
         });

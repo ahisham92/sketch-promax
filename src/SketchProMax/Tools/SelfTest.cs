@@ -119,7 +119,7 @@ internal static class SelfTest
             {
                 var raw = JsonSerializer.SerializeToElement(c.Args(ctx));
                 var args = raw.EnumerateObject().ToDictionary(p => p.Name, p => p.Value.Clone());
-                var result = tool.Execute(app, new ToolArgs(args));
+                var result = Revit.FailureGuard.Run(() => tool.Execute(app, new ToolArgs(args)));
                 if (!result.IsError && result.Text.Length > 24000)
                     report.Results.Add(new(c.Tool, "fail", watch.ElapsedMilliseconds, $"Output too large for a chat ({result.Text.Length:N0} characters)."));
                 else
