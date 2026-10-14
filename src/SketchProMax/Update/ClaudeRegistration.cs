@@ -8,7 +8,7 @@ namespace SketchProMax.Update;
 /// <summary>
 /// Makes sure the Claude desktop app knows about the Sketch ProMax connector, every time Revit starts.
 /// This repairs installs where the app was installed after Sketch ProMax, or keeps its config somewhere else
-/// (the Microsoft Store / MSIX build uses %LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude).
+/// (the Microsoft Store / MSIX build reads %LOCALAPPDATA%\Packages\<package family>\LocalCache\Roaming\Claude).
 /// </summary>
 public static class ClaudeRegistration
 {
@@ -21,9 +21,17 @@ public static class ClaudeRegistration
         yield return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Claude");
         var packages = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Packages");
         if (!Directory.Exists(packages)) yield break;
-        foreach (var package in Directory.GetDirectories(packages, "Claude*"))
+        // Named after the package family, e.g. Claude_pzs8sxrjxfjjc or AnthropicPBC.Claude_fnn82j28hfe8t.
+        var family = new System.Text.RegularExpressions.Regex(@"(^|\.)Claude_[a-z0-9]+$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        foreach (var package in Directory.GetDirectories(packages).Where(d => family.IsMatch(Path.GetFileName(d))))
             yield return Path.Combine(package, "LocalCache", "Roaming", "Claude");
     }
+
+    /// <summary>Config files that currently list the connector, for the Status button.</summary>
+    public static List<string> Registered() =>
+        ConfigFolders().Select(f => Path.Combine(f, "claude_desktop_config.json"))
+            .Where(f => { try { return File.Exists(f) && File.ReadAllText(f).Contains("sketch-promax"); } catch (IOException) { return false; } })
+            .ToList();
 
     /// <summary>Adds or repairs the connector entry. Returns the config files that were changed.</summary>
     public static List<string> Ensure()

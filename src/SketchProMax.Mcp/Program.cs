@@ -18,7 +18,7 @@ builder.Logging.AddConsole(o => o.LogToStandardErrorThreshold = LogLevel.Trace);
 builder.Services
     .AddMcpServer(o =>
     {
-        o.ServerInfo = new() { Name = "sketch-promax", Version = "0.11.0" };
+        o.ServerInfo = new() { Name = "sketch-promax", Version = "0.11.1" };
         o.ServerInstructions = SystemPrompt.Build(RevitBridge.FirmStandards());
     })
     .WithStdioServerTransport()

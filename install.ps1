@@ -29,12 +29,13 @@ $exe = Join-Path $mcpDir "SketchProMax.Mcp.exe"
 Write-Host "Installed MCP server: $exe" -ForegroundColor Green
 
 # The Claude desktop app keeps its config in %APPDATA%\Claude, or, for the Microsoft Store / MSIX build,
-# in %LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude. Register in every place that exists, and
+# in %LOCALAPPDATA%\Packages\<package>\LocalCache\Roaming\Claude. Register in every place that exists, and
 # always in %APPDATA%\Claude so a later install of the app finds it too.
 $claudeDirs = @(Join-Path $env:APPDATA "Claude")
 $packages = Join-Path $env:LOCALAPPDATA "Packages"
 if (Test-Path $packages) {
-    Get-ChildItem $packages -Directory -Filter "Claude*" | ForEach-Object {
+    # The package folder is named after the app's package family, e.g. Claude_pzs8sxrjxfjjc or AnthropicPBC.Claude_fnn82j28hfe8t.
+    Get-ChildItem $packages -Directory | Where-Object { $_.Name -match '(^|\.)Claude_[a-z0-9]+$' } | ForEach-Object {
         $claudeDirs += Join-Path $_.FullName "LocalCache\Roaming\Claude"
     }
 }

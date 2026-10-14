@@ -29,6 +29,8 @@ public sealed class StatusCommand : IExternalCommand
     public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
     {
         var doc = commandData.Application.ActiveUIDocument?.Document;
+        ClaudeRegistration.Ensure();
+        var registered = ClaudeRegistration.Registered();
         var dialog = new TaskDialog("Sketch ProMax")
         {
             MainInstruction = App.Bridge?.IsListening == true ? "Sketch ProMax is ready" : "Sketch ProMax is not connected",
@@ -37,7 +39,9 @@ public sealed class StatusCommand : IExternalCommand
                 "chat in the Claude desktop app, for example: \"What's in my Revit model?\"\n\n" +
                 "If the Revit tools don't appear in Claude, quit Claude completely (system tray > Quit) and start it again.",
             FooterText = Updater.Describe(),
-            ExpandedContent = $"Revit {commandData.Application.Application.VersionNumber}, session {BridgeServer.SessionId}",
+            ExpandedContent = $"Revit {commandData.Application.Application.VersionNumber}, session {BridgeServer.SessionId}\n\n" +
+                              "Registered with the Claude app in:\n" +
+                              (registered.Count > 0 ? string.Join("\n", registered) : "(nowhere yet - is the Claude desktop app installed?)"),
         };
         dialog.AddCommandLink(TaskDialogCommandLinkId.CommandLink1, "Check for updates now");
         if (dialog.Show() != TaskDialogResult.CommandLink1) return Result.Succeeded;
