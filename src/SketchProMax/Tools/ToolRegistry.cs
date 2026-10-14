@@ -75,5 +75,23 @@ public sealed class ToolRegistry
         new ChangeTypeTool(),
         new WorksetsTool(),
         new DeleteElementsTool(),
+
+        // Views, graphics, annotation, schedules, exports, links, families
+        new CreateSectionTool(),
+        new CreateElevationsTool(),
+        new CreateCalloutTool(),
+        new Create3DViewTool(),
+        new SetViewGraphicsTool(),
+        new AddAnnotationsTool(),
+        new ArrangeTagsTool(),
+        new FormatScheduleTool(),
+        new CreateSheetListTool(),
+        new ExportFilesTool(),
+        new QueryLinkedModelsTool(),
+        new LoadFamilyTool(),
+
+        // Anything else, through the Revit API
+        new RunRevitQueryCodeTool(),
+        new RunRevitCodeTool(),
     ]);
 }

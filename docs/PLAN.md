@@ -64,7 +64,7 @@ Sources: [sketchpro.ai](https://sketchpro.ai/), [SketchPro Academy](https://sket
 
 ## 4. Roadmap
 
-**Done:** the 51 Revit tools above (documentation, modeling, view filters, images), the desktop-app connector (MCP) with several Revit windows and versions at once, ribbon Status and Settings, install scripts, and builds for Revit 2024/2025/2026.
+**Done:** 65 Revit tools (documentation, modeling, view filters, images, views/graphics/annotation, schedules, exports, links, families, and a run-Revit-code catch-all), the desktop-app connector (MCP) with several Revit windows and versions at once, ribbon Status and Settings, self-update from GitHub Releases, and builds for Revit 2024/2025/2026.
 
 **Next (documentation depth):** dimension openings and room widths, elevation and section creation, interior elevations per room, legends and keynotes, schedule formatting (filters, grouping, totals), sheet-index and drawing-list automation, align/tidy tags (using visual QA), linked-model queries, a conversation log export.
 

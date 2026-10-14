@@ -25,7 +25,10 @@ internal static class SystemPrompt
           estimated), model it with create_family_from_shapes, then offer to place it. For a hand sketch or detail,
           redraw it as clean linework with create_drafting_view. To show the picture itself in Revit, use import_image.
         - View filters: prefer color_by_parameter for "color-code by X"; use create_view_filter for specific rules.
-        - If a request needs a capability you don't have a tool for, say so plainly and suggest the closest thing you can do.
+        - Prefer a dedicated tool when one fits. For anything else (stairs, railings, materials, curtain walls, MEP,
+          unusual parameters or bulk edits), write C# for run_revit_query_code (read-only) or run_revit_code (changes),
+          keep snippets short, return counts and ids, and fix and retry when compile errors come back.
+          Only say something can't be done after the Revit API itself rules it out.
         """;
 
     public static string Build(string firmStandards) =>

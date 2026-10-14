@@ -199,8 +199,11 @@ public sealed class BridgeServer
 
     private static bool Approve(IRevitTool tool, Dictionary<string, JsonElement> args)
     {
-        var json = JsonSerializer.Serialize(args, new JsonSerializerOptions { WriteIndented = true });
-        if (json.Length > 1500) json = json.Substring(0, 1500) + "\n…";
+        // Show code as code, so the user can read what will run.
+        var json = args.TryGetValue("code", out var code) && code.ValueKind == JsonValueKind.String
+            ? (args.TryGetValue("description", out var d) ? d.GetString() + "\n\n" : "") + code.GetString()
+            : JsonSerializer.Serialize(args, new JsonSerializerOptions { WriteIndented = true });
+        if (json.Length > 6000) json = json.Substring(0, 6000) + "\n…";
         var dialog = new TaskDialog("Sketch ProMax")
         {
             MainInstruction = $"Claude wants to run '{tool.Name}'",
