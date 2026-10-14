@@ -1,0 +1,187 @@
+using Autodesk.Revit.DB;
+using Autodesk.Revit.DB.Architecture;
+using Autodesk.Revit.UI;
+using SketchProMax.Revit;
+
+namespace SketchProMax.Tools;
+
+public sealed class TagElementsInViewTool : IRevitTool
+{
+    public string Name => "tag_elements_in_view";
+    public string Description =>
+        "Tag every untagged element of a category (Doors, Windows, Rooms, Walls, Furniture, ...) in a plan view. " +
+        "Uses the category's default tag type; elements that already have a tag in that view are skipped.";
+    public string PropertiesJson => """
+    {
+      "category": {"type": "string"},
+      "view_id": {"type": "integer", "description": "Defaults to the active view."},
+      "leader": {"type": "boolean"}
+    }
+    """;
+    public string[] Required => ["category"];
+    public bool ModifiesModel => true;
+
+    public ToolResult Execute(UIApplication app, ToolArgs args)
+    {
+        var doc = app.ActiveUIDocument.Document;
+        var view = args.OptLong("view_id") is { } vid ? (View)doc.GetElement(new ElementId(vid)) : doc.ActiveView;
+        var bic = RevitHelpers.ParseCategory(doc, args.String("category"));
+
+        var alreadyTagged = new HashSet<long>();
+        foreach (var tag in new FilteredElementCollector(doc, view.Id).OfClass(typeof(IndependentTag)).Cast<IndependentTag>())
+            foreach (var id in tag.GetTaggedLocalElementIds()) alreadyTagged.Add(id.Value);
+        if (bic == BuiltInCategory.OST_Rooms)
+            foreach (var rt in new FilteredElementCollector(doc, view.Id).OfCategory(BuiltInCategory.OST_RoomTags).Cast<RoomTag>())
+                if (rt.Room != null) alreadyTagged.Add(rt.Room.Id.Value);
+
+        var targets = new FilteredElementCollector(doc, view.Id).OfCategory(bic).WhereElementIsNotElementType()
+            .Where(e => !alreadyTagged.Contains(e.Id.Value)).ToList();
+
+        int tagged = 0, skipped = 0;
+        using var t = RevitHelpers.StartTransaction(doc, $"Tag {bic.ToString().Replace("OST_", "")}");
+        foreach (var e in targets)
+        {
+            try
+            {
+                if (e is Room room)
+                {
+                    if (room.Location is not LocationPoint lp) { skipped++; continue; }
+                    doc.Create.NewRoomTag(new LinkElementId(room.Id), new UV(lp.Point.X, lp.Point.Y), view.Id);
+                }
+                else
+                {
+                    var center = Center(e, view);
+                    if (center is null) { skipped++; continue; }
+                    IndependentTag.Create(doc, view.Id, new Reference(e), args.OptBool("leader"),
+                        TagMode.TM_ADDBY_CATEGORY, TagOrientation.Horizontal, center);
+                }
+                tagged++;
+            }
+            catch (Autodesk.Revit.Exceptions.ApplicationException) { skipped++; }
+        }
+        t.Commit();
+        return ToolResult.Ok(new { view = view.Name, tagged, skipped, alreadyTagged = alreadyTagged.Count });
+    }
+
+    private static XYZ? Center(Element e, View view)
+    {
+        if (e.Location is LocationPoint lp) return lp.Point;
+        if (e.Location is LocationCurve lc) return lc.Curve.Evaluate(0.5, true);
+        var bb = e.get_BoundingBox(view);
+        return bb is null ? null : (bb.Min + bb.Max) / 2;
+    }
+}
+
+public sealed class CreateSheetTool : IRevitTool
+{
+    public string Name => "create_sheet";
+    public string Description =>
+        "Create a sheet with a title block and optionally place views on it in a simple grid. " +
+        "A view can only be placed on one sheet (schedules excepted); placed views are reported as skipped.";
+    public string PropertiesJson => """
+    {
+      "number": {"type": "string"},
+      "name": {"type": "string"},
+      "title_block": {"type": "string", "description": "Title block type name (default: first one found)."},
+      "view_ids": {"type": "array", "items": {"type": "integer"}}
+    }
+    """;
+    public string[] Required => ["number", "name"];
+    public bool ModifiesModel => true;
+
+    public ToolResult Execute(UIApplication app, ToolArgs args)
+    {
+        var doc = app.ActiveUIDocument.Document;
+        var titleBlocks = new FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_TitleBlocks)
+            .WhereElementIsElementType().Cast<FamilySymbol>().ToList();
+        var tbName = args.OptString("title_block");
+        var tb = tbName is null
+            ? titleBlocks.FirstOrDefault()
+            : titleBlocks.FirstOrDefault(s => string.Equals(s.Name, tbName, StringComparison.OrdinalIgnoreCase));
+        if (tb is null) return ToolResult.Error("No matching title block type is loaded in the model.");
+
+        using var t = RevitHelpers.StartTransaction(doc, $"Create sheet {args.String("number")}");
+        var sheet = ViewSheet.Create(doc, tb.Id);
+        sheet.SheetNumber = args.String("number");
+        sheet.Name = args.String("name");
+        doc.Regenerate(); // the sheet outline is only valid after regeneration
+
+        // Lay views out on a grid inside the sheet outline.
+        var outline = sheet.Outline;
+        var ids = args.LongList("view_ids");
+        int cols = Math.Max(1, (int)Math.Ceiling(Math.Sqrt(ids.Count)));
+        int rows = Math.Max(1, (int)Math.Ceiling(ids.Count / (double)cols));
+        double w = (outline.Max.U - outline.Min.U) / cols, h = (outline.Max.V - outline.Min.V) / rows;
+
+        var placed = new List<long>();
+        var skipped = new List<object>();
+        for (int i = 0; i < ids.Count; i++)
+        {
+            var viewId = new ElementId(ids[i]);
+            var center = new XYZ(outline.Min.U + w * (i % cols + 0.5), outline.Max.V - h * (i / cols + 0.5), 0);
+            if (doc.GetElement(viewId) is ViewSchedule)
+            {
+                ScheduleSheetInstance.Create(doc, sheet.Id, viewId, center);
+                placed.Add(ids[i]);
+            }
+            else if (Viewport.CanAddViewToSheet(doc, sheet.Id, viewId))
+            {
+                Viewport.Create(doc, sheet.Id, viewId, center);
+                placed.Add(ids[i]);
+            }
+            else skipped.Add(new { id = ids[i], reason = "already on a sheet or not placeable" });
+        }
+        t.Commit();
+        return ToolResult.Ok(new { sheetId = sheet.Id.Value, placed, skipped });
+    }
+}
+
+public sealed class CreateScheduleTool : IRevitTool
+{
+    public string Name => "create_schedule";
+    public string Description =>
+        "Create a schedule for a category with the given fields (parameter names, in order), optionally sorted " +
+        "by the first field. Unknown field names are reported back.";
+    public string PropertiesJson => """
+    {
+      "category": {"type": "string"},
+      "name": {"type": "string"},
+      "fields": {"type": "array", "items": {"type": "string"}},
+      "sort_by_first_field": {"type": "boolean"}
+    }
+    """;
+    public string[] Required => ["category", "name", "fields"];
+    public bool ModifiesModel => true;
+
+    public ToolResult Execute(UIApplication app, ToolArgs args)
+    {
+        var doc = app.ActiveUIDocument.Document;
+        var bic = RevitHelpers.ParseCategory(doc, args.String("category"));
+
+        using var t = RevitHelpers.StartTransaction(doc, $"Create schedule {args.String("name")}");
+        var schedule = ViewSchedule.CreateSchedule(doc, new ElementId(bic));
+        schedule.Name = args.String("name");
+
+        var def = schedule.Definition;
+        var schedulable = def.GetSchedulableFields();
+        var missing = new List<string>();
+        ScheduleField? first = null;
+        foreach (var fieldName in args.StringList("fields"))
+        {
+            var sf = schedulable.FirstOrDefault(f => string.Equals(f.GetName(doc), fieldName, StringComparison.OrdinalIgnoreCase));
+            if (sf is null) { missing.Add(fieldName); continue; }
+            var added = def.AddField(sf);
+            first ??= added;
+        }
+        if (first != null && args.OptBool("sort_by_first_field", true))
+            def.AddSortGroupField(new ScheduleSortGroupField(first.FieldId));
+        t.Commit();
+
+        return ToolResult.Ok(new
+        {
+            scheduleId = schedule.Id.Value,
+            missingFields = missing,
+            availableFieldsHint = missing.Count > 0 ? schedulable.Select(f => f.GetName(doc)).Take(80) : null,
+        });
+    }
+}

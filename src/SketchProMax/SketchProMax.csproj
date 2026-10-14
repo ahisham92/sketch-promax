@@ -1,0 +1,50 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Build for a specific Revit release with:  dotnet build -c Release -p:RevitVersion=2026
+    Revit 2025 and 2026 run on .NET 8; Revit 2027 runs on .NET 10.
+  -->
+  <PropertyGroup>
+    <RevitVersion Condition="'$(RevitVersion)' == ''">2025</RevitVersion>
+    <TargetFramework Condition="'$(RevitVersion)' &lt; '2027'">net8.0-windows</TargetFramework>
+    <TargetFramework Condition="'$(RevitVersion)' &gt;= '2027'">net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>SketchProMax</RootNamespace>
+    <AssemblyName>SketchProMax</AssemblyName>
+    <Version>0.1.0</Version>
+    <!-- Copy NuGet dependencies (Anthropic SDK) next to the add-in DLL. -->
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <OutputPath>bin\$(Configuration)\Revit$(RevitVersion)\</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <DefineConstants>$(DefineConstants);REVIT$(RevitVersion)</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Reference-only Revit API assemblies; Revit supplies the real ones at runtime. -->
+    <PackageReference Include="Nice3point.Revit.Api.RevitAPI" Version="$(RevitVersion).*" ExcludeAssets="runtime" PrivateAssets="all" />
+    <PackageReference Include="Nice3point.Revit.Api.RevitAPIUI" Version="$(RevitVersion).*" ExcludeAssets="runtime" PrivateAssets="all" />
+    <PackageReference Include="Anthropic" Version="12.57.0" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="SketchProMax.addin" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!-- On Windows, copy the build into the per-user Revit add-ins folder so Revit picks it up. -->
+  <Target Name="DeployToRevit" AfterTargets="Build" Condition="'$(OS)' == 'Windows_NT' AND '$(Configuration)' == 'Debug'">
+    <PropertyGroup>
+      <AddinRoot>$(AppData)\Autodesk\Revit\Addins\$(RevitVersion)\</AddinRoot>
+    </PropertyGroup>
+    <ItemGroup>
+      <DeployFiles Include="$(OutputPath)**\*.*" Exclude="$(OutputPath)SketchProMax.addin" />
+    </ItemGroup>
+    <Copy SourceFiles="$(OutputPath)SketchProMax.addin" DestinationFolder="$(AddinRoot)" />
+    <Copy SourceFiles="@(DeployFiles)" DestinationFolder="$(AddinRoot)SketchProMax\%(RecursiveDir)" />
+  </Target>
+
+</Project>
