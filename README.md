@@ -1,6 +1,6 @@
 # Sketch ProMax
 
-An AI agent for Autodesk Revit 2024, 2025, 2026 and 2027, powered by Claude. Ask in plain language; it reads, documents, audits and edits the open model through 82 tools. It asks for your approval before every change, and every change can be undone with Ctrl+Z.
+An AI agent for Autodesk Revit 2024, 2025, 2026 and 2027, powered by Claude. Ask in plain language; it reads, documents, audits and edits the open model through 91 tools. It asks for your approval before every change, and every change can be undone with Ctrl+Z.
 
 See [docs/PLAN.md](docs/PLAN.md) for the comparison with SketchPro, the roadmap and the architecture.
 
@@ -45,7 +45,7 @@ To publish an update: bump `<Version>` in both project files and push to `main`.
 
 **Documentation:**
 - Tag any category in a view (doors, windows, rooms, equipment...)
-- Dimension grids, walls, door/window openings and room clear widths; spot elevations on floors and roofs
+- Dimension grids, walls, door/window openings and room clear widths; spot elevations placed automatically on every floor and roof in a view
 - Create floor, ceiling and structural plans per level with templates and naming patterns
 - Duplicate views
 - Apply view templates
@@ -53,7 +53,7 @@ To publish an update: bump `<Version>` in both project files and push to `main`.
 - Rename and renumber views, sheets, rooms, levels and types to firm standards
 - Create schedules, then read them or export them to CSV/Excel
 - Create revisions, add them to sheets, and cloud changed elements
-- Edit and translate text notes (e.g. English to Arabic)
+- Translate drawings into any language (text notes, sheet, view, room and level names, schedule headings, type names, text parameters), or make them bilingual
 - Sections (along a line or through elements), building elevations (N/S/E/W), interior elevations per room, callouts, 3D views with section boxes
 - Visibility/graphics: hide, show or isolate categories and elements, color/halftone/transparency overrides, detail level, crop to elements, scope boxes
 - Text notes, detail lines and filled regions in any view
@@ -80,6 +80,12 @@ To publish an update: bump `<Version>` in both project files and push to `main`.
 - Build a Revit family from a product photo or manufacturer cut sheet
 - Redraw a hand sketch as clean linework in a drafting view
 - Place pictures or PDF pages into views and sheets
+
+**CAD to Revit:** link a DWG, read its layers, and convert layers into walls (from double lines, with matching wall types), grids (auto-named), columns, floors, room separation or model lines.
+
+**Location and coordinates:** read and set latitude/longitude, shared coordinates and true north; acquire coordinates from a link; convert survey points to model points.
+
+**Mass placement:** place a family, group or linked model hundreds or thousands of times from a CSV/Excel list of points, levels, rotations and parameter values (survey coordinates supported).
 
 **Several models:** list every connected Revit window and its open models, and switch between them by name, across Revit 2024 to 2027.
 
@@ -124,7 +130,7 @@ src/SketchProMax/            The Revit add-in (net48 for Revit 2024, net8.0-wind
   Agent/SystemPrompt         Instructions the desktop app receives from the connector
   Bridge/BridgeServer        Per-Revit-window named-pipe server the connector talks to
   Revit/                     Main-thread dispatcher (ExternalEvent), helpers, Revit 2024 dependency loader
-  Tools/                     The 80 IRevitTool implementations and the registry (CodeTools compiles C# with Roslyn)
+  Tools/                     The 89 IRevitTool implementations and the registry (CodeTools compiles C# with Roslyn)
   UI/                        Settings dialog
   Settings/                  Per-user settings (approval switch, auto-update, firm standards)
   Update/Updater             Self-update from GitHub Releases

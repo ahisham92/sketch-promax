@@ -106,6 +106,17 @@ public sealed class ToolRegistry
         new SetCurtainGridTool(),
         new ExportBcfTool(),
 
+        // Translation, CAD conversion, coordinates, bulk placement
+        new CollectTextTool(),
+        new ApplyTextTool(),
+        new ImportCadTool(),
+        new ListCadLayersTool(),
+        new ConvertCadTool(),
+        new GetCoordinatesTool(),
+        new SetCoordinatesTool(),
+        new ConvertCoordinatesTool(),
+        new PlaceManyTool(),
+
         // Activity log
         new GetActivityLogTool(),
         new ListRecipesTool(),

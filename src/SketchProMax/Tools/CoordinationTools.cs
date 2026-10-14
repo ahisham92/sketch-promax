@@ -167,26 +167,33 @@ public sealed class AddSpotElevationsTool : IRevitTool
 {
     public string Name => "add_spot_elevations";
     public string Description =>
-        "Add spot elevations on the top surface of floors, roofs, slabs or toposolids in a plan or section view, " +
-        "at each element's center or at given plan points on one element.";
+        "Add spot elevations on the top surface of floors, roofs and slabs in a plan or section view. With no element " +
+        "ids it finds every floor and roof visible in the view (each level change gets one). Places at each top face's " +
+        "center, at its corners, or at given plan points.";
     public string PropertiesJson => """
     {
       "view_id": {"type": "integer"},
-      "element_ids": {"type": "array", "items": {"type": "integer"}},
+      "element_ids": {"type": "array", "items": {"type": "integer"}, "description": "Default: all floors and roofs in the view."},
+      "at_corners": {"type": "boolean", "description": "Also mark each top face's corners (e.g. sloped slabs, ramps)."},
       "points": {"type": "array", "items": {"type": "array", "items": {"type": "number"}}, "description": "Optional [x, y] plan points; each uses the element whose top face is under it."},
       "leader": {"type": "boolean", "description": "Default true."}
     }
     """;
-    public string[] Required => ["element_ids"];
+    public string[] Required => [];
     public bool ModifiesModel => true;
 
     public ToolResult Execute(UIApplication app, ToolArgs args)
     {
         var doc = app.ActiveUIDocument.Document;
         var view = ViewKit.ViewOrActive(doc, args.OptLong("view_id"));
+        var elementIds = args.LongList("element_ids");
+        if (elementIds.Count == 0)
+            elementIds = new FilteredElementCollector(doc, view.Id)
+                .WherePasses(new ElementMulticategoryFilter([BuiltInCategory.OST_Floors, BuiltInCategory.OST_Roofs]))
+                .WhereElementIsNotElementType().Select(e => e.Id.Value).ToList();
         var leader = args.OptBool("leader", true);
         var faces = new List<(Element Element, Reference Ref, Face Face)>();
-        foreach (var id in args.LongList("element_ids"))
+        foreach (var id in elementIds)
         {
             var e = doc.GetElement(new ElementId(id));
             if (e is not HostObject host) continue;
@@ -215,6 +222,10 @@ public sealed class AddSpotElevationsTool : IRevitTool
             {
                 var box = f.GetBoundingBox();
                 targets.Add((r, f.Evaluate((box.Min + box.Max) / 2)));
+                if (args.OptBool("at_corners"))
+                    foreach (var loop in f.GetEdgesAsCurveLoops())
+                        foreach (var c in loop)
+                            targets.Add((r, c.GetEndPoint(0)));
             }
         }
 
