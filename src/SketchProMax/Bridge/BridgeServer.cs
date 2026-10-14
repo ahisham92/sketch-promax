@@ -172,8 +172,11 @@ public sealed class BridgeServer
         {
             if (app.ActiveUIDocument is null) return ToolResult.Error("No model is open in Revit. Ask the user to open one.");
             if (confirm && !Approve(tool, args)) return ToolResult.Error("The user rejected this change in Revit. Ask them how to proceed.");
-            try { return tool.Execute(app, new ToolArgs(args)); }
-            catch (Exception ex) { return ToolResult.Error($"{ex.GetType().Name}: {ex.Message}"); }
+            ToolResult result;
+            try { result = tool.Execute(app, new ToolArgs(args)); }
+            catch (Exception ex) { result = ToolResult.Error($"{ex.GetType().Name}: {ex.Message}"); }
+            ActivityLog.Write(app.ActiveUIDocument.Document.Title, tool, args, result);
+            return result;
         });
     }
 

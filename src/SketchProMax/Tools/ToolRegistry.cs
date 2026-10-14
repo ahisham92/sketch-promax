@@ -11,11 +11,15 @@ public sealed class ToolRegistry
     public ToolRegistry(IEnumerable<IRevitTool> tools) =>
         _tools = tools.ToDictionary(t => t.Name);
 
+    private void Add(IRevitTool tool) => _tools[tool.Name] = tool;
+
     public IReadOnlyCollection<IRevitTool> All => _tools.Values;
 
     public IRevitTool? Find(string name) => _tools.TryGetValue(name, out var tool) ? tool : null;
 
-    public static ToolRegistry CreateDefault() => new(
+    public static ToolRegistry CreateDefault()
+    {
+        var registry = new ToolRegistry(
     [
         // Read-only: understand the model
         new GetModelContextTool(),
@@ -90,8 +94,25 @@ public sealed class ToolRegistry
         new QueryLinkedModelsTool(),
         new LoadFamilyTool(),
 
+        // More modeling and dimensions
+        new CreateStairsTool(),
+        new CreateRailingsTool(),
+        new CreateRoomSeparationLinesTool(),
+        new SetMaterialTool(),
+        new CreateMepRunsTool(),
+        new DimensionOpeningsTool(),
+
+        // Activity log
+        new GetActivityLogTool(),
+        new ListRecipesTool(),
+
         // Anything else, through the Revit API
         new RunRevitQueryCodeTool(),
         new RunRevitCodeTool(),
     ]);
+        // Recipes replay other tools, so they need the registry itself.
+        registry.Add(new SaveRecipeTool(registry));
+        registry.Add(new RunRecipeTool(registry));
+        return registry;
+    }
 }

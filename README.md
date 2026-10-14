@@ -1,6 +1,6 @@
 # Sketch ProMax
 
-An AI agent for Autodesk Revit 2024, 2025 and 2026, powered by Claude. Ask in plain language; it reads, documents, audits and edits the open model through 67 tools. It asks for your approval before every change, and every change can be undone with Ctrl+Z.
+An AI agent for Autodesk Revit 2024, 2025 and 2026, powered by Claude. Ask in plain language; it reads, documents, audits and edits the open model through 77 tools. It asks for your approval before every change, and every change can be undone with Ctrl+Z.
 
 See [docs/PLAN.md](docs/PLAN.md) for the comparison with SketchPro, the roadmap and the architecture.
 
@@ -45,7 +45,7 @@ To publish an update: bump `<Version>` in both project files and push to `main`.
 
 **Documentation:**
 - Tag any category in a view (doors, windows, rooms, equipment...)
-- Dimension grids and walls
+- Dimension grids, walls, and door/window openings
 - Create floor, ceiling and structural plans per level with templates and naming patterns
 - Duplicate views
 - Apply view templates
@@ -69,6 +69,9 @@ To publish an update: bump `<Version>` in both project files and push to `main`.
 - Structural columns at grid intersections and beams along grids
 - Any loaded family (furniture, equipment, fixtures) placed with rotation
 - Move, copy and rotate elements
+- Straight-run stairs with railings, railings along any path, room separation lines
+- Materials: create, color and assign (by parameter or by painting faces)
+- Ducts, pipes, cable trays and conduits along a path, with elbows
 
 **View filters:** create rule-based filters, apply them to views or templates with colors, halftone, transparency or hide, and color-code a view by any parameter in one step (e.g. doors by fire rating) with a legend.
 
@@ -80,6 +83,8 @@ To publish an update: bump `<Version>` in both project files and push to `main`.
 **Several models:** list every connected Revit window and its open models, and switch between them by name, across Revit 2024, 2025 and 2026.
 
 **Linked models and families:** list links and query elements inside them; load families from a file or by searching Revit's content library.
+
+**Recipes and activity log:** save a workflow that worked as a recipe and rerun it later without the AI (with blanks like {level} filled in each time). Every tool call is logged per day in `%APPDATA%\SketchProMax\logs`, so Claude can report what it changed.
 
 **Anything else:** Claude can write and run short Revit API code (C#) for what no dedicated tool covers, such as stairs, railings, materials, curtain walls or MEP. Read-only code runs freely; code that changes the model is shown to you first and is one Undo step.
 
@@ -116,7 +121,7 @@ src/SketchProMax/            The Revit add-in (net48 for Revit 2024, net8.0-wind
   Agent/SystemPrompt         Instructions the desktop app receives from the connector
   Bridge/BridgeServer        Per-Revit-window named-pipe server the connector talks to
   Revit/                     Main-thread dispatcher (ExternalEvent), helpers, Revit 2024 dependency loader
-  Tools/                     The 65 IRevitTool implementations and the registry (CodeTools compiles C# with Roslyn)
+  Tools/                     The 75 IRevitTool implementations and the registry (CodeTools compiles C# with Roslyn)
   UI/                        Settings dialog
   Settings/                  Per-user settings (approval switch, auto-update, firm standards)
   Update/Updater             Self-update from GitHub Releases

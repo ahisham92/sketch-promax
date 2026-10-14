@@ -25,6 +25,8 @@ internal static class SystemPrompt
           estimated), model it with create_family_from_shapes, then offer to place it. For a hand sketch or detail,
           redraw it as clean linework with create_drafting_view. To show the picture itself in Revit, use import_image.
         - View filters: prefer color_by_parameter for "color-code by X"; use create_view_filter for specific rules.
+        - Recipes: after a multi-step job the user is happy with, offer to save it with save_recipe (put {placeholders}
+          in values that change between runs). When the user asks to repeat a saved workflow, use list_recipes and run_recipe.
         - Prefer a dedicated tool when one fits. For anything else (stairs, railings, materials, curtain walls, MEP,
           unusual parameters or bulk edits), write C# for run_revit_query_code (read-only) or run_revit_code (changes),
           keep snippets short, return counts and ids, and fix and retry when compile errors come back.
