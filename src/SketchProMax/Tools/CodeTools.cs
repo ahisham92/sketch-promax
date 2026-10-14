@@ -138,31 +138,6 @@ internal static class ScriptCompiler
 {
     public delegate object? Script(UIApplication app, UIDocument uidoc, Document doc, StringBuilder log, IDictionary<string, object?> args);
 
-    private const string Header = """
-        using System;
-        using System.Linq;
-        using System.Collections.Generic;
-        using Autodesk.Revit.DB;
-        using Autodesk.Revit.DB.Architecture;
-        using Autodesk.Revit.DB.Structure;
-        using Autodesk.Revit.DB.Mechanical;
-        using Autodesk.Revit.DB.Plumbing;
-        using Autodesk.Revit.DB.Electrical;
-        using Autodesk.Revit.UI;
-        public static class SketchProMaxScript
-        {
-            public static object Run(UIApplication app, UIDocument uidoc, Document doc, System.Text.StringBuilder log, IDictionary<string, object> args)
-            {
-        #line 1 "snippet"
-        """;
-
-    private const string Footer = """
-
-        #line default
-            }
-        }
-        """;
-
     private static readonly Dictionary<string, Script> Cache = new();
     private static List<MetadataReference>? _references;
 
@@ -170,7 +145,7 @@ internal static class ScriptCompiler
     {
         if (Cache.TryGetValue(code, out var cached)) return (cached, "");
 
-        var tree = CSharpSyntaxTree.ParseText(Header + code + Footer, new CSharpParseOptions(LanguageVersion.Latest));
+        var tree = CSharpSyntaxTree.ParseText(ScriptSource.Wrap(code), new CSharpParseOptions(LanguageVersion.Latest));
         var compilation = CSharpCompilation.Create(
             "SketchProMaxScript_" + Guid.NewGuid().ToString("N"),
             [tree],

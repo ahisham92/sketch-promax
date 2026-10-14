@@ -47,6 +47,10 @@ jobs:
             8.0.x
             10.0.x
 
+      - name: Test the code-tool wrapper
+        if: steps.version.outputs.exists == 'false' || github.event_name == 'workflow_dispatch'
+        run: dotnet run --project tests/SketchProMax.Tests -c Release
+
       - name: Build add-in (2024 to 2027) and connector
         if: steps.version.outputs.exists == 'false' || github.event_name == 'workflow_dispatch'
         shell: pwsh
