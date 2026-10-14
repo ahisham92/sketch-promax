@@ -102,6 +102,7 @@ public sealed class ToolRegistry
         new CreateMepRunsTool(),
         new DimensionOpeningsTool(),
         new AddSpotElevationsTool(),
+        new DimensionRoomsTool(),
         new SetCurtainGridTool(),
         new ExportBcfTool(),
 
@@ -116,6 +117,7 @@ public sealed class ToolRegistry
         // Recipes replay other tools, so they need the registry itself.
         registry.Add(new SaveRecipeTool(registry));
         registry.Add(new RunRecipeTool(registry));
+        registry.Add(new BatchRunRecipeTool(registry));
         return registry;
     }
 }

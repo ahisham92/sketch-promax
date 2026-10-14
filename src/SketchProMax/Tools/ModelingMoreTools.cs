@@ -40,15 +40,17 @@ public sealed class CreateStairsTool : IRevitTool
 {
     public string Name => "create_stairs";
     public string Description =>
-        "Create a straight-run stair between two levels, starting at a plan point and climbing in a direction, " +
-        "optionally with railings on both sides. Riser count and tread depth follow the stair type's rules. " +
-        "For L or U shaped stairs, create two runs with run_revit_code (StairsEditScope).";
+        "Create a stair between two levels, starting at a plan point and climbing in a direction: straight, L-shaped " +
+        "(turn left or right at a landing) or U-shaped (switchback), with railings. Riser count and tread depth follow " +
+        "the stair type's rules.";
     public string PropertiesJson => """
     {
       "base_level": {"type": "string"}, "top_level": {"type": "string"},
       "start": {"type": "array", "items": {"type": "number"}, "description": "[x, y] of the first riser's center, project units."},
       "direction": {"type": "array", "items": {"type": "number"}, "description": "[dx, dy] climbing direction, e.g. [0, 1] for north."},
       "width": {"type": "number", "description": "Run width, project units."},
+      "shape": {"type": "string", "enum": ["straight", "l_left", "l_right", "u_left", "u_right"], "description": "Default straight. L and U turn at a landing halfway up."},
+      "first_run_risers": {"type": "integer", "description": "Risers before the landing (default: half)."},
       "stair_type": {"type": "string"},
       "railings": {"type": "boolean", "description": "Add railings (default true)."},
       "railing_type": {"type": "string"}
@@ -78,11 +80,44 @@ public sealed class CreateStairsTool : IRevitTool
             if (args.OptString("stair_type") is { } typeName)
                 stairs.ChangeTypeId(TypeKit.Pick<StairsType>(doc, typeName, "stair").Id);
             risers = stairs.DesiredRisersNumber;
-            var treads = Math.Max(1, risers - 1);
-            var length = treads * stairs.ActualTreadDepth;
-            var run = StairsRun.CreateStraightRun(doc, stairsId,
-                Line.CreateBound(start, start + dir * length), StairsRunJustification.Center);
-            if (args.OptDouble("width") is { } w) run.ActualRunWidth = RevitHelpers.ToInternal(doc, w);
+            var tread = stairs.ActualTreadDepth;
+            var shape = args.OptString("shape") ?? "straight";
+            var width = args.OptDouble("width") is { } w ? RevitHelpers.ToInternal(doc, w) : (double?)null;
+            if (shape == "straight")
+            {
+                var run = StairsRun.CreateStraightRun(doc, stairsId,
+                    Line.CreateBound(start, start + dir * Math.Max(1, risers - 1) * tread), StairsRunJustification.Center);
+                if (width is { } rw) run.ActualRunWidth = rw;
+            }
+            else
+            {
+                var r1 = (int)(args.OptLong("first_run_risers") ?? risers / 2);
+                var r2 = risers - r1;
+                if (r1 < 2 || r2 < 2) throw new ArgumentException("Each run needs at least 2 risers.");
+                var run1 = StairsRun.CreateStraightRun(doc, stairsId,
+                    Line.CreateBound(start, start + dir * (r1 - 1) * tread), StairsRunJustification.Center);
+                if (width is { } rw1) run1.ActualRunWidth = rw1;
+                var runWidth = run1.ActualRunWidth;
+                var end1 = start + dir * (r1 - 1) * tread;
+                var side = shape.EndsWith("left", StringComparison.Ordinal) ? new XYZ(-dir.Y, dir.X, 0) : new XYZ(dir.Y, -dir.X, 0);
+                XYZ start2, dir2;
+                if (shape.StartsWith("l", StringComparison.Ordinal))
+                {
+                    start2 = end1 + dir * (tread / 2 + runWidth / 2) + side * (runWidth / 2 + tread / 2);
+                    dir2 = side;
+                }
+                else
+                {
+                    start2 = end1 + side * runWidth;
+                    dir2 = -dir;
+                }
+                var run2 = StairsRun.CreateStraightRun(doc, stairsId,
+                    Line.CreateBound(start2, start2 + dir2 * (r2 - 1) * tread), StairsRunJustification.Center);
+                run2.ActualRunWidth = runWidth;
+                run2.BaseElevation = run1.TopElevation;
+                if (StairsLanding.CanCreateAutomaticLanding(doc, run1.Id, run2.Id))
+                    StairsLanding.CreateAutomaticLanding(doc, run1.Id, run2.Id);
+            }
             t.Commit();
             scope.Commit(new TypeKit.SwallowWarnings());
         }
@@ -404,5 +439,82 @@ public sealed class DimensionOpeningsTool : IRevitTool
             foreach (Face face in solid.Faces)
                 if (face is PlanarFace pf && Math.Abs(pf.FaceNormal.DotProduct(dir)) > 0.99 && pf.Reference != null)
                     yield return pf.Reference;
+    }
+}
+
+public sealed class DimensionRoomsTool : IRevitTool
+{
+    public string Name => "dimension_rooms";
+    public string Description =>
+        "In a plan view, dimension each room's clear width and length (wall finish face to finish face) through the " +
+        "room's center. Works on rectangular-ish rooms bounded by walls.";
+    public string PropertiesJson => """
+    {
+      "view_id": {"type": "integer"},
+      "room_ids": {"type": "array", "items": {"type": "integer"}, "description": "Default: every room in the view."},
+      "directions": {"type": "string", "enum": ["both", "x", "y"]}
+    }
+    """;
+    public string[] Required => [];
+    public bool ModifiesModel => true;
+
+    public ToolResult Execute(UIApplication app, ToolArgs args)
+    {
+        var doc = app.ActiveUIDocument.Document;
+        if (ViewKit.ViewOrActive(doc, args.OptLong("view_id")) is not ViewPlan view) return ToolResult.Error("Use a plan view.");
+        var ids = args.LongList("room_ids");
+        var rooms = ids.Count > 0
+            ? ids.Select(i => doc.GetElement(new ElementId(i))).OfType<Room>().ToList()
+            : new FilteredElementCollector(doc, view.Id).OfCategory(BuiltInCategory.OST_Rooms).OfType<Room>().Where(r => r.Area > 0).ToList();
+        var which = args.OptString("directions") ?? "both";
+        var z = view.GenLevel?.Elevation ?? 0;
+        var created = new List<long>();
+        var skipped = new List<string>();
+
+        using var t = RevitHelpers.StartTransaction(doc, "Dimension rooms");
+        foreach (var room in rooms)
+        {
+            if (room.Location is not LocationPoint lp) continue;
+            var c = lp.Point;
+            var faces = new List<PlanarFace>();
+            var refs = new Dictionary<PlanarFace, Reference>();
+            var walls = room.GetBoundarySegments(new SpatialElementBoundaryOptions()).SelectMany(l => l)
+                .Select(seg => doc.GetElement(seg.ElementId)).OfType<Wall>().Distinct();
+            foreach (var wall in walls)
+                foreach (var shell in new[] { ShellLayerType.Interior, ShellLayerType.Exterior })
+                    foreach (var r in HostObjectUtils.GetSideFaces(wall, shell))
+                        if (wall.GetGeometryObjectFromReference(r) is PlanarFace pf && pf.FaceNormal.DotProduct(c - pf.Origin) > 0)
+                        {
+                            faces.Add(pf);
+                            refs[pf] = r;
+                        }
+
+            foreach (var axis in new[] { XYZ.BasisX, XYZ.BasisY })
+            {
+                if (which == "x" && axis.IsAlmostEqualTo(XYZ.BasisY) || which == "y" && axis.IsAlmostEqualTo(XYZ.BasisX)) continue;
+                double At(XYZ p) => p.DotProduct(axis);
+                PlanarFace? Crossing(PlanarFace f)
+                {
+                    var hit = f.Project(new XYZ(c.X, c.Y, f.Origin.Z));
+                    if (hit is null) return null;
+                    var other = hit.XYZPoint - new XYZ(c.X, c.Y, hit.XYZPoint.Z);
+                    return Math.Abs(other.DotProduct(new XYZ(-axis.Y, axis.X, 0))) < 0.05 ? f : null;
+                }
+                var low = faces.Where(f => f.FaceNormal.DotProduct(axis) > 0.99 && At(f.Origin) < At(c)).Select(Crossing).OfType<PlanarFace>()
+                    .OrderByDescending(f => At(f.Origin)).FirstOrDefault();
+                var high = faces.Where(f => f.FaceNormal.DotProduct(axis) < -0.99 && At(f.Origin) > At(c)).Select(Crossing).OfType<PlanarFace>()
+                    .OrderBy(f => At(f.Origin)).FirstOrDefault();
+                if (low is null || high is null) { skipped.Add($"{room.Number} ({(axis.X > 0 ? "x" : "y")}): no facing walls"); continue; }
+                var array = new ReferenceArray();
+                array.Append(refs[low]);
+                array.Append(refs[high]);
+                var a = new XYZ(c.X, c.Y, z) + axis * (At(low.Origin) - At(c));
+                var b = new XYZ(c.X, c.Y, z) + axis * (At(high.Origin) - At(c));
+                try { created.Add(doc.Create.NewDimension(view, Line.CreateBound(a, b), array).Id.Value); }
+                catch (Autodesk.Revit.Exceptions.ArgumentException ex) { skipped.Add($"{room.Number}: {ex.Message}"); }
+            }
+        }
+        t.Commit();
+        return ToolResult.Ok(new { rooms = rooms.Count, dimensions = created.Count, skipped });
     }
 }

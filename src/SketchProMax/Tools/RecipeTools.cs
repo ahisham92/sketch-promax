@@ -115,23 +115,31 @@ public sealed class RunRecipeTool : IRevitTool
 
     public ToolResult Execute(UIApplication app, ToolArgs args)
     {
-        var path = Recipes.PathFor(args.String("name"));
-        if (!File.Exists(path)) return ToolResult.Error($"No recipe named '{args.String("name")}'. Call list_recipes.");
+        var steps = Run(app, _registry, args.String("name"), args.Has("values") ? args.Raw["values"] : null, args.OptBool("continue_on_error"));
+        return steps is null
+            ? ToolResult.Error($"No recipe named '{args.String("name")}'. Call list_recipes.")
+            : ToolResult.Ok(new { recipe = args.String("name"), steps });
+    }
+
+    /// <summary>Runs a recipe on the active model. Returns per-step results, or null when the recipe doesn't exist.</summary>
+    public static List<object>? Run(UIApplication app, ToolRegistry registry, string recipe, JsonElement? values, bool keepGoing)
+    {
+        var path = Recipes.PathFor(recipe);
+        if (!File.Exists(path)) return null;
         var text = File.ReadAllText(path);
-        if (args.Has("values"))
-            foreach (var p in args.Raw["values"].EnumerateObject())
+        if (values is { ValueKind: JsonValueKind.Object } v)
+            foreach (var p in v.EnumerateObject())
                 text = text.Replace("{" + p.Name + "}", JsonEncodedText.Encode(p.Value.ToString()).ToString());
 
         using var doc = JsonDocument.Parse(text);
         var results = new List<object>();
-        var keepGoing = args.OptBool("continue_on_error");
         var index = 0;
         foreach (var step in doc.RootElement.GetProperty("steps").EnumerateArray())
         {
             index++;
             var name = step.GetProperty("tool").GetString() ?? "";
-            if (name == Name) { results.Add(new { step = index, tool = name, error = "a recipe can't run another recipe" }); continue; }
-            var tool = _registry.Find(name);
+            if (name is "run_recipe" or "batch_run_recipe") { results.Add(new { step = index, tool = name, error = "a recipe can't run another recipe" }); continue; }
+            var tool = registry.Find(name);
             if (tool is null) { results.Add(new { step = index, tool = name, error = "unknown tool" }); if (!keepGoing) break; continue; }
             var stepArgs = step.TryGetProperty("arguments", out var a) && a.ValueKind == JsonValueKind.Object
                 ? a.EnumerateObject().ToDictionary(p => p.Name, p => p.Value.Clone())
@@ -139,10 +147,97 @@ public sealed class RunRecipeTool : IRevitTool
             ToolResult result;
             try { result = tool.Execute(app, new ToolArgs(stepArgs)); }
             catch (Exception ex) { result = ToolResult.Error($"{ex.GetType().Name}: {ex.Message}"); }
+            ActivityLog.Write(app.ActiveUIDocument.Document.Title, tool, stepArgs, result);
             results.Add(new { step = index, tool = name, ok = !result.IsError, result = result.Text.Length > 800 ? result.Text.Substring(0, 800) + "…" : result.Text });
             if (result.IsError && !keepGoing) break;
         }
-        return ToolResult.Ok(new { recipe = args.String("name"), steps = results });
+        return results;
+    }
+}
+
+public sealed class BatchRunRecipeTool : IRevitTool
+{
+    public string Name => "batch_run_recipe";
+    public string Description =>
+        "Run a saved recipe on many models in turn: opens each .rvt (from a list or every .rvt in a folder), runs the " +
+        "recipe, optionally saves, and closes it. Workshared central models are opened detached and saved as a copy " +
+        "only when output_folder is given. Long-running: tell the user Revit will be busy.";
+    public string PropertiesJson => """
+    {
+      "recipe": {"type": "string"},
+      "model_paths": {"type": "array", "items": {"type": "string"}},
+      "folder": {"type": "string", "description": "Run on every .rvt in this folder (not subfolders)."},
+      "values": {"type": "object", "additionalProperties": {"type": "string"}},
+      "save": {"type": "boolean", "description": "Save each model after the recipe (default false). Ignored for detached central models."},
+      "output_folder": {"type": "string", "description": "Save each result here as a copy instead of overwriting."},
+      "continue_on_error": {"type": "boolean"}
+    }
+    """;
+    public string[] Required => ["recipe"];
+    public bool ModifiesModel => true;
+
+    private readonly ToolRegistry _registry;
+    public BatchRunRecipeTool(ToolRegistry registry) => _registry = registry;
+
+    public ToolResult Execute(UIApplication app, ToolArgs args)
+    {
+        var paths = args.StringList("model_paths");
+        if (args.OptString("folder") is { } folder)
+            paths.AddRange(Directory.GetFiles(folder, "*.rvt").Where(f => !System.Text.RegularExpressions.Regex.IsMatch(f, @"\.\d{4}\.rvt$")));
+        if (paths.Count == 0) return ToolResult.Error("Give model_paths or a folder with .rvt files.");
+        if (!File.Exists(Recipes.PathFor(args.String("recipe")))) return ToolResult.Error($"No recipe named '{args.String("recipe")}'.");
+
+        var startDoc = app.ActiveUIDocument?.Document;
+        var output = args.OptString("output_folder");
+        if (output != null) Directory.CreateDirectory(output);
+        var values = args.Has("values") ? args.Raw["values"] : (JsonElement?)null;
+        var report = new List<object>();
+        Autodesk.Revit.DB.Document? previous = null;
+
+        foreach (var path in paths)
+        {
+            try
+            {
+                var modelPath = Autodesk.Revit.DB.ModelPathUtils.ConvertUserVisiblePathToModelPath(path);
+                var info = Autodesk.Revit.DB.BasicFileInfo.Extract(path);
+                var options = new Autodesk.Revit.DB.OpenOptions();
+                if (info.IsWorkshared) options.DetachFromCentralOption = Autodesk.Revit.DB.DetachFromCentralOption.DetachAndPreserveWorksets;
+                var uidoc = app.OpenAndActivateDocument(modelPath, options, false);
+                CloseQuietly(previous, startDoc);
+
+                var steps = RunRecipeTool.Run(app, _registry, args.String("recipe"), values, args.OptBool("continue_on_error"));
+                string saved = "not saved";
+                var doc = uidoc.Document;
+                if (output != null)
+                {
+                    var target = Path.Combine(output, Path.GetFileName(path));
+                    var save = new Autodesk.Revit.DB.SaveAsOptions { OverwriteExistingFile = true };
+                    if (doc.IsWorkshared) save.SetWorksharingOptions(new Autodesk.Revit.DB.WorksharingSaveAsOptions { SaveAsCentral = true });
+                    doc.SaveAs(target, save);
+                    saved = target;
+                }
+                else if (args.OptBool("save") && !info.IsWorkshared)
+                {
+                    doc.Save();
+                    saved = "saved";
+                }
+                report.Add(new { model = path, saved, steps });
+                previous = doc;
+            }
+            catch (Exception ex) when (ex is Autodesk.Revit.Exceptions.ApplicationException or IOException or InvalidOperationException)
+            {
+                report.Add(new { model = path, error = ex.Message });
+            }
+        }
+        return ToolResult.Ok(new { recipe = args.String("recipe"), models = report.Count, report, note = "The last model stays open in Revit." });
+    }
+
+    /// <summary>Closes a batch model once another one is active. The model the user started in is never closed.</summary>
+    private static void CloseQuietly(Autodesk.Revit.DB.Document? doc, Autodesk.Revit.DB.Document? keep)
+    {
+        if (doc is null || (keep != null && doc.Equals(keep))) return;
+        try { doc.Close(false); }
+        catch (Autodesk.Revit.Exceptions.ApplicationException) { }
     }
 }
 
