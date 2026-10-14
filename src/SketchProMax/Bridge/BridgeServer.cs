@@ -164,6 +164,15 @@ public sealed class BridgeServer
 
     private Task<ToolResult> CallTool(string name, Dictionary<string, JsonElement> args)
     {
+        if (name == "run_learned_tool" && args.TryGetValue("name", out var inner) && inner.ValueKind == JsonValueKind.String
+            && LearnedTools.Load(inner.GetString()!) is { } learned)
+        {
+            // Run the learned tool itself, so it gets its own approval, transaction and log entry.
+            name = learned.Name;
+            args = args.TryGetValue("arguments", out var a) && a.ValueKind == JsonValueKind.Object
+                ? a.EnumerateObject().ToDictionary(p => p.Name, p => p.Value.Clone())
+                : new Dictionary<string, JsonElement>();
+        }
         var tool = _registry.Find(name);
         if (tool is null) return Task.FromResult(ToolResult.Error($"Unknown tool '{name}'."));
         var confirm = tool.ModifiesModel && AgentSettings.Load().RequireApprovalForChanges;
@@ -203,7 +212,9 @@ public sealed class BridgeServer
     private static bool Approve(IRevitTool tool, Dictionary<string, JsonElement> args)
     {
         // Show code as code, so the user can read what will run.
-        var json = args.TryGetValue("code", out var code) && code.ValueKind == JsonValueKind.String
+        var json = tool is LearnedTool learned
+            ? $"Learned tool: {learned.Summary}\n\nInputs: {JsonSerializer.Serialize(args)}\n\n{learned.Code}"
+            : args.TryGetValue("code", out var code) && code.ValueKind == JsonValueKind.String
             ? (args.TryGetValue("description", out var d) ? d.GetString() + "\n\n" : "") + code.GetString()
             : JsonSerializer.Serialize(args, new JsonSerializerOptions { WriteIndented = true });
         if (json.Length > 6000) json = json.Substring(0, 6000) + "\n…";

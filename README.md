@@ -1,6 +1,6 @@
 # Sketch ProMax
 
-An AI agent for Autodesk Revit 2024, 2025, 2026 and 2027, powered by Claude. Ask in plain language; it reads, documents, audits and edits the open model through 95 tools. It asks for your approval before every change, and every change can be undone with Ctrl+Z.
+An AI agent for Autodesk Revit 2024, 2025, 2026 and 2027, powered by Claude. Ask in plain language; it reads, documents, audits and edits the open model through 99 tools, and it learns new ones as you use it. It asks for your approval before every change, and every change can be undone with Ctrl+Z.
 
 See [docs/PLAN.md](docs/PLAN.md) for the comparison with SketchPro, the roadmap and the architecture.
 
@@ -93,6 +93,8 @@ To publish an update: bump `<Version>` in both project files and push to `main`.
 
 **Recipes and activity log:** save a workflow that worked as a recipe and rerun it later without the AI (with blanks like {level} filled in each time), on the open model or on a whole folder of models. Every tool call is logged per day in `%APPDATA%\SketchProMax\logs`, so Claude can report what it changed.
 
+**Learns new tools:** when you ask for something no tool covers, Claude writes the Revit API code, and once it works it saves it as a new named tool with its own inputs. Learned tools show up as ordinary tools in every later chat and every Revit window, run behind the same approval, and are kept in `%APPDATA%\SketchProMax\learned-tools` (copy the files to share them). Ask "what have you learned?" to list them, or ask Claude to change or delete one.
+
 
 **Openings and slabs:** find where pipes, ducts, cable trays and conduits (in this model or linked MEP models) cross walls, floors and beams, and add openings with your own opening family or a plain cut; cut notches or recesses into slab edges; add slab edges; lay out hollow core planks over a slab, room or outline with plank marks.
 **Coordination:** write issues (elements, snapshot and camera) to a BCF file for ACC, Navisworks, Solibri or BIMcollab.
@@ -134,7 +136,7 @@ src/SketchProMax/            The Revit add-in (net48 for Revit 2024, net8.0-wind
   Agent/SystemPrompt         Instructions the desktop app receives from the connector
   Bridge/BridgeServer        Per-Revit-window named-pipe server the connector talks to
   Revit/                     Main-thread dispatcher (ExternalEvent), helpers, Revit 2024 dependency loader
-  Tools/                     The 93 IRevitTool implementations and the registry (CodeTools compiles C# with Roslyn)
+  Tools/                     The 97 IRevitTool implementations and the registry (CodeTools compiles C# with Roslyn)
   UI/                        Settings dialog
   Settings/                  Per-user settings (approval switch, auto-update, firm standards)
   Update/Updater             Self-update from GitHub Releases

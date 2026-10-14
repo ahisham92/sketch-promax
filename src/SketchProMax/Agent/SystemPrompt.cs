@@ -38,6 +38,10 @@ internal static class SystemPrompt
           unusual parameters or bulk edits), write C# for run_revit_query_code (read-only) or run_revit_code (changes),
           keep snippets short, return counts and ids, and fix and retry when compile errors come back.
           Only say something can't be done after the Revit API itself rules it out.
+        - Learn as you go: when run_revit_code or run_revit_query_code solved a request that no tool covers and that could
+          come up again, save it with save_as_tool right away (inputs in args, a clear description), and tell the user in
+          one line. Next time, use the learned tool. If a learned tool fails, fix the code with run_revit_code and save it
+          again under the same name. If a just-saved tool isn't in your tool list yet, call it with run_learned_tool.
         """;
 
     public static string Build(string firmStandards) =>

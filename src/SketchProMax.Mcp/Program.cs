@@ -18,15 +18,20 @@ builder.Logging.AddConsole(o => o.LogToStandardErrorThreshold = LogLevel.Trace);
 builder.Services
     .AddMcpServer(o =>
     {
-        o.ServerInfo = new() { Name = "sketch-promax", Version = "0.12.0" };
+        o.ServerInfo = new() { Name = "sketch-promax", Version = "0.13.0" };
         o.ServerInstructions = SystemPrompt.Build(RevitBridge.FirmStandards());
+        // Learned tools can be added mid-chat; the client is told to refresh its list when that happens.
+        o.Capabilities = new() { Tools = new() { ListChanged = true } };
     })
     .WithStdioServerTransport()
     .WithListToolsHandler((ctx, ct) => ValueTask.FromResult(new ListToolsResult { Tools = RevitBridge.LoadTools() }))
     .WithCallToolHandler(async (ctx, ct) =>
     {
         var p = ctx.Params ?? throw new InvalidOperationException("Missing tool call parameters.");
-        return await RevitBridge.CallAsync(p.Name, p.Arguments, ct);
+        var result = await RevitBridge.CallAsync(p.Name, p.Arguments, ct);
+        if (p.Name is "save_as_tool" or "delete_learned_tool" && result.IsError != true)
+            await ctx.Server.SendNotificationAsync(NotificationMethods.ToolListChangedNotification, ct);
+        return result;
     });
 
 await builder.Build().RunAsync();
@@ -90,7 +95,34 @@ internal static class RevitBridge
             InputSchema = t.GetProperty("inputSchema").Clone(),
         }).ToList();
         tools.AddRange(ConnectionTools);
+        tools.AddRange(LearnedTools(tools.Select(t => t.Name).ToHashSet()));
         return tools;
+    }
+
+    /// <summary>Tools Claude saved with save_as_tool, read from the files the add-in writes.</summary>
+    private static IEnumerable<Tool> LearnedTools(HashSet<string> taken)
+    {
+        var folder = Path.Combine(Folder, "learned-tools");
+        if (!Directory.Exists(folder)) yield break;
+        foreach (var file in Directory.GetFiles(folder, "*.json").OrderBy(f => f))
+        {
+            Tool? tool = null;
+            try
+            {
+                using var doc = JsonDocument.Parse(File.ReadAllText(file));
+                var r = doc.RootElement;
+                var name = r.GetProperty("name").GetString()!;
+                if (taken.Add(name))
+                    tool = new Tool
+                    {
+                        Name = name,
+                        Description = r.GetProperty("description").GetString(),
+                        InputSchema = r.GetProperty("inputSchema").Clone(),
+                    };
+            }
+            catch (Exception ex) when (ex is IOException or JsonException or KeyNotFoundException or InvalidOperationException) { }
+            if (tool is not null) yield return tool;
+        }
     }
 
     public static string FirmStandards()

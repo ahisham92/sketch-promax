@@ -15,7 +15,10 @@ public sealed class ToolRegistry
 
     public IReadOnlyCollection<IRevitTool> All => _tools.Values;
 
-    public IRevitTool? Find(string name) => _tools.TryGetValue(name, out var tool) ? tool : null;
+    /// <summary>A built-in tool, or a learned tool read fresh from disk so tools saved in another Revit window work too.</summary>
+    public IRevitTool? Find(string name) => _tools.TryGetValue(name, out var tool) ? tool : LearnedTools.Load(name);
+
+    public bool IsBuiltIn(string name) => _tools.ContainsKey(name);
 
     public static ToolRegistry CreateDefault()
     {
@@ -133,6 +136,10 @@ public sealed class ToolRegistry
         registry.Add(new SaveRecipeTool(registry));
         registry.Add(new RunRecipeTool(registry));
         registry.Add(new BatchRunRecipeTool(registry));
+        registry.Add(new SaveAsToolTool(registry));
+        registry.Add(new ListLearnedToolsTool());
+        registry.Add(new RunLearnedToolTool());
+        registry.Add(new DeleteLearnedToolTool());
         return registry;
     }
 }

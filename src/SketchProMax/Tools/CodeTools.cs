@@ -35,10 +35,13 @@ public abstract class RevitCodeToolBase : IRevitTool
         " Write a C# method body using the Revit API of the running Revit version. Use dedicated tools first when one fits; " +
         "use this for anything they can't do. If compilation fails, the errors come back with line numbers so you can fix and retry.";
 
-    public ToolResult Execute(UIApplication app, ToolArgs args)
+    public ToolResult Execute(UIApplication app, ToolArgs args) =>
+        RunScript(app, args.String("code"), args.String("description"), ModifiesModel, new Dictionary<string, object?>());
+
+    /// <summary>Compiles and runs a snippet, inside one transaction when it changes the model. Learned tools use this too.</summary>
+    internal static ToolResult RunScript(UIApplication app, string code, string description, bool modifiesModel,
+        IDictionary<string, object?> values)
     {
-        var code = args.String("code");
-        var description = args.String("description");
         var uidoc = app.ActiveUIDocument;
         var doc = uidoc.Document;
 
@@ -47,13 +50,13 @@ public abstract class RevitCodeToolBase : IRevitTool
 
         var log = new StringBuilder();
         object? result;
-        if (ModifiesModel)
+        if (modifiesModel)
         {
             using var t = new Transaction(doc, $"Sketch ProMax: {Trim(description, 60)}");
             t.Start();
             try
             {
-                result = run(app, uidoc, doc, log);
+                result = run(app, uidoc, doc, log, values);
             }
             catch (Exception ex)
             {
@@ -66,14 +69,14 @@ public abstract class RevitCodeToolBase : IRevitTool
         }
         else
         {
-            try { result = run(app, uidoc, doc, log); }
+            try { result = run(app, uidoc, doc, log, values); }
             catch (Exception ex) { return ToolResult.Error($"The code failed. {Unwrap(ex)}\n{log}"); }
         }
 
         return new ToolResult(JsonSerializer.Serialize(new { result = SafeJson(result), log = log.Length > 0 ? log.ToString() : null }));
     }
 
-    private static string Unwrap(Exception ex)
+    internal static string Unwrap(Exception ex)
     {
         if (ex is TargetInvocationException { InnerException: { } inner }) ex = inner;
         var line = ScriptCompiler.LineOf(ex);
@@ -133,7 +136,7 @@ public sealed class RunRevitCodeTool : RevitCodeToolBase
 /// <summary>Compiles snippets with Roslyn, caching by source so a retried snippet doesn't compile twice.</summary>
 internal static class ScriptCompiler
 {
-    public delegate object? Script(UIApplication app, UIDocument uidoc, Document doc, StringBuilder log);
+    public delegate object? Script(UIApplication app, UIDocument uidoc, Document doc, StringBuilder log, IDictionary<string, object?> args);
 
     private const string Header = """
         using System;
@@ -148,7 +151,7 @@ internal static class ScriptCompiler
         using Autodesk.Revit.UI;
         public static class SketchProMaxScript
         {
-            public static object Run(UIApplication app, UIDocument uidoc, Document doc, System.Text.StringBuilder log)
+            public static object Run(UIApplication app, UIDocument uidoc, Document doc, System.Text.StringBuilder log, IDictionary<string, object> args)
             {
         #line 1 "snippet"
         """;
@@ -189,7 +192,7 @@ internal static class ScriptCompiler
 
         var assembly = Load(pe.ToArray(), pdb.ToArray());
         var method = assembly.GetType("SketchProMaxScript")!.GetMethod("Run")!;
-        Script run = (app, uidoc, doc, log) => method.Invoke(null, [app, uidoc, doc, log]);
+        Script run = (app, uidoc, doc, log, args) => method.Invoke(null, [app, uidoc, doc, log, args]);
         if (Cache.Count > 50) Cache.Clear();
         Cache[code] = run;
         return (run, "");
