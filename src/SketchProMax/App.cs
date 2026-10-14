@@ -44,6 +44,10 @@ public sealed class App : IExternalApplication
             ToolTip = "Firm standards and whether Revit asks before Claude changes the model.",
             AvailabilityClassName = typeof(AlwaysAvailable).FullName,
         });
+        panel.AddItem(new PushButtonData("SketchProMaxSelfTest", "Self-test", assembly, typeof(SelfTestCommand).FullName)
+        {
+            ToolTip = "Run every Sketch ProMax tool once on the open model and report what works. Changes are rolled back, so the model is left as it was.",
+        });
         return Result.Succeeded;
     }
 

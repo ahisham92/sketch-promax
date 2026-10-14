@@ -38,6 +38,8 @@ public sealed class BridgeServer
     public static string ToolsFile => Path.Combine(Root, "tools.json");
 
     private readonly ToolRegistry _registry;
+
+    public ToolRegistry Registry => _registry;
     private readonly RevitDispatcher _dispatcher;
     private readonly CancellationTokenSource _cts = new();
     private readonly string _revitVersion;

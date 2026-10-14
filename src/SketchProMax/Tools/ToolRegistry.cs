@@ -140,6 +140,7 @@ public sealed class ToolRegistry
         registry.Add(new ListLearnedToolsTool());
         registry.Add(new RunLearnedToolTool());
         registry.Add(new DeleteLearnedToolTool());
+        registry.Add(new RunSelfTestTool(registry));
         return registry;
     }
 }

@@ -52,3 +52,36 @@ public sealed class StatusCommand : IExternalCommand
         return Result.Succeeded;
     }
 }
+
+[Transaction(TransactionMode.Manual)]
+public sealed class SelfTestCommand : IExternalCommand
+{
+    public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
+    {
+        var app = commandData.Application;
+        if (app.ActiveUIDocument is null)
+        {
+            TaskDialog.Show("Sketch ProMax", "Open a model first. A copy of a real project gives the most useful result.");
+            return Result.Cancelled;
+        }
+        var ask = new TaskDialog("Sketch ProMax self-test")
+        {
+            MainInstruction = "Test every Sketch ProMax tool on this model?",
+            MainContent = "Each tool runs once with inputs taken from this model. Everything it creates or changes is rolled back " +
+                          "at the end, so the model is left exactly as it was. It can take a few minutes on a large model.",
+            CommonButtons = TaskDialogCommonButtons.Ok | TaskDialogCommonButtons.Cancel,
+        };
+        if (ask.Show() != TaskDialogResult.Ok) return Result.Cancelled;
+
+        var registry = App.Bridge?.Registry ?? Tools.ToolRegistry.CreateDefault();
+        var report = Tools.SelfTest.Run(app, registry, includeChanges: true);
+        new TaskDialog("Sketch ProMax self-test")
+        {
+            MainInstruction = report.Failed == 0 ? "Every tested tool works" : $"{report.Failed} tool(s) failed",
+            MainContent = report.Summary(),
+            FooterText = report.File is null ? "" : "Full report: " + report.File +
+                         "\nSend this file to Claude (attach it in the chat) to get the failures fixed.",
+        }.Show();
+        return Result.Succeeded;
+    }
+}
