@@ -142,24 +142,52 @@ internal static class Filters
 public sealed class ListViewFiltersTool : IRevitTool
 {
     public string Name => "list_view_filters";
-    public string Description => "List view filters in the model: name, categories, and which views/templates use them.";
-    public string PropertiesJson => "{}";
+    public string Description =>
+        "List view filters in the model: name, categories, and how many views/templates use them (with a few names). Paged.";
+    public string PropertiesJson => "{" + Paging.Properties + "}";
     public string[] Required => [];
     public bool ModifiesModel => false;
 
     public ToolResult Execute(UIApplication app, ToolArgs args)
     {
         var doc = app.ActiveUIDocument.Document;
-        var views = new FilteredElementCollector(doc).OfClass(typeof(View)).Cast<View>()
-            .Where(v => v.AreGraphicsOverridesAllowed()).ToList();
-        return ToolResult.Ok(new FilteredElementCollector(doc).OfClass(typeof(ParameterFilterElement))
-            .Cast<ParameterFilterElement>().Select(f => new
+        // One pass over the views, not one per filter.
+        var usedIn = new Dictionary<long, List<string>>();
+        foreach (var v in new FilteredElementCollector(doc).OfClass(typeof(View)).Cast<View>())
+        {
+            ICollection<ElementId> filters;
+            try
             {
-                id = f.Id.Value,
-                name = f.Name,
-                categories = f.GetCategories().Select(c => Category.GetCategory(doc, c)?.Name),
-                usedIn = views.Where(v => v.GetFilters().Contains(f.Id)).Select(v => v.Name),
-            }));
+                if (!v.AreGraphicsOverridesAllowed()) continue;
+                filters = v.GetFilters();
+            }
+            catch (Autodesk.Revit.Exceptions.ApplicationException) { continue; }
+            foreach (var id in filters)
+            {
+                if (!usedIn.TryGetValue(id.Value, out var list)) usedIn[id.Value] = list = [];
+                list.Add(v.IsTemplate ? v.Name + " (template)" : v.Name);
+            }
+        }
+
+        var all = new FilteredElementCollector(doc).OfClass(typeof(ParameterFilterElement))
+            .Cast<ParameterFilterElement>().OrderBy(f => f.Name);
+        var (page, info) = Paging.Page(Paging.Named(all, args, f => f.Name), args);
+        return ToolResult.Ok(new
+        {
+            filters = page.Select(f =>
+            {
+                var views = usedIn.TryGetValue(f.Id.Value, out var l) ? l : [];
+                return new
+                {
+                    id = f.Id.Value,
+                    name = f.Name,
+                    categories = f.GetCategories().Select(c => Category.GetCategory(doc, c)?.Name).ToList(),
+                    used_in_count = views.Count,
+                    used_in = views.Take(5).ToList(),
+                };
+            }),
+            page = info,
+        });
     }
 }
 

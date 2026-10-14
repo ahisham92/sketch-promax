@@ -24,7 +24,8 @@ public sealed class CollectTextTool : IRevitTool
       "parameters": {"type": "array", "items": {"type": "string"}, "description": "Text instance parameters to include, e.g. 'Comments'."},
       "parameter_categories": {"type": "array", "items": {"type": "string"}, "description": "Categories for 'parameters' (default: Rooms, Doors, Windows)."},
       "sheet_numbers": {"type": "array", "items": {"type": "string"}, "description": "Limit text notes and views to these sheets."},
-      "limit": {"type": "integer", "description": "Default 1500 items."}
+      "limit": {"type": "integer", "description": "Default 400 items per call."},
+      "offset": {"type": "integer", "description": "Skip this many items (next batch)."}
     }
     """;
     public string[] Required => [];
@@ -84,8 +85,8 @@ public sealed class CollectTextTool : IRevitTool
                         if (e.LookupParameter(n) is { StorageType: StorageType.String } p) Add(e, "param:" + n, p.AsString());
         }
 
-        var limit = (int)(args.OptLong("limit") ?? 1500);
-        return ToolResult.Ok(new { total = items.Count, items = items.Take(limit), truncated = items.Count > limit });
+        var (page, info) = Paging.Page(items, args, 400);
+        return ToolResult.Ok(new { items = page, page = info });
     }
 }
 

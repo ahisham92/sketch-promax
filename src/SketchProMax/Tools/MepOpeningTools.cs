@@ -119,10 +119,16 @@ public sealed class CreateMepOpeningsTool : IRevitTool
 
     private static IEnumerable<(Document Doc, Transform Transform, string Name)> Sources(Document doc, List<string> wanted)
     {
-        bool Wants(string name) => wanted.Count == 0 || wanted.Any(w => name.IndexOf(w, StringComparison.OrdinalIgnoreCase) >= 0);
-        if (Wants("this model")) yield return (doc, Transform.Identity, "this model");
-        foreach (var link in new FilteredElementCollector(doc).OfClass(typeof(RevitLinkInstance)).Cast<RevitLinkInstance>())
-            if (link.GetLinkDocument() is { } linked && Wants(link.Name))
+        var links = new FilteredElementCollector(doc).OfClass(typeof(RevitLinkInstance)).Cast<RevitLinkInstance>().ToList();
+        var thisModel = wanted.Count == 0 || wanted.Any(w => w.Trim().Equals("this model", StringComparison.OrdinalIgnoreCase));
+        // Each named link resolves to one link file (all its placed copies); an ambiguous name is reported, not guessed.
+        var types = wanted.Count == 0
+            ? links.Select(l => l.GetTypeId().Value).ToHashSet()
+            : wanted.Where(w => !w.Trim().Equals("this model", StringComparison.OrdinalIgnoreCase))
+                .Select(w => LinkMatch.Find(doc, links, w).GetTypeId().Value).ToHashSet();
+        if (thisModel) yield return (doc, Transform.Identity, "this model");
+        foreach (var link in links)
+            if (types.Contains(link.GetTypeId().Value) && link.GetLinkDocument() is { } linked)
                 yield return (linked, link.GetTotalTransform(), link.Name);
     }
 

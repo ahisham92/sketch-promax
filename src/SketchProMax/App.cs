@@ -28,7 +28,8 @@ public sealed class App : IExternalApplication
         Bridge = new BridgeServer(ToolRegistry.CreateDefault(), Dispatcher, application.ControlledApplication.VersionNumber);
         Bridge.Start();
         _ = Task.Run(() => ClaudeRegistration.Ensure());
-        if (AgentSettings.Load().AutoUpdate) _ = Task.Run(CheckForUpdateAsync);
+        // Check at every start, then hourly while Revit stays open, so a fix is staged by the time Revit is next closed.
+        if (AgentSettings.Load().AutoUpdate) _ = Task.Run(UpdateLoopAsync);
 
         const string tab = "Sketch ProMax";
         application.CreateRibbonTab(tab);
@@ -55,9 +56,22 @@ public sealed class App : IExternalApplication
         $"Sketch ProMax {version} has been downloaded. It starts the next time you open Revit.\n\n" +
         "Restart the Claude desktop app too (system tray > Quit, then open it again) so it picks up the new version.";
 
-    private static async Task CheckForUpdateAsync()
+    private static async Task UpdateLoopAsync()
     {
-        var staged = await Updater.CheckAsync(force: false).ConfigureAwait(false);
+        var force = true;
+        while (true)
+        {
+            try { await CheckForUpdateAsync(force).ConfigureAwait(false); }
+            catch (Exception) { /* a failed check is retried next round; Status shows the last error */ }
+            force = false;
+            await Task.Delay(TimeSpan.FromHours(1)).ConfigureAwait(false);
+            if (!AgentSettings.Load().AutoUpdate) return;
+        }
+    }
+
+    private static async Task CheckForUpdateAsync(bool force)
+    {
+        var staged = await Updater.CheckAsync(force).ConfigureAwait(false);
         if (staged is null) return;
         // Show the notice on Revit's main thread, when Revit is idle.
         await Dispatcher.InvokeAsync(_ =>

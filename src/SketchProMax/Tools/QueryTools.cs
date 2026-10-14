@@ -157,16 +157,20 @@ public sealed class GetElementParametersTool : IRevitTool
         return ToolResult.Ok(result);
     }
 
+    // Revit can expose the same parameter more than once (built-in and shared copies); list each name and value once.
     private static IEnumerable<object> Dump(Element e) =>
         e.Parameters.Cast<Parameter>()
             .Where(p => p.Definition != null)
-            .OrderBy(p => p.Definition.Name)
-            .Select(p => new
+            .Select(p => (Param: p, Name: p.Definition.Name, Value: RevitHelpers.ParamValue(p)))
+            .GroupBy(x => (x.Name, x.Value))
+            .Select(g => g.OrderBy(x => x.Param.IsReadOnly).First())
+            .OrderBy(x => x.Name)
+            .Select(x => new
             {
-                name = p.Definition.Name,
-                value = RevitHelpers.ParamValue(p),
-                storage = p.StorageType.ToString(),
-                readOnly = p.IsReadOnly,
+                name = x.Name,
+                value = x.Value,
+                storage = x.Param.StorageType.ToString(),
+                readOnly = x.Param.IsReadOnly,
             });
 }
 
@@ -174,31 +178,50 @@ public sealed class ListViewsAndSheetsTool : IRevitTool
 {
     public string Name => "list_views_and_sheets";
     public string Description =>
-        "List sheets (number, name, placed views) and non-template views (name, type, level, whether placed on a sheet).";
-    public string PropertiesJson => """
-    { "view_type": {"type": "string", "description": "Optional filter, e.g. 'FloorPlan', 'Section', 'Elevation', 'ThreeD', 'Schedule'."} }
-    """;
+        "List sheets (number, name, how many views are placed) and non-template views (name, type, level, sheet it is on). " +
+        "Paged: use name_contains, view_type and offset to get more on big models.";
+    public string PropertiesJson => "{" + """
+      "include": {"type": "string", "enum": ["both", "sheets", "views"], "description": "Default both, or views when view_type is given."},
+      "view_type": {"type": "string", "description": "Only views of this type, e.g. 'FloorPlan', 'Section', 'Elevation', 'ThreeD', 'Schedule', 'DraftingView'."},
+    """ + Paging.Properties + "}";
     public string[] Required => [];
     public bool ModifiesModel => false;
 
     public ToolResult Execute(UIApplication app, ToolArgs args)
     {
         var doc = app.ActiveUIDocument.Document;
+        var viewType = args.OptString("view_type");
+        var include = args.OptString("include") ?? (viewType is null ? "both" : "views");
         var sheets = new FilteredElementCollector(doc).OfClass(typeof(ViewSheet)).Cast<ViewSheet>()
             .OrderBy(s => s.SheetNumber).ToList();
-        var placed = sheets.SelectMany(s => s.GetAllPlacedViews()).Select(id => id.Value).ToHashSet();
+        var sheetOf = new Dictionary<long, string>();
+        foreach (var s in sheets)
+            foreach (var id in s.GetAllPlacedViews())
+                sheetOf[id.Value] = s.SheetNumber;
 
-        var filter = args.OptString("view_type");
-        var views = new FilteredElementCollector(doc).OfClass(typeof(View)).Cast<View>()
-            .Where(v => !v.IsTemplate && v is not ViewSheet && v.ViewType != ViewType.ProjectBrowser && v.ViewType != ViewType.SystemBrowser)
-            .Where(v => filter is null || string.Equals(v.ViewType.ToString(), filter, StringComparison.OrdinalIgnoreCase))
-            .Select(v => new { id = v.Id.Value, name = v.Name, type = v.ViewType.ToString(), level = v.GenLevel?.Name, onSheet = placed.Contains(v.Id.Value) });
-
-        return ToolResult.Ok(new
+        object? sheetPage = null, sheetInfo = null, viewPage = null, viewInfo = null;
+        if (include is "both" or "sheets")
         {
-            sheets = sheets.Select(s => new { id = s.Id.Value, number = s.SheetNumber, name = s.Name, views = s.GetAllPlacedViews().Select(v => doc.GetElement(v)?.Name) }),
-            views,
-        });
+            var (items, info) = Paging.Page(Paging.Named(sheets, args, s => s.SheetNumber + " " + s.Name), args);
+            sheetPage = items.Select(s => new { id = s.Id.Value, number = s.SheetNumber, name = s.Name, views = s.GetAllPlacedViews().Count });
+            sheetInfo = info;
+        }
+        if (include is "both" or "views")
+        {
+            var views = new FilteredElementCollector(doc).OfClass(typeof(View)).Cast<View>()
+                .Where(v => !v.IsTemplate && v is not ViewSheet && v.ViewType != ViewType.ProjectBrowser && v.ViewType != ViewType.SystemBrowser
+                            && v.ViewType != ViewType.Internal && v.ViewType != ViewType.Undefined)
+                .Where(v => viewType is null || string.Equals(v.ViewType.ToString(), viewType, StringComparison.OrdinalIgnoreCase))
+                .OrderBy(v => v.ViewType.ToString()).ThenBy(v => v.Name);
+            var (items, info) = Paging.Page(Paging.Named(views, args, v => v.Name), args);
+            viewPage = items.Select(v => new
+            {
+                id = v.Id.Value, name = v.Name, type = v.ViewType.ToString(), level = v.GenLevel?.Name,
+                sheet = sheetOf.TryGetValue(v.Id.Value, out var n) ? n : null,
+            });
+            viewInfo = info;
+        }
+        return ToolResult.Ok(new { sheets = sheetPage, sheets_page = sheetInfo, views = viewPage, views_page = viewInfo });
     }
 }
 
@@ -209,8 +232,8 @@ public sealed class ListTypesTool : IRevitTool
         "List the available family types / system types for a category (e.g. Walls, Doors, Title Blocks) " +
         "so you can pick an exact type name before creating elements.";
     public string PropertiesJson => """
-    { "category": {"type": "string"} }
-    """;
+    { "category": {"type": "string"},
+    """ + Paging.Properties + "}";
     public string[] Required => ["category"];
     public bool ModifiesModel => false;
 
@@ -222,7 +245,8 @@ public sealed class ListTypesTool : IRevitTool
             .Cast<ElementType>()
             .Select(t => new { id = t.Id.Value, family = t.FamilyName, type = t.Name })
             .OrderBy(t => t.family).ThenBy(t => t.type);
-        return ToolResult.Ok(types);
+        var (page, info) = Paging.Page(Paging.Named(types, args, t => t.family + ": " + t.type), args, 200);
+        return ToolResult.Ok(new { types = page, page = info });
     }
 }
 

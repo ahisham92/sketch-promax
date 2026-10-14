@@ -18,7 +18,7 @@ builder.Logging.AddConsole(o => o.LogToStandardErrorThreshold = LogLevel.Trace);
 builder.Services
     .AddMcpServer(o =>
     {
-        o.ServerInfo = new() { Name = "sketch-promax", Version = "0.13.2" };
+        o.ServerInfo = new() { Name = "sketch-promax", Version = "0.13.3" };
         o.ServerInstructions = SystemPrompt.Build(RevitBridge.FirmStandards());
         // Learned tools can be added mid-chat; the client is told to refresh its list when that happens.
         o.Capabilities = new() { Tools = new() { ListChanged = true } };

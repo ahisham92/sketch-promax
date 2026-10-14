@@ -120,7 +120,10 @@ internal static class SelfTest
                 var raw = JsonSerializer.SerializeToElement(c.Args(ctx));
                 var args = raw.EnumerateObject().ToDictionary(p => p.Name, p => p.Value.Clone());
                 var result = tool.Execute(app, new ToolArgs(args));
-                report.Results.Add(new(c.Tool, result.IsError ? "fail" : "pass", watch.ElapsedMilliseconds, Short(result.Text, 600)));
+                if (!result.IsError && result.Text.Length > 24000)
+                    report.Results.Add(new(c.Tool, "fail", watch.ElapsedMilliseconds, $"Output too large for a chat ({result.Text.Length:N0} characters)."));
+                else
+                    report.Results.Add(new(c.Tool, result.IsError ? "fail" : "pass", watch.ElapsedMilliseconds, Short(result.Text, 600)));
             }
             catch (Skip s) { report.Results.Add(new(c.Tool, "skip", 0, s.Message)); }
             catch (Exception ex)

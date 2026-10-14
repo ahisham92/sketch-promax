@@ -187,7 +187,7 @@ public sealed class BridgeServer
             try { result = tool.Execute(app, new ToolArgs(args)); }
             catch (Exception ex) { result = ToolResult.Error($"{ex.GetType().Name}: {ex.Message}"); }
             ActivityLog.Write(app.ActiveUIDocument.Document.Title, tool, args, result);
-            return result;
+            return Capped(result);
         });
     }
 
@@ -229,6 +229,20 @@ public sealed class BridgeServer
             DefaultButton = TaskDialogResult.Yes,
         };
         return dialog.Show() == TaskDialogResult.Yes;
+    }
+
+    private const int MaxResultChars = 24000;
+
+    /// <summary>A safety net for any tool: a huge result floods the chat, so it is cut with a note on how to ask for less.</summary>
+    private static ToolResult Capped(ToolResult result)
+    {
+        if (result.Text.Length <= MaxResultChars) return result;
+        return result with
+        {
+            Text = result.Text.Substring(0, MaxResultChars) +
+                   $"\n…[cut at {MaxResultChars:N0} of {result.Text.Length:N0} characters. Ask for less: use a filter such as " +
+                   "name_contains, category or level, or limit and offset to page through.]",
+        };
     }
 
     private static string Error(string message) => JsonSerializer.Serialize(new { text = message, isError = true });

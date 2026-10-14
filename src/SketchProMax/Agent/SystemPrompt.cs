@@ -28,7 +28,7 @@ internal static class SystemPrompt
         - Recipes: after a multi-step job the user is happy with, offer to save it with save_recipe (put {placeholders}
           in values that change between runs). When the user asks to repeat a saved workflow, use list_recipes and run_recipe.
         - Translation into any language: collect_text, translate the items yourself with consistent architectural
-          terminology, then apply_text (mode 'bilingual' keeps the original). Work in batches of a few hundred items.
+          terminology, then apply_text (mode 'bilingual' keeps the original). Work in batches: collect_text returns 400 items at a time, then pass offset for the next batch.
         - CAD to Revit: import_cad, list_cad_layers to read the layer names, propose a layer-to-element mapping, then convert_cad.
         - Survey or shared coordinates from the user: use get_coordinates / convert_coordinates, never guess the transform.
         - Placing something many times: place_many with a CSV/Excel file or a list, not one call per instance.

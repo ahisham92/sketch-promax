@@ -337,14 +337,16 @@ public sealed class QueryLinkedModelsTool : IRevitTool
             });
         }
 
-        var link = links.FirstOrDefault(l => l.Name.IndexOf(wanted, StringComparison.OrdinalIgnoreCase) >= 0)
-                   ?? throw new ArgumentException($"No link matching '{wanted}'. Links: {string.Join(", ", links.Select(l => l.Name))}");
+        var link = LinkMatch.Find(doc, links, wanted);
         var linkDoc = link.GetLinkDocument() ?? throw new InvalidOperationException($"'{link.Name}' is not loaded.");
 
         if (args.OptString("category") is not { } category)
         {
             var counts = new FilteredElementCollector(linkDoc).WhereElementIsNotElementType()
-                .Where(e => e.Category != null && e.Category.CategoryType == CategoryType.Model)
+                .Where(e => e.Category != null && e.Category.CategoryType == CategoryType.Model && !e.ViewSpecific
+                            && !e.Category.Name.StartsWith("<", StringComparison.Ordinal)
+                            && e.Category.Name.IndexOf("Analytical", StringComparison.OrdinalIgnoreCase) < 0
+                            && e.get_BoundingBox(null) != null)
                 .GroupBy(e => e.Category.Name).Select(g => new { category = g.Key, count = g.Count() })
                 .OrderByDescending(x => x.count).ToList();
             return ToolResult.Ok(new { link = link.Name, categories = counts });
@@ -440,5 +442,46 @@ public sealed class LoadFamilyTool : IRevitTool
             overwriteParameterValues = overwrite;
             return overwrite;
         }
+    }
+}
+
+/// <summary>
+/// Picks one link from what the user called it. Exact file names win over whole words ("EL" in "Tower-EL-Model"),
+/// which win over parts of words; a tie between different links is reported instead of guessed.
+/// </summary>
+internal static class LinkMatch
+{
+    public static RevitLinkInstance Find(Document doc, IList<RevitLinkInstance> links, string wanted)
+    {
+        string FileName(RevitLinkInstance l)
+        {
+            var name = (doc.GetElement(l.GetTypeId()) as RevitLinkType)?.Name ?? l.Name;
+            var colon = name.IndexOf(" : ", StringComparison.Ordinal);
+            if (colon > 0) name = name.Substring(0, colon);
+            return name.EndsWith(".rvt", StringComparison.OrdinalIgnoreCase) ? name.Substring(0, name.Length - 4) : name;
+        }
+        var w = wanted.Trim();
+        if (w.EndsWith(".rvt", StringComparison.OrdinalIgnoreCase)) w = w.Substring(0, w.Length - 4);
+        var tokens = System.Text.RegularExpressions.Regex.Split(w, "[^A-Za-z0-9]+").Where(t => t.Length > 0).ToList();
+
+        int Rank(RevitLinkInstance l)
+        {
+            var file = FileName(l);
+            if (string.Equals(file, w, StringComparison.OrdinalIgnoreCase)) return 3;
+            var words = System.Text.RegularExpressions.Regex.Split(file, "[^A-Za-z0-9]+")
+                .Where(t => t.Length > 0).Select(t => t.ToUpperInvariant()).ToHashSet();
+            if (tokens.Count > 0 && tokens.All(t => words.Contains(t.ToUpperInvariant()))) return 2;
+            return file.IndexOf(w, StringComparison.OrdinalIgnoreCase) >= 0 ? 1 : 0;
+        }
+
+        var ranked = links.Select(l => (Link: l, Rank: Rank(l))).Where(x => x.Rank > 0).ToList();
+        if (ranked.Count == 0)
+            throw new ArgumentException($"No link matching '{wanted}'. Links: {string.Join(", ", links.Select(FileName).Distinct())}");
+        var best = ranked.Max(x => x.Rank);
+        var top = ranked.Where(x => x.Rank == best).Select(x => x.Link).ToList();
+        var files = top.Select(FileName).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        if (files.Count > 1)
+            throw new ArgumentException($"'{wanted}' matches several links: {string.Join(", ", files)}. Ask the user which one, then use its full name.");
+        return top[0];
     }
 }
