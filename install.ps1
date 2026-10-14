@@ -7,6 +7,10 @@ $ErrorActionPreference = "Stop"
 $dist = Join-Path $PSScriptRoot "dist"
 if (-not (Test-Path $dist)) { throw "Run .\build.ps1 first." }
 
+# Files from a downloaded zip carry a "came from the internet" mark that makes Windows and
+# Revit 2024 (.NET Framework) refuse to load them. Clear it.
+Get-ChildItem $PSScriptRoot -Recurse -File | Unblock-File
+
 foreach ($v in 2024, 2025, 2026) {
     $src = Join-Path $dist "Revit$v"
     $addins = Join-Path $env:APPDATA "Autodesk\Revit\Addins\$v"
