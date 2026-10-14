@@ -24,6 +24,8 @@ internal static class SelfTest
         public string RevitVersion { get; init; } = "";
         public string AddinVersion { get; init; } = "";
         public DateTime Ran { get; init; } = DateTime.Now;
+        public string Mode { get; init; } = "";
+        public bool LargeModel { get; init; }
         public List<Outcome> Results { get; } = [];
         public int Passed => Results.Count(r => r.Status == "pass");
         public int Failed => Results.Count(r => r.Status == "fail");
@@ -92,95 +94,211 @@ internal static class SelfTest
         public string UpperName => Upper?.Name ?? throw new Skip("the model needs two levels");
     }
 
-    private sealed record Case(string Tool, Func<Ctx, object> Args);
+    private sealed record Case(string Tool, Func<Ctx, object> Args, string[]? Setup = null, bool Heavy = false);
 
-    public static Report Run(UIApplication app, ToolRegistry registry, bool includeChanges, IProgress<string>? progress = null)
+    public enum Mode { Safe, Full }
+
+    /// <summary>One run in progress. Each tool runs in its own Revit API call, so Revit stays responsive in between.</summary>
+    private sealed class Run
     {
+        public required Report Report;
+        public required Ctx Ctx;
+        public required Mode Mode;
+        public required bool Big;
+        public required List<Case> Steps;
+        public int Done;
+        public string? Current;
+        public string? StoppedBecause;
+        public bool Finished;
+        public readonly CancellationTokenSource Cancel = new();
+    }
+
+    private static volatile Run? _run;
+
+    public static bool IsRunning => _run is { Finished: false };
+
+    private const int SlowStepMs = 60000;
+
+    /// <summary>
+    /// Starts a self-test on the active model and returns at once. Call on Revit's main thread.
+    /// Safe mode runs the read-only tools; full mode also runs the editing tools, each inside its own
+    /// transaction group that is rolled back straight after, so the model is left as it was.
+    /// </summary>
+    public static string Start(UIApplication app, ToolRegistry registry, Mode mode, Action<Report>? onDone = null)
+    {
+        if (IsRunning) return "A self-test is already running. " + Progress();
         var doc = app.ActiveUIDocument?.Document ?? throw new InvalidOperationException("Open a model first.");
-        var report = new Report
-        {
-            Model = doc.Title,
-            RevitVersion = app.Application.VersionNumber,
-            AddinVersion = typeof(SelfTest).Assembly.GetName().Version?.ToString() ?? "",
-        };
+        if (doc.IsReadOnly) throw new InvalidOperationException("This model is read-only.");
         var temp = Path.Combine(Path.GetTempPath(), "SketchProMax-self-test-" + Guid.NewGuid().ToString("N").Substring(0, 8));
         Directory.CreateDirectory(temp);
         var ctx = Collect(app, doc, registry, temp);
 
-        var tested = new HashSet<string>();
-        void RunCase(Case c)
+        // Large models: tools that touch every element in a view or the model are skipped, so nothing runs for minutes.
+        var size = new FilteredElementCollector(doc).OfClass(typeof(FamilyInstance)).GetElementCount()
+                   + new FilteredElementCollector(doc).OfClass(typeof(Wall)).GetElementCount()
+                   + new FilteredElementCollector(doc).OfClass(typeof(Floor)).GetElementCount();
+        var big = size > 5000;
+
+        var steps = ReadOnlyCases().Concat(FileCases()).ToList();
+        if (mode == Mode.Full) steps.AddRange(ChangeCases());
+
+        var run = new Run
         {
-            tested.Add(c.Tool);
-            progress?.Report(c.Tool);
-            var tool = registry.Find(c.Tool);
-            if (tool is null) { report.Results.Add(new(c.Tool, "fail", 0, "Tool not found in the registry.")); return; }
-            var watch = Stopwatch.StartNew();
-            try
+            Report = new Report
             {
-                var raw = JsonSerializer.SerializeToElement(c.Args(ctx));
-                var args = raw.EnumerateObject().ToDictionary(p => p.Name, p => p.Value.Clone());
-                var result = Revit.FailureGuard.Run(() => tool.Execute(app, new ToolArgs(args)));
-                if (!result.IsError && result.Text.Length > 24000)
-                    report.Results.Add(new(c.Tool, "fail", watch.ElapsedMilliseconds, $"Output too large for a chat ({result.Text.Length:N0} characters)."));
-                else
-                    report.Results.Add(new(c.Tool, result.IsError ? "fail" : "pass", watch.ElapsedMilliseconds, Short(result.Text, 600)));
-            }
-            catch (Skip s) { report.Results.Add(new(c.Tool, "skip", 0, s.Message)); }
-            catch (Exception ex)
+                Model = doc.Title,
+                RevitVersion = app.Application.VersionNumber,
+                AddinVersion = typeof(SelfTest).Assembly.GetName().Version?.ToString() ?? "",
+                Mode = mode.ToString().ToLowerInvariant(),
+                LargeModel = big,
+            },
+            Ctx = ctx, Mode = mode, Big = big, Steps = steps,
+        };
+        _run = run;
+        _ = Task.Run(() => Loop(run, registry, onDone));
+        return $"Self-test started on '{doc.Title}' in {run.Report.Mode} mode ({steps.Count} steps" +
+               (big ? $", large model with {size:N0} elements: heavy tools are skipped" : "") +
+               "). Revit stays usable between steps; don't switch to another model until it finishes.";
+    }
+
+    public static void Stop() => _run?.Cancel.Cancel();
+
+    public static string Progress()
+    {
+        var r = _run;
+        if (r is null) return "No self-test has run since Revit started.";
+        return r.Finished
+            ? $"Finished: {r.Report.Summary()}" + (r.StoppedBecause is null ? "" : $" Stopped early: {r.StoppedBecause}") +
+              (r.Report.File is null ? "" : $" Report: {r.Report.File}")
+            : $"Running: {r.Done} of {r.Steps.Count} steps done{(r.Current is null ? "" : $", now {r.Current}")}.";
+    }
+
+    public static Report? LastReport => _run?.Report;
+
+    private static async Task Loop(Run run, ToolRegistry registry, Action<Report>? onDone)
+    {
+        try
+        {
+            foreach (var step in run.Steps)
             {
-                report.Results.Add(new(c.Tool, "fail", watch.ElapsedMilliseconds, Bridge.BridgeServer.Describe(tool, ex)));
+                if (run.Cancel.IsCancellationRequested) { run.StoppedBecause ??= "stopped by the user"; break; }
+                run.Current = step.Tool;
+                var watch = Stopwatch.StartNew();
+                Outcome outcome;
+                try
+                {
+                    outcome = await App.Dispatcher.InvokeAsync(app => RunStep(app, run, registry, step)).ConfigureAwait(false);
+                }
+                catch (Exception ex) { outcome = new(step.Tool, "fail", watch.ElapsedMilliseconds, $"{ex.GetType().Name}: {ex.Message}"); }
+                lock (run.Report.Results) run.Report.Results.Add(outcome);
+                run.Done++;
+                if (outcome.Status == "stop") { run.StoppedBecause = outcome.Message; break; }
+                if (outcome.Ms > SlowStepMs) { run.StoppedBecause = $"{step.Tool} took {outcome.Ms / 1000} s, so the test stopped to keep Revit responsive"; break; }
+                // Give Revit room to redraw and handle the user between steps.
+                await Task.Delay(150).ConfigureAwait(false);
             }
+            run.Report.Results.RemoveAll(r => r.Status == "stop");
+            await App.Dispatcher.InvokeAsync(app => { Finish(run, registry); return true; }).ConfigureAwait(false);
         }
-
-        foreach (var c in ReadOnlyCases()) RunCase(c);
-
-        if (includeChanges)
+        finally
         {
-            using var group = new TransactionGroup(doc, "Sketch ProMax: self-test (rolled back)");
-            group.Start();
-            try
+            run.Current = null;
+            run.Finished = true;
+        }
+        if (onDone is not null)
+            await App.Dispatcher.InvokeAsync(_ => { onDone(run.Report); return true; }).ConfigureAwait(false);
+    }
+
+    private static Outcome RunStep(UIApplication app, Run run, ToolRegistry registry, Case step)
+    {
+        // Only ever touch the model the test started on.
+        var doc = app.ActiveUIDocument?.Document;
+        if (doc is null || !doc.Equals(run.Ctx.Doc))
+            return new(step.Tool, "stop", 0, $"the active model changed from '{run.Report.Model}', so the test stopped without touching the other model");
+        if (step.Heavy && run.Big) return new(step.Tool, "skip", 0, "skipped on large models to keep Revit responsive");
+        if (step.Heavy && run.Mode == Mode.Safe) return new(step.Tool, "skip", 0, "slow on big models; runs in the full self-test");
+
+        var tool = registry.Find(step.Tool);
+        if (tool is null) return new(step.Tool, "fail", 0, "Tool not found in the registry.");
+        var watch = Stopwatch.StartNew();
+        TransactionGroup? group = null;
+        try
+        {
+            if (tool.ModifiesModel || step.Setup is not null)
             {
-                foreach (var c in ChangeCases()) RunCase(c);
+                group = new TransactionGroup(doc, $"Sketch ProMax: self-test {step.Tool} (rolled back)");
+                group.Start();
+                foreach (var name in step.Setup ?? [])
+                {
+                    var setup = AllCases().First(c => c.Tool == name);
+                    var setupResult = Execute(app, registry.Find(name)!, setup, run.Ctx);
+                    if (setupResult.IsError)
+                        return new(step.Tool, "skip", watch.ElapsedMilliseconds, $"setup step {name} failed: {Short(setupResult.Text, 300)}");
+                }
             }
-            finally
+            var result = Execute(app, tool, step, run.Ctx);
+            if (!result.IsError && result.Text.Length > 24000)
+                return new(step.Tool, "fail", watch.ElapsedMilliseconds, $"Output too large for a chat ({result.Text.Length:N0} characters).");
+            return new(step.Tool, result.IsError ? "fail" : "pass", watch.ElapsedMilliseconds, Short(result.Text, 600));
+        }
+        catch (Skip s) { return new(step.Tool, "skip", 0, s.Message); }
+        catch (Exception ex) { return new(step.Tool, "fail", watch.ElapsedMilliseconds, Bridge.BridgeServer.Describe(tool, ex)); }
+        finally
+        {
+            if (group is not null)
             {
-                // Close anything a failed tool left open, then undo the whole run.
                 if (group.HasStarted() && !group.HasEnded()) group.RollBack();
+                group.Dispose();
             }
         }
+    }
 
-        foreach (var c in FileCases()) RunCase(c);
+    private static ToolResult Execute(UIApplication app, IRevitTool tool, Case c, Ctx ctx)
+    {
+        var raw = JsonSerializer.SerializeToElement(c.Args(ctx));
+        var args = raw.EnumerateObject().ToDictionary(p => p.Name, p => p.Value.Clone());
+        return Revit.FailureGuard.Run(() => tool.Execute(app, new ToolArgs(args)));
+    }
 
+    private static IEnumerable<Case> AllCases() => ReadOnlyCases().Concat(FileCases()).Concat(ChangeCases());
+
+    private static void Finish(Run run, ToolRegistry registry)
+    {
+        var report = run.Report;
+        var tested = report.Results.Select(r => r.Tool).ToHashSet();
         foreach (var tool in registry.All.Where(t => !tested.Contains(t.Name)).OrderBy(t => t.Name))
         {
             var reason = tool.Name switch
             {
+                _ when run.StoppedBecause is not null => "not reached: " + run.StoppedBecause,
                 "batch_run_recipe" => "opens other model files; run it by hand on a folder of copies",
                 "load_family" => "needs a family file on this PC",
                 "run_learned_tool" => "tested through save_as_tool",
-                "run_self_test" => "this test",
-                _ when !includeChanges && tool.ModifiesModel => "changes the model; run the self-test with changes",
+                "run_self_test" or "self_test_status" => "this test",
+                _ when run.Mode == Mode.Safe && tool.ModifiesModel => "changes the model; runs in the full self-test",
                 _ => "no test written yet",
             };
             report.Results.Add(new(tool.Name, "skip", 0, reason));
         }
 
-        try { Directory.Delete(temp, true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+        try { Directory.Delete(run.Ctx.Temp, true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+        try { System.IO.File.Delete(Recipes.PathFor("sketch-promax-self-test")); } catch (IOException) { }
+        try { System.IO.File.Delete(LearnedTools.PathFor("self_test_count_walls")); } catch (IOException) { }
 
         try
         {
             var folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "SketchProMax", "self-test");
             Directory.CreateDirectory(folder);
-            var safe = string.Concat(doc.Title.Select(ch => Path.GetInvalidFileNameChars().Contains(ch) ? '_' : ch));
+            var safe = string.Concat(report.Model.Select(ch => Path.GetInvalidFileNameChars().Contains(ch) ? '_' : ch));
             report.File = Path.Combine(folder, $"{DateTime.Now:yyyyMMdd-HHmmss} {safe} Revit {report.RevitVersion}.json");
             System.IO.File.WriteAllText(report.File, JsonSerializer.Serialize(new
             {
-                report.Model, report.RevitVersion, report.AddinVersion, report.Ran, report.Passed, report.Failed, report.Skipped,
+                report.Model, report.RevitVersion, report.AddinVersion, report.Mode, report.LargeModel, report.Ran,
+                report.Passed, report.Failed, report.Skipped, stoppedEarly = run.StoppedBecause,
                 results = report.Results.OrderBy(r => r.Status == "fail" ? 0 : r.Status == "skip" ? 2 : 1).ThenBy(r => r.Tool),
             }, new JsonSerializerOptions { WriteIndented = true }));
         }
         catch (IOException) { report.File = null; }
-        return report;
     }
 
     private static Ctx Collect(UIApplication app, Document doc, ToolRegistry registry, string temp)
@@ -238,7 +356,7 @@ internal static class SelfTest
         new("read_schedule", c => new { schedule_id = c.Id(c.Schedule ?? throw new Skip("the model has no schedules")), max_rows = 20 }),
         new("select_elements", c => new { element_ids = new[] { c.Id(c.Wall ?? throw new Skip("the model has no walls")) }, zoom = false }),
         new("run_model_audit", _ => new { }),
-        new("capture_view_image", c => new { view_id = c.PlanId, pixel_width = 800 }),
+        new("capture_view_image", c => new { view_id = c.PlanId, pixel_width = 800 }) { Heavy = true },
         new("list_view_filters", _ => new { }),
         new("query_linked_models", _ => new { }),
         new("collect_text", _ => new { limit = 50 }),
@@ -248,15 +366,15 @@ internal static class SelfTest
         new("list_recipes", _ => new { }),
         new("list_learned_tools", _ => new { }),
         new("run_revit_query_code", _ => new { code = "return new { walls = new FilteredElementCollector(doc).OfClass(typeof(Wall)).GetElementCount(), title = doc.Title };", description = "self-test query" }),
-        new("create_mep_openings", _ => new { method = "report", limit = 50 }),
+        new("create_mep_openings", _ => new { method = "report", limit = 50 }) { Heavy = true },
     ];
 
     /// <summary>Exports: they write files to the temporary folder and cannot run inside a transaction group.</summary>
     private static IEnumerable<Case> FileCases() =>
     [
         new("export_schedule", c => new { schedule_id = c.Id(c.Schedule ?? throw new Skip("the model has no schedules")), folder = c.Temp, file_name = "schedule" }),
-        new("export_pdf", c => new { view_ids = new[] { c.Sheet?.Id.Value ?? c.PlanId }, folder = c.Temp, file_name = "sheets" }),
-        new("export_files", c => new { format = "dwg", view_ids = new[] { c.PlanId }, folder = c.Temp, file_name = "plan" }),
+        new("export_pdf", c => new { view_ids = new[] { c.Sheet?.Id.Value ?? c.PlanId }, folder = c.Temp, file_name = "sheets" }) { Heavy = true },
+        new("export_files", c => new { format = "dwg", view_ids = new[] { c.PlanId }, folder = c.Temp, file_name = "plan" }) { Heavy = true },
         new("export_bcf", c => new { issues = new[] { new { title = "Self-test issue", element_ids = c.Wall is null ? Array.Empty<long>() : [c.Wall.Id.Value] } }, folder = c.Temp, file_name = "issues" }),
         new("save_recipe", _ => new { name = "sketch-promax-self-test", description = "Self-test", steps = new[] { new { tool = "get_model_context", arguments = new { } } } }),
         new("save_as_tool", _ => new
@@ -319,7 +437,7 @@ internal static class SelfTest
             Need(c.First<DuctType>() is not null, "the model has no duct types");
             return new { kind = "duct", level = c.LevelName, points = new[] { c.At(0, 10000).Append(c.P(2800)).ToArray(), c.At(6000, 10000).Append(c.P(2800)).ToArray() }, width = c.P(400), height = c.P(300) };
         }),
-        new("place_rooms", c => new { level = c.LevelName }),
+        new("place_rooms", c => new { level = c.LevelName }) { Heavy = true },
 
         // Edits to existing elements.
         new("move_copy_rotate", c => new { element_ids = new[] { c.Id(c.Wall ?? throw new Skip("the model has no walls")) }, offset = new[] { c.P(1000), 0 }, copy = true }),
@@ -340,7 +458,7 @@ internal static class SelfTest
             Need(c.First<SlabEdgeType>() is not null, "the model has no slab edge types");
             return new { floor_ids = new[] { c.Id(c.Floor ?? throw new Skip("the model has no floors")) } };
         }),
-        new("hollow_core_layout", c => new { floor_id = c.Id(c.Floor ?? throw new Skip("the model has no floors")), original = "keep" }),
+        new("hollow_core_layout", c => new { points = c.Square(0, 14000, 6000), level = c.LevelName, plank_width = c.P(1200) }),
         new("set_curtain_grid", c =>
         {
             var curtain = c.First<Wall>(w => w.WallType.Kind == WallKind.Curtain) ?? throw new Skip("the model has no curtain walls");
@@ -370,39 +488,39 @@ internal static class SelfTest
             var sheet = c.First<ViewSheet>(s => s.SheetNumber == "ST-999") ?? throw new Skip("create_sheets did not create the test sheet");
             var view = c.First<ViewDrafting>(v => v.Name.StartsWith("Self-test drafting", StringComparison.Ordinal)) ?? throw new Skip("create_drafting_view did not create the test view");
             return new { sheet_id = sheet.Id.Value, view_ids = new[] { view.Id.Value } };
-        }),
+        }, Setup: ["create_sheets", "create_drafting_view"]),
         new("create_schedule", _ => new { category = "Walls", name = "Self-test wall schedule", fields = new[] { "Type", "Length" }, sort_by_first_field = true }),
-        new("format_schedule", _ => new { schedule = "Self-test wall schedule", grand_totals = true }),
+        new("format_schedule", _ => new { schedule = "Self-test wall schedule", grand_totals = true }, Setup: ["create_schedule"]),
         new("create_sheet_list", _ => new { name = "Self-test drawing list" }),
         new("create_revision", _ => new { description = "Self-test revision" }),
         new("cloud_elements", c =>
         {
             var revision = c.First<Revision>() ?? throw new Skip("no revision");
             return new { revision_id = revision.Id.Value, element_ids = new[] { c.Id(c.Wall ?? throw new Skip("the model has no walls")) }, view_id = c.PlanId };
-        }),
+        }, Setup: ["create_revision"]),
         new("create_section", c => new { element_ids = new[] { c.Id(c.Wall ?? throw new Skip("the model has no walls")) }, name = "Self-test section" }),
-        new("create_elevations", c => new { mode = "building", plan_view_id = c.PlanId, sides = new[] { "North" }, name_pattern = "{side} self-test" }),
+        new("create_elevations", c => new { mode = "building", plan_view_id = c.PlanId, element_ids = new[] { c.Id(c.Wall ?? throw new Skip("the model has no walls")) }, sides = new[] { "North" }, name_pattern = "{side} self-test" }) { Heavy = true },
         new("create_callout", c => new { parent_view_id = c.PlanId, element_ids = new[] { c.Id(c.Wall ?? throw new Skip("the model has no walls")) }, name = "Self-test callout" }),
         new("create_3d_view", c => new { name = "Self-test 3D", level = c.LevelName }),
         new("set_view_graphics", c => new { view_ids = new[] { c.PlanId }, detail_level = "medium" }),
         new("create_view_filter", _ => new { name = "Self-test filter", categories = new[] { "Walls" } }),
-        new("apply_view_filter", c => new { filter = "Self-test filter", view_ids = new[] { c.PlanId }, halftone = true }),
+        new("apply_view_filter", c => new { filter = "Self-test filter", view_ids = new[] { c.PlanId }, halftone = true }, Setup: ["create_view_filter"]),
         new("color_by_parameter", c => c.Room is not null
             ? new { categories = new[] { "Rooms" }, parameter = "Name", view_ids = new[] { c.PlanId }, name_prefix = "Self-test" }
-            : (object)new { categories = new[] { "Walls" }, parameter = "Type", view_ids = new[] { c.PlanId }, name_prefix = "Self-test" }),
+            : (object)new { categories = new[] { "Walls" }, parameter = "Type", view_ids = new[] { c.PlanId }, name_prefix = "Self-test" }) { Heavy = true },
 
         // Annotation.
         new("add_annotations", c => new { view_id = c.PlanId,
             text_notes = new[] { new { text = "Self-test note", at = c.At(0, -3000) } },
             detail_lines = new[] { new { points = new[] { c.At(0, -3500), c.At(3000, -3500) } } } }),
         new("update_text_notes", c => new { create = new[] { new { view_id = c.PlanId, x = c.At(0, -4000)[0], y = c.At(0, -4000)[1], text = "Self-test text" } } }),
-        new("tag_elements_in_view", c => new { category = "Doors", view_id = c.PlanId }),
-        new("arrange_tags", c => new { view_id = c.PlanId, action = "report_overlaps" }),
-        new("dimension_grids", c => new { view_id = c.PlanId }),
+        new("tag_elements_in_view", c => new { category = "Doors", view_id = c.PlanId }) { Heavy = true },
+        new("arrange_tags", c => new { view_id = c.PlanId, action = "report_overlaps" }) { Heavy = true },
+        new("dimension_grids", c => new { view_id = c.PlanId }, Setup: ["create_grids"]),
         new("dimension_walls", c => new { view_id = c.PlanId, wall_ids = new[] { c.Id(c.Wall ?? throw new Skip("the model has no walls")) } }),
-        new("dimension_openings", c => new { view_id = c.PlanId }),
+        new("dimension_openings", c => new { view_id = c.PlanId, wall_ids = new[] { c.Id(c.Wall ?? throw new Skip("the model has no walls")) } }, Setup: ["place_doors_windows"]),
         new("dimension_rooms", c => { Need(c.Room is not null, "the model has no placed rooms"); return new { view_id = c.PlanId, room_ids = new[] { c.Room!.Id.Value } }; }),
-        new("add_spot_elevations", c => new { view_id = c.PlanId }),
+        new("add_spot_elevations", c => new { view_id = c.PlanId, element_ids = new[] { c.Id(c.Floor ?? throw new Skip("the model has no floors")) } }),
         new("import_image", c => new { path = WriteBitmap(c.Temp), view_id = c.PlanId, center = c.At(0, -6000), width = c.P(2000) }),
 
         // Text, CAD and families.
@@ -411,12 +529,12 @@ internal static class SelfTest
             var plan = c.Plan ?? throw new Skip("the model has no floor plan");
             return new { items = new[] { new { key = $"{plan.Id.Value}|name", text = plan.Name + " (translated)" } }, mode = "replace" };
         }),
-        new("import_cad", c => new { path = WriteDxf(c.Temp), view_id = c.PlanId, link = false, placement = "origin", units = "millimeter" }),
-        new("list_cad_layers", c => new { import_id = c.Id(LatestImport(c.Doc) ?? throw new Skip("import_cad did not import the test drawing")) }),
+        new("import_cad", c => new { path = WriteDxf(c.Temp), view_id = c.PlanId, link = false, placement = "origin", units = "millimeter" }) { Heavy = true },
+        new("list_cad_layers", c => new { import_id = c.Id(LatestImport(c.Doc) ?? throw new Skip("import_cad did not import the test drawing")) }, Setup: ["import_cad"]) { Heavy = true },
         new("convert_cad", c => new { import_id = c.Id(LatestImport(c.Doc) ?? throw new Skip("import_cad did not import the test drawing")), level = c.LevelName,
-            conversions = new[] { new { layer = "*", @as = "model_lines" } } }),
+            conversions = new[] { new { layer = "*", @as = "model_lines" } } }, Setup: ["import_cad"]) { Heavy = true },
         new("create_family_from_shapes", c => new { name = "Self-test box " + Guid.NewGuid().ToString("N").Substring(0, 4),
-            shapes = new[] { new { kind = "box", origin = new[] { 0.0, 0.0, 0.0 }, size = new[] { c.P(600), c.P(600), c.P(750) } } } }),
+            shapes = new[] { new { kind = "box", origin = new[] { 0.0, 0.0, 0.0 }, size = new[] { c.P(600), c.P(600), c.P(750) } } } }) { Heavy = true },
         new("run_revit_code", _ => new { code = "var n = new FilteredElementCollector(doc).OfClass(typeof(Level)).GetElementCount();\nreturn n;", description = "self-test change" }),
         new("run_recipe", _ =>
         {
@@ -467,13 +585,19 @@ public sealed class RunSelfTestTool : IRevitTool
 {
     public string Name => "run_self_test";
     public string Description =>
-        "Check that Sketch ProMax works in this Revit version and model: calls every tool once with inputs taken from the " +
-        "open model and reports pass, fail or skip for each. With include_changes, tools that change the model run too, " +
-        "inside one transaction group that is rolled back at the end, so the model is left unchanged. Use it when the " +
-        "user asks whether everything works, or after an update. Takes a minute or two on a large model.";
-    public string PropertiesJson => """{"include_changes": {"type": "boolean", "description": "Default true."}}""";
+        "Check that Sketch ProMax works in this Revit version and model. Starts in the background and returns at once; " +
+        "call self_test_status for progress and the result. Each tool runs once, one at a time, so Revit stays usable. " +
+        "mode 'safe' (default) runs only read-only tools. mode 'full' also runs the editing tools, each inside a " +
+        "transaction group rolled back straight away, so the model is left unchanged; only use full on a copy of a " +
+        "model and only when the user asks for it. Slow tools are skipped on large models.";
+    public string PropertiesJson => """
+    {
+      "mode": {"type": "string", "enum": ["safe", "full"]},
+      "stop": {"type": "boolean", "description": "Stop a running self-test."}
+    }
+    """;
     public string[] Required => [];
-    // Everything it changes is rolled back, so it needs no approval.
+    // Full mode undoes everything it changes, so no approval is asked.
     public bool ModifiesModel => false;
 
     private readonly ToolRegistry _registry;
@@ -481,14 +605,37 @@ public sealed class RunSelfTestTool : IRevitTool
 
     public ToolResult Execute(UIApplication app, ToolArgs args)
     {
-        var report = SelfTest.Run(app, _registry, args.OptBool("include_changes", true));
+        if (args.OptBool("stop"))
+        {
+            SelfTest.Stop();
+            return ToolResult.Ok(new { status = "Stopping after the current step." });
+        }
+        var mode = args.OptString("mode") == "full" ? SelfTest.Mode.Full : SelfTest.Mode.Safe;
+        return ToolResult.Ok(new { status = SelfTest.Start(app, _registry, mode) });
+    }
+}
+
+public sealed class SelfTestStatusTool : IRevitTool
+{
+    public string Name => "self_test_status";
+    public string Description => "Progress of the running self-test, or the result of the last one: counts, every failure, and the report file.";
+    public string PropertiesJson => "{}";
+    public string[] Required => [];
+    public bool ModifiesModel => false;
+
+    public ToolResult Execute(UIApplication app, ToolArgs args)
+    {
+        var report = SelfTest.LastReport;
+        List<SelfTest.Outcome> results;
+        lock (report?.Results ?? new List<SelfTest.Outcome>()) results = report?.Results.ToList() ?? [];
         return ToolResult.Ok(new
         {
-            summary = report.Summary(),
-            passed = report.Passed, failed = report.Failed, skipped = report.Skipped,
-            failures = report.Results.Where(r => r.Status == "fail"),
-            skips = report.Results.Where(r => r.Status == "skip").Select(r => $"{r.Tool}: {r.Message}"),
-            report_file = report.File,
+            status = SelfTest.Progress(),
+            running = SelfTest.IsRunning,
+            failures = results.Where(r => r.Status == "fail"),
+            skipped = results.Where(r => r.Status == "skip").Select(r => $"{r.Tool}: {r.Message}"),
+            passed = results.Where(r => r.Status == "pass").Select(r => $"{r.Tool} ({r.Ms} ms)"),
+            report_file = report?.File,
         });
     }
 }

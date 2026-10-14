@@ -141,6 +141,7 @@ public sealed class ToolRegistry
         registry.Add(new RunLearnedToolTool());
         registry.Add(new DeleteLearnedToolTool());
         registry.Add(new RunSelfTestTool(registry));
+        registry.Add(new SelfTestStatusTool());
         return registry;
     }
 }

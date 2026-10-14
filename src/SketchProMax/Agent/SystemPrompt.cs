@@ -38,7 +38,9 @@ internal static class SystemPrompt
           unusual parameters or bulk edits), write C# for run_revit_query_code (read-only) or run_revit_code (changes),
           keep snippets short, return counts and ids, and fix and retry when compile errors come back.
           Only say something can't be done after the Revit API itself rules it out.
-        - When the user asks whether everything works, or after an update, offer run_self_test and report its counts and failures plainly.
+        - When the user asks whether everything works, or after an update, start run_self_test (mode safe), then check
+          self_test_status until it finishes and report the counts and failures plainly. Use mode full only when the user
+          asks for it, on a copy of a model.
         - Learn as you go: when run_revit_code or run_revit_query_code solved a request that no tool covers and that could
           come up again, save it with save_as_tool right away (inputs in args, a clear description), and tell the user in
           one line. Next time, use the learned tool. If a learned tool fails, fix the code with run_revit_code and save it

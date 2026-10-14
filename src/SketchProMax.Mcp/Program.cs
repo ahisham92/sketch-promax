@@ -18,7 +18,7 @@ builder.Logging.AddConsole(o => o.LogToStandardErrorThreshold = LogLevel.Trace);
 builder.Services
     .AddMcpServer(o =>
     {
-        o.ServerInfo = new() { Name = "sketch-promax", Version = "0.13.3" };
+        o.ServerInfo = new() { Name = "sketch-promax", Version = "0.14.0" };
         o.ServerInstructions = SystemPrompt.Build(RevitBridge.FirmStandards());
         // Learned tools can be added mid-chat; the client is told to refresh its list when that happens.
         o.Capabilities = new() { Tools = new() { ListChanged = true } };
@@ -48,7 +48,10 @@ internal static class RevitBridge
     private sealed record Target(int Pid, string? Model);
     private static volatile Target? _target;
 
-    private sealed record Session(int Pid, string Pipe, string RevitVersion, List<(string Title, string Path, bool Active)> Documents);
+    // Revit windows that are running but did not answer the last ping (busy with a long operation, or frozen).
+    private static volatile int _unresponsive;
+
+    private sealed record Session(int Pid, string Pipe, string RevitVersion, bool Busy, List<(string Title, string Path, bool Active)> Documents);
 
     private static readonly Tool[] ConnectionTools =
     [
@@ -147,7 +150,9 @@ internal static class RevitBridge
         if (name == "use_revit_model") return Choose(sessions, arguments);
 
         if (sessions.Count == 0)
-            return Text("Revit is not reachable. Ask the user to start Revit with the Sketch ProMax add-in and open a model.", true);
+            return Text(_unresponsive > 0
+                ? "Revit is running but not responding: it may be busy with a long operation or frozen. Ask the user to check Revit, then try again."
+                : "Revit is not reachable. Ask the user to start Revit with the Sketch ProMax add-in and open a model.", true);
 
         var chosen = _target;
         var target = sessions.FirstOrDefault(s => s.Pid == chosen?.Pid);
@@ -158,6 +163,9 @@ internal static class RevitBridge
             target = sessions[0];
             chosen = _target = new Target(target.Pid, null);
         }
+
+        if (target.Busy)
+            return Text($"Revit {target.RevitVersion} is busy finishing a long operation. Wait a moment and try again, and don't send more work to it meanwhile.", true);
 
         if (chosen!.Model is not null)
         {
@@ -211,13 +219,16 @@ internal static class RevitBridge
 
     private static string Describe(List<Session> sessions)
     {
-        if (sessions.Count == 0) return "No Revit window with Sketch ProMax is running.";
+        if (sessions.Count == 0)
+            return _unresponsive > 0
+                ? "Revit is running but not responding: it may be busy with a long operation or frozen. Ask the user to check Revit, then try again."
+                : "No Revit window with Sketch ProMax is running.";
         var chosen = _target;
         var sb = new StringBuilder("Connected Revit windows:\n");
         foreach (var s in sessions)
         {
             var current = s.Pid == chosen?.Pid ? " (current)" : "";
-            sb.AppendLine($"- Revit {s.RevitVersion}{current}");
+            sb.AppendLine($"- Revit {s.RevitVersion}{current}{(s.Busy ? " (busy right now)" : "")}");
             if (s.Documents.Count == 0) sb.AppendLine("    no model open");
             foreach (var d in s.Documents)
             {
@@ -234,7 +245,8 @@ internal static class RevitBridge
     private static async Task<List<Session>> DiscoverAsync(CancellationToken ct)
     {
         var found = new List<Session>();
-        if (!Directory.Exists(SessionsFolder)) return found;
+        var silent = 0;
+        if (!Directory.Exists(SessionsFolder)) { _unresponsive = 0; return found; }
 
         foreach (var file in Directory.GetFiles(SessionsFolder, "*.json"))
         {
@@ -259,8 +271,9 @@ internal static class RevitBridge
                 continue;
             }
 
-            var pong = await SendAsync(pipe, """{"method":"ping"}""", 1500, ct);
-            if (pong is null) continue; // Revit is starting up or busy; skip it this time.
+            // A Revit that doesn't answer within a few seconds is skipped, so one stuck window never blocks the others.
+            var pong = await SendAsync(pipe, """{"method":"ping"}""", 1500, ct, readTimeoutMs: 5000);
+            if (pong is null) { silent++; continue; }
 
             try
             {
@@ -271,10 +284,12 @@ internal static class RevitBridge
                         d.TryGetProperty("path", out var dp) ? dp.GetString() ?? "" : "",
                         d.TryGetProperty("active", out var da) && da.GetBoolean())).ToList()
                     : [];
-                found.Add(new Session(pid, pipe, version, docs));
+                var busy = p.RootElement.TryGetProperty("busy", out var b) && b.ValueKind == JsonValueKind.True;
+                found.Add(new Session(pid, pipe, version, busy, docs));
             }
             catch (JsonException) { }
         }
+        _unresponsive = silent;
         return found.OrderBy(s => s.RevitVersion).ThenBy(s => s.Pid).ToList();
     }
 
@@ -289,8 +304,11 @@ internal static class RevitBridge
     }
 
     /// <summary>Sends one request line and returns the response line, or null when the pipe can't be reached.</summary>
-    private static async Task<string?> SendAsync(string pipeName, string request, int connectTimeoutMs, CancellationToken ct)
+    private static async Task<string?> SendAsync(string pipeName, string request, int connectTimeoutMs, CancellationToken ct, int readTimeoutMs = 0)
     {
+        using var limit = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        if (readTimeoutMs > 0) limit.CancelAfter(connectTimeoutMs + readTimeoutMs);
+        ct = limit.Token;
         try
         {
             using var pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
@@ -302,6 +320,7 @@ internal static class RevitBridge
             return await reader.ReadLineAsync(ct);
         }
         catch (Exception ex) when (ex is TimeoutException or IOException) { return null; }
+        catch (OperationCanceledException) when (readTimeoutMs > 0 && limit.IsCancellationRequested) { return null; }
     }
 
     private static CallToolResult Text(string text, bool isError) =>

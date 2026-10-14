@@ -92,30 +92,45 @@ public sealed class BridgeServer
     {
         while (!ct.IsCancellationRequested)
         {
+            NamedPipeServerStream pipe;
             try
             {
-                using var pipe = new NamedPipeServerStream(PipeName, PipeDirection.InOut, 1,
+                // Several connections at once: a status ping must not wait behind a long tool call.
+                pipe = new NamedPipeServerStream(PipeName, PipeDirection.InOut, NamedPipeServerStream.MaxAllowedServerInstances,
                     PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
                 IsListening = true;
                 await pipe.WaitForConnectionAsync(ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) { return; }
+            catch (IOException)
+            {
+                await Task.Delay(2000, ct).ConfigureAwait(false);
+                continue;
+            }
+            _ = Task.Run(() => Serve(pipe, ct));
+        }
+    }
 
+    private async Task Serve(NamedPipeServerStream pipe, CancellationToken ct)
+    {
+        using (pipe)
+        {
+            try
+            {
                 var reader = new StreamReader(pipe, new UTF8Encoding(false), false, 4096, leaveOpen: true);
                 var line = await reader.ReadLineAsync().ConfigureAwait(false);
                 var response = line is null ? Error("empty request") : await Handle(line).ConfigureAwait(false);
-
                 var bytes = new UTF8Encoding(false).GetBytes(response + "\n");
                 await pipe.WriteAsync(bytes, 0, bytes.Length, ct).ConfigureAwait(false);
                 await pipe.FlushAsync(ct).ConfigureAwait(false);
                 pipe.WaitForPipeDrain();
             }
-            catch (OperationCanceledException) { return; }
-            catch (IOException)
-            {
-                // The client went away mid-request, or the pipe is briefly unavailable. Back off and retry.
-                await Task.Delay(2000, ct).ConfigureAwait(false);
-            }
+            catch (Exception ex) when (ex is IOException or OperationCanceledException or ObjectDisposedException) { }
         }
     }
+
+    // The open models as of the last time Revit answered, for pings that arrive while Revit is busy.
+    private volatile object _lastDocuments = Array.Empty<object>();
 
     private async Task<string> Handle(string line)
     {
@@ -126,15 +141,18 @@ public sealed class BridgeServer
             switch (root.GetProperty("method").GetString())
             {
                 case "ping":
-                    var documents = await _dispatcher.InvokeAsync(app =>
+                    var lookup = _dispatcher.InvokeAsync<object>(app =>
                     {
                         var active = app.ActiveUIDocument?.Document;
                         return app.Application.Documents.Cast<Autodesk.Revit.DB.Document>()
                             .Where(d => !d.IsFamilyDocument && !d.IsLinked)
                             .Select(d => new { title = d.Title, path = d.PathName, active = active != null && d.Equals(active) })
                             .ToList();
-                    }).ConfigureAwait(false);
-                    return JsonSerializer.Serialize(new { ok = true, pid = SessionId, revitVersion = _revitVersion, documents });
+                    });
+                    // Revit only answers when idle; a busy Revit still reports itself, with the last known models.
+                    var busy = await Task.WhenAny(lookup, Task.Delay(1500)).ConfigureAwait(false) != lookup;
+                    if (!busy) _lastDocuments = await lookup.ConfigureAwait(false);
+                    return JsonSerializer.Serialize(new { ok = true, pid = SessionId, revitVersion = _revitVersion, busy, documents = _lastDocuments });
 
                 case "activate_document":
                     var wanted = root.GetProperty("title").GetString() ?? "";

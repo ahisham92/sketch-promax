@@ -59,6 +59,18 @@ public sealed class SelfTestCommand : IExternalCommand
     public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
     {
         var app = commandData.Application;
+        if (Tools.SelfTest.IsRunning)
+        {
+            var running = new TaskDialog("Sketch ProMax self-test")
+            {
+                MainInstruction = "A self-test is running",
+                MainContent = Tools.SelfTest.Progress(),
+                CommonButtons = TaskDialogCommonButtons.Close,
+            };
+            running.AddCommandLink(TaskDialogCommandLinkId.CommandLink1, "Stop it after the current step");
+            if (running.Show() == TaskDialogResult.CommandLink1) Tools.SelfTest.Stop();
+            return Result.Succeeded;
+        }
         if (app.ActiveUIDocument is null)
         {
             TaskDialog.Show("Sketch ProMax", "Open a model first. A copy of a real project gives the most useful result.");
@@ -66,22 +78,25 @@ public sealed class SelfTestCommand : IExternalCommand
         }
         var ask = new TaskDialog("Sketch ProMax self-test")
         {
-            MainInstruction = "Test every Sketch ProMax tool on this model?",
-            MainContent = "Each tool runs once with inputs taken from this model. Everything it creates or changes is rolled back " +
-                          "at the end, so the model is left exactly as it was. It can take a few minutes on a large model.",
-            CommonButtons = TaskDialogCommonButtons.Ok | TaskDialogCommonButtons.Cancel,
+            MainInstruction = "Test the Sketch ProMax tools on this model",
+            MainContent = "Tools run one at a time in the background, so you can keep working, but stay in this model until it " +
+                          "finishes. Slow tools are skipped on large models. Click Self-test again to see progress or stop it.",
+            CommonButtons = TaskDialogCommonButtons.Cancel,
         };
-        if (ask.Show() != TaskDialogResult.Ok) return Result.Cancelled;
+        ask.AddCommandLink(TaskDialogCommandLinkId.CommandLink1, "Quick check (recommended)", "Read-only tools only. Nothing in the model changes.");
+        ask.AddCommandLink(TaskDialogCommandLinkId.CommandLink2, "Full check, on a copy of a model",
+            "Also runs the tools that change the model. Each change is undone straight after it is checked.");
+        var choice = ask.Show();
+        if (choice is not (TaskDialogResult.CommandLink1 or TaskDialogResult.CommandLink2)) return Result.Cancelled;
 
         var registry = App.Bridge?.Registry ?? Tools.ToolRegistry.CreateDefault();
-        var report = Tools.SelfTest.Run(app, registry, includeChanges: true);
-        new TaskDialog("Sketch ProMax self-test")
+        var mode = choice == TaskDialogResult.CommandLink2 ? Tools.SelfTest.Mode.Full : Tools.SelfTest.Mode.Safe;
+        Tools.SelfTest.Start(app, registry, mode, report => new TaskDialog("Sketch ProMax self-test")
         {
             MainInstruction = report.Failed == 0 ? "Every tested tool works" : $"{report.Failed} tool(s) failed",
-            MainContent = report.Summary(),
-            FooterText = report.File is null ? "" : "Full report: " + report.File +
-                         "\nSend this file to Claude (attach it in the chat) to get the failures fixed.",
-        }.Show();
+            MainContent = Tools.SelfTest.Progress(),
+            FooterText = report.File is null ? "" : "Send the report file to Claude (attach it in the chat) to get any failures fixed.",
+        }.Show());
         return Result.Succeeded;
     }
 }
