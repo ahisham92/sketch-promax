@@ -37,7 +37,9 @@ public sealed class TagElementsInViewTool : IRevitTool
         var targets = new FilteredElementCollector(doc, view.Id).OfCategory(bic).WhereElementIsNotElementType()
             .Where(e => !alreadyTagged.Contains(e.Id.Value)).ToList();
 
-        int tagged = 0, skipped = 0;
+        int tagged = 0;
+        var reasons = new Dictionary<string, int>();
+        void Skip(string why) => reasons[why] = reasons.TryGetValue(why, out var n) ? n + 1 : 1;
         using var t = RevitHelpers.StartTransaction(doc, $"Tag {bic.ToString().Replace("OST_", "")}");
         foreach (var e in targets)
         {
@@ -45,22 +47,37 @@ public sealed class TagElementsInViewTool : IRevitTool
             {
                 if (e is Room room)
                 {
-                    if (room.Location is not LocationPoint lp) { skipped++; continue; }
+                    if (room.Location is not LocationPoint lp) { Skip("room is not placed"); continue; }
                     doc.Create.NewRoomTag(new LinkElementId(room.Id), new UV(lp.Point.X, lp.Point.Y), view.Id);
                 }
                 else
                 {
                     var center = Center(e, view);
-                    if (center is null) { skipped++; continue; }
+                    if (center is null) { Skip("no location to put the tag"); continue; }
                     IndependentTag.Create(doc, view.Id, new Reference(e), args.OptBool("leader"),
                         TagMode.TM_ADDBY_CATEGORY, TagOrientation.Horizontal, center);
                 }
                 tagged++;
             }
-            catch (Autodesk.Revit.Exceptions.ApplicationException) { skipped++; }
+            catch (Autodesk.Revit.Exceptions.ApplicationException ex) { Skip(ex.Message.Trim()); }
+        }
+        var skipped = reasons.Values.Sum();
+        if (tagged == 0 && skipped > 0)
+        {
+            t.RollBack();
+            var main = reasons.OrderByDescending(r => r.Value).First().Key;
+            var hint = main.IndexOf("tag", StringComparison.OrdinalIgnoreCase) >= 0 && main.IndexOf("load", StringComparison.OrdinalIgnoreCase) >= 0
+                ? " Load a tag family for this category (load_family, e.g. search 'wall tag'), then try again."
+                : "";
+            return ToolResult.Error($"Tagged nothing in '{view.Name}': {skipped} element(s) could not be tagged. Revit said: {main}.{hint}");
         }
         t.Commit();
-        return ToolResult.Ok(new { view = view.Name, tagged, skipped, alreadyTagged = alreadyTagged.Count });
+        return ToolResult.Ok(new
+        {
+            view = view.Name, tagged, skipped, alreadyTagged = alreadyTagged.Count,
+            skippedBecause = reasons.Select(r => $"{r.Value}: {r.Key}"),
+            note = targets.Count == 0 ? $"No untagged {args.String("category")} are visible in this view." : null,
+        });
     }
 
     private static XYZ? Center(Element e, View view)

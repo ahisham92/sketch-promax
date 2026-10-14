@@ -185,7 +185,7 @@ public sealed class BridgeServer
             if (confirm && !Approve(tool, args)) return ToolResult.Error("The user rejected this change in Revit. Ask them how to proceed.");
             ToolResult result;
             try { result = tool.Execute(app, new ToolArgs(args)); }
-            catch (Exception ex) { result = ToolResult.Error($"{ex.GetType().Name}: {ex.Message}"); }
+            catch (Exception ex) { result = ToolResult.Error(Describe(tool, ex)); }
             ActivityLog.Write(app.ActiveUIDocument.Document.Title, tool, args, result);
             return Capped(result);
         });
@@ -229,6 +229,21 @@ public sealed class BridgeServer
             DefaultButton = TaskDialogResult.Yes,
         };
         return dialog.Show() == TaskDialogResult.Yes;
+    }
+
+    /// <summary>An unexpected exception, with where it happened so a bug report can be fixed without guessing.</summary>
+    internal static string Describe(IRevitTool tool, Exception ex)
+    {
+        if (ex is System.Reflection.TargetInvocationException { InnerException: { } inner }) ex = inner;
+        var expected = ex is ArgumentException and not ArgumentNullException || ex is InvalidOperationException
+                       || ex is Autodesk.Revit.Exceptions.ArgumentException || ex is Autodesk.Revit.Exceptions.InvalidOperationException;
+        if (expected) return ex.Message;
+        var frame = new System.Diagnostics.StackTrace(ex, false).GetFrames()?
+            .Select(f => f.GetMethod())
+            .FirstOrDefault(m => m?.DeclaringType?.Namespace?.StartsWith("SketchProMax", StringComparison.Ordinal) == true);
+        var where = frame is null ? "" : $" in {frame.DeclaringType!.Name}.{frame.Name}";
+        return $"{tool.Name} hit an internal error ({ex.GetType().Name}{where}: {ex.Message}). This is a Sketch ProMax bug; " +
+               "tell the user, and try another way for now (for example run_revit_code).";
     }
 
     private const int MaxResultChars = 24000;

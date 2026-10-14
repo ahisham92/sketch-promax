@@ -128,8 +128,7 @@ internal static class SelfTest
             catch (Skip s) { report.Results.Add(new(c.Tool, "skip", 0, s.Message)); }
             catch (Exception ex)
             {
-                if (ex is System.Reflection.TargetInvocationException { InnerException: { } inner }) ex = inner;
-                report.Results.Add(new(c.Tool, "fail", watch.ElapsedMilliseconds, $"{ex.GetType().Name}: {ex.Message}"));
+                report.Results.Add(new(c.Tool, "fail", watch.ElapsedMilliseconds, Bridge.BridgeServer.Describe(tool, ex)));
             }
         }
 

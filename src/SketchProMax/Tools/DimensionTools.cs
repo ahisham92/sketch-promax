@@ -52,6 +52,14 @@ public sealed class DimensionGridsTool : IRevitTool
 
         var grids = new FilteredElementCollector(doc, view.Id).OfClass(typeof(Grid)).Cast<Grid>()
             .Where(g => g.Curve is Line).ToList();
+        if (grids.Count < 2)
+        {
+            var inModel = new FilteredElementCollector(doc).OfClass(typeof(Grid)).GetElementCount();
+            return ToolResult.Error(inModel == 0
+                ? "The model has no grids."
+                : $"Only {grids.Count} of the model's {inModel} grids are visible in '{view.Name}'. They may not reach this level " +
+                  "(their vertical extents), be hidden in the view, or lie outside its crop region. Fix that, then try again.");
+        }
         var groups = new List<List<Grid>>();
         foreach (var g in grids)
         {
@@ -133,6 +141,14 @@ public sealed class DimensionWallsTool : IRevitTool
             var line = DimensionGeometry.Across(pts, Dir(group[0]), offset, z);
             try { created.Add(doc.Create.NewDimension(view, line, refs).Id.Value); }
             catch (Autodesk.Revit.Exceptions.ArgumentException) { skipped += group.Count; }
+        }
+        if (created.Count == 0)
+        {
+            t.RollBack();
+            var reason = straight.Count == 0 ? "no straight walls are visible in this view (or among the given ids)"
+                : groups.All(g => g.Count < 2) ? "each string needs at least two parallel straight walls, and none of the walls given have a parallel partner"
+                : "Revit could not find usable faces on these walls (curtain or stacked walls, or walls joined in a way that hides the face)";
+            return ToolResult.Error($"No dimension strings were added in '{view.Name}': {reason}.");
         }
         t.Commit();
         return ToolResult.Ok(new { dimensionStrings = created.Count, ids = created, wallsConsidered = straight.Count, skipped });

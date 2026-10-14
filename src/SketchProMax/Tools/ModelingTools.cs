@@ -128,12 +128,13 @@ public sealed class CreateLevelsTool : IRevitTool
         {
             var level = Level.Create(doc, RevitHelpers.ToInternal(doc, spec.GetProperty("elevation").GetDouble()));
             try { level.Name = spec.GetProperty("name").GetString()!; } catch (Autodesk.Revit.Exceptions.ArgumentException) { }
+            long? floorPlan = null, ceilingPlan = null;
             if (plans)
             {
-                if (floorVft != null) ViewPlan.Create(doc, floorVft.Id, level.Id);
-                if (ceilingVft != null) ViewPlan.Create(doc, ceilingVft.Id, level.Id);
+                if (floorVft != null) floorPlan = ViewPlan.Create(doc, floorVft.Id, level.Id).Id.Value;
+                if (ceilingVft != null) ceilingPlan = ViewPlan.Create(doc, ceilingVft.Id, level.Id).Id.Value;
             }
-            created.Add(new { id = level.Id.Value, name = level.Name });
+            created.Add(new { id = level.Id.Value, name = level.Name, floorPlanId = floorPlan, ceilingPlanId = ceilingPlan });
         }
         t.Commit();
         return ToolResult.Ok(new { created });
@@ -167,10 +168,14 @@ public sealed class CreateGridsTool : IRevitTool
         var doc = app.ActiveUIDocument.Document;
         var created = new List<object>();
         using var t = RevitHelpers.StartTransaction(doc, "Create grids");
+        // Grids should show in the plans of every level, so stretch them from below the lowest to above the highest.
+        var elevations = new FilteredElementCollector(doc).OfClass(typeof(Level)).Cast<Level>().Select(l => l.Elevation).DefaultIfEmpty(0).ToList();
+        double bottom = elevations.Min() - 10, top = elevations.Max() + 30;
 
         void Make(XYZ a, XYZ b, string? name)
         {
-            var g = Grid.Create(doc, Line.CreateBound(a, b));
+            var g = Grid.Create(doc, Line.CreateBound(new XYZ(a.X, a.Y, 0), new XYZ(b.X, b.Y, 0)));
+            try { g.SetVerticalExtents(bottom, top); } catch (Autodesk.Revit.Exceptions.ApplicationException) { }
             if (name != null) { try { g.Name = name; } catch (Autodesk.Revit.Exceptions.ArgumentException) { } }
             created.Add(new { id = g.Id.Value, name = g.Name });
         }
@@ -328,8 +333,8 @@ public sealed class CreateRoofTool : IRevitTool
         var doc = app.ActiveUIDocument.Document;
         var level = RevitHelpers.FindLevel(doc, args.String("level"));
         var roofType = args.OptLong("type_id") is { } tid
-            ? (RoofType)doc.GetElement(new ElementId(tid))
-            : new FilteredElementCollector(doc).OfClass(typeof(RoofType)).Cast<RoofType>().First();
+            ? doc.GetElement(new ElementId(tid)) as RoofType ?? throw new ArgumentException($"{tid} is not a roof type. Use list_types 'Roofs'.")
+            : DefaultRoofType(doc);
         var loop = Modeling.Polygon(doc, args.Raw["points"], level.Elevation);
         var footprint = new CurveArray();
         foreach (var c in loop) footprint.Append(c);
@@ -339,9 +344,10 @@ public sealed class CreateRoofTool : IRevitTool
         var gables = args.LongList("gable_edges").Select(i => (int)i).ToHashSet();
 
         using var t = RevitHelpers.StartTransaction(doc, "Create roof");
-        var roof = doc.Create.NewFootPrintRoof(footprint, level, roofType, out var edges);
+        var roof = doc.Create.NewFootPrintRoof(footprint, level, roofType, out var edges)
+                   ?? throw new InvalidOperationException("Revit did not create the roof. Check that the outline is closed and does not cross itself.");
         int index = 0;
-        foreach (ModelCurve edge in edges)
+        foreach (ModelCurve edge in edges ?? new ModelCurveArray())
         {
             var sloped = slope > 0 && !gables.Contains(index++);
             roof.set_DefinesSlope(edge, sloped);
@@ -349,7 +355,16 @@ public sealed class CreateRoofTool : IRevitTool
             if (overhang > 0) roof.set_Overhang(edge, overhang);
         }
         t.Commit();
-        return ToolResult.Ok(new { roofId = roof.Id.Value });
+        return ToolResult.Ok(new { roofId = roof.Id.Value, type = roofType.Name });
+    }
+
+    /// <summary>The model's default roof type, else the first basic roof (not sloped glazing).</summary>
+    private static RoofType DefaultRoofType(Document doc)
+    {
+        if (doc.GetElement(doc.GetDefaultElementTypeId(ElementTypeGroup.RoofType)) is RoofType byDefault) return byDefault;
+        var types = new FilteredElementCollector(doc).OfClass(typeof(RoofType)).Cast<RoofType>().ToList();
+        return types.FirstOrDefault(t => t.GetCompoundStructure() is not null) ?? types.FirstOrDefault()
+               ?? throw new InvalidOperationException("The model has no roof types. Load or transfer one first.");
     }
 }
 

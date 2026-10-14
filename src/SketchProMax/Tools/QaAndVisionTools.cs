@@ -86,7 +86,9 @@ public sealed class CaptureViewImageTool : IRevitTool
     public string PropertiesJson => """
     {
       "view_id": {"type": "integer", "description": "View or sheet id. Defaults to the active view."},
-      "pixel_width": {"type": "integer", "description": "Image width in pixels (default 1600, max 2400)."}
+      "pixel_width": {"type": "integer", "description": "Image width in pixels (default 1600, max 2400)."},
+      "element_ids": {"type": "array", "items": {"type": "integer"}, "description": "Plan views: zoom to these elements (the view itself is left unchanged)."},
+      "margin": {"type": "number", "description": "Around element_ids, project units. Default 2 m."}
     }
     """;
     public string[] Required => [];
@@ -110,7 +112,36 @@ public sealed class CaptureViewImageTool : IRevitTool
             ImageResolution = ImageResolution.DPI_150,
         };
         options.SetViewsAndSheets([viewId]);
-        doc.ExportImage(options);
+
+        // Zooming crops the view for the export only: the crop is committed inside a group that is then rolled back.
+        TransactionGroup? zoom = null;
+        var ids = args.LongList("element_ids");
+        if (ids.Count > 0)
+        {
+            if (doc.GetElement(viewId) is not ViewPlan plan) return ToolResult.Error("element_ids zoom works on plan views; capture the whole view instead.");
+            var boxes = ids.Select(i => doc.GetElement(new ElementId(i))?.get_BoundingBox(null)).Where(b => b != null).ToList();
+            if (boxes.Count == 0) return ToolResult.Error("None of those elements have a location to zoom to.");
+            var margin = args.OptDouble("margin") is { } m ? RevitHelpers.ToInternal(doc, m) : 2000 / 304.8;
+            var crop = plan.CropBox;
+            var inverse = crop.Transform.Inverse;
+            var corners = boxes.SelectMany(b => new[] { inverse.OfPoint(b!.Min), inverse.OfPoint(b.Max) }).ToList();
+            zoom = new TransactionGroup(doc, "Sketch ProMax: zoom for image");
+            zoom.Start();
+            using (var t = new Transaction(doc, "Sketch ProMax: zoom for image"))
+            {
+                t.Start();
+                plan.CropBox = new BoundingBoxXYZ
+                {
+                    Transform = crop.Transform,
+                    Min = new XYZ(corners.Min(p => p.X) - margin, corners.Min(p => p.Y) - margin, crop.Min.Z),
+                    Max = new XYZ(corners.Max(p => p.X) + margin, corners.Max(p => p.Y) + margin, crop.Max.Z),
+                };
+                plan.CropBoxActive = true;
+                t.Commit();
+            }
+        }
+        try { doc.ExportImage(options); }
+        finally { if (zoom is { } g) { if (g.HasStarted() && !g.HasEnded()) g.RollBack(); g.Dispose(); } }
 
         var file = Directory.GetFiles(dir, "*.png").FirstOrDefault();
         if (file is null) return ToolResult.Error("Revit did not produce an image for that view.");

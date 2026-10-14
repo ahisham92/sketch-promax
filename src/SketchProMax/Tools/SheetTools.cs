@@ -164,7 +164,10 @@ public sealed class RenameElementsTool : IRevitTool
         foreach (var i in renumber)
         {
             var e = doc.GetElement(new ElementId(i.GetProperty("element_id").GetInt64()));
-            SetNumber(e, "~tmp~" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            if (e is not (ViewSheet or SpatialElement)) continue; // reported in the loop below
+            // Letters and digits only: sheet numbers refuse characters such as ~ { } [ ] | ; < > ? \ :
+            try { SetNumber(e, "TMP" + Guid.NewGuid().ToString("N").Substring(0, 10)); }
+            catch (Autodesk.Revit.Exceptions.ApplicationException) { }
         }
 
         foreach (var i in items)
