@@ -35,7 +35,7 @@ public sealed class AgentSession
     public AgentSession(AgentSettings settings, ToolRegistry registry, RevitDispatcher dispatcher)
     {
         var key = settings.GetApiKey()
-            ?? throw new InvalidOperationException("No Anthropic API key. Set ANTHROPIC_API_KEY or add one in Settings.");
+            ?? throw new InvalidOperationException("No Anthropic API key is set, so this pane can't reach Claude. To use Sketch ProMax at no extra cost, chat from the Claude desktop app instead (see README). To use this pane, add an API key in Settings.");
         _client = new AnthropicClient { ApiKey = key };
         _settings = settings;
         _registry = registry;
@@ -175,12 +175,11 @@ public sealed class AgentSession
 
     private static BetaToolUnion ToToolDefinition(IRevitTool tool)
     {
-        var props = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(tool.PropertiesJson) ?? [];
         return new BetaTool
         {
             Name = tool.Name,
-            Description = tool.Description + (tool.ModifiesModel ? " (Changes the model.)" : ""),
-            InputSchema = new() { Properties = props, Required = tool.Required },
+            Description = ToolSchema.Description(tool),
+            InputSchema = new() { Properties = ToolSchema.Properties(tool), Required = tool.Required },
         };
     }
 

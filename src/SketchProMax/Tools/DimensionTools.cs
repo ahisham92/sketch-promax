@@ -1,0 +1,149 @@
+using Autodesk.Revit.DB;
+using Autodesk.Revit.UI;
+using SketchProMax.Revit;
+
+namespace SketchProMax.Tools;
+
+/// <summary>Shared geometry for placing a dimension string across parallel references in a plan.</summary>
+internal static class DimensionGeometry
+{
+    /// <summary>
+    /// Builds a line perpendicular to the referenced elements' direction, positioned just beyond
+    /// the elements' extent on the given side, at the view's cut height.
+    /// </summary>
+    public static Line Across(IList<XYZ> points, XYZ alongElements, double offset, double z)
+    {
+        var across = new XYZ(-alongElements.Y, alongElements.X, 0).Normalize();
+        var along = alongElements.Normalize();
+
+        var onAcross = points.Select(p => p.DotProduct(across)).ToList();
+        var onAlong = points.Select(p => p.DotProduct(along)).ToList();
+        double min = onAcross.Min(), max = onAcross.Max(), position = onAlong.Max() + offset;
+
+        var a = across * (min - 1) + along * position;
+        var b = across * (max + 1) + along * position;
+        return Line.CreateBound(new XYZ(a.X, a.Y, z), new XYZ(b.X, b.Y, z));
+    }
+
+    public static bool IsParallel(XYZ a, XYZ b) => Math.Abs(Math.Abs(a.Normalize().DotProduct(b.Normalize())) - 1) < 1e-6;
+}
+
+public sealed class DimensionGridsTool : IRevitTool
+{
+    public string Name => "dimension_grids";
+    public string Description =>
+        "Add one continuous dimension string across each set of parallel straight grids visible in a plan view " +
+        "(typically one horizontal and one vertical string), placed just outside the grid extents.";
+    public string PropertiesJson => """
+    {
+      "view_id": {"type": "integer", "description": "Plan view (default: active view)."},
+      "offset": {"type": "number", "description": "Distance beyond the grid ends, project units (default ~ 1 m / 3 ft)."}
+    }
+    """;
+    public string[] Required => [];
+    public bool ModifiesModel => true;
+
+    public ToolResult Execute(UIApplication app, ToolArgs args)
+    {
+        var doc = app.ActiveUIDocument.Document;
+        var view = args.OptLong("view_id") is { } vid ? (View)doc.GetElement(new ElementId(vid)) : doc.ActiveView;
+        if (view is not ViewPlan) return ToolResult.Error("dimension_grids works in plan views.");
+        var offset = args.OptDouble("offset") is { } o ? RevitHelpers.ToInternal(doc, o) : 3.0;
+
+        var grids = new FilteredElementCollector(doc, view.Id).OfClass(typeof(Grid)).Cast<Grid>()
+            .Where(g => g.Curve is Line).ToList();
+        var groups = new List<List<Grid>>();
+        foreach (var g in grids)
+        {
+            var dir = ((Line)g.Curve).Direction;
+            var group = groups.FirstOrDefault(gr => DimensionGeometry.IsParallel(((Line)gr[0].Curve).Direction, dir));
+            if (group is null) groups.Add([g]); else group.Add(g);
+        }
+
+        var z = view.GenLevel?.Elevation ?? 0;
+        var created = new List<long>();
+        using var t = RevitHelpers.StartTransaction(doc, "Dimension grids");
+        foreach (var group in groups.Where(g => g.Count >= 2))
+        {
+            var refs = new ReferenceArray();
+            foreach (var g in group) refs.Append(new Reference(g));
+            var dir = ((Line)group[0].Curve).Direction;
+            var pts = group.SelectMany(g => new[] { g.Curve.GetEndPoint(0), g.Curve.GetEndPoint(1) }).ToList();
+            var line = DimensionGeometry.Across(pts, dir, offset, z);
+            created.Add(doc.Create.NewDimension(view, line, refs).Id.Value);
+        }
+        t.Commit();
+        return ToolResult.Ok(new { dimensionStrings = created.Count, ids = created, gridsFound = grids.Count });
+    }
+}
+
+public sealed class DimensionWallsTool : IRevitTool
+{
+    public string Name => "dimension_walls";
+    public string Description =>
+        "Add dimension strings across parallel straight walls in a plan view, measuring between wall faces " +
+        "(exterior or interior). Works on the given walls, or all walls in the view. Produces one string per wall direction.";
+    public string PropertiesJson => """
+    {
+      "view_id": {"type": "integer"},
+      "wall_ids": {"type": "array", "items": {"type": "integer"}, "description": "Default: all walls in the view."},
+      "measure_to": {"type": "string", "enum": ["exterior_face", "interior_face"]},
+      "offset": {"type": "number", "description": "Distance beyond the walls, project units."}
+    }
+    """;
+    public string[] Required => [];
+    public bool ModifiesModel => true;
+
+    public ToolResult Execute(UIApplication app, ToolArgs args)
+    {
+        var doc = app.ActiveUIDocument.Document;
+        var view = args.OptLong("view_id") is { } vid ? (View)doc.GetElement(new ElementId(vid)) : doc.ActiveView;
+        if (view is not ViewPlan) return ToolResult.Error("dimension_walls works in plan views.");
+        var offset = args.OptDouble("offset") is { } o ? RevitHelpers.ToInternal(doc, o) : 3.0;
+        var mode = args.OptString("measure_to") ?? "exterior_face";
+
+        var ids = args.LongList("wall_ids");
+        IEnumerable<Wall> walls = ids.Count > 0
+            ? ids.Select(i => doc.GetElement(new ElementId(i))).OfType<Wall>()
+            : new FilteredElementCollector(doc, view.Id).OfClass(typeof(Wall)).Cast<Wall>();
+        var straight = walls.Where(w => w.Location is LocationCurve { Curve: Line }).ToList();
+
+        var groups = new List<List<Wall>>();
+        foreach (var w in straight)
+        {
+            var dir = Dir(w);
+            var group = groups.FirstOrDefault(g => DimensionGeometry.IsParallel(Dir(g[0]), dir));
+            if (group is null) groups.Add([w]); else group.Add(w);
+        }
+
+        var z = view.GenLevel?.Elevation ?? 0;
+        var created = new List<long>();
+        var skipped = 0;
+        using var t = RevitHelpers.StartTransaction(doc, "Dimension walls");
+        foreach (var group in groups.Where(g => g.Count >= 2))
+        {
+            var refs = new ReferenceArray();
+            foreach (var w in group)
+            {
+                var r = WallReference(w, mode);
+                if (r is null) skipped++; else refs.Append(r);
+            }
+            if (refs.Size < 2) continue;
+            var pts = group.SelectMany(w => new[] { ((LocationCurve)w.Location).Curve.GetEndPoint(0), ((LocationCurve)w.Location).Curve.GetEndPoint(1) }).ToList();
+            var line = DimensionGeometry.Across(pts, Dir(group[0]), offset, z);
+            try { created.Add(doc.Create.NewDimension(view, line, refs).Id.Value); }
+            catch (Autodesk.Revit.Exceptions.ArgumentException) { skipped += group.Count; }
+        }
+        t.Commit();
+        return ToolResult.Ok(new { dimensionStrings = created.Count, ids = created, wallsConsidered = straight.Count, skipped });
+    }
+
+    private static XYZ Dir(Wall w) => ((Line)((LocationCurve)w.Location).Curve).Direction;
+
+    private static Reference? WallReference(Wall w, string mode)
+    {
+        var side = mode == "interior_face" ? ShellLayerType.Interior : ShellLayerType.Exterior;
+        var faces = HostObjectUtils.GetSideFaces(w, side);
+        return faces.Count > 0 ? faces[0] : null;
+    }
+}

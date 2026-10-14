@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    Local MCP server that lets Claude Desktop (or Claude Code) use Sketch ProMax's Revit tools.
+    Claude Desktop starts this exe; it forwards tool calls over a named pipe to the add-in running in Revit.
+    Conversations then run on your Claude plan instead of a pay-per-token API key.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>SketchProMax.Mcp</AssemblyName>
+    <RootNamespace>SketchProMax.Mcp</RootNamespace>
+    <Version>0.2.0</Version>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Same agent instructions as the in-Revit chat pane. -->
+    <Compile Include="..\SketchProMax\Agent\SystemPrompt.cs" Link="SystemPrompt.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="ModelContextProtocol" Version="2.2.0" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.1" />
+  </ItemGroup>
+</Project>

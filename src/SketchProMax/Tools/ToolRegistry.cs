@@ -17,20 +17,43 @@ public sealed class ToolRegistry
 
     public static ToolRegistry CreateDefault() => new(
     [
-        // Read-only
+        // Read-only: understand the model
         new GetModelContextTool(),
         new QueryElementsTool(),
         new GetElementParametersTool(),
         new ListViewsAndSheetsTool(),
+        new ListViewTemplatesTool(),
         new ListTypesTool(),
+        new ListRevisionsTool(),
+        new ListTextNotesTool(),
+        new ReadScheduleTool(),
         new SelectElementsTool(),
+        // Read-only: QA and output
         new RunModelAuditTool(),
         new CaptureViewImageTool(),
-        // Model-changing (go through the approval gate)
-        new SetParametersTool(),
-        new CreateWallsTool(),
+        new ExportScheduleTool(),
+        new ExportPdfTool(),
+        // Documentation (change the model; go through the approval gate)
         new TagElementsInViewTool(),
-        new CreateSheetTool(),
+        new DimensionGridsTool(),
+        new DimensionWallsTool(),
+        new CreatePlanViewsTool(),
+        new DuplicateViewsTool(),
+        new ApplyViewTemplateTool(),
+        new CreateSheetsTool(),
+        new PlaceViewsOnSheetTool(),
+        new RenameElementsTool(),
         new CreateScheduleTool(),
+        new CreateRevisionTool(),
+        new CloudElementsTool(),
+        new UpdateTextNotesTool(),
+        // Model data
+        new SetParametersTool(),
+        new PlaceRoomsTool(),
+        new DuplicateTypeTool(),
+        new ChangeTypeTool(),
+        new WorksetsTool(),
+        new CreateWallsTool(),
+        new DeleteElementsTool(),
     ]);
 }

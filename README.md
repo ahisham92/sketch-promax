@@ -1,73 +1,93 @@
 # Sketch ProMax
 
-An AI agent for Autodesk Revit, powered by Claude. Chat with your model in a docked pane; the agent queries, audits and edits the model through typed Revit tools, asking your approval before any change.
+An AI agent for Autodesk Revit 2024, 2025 and 2026, powered by Claude. Ask in plain language; it reads, documents, audits and edits the open model through 34 Revit tools. It asks for your approval before every change, and every change can be undone with Ctrl+Z.
 
-See [docs/PLAN.md](docs/PLAN.md) for the gap analysis against SketchPro, the roadmap and the architecture.
+See [docs/PLAN.md](docs/PLAN.md) for the comparison with SketchPro, the roadmap and the architecture.
 
-## Requirements
+## Two ways to use it
 
-- Windows with Revit 2024, 2025 or 2026
-- .NET 8 SDK (it also builds the .NET Framework 4.8 version for Revit 2024; Revit 2027 builds need the .NET 10 SDK)
-- An Anthropic API key
+| | Claude desktop app (recommended) | Chat pane inside Revit |
+|---|---|---|
+| Cost | Included in your Claude plan, no extra payment | Pay per use with an Anthropic API key |
+| Where you chat | The Claude desktop app, next to Revit | A docked pane in Revit |
+| Setup | Install the desktop app, run `install.ps1` | Paste an API key in the pane's Settings |
 
-## Build and install
+Both use the same tools on the same open model. Your Claude plan can only be used through Anthropic's own apps, which is why the no-cost route goes through the desktop app. If your company manages your Claude account, IT may need to allow the desktop app's local tools (MCP servers).
+
+## Install
+
+Requirements: Windows, Revit 2024/2025/2026, and the .NET 8 SDK to build.
 
 ```powershell
-# All supported versions (2024, 2025, 2026)
-.\build.ps1
-
-# One version
-dotnet build src\SketchProMax\SketchProMax.csproj -c Debug -p:RevitVersion=2024
+.\build.ps1      # builds the add-in for 2024, 2025, 2026 and the desktop-app connector into .\dist
+.\install.ps1    # installs for your user, no admin needed
 ```
 
-| Revit | Runtime | Output folder |
-|---|---|---|
-| 2024 | .NET Framework 4.8 | `bin\<config>\Revit2024\` |
-| 2025 | .NET 8 | `bin\<config>\Revit2025\` |
-| 2026 | .NET 8 | `bin\<config>\Revit2026\` |
+`install.ps1` copies the add-in into each installed Revit version, installs the connector to `%LOCALAPPDATA%\SketchProMax\mcp`, and registers it with the Claude desktop app if it's installed (your existing config is backed up to `claude_desktop_config.json.bak`).
 
-The same source and the same `.addin` manifest serve every version; each build goes into that version's add-ins folder.
+Then:
+1. Start Revit, choose **Always Load**, and open a model. The **Sketch ProMax** tab appears on the ribbon.
+2. **Desktop app:** restart the Claude desktop app. The Sketch ProMax tools show under the tools (plug) menu. Chat as normal: "Tag all doors in the active view".
+3. **Revit pane:** click **Sketch ProMax** on the ribbon, then **Settings**, and paste an API key (or set `ANTHROPIC_API_KEY`). Keys are encrypted with Windows DPAPI.
 
-A Debug build on Windows copies itself into `%APPDATA%\Autodesk\Revit\Addins\<version>\` (manifest plus a `SketchProMax\` folder). For Release, copy `bin\Release\Revit<version>\` there yourself: `SketchProMax.addin` at the top level, everything else into `SketchProMax\`.
+Revit must be running with a model open for the tools to work. With "Ask before changing the model" on (the default), Revit shows a Yes/No dialog before every change made from the desktop app.
 
-Start Revit, choose **Always Load** when prompted, then open the **Sketch ProMax** ribbon tab.
+## What it can do
 
-## API key
+**Understand the model:** model summary, find elements by category/level/parameter, all parameters of an element, views and sheets, view templates, types, revisions, text notes, read any schedule, highlight elements.
 
-Either set `ANTHROPIC_API_KEY` in your user environment, or paste the key in **Settings** in the pane. Keys saved in Settings are encrypted with Windows DPAPI for your user account (`%APPDATA%\SketchProMax\settings.json`).
+**Documentation:**
+- Tag any category in a view (doors, windows, rooms, equipment...)
+- Dimension grids and walls
+- Create floor, ceiling and structural plans per level with templates and naming patterns
+- Duplicate views
+- Apply view templates
+- Create full sheet sets in one go (including placeholder sheets) and place views on sheets
+- Rename and renumber views, sheets, rooms, levels and types to firm standards
+- Create schedules, then read them or export them to CSV/Excel
+- Create revisions, add them to sheets, and cloud changed elements
+- Edit and translate text notes (e.g. English to Arabic)
+- Print to PDF
 
-## Try it
+**Model data:** set parameters in bulk, place rooms automatically, duplicate types with new values, swap types, manage worksets, create walls, delete elements.
+
+**QA:** deterministic model audit (unplaced/unbounded/unnumbered rooms, duplicate room numbers, untagged doors and windows, views not on sheets, empty sheets) and visual review of rendered views and sheets.
+
+**Firm standards:** write your conventions in plain English in Settings (naming, numbering, tag styles). They're applied in every conversation, in both the desktop app and the pane.
+
+### Try
 
 - "What's in this model?"
-- "Tag every untagged door and window in this view."
-- "Run a QA check and tell me what to fix first."
-- "Make a door schedule with Mark, Type, Width, Height and Fire Rating."
-- "Create sheet A-101 'Ground Floor Plan' and put the Level 1 plan on it."
-- "Look at the active sheet and tell me if any tags overlap."
+- "Create floor plans for every level using the 'A - Floor Plan' template, named 'A - {level} - GA'."
+- "Make a cartoon set: A-001 cover, A-101 to A-104 for each level plan, plus placeholder sheets S-101 and M-101."
+- "Dimension the grids and the exterior walls on Level 1."
+- "Run a QA check, fix what you safely can, and list the rest."
+- "Create revision 'Bulletin 03', add it to A-101 and A-102 and cloud the doors whose fire rating changed."
+- "Translate every text note on sheet A-101 to Arabic."
+- "Look at sheet A-101 and tell me if any tags overlap."
 
 ## Project layout
 
 ```
-src/SketchProMax/
-  App.cs                    IExternalApplication: ribbon, dockable pane, dispatcher
-  SketchProMax.addin        Revit manifest
-  Commands/ShowPaneCommand  Toggle the pane
-  Agent/AgentSession        Claude tool-use loop (Anthropic C# SDK)
-  Agent/SystemPrompt        Agent instructions + firm standards
-  Revit/RevitDispatcher     Runs work on Revit's main thread via ExternalEvent
-  Revit/DependencyResolver  Revit 2024 only: loads the SDK's System.* dependencies from the add-in folder
-  Tools/                    IRevitTool implementations and the registry
-  UI/                       Chat pane (WPF) and settings dialog
-  Settings/                 Per-user settings, DPAPI-encrypted key
+build.ps1 / install.ps1      Build everything into .\dist / install for the current user
+src/SketchProMax/            The Revit add-in (net48 for Revit 2024, net8.0-windows for 2025/2026)
+  App.cs                     Ribbon, dockable pane, dispatcher, desktop-app bridge
+  Agent/                     Claude tool-use loop for the in-Revit pane (Anthropic C# SDK) and agent instructions
+  Bridge/BridgeServer        Named-pipe server the desktop-app connector talks to
+  Revit/                     Main-thread dispatcher (ExternalEvent), helpers, Revit 2024 dependency loader
+  Tools/                     The 34 IRevitTool implementations and the registry
+  UI/                        Chat pane and settings dialog
+  Settings/                  Per-user settings, DPAPI-encrypted API key
+src/SketchProMax.Mcp/        MCP server (stdio) the Claude desktop app launches; forwards tool calls to Revit
 ```
 
 ## Adding a tool
 
-1. Implement `IRevitTool` (name, description, JSON schema properties, `ModifiesModel`, `Execute`).
+1. Implement `IRevitTool` (name, description, JSON schema, `ModifiesModel`, `Execute`).
 2. Wrap model changes in `RevitHelpers.StartTransaction(doc, "...")` and `Commit()`.
 3. Return `ToolResult.Ok(new { ... })` with counts and element ids so Claude can verify its work.
-4. Register it in `ToolRegistry.CreateDefault()`.
+4. Register it in `ToolRegistry.CreateDefault()`. It appears in both the pane and the desktop app automatically.
 
 ## Status
 
-Starter code. It compiles against the Revit 2024, 2025 and 2026 API reference packages, but has not yet been run inside Revit. Expect to fix small runtime issues on first launch.
+The add-in compiles for Revit 2024, 2025 and 2026, and the desktop-app connector has been tested end to end against a simulated Revit. It has not been run inside a real Revit session yet, so expect small fixes on first launch.

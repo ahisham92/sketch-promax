@@ -1,6 +1,8 @@
 using Autodesk.Revit.UI;
+using SketchProMax.Bridge;
 using SketchProMax.Commands;
 using SketchProMax.Revit;
+using SketchProMax.Tools;
 using SketchProMax.UI;
 
 namespace SketchProMax;
@@ -12,12 +14,18 @@ public sealed class App : IExternalApplication
 
     public static RevitDispatcher Dispatcher { get; } = new();
 
+    private BridgeServer? _bridge;
+
     public Result OnStartup(UIControlledApplication application)
     {
 #if NETFRAMEWORK
         DependencyResolver.Register();
 #endif
         Dispatcher.Initialize();
+
+        // Lets the Claude desktop app / Claude Code drive Revit through SketchProMax.Mcp.exe (no API key needed).
+        _bridge = new BridgeServer(ToolRegistry.CreateDefault(), Dispatcher);
+        _bridge.Start();
         application.RegisterDockablePane(PaneId, "Sketch ProMax", new ChatPane());
 
         const string tab = "Sketch ProMax";
@@ -35,6 +43,7 @@ public sealed class App : IExternalApplication
 
     public Result OnShutdown(UIControlledApplication application)
     {
+        _bridge?.Stop();
 #if NETFRAMEWORK
         DependencyResolver.Unregister();
 #endif
