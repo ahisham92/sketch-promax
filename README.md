@@ -6,19 +6,27 @@ See [docs/PLAN.md](docs/PLAN.md) for the gap analysis against SketchPro, the roa
 
 ## Requirements
 
-- Windows with Revit 2025 or 2026
-- .NET 8 SDK (Revit 2027 builds need the .NET 10 SDK)
+- Windows with Revit 2024, 2025 or 2026
+- .NET 8 SDK (it also builds the .NET Framework 4.8 version for Revit 2024; Revit 2027 builds need the .NET 10 SDK)
 - An Anthropic API key
 
 ## Build and install
 
 ```powershell
-# Revit 2025 (default)
-dotnet build src\SketchProMax\SketchProMax.csproj -c Debug
+# All supported versions (2024, 2025, 2026)
+.\build.ps1
 
-# Revit 2026
-dotnet build src\SketchProMax\SketchProMax.csproj -c Debug -p:RevitVersion=2026
+# One version
+dotnet build src\SketchProMax\SketchProMax.csproj -c Debug -p:RevitVersion=2024
 ```
+
+| Revit | Runtime | Output folder |
+|---|---|---|
+| 2024 | .NET Framework 4.8 | `bin\<config>\Revit2024\` |
+| 2025 | .NET 8 | `bin\<config>\Revit2025\` |
+| 2026 | .NET 8 | `bin\<config>\Revit2026\` |
+
+The same source and the same `.addin` manifest serve every version; each build goes into that version's add-ins folder.
 
 A Debug build on Windows copies itself into `%APPDATA%\Autodesk\Revit\Addins\<version>\` (manifest plus a `SketchProMax\` folder). For Release, copy `bin\Release\Revit<version>\` there yourself: `SketchProMax.addin` at the top level, everything else into `SketchProMax\`.
 
@@ -47,6 +55,7 @@ src/SketchProMax/
   Agent/AgentSession        Claude tool-use loop (Anthropic C# SDK)
   Agent/SystemPrompt        Agent instructions + firm standards
   Revit/RevitDispatcher     Runs work on Revit's main thread via ExternalEvent
+  Revit/DependencyResolver  Revit 2024 only: loads the SDK's System.* dependencies from the add-in folder
   Tools/                    IRevitTool implementations and the registry
   UI/                       Chat pane (WPF) and settings dialog
   Settings/                 Per-user settings, DPAPI-encrypted key
@@ -61,4 +70,4 @@ src/SketchProMax/
 
 ## Status
 
-Starter code. It compiles against the Revit 2025 and 2026 API reference packages, but has not yet been run inside Revit. Expect to fix small runtime issues on first launch.
+Starter code. It compiles against the Revit 2024, 2025 and 2026 API reference packages, but has not yet been run inside Revit. Expect to fix small runtime issues on first launch.

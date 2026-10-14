@@ -13,7 +13,7 @@ public sealed class ToolRegistry
 
     public IReadOnlyCollection<IRevitTool> All => _tools.Values;
 
-    public IRevitTool? Find(string name) => _tools.GetValueOrDefault(name);
+    public IRevitTool? Find(string name) => _tools.TryGetValue(name, out var tool) ? tool : null;
 
     public static ToolRegistry CreateDefault() => new(
     [

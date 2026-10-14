@@ -54,7 +54,7 @@ public sealed class AgentSettings
     {
         var env = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
         if (!string.IsNullOrWhiteSpace(env)) return env;
-        if (EncryptedApiKey is null || !OperatingSystem.IsWindows()) return null;
+        if (EncryptedApiKey is null || !IsWindows) return null;
         try
         {
             var bytes = ProtectedData.Unprotect(Convert.FromBase64String(EncryptedApiKey), null, DataProtectionScope.CurrentUser);
@@ -63,9 +63,12 @@ public sealed class AgentSettings
         catch (CryptographicException) { return null; }
     }
 
+    // Revit only runs on Windows; the check keeps the platform analyzer quiet on .NET 8.
+    private static bool IsWindows => Environment.OSVersion.Platform == PlatformID.Win32NT;
+
     public void SetApiKey(string key)
     {
-        if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException();
+        if (!IsWindows) throw new PlatformNotSupportedException();
         var bytes = ProtectedData.Protect(Encoding.UTF8.GetBytes(key.Trim()), null, DataProtectionScope.CurrentUser);
         EncryptedApiKey = Convert.ToBase64String(bytes);
     }

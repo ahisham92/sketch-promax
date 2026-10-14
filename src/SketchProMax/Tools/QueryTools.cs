@@ -104,7 +104,7 @@ public sealed class QueryElementsTool : IRevitTool
             {
                 var p = e.LookupParameter(pname) ?? doc.GetElement(e.GetTypeId())?.LookupParameter(pname);
                 var v = p is null ? null : RevitHelpers.ParamValue(p);
-                return v != null && v.Contains(needle, StringComparison.OrdinalIgnoreCase);
+                return v != null && v.IndexOf(needle, StringComparison.OrdinalIgnoreCase) >= 0;
             });
         }
 

@@ -104,7 +104,7 @@ public sealed class CaptureViewImageTool : IRevitTool
             ExportRange = ExportRange.SetOfViews,
             FilePath = Path.Combine(dir, "view"),
             ZoomType = ZoomFitType.FitToPage,
-            PixelSize = (int)Math.Clamp(args.OptLong("pixel_width") ?? 1600, 400, 2400),
+            PixelSize = (int)Math.Min(Math.Max(args.OptLong("pixel_width") ?? 1600, 400), 2400),
             HLRandWFViewsFileType = ImageFileType.PNG,
             ShadowViewsFileType = ImageFileType.PNG,
             ImageResolution = ImageResolution.DPI_150,

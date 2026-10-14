@@ -14,6 +14,9 @@ public sealed class App : IExternalApplication
 
     public Result OnStartup(UIControlledApplication application)
     {
+#if NETFRAMEWORK
+        DependencyResolver.Register();
+#endif
         Dispatcher.Initialize();
         application.RegisterDockablePane(PaneId, "Sketch ProMax", new ChatPane());
 
@@ -30,5 +33,11 @@ public sealed class App : IExternalApplication
         return Result.Succeeded;
     }
 
-    public Result OnShutdown(UIControlledApplication application) => Result.Succeeded;
+    public Result OnShutdown(UIControlledApplication application)
+    {
+#if NETFRAMEWORK
+        DependencyResolver.Unregister();
+#endif
+        return Result.Succeeded;
+    }
 }

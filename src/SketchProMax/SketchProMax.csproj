@@ -2,11 +2,12 @@
 
   <!--
     Build for a specific Revit release with:  dotnet build -c Release -p:RevitVersion=2026
-    Revit 2025 and 2026 run on .NET 8; Revit 2027 runs on .NET 10.
+    Revit 2024 runs on .NET Framework 4.8; Revit 2025 and 2026 on .NET 8; Revit 2027 on .NET 10.
   -->
   <PropertyGroup>
     <RevitVersion Condition="'$(RevitVersion)' == ''">2025</RevitVersion>
-    <TargetFramework Condition="'$(RevitVersion)' &lt; '2027'">net8.0-windows</TargetFramework>
+    <TargetFramework Condition="'$(RevitVersion)' &lt; '2025'">net48</TargetFramework>
+    <TargetFramework Condition="'$(RevitVersion)' &gt;= '2025' AND '$(RevitVersion)' &lt; '2027'">net8.0-windows</TargetFramework>
     <TargetFramework Condition="'$(RevitVersion)' &gt;= '2027'">net10.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
@@ -28,7 +29,18 @@
     <PackageReference Include="Nice3point.Revit.Api.RevitAPI" Version="$(RevitVersion).*" ExcludeAssets="runtime" PrivateAssets="all" />
     <PackageReference Include="Nice3point.Revit.Api.RevitAPIUI" Version="$(RevitVersion).*" ExcludeAssets="runtime" PrivateAssets="all" />
     <PackageReference Include="Anthropic" Version="12.57.0" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' != 'net48'">
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
+  </ItemGroup>
+
+  <!-- .NET Framework 4.8 (Revit 2024): reference assemblies plus compiler polyfills for modern C#. -->
+  <ItemGroup Condition="'$(TargetFramework)' == 'net48'">
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+    <PackageReference Include="PolySharp" Version="1.15.0" PrivateAssets="all" IncludeAssets="runtime; build; native; contentfiles; analyzers" />
+    <Reference Include="System.Security" />
+    <Reference Include="System.Net.Http" />
   </ItemGroup>
 
   <ItemGroup>

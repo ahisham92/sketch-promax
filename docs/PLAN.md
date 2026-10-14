@@ -81,11 +81,11 @@ Key decisions:
 - **Deterministic where it matters.** QA checks and future code checks are plain code. Claude interprets, explains and fixes; it doesn't do the counting.
 - **Model.** Claude Opus 5.5 by default (`claude-opus-5-5`), effort `high`, prompt caching on tools + system prompt, server-side refusal fallback enabled. Model and effort are user settings.
 - **Secrets.** API key from `ANTHROPIC_API_KEY` or stored encrypted with Windows DPAPI per user. Never in plain text.
-- **Targets.** Revit 2025 and 2026 (.NET 8) build from the same source with `-p:RevitVersion=`. Revit 2027 (.NET 10) is wired in the project file but needs the .NET 10 SDK to build.
+- **Targets.** Revit 2024 (.NET Framework 4.8), 2025 and 2026 (.NET 8) build from the same source with `-p:RevitVersion=` (or `build.ps1` for all three). Modern C# on 4.8 comes from compiler polyfills (PolySharp). Revit 2027 (.NET 10) is wired in the project file but needs the .NET 10 SDK to build.
 
 ## 5. Risks and open questions
 
-1. **Dependency conflicts.** The Anthropic SDK brings newer `System.Text.Json`; other add-ins or Revit may load a different version. Test early in Revit 2025 and 2026; fall back to an isolated `AssemblyLoadContext` if needed.
+1. **Dependency conflicts.** The Anthropic SDK brings newer `System.Text.Json`; other add-ins or Revit may load a different version. On Revit 2024 (.NET Framework, no binding redirects for add-ins) an `AssemblyResolve` handler loads these from the add-in folder; if another add-in has already loaded an older version first, that one wins and may break the SDK. Test early in all three versions; on 2025+ fall back to an isolated `AssemblyLoadContext` if needed.
 2. **Prompt-injected model content.** Text in a model (parameter values, linked files) is data, not instructions. The system prompt says so; the approval gate is the hard stop.
 3. **Cost control.** Large models and image captures cost tokens. Add per-conversation budget and the cost meter in Phase 1.
 4. **Professional responsibility.** The agent proposes; the architect approves. Keep the audit log exportable.
