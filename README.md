@@ -1,18 +1,20 @@
 # Sketch ProMax
 
-An AI agent for Autodesk Revit 2024, 2025 and 2026, powered by Claude. Ask in plain language; it reads, documents, audits and edits the open model through 51 Revit tools. It asks for your approval before every change, and every change can be undone with Ctrl+Z.
+An AI agent for Autodesk Revit 2024, 2025 and 2026, powered by Claude. Ask in plain language; it reads, documents, audits and edits the open model through 53 tools. It asks for your approval before every change, and every change can be undone with Ctrl+Z.
 
 See [docs/PLAN.md](docs/PLAN.md) for the comparison with SketchPro, the roadmap and the architecture.
 
-## Two ways to use it
+## How you use it
 
-| | Claude desktop app (recommended) | Chat pane inside Revit |
-|---|---|---|
-| Cost | Included in your Claude plan, no extra payment | Pay per use with an Anthropic API key |
-| Where you chat | The Claude desktop app, next to Revit | A docked pane in Revit |
-| Setup | Install the desktop app, run `install.ps1` | Paste an API key in the pane's Settings |
+You chat in the **Claude desktop app**, next to Revit, on your normal Claude plan: no API key and no extra payment. The work happens in Revit. There is no chat inside Revit, because that would need a paid API key; your Claude plan can only be used through Anthropic's own apps.
 
-Both use the same tools on the same open model. Your Claude plan can only be used through Anthropic's own apps, which is why the no-cost route goes through the desktop app. If your company manages your Claude account, IT may need to allow the desktop app's local tools (MCP servers).
+On the Revit ribbon, the **AI Agent** panel has two buttons:
+- **Status** shows whether the desktop app can reach this Revit window.
+- **Settings** holds your firm standards and the "ask me before changing the model" switch.
+
+Several Revit windows, and different Revit versions, can be open at once. Name the model in chat ("in the Tower model, ...") and Claude switches to it.
+
+If your company manages your Claude account, IT may need to allow the desktop app's local tools (MCP servers).
 
 ## Install
 
@@ -27,10 +29,9 @@ Requirements: Windows, Revit 2024/2025/2026, and the .NET 8 SDK to build.
 
 Then:
 1. Start Revit, choose **Always Load**, and open a model. The **Sketch ProMax** tab appears on the ribbon.
-2. **Desktop app:** restart the Claude desktop app. The Sketch ProMax tools show under the tools (plug) menu. Chat as normal: "Tag all doors in the active view".
-3. **Revit pane:** click **Sketch ProMax** on the ribbon, then **Settings**, and paste an API key (or set `ANTHROPIC_API_KEY`). Keys are encrypted with Windows DPAPI.
+2. Restart the Claude desktop app. The Sketch ProMax tools show under the tools (plug) menu. Chat as normal: "Tag all doors in the active view".
 
-Revit must be running with a model open for the tools to work. With "Ask before changing the model" on (the default), Revit shows a Yes/No dialog before every change made from the desktop app.
+Revit must be running with a model open for the tools to work. With "Ask before changing the model" on (the default), Revit shows a Yes/No dialog before every change.
 
 ## What it can do
 
@@ -59,20 +60,23 @@ Revit must be running with a model open for the tools to work. With "Ask before 
 
 **View filters:** create rule-based filters, apply them to views or templates with colors, halftone, transparency or hide, and color-code a view by any parameter in one step (e.g. doors by fire rating) with a legend.
 
-**Pictures, sketches and cut sheets:** attach photos or PDFs in the Revit chat (📎) or the desktop app.
+**Pictures, sketches and cut sheets:** attach photos or PDFs in the desktop app.
 - Build a Revit family from a product photo or manufacturer cut sheet
 - Redraw a hand sketch as clean linework in a drafting view
 - Place pictures or PDF pages into views and sheets
+
+**Several models:** list every connected Revit window and its open models, and switch between them by name, across Revit 2024, 2025 and 2026.
 
 **Model data:** set parameters in bulk, place rooms automatically, duplicate types with new values, swap types, manage worksets, delete elements.
 
 **QA:** deterministic model audit (unplaced/unbounded/unnumbered rooms, duplicate room numbers, untagged doors and windows, views not on sheets, empty sheets) and visual review of rendered views and sheets.
 
-**Firm standards:** write your conventions in plain English in Settings (naming, numbering, tag styles). They're applied in every conversation, in both the desktop app and the pane.
+**Firm standards:** write your conventions in plain English in Settings (naming, numbering, tag styles). Claude reads them at the start of every conversation.
 
 ### Try
 
 - "What's in this model?"
+- "Which Revit models do you have open? Switch to the Podium model."
 - "Color the Level 1 plan by room department and give me the legend."
 - (attach a chair cut sheet) "Make a family from this and place 6 in the meeting room."
 - (attach a sketch photo) "Turn this sketch into a 1:10 drafting view."
@@ -91,14 +95,14 @@ Revit must be running with a model open for the tools to work. With "Ask before 
 ```
 build.ps1 / install.ps1      Build everything into .\dist / install for the current user
 src/SketchProMax/            The Revit add-in (net48 for Revit 2024, net8.0-windows for 2025/2026)
-  App.cs                     Ribbon, dockable pane, dispatcher, desktop-app bridge
-  Agent/                     Claude tool-use loop for the in-Revit pane (Anthropic C# SDK) and agent instructions
-  Bridge/BridgeServer        Named-pipe server the desktop-app connector talks to
+  App.cs                     Ribbon (Status, Settings), dispatcher, desktop-app bridge
+  Agent/SystemPrompt         Instructions the desktop app receives from the connector
+  Bridge/BridgeServer        Per-Revit-window named-pipe server the connector talks to
   Revit/                     Main-thread dispatcher (ExternalEvent), helpers, Revit 2024 dependency loader
   Tools/                     The 51 IRevitTool implementations and the registry
-  UI/                        Chat pane and settings dialog
-  Settings/                  Per-user settings, DPAPI-encrypted API key
-src/SketchProMax.Mcp/        MCP server (stdio) the Claude desktop app launches; forwards tool calls to Revit
+  UI/                        Settings dialog
+  Settings/                  Per-user settings (approval switch, firm standards)
+src/SketchProMax.Mcp/        MCP server (stdio) the Claude desktop app launches; finds open Revit windows and forwards tool calls
 ```
 
 ## Adding a tool
@@ -106,7 +110,7 @@ src/SketchProMax.Mcp/        MCP server (stdio) the Claude desktop app launches;
 1. Implement `IRevitTool` (name, description, JSON schema, `ModifiesModel`, `Execute`).
 2. Wrap model changes in `RevitHelpers.StartTransaction(doc, "...")` and `Commit()`.
 3. Return `ToolResult.Ok(new { ... })` with counts and element ids so Claude can verify its work.
-4. Register it in `ToolRegistry.CreateDefault()`. It appears in both the pane and the desktop app automatically.
+4. Register it in `ToolRegistry.CreateDefault()`. It appears in the desktop app the next time Revit and the app start.
 
 ## Status
 

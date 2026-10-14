@@ -1,36 +1,21 @@
 using System.IO;
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 
 namespace SketchProMax.Settings;
 
 /// <summary>
-/// Per-user settings stored in %APPDATA%\SketchProMax\settings.json.
-/// The API key is encrypted with Windows DPAPI (current user) and never written in plain text.
-/// The ANTHROPIC_API_KEY environment variable, when set, takes precedence.
+/// Per-user settings stored in %APPDATA%\SketchProMax\settings.json, edited from the ribbon's Settings button.
+/// The MCP server reads the same file, so firm standards reach Claude in the desktop app.
 /// </summary>
 public sealed class AgentSettings
 {
-    public string Model { get; set; } = "claude-opus-5-5";
-
-    /// <summary>low | medium | high | xhigh | max</summary>
-    public string Effort { get; set; } = "high";
-
-    public int MaxTokens { get; set; } = 16000;
-
-    /// <summary>Upper bound on Claude round-trips for one user message.</summary>
-    public int MaxToolRounds { get; set; } = 25;
-
-    /// <summary>Ask before running tools that change the model.</summary>
+    /// <summary>Show a Yes/No dialog in Revit before any tool changes the model.</summary>
     public bool RequireApprovalForChanges { get; set; } = true;
 
-    /// <summary>Firm standards appended to the system prompt (naming, sheet numbering, tag styles...).</summary>
+    /// <summary>Firm standards in plain English (naming, sheet numbering, tag styles...), given to Claude.</summary>
     public string FirmStandards { get; set; } = "";
 
-    public string? EncryptedApiKey { get; set; }
-
-    private static string FilePath => Path.Combine(
+    public static string FilePath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "SketchProMax", "settings.json");
 
     public static AgentSettings Load()
@@ -48,28 +33,5 @@ public sealed class AgentSettings
     {
         Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
         File.WriteAllText(FilePath, JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true }));
-    }
-
-    public string? GetApiKey()
-    {
-        var env = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
-        if (!string.IsNullOrWhiteSpace(env)) return env;
-        if (EncryptedApiKey is null || !IsWindows) return null;
-        try
-        {
-            var bytes = ProtectedData.Unprotect(Convert.FromBase64String(EncryptedApiKey), null, DataProtectionScope.CurrentUser);
-            return Encoding.UTF8.GetString(bytes);
-        }
-        catch (CryptographicException) { return null; }
-    }
-
-    // Revit only runs on Windows; the check keeps the platform analyzer quiet on .NET 8.
-    private static bool IsWindows => Environment.OSVersion.Platform == PlatformID.Win32NT;
-
-    public void SetApiKey(string key)
-    {
-        if (!IsWindows) throw new PlatformNotSupportedException();
-        var bytes = ProtectedData.Protect(Encoding.UTF8.GetBytes(key.Trim()), null, DataProtectionScope.CurrentUser);
-        EncryptedApiKey = Convert.ToBase64String(bytes);
     }
 }

@@ -10,40 +10,65 @@ using SketchProMax.Tools;
 namespace SketchProMax.Bridge;
 
 /// <summary>
-/// Lets an outside Claude client (Claude desktop app or Claude Code, through SketchProMax.Mcp.exe)
-/// use the same Revit tools as the in-Revit chat pane. Conversations then run on the user's Claude
-/// plan instead of an API key.
+/// Lets the Claude desktop app (or Claude Code), through SketchProMax.Mcp.exe, use the Revit tools.
+/// Conversations run on the user's Claude plan; there is no API key.
 ///
-/// Protocol: one JSON request line per connection on a per-user named pipe, one JSON response line back.
-///   {"method":"ping"}                                   -> {"ok":true,"document":"..."}
+/// Every Revit process gets its own pipe and announces itself with a file in %APPDATA%\SketchProMax\sessions,
+/// so several Revit windows and versions can be connected at once; the MCP server picks one by model name.
+///
+/// Protocol: one JSON request line per connection, one JSON response line back.
+///   {"method":"ping"}                                   -> {"ok":true,"pid":..,"revitVersion":"2025","documents":[..]}
+///   {"method":"activate_document","title":"..."}       -> {"ok":true} or {"text":"...","isError":true}
 ///   {"method":"call_tool","name":"...","arguments":{}}  -> {"text":"...","isError":false,"pngBase64":null}
 /// The tool catalogue is written to %APPDATA%\SketchProMax\tools.json at startup so the MCP server can
 /// list tools even before Revit is running.
 /// </summary>
 public sealed class BridgeServer
 {
-    public static string PipeName => $"SketchProMax.Revit.{Environment.UserName}";
+    public static int SessionId { get; } = System.Diagnostics.Process.GetCurrentProcess().Id;
 
-    public static string ToolsFile => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "SketchProMax", "tools.json");
+    public static string PipeName => $"SketchProMax.Revit.{Environment.UserName}.{SessionId}";
+
+    private static string Root => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "SketchProMax");
+
+    private static string SessionFile => Path.Combine(Root, "sessions", $"{SessionId}.json");
+
+    public bool IsListening { get; private set; }
+
+    public static string ToolsFile => Path.Combine(Root, "tools.json");
 
     private readonly ToolRegistry _registry;
     private readonly RevitDispatcher _dispatcher;
     private readonly CancellationTokenSource _cts = new();
+    private readonly string _revitVersion;
 
-    public BridgeServer(ToolRegistry registry, RevitDispatcher dispatcher)
+    public BridgeServer(ToolRegistry registry, RevitDispatcher dispatcher, string revitVersion)
     {
         _registry = registry;
         _dispatcher = dispatcher;
+        _revitVersion = revitVersion;
     }
 
     public void Start()
     {
         WriteToolCatalogue();
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(SessionFile)!);
+            File.WriteAllText(SessionFile, JsonSerializer.Serialize(new
+            {
+                pid = SessionId, pipe = PipeName, revitVersion = _revitVersion, started = DateTime.UtcNow,
+            }));
+        }
+        catch (IOException) { }
         Task.Run(() => AcceptLoop(_cts.Token));
     }
 
-    public void Stop() => _cts.Cancel();
+    public void Stop()
+    {
+        _cts.Cancel();
+        try { File.Delete(SessionFile); } catch (IOException) { }
+    }
 
     private void WriteToolCatalogue()
     {
@@ -69,6 +94,7 @@ public sealed class BridgeServer
             {
                 using var pipe = new NamedPipeServerStream(PipeName, PipeDirection.InOut, 1,
                     PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
+                IsListening = true;
                 await pipe.WaitForConnectionAsync(ct).ConfigureAwait(false);
 
                 var reader = new StreamReader(pipe, new UTF8Encoding(false), false, 4096, leaveOpen: true);
@@ -83,7 +109,7 @@ public sealed class BridgeServer
             catch (OperationCanceledException) { return; }
             catch (IOException)
             {
-                // Pipe already owned by another Revit session, or the client went away. Back off and retry.
+                // The client went away mid-request, or the pipe is briefly unavailable. Back off and retry.
                 await Task.Delay(2000, ct).ConfigureAwait(false);
             }
         }
@@ -98,8 +124,20 @@ public sealed class BridgeServer
             switch (root.GetProperty("method").GetString())
             {
                 case "ping":
-                    var title = await _dispatcher.InvokeAsync(app => app.ActiveUIDocument?.Document.Title).ConfigureAwait(false);
-                    return JsonSerializer.Serialize(new { ok = true, document = title });
+                    var documents = await _dispatcher.InvokeAsync(app =>
+                    {
+                        var active = app.ActiveUIDocument?.Document;
+                        return app.Application.Documents.Cast<Autodesk.Revit.DB.Document>()
+                            .Where(d => !d.IsFamilyDocument && !d.IsLinked)
+                            .Select(d => new { title = d.Title, path = d.PathName, active = active != null && d.Equals(active) })
+                            .ToList();
+                    }).ConfigureAwait(false);
+                    return JsonSerializer.Serialize(new { ok = true, pid = SessionId, revitVersion = _revitVersion, documents });
+
+                case "activate_document":
+                    var wanted = root.GetProperty("title").GetString() ?? "";
+                    var error = await _dispatcher.InvokeAsync(app => Activate(app, wanted)).ConfigureAwait(false);
+                    return error is null ? JsonSerializer.Serialize(new { ok = true }) : Error(error);
 
                 case "call_tool":
                     var name = root.GetProperty("name").GetString() ?? "";
@@ -137,6 +175,26 @@ public sealed class BridgeServer
             try { return tool.Execute(app, new ToolArgs(args)); }
             catch (Exception ex) { return ToolResult.Error($"{ex.GetType().Name}: {ex.Message}"); }
         });
+    }
+
+    /// <summary>Makes the named open model the active one, so tools act on it. Returns an error message or null.</summary>
+    private static string? Activate(UIApplication app, string title)
+    {
+        var doc = app.Application.Documents.Cast<Autodesk.Revit.DB.Document>()
+            .Where(d => !d.IsFamilyDocument && !d.IsLinked)
+            .FirstOrDefault(d => string.Equals(d.Title, title, StringComparison.OrdinalIgnoreCase));
+        if (doc is null) return $"'{title}' is not open in this Revit session.";
+        if (app.ActiveUIDocument?.Document.Equals(doc) == true) return null;
+        if (string.IsNullOrEmpty(doc.PathName)) return $"'{title}' has never been saved, so it can't be switched to automatically. Ask the user to click into its window in Revit.";
+        try
+        {
+            app.OpenAndActivateDocument(doc.PathName);
+            return null;
+        }
+        catch (Exception ex) when (ex is Autodesk.Revit.Exceptions.ApplicationException or InvalidOperationException)
+        {
+            return $"Revit could not switch to '{title}' ({ex.Message}). Ask the user to click into its window in Revit.";
+        }
     }
 
     private static bool Approve(IRevitTool tool, Dictionary<string, JsonElement> args)

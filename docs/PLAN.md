@@ -25,7 +25,7 @@ Sources: [sketchpro.ai](https://sketchpro.ai/), [SketchPro Academy](https://sket
 
 - **Standalone:** Sketch ProMax must cover SketchPro's documentation work on its own, not just add to it.
 - **Revit 2024, 2025 and 2026.**
-- **No extra cost:** chat from the Claude desktop app on the existing Claude plan. The in-Revit pane with an API key stays as an optional pay-per-use mode.
+- **No extra cost:** chat from the Claude desktop app on the existing Claude plan. There is no in-Revit chat, since that would need a paid API key.
 - **Out of scope for now:** embodied carbon and building-code rule packs.
 
 ## 3. Feature comparison
@@ -64,7 +64,7 @@ Sources: [sketchpro.ai](https://sketchpro.ai/), [SketchPro Academy](https://sket
 
 ## 4. Roadmap
 
-**Done:** the 51 tools above (documentation, modeling, view filters, images), the in-Revit pane, the desktop-app connector (MCP), install scripts, and builds for Revit 2024/2025/2026.
+**Done:** the 51 Revit tools above (documentation, modeling, view filters, images), the desktop-app connector (MCP) with several Revit windows and versions at once, ribbon Status and Settings, install scripts, and builds for Revit 2024/2025/2026.
 
 **Next (documentation depth):** dimension openings and room widths, elevation and section creation, interior elevations per room, legends and keynotes, schedule formatting (filters, grouping, totals), sheet-index and drawing-list automation, align/tidy tags (using visual QA), linked-model queries, a conversation log export.
 
@@ -75,42 +75,38 @@ Sources: [sketchpro.ai](https://sketchpro.ai/), [SketchPro Academy](https://sket
 ## 5. Architecture
 
 ```
-Claude desktop app ──stdio──► SketchProMax.Mcp.exe ──named pipe──► BridgeServer ─┐   (no-cost mode)
-                                                                                 │
-┌──────────────────── Revit process ────────────────────┐                        │
-│  BridgeServer ◄─────────────────────────────────────────────────────────────────┘
-│     └─► same ToolRegistry + RevitDispatcher as below  │
-│  Ribbon button ─► Dockable ChatPane (WPF)             │
-│                        │ user message                 │
-│                        ▼                              │
-│                 AgentSession (background thread)      │
-│      ┌─────────────────┼──────────────────┐           │
-│      │ HTTPS           │ tool_use         │           │
-│      ▼                 ▼                  │           │
-│  Claude API      Approval gate (pane) ──► │           │
-│  (Messages +           │                  │           │
-│   tool use)            ▼                  │           │
-│               RevitDispatcher ─ ExternalEvent ─► Revit main thread
-│                        │                     IRevitTool.Execute(UIApplication)
-│                        ▼                     (one Transaction per change)
-│                   tool_result (JSON / PNG) ──► back to Claude
+Claude desktop app ──stdio──► SketchProMax.Mcp.exe ──┬─ named pipe ─► Revit 2024 window (BridgeServer)
+  (your Claude plan)          finds Revit windows    ├─ named pipe ─► Revit 2025 window
+                              from %APPDATA%\        └─ named pipe ─► Revit 2026 window
+                              SketchProMax\sessions
+
+┌──────────────────── each Revit process ───────────────┐
+│  Ribbon: Status, Settings (approval, firm standards)  │
+│  BridgeServer (pipe SketchProMax.Revit.<user>.<pid>)  │
+│     │  ping / activate_document / call_tool           │
+│     ▼                                                 │
+│  Approval dialog (if on) ──► RevitDispatcher          │
+│        ─ ExternalEvent ─► Revit main thread           │
+│        IRevitTool.Execute(UIApplication)              │
+│        (one Transaction per change)                   │
+│     ▲                                                 │
+│     └── result (JSON / PNG) back to Claude            │
 └────────────────────────────────────────────────────────┘
 ```
 
 Key decisions:
-- **Threading.** The Revit API is single-threaded. The agent loop awaits HTTP on a background thread; every tool runs on Revit's main thread via one `ExternalEvent` queue (`RevitDispatcher`). This keeps Revit responsive while Claude thinks.
+- **Threading.** The Revit API is single-threaded. The pipe server waits on a background thread; every tool runs on Revit's main thread via one `ExternalEvent` queue (`RevitDispatcher`). Revit stays responsive while Claude thinks.
 - **Tools are small, typed and composable.** Each tool declares a JSON schema, whether it changes the model, and returns JSON (or an image). Counts and ids come back so Claude can verify its own work.
-- **Human in the loop.** Model-changing tools pause for Approve/Reject in the pane (configurable). Each change is a named transaction, so Undo works per step.
+- **Human in the loop.** Model-changing tools show a Yes/No dialog in Revit (switchable in ribbon Settings). Each change is a named transaction, so Undo works per step.
 - **Deterministic where it matters.** QA checks and future code checks are plain code. Claude interprets, explains and fixes; it doesn't do the counting.
-- **Two front ends, one tool set.** The desktop app reaches Revit through a small MCP server (stdio) that forwards calls over a per-user named pipe to the add-in. The pane calls the Claude API directly. Both run the same `IRevitTool` registry on Revit's main thread, and both confirm changes before running them.
-- **Model (pane mode).** Claude Opus 5.5 by default (`claude-opus-5-5`), effort `high`, prompt caching on tools + system prompt, server-side refusal fallback enabled. Model and effort are user settings.
-- **Secrets.** API key from `ANTHROPIC_API_KEY` or stored encrypted with Windows DPAPI per user. Never in plain text.
+- **One front end: the Claude desktop app.** Each Revit window announces itself with a file in `%APPDATA%\SketchProMax\sessions` and listens on its own pipe. The connector pings them, drops stale ones, and routes calls to the window and model the user named (`list_revit_models`, `use_revit_model`), or to the only one open.
+- **No secrets.** No API key is stored or needed.
 - **Targets.** Revit 2024 (.NET Framework 4.8), 2025 and 2026 (.NET 8) build from the same source with `-p:RevitVersion=` (or `build.ps1` for all three). Modern C# on 4.8 comes from compiler polyfills (PolySharp). Revit 2027 (.NET 10) is wired in the project file but needs the .NET 10 SDK to build.
 
 ## 6. Risks and open questions
 
-1. **Dependency conflicts.** The Anthropic SDK brings newer `System.Text.Json`; other add-ins or Revit may load a different version. On Revit 2024 (.NET Framework, no binding redirects for add-ins) an `AssemblyResolve` handler loads these from the add-in folder; if another add-in has already loaded an older version first, that one wins and may break the SDK. Test early in all three versions; on 2025+ fall back to an isolated `AssemblyLoadContext` if needed.
+1. **Dependency conflicts.** On Revit 2024 the add-in ships `System.Text.Json` 8; an `AssemblyResolve` handler loads it from the add-in folder. If another add-in has already loaded an older version first, that one wins. Test early in all three versions.
 2. **Prompt-injected model content.** Text in a model (parameter values, linked files) is data, not instructions. The system prompt says so; the approval gate is the hard stop.
-3. **Cost control.** Large models and image captures cost tokens. Add per-conversation budget and the cost meter in Phase 1.
+3. **Plan limits.** Large models and image reviews use more of the Claude plan's usage limits.
 4. **Professional responsibility.** The agent proposes; the architect approves. Keep the audit log exportable.
 5. **Company-managed Claude accounts** may restrict local tools in the desktop app; IT may need to allow them.

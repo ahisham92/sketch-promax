@@ -3,18 +3,19 @@ using SketchProMax.Bridge;
 using SketchProMax.Commands;
 using SketchProMax.Revit;
 using SketchProMax.Tools;
-using SketchProMax.UI;
 
 namespace SketchProMax;
 
-/// <summary>Revit entry point: registers the ribbon button, the dockable chat pane and the API dispatcher.</summary>
+/// <summary>
+/// Revit entry point. Starts the bridge that the Claude desktop app talks to (through SketchProMax.Mcp.exe)
+/// and adds a ribbon tab with Status and Settings. There is no chat inside Revit: conversations happen in the
+/// Claude desktop app on the user's Claude plan, so there is no API key and no per-use cost.
+/// </summary>
 public sealed class App : IExternalApplication
 {
-    public static readonly DockablePaneId PaneId = new(new Guid("8b0f7e52-6d1a-4c3e-9f27-5a4b1c9e2d70"));
-
     public static RevitDispatcher Dispatcher { get; } = new();
 
-    private BridgeServer? _bridge;
+    public static BridgeServer? Bridge { get; private set; }
 
     public Result OnStartup(UIControlledApplication application)
     {
@@ -22,28 +23,29 @@ public sealed class App : IExternalApplication
         DependencyResolver.Register();
 #endif
         Dispatcher.Initialize();
-
-        // Lets the Claude desktop app / Claude Code drive Revit through SketchProMax.Mcp.exe (no API key needed).
-        _bridge = new BridgeServer(ToolRegistry.CreateDefault(), Dispatcher);
-        _bridge.Start();
-        application.RegisterDockablePane(PaneId, "Sketch ProMax", new ChatPane());
+        Bridge = new BridgeServer(ToolRegistry.CreateDefault(), Dispatcher, application.ControlledApplication.VersionNumber);
+        Bridge.Start();
 
         const string tab = "Sketch ProMax";
         application.CreateRibbonTab(tab);
         var panel = application.CreateRibbonPanel(tab, "AI Agent");
-        var button = new PushButtonData("SketchProMaxShowPane", "Sketch\nProMax",
-            typeof(App).Assembly.Location, typeof(ShowPaneCommand).FullName)
+        var assembly = typeof(App).Assembly.Location;
+        panel.AddItem(new PushButtonData("SketchProMaxStatus", "Status", assembly, typeof(StatusCommand).FullName)
         {
-            ToolTip = "Open the Sketch ProMax AI agent pane.",
-            AvailabilityClassName = typeof(ShowPaneCommand).FullName,
-        };
-        panel.AddItem(button);
+            ToolTip = "Check the connection to the Claude desktop app and how to start.",
+            AvailabilityClassName = typeof(AlwaysAvailable).FullName,
+        });
+        panel.AddItem(new PushButtonData("SketchProMaxSettings", "Settings", assembly, typeof(SettingsCommand).FullName)
+        {
+            ToolTip = "Firm standards and whether Revit asks before Claude changes the model.",
+            AvailabilityClassName = typeof(AlwaysAvailable).FullName,
+        });
         return Result.Succeeded;
     }
 
     public Result OnShutdown(UIControlledApplication application)
     {
-        _bridge?.Stop();
+        Bridge?.Stop();
 #if NETFRAMEWORK
         DependencyResolver.Unregister();
 #endif
