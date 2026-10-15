@@ -23,17 +23,7 @@ internal static class ViewPoints
             .OrderBy(s => s.FamilyName).ThenBy(s => s.Name).ToList();
         if (symbols.Count == 0) throw new InvalidOperationException($"No {what} family is loaded. Load one with load_family first.");
         if (name is null) return symbols[0];
-        var wanted = name.Trim();
-        var match = symbols.FirstOrDefault(s => string.Equals($"{s.FamilyName}: {s.Name}", wanted, StringComparison.OrdinalIgnoreCase))
-                    ?? symbols.FirstOrDefault(s => string.Equals(s.Name, wanted, StringComparison.OrdinalIgnoreCase))
-                    ?? symbols.FirstOrDefault(s => string.Equals(s.FamilyName, wanted, StringComparison.OrdinalIgnoreCase));
-        if (match is not null) return match;
-        var partial = symbols.Where(s => $"{s.FamilyName}: {s.Name}".IndexOf(wanted, StringComparison.OrdinalIgnoreCase) >= 0).ToList();
-        if (partial.Count == 1) return partial[0];
-        var loaded = string.Join(", ", symbols.Take(40).Select(s => $"{s.FamilyName}: {s.Name}"));
-        throw new ArgumentException(partial.Count == 0
-            ? $"No {what} called '{name}'. Loaded: {loaded}"
-            : $"'{name}' matches several {what} types: {string.Join(", ", partial.Take(20).Select(s => $"{s.FamilyName}: {s.Name}"))}. Use 'Family: Type'.");
+        return TypeMatch.Find(symbols, name, what);
     }
 }
 

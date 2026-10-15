@@ -30,6 +30,9 @@ public sealed class ImportImageTool : IRevitTool
         var path = args.String("path");
         if (!File.Exists(path)) return ToolResult.Error($"File not found: {path}");
         var view = ViewKit.ViewOrActive(doc, args.OptLong("view_id"));
+        if (view is ViewSheet { IsPlaceholder: true } ph)
+            return ToolResult.Error($"Sheet {ph.SheetNumber} '{ph.Name}' is a placeholder sheet (an index entry with no paper), so it " +
+                                    "cannot hold images or views. Pick a real sheet, or create one with create_sheets (placeholder=false).");
 
         XYZ center;
         if (args.Has("center")) center = Modeling.Point(doc, args.Raw["center"]);
@@ -91,10 +94,19 @@ public sealed class CreateDraftingViewTool : IRevitTool
         var styles = new FilteredElementCollector(doc).OfClass(typeof(GraphicsStyle)).Cast<GraphicsStyle>()
             .Where(g => g.GraphicsStyleType == GraphicsStyleType.Projection
                         && g.GraphicsStyleCategory?.Parent?.Id.Value == (long)BuiltInCategory.OST_Lines).ToList();
-        GraphicsStyle? Style(JsonElement item) =>
-            item.TryGetProperty("style", out var s)
-                ? styles.FirstOrDefault(g => string.Equals(g.Name, s.GetString(), StringComparison.OrdinalIgnoreCase))
-                : null;
+        // Revit wraps its system line styles in angle brackets ("<Wide Lines>"); accept the name with or without them.
+        static string Bare(string? n) => (n ?? "").Trim().TrimStart('<').TrimEnd('>').Trim();
+        var styleCache = new Dictionary<string, GraphicsStyle?>(StringComparer.OrdinalIgnoreCase);
+        GraphicsStyle? Style(JsonElement item)
+        {
+            if (!item.TryGetProperty("style", out var s)) return null;
+            var wanted = s.GetString() ?? "";
+            if (styleCache.TryGetValue(wanted, out var hit)) return hit;
+            hit = styles.FirstOrDefault(g => string.Equals(g.Name, wanted.Trim(), StringComparison.OrdinalIgnoreCase))
+                  ?? styles.FirstOrDefault(g => string.Equals(Bare(g.Name), Bare(wanted), StringComparison.OrdinalIgnoreCase));
+            styleCache[wanted] = hit;
+            return hit;
+        }
 
         int curves = 0;
         var missingStyles = new HashSet<string>();
@@ -150,8 +162,22 @@ public sealed class CreateDraftingViewTool : IRevitTool
         return ToolResult.Ok(new
         {
             viewId = view.Id.Value, name = view.Name, curves, texts,
-            unknownLineStyles = missingStyles, availableLineStyles = missingStyles.Count > 0 ? styles.Select(s => s.Name) : null,
+            unknownLineStyles = missingStyles,
+            availableLineStyles = missingStyles.Count > 0 ? SuggestStyles(styles.Select(s => s.Name).ToList(), missingStyles, Bare) : null,
         });
+    }
+
+    /// <summary>A short list of line style names: close matches to the unknown names first, then Revit's standard ones.</summary>
+    private static List<string> SuggestStyles(List<string> all, HashSet<string> unknown, Func<string?, string> bare)
+    {
+        const int max = 12;
+        var words = unknown.SelectMany(u => bare(u).Split([' ', '-', '_'], StringSplitOptions.RemoveEmptyEntries))
+            .Where(w => w.Length > 2 && !w.Equals("lines", StringComparison.OrdinalIgnoreCase)).ToList();
+        var close = all.Where(n => words.Any(w => n.IndexOf(w, StringComparison.OrdinalIgnoreCase) >= 0));
+        var standard = all.Where(n => n.StartsWith("<", StringComparison.Ordinal) || n is "Thin Lines" or "Medium Lines" or "Wide Lines");
+        var list = close.Concat(standard).Concat(all).Distinct().Take(max).ToList();
+        if (all.Count > list.Count) list.Add($"... and {all.Count - list.Count} more");
+        return list;
     }
 }
 

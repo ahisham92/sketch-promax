@@ -11,7 +11,7 @@ public sealed class CreateSheetsTool : IRevitTool
     public string Name => "create_sheets";
     public string Description =>
         "Create one or many sheets in one go (a full 'cartoon set'), each with a title block and optional views " +
-        "placed in a grid. Set placeholder=true for index-only sheets of other disciplines (no title block, not printed). " +
+        "laid out inside the title block's drawing area without overlapping. Set placeholder=true for index-only sheets of other disciplines (no title block, not printed). " +
         "A view can sit on only one sheet (schedules excepted); views already placed are reported as skipped.";
     public string PropertiesJson => """
     {
@@ -22,8 +22,9 @@ public sealed class CreateSheetsTool : IRevitTool
           "properties": {
             "number": {"type": "string"},
             "name": {"type": "string"},
-            "title_block": {"type": "string", "description": "Title block type name (default: first loaded)."},
+            "title_block": {"type": "string", "description": "Title block as 'Family: Type', family name or type name (default: first loaded). A name that fits several title blocks is refused with the list."},
             "view_ids": {"type": "array", "items": {"type": "integer"}},
+            "drawing_area": {"type": "array", "items": {"type": "number"}, "description": "Optional [x_min, y_min, x_max, y_max] on the sheet in project units (paper size) that views may use. Default: the title block frame minus its title panel."},
             "placeholder": {"type": "boolean"}
           },
           "required": ["number", "name"]
@@ -51,6 +52,7 @@ public sealed class CreateSheetsTool : IRevitTool
             if (existingNumbers.Contains(number)) { results.Add(new { number, error = "sheet number already exists" }); continue; }
 
             ViewSheet sheet;
+            FamilySymbol? tb = null;
             if (spec.TryGetProperty("placeholder", out var ph) && ph.GetBoolean())
             {
                 sheet = ViewSheet.CreatePlaceholder(doc);
@@ -58,10 +60,17 @@ public sealed class CreateSheetsTool : IRevitTool
             else
             {
                 var tbName = spec.TryGetProperty("title_block", out var tbp) ? tbp.GetString() : null;
-                var tb = tbName is null ? titleBlocks.FirstOrDefault()
-                    : titleBlocks.FirstOrDefault(s => string.Equals(s.Name, tbName, StringComparison.OrdinalIgnoreCase));
-                if (tb is null) { results.Add(new { number, error = "no matching title block loaded" }); continue; }
-                sheet = ViewSheet.Create(doc, tb.Id);
+                if (tbName is null)
+                {
+                    tb = titleBlocks.OrderBy(s => s.FamilyName).ThenBy(s => s.Name).FirstOrDefault();
+                    if (tb is null) { results.Add(new { number, error = "no title block loaded; load one with load_family or use placeholder=true" }); continue; }
+                }
+                else if (!TypeMatch.TryFind(titleBlocks, tbName, "title block", out tb, out var tbError))
+                {
+                    results.Add(new { number, error = tbError });
+                    continue;
+                }
+                sheet = ViewSheet.Create(doc, tb!.Id);
             }
             try
             {
@@ -77,49 +86,31 @@ public sealed class CreateSheetsTool : IRevitTool
             existingNumbers.Add(number);
 
             var ids = spec.TryGetProperty("view_ids", out var v) ? v.EnumerateArray().Select(e => e.GetInt64()).ToList() : [];
-            var (placed, skipped) = ids.Count > 0 && !sheet.IsPlaceholder ? PlaceViews(doc, sheet, ids) : ([], []);
-            results.Add(new { number, sheetId = sheet.Id.Value, placed, skipped });
+            var area = spec.TryGetProperty("drawing_area", out var da) ? da.EnumerateArray().Select(e => e.GetDouble()).ToList() : null;
+            if (ids.Count > 0 && !sheet.IsPlaceholder)
+            {
+                var layout = SheetLayout.PlaceViews(doc, sheet, ids, area);
+                results.Add(new { number, sheetId = sheet.Id.Value, titleBlock = tb is null ? null : TypeMatch.Label(tb), layout.placed, layout.skipped, layout.warnings, layout.drawingArea });
+            }
+            else results.Add(new { number, sheetId = sheet.Id.Value, titleBlock = tb is null ? null : TypeMatch.Label(tb), placed = new List<long>(), skipped = new List<object>() });
         }
         t.Commit();
         return ToolResult.Ok(results);
-    }
-
-    internal static (List<long> placed, List<object> skipped) PlaceViews(Document doc, ViewSheet sheet, List<long> ids)
-    {
-        doc.Regenerate(); // the sheet outline is only valid after regeneration
-        var outline = sheet.Outline;
-        int cols = Math.Max(1, (int)Math.Ceiling(Math.Sqrt(ids.Count)));
-        int rows = Math.Max(1, (int)Math.Ceiling(ids.Count / (double)cols));
-        double w = (outline.Max.U - outline.Min.U) / cols, h = (outline.Max.V - outline.Min.V) / rows;
-
-        var placed = new List<long>();
-        var skipped = new List<object>();
-        for (int i = 0; i < ids.Count; i++)
-        {
-            var viewId = new ElementId(ids[i]);
-            var center = new XYZ(outline.Min.U + w * (i % cols + 0.5), outline.Max.V - h * (i / cols + 0.5), 0);
-            if (doc.GetElement(viewId) is ViewSchedule)
-            {
-                ScheduleSheetInstance.Create(doc, sheet.Id, viewId, center);
-                placed.Add(ids[i]);
-            }
-            else if (Viewport.CanAddViewToSheet(doc, sheet.Id, viewId))
-            {
-                Viewport.Create(doc, sheet.Id, viewId, center);
-                placed.Add(ids[i]);
-            }
-            else skipped.Add(new { id = ids[i], reason = "already on a sheet or not placeable" });
-        }
-        return (placed, skipped);
     }
 }
 
 public sealed class PlaceViewsOnSheetTool : IRevitTool
 {
     public string Name => "place_views_on_sheet";
-    public string Description => "Place existing views or schedules on an existing sheet, laid out in a grid.";
+    public string Description =>
+        "Place existing views or schedules on an existing sheet, packed inside the title block's drawing area (its frame " +
+        "minus the title panel) without overlapping each other or what is already on the sheet.";
     public string PropertiesJson => """
-    { "sheet_id": {"type": "integer"}, "view_ids": {"type": "array", "items": {"type": "integer"}} }
+    {
+      "sheet_id": {"type": "integer"},
+      "view_ids": {"type": "array", "items": {"type": "integer"}},
+      "drawing_area": {"type": "array", "items": {"type": "number"}, "description": "Optional [x_min, y_min, x_max, y_max] on the sheet in project units (paper size) that views may use. Default: detected from the title block."}
+    }
     """;
     public string[] Required => ["sheet_id", "view_ids"];
     public bool ModifiesModel => true;
@@ -129,10 +120,12 @@ public sealed class PlaceViewsOnSheetTool : IRevitTool
         var doc = app.ActiveUIDocument.Document;
         if (doc.GetElement(new ElementId(args.OptLong("sheet_id") ?? -1)) is not ViewSheet sheet)
             return ToolResult.Error("sheet_id is not a sheet.");
+        if (sheet.IsPlaceholder) return ToolResult.Error("This is a placeholder sheet; placeholders cannot hold views.");
         using var t = RevitHelpers.StartTransaction(doc, $"Place views on {sheet.SheetNumber}");
-        var (placed, skipped) = CreateSheetsTool.PlaceViews(doc, sheet, args.LongList("view_ids"));
+        var area = args.Has("drawing_area") ? args.Array("drawing_area").Select(e => e.GetDouble()).ToList() : null;
+        var layout = SheetLayout.PlaceViews(doc, sheet, args.LongList("view_ids"), area);
         t.Commit();
-        return ToolResult.Ok(new { placed, skipped });
+        return ToolResult.Ok(new { layout.placed, layout.skipped, layout.warnings, layout.drawingArea });
     }
 }
 
@@ -278,5 +271,234 @@ public sealed class ExportPdfTool : IRevitTool
         }
         var ok = doc.Export(folder, ids, options);
         return ok ? ToolResult.Ok(new { folder, exported = ids.Count }) : ToolResult.Error("Revit reported the PDF export failed.");
+    }
+}
+
+/// <summary>
+/// Places views and schedules on a sheet inside the title block's drawing area: the frame minus the title panel,
+/// found from the title block's long frame lines, or a rectangle the caller gives. Each new viewport (box and label)
+/// is packed top-left first next to what is already on the sheet, with a gap, so nothing overlaps.
+/// </summary>
+internal static class SheetLayout
+{
+    private const double Gap = 8 / 304.8; // 8 mm on paper, in feet
+
+    public sealed record Result(List<long> placed, List<object> skipped, List<string> warnings, object drawingArea);
+
+    private readonly record struct Box(double X0, double Y0, double X1, double Y1)
+    {
+        public double W => X1 - X0;
+        public double H => Y1 - Y0;
+        public Box Union(Box o) => new(Math.Min(X0, o.X0), Math.Min(Y0, o.Y0), Math.Max(X1, o.X1), Math.Max(Y1, o.Y1));
+        public Box Inset(double d) => W > 4 * d && H > 4 * d ? new(X0 + d, Y0 + d, X1 - d, Y1 - d) : this;
+        public bool Overlaps(Box o, double gap) =>
+            X0 < o.X1 + gap - 1e-6 && X1 > o.X0 - gap + 1e-6 && Y0 < o.Y1 + gap - 1e-6 && Y1 > o.Y0 - gap + 1e-6;
+    }
+
+    public static Result PlaceViews(Document doc, ViewSheet sheet, List<long> ids, List<double>? area)
+    {
+        var placed = new List<long>();
+        var skipped = new List<object>();
+        var warnings = new List<string>();
+        doc.Regenerate(); // the sheet and title block extents are only valid after regeneration
+
+        var full = SheetExtents(doc, sheet, out var titleBlock, warnings);
+        Box usable;
+        string source;
+        if (area is { Count: 4 })
+        {
+            double a0 = RevitHelpers.ToInternal(doc, area[0]), a1 = RevitHelpers.ToInternal(doc, area[1]);
+            double a2 = RevitHelpers.ToInternal(doc, area[2]), a3 = RevitHelpers.ToInternal(doc, area[3]);
+            usable = new Box(Math.Min(a0, a2), Math.Min(a1, a3), Math.Max(a0, a2), Math.Max(a1, a3));
+            source = "given";
+        }
+        else
+        {
+            if (area is not null) warnings.Add("drawing_area needs four numbers [x_min, y_min, x_max, y_max]; used the title block's drawing area.");
+            usable = titleBlock is null ? full.Inset(Gap) : DrawingArea(sheet, titleBlock, full, warnings).Inset(Gap);
+            source = titleBlock is null ? "sheet extents" : "title block";
+        }
+
+        // What is already on the sheet stays where it is; new views go around it.
+        var occupied = new List<Box>();
+        foreach (var vpId in sheet.GetAllViewports())
+            if (doc.GetElement(vpId) is Viewport vp) occupied.Add(ViewportBox(vp));
+        foreach (var si in new FilteredElementCollector(doc, sheet.Id).OfClass(typeof(ScheduleSheetInstance)).Cast<ScheduleSheetInstance>())
+            if (!si.IsTitleblockRevisionSchedule && si.get_BoundingBox(sheet) is { } sb) occupied.Add(new Box(sb.Min.X, sb.Min.Y, sb.Max.X, sb.Max.Y));
+
+        // Create everything at the area centre first, regenerate once, then read the real sizes and move.
+        var start = new XYZ((usable.X0 + usable.X1) / 2, (usable.Y0 + usable.Y1) / 2, 0);
+        var made = new List<(long id, Element element)>();
+        foreach (var id in ids)
+        {
+            var viewId = new ElementId(id);
+            var view = doc.GetElement(viewId) as View;
+            if (view is null) { skipped.Add(new { id, reason = "not a view" }); continue; }
+            try
+            {
+                if (view is ViewSchedule) made.Add((id, ScheduleSheetInstance.Create(doc, sheet.Id, viewId, start)));
+                else if (Viewport.CanAddViewToSheet(doc, sheet.Id, viewId)) made.Add((id, Viewport.Create(doc, sheet.Id, viewId, start)));
+                else skipped.Add(new { id, reason = "already on a sheet or not placeable" });
+            }
+            catch (Autodesk.Revit.Exceptions.ApplicationException ex) { skipped.Add(new { id, reason = ex.Message }); }
+        }
+        if (made.Count == 0) return new Result(placed, skipped, warnings, AreaInfo(doc, usable, source));
+        doc.Regenerate();
+
+        double offX = full.X1 + 4 * Gap, offTop = full.Y1;
+        foreach (var (id, element) in made)
+        {
+            Box? current = element switch
+            {
+                Viewport vp => ViewportBox(vp),
+                _ => element.get_BoundingBox(sheet) is { } bb ? new Box(bb.Min.X, bb.Min.Y, bb.Max.X, bb.Max.Y) : null,
+            };
+            if (current is not { } cur) { placed.Add(id); continue; }
+            Box target;
+            if (Fit(usable, occupied, cur.W, cur.H) is { } spot)
+            {
+                target = spot;
+                occupied.Add(target);
+            }
+            else
+            {
+                // Too big for the free area at its scale: park it beside the sheet rather than over the title block or other views.
+                target = new Box(offX, offTop - cur.H, offX + cur.W, offTop);
+                offTop -= cur.H + Gap;
+                var name = (doc.GetElement(new ElementId(id)) as View)?.Name;
+                warnings.Add($"View {id} '{name}' ({Len(doc, cur.W)} x {Len(doc, cur.H)}) does not fit in the free drawing area " +
+                             $"({Len(doc, usable.W)} x {Len(doc, usable.H)}); it was placed to the right of the sheet. Change its scale or crop, or use a larger title block.");
+            }
+            var delta = new XYZ(target.X0 - cur.X0, target.Y0 - cur.Y0, 0);
+            if (!delta.IsZeroLength())
+            {
+                if (element is Viewport vp) vp.SetBoxCenter(vp.GetBoxCenter() + delta);
+                else if (element is ScheduleSheetInstance si) si.Point = si.Point + delta;
+            }
+            placed.Add(id);
+        }
+        return new Result(placed, skipped, warnings, AreaInfo(doc, usable, source));
+    }
+
+    private static string Len(Document doc, double feet) => RevitHelpers.FromInternal(doc, feet).ToString("0.#");
+
+    private static object AreaInfo(Document doc, Box b, string source) => new
+    {
+        min = new[] { RevitHelpers.FromInternal(doc, b.X0), RevitHelpers.FromInternal(doc, b.Y0) },
+        max = new[] { RevitHelpers.FromInternal(doc, b.X1), RevitHelpers.FromInternal(doc, b.Y1) },
+        source,
+    };
+
+    /// <summary>The highest, then leftmost, free spot of w x h inside the area, touching the area corner or another box.</summary>
+    private static Box? Fit(Box area, List<Box> occupied, double w, double h)
+    {
+        var candidates = new List<(double x, double y)> { (area.X0, area.Y1) };
+        foreach (var r in occupied)
+        {
+            candidates.Add((r.X1 + Gap, r.Y1));
+            candidates.Add((r.X1 + Gap, area.Y1));
+            candidates.Add((r.X0, r.Y0 - Gap));
+            candidates.Add((area.X0, r.Y0 - Gap));
+        }
+        foreach (var (x, y) in candidates.OrderByDescending(c => Math.Round(c.y, 5)).ThenBy(c => c.x))
+        {
+            var b = new Box(x, y - h, x + w, y);
+            if (b.X0 < area.X0 - 1e-6 || b.X1 > area.X1 + 1e-6 || b.Y0 < area.Y0 - 1e-6 || b.Y1 > area.Y1 + 1e-6) continue;
+            if (occupied.Any(o => o.Overlaps(b, Gap))) continue;
+            return b;
+        }
+        return null;
+    }
+
+    /// <summary>The viewport's box together with its title label.</summary>
+    private static Box ViewportBox(Viewport vp)
+    {
+        var o = vp.GetBoxOutline();
+        var box = new Box(o.MinimumPoint.X, o.MinimumPoint.Y, o.MaximumPoint.X, o.MaximumPoint.Y);
+        try
+        {
+            var l = vp.GetLabelOutline();
+            if (l is not null && !l.IsEmpty) box = box.Union(new Box(l.MinimumPoint.X, l.MinimumPoint.Y, l.MaximumPoint.X, l.MaximumPoint.Y));
+        }
+        catch (Autodesk.Revit.Exceptions.ApplicationException) { } // no label shown
+        return box;
+    }
+
+    private static Box SheetExtents(Document doc, ViewSheet sheet, out Element? titleBlock, List<string> warnings)
+    {
+        titleBlock = new FilteredElementCollector(doc, sheet.Id).OfCategory(BuiltInCategory.OST_TitleBlocks)
+            .WhereElementIsNotElementType().FirstOrDefault();
+        if (titleBlock?.get_BoundingBox(sheet) is { } bb && bb.Max.X - bb.Min.X > 0.3 && bb.Max.Y - bb.Min.Y > 0.3)
+            return new Box(bb.Min.X, bb.Min.Y, bb.Max.X, bb.Max.Y);
+        var o = sheet.Outline;
+        if (o is not null && o.Max.U - o.Min.U > 0.3 && o.Max.V - o.Min.V > 0.3)
+            return new Box(o.Min.U, o.Min.V, o.Max.U, o.Max.V);
+        warnings.Add("Could not read the sheet size; assumed A1 landscape (841 x 594 mm) from the sheet origin.");
+        return new Box(0, 0, 841 / 304.8, 594 / 304.8);
+    }
+
+    /// <summary>
+    /// The title block's frame minus its title panel. Long straight lines (merged along one axis) running most of the
+    /// sheet's height or width are the frame and the panel edges; the innermost one on each side bounds the drawing area.
+    /// </summary>
+    private static Box DrawingArea(ViewSheet sheet, Element titleBlock, Box full, List<string> warnings)
+    {
+        var segments = new List<(XYZ a, XYZ b)>();
+        try { Collect(titleBlock.get_Geometry(new Options { View = sheet }), segments); }
+        catch (Autodesk.Revit.Exceptions.ApplicationException) { }
+
+        const double axisTol = 1e-4;
+        // Coverage of each vertical x and horizontal y (several short segments on one line add up).
+        double Coverage(IEnumerable<(double lo, double hi)> spans)
+        {
+            double total = 0, end = double.MinValue;
+            foreach (var (lo, hi) in spans.OrderBy(s => s.lo))
+            {
+                if (hi <= end) continue;
+                total += hi - Math.Max(lo, end);
+                end = hi;
+            }
+            return total;
+        }
+        var verticals = segments.Where(s => Math.Abs(s.a.X - s.b.X) < axisTol && Math.Abs(s.a.Y - s.b.Y) > axisTol)
+            .GroupBy(s => Math.Round(s.a.X, 3))
+            .Where(g => Coverage(g.Select(s => (Math.Min(s.a.Y, s.b.Y), Math.Max(s.a.Y, s.b.Y)))) >= 0.6 * full.H)
+            .Select(g => g.Key).ToList();
+        var horizontals = segments.Where(s => Math.Abs(s.a.Y - s.b.Y) < axisTol && Math.Abs(s.a.X - s.b.X) > axisTol)
+            .GroupBy(s => Math.Round(s.a.Y, 3))
+            .Where(g => Coverage(g.Select(s => (Math.Min(s.a.X, s.b.X), Math.Max(s.a.X, s.b.X)))) >= 0.6 * full.W)
+            .Select(g => g.Key).ToList();
+
+        double midX = (full.X0 + full.X1) / 2, midY = (full.Y0 + full.Y1) / 2;
+        var area = new Box(
+            verticals.Where(x => x < midX).DefaultIfEmpty(full.X0).Max(),
+            horizontals.Where(y => y < midY).DefaultIfEmpty(full.Y0).Max(),
+            verticals.Where(x => x > midX).DefaultIfEmpty(full.X1).Min(),
+            horizontals.Where(y => y > midY).DefaultIfEmpty(full.Y1).Min());
+        if (verticals.Count + horizontals.Count == 0)
+            warnings.Add("Could not find the title block's frame lines; views are laid out over the whole sheet. Pass drawing_area to keep them off the title panel.");
+        if (area.W < 0.3 * full.W || area.H < 0.3 * full.H)
+        {
+            warnings.Add("The title block's drawing area looked implausibly small; used the whole sheet. Pass drawing_area to set it.");
+            return full;
+        }
+        return area;
+    }
+
+    private static void Collect(GeometryElement? geometry, List<(XYZ a, XYZ b)> segments)
+    {
+        if (geometry is null) return;
+        foreach (var g in geometry)
+        {
+            switch (g)
+            {
+                case Line l when l.IsBound: segments.Add((l.GetEndPoint(0), l.GetEndPoint(1))); break;
+                case PolyLine pl:
+                    var pts = pl.GetCoordinates();
+                    for (int i = 0; i + 1 < pts.Count; i++) segments.Add((pts[i], pts[i + 1]));
+                    break;
+                case GeometryInstance gi: Collect(gi.GetInstanceGeometry(), segments); break;
+            }
+        }
     }
 }
