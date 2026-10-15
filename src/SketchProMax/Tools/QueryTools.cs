@@ -240,13 +240,35 @@ public sealed class ListTypesTool : IRevitTool
     public ToolResult Execute(UIApplication app, ToolArgs args)
     {
         var doc = app.ActiveUIDocument.Document;
-        var bic = RevitHelpers.ParseCategory(doc, args.String("category"));
+        var bic = TypeCategory(doc, args.String("category"));
         var types = new FilteredElementCollector(doc).OfCategory(bic).WhereElementIsElementType()
             .Cast<ElementType>()
             .Select(t => new { id = t.Id.Value, family = t.FamilyName, type = t.Name })
             .OrderBy(t => t.family).ThenBy(t => t.type);
         var (page, info) = Paging.Page(Paging.Named(types, args, t => t.family + ": " + t.type), args, 200);
         return ToolResult.Ok(new { types = page, page = info });
+    }
+
+    /// <summary>
+    /// A category by name, also accepting subcategories that own their own types: "Slab Edges" (OST_EdgeSlab, under
+    /// Floors), "Fascias" and "Gutters" (under Roofs), "Wall Sweeps" and "Reveals" (under Walls) and the like.
+    /// </summary>
+    private static BuiltInCategory TypeCategory(Document doc, string name)
+    {
+        try { return RevitHelpers.ParseCategory(doc, name); }
+        catch (ArgumentException)
+        {
+            var trimmed = name.Trim();
+            var key = trimmed.Replace(" ", "").ToLowerInvariant();
+            if (key is "slabedges" or "slabedge" or "floors:slabedges") return BuiltInCategory.OST_EdgeSlab;
+            foreach (Category parent in doc.Settings.Categories)
+                foreach (Category sub in parent.SubCategories)
+                    if (sub.BuiltInCategory != BuiltInCategory.INVALID
+                        && (string.Equals(sub.Name, trimmed, StringComparison.OrdinalIgnoreCase)
+                            || string.Equals(parent.Name + ": " + sub.Name, trimmed, StringComparison.OrdinalIgnoreCase)))
+                        return sub.BuiltInCategory;
+            throw;
+        }
     }
 }
 

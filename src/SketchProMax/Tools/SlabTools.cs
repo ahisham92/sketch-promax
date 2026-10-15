@@ -138,25 +138,53 @@ public sealed class AddSlabEdgesTool : IRevitTool
         foreach (var id in args.LongList("floor_ids"))
         {
             var floor = Outlines.ParseFloor(doc, id);
-            var top = HostObjectUtils.GetTopFaces(floor).Select(r => (Ref: r, Face: floor.GetGeometryObjectFromReference(r) as PlanarFace)).FirstOrDefault(x => x.Face != null);
-            if (top.Face is null) { problems.Add($"{id}: no flat top face"); continue; }
+            // Edges of a face only carry references when the geometry is read with ComputeReferences; the faces from
+            // HostObjectUtils.GetTopFaces / GetGeometryObjectFromReference have null edge references.
+            var top = TopFace(floor);
+            if (top is null) { problems.Add($"{id}: no flat top face"); continue; }
             var refs = new ReferenceArray();
-            var outer = top.Face.EdgeLoops.Cast<EdgeArray>().OrderByDescending(loop => loop.Cast<Edge>().Sum(e => e.ApproximateLength)).First();
+            var outer = top.EdgeLoops.Cast<EdgeArray>().OrderByDescending(loop => loop.Cast<Edge>().Sum(e => e.ApproximateLength)).FirstOrDefault();
+            if (outer is null) { problems.Add($"{id}: the top face has no edges"); continue; }
             foreach (Edge edge in outer)
             {
+                if (edge.Reference is null) continue;
                 // Following the face, the face lies to the left of the edge, so direction x normal points out of the slab.
-                var tangent = edge.AsCurveFollowingFace(top.Face).ComputeDerivatives(0.5, true).BasisX;
-                var side = tangent.CrossProduct(top.Face.FaceNormal);
+                var tangent = edge.AsCurveFollowingFace(top).ComputeDerivatives(0.5, true).BasisX;
+                var side = tangent.CrossProduct(top.FaceNormal);
                 var outward = new XYZ(side.X, side.Y, 0);
-                if (facing.Count > 0 && !facing.Contains(ViewKit.Compass(outward).ToLowerInvariant())) continue;
+                if (facing.Count > 0 && (outward.GetLength() < 1e-9 || !facing.Contains(ViewKit.Compass(outward).ToLowerInvariant()))) continue;
                 refs.Append(edge.Reference);
             }
-            if (refs.Size == 0) continue;
+            if (refs.Size == 0 && facing.Count > 0) { problems.Add($"{id}: no outer edge faces {string.Join("/", facing)}"); continue; }
+            if (refs.Size == 0) { problems.Add($"{id}: no edge references on the top face"); continue; }
             try { made.Add(doc.Create.NewSlabEdge(type, refs).Id.Value); }
             catch (Autodesk.Revit.Exceptions.ApplicationException ex) { problems.Add($"{id}: {ex.Message}"); }
         }
         t.Commit();
+        made = made.Where(i => doc.GetElement(new ElementId(i)) != null).ToList();
         return ToolResult.Ok(new { slabEdges = made.Count, ids = made, type = type.Name, problems });
+    }
+
+    /// <summary>The floor's highest upward-facing planar face, read with references so its edges can host slab edges.</summary>
+    private static PlanarFace? TopFace(Floor floor)
+    {
+        var geometry = floor.get_Geometry(new Options { ComputeReferences = true, DetailLevel = ViewDetailLevel.Fine });
+        if (geometry is null) return null;
+        var faces = new List<PlanarFace>();
+        void Collect(GeometryElement ge)
+        {
+            foreach (var obj in ge)
+            {
+                if (obj is Solid solid && solid.Faces.Size > 0)
+                {
+                    foreach (Face f in solid.Faces)
+                        if (f is PlanarFace pf && pf.FaceNormal.Z > 0.99 && pf.Reference != null) faces.Add(pf);
+                }
+                else if (obj is GeometryInstance gi) Collect(gi.GetInstanceGeometry());
+            }
+        }
+        Collect(geometry);
+        return faces.OrderByDescending(f => f.Origin.Z).ThenByDescending(f => f.Area).FirstOrDefault();
     }
 }
 
@@ -326,14 +354,22 @@ public sealed class HollowCoreLayoutTool : IRevitTool
         });
     }
 
-    /// <summary>A floor type named for the plank depth, made from the first floor type with its structure set to that depth.</summary>
+    /// <summary>A floor type named for the plank depth, made from the first non-foundation floor type with its structure set to that depth.</summary>
     internal static FloorType PlankType(Document doc, double depth, string label)
     {
         var mm = Math.Round(UnitUtils.ConvertFromInternalUnits(depth, UnitTypeId.Millimeters));
         var name = $"{label} {mm}mm";
         var types = new FilteredElementCollector(doc).OfClass(typeof(FloorType)).Cast<FloorType>().ToList();
-        if (types.FirstOrDefault(x => x.Name == name) is { } existing) return existing;
-        var basis = types.FirstOrDefault(x => x.Name.IndexOf("Generic", StringComparison.OrdinalIgnoreCase) >= 0) ?? types.First();
+        // Precast units and toppings are floors, not structural foundations: never reuse or copy a foundation slab type.
+        if (types.FirstOrDefault(x => x.Name == name && !x.IsFoundationSlab) is { } existing) return existing;
+        if (types.Any(x => x.Name == name))
+        {
+            name += " (Floor)";
+            if (types.FirstOrDefault(x => x.Name == name && !x.IsFoundationSlab) is { } renamed) return renamed;
+        }
+        var floorTypes = types.Where(x => !x.IsFoundationSlab).ToList();
+        if (floorTypes.Count == 0) throw new InvalidOperationException("This model has no floor types that aren't foundation slabs. Load or create one first.");
+        var basis = floorTypes.FirstOrDefault(x => x.Name.IndexOf("Generic", StringComparison.OrdinalIgnoreCase) >= 0) ?? floorTypes[0];
         var type = (FloorType)basis.Duplicate(name);
         var cs = type.GetCompoundStructure();
         if (cs != null)

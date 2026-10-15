@@ -84,7 +84,9 @@ public sealed class CreateWallsTool : IRevitTool
     public string Name => "create_walls";
     public string Description =>
         "Create straight walls from 2D segments on a level. Coordinates and height are in the project's length unit " +
-        "(see get_model_context). Use list_types with category 'Walls' to pick a wall type.";
+        "(see get_model_context). Use list_types with category 'Walls' to pick a wall type. Segments that form a closed " +
+        "loop are oriented so the walls' exterior faces point out of the loop, whichever way the loop is drawn " +
+        "(orient_loops false keeps them as given).";
     public string PropertiesJson => """
     {
       "segments": {
@@ -101,7 +103,8 @@ public sealed class CreateWallsTool : IRevitTool
       "level": {"type": "string", "description": "Base level name (default: lowest level)."},
       "height": {"type": "number", "description": "Unconnected height in project units."},
       "wall_type": {"type": "string", "description": "Exact wall type name (default: model default)."},
-      "structural": {"type": "boolean"}
+      "structural": {"type": "boolean"},
+      "orient_loops": {"type": "boolean", "description": "Turn closed loops so exterior faces point outwards (default true)."}
     }
     """;
     public string[] Required => ["segments", "height"];
@@ -121,18 +124,92 @@ public sealed class CreateWallsTool : IRevitTool
                 ?? throw new ArgumentException($"No wall type named '{typeName}'.");
         }
 
-        var created = new List<long>();
-        using var t = RevitHelpers.StartTransaction(doc, "Create walls");
+        var z = level.ProjectElevation;
+        var segments = new List<(XYZ a, XYZ b)>();
         foreach (var seg in args.Array("segments"))
         {
-            var a = Point(doc, seg.GetProperty("start"), level.ProjectElevation);
-            var b = Point(doc, seg.GetProperty("end"), level.ProjectElevation);
+            var a = Point(doc, seg.GetProperty("start"), z);
+            var b = Point(doc, seg.GetProperty("end"), z);
             if (a.DistanceTo(b) < doc.Application.ShortCurveTolerance) continue;
-            var wall = Wall.Create(doc, Line.CreateBound(a, b), typeId, level.Id, height, 0, false, args.OptBool("structural"));
+            segments.Add((a, b));
+        }
+        var reversed = args.OptBool("orient_loops", true) ? LoopReversals(segments) : new HashSet<int>();
+
+        var created = new List<long>();
+        using var t = RevitHelpers.StartTransaction(doc, "Create walls");
+        for (int i = 0; i < segments.Count; i++)
+        {
+            var (a, b) = segments[i];
+            var line = reversed.Contains(i) ? Line.CreateBound(b, a) : Line.CreateBound(a, b);
+            var wall = Wall.Create(doc, line, typeId, level.Id, height, 0, false, args.OptBool("structural"));
             created.Add(wall.Id.Value);
         }
         t.Commit();
-        return ToolResult.Ok(new { created });
+        return ToolResult.Ok(new { created, reversedForExterior = reversed.Count });
+    }
+
+    /// <summary>
+    /// Segments (by index) to draw reversed so every closed loop runs clockwise in plan. Revit puts a wall's
+    /// exterior face on the left of its direction, so clockwise loops face outwards. Only components where every
+    /// corner joins exactly two segments (simple closed loops) are touched; open runs keep their direction.
+    /// </summary>
+    internal static HashSet<int> LoopReversals(IReadOnlyList<(XYZ a, XYZ b)> segments)
+    {
+        const double tol = 1e-3; // feet, ~0.3 mm
+        var vertices = new List<XYZ>();
+        int Vertex(XYZ p)
+        {
+            for (int k = 0; k < vertices.Count; k++)
+                if (Math.Abs(vertices[k].X - p.X) < tol && Math.Abs(vertices[k].Y - p.Y) < tol) return k;
+            vertices.Add(p);
+            return vertices.Count - 1;
+        }
+        var va = segments.Select(s => Vertex(s.a)).ToArray();
+        var vb = segments.Select(s => Vertex(s.b)).ToArray();
+        var at = new Dictionary<int, List<int>>();
+        for (int i = 0; i < segments.Count; i++)
+            foreach (var v in new[] { va[i], vb[i] })
+            {
+                if (!at.TryGetValue(v, out var list)) at[v] = list = new List<int>();
+                list.Add(i);
+            }
+
+        var result = new HashSet<int>();
+        var seen = new bool[segments.Count];
+        for (int start = 0; start < segments.Count; start++)
+        {
+            if (seen[start] || va[start] == vb[start]) continue;
+            // Walk the loop from this segment; give up when a corner does not join exactly two segments.
+            var order = new List<(int seg, bool forward)>();
+            var cur = start;
+            var forward = true;
+            var closed = false;
+            while (true)
+            {
+                order.Add((cur, forward));
+                seen[cur] = true;
+                var end = forward ? vb[cur] : va[cur];
+                if (at[end].Count != 2) break;
+                var next = at[end][0] == cur ? at[end][1] : at[end][0];
+                if (next == start) { closed = at[va[start]].Count == 2; break; }
+                if (seen[next]) break;
+                forward = va[next] == end;
+                cur = next;
+            }
+            if (!closed || order.Count < 3) continue;
+
+            double area = 0; // shoelace over the walk, > 0 = counter-clockwise
+            foreach (var (seg, fwd) in order)
+            {
+                XYZ p = fwd ? segments[seg].a : segments[seg].b, q = fwd ? segments[seg].b : segments[seg].a;
+                area += p.X * q.Y - q.X * p.Y;
+            }
+            if (Math.Abs(area) < 1e-9) continue;
+            // Draw each segment in the clockwise sense of the loop.
+            foreach (var (seg, fwd) in order)
+                if ((area > 0) == fwd) result.Add(seg);
+        }
+        return result;
     }
 
     private static XYZ Point(Document doc, System.Text.Json.JsonElement arr, double z)
