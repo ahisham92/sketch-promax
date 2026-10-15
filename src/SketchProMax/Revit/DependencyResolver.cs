@@ -21,7 +21,11 @@ internal static class DependencyResolver
     private static Assembly? Resolve(object? sender, ResolveEventArgs args)
     {
         var name = new AssemblyName(args.Name).Name;
-        var already = AppDomain.CurrentDomain.GetAssemblies().FirstOrDefault(a => a.GetName().Name == name);
+        // After an update is switched to without restarting Revit, two versions of the core are loaded: never hand one
+        // version's SketchProMax.dll (or the loader) to the other. The exact version wins, then any by name.
+        if (name == "SketchProMax") return args.Name == typeof(DependencyResolver).Assembly.FullName ? typeof(DependencyResolver).Assembly : null;
+        var loaded = AppDomain.CurrentDomain.GetAssemblies().Where(a => !a.IsDynamic).ToList();
+        var already = loaded.FirstOrDefault(a => a.FullName == args.Name) ?? loaded.FirstOrDefault(a => a.GetName().Name == name);
         if (already != null) return already;
 
         var path = Path.Combine(Folder, name + ".dll");

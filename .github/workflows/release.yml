@@ -63,6 +63,13 @@ jobs:
           $pkg = "package\SketchProMax"
           New-Item -ItemType Directory -Force $pkg | Out-Null
           Copy-Item dist $pkg -Recurse
+          # Every Revit build must carry the loader the manifest names, or installed copies couldn't update in place.
+          foreach ($v in 2024, 2025, 2026, 2027) {
+            foreach ($f in "SketchProMax.dll", "SketchProMax.Loader.dll", "SketchProMax.addin") {
+              if (-not (Test-Path "$pkg\dist\Revit$v\$f")) { throw "Package is missing dist\Revit$v\$f" }
+            }
+          }
+          if ((Select-String -Path "$pkg\dist\Revit2025\SketchProMax.addin" -Pattern "SketchProMax.Loader.LoaderApp" -Quiet) -ne $true) { throw "SketchProMax.addin does not load the loader" }
           Get-ChildItem $pkg -Recurse -Filter *.pdb | Remove-Item
           Copy-Item install.ps1, Install.cmd, README.md $pkg
           Compress-Archive -Path $pkg -DestinationPath "SketchProMax-${{ steps.version.outputs.version }}.zip"

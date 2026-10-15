@@ -1,6 +1,7 @@
 # Builds Sketch ProMax for every supported Revit version, plus the MCP server for the Claude desktop app.
 # Output goes to .\dist\ :
-#   dist\Revit2024\ ... dist\Revit2027\   add-in builds
+#   dist\Revit2024\ ... dist\Revit2027\   add-in builds: SketchProMax.Loader.dll (what Revit loads, named by
+#                                       SketchProMax.addin) next to the core SketchProMax.dll and its dependencies
 #   dist\mcp\SketchProMax.Mcp.exe                       self-contained MCP server (no .NET install needed)
 # Usage: .\build.ps1 [-Configuration Release] [-Versions 2024,2025,2026,2027]
 param(
@@ -17,6 +18,10 @@ foreach ($v in $Versions) {
     dotnet build $addin -c $Configuration -p:RevitVersion=$v
     if ($LASTEXITCODE -ne 0) { throw "Build failed for Revit $v" }
     $out = Join-Path $PSScriptRoot "src\SketchProMax\bin\$Configuration\Revit$v"
+    # The core references the loader, so its build carries it; an update without it could not switch over live.
+    foreach ($f in "SketchProMax.dll", "SketchProMax.Loader.dll", "SketchProMax.addin") {
+        if (-not (Test-Path (Join-Path $out $f))) { throw "Revit $v build is missing $f" }
+    }
     $target = Join-Path $dist "Revit$v"
     if (Test-Path $target) { Remove-Item $target -Recurse -Force }
     Copy-Item $out $target -Recurse

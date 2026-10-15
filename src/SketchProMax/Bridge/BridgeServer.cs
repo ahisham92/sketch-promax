@@ -70,11 +70,20 @@ public sealed class BridgeServer
         Task.Run(() => AcceptLoop(_cts.Token));
     }
 
-    public void Stop()
+    /// <summary>
+    /// Stops listening. When Revit closes the session file goes too; when an update is being switched to
+    /// (<paramref name="keepSession"/>), it stays, since the new core takes over the same pipe name straight away.
+    /// </summary>
+    public void Stop(bool keepSession = false)
     {
         _cts.Cancel();
+        IsListening = false;
+        if (keepSession) return;
         try { File.Delete(SessionFile); } catch (IOException) { }
     }
+
+    /// <summary>When the Claude app (through the connector) last talked to this Revit window, for the ribbon.</summary>
+    public static DateTime? LastContact { get; private set; }
 
     private void WriteToolCatalogue()
     {
@@ -205,6 +214,7 @@ public sealed class BridgeServer
         {
             using var doc = JsonDocument.Parse(line);
             var root = doc.RootElement;
+            LastContact = DateTime.UtcNow;
             switch (root.GetProperty("method").GetString())
             {
                 case "ping":

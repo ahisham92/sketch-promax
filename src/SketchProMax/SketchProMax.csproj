@@ -16,7 +16,7 @@
     <LangVersion>latest</LangVersion>
     <RootNamespace>SketchProMax</RootNamespace>
     <AssemblyName>SketchProMax</AssemblyName>
-    <Version>0.25.1</Version>
+    <Version>0.26.0</Version>
     <!-- Copy NuGet dependencies (System.Text.Json on Revit 2024) next to the add-in DLL. -->
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
@@ -49,6 +49,20 @@
 
   <ItemGroup>
     <None Update="SketchProMax.addin" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!--
+    The loader is what Revit loads (SketchProMax.addin names it); it ships next to this DLL in every build. The core
+    references it only so that a manifest written by 0.25.x, which still names SketchProMax.App, can hand over to it.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\SketchProMax.Loader\SketchProMax.Loader.csproj" />
+  </ItemGroup>
+
+  <!-- The product logo and icon, for the update window and dialogs. -->
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\assets\logo\sketch-promax-64.png" LogicalName="SketchProMax.logo-64.png" />
+    <EmbeddedResource Include="..\..\assets\logo\sketch-promax.ico" LogicalName="SketchProMax.sketch-promax.ico" />
   </ItemGroup>
 
   <!-- On Windows, copy the build into the per-user Revit add-ins folder so Revit picks it up. -->

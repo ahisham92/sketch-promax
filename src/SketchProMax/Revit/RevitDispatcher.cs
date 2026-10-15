@@ -40,6 +40,37 @@ public sealed class RevitDispatcher : IExternalEventHandler
         _wake = new Timer(_ => Nudge(), null, 250, 250);
     }
 
+    /// <summary>
+    /// The same, from a running Revit (the loader starts the core on Revit's first idle moment, and again after an update
+    /// is switched to). Call from a valid API context.
+    /// </summary>
+    public void Initialize(UIApplication application)
+    {
+        Initialize();
+        try { _mainWindow = application.MainWindowHandle; }
+        catch (Exception) { _mainWindow = IntPtr.Zero; }
+        application.Idling += OnIdling;
+        _wake = new Timer(_ => Nudge(), null, 250, 250);
+    }
+
+    /// <summary>True while anything is queued or running, so switching to a new core must wait.</summary>
+    public bool HasWork => _running || !_queue.IsEmpty;
+
+    /// <summary>
+    /// Lets go of Revit: no more Idling, wake timer or external event. Anything that slipped into the queue meanwhile is
+    /// run first, so no caller is left waiting. Call from a valid API context.
+    /// </summary>
+    public void Shutdown(UIApplication application)
+    {
+        try { application.Idling -= OnIdling; } catch (Exception) { /* not subscribed through this object */ }
+        Drain(application);
+        _wake?.Dispose();
+        _wake = null;
+        var ev = _event;
+        _event = null;
+        try { ev?.Dispose(); } catch (Exception) { }
+    }
+
     public Task<T> InvokeAsync<T>(Func<UIApplication, T> work) => InvokeAsync(work, CancellationToken.None);
 
     /// <summary>
@@ -48,7 +79,7 @@ public sealed class RevitDispatcher : IExternalEventHandler
     /// </summary>
     public Task<T> InvokeAsync<T>(Func<UIApplication, T> work, CancellationToken ct)
     {
-        if (_event is null) throw new InvalidOperationException("RevitDispatcher not initialized.");
+        var ev = _event ?? throw new InvalidOperationException("Sketch ProMax is not running in this Revit window (it may have just been updated). Try again.");
 
         var tcs = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
         if (ct.IsCancellationRequested)
@@ -68,7 +99,7 @@ public sealed class RevitDispatcher : IExternalEventHandler
 
         // Pending (an earlier Raise() will drain this too), Denied or TimedOut are not final: the Idling handler and
         // the wake timer still get the queue run, so the request is never failed here.
-        _event.Raise();
+        ev.Raise();
         Nudge();
 
         return tcs.Task;

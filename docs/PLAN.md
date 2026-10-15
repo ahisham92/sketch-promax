@@ -81,7 +81,7 @@ Claude desktop app ──stdio──► SketchProMax.Mcp.exe ──┬─ named 
                               SketchProMax\sessions
 
 ┌──────────────────── each Revit process ───────────────┐
-│  Ribbon: Status, Settings (approval, firm standards)  │
+│  Loader: ribbon, loads newest core, live switch-over  │
 │  BridgeServer (pipe SketchProMax.Revit.<user>.<pid>)  │
 │     │  ping / activate_document / call_tool           │
 │     ▼                                                 │

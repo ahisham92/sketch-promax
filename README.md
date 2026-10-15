@@ -1,5 +1,7 @@
 # Sketch ProMax
 
+<p align="center"><img src="assets/logo/sketch-promax-wordmark.png" alt="Sketch ProMax" width="420"></p>
+
 An AI agent for Autodesk Revit 2024, 2025, 2026 and 2027, powered by Claude. Ask in plain language; it reads, documents, audits and edits the open model through 184 tools, and it learns new ones as you use it. It asks for your approval before every change, and every change can be undone with Ctrl+Z.
 
 See [docs/PLAN.md](docs/PLAN.md) for the comparison with SketchPro, the roadmap and the architecture.
@@ -8,9 +10,13 @@ See [docs/PLAN.md](docs/PLAN.md) for the comparison with SketchPro, the roadmap 
 
 You chat in the **Claude desktop app**, next to Revit, on your normal Claude plan: no API key and no extra payment. The work happens in Revit. There is no chat inside Revit, because that would need a paid API key; your Claude plan can only be used through Anthropic's own apps.
 
-On the Revit ribbon, the **AI Agent** panel has two buttons:
-- **Status** shows whether the desktop app can reach this Revit window.
-- **Settings** holds your firm standards and the "ask me before changing the model" switch.
+The **Sketch ProMax** ribbon tab:
+- **Claude**: whether the Claude desktop app is connected to this Revit window (green: talked to it recently; amber: ready; gray: not running), **Copy starter prompt** (a good first message, ready to paste) and **Open Claude** (also the Microsoft Store version).
+- **Jobs**: the tool Claude is running, for how long and how far it got, and **Cancel job**.
+- **Quick tools**: your saved recipes and learned tools, run right in Revit with no AI and no internet. It asks for any blanks ({level}...) and shows the result.
+- **Checks**: **Model check** (warnings, duplicates, gaps, unsupported beams, columns off grid, wrong levels, rooms, empty parameters) and **Self-test**.
+- **Updates**: the installed version and update progress, **Check now** and **What's new**.
+- **Settings** (firm standards, the "ask me before changing the model" switch, automatic updates) and **Help**.
 
 Several Revit windows, and different Revit versions, can be open at once. Name the model in chat ("in the Tower model, ...") and Claude switches to it.
 
@@ -35,7 +41,9 @@ Revit must be running with a model open for the tools to work. With "Ask before 
 
 ## Updates
 
-Install once; after that Sketch ProMax updates itself. Each time Revit starts it checks this repository's latest GitHub Release. When there is a newer version it downloads it in the background and shows a notice; the new version runs the next time you open Revit (and restart the Claude desktop app). Your settings are kept. Turn this off, or check right away, from the ribbon's **Settings** and **Status** buttons.
+Install once; after that Sketch ProMax updates itself, without restarting Revit. Each time Revit starts, and hourly while it is open, it checks this repository's latest GitHub Release. When there is a newer version a small window shows it downloading (percent and MB), verifying, unpacking and applying; you can hide it and keep working, or cancel the download. As soon as Revit is idle and no job is running, Sketch ProMax switches to the new version in place and says "Updated to X". The Claude app sees the new tool list straight away. Your settings are kept. Turn this off from **Settings**, or check right away with **Check now**.
+
+How it works: Revit loads a small, never-changing loader (`SketchProMax.Loader.dll`) that owns the ribbon and loads the newest installed core (`SketchProMax.dll`) from `%LOCALAPPDATA%\SketchProMax\versions`. To switch, the loader stops the running core (its connection to Claude, its Revit event handlers and timers) and starts the new one, which takes over the same connection. The old DLLs stay loaded, unused, until Revit closes. Coming from 0.25.x, the first update still needs one Revit restart; from then on, none.
 
 To publish an update: bump `<Version>` in both project files and push to `main`. The Release workflow builds on Windows and publishes `SketchProMax-<version>.zip` as a GitHub Release.
 
@@ -159,15 +167,19 @@ To publish an update: bump `<Version>` in both project files and push to `main`.
 ```
 build.ps1 / install.ps1      Build everything into .\dist / install for the current user
 .github/workflows/release.yml  Publishes a GitHub Release for each new version on main
-src/SketchProMax/            The Revit add-in (net48 for Revit 2024, net8.0-windows for 2025/2026, net10.0-windows for 2027)
-  App.cs                     Ribbon (Status, Settings), dispatcher, desktop-app bridge
+assets/logo/                 Product logo, icon and wordmark
+src/SketchProMax.Loader/     What Revit loads: the ribbon, its buttons and icons, and loading/switching the newest core
+src/SketchProMax/            The Revit add-in core (net48 for Revit 2024, net8.0-windows for 2025/2026, net10.0-windows for 2027)
+  CoreEntry.cs               What the loader calls: start, stop, ribbon commands and ribbon status
+  App.cs                     Starts/stops the dispatcher, bridge and update loop; boots through the loader for 0.25.x manifests
+  Commands/                  What the ribbon buttons do, and running recipes / learned tools from the ribbon
   Agent/SystemPrompt         Instructions the desktop app receives from the connector
   Bridge/BridgeServer        Per-Revit-window named-pipe server the connector talks to
   Revit/                     Main-thread dispatcher (ExternalEvent), helpers, Revit 2024 dependency loader
   Tools/                     The 182 IRevitTool implementations and the registry (CodeTools compiles C# with Roslyn)
-  UI/                        Settings dialog
+  UI/                        Settings, update progress, quick-tool input and result windows
   Settings/                  Per-user settings (approval switch, auto-update, firm standards)
-  Update/Updater             Self-update from GitHub Releases
+  Update/Updater             Self-update from GitHub Releases, with progress, switched to without restarting Revit
 src/SketchProMax.Mcp/        MCP server (stdio) the Claude desktop app launches; finds open Revit windows and forwards tool calls
 ```
 
