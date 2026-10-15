@@ -98,7 +98,8 @@ public sealed class RunRecipeTool : IRevitTool
 {
     public string Name => "run_recipe";
     public string Description =>
-        "Run a saved recipe step by step in the active model, filling {placeholders} from 'values'. Stops at the first " +
+        "Run a saved recipe step by step in the active model, filling {placeholders} from 'values' (converted to the number, " +
+        "boolean or list the step's tool expects). Stops at the first " +
         "failing step unless continue_on_error is set. Each step is its own Undo entry.";
     public string PropertiesJson => """
     {
@@ -127,9 +128,9 @@ public sealed class RunRecipeTool : IRevitTool
         var path = Recipes.PathFor(recipe);
         if (!File.Exists(path)) return null;
         var text = File.ReadAllText(path);
+        var fill = new Dictionary<string, JsonElement>();
         if (values is { ValueKind: JsonValueKind.Object } v)
-            foreach (var p in v.EnumerateObject())
-                text = text.Replace("{" + p.Name + "}", JsonEncodedText.Encode(p.Value.ToString()).ToString());
+            foreach (var p in v.EnumerateObject()) fill[p.Name] = p.Value.Clone();
 
         using var doc = JsonDocument.Parse(text);
         var results = new List<object>();
@@ -137,14 +138,14 @@ public sealed class RunRecipeTool : IRevitTool
         foreach (var step in doc.RootElement.GetProperty("steps").EnumerateArray())
         {
             index++;
-            var name = step.GetProperty("tool").GetString() ?? "";
+            var name = Placeholders.Text(step.GetProperty("tool").GetString() ?? "", fill);
             if (name is "run_recipe" or "batch_run_recipe") { results.Add(new { step = index, tool = name, error = "a recipe can't run another recipe" }); continue; }
             var stepArgs = step.TryGetProperty("arguments", out var a) && a.ValueKind == JsonValueKind.Object
                 ? a.EnumerateObject().ToDictionary(p => p.Name, p => p.Value.Clone())
                 : new Dictionary<string, JsonElement>();
             // As in the bridge: run the learned tool itself, with its own inputs.
             if (name == "run_learned_tool" && stepArgs.TryGetValue("name", out var inner) && inner.ValueKind == JsonValueKind.String
-                && LearnedTools.Load(inner.GetString()!) is { } learned)
+                && LearnedTools.Load(Placeholders.Text(inner.GetString()!, fill)) is { } learned)
             {
                 name = learned.Name;
                 stepArgs = stepArgs.TryGetValue("arguments", out var la) && la.ValueKind == JsonValueKind.Object
@@ -153,6 +154,8 @@ public sealed class RunRecipeTool : IRevitTool
             }
             var tool = registry.Find(name);
             if (tool is null) { results.Add(new { step = index, tool = name, error = "unknown tool" }); if (!keepGoing) break; continue; }
+            // Placeholders take the type the tool's schema asks for: "{view_id}" becomes 5285027, not "5285027".
+            stepArgs = Placeholders.Fill(stepArgs, tool.PropertiesJson, fill);
             ToolResult result;
             try { result = tool.Execute(app, new ToolArgs(stepArgs)); }
             catch (Exception ex) { result = ToolResult.Error($"{ex.GetType().Name}: {ex.Message}"); }
@@ -161,6 +164,160 @@ public sealed class RunRecipeTool : IRevitTool
             if (result.IsError && !keepGoing) break;
         }
         return results;
+    }
+}
+
+/// <summary>
+/// Fills {placeholders} in recipe arguments. A value that is just "{name}" takes the type the tool's input schema gives
+/// that argument (number, integer, boolean, array, object); a placeholder inside longer text is replaced as text.
+/// </summary>
+internal static class Placeholders
+{
+    private static readonly System.Text.RegularExpressions.Regex Whole = new(@"^\{([A-Za-z_][A-Za-z0-9_ ]*)\}$");
+    private static readonly System.Globalization.CultureInfo Inv = System.Globalization.CultureInfo.InvariantCulture;
+    private static readonly Dictionary<string, JsonElement> NoValues = new();
+
+    public static string Text(string s, IReadOnlyDictionary<string, JsonElement> values)
+    {
+        foreach (var kv in values)
+            s = s.Replace("{" + kv.Key + "}", kv.Value.ValueKind == JsonValueKind.String ? kv.Value.GetString() : kv.Value.GetRawText());
+        return s;
+    }
+
+    public static Dictionary<string, JsonElement> Fill(Dictionary<string, JsonElement> args, string propertiesJson, IReadOnlyDictionary<string, JsonElement> values)
+    {
+        if (values.Count == 0) return args;
+        JsonElement? properties = null;
+        properties = TryParse(propertiesJson);
+        var result = new Dictionary<string, JsonElement>();
+        foreach (var kv in args)
+            result[kv.Key] = Element(w => Write(w, kv.Value, Property(properties, kv.Key), values));
+        return result;
+    }
+
+    private static JsonElement Element(Action<Utf8JsonWriter> write)
+    {
+        using var stream = new MemoryStream();
+        using (var w = new Utf8JsonWriter(stream)) write(w);
+        using var parsed = JsonDocument.Parse(stream.ToArray());
+        return parsed.RootElement.Clone();
+    }
+
+    private static JsonElement? Property(JsonElement? objectProperties, string key) =>
+        objectProperties is { ValueKind: JsonValueKind.Object } p && p.TryGetProperty(key, out var s) ? s : null;
+
+    private static string? TypeOf(JsonElement? schema)
+    {
+        if (schema is not { ValueKind: JsonValueKind.Object } s || !s.TryGetProperty("type", out var t)) return null;
+        if (t.ValueKind == JsonValueKind.String) return t.GetString();
+        if (t.ValueKind != JsonValueKind.Array) return null;
+        var types = t.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String).Select(x => x.GetString()).ToList();
+        return types.Contains("string") ? "string" : types.FirstOrDefault(x => x != "null");
+    }
+
+    private static void Write(Utf8JsonWriter w, JsonElement value, JsonElement? schema, IReadOnlyDictionary<string, JsonElement> values)
+    {
+        switch (value.ValueKind)
+        {
+            case JsonValueKind.String:
+            {
+                var s = value.GetString() ?? "";
+                var m = Whole.Match(s);
+                if (m.Success && values.TryGetValue(m.Groups[1].Value, out var given)) Coerce(w, given, schema, values);
+                else w.WriteStringValue(Text(s, values));
+                break;
+            }
+            case JsonValueKind.Array:
+            {
+                var items = schema is { ValueKind: JsonValueKind.Object } sa && sa.TryGetProperty("items", out var it) ? it : (JsonElement?)null;
+                w.WriteStartArray();
+                foreach (var item in value.EnumerateArray()) Write(w, item, items, values);
+                w.WriteEndArray();
+                break;
+            }
+            case JsonValueKind.Object:
+            {
+                JsonElement? props = null, extra = null;
+                if (schema is { ValueKind: JsonValueKind.Object } so)
+                {
+                    if (so.TryGetProperty("properties", out var pp)) props = pp;
+                    if (so.TryGetProperty("additionalProperties", out var ap) && ap.ValueKind == JsonValueKind.Object) extra = ap;
+                }
+                w.WriteStartObject();
+                foreach (var p in value.EnumerateObject())
+                {
+                    w.WritePropertyName(p.Name);
+                    Write(w, p.Value, Property(props, p.Name) ?? extra, values);
+                }
+                w.WriteEndObject();
+                break;
+            }
+            default:
+                value.WriteTo(w);
+                break;
+        }
+    }
+
+    /// <summary>Writes a supplied value as the schema type; anything that doesn't convert is written as given.</summary>
+    private static void Coerce(Utf8JsonWriter w, JsonElement given, JsonElement? schema, IReadOnlyDictionary<string, JsonElement> values)
+    {
+        var type = TypeOf(schema);
+        if (given.ValueKind != JsonValueKind.String)
+        {
+            if (type == "string") w.WriteStringValue(given.GetRawText());
+            else if (type == "array" && given.ValueKind != JsonValueKind.Array) { w.WriteStartArray(); Coerce(w, given, Items(schema), values); w.WriteEndArray(); }
+            else given.WriteTo(w);
+            return;
+        }
+        var s = (given.GetString() ?? "").Trim();
+        switch (type)
+        {
+            case "integer" or "number" when double.TryParse(s, System.Globalization.NumberStyles.Float, Inv, out var d):
+                if (type == "integer" && d == Math.Floor(d) && Math.Abs(d) < 9e15) w.WriteNumberValue((long)d);
+                else w.WriteNumberValue(d);
+                return;
+            case "boolean" when Bool(s) is { } b:
+                w.WriteBooleanValue(b);
+                return;
+            case "array":
+            {
+                if (s.StartsWith("[", StringComparison.Ordinal) && TryParse(s) is { ValueKind: JsonValueKind.Array } parsed)
+                {
+                    Write(w, parsed, schema, NoValues);
+                    return;
+                }
+                // A comma-separated list: "1, 2, 3" -> [1, 2, 3] (each item as the schema's item type).
+                w.WriteStartArray();
+                foreach (var part in s.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries))
+                    Coerce(w, Element(x => x.WriteStringValue(part.Trim())), Items(schema), values);
+                w.WriteEndArray();
+                return;
+            }
+            case "object" when s.StartsWith("{", StringComparison.Ordinal) && TryParse(s) is { ValueKind: JsonValueKind.Object } obj:
+                Write(w, obj, schema, NoValues);
+                return;
+        }
+        w.WriteStringValue(given.GetString());
+    }
+
+    private static JsonElement? Items(JsonElement? schema) =>
+        schema is { ValueKind: JsonValueKind.Object } s && s.TryGetProperty("items", out var it) ? it : null;
+
+    private static bool? Bool(string s) => s.ToLowerInvariant() switch
+    {
+        "true" or "yes" or "1" => true,
+        "false" or "no" or "0" => false,
+        _ => null,
+    };
+
+    private static JsonElement? TryParse(string s)
+    {
+        try
+        {
+            using var d = JsonDocument.Parse(s);
+            return d.RootElement.Clone();
+        }
+        catch (JsonException) { return null; }
     }
 }
 

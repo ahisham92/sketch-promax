@@ -150,24 +150,46 @@ public sealed class CreateSectionTool : IRevitTool
 
         var dir = (p1 - p0).Normalize();
         var up = XYZ.BasisZ;
-        var transform = Transform.Identity;
-        transform.Origin = (p0 + p1) / 2;
-        transform.BasisX = dir;
-        transform.BasisY = up;
-        transform.BasisZ = dir.CrossProduct(up);
+        var look = up.CrossProduct(dir); // to the left of start -> end
         var half = p0.DistanceTo(p1) / 2;
-        var sectionBox = new BoundingBoxXYZ
-        {
-            Transform = transform,
-            Min = new XYZ(-half, bottom, -depth),
-            Max = new XYZ(half, top, 0),
-        };
 
         using var t = RevitHelpers.StartTransaction(doc, "Create section");
-        var view = ViewSection.CreateSection(doc, ViewKit.TypeFor(doc, ViewFamily.Section).Id, sectionBox);
+        var typeId = ViewKit.TypeFor(doc, ViewFamily.Section).Id;
+        // The cut plane goes on the drawn line, looking to its left, with the far clip 'depth' away. Box frame: origin on
+        // the line's midpoint, BasisZ along the looking direction (= -ViewDirection), Z from 0 (cut) to depth (far clip).
+        var view = ViewSection.CreateSection(doc, typeId, SectionBox((p0 + p1) / 2, look, half, bottom, top, depth, lookAlongBasisZ: true));
+        doc.Regenerate();
+        if (-view.ViewDirection.DotProduct(look) < 0.5)
+        {
+            // This Revit build reads the box the other way round (cut plane at Max.Z, looking along -BasisZ): rebuild it
+            // so the result is the same section.
+            doc.Delete(view.Id);
+            view = ViewSection.CreateSection(doc, typeId, SectionBox((p0 + p1) / 2, look, half, bottom, top, depth, lookAlongBasisZ: false));
+            doc.Regenerate();
+        }
         var name = ViewKit.Finish(doc, view, args.OptString("name"), args.OptLong("scale"), args.OptString("view_template"));
         t.Commit();
-        return ToolResult.Ok(new { id = view.Id.Value, name, looking = ViewKit.Compass(-view.ViewDirection) + "-ish" });
+        return ToolResult.Ok(new { id = view.Id.Value, name, looking = ViewKit.Compass(-view.ViewDirection) + "-ish", depth = RevitHelpers.FromInternal(doc, depth) });
+    }
+
+    /// <summary>
+    /// The section box for a cut on a plan line through <paramref name="mid"/>, looking toward
+    /// <paramref name="look"/>. Both frames are right-handed with BasisY up. lookAlongBasisZ: BasisZ = look, Z in
+    /// [0, depth]; otherwise BasisZ = -look (the view direction, toward the viewer), Z in [-depth, 0].
+    /// </summary>
+    private static BoundingBoxXYZ SectionBox(XYZ mid, XYZ look, double half, double bottom, double top, double depth, bool lookAlongBasisZ)
+    {
+        var transform = Transform.Identity;
+        transform.Origin = mid;
+        transform.BasisY = XYZ.BasisZ;
+        transform.BasisZ = lookAlongBasisZ ? look : -look;
+        transform.BasisX = transform.BasisY.CrossProduct(transform.BasisZ);
+        return new BoundingBoxXYZ
+        {
+            Transform = transform,
+            Min = new XYZ(-half, bottom, lookAlongBasisZ ? 0 : -depth),
+            Max = new XYZ(half, top, lookAlongBasisZ ? depth : 0),
+        };
     }
 }
 
@@ -341,13 +363,15 @@ public sealed class Create3DViewTool : IRevitTool
     public string Name => "create_3d_view";
     public string Description =>
         "Create an isometric 3D view, optionally with a section box around given elements or around one level " +
-        "(from that level to the next one up).";
+        "(from that level to the next one up). The camera is aimed at the section box. Unless a view template is given, " +
+        "the view has no template and shows every model category and workset (so images, BCF and IFC from it are complete).";
     public string PropertiesJson => """
     {
       "element_ids": {"type": "array", "items": {"type": "integer"}},
       "level": {"type": "string"},
       "margin": {"type": "number", "description": "Section box margin, project units. Default 1 m."},
-      "name": {"type": "string"}, "view_template": {"type": "string"}
+      "name": {"type": "string"}, "view_template": {"type": "string"},
+      "show_all": {"type": "boolean", "description": "Without view_template: remove the template the 3D view type applies and unhide all model categories, worksets and view filters (default true)."}
     }
     """;
     public string[] Required => [];
@@ -376,9 +400,82 @@ public sealed class Create3DViewTool : IRevitTool
 
         using var t = RevitHelpers.StartTransaction(doc, "Create 3D view");
         var view = View3D.CreateIsometric(doc, ViewKit.TypeFor(doc, ViewFamily.ThreeDimensional).Id);
-        if (box != null) view.SetSectionBox(ViewKit.Grow(box, margin));
-        var name = ViewKit.Finish(doc, view, args.OptString("name"), null, args.OptString("view_template"));
+        var template = args.OptString("view_template");
+        var shown = new List<string>();
+        if (string.IsNullOrWhiteSpace(template) && args.OptBool("show_all", true)) shown = ShowAll(doc, view);
+        if (box != null)
+        {
+            var grown = ViewKit.Grow(box, margin);
+            view.SetSectionBox(grown);
+            AimAt(view, grown);
+        }
+        var name = ViewKit.Finish(doc, view, args.OptString("name"), null, template);
         t.Commit();
-        return ToolResult.Ok(new { id = view.Id.Value, name, sectionBox = box != null });
+        return ToolResult.Ok(new { id = view.Id.Value, name, sectionBox = box != null, madeVisible = shown });
+    }
+
+    /// <summary>
+    /// Keeps the isometric direction but moves the camera so it looks at the centre of the box; a new isometric view
+    /// otherwise looks at the whole model and its section box can be off screen (blank image exports, BCF viewpoints
+    /// pointing at nothing).
+    /// </summary>
+    private static void AimAt(View3D view, BoundingBoxXYZ box)
+    {
+        var centre = (box.Min + box.Max) / 2;
+        var o = view.GetOrientation();
+        var forward = o.ForwardDirection.Normalize();
+        var up = o.UpDirection;
+        if (Math.Abs(up.DotProduct(forward)) > 1e-6) up = (XYZ.BasisZ - forward * XYZ.BasisZ.DotProduct(forward)).Normalize();
+        var distance = Math.Max(box.Min.DistanceTo(box.Max), 1.0);
+        view.SetOrientation(new ViewOrientation3D(centre - forward * distance, up, forward));
+    }
+
+    /// <summary>
+    /// Removes the template the 3D view type applies to new views and unhides model categories, worksets and view
+    /// filters, so the view shows the whole model. Returns what was made visible.
+    /// </summary>
+    private static List<string> ShowAll(Document doc, View3D view)
+    {
+        var shown = new List<string>();
+        if (view.ViewTemplateId != ElementId.InvalidElementId)
+        {
+            shown.Add("removed view template " + (doc.GetElement(view.ViewTemplateId)?.Name ?? ""));
+            view.ViewTemplateId = ElementId.InvalidElementId;
+        }
+        try { view.AreModelCategoriesHidden = false; }
+        catch (Autodesk.Revit.Exceptions.ApplicationException) { }
+        foreach (Category c in doc.Settings.Categories)
+        {
+            if (c.CategoryType != CategoryType.Model) continue;
+            try
+            {
+                if (!view.CanCategoryBeHidden(c.Id) || !view.GetCategoryHidden(c.Id)) continue;
+                view.SetCategoryHidden(c.Id, false);
+                shown.Add(c.Name);
+            }
+            catch (Autodesk.Revit.Exceptions.ApplicationException) { }
+        }
+        foreach (var filterId in view.GetFilters())
+        {
+            try
+            {
+                if (view.GetFilterVisibility(filterId)) continue;
+                view.SetFilterVisibility(filterId, true);
+                shown.Add("filter " + doc.GetElement(filterId)?.Name);
+            }
+            catch (Autodesk.Revit.Exceptions.ApplicationException) { }
+        }
+        if (doc.IsWorkshared)
+            foreach (var ws in new FilteredWorksetCollector(doc).OfKind(WorksetKind.UserWorkset))
+            {
+                try
+                {
+                    if (view.IsWorksetVisible(ws.Id)) continue;
+                    view.SetWorksetVisibility(ws.Id, WorksetVisibility.Visible);
+                    shown.Add("workset " + ws.Name);
+                }
+                catch (Autodesk.Revit.Exceptions.ApplicationException) { }
+            }
+        return shown;
     }
 }
