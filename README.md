@@ -1,6 +1,6 @@
 # Sketch ProMax
 
-An AI agent for Autodesk Revit 2024, 2025, 2026 and 2027, powered by Claude. Ask in plain language; it reads, documents, audits and edits the open model through 154 tools, and it learns new ones as you use it. It asks for your approval before every change, and every change can be undone with Ctrl+Z.
+An AI agent for Autodesk Revit 2024, 2025, 2026 and 2027, powered by Claude. Ask in plain language; it reads, documents, audits and edits the open model through 158 tools, and it learns new ones as you use it. It asks for your approval before every change, and every change can be undone with Ctrl+Z.
 
 See [docs/PLAN.md](docs/PLAN.md) for the comparison with SketchPro, the roadmap and the architecture.
 
@@ -113,6 +113,8 @@ To publish an update: bump `<Version>` in both project files and push to `main`.
 
 **From architecture to issued drawings:** turn the architectural model into a structural one (load-bearing walls, columns sized from the architect's, structural slabs), ramps as sloped slabs with landings and a gradient check, housekeeping pads under MEP equipment, a sleeve and opening schedule, general notes from a structural template, typical detail tables (laps, covers, hooks), and one-step issue: revision, checks, PDF and DWG per sheet with your naming, and a checked list of drawings.
 
+**Model health and change tracking:** a scored model check (Revit warnings by type, duplicates, wall gaps, beams on nothing, columns off grid intersections, elements slightly off-axis or far from their level, unplaced or unenclosed rooms, empty required parameters), missing items (rooms with no door, columns with no footing, masonry openings with no lintel, untagged structure, empty sheets, architecture with no structure), model and link snapshots compared for added, deleted and modified elements with coloured views, and coordination progress over time (new, resolved and open clashes per test), all to CSV with optional BCF.
+
 **One prompt to an issued package:** link the architectural model (link_model), build the structure from it with door and window openings, add a raft a set depth under the slab on grade (create_raft), make GA plans with sheets, tags and dimensions, reinforce rafts, slabs, beams and columns with typical values marked ASSUMED, and issue the set "Issued for Construction" (revision, checks, PDF/DWG, list of drawings). work_progress saves the plan and each step's result with the model, so a long job picks up where it stopped after "continue".
 
 **Marine, infrastructure and robustness:** piles (round, square or tubular, vertical or raked, at points, on a grid or in rows along an alignment), revetments and rubble breakwaters with armour, underlayer and filter layers, crown walls, gravity block quay walls, cantilever retaining walls, masonry walls, gravity dams, open-piled jetties and quay decks, bridges (deck, piers, abutments), floating pontoons, manholes, planters and hoppers; bollards, fenders, ladders, cleats and crane rails along a quay edge; design vessels (tug to ULCV, hopper barge and dredger) at a berth; vessel impact screening (PIANC berthing energy, AASHTO collision force, exposed piles and piers); and progressive collapse screening (notional column removal, transfer columns, tie forces).
@@ -158,7 +160,7 @@ src/SketchProMax/            The Revit add-in (net48 for Revit 2024, net8.0-wind
   Agent/SystemPrompt         Instructions the desktop app receives from the connector
   Bridge/BridgeServer        Per-Revit-window named-pipe server the connector talks to
   Revit/                     Main-thread dispatcher (ExternalEvent), helpers, Revit 2024 dependency loader
-  Tools/                     The 152 IRevitTool implementations and the registry (CodeTools compiles C# with Roslyn)
+  Tools/                     The 156 IRevitTool implementations and the registry (CodeTools compiles C# with Roslyn)
   UI/                        Settings dialog
   Settings/                  Per-user settings (approval switch, auto-update, firm standards)
   Update/Updater             Self-update from GitHub Releases

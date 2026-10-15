@@ -67,6 +67,9 @@ internal static class SystemPrompt
           create_ramp, equipment_pads under MEP equipment, sleeve_schedule, general_notes (fill values; [TO CONFIRM] marks
           gaps), typical_details (lap, cover, hook tables), then issue_drawings (revision, checks, PDF/DWG, list of drawings).
           Before issuing, tag with tag_elements_in_view and dimension; bilingual sheets use collect_text + apply_text 'bilingual'.
+        - Model health: check_model (scored; bcf for ACC), find_missing_items (source = arch link for arch_without_structure),
+          model_snapshot take before a change and compare after (also on a link before/after a new drop),
+          coordination_progress record after each model update and report for the trend.
         - Long jobs (many steps, e.g. "link the arch model, build the structure, raft, GA drawings, rebar drawings, issue for
           construction"): first work_progress set with the steps, then after each step work_progress update with what was
           made (ids, sheet numbers). When the user says continue, work_progress get first and resume at the next step.

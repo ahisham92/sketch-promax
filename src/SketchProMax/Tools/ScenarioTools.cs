@@ -29,9 +29,11 @@ public sealed class LinkModelTool : IRevitTool
         var path = args.String("path").Trim().Trim('"');
         if (!path.EndsWith(".rvt", StringComparison.OrdinalIgnoreCase)) throw new ArgumentException("Give the full path of a .rvt file.");
         if (!File.Exists(path)) throw new ArgumentException($"File not found: {path}");
+        path = Path.GetFullPath(path);
+        string Norm(string p) { try { return Path.GetFullPath(p); } catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException) { return p; } }
         var existing = new FilteredElementCollector(doc).OfClass(typeof(RevitLinkType)).Cast<RevitLinkType>()
-            .FirstOrDefault(t => t.GetExternalFileReference() is { } r
-                                 && string.Equals(ModelPathUtils.ConvertModelPathToUserVisiblePath(r.GetAbsolutePath()), path, StringComparison.OrdinalIgnoreCase));
+            .FirstOrDefault(t => !t.IsNestedLink && t.GetExternalFileReference() is { } r
+                                 && string.Equals(Norm(ModelPathUtils.ConvertModelPathToUserVisiblePath(r.GetAbsolutePath())), path, StringComparison.OrdinalIgnoreCase));
         if (existing != null)
         {
             var inst = new FilteredElementCollector(doc).OfClass(typeof(RevitLinkInstance)).Cast<RevitLinkInstance>().FirstOrDefault(i => i.GetTypeId() == existing.Id);
@@ -51,8 +53,15 @@ public sealed class LinkModelTool : IRevitTool
         RevitLinkInstance instance;
         if (placement == "shared")
         {
-            try { instance = RevitLinkInstance.Create(doc, typeId, ImportPlacement.Shared); used = "shared coordinates"; }
-            catch (Autodesk.Revit.Exceptions.ApplicationException) { instance = RevitLinkInstance.Create(doc, typeId, ImportPlacement.Origin); used = "origin to origin (the models share no coordinates)"; }
+            // Revit may refuse or warn when the models share no coordinates; fall back to origin to origin.
+            using var sub = new SubTransaction(doc);
+            sub.Start();
+            try { instance = RevitLinkInstance.Create(doc, typeId, ImportPlacement.Shared); sub.Commit(); used = "shared coordinates (if Revit warns the models share none, it placed it origin to origin)"; }
+            catch (Autodesk.Revit.Exceptions.ApplicationException)
+            {
+                if (!sub.HasEnded()) sub.RollBack();
+                instance = RevitLinkInstance.Create(doc, typeId, ImportPlacement.Origin); used = "origin to origin (the models share no coordinates)";
+            }
         }
         else { instance = RevitLinkInstance.Create(doc, typeId, ImportPlacement.Origin); used = "origin to origin"; }
         if (t.Commit() != TransactionStatus.Committed) return ToolResult.Error("Revit refused the link when saving it.");
@@ -103,13 +112,16 @@ public sealed class CreateRaftTool : IRevitTool
         var depth = args.OptDouble("depth_below") is { } d ? RevitHelpers.ToInternal(doc, d) : 1500 / 304.8;
         var thickness = args.OptDouble("thickness") is { } th ? RevitHelpers.ToInternal(doc, th) : 1000 / 304.8;
         var projection = args.OptDouble("projection") is { } pr ? RevitHelpers.ToInternal(doc, pr) : 0;
-        if (thickness <= 0 || depth < 0) throw new ArgumentException("thickness must be positive and depth_below not negative.");
+        if (thickness <= 0 || depth < 0 || projection < 0) throw new ArgumentException("thickness must be positive, and depth_below and projection not negative.");
+        var floorThickness = floor.FloorType.GetCompoundStructure()?.GetWidth() ?? 0;
+        if (depth < floorThickness - 1e-6) throw new ArgumentException($"depth_below must be at least the floor's thickness ({Math.Round(floorThickness * 304.8)} mm), or the raft overlaps the floor.");
         var floorLevel = (Level)doc.GetElement(floor.LevelId);
         var floorTop = floorLevel.ProjectElevation + (floor.get_Parameter(BuiltInParameter.FLOOR_HEIGHTABOVELEVEL_PARAM)?.AsDouble() ?? 0);
         var raftTop = floorTop - depth;
 
         // Outer edge only (the raft has no openings), flattened and pushed out by the projection.
-        var outer = Outlines.FloorProfile(doc, floor).OrderByDescending(Area).First();
+        var profile = Outlines.FloorProfile(doc, floor).OrderByDescending(Area).ToList();
+        var outer = profile.First();
         var flat = CurveLoop.CreateViaTransform(outer, Transform.CreateTranslation(new XYZ(0, 0, floorLevel.ProjectElevation - outer.First().GetEndPoint(0).Z)));
         if (projection > 1e-6)
         {
@@ -127,13 +139,18 @@ public sealed class CreateRaftTool : IRevitTool
             type = ConcreteTypes.Slab(doc, thickness, "Raft (structural floor)");
             raft = Floor.Create(doc, [flat], type.Id, floorLevel.Id, true, null, 0);
         }
-        raft.get_Parameter(BuiltInParameter.FLOOR_HEIGHTABOVELEVEL_PARAM)?.Set(raftTop - floorLevel.ProjectElevation);
+        if (raft.get_Parameter(BuiltInParameter.FLOOR_HEIGHTABOVELEVEL_PARAM) is not { IsReadOnly: false } offset || !offset.Set(raftTop - floorLevel.ProjectElevation))
+        {
+            t.RollBack();
+            return ToolResult.Error("Couldn't set the raft's height offset from the level.");
+        }
         raft.get_Parameter(BuiltInParameter.ALL_MODEL_MARK)?.Set("RAFT");
         if (t.Commit() != TransactionStatus.Committed) return ToolResult.Error("Revit refused the raft when saving it.");
         return ToolResult.Ok(new
         {
             id = raft.Id.Value, type = type.Name, foundationSlab = type.IsFoundationSlab, under = floor.Id.Value,
             topElevation = RevitHelpers.FromInternal(doc, raftTop), bottomElevation = RevitHelpers.FromInternal(doc, raftTop - thickness),
+            otherAreas = profile.Count > 1 && profile.Skip(1).Any(l => Area(l) > Area(outer) * 0.05) ? "The floor's sketch has more than one loop; only the largest outline was used (holes are ignored for a raft). Check separate floor areas." : null,
             next = "Reinforce it with reinforce_slab_wall (cover 75 mm) and show it with rebar_section / a foundation plan.",
         });
     }
@@ -141,7 +158,7 @@ public sealed class CreateRaftTool : IRevitTool
     private static double Area(CurveLoop loop)
     {
         // Shoelace area of the loop's tessellated points in plan.
-        var pts = loop.SelectMany(c => c.Tessellate().Take(c.Tessellate().Count - 1)).ToList();
+        var pts = loop.SelectMany(c => { var t = c.Tessellate(); return t.Take(t.Count - 1); }).ToList();
         var a = 0.0;
         for (var i = 0; i < pts.Count; i++) { var p = pts[i]; var q = pts[(i + 1) % pts.Count]; a += p.X * q.Y - q.X * p.Y; }
         return Math.Abs(a) / 2;
@@ -174,13 +191,15 @@ public sealed class WorkProgressTool : IRevitTool
     public ToolResult Execute(UIApplication app, ToolArgs args)
     {
         var doc = app.ActiveUIDocument.Document;
-        var key = string.IsNullOrEmpty(doc.PathName) ? doc.Title : doc.PathName;
-        var safe = new string(Path.GetFileNameWithoutExtension(key).Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '_' : c).ToArray());
         var folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "SketchProMax", "progress");
-        var file = Path.Combine(folder, $"{safe}-{(uint)StringComparer.OrdinalIgnoreCase.GetHashCode(key):x8}.json");
+        var file = Path.Combine(folder, $"{Checks.ModelKey(doc)}.json");
         var options = new JsonSerializerOptions { WriteIndented = true };
-        Plan? Load() => File.Exists(file) ? JsonSerializer.Deserialize<Plan>(File.ReadAllText(file)) : null;
-        void Save(Plan p) { Directory.CreateDirectory(folder); p.Updated = DateTime.Now.ToString("yyyy-MM-dd HH:mm"); File.WriteAllText(file, JsonSerializer.Serialize(p, options)); }
+        Plan? Load()
+        {
+            try { return File.Exists(file) ? JsonSerializer.Deserialize<Plan>(File.ReadAllText(file)) : null; }
+            catch (JsonException) { return null; }
+        }
+        void Save(Plan p) { Directory.CreateDirectory(folder); p.Updated = Checks.Now; File.WriteAllText(file, JsonSerializer.Serialize(p, options)); }
         object View(Plan p) => new
         {
             goal = p.Goal, updated = p.Updated,

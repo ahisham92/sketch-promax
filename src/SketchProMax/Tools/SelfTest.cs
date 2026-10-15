@@ -538,6 +538,10 @@ internal static class SelfTest
         new("general_notes", _ => new { values = new { codes = "Self-test code" } }),
         new("typical_details", _ => new { kinds = new[] { "lap_schedule", "cover_schedule" } }),
         new("issue_drawings", c => new { sheet_numbers = new[] { "ST-999" }, revision_description = "Self-test issue", folder = Path.Combine(c.Temp, "issue") }, Setup: ["create_sheets"]) { Heavy = true },
+        new("check_model", c => new { folder = c.Temp }) { Heavy = true },
+        new("find_missing_items", c => new { checks = new[] { "rooms_without_door", "columns_without_footing", "untagged_structure", "sheets_without_views" }, folder = c.Temp }),
+        new("model_snapshot", c => new { action = "take", name = "self-test" }) { Heavy = true },
+        new("coordination_progress", c => new { action = "record", test = "Self-test walls/floors", clash_args = new { set_a = new { categories = new[] { "Walls", "Floors" } }, level = c.LevelName, folder = c.Temp } }) { Heavy = true },
         new("link_model", c =>
         {
             var lt = new FilteredElementCollector(c.Doc).OfClass(typeof(RevitLinkType)).Cast<RevitLinkType>().FirstOrDefault(t => t.GetExternalFileReference() != null)

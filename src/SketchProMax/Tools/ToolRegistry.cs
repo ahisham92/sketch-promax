@@ -176,6 +176,10 @@ public sealed class ToolRegistry
         new TypicalDetailsTool(),
         new IssueDrawingsTool(),
         new LinkModelTool(),
+        new CheckModelTool(),
+        new FindMissingItemsTool(),
+        new ModelSnapshotTool(),
+        new CoordinationProgressTool(),
         new CreateRaftTool(),
         new WorkProgressTool(),
 
