@@ -9,7 +9,10 @@ public sealed class GetModelContextTool : IRevitTool
     public string Name => "get_model_context";
     public string Description =>
         "Summarize the open Revit model: title, length unit, active view, levels with elevations, " +
-        "current selection, and element counts for the main categories. Call this first in a new conversation.";
+        "current selection, and element counts for the main categories. Call this first in a new conversation. " +
+        "Each level has 'elevation' (what Revit displays, relative to the level type's Elevation Base: Project Base " +
+        "Point or Survey Point) and 'internalZ' (the model's internal Z). Geometry, bounding boxes, element locations " +
+        "and [x, y, z] points in tools use internal Z; tool inputs named 'elevation' use the displayed value.";
     public string PropertiesJson => "{}";
     public string[] Required => [];
     public bool ModifiesModel => false;
@@ -29,9 +32,26 @@ public sealed class GetModelContextTool : IRevitTool
         var doc = uidoc.Document;
         var view = doc.ActiveView;
 
-        var levels = new FilteredElementCollector(doc).OfClass(typeof(Level)).Cast<Level>()
-            .OrderBy(l => l.Elevation)
-            .Select(l => new { id = l.Id.Value, name = l.Name, elevation = RevitHelpers.FromInternal(doc, l.Elevation) });
+        var levelList = new FilteredElementCollector(doc).OfClass(typeof(Level)).Cast<Level>().OrderBy(l => l.ProjectElevation).ToList();
+        var levels = levelList.Select(l => new
+        {
+            id = l.Id.Value,
+            name = l.Name,
+            elevation = RevitHelpers.FromInternal(doc, l.Elevation),
+            internalZ = RevitHelpers.FromInternal(doc, l.ProjectElevation),
+            elevationBase = ElevationBase(doc, l),
+        });
+        // One line that says how the two relate, so nothing gets placed a base-point height off.
+        var offsets = levelList.Select(l => Math.Round(RevitHelpers.FromInternal(doc, l.ProjectElevation - l.Elevation), 3)).Distinct().ToList();
+        var elevationBasis = offsets.Count switch
+        {
+            0 => null,
+            1 when Math.Abs(offsets[0]) < 1e-9 => "Displayed level elevations equal internal Z (the elevation base is at internal Z 0).",
+            1 => $"Displayed level elevations are internal Z minus {offsets[0]} {RevitHelpers.LengthUnitLabel(doc)} (the elevation base). " +
+                 "Geometry, bounding boxes and [x, y, z] tool points use internal Z; 'elevation' inputs use displayed values.",
+            _ => "Level types use different elevation bases, so displayed elevations are not on one datum; compare internalZ values. " +
+                 "Geometry, bounding boxes and [x, y, z] tool points use internal Z.",
+        };
 
         var counts = Counted.ToDictionary(
             c => c.ToString().Replace("OST_", ""),
@@ -50,10 +70,16 @@ public sealed class GetModelContextTool : IRevitTool
             sketchProMax = Update.Updater.Describe(),
             activeView = new { id = view.Id.Value, name = view.Name, type = view.ViewType.ToString(), level = view.GenLevel?.Name },
             levels,
+            elevationBasis,
             selection,
             counts,
         });
     }
+
+    /// <summary>What the level's displayed elevation is measured from (its type's Elevation Base).</summary>
+    private static string ElevationBase(Document doc, Level level) =>
+        doc.GetElement(level.GetTypeId())?.get_Parameter(BuiltInParameter.LEVEL_RELATIVE_BASE_TYPE)?.AsInteger() == 1
+            ? "Survey Point" : "Project Base Point";
 }
 
 public sealed class QueryElementsTool : IRevitTool

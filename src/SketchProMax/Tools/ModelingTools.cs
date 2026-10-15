@@ -166,6 +166,7 @@ public sealed class CreateLevelsTool : IRevitTool
             created = created.Select(c => new
             {
                 id = c.level.Id.Value, name = c.level.Name, elevation = Elevations.Displayed(doc, c.level),
+                internalZ = RevitHelpers.FromInternal(doc, c.level.ProjectElevation),
                 floorPlanId = c.floorPlan, ceilingPlanId = c.ceilingPlan,
             }).ToList(),
             elevationBaseInternalZ = RevitHelpers.FromInternal(doc, Base(defaultType)),
@@ -751,7 +752,9 @@ public sealed class TransformElementsTool : IRevitTool
     public string Description =>
         "Move or copy elements by an offset [dx, dy, dz] (project units), and/or rotate them about a vertical axis " +
         "through a point. With copy=true the originals stay and the copies are returned. Workshared: elements another user owns are " +
-        "left in place and named with their owner; if Revit refuses the set as a whole, each element is tried on its own.";
+        "left in place and named with their owner; if Revit refuses the set as a whole, each element is tried on its own. Model groups " +
+        "that Revit will not move vertically are moved through their Origin Level Offset instead, or reported. " +
+        "Section/elevation views: use relocate_view_with_detailing.";
     public string PropertiesJson => """
     {
       "element_ids": {"type": "array", "items": {"type": "integer"}},
@@ -773,10 +776,23 @@ public sealed class TransformElementsTool : IRevitTool
         var copy = args.OptBool("copy");
         var deg = args.OptDouble("rotation_degrees") ?? 0;
 
+        var views = ids.Where(id => doc.GetElement(id) is View).Select(id => id.Value).ToList();
+        if (views.Count > 0)
+            return ToolResult.Error($"{string.Join(", ", views)} are views; Revit ignores moving a view by its id. " +
+                                    "Use relocate_view_with_detailing or duplicate_view_to_location, which move the view's marker.");
+
         // Moving or rotating needs ownership; copying only reads the originals. Locked ones are left and named.
         var locked = copy ? new Dictionary<long, string>() : Batch.Locked(doc, ids);
         var work = ids.Where(id => !locked.ContainsKey(id.Value)).ToList();
         if (work.Count == 0) return ToolResult.Error($"Nothing moved: {string.Join("; ", locked.Values.Take(10))}");
+
+        // Revit can silently skip the vertical part of a move for model groups: note where each group is first.
+        var dz = offset.Z;
+        var groupZ = new Dictionary<long, double>();
+        if (Math.Abs(dz) > 1e-9)
+            foreach (var g in work.Select(id => doc.GetElement(id)).OfType<Group>())
+                if (GroupZ(g) is { } gz) groupZ[g.Id.Value] = gz;
+        var groupNotes = new List<string>();
 
         // The rotation centre is fixed before anything moves, so a per-element retry turns everything about the same point.
         XYZ? center = null;
@@ -793,8 +809,10 @@ public sealed class TransformElementsTool : IRevitTool
         ICollection<ElementId> Apply(ICollection<ElementId> set)
         {
             var result = set;
+            var before = set.Select(id => id.Value).Where(groupZ.ContainsKey).ToList();
             if (copy) result = ElementTransformUtils.CopyElements(doc, set, offset);
             else if (!offset.IsZeroLength()) ElementTransformUtils.MoveElements(doc, set, offset);
+            if (before.Count > 0) FixGroupHeights(result, before);
             if (center is not null)
             {
                 var axis = Line.CreateBound(new XYZ(center.X, center.Y, 0), new XYZ(center.X, center.Y, 1));
@@ -833,6 +851,41 @@ public sealed class TransformElementsTool : IRevitTool
             movedWithHost = withHost.Count > 0 ? withHost : null,
             locked = locked.Count > 0 ? locked.Select(kv => new { id = kv.Key, reason = kv.Value }) : null,
             failures = failures.Count > 0 ? failures : null,
+            groups = groupNotes.Count > 0 ? groupNotes : null,
         });
+
+        // For a move, each group against where it was; for a copy, each copied group against the originals of its type.
+        void FixGroupHeights(ICollection<ElementId> result, List<long> originals)
+        {
+            doc.Regenerate();
+            var stuck = new List<string>();
+            foreach (var g in result.Select(id => doc.GetElement(id)).OfType<Group>())
+            {
+                var want = copy
+                    ? originals.Where(o => doc.GetElement(new ElementId(o))?.GetTypeId() == g.GetTypeId()).Select(o => groupZ[o] + dz).ToList()
+                    : groupZ.TryGetValue(g.Id.Value, out var z0) ? new List<double> { z0 + dz } : new List<double>();
+                if (want.Count == 0 || GroupZ(g) is not { } z || want.Any(w => Math.Abs(w - z) < 1e-4)) continue;
+                var missing = want.OrderBy(w => Math.Abs(w - z)).First() - z;
+                var p = g.get_Parameter(BuiltInParameter.GROUP_OFFSET_FROM_LEVEL);
+                if (p is { IsReadOnly: false } && p.Set(p.AsDouble() + missing))
+                {
+                    doc.Regenerate();
+                    if (GroupZ(g) is { } z2 && Math.Abs(z2 - (z + missing)) < 1e-4)
+                    {
+                        groupNotes.Add($"group {g.Id.Value} ('{g.Name}'): Revit ignored the vertical move; applied it through Origin Level Offset.");
+                        continue;
+                    }
+                }
+                stuck.Add($"{g.Id.Value} ('{g.Name}')");
+            }
+            if (stuck.Count > 0)
+                throw new InvalidOperationException(
+                    $"Revit would not move model groups {string.Join(", ", stuck)} vertically, and their Origin Level Offset could not be changed. " +
+                    "Move them horizontally only, then change each group's Reference Level or Origin Level Offset (set_parameters).");
+        }
     }
+
+    /// <summary>A group's origin Z (internal), or its bounding box bottom when it has no location point.</summary>
+    private static double? GroupZ(Group g) =>
+        g.Location is LocationPoint lp ? lp.Point.Z : g.get_BoundingBox(null)?.Min.Z;
 }
