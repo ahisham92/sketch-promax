@@ -185,12 +185,14 @@ internal static class Measure
             case "m2":
             {
                 var area = D(e, BuiltInParameter.HOST_AREA_COMPUTED) * M2;
+                if (area == 0 && InPlace.Is(e)) return new Line(e, 0, "0: " + InPlace.Short + "; measure it by hand", 0, 0);
                 if (area == 0 && len > 0 && Size(e, "b", "Width", "B") is { } w) { area = len * w * M2; return new Line(e, area, $"L {F(len * M)} × b {F(w * M)} = {F(area)} m²", area, 0); }
                 return new Line(e, area, $"area {F(area)} m² (Revit, net of openings)", area, 0);
             }
             default:
             {
                 var net = Math.Max(D(e, BuiltInParameter.HOST_VOLUME_COMPUTED), e.LookupParameter("Volume") is { StorageType: StorageType.Double } vp ? vp.AsDouble() : 0) * M3;
+                if (net == 0 && InPlace.Is(e)) return new Line(e, 0, "0: " + InPlace.Short + "; measure it by hand", 0, 0);
                 // Revit's net volume already deducts joins and openings. Openings at or under the method's threshold go
                 // back in, one by one (joins are always deducted, so nothing is counted in two items).
                 if (voidThreshold > 0 && e is HostObject host && (e is Wall || e is Floor))
@@ -327,10 +329,13 @@ public sealed class BoqCheckTool : IRevitTool
                 var elements = Measure.Elements(doc, item);
                 count = elements.Count;
                 foreach (var e in elements) { if (!usedBy.TryGetValue(e.Id.Value, out var l)) usedBy[e.Id.Value] = l = []; l.Add(item.Ref.Length > 0 ? item.Ref : item.Description); }
-                model = elements.Sum(e => Measure.Of(doc, e, unit, threshold).Qty);
+                var measured = elements.Select(e => Measure.Of(doc, e, unit, threshold)).ToList();
+                model = measured.Sum(l => l.Qty);
+                var inPlace = unit is "m3" or "m2" ? measured.Count(l => l.Qty == 0 && InPlace.Is(l.E)) : 0;
                 var diff = item.Quantity is { } q ? model.Value - q : (double?)null;
                 var pct = item.Quantity is { } q2 && Math.Abs(q2) > 1e-9 ? diff!.Value / q2 * 100 : (double?)null;
                 flag = count == 0 ? "no matching elements" : item.Quantity is null ? "no BOQ quantity" : pct is { } p && Math.Abs(p) > tol ? (p > 0 ? "model more than BOQ" : "BOQ more than model") : "ok";
+                if (inPlace > 0) flag += $"; {inPlace} in-place element(s) measured as 0 ({InPlace.Short})";
                 compared.Add(new { item.Ref, item.Description, unit, boq = item.Quantity, model = Math.Round(model.Value, 3), difference = diff is { } d ? Math.Round(d, 3) : (double?)null, percent = pct is { } pp ? Math.Round(pp, 1) : (double?)null, elements = count, flag });
                 sb.AppendLine(string.Join(",", Measure.Csv(item.Ref), Measure.Csv(item.Description), unit, item.Quantity?.ToString(CultureInfo.InvariantCulture), Math.Round(model.Value, 3).ToString(CultureInfo.InvariantCulture),
                     diff is { } d2 ? Math.Round(d2, 3).ToString(CultureInfo.InvariantCulture) : "", pct is { } p2 ? Math.Round(p2, 1).ToString(CultureInfo.InvariantCulture) : "", count, Measure.Csv(flag)));
@@ -344,7 +349,7 @@ public sealed class BoqCheckTool : IRevitTool
 
         // Double counting: unjoined overlapping concrete.
         var doubles = new List<(long a, string aType, long b, string bType, double m3)>();
-        var pairsCapped = false; var doubleTotal = 0.0; var doubleByPair = new Dictionary<string, double>();
+        var pairsCapped = false; var doubleTotal = 0.0; var doubleSkippedInPlace = 0; var doubleByPair = new Dictionary<string, double>();
         if (args.OptBool("double_counting", true))
         {
             var cats = new[] { BuiltInCategory.OST_StructuralFraming, BuiltInCategory.OST_StructuralColumns, BuiltInCategory.OST_Floors, BuiltInCategory.OST_Walls, BuiltInCategory.OST_StructuralFoundation };
@@ -362,6 +367,8 @@ public sealed class BoqCheckTool : IRevitTool
                 return solids[e.Id.Value] = u;
             }
             var pairs = 0;
+            doubleSkippedInPlace = concrete.Count(InPlace.Is);
+            concrete = concrete.Where(e => !InPlace.Is(e)).ToList();
             foreach (var a in concrete)
             {
                 var ab = a.get_BoundingBox(null);
@@ -398,7 +405,8 @@ public sealed class BoqCheckTool : IRevitTool
             items = compared.Count, method, file, compared = compared.Take(150),
             inSeveralItems = usedBy.Where(kv => kv.Value.Count > 1).GroupBy(kv => string.Join(" + ", kv.Value)).Select(g => new { items = g.Key, elements = g.Count() }).Take(20),
             pairsCapped = pairsCapped ? "Stopped the overlap search at 200,000 pairs; run per level for the rest." : null,
-            doubleCounting = new { totalM3 = Math.Round(doubleTotal, 2), byPair = doubleByPair.Select(kv => new { pair = kv.Key, m3 = Math.Round(kv.Value, 2) }).OrderByDescending(x => x.m3), sample = doubles.Take(30).Select(d => new { d.a, d.aType, d.b, d.bType, overlapM3 = d.m3 }), fix = "Join the overlapping elements (join_elements) so Revit deducts the overlap, or decide which item carries it." },
+            doubleCounting = new { totalM3 = Math.Round(doubleTotal, 2), byPair = doubleByPair.Select(kv => new { pair = kv.Key, m3 = Math.Round(kv.Value, 2) }).OrderByDescending(x => x.m3), sample = doubles.Take(30).Select(d => new { d.a, d.aType, d.b, d.bType, overlapM3 = d.m3 }), fix = "Join the overlapping elements (cut_geometry with action join) so Revit deducts the overlap, or decide which item carries it.",
+                notChecked = doubleSkippedInPlace > 0 ? $"{doubleSkippedInPlace} in-place element(s) not checked for overlap: {InPlace.Short}." : null },
             note = "Model quantities are as modelled; check the item mapping with boq_item_breakdown before trusting a difference.",
         });
     }
@@ -473,6 +481,8 @@ public sealed class BoqItemBreakdownTool : IRevitTool
             byType = lines.GroupBy(l => Measure.TypeName(l.E)).Select(g => new { type = g.Key, quantity = Math.Round(g.Sum(l => l.Qty), 3), elements = g.Count() }),
             sample = lines.Take(20).Select(l => new { id = l.E.Id.Value, level = Measure.LevelName(doc, l.E), type = Measure.TypeName(l.E), quantity = Math.Round(l.Qty, 4), working = l.Working }),
             selected = args.OptBool("select") ? lines.Count : (int?)null,
+            inPlace = lines.Where(l => l.Qty == 0 && InPlace.Is(l.E)).Select(l => l.E.Id.Value).ToList() is { Count: > 0 } ip
+                ? new { ids = ip.Take(50), note = $"{ip.Count} in-place element(s) measured as 0: {InPlace.Short}. Measure them by hand." } : null,
         });
     }
 }

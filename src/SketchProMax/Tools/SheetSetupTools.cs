@@ -770,6 +770,7 @@ public sealed class ExportQuantitiesTool : IRevitTool
             Math.Round(UnitUtils.ConvertFromInternalUnits(v, doc.GetUnits().GetFormatOptions(spec).GetUnitTypeId()), 3);
 
         var rows = new Dictionary<string, (string cat, string fam, string type, string[] keys, int count, double len, double area, double vol)>();
+        var inPlaceNoQuantity = new List<long>();
         foreach (var bic in cats)
         {
             foreach (var e in new FilteredElementCollector(doc).OfCategory(bic).WhereElementIsNotElementType())
@@ -788,6 +789,7 @@ public sealed class ExportQuantitiesTool : IRevitTool
                 var area = D(BuiltInParameter.HOST_AREA_COMPUTED);
                 var vol = D(BuiltInParameter.HOST_VOLUME_COMPUTED);
                 if (vol == 0 && e.LookupParameter("Volume") is { StorageType: StorageType.Double } vp) vol = vp.AsDouble();
+                if (vol == 0 && area == 0 && InPlace.Is(e)) inPlaceNoQuantity.Add(e.Id.Value);
                 var catName = e.Category?.Name ?? bic.ToString();
                 var k = string.Join("|", new[] { catName, type?.FamilyName ?? "", type?.Name ?? "" }.Concat(keys));
                 rows.TryGetValue(k, out var r);
@@ -818,7 +820,15 @@ public sealed class ExportQuantitiesTool : IRevitTool
             category = g.Key, count = g.Sum(r => r.count),
             length = Conv(g.Sum(r => r.len), SpecTypeId.Length), area = Conv(g.Sum(r => r.area), SpecTypeId.Area), volume = Conv(g.Sum(r => r.vol), SpecTypeId.Volume),
         });
-        return ToolResult.Ok(new { file, rows = ordered.Count, units = new { length = lengthUnit, area = areaUnit, volume = volUnit }, totals });
+        return ToolResult.Ok(new
+        {
+            file, rows = ordered.Count, units = new { length = lengthUnit, area = areaUnit, volume = volUnit }, totals,
+            inPlace = inPlaceNoQuantity.Count == 0 ? null : new
+            {
+                count = inPlaceNoQuantity.Count, ids = inPlaceNoQuantity.Take(50),
+                note = "These in-place families are counted but carry no volume or area: Revit doesn't expose in-place geometry to add-ins. Measure them by hand or remodel them as system/loadable elements.",
+            },
+        });
     }
 }
 

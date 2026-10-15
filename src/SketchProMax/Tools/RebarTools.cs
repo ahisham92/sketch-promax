@@ -70,6 +70,7 @@ internal static class Rebars
     public static Element Host(Document doc, long id)
     {
         var e = doc.GetElement(new ElementId(id)) ?? throw new ArgumentException($"No element {id}.");
+        if (InPlace.Is(e)) throw new ArgumentException(InPlace.Why(e));
         if (!RebarHostData.IsValidHost(e))
             throw new ArgumentException($"{e.Category?.Name} {id} can't hold rebar. It must be a structural concrete element (structural floor, wall, beam, column or foundation with a concrete material).");
         return e;
@@ -88,7 +89,7 @@ internal static class Rebars
             double a = v.DotProduct(d), b = v.DotProduct(w), c = v.DotProduct(u);
             d0 = Math.Min(d0, a); d1 = Math.Max(d1, a); w0 = Math.Min(w0, b); w1 = Math.Max(w1, b); u0 = Math.Min(u0, c); u1 = Math.Max(u1, c);
         }
-        if (!any) throw new ArgumentException($"Element {host.Id.Value} has no solid geometry.");
+        if (!any) throw new ArgumentException(InPlace.Is(host) ? InPlace.Why(host) : $"Element {host.Id.Value} has no solid geometry.");
         (f.D0, f.D1, f.W0, f.W1, f.U0, f.U1) = (d0, d1, w0, w1, u0, u1);
         return f;
     }
