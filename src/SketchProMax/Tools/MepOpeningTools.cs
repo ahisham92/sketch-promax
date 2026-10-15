@@ -300,7 +300,7 @@ public sealed class CreateMepOpeningsTool : IRevitTool
         FamilyInstance instance;
         var placement = symbol.Family.FamilyPlacementType;
         var level = doc.GetElement(x.Host.LevelId) as Level
-                    ?? new FilteredElementCollector(doc).OfClass(typeof(Level)).Cast<Level>().OrderBy(l => Math.Abs(l.Elevation - x.Center.Z)).First();
+                    ?? new FilteredElementCollector(doc).OfClass(typeof(Level)).Cast<Level>().OrderBy(l => Math.Abs(l.ProjectElevation - x.Center.Z)).First();
         double w, h;
         if (x.Host is Wall { Location: LocationCurve { Curve: Line wallLine } } wall && placement == FamilyPlacementType.OneLevelBasedHosted)
         {

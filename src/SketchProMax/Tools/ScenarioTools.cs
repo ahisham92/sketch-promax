@@ -149,7 +149,7 @@ public sealed class CreateRaftTool : IRevitTool
         return ToolResult.Ok(new
         {
             id = raft.Id.Value, type = type.Name, foundationSlab = type.IsFoundationSlab, under = floor.Id.Value,
-            topElevation = RevitHelpers.FromInternal(doc, raftTop), bottomElevation = RevitHelpers.FromInternal(doc, raftTop - thickness),
+            topElevation = Elevations.FromInternalZ(doc, raftTop), bottomElevation = Elevations.FromInternalZ(doc, raftTop - thickness),
             otherAreas = profile.Count > 1 && profile.Skip(1).Any(l => Area(l) > Area(outer) * 0.05) ? "The floor's sketch has more than one loop; only the largest outline was used (holes are ignored for a raft). Check separate floor areas." : null,
             next = "Reinforce it with reinforce_slab_wall (cover 75 mm) and show it with rebar_section / a foundation plan.",
         });

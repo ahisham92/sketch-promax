@@ -153,7 +153,8 @@ public sealed class CreatePilesTool : IRevitTool
     {
         var doc = app.ActiveUIDocument.Document;
         double L(string k) => RevitHelpers.ToInternal(doc, args.Double(k));
-        var size = L("size"); var top = L("cutoff_level"); var toe = L("toe_level");
+        // Levels are elevations as Revit displays them (relative to the level elevation base), not internal Z.
+        var size = L("size"); var top = Elevations.ToInternalZ(doc, args.Double("cutoff_level")); var toe = Elevations.ToInternalZ(doc, args.Double("toe_level"));
         if (toe >= top) throw new ArgumentException("toe_level must be below cutoff_level.");
         var shape = args.OptString("shape") ?? "round";
         var wall = args.OptDouble("wall_thickness") is { } wt ? RevitHelpers.ToInternal(doc, wt) : 0;
@@ -255,8 +256,11 @@ public sealed class MarineStructureTool : IRevitTool
         var kind = args.String("kind");
         var p = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
         if (args.Has("params")) foreach (var x in args.Raw["params"].EnumerateObject()) p[x.Name] = x.Value.Clone();
-        double L(string k, double? fallbackMm = null) => p.TryGetValue(k, out var v) ? RevitHelpers.ToInternal(doc, v.GetDouble())
-            : fallbackMm is { } f ? Shapes.Mm(f) : throw new ArgumentException($"{kind} needs params.{k}.");
+        // "*_level" params are elevations as Revit displays them (relative to the level elevation base), not internal Z.
+        var baseZ = Elevations.BaseZ(doc);
+        double L(string k, double? fallbackMm = null) => (k.EndsWith("_level", StringComparison.Ordinal) ? baseZ : 0)
+            + (p.TryGetValue(k, out var v) ? RevitHelpers.ToInternal(doc, v.GetDouble())
+            : fallbackMm is { } f ? Shapes.Mm(f) : throw new ArgumentException($"{kind} needs params.{k}."));
         double N(string k, double fallback) => p.TryGetValue(k, out var v) ? v.GetDouble() : fallback;
         var alignment = args.Has("alignment") ? args.Raw["alignment"].EnumerateArray().Select(x => Modeling.Point(doc, x)).ToList() : [];
         var made = new List<object>();
@@ -570,7 +574,7 @@ public sealed class PortFurnitureTool : IRevitTool
         var edge = args.Raw["edge"].EnumerateArray().Select(x => Modeling.Point(doc, x)).ToList();
         if (edge.Count < 2) throw new ArgumentException("edge needs at least two points.");
         double Opt(string k, double mm) => args.OptDouble(k) is { } v ? RevitHelpers.ToInternal(doc, v) : Shapes.Mm(mm);
-        var cope = RevitHelpers.ToInternal(doc, args.Double("cope_level"));
+        var cope = Elevations.ToInternalZ(doc, args.Double("cope_level"));
         var total = Shapes.Length(edge);
         var made = new List<long>();
         var prefix = item switch { "bollard" => "BL", "fender" => "FD", "ladder" => "LD", "cleat" => "CL", _ => "CR" };
@@ -628,13 +632,13 @@ public sealed class PortFurnitureTool : IRevitTool
                     }
                     case "fender":
                     {
-                        var dia = Opt("size", 1000); var low = args.OptDouble("low_level") is { } lw ? RevitHelpers.ToInternal(doc, lw) : cope - Shapes.Mm(3000);
+                        var dia = Opt("size", 1000); var low = args.OptDouble("low_level") is { } lw ? Elevations.ToInternalZ(doc, lw) : cope - Shapes.Mm(3000);
                         solids.Add(Shapes.Cylinder(new XYZ(o.X, o.Y, low) - land * (dia / 2), XYZ.BasisZ, dia / 2, cope - low));
                         break;
                     }
                     case "ladder":
                     {
-                        var low = args.OptDouble("low_level") is { } lw ? RevitHelpers.ToInternal(doc, lw) : cope - Shapes.Mm(3000);
+                        var low = args.OptDouble("low_level") is { } lw ? Elevations.ToInternalZ(doc, lw) : cope - Shapes.Mm(3000);
                         var bar = Shapes.Mm(40); var half = Shapes.Mm(225); var c = o - land * Shapes.Mm(150);
                         solids.Add(Shapes.Block(c, dir, land, -half - bar, -half, -bar / 2, bar / 2, low, cope + Shapes.Mm(1000)));
                         solids.Add(Shapes.Block(c, dir, land, half, half + bar, -bar / 2, bar / 2, low, cope + Shapes.Mm(1000)));
@@ -696,7 +700,7 @@ public sealed class DesignVesselTool : IRevitTool
         var c = Modeling.Point(doc, args.Raw["position"]);
         var heading = (args.OptDouble("heading") ?? 0) * Math.PI / 180;
         XYZ d = new(Math.Cos(heading), Math.Sin(heading), 0), w = XYZ.BasisZ.CrossProduct(d);
-        var water = args.OptDouble("water_level") is { } wl ? RevitHelpers.ToInternal(doc, wl) : 0;
+        var water = args.OptDouble("water_level") is { } wl ? Elevations.ToInternalZ(doc, wl) : Elevations.BaseZ(doc);
         double keel = water - draft, deck = keel + depth;
         var o = new XYZ(c.X, c.Y, 0);
         // Hull in plan: parallel midbody, bow taper to a point, square transom; extruded keel to deck.
@@ -773,7 +777,7 @@ public sealed class VesselCollisionCheckTool : IRevitTool
         double ce = args.OptDouble("ce") ?? 0.5, cm = args.OptDouble("cm") ?? 1.5;
         var energy = 0.5 * disp * v * v * ce * cm; // kJ with t and m/s, Cs = Cc = 1
         var collisionKn = 1.2e5 * v * Math.Sqrt(dwt) / 1000; // AASHTO (SI): N with V in m/s and DWT in tonnes
-        var water = args.OptDouble("water_level") is { } wl ? RevitHelpers.ToInternal(doc, wl) : 0;
+        var water = args.OptDouble("water_level") is { } wl ? Elevations.ToInternalZ(doc, wl) : Elevations.BaseZ(doc);
         var zone = args.OptDouble("zone_width") is { } zw ? RevitHelpers.ToInternal(doc, zw) : Math.Max(3 * beamM, 50) / 0.3048;
         List<XYZ> line = args.Has("channel") ? args.Raw["channel"].EnumerateArray().Select(x => Modeling.Point(doc, x)).ToList()
             : vesselAt is { } va ? [va] : throw new ArgumentException("Give channel or vessel_id.");
