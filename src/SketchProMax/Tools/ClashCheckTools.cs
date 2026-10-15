@@ -19,13 +19,40 @@ internal sealed class Placed(Element element, Transform transform, string source
     public XYZ Min = XYZ.Zero, Max = XYZ.Zero;
     private List<Solid>? _solids;
 
-    public string Key => $"{Source}:{Element.Id.Value}";
+    /// <summary>The unattached voids of a void family instance, rebuilt as positive solids (Revit returns no void geometry).</summary>
+    public bool IsVoid { get; private set; }
+    private List<Solid>? _voidSolids;
+
+    /// <summary>Solids with negative volume Revit returned (void or inside-out geometry), left out of the boolean checks.</summary>
+    public int NegativeSolids { get; private set; }
+
+    public string Key => $"{Source}:{Element.Id.Value}" + (IsVoid ? "#void" : "");
+
+    /// <summary>A second entry for a void family instance whose voids were rebuilt as positive solids (model coordinates).</summary>
+    public static Placed ForVoid(Placed of, List<Solid> solids)
+    {
+        var p = new Placed(of.Element, Transform.Identity, of.Source, of.InHost) { IsVoid = true, _voidSolids = solids };
+        double x0 = double.MaxValue, y0 = double.MaxValue, z0 = double.MaxValue, x1 = double.MinValue, y1 = double.MinValue, z1 = double.MinValue;
+        foreach (var s in solids)
+        {
+            var bb = s.GetBoundingBox();
+            foreach (var c in new[] { bb.Min, bb.Max, new XYZ(bb.Min.X, bb.Max.Y, bb.Min.Z), new XYZ(bb.Max.X, bb.Min.Y, bb.Max.Z) })
+            {
+                var w = bb.Transform.OfPoint(c);
+                x0 = Math.Min(x0, w.X); y0 = Math.Min(y0, w.Y); z0 = Math.Min(z0, w.Z);
+                x1 = Math.Max(x1, w.X); y1 = Math.Max(y1, w.Y); z1 = Math.Max(z1, w.Z);
+            }
+        }
+        p.Min = new XYZ(x0, y0, z0); p.Max = new XYZ(x1, y1, z1);
+        return p;
+    }
 
     /// <summary>Drops the cached solids (for elements that won't be compared again).</summary>
-    public void Release() => _solids = null;
+    public void Release() { if (!IsVoid) _solids = null; }
 
     public List<Solid> Solids()
     {
+        if (IsVoid) return _voidSolids!;
         if (_solids != null) return _solids;
         _solids = [];
         Collect(Element.get_Geometry(new Options { DetailLevel = ViewDetailLevel.Fine }));
@@ -38,10 +65,12 @@ internal sealed class Placed(Element element, Transform transform, string source
             foreach (var o in g)
                 if (o is GeometryInstance gi) Collect(gi.GetInstanceGeometry());
                 else if (o is Solid { Volume: > 1e-6 } s) _solids!.Add(s);
+                // A negative volume is void (or inside-out) geometry: intersecting it gives nonsense such as whole-floor volumes.
+                else if (o is Solid { Volume: < -1e-6 }) NegativeSolids++;
         }
     }
 
-    public string Describe() => $"{Element.Category?.Name} {Element.Id.Value}" + (InHost ? "" : $" in {Source}") +
+    public string Describe() => (IsVoid ? "void of " : "") + $"{Element.Category?.Name} {Element.Id.Value}" + (InHost ? "" : $" in {Source}") +
                                 (Element is FamilyInstance fi ? $" ({fi.Symbol.FamilyName}: {fi.Symbol.Name})" : Element.Name is { Length: > 0 } n ? $" ({n})" : "");
 }
 
@@ -124,7 +153,9 @@ public sealed class FindClashesTool : IRevitTool
         "Clash detection between two sets of elements, each from this model or a linked model (other trades, or one link " +
         "against another), or inside one set: hard clashes from real solid overlap, or clearance clashes within a distance. " +
         "Skips elements hosted in or joined to each other. Writes a CSV of every clash and, with bcf, a BCF file for " +
-        "ACC/Navisworks. Use on a level or a few categories at a time on big models.";
+        "ACC/Navisworks. Void families are checked with their voids rebuilt (an element running into a void that " +
+        "doesn't cut it is a 'void' clash); in-place families whose geometry Revit doesn't expose are listed as not " +
+        "checkable. Use on a level or a few categories at a time on big models.";
     public string PropertiesJson => """
     {
       "set_a": {"type": "object", "properties": {"source": {"type": "string", "description": "'model' or a link name."}, "categories": {"type": "array", "items": {"type": "string"}}}, "required": ["categories"]},
@@ -134,7 +165,8 @@ public sealed class FindClashesTool : IRevitTool
       "level": {"type": "string", "description": "Only elements whose box spans this level's height band (this level up to the next)."},
       "limit": {"type": "integer", "description": "Max clashes to report (default 1000)."},
       "bcf": {"type": "boolean", "description": "Also write a BCF file with one issue per clash (first 200)."},
-      "folder": {"type": "string"}
+      "folder": {"type": "string"},
+      "voids": {"type": "string", "enum": ["rebuild", "skip"], "description": "Void family instances (unattached voids): 'rebuild' (default) rebuilds their voids as solids from the family and reports elements running into a void that doesn't cut them (kind 'void'); 'skip' leaves voids out. In-place voids can't be read and are listed as not checkable."}
     }
     """;
     public string[] Required => ["set_a"];
@@ -167,6 +199,38 @@ public sealed class FindClashesTool : IRevitTool
             setA = setA.Where(In).ToList();
             setB = same ? setA : setB.Where(In).ToList();
         }
+        // Voids and in-place families, handled up front instead of giving wrong or empty results.
+        var voidMode = args.OptString("voids") ?? "rebuild";
+        var notCheckable = new List<string>(); var voidsRebuilt = 0; var voidProblems = new List<string>();
+        var voidCache = new Dictionary<string, List<Solid>?>();
+        List<Placed> Prepare(List<Placed> set)
+        {
+            var kept = new List<Placed>();
+            foreach (var p in set)
+            {
+                if (InPlace.Is(p.Element) && p.Solids().Count == 0)
+                {
+                    if (notCheckable.Count < 100) notCheckable.Add($"{p.Describe()}: {InPlace.Short} (an in-place void or solid can't be clash-checked; check it in Revit or Navisworks)");
+                    continue;
+                }
+                kept.Add(p);
+                if (p.Element is FamilyInstance fi && !InPlace.Is(fi) && InstanceVoidCutUtils.IsVoidInstanceCuttingElement(fi))
+                {
+                    if (voidMode == "skip") continue;
+                    if (voidsRebuilt >= 100) { if (voidProblems.Count < 30) voidProblems.Add($"{p.Describe()}: not rebuilt (100 voids per run)"); continue; }
+                    var solids = VoidSolids.Rebuild(doc, fi, voidCache, out var why);
+                    if (solids is null) { if (voidProblems.Count < 30) voidProblems.Add($"{p.Describe()}: {why}"); continue; }
+                    if (!p.Transform.IsIdentity) solids = solids.Select(x => SolidUtils.CreateTransformed(x, p.Transform)).ToList();
+                    if (p.Solids().Count == 0) kept.Remove(p); // a void-only family: only its rebuilt void takes part
+                    kept.Add(Placed.ForVoid(p, solids));
+                    voidsRebuilt++;
+                }
+            }
+            return kept;
+        }
+        setA = Prepare(setA);
+        setB = same ? setA : Prepare(setB);
+
         var index = new BoxIndex<Placed>(10);
         foreach (var p in setB) index.Add(p, p.Min, p.Max);
 
@@ -190,10 +254,10 @@ public sealed class FindClashesTool : IRevitTool
                     if (pa.Solids().Count == 0 || pb.Solids().Count == 0) meshOnly++;
                     var (hit, depth, at, failed) = Hard(pa, pb, minOverlap);
                     if (failed) solidFailures++;
-                    if (hit) { clashes.Add((pa, pb, "hard", depth, at)); if (clashes.Count >= limit) break; continue; }
+                    if (hit) { clashes.Add((pa, pb, pa.IsVoid || pb.IsVoid ? "void" : "hard", depth, at)); if (clashes.Count >= limit) break; continue; }
                 }
                 // Clearance: boxes apart but closer than the clearance (touching faces like a wall on a slab don't count).
-                if (clearance > 0 && boxDepth < -1 / 304.8)
+                if (clearance > 0 && boxDepth < -1 / 304.8 && !pa.IsVoid && !pb.IsVoid)
                     clashes.Add((pa, pb, "clearance", 0, (lo + hi) / 2));
                 if (clashes.Count >= limit) break;
             }
@@ -236,6 +300,14 @@ public sealed class FindClashesTool : IRevitTool
             note = truncated ? "Stopped after 200,000 candidate pairs; narrow by level or categories." : clashes.Count >= limit ? $"Stopped at the limit of {limit} clashes." : null,
             geometryFallbacks = solidFailures > 0 ? $"{solidFailures} pairs were judged by their boxes because Revit couldn't intersect their solids." : null,
             meshOnly = meshOnly > 0 ? $"{meshOnly} candidate pairs involved elements with no solids (meshes, e.g. from IFC) and can only clash by clearance." : null,
+            voids = clashes.Any(c => c.kind == "void") || voidsRebuilt > 0 || voidProblems.Count > 0 ? new
+            {
+                rebuilt = voidsRebuilt,
+                meaning = "A 'void' clash is an element running into a void family's void that does not cut it (a void that cuts an element is by design and skipped).",
+                notRebuilt = voidProblems.Count > 0 ? voidProblems : null,
+            } : null,
+            negativeSolidsSkipped = setA.Concat(setB).Distinct().Sum(p => p.NegativeSolids) is var neg and > 0 ? $"{neg} void/inside-out solids (negative volume) were left out of the boolean checks." : null,
+            notCheckable = notCheckable.Count > 0 ? notCheckable : null,
         });
     }
 
@@ -243,6 +315,16 @@ public sealed class FindClashesTool : IRevitTool
     private static bool Related(Placed a, Placed b)
     {
         if (a.Element.Document != b.Element.Document) return false;
+        if (a.Element.Id == b.Element.Id) return true; // an element and its own rebuilt void
+        if (a.IsVoid || b.IsVoid)
+        {
+            var (v, other) = a.IsVoid ? (a, b) : (b, a);
+            try { if (InstanceVoidCutUtils.InstanceVoidCutExists(other.Element, v.Element)) return true; }
+            catch (Autodesk.Revit.Exceptions.ArgumentException) { }
+            // A face-based void hosted on the element cuts it by design too.
+            if (v.Element is FamilyInstance hv && hv.Host?.Id == other.Element.Id) return true;
+            return false;
+        }
         if (a.Element is FamilyInstance fa && (fa.Host?.Id == b.Element.Id || fa.SuperComponent?.Id == b.Element.Id)) return true;
         if (b.Element is FamilyInstance fb && (fb.Host?.Id == a.Element.Id || fb.SuperComponent?.Id == a.Element.Id)) return true;
         try { return JoinGeometryUtils.AreElementsJoined(a.Element.Document, a.Element, b.Element); }
@@ -261,6 +343,8 @@ public sealed class FindClashesTool : IRevitTool
                 try { x = BooleanOperationsUtils.ExecuteBooleanOperation(sa, sb, BooleanOperationsType.Intersect); }
                 catch (Autodesk.Revit.Exceptions.ApplicationException) { failed++; continue; }
                 if (x is null || x.Volume < minVolume) continue;
+                // An intersection bigger than either solid is a broken boolean (typically void or inside-out geometry): don't trust it.
+                if (x.Volume > Math.Min(sa.Volume, sb.Volume) * 1.001 + 1e-9) { failed++; continue; }
                 var bb = x.GetBoundingBox();
                 var lo = bb.Transform.OfPoint(bb.Min); var hi = bb.Transform.OfPoint(bb.Max);
                 var depth = Math.Min(Math.Abs(hi.X - lo.X), Math.Min(Math.Abs(hi.Y - lo.Y), Math.Abs(hi.Z - lo.Z)));

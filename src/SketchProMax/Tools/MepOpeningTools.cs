@@ -58,6 +58,15 @@ public sealed class CreateMepOpeningsTool : IRevitTool
         var hostFilter = new ElementMulticategoryFilter(hostCats);
         var solids = new Dictionary<long, List<Solid>>();
 
+        // In-place hosts: Revit gives add-ins no geometry for them, so crossings through them can't be found. Say so.
+        var inPlaceHosts = new FilteredElementCollector(doc).WherePasses(hostFilter).OfClass(typeof(FamilyInstance)).Where(InPlace.Is)
+            .Where(e => levelFilter is null || e.LevelId == levelFilter).Select(e => e.Id.Value).ToList();
+        var inPlaceNote = inPlaceHosts.Count == 0 ? null : new
+        {
+            ids = inPlaceHosts.Take(50),
+            note = $"{inPlaceHosts.Count} in-place host(s) not checked: {InPlace.Short}. Check services through them by hand, or remodel them as walls/floors/beams.",
+        };
+
         var crossings = new List<Crossing>();
         foreach (var (sourceDoc, transform, sourceName) in Sources(doc, args.StringList("sources")))
             foreach (var mep in MepCurves(sourceDoc, services))
@@ -92,6 +101,7 @@ public sealed class CreateMepOpeningsTool : IRevitTool
                     at = Coordinates.Out(doc, x.Center), size = $"{RevitHelpers.FromInternal(doc, x.Width)} x {RevitHelpers.FromInternal(doc, x.Height)}",
                     alreadyOpen = AlreadyOpen(x.Center),
                 }),
+                inPlaceHostsNotChecked = inPlaceNote,
             });
         }
 
@@ -132,7 +142,7 @@ public sealed class CreateMepOpeningsTool : IRevitTool
         }
         t.Commit();
         created.RemoveAll(id => swallow.Deleted.Contains(id));
-        return ToolResult.Ok(new { crossings = crossings.Count, created = created.Count, alreadyOpen = skipped, ids = created.Take(50), removedByRevit = swallow.Deleted.Take(50), problems = problems.Distinct() });
+        return ToolResult.Ok(new { crossings = crossings.Count, created = created.Count, alreadyOpen = skipped, ids = created.Take(50), removedByRevit = swallow.Deleted.Take(50), problems = problems.Distinct(), inPlaceHostsNotChecked = inPlaceNote });
     }
 
     private static IEnumerable<(Document Doc, Transform Transform, string Name)> Sources(Document doc, List<string> wanted)
