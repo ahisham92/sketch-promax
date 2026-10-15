@@ -210,6 +210,16 @@ internal static class Icons
                 dc.DrawEllipse(amberFill, null, new Point(16, 16), 2, 2);
                 break;
             }
+            case "pane": // window with a docked side panel listing steps
+                Path(dc, "M8,7 H24 A2,2 0 0 1 26,9 V23 A2,2 0 0 1 24,25 H8 A2,2 0 0 1 6,23 V9 A2,2 0 0 1 8,7 Z", white);
+                Path(dc, "M18,7 V25", white);
+                Path(dc, "M20.5,12 H23.5 M20.5,16 H23.5 M20.5,20 H23.5", amber);
+                break;
+            case "field": // clipboard with a tick
+                Path(dc, "M12,8 H9 A1,1 0 0 0 8,9 V26 A1,1 0 0 0 9,27 H23 A1,1 0 0 0 24,26 V9 A1,1 0 0 0 23,8 H20", white);
+                Path(dc, "M12.5,5.5 H19.5 V10 H12.5 Z", white);
+                Path(dc, "M11.5,18 L15,21.5 L21,14.5", amber);
+                break;
             case "help":
                 Path(dc, "M11.5,12 A4.5,4.5 0 1 1 18,16 C16.5,17 16,18 16,20", white);
                 dc.DrawEllipse(amberFill, null, new Point(16, 24.5), 2, 2);

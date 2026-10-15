@@ -64,6 +64,8 @@ public sealed class ModelAvailable : IExternalCommandAvailability
 [Transaction(TransactionMode.Manual)] public sealed class UpdateCheckCommand : ForwardCommand { protected override string Name => "update-check"; }
 [Transaction(TransactionMode.Manual)] public sealed class WhatsNewCommand : ForwardCommand { protected override string Name => "whats-new"; }
 [Transaction(TransactionMode.Manual)] public sealed class SettingsCommand : ForwardCommand { protected override string Name => "settings"; }
+[Transaction(TransactionMode.Manual)] public sealed class PaneCommand : ForwardCommand { protected override string Name => "pane"; }
+[Transaction(TransactionMode.Manual)] public sealed class FieldTestCommand : ForwardCommand { protected override string Name => "field-test"; }
 [Transaction(TransactionMode.Manual)] public sealed class HelpCommand : ForwardCommand { protected override string Name => "help"; }
 
 // Quick tools: a pulldown item needs its own command class, so there is a fixed set of slots, given a recipe or a learned

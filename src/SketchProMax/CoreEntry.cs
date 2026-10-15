@@ -13,7 +13,7 @@ namespace SketchProMax;
 ///   Start / Stop       start or let go of everything this core hooks into Revit; Stop leaves it restartable.
 ///   Shutdown           Revit is closing.
 ///   Command(name, app) a ribbon button; returns a Revit Result as int.
-///   Query(key)         a short text answer for the ribbon, or a notice about switching versions.
+///   Query(key)         a short text answer for the ribbon or the dockable pane, or a notice about switching versions.
 /// All are called on Revit's main thread; Start, Stop and Command in a valid Revit API context.
 /// </summary>
 public static class CoreEntry
@@ -44,6 +44,9 @@ public static class CoreEntry
             "whats-new" => CoreCommands.OpenUrl(CoreCommands.ReleasesUrl),
             "settings" => CoreCommands.Settings(),
             "help" => CoreCommands.OpenUrl(CoreCommands.HelpUrl),
+            // The loader's dockable pane (0.27+): select and zoom to element ids, stop the running job quietly.
+            "pane-cancel" => Pane.Cancel(),
+            _ when name.StartsWith("pane-select\t", StringComparison.Ordinal) => Pane.Select(app, name.Substring("pane-select\t".Length)),
             _ when name.StartsWith("quick\t", StringComparison.Ordinal) && name.Split('\t') is { Length: 3 } q => QuickTools.Run(app, q[1], q[2]),
             _ => Unknown(name),
         };
@@ -75,6 +78,7 @@ public static class CoreEntry
             case "update": return UpdateLine();
             case "quick": return QuickTools.List();
             case "quick-reload": return QuickTools.List(force: true);
+            case "pane": return Pane.Snapshot(); // the dockable pane's content, see UI/Pane.cs for the format
             case "swapped":
             {
                 // The loader switched from this core to version <arg>; this core is stopped. Finish its update window.

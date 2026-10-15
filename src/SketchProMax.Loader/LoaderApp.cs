@@ -49,6 +49,7 @@ internal static class Host
     private static int _lastScan = Environment.TickCount - 120000;
     private static int _lastRefresh;
     private static IntPtr _mainWindow;
+    private static UIApplication? _uiApp;
 
     public static CoreHandle? Core => _core;
     public static string Year => _year;
@@ -72,6 +73,9 @@ internal static class Host
 #endif
         try { Ribbon.Build(application); }
         catch (Exception ex) { _bootError = "The ribbon could not be built: " + ex.Message; }
+        // Dockable panes can only be registered now, during startup; the pane gets its content from whichever core runs.
+        try { PaneHost.Register(application); }
+        catch (Exception) { /* no pane this session: the Pane button says so */ }
 
         application.Idling += OnIdling;
         // Revit raises Idling once per idle spell, so the ribbon's live text runs on a UI timer instead.
@@ -97,6 +101,8 @@ internal static class Host
     private static void OnIdling(object? sender, IdlingEventArgs e)
     {
         if (sender is not UIApplication app) return;
+        _uiApp = app;
+        PaneHost.EnsureEvent();
         if (_core is null)
         {
             if (!_booted) Boot(app);
@@ -251,11 +257,14 @@ internal static class Host
     /// <summary>Runs a ribbon command. Reached through an AppDomain delegate, so any copy of the command classes finds it.</summary>
     public static int Dispatch(string name, UIApplication app)
     {
+        _uiApp = app;
         if (name == "quick-refresh")
         {
             Ribbon.RefreshQuickTools(reload: true);
             return 0;
         }
+        // The dockable pane belongs to the loader, so its button works with any core, or none yet.
+        if (name == "pane") return PaneHost.Toggle(app);
         if (_core is null) Boot(app);
         if (_core is null)
         {
@@ -282,6 +291,17 @@ internal static class Host
 
     /// <summary>Asks the running core; empty while none is running.</summary>
     public static string Query(string key) => _core?.Query(key) ?? "";
+
+    /// <summary>
+    /// The pane's Cancel button. Asking a job to stop needs no Revit API, so it goes to the core straight away rather than
+    /// waiting for Revit to be idle (which it is not while the job runs).
+    /// </summary>
+    public static void PaneCancel()
+    {
+        if (_core is not { } core) return;
+        try { core.Command("pane-cancel", _uiApp!); }
+        catch (Exception) { /* the job finished or the core is switching: the next refresh shows where things are */ }
+    }
 
     private static Exception Inner(Exception ex) =>
         ex is TargetInvocationException { InnerException: { } inner } ? inner : ex;

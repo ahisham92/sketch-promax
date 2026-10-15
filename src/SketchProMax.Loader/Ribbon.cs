@@ -13,7 +13,7 @@ internal static class Ribbon
     public const string HelpUrl = "https://github.com/ahisham92/sketch-promax#readme";
     public const int Slots = 20;
 
-    private static PushButton? _status, _job, _cancel, _version;
+    private static PushButton? _status, _job, _cancel, _version, _pane;
     private static PulldownButton? _quick;
     private static readonly PushButton?[] SlotButtons = new PushButton?[Slots];
     private static readonly string?[] SlotKeys = new string?[Slots];
@@ -52,13 +52,19 @@ internal static class Ribbon
             "Green: Claude has talked to this Revit window in the last few minutes. Amber: ready, waiting for Claude. " +
             "Gray: the Claude desktop app is not running or can't reach Revit.\n\nClick for details, the models Claude can see, " +
             "and how to fix a missing connection.", false));
-        claude.AddStackedItems(
+        var stacked = claude.AddStackedItems(
             Button<CopyPromptCommand>("CopyPrompt", "Copy starter prompt", "copy",
                 "Copies a good first message for Claude to the clipboard. Paste it into a new chat in the Claude desktop app.",
                 "The prompt names the open model and asks Claude to look at it and suggest what it can do for you."),
             Button<OpenClaudeCommand>("OpenClaude", "Open Claude", "open",
                 "Starts the Claude desktop app, or brings it to the front.",
-                "Works with the normal installer and the Microsoft Store version."));
+                "Works with the normal installer and the Microsoft Store version."),
+            Button<PaneCommand>("Pane", "Show pane", "pane",
+                "Shows or hides the Sketch ProMax pane: connection, the running job with its steps and a Cancel button, " +
+                "the last result with clickable element ids, and your quick tools.",
+                "Click an element id in the pane to select it and zoom to it. The pane docks like the Properties palette; " +
+                "drag its tab to move it."));
+        _pane = stacked.Count > 2 ? stacked[2] as PushButton : null;
 
         // Jobs: what Revit is doing for Claude right now.
         var jobs = app.CreateRibbonPanel(Tab, "Jobs");
@@ -120,6 +126,10 @@ internal static class Ribbon
             "Runs every Sketch ProMax tool once on the open model and reports what works.",
             "The quick check is read-only. The full check also runs the tools that change the model and undoes each change " +
             "straight after it; use it on a copy of a model. Click again while it runs to see progress or stop it."));
+        checks.AddItem(Button<FieldTestCommand>("FieldTest", "Field\ntest", "field",
+            "Tries Sketch ProMax on the open model the way it is used on a real project and reports what works and what to fix.",
+            "Run it on a copy of a real project model. Click again while it runs to see progress or stop it.",
+            needsModel: true));
 
         // Updates.
         var updates = app.CreateRibbonPanel(Tab, "Updates");
@@ -236,6 +246,13 @@ internal static class Ribbon
                 else if (button.Visible) button.Visible = false;
             }
         }
+    }
+
+    /// <summary>Keeps the Pane button's text in step with the pane ("Show pane" / "Hide pane").</summary>
+    public static void SetPaneShown(bool shown)
+    {
+        try { Set(_pane, shown ? "Hide pane" : "Show pane"); }
+        catch (Exception) { /* cosmetic */ }
     }
 
     /// <summary>The core command for a slot, or null when the slot is empty.</summary>
