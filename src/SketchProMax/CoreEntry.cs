@@ -39,6 +39,7 @@ public static class CoreEntry
             "quick-folder" => CoreCommands.QuickFolder(),
             "model-check" => QuickTools.ModelCheck(app),
             "self-test" => CoreCommands.SelfTest(app),
+            "field-test" => Tools.FieldTest.RibbonCommand(app),
             "update-info" => CoreCommands.UpdateInfo(),
             "update-check" => CoreCommands.CheckForUpdates(),
             "whats-new" => CoreCommands.OpenUrl(CoreCommands.ReleasesUrl),

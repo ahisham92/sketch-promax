@@ -15,7 +15,7 @@ namespace SketchProMax.Tools;
 /// Read-only tools run first. Tools that change the model then run inside one transaction group that is rolled back
 /// at the end, so the model is left exactly as it was. Files go to a temporary folder that is deleted afterwards.
 /// </summary>
-internal static class SelfTest
+internal static partial class SelfTest
 {
     public sealed record Outcome(string Tool, string Status, long Ms, string Message);
 
