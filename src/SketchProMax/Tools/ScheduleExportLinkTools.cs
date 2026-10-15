@@ -46,7 +46,8 @@ public sealed class FormatScheduleTool : IRevitTool
       "clear_filters": {"type": "boolean"},
       "filters": {"type": "array", "items": {"type": "object", "properties": {"field": {"type": "string"}, "operator": {"type": "string", "enum": ["equal", "not_equal", "greater", "greater_or_equal", "less", "less_or_equal", "contains", "not_contains", "begins_with", "ends_with", "has_value", "has_no_value"]}, "value": {"type": "string"}}, "required": ["field", "operator"]}},
       "clear_sorting": {"type": "boolean"},
-      "sort_by": {"type": "array", "items": {"type": "object", "properties": {"field": {"type": "string"}, "descending": {"type": "boolean"}, "header": {"type": "boolean"}, "footer": {"type": "boolean"}, "blank_line": {"type": "boolean"}}, "required": ["field"]}},
+      "sort_by": {"type": "array", "items": {"type": "object", "properties": {"field": {"type": "string"}, "descending": {"type": "boolean"}, "header": {"type": "boolean"}, "footer": {"type": "boolean"}, "blank_line": {"type": "boolean"}}, "required": ["field"]}, "description": "Replaces the schedule's existing sorting/grouping, in this order, unless append_sorting is true."},
+      "append_sorting": {"type": "boolean", "description": "Add sort_by after the existing sorting/grouping instead of replacing it. Default false."},
       "itemize": {"type": "boolean"},
       "grand_totals": {"type": "boolean"},
       "total_fields": {"type": "array", "items": {"type": "string"}, "description": "Numeric fields to total (e.g. Area, Count)."}
@@ -118,8 +119,10 @@ public sealed class FormatScheduleTool : IRevitTool
             catch (Autodesk.Revit.Exceptions.ApplicationException ex) { problems.Add($"filter on {field.GetName()}: {ex.Message}"); }
         }
 
-        if (args.OptBool("clear_sorting")) def.ClearSortGroupFields();
-        foreach (var spec in args.Array("sort_by"))
+        var sortSpecs = args.Array("sort_by").ToList();
+        // sort_by states the whole sort order, so it replaces what is there unless append_sorting asks to add to it.
+        if (args.OptBool("clear_sorting") || (sortSpecs.Count > 0 && !args.OptBool("append_sorting"))) def.ClearSortGroupFields();
+        foreach (var spec in sortSpecs)
         {
             var field = Need(spec.GetProperty("field").GetString()!);
             var sort = new ScheduleSortGroupField(field.FieldId,
@@ -230,7 +233,8 @@ public sealed class ExportFilesTool : IRevitTool
       "folder": {"type": "string"},
       "file_name": {"type": "string", "description": "Base name. dwg/images add the view name per file."},
       "dwg_setup": {"type": "string", "description": "Name of a saved DWG export setup in the model."},
-      "ifc_version": {"type": "string", "enum": ["IFC2x3", "IFC4"], "description": "Default IFC2x3 Coordination View 2.0."},
+      "ifc_version": {"type": "string", "enum": ["IFC2x3", "IFC4"], "description": "Default IFC2x3 Coordination View 2.0. IFC4 exports an IFC4 model view (Reference View unless ifc4_view says otherwise)."},
+      "ifc4_view": {"type": "string", "enum": ["reference_view", "design_transfer_view"], "description": "IFC4 only: model view definition. Default reference_view (IFC4 Reference View)."},
       "image_pixels": {"type": "integer", "description": "Image width in pixels, default 3000."},
       "coordinates": {"type": "string", "enum": ["internal", "project_base", "shared"], "description": "dwg: internal or shared. ifc: all three. nwc: internal or shared. Default: the exporter's own default."},
       "units": {"type": "string", "enum": ["mm", "cm", "m", "ft", "in"], "description": "dwg only (ifc and nwc use the model's units)."},
@@ -291,10 +295,15 @@ public sealed class ExportFilesTool : IRevitTool
             }
             case "ifc":
             {
+                // Generic IFCVersion.IFC4 makes the exporter write the IFC2x3 'CoordinationView_V2.0' header;
+                // export a real IFC4 model view instead (Reference View by default, or Design Transfer View).
+                var ifc4 = args.OptString("ifc_version") == "IFC4";
                 var options = new IFCExportOptions
                 {
-                    FileVersion = args.OptString("ifc_version") == "IFC4" ? IFCVersion.IFC4 : IFCVersion.IFC2x3CV2,
+                    FileVersion = !ifc4 ? IFCVersion.IFC2x3CV2
+                        : args.OptString("ifc4_view") == "design_transfer_view" ? IFCVersion.IFC4DTV : IFCVersion.IFC4RV,
                 };
+                if (ifc4) notes.Add(options.FileVersion == IFCVersion.IFC4DTV ? "IFC4 Design Transfer View." : "IFC4 Reference View.");
                 if (ids.Count > 0) options.FilterViewId = ids[0];
                 // The IFC exporter's site placement: 0 shared, 2 project base point, 3 internal.
                 if (args.OptString("coordinates") is { } coords)

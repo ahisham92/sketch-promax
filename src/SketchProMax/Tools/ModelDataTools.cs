@@ -1,5 +1,6 @@
 using System.IO;
 using Autodesk.Revit.DB;
+using Autodesk.Revit.DB.Architecture;
 using Autodesk.Revit.UI;
 using SketchProMax.Revit;
 
@@ -24,9 +25,50 @@ public sealed class PlaceRoomsTool : IRevitTool
         // Rooms go in the active view's phase, so they show up where the user is looking.
         var phase = doc.GetElement(app.ActiveUIDocument.ActiveView.get_Parameter(BuiltInParameter.VIEW_PHASE)?.AsElementId() ?? ElementId.InvalidElementId) as Phase;
         using var t = RevitHelpers.StartTransaction(doc, $"Place rooms on {level.Name}");
-        var ids = phase != null ? doc.Create.NewRooms2(level, phase) : doc.Create.NewRooms2(level);
-        t.Commit();
-        return ToolResult.Ok(new { created = ids.Select(i => i.Value) });
+        // Walk the level's plan circuits ourselves: NewRooms2 also fills circuits that already hold a room
+        // (leaving redundant, zero-area rooms). Only circuits without a room, with a real area, get one.
+        var topology = phase != null ? doc.get_PlanTopology(level, phase) : doc.get_PlanTopology(level);
+        var circuits = new List<PlanCircuit>();
+        foreach (PlanCircuit c in topology.Circuits) circuits.Add(c);
+        var created = new List<long>();
+        int alreadyHadRoom = 0, tooSmall = 0;
+        var failed = new List<string>();
+        var minArea = 0.1 * 0.1 / (0.3048 * 0.3048); // 0.01 m2 in square feet
+        foreach (var circuit in circuits)
+        {
+            if (circuit.IsRoomLocated) { alreadyHadRoom++; continue; }
+            if (circuit.Area < minArea) { tooSmall++; continue; }
+            Room? room = null;
+            try
+            {
+                if (phase != null)
+                {
+                    // An unplaced room in the view's phase, then placed in the circuit.
+                    room = doc.Create.NewRoom(phase);
+                    room = doc.Create.NewRoom(room, circuit);
+                }
+                else room = doc.Create.NewRoom(null, circuit);
+            }
+            catch (Autodesk.Revit.Exceptions.ApplicationException ex)
+            {
+                if (room != null && room.IsValidObject && room.Location == null) doc.Delete(room.Id);
+                failed.Add(ex.Message.Trim());
+                continue;
+            }
+            if (room != null) created.Add(room.Id.Value);
+        }
+        var status = t.Commit();
+        if (status != TransactionStatus.Committed)
+            return ToolResult.Error("Revit rolled the room placement back; no rooms were created.");
+        var existing = created.Where(id => doc.GetElement(new ElementId(id)) is Room).ToList();
+        return ToolResult.Ok(new
+        {
+            created = existing,
+            circuits = circuits.Count,
+            skippedAlreadyHaveRoom = alreadyHadRoom,
+            skippedTooSmall = tooSmall,
+            failed = failed.Count > 0 ? failed.Distinct().Take(10) : null,
+        });
     }
 }
 
@@ -225,8 +267,44 @@ public sealed class DeleteElementsTool : IRevitTool
         var doc = app.ActiveUIDocument.Document;
         var ids = args.LongList("element_ids").Select(i => new ElementId(i)).Where(id => doc.GetElement(id) != null).ToList();
         using var t = RevitHelpers.StartTransaction(doc, "Delete elements");
+        // Dry run in a sub-transaction to learn what Revit will cascade-delete, while the elements still exist
+        // to be described; then roll it back and delete for real.
+        var preview = new Dictionary<long, (string category, string name)>();
+        using (var st = new SubTransaction(doc))
+        {
+            st.Start();
+            var wouldDelete = doc.Delete(ids);
+            st.RollBack();
+            foreach (var id in wouldDelete)
+            {
+                var e = doc.GetElement(id);
+                preview[id.Value] = (e?.Category?.Name ?? e?.GetType().Name ?? "Unknown", SafeName(e));
+            }
+        }
         var deleted = doc.Delete(ids);
-        t.Commit();
-        return ToolResult.Ok(new { requested = ids.Count, totalDeletedIncludingDependents = deleted.Count });
+        if (t.Commit() != TransactionStatus.Committed)
+            return ToolResult.Error("Revit rolled the deletion back; nothing was deleted.");
+        var requestedSet = new HashSet<long>(ids.Select(i => i.Value));
+        var dependents = deleted.Where(id => !requestedSet.Contains(id.Value)).Select(id =>
+        {
+            var info = preview.TryGetValue(id.Value, out var v) ? v : ("Unknown", "");
+            return new { id = id.Value, category = info.Item1, name = info.Item2 };
+        }).ToList();
+        const int cap = 200;
+        return ToolResult.Ok(new
+        {
+            requested = ids.Count,
+            totalDeletedIncludingDependents = deleted.Count,
+            dependentCount = dependents.Count,
+            dependentsByCategory = dependents.GroupBy(d => d.category).ToDictionary(g => g.Key, g => g.Count()),
+            dependents = dependents.Take(cap),
+            dependentsTruncated = dependents.Count > cap,
+        });
+    }
+
+    private static string SafeName(Element? e)
+    {
+        if (e == null) return "";
+        try { return e.Name ?? ""; } catch { return ""; }
     }
 }
