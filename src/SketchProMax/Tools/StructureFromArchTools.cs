@@ -27,22 +27,28 @@ internal static class ConcreteTypes
         return cs;
     }
 
-    public static WallType Wall(Document doc, double thickness)
+    public static WallType Wall(Document doc, double thickness, string label = "RC Wall")
     {
-        var name = $"RC Wall {Mm(thickness)}mm";
+        var name = $"{label} {Mm(thickness)}mm";
+        var masonry = label.StartsWith("Masonry", StringComparison.OrdinalIgnoreCase);
         var types = new FilteredElementCollector(doc).OfClass(typeof(WallType)).Cast<WallType>().Where(t => t.Kind == WallKind.Basic).ToList();
         if (types.FirstOrDefault(t => t.Name == name) is { } existing) return existing;
         var basis = types.FirstOrDefault(t => t.Name.IndexOf("Concrete", StringComparison.OrdinalIgnoreCase) >= 0) ?? types.FirstOrDefault()
                     ?? throw new InvalidOperationException("The model has no basic wall types to start from.");
         var type = (WallType)basis.Duplicate(name);
-        if (type.GetCompoundStructure() is { } cs) type.SetCompoundStructure(Single(cs, thickness, Concrete(doc)));
+        var material = masonry
+            ? new FilteredElementCollector(doc).OfClass(typeof(Material)).Cast<Material>().FirstOrDefault(m => new[] { "Masonry", "Block", "Brick", "Stone" }.Any(w => m.Name.IndexOf(w, StringComparison.OrdinalIgnoreCase) >= 0)) ?? Concrete(doc)
+            : Concrete(doc);
+        if (type.GetCompoundStructure() is { } cs) type.SetCompoundStructure(Single(cs, thickness, material));
         return type;
     }
 
-    public static FloorType Slab(Document doc, double thickness, string label = "RC Slab")
+    public static FloorType Slab(Document doc, double thickness, string label = "RC Slab", bool foundation = false)
     {
         var name = $"{label} {Mm(thickness)}mm";
-        var types = new FilteredElementCollector(doc).OfClass(typeof(FloorType)).Cast<FloorType>().Where(t => !t.IsFoundationSlab).ToList();
+        var all = new FilteredElementCollector(doc).OfClass(typeof(FloorType)).Cast<FloorType>().ToList();
+        var types = all.Where(t => t.IsFoundationSlab == foundation).ToList();
+        if (types.Count == 0) types = all;
         if (types.FirstOrDefault(t => t.Name == name) is { } existing) return existing;
         var basis = types.FirstOrDefault(t => t.Name.IndexOf("Concrete", StringComparison.OrdinalIgnoreCase) >= 0) ?? types.FirstOrDefault()
                     ?? throw new InvalidOperationException("The model has no floor types to start from.");
@@ -115,7 +121,7 @@ public sealed class ArchToStructureTool : IRevitTool
     public string PropertiesJson => """
     {
       "source": {"type": "string", "description": "Architectural link name, or 'model'."},
-      "what": {"type": "array", "items": {"type": "string", "enum": ["walls", "columns", "floors"]}, "description": "Default all three."},
+      "what": {"type": "array", "items": {"type": "string", "enum": ["walls", "columns", "floors", "openings"]}, "description": "Default all four. openings: door and window openings cut in the new structural walls (slab openings come with the floors)."},
       "wall_type_words": {"type": "array", "items": {"type": "string"}, "description": "Type name words meaning load-bearing (default Concrete, RC, Core, Shear, Retaining)."},
       "min_wall_thickness": {"type": "number", "description": "Also take walls at least this thick, project units (default: off)."},
       "wall_thickness": {"type": "number", "description": "Make structural walls this thick instead of the architect's thickness."},
@@ -140,7 +146,13 @@ public sealed class ArchToStructureTool : IRevitTool
             tr = link.GetTotalTransform(); sourceName = link.Name;
         }
         var what = args.StringList("what");
-        if (what.Count == 0) what = ["walls", "columns", "floors"];
+        if (what.Count == 0) what = ["walls", "columns", "floors", "openings"];
+        var openingsMade = 0;
+        var hosted = what.Contains("openings")
+            ? new FilteredElementCollector(src).OfClass(typeof(FamilyInstance)).Cast<FamilyInstance>()
+                .Where(f => f.Host is Wall && f.Category?.Id.Value is (long)BuiltInCategory.OST_Doors or (long)BuiltInCategory.OST_Windows)
+                .GroupBy(f => f.Host.Id.Value).ToDictionary(g => g.Key, g => g.ToList())
+            : new Dictionary<long, List<FamilyInstance>>();
         var words = args.StringList("wall_type_words");
         if (words.Count == 0) words = ["Concrete", "RC", "Core", "Shear", "Retaining"];
         var minWall = args.OptDouble("min_wall_thickness") is { } mw ? RevitHelpers.ToInternal(doc, mw) : double.MaxValue;
@@ -193,6 +205,24 @@ public sealed class ArchToStructureTool : IRevitTool
                     }
                     wall.get_Parameter(BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS)?.Set($"from {w.UniqueId}");
                     made["walls"]++;
+                    // Door and window openings: each opening's box, measured along the new wall.
+                    if (hosted.TryGetValue(w.Id.Value, out var inserts) && flat is Line wl)
+                        foreach (var ins in inserts)
+                        {
+                            if (ins.get_BoundingBox(null) is not { } ib) continue;
+                            var corners = new[] { ib.Min, ib.Max, new XYZ(ib.Min.X, ib.Max.Y, ib.Min.Z), new XYZ(ib.Max.X, ib.Min.Y, ib.Max.Z) }.Select(tr.OfPoint).ToList();
+                            var along = corners.Select(c => (c - wl.GetEndPoint(0)).DotProduct(wl.Direction)).ToList();
+                            double a0 = Math.Max(along.Min(), 0), a1 = Math.Min(along.Max(), wl.Length);
+                            double z0 = corners.Min(c => c.Z), z1 = corners.Max(c => c.Z);
+                            if (a1 - a0 < 50 / 304.8 || z1 - z0 < 50 / 304.8) continue;
+                            try
+                            {
+                                doc.Create.NewOpening(wall, wl.GetEndPoint(0) + wl.Direction * a0 + XYZ.BasisZ * (z0 - wl.GetEndPoint(0).Z),
+                                    wl.GetEndPoint(0) + wl.Direction * a1 + XYZ.BasisZ * (z1 - wl.GetEndPoint(0).Z));
+                                openingsMade++;
+                            }
+                            catch (Autodesk.Revit.Exceptions.ApplicationException ex) { errors.Add($"opening for {ins.Id.Value}: {ex.Message.Trim()}"); }
+                        }
                 }
                 catch (Exception ex) when (ex is Autodesk.Revit.Exceptions.ApplicationException or ArgumentException or InvalidOperationException) { errors.Add($"wall {w.Id.Value}: {ex.Message.Trim()}"); }
             }
@@ -259,7 +289,7 @@ public sealed class ArchToStructureTool : IRevitTool
         return ToolResult.Ok(new
         {
             source = sourceName, dryRun = dry, made, skipped, errors = errors.Take(40), moreErrors = Math.Max(0, errors.Count - 40),
-            deletedAtSave = swallow?.Deleted.Count ?? 0,
+            deletedAtSave = swallow?.Deleted.Count ?? 0, wallOpenings = openingsMade,
             slopedFloors = sloped > 0 ? $"{sloped} architectural floor(s) are sloped or shape-edited; their slabs were made flat. Re-slope them (create_ramp or shape editing)." : null,
             note = "Check wall joins and slab edges; beams over openings and transfer structure still need adding (place_beams).",
         });

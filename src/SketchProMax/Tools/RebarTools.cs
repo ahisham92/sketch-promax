@@ -209,7 +209,7 @@ internal static class Rebars
     public static JsonElement? Opt(ToolArgs args, string key) => args.Has(key) ? args.Raw[key] : null;
 
     /// <summary>Runs one host's work in a sub-transaction, so a host Revit refuses leaves nothing half made.</summary>
-    public static void PerHost(Document doc, IEnumerable<long> ids, Action<Element, List<long>> work, List<object> done, List<object> errors)
+    public static void PerHost(Document doc, IEnumerable<long> ids, Action<Element, List<long>> work, List<object> done, List<object> errors, bool assumed = false)
     {
         foreach (var id in ids)
         {
@@ -220,6 +220,10 @@ internal static class Rebars
                 var host = Host(doc, id);
                 var made = new List<long>();
                 work(host, made);
+                // Typical values not from a design: say so on every bar, so schedules and tags show it.
+                if (assumed)
+                    foreach (var r in made)
+                        doc.GetElement(new ElementId(r))?.get_Parameter(BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS)?.Set(AssumedText);
                 sub.Commit();
                 done.Add(new { host = id, rebarIds = made });
             }
@@ -231,11 +235,17 @@ internal static class Rebars
         }
     }
 
-    public static ToolResult Result(Transaction t, List<object> done, List<object> errors, string what)
+    public const string AssumedText = "ASSUMED - typical reinforcement, to be confirmed by design";
+
+    public static ToolResult Result(Transaction t, List<object> done, List<object> errors, string what, bool assumed = false)
     {
         if (done.Count == 0) { t.RollBack(); return ToolResult.Error($"No {what} was placed: {JsonSerializer.Serialize(errors)}"); }
         if (t.Commit() != TransactionStatus.Committed) return ToolResult.Error($"Revit refused the {what} when saving it, so none was placed.");
-        return ToolResult.Ok(new { reinforced = done.Count, hosts = done, errors });
+        return ToolResult.Ok(new
+        {
+            reinforced = done.Count, hosts = done, errors,
+            assumed = assumed ? $"Bars are marked '{AssumedText}' in Comments. Put a note on the reinforcement sheets: 'Reinforcement shown is assumed typical; to be confirmed by the structural design.'" : null,
+        });
     }
 }
 
@@ -253,7 +263,8 @@ public sealed class ReinforceBeamTool : IRevitTool
       "top": {"type": "object", "properties": {"bar": {"type": "string"}, "count": {"type": "integer"}}},
       "side": {"type": "object", "properties": {"bar": {"type": "string"}, "count": {"type": "integer"}}, "description": "Bars on each side face between top and bottom (count per face)."},
       "stirrups": {"type": "object", "properties": {"bar": {"type": "string"}, "spacing": {"type": "number"}}, "description": "e.g. {bar:'T10', spacing:150} (project units)."},
-      "cover": {"type": "number", "description": "Clear cover, project units (default 40 mm)."}
+      "cover": {"type": "number", "description": "Clear cover, project units (default 40 mm)."},
+      "assumed": {"type": "boolean", "description": "Assumed typical values, not from a design: every bar's Comments says ASSUMED (tag/schedule it and note it on the sheet)."}
     }
     """;
     public string[] Required => ["element_ids"];
@@ -303,8 +314,8 @@ public sealed class ReinforceBeamTool : IRevitTool
                 var corners = new[] { f.At(first, f.W0 + inset, f.U0 + inset), f.At(first, f.W1 - inset, f.U0 + inset), f.At(first, f.W1 - inset, f.U1 - inset), f.At(first, f.W0 + inset, f.U1 - inset) };
                 made.Add(Rebars.Links(doc, host, l.bar, corners, f.D, l.spacing, f.Length - Rebars.Mm(100)).Id.Value);
             }
-        }, done, errors);
-        return Rebars.Result(t, done, errors, "beam rebar");
+        }, done, errors, args.OptBool("assumed"));
+        return Rebars.Result(t, done, errors, "beam rebar", args.OptBool("assumed"));
     }
 }
 
@@ -321,7 +332,8 @@ public sealed class ReinforceColumnTool : IRevitTool
       "bars_x": {"type": "integer", "description": "Bars on each face along the column's width, corners included (default 3)."},
       "bars_y": {"type": "integer", "description": "Bars on each face along the column's depth, corners included (default 3)."},
       "ties": {"type": "object", "properties": {"bar": {"type": "string"}, "spacing": {"type": "number"}}, "description": "e.g. {bar:'T10', spacing:200}."},
-      "cover": {"type": "number", "description": "Clear cover, project units (default 40 mm)."}
+      "cover": {"type": "number", "description": "Clear cover, project units (default 40 mm)."},
+      "assumed": {"type": "boolean", "description": "Assumed typical values, not from a design: every bar's Comments says ASSUMED (tag/schedule it and note it on the sheet)."}
     }
     """;
     public string[] Required => ["element_ids", "bar"];
@@ -364,8 +376,8 @@ public sealed class ReinforceColumnTool : IRevitTool
                 var corners = new[] { f.At(first, f.W0 + ti, f.U0 + ti), f.At(first, f.W1 - ti, f.U0 + ti), f.At(first, f.W1 - ti, f.U1 - ti), f.At(first, f.W0 + ti, f.U1 - ti) };
                 made.Add(Rebars.Links(doc, host, l.bar, corners, f.D, l.spacing, f.Length - Rebars.Mm(100)).Id.Value);
             }
-        }, done, errors);
-        return Rebars.Result(t, done, errors, "column rebar");
+        }, done, errors, args.OptBool("assumed"));
+        return Rebars.Result(t, done, errors, "column rebar", args.OptBool("assumed"));
     }
 }
 
@@ -380,7 +392,8 @@ public sealed class ReinforceFootingTool : IRevitTool
       "element_ids": {"type": "array", "items": {"type": "integer"}, "description": "Isolated footings / pile caps."},
       "bottom": {"type": "object", "properties": {"bar": {"type": "string"}, "spacing": {"type": "number"}}, "description": "e.g. {bar:'T16', spacing:150}."},
       "top": {"type": "object", "properties": {"bar": {"type": "string"}, "spacing": {"type": "number"}}},
-      "cover": {"type": "number", "description": "Clear cover, project units (default 75 mm)."}
+      "cover": {"type": "number", "description": "Clear cover, project units (default 75 mm)."},
+      "assumed": {"type": "boolean", "description": "Assumed typical values, not from a design: every bar's Comments says ASSUMED (tag/schedule it and note it on the sheet)."}
     }
     """;
     public string[] Required => ["element_ids", "bottom"];
@@ -413,8 +426,8 @@ public sealed class ReinforceFootingTool : IRevitTool
             }
             Mat(bottom, false);
             if (top is { } tp) Mat(tp, true);
-        }, done, errors);
-        return Rebars.Result(t, done, errors, "footing rebar");
+        }, done, errors, args.OptBool("assumed"));
+        return Rebars.Result(t, done, errors, "footing rebar", args.OptBool("assumed"));
     }
 }
 
@@ -433,7 +446,8 @@ public sealed class ReinforceSlabWallTool : IRevitTool
       "exterior": {"type": "object", "properties": {"bar": {"type": "string"}, "spacing": {"type": "number"}}, "description": "Walls: exterior face."},
       "interior": {"type": "object", "properties": {"bar": {"type": "string"}, "spacing": {"type": "number"}}, "description": "Walls: interior face."},
       "major_direction": {"type": "array", "items": {"type": "number"}, "description": "Slabs: [x, y] direction of the main bars (default along X)."},
-      "cover": {"type": "number", "description": "Clear cover, project units (default 25 mm slabs, 40 mm walls, 75 mm foundations)."}
+      "cover": {"type": "number", "description": "Clear cover, project units (default 25 mm slabs, 40 mm walls, 75 mm foundations)."},
+      "assumed": {"type": "boolean", "description": "Assumed typical values, not from a design: every bar's Comments says ASSUMED (tag/schedule it and note it on the sheet)."}
     }
     """;
     public string[] Required => ["element_ids"];
@@ -483,8 +497,8 @@ public sealed class ReinforceSlabWallTool : IRevitTool
                     Set(area, $"REBAR_SYSTEM_SPACING_{name}_DIR_{dir}", l.spacing);
                 }
             made.Add(area.Id.Value);
-        }, done, errors);
-        return Rebars.Result(t, done, errors, "area reinforcement");
+        }, done, errors, args.OptBool("assumed"));
+        return Rebars.Result(t, done, errors, "area reinforcement", args.OptBool("assumed"));
     }
 
     private static BuiltInParameter Param(string name) => (BuiltInParameter)Enum.Parse(typeof(BuiltInParameter), name);

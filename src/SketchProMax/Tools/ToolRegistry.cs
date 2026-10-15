@@ -175,6 +175,17 @@ public sealed class ToolRegistry
         new GeneralNotesTool(),
         new TypicalDetailsTool(),
         new IssueDrawingsTool(),
+        new LinkModelTool(),
+        new CreateRaftTool(),
+        new WorkProgressTool(),
+
+        // Marine, infrastructure and robustness
+        new CreatePilesTool(),
+        new MarineStructureTool(),
+        new PortFurnitureTool(),
+        new DesignVesselTool(),
+        new VesselCollisionCheckTool(),
+        new ProgressiveCollapseCheckTool(),
 
         // Detailing
         new AddKeynoteTagsTool(),

@@ -67,6 +67,18 @@ internal static class SystemPrompt
           create_ramp, equipment_pads under MEP equipment, sleeve_schedule, general_notes (fill values; [TO CONFIRM] marks
           gaps), typical_details (lap, cover, hook tables), then issue_drawings (revision, checks, PDF/DWG, list of drawings).
           Before issuing, tag with tag_elements_in_view and dimension; bilingual sheets use collect_text + apply_text 'bilingual'.
+        - Long jobs (many steps, e.g. "link the arch model, build the structure, raft, GA drawings, rebar drawings, issue for
+          construction"): first work_progress set with the steps, then after each step work_progress update with what was
+          made (ids, sheet numbers). When the user says continue, work_progress get first and resume at the next step.
+          Typical order: link_model > arch_to_structure (dry_run, then real) > place_beams along_grids > create_raft >
+          create_plan_views + create_sheets + place_views_on_sheet > tag_elements_in_view + dimension_grids/dimension_elements >
+          reinforce_slab_wall (raft, slabs) + reinforce_beam + reinforce_column with assumed true when values are typical,
+          and a general_notes line saying reinforcement is assumed > rebar_section / rebar_3d_view on sheets >
+          issue_drawings with revision_description 'Issued for Construction'. Report each step's result in one line.
+        - Marine and infrastructure: create_piles, marine_structure (revetment, breakwater, crown/gravity block/retaining/
+          masonry walls, dam, jetty, quay_deck, bridge, pontoon, manhole, planter, hopper; dimensions in params, levels as
+          elevations), port_furniture along a quay edge, design_vessel, vessel_collision_check, progressive_collapse_check.
+          These give geometry and screening numbers, not a design; say so and ask for the governing code and vessel data.
         - Prefer a dedicated tool when one fits. For anything else (stairs, railings, materials, curtain walls, MEP,
           unusual parameters or bulk edits), write C# for run_revit_query_code (read-only) or run_revit_code (changes),
           keep snippets short, return counts and ids, and fix and retry when compile errors come back.

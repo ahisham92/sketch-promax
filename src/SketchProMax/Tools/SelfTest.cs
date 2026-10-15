@@ -538,6 +538,24 @@ internal static class SelfTest
         new("general_notes", _ => new { values = new { codes = "Self-test code" } }),
         new("typical_details", _ => new { kinds = new[] { "lap_schedule", "cover_schedule" } }),
         new("issue_drawings", c => new { sheet_numbers = new[] { "ST-999" }, revision_description = "Self-test issue", folder = Path.Combine(c.Temp, "issue") }, Setup: ["create_sheets"]) { Heavy = true },
+        new("link_model", c =>
+        {
+            var lt = new FilteredElementCollector(c.Doc).OfClass(typeof(RevitLinkType)).Cast<RevitLinkType>().FirstOrDefault(t => t.GetExternalFileReference() != null)
+                     ?? throw new Skip("the model has no Revit links");
+            return new { path = ModelPathUtils.ConvertModelPathToUserVisiblePath(lt.GetExternalFileReference().GetAbsolutePath()) };
+        }),
+        new("create_raft", c => new { level = c.LevelName, depth_below = c.P(1500), thickness = c.P(1000), projection = c.P(500) }, Setup: ["create_floors"]),
+        new("work_progress", _ => new { action = "get" }),
+        new("create_piles", c => new { points = new[] { c.At(0, 40000), c.At(3000, 40000) }, shape = "round", size = c.P(600), cutoff_level = c.P(0), toe_level = c.P(-12000), rake = 5 }),
+        new("marine_structure", c => new { kind = "revetment", alignment = new[] { c.At(0, 50000), c.At(20000, 50000) }, @params = new { crest_level = c.P(3000), toe_level = c.P(-4000), crest_width = c.P(4000), slope = 2 } }),
+        new("port_furniture", c => new { item = "bollard", edge = new[] { c.At(0, 60000), c.At(40000, 60000) }, cope_level = c.P(3000) }),
+        new("design_vessel", c => new { preset = "hopper_barge", position = c.At(20000, 80000) }),
+        new("vessel_collision_check", c => new { channel = new[] { c.At(0, 80000), c.At(40000, 80000) }, dwt = 5000, velocity = 2.5 }),
+        new("progressive_collapse_check", c =>
+        {
+            Need(new FilteredElementCollector(c.Doc).OfCategory(BuiltInCategory.OST_StructuralColumns).WhereElementIsNotElementType().Any(), "the model has no structural columns");
+            return new { scope = "perimeter" };
+        }),
         new("export_tendon_schedule", c => new { folder = c.Temp }, Setup: ["create_floors", "place_pt_tendons"]),
         new("set_curtain_grid", c =>
         {
