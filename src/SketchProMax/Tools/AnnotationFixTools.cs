@@ -1486,39 +1486,44 @@ public sealed class TrimMatchlinesTool : IRevitTool
 
         GraphicsStyle? style = null;
         string? styleNote = null;
-        if (mode == "redraw") (style, styleNote) = LineStyle(doc, args.OptString("line_style"));
-
+        var styleCreated = false;
         var guards = new Dictionary<long, DependentGuard>();
-        var batch = ItemBatch.Run(doc, mode == "redraw" ? "Trim matchlines" : "Restore matchlines", work,
-            w => $"matchline {w.ml.Id.Value} in '{w.view.Name}'", w => [w.view.Id], w =>
-            {
-                var old = Ours(doc, w.view, w.ml);
-                if (old.Count > 0) doc.Delete(old);
-                if (mode == "restore")
+        // The new line style (if one is made) and the batch are one Undo step; with nothing done, the style goes too.
+        var batch = Batch.InGroup(doc, mode == "redraw" ? "Trim matchlines" : "Restore matchlines", () =>
+        {
+            if (mode == "redraw") (style, styleNote, styleCreated) = LineStyle(doc, args.OptString("line_style"));
+            return ItemBatch.Run(doc, mode == "redraw" ? "Trim matchlines" : "Restore matchlines", work,
+                w => $"matchline {w.ml.Id.Value} in '{w.view.Name}'", w => [w.view.Id], w =>
                 {
-                    if (w.ml.IsHidden(w.view)) w.view.UnhideElements([w.ml.Id]);
-                    return new { removedLines = old.Count };
-                }
-                if (w.crop is null) throw new InvalidOperationException("the view's crop is off, so there is nothing to trim to");
-                if (!w.ml.IsHidden(w.view))
-                {
-                    if (!w.ml.CanBeHidden(w.view)) throw new InvalidOperationException("Revit won't hide this matchline in this view (check the view template's Matchline visibility)");
-                    w.view.HideElements([w.ml.Id]);
-                }
-                if (!guards.TryGetValue(w.view.Id.Value, out var guard)) guards[w.view.Id.Value] = guard = DependentGuard.For(doc, w.view, "warn");
-                var drawn = new List<long>();
-                foreach (var piece in w.curves.SelectMany(c => w.crop.Clip(c, tol)))
-                    foreach (var flat in CropClip.ToViewPlane(w.view, piece))
+                    var old = Ours(doc, w.view, w.ml);
+                    if (old.Count > 0) doc.Delete(old);
+                    if (mode == "restore")
                     {
-                        var line = doc.Create.NewDetailCurve(w.view, flat);
-                        if (style != null) line.LineStyle = style;
-                        var comment = line.get_Parameter(BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS);
-                        if (comment is { IsReadOnly: false }) comment.Set(Marker + w.ml.Id.Value);
-                        guard.Note(flat.GetEndPoint(0)); guard.Note(flat.GetEndPoint(1));
-                        drawn.Add(line.Id.Value);
+                        if (w.ml.IsHidden(w.view)) w.view.UnhideElements([w.ml.Id]);
+                        return new { removedLines = old.Count };
                     }
-                return new { lines = drawn.Count, replacedLines = old.Count };
-            });
+                    if (w.crop is null) throw new InvalidOperationException("the view's crop is off, so there is nothing to trim to");
+                    if (!w.ml.IsHidden(w.view))
+                    {
+                        if (!w.ml.CanBeHidden(w.view)) throw new InvalidOperationException("Revit won't hide this matchline in this view (check the view template's Matchline visibility)");
+                        w.view.HideElements([w.ml.Id]);
+                    }
+                    if (!guards.TryGetValue(w.view.Id.Value, out var guard)) guards[w.view.Id.Value] = guard = DependentGuard.For(doc, w.view, "warn");
+                    var drawn = new List<long>();
+                    foreach (var piece in w.curves.SelectMany(c => w.crop.Clip(c, tol)))
+                        foreach (var flat in CropClip.ToViewPlane(w.view, piece))
+                        {
+                            var line = doc.Create.NewDetailCurve(w.view, flat);
+                            if (style != null) line.LineStyle = style;
+                            var comment = line.get_Parameter(BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS);
+                            if (comment is { IsReadOnly: false }) comment.Set(Marker + w.ml.Id.Value);
+                            guard.Note(flat.GetEndPoint(0)); guard.Note(flat.GetEndPoint(1));
+                            drawn.Add(line.Id.Value);
+                        }
+                    return new { lines = drawn.Count, replacedLines = old.Count };
+                });
+        }, b => b.Done > 0);
+        if (batch.Done == 0 && styleCreated) { style = null; styleNote = "No matchline was redrawn, so the new matchline line style was not kept."; }
 
         return ToolResult.Ok(new
         {
@@ -1591,7 +1596,7 @@ public sealed class TrimMatchlinesTool : IRevitTool
         return (off - d * off.DotProduct(d)).GetLength() < 1e-3;
     }
 
-    private static (GraphicsStyle? Style, string? Note) LineStyle(Document doc, string? name)
+    private static (GraphicsStyle? Style, string? Note, bool Created) LineStyle(Document doc, string? name)
     {
         var lines = doc.Settings.Categories.get_Item(BuiltInCategory.OST_Lines);
         var subs = lines.SubCategories.Cast<Category>().ToList();
@@ -1599,10 +1604,10 @@ public sealed class TrimMatchlinesTool : IRevitTool
         {
             var found = subs.FirstOrDefault(c => string.Equals(c.Name, name, StringComparison.OrdinalIgnoreCase))
                         ?? throw new ArgumentException($"No line style '{name}'. Line styles: {string.Join(", ", subs.Select(c => c.Name).OrderBy(n => n).Take(60))}");
-            return (found.GetGraphicsStyle(GraphicsStyleType.Projection), null);
+            return (found.GetGraphicsStyle(GraphicsStyleType.Projection), null, false);
         }
         var match = subs.FirstOrDefault(c => c.Name.IndexOf("match", StringComparison.OrdinalIgnoreCase) >= 0);
-        if (match != null) return (match.GetGraphicsStyle(GraphicsStyleType.Projection), null);
+        if (match != null) return (match.GetGraphicsStyle(GraphicsStyleType.Projection), null, false);
 
         const string newName = "Matchline (Sketch ProMax)";
         using var t = new Transaction(doc, "Sketch ProMax: matchline line style");
@@ -1618,13 +1623,14 @@ public sealed class TrimMatchlinesTool : IRevitTool
                 var pattern = source.GetLinePatternId(GraphicsStyleType.Projection);
                 if (pattern != ElementId.InvalidElementId) sub.SetLinePatternId(pattern, GraphicsStyleType.Projection);
             }
-            t.Commit();
-            return (sub.GetGraphicsStyle(GraphicsStyleType.Projection), $"Created line style '{newName}' from the Matchline object style.");
+            if (t.Commit() != TransactionStatus.Committed)
+                return (null, "Revit did not accept a new matchline line style; the lines use the default style. Pass line_style to choose one.", false);
+            return (sub.GetGraphicsStyle(GraphicsStyleType.Projection), $"Created line style '{newName}' from the Matchline object style.", true);
         }
         catch (Exception ex) when (ex is Autodesk.Revit.Exceptions.ApplicationException or InvalidOperationException)
         {
             if (t.HasStarted() && !t.HasEnded()) t.RollBack();
-            return (null, $"Couldn't create a matchline line style ({ex.Message.Trim()}); the lines use the default style. Pass line_style to choose one.");
+            return (null, $"Couldn't create a matchline line style ({ex.Message.Trim()}); the lines use the default style. Pass line_style to choose one.", false);
         }
     }
 

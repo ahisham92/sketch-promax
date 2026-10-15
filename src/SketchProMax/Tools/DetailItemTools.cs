@@ -367,9 +367,23 @@ internal static class DetailPlacement
     /// Places every spec. method: "new", "copy", or "auto" (new first; on a refusal, copy an existing instance).
     /// Runs in one undo step; call with no transaction open.
     /// </summary>
+    /// <summary>Most placements one call takes (each is its own transaction, and copies look up a source).</summary>
+    public const int MaxPerCall = 500;
+
     public static void Run(Document doc, View view, List<Spec> specs, string method, long? sourceId)
     {
         var todo = specs.Where(s => s.Error is null).ToList();
+        // Finding a source scans the model; look it up once per (type, source) in this run. A cached source that was
+        // deleted since (a refused new instance, say) is looked up again.
+        var sources = new Dictionary<string, (FamilyInstance? src, string? how)>();
+        FamilyInstance? SourceFor(FamilySymbol symbol, out string? how)
+        {
+            var key = symbol.Id.Value + "|" + (sourceId?.ToString() ?? "");
+            if (sources.TryGetValue(key, out var hit) && (hit.src is null || hit.src.IsValidObject)) { how = hit.how; return hit.src; }
+            var found = DetailCopy.Source(doc, symbol, view, sourceId, out how);
+            sources[key] = (found, how);
+            return found;
+        }
         if (method != "copy")
         {
             var a = ItemBatch.Run(doc, "Place detail items", todo, s => $"placement {s.Index}", _ => [], s => New(doc, view, s), borrow: false);
@@ -385,7 +399,7 @@ internal static class DetailPlacement
             {
                 // A fresh instance whose sizes Revit refused gets replaced by a copy of one that already works.
                 var refused = todo.Where(s => s.Created is not null && s.Params.Any(l => l.status == "failed")).ToList();
-                var replace = refused.Where(s => DetailCopy.Source(doc, s.Symbol!, view, sourceId, out _) is not null).ToList();
+                var replace = refused.Where(s => SourceFor(s.Symbol!, out _) is not null).ToList();
                 if (replace.Count > 0)
                 {
                     var del = ItemBatch.Run(doc, "Replace refused detail items", replace, s => $"placement {s.Index}", s => [s.Created!],
@@ -408,7 +422,7 @@ internal static class DetailPlacement
         var withSource = new List<(Spec spec, FamilyInstance src, string? how)>();
         foreach (var s in todo)
         {
-            var src = DetailCopy.Source(doc, s.Symbol!, view, sourceId, out var how);
+            var src = SourceFor(s.Symbol!, out var how);
             if (src is null)
             {
                 s.Error = (s.FallbackReason is null ? "" : s.FallbackReason + " ") +
@@ -648,6 +662,8 @@ public sealed class PlaceDetailItemCopyTool : IRevitTool
         }
         var raw = args.Array("placements").ToList();
         if (raw.Count == 0) return ToolResult.Error("Give at least one placement.");
+        if (raw.Count > DetailPlacement.MaxPerCall)
+            return ToolResult.Error($"{raw.Count} placements in one call; the limit is {DetailPlacement.MaxPerCall}. Split them into several calls of up to {DetailPlacement.MaxPerCall} each.");
         var cache = new Dictionary<string, (FamilySymbol, string?)>(StringComparer.OrdinalIgnoreCase);
         var specs = raw.Select((p, i) => DetailPlacement.Parse(doc, view, p, i, defaultName, cache)).ToList();
 

@@ -84,24 +84,44 @@ internal static class InPlace
 /// </summary>
 internal static class VoidSolids
 {
-    public static List<Solid>? Rebuild(Document doc, FamilyInstance fi, Dictionary<string, List<Solid>?> cache, out string? why)
+    /// <summary>Opening families is slow (each EditFamily loads a document), so a run opens at most this many.</summary>
+    public const int MaxOpens = 20;
+
+    /// <summary>What one run has learned: rebuilt solids by key, families that failed, the parameters that drive each family.</summary>
+    public sealed class Session
     {
-        why = null;
+        internal readonly Dictionary<string, List<Solid>?> Cache = new();
+        internal readonly Dictionary<long, string> Failed = new();
+        internal readonly Dictionary<long, List<string>> Driving = new();
+        public int Opens { get; internal set; }
+    }
+
+    /// <param name="capped">True when the instance wasn't rebuilt because the run already opened <see cref="MaxOpens"/> families.</param>
+    public static List<Solid>? Rebuild(Document doc, FamilyInstance fi, Session session, out string? why, out bool capped)
+    {
+        why = null; capped = false;
         var family = fi.Symbol.Family;
         if (family.IsInPlace) { why = InPlace.Short; return null; }
         if (fi.Document.IsLinked) { why = "void family in a linked model: open the link to check it"; return null; }
         if (!family.IsEditable) { why = "the family can't be opened for editing"; return null; }
-        var key = fi.Symbol.Id.Value + "|" + string.Join("|", fi.Parameters.Cast<Parameter>()
-            .Where(p => p.StorageType is StorageType.Double or StorageType.Integer)
-            .Select(p => p.Definition.Name + "=" + (p.StorageType == StorageType.Double ? Math.Round(p.AsDouble(), 6) : p.AsInteger())).OrderBy(x => x));
-        if (!cache.TryGetValue(key, out var local))
+        var familyId = family.Id.Value;
+        if (session.Failed.TryGetValue(familyId, out var failed)) { why = failed; return null; }
+
+        List<Solid>? local = null;
+        var known = session.Driving.TryGetValue(familyId, out var driving);
+        var key = known ? Key(fi, driving!) : null;
+        if (key is null || !session.Cache.TryGetValue(key, out local))
         {
+            if (session.Opens >= MaxOpens) { capped = true; why = $"not rebuilt: at most {MaxOpens} families are opened per run"; return null; }
+            session.Opens++;
             local = null;
+            string? failure = null;
             Document? famDoc = null;
             try
             {
                 famDoc = doc.EditFamily(family);
                 var mgr = famDoc.FamilyManager;
+                if (!known) { driving = DrivingParameters(famDoc); session.Driving[familyId] = driving; key = Key(fi, driving); }
                 using var t = new Transaction(famDoc, "match instance");
                 t.Start();
                 var ft = mgr.Types.Cast<FamilyType>().FirstOrDefault(x => x.Name == fi.Symbol.Name);
@@ -128,20 +148,68 @@ internal static class VoidSolids
                         if (o is Solid s && Math.Abs(s.Volume) > 1e-9) local.Add(SolidUtils.Clone(s));
                 }
                 t.RollBack();
-                if (local.Count == 0) { why = "no void forms found in the family (voids in nested families aren't read)"; local = null; }
+                if (local.Count == 0) { failure = "no void forms found in the family (voids in nested families aren't read)"; local = null; }
             }
             catch (Exception ex) when (ex is Autodesk.Revit.Exceptions.ApplicationException or InvalidOperationException or ArgumentException)
             {
-                why = "couldn't open the family: " + Geo.Reason(ex);
+                failure = "couldn't open the family: " + Geo.Reason(ex);
+                local = null;
             }
             finally { famDoc?.Close(false); }
-            cache[key] = local;
+            // A family that failed fails the same way for every instance: never open it again this run.
+            if (failure != null) { session.Failed[familyId] = failure; why = failure; return null; }
+            if (key != null) session.Cache[key] = local;
         }
         if (local is null) { why ??= "not rebuilt"; return null; }
         var tr = fi.GetTotalTransform();
         var placed = local.Select(s => SolidUtils.CreateTransformed(s, tr)).Where(s => s.Volume > 1e-9).ToList();
         if (placed.Count == 0) { why = "rebuilt solids came out inside-out (mirrored instance?)"; return null; }
         return placed;
+    }
+
+    /// <summary>The type plus the values of the family's geometry-driving parameters, so instances that differ only in
+    /// other values (offsets, marks, project parameters) share one rebuild.</summary>
+    private static string Key(FamilyInstance fi, List<string> driving)
+    {
+        var parts = new List<string> { fi.Symbol.Id.Value.ToString() };
+        foreach (var name in driving)
+        {
+            var p = fi.LookupParameter(name) ?? fi.Symbol.LookupParameter(name);
+            if (p is null || !p.HasValue) { parts.Add(name + "=?"); continue; }
+            parts.Add(name + "=" + (p.StorageType == StorageType.Double ? Math.Round(p.AsDouble(), 6).ToString("R", System.Globalization.CultureInfo.InvariantCulture)
+                : p.StorageType == StorageType.Integer ? p.AsInteger().ToString() : p.AsValueString() ?? ""));
+        }
+        return string.Join("|", parts);
+    }
+
+    /// <summary>Settable family parameters that drive geometry: dimension labels, parameters associated to element
+    /// parameters (extrusion ends, visibility, nested family parameters), and the inputs of formulas feeding those.</summary>
+    private static List<string> DrivingParameters(Document famDoc)
+    {
+        var mgr = famDoc.FamilyManager;
+        var all = mgr.Parameters.Cast<FamilyParameter>().ToList();
+        var drive = new HashSet<string>();
+        foreach (var fp in all)
+            if (fp.AssociatedParameters is { Size: > 0 }) drive.Add(fp.Definition.Name);
+        foreach (var d in new FilteredElementCollector(famDoc).OfClass(typeof(Dimension)).Cast<Dimension>())
+        {
+            try { if (d.FamilyLabel is { } label) drive.Add(label.Definition.Name); }
+            catch (Autodesk.Revit.Exceptions.InvalidOperationException) { /* not a labelable dimension */ }
+        }
+        // Formula inputs: a driving parameter computed by a formula is driven by the parameters the formula names.
+        for (var grew = true; grew;)
+        {
+            grew = false;
+            foreach (var fp in all)
+            {
+                if (!drive.Contains(fp.Definition.Name) || !fp.IsDeterminedByFormula || fp.Formula is not { } formula) continue;
+                foreach (var other in all)
+                    if (formula.Contains(other.Definition.Name) && drive.Add(other.Definition.Name)) grew = true;
+            }
+        }
+        return all.Where(fp => drive.Contains(fp.Definition.Name) && !fp.IsDeterminedByFormula && !fp.IsReporting
+                               && fp.StorageType is StorageType.Double or StorageType.Integer)
+            .Select(fp => fp.Definition.Name).Distinct().OrderBy(x => x, StringComparer.Ordinal).ToList();
     }
 }
 
@@ -580,6 +648,11 @@ public sealed class PlaceVoidCutsTool : IRevitTool
         var before = new Dictionary<long, double?>();
         foreach (var t in specs.SelectMany(s => s.Targets)) if (!before.ContainsKey(t.Id.Value)) before[t.Id.Value] = Geo.Volume(t);
 
+        // The placements and the removal of ineffective cuts below are one Undo step. Disposing the group unfinished
+        // (an exception) rolls it back.
+        if (doc.IsModifiable) throw new InvalidOperationException("A transaction is already open; this tool must run on its own.");
+        using var group = new TransactionGroup(doc, "Sketch ProMax: Place void cuts");
+        group.Start();
         var batch = ItemBatch.Run(doc, "Place void cuts", specs, s => s.Label,
             s => s.Targets.Select(t => t.Id),
             s =>
@@ -674,6 +747,7 @@ public sealed class PlaceVoidCutsTool : IRevitTool
         }
 
         var undone = new List<string>();
+        string? removalNote = null;
         if (args.OptBool("remove_ineffective", true) && ineffective.Count > 0)
         {
             using var t = new Transaction(doc, "Sketch ProMax: undo void cuts that removed nothing");
@@ -693,8 +767,14 @@ public sealed class PlaceVoidCutsTool : IRevitTool
                     undone.Add($"deleted void {s.VoidId!.Value} (it cut nothing)");
                 }
             }
-            t.Commit();
+            var status = t.Commit();
+            if (status != TransactionStatus.Committed)
+            {
+                undone.Clear();
+                removalNote = $"Revit did not accept removing the cuts that removed nothing ({status}); they are still in the model. Remove them by hand (Modify > Cut > Uncut Geometry, or delete the void).";
+            }
         }
+        if (batch.Done > 0) group.Assimilate(); else group.RollBack();
 
         var failures = batch.Failed.Select(f => new { item = f.Item, reason = f.Error + (!faceBased && (f.Error ?? "").IndexOf("cut", StringComparison.OrdinalIgnoreCase) >= 0 ? " " + LevelBasedHint : "") }).ToList();
         return ToolResult.Ok(new
@@ -706,6 +786,7 @@ public sealed class PlaceVoidCutsTool : IRevitTool
             notCuttable = notCuttable.Count > 0 ? notCuttable : null,
             checks = results.Take(200),
             undone = undone.Count > 0 ? undone : null,
+            removalNote,
             warning = !faceBased ? LevelBasedHint : null,
             note = "Volumes are the elements' solid volumes read after the change was committed. Run verify_void_cut later to re-check.",
         });
