@@ -15,6 +15,8 @@ public sealed class SettingsWindow : Window
         AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, Height = 220, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
     };
 
+    private readonly TextBox _legendSeed = new();
+
     public SettingsWindow()
     {
         Title = "Sketch ProMax settings";
@@ -26,6 +28,7 @@ public sealed class SettingsWindow : Window
         _approval.IsChecked = _settings.RequireApprovalForChanges;
         _autoUpdate.IsChecked = _settings.AutoUpdate;
         _standards.Text = _settings.FirmStandards;
+        _legendSeed.Text = _settings.LegendSeedPath ?? "";
 
         var save = new Button { Content = "Save", Width = 80, IsDefault = true, Margin = new Thickness(0, 10, 0, 0), HorizontalAlignment = HorizontalAlignment.Right };
         save.Click += (_, _) => Save();
@@ -42,6 +45,12 @@ public sealed class SettingsWindow : Window
         stack.Children.Add(_standards);
         stack.Children.Add(new TextBlock
         {
+            Text = "Legend seed file (optional): a firm template or project (.rvt/.rte) with a legend. create_legend copies from it when a model has no legend.",
+            TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 12, 0, 4),
+        });
+        stack.Children.Add(_legendSeed);
+        stack.Children.Add(new TextBlock
+        {
             Text = "Changes apply to new chats in the Claude app.", Foreground = System.Windows.Media.Brushes.Gray, Margin = new Thickness(0, 6, 0, 0),
         });
         stack.Children.Add(save);
@@ -53,6 +62,7 @@ public sealed class SettingsWindow : Window
         _settings.RequireApprovalForChanges = _approval.IsChecked == true;
         _settings.AutoUpdate = _autoUpdate.IsChecked == true;
         _settings.FirmStandards = _standards.Text;
+        _settings.LegendSeedPath = _legendSeed.Text.Trim().Trim('"');
         _settings.Save();
         DialogResult = true;
     }

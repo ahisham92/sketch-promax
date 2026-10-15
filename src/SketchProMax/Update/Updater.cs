@@ -366,6 +366,7 @@ public static class Updater
                 throw new InvalidDataException("The downloaded update is incomplete (no SketchProMax.dll). It will be retried later.");
         }
 
+        ClearDownloadMark(zip);
         progress.Report(UpdateStage.Unpacking, $"Unpacking Sketch ProMax {release.Version}…");
         var target = Path.Combine(VersionsFolder, release.Version);
         var temp = target + ".partial";
@@ -376,6 +377,7 @@ public static class Updater
         if (Directory.Exists(target)) Directory.Delete(target, true);
         Directory.Move(dist, target);
         Directory.Delete(temp, true);
+        foreach (var file in Directory.GetFiles(target, "*", SearchOption.AllDirectories)) ClearDownloadMark(file);
         File.Delete(zip);
         return target;
     }
@@ -477,6 +479,20 @@ public static class Updater
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { continue; }
             TryDelete(() => Directory.Delete(doomed, true));
         }
+    }
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", EntryPoint = "DeleteFileW", CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)]
+    private static extern bool DeleteFileNative(string path);
+
+    /// <summary>
+    /// Removes the "downloaded from the internet" mark (the Zone.Identifier alternate data stream) so Windows and
+    /// .NET Framework (Revit 2024) don't block the files. HttpClient and ZipFile don't normally add it, but security
+    /// software or a proxy can. The Win32 call is used because .NET Framework rejects "file:stream" paths.
+    /// </summary>
+    private static void ClearDownloadMark(string path)
+    {
+        try { DeleteFileNative(path + ":Zone.Identifier"); }
+        catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException or IOException or UnauthorizedAccessException) { }
     }
 
     private static void TryDelete(Action delete)

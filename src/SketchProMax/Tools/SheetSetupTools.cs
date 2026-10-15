@@ -544,7 +544,7 @@ public sealed class PlaceLegendOnSheetsTool : IRevitTool
         var doc = app.ActiveUIDocument.Document;
         var legends = new FilteredElementCollector(doc).OfClass(typeof(View)).Cast<View>().Where(v => !v.IsTemplate && v.ViewType == ViewType.Legend).ToList();
         if (legends.Count == 0)
-            return ToolResult.Error("The model has no legends. Revit's API can't create a new legend; copy one in with copy_from_file, or make one legend by hand once and I can fill and place it.");
+            return ToolResult.Error("The model has no legends. Make one with create_legend (it copies one from another open model or a saved legend seed), copy one in with copy_from_file, or make one by hand once (View > Legends > Legend).");
         var wanted = args.String("legend").Trim();
         var legend = legends.FirstOrDefault(v => string.Equals(v.Name, wanted, StringComparison.OrdinalIgnoreCase))
                      ?? (legends.Where(v => v.Name.IndexOf(wanted, StringComparison.OrdinalIgnoreCase) >= 0).Take(2).ToList() is { Count: 1 } one ? one[0] : null)

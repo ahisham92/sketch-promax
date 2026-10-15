@@ -18,6 +18,12 @@ public sealed class AgentSettings
     /// <summary>Download new versions from GitHub when Revit starts; they take effect the next time Revit opens.</summary>
     public bool AutoUpdate { get; set; } = true;
 
+    /// <summary>
+    /// Optional firm template or seed (.rvt/.rte) holding a legend. create_legend copies a legend from it when the model
+    /// has none (Revit's API can't create a legend from nothing). Empty: not set.
+    /// </summary>
+    public string LegendSeedPath { get; set; } = "";
+
     public static string FilePath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "SketchProMax", "settings.json");
 

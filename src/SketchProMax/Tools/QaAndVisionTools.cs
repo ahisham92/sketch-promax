@@ -90,8 +90,10 @@ public sealed class CaptureViewImageTool : IRevitTool
     public string Description =>
         "Render a view or sheet to a PNG image and return it so you can look at it. Use this to visually " +
         "check drawings: overlapping tags or dimensions, crowded annotation, missing labels, layout issues. " +
-        "source 'export' (default) uses Revit's image export, which prints the view like a print/PDF would; " +
-        "source 'screen' grabs exactly what Revit shows in the open, active view window (selection highlights included). " +
+        "By default it grabs the screen when the view is the open, active view in Revit and no export-only option " +
+        "(element_ids, margin, resolution_dpi) is given, and otherwise uses Revit's image export; the result says which and why. " +
+        "source 'export' forces Revit's image export, which prints the view like a print/PDF would; " +
+        "source 'screen' forces a grab of exactly what Revit shows in the open, active view window (selection highlights included). " +
         "Note: Revit draws a CUT pattern override only where the cut plane passes through an element; parts seen beyond " +
         "it (e.g. the lower part of a sloped slab in a section) use the projection/surface pattern, normally the " +
         "material's. The result lists filters/categories that override only the cut pattern.";
@@ -101,7 +103,7 @@ public sealed class CaptureViewImageTool : IRevitTool
       "pixel_width": {"type": "integer", "description": "Image width in pixels (default 1600, max 2400)."},
       "element_ids": {"type": "array", "items": {"type": "integer"}, "description": "Plan views: zoom to these elements (the view itself is left unchanged)."},
       "margin": {"type": "number", "description": "Around element_ids, project units. Default 2 m."},
-      "source": {"type": "string", "enum": ["export", "screen"], "description": "export (default): Revit image export. screen: what the open, active view window shows right now."},
+      "source": {"type": "string", "enum": ["export", "screen"], "description": "Default: screen when the view is the active view and no element_ids/margin/resolution_dpi are given, else export. export: Revit image export. screen: what the open, active view window shows right now."},
       "resolution_dpi": {"type": "integer", "enum": [72, 150, 300, 600], "description": "Export resolution, which sets how line weights and patterns are drawn (default 150)."}
     }
     """;
@@ -114,7 +116,30 @@ public sealed class CaptureViewImageTool : IRevitTool
         var viewId = args.OptLong("view_id") is { } id ? new ElementId(id) : doc.ActiveView.Id;
         var maxWidth = (int)Math.Min(Math.Max(args.OptLong("pixel_width") ?? 1600, 400), 2400);
         var patternNotes = CutPatternNotes(doc, doc.GetElement(viewId) as View, args.LongList("element_ids"));
-        if (args.OptString("source") == "screen")
+        var source = args.OptString("source");
+        if (source is not (null or "export" or "screen")) throw new ArgumentException("source must be export or screen.");
+        string how;
+        if (source is null)
+        {
+            // Screen is what the user sees and is instant; export is needed for zooming to elements or a set resolution.
+            var exportOnly = new[] { "element_ids", "margin", "resolution_dpi" }.Where(args.Has).ToList();
+            var isActive = doc.ActiveView.Id == viewId && app.ActiveUIDocument.GetOpenUIViews().Any(u => u.ViewId == viewId);
+            if (exportOnly.Count > 0) how = $"Used image export because {string.Join(", ", exportOnly)} need{(exportOnly.Count == 1 ? "s" : "")} it.";
+            else if (!isActive) how = "Used image export because this view is not the active view in Revit (screen capture needs it open and current).";
+            else
+            {
+                try
+                {
+                    var uiActive = app.ActiveUIDocument.GetOpenUIViews().First(u => u.ViewId == viewId);
+                    var grab = ScreenGrab.Capture(app.MainWindowHandle, uiActive.GetWindowRectangle(), maxWidth);
+                    return new ToolResult($"Screen image of view '{doc.GetElement(viewId)?.Name}' as Revit shows it now (source=screen, chosen because it is the active view; " +
+                                          "pass source=export for a print-like image)." + patternNotes, PngImage: grab);
+                }
+                catch (InvalidOperationException ex) { how = $"Used image export because the screen capture failed: {ex.Message}"; }
+            }
+        }
+        else how = source == "export" ? "source=export as asked." : "";
+        if (source == "screen")
         {
             if (args.LongList("element_ids").Count > 0)
                 return ToolResult.Error("source=screen shows the view as it is on screen; zoom in Revit, or use source=export with element_ids.");
@@ -122,7 +147,7 @@ public sealed class CaptureViewImageTool : IRevitTool
             if (uiView is null || doc.ActiveView.Id != viewId)
                 return ToolResult.Error($"'{doc.GetElement(viewId)?.Name}' is not the active view in Revit. Open it (make it the current tab), then capture again, or use source=export.");
             var shot = ScreenGrab.Capture(app.MainWindowHandle, uiView.GetWindowRectangle(), maxWidth);
-            return new ToolResult($"Screen image of view '{doc.GetElement(viewId)?.Name}' as Revit shows it now." + patternNotes, PngImage: shot);
+            return new ToolResult($"Screen image of view '{doc.GetElement(viewId)?.Name}' as Revit shows it now (source=screen as asked)." + patternNotes, PngImage: shot);
         }
         var dir = Path.Combine(Path.GetTempPath(), "SketchProMax", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
@@ -187,7 +212,7 @@ public sealed class CaptureViewImageTool : IRevitTool
         var bytes = File.ReadAllBytes(file);
         try { Directory.Delete(dir, true); } catch (IOException) { }
 
-        return new ToolResult($"Image of view '{doc.GetElement(viewId)?.Name}'." + patternNotes, PngImage: bytes);
+        return new ToolResult($"Image of view '{doc.GetElement(viewId)?.Name}' (Revit image export). {how}" + patternNotes, PngImage: bytes);
     }
 
     /// <summary>
