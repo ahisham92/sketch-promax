@@ -134,7 +134,8 @@ public sealed class RenameElementsTool : IRevitTool
     public string Name => "rename_elements";
     public string Description =>
         "Rename or renumber many elements at once: views, sheets (name and/or number), levels, grids, rooms " +
-        "(name and/or number), family types. Use this to apply firm naming conventions across the model.";
+        "(name and/or number), family types. Use this to apply firm naming conventions across the model. Each element is its own " +
+        "step: in a workshared model, elements another user owns are skipped and named with their owner, and one refusal undoes nothing else.";
     public string PropertiesJson => """
     {
       "items": {
@@ -157,52 +158,67 @@ public sealed class RenameElementsTool : IRevitTool
     public ToolResult Execute(UIApplication app, ToolArgs args)
     {
         var doc = app.ActiveUIDocument.Document;
-        var items = args.Array("items").ToList();
-        var results = new List<object>();
-        using var t = RevitHelpers.StartTransaction(doc, "Rename elements");
-
-        // Sheet and room numbers must be unique at every step, so park changing numbers on temporary values first.
-        // The originals are kept so an element whose final number fails gets its old number back.
-        var renumber = items.Where(i => i.TryGetProperty("number", out _)).ToList();
-        var original = new Dictionary<long, string>();
-        foreach (var i in renumber)
-        {
-            var e = doc.GetElement(new ElementId(i.GetProperty("element_id").GetInt64()));
-            if (e is not (ViewSheet or SpatialElement)) continue; // reported in the loop below
-            var old = GetNumber(e);
-            // Letters and digits only: sheet numbers refuse characters such as ~ { } [ ] | ; < > ? \ :
-            try { SetNumber(e, "TMP" + Guid.NewGuid().ToString("N").Substring(0, 10)); original[e.Id.Value] = old; }
-            catch (Autodesk.Revit.Exceptions.ApplicationException) { }
-        }
-
-        foreach (var i in items)
+        var items = new List<(long id, Element? e, string? name, string? number)>();
+        foreach (var i in args.Array("items"))
         {
             var id = i.GetProperty("element_id").GetInt64();
-            var e = doc.GetElement(new ElementId(id));
-            if (e is null) { results.Add(new { element_id = id, status = "not found" }); continue; }
-            try
-            {
-                if (i.TryGetProperty("number", out var n))
-                {
-                    try { SetNumber(e, n.GetString()!); }
-                    catch (Exception) when (original.TryGetValue(id, out var old))
-                    {
-                        try { SetNumber(e, old); } catch (Autodesk.Revit.Exceptions.ApplicationException) { }
-                        original.Remove(id);
-                        throw;
-                    }
-                    original.Remove(id);
-                }
-                if (i.TryGetProperty("name", out var nm)) e.Name = nm.GetString()!;
-                results.Add(new { element_id = id, status = "ok" });
-            }
-            catch (Exception ex) when (ex is Autodesk.Revit.Exceptions.ApplicationException or ArgumentException or InvalidOperationException)
-            {
-                results.Add(new { element_id = id, status = ex.Message });
-            }
+            items.Add((id, doc.GetElement(new ElementId(id)),
+                i.TryGetProperty("name", out var nm) ? nm.GetString() : null,
+                i.TryGetProperty("number", out var n) ? n.GetString() : null));
         }
-        t.Commit();
-        return ToolResult.Ok(results);
+        var status = new Dictionary<int, string>();
+        // Workshared: elements someone else owns are skipped up front, each with its owner; every other item is its own step.
+        var locked = Batch.Locked(doc, items.Where(i => i.e is not null).Select(i => i.e!.Id));
+        var run = new List<int>();
+        for (var k = 0; k < items.Count; k++)
+        {
+            if (items[k].e is null) status[k] = "not found";
+            else if (locked.TryGetValue(items[k].id, out var why)) status[k] = "locked: " + why;
+            else run.Add(k);
+        }
+
+        Batch.InGroup(doc, "Rename elements", () =>
+        {
+            // Sheet and room numbers must be unique at every step, so changing numbers are parked on temporary values first
+            // (this is what lets two sheets swap numbers). An item that then fails gets its old number back.
+            var park = run.Where(k => items[k].number is not null && items[k].e is ViewSheet or SpatialElement).ToList();
+            var original = new Dictionary<int, string>();
+            var parked = ItemBatch.Run(doc, "Rename elements (park numbers)", park, k => items[k].id.ToString(), k => [items[k].e!.Id], k =>
+            {
+                var old = GetNumber(items[k].e!);
+                // Letters and digits only: sheet numbers refuse characters such as ~ { } [ ] | ; < > ? \ :
+                SetNumber(items[k].e, "TMP" + Guid.NewGuid().ToString("N").Substring(0, 10));
+                return old;
+            });
+            for (var j = 0; j < park.Count; j++)
+                if (parked.Items[j].Ok) original[park[j]] = (string)parked.Items[j].Value!;
+
+            var main = ItemBatch.Run(doc, "Rename elements", run, k => items[k].id.ToString(), k => [items[k].e!.Id], k =>
+            {
+                var (_, e, name, number) = items[k];
+                if (number is not null) SetNumber(e, number);
+                if (name is not null) e!.Name = name;
+                return null;
+            }, borrow: false);
+            var restore = new List<int>();
+            for (var j = 0; j < run.Count; j++)
+            {
+                var k = run[j];
+                status[k] = main.Items[j].Ok ? "ok" : main.Items[j].Error ?? "failed";
+                if (!main.Items[j].Ok && original.ContainsKey(k)) restore.Add(k);
+            }
+            if (restore.Count > 0)
+            {
+                var back = ItemBatch.Run(doc, "Rename elements (restore numbers)", restore, k => items[k].id.ToString(), k => [items[k].e!.Id],
+                    k => { SetNumber(items[k].e, original[k]); return null; }, borrow: false);
+                for (var j = 0; j < restore.Count; j++)
+                    if (!back.Items[j].Ok)
+                        status[restore[j]] += $" (and its old number '{original[restore[j]]}' could not be put back: {back.Items[j].Error}; it now has a temporary TMP number)";
+            }
+            return status;
+        }, _ => run.Count > 0);
+
+        return ToolResult.Ok(items.Select((i, k) => new { element_id = i.id, status = status.TryGetValue(k, out var st) ? st : "not applied" }));
     }
 
     private static string GetNumber(Element e) => e switch

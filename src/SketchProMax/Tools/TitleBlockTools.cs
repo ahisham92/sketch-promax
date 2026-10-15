@@ -159,38 +159,65 @@ public sealed class FillTitleBlocksTool : IRevitTool
 
         int written = 0;
         var projectResults = new List<object>();
-        using var t = RevitHelpers.StartTransaction(doc, "Fill title blocks");
-        foreach (var kv in project)
+        var locked = new List<object>();
+        Batch.InGroup(doc, "Fill title blocks", () =>
         {
-            var p = doc.ProjectInformation.LookupParameter(kv.Key);
-            var status = p is null ? "no such field in Project Information"
-                : p.IsReadOnly ? "read-only"
-                : SetParametersTool.Write(p, kv.Value) ? "ok" : "value rejected";
-            projectResults.Add(new { field = kv.Key, status });
-        }
-        foreach (var sheet in sheets)
-        {
-            var tb = bySheet.TryGetValue(sheet.Id.Value, out var l) ? l.First() : null;
-            foreach (var kv in values)
+            if (project.Count > 0)
             {
-                var value = kv.Value.Replace("{number}", sheet.SheetNumber).Replace("{name}", sheet.Name);
-                var p = Writable(sheet, kv.Key) ?? (tb is null ? null : Writable(tb, kv.Key));
-                if (p is null) { Problem($"{kv.Key}: no editable field with this name", sheet.SheetNumber); continue; }
-                try
+                var info = doc.ProjectInformation;
+                var r = ItemBatch.Run(doc, "Project information", [info], _ => "Project Information", i => [i.Id], i =>
                 {
-                    if (SetParametersTool.Write(p, value)) written++;
-                    else Problem($"{kv.Key}: value '{value}' rejected", sheet.SheetNumber);
-                }
-                catch (Autodesk.Revit.Exceptions.ApplicationException ex) { Problem($"{kv.Key}: {ex.Message}", sheet.SheetNumber); }
+                    var rows = new List<object>();
+                    foreach (var kv in project)
+                    {
+                        var p = i.LookupParameter(kv.Key);
+                        string status;
+                        try
+                        {
+                            status = p is null ? "no such field in Project Information"
+                                : p.IsReadOnly ? "read-only"
+                                : SetParametersTool.Write(p, kv.Value) ? "ok" : "value rejected";
+                        }
+                        catch (Autodesk.Revit.Exceptions.ApplicationException ex) { status = ex.Message; }
+                        rows.Add(new { field = kv.Key, status });
+                    }
+                    return rows;
+                });
+                if (r.Items[0].Ok) projectResults.AddRange((List<object>)r.Items[0].Value!);
+                else projectResults.AddRange(project.Keys.Select(k => (object)new { field = k, status = r.Items[0].Error }));
             }
-        }
-        t.Commit();
+            // Each sheet is its own step: a sheet (or its title block) another user owns is skipped and named; the rest are filled.
+            var batch = ItemBatch.Run(doc, "Fill title blocks", sheets, sh => sh.SheetNumber, sh =>
+                bySheet.TryGetValue(sh.Id.Value, out var l) ? new[] { sh.Id }.Concat(l.Select(tb => tb.Id)) : [sh.Id], sheet =>
+            {
+                var tb = bySheet.TryGetValue(sheet.Id.Value, out var l) ? l.First() : null;
+                var n = 0;
+                foreach (var kv in values)
+                {
+                    var value = kv.Value.Replace("{number}", sheet.SheetNumber).Replace("{name}", sheet.Name);
+                    var p = Writable(sheet, kv.Key) ?? (tb is null ? null : Writable(tb, kv.Key));
+                    if (p is null) { Problem($"{kv.Key}: no editable field with this name", sheet.SheetNumber); continue; }
+                    try
+                    {
+                        if (SetParametersTool.Write(p, value)) n++;
+                        else Problem($"{kv.Key}: value '{value}' rejected", sheet.SheetNumber);
+                    }
+                    catch (Autodesk.Revit.Exceptions.ApplicationException ex) { Problem($"{kv.Key}: {ex.Message}", sheet.SheetNumber); }
+                }
+                return n;
+            });
+            foreach (var o in batch.Items)
+                if (o.Ok) written += (int)o.Value!;
+                else locked.Add(new { sheet = o.Item, reason = o.Error });
+            return written;
+        }, n => n > 0 || projectResults.Count > 0);
         return ToolResult.Ok(new
         {
             sheets = sheets.Count,
             fields_written = written,
             project_info = projectResults,
             problems = problems.Select(p => new { problem = p.Key, sheets = p.Value }),
+            sheets_not_written = locked.Count > 0 ? locked : null,
         });
     }
 
@@ -238,42 +265,56 @@ public sealed class SetSheetTitleBlockTool : IRevitTool
         int changed = 0, added = 0, removed = 0, moved = 0;
         var skipped = new List<string>();
 
-        using var t = RevitHelpers.StartTransaction(doc, "Set sheet title blocks");
-        if (type is { IsActive: false }) { type.Activate(); doc.Regenerate(); }
-        foreach (var sheet in sheets)
+        var failures = new List<object>();
+        Batch.InGroup(doc, "Set sheet title blocks", () =>
         {
-            var list = bySheet.TryGetValue(sheet.Id.Value, out var l) ? l : [];
-            if (list.Count == 0)
+            // Each sheet is its own step: a sheet another user owns (workshared) is skipped and named; the rest are done.
+            var batch = ItemBatch.Run(doc, "Set sheet title blocks", sheets, sh => sh.SheetNumber, sh =>
+                bySheet.TryGetValue(sh.Id.Value, out var l) ? new[] { sh.Id }.Concat(l.Select(tb => tb.Id)) : [sh.Id], sheet =>
             {
-                if (type is null || !addMissing) { skipped.Add(sheet.SheetNumber); continue; }
-                doc.Create.NewFamilyInstance(XYZ.Zero, type, sheet);
-                added++;
-                continue;
-            }
-            if (removeDuplicates && list.Count > 1)
-            {
-                // Keep the one that already has the wanted type and sits at the origin.
-                var keep = list.OrderByDescending(tb => type is not null && tb.Symbol.Id == type.Id)
-                    .ThenBy(tb => tb.Location is LocationPoint p ? p.Point.GetLength() : double.MaxValue).First();
-                foreach (var extra in list.Where(tb => tb.Id != keep.Id)) { doc.Delete(extra.Id); removed++; }
-                list = [keep];
-            }
-            foreach (var tb in list)
-            {
-                if (type is not null && tb.Symbol.Id != type.Id) { tb.ChangeTypeId(type.Id); changed++; }
-                if (toOrigin && tb.Location is LocationPoint lp && lp.Point.GetLength() > 1e-6)
+                if (type is { IsActive: false }) { type.Activate(); doc.Regenerate(); }
+                int c = 0, a = 0, r = 0, m = 0;
+                var list = bySheet.TryGetValue(sheet.Id.Value, out var l) ? l : [];
+                if (list.Count == 0)
                 {
-                    ElementTransformUtils.MoveElement(doc, tb.Id, XYZ.Zero - lp.Point);
-                    moved++;
+                    if (type is null || !addMissing) return (c, a, r, m, false);
+                    doc.Create.NewFamilyInstance(XYZ.Zero, type, sheet);
+                    return (c, 1, r, m, true);
                 }
+                if (removeDuplicates && list.Count > 1)
+                {
+                    // Keep the one that already has the wanted type and sits at the origin.
+                    var keep = list.OrderByDescending(tb => type is not null && tb.Symbol.Id == type.Id)
+                        .ThenBy(tb => tb.Location is LocationPoint p ? p.Point.GetLength() : double.MaxValue).First();
+                    foreach (var extra in list.Where(tb => tb.Id != keep.Id)) { doc.Delete(extra.Id); r++; }
+                    list = [keep];
+                }
+                foreach (var tb in list)
+                {
+                    if (type is not null && tb.Symbol.Id != type.Id) { tb.ChangeTypeId(type.Id); c++; }
+                    if (toOrigin && tb.Location is LocationPoint lp && lp.Point.GetLength() > 1e-6)
+                    {
+                        ElementTransformUtils.MoveElement(doc, tb.Id, XYZ.Zero - lp.Point);
+                        m++;
+                    }
+                }
+                return (c, a, r, m, true);
+            });
+            foreach (var o in batch.Items)
+            {
+                if (!o.Ok) { failures.Add(new { sheet = o.Item, reason = o.Error }); continue; }
+                var (c, a, r, m, has) = ((int, int, int, int, bool))o.Value!;
+                changed += c; added += a; removed += r; moved += m;
+                if (!has) skipped.Add(o.Item);
             }
-        }
-        t.Commit();
+            return batch.Done;
+        }, n => n > 0);
         return ToolResult.Ok(new
         {
             sheets = sheets.Count, changed, added, removed, moved,
             title_block = type is null ? null : $"{type.FamilyName}: {type.Name}",
             sheets_left_without_title_block = skipped.Take(50),
+            sheets_not_changed = failures.Count > 0 ? failures : null,
         });
     }
 }

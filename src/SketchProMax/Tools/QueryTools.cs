@@ -75,6 +75,7 @@ public sealed class QueryElementsTool : IRevitTool
         "required": ["name", "contains"]
       },
       "include_parameters": {"type": "array", "items": {"type": "string"}, "description": "Parameter names to return for each element."},
+      "family": {"type": "string", "description": "Only these family types: 'Family: Type', a family name or a type name. Numbered copies of a family ('X 1', 'X 2', made when a family is pasted in twice) are included and listed."},
       "limit": {"type": "integer", "description": "Max elements to return (default 200)."}
     }
     """;
@@ -95,6 +96,16 @@ public sealed class QueryElementsTool : IRevitTool
         {
             var level = RevitHelpers.FindLevel(doc, levelName);
             elements = elements.Where(e => e.LevelId == level.Id);
+        }
+
+        List<string>? matchedTypes = null;
+        if (args.OptString("family") is { Length: > 0 } family)
+        {
+            var types = DetailTypes.Matching(new FilteredElementCollector(doc).OfCategory(bic).WhereElementIsElementType().Cast<ElementType>(), family);
+            if (types.Count == 0) return ToolResult.Error($"No {args.String("category")} type matches '{family}'. Use list_types to see the loaded ones.");
+            matchedTypes = types.Select(TypeMatch.Label).ToList();
+            var typeIds = new HashSet<long>(types.Select(t => t.Id.Value));
+            elements = elements.Where(e => typeIds.Contains(e.GetTypeId().Value));
         }
 
         if (args.Has("parameter_filter"))
@@ -124,7 +135,7 @@ public sealed class QueryElementsTool : IRevitTool
             }),
         });
 
-        return ToolResult.Ok(new { total = all.Count, returned = Math.Min(limit, all.Count), elements = rows });
+        return ToolResult.Ok(new { total = all.Count, returned = Math.Min(limit, all.Count), matchedTypes, elements = rows });
     }
 }
 

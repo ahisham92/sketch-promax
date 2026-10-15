@@ -8,9 +8,12 @@ public sealed class SetParametersTool : IRevitTool
 {
     public string Name => "set_parameters";
     public string Description =>
-        "Set parameter values on elements in one transaction. Values are written as the user would type them " +
+        "Set parameter values on elements. Values are written as the user would type them " +
         "in Revit (e.g. '2100 mm', '60 min', 'Yes'). Set type=true to write the element's type parameter " +
-        "(this affects every instance of that type).";
+        "(this affects every instance of that type). Each element is its own step, so one refused or locked element " +
+        "(workshared: borrowed by someone else, named in the result) undoes nothing else. Values are read back after Revit " +
+        "regenerates; any that did not stick are re-applied one parameter per step, and what still differs is reported " +
+        "with the current value and why (formula, reporting/read-only, constraint). separate_steps=true writes every value as its own step.";
     public string PropertiesJson => """
     {
       "changes": {
@@ -25,7 +28,8 @@ public sealed class SetParametersTool : IRevitTool
           },
           "required": ["element_id", "parameter", "value"]
         }
-      }
+      },
+      "separate_steps": {"type": "boolean", "description": "Write each value in its own transaction, regenerating in between (default: per element, splitting only when needed)."}
     }
     """;
     public string[] Required => ["changes"];
@@ -34,37 +38,51 @@ public sealed class SetParametersTool : IRevitTool
     public ToolResult Execute(UIApplication app, ToolArgs args)
     {
         var doc = app.ActiveUIDocument.Document;
-        var results = new List<object>();
-        using var t = RevitHelpers.StartTransaction(doc, "Set parameters");
-
+        var rows = new List<(long id, string name, string value, ElementId? target)>();
         foreach (var c in args.Array("changes"))
         {
             var id = c.GetProperty("element_id").GetInt64();
             var name = c.GetProperty("parameter").GetString()!;
-            var value = c.GetProperty("value").GetString() ?? "";
-            var onType = c.TryGetProperty("type", out var tp) && tp.GetBoolean();
-
+            var value = c.TryGetProperty("value", out var v) ? (v.ValueKind == System.Text.Json.JsonValueKind.String ? v.GetString() ?? "" : v.GetRawText()) : "";
+            var onType = c.TryGetProperty("type", out var tp) && tp.ValueKind == System.Text.Json.JsonValueKind.True;
             var e = doc.GetElement(new ElementId(id));
-            if (onType && e != null) e = doc.GetElement(e.GetTypeId());
-            var p = e?.LookupParameter(name);
-
-            string status;
-            if (e is null) status = "element not found";
-            else if (p is null) status = "parameter not found";
-            else if (p.IsReadOnly) status = "parameter is read-only";
-            else
-            {
-                try { status = Write(p, value) ? "ok" : "value rejected"; }
-                catch (Exception ex) when (ex is Autodesk.Revit.Exceptions.ApplicationException or ArgumentException or FormatException)
-                {
-                    status = ex.Message;
-                }
-            }
-
-            results.Add(new { element_id = id, parameter = name, status });
+            var target = e is null ? null : onType ? e.GetTypeId() : e.Id;
+            if (target == ElementId.InvalidElementId) target = null;
+            rows.Add((id, name, value, target));
         }
 
-        t.Commit();
+        // One target per element (or type), keeping the order the changes were given in.
+        var targets = rows.Where(r => r.target is not null).GroupBy(r => r.target!.Value)
+            .Select(g => new ParamEdits.Target
+            {
+                Id = g.First().target!, Label = g.First().target!.Value.ToString(),
+                // The same parameter given twice: the last value wins (writing both would undo each other's read-back).
+                Wants = g.GroupBy(r => r.name, StringComparer.OrdinalIgnoreCase).Select(n => new ParamEdits.Want(n.Last().name, n.Last().value)).ToList(),
+            }).ToList();
+        var lines = targets.Count == 0 ? []
+            : Batch.InGroup(doc, "Set parameters",
+                () => ParamEdits.Apply(doc, "Set parameters", targets, args.OptBool("separate_steps")),
+                l => l.Any(x => x.Ok));
+
+        // Each change's own line (the same parameter given twice on one element reports the final state twice).
+        var results = new List<object>();
+        foreach (var r in rows)
+        {
+            if (r.target is null)
+            {
+                results.Add(new { element_id = r.id, parameter = r.name, status = doc.GetElement(new ElementId(r.id)) is null ? "element not found" : "element has no type" });
+                continue;
+            }
+            var l = lines.LastOrDefault(x => x.element_id == r.target.Value && string.Equals(x.parameter, r.name, StringComparison.OrdinalIgnoreCase));
+            results.Add(new
+            {
+                element_id = r.id,
+                parameter = r.name,
+                status = l?.status ?? "not applied",
+                now = l is null || l.status == "ok" ? null : l.now,
+                note = l?.note,
+            });
+        }
         return ToolResult.Ok(results);
     }
 

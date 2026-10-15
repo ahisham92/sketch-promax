@@ -23,7 +23,7 @@ internal static class ViewPoints
             .OrderBy(s => s.FamilyName).ThenBy(s => s.Name).ToList();
         if (symbols.Count == 0) throw new InvalidOperationException($"No {what} family is loaded. Load one with load_family first.");
         if (name is null) return symbols[0];
-        return TypeMatch.Find(symbols, name, what);
+        return DetailTypes.Find(doc, category, name, what, out _);
     }
 }
 
@@ -133,7 +133,11 @@ public sealed class PlaceDetailComponentsTool : IRevitTool
         "Place detail components (detail items, e.g. 'Break Line', 'Wood Blocking', 'Insulation', 'Concrete Masonry Units') " +
         "in a plan, section, elevation, drafting or detail view. Point-based components take 'at'; line-based ones take " +
         "'start' and 'end'. Points are [x, y] in project units: model x,y on plans, or along the view's right/up axes " +
-        "measured from the view origin in other views; [x, y, z] is a model point. Use list_types category 'Detail Items' to find types.";
+        "measured from the view origin in other views; [x, y, z] is a model point. Use list_types category 'Detail Items' to find types. " +
+        "Each placement is its own step (one refused item undoes nothing else). Parameters are set after placing, read back after " +
+        "regeneration and re-applied once if they did not stick; what still differs is reported with the reason (formula, read-only...). " +
+        "If Revit refuses a new instance ('Can't make type', constraint errors), an existing instance of the type is copied instead " +
+        "(method 'auto', the default); see also place_detail_item_copy.";
     public string PropertiesJson => """
     {
       "view_id": {"type": "integer", "description": "Default: active view."},
@@ -145,7 +149,8 @@ public sealed class PlaceDetailComponentsTool : IRevitTool
         "end": {"type": "array", "items": {"type": "number"}},
         "rotation_degrees": {"type": "number"},
         "parameters": {"type": "object", "description": "Instance parameters to set, name -> value."}
-      }}}
+      }}},
+      "method": {"type": "string", "enum": ["auto", "new", "copy"], "description": "auto (default): new instance, falling back to copying an existing one when Revit refuses. new: never copy. copy: always copy an existing instance."}
     }
     """;
     public string[] Required => ["placements"];
@@ -157,67 +162,37 @@ public sealed class PlaceDetailComponentsTool : IRevitTool
         var view = ViewKit.ViewOrActive(doc, args.OptLong("view_id"));
         if (view.IsTemplate || view is View3D || view is ViewSchedule || view.ViewType == ViewType.DrawingSheet)
             return ToolResult.Error($"Detail components go in plan, section, elevation, drafting or detail views, not '{view.Name}' ({view.ViewType}).");
-        var defaultName = args.OptString("family");
+        var method = args.OptString("method") ?? "auto";
+        if (method is not ("auto" or "new" or "copy")) throw new ArgumentException("method must be auto, new or copy.");
         var placements = args.Array("placements").ToList();
         if (placements.Count == 0) return ToolResult.Error("Give at least one placement.");
 
-        var created = new List<long>();
+        var cache = new Dictionary<string, (FamilySymbol, string?)>(StringComparer.OrdinalIgnoreCase);
+        var specs = placements.Select((p, i) => DetailPlacement.Parse(doc, view, p, i, args.OptString("family"), cache)).ToList();
+        Batch.InGroup(doc, "Place detail components", () => { DetailPlacement.Run(doc, view, specs, method, null); return specs; },
+            s => s.Any(x => x.Created is not null));
+
+        var placed = specs.Where(s => s.Created is not null).ToList();
         var errors = new List<object>();
-        using var t = RevitHelpers.StartTransaction(doc, "Place detail components");
-        var cache = new Dictionary<string, FamilySymbol>(StringComparer.OrdinalIgnoreCase);
-        for (var i = 0; i < placements.Count; i++)
+        foreach (var s in specs)
         {
-            var p = placements[i];
-            try
-            {
-                var name = p.TryGetProperty("family", out var f) ? f.GetString() : defaultName;
-                var key = name ?? "";
-                if (!cache.TryGetValue(key, out var symbol))
-                {
-                    symbol = cache[key] = ViewPoints.Symbol(doc, BuiltInCategory.OST_DetailComponents, name, "detail item");
-                    if (!symbol.IsActive) { symbol.Activate(); doc.Regenerate(); }
-                }
-                FamilyInstance inst;
-                var lineBased = symbol.Family.FamilyPlacementType == FamilyPlacementType.CurveBasedDetail;
-                if (lineBased)
-                {
-                    if (!p.TryGetProperty("start", out var s) || !p.TryGetProperty("end", out var e))
-                        throw new ArgumentException($"'{symbol.FamilyName}' is line-based: give start and end.");
-                    var a = ViewPoints.ToModel(doc, view, s);
-                    var b = ViewPoints.ToModel(doc, view, e);
-                    if (a.DistanceTo(b) < doc.Application.ShortCurveTolerance) throw new ArgumentException("start and end are the same point.");
-                    inst = doc.Create.NewFamilyInstance(Line.CreateBound(a, b), symbol, view);
-                }
-                else
-                {
-                    var atSpec = p.TryGetProperty("at", out var at) ? at : p.TryGetProperty("start", out var st) ? st
-                        : throw new ArgumentException("Give 'at' for a point-based detail item.");
-                    var point = ViewPoints.ToModel(doc, view, atSpec);
-                    inst = doc.Create.NewFamilyInstance(point, symbol, view);
-                    if (p.TryGetProperty("rotation_degrees", out var r) && Math.Abs(r.GetDouble()) > 1e-9)
-                        ElementTransformUtils.RotateElement(doc, inst.Id, Line.CreateUnbound(point, view.ViewDirection), r.GetDouble() * Math.PI / 180);
-                }
-                if (p.TryGetProperty("parameters", out var ps) && ps.ValueKind == JsonValueKind.Object)
-                    foreach (var kv in ps.EnumerateObject())
-                    {
-                        var prm = inst.LookupParameter(kv.Name);
-                        if (prm is null || prm.IsReadOnly) { errors.Add(new { index = i, warning = $"no editable parameter '{kv.Name}'" }); continue; }
-                        if (!SetParametersTool.Write(prm, kv.Value.ValueKind == JsonValueKind.String ? kv.Value.GetString() ?? "" : kv.Value.GetRawText())) errors.Add(new { index = i, warning = $"'{kv.Name}' rejected the value" });
-                    }
-                created.Add(inst.Id.Value);
-            }
-            catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or Autodesk.Revit.Exceptions.ApplicationException)
-            {
-                errors.Add(new { index = i, error = ex.Message.Trim() });
-            }
+            if (s.Created is null) errors.Add(new { index = s.Index, error = s.Error ?? s.FallbackReason ?? "not placed" });
+            foreach (var l in ParamEdits.Problems(s.Params).Where(l => !l.Ok))
+                errors.Add(new { index = s.Index, warning = $"'{l.parameter}' {l.status}" + (l.now is null ? "" : $" (now {l.now})") + (l.note is null ? "" : $": {l.note}") });
         }
-        if (created.Count == 0)
-        {
-            t.RollBack();
+        if (placed.Count == 0)
             return ToolResult.Error($"No detail components were placed. {JsonSerializer.Serialize(errors.Take(10))}");
-        }
-        t.Commit();
-        return ToolResult.Ok(new { view = view.Name, placed = created.Count, ids = created, errors });
+        return ToolResult.Ok(new
+        {
+            view = view.Name,
+            placed = placed.Count,
+            ids = placed.Select(s => s.Created!.Value),
+            errors,
+            copied = placed.Count(s => s.Method == "copy") is var c && c > 0 ? c : (int?)null,
+            placements = specs.Any(s => s.Method == "copy" || s.Params.Count > 0 || s.TypeNote != null) ? specs.Select(DetailPlacement.Row) : null,
+            dependentViewWarning = view.GetPrimaryViewId() != ElementId.InvalidElementId
+                ? "This is a dependent view: detail items belong to the primary view and show in every dependent view whose crop covers them." : null,
+        });
     }
 }
 
