@@ -16,9 +16,15 @@ public static class FailureGuard
     private static readonly List<string> Errors = [];
     private static readonly List<string> Warnings = [];
 
+    /// <summary>
+    /// While above zero, failures are still rolled back but not reported in the tool's result: the caller (ItemBatch)
+    /// reports them per item itself.
+    /// </summary>
+    internal static int Muted;
+
     public static void Handle(object? sender, FailuresProcessingEventArgs e)
     {
-        if (!_active) return;
+        if (!_active || Muted > 0) return;
         var accessor = e.GetFailuresAccessor();
         var hasError = false;
         foreach (var f in accessor.GetFailureMessages())
