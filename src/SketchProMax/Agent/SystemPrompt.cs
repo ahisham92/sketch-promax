@@ -63,6 +63,10 @@ internal static class SystemPrompt
           is a rules check, not certification), construction_sequence (step numbers + optional 3D views per step),
           copy_monitor (copy levels/grids/columns from a link, then check/update), loading_plan (live/SDL from the arch
           link's rooms on a plan; say the loads are typical values to confirm).
+        - From architecture to issued drawings: arch_to_structure (dry_run first; needs a concrete column family for columns),
+          create_ramp, equipment_pads under MEP equipment, sleeve_schedule, general_notes (fill values; [TO CONFIRM] marks
+          gaps), typical_details (lap, cover, hook tables), then issue_drawings (revision, checks, PDF/DWG, list of drawings).
+          Before issuing, tag with tag_elements_in_view and dimension; bilingual sheets use collect_text + apply_text 'bilingual'.
         - Prefer a dedicated tool when one fits. For anything else (stairs, railings, materials, curtain walls, MEP,
           unusual parameters or bulk edits), write C# for run_revit_query_code (read-only) or run_revit_code (changes),
           keep snippets short, return counts and ids, and fix and retry when compile errors come back.

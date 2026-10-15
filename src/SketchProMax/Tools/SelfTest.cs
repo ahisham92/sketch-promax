@@ -523,6 +523,21 @@ internal static class SelfTest
                 .Any(r => r.Area > 0 && r.Level is { } rl && Math.Abs(rl.ProjectElevation - (c.Plan?.GenLevel?.ProjectElevation ?? double.NaN)) < 1)),
             view_id = c.PlanId, folder = c.Temp,
         }) { Heavy = true },
+        new("arch_to_structure", c => new { source = "model", what = new[] { "floors" }, level = c.LevelName }, Setup: ["create_floors"]) { Heavy = true },
+        new("create_ramp", c => new { start = c.At(0, 20000), end = c.At(12000, 20000), width = c.P(3000), base_level = c.LevelName, rise = c.P(1500), landing = c.P(1500) }),
+        new("equipment_pads", c =>
+        {
+            Need(new FilteredElementCollector(c.Doc).OfCategory(BuiltInCategory.OST_MechanicalEquipment).WhereElementIsNotElementType().Any(), "the model has no mechanical equipment");
+            return new { source = "model" };
+        }) { Heavy = true },
+        new("sleeve_schedule", c =>
+        {
+            Need(new FilteredElementCollector(c.Doc).OfClass(typeof(Opening)).Any(), "the model has no openings");
+            return new { folder = c.Temp };
+        }),
+        new("general_notes", _ => new { values = new { codes = "Self-test code" } }),
+        new("typical_details", _ => new { kinds = new[] { "lap_schedule", "cover_schedule" } }),
+        new("issue_drawings", c => new { sheet_numbers = new[] { "ST-999" }, revision_description = "Self-test issue", folder = Path.Combine(c.Temp, "issue") }, Setup: ["create_sheets"]) { Heavy = true },
         new("export_tendon_schedule", c => new { folder = c.Temp }, Setup: ["create_floors", "place_pt_tendons"]),
         new("set_curtain_grid", c =>
         {

@@ -167,6 +167,15 @@ public sealed class ToolRegistry
         new CopyMonitorTool(),
         new LoadingPlanTool(),
 
+        // Architecture to structure, and issuing drawings
+        new ArchToStructureTool(),
+        new CreateRampTool(),
+        new EquipmentPadsTool(),
+        new SleeveScheduleTool(),
+        new GeneralNotesTool(),
+        new TypicalDetailsTool(),
+        new IssueDrawingsTool(),
+
         // Detailing
         new AddKeynoteTagsTool(),
         new PlaceDetailComponentsTool(),

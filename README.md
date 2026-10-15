@@ -1,6 +1,6 @@
 # Sketch ProMax
 
-An AI agent for Autodesk Revit 2024, 2025, 2026 and 2027, powered by Claude. Ask in plain language; it reads, documents, audits and edits the open model through 138 tools, and it learns new ones as you use it. It asks for your approval before every change, and every change can be undone with Ctrl+Z.
+An AI agent for Autodesk Revit 2024, 2025, 2026 and 2027, powered by Claude. Ask in plain language; it reads, documents, audits and edits the open model through 145 tools, and it learns new ones as you use it. It asks for your approval before every change, and every change can be undone with Ctrl+Z.
 
 See [docs/PLAN.md](docs/PLAN.md) for the comparison with SketchPro, the roadmap and the architecture.
 
@@ -111,6 +111,8 @@ To publish an update: bump `<Version>` in both project files and push to `main`.
 
 **Precast and post-tensioning:** precast slab layouts (hollow core, solid planks, filigree planks, double tees) with joints, cut units and an optional structural topping, a precast unit schedule with lifting weights, post-tensioning tendons in slabs (along lines, uniform or banded on column lines) and beams with a parabolic drape over the supports, and a tendon schedule with strand quantities.
 
+**From architecture to issued drawings:** turn the architectural model into a structural one (load-bearing walls, columns sized from the architect's, structural slabs), ramps as sloped slabs with landings and a gradient check, housekeeping pads under MEP equipment, a sleeve and opening schedule, general notes from a structural template, typical detail tables (laps, covers, hooks), and one-step issue: revision, checks, PDF and DWG per sheet with your naming, and a checked list of drawings.
+
 **Coordination:** write issues (elements, snapshot and camera) to a BCF file for ACC, Navisworks, Solibri or BIMcollab. Clash detection between trades and linked models (hard and clearance clashes, CSV and BCF), a drawing checker (grids and levels against links, overridden dimensions, duplicate marks, sections not on sheets, empty sheets, missing title block fields), code and standards rules checks from your own rule packs, construction sequence numbering with step-by-step 3D views, copy/monitor of levels, grids and columns from links, and loading plans (live and superimposed dead loads per room) from the architectural link.
 
 **Anything else:** Claude can write and run short Revit API code (C#) for what no dedicated tool covers, such as stairs, railings, materials, curtain walls or MEP. Read-only code runs freely; code that changes the model is shown to you first and is one Undo step.
@@ -152,7 +154,7 @@ src/SketchProMax/            The Revit add-in (net48 for Revit 2024, net8.0-wind
   Agent/SystemPrompt         Instructions the desktop app receives from the connector
   Bridge/BridgeServer        Per-Revit-window named-pipe server the connector talks to
   Revit/                     Main-thread dispatcher (ExternalEvent), helpers, Revit 2024 dependency loader
-  Tools/                     The 136 IRevitTool implementations and the registry (CodeTools compiles C# with Roslyn)
+  Tools/                     The 143 IRevitTool implementations and the registry (CodeTools compiles C# with Roslyn)
   UI/                        Settings dialog
   Settings/                  Per-user settings (approval switch, auto-update, firm standards)
   Update/Updater             Self-update from GitHub Releases
