@@ -204,85 +204,188 @@ internal static class FieldTest
 
     internal const string Estimate = "about 5 to 15 minutes";
 
-    /// <summary>
-    /// Runs the whole field test on Revit's thread. Call with a job running (Jobs.Running) so progress and cancel_job work;
-    /// cancel is checked between tools. Never throws: problems end up in the result.
-    /// </summary>
-    internal static RunReport Run(UIApplication app, ToolRegistry registry, Options o)
+    /// <summary>Everything one run carries from one Revit API call to the next.</summary>
+    private sealed class State(Job job, ToolRegistry registry, Options o)
     {
-        var watch = Stopwatch.StartNew();
-        var job = Jobs.Running;
-        var a = app.Application;
-        var result = new RunReport
-        {
-            RevitVersion = a.VersionNumber, RevitBuild = a.VersionBuild, RevitName = a.VersionName,
-            AddinVersion = $"{Update.Updater.CurrentText} ({typeof(FieldTest).Assembly.GetName().Version})",
-            Families = o.Families,
-        };
-        var original = app.ActiveUIDocument?.Document;
-        var folder = Path.Combine(Path.GetTempPath(), $"SketchProMax-field-test-{DateTime.Now:yyyyMMdd-HHmmss}");
-        Document? test = null, built = null;
-        SelfTest.IFieldSession? session = null;
-        var keepFolder = o.KeepProject;
-        try
-        {
-            Directory.CreateDirectory(folder);
-            Jobs.Report("Field test: building the architectural link model");
-            var linkPath = BuildArchLink(a, folder, result);
-            Jobs.Report("Field test: building the test project");
-            built = NewProject(a, result);
-            Build(a, built, linkPath, result);
-            Jobs.Report("Field test: saving and opening the test project");
-            var path = SaveForTest(built, folder, o.Workshared, result);
-            result.ProjectPath = path;
+        public readonly Job Job = job;
+        public readonly ToolRegistry Registry = registry;
+        public readonly Options O = o;
+        public readonly RunReport Result = new() { Families = o.Families };
+        public readonly Stopwatch Watch = Stopwatch.StartNew();
+        public string Folder = "";
+        public Document? Original, Built, Test;
+        public string? LinkPath, ProjectFile, NoView;
+        public SelfTest.IFieldSession? Session;
+        public bool KeepFolder = o.KeepProject;
+    }
 
-            string? noView = null;
+    /// <summary>
+    /// Starts the field test for <paramref name="job"/>, which must already be <see cref="Jobs.Running"/>, and returns at
+    /// once. Each building step and each tool is its own Revit API call queued from a background task, so Revit redraws
+    /// and answers clicks in between, and cancel_job, the pane's Cancel and the ribbon's Cancel job stop it before the
+    /// next tool (one tool call that is already running still runs to its end). Steps that create, open, switch or close
+    /// documents are queued with <see cref="Revit.RevitDispatcher.InvokeFromEventAsync{T}"/>, since the API refuses
+    /// those inside the Idling event. Whatever happens, the returned task completes with the job's result, and the job
+    /// is marked finished and Jobs.Running cleared first; <paramref name="onDone"/> then runs on Revit's thread.
+    /// </summary>
+    internal static Task<ToolResult> Start(Job job, ToolRegistry registry, Options o, Action<RunReport?, ToolResult>? onDone = null)
+    {
+        var done = new TaskCompletionSource<ToolResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _ = Task.Run(async () =>
+        {
+            RunReport? report = null;
+            ToolResult? final = null;
             try
             {
-                test = app.OpenAndActivateDocument(path)?.Document;
-                if (test is null || app.ActiveUIDocument?.Document.Equals(test) != true)
-                    noView = "Revit did not make the test project the active model";
+                report = await RunSteps(new State(job, registry, o)).ConfigureAwait(false);
+                final = ToToolResult(report, o);
             }
-            catch (Exception ex) when (ex is Autodesk.Revit.Exceptions.ApplicationException or InvalidOperationException)
+            catch (Exception ex)
             {
-                noView = $"Revit could not open the test project in a window ({ex.Message})";
+                final = ToolResult.Error($"The field test stopped unexpectedly ({ex.GetType().Name}: {ex.Message}). The test project may still be open: close it without saving.");
             }
+            finally
+            {
+                job.Finished = DateTime.UtcNow;
+                if (Jobs.Running == job) Jobs.Running = null;
+                done.TrySetResult(final ?? ToolResult.Error("The field test stopped unexpectedly. The test project may still be open: close it without saving."));
+            }
+            if (onDone is not null)
+            {
+                try { await App.Dispatcher.InvokeAsync(_ => { onDone(report, final!); return true; }).ConfigureAwait(false); }
+                catch (Exception) { /* the result is still with the job (wait_for_job, the Job button) */ }
+            }
+        });
+        return done.Task;
+    }
 
-            var output = Path.Combine(folder, "output");
-            if (noView is null) session = SelfTest.OpenFieldSession(app, test!, registry, output);
-            RunCases(app, registry, o, session, test, noView, job, result);
+    /// <summary>One step that creates, opens, switches or closes documents: only from the external event.</summary>
+    private static Task<bool> OnRevit(Action<UIApplication> body) =>
+        App.Dispatcher.InvokeFromEventAsync(app => { body(app); return true; });
+
+    private static async Task<RunReport> RunSteps(State s)
+    {
+        var result = s.Result;
+        bool Cancelled()
+        {
+            if (!s.Job.CancelRequested) return false;
+            result.StoppedBecause ??= "stopped on request (cancel_job or Cancel in Revit)";
+            return true;
+        }
+        try
+        {
+            await OnRevit(app =>
+            {
+                var a = app.Application;
+                result.RevitVersion = a.VersionNumber;
+                result.RevitBuild = a.VersionBuild;
+                result.RevitName = a.VersionName;
+                result.AddinVersion = $"{Update.Updater.CurrentText} ({typeof(FieldTest).Assembly.GetName().Version})";
+                s.Original = app.ActiveUIDocument?.Document;
+                s.Folder = Path.Combine(Path.GetTempPath(), $"SketchProMax-field-test-{DateTime.Now:yyyyMMdd-HHmmss}");
+                Directory.CreateDirectory(s.Folder);
+                Jobs.Report("Field test: building the architectural link model");
+                s.LinkPath = BuildArchLink(a, s.Folder, result);
+            }).ConfigureAwait(false);
+            if (!Cancelled())
+                await OnRevit(app =>
+                {
+                    Jobs.Report("Field test: building the test project");
+                    s.Built = NewProject(app.Application, result);
+                    Build(app.Application, s.Built, s.LinkPath, result);
+                }).ConfigureAwait(false);
+            if (!Cancelled())
+                await OnRevit(app =>
+                {
+                    Jobs.Report("Field test: saving the test project");
+                    s.ProjectFile = SaveForTest(s.Built!, s.Folder, s.O.Workshared, result);
+                    result.ProjectPath = s.ProjectFile;
+                }).ConfigureAwait(false);
+            if (!Cancelled())
+                await OnRevit(app => OpenTest(app, s)).ConfigureAwait(false);
+            if (!Cancelled())
+                await RunCases(s).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
             result.Fatal = $"{ex.GetType().Name}: {ex.Message}";
-            // Still list every tool, as skipped, so the report says what was not tested.
-            if (result.Rows.Count == 0) RunCases(app, registry, o, null, null, null, null, result);
         }
-        finally
+
+        try { await OnRevit(app => Finish(app, s)).ConfigureAwait(false); }
+        catch (Exception ex)
         {
-            session?.Cleanup();
-            // The project being built is only open in the background; if building failed part-way, close it here.
-            try { if (built is { IsValidObject: true } && (test is null || !built.Equals(test))) built.Close(false); }
-            catch (Exception) { }
-            CloseTest(app, test, original, result, ref keepFolder);
-            if (!keepFolder)
+            // Revit could not run the clean-up (Sketch ProMax was stopped or updated meanwhile): still write the report.
+            result.Fatal ??= $"clean-up did not run ({ex.GetType().Name}: {ex.Message})";
+            result.StillOpen ??= "The test project may still be open: close it without saving." +
+                                 (string.IsNullOrEmpty(s.Folder) ? "" : $" Its files are in {s.Folder}.");
+            if (result.ReportPath is null)
             {
-                TryDeleteFolder(folder);
-                result.ProjectPath = null;
+                result.Took = s.Watch.Elapsed;
+                WriteReport(result, s.O.ReportFolder);
             }
-            if (o.KeepProject && result.ProjectPath is not null) result.Sample.Add($"Kept the test project: {result.ProjectPath}");
-            result.Took = watch.Elapsed;
-            WriteReport(result, o.ReportFolder);
         }
         return result;
     }
 
-    private static void RunCases(UIApplication app, ToolRegistry registry, Options o, SelfTest.IFieldSession? session, Document? test,
-        string? noView, Job? job, RunReport result)
+    /// <summary>Opens the saved test project in its own window and makes it the active model.</summary>
+    private static void OpenTest(UIApplication app, State s)
     {
-        bool Wanted(string tool) => o.Families is null || o.Families.Contains(FamilyOf(tool));
-        var steps = session?.Steps ?? [];
-        var toRun = steps.Where(s => Wanted(s.Tool)).ToList();
+        Jobs.Report("Field test: opening the test project");
+        try
+        {
+            s.Test = app.OpenAndActivateDocument(s.ProjectFile!)?.Document;
+            if (s.Test is null || app.ActiveUIDocument?.Document.Equals(s.Test) != true)
+                s.NoView = "Revit did not make the test project the active model";
+        }
+        catch (Exception ex) when (ex is Autodesk.Revit.Exceptions.ApplicationException or InvalidOperationException)
+        {
+            s.NoView = $"Revit could not open the test project in a window ({ex.Message})";
+        }
+        // Revit may have opened the file before it failed to activate it: find it, so it is still closed at the end.
+        s.Test ??= app.Application.Documents.Cast<Document>().FirstOrDefault(d => !d.IsFamilyDocument && SamePath(d.PathName, s.ProjectFile));
+        if (s.NoView is null) s.Session = SelfTest.OpenFieldSession(app, s.Test!, s.Registry, Path.Combine(s.Folder, "output"));
+    }
+
+    private static bool SamePath(string? a, string? b)
+    {
+        if (string.IsNullOrEmpty(a) || string.IsNullOrEmpty(b)) return false;
+        try { return string.Equals(Path.GetFullPath(a), Path.GetFullPath(b), StringComparison.OrdinalIgnoreCase); }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException or System.Security.SecurityException)
+        {
+            return string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    private sealed record StepRun(SelfTest.Outcome Outcome, bool CapHit, long Ms, bool LeftOpen);
+
+    /// <summary>One case, on Revit's thread, under its own time cap.</summary>
+    private static StepRun RunOne(UIApplication app, State s, SelfTest.FieldStep step)
+    {
+        var limit = new StepLimit();
+        s.Job.Limit = limit;
+        var watch = Stopwatch.StartNew();
+        // Tools that check for cancel stop at the cap. The cap belongs to this step only: a timer that fires after the step
+        // has ended changes nothing, and a cancel_job sent meanwhile stays set and stops the run.
+        using var cap = new Timer(_ => limit.TryHit(), null, s.O.ToolCapSeconds * 1000, Timeout.Infinite);
+        SelfTest.Outcome outcome;
+        try { outcome = s.Session!.RunCase(app, step); }
+        catch (Exception ex) { outcome = new(step.Tool, "fail", watch.ElapsedMilliseconds, $"{ex.GetType().Name}: {ex.Message}"); }
+        finally
+        {
+            limit.Finish();
+            s.Job.Limit = null;
+        }
+        var leftOpen = s.Test is { IsValidObject: true } test && test.IsModifiable;
+        return new(outcome, limit.Hit, watch.ElapsedMilliseconds, leftOpen);
+    }
+
+    private static bool Wanted(Options o, string tool) => o.Families is null || o.Families.Contains(FamilyOf(tool));
+
+    private static async Task RunCases(State s)
+    {
+        var o = s.O;
+        var result = s.Result;
+        var toRun = (s.Session?.Steps ?? []).Where(st => Wanted(o, st.Tool)).ToList();
         var counts = new Dictionary<string, int>();
         var done = 0;
         foreach (var step in toRun)
@@ -291,41 +394,20 @@ internal static class FieldTest
             var family = FamilyOf(step.Tool);
             counts[step.Tool] = counts.TryGetValue(step.Tool, out var n) ? n + 1 : 1;
             var label = counts[step.Tool] == 1 ? step.Tool : $"{step.Tool} #{counts[step.Tool]}";
+            if (result.StoppedBecause is null && s.Job.CancelRequested) result.StoppedBecause = "stopped on request (cancel_job or Cancel in Revit)";
             if (result.StoppedBecause is not null) { result.Rows.Add(new(family, label, "skip", 0, "not reached: " + result.StoppedBecause)); continue; }
-            if (job?.CancelRequested == true)
-            {
-                result.StoppedBecause = "stopped on request (cancel_job)";
-                result.Rows.Add(new(family, label, "skip", 0, "not reached: " + result.StoppedBecause));
-                continue;
-            }
             if (NeverRun(step.Tool) is { } never) { result.Rows.Add(new(family, label, "skip", 0, never)); continue; }
             if (step.Heavy && !o.IncludeHeavy) { result.Rows.Add(new(family, label, "skip", 0, "slow tool; run with include_heavy to test it")); continue; }
 
             Jobs.Report($"Field test {done} of {toRun.Count}: {label} ({Title(family)})");
-            var timedOut = false;
-            var stepDone = false;
-            var outcome = default(SelfTest.Outcome);
-            var watch = Stopwatch.StartNew();
-            // Tools that check for cancel_job stop at the cap; the flag is cleared again before the next tool. (A cancel_job
-            // sent while a capped tool is stopping can't be told apart from the cap, so it is cleared too: send it again.)
-            var cap = new Timer(_ =>
-            {
-                if (Volatile.Read(ref stepDone)) return;
-                timedOut = true;
-                if (job is not null) job.CancelRequested = true;
-            }, null, o.ToolCapSeconds * 1000, Timeout.Infinite);
-            try { outcome = session!.RunCase(app, step); }
-            catch (Exception ex) { outcome = new(step.Tool, "fail", watch.ElapsedMilliseconds, $"{ex.GetType().Name}: {ex.Message}"); }
-            finally
-            {
-                Volatile.Write(ref stepDone, true);
-                cap.Dispose();
-            }
-            if (Volatile.Read(ref timedOut) && job is not null) job.CancelRequested = false;
+            StepRun run;
+            try { run = await App.Dispatcher.InvokeAsync(app => RunOne(app, s, step)).ConfigureAwait(false); }
+            catch (Exception ex) { run = new(new(step.Tool, "fail", 0, $"{ex.GetType().Name}: {ex.Message}"), false, 0, false); }
+            var outcome = run.Outcome;
 
-            var message = outcome!.Message;
-            if (timedOut)
-                message = $"hit the {o.ToolCapSeconds} s cap after {watch.ElapsedMilliseconds / 1000} s" +
+            var message = outcome.Message;
+            if (run.CapHit)
+                message = $"hit the {o.ToolCapSeconds} s cap after {run.Ms / 1000} s" +
                           (outcome.Status == "pass" ? " (it cannot be stopped part-way, so it ran to the end)" : "") + ". " + message;
             if (outcome.Status == "stop")
             {
@@ -335,26 +417,70 @@ internal static class FieldTest
             }
             result.Rows.Add(new(family, label, outcome.Status, outcome.Ms, message));
 
-            // A tool that leaves a transaction open would block every tool after it.
-            if (test is not null && test.IsModifiable)
+            // A tool that leaves a transaction open would block every tool after it (and switching away at the end).
+            if (run.LeftOpen)
                 result.StoppedBecause = $"{step.Tool} left a transaction open in the test project";
-        }
 
-        // Tools with no case, or that could not run at all.
-        var covered = new HashSet<string>(steps.Select(s => s.Tool));
-        foreach (var tool in registry.All.Where(t => Wanted(t.Name)).OrderBy(t => t.Name))
-        {
-            var family = FamilyOf(tool.Name);
-            if (noView is not null || session is null)
-            {
-                if (NeverRun(tool.Name) is { } never) { result.Rows.Add(new(family, tool.Name, "skip", 0, never)); continue; }
-                var why = noView is not null ? $"needs an open view: {noView}" : "the test project could not be built (see the error above)";
-                result.Rows.Add(new(family, tool.Name, "skip", 0, why));
-                continue;
-            }
-            if (covered.Contains(tool.Name)) continue;
-            result.Rows.Add(new(family, tool.Name, "skip", 0, NeverRun(tool.Name) ?? NoCaseReason(tool.Name)));
+            // Give Revit room to redraw and handle the user between tools.
+            await Task.Delay(150).ConfigureAwait(false);
         }
+    }
+
+    /// <summary>Rows for the tools that did not run: no case, not reached, or nothing to run them in.</summary>
+    private static void AddUncovered(State s)
+    {
+        var result = s.Result;
+        var hasRow = new HashSet<string>(result.Rows.Select(r => r.Tool.Split(' ')[0]));
+        var covered = new HashSet<string>((s.Session?.Steps ?? []).Select(st => st.Tool));
+        foreach (var tool in s.Registry.All.Where(t => Wanted(s.O, t.Name)).OrderBy(t => t.Name))
+        {
+            if (hasRow.Contains(tool.Name)) continue;
+            var family = FamilyOf(tool.Name);
+            if (NeverRun(tool.Name) is { } never) { result.Rows.Add(new(family, tool.Name, "skip", 0, never)); continue; }
+            var why = s.NoView is not null ? $"needs an open view: {s.NoView}"
+                : s.Session is null ? result.StoppedBecause is { } stop ? "not reached: " + stop : "the test project could not be built (see the error above)"
+                : covered.Contains(tool.Name) ? "not reached: " + (result.StoppedBecause ?? result.Fatal ?? "the run ended early")
+                : NoCaseReason(tool.Name);
+            result.Rows.Add(new(family, tool.Name, "skip", 0, why));
+        }
+    }
+
+    /// <summary>The last step, from the external event: list what didn't run, close the test project, write the report.</summary>
+    private static void Finish(UIApplication app, State s)
+    {
+        var result = s.Result;
+        Jobs.Report("Field test: closing the test project and writing the report");
+        AddUncovered(s);
+        try { s.Session?.Cleanup(); } catch (Exception) { }
+        // The project being built is only open in the background; if building failed part-way, close it here.
+        try { if (s.Built is { IsValidObject: true } built && (s.Test is null || !built.Equals(s.Test))) built.Close(false); }
+        catch (Exception) { }
+        CloseTest(app, s.Test, s.Original, result, ref s.KeepFolder);
+        if (!s.KeepFolder && !string.IsNullOrEmpty(s.Folder))
+        {
+            TryDeleteFolder(s.Folder);
+            result.ProjectPath = null;
+        }
+        if (s.O.KeepProject && result.ProjectPath is not null) result.Sample.Add($"Kept the test project: {result.ProjectPath}");
+        result.Took = s.Watch.Elapsed;
+        WriteReport(result, s.O.ReportFolder);
+    }
+
+    /// <summary>The job's result for Claude (and the Job button): counts, summary, report paths.</summary>
+    internal static ToolResult ToToolResult(RunReport result, Options o)
+    {
+        var payload = new
+        {
+            summary = result.Summary(),
+            passed = result.Count("pass"), failed = result.Count("fail"), skipped = result.Count("skip"),
+            report = result.ReportPath, report_json = result.JsonPath,
+            kept_project = o.KeepProject ? result.ProjectPath : null,
+            still_open = result.StillOpen,
+            next = result.ReportPath is null ? null : "Read the report for every tool's detail; fix failures family by family.",
+        };
+        return result.Fatal is not null && result.Rows.Count(r => r.Status != "skip") == 0
+            ? ToolResult.Error(JsonSerializer.Serialize(payload))
+            : ToolResult.Ok(payload);
     }
 
     private static string Title(string family) => Groups.FirstOrDefault(g => g.Key == family).Title ?? family;
@@ -882,11 +1008,23 @@ internal static class FieldTest
 
     /// <summary>
     /// Switches Revit back to the model the user was in (or any other saved model that is open) and closes the test
-    /// project without saving. The API cannot close the active model, so with nothing to switch to it stays open.
+    /// project without saving. Call from the external event (OpenAndActivateDocument is refused in event handlers).
+    /// The API cannot close the active model, so with nothing to switch to it stays open. A transaction left open in it
+    /// by a tool blocks both switching and closing, and the API gives no handle to roll back a transaction someone else
+    /// started (Document.IsModifiable only says one is open), so then it is left open and the report says what to do.
     /// </summary>
     private static void CloseTest(UIApplication app, Document? test, Document? original, RunReport result, ref bool keepFolder)
     {
         if (test is null || !test.IsValidObject) return;
+        if (test.IsModifiable)
+        {
+            keepFolder = true;
+            result.StillOpen = $"The test project '{test.Title}' is still open: a tool left a transaction open in it, and Revit can't switch " +
+                               "models or close one while a transaction is open (the API has no way to roll back a transaction another tool " +
+                               "started). Go to its window, press Esc (or Cancel any edit mode), then close it and don't save. Its files are in " +
+                               Path.GetDirectoryName(test.PathName) + ".";
+            return;
+        }
         var active = app.ActiveUIDocument?.Document;
         if (active is not null && active.Equals(test))
         {
@@ -1014,10 +1152,26 @@ internal static class FieldTest
 
     // ---- Ribbon -----------------------------------------------------------------------------------------------------
 
-    /// <summary>The ribbon's Field test button (CoreEntry "field-test"): asks first, runs as a job, shows the result.</summary>
+    /// <summary>
+    /// The ribbon's Field test button (CoreEntry "field-test"): asks first, then starts the run as a job and returns at
+    /// once; the result is shown when it finishes. Clicked again while it runs, it shows progress and can stop it.
+    /// </summary>
     internal static Autodesk.Revit.UI.Result RibbonCommand(UIApplication app)
     {
-        if (Jobs.Running is { } running || App.Dispatcher.IsRunning || SelfTest.IsRunning)
+        if (Jobs.Running is { Tool: "run_field_test" } ours)
+        {
+            var progress = new TaskDialog("Sketch ProMax field test")
+            {
+                MainInstruction = ours.CancelRequested ? "The field test is stopping" : "The field test is running",
+                MainContent = $"{Jobs.Describe(ours)}." + (ours.Progress() is { } p ? $"\n\n{p}" : ""),
+                CommonButtons = TaskDialogCommonButtons.Close,
+            };
+            if (!ours.CancelRequested) progress.AddCommandLink(TaskDialogCommandLinkId.CommandLink1, "Stop it after the current tool",
+                "The test project is then closed without saving and the report lists what ran.");
+            if (progress.Show() == TaskDialogResult.CommandLink1) ours.CancelRequested = true;
+            return Autodesk.Revit.UI.Result.Succeeded;
+        }
+        if (Jobs.Running is not null || App.Dispatcher.IsRunning || SelfTest.IsRunning)
         {
             TaskDialog.Show("Sketch ProMax field test", SelfTest.IsRunning ? "A self-test is running. Wait for it to finish, then try again." : Jobs.Busy(Jobs.Running).Text);
             return Autodesk.Revit.UI.Result.Cancelled;
@@ -1030,7 +1184,9 @@ internal static class FieldTest
                 "with a slab edge, foundations, a linked architectural model, views and a sheet), opens it in its own window and " +
                 "runs every tool family against it, one tool at a time. Then it closes that project without saving and writes " +
                 "one report.\n\nThe models you have open are not changed: Revit only switches back to your model at the end. " +
-                $"It takes {Estimate}; Revit is busy until it finishes (Claude can stop it with cancel_job).",
+                "Save your open models first all the same, since Revit switches windows while it runs.\n\n" +
+                $"It takes {Estimate}. Revit stays responsive between tools, but leave the test project's window active until it " +
+                "finishes. Click Field test again to see progress or stop it (Cancel job and the pane's Cancel also stop it before the next tool).",
             CommonButtons = TaskDialogCommonButtons.Yes | TaskDialogCommonButtons.No,
             DefaultButton = TaskDialogResult.Yes,
         };
@@ -1042,23 +1198,21 @@ internal static class FieldTest
             TaskDialog.Show("Sketch ProMax field test", Jobs.Busy(inTheWay).Text);
             return Autodesk.Revit.UI.Result.Cancelled;
         }
-        var done = new TaskCompletionSource<ToolResult>(TaskCreationOptions.RunContinuationsAsynchronously);
-        job.Task = done.Task;
         job.TryStart();
         Jobs.Running = job;
         job.StartedSignal.TrySetResult(true);
-        FieldTest.RunReport result;
-        try
-        {
-            result = Run(app, App.Bridge?.Registry ?? ToolRegistry.CreateDefault(), new Options());
-        }
-        finally
-        {
-            job.Finished = DateTime.UtcNow;
-            Jobs.Running = null;
-        }
-        done.TrySetResult(new ToolResult(result.Summary(), result.Fatal is not null));
+        job.Task = Start(job, App.Bridge?.Registry ?? ToolRegistry.CreateDefault(), new Options(), ShowResult);
+        return Autodesk.Revit.UI.Result.Succeeded;
+    }
 
+    /// <summary>The ribbon run's result dialog, on Revit's thread once the run has ended.</summary>
+    private static void ShowResult(RunReport? result, ToolResult outcome)
+    {
+        if (result is null)
+        {
+            TaskDialog.Show("Sketch ProMax field test", Short(outcome.Text, 1800));
+            return;
+        }
         var show = new TaskDialog("Sketch ProMax field test")
         {
             MainInstruction = result.Fatal is not null ? "The field test could not run"
@@ -1084,7 +1238,6 @@ internal static class FieldTest
         {
             TaskDialog.Show("Sketch ProMax field test", $"Couldn't open {result.ReportPath}: {ex.Message}");
         }
-        return result.Fatal is null ? Autodesk.Revit.UI.Result.Succeeded : Autodesk.Revit.UI.Result.Failed;
     }
 }
 
@@ -1127,20 +1280,15 @@ public sealed class RunFieldTestTool : IRevitTool
             ReportFolder = args.OptString("report_folder"),
             ToolCapSeconds = (int)Math.Max(10, Math.Min(1800, args.OptLong("tool_time_cap_seconds") ?? 120)),
         };
-        var result = FieldTest.Run(app, _registry, options);
-        // The cases ran under their own FailureGuard; clear what the last one noted so it isn't folded into this result.
-        Revit.FailureGuard.Run(() => new ToolResult(""));
-        var payload = new
+        if (Jobs.CanContinue(Name) is not { } job)
+            return ToolResult.Error("run_field_test runs only when Claude calls it directly or from the ribbon's Field test button, not from a recipe or quick tool.");
+        // Each tool then runs in its own Revit API call, so Revit stays responsive; the job's result arrives through wait_for_job.
+        job.Continuation = FieldTest.Start(job, _registry, options);
+        return ToolResult.Ok(new
         {
-            summary = result.Summary(),
-            passed = result.Count("pass"), failed = result.Count("fail"), skipped = result.Count("skip"),
-            report = result.ReportPath, report_json = result.JsonPath,
-            kept_project = options.KeepProject ? result.ProjectPath : null,
-            still_open = result.StillOpen,
-            next = result.ReportPath is null ? null : "Read the report for every tool's detail; fix failures family by family.",
-        };
-        return result.Fatal is not null && result.Rows.Count(r => r.Status != "skip") == 0
-            ? ToolResult.Error(JsonSerializer.Serialize(payload))
-            : ToolResult.Ok(payload);
+            status = "started", job = job.Id,
+            note = $"The field test runs one tool at a time ({FieldTest.Estimate}). Call wait_for_job (job_id {job.Id}) for progress and the " +
+                   "result; cancel_job stops it before the next tool. Don't send other model work meanwhile.",
+        });
     }
 }

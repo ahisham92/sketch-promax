@@ -191,6 +191,12 @@ internal static class CoreCommands
             if (running.Show() == TaskDialogResult.CommandLink1) Tools.SelfTest.Stop();
             return Result.Succeeded;
         }
+        // A job (the field test runs one between its steps, with Revit free in between) owns the model until it ends.
+        if (Jobs.Running is { } busy)
+        {
+            TaskDialog.Show("Sketch ProMax self-test", Jobs.Busy(busy).Text);
+            return Result.Cancelled;
+        }
         if (app?.ActiveUIDocument is null)
         {
             TaskDialog.Show("Sketch ProMax", "Open a model first. A copy of a real project gives the most useful result.");

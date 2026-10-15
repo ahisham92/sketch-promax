@@ -314,6 +314,7 @@ internal static partial class SelfTest
                 "title_block_from_cad" => "needs a DWG title block on this PC",
                 "run_learned_tool" => "tested through save_as_tool",
                 "run_self_test" or "self_test_status" => "this test",
+                "run_field_test" => "opens its own throwaway project; run it from the ribbon or on its own",
                 _ when run.Mode == Mode.Safe && tool.ModifiesModel => "changes the model; runs in the full self-test",
                 _ => "no test written yet",
             };
@@ -400,6 +401,9 @@ internal static partial class SelfTest
         new("select_elements", c => new { element_ids = new[] { c.Id(c.Wall ?? throw new Skip("the model has no walls")) }, zoom = false }),
         new("run_model_audit", _ => new { }),
         new("capture_view_image", c => new { view_id = c.PlanId, pixel_width = 800 }) { Heavy = true },
+        new("create_legend", c => new { name = "SPM Selftest Legend", scale = 50 }),
+        new("save_legend_seed", c => new { path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "spm-legend-seed-test.rvt") }) { Heavy = true },
+        new("in_place_guide", c => new { action = "convert" }),
         new("list_view_filters", _ => new { }),
         new("query_linked_models", _ => new { }),
         new("collect_text", _ => new { limit = 50 }),
@@ -771,6 +775,8 @@ internal static partial class SelfTest
     /// </summary>
     private static IEnumerable<Case> RegressionCases() =>
     [
+        // 0.27: with no source given, an open active view is captured from the screen.
+        new("capture_view_image", c => new { pixel_width = 800 }) { Heavy = true },
         // 0.26 regressions from the field bug log.
         new("set_parameters", c => new { changes = new[] { new { element_id = c.Id(c.Wall ?? throw new Skip("the model has no walls")), parameter = "Comments", value = "Sketch ProMax self-test" }, new { element_id = c.Id(c.Wall!), parameter = "Mark", value = "ST-1" } }, separate_steps = true }),
         new("query_elements", _ => new { category = "Detail Items", family = "Break Line", limit = 5 }),

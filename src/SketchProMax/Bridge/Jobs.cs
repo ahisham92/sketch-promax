@@ -27,6 +27,21 @@ public sealed class Job
     internal readonly CancellationTokenSource Abandon = new();
     public volatile bool CancelRequested;
 
+    /// <summary>
+    /// A time cap on the current step of a multi-step job (the field test). Each step gets its own object, so a cap timer
+    /// that fires late only marks a step that has already finished, and a real cancel_job is never cleared by it.
+    /// </summary>
+    internal volatile StepLimit? Limit;
+
+    /// <summary>Set by the caller that runs the tool when it can hand the job on to <see cref="Continuation"/>.</summary>
+    internal bool CanContinue;
+
+    /// <summary>
+    /// Set by a tool that returns at once and finishes its work in later Revit API calls (the field test): the job's
+    /// result is this task's, and the task itself sets <see cref="Finished"/> and clears <see cref="Jobs.Running"/>.
+    /// </summary>
+    internal Task<ToolResult>? Continuation;
+
     // 0 queued, 1 running, 2 abandoned. Revit's thread and the bridge race to move it out of "queued"; whoever wins
     // decides whether the job runs, so a caller is never told "dropped" for a job that then runs.
     private int _state;
@@ -71,6 +86,21 @@ public sealed class Job
     }
 }
 
+/// <summary>One step's time cap: <see cref="Hit"/> is set by the step's timer only while the step is still running.</summary>
+internal sealed class StepLimit
+{
+    private readonly object _gate = new();
+    private bool _done, _hit;
+
+    public bool Hit { get { lock (_gate) return _hit; } }
+
+    /// <summary>From the timer: marks the cap as hit unless the step has already finished. True when it did.</summary>
+    public bool TryHit() { lock (_gate) { if (_done) return false; _hit = true; return true; } }
+
+    /// <summary>From the step, when it ends: later timer callbacks do nothing.</summary>
+    public void Finish() { lock (_gate) _done = true; }
+}
+
 public static class Jobs
 {
     private static readonly object Gate = new();
@@ -81,7 +111,21 @@ public static class Jobs
     public static Job? Running { get; internal set; }
 
     /// <summary>True when the user (through cancel_job) asked the running job to stop. Long loops should check it.</summary>
-    public static bool CancelRequested => Running?.CancelRequested == true;
+    public static bool CancelRequested => Running is { } job && (job.CancelRequested || job.Limit?.Hit == true);
+
+    /// <summary>
+    /// From a tool's Execute: the running job when the tool may hand it on by setting <see cref="Job.Continuation"/> (each
+    /// later step its own Revit API call, so Revit stays responsive; the job's result is the continuation's). Null when
+    /// the tool was not called in a way that allows it (from a recipe, a quick tool or another tool).
+    /// </summary>
+    internal static Job? CanContinue(string tool) => Running is { CanContinue: true } job && job.Tool == tool && job.Continuation is null ? job : null;
+
+    /// <summary>The job's whole result: the first Revit call's, or, when the tool handed on, the continuation's.</summary>
+    internal static async Task<ToolResult> Follow(Job job, Task<ToolResult> first)
+    {
+        var result = await first.ConfigureAwait(false);
+        return job.Continuation is { } rest ? await rest.ConfigureAwait(false) : result;
+    }
 
     /// <summary>Sets the running job's progress line, shown by wait_for_job.</summary>
     public static void Report(string text)

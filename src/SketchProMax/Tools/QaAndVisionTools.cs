@@ -135,7 +135,8 @@ public sealed class CaptureViewImageTool : IRevitTool
                     return new ToolResult($"Screen image of view '{doc.GetElement(viewId)?.Name}' as Revit shows it now (source=screen, chosen because it is the active view; " +
                                           "pass source=export for a print-like image)." + patternNotes, PngImage: grab);
                 }
-                catch (InvalidOperationException ex) { how = $"Used image export because the screen capture failed: {ex.Message}"; }
+                // The caller didn't ask for the screen, so any capture failure (Win32, GDI+, an odd window state) falls back to export.
+                catch (Exception ex) when (ex is not OperationCanceledException) { how = $"Used image export because the screen capture failed: {ex.Message}"; }
             }
         }
         else how = source == "export" ? "source=export as asked." : "";

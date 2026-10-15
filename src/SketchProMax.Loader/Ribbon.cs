@@ -127,8 +127,10 @@ internal static class Ribbon
             "The quick check is read-only. The full check also runs the tools that change the model and undoes each change " +
             "straight after it; use it on a copy of a model. Click again while it runs to see progress or stop it."));
         checks.AddItem(Button<FieldTestCommand>("FieldTest", "Field\ntest", "field",
-            "Tries Sketch ProMax on the open model the way it is used on a real project and reports what works and what to fix.",
-            "Run it on a copy of a real project model. Click again while it runs to see progress or stop it.",
+            "Builds a throwaway test project, runs every Sketch ProMax tool family on it one tool at a time and writes one report of what works and what to fix.",
+            "Your open models are not changed: the test project opens in its own window and is closed without saving, and Revit " +
+            "switches back to your model at the end. Save your models first. Takes about 5 to 15 minutes; Revit stays responsive " +
+            "between tools. Click again while it runs to see progress or stop it after the current tool.",
             needsModel: true));
 
         // Updates.

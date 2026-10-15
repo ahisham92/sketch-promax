@@ -15,10 +15,16 @@ namespace SketchProMax.Revit;
 /// a request could sit queued until the user clicked in Revit. To avoid that, queued work is also run from the Idling
 /// event (kept firing while work waits), and a timer nudges Revit's main window with an empty message until the
 /// queue is empty.
+///
+/// Some calls (OpenAndActivateDocument, closing or creating documents) are not allowed inside an event handler such as
+/// Idling. Work queued with <see cref="InvokeFromEventAsync{T}(Func{UIApplication, T}, CancellationToken)"/> is only run
+/// from <see cref="Execute"/> (the external event's own API context); Idling skips it and raises the event instead.
 /// </summary>
 public sealed class RevitDispatcher : IExternalEventHandler
 {
     private readonly ConcurrentQueue<Action<UIApplication>> _queue = new();
+    // Work that must run from ExternalEvent.Execute; the second action fails the caller when Revit lets go first.
+    private readonly ConcurrentQueue<(Action<UIApplication> Run, Action Fail)> _eventOnly = new();
     private ExternalEvent? _event;
     private IntPtr _mainWindow;
     private Timer? _wake;
@@ -54,7 +60,7 @@ public sealed class RevitDispatcher : IExternalEventHandler
     }
 
     /// <summary>True while anything is queued or running, so switching to a new core must wait.</summary>
-    public bool HasWork => _running || !_queue.IsEmpty;
+    public bool HasWork => _running || !_queue.IsEmpty || !_eventOnly.IsEmpty;
 
     /// <summary>
     /// Lets go of Revit: no more Idling, wake timer or external event. Anything that slipped into the queue meanwhile is
@@ -63,7 +69,9 @@ public sealed class RevitDispatcher : IExternalEventHandler
     public void Shutdown(UIApplication application)
     {
         try { application.Idling -= OnIdling; } catch (Exception) { /* not subscribed through this object */ }
-        Drain(application);
+        Drain(application, fromEvent: false);
+        // Work that may only run from the external event can't run here (this may be an event handler): fail it.
+        while (_eventOnly.TryDequeue(out var pending)) pending.Fail();
         _wake?.Dispose();
         _wake = null;
         var ev = _event;
@@ -77,7 +85,16 @@ public sealed class RevitDispatcher : IExternalEventHandler
     /// Queues work for Revit's main thread. Cancelling <paramref name="ct"/> before Revit gets to it (for example when
     /// the caller has gone away) means the work never runs; once it has started it runs to the end.
     /// </summary>
-    public Task<T> InvokeAsync<T>(Func<UIApplication, T> work, CancellationToken ct)
+    public Task<T> InvokeAsync<T>(Func<UIApplication, T> work, CancellationToken ct) => Enqueue(work, ct, eventOnly: false);
+
+    /// <summary>
+    /// Like <see cref="InvokeAsync{T}(Func{UIApplication, T}, CancellationToken)"/>, for work the Revit API only allows
+    /// from an external command or event (switching, opening or closing documents): it runs only from
+    /// <see cref="Execute"/>, never from the Idling event.
+    /// </summary>
+    public Task<T> InvokeFromEventAsync<T>(Func<UIApplication, T> work, CancellationToken ct = default) => Enqueue(work, ct, eventOnly: true);
+
+    private Task<T> Enqueue<T>(Func<UIApplication, T> work, CancellationToken ct, bool eventOnly)
     {
         var ev = _event ?? throw new InvalidOperationException("Sketch ProMax is not running in this Revit window (it may have just been updated). Try again.");
 
@@ -88,14 +105,21 @@ public sealed class RevitDispatcher : IExternalEventHandler
             return tcs.Task;
         }
         var registration = ct.CanBeCanceled ? ct.Register(() => tcs.TrySetCanceled()) : default;
-        _queue.Enqueue(app =>
+        void Run(UIApplication app)
         {
             // Cancelled while it waited: the caller has its answer already, so don't run it late.
             registration.Dispose();
             if (tcs.Task.IsCompleted) return;
             try { tcs.TrySetResult(work(app)); }
             catch (Exception ex) { tcs.TrySetException(ex); }
-        });
+        }
+        if (eventOnly)
+            _eventOnly.Enqueue((Run, () =>
+            {
+                registration.Dispose();
+                tcs.TrySetException(new InvalidOperationException("Sketch ProMax stopped in this Revit window before the work could run."));
+            }));
+        else _queue.Enqueue(Run);
 
         // Pending (an earlier Raise() will drain this too), Denied or TimedOut are not final: the Idling handler and
         // the wake timer still get the queue run, so the request is never failed here.
@@ -105,36 +129,46 @@ public sealed class RevitDispatcher : IExternalEventHandler
         return tcs.Task;
     }
 
-    public void Execute(UIApplication app) => Drain(app);
+    public void Execute(UIApplication app) => Drain(app, fromEvent: true);
 
     public string GetName() => "Sketch ProMax dispatcher";
 
-    private void Drain(UIApplication app)
+    private void Drain(UIApplication app, bool fromEvent)
     {
         // A modal dialog shown by a tool (the approval prompt) pumps messages; don't start other work inside it.
         if (_running) return;
         _running = true;
         try
         {
-            // Drain everything queued so far; one Raise() may cover several items.
-            while (_queue.TryDequeue(out var work)) work(app);
+            // Drain everything queued so far; one Raise() may cover several items. Event-only work runs only from Execute.
+            while (true)
+            {
+                if (_queue.TryDequeue(out var work)) work(app);
+                else if (fromEvent && _eventOnly.TryDequeue(out var only)) only.Run(app);
+                else break;
+            }
         }
         finally { _running = false; }
     }
 
     private void OnIdling(object? sender, IdlingEventArgs e)
     {
-        if (_queue.IsEmpty) return;
-        if (sender is UIApplication app) Drain(app);
-        else _event?.Raise();
+        if (_queue.IsEmpty && _eventOnly.IsEmpty) return;
+        if (!_queue.IsEmpty)
+        {
+            if (sender is UIApplication app) Drain(app, fromEvent: false);
+            else _event?.Raise();
+        }
+        // Work that must not run inside an event handler: have the external event pick it up.
+        if (!_eventOnly.IsEmpty) _event?.Raise();
         // Keep Idling coming without waiting for user input while anything is still queued.
-        if (!_queue.IsEmpty) e.SetRaiseWithoutDelay();
+        if (!_queue.IsEmpty || !_eventOnly.IsEmpty) e.SetRaiseWithoutDelay();
     }
 
     /// <summary>Wakes Revit's message loop so it notices the queued work, without needing a click or mouse move.</summary>
     private void Nudge()
     {
-        if (_queue.IsEmpty || _running || _mainWindow == IntPtr.Zero) return;
+        if ((_queue.IsEmpty && _eventOnly.IsEmpty) || _running || _mainWindow == IntPtr.Zero) return;
         try { PostMessage(_mainWindow, 0 /* WM_NULL */, IntPtr.Zero, IntPtr.Zero); }
         catch (Exception) { /* the window is gone: nothing to wake */ }
     }

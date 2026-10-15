@@ -15,10 +15,12 @@ if (-not (Test-Path $dist)) { throw "Run .\build.ps1 first." }
 function Clear-DownloadMark($path) {
     if (Test-Path $path) { Get-ChildItem $path -Recurse -File -ErrorAction SilentlyContinue | Unblock-File -ErrorAction SilentlyContinue }
 }
-$zips = @($PSScriptRoot, (Split-Path $PSScriptRoot -Parent), (Join-Path $env:USERPROFILE "Downloads")) |
+# With no zip found $zips is $null, and piping $null would hand Unblock-File a null path (an error under "Stop").
+$downloads = if ($env:USERPROFILE) { Join-Path $env:USERPROFILE "Downloads" } else { $null }
+$zips = @($PSScriptRoot, (Split-Path $PSScriptRoot -Parent), $downloads) |
     Where-Object { $_ -and (Test-Path $_) } |
     ForEach-Object { Get-ChildItem $_ -Filter "SketchProMax-*.zip" -File -ErrorAction SilentlyContinue }
-$zips | Unblock-File -ErrorAction SilentlyContinue
+if ($zips) { $zips | Unblock-File -ErrorAction SilentlyContinue }
 Clear-DownloadMark $PSScriptRoot
 
 if (Get-Process Revit -ErrorAction SilentlyContinue) {

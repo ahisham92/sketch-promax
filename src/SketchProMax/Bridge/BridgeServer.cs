@@ -301,7 +301,8 @@ public sealed class BridgeServer
         if (job is null) return Jobs.Busy(inTheWay);
         // Dropped while still queued if the caller goes away or cancel_job asks; once started it runs to the end.
         var queued = CancellationTokenSource.CreateLinkedTokenSource(ct, job.Abandon.Token);
-        job.Task = _dispatcher.InvokeAsync(app =>
+        job.CanContinue = true;
+        var firstCall = _dispatcher.InvokeAsync(app =>
         {
             if (!job.TryStart()) return ToolResult.Error("Dropped before Revit started it; nothing was changed.");
             Jobs.Running = job;
@@ -321,10 +322,15 @@ public sealed class BridgeServer
             }
             finally
             {
-                job.Finished = DateTime.UtcNow;
-                Jobs.Running = null;
+                // A tool that handed on to a continuation (the field test) is still running: the continuation ends the job.
+                if (job.Continuation is null)
+                {
+                    job.Finished = DateTime.UtcNow;
+                    Jobs.Running = null;
+                }
             }
         }, queued.Token);
+        job.Task = Jobs.Follow(job, firstCall);
 
         // Revit picks work up within a second when idle. If it doesn't, it is in an edit mode (in-place family, sketch,
         // group edit), showing a dialog, or busy with something of its own: say so rather than time out.

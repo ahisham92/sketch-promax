@@ -16,6 +16,25 @@ internal static class LegendSeeds
     public static string SavedSeedPath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SketchProMax", "legend-seed.rvt");
 
+    private const string MarkerSuffix = ".sketchpromax-seed";
+
+    /// <summary>True when save_legend_seed wrote <paramref name="path"/>, so it may be replaced without asking.</summary>
+    public static bool IsOurSeed(string path)
+    {
+        if (File.Exists(path + MarkerSuffix)) return true;
+        var ourFolder = Path.GetDirectoryName(SavedSeedPath)!;
+        var name = Path.GetFileName(path);
+        return string.Equals(Path.GetFullPath(Path.GetDirectoryName(path) ?? ""), Path.GetFullPath(ourFolder), StringComparison.OrdinalIgnoreCase)
+               && name.StartsWith("legend-seed", StringComparison.OrdinalIgnoreCase) && name.EndsWith(".rvt", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>Leaves a small marker next to a seed this tool wrote, so a later save may replace it.</summary>
+    public static void MarkOurSeed(string path)
+    {
+        try { File.WriteAllText(path + MarkerSuffix, "Written by Sketch ProMax save_legend_seed; it may replace the .rvt next to this file.\n"); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+    }
+
     public static List<View> Legends(Document doc) =>
         new FilteredElementCollector(doc).OfClass(typeof(View)).Cast<View>()
             .Where(v => !v.IsTemplate && v.ViewType == ViewType.Legend).ToList();
@@ -217,11 +236,13 @@ public sealed class SaveLegendSeedTool : IRevitTool
     public string Description =>
         "Save a legend seed so create_legend works in projects that have no legend: writes a tiny project holding one empty " +
         "legend to %LOCALAPPDATA%\\SketchProMax\\legend-seed.rvt, copied from a legend in this model (or another open one). " +
-        "Run once in any project that has a legend. The open model is not changed. The seed opens in this Revit version and newer.";
+        "Run once in any project that has a legend. The open model is not changed. The seed opens in this Revit version and newer. " +
+        "An existing file at path that this tool did not write is left alone unless overwrite is true.";
     public string PropertiesJson => """
     {
       "legend": {"type": "string", "description": "Legend to copy (only its view, not its contents). Default: any legend."},
-      "path": {"type": "string", "description": "Where to write the seed (default %LOCALAPPDATA%\\SketchProMax\\legend-seed.rvt)."}
+      "path": {"type": "string", "description": "Where to write the seed (default %LOCALAPPDATA%\\SketchProMax\\legend-seed.rvt)."},
+      "overwrite": {"type": "boolean", "description": "Replace an existing .rvt at path that this tool did not write. Default false: such a file is left alone and the call fails."}
     }
     """;
     public string[] Required => [];
@@ -244,7 +265,15 @@ public sealed class SaveLegendSeedTool : IRevitTool
         if (!path.EndsWith(".rvt", StringComparison.OrdinalIgnoreCase)) throw new ArgumentException("path must end in .rvt.");
         if (app.Application.Documents.Cast<Document>().Any(d => string.Equals(d.PathName, path, StringComparison.OrdinalIgnoreCase)))
             return ToolResult.Error($"{path} is open in Revit; close it first.");
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        // Never replace someone's model by accident: an existing file is only overwritten when this tool wrote it (its
+        // marker file is next to it, or it is a legend-seed*.rvt in the Sketch ProMax folder) or overwrite is passed.
+        if (File.Exists(path) && !LegendSeeds.IsOurSeed(path) && !args.OptBool("overwrite"))
+            return ToolResult.Error($"{path} already exists and was not written by save_legend_seed, so it was left alone. " +
+                                    "Pick another path, or pass overwrite: true to replace it.");
+        var folder = Path.GetDirectoryName(path)!;
+        Directory.CreateDirectory(folder);
+        var backupPattern = Path.GetFileNameWithoutExtension(path) + ".0*.rvt";
+        var backupsBefore = new HashSet<string>(Directory.GetFiles(folder, backupPattern), StringComparer.OrdinalIgnoreCase);
 
         var seed = app.Application.NewProjectDocument(UnitSystem.Metric);
         try
@@ -259,8 +288,10 @@ public sealed class SaveLegendSeedTool : IRevitTool
             seed.SaveAs(path, new SaveAsOptions { OverwriteExistingFile = true, MaximumBackups = 1 });
         }
         finally { seed.Close(false); }
-        // SaveAs leaves a backup next to it (legend-seed.0001.rvt); it is not needed.
-        foreach (var backup in Directory.GetFiles(Path.GetDirectoryName(path)!, Path.GetFileNameWithoutExtension(path) + ".0*.rvt"))
+        LegendSeeds.MarkOurSeed(path);
+        // SaveAs leaves a backup next to it (legend-seed.0001.rvt); it is not needed. Backups that were there before
+        // this call belong to someone else and are kept.
+        foreach (var backup in Directory.GetFiles(folder, backupPattern).Where(b => !backupsBefore.Contains(b)))
             try { File.Delete(backup); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
 
         return ToolResult.Ok(new

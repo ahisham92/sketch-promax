@@ -294,7 +294,10 @@ internal static class Host
 
     /// <summary>
     /// The pane's Cancel button. Asking a job to stop needs no Revit API, so it goes to the core straight away rather than
-    /// waiting for Revit to be idle (which it is not while the job runs).
+    /// waiting for Revit to be idle. It only sets the job's stop flag: the pane can only be clicked while Revit's UI is
+    /// responsive, which is between the steps of a multi-step job (the field test, the self-test), and those stop before
+    /// their next step. A single long tool call keeps Revit's thread busy until it ends, so the click is not seen until
+    /// then; such a call is stopped with cancel_job from Claude, and stops only at its own checks.
     /// </summary>
     public static void PaneCancel()
     {
