@@ -10,8 +10,22 @@ $dist = Join-Path $PSScriptRoot "dist"
 if (-not (Test-Path $dist)) { throw "Run .\build.ps1 first." }
 
 # Files from a downloaded zip carry a "came from the internet" mark that makes Windows and
-# Revit 2024 (.NET Framework) refuse to load them. Clear it.
-Get-ChildItem $PSScriptRoot -Recurse -File | Unblock-File
+# Revit 2024 (.NET Framework) refuse to load them. Clear it: on the release zip itself (next to this folder or in
+# Downloads, so a later re-extract is clean too), on every extracted file, and again on the installed copies below.
+function Clear-DownloadMark($path) {
+    if (Test-Path $path) { Get-ChildItem $path -Recurse -File -ErrorAction SilentlyContinue | Unblock-File -ErrorAction SilentlyContinue }
+}
+$zips = @($PSScriptRoot, (Split-Path $PSScriptRoot -Parent), (Join-Path $env:USERPROFILE "Downloads")) |
+    Where-Object { $_ -and (Test-Path $_) } |
+    ForEach-Object { Get-ChildItem $_ -Filter "SketchProMax-*.zip" -File -ErrorAction SilentlyContinue }
+$zips | Unblock-File -ErrorAction SilentlyContinue
+Clear-DownloadMark $PSScriptRoot
+
+if (Get-Process Revit -ErrorAction SilentlyContinue) {
+    Write-Warning "Revit is running. Files it has loaded can't be replaced; close Revit and run this again if anything below fails."
+}
+$installed = @()
+$registered = @()
 
 foreach ($v in 2024, 2025, 2026, 2027) {
     $src = Join-Path $dist "Revit$v"
@@ -23,12 +37,16 @@ foreach ($v in 2024, 2025, 2026, 2027) {
     # Files first, manifest last, so Revit never finds a manifest naming a loader that isn't there yet.
     Get-ChildItem $src -Exclude "SketchProMax.addin" | Copy-Item -Destination (Join-Path $addins "SketchProMax") -Recurse -Force
     Copy-Item (Join-Path $src "SketchProMax.addin") $addins -Force
+    Clear-DownloadMark (Join-Path $addins "SketchProMax")
+    Unblock-File (Join-Path $addins "SketchProMax.addin") -ErrorAction SilentlyContinue
+    $installed += [pscustomobject]@{ Revit = $v; Folder = (Join-Path $addins "SketchProMax") }
     Write-Host "Installed add-in for Revit $v" -ForegroundColor Green
 }
 
 $mcpDir = Join-Path $env:LOCALAPPDATA "SketchProMax\mcp"
 New-Item -ItemType Directory -Force -Path $mcpDir | Out-Null
 Copy-Item (Join-Path $dist "mcp\*") $mcpDir -Recurse -Force
+Clear-DownloadMark $mcpDir
 $exe = Join-Path $mcpDir "SketchProMax.Mcp.exe"
 Write-Host "Installed MCP server: $exe" -ForegroundColor Green
 
@@ -60,6 +78,26 @@ foreach ($claudeDir in $claudeDirs) {
     $config.mcpServers | Add-Member -Force "sketch-promax" ([pscustomobject]@{ command = $exe })
     # Write without a byte-order mark; the Claude app rejects JSON that starts with one.
     [IO.File]::WriteAllText($configPath, ($config | ConvertTo-Json -Depth 10), (New-Object Text.UTF8Encoding $false))
+    $registered += $configPath
     Write-Host "Registered with the Claude desktop app: $configPath" -ForegroundColor Green
 }
-Write-Host "Quit the Claude desktop app completely (system tray > Quit) and open it again to load the Revit tools." -ForegroundColor Green
+
+# First-run checklist.
+Write-Host ""
+Write-Host "==== Sketch ProMax: first-run checklist ====" -ForegroundColor Cyan
+if ($installed.Count -gt 0) {
+    foreach ($i in $installed) { Write-Host "  [x] Revit $($i.Revit): add-in installed in $($i.Folder)" }
+} else {
+    Write-Host "  [ ] No supported Revit (2024 to 2027) was found under $env:ProgramFiles\Autodesk. Install Revit, then run this again." -ForegroundColor Yellow
+}
+Write-Host "  [x] MCP server: $exe"
+if ($registered.Count -gt 0) {
+    foreach ($r in $registered) { Write-Host "  [x] Claude desktop config written: $r" }
+} else {
+    Write-Host "  [ ] Claude desktop config was not written (see the warnings above)." -ForegroundColor Yellow
+}
+Write-Host ""
+Write-Host "Next steps:" -ForegroundColor Cyan
+Write-Host "  1. Quit the Claude desktop app completely (system tray > Quit) and open it again to load the Revit tools."
+Write-Host "  2. Open Revit$(if ($installed.Count -gt 0) { ' ' + (($installed | ForEach-Object { $_.Revit }) -join ' / ') }) and a model. If Revit asks about loading Sketch ProMax, choose 'Always Load'."
+Write-Host "  3. On the Sketch ProMax ribbon tab click Claude > Status: it should say 'Ready' or 'Connected'. Then ask Claude something about the model."

@@ -233,6 +233,10 @@ public sealed class ToolRegistry
         new CutOpeningsInJoinedTool(),
         new CreateFloorsFromFacesTool(),
         new CutGeometryTool(),
+        // Guided workarounds for API limits
+        new CreateLegendTool(),
+        new SaveLegendSeedTool(),
+        new InPlaceGuideTool(),
     ]);
         // Recipes replay other tools, so they need the registry itself.
         registry.Add(new SaveRecipeTool(registry));

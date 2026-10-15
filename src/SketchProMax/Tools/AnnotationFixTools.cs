@@ -890,7 +890,7 @@ public sealed class CopyDimensionsTool : IRevitTool
                 var refs = Refs(d);
                 var shape = d.DimensionShape;
                 if (refs.Any(r => r.ElementReferenceType == ElementReferenceType.REFERENCE_TYPE_CUT_EDGE))
-                { job.Manual = "it measures to a view-specific cut edge, which exists only in its own view; the API can't point a dimension at the cut edge of another view"; continue; }
+                { job.Manual = "it measures to a cut edge (a line Revit makes only where that view's cut plane slices the element), which exists only in its own view; the API can't point a dimension at another view's cut edge (Revit API limit). Re-add it by hand in the target view: Annotate > Aligned and pick the cut edges"; continue; }
                 var allVisible = refs.Count > 0 && refs.All(r => visible.Contains(r.ElementId));
                 if (method != "recreate" && allVisible) { job.How = "copy"; continue; }
                 if (method == "copy") { job.Manual = "the dimensioned elements don't show in the target view (use method auto or recreate)"; continue; }
