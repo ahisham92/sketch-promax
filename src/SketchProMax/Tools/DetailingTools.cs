@@ -170,6 +170,8 @@ public sealed class PlaceDetailComponentsTool : IRevitTool
         var guard = DependentGuard.For(doc, view, args.OptString("dependent_view"));
         var placements = args.Array("placements").ToList();
         if (placements.Count == 0) return ToolResult.Error("Give at least one placement.");
+        if (placements.Count > DetailPlacement.MaxPerCall)
+            return ToolResult.Error($"{placements.Count} placements in one call; the limit is {DetailPlacement.MaxPerCall}. Split them into several calls of up to {DetailPlacement.MaxPerCall} each.");
 
         var cache = new Dictionary<string, (FamilySymbol, string?)>(StringComparer.OrdinalIgnoreCase);
         var all = placements.Select((p, i) => DetailPlacement.Parse(doc, view, p, i, args.OptString("family"), cache)).ToList();

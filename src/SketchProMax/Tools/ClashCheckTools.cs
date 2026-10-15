@@ -202,7 +202,7 @@ public sealed class FindClashesTool : IRevitTool
         // Voids and in-place families, handled up front instead of giving wrong or empty results.
         var voidMode = args.OptString("voids") ?? "rebuild";
         var notCheckable = new List<string>(); var voidsRebuilt = 0; var voidProblems = new List<string>();
-        var voidCache = new Dictionary<string, List<Solid>?>();
+        var voidSession = new VoidSolids.Session(); var voidsCapped = new HashSet<long>();
         List<Placed> Prepare(List<Placed> set)
         {
             var kept = new List<Placed>();
@@ -217,9 +217,10 @@ public sealed class FindClashesTool : IRevitTool
                 if (p.Element is FamilyInstance fi && !InPlace.Is(fi) && InstanceVoidCutUtils.IsVoidInstanceCuttingElement(fi))
                 {
                     if (voidMode == "skip") continue;
-                    if (voidsRebuilt >= 100) { if (voidProblems.Count < 30) voidProblems.Add($"{p.Describe()}: not rebuilt (100 voids per run)"); continue; }
-                    var solids = VoidSolids.Rebuild(doc, fi, voidCache, out var why);
-                    if (solids is null) { if (voidProblems.Count < 30) voidProblems.Add($"{p.Describe()}: {why}"); continue; }
+                    if (Bridge.Jobs.CancelRequested) throw new OperationCanceledException("Stopped on request (cancel_job).");
+                    var solids = VoidSolids.Rebuild(doc, fi, voidSession, out var why, out var capped);
+                    if (capped) voidsCapped.Add(fi.Id.Value);
+                    if (solids is null) { if (!capped && voidProblems.Count < 30) voidProblems.Add($"{p.Describe()}: {why}"); continue; }
                     if (!p.Transform.IsIdentity) solids = solids.Select(x => SolidUtils.CreateTransformed(x, p.Transform)).ToList();
                     if (p.Solids().Count == 0) kept.Remove(p); // a void-only family: only its rebuilt void takes part
                     kept.Add(Placed.ForVoid(p, solids));
@@ -300,9 +301,13 @@ public sealed class FindClashesTool : IRevitTool
             note = truncated ? "Stopped after 200,000 candidate pairs; narrow by level or categories." : clashes.Count >= limit ? $"Stopped at the limit of {limit} clashes." : null,
             geometryFallbacks = solidFailures > 0 ? $"{solidFailures} pairs were judged by their boxes because Revit couldn't intersect their solids." : null,
             meshOnly = meshOnly > 0 ? $"{meshOnly} candidate pairs involved elements with no solids (meshes, e.g. from IFC) and can only clash by clearance." : null,
-            voids = clashes.Any(c => c.kind == "void") || voidsRebuilt > 0 || voidProblems.Count > 0 ? new
+            voids = clashes.Any(c => c.kind == "void") || voidsRebuilt > 0 || voidProblems.Count > 0 || voidsCapped.Count > 0 ? new
             {
                 rebuilt = voidsRebuilt,
+                familiesOpened = voidSession.Opens,
+                notRebuiltOverCap = voidsCapped.Count > 0
+                    ? $"{voidsCapped.Count} void instances were not rebuilt (and not checked) because a run opens at most {VoidSolids.MaxOpens} void families. Narrow the run by level or categories, or run again with voids 'skip' to leave them out."
+                    : null,
                 meaning = "A 'void' clash is an element running into a void family's void that does not cut it (a void that cuts an element is by design and skipped).",
                 notRebuilt = voidProblems.Count > 0 ? voidProblems : null,
             } : null,
