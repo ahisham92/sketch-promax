@@ -56,9 +56,13 @@ internal static class ItemBatch
 
         using var group = new TransactionGroup(doc, $"Sketch ProMax: {name}");
         group.Start();
+        var index = 0;
         foreach (var item in list)
         {
             var what = label(item);
+            index++;
+            if (Bridge.Jobs.CancelRequested) { result.Items.Add(new(what, false, "not done: stopped on request (cancel_job)", null)); continue; }
+            if (list.Count > 20 && index % 10 == 0) Bridge.Jobs.Report($"{name}: {index} of {list.Count}");
             var locked = doc.IsWorkshared ? Locked(doc, elements(item)) : null;
             if (locked is not null) { result.Items.Add(new(what, false, locked, null)); continue; }
 

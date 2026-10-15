@@ -210,6 +210,8 @@ public sealed class ToolRegistry
         // Anything else, through the Revit API
         new RunRevitQueryCodeTool(),
         new RunRevitCodeTool(),
+        new SketchProMax.Bridge.WaitForJobTool(),
+        new SketchProMax.Bridge.CancelJobTool(),
     ]);
         // Recipes replay other tools, so they need the registry itself.
         registry.Add(new SaveRecipeTool(registry));

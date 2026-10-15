@@ -18,6 +18,9 @@ internal static class ScriptSource
         using Autodesk.Revit.UI;
         public static class SketchProMaxScript
         {
+            public static Func<bool> CancelProbe;
+            static bool Cancelled() => CancelProbe != null && CancelProbe();
+            static void CheckCancel() { if (Cancelled()) throw new OperationCanceledException("Stopped on request (cancel_job)."); }
             public static object Run(UIApplication app, UIDocument uidoc, Document doc, System.Text.StringBuilder log, IDictionary<string, object> args)
             {
         #line 1 "snippet"

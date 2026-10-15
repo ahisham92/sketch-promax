@@ -227,6 +227,7 @@ public sealed class BridgeServer
                     return JsonSerializer.Serialize(new { ok = true, pid = SessionId, revitVersion = _revitVersion, busy, documents = _lastDocuments });
 
                 case "activate_document":
+                    if (Jobs.Running is { } busyWith) return Error(Jobs.Busy(busyWith).Text);
                     var wanted = root.GetProperty("title").GetString() ?? "";
                     var error = await _dispatcher.InvokeAsync(app => Activate(app, wanted), ct).ConfigureAwait(false);
                     return error is null ? JsonSerializer.Serialize(new { ok = true }) : Error(error);
@@ -254,8 +255,18 @@ public sealed class BridgeServer
         }
     }
 
-    private Task<ToolResult> CallTool(string name, Dictionary<string, JsonElement> args, CancellationToken ct)
+    /// <summary>How long a call waits for Revit to pick it up before concluding Revit is in an edit mode or a dialog.</summary>
+    private const int StartWaitMs = 20000;
+
+    /// <summary>How long a call waits for its result before returning "still running" (the connector gives up later than this).</summary>
+    private const int InlineWaitMs = 45000;
+
+    private async Task<ToolResult> CallTool(string name, Dictionary<string, JsonElement> args, CancellationToken ct)
     {
+        // Job questions are answered here, without Revit's thread, so they work while Revit is busy.
+        if (name == "wait_for_job") return await WaitForJobTool.AnswerAsync(new ToolArgs(args), ct).ConfigureAwait(false);
+        if (name == "cancel_job") return CancelJobTool.Cancel(new ToolArgs(args));
+
         if (name == "run_learned_tool" && args.TryGetValue("name", out var inner) && inner.ValueKind == JsonValueKind.String
             && LearnedTools.Load(inner.GetString()!) is { } learned)
         {
@@ -266,24 +277,67 @@ public sealed class BridgeServer
                 : new Dictionary<string, JsonElement>();
         }
         var tool = _registry.Find(name);
-        if (tool is null) return Task.FromResult(ToolResult.Error($"Unknown tool '{name}'."));
+        if (tool is null) return ToolResult.Error($"Unknown tool '{name}'.");
+
+        // One job at a time: say what is running instead of queueing behind it until the call times out.
+        if (Jobs.Running is { } running) return Jobs.Busy(running);
+        if (_dispatcher.IsRunning) return Jobs.Busy(null);
+
         // A learned tool's code is asked about the first time it runs (and after it changes), even when read-only.
         var confirm = tool.ModifiesModel && AgentSettings.Load().RequireApprovalForChanges
                       || tool is LearnedTool unapproved && !LearnedTools.IsApproved(unapproved.Code);
 
-        return _dispatcher.InvokeAsync(app =>
+        var job = Jobs.Create(tool.Name);
+        // Dropped while still queued if the caller goes away or cancel_job asks; once started it runs to the end.
+        var queued = CancellationTokenSource.CreateLinkedTokenSource(ct, job.Abandon.Token);
+        job.Task = _dispatcher.InvokeAsync(app =>
         {
-            if (app.ActiveUIDocument is null) return ToolResult.Error("No model is open in Revit. Ask the user to open one.");
-            if (confirm && !Approve(tool, args)) return ToolResult.Error("The user rejected this change in Revit. Ask them how to proceed.");
-            ToolResult result;
-            result = FailureGuard.Run(() =>
+            job.Started = DateTime.UtcNow;
+            Jobs.Running = job;
+            job.StartedSignal.TrySetResult(true);
+            try
             {
-                try { return tool.Execute(app, new ToolArgs(args)); }
-                catch (Exception ex) { return ToolResult.Error(Describe(tool, ex)); }
-            });
-            ActivityLog.Write(app.ActiveUIDocument?.Document?.Title ?? "", tool, args, result);
-            return Capped(result);
-        }, ct);
+                if (app.ActiveUIDocument is null) return ToolResult.Error("No model is open in Revit. Ask the user to open one.");
+                if (confirm && !Approve(tool, args)) return ToolResult.Error("The user rejected this change in Revit. Ask them how to proceed.");
+                var result = FailureGuard.Run(() =>
+                {
+                    try { return tool.Execute(app, new ToolArgs(args)); }
+                    catch (OperationCanceledException) when (job.CancelRequested) { return ToolResult.Error("Stopped on request (cancel_job); nothing from this call was kept."); }
+                    catch (Exception ex) { return ToolResult.Error(Describe(tool, ex)); }
+                });
+                ActivityLog.Write(app.ActiveUIDocument?.Document?.Title ?? "", tool, args, result);
+                return Capped(result);
+            }
+            finally
+            {
+                job.Finished = DateTime.UtcNow;
+                Jobs.Running = null;
+            }
+        }, queued.Token);
+
+        // Revit picks work up within a second when idle. If it doesn't, it is in an edit mode (in-place family, sketch,
+        // group edit), showing a dialog, or busy with something of its own: say so rather than time out.
+        var first = await Task.WhenAny(job.Task, job.StartedSignal.Task, Task.Delay(StartWaitMs, ct)).ConfigureAwait(false);
+        if (first != job.Task && first != job.StartedSignal.Task && job.Started is null && !ct.IsCancellationRequested)
+        {
+            try { job.Abandon.Cancel(); } catch (ObjectDisposedException) { }
+            if (job.Started is null)
+                return ToolResult.Error(
+                    $"Revit didn't pick up the request within {StartWaitMs / 1000} s, so it was dropped and nothing was changed. Revit is probably " +
+                    "in an edit mode (editing an in-place family or group, a sketch such as a floor boundary, or Edit Profile), has a dialog open, " +
+                    "or is busy with a command of its own (sync, loading, printing). Ask the user to finish or cancel that in Revit (Finish/Cancel " +
+                    "Edit Mode, close the dialog), then try again.");
+        }
+
+        await Task.WhenAny(job.Task, Task.Delay(InlineWaitMs, ct)).ConfigureAwait(false);
+        if (job.Task.IsCompleted) return job.Task.Status == TaskStatus.RanToCompletion ? job.Task.Result : Jobs.Status(job);
+        return new ToolResult(JsonSerializer.Serialize(new
+        {
+            status = "still running in Revit",
+            job = job.Id, tool = job.Tool, elapsed = Jobs.Duration(job.Elapsed), progress = job.Progress(),
+            next = $"Call wait_for_job (job_id {job.Id}) to wait for the result; it is kept when it finishes. Don't send other model work meanwhile, " +
+                   "and use cancel_job if it should stop.",
+        }));
     }
 
     /// <summary>Makes the named open model the active one, so tools act on it. Returns an error message or null.</summary>

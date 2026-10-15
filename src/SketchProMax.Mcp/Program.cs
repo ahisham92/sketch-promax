@@ -179,10 +179,8 @@ internal static class RevitBridge
             chosen = _target = new Target(target.Pid, null);
         }
 
-        if (target.Busy)
-            return Text($"Revit {target.RevitVersion} is busy finishing a long operation. Wait a moment and try again, and don't send more work to it meanwhile.", true);
-
-        if (chosen!.Model is not null)
+        // A busy Revit still answers: it says which job is running, and wait_for_job / cancel_job work meanwhile.
+        if (chosen!.Model is not null && !target.Busy)
         {
             var activate = await SendAsync(target.Pipe, JsonSerializer.Serialize(new { method = "activate_document", title = chosen.Model }), 5000, ct,
                 readTimeoutMs: 15000);

@@ -403,6 +403,8 @@ internal static class SelfTest
         new("list_view_filters", _ => new { }),
         new("query_linked_models", _ => new { }),
         new("collect_text", _ => new { limit = 50 }),
+        new("wait_for_job", _ => new { wait_seconds = 0 }),
+        new("cancel_job", _ => new { job_id = 999999 }),
         new("get_coordinates", _ => new { }),
         new("convert_coordinates", _ => new { points = new[] { new[] { 0.0, 0.0, 0.0 } }, from = "internal" }),
         new("get_activity_log", _ => new { limit = 5 }),
@@ -735,6 +737,8 @@ internal static class SelfTest
     /// </summary>
     private static IEnumerable<Case> RegressionCases() =>
     [
+        // 0.26: long snippets can report progress and be stopped (CheckCancel compiles and returns normally when not cancelled).
+        new("run_revit_query_code", _ => new { code = "var n = 0; foreach (var id in new FilteredElementCollector(doc).OfClass(typeof(Level)).ToElementIds()) { CheckCancel(); n++; log.AppendLine(\"level \" + n); }\nreturn n;", description = "self-test cancel probe" }),
         new("list_types", _ => new { category = "Slab Edges" }),
         new("collect_text", c => new { view_ids = new[] { c.PlanId }, include = new[] { "view_names" }, text_contains = "Level", limit = 50 }),
         // A placeholder standing for a whole value must reach the tool as the schema's type (here an integer).

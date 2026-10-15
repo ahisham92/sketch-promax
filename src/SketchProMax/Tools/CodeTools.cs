@@ -34,7 +34,13 @@ public abstract class RevitCodeToolBase : IRevitTool
 
     protected const string CodeGuidance =
         " Write a C# method body using the Revit API of the running Revit version. Use dedicated tools first when one fits; " +
-        "use this for anything they can't do. If compilation fails, the errors come back with line numbers so you can fix and retry.";
+        "use this for anything they can't do. If compilation fails, the errors come back with line numbers so you can fix and retry. " +
+        "Big models (tens of thousands of elements): never collect a whole class or category unfiltered (all CurveElements includes every " +
+        "sketch line and can freeze Revit for minutes); filter by category AND view, level or BoundingBoxIntersectsFilter/" +
+        "ElementIntersectsElementFilter, and use quick filters before slow ones. For long loops, call CheckCancel() each iteration so " +
+        "cancel_job can stop it, and log.AppendLine progress or partial results: wait_for_job shows the end of the log while it runs, " +
+        "and the log comes back even if the code stops early. A call that runs past about 45 s returns 'still running as job N'; " +
+        "collect the result with wait_for_job.";
 
     public virtual ToolResult Execute(UIApplication app, ToolArgs args) =>
         RunScript(app, args.String("code"), args.String("description"), ModifiesModel, new Dictionary<string, object?>());
@@ -55,6 +61,8 @@ public abstract class RevitCodeToolBase : IRevitTool
         if (run is null) return ToolResult.Error("The code did not compile:\n" + errors);
 
         var log = new StringBuilder();
+        // wait_for_job shows the end of the log as progress while a long snippet runs.
+        if (Bridge.Jobs.Running is { } job) job.Log = log;
         object? result;
         if (modifiesModel && ownTransactions)
         {
@@ -238,7 +246,10 @@ internal static class ScriptCompiler
         }
 
         var (assembly, context) = Load(pe.ToArray(), pdb.ToArray());
-        var method = assembly.GetType("SketchProMaxScript")!.GetMethod("Run")!;
+        var type = assembly.GetType("SketchProMaxScript")!;
+        var method = type.GetMethod("Run")!;
+        // Lets a long snippet stop when the user asks (cancel_job): CheckCancel() throws, Cancelled() tells.
+        type.GetField("CancelProbe")?.SetValue(null, (Func<bool>)(() => Bridge.Jobs.CancelRequested));
         Script run = (app, uidoc, doc, log, args) => method.Invoke(null, [app, uidoc, doc, log, args]);
         if (Cache.Count > 50) Evict();
         Cache[code] = new Entry(run, context);
