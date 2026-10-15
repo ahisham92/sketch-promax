@@ -357,7 +357,5 @@ public sealed class CreateMepOpeningsTool : IRevitTool
     }
 
     private static FamilySymbol FindSymbol(Document doc, string name) =>
-        new FilteredElementCollector(doc).OfClass(typeof(FamilySymbol)).Cast<FamilySymbol>()
-            .FirstOrDefault(s => string.Equals($"{s.FamilyName}: {s.Name}", name, StringComparison.OrdinalIgnoreCase) || string.Equals(s.Name, name, StringComparison.OrdinalIgnoreCase))
-        ?? throw new ArgumentException($"No family type '{name}'. Load it with load_family first.");
+        TypeMatch.Find(new FilteredElementCollector(doc).OfClass(typeof(FamilySymbol)).Cast<FamilySymbol>().ToList(), name, "family type");
 }

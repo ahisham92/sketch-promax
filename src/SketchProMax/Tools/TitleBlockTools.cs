@@ -48,16 +48,7 @@ internal static class TitleBlocks
         if (args.OptLong("type_id") is { } id)
             return types.FirstOrDefault(t => t.Id.Value == id) ?? throw new ArgumentException($"{id} is not a title block type. Call list_title_blocks.");
         var name = args.OptString("title_block") ?? throw new ArgumentException("Give title_block ('Family: Type' or type name) or type_id.");
-        var wanted = name.Trim();
-        var match = types.FirstOrDefault(t => string.Equals($"{t.FamilyName}: {t.Name}", wanted, StringComparison.OrdinalIgnoreCase))
-                    ?? types.FirstOrDefault(t => string.Equals(t.Name, wanted, StringComparison.OrdinalIgnoreCase))
-                    ?? types.FirstOrDefault(t => string.Equals(t.FamilyName, wanted, StringComparison.OrdinalIgnoreCase));
-        if (match is not null) return match;
-        var partial = types.Where(t => $"{t.FamilyName}: {t.Name}".IndexOf(wanted, StringComparison.OrdinalIgnoreCase) >= 0).ToList();
-        if (partial.Count == 1) return partial[0];
-        throw new ArgumentException(partial.Count == 0
-            ? $"No title block called '{name}'. Loaded: {string.Join(", ", types.Select(t => $"{t.FamilyName}: {t.Name}"))}"
-            : $"'{name}' matches several title blocks: {string.Join(", ", partial.Select(t => $"{t.FamilyName}: {t.Name}"))}. Use the full name.");
+        return TypeMatch.Find(types, name, "title block");
     }
 
     /// <summary>Text-like fields a user would fill in: editable, with a definition, not an id.</summary>
