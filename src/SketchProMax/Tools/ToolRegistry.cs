@@ -244,6 +244,7 @@ public sealed class ToolRegistry
         registry.Add(new DeleteLearnedToolTool());
         registry.Add(new RunSelfTestTool(registry));
         registry.Add(new SelfTestStatusTool());
+        registry.Add(new RunFieldTestTool(registry));
         return registry;
     }
 }
