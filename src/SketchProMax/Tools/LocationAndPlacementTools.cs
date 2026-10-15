@@ -103,7 +103,14 @@ public sealed class SetCoordinatesTool : IRevitTool
         var site = doc.SiteLocation;
         if (args.OptDouble("latitude") is { } lat) { site.Latitude = Coordinates.Rad(lat); done.Add("latitude"); }
         if (args.OptDouble("longitude") is { } lon) { site.Longitude = Coordinates.Rad(lon); done.Add("longitude"); }
-        if (args.OptString("place_name") is { } place) { site.PlaceName = place; done.Add("place name"); }
+        var place = args.OptString("place_name");
+        if (place != null)
+        {
+            // Revit can rewrite the place name from latitude/longitude when it regenerates, so set it after the
+            // coordinates have been applied, and verify it after the commit.
+            if (args.Has("latitude") || args.Has("longitude")) doc.Regenerate();
+            site.PlaceName = place;
+        }
 
         if (args.Has("east") || args.Has("north") || args.Has("elevation") || args.Has("true_north_angle"))
         {
@@ -125,8 +132,26 @@ public sealed class SetCoordinatesTool : IRevitTool
             doc.AcquireCoordinates(link.Id);
             done.Add($"acquired coordinates from {link.Name}");
         }
-        t.Commit();
-        return ToolResult.Ok(new { done });
+        if (t.Commit() != TransactionStatus.Committed)
+            return ToolResult.Error("Revit rolled the coordinate change back; nothing was changed.");
+
+        string? placeNameNote = null;
+        if (place != null)
+        {
+            if (!string.Equals(doc.SiteLocation.PlaceName, place, StringComparison.Ordinal))
+            {
+                // Second attempt on its own, now that the coordinates are settled.
+                using var t2 = RevitHelpers.StartTransaction(doc, "Set place name");
+                doc.SiteLocation.PlaceName = place;
+                t2.Commit();
+            }
+            var actual = doc.SiteLocation.PlaceName;
+            if (string.Equals(actual, place, StringComparison.Ordinal)) done.Add("place name");
+            else placeNameNote = $"Revit did not keep the place name: it is '{actual}', not '{place}'.";
+        }
+        if (placeNameNote != null)
+            return done.Count == 0 ? ToolResult.Error(placeNameNote) : ToolResult.Ok(new { done, placeName = doc.SiteLocation.PlaceName, warning = placeNameNote });
+        return ToolResult.Ok(new { done, placeName = place != null ? doc.SiteLocation.PlaceName : null });
     }
 }
 

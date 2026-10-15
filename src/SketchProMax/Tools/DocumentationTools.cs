@@ -27,15 +27,46 @@ public sealed class TagElementsInViewTool : IRevitTool
         var view = ViewKit.ViewOrActive(doc, args.OptLong("view_id"));
         var bic = RevitHelpers.ParseCategory(doc, args.String("category"));
 
-        var alreadyTagged = new HashSet<long>();
-        foreach (var tag in new FilteredElementCollector(doc, view.Id).OfClass(typeof(IndependentTag)).Cast<IndependentTag>())
-            foreach (var id in tag.GetTaggedLocalElementIds()) alreadyTagged.Add(id.Value);
-        if (bic == BuiltInCategory.OST_Rooms)
-            foreach (var rt in new FilteredElementCollector(doc, view.Id).OfCategory(BuiltInCategory.OST_RoomTags).Cast<RoomTag>())
-                if (rt.Room != null) alreadyTagged.Add(rt.Room.Id.Value);
+        // Everything already tagged in this view: element tags (IndependentTag) and spatial tags (room, space and
+        // area tags are SpatialElementTag, not IndependentTag). Tag categories are collected too, in case a tag
+        // class is not reachable through the class filter.
+        var taggedInView = new HashSet<long>();
+        var tagElements = new Dictionary<long, Element>();
+        foreach (var e in new FilteredElementCollector(doc, view.Id)
+                     .WherePasses(new ElementMulticlassFilter([typeof(IndependentTag), typeof(SpatialElementTag)])))
+            tagElements[e.Id.Value] = e;
+        foreach (var tagCat in new[] { BuiltInCategory.OST_RoomTags, BuiltInCategory.OST_MEPSpaceTags, BuiltInCategory.OST_AreaTags })
+            foreach (var e in new FilteredElementCollector(doc, view.Id).OfCategory(tagCat).WhereElementIsNotElementType())
+                tagElements[e.Id.Value] = e;
+        foreach (var tagEl in tagElements.Values)
+        {
+            try
+            {
+                switch (tagEl)
+                {
+                    case IndependentTag it:
+                        foreach (var id in it.GetTaggedLocalElementIds()) taggedInView.Add(id.Value);
+                        break;
+                    case RoomTag rt:
+                        // TaggedLocalRoomId is set even when Room resolves to null (e.g. phase differences).
+                        if (rt.TaggedLocalRoomId != ElementId.InvalidElementId) taggedInView.Add(rt.TaggedLocalRoomId.Value);
+                        else if (rt.Room != null) taggedInView.Add(rt.Room.Id.Value);
+                        break;
+                    case Autodesk.Revit.DB.Mechanical.SpaceTag st:
+                        if (st.Space != null) taggedInView.Add(st.Space.Id.Value);
+                        break;
+                    case AreaTag at:
+                        if (at.Area != null) taggedInView.Add(at.Area.Id.Value);
+                        break;
+                }
+            }
+            catch (Autodesk.Revit.Exceptions.ApplicationException) { /* orphaned tag: nothing to record */ }
+        }
 
-        var targets = new FilteredElementCollector(doc, view.Id).OfCategory(bic).WhereElementIsNotElementType()
-            .Where(e => !alreadyTagged.Contains(e.Id.Value)).ToList();
+        var inCategory = new FilteredElementCollector(doc, view.Id).OfCategory(bic).WhereElementIsNotElementType().ToList();
+        var alreadyTagged = inCategory.Where(e => taggedInView.Contains(e.Id.Value)).Select(e => e.Id.Value).ToList();
+
+        var targets = inCategory.Where(e => !taggedInView.Contains(e.Id.Value)).ToList();
 
         int tagged = 0;
         var reasons = new Dictionary<string, int>();
@@ -48,6 +79,7 @@ public sealed class TagElementsInViewTool : IRevitTool
                 if (e is Room room)
                 {
                     if (room.Location is not LocationPoint lp) { Skip("room is not placed"); continue; }
+                    if (room.Area <= 0) { Skip("room is not enclosed or is redundant (zero area)"); continue; }
                     doc.Create.NewRoomTag(new LinkElementId(room.Id), new UV(lp.Point.X, lp.Point.Y), view.Id);
                 }
                 else

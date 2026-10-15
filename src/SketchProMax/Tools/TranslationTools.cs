@@ -24,7 +24,9 @@ public sealed class CollectTextTool : IRevitTool
       "parameters": {"type": "array", "items": {"type": "string"}, "description": "Text instance parameters to include, e.g. 'Comments'."},
       "parameter_categories": {"type": "array", "items": {"type": "string"}, "description": "Categories for 'parameters' (default: Rooms, Doors, Windows)."},
       "sheet_numbers": {"type": "array", "items": {"type": "string"}, "description": "Limit text notes and views to these sheets."},
-      "limit": {"type": "integer", "description": "Default 400 items per call."},
+      "view_ids": {"type": "array", "items": {"type": "integer"}, "description": "Limit text notes and view names to these views (or sheets)."},
+      "text_contains": {"type": "string", "description": "Only items whose text contains this (case-insensitive)."},
+      "limit": {"type": "integer", "description": "Default 400 items per call. A page also stops at about 20,000 characters so it is never cut; page.next_offset says where to continue."},
       "offset": {"type": "integer", "description": "Skip this many items (next batch)."}
     }
     """;
@@ -36,10 +38,10 @@ public sealed class CollectTextTool : IRevitTool
         var doc = app.ActiveUIDocument.Document;
         var include = args.StringList("include");
         if (include.Count == 0) include = ["text_notes", "sheet_names", "view_names", "room_names", "schedules"];
-        var items = new List<object>();
+        var items = new List<(string key, string text)>();
         void Add(Element e, string field, string? text)
         {
-            if (!string.IsNullOrWhiteSpace(text)) items.Add(new { key = $"{e.Id.Value}|{field}", text });
+            if (!string.IsNullOrWhiteSpace(text)) items.Add(($"{e.Id.Value}|{field}", text!));
         }
 
         HashSet<ElementId>? onSheets = null;
@@ -48,6 +50,12 @@ public sealed class CollectTextTool : IRevitTool
         {
             sheets = sheets.Where(s => numbers.Contains(s.SheetNumber, StringComparer.OrdinalIgnoreCase)).ToList();
             onSheets = new HashSet<ElementId>(sheets.SelectMany(s => s.GetAllPlacedViews().Append(s.Id)));
+        }
+        if (args.LongList("view_ids") is { Count: > 0 } viewIds)
+        {
+            var chosen = new HashSet<ElementId>(viewIds.Select(i => new ElementId(i)));
+            onSheets = onSheets is null ? chosen : new HashSet<ElementId>(onSheets.Where(chosen.Contains));
+            sheets = sheets.Where(s => onSheets.Contains(s.Id)).ToList();
         }
 
         if (include.Contains("text_notes"))
@@ -85,8 +93,35 @@ public sealed class CollectTextTool : IRevitTool
                         if (e.LookupParameter(n) is { StorageType: StorageType.String } p) Add(e, "param:" + n, p.AsString());
         }
 
-        var (page, info) = Paging.Page(items, args, 400);
-        return ToolResult.Ok(new { items = page, page = info });
+        if (args.OptString("text_contains") is { Length: > 0 } needle)
+            items = items.Where(i => i.text.IndexOf(needle, StringComparison.OrdinalIgnoreCase) >= 0).ToList();
+
+        // Page by count and by size: the bridge cuts results at 24,000 characters, which would drop keys mid-list.
+        const int maxChars = 20000;
+        var offset = (int)Math.Max(0, args.OptLong("offset") ?? 0);
+        var limit = (int)Math.Min(1000, Math.Max(1, args.OptLong("limit") ?? 400));
+        var page = new List<object>();
+        var chars = 0;
+        for (var i = offset; i < items.Count && page.Count < limit; i++)
+        {
+            var item = new { items[i].key, items[i].text };
+            var size = System.Text.Json.JsonSerializer.Serialize(item).Length + 1;
+            if (page.Count > 0 && chars + size > maxChars) break;
+            page.Add(item);
+            chars += size;
+        }
+        int? next = offset + page.Count < items.Count ? offset + page.Count : null;
+        return ToolResult.Ok(new
+        {
+            items = page,
+            page = new
+            {
+                total = items.Count,
+                returned = page.Count,
+                next_offset = next,
+                note = next is null ? null : $"{items.Count - next} more; call again with offset {next}, or narrow with include, sheet_numbers, view_ids or text_contains.",
+            },
+        });
     }
 }
 

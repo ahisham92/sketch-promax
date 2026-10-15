@@ -259,6 +259,7 @@ public sealed class ArrangeTagsTool : IRevitTool
         {
             IndependentTag t => t.TagText,
             Autodesk.Revit.DB.Architecture.RoomTag r => r.TagText,
+            SpatialElementTag st => st.TagText,
             _ => Element.Name,
         };
     }
@@ -279,8 +280,15 @@ public sealed class ArrangeTagsTool : IRevitTool
             .Where(e => e is IndependentTag or SpatialElementTag).ToList();
         if (elements.Count == 0)
         {
-            IEnumerable<Element> collector = new FilteredElementCollector(doc, view.Id)
-                .WherePasses(new ElementMulticlassFilter([typeof(IndependentTag), typeof(SpatialElementTag)]));
+            // Room, space and area tags are SpatialElementTag; they are also collected by category so none is missed.
+            var found = new Dictionary<long, Element>();
+            foreach (var e in new FilteredElementCollector(doc, view.Id)
+                         .WherePasses(new ElementMulticlassFilter([typeof(IndependentTag), typeof(SpatialElementTag)])))
+                found[e.Id.Value] = e;
+            foreach (var tagCat in new[] { BuiltInCategory.OST_RoomTags, BuiltInCategory.OST_MEPSpaceTags, BuiltInCategory.OST_AreaTags })
+                foreach (var e in new FilteredElementCollector(doc, view.Id).OfCategory(tagCat).WhereElementIsNotElementType())
+                    if (e is IndependentTag or SpatialElementTag) found[e.Id.Value] = e;
+            IEnumerable<Element> collector = found.Values;
             if (args.OptString("tag_category") is { } cat)
             {
                 var bic = RevitHelpers.ParseCategory(doc, cat);
@@ -294,7 +302,18 @@ public sealed class ArrangeTagsTool : IRevitTool
         XYZ right = view.RightDirection, up = view.UpDirection;
         Rect? ToRect(TagRef tag)
         {
-            if (tag.Element.get_BoundingBox(view) is not { } box) return null;
+            if (tag.Element.get_BoundingBox(view) is not { } box)
+            {
+                // Some spatial tags report no view bounding box; estimate one from the head and the text length
+                // (about 2.5 mm text on paper), so room tags still take part in overlap checks.
+                XYZ head;
+                try { head = tag.Head; } catch (Autodesk.Revit.Exceptions.ApplicationException) { return null; }
+                var ch = 2.5 / 304.8 * Math.Max(1, view.Scale);
+                var halfW = Math.Max(3, (tag.Text ?? "").Length) * ch * 0.35;
+                var halfH = ch * 0.75;
+                double hu = head.DotProduct(right), hv = head.DotProduct(up);
+                return new Rect { Tag = tag, U0 = hu - halfW, V0 = hv - halfH, U1 = hu + halfW, V1 = hv + halfH };
+            }
             double u0 = double.MaxValue, v0 = double.MaxValue, u1 = double.MinValue, v1 = double.MinValue;
             foreach (var c in ViewKit.Corners(box))
             {
