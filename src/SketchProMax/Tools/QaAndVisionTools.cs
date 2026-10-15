@@ -47,7 +47,11 @@ public sealed class RunModelAuditTool : IRevitTool
         var viewsNotOnSheets = new FilteredElementCollector(doc).OfClass(typeof(View)).Cast<View>()
             .Where(v => !v.IsTemplate && printableTypes.Contains(v.ViewType) && !placed.Contains(v.Id.Value))
             .Select(v => new { id = v.Id.Value, name = v.Name }).ToList();
-        var emptySheets = sheets.Where(s => s.GetAllPlacedViews().Count == 0)
+        // A sheet holding only a schedule has no viewports, so schedule instances (not title block revision schedules)
+        // count as content too. Placeholder sheets hold nothing by design and are not reported.
+        var withSchedules = new FilteredElementCollector(doc).OfClass(typeof(ScheduleSheetInstance)).Cast<ScheduleSheetInstance>()
+            .Where(i => !i.IsTitleblockRevisionSchedule).Select(i => i.OwnerViewId.Value).ToHashSet();
+        var emptySheets = sheets.Where(s => !s.IsPlaceholder && s.GetAllPlacedViews().Count == 0 && !withSchedules.Contains(s.Id.Value))
             .Select(s => new { id = s.Id.Value, number = s.SheetNumber }).ToList();
 
         var untaggedDoors = Untagged(BuiltInCategory.OST_Doors);
