@@ -184,7 +184,7 @@ public sealed class UpdateTextNotesTool : IRevitTool
 {
     public string Name => "update_text_notes";
     public string Description => "Replace the text of existing text notes, or create new ones at a point in a view.";
-    public string PropertiesJson => """
+    public string PropertiesJson => DependentGuard.AddTo("""
     {
       "updates": {"type": "array", "items": {"type": "object",
         "properties": {"id": {"type": "integer"}, "text": {"type": "string"}}, "required": ["id", "text"]}},
@@ -192,7 +192,7 @@ public sealed class UpdateTextNotesTool : IRevitTool
         "properties": {"view_id": {"type": "integer"}, "x": {"type": "number"}, "y": {"type": "number"}, "text": {"type": "string"}},
         "required": ["view_id", "x", "y", "text"]}, "description": "x/y in project units: model coordinates in plans; in sections, elevations and drafting views, along the view's right and up directions from its origin (as add_annotations)."}
     }
-    """;
+    """);
     public string[] Required => [];
     public bool ModifiesModel => true;
 
@@ -211,14 +211,19 @@ public sealed class UpdateTextNotesTool : IRevitTool
             }
         }
         var typeId = doc.GetDefaultElementTypeId(ElementTypeGroup.TextNoteType);
+        var guards = new Dictionary<long, DependentGuard>();
         foreach (var c in args.Array("create"))
         {
             var view = ViewKit.ViewOrActive(doc, c.GetProperty("view_id").GetInt64());
+            if (!guards.TryGetValue(view.Id.Value, out var guard))
+                guards[view.Id.Value] = guard = DependentGuard.For(doc, view, args.OptString("dependent_view"));
             var p = ViewKit.ToModel(doc, view, c.GetProperty("x").GetDouble(), c.GetProperty("y").GetDouble());
-            var note = TextNote.Create(doc, view.Id, p, c.GetProperty("text").GetString() ?? "", typeId);
+            if (!guard.Keep(p)) continue;
+            var note = TextNote.Create(doc, guard.Target.Id, p, c.GetProperty("text").GetString() ?? "", typeId);
             created.Add(note.Id.Value);
         }
         t.Commit();
-        return ToolResult.Ok(new { updated, created });
+        var dependent = guards.Values.Select(g => g.Report()).Where(r => r != null).ToList();
+        return ToolResult.Ok(new { updated, created, dependentViews = dependent.Count > 0 ? dependent : null });
     }
 }

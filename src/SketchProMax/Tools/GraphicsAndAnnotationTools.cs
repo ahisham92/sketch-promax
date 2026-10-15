@@ -147,15 +147,16 @@ public sealed class AddAnnotationsTool : IRevitTool
         "Draw annotation in a view: text notes, detail lines (any line style, open or closed) and filled regions. " +
         "Coordinates: in plans, model x, y in project units; in sections, elevations and drafting views, x along the " +
         "view's right direction and y up from the view origin. Use list_types with category 'Text Notes' or " +
-        "'Filled region' for type names.";
-    public string PropertiesJson => """
+        "'Filled region' for type names. In a dependent view it warns that the annotation belongs to the primary view (and " +
+        "shows in every dependent whose crop covers it); dependent_view 'clip_to_crop' trims detail lines to this view's crop.";
+    public string PropertiesJson => DependentGuard.AddTo("""
     {
       "view_id": {"type": "integer", "description": "Default: active view."},
       "text_notes": {"type": "array", "items": {"type": "object", "properties": {"text": {"type": "string"}, "at": {"type": "array", "items": {"type": "number"}}, "type": {"type": "string"}, "width": {"type": "number", "description": "Wrap width on paper, mm. Optional."}}, "required": ["text", "at"]}},
       "detail_lines": {"type": "array", "items": {"type": "object", "properties": {"points": {"type": "array", "items": {"type": "array", "items": {"type": "number"}}}, "closed": {"type": "boolean"}, "line_style": {"type": "string"}}, "required": ["points"]}},
       "filled_regions": {"type": "array", "items": {"type": "object", "properties": {"points": {"type": "array", "items": {"type": "array", "items": {"type": "number"}}}, "type": {"type": "string"}}, "required": ["points"]}}
     }
-    """;
+    """);
     public string[] Required => [];
     public bool ModifiesModel => true;
 
@@ -163,6 +164,8 @@ public sealed class AddAnnotationsTool : IRevitTool
     {
         var doc = app.ActiveUIDocument.Document;
         var view = ViewKit.ViewOrActive(doc, args.OptLong("view_id"));
+        var guard = DependentGuard.For(doc, view, args.OptString("dependent_view"));
+        var target = guard.Target;
         XYZ ToModel(JsonElement p) => ViewKit.ToModel(doc, view, p);
         List<Curve> Polyline(JsonElement spec, bool closed)
         {
@@ -186,10 +189,11 @@ public sealed class AddAnnotationsTool : IRevitTool
                        ?? textTypes.First();
             var options = new TextNoteOptions(type.Id) { HorizontalAlignment = HorizontalTextAlignment.Left };
             var at = ToModel(spec.GetProperty("at"));
+            if (!guard.Keep(at)) continue;
             var text = spec.GetProperty("text").GetString() ?? "";
             var note = spec.TryGetProperty("width", out var w)
-                ? TextNote.Create(doc, view.Id, at, UnitUtils.ConvertToInternalUnits(w.GetDouble(), UnitTypeId.Millimeters), text, options)
-                : TextNote.Create(doc, view.Id, at, text, options);
+                ? TextNote.Create(doc, target.Id, at, UnitUtils.ConvertToInternalUnits(w.GetDouble(), UnitTypeId.Millimeters), text, options)
+                : TextNote.Create(doc, target.Id, at, text, options);
             created.Add(note.Id.Value);
         }
 
@@ -201,9 +205,9 @@ public sealed class AddAnnotationsTool : IRevitTool
             var style = styleName is null ? null
                 : lineStyles.FirstOrDefault(x => string.Equals(x.Name, styleName, StringComparison.OrdinalIgnoreCase))?.GetGraphicsStyle(GraphicsStyleType.Projection)
                   ?? throw new ArgumentException($"No line style '{styleName}'. Available: {string.Join(", ", lineStyles.Select(x => x.Name))}");
-            foreach (var curve in Polyline(spec, closed))
+            foreach (var curve in Polyline(spec, closed).SelectMany(c => guard.Clip(c, doc.Application.ShortCurveTolerance)))
             {
-                var line = doc.Create.NewDetailCurve(view, curve);
+                var line = doc.Create.NewDetailCurve(target, curve);
                 if (style != null) line.LineStyle = style;
                 created.Add(line.Id.Value);
             }
@@ -215,12 +219,14 @@ public sealed class AddAnnotationsTool : IRevitTool
             var typeName = spec.TryGetProperty("type", out var rt) ? rt.GetString() : null;
             var type = regionTypes.FirstOrDefault(x => string.Equals(x.Name, typeName, StringComparison.OrdinalIgnoreCase)) ?? regionTypes.FirstOrDefault()
                        ?? throw new InvalidOperationException("This model has no filled region types.");
-            var loop = CurveLoop.Create(Polyline(spec, closed: true));
-            created.Add(FilledRegion.Create(doc, type.Id, view.Id, [loop]).Id.Value);
+            var outline = Polyline(spec, closed: true);
+            if (!guard.KeepAll(outline.Select(c => c.GetEndPoint(0)).ToList())) continue;
+            var loop = CurveLoop.Create(outline);
+            created.Add(FilledRegion.Create(doc, type.Id, target.Id, [loop]).Id.Value);
         }
 
         t.Commit();
-        return ToolResult.Ok(new { view = view.Name, created = created.Count, ids = created });
+        return ToolResult.Ok(new { view = target.Name, created = created.Count, ids = created, dependentView = guard.Report() });
     }
 }
 
@@ -229,7 +235,8 @@ public sealed class ArrangeTagsTool : IRevitTool
     public string Name => "arrange_tags";
     public string Description =>
         "Tidy tags in a view: report overlapping tags, move overlapping tags apart (fix_overlaps), align tag heads in a row or column (left/right/top/bottom or " +
-        "center lines), or turn leaders on/off. Works on element tags and room/space/area tags. Pick tags by id, or all tags of a tag category in the view (e.g. 'Door Tags', 'Room Tags').";
+        "center lines), or turn leaders on/off. Works on element tags and room/space/area tags. Pick tags by id, or all tags of a tag category in the view (e.g. 'Door Tags', 'Room Tags'). " +
+        "To re-flow a copied detail's tags and text notes (leaders horizontal, labels in a column beside the elements, heads following their elements) use reflow_annotations.";
     public string PropertiesJson => """
     {
       "view_id": {"type": "integer"},

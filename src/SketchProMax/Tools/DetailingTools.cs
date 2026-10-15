@@ -35,7 +35,7 @@ public sealed class AddKeynoteTagsTool : IRevitTool
         "Whether the tag shows the element keynote, material keynote or user keynote is set by the keynote tag family/type " +
         "(e.g. 'Keynote Tag: Keynote Number'). Elements already keynoted in the view are skipped; elements with an empty " +
         "Keynote parameter are reported (set it with set_parameters, parameter 'Keynote').";
-    public string PropertiesJson => """
+    public string PropertiesJson => DependentGuard.AddTo("""
     {
       "view_id": {"type": "integer", "description": "Default: active view."},
       "element_ids": {"type": "array", "items": {"type": "integer"}},
@@ -44,7 +44,7 @@ public sealed class AddKeynoteTagsTool : IRevitTool
       "leader": {"type": "boolean", "description": "Default true."},
       "offset": {"type": "array", "items": {"type": "number"}, "description": "[dx, dy] from the element centre to the tag head, project units (default ~1 m / 3 ft right and up)."}
     }
-    """;
+    """);
     public string[] Required => [];
     public bool ModifiesModel => true;
 
@@ -55,6 +55,7 @@ public sealed class AddKeynoteTagsTool : IRevitTool
         if (view.IsTemplate || view is ViewSchedule || view.ViewType == ViewType.DrawingSheet)
             return ToolResult.Error($"'{view.Name}' can't hold keynote tags. Use a plan, section, elevation, detail or 3D view.");
         var tagType = ViewPoints.Symbol(doc, BuiltInCategory.OST_KeynoteTags, args.OptString("tag_type"), "keynote tag");
+        var guard = DependentGuard.For(doc, view, args.OptString("dependent_view"));
 
         List<Element> targets;
         var ids = args.LongList("element_ids");
@@ -98,9 +99,10 @@ public sealed class AddKeynoteTagsTool : IRevitTool
             if (bb is null) { Skip("not visible in the view"); continue; }
             var center = (bb.Min + bb.Max) / 2;
             var head = view is ViewPlan ? center + new XYZ(dx, dy, 0) : center + view.RightDirection * dx + view.UpDirection * dy;
+            if (!guard.Keep(head)) { Skip("tag head outside this dependent view's crop"); continue; }
             try
             {
-                var tag = IndependentTag.Create(doc, tagType.Id, view.Id, new Reference(e), leader, TagOrientation.Horizontal, center);
+                var tag = IndependentTag.Create(doc, tagType.Id, guard.Target.Id, new Reference(e), leader, TagOrientation.Horizontal, center);
                 if (leader) { tag.LeaderEndCondition = LeaderEndCondition.Free; }
                 tag.TagHeadPosition = head;
                 placed.Add(tag.Id.Value);
@@ -121,6 +123,7 @@ public sealed class AddKeynoteTagsTool : IRevitTool
             alreadyTagged = skippedExisting,
             withoutKeynoteValue = noKeynote.Count, withoutKeynoteIds = noKeynote.Take(50),
             skippedBecause = reasons.Select(r => $"{r.Value}: {r.Key}"),
+            dependentView = guard.Report(),
             note = noKeynote.Count > 0 ? "Some elements have no Keynote value, so their tags show '?' or blank. Set 'Keynote' with set_parameters (on the type for element keynotes)." : null,
         });
     }
@@ -138,7 +141,7 @@ public sealed class PlaceDetailComponentsTool : IRevitTool
         "regeneration and re-applied once if they did not stick; what still differs is reported with the reason (formula, read-only...). " +
         "If Revit refuses a new instance ('Can't make type', constraint errors), an existing instance of the type is copied instead " +
         "(method 'auto', the default); see also place_detail_item_copy.";
-    public string PropertiesJson => """
+    public string PropertiesJson => DependentGuard.AddTo("""
     {
       "view_id": {"type": "integer", "description": "Default: active view."},
       "family": {"type": "string", "description": "Detail item 'Family: Type' used when a placement doesn't name one."},
@@ -152,7 +155,7 @@ public sealed class PlaceDetailComponentsTool : IRevitTool
       }}},
       "method": {"type": "string", "enum": ["auto", "new", "copy"], "description": "auto (default): new instance, falling back to copying an existing one when Revit refuses. new: never copy. copy: always copy an existing instance."}
     }
-    """;
+    """);
     public string[] Required => ["placements"];
     public bool ModifiesModel => true;
 
@@ -164,12 +167,18 @@ public sealed class PlaceDetailComponentsTool : IRevitTool
             return ToolResult.Error($"Detail components go in plan, section, elevation, drafting or detail views, not '{view.Name}' ({view.ViewType}).");
         var method = args.OptString("method") ?? "auto";
         if (method is not ("auto" or "new" or "copy")) throw new ArgumentException("method must be auto, new or copy.");
+        var guard = DependentGuard.For(doc, view, args.OptString("dependent_view"));
         var placements = args.Array("placements").ToList();
         if (placements.Count == 0) return ToolResult.Error("Give at least one placement.");
 
         var cache = new Dictionary<string, (FamilySymbol, string?)>(StringComparer.OrdinalIgnoreCase);
-        var specs = placements.Select((p, i) => DetailPlacement.Parse(doc, view, p, i, args.OptString("family"), cache)).ToList();
-        Batch.InGroup(doc, "Place detail components", () => { DetailPlacement.Run(doc, view, specs, method, null); return specs; },
+        var all = placements.Select((p, i) => DetailPlacement.Parse(doc, view, p, i, args.OptString("family"), cache)).ToList();
+        // Dependent views: with clip_to_crop, placements outside this view's crop are left out (they would show in other dependents).
+        var outside = all.Where(x => x.Error is null && (x.At ?? (x.Start is { } st && x.End is { } en ? (st + en) / 2 : null)) is { } pt && !guard.Keep(pt))
+            .Select(x => x.Index).ToList();
+        var specs = all.Where(x => !outside.Contains(x.Index)).ToList();
+        var target = guard.Target;
+        Batch.InGroup(doc, "Place detail components", () => { DetailPlacement.Run(doc, target, specs, method, null); return specs; },
             s => s.Any(x => x.Created is not null));
 
         var placed = specs.Where(s => s.Created is not null).ToList();
@@ -190,8 +199,8 @@ public sealed class PlaceDetailComponentsTool : IRevitTool
             errors,
             copied = placed.Count(s => s.Method == "copy") is var c && c > 0 ? c : (int?)null,
             placements = specs.Any(s => s.Method == "copy" || s.Params.Count > 0 || s.TypeNote != null) ? specs.Select(DetailPlacement.Row) : null,
-            dependentViewWarning = view.GetPrimaryViewId() != ElementId.InvalidElementId
-                ? "This is a dependent view: detail items belong to the primary view and show in every dependent view whose crop covers them." : null,
+            dependentView = guard.Report(),
+            outsideCrop = outside.Count > 0 ? outside : null,
         });
     }
 }
@@ -201,19 +210,22 @@ public sealed class DimensionElementsTool : IRevitTool
     public string Name => "dimension_elements";
     public string Description =>
         "Add one dimension string through the given elements: grids, levels, reference planes, walls (faces or centre " +
-        "references) and family instances such as columns, doors or furniture (their centre reference planes). Works in " +
-        "plans, sections and elevations. The string measures along 'direction' (x, y or vertical); by default it is " +
-        "worked out from the elements (across parallel grids/walls/planes, vertical for levels, else along their widest spread).";
-    public string PropertiesJson => """
+        "references), floors/slabs (top and bottom faces for vertical strings) and family instances such as piles, beams, " +
+        "columns, doors or furniture (centre reference planes, or with family_refs 'faces' their side planes / outer faces, " +
+        "resolved from the family geometry with the instance's position). Works in plans, sections and elevations. The string " +
+        "measures along 'direction' (x, y or vertical); by default it is worked out from the elements. For several strings " +
+        "at once use add_dimensions.";
+    public string PropertiesJson => DependentGuard.AddTo("""
     {
       "view_id": {"type": "integer", "description": "Default: active view."},
-      "element_ids": {"type": "array", "items": {"type": "integer"}, "description": "At least two elements."},
+      "element_ids": {"type": "array", "items": {"type": "integer"}, "description": "At least two elements (or one, with family_refs faces, for its width)."},
       "direction": {"type": "string", "enum": ["auto", "x", "y", "vertical"]},
       "walls": {"type": "string", "enum": ["exterior_face", "interior_face", "both_faces"], "description": "Wall references to use (default exterior_face)."},
+      "family_refs": {"type": "string", "enum": ["center", "faces", "center_and_faces"], "description": "Family instances: centre plane (default), the two outer faces/side planes, or both."},
       "offset": {"type": "number", "description": "Distance from the elements to the dimension line, project units (default ~1 m / 3 ft)."},
       "line": {"type": "array", "items": {"type": "array", "items": {"type": "number"}}, "description": "Optional [[x,y],[x,y]] to place the dimension line exactly (view points, see place_detail_components)."}
     }
-    """;
+    """);
     public string[] Required => ["element_ids"];
     public bool ModifiesModel => true;
 
@@ -223,120 +235,38 @@ public sealed class DimensionElementsTool : IRevitTool
         var view = ViewKit.ViewOrActive(doc, args.OptLong("view_id"));
         if (view is View3D || view is ViewSchedule || view.ViewType == ViewType.DrawingSheet || view.IsTemplate)
             return ToolResult.Error($"dimension_elements works in plan, section, elevation and detail views, not '{view.Name}'.");
+        var guard = DependentGuard.For(doc, view, args.OptString("dependent_view"));
+        var target = guard.Target;
         var elements = args.LongList("element_ids").Select(i => doc.GetElement(new ElementId(i)) ?? throw new ArgumentException($"No element with id {i}.")).ToList();
-        if (elements.Count < 2) return ToolResult.Error("Give at least two element_ids.");
-        var wallMode = args.OptString("walls") ?? "exterior_face";
+        if (elements.Count < 1) return ToolResult.Error("Give at least two element_ids.");
         var offset = args.OptDouble("offset") is { } o ? RevitHelpers.ToInternal(doc, o) : 3.0;
-        var vd = view.ViewDirection.Normalize();
-
-        // Measuring direction, in the view plane.
-        XYZ? m = (args.OptString("direction") ?? "auto") switch
-        {
-            "x" => XYZ.BasisX,
-            "y" => XYZ.BasisY,
-            "vertical" => XYZ.BasisZ,
-            _ => null,
-        };
-        m ??= AutoDirection(elements, view);
-        m = (m - vd * m.DotProduct(vd));
-        if (m.GetLength() < 1e-6)
-            return ToolResult.Error($"That direction points straight out of '{view.Name}'. Pick another direction or a view that shows it.");
-        m = m.Normalize();
-
-        var refs = new ReferenceArray();
-        var points = new List<XYZ>();
-        var skipped = new List<object>();
-        foreach (var e in elements)
-        {
-            var found = References(e, m, wallMode);
-            if (found.Count == 0) { skipped.Add(new { id = e.Id.Value, reason = $"no reference across this direction ({e.Category?.Name ?? e.GetType().Name})" }); continue; }
-            foreach (var r in found) refs.Append(r);
-            var bb = e.get_BoundingBox(view) ?? e.get_BoundingBox(null);
-            if (bb != null) { points.Add(bb.Min); points.Add(bb.Max); }
-        }
-        if (refs.Size < 2) return ToolResult.Error($"Only {refs.Size} usable reference(s) found; a dimension needs two. Skipped: {JsonSerializer.Serialize(skipped)}");
-
-        Line line;
+        Line? line = null;
         if (args.Has("line"))
         {
-            var pts = args.Array("line").Select(p => ViewPoints.ToModel(doc, view, p)).ToList();
+            var pts = args.Array("line").Select(p => ViewPoints.ToModel(doc, target, p)).ToList();
             if (pts.Count != 2) return ToolResult.Error("line needs exactly two points.");
             line = Line.CreateBound(pts[0], pts[1]);
         }
-        else
-        {
-            if (points.Count == 0) return ToolResult.Error("Couldn't find where the elements are in this view. Give 'line'.");
-            var perp = vd.CrossProduct(m).Normalize();
-            var along = points.Select(p => p.DotProduct(m)).ToList();
-            var position = points.Max(p => p.DotProduct(perp)) + offset;
-            var depth = view is ViewPlan plan ? (plan.GenLevel?.ProjectElevation ?? 0) : view.Origin.DotProduct(vd);
-            XYZ At(double s) => m * s + perp * position + vd * depth;
-            // On plans, vd is up, so "depth" is the level elevation.
-            line = Line.CreateBound(At(along.Min() - 1), At(along.Max() + 1));
-        }
-
-        using var t = RevitHelpers.StartTransaction(doc, "Dimension elements");
+        DimensionPlanner.Plan plan;
         try
         {
-            var dim = doc.Create.NewDimension(view, line, refs);
-            t.Commit();
-            return ToolResult.Ok(new { view = view.Name, dimensionId = dim.Id.Value, references = refs.Size, segments = Math.Max(1, dim.NumberOfSegments), skipped });
+            plan = DimensionPlanner.Make(doc, target, elements, args.OptString("direction"), args.OptString("walls") ?? "exterior_face",
+                args.OptString("family_refs") ?? "center", offset, line);
         }
-        catch (Autodesk.Revit.Exceptions.ApplicationException ex)
-        {
-            t.RollBack();
-            return ToolResult.Error($"Revit could not make the dimension: {ex.Message.Trim()} The references may not be parallel to each other or not visible in '{view.Name}'. Try direction x/y/vertical, fewer elements, or walls: exterior_face.");
-        }
-    }
+        catch (ArgumentException ex) { return ToolResult.Error(ex.Message); }
+        if (!guard.Keep(plan.Line.Evaluate(0.5, true)))
+            return ToolResult.Error($"The dimension line is outside the crop of dependent view '{view.Name}' (dependent_view: clip_to_crop).");
 
-    private static XYZ AutoDirection(List<Element> elements, View view)
-    {
-        foreach (var e in elements)
+        var (ids, result) = DimensionBatch.Create(doc, "Dimension elements", [new DimensionBatch.Spec("dimension", target, plan.Line, plan.Refs)]);
+        if (ids.Count == 0)
+            return ToolResult.Error($"Revit could not make the dimension: {result.Failed.FirstOrDefault()?.Error} The references may not be parallel to each other (a sloped face), " +
+                                    $"or not visible in '{target.Name}'. Try direction x/y/vertical, fewer elements, family_refs faces, or walls: exterior_face. Skipped: {JsonSerializer.Serialize(plan.Skipped)}");
+        var dim = (Dimension)doc.GetElement(new ElementId(ids[0]));
+        return ToolResult.Ok(new
         {
-            switch (e)
-            {
-                case Grid { Curve: Line gl }: return new XYZ(-gl.Direction.Y, gl.Direction.X, 0);
-                case Wall { Location: LocationCurve { Curve: Line wl } }: return new XYZ(-wl.Direction.Y, wl.Direction.X, 0);
-                case ReferencePlane rp: return rp.Normal;
-                case Level: return XYZ.BasisZ;
-            }
-        }
-        var centers = elements.Select(e => e.get_BoundingBox(view) ?? e.get_BoundingBox(null)).Where(b => b != null).Select(b => (b!.Min + b.Max) / 2).ToList();
-        if (centers.Count < 2) return view.RightDirection;
-        var right = view.RightDirection; var up = view.UpDirection;
-        double spread(XYZ d) => centers.Max(c => c.DotProduct(d)) - centers.Min(c => c.DotProduct(d));
-        return spread(right) >= spread(up) ? right : up;
-    }
-
-    private static List<Reference> References(Element e, XYZ m, string wallMode)
-    {
-        bool Across(XYZ normal) => Math.Abs(normal.Normalize().DotProduct(m)) > 0.99;
-        switch (e)
-        {
-            case Grid g when g.Curve is Line l:
-                return Across(new XYZ(-l.Direction.Y, l.Direction.X, 0)) ? [new Reference(g)] : [];
-            case Level lv:
-                return Across(XYZ.BasisZ) ? [new Reference(lv)] : [];
-            case ReferencePlane rp:
-                return Across(rp.Normal) ? [rp.GetReference()] : [];
-            case Wall w when w.Location is LocationCurve { Curve: Line wl }:
-                if (!Across(new XYZ(-wl.Direction.Y, wl.Direction.X, 0))) return [];
-                var list = new List<Reference>();
-                if (wallMode is "exterior_face" or "both_faces" && DimensionWallsTool.WallReference(w, "exterior_face") is { } ext) list.Add(ext);
-                if (wallMode is "interior_face" or "both_faces" && DimensionWallsTool.WallReference(w, "interior_face") is { } inn) list.Add(inn);
-                return list;
-            case FamilyInstance fi:
-                // Centre (left/right) plane is perpendicular to the hand direction; (front/back) to the facing direction.
-                var hand = fi.HandOrientation; var facing = fi.FacingOrientation;
-                FamilyInstanceReferenceType type =
-                    Across(XYZ.BasisZ) && Math.Abs(m.Z) > 0.99 ? FamilyInstanceReferenceType.CenterElevation
-                    : Math.Abs(hand.DotProduct(m)) >= Math.Abs(facing.DotProduct(m)) ? FamilyInstanceReferenceType.CenterLeftRight
-                    : FamilyInstanceReferenceType.CenterFrontBack;
-                var refs = fi.GetReferences(type);
-                return refs.Count > 0 ? [refs[0]] : [];
-            default:
-                return [];
-        }
+            view = target.Name, dimensionId = dim.Id.Value, references = plan.Refs.Size, segments = Math.Max(1, dim.NumberOfSegments),
+            skipped = plan.Skipped, dependentView = guard.Report(),
+        });
     }
 }
 

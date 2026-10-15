@@ -11,13 +11,13 @@ public sealed class TagElementsInViewTool : IRevitTool
     public string Description =>
         "Tag every untagged element of a category (Doors, Windows, Rooms, Walls, Furniture, ...) in a plan view. " +
         "Uses the category's default tag type; elements that already have a tag in that view are skipped.";
-    public string PropertiesJson => """
+    public string PropertiesJson => DependentGuard.AddTo("""
     {
       "category": {"type": "string"},
       "view_id": {"type": "integer", "description": "Defaults to the active view."},
       "leader": {"type": "boolean"}
     }
-    """;
+    """);
     public string[] Required => ["category"];
     public bool ModifiesModel => true;
 
@@ -26,6 +26,8 @@ public sealed class TagElementsInViewTool : IRevitTool
         var doc = app.ActiveUIDocument.Document;
         var view = ViewKit.ViewOrActive(doc, args.OptLong("view_id"));
         var bic = RevitHelpers.ParseCategory(doc, args.String("category"));
+        var guard = DependentGuard.For(doc, view, args.OptString("dependent_view"));
+        var target = guard.Target;
 
         // Everything already tagged in this view: element tags (IndependentTag) and spatial tags (room, space and
         // area tags are SpatialElementTag, not IndependentTag). Tag categories are collected too, in case a tag
@@ -80,13 +82,15 @@ public sealed class TagElementsInViewTool : IRevitTool
                 {
                     if (room.Location is not LocationPoint lp) { Skip("room is not placed"); continue; }
                     if (room.Area <= 0) { Skip("room is not enclosed or is redundant (zero area)"); continue; }
-                    doc.Create.NewRoomTag(new LinkElementId(room.Id), new UV(lp.Point.X, lp.Point.Y), view.Id);
+                    if (!guard.Keep(lp.Point)) { Skip("outside this dependent view's crop"); continue; }
+                    doc.Create.NewRoomTag(new LinkElementId(room.Id), new UV(lp.Point.X, lp.Point.Y), target.Id);
                 }
                 else
                 {
                     var center = Center(e, view);
                     if (center is null) { Skip("no location to put the tag"); continue; }
-                    IndependentTag.Create(doc, view.Id, new Reference(e), args.OptBool("leader"),
+                    if (!guard.Keep(center)) { Skip("outside this dependent view's crop"); continue; }
+                    IndependentTag.Create(doc, target.Id, new Reference(e), args.OptBool("leader"),
                         TagMode.TM_ADDBY_CATEGORY, TagOrientation.Horizontal, center);
                 }
                 tagged++;
@@ -108,6 +112,7 @@ public sealed class TagElementsInViewTool : IRevitTool
         {
             view = view.Name, tagged, skipped, alreadyTagged = alreadyTagged.Count,
             skippedBecause = reasons.Select(r => $"{r.Value}: {r.Key}"),
+            dependentView = guard.Report(),
             note = targets.Count == 0 ? $"No untagged {args.String("category")} are visible in this view." : null,
         });
     }

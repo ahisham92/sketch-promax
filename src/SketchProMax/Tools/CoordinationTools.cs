@@ -167,18 +167,22 @@ public sealed class AddSpotElevationsTool : IRevitTool
 {
     public string Name => "add_spot_elevations";
     public string Description =>
-        "Add spot elevations on the top surface of floors, roofs and slabs in a plan or section view. With no element " +
-        "ids it finds every floor and roof visible in the view (each level change gets one). Places at each top face's " +
-        "center, at its corners, or at given plan points.";
-    public string PropertiesJson => """
+        "Add spot elevations on the top (or bottom) surface of floors, roofs and slabs, and of family instances such as piles, " +
+        "pile caps, footings, beams and columns, in a plan or section view. Family instance faces are resolved from the family " +
+        "geometry with the instance's position applied, so the spot lies on its reference. With no element ids it finds every " +
+        "floor and roof visible in the view (each level change gets one). Places at each face's center, at its corners, or at " +
+        "given plan points. Each spot is its own step: one Revit refuses is reported with its reason and the rest are kept.";
+    public string PropertiesJson => DependentGuard.AddTo("""
     {
       "view_id": {"type": "integer"},
       "element_ids": {"type": "array", "items": {"type": "integer"}, "description": "Default: all floors and roofs in the view."},
+      "categories": {"type": "array", "items": {"type": "string"}, "description": "With no element_ids: categories to collect in the view instead of floors and roofs, e.g. ['Structural Foundations', 'Structural Framing']."},
+      "face": {"type": "string", "enum": ["top", "bottom"], "description": "Default top."},
       "at_corners": {"type": "boolean", "description": "Also mark each top face's corners (e.g. sloped slabs, ramps)."},
       "points": {"type": "array", "items": {"type": "array", "items": {"type": "number"}}, "description": "Optional [x, y] plan points; each uses the element whose top face is under it."},
       "leader": {"type": "boolean", "description": "Default true."}
     }
-    """;
+    """);
     public string[] Required => [];
     public bool ModifiesModel => true;
 
@@ -186,62 +190,94 @@ public sealed class AddSpotElevationsTool : IRevitTool
     {
         var doc = app.ActiveUIDocument.Document;
         var view = ViewKit.ViewOrActive(doc, args.OptLong("view_id"));
+        var guard = DependentGuard.For(doc, view, args.OptString("dependent_view"));
+        var target = guard.Target;
+        var sign = (args.OptString("face") ?? "top") switch
+        {
+            "top" => 1,
+            "bottom" => -1,
+            _ => throw new ArgumentException("face must be top or bottom."),
+        };
         var elementIds = args.LongList("element_ids");
         if (elementIds.Count == 0)
+        {
+            var cats = args.StringList("categories").Select(c => RevitHelpers.ParseCategory(doc, c)).ToList();
+            if (cats.Count == 0) cats = [BuiltInCategory.OST_Floors, BuiltInCategory.OST_Roofs];
             elementIds = new FilteredElementCollector(doc, view.Id)
-                .WherePasses(new ElementMulticategoryFilter([BuiltInCategory.OST_Floors, BuiltInCategory.OST_Roofs]))
+                .WherePasses(new ElementMulticategoryFilter(cats))
                 .WhereElementIsNotElementType().Select(e => e.Id.Value).ToList();
+        }
         var leader = args.OptBool("leader", true);
-        var faces = new List<(Element Element, Reference Ref, Face Face)>();
+        var faces = new List<RefResolver.RefFace>();
+        var noFace = new List<long>();
         foreach (var id in elementIds)
         {
             var e = doc.GetElement(new ElementId(id));
-            if (e is not HostObject host) continue;
-            foreach (var r in HostObjectUtils.GetTopFaces(host))
-                if (e.GetGeometryObjectFromReference(r) is Face f) faces.Add((e, r, f));
+            if (e is null) throw new ArgumentException($"No element with id {id}.");
+            var found = RefResolver.TopOrBottom(e, view, sign);
+            if (found.Count == 0) noFace.Add(id);
+            faces.AddRange(found);
         }
-        if (faces.Count == 0) return ToolResult.Error("No top faces found. Use floors, roofs or slabs.");
+        if (faces.Count == 0)
+            return ToolResult.Error($"No {(sign > 0 ? "top" : "bottom")} faces found{(noFace.Count > 0 ? $" on {string.Join(", ", noFace.Take(20))}" : "")}. " +
+                                    "Use floors, roofs, slabs or family instances with solid geometry (in-place families expose none to the API).");
 
-        var targets = new List<(Reference Ref, XYZ Point)>();
+        // In sections the spot goes where the face meets the section plane, not at the face's middle somewhere behind it.
+        var vd = view.ViewDirection.Normalize();
+        XYZ OnFace(RefResolver.RefFace f, XYZ p)
+        {
+            if (view is ViewPlan) return p;
+            var onPlane = p - vd * (p - view.Origin).DotProduct(vd);
+            return f.Closest(onPlane) ?? p;
+        }
+
+        var targets = new List<(RefResolver.RefFace Face, XYZ Point)>();
         if (args.Has("points"))
         {
             foreach (var p in args.Array("points"))
             {
                 var xy = ViewKit.Point(doc, p);
-                foreach (var (_, r, f) in faces)
+                foreach (var f in faces)
                 {
-                    var hit = f.Project(new XYZ(xy.X, xy.Y, 1e4)) ?? f.Project(new XYZ(xy.X, xy.Y, -1e4));
-                    var onFace = hit?.XYZPoint;
-                    if (onFace != null && Math.Abs(onFace.X - xy.X) < 0.01 && Math.Abs(onFace.Y - xy.Y) < 0.01) { targets.Add((r, onFace)); break; }
+                    var onFace = f.Closest(new XYZ(xy.X, xy.Y, f.Middle().Z));
+                    if (onFace != null && Math.Abs(onFace.X - xy.X) < 0.01 && Math.Abs(onFace.Y - xy.Y) < 0.01) { targets.Add((f, onFace)); break; }
                 }
             }
         }
         else
         {
-            foreach (var (_, r, f) in faces)
+            foreach (var f in faces)
             {
-                var box = f.GetBoundingBox();
-                targets.Add((r, f.Evaluate((box.Min + box.Max) / 2)));
+                targets.Add((f, OnFace(f, f.Face is PlanarFace ? f.Middle() : f.Extreme(sign))));
                 if (args.OptBool("at_corners"))
-                    foreach (var loop in f.GetEdgesAsCurveLoops())
+                    foreach (var loop in f.Face.GetEdgesAsCurveLoops())
                         foreach (var c in loop)
-                            targets.Add((r, c.GetEndPoint(0)));
+                            targets.Add((f, f.Tr.OfPoint(c.GetEndPoint(0))));
             }
         }
+        targets = targets.Where(t => guard.Keep(t.Point)).ToList();
+        if (targets.Count == 0) return ToolResult.Error("No spot positions left to place (none of the points lies on a face, or all are outside this view's crop).");
 
-        var created = new List<long>();
-        var problems = new List<string>();
         var step = UnitUtils.ConvertToInternalUnits(1, UnitTypeId.Meters) * view.Scale / 100.0;
-        using var t = RevitHelpers.StartTransaction(doc, "Spot elevations");
-        foreach (var (r, point) in targets)
+        var i = 0;
+        var batch = ItemBatch.Run(doc, "Spot elevations", targets.Select(t => (t.Face, t.Point, n: ++i)),
+            t => $"spot {t.n} on {t.Face.Element.Id.Value}", _ => [], t =>
+            {
+                var bend = t.Point + (target.RightDirection + target.UpDirection) * step * 0.5;
+                var end = bend + target.RightDirection * step * 0.5;
+                return doc.Create.NewSpotElevation(target, t.Face.Ref, t.Point, bend, end, t.Point, leader).Id.Value;
+            }, borrow: false);
+        var created = batch.Items.Where(x => x.Ok && x.Value is long).Select(x => (long)x.Value!).ToList();
+        var payload = new
         {
-            var bend = point + (view.RightDirection + view.UpDirection) * step * 0.5;
-            var end = bend + view.RightDirection * step * 0.5;
-            try { created.Add(doc.Create.NewSpotElevation(view, r, point, bend, end, point, leader).Id.Value); }
-            catch (Autodesk.Revit.Exceptions.ApplicationException ex) { problems.Add(ex.Message); }
-        }
-        t.Commit();
-        return ToolResult.Ok(new { created = created.Count, ids = created, problems = problems.Distinct() });
+            created = created.Count, ids = created,
+            problems = batch.Failed.Select(f => $"{f.Item}: {f.Error}").Take(50),
+            noFace = noFace.Count > 0 ? noFace.Take(50) : null,
+            dependentView = guard.Report(),
+        };
+        return created.Count == 0
+            ? new ToolResult("No spot elevations were placed. " + System.Text.Json.JsonSerializer.Serialize(payload), IsError: true)
+            : ToolResult.Ok(payload);
     }
 }
 

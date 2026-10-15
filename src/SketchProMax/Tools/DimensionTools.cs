@@ -69,29 +69,25 @@ public sealed class DimensionGridsTool : IRevitTool
         }
 
         var z = view.GenLevel?.ProjectElevation ?? 0;
-        var created = new List<long>();
-        var skipped = 0;
-        using var t = RevitHelpers.StartTransaction(doc, "Dimension grids");
+        if (groups.All(g => g.Count < 2))
+            return ToolResult.Error($"No two grids in '{view.Name}' are parallel, so there is nothing to dimension between.");
+        // One string per transaction: a string Revit refuses is reported and the others are kept.
+        var specs = new List<DimensionBatch.Spec>();
         foreach (var group in groups.Where(g => g.Count >= 2))
         {
             var refs = new ReferenceArray();
             foreach (var g in group) refs.Append(new Reference(g));
             var dir = ((Line)group[0].Curve).Direction;
             var pts = group.SelectMany(g => new[] { g.Curve.GetEndPoint(0), g.Curve.GetEndPoint(1) }).ToList();
-            var line = DimensionGeometry.Across(pts, dir, offset, z);
-            try { created.Add(doc.Create.NewDimension(view, line, refs).Id.Value); }
-            catch (Autodesk.Revit.Exceptions.ApplicationException) { skipped++; }
+            specs.Add(new DimensionBatch.Spec($"grids {string.Join(", ", group.Select(g => g.Name).Take(6))}{(group.Count > 6 ? "..." : "")}", view,
+                DimensionGeometry.Across(pts, dir, offset, z), refs));
         }
+        var (created, result) = DimensionBatch.Create(doc, "Dimension grids", specs);
+        var failures = result.Failed.Select(f => new { item = f.Item, reason = f.Error }).ToList();
         if (created.Count == 0)
-        {
-            t.RollBack();
-            return ToolResult.Error(groups.All(g => g.Count < 2)
-                ? $"No two grids in '{view.Name}' are parallel, so there is nothing to dimension between."
-                : $"Revit refused every dimension string in '{view.Name}' ({skipped} tried). The grids may be multi-segment, " +
-                  "pinned in a way that hides their references, or not cut by this view; try dimension_walls or dimension the grids by hand.");
-        }
-        t.Commit();
-        return ToolResult.Ok(new { dimensionStrings = created.Count, ids = created, gridsFound = grids.Count, skipped });
+            return ToolResult.Error($"Revit refused every dimension string in '{view.Name}' ({specs.Count} tried): {System.Text.Json.JsonSerializer.Serialize(failures)}. " +
+                                    "The grids may be multi-segment, pinned in a way that hides their references, or not cut by this view; try dimension_walls or dimension the grids by hand.");
+        return ToolResult.Ok(new { dimensionStrings = created.Count, ids = created, gridsFound = grids.Count, skipped = failures.Count, failures });
     }
 }
 
@@ -135,9 +131,9 @@ public sealed class DimensionWallsTool : IRevitTool
         }
 
         var z = view.GenLevel?.ProjectElevation ?? 0;
-        var created = new List<long>();
         var skipped = 0;
-        using var t = RevitHelpers.StartTransaction(doc, "Dimension walls");
+        // One string per transaction: a string Revit refuses is reported and the others are kept.
+        var specs = new List<DimensionBatch.Spec>();
         foreach (var group in groups.Where(g => g.Count >= 2))
         {
             var refs = new ReferenceArray();
@@ -148,20 +144,20 @@ public sealed class DimensionWallsTool : IRevitTool
             }
             if (refs.Size < 2) continue;
             var pts = group.SelectMany(w => new[] { ((LocationCurve)w.Location).Curve.GetEndPoint(0), ((LocationCurve)w.Location).Curve.GetEndPoint(1) }).ToList();
-            var line = DimensionGeometry.Across(pts, Dir(group[0]), offset, z);
-            try { created.Add(doc.Create.NewDimension(view, line, refs).Id.Value); }
-            catch (Autodesk.Revit.Exceptions.ArgumentException) { skipped += group.Count; }
+            specs.Add(new DimensionBatch.Spec($"walls {string.Join(", ", group.Select(w => w.Id.Value).Take(6))}{(group.Count > 6 ? "..." : "")}", view,
+                DimensionGeometry.Across(pts, Dir(group[0]), offset, z), refs));
         }
+        var (created, result) = DimensionBatch.Create(doc, "Dimension walls", specs);
+        var failures = result.Failed.Select(f => new { item = f.Item, reason = f.Error }).ToList();
         if (created.Count == 0)
         {
-            t.RollBack();
             var reason = straight.Count == 0 ? "no straight walls are visible in this view (or among the given ids)"
                 : groups.All(g => g.Count < 2) ? "each string needs at least two parallel straight walls, and none of the walls given have a parallel partner"
+                : failures.Count > 0 ? $"Revit refused them: {System.Text.Json.JsonSerializer.Serialize(failures)}"
                 : "Revit could not find usable faces on these walls (curtain or stacked walls, or walls joined in a way that hides the face)";
             return ToolResult.Error($"No dimension strings were added in '{view.Name}': {reason}.");
         }
-        t.Commit();
-        return ToolResult.Ok(new { dimensionStrings = created.Count, ids = created, wallsConsidered = straight.Count, skipped });
+        return ToolResult.Ok(new { dimensionStrings = created.Count, ids = created, wallsConsidered = straight.Count, skipped, failures });
     }
 
     private static XYZ Dir(Wall w) => ((Line)((LocationCurve)w.Location).Curve).Direction;

@@ -527,10 +527,9 @@ public sealed class DimensionOpeningsTool : IRevitTool
             .Where(f => wallFilter.Count == 0 || wallFilter.Contains(f.Host.Id.Value))
             .GroupBy(f => f.Host.Id.Value);
 
-        var created = new List<long>();
         var skipped = new List<string>();
         var z = view.GenLevel?.ProjectElevation ?? 0;
-        using var t = RevitHelpers.StartTransaction(doc, "Dimension openings");
+        var specs = new List<DimensionBatch.Spec>();
         foreach (var group in openings)
         {
             var wall = (Wall)doc.GetElement(new ElementId(group.Key));
@@ -551,10 +550,11 @@ public sealed class DimensionOpeningsTool : IRevitTool
             var outward = wall.Orientation.Normalize() * (wall.Width / 2 + offset);
             var p0 = wallLine.GetEndPoint(0) + outward;
             var p1 = wallLine.GetEndPoint(1) + outward;
-            try { created.Add(doc.Create.NewDimension(view, Line.CreateBound(new XYZ(p0.X, p0.Y, z), new XYZ(p1.X, p1.Y, z)), refs).Id.Value); }
-            catch (Autodesk.Revit.Exceptions.ArgumentException ex) { skipped.Add($"wall {group.Key}: {ex.Message}"); }
+            specs.Add(new DimensionBatch.Spec($"wall {group.Key}", view, Line.CreateBound(new XYZ(p0.X, p0.Y, z), new XYZ(p1.X, p1.Y, z)), refs));
         }
-        t.Commit();
+        // One string per transaction: a wall Revit refuses is reported and the others are kept.
+        var (created, result) = DimensionBatch.Create(doc, "Dimension openings", specs);
+        skipped.AddRange(result.Failed.Select(f => $"{f.Item}: {f.Error}"));
         return ToolResult.Ok(new { dimensionStrings = created.Count, ids = created, skipped });
     }
 
@@ -604,10 +604,9 @@ public sealed class DimensionRoomsTool : IRevitTool
             .Where(r => r.Area > 0).ToList();
         var which = args.OptString("directions") ?? "both";
         var z = view.GenLevel?.ProjectElevation ?? 0;
-        var created = new List<long>();
         var skipped = new List<string>();
+        var specs = new List<DimensionBatch.Spec>();
 
-        using var t = RevitHelpers.StartTransaction(doc, "Dimension rooms");
         foreach (var room in rooms)
         {
             if (room.Location is not LocationPoint lp) continue;
@@ -648,11 +647,13 @@ public sealed class DimensionRoomsTool : IRevitTool
                 array.Append(refs[high]);
                 var a = new XYZ(c.X, c.Y, z) + axis * (At(low.Origin) - At(c));
                 var b = new XYZ(c.X, c.Y, z) + axis * (At(high.Origin) - At(c));
-                try { created.Add(doc.Create.NewDimension(view, Line.CreateBound(a, b), array).Id.Value); }
-                catch (Autodesk.Revit.Exceptions.ArgumentException ex) { skipped.Add($"{room.Number}: {ex.Message}"); }
+                if (a.DistanceTo(b) < doc.Application.ShortCurveTolerance) { skipped.Add($"{room.Number}: walls too close"); continue; }
+                specs.Add(new DimensionBatch.Spec($"{room.Number} ({(axis.X > 0 ? "x" : "y")})", view, Line.CreateBound(a, b), array));
             }
         }
-        t.Commit();
+        // One dimension per transaction: one Revit refuses is reported and the others are kept.
+        var (created, result) = DimensionBatch.Create(doc, "Dimension rooms", specs);
+        skipped.AddRange(result.Failed.Select(f => $"{f.Item}: {f.Error}"));
         return ToolResult.Ok(new { rooms = rooms.Count, dimensions = created.Count, skipped });
     }
 }
