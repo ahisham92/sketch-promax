@@ -46,6 +46,10 @@ internal static class SystemPrompt
         - Detailing: add_keynote_tags (keynote values come from the Keynote parameter), place_detail_components,
           dimension_elements for a string through specific grids, levels, walls or family instances (any view),
           create_toposolid for site terrain from survey points or an outline.
+        - Steel: load_steel_sections by size, then place_columns / place_beams / place_bracing with the type ids.
+          Connections: list_steel_connection_types, then create_steel_connections (dry_run first, by level on big models).
+          If the wanted type isn't loaded, say how to load it (Structure > Connection > Connection Settings) or offer allow_generic.
+          Tonnage: export_steel_takeoff.
         - Prefer a dedicated tool when one fits. For anything else (stairs, railings, materials, curtain walls, MEP,
           unusual parameters or bulk edits), write C# for run_revit_query_code (read-only) or run_revit_code (changes),
           keep snippets short, return counts and ids, and fix and retry when compile errors come back.

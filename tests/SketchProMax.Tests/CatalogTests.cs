@@ -13,7 +13,7 @@ internal static class CatalogTests
     private static readonly string[] SchemaTypes = ["string", "number", "integer", "boolean", "array", "object"];
 
     // Tools the self-test deliberately leaves to a person, with the reason SelfTest.Finish reports.
-    private static readonly string[] NotSelfTested = ["batch_run_recipe", "load_family", "copy_from_file", "title_block_from_cad", "run_learned_tool", "run_self_test", "self_test_status"];
+    private static readonly string[] NotSelfTested = ["batch_run_recipe", "load_family", "copy_from_file", "title_block_from_cad", "load_steel_sections", "run_learned_tool", "run_self_test", "self_test_status"];
 
     public static void Run(string addinDir, string repoRoot, Action<string, bool, string> check)
     {

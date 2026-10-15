@@ -138,6 +138,13 @@ public sealed class ToolRegistry
         new ExportQuantitiesTool(),
         new CheckScheduleTool(),
 
+        // Steel
+        new LoadSteelSectionsTool(),
+        new PlaceBracingTool(),
+        new ListSteelConnectionTypesTool(),
+        new CreateSteelConnectionsTool(),
+        new ExportSteelTakeoffTool(),
+
         // Detailing
         new AddKeynoteTagsTool(),
         new PlaceDetailComponentsTool(),

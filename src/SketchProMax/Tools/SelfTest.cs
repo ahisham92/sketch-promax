@@ -295,6 +295,7 @@ internal static class SelfTest
                 "batch_run_recipe" => "opens other model files; run it by hand on a folder of copies",
                 "load_family" => "needs a family file on this PC",
                 "copy_from_file" => "needs another Revit file on this PC",
+                "load_steel_sections" => "depends on the content library installed on this PC",
                 "title_block_from_cad" => "needs a DWG title block on this PC",
                 "run_learned_tool" => "tested through save_as_tool",
                 "run_self_test" or "self_test_status" => "this test",
@@ -391,6 +392,7 @@ internal static class SelfTest
         new("get_activity_log", _ => new { limit = 5 }),
         new("list_recipes", _ => new { }),
         new("list_learned_tools", _ => new { }),
+        new("list_steel_connection_types", _ => new { }),
         new("list_title_blocks", c => new { sheet_number = c.Sheet?.SheetNumber }),
         new("run_revit_query_code", _ => new { code = "return new { walls = new FilteredElementCollector(doc).OfClass(typeof(Wall)).GetElementCount(), title = doc.Title };", description = "self-test query" }),
         new("create_mep_openings", _ => new { method = "report", limit = 50 }) { Heavy = true },
@@ -401,6 +403,7 @@ internal static class SelfTest
     [
         new("export_schedule", c => new { schedule_id = c.Id(c.Schedule ?? throw new Skip("the model has no schedules")), folder = c.Temp, file_name = "schedule" }),
         new("export_drawing_list", c => new { folder = c.Temp, fields = new[] { "Drawn By" } }),
+        new("export_steel_takeoff", c => new { folder = c.Temp }) { Heavy = true },
         new("export_quantities", c => new { folder = c.Temp, categories = new[] { "Walls", "Floors" }, group_by = new[] { "level" } }) { Heavy = true },
         new("export_pdf", c => new { view_ids = new[] { c.Sheet?.Id.Value ?? c.PlanId }, folder = c.Temp, file_name = "sheets" }) { Heavy = true },
         new("export_files", c => new { format = "dwg", view_ids = new[] { c.PlanId }, folder = c.Temp, file_name = "plan" }) { Heavy = true },
@@ -599,6 +602,14 @@ internal static class SelfTest
             var legend = c.First<View>(v => !v.IsTemplate && v.ViewType == ViewType.Legend) ?? throw new Skip("the model has no legends");
             return new { legend = legend.Name, sheet_numbers = new[] { "ST-999" } };
         }, Setup: ["create_sheets", "set_sheet_title_block"]),
+        new("place_bracing", c =>
+        {
+            var type = c.Symbol(BuiltInCategory.OST_StructuralFraming) ?? throw new Skip("no structural framing family loaded");
+            Need(c.Upper is not null, "the model needs two levels");
+            double Z(Level l) => Math.Round(UnitUtils.ConvertFromInternalUnits(l.ProjectElevation, c.Unit), 4);
+            return new { type_id = type.Id.Value, lines = new[] { new { start = c.At(0, 9000).Append(Z(c.Level!)).ToArray(), end = c.At(3000, 9000).Append(Z(c.Upper!)).ToArray(), level = c.LevelName } } };
+        }),
+        new("create_steel_connections", _ => new { kind = "beam_column", dry_run = true }) { Heavy = true },
         new("set_sheet_revisions", _ => new { revision = "Self-test revision", sheet_numbers = new[] { "ST-999" } }, Setup: ["create_sheets", "create_revision"]),
         new("dimension_openings", c => new { view_id = c.PlanId, wall_ids = new[] { c.Id(c.Wall ?? throw new Skip("the model has no walls")) } }, Setup: ["place_doors_windows"]),
         new("dimension_rooms", c => { Need(c.Room is not null, "the model has no placed rooms"); return new { view_id = c.PlanId, room_ids = new[] { c.Room!.Id.Value } }; }),
