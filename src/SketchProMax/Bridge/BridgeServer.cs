@@ -289,7 +289,7 @@ public sealed class BridgeServer
         var tool = _registry.Find(name);
         if (tool is null) return ToolResult.Error($"Unknown tool '{name}'.");
 
-        // One job at a time: say what is running instead of queueing behind it until the call times out.
+        // One job at a time: say what is running (or queued) instead of waiting behind it until the call times out.
         if (Jobs.Running is { } running) return Jobs.Busy(running);
         if (_dispatcher.IsRunning) return Jobs.Busy(null);
 
@@ -297,12 +297,13 @@ public sealed class BridgeServer
         var confirm = tool.ModifiesModel && AgentSettings.Load().RequireApprovalForChanges
                       || tool is LearnedTool unapproved && !LearnedTools.IsApproved(unapproved.Code);
 
-        var job = Jobs.Create(tool.Name);
+        var job = Jobs.TryCreate(tool.Name, out var inTheWay);
+        if (job is null) return Jobs.Busy(inTheWay);
         // Dropped while still queued if the caller goes away or cancel_job asks; once started it runs to the end.
         var queued = CancellationTokenSource.CreateLinkedTokenSource(ct, job.Abandon.Token);
         job.Task = _dispatcher.InvokeAsync(app =>
         {
-            job.Started = DateTime.UtcNow;
+            if (!job.TryStart()) return ToolResult.Error("Dropped before Revit started it; nothing was changed.");
             Jobs.Running = job;
             job.StartedSignal.TrySetResult(true);
             try
@@ -312,7 +313,7 @@ public sealed class BridgeServer
                 var result = FailureGuard.Run(() =>
                 {
                     try { return tool.Execute(app, new ToolArgs(args)); }
-                    catch (OperationCanceledException) when (job.CancelRequested) { return ToolResult.Error("Stopped on request (cancel_job); nothing from this call was kept."); }
+                    catch (OperationCanceledException) when (job.CancelRequested) { return ToolResult.Error("Stopped on request (cancel_job). Steps this call had already finished are kept; check the model before continuing."); }
                     catch (Exception ex) { return ToolResult.Error(Describe(tool, ex)); }
                 });
                 ActivityLog.Write(app.ActiveUIDocument?.Document?.Title ?? "", tool, args, result);
@@ -328,10 +329,10 @@ public sealed class BridgeServer
         // Revit picks work up within a second when idle. If it doesn't, it is in an edit mode (in-place family, sketch,
         // group edit), showing a dialog, or busy with something of its own: say so rather than time out.
         var first = await Task.WhenAny(job.Task, job.StartedSignal.Task, Task.Delay(StartWaitMs, ct)).ConfigureAwait(false);
-        if (first != job.Task && first != job.StartedSignal.Task && job.Started is null && !ct.IsCancellationRequested)
+        if (first != job.Task && first != job.StartedSignal.Task && !ct.IsCancellationRequested)
         {
-            try { job.Abandon.Cancel(); } catch (ObjectDisposedException) { }
-            if (job.Started is null)
+            // Only "dropped" when the bridge, not Revit, won the race: otherwise the job is running and is waited for below.
+            if (job.TryAbandon())
                 return ToolResult.Error(
                     $"Revit didn't pick up the request within {StartWaitMs / 1000} s, so it was dropped and nothing was changed. Revit is probably " +
                     "in an edit mode (editing an in-place family or group, a sketch such as a floor boundary, or Edit Profile), has a dialog open, " +

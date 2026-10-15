@@ -37,7 +37,7 @@ internal static class ItemBatch
     /// <param name="elements">The existing elements the item edits, for the ownership check (may be empty).</param>
     /// <param name="apply">Does the edit inside the item's transaction; return a value to report, or throw to fail the item.</param>
     public static Result Run<T>(Document doc, string name, IEnumerable<T> items, Func<T, string> label,
-        Func<T, IEnumerable<ElementId>> elements, Func<T, object?> apply, bool borrow = true)
+        Func<T, IEnumerable<ElementId>> elements, Func<T, object?> apply, bool borrow = true, bool cancellable = true)
     {
         var list = items.ToList();
         var result = new Result();
@@ -61,7 +61,7 @@ internal static class ItemBatch
         {
             var what = label(item);
             index++;
-            if (Bridge.Jobs.CancelRequested) { result.Items.Add(new(what, false, "not done: stopped on request (cancel_job)", null)); continue; }
+            if (cancellable && Bridge.Jobs.CancelRequested) { result.Items.Add(new(what, false, "not done: stopped on request (cancel_job)", null)); continue; }
             if (list.Count > 20 && index % 10 == 0) Bridge.Jobs.Report($"{name}: {index} of {list.Count}");
             var locked = doc.IsWorkshared ? Locked(doc, elements(item)) : null;
             if (locked is not null) { result.Items.Add(new(what, false, locked, null)); continue; }

@@ -179,8 +179,9 @@ internal static class RevitBridge
             chosen = _target = new Target(target.Pid, null);
         }
 
-        // A busy Revit still answers: it says which job is running, and wait_for_job / cancel_job work meanwhile.
-        if (chosen!.Model is not null && !target.Busy)
+        // Job questions don't touch a model, so they skip switching models (which would wait behind a busy Revit). Every
+        // other call switches first; a busy Revit answers that at once with what it is running, so nothing runs on the wrong model.
+        if (chosen!.Model is not null && name is not ("wait_for_job" or "cancel_job"))
         {
             var activate = await SendAsync(target.Pipe, JsonSerializer.Serialize(new { method = "activate_document", title = chosen.Model }), 5000, ct,
                 readTimeoutMs: 15000);

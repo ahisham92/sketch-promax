@@ -210,7 +210,7 @@ public sealed class RenameElementsTool : IRevitTool
             if (restore.Count > 0)
             {
                 var back = ItemBatch.Run(doc, "Rename elements (restore numbers)", restore, k => items[k].id.ToString(), k => [items[k].e!.Id],
-                    k => { SetNumber(items[k].e, original[k]); return null; }, borrow: false);
+                    k => { SetNumber(items[k].e, original[k]); return null; }, borrow: false, cancellable: false);
                 for (var j = 0; j < restore.Count; j++)
                     if (!back.Items[j].Ok)
                         status[restore[j]] += $" (and its old number '{original[restore[j]]}' could not be put back: {back.Items[j].Error}; it now has a temporary TMP number)";

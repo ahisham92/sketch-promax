@@ -15,12 +15,39 @@ public sealed class Job
     public int Id { get; init; }
     public string Tool { get; init; } = "";
     public DateTime Queued { get; } = DateTime.UtcNow;
-    public DateTime? Started { get; internal set; }
+    private long _startedTicks;
+    public DateTime? Started
+    {
+        get { var t = System.Threading.Interlocked.Read(ref _startedTicks); return t == 0 ? null : new DateTime(t, DateTimeKind.Utc); }
+        private set => System.Threading.Interlocked.Exchange(ref _startedTicks, value?.Ticks ?? 0);
+    }
     public DateTime? Finished { get; internal set; }
     public Task<ToolResult> Task { get; internal set; } = null!;
     internal readonly TaskCompletionSource<bool> StartedSignal = new(TaskCreationOptions.RunContinuationsAsynchronously);
     internal readonly CancellationTokenSource Abandon = new();
     public volatile bool CancelRequested;
+
+    // 0 queued, 1 running, 2 abandoned. Revit's thread and the bridge race to move it out of "queued"; whoever wins
+    // decides whether the job runs, so a caller is never told "dropped" for a job that then runs.
+    private int _state;
+
+    /// <summary>On Revit's thread, just before running: false when the job was abandoned first.</summary>
+    internal bool TryStart()
+    {
+        if (System.Threading.Interlocked.CompareExchange(ref _state, 1, 0) != 0) return false;
+        Started = DateTime.UtcNow;
+        return true;
+    }
+
+    /// <summary>From the bridge: true when the job had not started and now never will.</summary>
+    internal bool TryAbandon()
+    {
+        if (System.Threading.Interlocked.CompareExchange(ref _state, 2, 0) != 0) return false;
+        try { Abandon.Cancel(); } catch (ObjectDisposedException) { }
+        return true;
+    }
+
+    internal bool Abandoned => System.Threading.Volatile.Read(ref _state) == 2;
 
     /// <summary>Where the job writes notes as it goes (run_revit_code's log); read for progress.</summary>
     internal StringBuilder? Log;
@@ -60,6 +87,20 @@ public static class Jobs
     public static void Report(string text)
     {
         if (Running is { } job) job.ProgressText = text;
+    }
+
+    /// <summary>
+    /// Creates a job unless one is still queued or running (two calls sent at once would otherwise both queue, and the
+    /// second would wait behind the first). Returns null and the job in the way when busy.
+    /// </summary>
+    internal static Job? TryCreate(string tool, out Job? busyWith)
+    {
+        lock (Gate)
+        {
+            busyWith = Recent.LastOrDefault(j => j.Task is null || !j.Task.IsCompleted && !j.Abandoned);
+            if (busyWith is not null) return null;
+            return Create(tool);
+        }
     }
 
     internal static Job Create(string tool)
@@ -180,11 +221,8 @@ public sealed class CancelJobTool : IRevitTool
         if (job is null || job.Task is { IsCompleted: true })
             return ToolResult.Ok(new { status = "nothing to cancel", job = job?.Id });
         job.CancelRequested = true;
-        if (job.Started is null)
-        {
-            try { job.Abandon.Cancel(); } catch (ObjectDisposedException) { }
+        if (job.TryAbandon())
             return ToolResult.Ok(new { status = "dropped before it started", job = job.Id, tool = job.Tool });
-        }
         return ToolResult.Ok(new
         {
             status = "stop requested", job = job.Id, tool = job.Tool, elapsed = Jobs.Duration(job.Elapsed),

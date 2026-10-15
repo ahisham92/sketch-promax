@@ -215,10 +215,11 @@ internal static class QuickTools
         if (Jobs.Running is { } running) return Jobs.Busy(running);
         if (App.Dispatcher.IsRunning || SelfTest.IsRunning) return Jobs.Busy(null);
 
-        var job = Jobs.Create(tool.Name);
+        var job = Jobs.TryCreate(tool.Name, out var inTheWay);
+        if (job is null) return Jobs.Busy(inTheWay);
         var done = new TaskCompletionSource<ToolResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         job.Task = done.Task;
-        job.Started = DateTime.UtcNow;
+        job.TryStart();
         Jobs.Running = job;
         job.StartedSignal.TrySetResult(true);
         ToolResult result;
@@ -227,7 +228,7 @@ internal static class QuickTools
             result = FailureGuard.Run(() =>
             {
                 try { return tool.Execute(app, new ToolArgs(args)); }
-                catch (OperationCanceledException) when (job.CancelRequested) { return ToolResult.Error("Stopped on request; nothing from this run was kept."); }
+                catch (OperationCanceledException) when (job.CancelRequested) { return ToolResult.Error("Stopped on request. Steps already finished are kept; check the model."); }
                 catch (Exception ex) { return ToolResult.Error(BridgeServer.Describe(tool, ex)); }
             });
             ActivityLog.Write(app.ActiveUIDocument?.Document?.Title ?? "", tool, args, result);
