@@ -76,10 +76,10 @@ internal static class Modeling
     public static string Letters(int i, string alphabet = Alphabet) =>
         i < alphabet.Length ? alphabet[i].ToString() : Letters(i / alphabet.Length - 1, alphabet) + alphabet[i % alphabet.Length];
 
-    /// <summary>2D intersections of all pairs of straight grids.</summary>
-    public static List<(XYZ point, string a, string b)> GridIntersections(Document doc)
+    /// <summary>2D intersections of all pairs of straight grids (every grid in the model unless a set is given).</summary>
+    public static List<(XYZ point, string a, string b)> GridIntersections(Document doc, IEnumerable<Grid>? only = null)
     {
-        var grids = new FilteredElementCollector(doc).OfClass(typeof(Grid)).Cast<Grid>().Where(g => g.Curve is Line).ToList();
+        var grids = (only ?? new FilteredElementCollector(doc).OfClass(typeof(Grid)).Cast<Grid>()).Where(g => g.Curve is Line).ToList();
         var result = new List<(XYZ, string, string)>();
         for (int i = 0; i < grids.Count; i++)
             for (int j = i + 1; j < grids.Count; j++)
@@ -108,7 +108,9 @@ public sealed class CreateLevelsTool : IRevitTool
 {
     public string Name => "create_levels";
     public string Description =>
-        "Create levels at given elevations (project units), optionally with a floor plan and ceiling plan for each.";
+        "Create levels at given elevations (project units), optionally with a floor plan and ceiling plan for each. " +
+        "Elevations are as Revit displays them for the level type (relative to its Elevation Base: Project Base Point " +
+        "or Survey Point), the same values get_model_context reports.";
     public string PropertiesJson => """
     {
       "levels": {"type": "array", "items": {"type": "object",
@@ -128,11 +130,26 @@ public sealed class CreateLevelsTool : IRevitTool
         var floorVft = Vft(ViewFamily.FloorPlan);
         var ceilingVft = Vft(ViewFamily.CeilingPlan);
 
-        var created = new List<object>();
+        // Elevations are read as Revit displays them for the level type (Elevation Base = Project Base Point or
+        // Survey Point), not as internal Z. Bases are taken before any level is added.
+        var defaultType = Elevations.DefaultLevelTypeId(doc);
+        var bases = new Dictionary<ElementId, double>();
+        double Base(ElementId typeId)
+        {
+            if (!bases.TryGetValue(typeId, out var z)) bases[typeId] = z = Elevations.BaseZ(doc, typeId);
+            return z;
+        }
+        Base(defaultType);
+
+        var created = new List<(Level level, long? floorPlan, long? ceilingPlan)>();
         using var t = RevitHelpers.StartTransaction(doc, "Create levels");
         foreach (var spec in args.Array("levels"))
         {
-            var level = Level.Create(doc, RevitHelpers.ToInternal(doc, spec.GetProperty("elevation").GetDouble()));
+            var wanted = RevitHelpers.ToInternal(doc, spec.GetProperty("elevation").GetDouble());
+            var level = Level.Create(doc, wanted + Base(defaultType));
+            var actualType = level.GetTypeId();
+            if (actualType != defaultType && Math.Abs(Base(actualType) - Base(defaultType)) > 1e-9)
+                ElementTransformUtils.MoveElement(doc, level.Id, new XYZ(0, 0, Base(actualType) - Base(defaultType)));
             try { level.Name = spec.GetProperty("name").GetString()!; } catch (Autodesk.Revit.Exceptions.ArgumentException) { }
             long? floorPlan = null, ceilingPlan = null;
             if (plans)
@@ -140,10 +157,19 @@ public sealed class CreateLevelsTool : IRevitTool
                 if (floorVft != null) floorPlan = ViewPlan.Create(doc, floorVft.Id, level.Id).Id.Value;
                 if (ceilingVft != null) ceilingPlan = ViewPlan.Create(doc, ceilingVft.Id, level.Id).Id.Value;
             }
-            created.Add(new { id = level.Id.Value, name = level.Name, floorPlanId = floorPlan, ceilingPlanId = ceilingPlan });
+            created.Add((level, floorPlan, ceilingPlan));
         }
         t.Commit();
-        return ToolResult.Ok(new { created });
+        // Report the elevation Revit shows for each level (same basis as get_model_context).
+        return ToolResult.Ok(new
+        {
+            created = created.Select(c => new
+            {
+                id = c.level.Id.Value, name = c.level.Name, elevation = Elevations.Displayed(doc, c.level),
+                floorPlanId = c.floorPlan, ceilingPlanId = c.ceilingPlan,
+            }).ToList(),
+            elevationBaseInternalZ = RevitHelpers.FromInternal(doc, Base(defaultType)),
+        });
     }
 }
 
@@ -322,7 +348,8 @@ public sealed class CreateRoofTool : IRevitTool
     public string Name => "create_roof";
     public string Description =>
         "Create a footprint roof from a polygon of [x,y] points on a level. slope_degrees 0 gives a flat roof; " +
-        "otherwise every edge slopes (hip roof). Optional overhang beyond the footprint.";
+        "otherwise every edge slopes (hip roof) except gable_edges (gable ends). Edge i runs from point i to point i+1. " +
+        "Optional overhang: the outline is offset outwards by that distance.";
     public string PropertiesJson => """
     {
       "points": {"type": "array", "items": {"type": "array", "items": {"type": "number"}}},
@@ -344,26 +371,65 @@ public sealed class CreateRoofTool : IRevitTool
             ? doc.GetElement(new ElementId(tid)) as RoofType ?? throw new ArgumentException($"{tid} is not a roof type. Use list_types 'Roofs'.")
             : DefaultRoofType(doc);
         var loop = Modeling.Polygon(doc, args.Raw["points"], level.ProjectElevation);
-        var footprint = new CurveArray();
-        foreach (var c in loop) footprint.Append(c);
 
         var slope = args.OptDouble("slope_degrees") ?? 0;
+        if (slope < 0 || slope >= 89) return ToolResult.Error("slope_degrees must be between 0 (flat) and 89.");
         var overhang = args.OptDouble("overhang") is { } o ? RevitHelpers.ToInternal(doc, o) : 0;
         var gables = args.LongList("gable_edges").Select(i => (int)i).ToHashSet();
+        var edgeCount = loop.Count();
+        var outOfRange = gables.Where(i => i < 0 || i >= edgeCount).ToList();
+        if (outOfRange.Count > 0)
+            return ToolResult.Error($"gable_edges {string.Join(", ", outOfRange)} out of range: the outline has {edgeCount} edges (0 to {edgeCount - 1}; edge i runs from point i to point i+1).");
+
+        // Overhang: offset the sketch outwards (set_Overhang only applies to edges picked from walls).
+        if (overhang > 0)
+        {
+            CurveLoop? grown = null;
+            foreach (var sign in new[] { 1.0, -1.0 })
+            {
+                try
+                {
+                    var candidate = CurveLoop.CreateViaOffset(loop, sign * overhang, XYZ.BasisZ);
+                    if (candidate.Count() == edgeCount && PlanArea(candidate) > PlanArea(loop)) { grown = candidate; break; }
+                }
+                catch (Autodesk.Revit.Exceptions.ApplicationException) { }
+            }
+            loop = grown ?? throw new ArgumentException("Could not offset the outline by the overhang (too large for this shape?). Try a smaller overhang.");
+        }
+        var outline = loop.ToList();
+        var footprint = new CurveArray();
+        foreach (var c in outline) footprint.Append(c);
 
         using var t = RevitHelpers.StartTransaction(doc, "Create roof");
-        var roof = doc.Create.NewFootPrintRoof(footprint, level, roofType, out var edges)
+        // The mapping array must exist before the call: Revit fills it, and throws "Value cannot be null" otherwise.
+        ModelCurveArray edges = new ModelCurveArray();
+        var roof = doc.Create.NewFootPrintRoof(footprint, level, roofType, out edges)
                    ?? throw new InvalidOperationException("Revit did not create the roof. Check that the outline is closed and does not cross itself.");
-        int index = 0;
+        var slopeValue = Math.Tan(slope * Math.PI / 180); // Revit stores roof slopes as rise/run
+        var sloped = new List<int>();
         foreach (ModelCurve edge in edges ?? new ModelCurveArray())
         {
-            var sloped = slope > 0 && !gables.Contains(index++);
-            roof.set_DefinesSlope(edge, sloped);
-            if (sloped) roof.set_SlopeAngle(edge, Math.Tan(slope * Math.PI / 180));
-            if (overhang > 0) roof.set_Overhang(edge, overhang);
+            // Match each sketch line to its outline edge by midpoint, so gable_edges follow the input order.
+            var mid = edge.GeometryCurve.Evaluate(0.5, true);
+            var index = Enumerable.Range(0, outline.Count).OrderBy(i => outline[i].Evaluate(0.5, true).DistanceTo(mid)).First();
+            var slopes = slope > 0 && !gables.Contains(index);
+            roof.set_DefinesSlope(edge, slopes);
+            if (slopes) { roof.set_SlopeAngle(edge, slopeValue); sloped.Add(index); }
         }
         t.Commit();
-        return ToolResult.Ok(new { roofId = roof.Id.Value, type = roofType.Name });
+        var kind = slope <= 0 ? "flat" : gables.Count == 0 ? "hip" : "gable";
+        return ToolResult.Ok(new { roofId = roof.Id.Value, type = roofType.Name, kind, slopeDegrees = slope, slopedEdges = sloped.OrderBy(i => i), gableEdges = gables.OrderBy(i => i) });
+    }
+
+    private static double PlanArea(CurveLoop loop)
+    {
+        double a = 0;
+        foreach (var c in loop)
+        {
+            XYZ p = c.GetEndPoint(0), q = c.GetEndPoint(1);
+            a += p.X * q.Y - q.X * p.Y;
+        }
+        return Math.Abs(a) / 2;
     }
 
     /// <summary>The model's default roof type, else the first basic roof (not sloped glazing).</summary>
@@ -486,16 +552,26 @@ public sealed class PlaceFamilyInstancesTool : IRevitTool
 
 public sealed class PlaceColumnsTool : IRevitTool
 {
+    public const int ConfirmAbove = 100;
+    public const int MaxIds = 100;
+
     public string Name => "place_columns";
     public string Description =>
-        "Place structural (or architectural) columns from a base level to a top level, at given points or at every " +
-        "grid intersection. Use list_types 'Structural Columns' or 'Columns' for type ids.";
+        "Place structural (or architectural) columns from a base level to a top level, at given points or at grid " +
+        "intersections. at_grid_intersections uses the grids named in 'grids' (both grids of a crossing must be listed), " +
+        "else the grids visible in the active plan view, else every grid; 'area' limits it to a plan rectangle. " +
+        $"More than {ConfirmAbove} columns needs confirm_count equal to the number to place (call once without it to " +
+        "learn the count). Use list_types 'Structural Columns' or 'Columns' for type ids.";
     public string PropertiesJson => """
     {
       "type_id": {"type": "integer"},
       "base_level": {"type": "string"},
       "top_level": {"type": "string"},
       "at_grid_intersections": {"type": "boolean"},
+      "grids": {"type": "array", "items": {"type": "string"}, "description": "Grid names to use for at_grid_intersections (default: grids visible in the active plan view)."},
+      "area": {"type": "object", "properties": {"min": {"type": "array", "items": {"type": "number"}}, "max": {"type": "array", "items": {"type": "number"}}},
+        "description": "Only grid intersections inside this plan rectangle [x, y] (project units)."},
+      "confirm_count": {"type": "integer", "description": "Required when more than 100 columns would be placed: the exact number expected."},
       "points": {"type": "array", "items": {"type": "array", "items": {"type": "number"}}},
       "architectural": {"type": "boolean", "description": "Place as non-structural columns."}
     }
@@ -511,9 +587,56 @@ public sealed class PlaceColumnsTool : IRevitTool
         var kind = args.OptBool("architectural") ? StructuralType.NonStructural : StructuralType.Column;
 
         var points = args.Array("points").Select(p => Modeling.Point(doc, p)).ToList();
+        string? gridSource = null;
         if (args.OptBool("at_grid_intersections"))
-            points.AddRange(Modeling.GridIntersections(doc).Select(i => i.point));
-        if (points.Count == 0) return ToolResult.Error("No points given and no grid intersections found.");
+        {
+            var all = new FilteredElementCollector(doc).OfClass(typeof(Grid)).Cast<Grid>().ToList();
+            List<Grid> grids;
+            var names = args.StringList("grids");
+            if (names.Count > 0)
+            {
+                var wanted = new HashSet<string>(names, StringComparer.OrdinalIgnoreCase);
+                grids = all.Where(g => wanted.Contains(g.Name)).ToList();
+                var missing = names.Where(n => !grids.Any(g => string.Equals(g.Name, n, StringComparison.OrdinalIgnoreCase))).ToList();
+                if (missing.Count > 0) return ToolResult.Error($"No grid named {string.Join(", ", missing.Select(m => $"'{m}'"))}.");
+                gridSource = "named grids";
+            }
+            else if (doc.ActiveView is ViewPlan plan
+                     && new FilteredElementCollector(doc, plan.Id).OfClass(typeof(Grid)).Cast<Grid>().ToList() is { Count: > 1 } visible)
+            {
+                grids = visible;
+                gridSource = $"grids visible in '{plan.Name}'";
+            }
+            else
+            {
+                grids = all;
+                gridSource = "all grids in the model";
+            }
+
+            var hits = Modeling.GridIntersections(doc, grids).Select(h => h.point);
+            if (args.Has("area"))
+            {
+                var area = args.Raw["area"];
+                if (!area.TryGetProperty("min", out var mn) || !area.TryGetProperty("max", out var mx))
+                    return ToolResult.Error("area needs min [x, y] and max [x, y].");
+                XYZ a = Modeling.Point(doc, mn), b = Modeling.Point(doc, mx);
+                double x0 = Math.Min(a.X, b.X), x1 = Math.Max(a.X, b.X), y0 = Math.Min(a.Y, b.Y), y1 = Math.Max(a.Y, b.Y);
+                const double eps = 1e-6;
+                hits = hits.Where(p => p.X >= x0 - eps && p.X <= x1 + eps && p.Y >= y0 - eps && p.Y <= y1 + eps);
+            }
+            points.AddRange(hits);
+        }
+        // Several grids crossing at one point (or a point given twice) must not stack columns.
+        var unique = new List<XYZ>();
+        foreach (var p in points)
+            if (!unique.Any(u => Math.Abs(u.X - p.X) < 1e-4 && Math.Abs(u.Y - p.Y) < 1e-4)) unique.Add(p);
+        points = unique;
+        if (points.Count == 0) return ToolResult.Error("No points given and no grid intersections found" + (gridSource is null ? "." : $" ({gridSource})."));
+
+        var confirm = args.OptLong("confirm_count");
+        if ((points.Count > ConfirmAbove && confirm is null) || (confirm is { } c && c != points.Count))
+            return ToolResult.Error($"This would place {points.Count} columns" + (gridSource is null ? "" : $" ({gridSource})") +
+                $". Pass confirm_count: {points.Count} to go ahead, or narrow it with 'grids' or 'area'.");
 
         var created = new List<long>();
         using var t = RevitHelpers.StartTransaction(doc, "Place columns");
@@ -526,7 +649,13 @@ public sealed class PlaceColumnsTool : IRevitTool
             created.Add(fi.Id.Value);
         }
         t.Commit();
-        return ToolResult.Ok(new { created = created.Count, ids = created });
+        return ToolResult.Ok(new
+        {
+            created = created.Count,
+            ids = created.Take(MaxIds),
+            idsTruncated = created.Count > MaxIds,
+            gridSource,
+        });
     }
 }
 
