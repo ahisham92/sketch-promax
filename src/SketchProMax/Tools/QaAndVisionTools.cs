@@ -89,13 +89,20 @@ public sealed class CaptureViewImageTool : IRevitTool
     public string Name => "capture_view_image";
     public string Description =>
         "Render a view or sheet to a PNG image and return it so you can look at it. Use this to visually " +
-        "check drawings: overlapping tags or dimensions, crowded annotation, missing labels, layout issues.";
+        "check drawings: overlapping tags or dimensions, crowded annotation, missing labels, layout issues. " +
+        "source 'export' (default) uses Revit's image export, which prints the view like a print/PDF would; " +
+        "source 'screen' grabs exactly what Revit shows in the open, active view window (selection highlights included). " +
+        "Note: Revit draws a CUT pattern override only where the cut plane passes through an element; parts seen beyond " +
+        "it (e.g. the lower part of a sloped slab in a section) use the projection/surface pattern, normally the " +
+        "material's. The result lists filters/categories that override only the cut pattern.";
     public string PropertiesJson => """
     {
       "view_id": {"type": "integer", "description": "View or sheet id. Defaults to the active view."},
       "pixel_width": {"type": "integer", "description": "Image width in pixels (default 1600, max 2400)."},
       "element_ids": {"type": "array", "items": {"type": "integer"}, "description": "Plan views: zoom to these elements (the view itself is left unchanged)."},
-      "margin": {"type": "number", "description": "Around element_ids, project units. Default 2 m."}
+      "margin": {"type": "number", "description": "Around element_ids, project units. Default 2 m."},
+      "source": {"type": "string", "enum": ["export", "screen"], "description": "export (default): Revit image export. screen: what the open, active view window shows right now."},
+      "resolution_dpi": {"type": "integer", "enum": [72, 150, 300, 600], "description": "Export resolution, which sets how line weights and patterns are drawn (default 150)."}
     }
     """;
     public string[] Required => [];
@@ -105,6 +112,18 @@ public sealed class CaptureViewImageTool : IRevitTool
     {
         var doc = app.ActiveUIDocument.Document;
         var viewId = args.OptLong("view_id") is { } id ? new ElementId(id) : doc.ActiveView.Id;
+        var maxWidth = (int)Math.Min(Math.Max(args.OptLong("pixel_width") ?? 1600, 400), 2400);
+        var patternNotes = CutPatternNotes(doc, doc.GetElement(viewId) as View, args.LongList("element_ids"));
+        if (args.OptString("source") == "screen")
+        {
+            if (args.LongList("element_ids").Count > 0)
+                return ToolResult.Error("source=screen shows the view as it is on screen; zoom in Revit, or use source=export with element_ids.");
+            var uiView = app.ActiveUIDocument.GetOpenUIViews().FirstOrDefault(u => u.ViewId == viewId);
+            if (uiView is null || doc.ActiveView.Id != viewId)
+                return ToolResult.Error($"'{doc.GetElement(viewId)?.Name}' is not the active view in Revit. Open it (make it the current tab), then capture again, or use source=export.");
+            var shot = ScreenGrab.Capture(app.MainWindowHandle, uiView.GetWindowRectangle(), maxWidth);
+            return new ToolResult($"Screen image of view '{doc.GetElement(viewId)?.Name}' as Revit shows it now." + patternNotes, PngImage: shot);
+        }
         var dir = Path.Combine(Path.GetTempPath(), "SketchProMax", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
 
@@ -113,10 +132,16 @@ public sealed class CaptureViewImageTool : IRevitTool
             ExportRange = ExportRange.SetOfViews,
             FilePath = Path.Combine(dir, "view"),
             ZoomType = ZoomFitType.FitToPage,
-            PixelSize = (int)Math.Min(Math.Max(args.OptLong("pixel_width") ?? 1600, 400), 2400),
+            PixelSize = maxWidth,
             HLRandWFViewsFileType = ImageFileType.PNG,
             ShadowViewsFileType = ImageFileType.PNG,
-            ImageResolution = ImageResolution.DPI_150,
+            ImageResolution = (args.OptLong("resolution_dpi") ?? 150) switch
+            {
+                72 => ImageResolution.DPI_72,
+                300 => ImageResolution.DPI_300,
+                600 => ImageResolution.DPI_600,
+                _ => ImageResolution.DPI_150,
+            },
         };
         options.SetViewsAndSheets([viewId]);
 
@@ -162,6 +187,100 @@ public sealed class CaptureViewImageTool : IRevitTool
         var bytes = File.ReadAllBytes(file);
         try { Directory.Delete(dir, true); } catch (IOException) { }
 
-        return new ToolResult($"Image of view '{doc.GetElement(viewId)?.Name}'.", PngImage: bytes);
+        return new ToolResult($"Image of view '{doc.GetElement(viewId)?.Name}'." + patternNotes, PngImage: bytes);
+    }
+
+    /// <summary>
+    /// Overrides that set a cut pattern but no surface pattern: those elements look two-toned wherever they are only
+    /// partly cut (sloped or stepped elements), on screen and in export alike. Cheap: filters, model categories, and
+    /// the given elements only.
+    /// </summary>
+    private static string CutPatternNotes(Document doc, View? view, List<long> elementIds)
+    {
+        if (view is null || view is ViewSheet || view.ViewType is ViewType.Schedule or ViewType.DraftingView or ViewType.ThreeD) return "";
+        static bool CutOnly(OverrideGraphicSettings o) =>
+            (o.CutForegroundPatternId != ElementId.InvalidElementId || o.CutForegroundPatternColor.IsValid)
+            && o.SurfaceForegroundPatternId == ElementId.InvalidElementId && !o.SurfaceForegroundPatternColor.IsValid;
+        var hits = new List<string>();
+        try
+        {
+            var owner = view.ViewTemplateId != ElementId.InvalidElementId && doc.GetElement(view.ViewTemplateId) is View tpl ? tpl : view;
+            foreach (var f in owner.GetFilters())
+                if (owner.GetFilterVisibility(f) && CutOnly(owner.GetFilterOverrides(f))) hits.Add($"filter '{doc.GetElement(f)?.Name}'");
+            foreach (Category c in doc.Settings.Categories)
+                if (c.CategoryType == CategoryType.Model && c.get_AllowsVisibilityControl(owner) && CutOnly(owner.GetCategoryOverrides(c.Id)))
+                    hits.Add($"category '{c.Name}'");
+            foreach (var i in elementIds.Take(200))
+                if (CutOnly(view.GetElementOverrides(new ElementId(i)))) hits.Add($"element {i}");
+        }
+        catch (Autodesk.Revit.Exceptions.ApplicationException) { return ""; }
+        if (hits.Count == 0) return "";
+        return $"\nNote: {string.Join(", ", hits.Take(10))}{(hits.Count > 10 ? $" and {hits.Count - 10} more" : "")} override only the CUT pattern. " +
+               "Revit fills with it only where the cut plane passes through the element; the parts seen beyond the cut plane " +
+               "(a sloped cover below the plane, the far end of a stepped slab) use the surface pattern, which falls back to the " +
+               "material's. That is how Revit draws the view, not an export fault; add a matching Surface (projection) pattern " +
+               "override to show the whole element in the override. Compare with source=screen if in doubt.";
+    }
+}
+
+/// <summary>
+/// Grabs the pixels of an open Revit view window. PrintWindow with PW_RENDERFULLCONTENT renders the Revit main window
+/// (DirectX view canvases included) even when other windows cover it; the view's rectangle is then cut out.
+/// </summary>
+internal static class ScreenGrab
+{
+    [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr hWnd, out Rect r);
+    [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern bool PrintWindow(IntPtr hWnd, IntPtr hdc, uint flags);
+    [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern IntPtr GetWindowDC(IntPtr hWnd);
+    [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern int ReleaseDC(IntPtr hWnd, IntPtr hdc);
+    [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern bool IsIconic(IntPtr hWnd);
+    [System.Runtime.InteropServices.DllImport("gdi32.dll")] private static extern IntPtr CreateCompatibleDC(IntPtr hdc);
+    [System.Runtime.InteropServices.DllImport("gdi32.dll")] private static extern IntPtr CreateCompatibleBitmap(IntPtr hdc, int w, int h);
+    [System.Runtime.InteropServices.DllImport("gdi32.dll")] private static extern IntPtr SelectObject(IntPtr hdc, IntPtr obj);
+    [System.Runtime.InteropServices.DllImport("gdi32.dll")] private static extern bool DeleteObject(IntPtr obj);
+    [System.Runtime.InteropServices.DllImport("gdi32.dll")] private static extern bool DeleteDC(IntPtr hdc);
+
+    private struct Rect { public int Left, Top, Right, Bottom; }
+    private const uint PwRenderFullContent = 2;
+
+    public static byte[] Capture(IntPtr main, Autodesk.Revit.DB.Rectangle view, int maxWidth)
+    {
+        if (main == IntPtr.Zero) throw new InvalidOperationException("Revit's main window was not found; use source=export.");
+        if (IsIconic(main)) throw new InvalidOperationException("Revit is minimized; restore its window, or use source=export.");
+        if (!GetWindowRect(main, out var w)) throw new InvalidOperationException("Could not read Revit's window position; use source=export.");
+        int width = w.Right - w.Left, height = w.Bottom - w.Top;
+        int x = Math.Max(0, view.Left - w.Left), y = Math.Max(0, view.Top - w.Top);
+        int cw = Math.Min(width - x, view.Right - view.Left), ch = Math.Min(height - y, view.Bottom - view.Top);
+        if (cw < 50 || ch < 50) throw new InvalidOperationException("The view window is too small or off-screen to capture; use source=export.");
+
+        var windowDc = GetWindowDC(main);
+        var memDc = CreateCompatibleDC(windowDc);
+        var bitmap = CreateCompatibleBitmap(windowDc, width, height);
+        var old = SelectObject(memDc, bitmap);
+        try
+        {
+            if (!PrintWindow(main, memDc, PwRenderFullContent))
+                throw new InvalidOperationException("Windows would not render Revit's window; use source=export.");
+            SelectObject(memDc, old);
+            System.Windows.Media.Imaging.BitmapSource image = System.Windows.Interop.Imaging.CreateBitmapSourceFromHBitmap(
+                bitmap, IntPtr.Zero, new System.Windows.Int32Rect(x, y, cw, ch),
+                System.Windows.Media.Imaging.BitmapSizeOptions.FromEmptyOptions());
+            if (cw > maxWidth)
+            {
+                var k = maxWidth / (double)cw;
+                image = new System.Windows.Media.Imaging.TransformedBitmap(image, new System.Windows.Media.ScaleTransform(k, k));
+            }
+            var encoder = new System.Windows.Media.Imaging.PngBitmapEncoder();
+            encoder.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(image));
+            using var stream = new MemoryStream();
+            encoder.Save(stream);
+            return stream.ToArray();
+        }
+        finally
+        {
+            DeleteObject(bitmap);
+            DeleteDC(memDc);
+            ReleaseDC(main, windowDc);
+        }
     }
 }

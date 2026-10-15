@@ -166,6 +166,7 @@ public sealed class CreateLevelsTool : IRevitTool
             created = created.Select(c => new
             {
                 id = c.level.Id.Value, name = c.level.Name, elevation = Elevations.Displayed(doc, c.level),
+                internalZ = RevitHelpers.FromInternal(doc, c.level.ProjectElevation),
                 floorPlanId = c.floorPlan, ceilingPlanId = c.ceilingPlan,
             }).ToList(),
             elevationBaseInternalZ = RevitHelpers.FromInternal(doc, Base(defaultType)),
@@ -722,7 +723,9 @@ public sealed class TransformElementsTool : IRevitTool
     public string Name => "move_copy_rotate";
     public string Description =>
         "Move or copy elements by an offset [dx, dy, dz] (project units), and/or rotate them about a vertical axis " +
-        "through a point. With copy=true the originals stay and the copies are returned.";
+        "through a point. With copy=true the originals stay and the copies are returned. Model groups that Revit " +
+        "will not move vertically are checked and moved through their Origin Level Offset instead; if that fails too, " +
+        "nothing is changed and the groups are named. Section/elevation views: use relocate_view_with_detailing.";
     public string PropertiesJson => """
     {
       "element_ids": {"type": "array", "items": {"type": "integer"}},
@@ -742,11 +745,60 @@ public sealed class TransformElementsTool : IRevitTool
         if (ids.Count == 0) return ToolResult.Error("None of those element ids exist in the model. Check them with query_elements.");
         var offset = args.Has("offset") ? Modeling.Point(doc, args.Raw["offset"]) : XYZ.Zero;
 
+        var views = ids.Where(id => doc.GetElement(id) is View).Select(id => id.Value).ToList();
+        if (views.Count > 0)
+            return ToolResult.Error($"{string.Join(", ", views)} are views; Revit ignores moving a view by its id. " +
+                                    "Use relocate_view_with_detailing or duplicate_view_to_location, which move the view's marker.");
+
+        // Revit can silently skip the vertical part of a move for model groups: note where each group is first.
+        var dz = offset.Z;
+        var groupsBefore = Math.Abs(dz) > 1e-9
+            ? ids.Select(id => doc.GetElement(id)).OfType<Group>().Select(g => (Group: g, Z: GroupZ(g))).Where(x => x.Z.HasValue).ToList()
+            : [];
+
         using var t = RevitHelpers.StartTransaction(doc, args.OptBool("copy") ? "Copy elements" : "Move elements");
         if (args.OptBool("copy"))
             ids = ElementTransformUtils.CopyElements(doc, ids, offset);
         else if (!offset.IsZeroLength())
             ElementTransformUtils.MoveElements(doc, ids, offset);
+
+        var groupNotes = new List<string>();
+        if (groupsBefore.Count > 0)
+        {
+            doc.Regenerate();
+            // For a move, the group itself; for a copy, each copied group against the originals of its type.
+            var check = args.OptBool("copy")
+                ? ids.Select(id => doc.GetElement(id)).OfType<Group>()
+                    .Select(g => (Group: g, Want: groupsBefore.Where(o => o.Group.GetTypeId() == g.GetTypeId()).Select(o => o.Z!.Value + dz).ToList()))
+                    .ToList()
+                : groupsBefore.Select(o => (o.Group, Want: new List<double> { o.Z!.Value + dz })).ToList();
+            var stuck = new List<string>();
+            foreach (var (g, want) in check)
+            {
+                if (want.Count == 0 || GroupZ(g) is not { } z) continue;
+                if (want.Any(w => Math.Abs(w - z) < 1e-4)) continue;
+                var missing = want.OrderBy(w => Math.Abs(w - z)).First() - z;
+                var p = g.get_Parameter(BuiltInParameter.GROUP_OFFSET_FROM_LEVEL);
+                if (p is { IsReadOnly: false } && p.Set(p.AsDouble() + missing))
+                {
+                    doc.Regenerate();
+                    if (GroupZ(g) is { } z2 && Math.Abs(z2 - (z + missing)) < 1e-4)
+                    {
+                        groupNotes.Add($"group {g.Id.Value} ('{g.Name}'): Revit ignored the vertical move; applied it through Origin Level Offset.");
+                        continue;
+                    }
+                }
+                stuck.Add($"{g.Id.Value} ('{g.Name}')");
+            }
+            if (stuck.Count > 0)
+            {
+                t.RollBack();
+                return ToolResult.Error(
+                    $"Revit would not move these model groups vertically, and their Origin Level Offset could not be changed: {string.Join(", ", stuck)}. " +
+                    "Nothing was changed. Move them horizontally only, then change each group's Reference Level or Origin Level Offset " +
+                    "(set_parameters), or move the member elements.");
+            }
+        }
 
         if (args.OptDouble("rotation_degrees") is { } deg && deg != 0)
         {
@@ -763,6 +815,10 @@ public sealed class TransformElementsTool : IRevitTool
             ElementTransformUtils.RotateElements(doc, ids, axis, deg * Math.PI / 180);
         }
         t.Commit();
-        return ToolResult.Ok(new { elements = ids.Select(i => i.Value) });
+        return ToolResult.Ok(new { elements = ids.Select(i => i.Value), groups = groupNotes.Count == 0 ? null : groupNotes });
     }
+
+    /// <summary>A group's origin Z (internal), or its bounding box bottom when it has no location point.</summary>
+    private static double? GroupZ(Group g) =>
+        g.Location is LocationPoint lp ? lp.Point.Z : g.get_BoundingBox(null)?.Min.Z;
 }
