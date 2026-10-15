@@ -288,7 +288,7 @@ internal static class RevitBridge
             }
 
             // A Revit that doesn't answer within a few seconds is skipped, so one stuck window never blocks the others.
-            var pong = await SendAsync(pipe, """{"method":"ping"}""", 1500, ct, readTimeoutMs: 5000);
+            var pong = await SendAsync(pipe, """{"method":"ping"}""", 1500, ct, readTimeoutMs: 7000);
             if (pong is null) { silent++; continue; }
 
             try

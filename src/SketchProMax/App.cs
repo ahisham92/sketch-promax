@@ -24,7 +24,7 @@ public sealed class App : IExternalApplication
 #if NETFRAMEWORK
         DependencyResolver.Register();
 #endif
-        Dispatcher.Initialize();
+        Dispatcher.Initialize(application);
         application.ControlledApplication.FailuresProcessing += FailureGuard.Handle;
         Bridge = new BridgeServer(ToolRegistry.CreateDefault(), Dispatcher, application.ControlledApplication.VersionNumber);
         Bridge.Start();

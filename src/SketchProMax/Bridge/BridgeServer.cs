@@ -217,8 +217,13 @@ public sealed class BridgeServer
                             .ToList();
                     }, ct);
                     // Revit only answers when idle; a busy Revit still reports itself, with the last known models.
-                    var busy = await Task.WhenAny(lookup, Task.Delay(1500)).ConfigureAwait(false) != lookup;
-                    if (!busy) _lastDocuments = await lookup.ConfigureAwait(false);
+                    // Busy means a tool is actually running. A lookup that is merely waiting its turn gets a little
+                    // longer, since the dispatcher wakes an idle Revit on its own; it is never reported as busy.
+                    var answered = await Task.WhenAny(lookup, Task.Delay(1500)).ConfigureAwait(false) == lookup;
+                    if (!answered && !_dispatcher.IsRunning)
+                        answered = await Task.WhenAny(lookup, Task.Delay(2500)).ConfigureAwait(false) == lookup;
+                    var busy = !answered && _dispatcher.IsRunning;
+                    if (answered) _lastDocuments = await lookup.ConfigureAwait(false);
                     return JsonSerializer.Serialize(new { ok = true, pid = SessionId, revitVersion = _revitVersion, busy, documents = _lastDocuments });
 
                 case "activate_document":
