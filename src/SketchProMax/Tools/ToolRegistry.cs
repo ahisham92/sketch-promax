@@ -154,6 +154,11 @@ public sealed class ToolRegistry
         new Rebar3dViewTool(),
         new ExportBarScheduleTool(),
 
+        // Precast and post-tensioning
+        new ExportPrecastScheduleTool(),
+        new PlacePtTendonsTool(),
+        new ExportTendonScheduleTool(),
+
         // Detailing
         new AddKeynoteTagsTool(),
         new PlaceDetailComponentsTool(),

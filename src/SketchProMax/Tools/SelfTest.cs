@@ -101,6 +101,9 @@ internal static class SelfTest
             .Where(e => (where is null || where(e)) && RebarHostData.IsValidHost(e)).OrderByDescending(e => e.Id.Value).FirstOrDefault()?.Id.Value
         ?? throw new Skip($"no {what} in the model (the loaded family may be steel)");
 
+    private static long Newest<T>(Ctx c) where T : Element =>
+        new FilteredElementCollector(c.Doc).OfClass(typeof(T)).WhereElementIsNotElementType().Max(e => (long?)e.Id.Value) ?? throw new Skip($"no {typeof(T).Name} in the model");
+
     private sealed record Case(string Tool, Func<Ctx, object> Args, string[]? Setup = null, bool Heavy = false);
 
     public enum Mode { Safe, Full }
@@ -502,6 +505,9 @@ internal static class SelfTest
             return new { floor_ids = new[] { c.Id(c.Floor ?? throw new Skip("the model has no floors")) } };
         }),
         new("hollow_core_layout", c => new { points = c.Square(0, 14000, 6000), level = c.LevelName, plank_width = c.P(1200) }),
+        new("export_precast_schedule", c => new { folder = c.Temp, mark_prefix = "HC-" }, Setup: ["hollow_core_layout"]),
+        new("place_pt_tendons", c => new { floor_id = Newest<Floor>(c), uniform = new { direction = "x", spacing = c.P(1000) } }, Setup: ["create_floors"]),
+        new("export_tendon_schedule", c => new { folder = c.Temp }, Setup: ["create_floors", "place_pt_tendons"]),
         new("set_curtain_grid", c =>
         {
             var curtain = c.First<Wall>(w => w.WallType.Kind == WallKind.Curtain) ?? throw new Skip("the model has no curtain walls");

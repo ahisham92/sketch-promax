@@ -164,22 +164,26 @@ public sealed class HollowCoreLayoutTool : IRevitTool
 {
     public string Name => "hollow_core_layout";
     public string Description =>
-        "Lay out precast hollow core planks over a floor, room, or polygon: planks of a standard width spanning in a " +
-        "chosen direction, with joints, the last plank cut to fit, each plank its own floor element (type created at " +
-        "the plank depth) marked HC-01, HC-02... so they schedule by length and width. Optionally hide or delete the original slab.";
+        "Lay out precast slab units over a floor, room, or polygon: hollow core planks, solid planks, filigree (lattice " +
+        "girder) planks or double tees, of a standard width spanning in a chosen direction, with joints, the last unit cut " +
+        "to fit, each unit its own floor element (type created at the unit depth) marked HC-01, SP-01, FP-01 or DT-01... so " +
+        "they schedule by length and width. Optionally a cast-in-place structural topping over them, and delete the original slab. " +
+        "export_precast_schedule lists the units with weights.";
     public string PropertiesJson => """
     {
       "floor_id": {"type": "integer", "description": "Area to cover (use its outline). Or give points or room_id."},
       "room_id": {"type": "integer"},
       "points": {"type": "array", "items": {"type": "array", "items": {"type": "number"}}},
       "level": {"type": "string", "description": "When using points or a room. Default: the floor's or room's level."},
+      "kind": {"type": "string", "enum": ["hollow_core", "solid_plank", "filigree", "double_tee"], "description": "Default hollow_core. Sets the default width, depth and marks."},
+      "topping": {"type": "number", "description": "Cast-in-place topping thickness, project units (e.g. 75). The units drop by this much and a topping slab covers them."},
       "span_direction": {"type": "string", "enum": ["x", "y", "auto"], "description": "Direction the planks span (their length). auto = shorter side of the area."},
-      "plank_width": {"type": "number", "description": "Project units, default 1200 mm."},
-      "depth": {"type": "number", "description": "Plank depth, default 200 mm (150, 200, 265, 320, 400 are common)."},
+      "plank_width": {"type": "number", "description": "Project units. Default 1200 mm (hollow core, solid plank) or 2400 mm (filigree, double tee)."},
+      "depth": {"type": "number", "description": "Unit depth. Default 200 mm hollow core (150-400 common), 150 solid plank, 60 filigree, 500 double tee."},
       "joint": {"type": "number", "description": "Gap between planks, default 10 mm."},
       "start_from": {"type": "string", "enum": ["min", "max", "center"], "description": "Side where full planks start; the cut plank lands on the other side (center: cuts split both sides)."},
       "original": {"type": "string", "enum": ["keep", "delete"], "description": "What to do with floor_id afterwards. Default keep."},
-      "mark_prefix": {"type": "string", "description": "Default 'HC-'."}
+      "mark_prefix": {"type": "string", "description": "Default 'HC-', 'SP-', 'FP-' or 'DT-' by kind."}
     }
     """;
     public string[] Required => [];
@@ -189,8 +193,19 @@ public sealed class HollowCoreLayoutTool : IRevitTool
     {
         var doc = app.ActiveUIDocument.Document;
         double Mm(double v) => UnitUtils.ConvertToInternalUnits(v, UnitTypeId.Millimeters);
-        var width = args.OptDouble("plank_width") is { } pw ? RevitHelpers.ToInternal(doc, pw) : Mm(1200);
-        var depth = args.OptDouble("depth") is { } d ? RevitHelpers.ToInternal(doc, d) : Mm(200);
+        var kind = args.OptString("kind") ?? "hollow_core";
+        var (defWidth, defDepth, defPrefix, label) = kind switch
+        {
+            "solid_plank" => (1200.0, 150.0, "SP-", "Solid Precast Plank"),
+            "filigree" => (2400.0, 60.0, "FP-", "Filigree Plank"),
+            "double_tee" => (2400.0, 500.0, "DT-", "Double Tee"),
+            "hollow_core" => (1200.0, 200.0, "HC-", "Hollow Core Plank"),
+            _ => throw new ArgumentException($"Unknown kind '{kind}'."),
+        };
+        var width = args.OptDouble("plank_width") is { } pw ? RevitHelpers.ToInternal(doc, pw) : Mm(defWidth);
+        var depth = args.OptDouble("depth") is { } d ? RevitHelpers.ToInternal(doc, d) : Mm(defDepth);
+        var topping = args.OptDouble("topping") is { } tp ? RevitHelpers.ToInternal(doc, tp) : 0;
+        if (topping < 0) throw new ArgumentException("topping must be a positive thickness.");
         var joint = args.OptDouble("joint") is { } j ? RevitHelpers.ToInternal(doc, j) : Mm(10);
 
         List<CurveLoop> area;
@@ -253,9 +268,11 @@ public sealed class HollowCoreLayoutTool : IRevitTool
         failure.SetFailuresPreprocessor(swallow);
         t.SetFailureHandlingOptions(failure);
 
-        var type = PlankType(doc, depth);
-        var prefix = args.OptString("mark_prefix") ?? "HC-";
-        var heightOffset = original?.get_Parameter(BuiltInParameter.FLOOR_HEIGHTABOVELEVEL_PARAM)?.AsDouble();
+        var type = PlankType(doc, depth, label);
+        var prefix = args.OptString("mark_prefix") ?? defPrefix;
+        var levelOffset = original?.get_Parameter(BuiltInParameter.FLOOR_HEIGHTABOVELEVEL_PARAM)?.AsDouble() ?? 0;
+        // Floors hang down from their top; with a topping the units sit one topping lower.
+        double? heightOffset = topping > 0 || original != null ? levelOffset - topping : null;
         var planks = new List<(string Mark, long Id, double Length, double Width, bool Cut)>();
         var n = 0;
         foreach (var (from, to) in strips)
@@ -269,7 +286,7 @@ public sealed class HollowCoreLayoutTool : IRevitTool
             {
                 var loops = piece.Select(l => CurveLoop.CreateViaTransform(l, Transform.CreateTranslation(new XYZ(0, 0, level.ProjectElevation)))).ToList();
                 Floor plank;
-                try { plank = Floor.Create(doc, loops, type.Id, level.Id); }
+                try { plank = Floor.Create(doc, loops, type.Id, level.Id, true, null, 0); }
                 catch (Autodesk.Revit.Exceptions.ApplicationException) { continue; }
                 n++;
                 plank.get_Parameter(BuiltInParameter.ALL_MODEL_MARK)?.Set($"{prefix}{n:00}");
@@ -277,25 +294,43 @@ public sealed class HollowCoreLayoutTool : IRevitTool
                 var pieceBox = Outlines.Extrude(piece).GetBoundingBox();
                 var length = spanAlongX ? pieceBox.Max.X - pieceBox.Min.X : pieceBox.Max.Y - pieceBox.Min.Y;
                 var plankWidth = to - from;
+                plank.get_Parameter(BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS)?.Set(string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                    "precast unit; length={0:0.###}; width={1:0.###}", UnitUtils.ConvertFromInternalUnits(length, UnitTypeId.Meters), UnitUtils.ConvertFromInternalUnits(plankWidth, UnitTypeId.Meters)));
                 planks.Add(($"{prefix}{n:00}", plank.Id.Value, length, plankWidth, plankWidth < width - Mm(1)));
             }
+        }
+        long? toppingId = null;
+        string? toppingError = null;
+        if (topping > 0 && planks.Count > 0)
+        {
+            try
+            {
+                var slab = Floor.Create(doc, area.Select(l => CurveLoop.CreateViaTransform(l, Transform.CreateTranslation(new XYZ(0, 0, level.ProjectElevation - l.First().GetEndPoint(0).Z)))).ToList(),
+                    PlankType(doc, topping, "Structural Topping").Id, level.Id, true, null, 0);
+                slab.get_Parameter(BuiltInParameter.FLOOR_HEIGHTABOVELEVEL_PARAM)?.Set(levelOffset);
+                slab.get_Parameter(BuiltInParameter.ALL_MODEL_MARK)?.Set($"{prefix}TOPPING");
+                toppingId = slab.Id.Value;
+            }
+            catch (Autodesk.Revit.Exceptions.ApplicationException ex) { toppingError = "The topping slab couldn't be made: " + ex.Message.Trim(); }
         }
         if (original != null && args.OptString("original") == "delete") doc.Delete(original.Id);
         t.Commit();
         var kept = planks.Where(p => !swallow.Deleted.Contains(p.Id)).ToList();
         return ToolResult.Ok(new
         {
-            planks = kept.Count, type = type.Name, spanDirection = spanAlongX ? "x" : "y", cutPlanks = kept.Count(p => p.Cut),
+            kind, planks = kept.Count, type = type.Name, toppingId, toppingError,
+            warning = topping > 0 && original != null && args.OptString("original") != "delete"
+                ? "The original slab was kept under the new units and topping, so concrete is doubled there. Run again with original 'delete', or delete it." : null, spanDirection = spanAlongX ? "x" : "y", cutPlanks = kept.Count(p => p.Cut),
             list = kept.Select(p => new { mark = p.Mark, id = p.Id, length = RevitHelpers.FromInternal(doc, p.Length), width = RevitHelpers.FromInternal(doc, p.Width), cut = p.Cut }),
             removedByRevit = swallow.Deleted,
         });
     }
 
     /// <summary>A floor type named for the plank depth, made from the first floor type with its structure set to that depth.</summary>
-    private static FloorType PlankType(Document doc, double depth)
+    internal static FloorType PlankType(Document doc, double depth, string label)
     {
         var mm = Math.Round(UnitUtils.ConvertFromInternalUnits(depth, UnitTypeId.Millimeters));
-        var name = $"Hollow Core Plank {mm}mm";
+        var name = $"{label} {mm}mm";
         var types = new FilteredElementCollector(doc).OfClass(typeof(FloorType)).Cast<FloorType>().ToList();
         if (types.FirstOrDefault(x => x.Name == name) is { } existing) return existing;
         var basis = types.FirstOrDefault(x => x.Name.IndexOf("Generic", StringComparison.OrdinalIgnoreCase) >= 0) ?? types.First();
