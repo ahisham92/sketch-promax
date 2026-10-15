@@ -273,7 +273,7 @@ public sealed class ConvertCadTool : IRevitTool
                 {
                     var height = Opt("height") ?? DefaultHeight(doc, level);
                     var centerlines = kind == "walls"
-                        ? PairWalls(layerCurves.OfType<Line>().ToList(), Opt("min_thickness") ?? Mm(50), Opt("max_thickness") ?? Mm(600))
+                        ? WallCenterlines(layerCurves.OfType<Line>().ToList(), Opt("min_thickness") ?? Mm(50), Opt("max_thickness") ?? Mm(600), tolerance)
                         : layerCurves.Select(c => (c, (double?)null)).ToList();
                     var types = new Dictionary<long, WallType>();
                     foreach (var (line, width) in centerlines)
@@ -286,10 +286,16 @@ public sealed class ConvertCadTool : IRevitTool
                 }
                 case "grids":
                 {
-                    var grids = new List<Grid>();
+                    // Each grid keeps the line it was drawn from: Grid.Curve can be null on a grid that was just created or
+                    // renamed in this transaction (no regeneration yet), which made auto_name throw.
+                    var grids = new List<(Grid Grid, Line Line)>();
                     foreach (var l in layerCurves.OfType<Line>().Where(l => l.Length > Mm(500)))
-                        Make(() => grids.Add(Grid.Create(doc, l)));
-                    if (spec.TryGetProperty("auto_name", out var an) && an.GetBoolean()) NameGrids(grids);
+                        Make(() => grids.Add((Grid.Create(doc, l), l)));
+                    if (spec.TryGetProperty("auto_name", out var an) && an.ValueKind == System.Text.Json.JsonValueKind.True && grids.Count > 0)
+                    {
+                        var renamed = NameGrids(grids);
+                        if (renamed < grids.Count) notes.Add($"{grids.Count - renamed} grids could not be renamed");
+                    }
                     break;
                 }
                 case "columns":
@@ -358,12 +364,104 @@ public sealed class ConvertCadTool : IRevitTool
         return above != null ? above.ProjectElevation - level.ProjectElevation : UnitUtils.ConvertToInternalUnits(3, UnitTypeId.Meters);
     }
 
-    /// <summary>Finds pairs of parallel, overlapping lines a wall-thickness apart and returns their centerlines.</summary>
-    private static List<(Curve Line, double? Width)> PairWalls(List<Line> lines, double min, double max)
+    /// <summary>
+    /// Wall centerlines from face lines: collinear touching pieces are merged first (CAD often splits a face where
+    /// another wall meets it), parallel lines are paired, the unpaired rest of a partly paired line is paired again,
+    /// and collinear centerlines of the same width with a gap no wider than a wall (a T or + junction) are joined.
+    /// </summary>
+    private static List<(Curve Line, double? Width)> WallCenterlines(List<Line> lines, double min, double max, double tolerance)
+    {
+        var pending = MergeCollinear(lines, tolerance, tolerance);
+        var walls = new List<(Line Line, double Width)>();
+        for (var round = 0; round < 5 && pending.Count > 1; round++)
+        {
+            var (paired, rest) = PairWalls(pending, min, max);
+            if (paired.Count == 0) break;
+            walls.AddRange(paired);
+            pending = rest;
+        }
+        var result = new List<(Curve, double?)>();
+        var mmStep = UnitUtils.ConvertToInternalUnits(5, UnitTypeId.Millimeters);
+        foreach (var g in walls.GroupBy(w => (long)Math.Round(w.Width / mmStep)))
+        {
+            var width = g.Average(w => w.Width);
+            foreach (var l in MergeCollinear(g.Select(w => w.Line).ToList(), tolerance, max + tolerance))
+                result.Add((l, width));
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Joins lines that lie on one infinite line (within <paramref name="offsetTolerance"/>) and overlap or are at most
+    /// <paramref name="gap"/> apart. Lines that join with nothing are returned unchanged.
+    /// </summary>
+    private static List<Line> MergeCollinear(List<Line> lines, double offsetTolerance, double gap)
+    {
+        const double angleTolerance = 0.002; // radians
+        var items = lines.Where(l => l.Length > 1e-6).Select(l =>
+        {
+            var d = l.Direction;
+            var angle = Math.Atan2(d.Y, d.X);
+            if (angle < -angleTolerance) angle += Math.PI;
+            if (angle >= Math.PI - angleTolerance) angle -= Math.PI;
+            return (Line: l, Angle: angle);
+        }).OrderBy(x => x.Angle).ToList();
+        var result = new List<Line>();
+        var i = 0;
+        while (i < items.Count)
+        {
+            // Run of lines with (nearly) the same direction.
+            var j = i + 1;
+            while (j < items.Count && items[j].Angle - items[j - 1].Angle < angleTolerance) j++;
+            var group = items.GetRange(i, j - i);
+            i = j;
+            if (group.Count == 1) { result.Add(group[0].Line); continue; }
+            var angleMean = group.Average(x => x.Angle);
+            var dir = new XYZ(Math.Cos(angleMean), Math.Sin(angleMean), 0);
+            var normal = new XYZ(-dir.Y, dir.X, 0);
+            var byOffset = group.Select(x => (x.Line, Offset: x.Line.GetEndPoint(0).DotProduct(normal))).OrderBy(x => x.Offset).ToList();
+            var k = 0;
+            while (k < byOffset.Count)
+            {
+                // Run of lines on (nearly) the same infinite line.
+                var m = k + 1;
+                while (m < byOffset.Count && byOffset[m].Offset - byOffset[m - 1].Offset < offsetTolerance) m++;
+                var run = byOffset.GetRange(k, m - k);
+                k = m;
+                var offset = run.Average(x => x.Offset);
+                var z = run[0].Line.GetEndPoint(0).Z;
+                var spans = run.Select(x =>
+                {
+                    double s0 = x.Line.GetEndPoint(0).DotProduct(dir), s1 = x.Line.GetEndPoint(1).DotProduct(dir);
+                    return (From: Math.Min(s0, s1), To: Math.Max(s0, s1), x.Line);
+                }).OrderBy(x => x.From).ToList();
+                var n = 0;
+                while (n < spans.Count)
+                {
+                    var from = spans[n].From;
+                    var to = spans[n].To;
+                    var first = spans[n].Line;
+                    var count = 1;
+                    for (n++; n < spans.Count && spans[n].From <= to + gap; n++, count++) to = Math.Max(to, spans[n].To);
+                    if (count == 1) { result.Add(first); continue; }
+                    var basePoint = normal * offset + new XYZ(0, 0, z);
+                    result.Add(Line.CreateBound(basePoint + dir * from, basePoint + dir * to));
+                }
+            }
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Finds pairs of parallel, overlapping lines a wall-thickness apart and returns their centerlines, plus the lines
+    /// left over: unpaired lines and the parts of paired lines beyond the overlap.
+    /// </summary>
+    private static (List<(Line Line, double Width)> Walls, List<Line> Leftover) PairWalls(List<Line> lines, double min, double max)
     {
         var used = new bool[lines.Count];
-        var result = new List<(Curve, double?)>();
-        if (lines.Count == 0) return result;
+        var result = new List<(Line, double)>();
+        var rest = new List<Line>();
+        if (lines.Count == 0) return (result, rest);
 
         // Parallel lines (within ~0.6 degrees) sit in the same or a neighbouring 1-degree direction bucket. Inside a
         // bucket, lines are sorted by their offset along the bucket's normal, so only lines about a wall-thickness
@@ -425,8 +523,23 @@ public sealed class ConvertCadTool : IRevitTool
             var start = a.GetEndPoint(0) + dir * bestFrom + shift;
             var end = a.GetEndPoint(0) + dir * bestTo + shift;
             result.Add((Line.CreateBound(start, end), bestGap));
+            // What lies beyond the overlap on either line can still pair with another line (e.g. the long face of a
+            // wall whose other face is split where a second wall meets it).
+            Remainders(a, a.GetEndPoint(0) + dir * bestFrom, a.GetEndPoint(0) + dir * bestTo);
+            Remainders(lines[best], a.GetEndPoint(0) + dir * bestFrom, a.GetEndPoint(0) + dir * bestTo);
         }
-        return result;
+        for (var i = 0; i < lines.Count; i++)
+            if (!used[i]) rest.Add(lines[i]);
+        return (result, rest);
+
+        void Remainders(Line l, XYZ p, XYZ q)
+        {
+            XYZ s = l.GetEndPoint(0), d = l.Direction;
+            double u = (p - s).DotProduct(d), v = (q - s).DotProduct(d);
+            double lo = Math.Max(0, Math.Min(u, v)), hi = Math.Min(l.Length, Math.Max(u, v));
+            if (lo >= min) rest.Add(Line.CreateBound(s, s + d * lo));
+            if (l.Length - hi >= min) rest.Add(Line.CreateBound(s + d * hi, l.GetEndPoint(1)));
+        }
     }
 
     private static XYZ Flat(XYZ v) => new(v.X, v.Y, 0);
@@ -465,19 +578,35 @@ public sealed class ConvertCadTool : IRevitTool
                                           string.Equals($"{s.FamilyName}: {s.Name}", name, StringComparison.OrdinalIgnoreCase));
     }
 
-    private static void NameGrids(List<Grid> grids)
+    /// <summary>Names vertical grids 1,2,3 left to right and horizontal ones A,B,C bottom up; returns how many were named.</summary>
+    private static int NameGrids(List<(Grid Grid, Line Line)> grids)
     {
-        // Temporary names first, so renaming never collides with an existing grid name.
-        foreach (var g in grids) g.Name = "tmp-" + g.Id.Value;
-        var vertical = grids.Where(g => Math.Abs(((Line)g.Curve).Direction.Y) > 0.7).OrderBy(g => g.Curve.Evaluate(0.5, true).X).ToList();
-        var horizontal = grids.Except(vertical).OrderBy(g => g.Curve.Evaluate(0.5, true).Y).ToList();
-        for (var i = 0; i < vertical.Count; i++) TryName(vertical[i], (i + 1).ToString());
-        for (var i = 0; i < horizontal.Count; i++) TryName(horizontal[i], Modeling.Letters(i));
+        var live = grids.Where(g => g.Grid is { IsValidObject: true } && g.Line != null).ToList();
+        // Order from the drawn lines, before any renaming touches the grids.
+        var vertical = live.Where(g => Math.Abs(g.Line.Direction.Y) > 0.7).OrderBy(g => Mid(g.Line).X).Select(g => g.Grid).ToList();
+        var horizontal = live.Where(g => Math.Abs(g.Line.Direction.Y) <= 0.7).OrderBy(g => Mid(g.Line).Y).Select(g => g.Grid).ToList();
+        // Temporary names first, so renaming never collides with one of these grids' current names.
+        foreach (var (g, _) in live)
+        {
+            try { g.Name = "tmp-" + g.Id.Value; }
+            catch (Autodesk.Revit.Exceptions.ArgumentException) { }
+        }
+        var named = 0;
+        for (var i = 0; i < vertical.Count; i++) named += TryName(vertical[i], (i + 1).ToString()) ? 1 : 0;
+        for (var i = 0; i < horizontal.Count; i++) named += TryName(horizontal[i], Modeling.Letters(i)) ? 1 : 0;
+        return named;
     }
 
-    private static void TryName(Grid g, string name)
+    private static XYZ Mid(Line l) => (l.GetEndPoint(0) + l.GetEndPoint(1)) / 2;
+
+    /// <summary>Renames a grid; when the name is taken by another grid, tries name', name'' and so on.</summary>
+    private static bool TryName(Grid g, string name)
     {
-        try { g.Name = name; }
-        catch (Autodesk.Revit.Exceptions.ArgumentException) { g.Name = name + "'"; }
+        for (var suffix = ""; suffix.Length < 4; suffix += "'")
+        {
+            try { g.Name = name + suffix; return true; }
+            catch (Autodesk.Revit.Exceptions.ArgumentException) { }
+        }
+        return false;
     }
 }
