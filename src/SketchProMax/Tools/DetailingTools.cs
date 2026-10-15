@@ -13,7 +13,7 @@ internal static class ViewPoints
         var v = p.EnumerateArray().Select(e => RevitHelpers.ToInternal(doc, e.GetDouble())).ToArray();
         if (v.Length < 2) throw new ArgumentException("A point needs at least [x, y].");
         if (v.Length > 2) return new XYZ(v[0], v[1], v[2]);
-        if (view is ViewPlan plan) return new XYZ(v[0], v[1], plan.GenLevel?.Elevation ?? 0);
+        if (view is ViewPlan plan) return new XYZ(v[0], v[1], plan.GenLevel?.ProjectElevation ?? 0);
         return view.Origin + view.RightDirection * v[0] + view.UpDirection * v[1];
     }
 
@@ -304,7 +304,7 @@ public sealed class DimensionElementsTool : IRevitTool
             var perp = vd.CrossProduct(m).Normalize();
             var along = points.Select(p => p.DotProduct(m)).ToList();
             var position = points.Max(p => p.DotProduct(perp)) + offset;
-            var depth = view is ViewPlan plan ? (plan.GenLevel?.Elevation ?? 0) : view.Origin.DotProduct(vd);
+            var depth = view is ViewPlan plan ? (plan.GenLevel?.ProjectElevation ?? 0) : view.Origin.DotProduct(vd);
             XYZ At(double s) => m * s + perp * position + vd * depth;
             // On plans, vd is up, so "depth" is the level elevation.
             line = Line.CreateBound(At(along.Min() - 1), At(along.Max() + 1));
@@ -420,9 +420,10 @@ public sealed class CreateToposolidTool : IRevitTool
             {
                 var v = p.EnumerateArray().Select(e => RevitHelpers.ToInternal(doc, e.GetDouble())).ToArray();
                 if (v.Length < 3) throw new ArgumentException("Survey points need [x, y, z].");
-                return new XYZ(v[0], v[1], v[2]);
+                // z is read like a level elevation (Revit's elevation base); geometry needs internal coordinates.
+                return new XYZ(v[0], v[1], v[2] - (level.Elevation - level.ProjectElevation));
             }).ToList();
-            var boundary = args.Array("boundary").Select(p => Modeling.Point(doc, p, level.Elevation)).ToList();
+            var boundary = args.Array("boundary").Select(p => Modeling.Point(doc, p, level.ProjectElevation)).ToList();
             if (boundary.Count > 1 && boundary[0].IsAlmostEqualTo(boundary[boundary.Count - 1])) boundary.RemoveAt(boundary.Count - 1);
 
             if (boundary.Count == 0 && pts.Count < 3) return ToolResult.Error("Give at least 3 survey points, or a boundary.");

@@ -53,7 +53,7 @@ internal static class Modeling
         }
         var level = RevitHelpers.FindLevel(doc, spec.TryGetProperty("level", out var l) ? l.GetString() : null);
         if (!spec.TryGetProperty("points", out var pts)) throw new ArgumentException("Give either room_id or points.");
-        return (Polygon(doc, pts, level.Elevation), level);
+        return (Polygon(doc, pts, level.ProjectElevation), level);
     }
 
     public static ElementId TypeId(Document doc, JsonElement spec, ElementTypeGroup fallback)
@@ -175,7 +175,7 @@ public sealed class CreateGridsTool : IRevitTool
         var created = new List<object>();
         using var t = RevitHelpers.StartTransaction(doc, "Create grids");
         // Grids should show in the plans of every level, so stretch them from below the lowest to above the highest.
-        var elevations = new FilteredElementCollector(doc).OfClass(typeof(Level)).Cast<Level>().Select(l => l.Elevation).DefaultIfEmpty(0).ToList();
+        var elevations = new FilteredElementCollector(doc).OfClass(typeof(Level)).Cast<Level>().Select(l => l.ProjectElevation).DefaultIfEmpty(0).ToList();
         double bottom = elevations.Min() - 10, top = elevations.Max() + 30;
 
         void Make(XYZ a, XYZ b, string? name)
@@ -343,7 +343,7 @@ public sealed class CreateRoofTool : IRevitTool
         var roofType = args.OptLong("type_id") is { } tid
             ? doc.GetElement(new ElementId(tid)) as RoofType ?? throw new ArgumentException($"{tid} is not a roof type. Use list_types 'Roofs'.")
             : DefaultRoofType(doc);
-        var loop = Modeling.Polygon(doc, args.Raw["points"], level.Elevation);
+        var loop = Modeling.Polygon(doc, args.Raw["points"], level.ProjectElevation);
         var footprint = new CurveArray();
         foreach (var c in loop) footprint.Append(c);
 
@@ -466,7 +466,7 @@ public sealed class PlaceFamilyInstancesTool : IRevitTool
             try
             {
                 var pt = Modeling.Point(doc, p.GetProperty("point"));
-                var fi = doc.Create.NewFamilyInstance(new XYZ(pt.X, pt.Y, level.Elevation + pt.Z), symbol, level, StructuralType.NonStructural);
+                var fi = doc.Create.NewFamilyInstance(new XYZ(pt.X, pt.Y, level.ProjectElevation + pt.Z), symbol, level, StructuralType.NonStructural);
                 if (p.TryGetProperty("rotation_degrees", out var r) && r.GetDouble() != 0)
                 {
                     var axis = Line.CreateBound(new XYZ(pt.X, pt.Y, 0), new XYZ(pt.X, pt.Y, 1));
@@ -520,7 +520,7 @@ public sealed class PlaceColumnsTool : IRevitTool
         var symbol = Modeling.Symbol(doc, args.OptLong("type_id") ?? -1);
         foreach (var p in points)
         {
-            var fi = doc.Create.NewFamilyInstance(new XYZ(p.X, p.Y, baseLevel.Elevation), symbol, baseLevel, kind);
+            var fi = doc.Create.NewFamilyInstance(new XYZ(p.X, p.Y, baseLevel.ProjectElevation), symbol, baseLevel, kind);
             fi.get_Parameter(BuiltInParameter.FAMILY_TOP_LEVEL_PARAM)?.Set(topLevel.Id);
             fi.get_Parameter(BuiltInParameter.FAMILY_TOP_LEVEL_OFFSET_PARAM)?.Set(0.0);
             created.Add(fi.Id.Value);
@@ -553,7 +553,7 @@ public sealed class PlaceBeamsTool : IRevitTool
     {
         var doc = app.ActiveUIDocument.Document;
         var level = RevitHelpers.FindLevel(doc, args.String("level"));
-        var z = level.Elevation;
+        var z = level.ProjectElevation;
 
         var segments = args.Array("lines")
             .Select(l => (Modeling.Point(doc, l.GetProperty("start"), z), Modeling.Point(doc, l.GetProperty("end"), z)))

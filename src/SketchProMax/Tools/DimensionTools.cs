@@ -68,7 +68,7 @@ public sealed class DimensionGridsTool : IRevitTool
             if (group is null) groups.Add([g]); else group.Add(g);
         }
 
-        var z = view.GenLevel?.Elevation ?? 0;
+        var z = view.GenLevel?.ProjectElevation ?? 0;
         var created = new List<long>();
         var skipped = 0;
         using var t = RevitHelpers.StartTransaction(doc, "Dimension grids");
@@ -134,7 +134,7 @@ public sealed class DimensionWallsTool : IRevitTool
             if (group is null) groups.Add([w]); else group.Add(w);
         }
 
-        var z = view.GenLevel?.Elevation ?? 0;
+        var z = view.GenLevel?.ProjectElevation ?? 0;
         var created = new List<long>();
         var skipped = 0;
         using var t = RevitHelpers.StartTransaction(doc, "Dimension walls");

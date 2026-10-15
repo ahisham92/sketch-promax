@@ -337,13 +337,13 @@ public sealed class PlaceManyTool : IRevitTool
                 var point = new XYZ(RevitHelpers.ToInternal(doc, Num("x", true)), RevitHelpers.ToInternal(doc, Num("y", true)), 0);
                 if (fromShared != null) point = fromShared.OfPoint(new XYZ(point.X, point.Y, 0));
                 var offset = RevitHelpers.ToInternal(doc, Num("z"));
-                var at = new XYZ(point.X, point.Y, level.Elevation + offset);
+                var at = new XYZ(point.X, point.Y, level.ProjectElevation + offset);
                 var angle = Coordinates.Rad(Num("rotation"));
 
                 Element placed;
                 if (symbol != null)
                 {
-                    var instance = doc.Create.NewFamilyInstance(new XYZ(point.X, point.Y, level.Elevation), symbol, level, StructuralType.NonStructural);
+                    var instance = doc.Create.NewFamilyInstance(new XYZ(point.X, point.Y, level.ProjectElevation), symbol, level, StructuralType.NonStructural);
                     if (Math.Abs(offset) > 1e-9)
                         (instance.get_Parameter(BuiltInParameter.INSTANCE_FREE_HOST_OFFSET_PARAM) ?? instance.get_Parameter(BuiltInParameter.INSTANCE_ELEVATION_PARAM))?.Set(offset);
                     placed = instance;

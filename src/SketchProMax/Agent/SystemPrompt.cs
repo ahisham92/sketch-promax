@@ -36,6 +36,13 @@ internal static class SystemPrompt
         - Slabs: cut_slab cuts or adds a polygon to a floor edge (notches, recesses, set-backs); add_slab_edges adds edge beams or upstands; hollow_core_layout lays precast planks over a floor, room or outline and marks them HC-01 onward.
         - Title blocks: list_title_blocks first (with sheet_number to see the exact field names), then fill_title_blocks
           for field values across sheets, set_sheet_title_block to swap types, add missing title blocks or fix duplicates.
+          New title block: title_block_from_cad (DWG) or copy_from_file (another RVT/RFA). Fixed text inside it: edit_family_text.
+          Missing fields: create_project_parameters (Sheets or Project Information, add_to_families the title block).
+          Legends: place_legend_on_sheets. Revisions on many sheets: set_sheet_revisions.
+        - Exports: export_files/export_pdf take coordinates (internal, project_base, shared), units (DWG) and name_pattern
+          (one file per sheet, names checked). For an issue set, use name_pattern so the names match the drawing list.
+          "LOD" from this user means the List Of Drawings: export_drawing_list (with check_folder to verify exported names).
+          Bills of quantities: export_quantities. Before issuing schedules: check_schedule.
         - Detailing: add_keynote_tags (keynote values come from the Keynote parameter), place_detail_components,
           dimension_elements for a string through specific grids, levels, walls or family instances (any view),
           create_toposolid for site terrain from survey points or an outline.

@@ -220,7 +220,9 @@ public sealed class ExportFilesTool : IRevitTool
     public string Name => "export_files";
     public string Description =>
         "Export to DWG (views or sheets), IFC (whole model, or what's visible in one 3D view), Navisworks NWC " +
-        "(needs the Navisworks exporter installed) or PNG/JPG images of views and sheets. Files go to Documents\\SketchProMax unless a folder is given.";
+        "(needs the Navisworks exporter installed) or PNG/JPG images of views and sheets. Files go to Documents\\SketchProMax unless a folder is given. " +
+        "coordinates picks internal, project base point or shared coordinates; units sets DWG units. With name_pattern each " +
+        "view or sheet becomes its own file named from the pattern, and the result checks every expected file exists with that exact name.";
     public string PropertiesJson => """
     {
       "format": {"type": "string", "enum": ["dwg", "ifc", "nwc", "png", "jpg"]},
@@ -229,7 +231,10 @@ public sealed class ExportFilesTool : IRevitTool
       "file_name": {"type": "string", "description": "Base name. dwg/images add the view name per file."},
       "dwg_setup": {"type": "string", "description": "Name of a saved DWG export setup in the model."},
       "ifc_version": {"type": "string", "enum": ["IFC2x3", "IFC4"], "description": "Default IFC2x3 Coordination View 2.0."},
-      "image_pixels": {"type": "integer", "description": "Image width in pixels, default 3000."}
+      "image_pixels": {"type": "integer", "description": "Image width in pixels, default 3000."},
+      "coordinates": {"type": "string", "enum": ["internal", "project_base", "shared"], "description": "dwg: internal or shared. ifc: all three. nwc: internal or shared. Default: the exporter's own default."},
+      "units": {"type": "string", "enum": ["mm", "cm", "m", "ft", "in"], "description": "dwg only (ifc and nwc use the model's units)."},
+      "name_pattern": {"type": "string", "description": "dwg: one file per view/sheet, e.g. '{number} - {name}' or 'PRJ-{number}-{revision}'. Placeholders: {number} {name} {revision} {view} {date}."}
     }
     """;
     public string[] Required => ["format"];
@@ -247,6 +252,8 @@ public sealed class ExportFilesTool : IRevitTool
         var before = new HashSet<string>(Directory.GetFiles(folder), StringComparer.OrdinalIgnoreCase);
         var started = DateTime.UtcNow.AddSeconds(-2);
         var format = args.String("format");
+        var notes = new List<string>();
+        var naming = new List<object>();
 
         switch (format)
         {
@@ -257,6 +264,28 @@ public sealed class ExportFilesTool : IRevitTool
                     ? DWGExportOptions.GetPredefinedOptions(doc, setup) ?? throw new ArgumentException($"No DWG export setup named '{setup}'.")
                     : new DWGExportOptions();
                 options.MergedViews = true;
+                switch (args.OptString("coordinates"))
+                {
+                    case "shared": options.SharedCoords = true; break;
+                    case "internal": options.SharedCoords = false; break;
+                    case "project_base": notes.Add("DWG export has no project base point option; used internal coordinates. Use shared coordinates, or IFC, for a project-base origin."); options.SharedCoords = false; break;
+                }
+                if (args.OptString("units") is { } u)
+                    options.TargetUnit = u switch { "mm" => ExportUnit.Millimeter, "cm" => ExportUnit.Centimeter, "m" => ExportUnit.Meter, "in" => ExportUnit.Inch, _ => ExportUnit.Foot };
+                if (args.OptString("name_pattern") is { } pattern)
+                {
+                    ExportNames.RequireUnique(doc, ids, pattern);
+                    foreach (var id in ids)
+                    {
+                        var view = doc.GetElement(id) as View ?? throw new ArgumentException($"{id.Value} is not a view or sheet.");
+                        var expected = ExportNames.For(doc, view, pattern);
+                        var existing = new HashSet<string>(Directory.GetFiles(folder), StringComparer.OrdinalIgnoreCase);
+                        var t0 = DateTime.UtcNow;
+                        if (!doc.Export(folder, expected, [id], options)) { naming.Add(new { view = view.Name, expected = expected + ".dwg", found = (string?)null, ok = false }); continue; }
+                        naming.Add(ExportNames.Settle(folder, expected, ".dwg", existing, t0, view.Name));
+                    }
+                    break;
+                }
                 if (!doc.Export(folder, name, ids, options)) return ToolResult.Error("Revit reported the DWG export failed.");
                 break;
             }
@@ -267,6 +296,10 @@ public sealed class ExportFilesTool : IRevitTool
                     FileVersion = args.OptString("ifc_version") == "IFC4" ? IFCVersion.IFC4 : IFCVersion.IFC2x3CV2,
                 };
                 if (ids.Count > 0) options.FilterViewId = ids[0];
+                // The IFC exporter's site placement: 0 shared, 2 project base point, 3 internal.
+                if (args.OptString("coordinates") is { } coords)
+                    options.AddOption("SitePlacement", coords switch { "shared" => "0", "project_base" => "2", _ => "3" });
+                if (args.Has("units")) notes.Add("IFC uses the model's project units; 'units' was ignored.");
                 // IFC export needs an open transaction; nothing is kept.
                 using var t = new Transaction(doc, "Sketch ProMax: IFC export");
                 t.Start();
@@ -281,6 +314,12 @@ public sealed class ExportFilesTool : IRevitTool
                     return ToolResult.Error("The Navisworks exporter isn't installed for this Revit version (free 'Navisworks NWC Export Utility' from Autodesk).");
                 var options = new NavisworksExportOptions();
                 if (ids.Count > 0) { options.ExportScope = NavisworksExportScope.View; options.ViewId = ids[0]; }
+                switch (args.OptString("coordinates"))
+                {
+                    case "shared": options.Coordinates = NavisworksCoordinates.Shared; break;
+                    case "internal": options.Coordinates = NavisworksCoordinates.Internal; break;
+                    case "project_base": notes.Add("NWC export has no project base point option; used internal coordinates."); options.Coordinates = NavisworksCoordinates.Internal; break;
+                }
                 doc.Export(folder, name + ".nwc", options);
                 break;
             }
@@ -305,7 +344,63 @@ public sealed class ExportFilesTool : IRevitTool
 
         var files = Directory.GetFiles(folder).Where(f => !before.Contains(f) || File.GetLastWriteTimeUtc(f) >= started)
             .Select(Path.GetFileName).ToList();
-        return ToolResult.Ok(new { folder, files });
+        return ToolResult.Ok(new
+        {
+            folder, files = files.Take(300), fileCount = files.Count,
+            naming = naming.Count > 0 ? naming : null, notes = notes.Count > 0 ? notes : null,
+        });
+    }
+}
+
+/// <summary>File names built from a pattern per view or sheet, and a check that Revit wrote exactly that name.</summary>
+internal static class ExportNames
+{
+    public static string For(Document doc, View view, string pattern)
+    {
+        var sheet = view as ViewSheet;
+        var revision = sheet is null ? "" : sheet.get_Parameter(BuiltInParameter.SHEET_CURRENT_REVISION)?.AsString() ?? "";
+        var text = pattern
+            .Replace("{number}", sheet?.SheetNumber ?? "")
+            .Replace("{name}", sheet?.Name ?? view.Name)
+            .Replace("{view}", view.Name)
+            .Replace("{revision}", revision)
+            .Replace("{date}", DateTime.Now.ToString("yyyy-MM-dd"))
+            .Replace("{project}", doc.ProjectInformation?.Number ?? "");
+        var safe = new string(text.Select(ch => Path.GetInvalidFileNameChars().Contains(ch) ? '_' : ch).ToArray()).Trim();
+        return safe.Length == 0 ? "export" : safe;
+    }
+
+    /// <summary>Stops before exporting when two views would get the same file name and overwrite each other.</summary>
+    public static void RequireUnique(Document doc, IEnumerable<ElementId> ids, string pattern)
+    {
+        var clashes = ids.Select(doc.GetElement).OfType<View>().GroupBy(v => For(doc, v, pattern), StringComparer.OrdinalIgnoreCase)
+            .Where(g => g.Count() > 1).Select(g => $"'{g.Key}' ({string.Join(", ", g.Select(v => v.Name))})").ToList();
+        if (clashes.Count > 0)
+            throw new ArgumentException($"name_pattern gives the same file name to several views: {string.Join("; ", clashes.Take(5))}. Add {{view}} or {{number}} to the pattern.");
+    }
+
+    /// <summary>Finds what Revit wrote and renames it to the expected name when Revit added its own suffix.</summary>
+    public static object Settle(string folder, string expected, string extension, HashSet<string> before, DateTime started, string view)
+    {
+        var target = Path.Combine(folder, expected + extension);
+        var written = Directory.GetFiles(folder, "*" + extension)
+            .Where(f => !before.Contains(f) || File.GetLastWriteTimeUtc(f) >= started).ToList();
+        if (written.Any(f => string.Equals(f, target, StringComparison.OrdinalIgnoreCase)))
+            return new { view, expected = expected + extension, found = expected + extension, ok = true };
+        if (written.Count == 1)
+        {
+            try
+            {
+                if (File.Exists(target)) File.Delete(target);
+                File.Move(written[0], target);
+                return new { view, expected = expected + extension, found = expected + extension, ok = true, renamedFrom = Path.GetFileName(written[0]) };
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                return new { view, expected = expected + extension, found = Path.GetFileName(written[0]), ok = false, error = ex.Message };
+            }
+        }
+        return new { view, expected = expected + extension, found = written.Count == 0 ? null : string.Join(", ", written.Select(Path.GetFileName)), ok = false };
     }
 }
 

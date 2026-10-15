@@ -128,6 +128,15 @@ public sealed class ToolRegistry
         new ListTitleBlocksTool(),
         new FillTitleBlocksTool(),
         new SetSheetTitleBlockTool(),
+        new TitleBlockFromCadTool(),
+        new CopyFromFileTool(),
+        new EditFamilyTextTool(),
+        new CreateProjectParametersTool(),
+        new PlaceLegendOnSheetsTool(),
+        new SetSheetRevisionsTool(),
+        new ExportDrawingListTool(),
+        new ExportQuantitiesTool(),
+        new CheckScheduleTool(),
 
         // Detailing
         new AddKeynoteTagsTool(),

@@ -248,7 +248,7 @@ public sealed class ConvertCadTool : IRevitTool
             var regex = new System.Text.RegularExpressions.Regex("^" + System.Text.RegularExpressions.Regex.Escape(pattern).Replace("\\*", ".*") + "$",
                 System.Text.RegularExpressions.RegexOptions.IgnoreCase);
             var matching = curves.Where(c => regex.IsMatch(c.Layer)).ToList();
-            var layerCurves = matching.Select(c => Cad.Flatten(c.Curve, level.Elevation, shortest)).OfType<Curve>().ToList();
+            var layerCurves = matching.Select(c => Cad.Flatten(c.Curve, level.ProjectElevation, shortest)).OfType<Curve>().ToList();
             var kind = spec.GetProperty("as").GetString();
             string? typeName = spec.TryGetProperty("type", out var tn) ? tn.GetString() : null;
             double? Opt(string key) => spec.TryGetProperty(key, out var v) ? RevitHelpers.ToInternal(doc, v.GetDouble()) : null;
@@ -304,7 +304,7 @@ public sealed class ConvertCadTool : IRevitTool
                         if (piece.Count > 1 && Cad.Loop(piece, tolerance) is null) { open++; continue; }
                         var box = Cad.Box(piece);
                         if (box.Max.U - box.Min.U > maxSize || box.Max.V - box.Min.V > maxSize) continue;
-                        var centre = new XYZ((box.Min.U + box.Max.U) / 2, (box.Min.V + box.Max.V) / 2, level.Elevation);
+                        var centre = new XYZ((box.Min.U + box.Max.U) / 2, (box.Min.V + box.Max.V) / 2, level.ProjectElevation);
                         Make(() => doc.Create.NewFamilyInstance(centre, symbol, level, symbol.Category.Id.Value == (long)BuiltInCategory.OST_StructuralColumns ? StructuralType.Column : StructuralType.NonStructural));
                     }
                     if (open > 0) notes.Add($"{open} open shapes (lines that don't close) were skipped");
@@ -323,7 +323,7 @@ public sealed class ConvertCadTool : IRevitTool
                 case "room_separation":
                 case "model_lines":
                 {
-                    var plane = SketchPlane.Create(doc, Plane.CreateByNormalAndOrigin(XYZ.BasisZ, new XYZ(0, 0, level.Elevation)));
+                    var plane = SketchPlane.Create(doc, Plane.CreateByNormalAndOrigin(XYZ.BasisZ, new XYZ(0, 0, level.ProjectElevation)));
                     if (kind == "model_lines")
                         foreach (var c in layerCurves) Make(() => doc.Create.NewModelCurve(c, plane));
                     else
@@ -354,8 +354,8 @@ public sealed class ConvertCadTool : IRevitTool
     private static double DefaultHeight(Document doc, Level level)
     {
         var above = new FilteredElementCollector(doc).OfClass(typeof(Level)).Cast<Level>()
-            .Where(l => l.Elevation > level.Elevation + 0.1).OrderBy(l => l.Elevation).FirstOrDefault();
-        return above != null ? above.Elevation - level.Elevation : UnitUtils.ConvertToInternalUnits(3, UnitTypeId.Meters);
+            .Where(l => l.Elevation > level.ProjectElevation + 0.1).OrderBy(l => l.Elevation).FirstOrDefault();
+        return above != null ? above.ProjectElevation - level.ProjectElevation : UnitUtils.ConvertToInternalUnits(3, UnitTypeId.Meters);
     }
 
     /// <summary>Finds pairs of parallel, overlapping lines a wall-thickness apart and returns their centerlines.</summary>

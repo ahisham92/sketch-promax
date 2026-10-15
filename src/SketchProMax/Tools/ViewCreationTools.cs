@@ -63,7 +63,7 @@ internal static class ViewKit
     public static XYZ ToModel(Document doc, View view, double xProject, double yProject)
     {
         double x = RevitHelpers.ToInternal(doc, xProject), y = RevitHelpers.ToInternal(doc, yProject);
-        if (view is ViewPlan plan) return new XYZ(x, y, plan.GenLevel?.Elevation ?? 0);
+        if (view is ViewPlan plan) return new XYZ(x, y, plan.GenLevel?.ProjectElevation ?? 0);
         return view.Origin + view.RightDirection * x + view.UpDirection * y;
     }
 
@@ -119,7 +119,7 @@ public sealed class CreateSectionTool : IRevitTool
     public ToolResult Execute(UIApplication app, ToolArgs args)
     {
         var doc = app.ActiveUIDocument.Document;
-        var levels = new FilteredElementCollector(doc).OfClass(typeof(Level)).Cast<Level>().Select(l => l.Elevation).ToList();
+        var levels = new FilteredElementCollector(doc).OfClass(typeof(Level)).Cast<Level>().Select(l => l.ProjectElevation).ToList();
         double meter = UnitUtils.ConvertToInternalUnits(1, UnitTypeId.Meters);
         XYZ p0, p1;
         double depth;
@@ -241,7 +241,7 @@ public sealed class CreateElevationsTool : IRevitTool
             var box = ViewKit.Extents(doc, elements) ?? throw new InvalidOperationException("No walls found to place elevations around.");
             var offset = RevitHelpers.ToInternal(doc, args.OptDouble("offset") ?? FromMeters(doc, 3));
             var mid = (box.Min + box.Max) / 2;
-            var z = plan.GenLevel?.Elevation ?? 0;
+            var z = plan.GenLevel?.ProjectElevation ?? 0;
             var pattern = args.OptString("name_pattern") ?? "{side} Elevation";
             foreach (var side in sides)
             {
@@ -364,13 +364,13 @@ public sealed class Create3DViewTool : IRevitTool
         {
             var level = RevitHelpers.FindLevel(doc, levelName);
             var above = new FilteredElementCollector(doc).OfClass(typeof(Level)).Cast<Level>()
-                .Where(l => l.Elevation > level.Elevation + 0.01).OrderBy(l => l.Elevation).FirstOrDefault();
+                .Where(l => l.Elevation > level.ProjectElevation + 0.01).OrderBy(l => l.Elevation).FirstOrDefault();
             var all = ViewKit.Extents(doc, new FilteredElementCollector(doc).OfClass(typeof(Wall)).WhereElementIsNotElementType());
             if (all != null)
                 box = new BoundingBoxXYZ
                 {
-                    Min = new XYZ(all.Min.X, all.Min.Y, level.Elevation),
-                    Max = new XYZ(all.Max.X, all.Max.Y, above?.Elevation - 0.1 ?? level.Elevation + UnitUtils.ConvertToInternalUnits(4, UnitTypeId.Meters)),
+                    Min = new XYZ(all.Min.X, all.Min.Y, level.ProjectElevation),
+                    Max = new XYZ(all.Max.X, all.Max.Y, above?.ProjectElevation - 0.1 ?? level.ProjectElevation + UnitUtils.ConvertToInternalUnits(4, UnitTypeId.Meters)),
                 };
         }
 

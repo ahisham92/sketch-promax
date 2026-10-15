@@ -261,8 +261,11 @@ public sealed class SetSheetTitleBlockTool : IRevitTool
             }
             if (removeDuplicates && list.Count > 1)
             {
-                foreach (var extra in list.Skip(1)) { doc.Delete(extra.Id); removed++; }
-                list = [list[0]];
+                // Keep the one that already has the wanted type and sits at the origin.
+                var keep = list.OrderByDescending(tb => type is not null && tb.Symbol.Id == type.Id)
+                    .ThenBy(tb => tb.Location is LocationPoint p ? p.Point.GetLength() : double.MaxValue).First();
+                foreach (var extra in list.Where(tb => tb.Id != keep.Id)) { doc.Delete(extra.Id); removed++; }
+                list = [keep];
             }
             foreach (var tb in list)
             {

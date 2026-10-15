@@ -1,6 +1,6 @@
 # Sketch ProMax
 
-An AI agent for Autodesk Revit 2024, 2025, 2026 and 2027, powered by Claude. Ask in plain language; it reads, documents, audits and edits the open model through 108 tools, and it learns new ones as you use it. It asks for your approval before every change, and every change can be undone with Ctrl+Z.
+An AI agent for Autodesk Revit 2024, 2025, 2026 and 2027, powered by Claude. Ask in plain language; it reads, documents, audits and edits the open model through 117 tools, and it learns new ones as you use it. It asks for your approval before every change, and every change can be undone with Ctrl+Z.
 
 See [docs/PLAN.md](docs/PLAN.md) for the comparison with SketchPro, the roadmap and the architecture.
 
@@ -99,7 +99,9 @@ To publish an update: bump `<Version>` in both project files and push to `main`.
 
 
 **Openings and slabs:** find where pipes, ducts, cable trays and conduits (in this model or linked MEP models) cross walls, floors and beams, and add openings with your own opening family or a plain cut; cut notches or recesses into slab edges; add slab edges; lay out hollow core planks over a slab, room or outline with plank marks.
-**Title blocks:** list title block types and which sheets use them, find sheets with no title block or two, fill title block fields on many sheets at once (with {number} and {name} placeholders, and Project Information), swap the title block type, add missing ones and move them to the origin.
+**Title blocks:** list title block types and which sheets use them, find sheets with no title block or two, fill title block fields on many sheets at once (with {number} and {name} placeholders, and Project Information), swap the title block type, add missing ones and move them to the origin. Make a title block family from a DWG, copy title blocks, legends, drafting details or schedules from another Revit file, edit the fixed text inside a title block family, create and bind shared parameters (and add them to the title block family), place a legend on many sheets, and add or remove a revision on many sheets.
+
+**Exports:** DWG, IFC and NWC in internal, project base point or shared coordinates, DWG in mm, m or ft; one file per sheet named from a pattern such as '{number} - {name}', with a check that every file has exactly that name; the list of drawings (LOD) to Excel, checked against the exported files; a bill of quantities to Excel; schedule checks (empty cells, repeated marks, elements left out).
 
 **Detailing:** keynote tags, detail components (point and line-based, e.g. break lines, insulation, blocking), dimension strings through any grids, levels, reference planes, walls or family instances in plans and sections, and toposolids from survey points or a site outline.
 
@@ -144,7 +146,7 @@ src/SketchProMax/            The Revit add-in (net48 for Revit 2024, net8.0-wind
   Agent/SystemPrompt         Instructions the desktop app receives from the connector
   Bridge/BridgeServer        Per-Revit-window named-pipe server the connector talks to
   Revit/                     Main-thread dispatcher (ExternalEvent), helpers, Revit 2024 dependency loader
-  Tools/                     The 106 IRevitTool implementations and the registry (CodeTools compiles C# with Roslyn)
+  Tools/                     The 115 IRevitTool implementations and the registry (CodeTools compiles C# with Roslyn)
   UI/                        Settings dialog
   Settings/                  Per-user settings (approval switch, auto-update, firm standards)
   Update/Updater             Self-update from GitHub Releases

@@ -310,7 +310,7 @@ public sealed class CreateMepOpeningsTool : IRevitTool
             h = 2 * (HalfAlong(x, XYZ.BasisZ) + clearance);
             // Wall-hosted openings are placed by their sill/base; centre them on the service.
             var sill = instance.get_Parameter(BuiltInParameter.INSTANCE_SILL_HEIGHT_PARAM);
-            if (sill is { IsReadOnly: false }) sill.Set(x.Center.Z - level.Elevation - h / 2);
+            if (sill is { IsReadOnly: false }) sill.Set(x.Center.Z - level.ProjectElevation - h / 2);
         }
         else if (placement is FamilyPlacementType.WorkPlaneBased or FamilyPlacementType.OneLevelBasedHosted)
         {
@@ -325,7 +325,7 @@ public sealed class CreateMepOpeningsTool : IRevitTool
         {
             instance = doc.Create.NewFamilyInstance(x.Center, symbol, level, StructuralType.NonStructural);
             var offset = instance.get_Parameter(BuiltInParameter.INSTANCE_ELEVATION_PARAM) ?? instance.get_Parameter(BuiltInParameter.INSTANCE_FREE_HOST_OFFSET_PARAM);
-            if (offset is { IsReadOnly: false }) offset.Set(x.Center.Z - level.Elevation);
+            if (offset is { IsReadOnly: false }) offset.Set(x.Center.Z - level.ProjectElevation);
             w = x.Width + 2 * clearance;
             h = x.Height + 2 * clearance;
         }

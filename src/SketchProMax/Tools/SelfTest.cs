@@ -294,6 +294,8 @@ internal static class SelfTest
                 _ when run.StoppedBecause is not null => "not reached: " + run.StoppedBecause,
                 "batch_run_recipe" => "opens other model files; run it by hand on a folder of copies",
                 "load_family" => "needs a family file on this PC",
+                "copy_from_file" => "needs another Revit file on this PC",
+                "title_block_from_cad" => "needs a DWG title block on this PC",
                 "run_learned_tool" => "tested through save_as_tool",
                 "run_self_test" or "self_test_status" => "this test",
                 _ when run.Mode == Mode.Safe && tool.ModifiesModel => "changes the model; runs in the full self-test",
@@ -376,6 +378,7 @@ internal static class SelfTest
         new("list_types", _ => new { category = "Walls" }),
         new("list_revisions", _ => new { }),
         new("list_text_notes", _ => new { limit = 20 }),
+        new("check_schedule", c => new { schedule = c.Id(c.Schedule ?? throw new Skip("the model has no schedules")).ToString() }),
         new("read_schedule", c => new { schedule_id = c.Id(c.Schedule ?? throw new Skip("the model has no schedules")), max_rows = 20 }),
         new("select_elements", c => new { element_ids = new[] { c.Id(c.Wall ?? throw new Skip("the model has no walls")) }, zoom = false }),
         new("run_model_audit", _ => new { }),
@@ -397,6 +400,8 @@ internal static class SelfTest
     private static IEnumerable<Case> FileCases() =>
     [
         new("export_schedule", c => new { schedule_id = c.Id(c.Schedule ?? throw new Skip("the model has no schedules")), folder = c.Temp, file_name = "schedule" }),
+        new("export_drawing_list", c => new { folder = c.Temp, fields = new[] { "Drawn By" } }),
+        new("export_quantities", c => new { folder = c.Temp, categories = new[] { "Walls", "Floors" }, group_by = new[] { "level" } }) { Heavy = true },
         new("export_pdf", c => new { view_ids = new[] { c.Sheet?.Id.Value ?? c.PlanId }, folder = c.Temp, file_name = "sheets" }) { Heavy = true },
         new("export_files", c => new { format = "dwg", view_ids = new[] { c.PlanId }, folder = c.Temp, file_name = "plan" }) { Heavy = true },
         new("export_bcf", c => new { issues = new[] { new { title = "Self-test issue", element_ids = c.Wall is null ? Array.Empty<long>() : [c.Wall.Id.Value] } }, folder = c.Temp, file_name = "issues" }),
@@ -579,6 +584,22 @@ internal static class SelfTest
             double[] P(double x, double y, double z) => c.At(x, y).Append(c.P(z) + Math.Round(UnitUtils.ConvertFromInternalUnits(c.Level?.Elevation ?? 0, c.Unit), 4)).ToArray();
             return new { level = c.LevelName, points = new[] { P(0, 22000, 0), P(8000, 22000, 500), P(8000, 28000, 1200), P(0, 28000, 300), P(4000, 25000, 800) } };
         }),
+        new("create_project_parameters", c => new
+        {
+            shared_parameter_file = Path.Combine(c.Temp, "SharedParameters.txt"),
+            parameters = new[] { new { name = "Self-test param", type = "text", categories = new[] { "Sheets" } } },
+        }),
+        new("edit_family_text", c =>
+        {
+            var tb = c.Symbol(BuiltInCategory.OST_TitleBlocks) ?? throw new Skip("no title block family loaded");
+            return new { family = tb.FamilyName };
+        }) { Heavy = true },
+        new("place_legend_on_sheets", c =>
+        {
+            var legend = c.First<View>(v => !v.IsTemplate && v.ViewType == ViewType.Legend) ?? throw new Skip("the model has no legends");
+            return new { legend = legend.Name, sheet_numbers = new[] { "ST-999" } };
+        }, Setup: ["create_sheets", "set_sheet_title_block"]),
+        new("set_sheet_revisions", _ => new { revision = "Self-test revision", sheet_numbers = new[] { "ST-999" } }, Setup: ["create_sheets", "create_revision"]),
         new("dimension_openings", c => new { view_id = c.PlanId, wall_ids = new[] { c.Id(c.Wall ?? throw new Skip("the model has no walls")) } }, Setup: ["place_doors_windows"]),
         new("dimension_rooms", c => { Need(c.Room is not null, "the model has no placed rooms"); return new { view_id = c.PlanId, room_ids = new[] { c.Room!.Id.Value } }; }),
         new("add_spot_elevations", c => new { view_id = c.PlanId, element_ids = new[] { c.Id(c.Floor ?? throw new Skip("the model has no floors")) } }),

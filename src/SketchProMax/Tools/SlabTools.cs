@@ -267,7 +267,7 @@ public sealed class HollowCoreLayoutTool : IRevitTool
             var clipped = BooleanOperationsUtils.ExecuteBooleanOperation(areaSolid, Outlines.Extrude([rect]), BooleanOperationsType.Intersect);
             foreach (var piece in Outlines.Pieces(clipped))
             {
-                var loops = piece.Select(l => CurveLoop.CreateViaTransform(l, Transform.CreateTranslation(new XYZ(0, 0, level.Elevation)))).ToList();
+                var loops = piece.Select(l => CurveLoop.CreateViaTransform(l, Transform.CreateTranslation(new XYZ(0, 0, level.ProjectElevation)))).ToList();
                 Floor plank;
                 try { plank = Floor.Create(doc, loops, type.Id, level.Id); }
                 catch (Autodesk.Revit.Exceptions.ApplicationException) { continue; }

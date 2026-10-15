@@ -110,8 +110,8 @@ public sealed class CreateStairsTool : IRevitTool
         var doc = app.ActiveUIDocument.Document;
         var baseLevel = RevitHelpers.FindLevel(doc, args.String("base_level"));
         var topLevel = RevitHelpers.FindLevel(doc, args.String("top_level"));
-        if (topLevel.Elevation <= baseLevel.Elevation) return ToolResult.Error("The top level must be above the base level.");
-        var start = ViewKit.Point(doc, args.Raw["start"], baseLevel.Elevation);
+        if (topLevel.ProjectElevation <= baseLevel.ProjectElevation) return ToolResult.Error("The top level must be above the base level.");
+        var start = ViewKit.Point(doc, args.Raw["start"], baseLevel.ProjectElevation);
         var d = args.Raw["direction"];
         var dir = new XYZ(d[0].GetDouble(), d[1].GetDouble(), 0).Normalize();
 
@@ -206,7 +206,7 @@ public sealed class CreateRailingsTool : IRevitTool
         else
         {
             var level = RevitHelpers.FindLevel(doc, args.OptString("level"));
-            var pts = TypeKit.Points(doc, args.Raw["points"], level.Elevation);
+            var pts = TypeKit.Points(doc, args.Raw["points"], level.ProjectElevation);
             var loop = new CurveLoop();
             for (var i = 0; i + 1 < pts.Count; i++) loop.Append(Line.CreateBound(pts[i], pts[i + 1]));
             ids = [Railing.Create(doc, loop, type.Id, level.Id).Id.Value];
@@ -234,7 +234,7 @@ public sealed class CreateRoomSeparationLinesTool : IRevitTool
     {
         var doc = app.ActiveUIDocument.Document;
         if (ViewKit.ViewOrActive(doc, args.OptLong("view_id")) is not ViewPlan view) return ToolResult.Error("Use a plan view.");
-        var z = view.GenLevel?.Elevation ?? 0;
+        var z = view.GenLevel?.ProjectElevation ?? 0;
         var pts = TypeKit.Points(doc, args.Raw["points"], z);
         if (args.OptBool("closed") && pts.Count > 2) pts.Add(pts[0]);
         var curves = new CurveArray();
@@ -347,7 +347,7 @@ public sealed class CreateMepRunsTool : IRevitTool
         var doc = app.ActiveUIDocument.Document;
         var level = RevitHelpers.FindLevel(doc, args.OptString("level"));
         var pts = args.Raw["points"].EnumerateArray()
-            .Select(p => ViewKit.Point(doc, p) + new XYZ(0, 0, level.Elevation)).ToList();
+            .Select(p => ViewKit.Point(doc, p) + new XYZ(0, 0, level.ProjectElevation)).ToList();
         if (pts.Count < 2) return ToolResult.Error("Give at least two points.");
         var kind = args.String("kind");
 
@@ -445,7 +445,7 @@ public sealed class DimensionOpeningsTool : IRevitTool
 
         var created = new List<long>();
         var skipped = new List<string>();
-        var z = view.GenLevel?.Elevation ?? 0;
+        var z = view.GenLevel?.ProjectElevation ?? 0;
         using var t = RevitHelpers.StartTransaction(doc, "Dimension openings");
         foreach (var group in openings)
         {
@@ -519,7 +519,7 @@ public sealed class DimensionRoomsTool : IRevitTool
                 : new FilteredElementCollector(doc, view.Id).OfCategory(BuiltInCategory.OST_Rooms).OfType<Room>())
             .Where(r => r.Area > 0).ToList();
         var which = args.OptString("directions") ?? "both";
-        var z = view.GenLevel?.Elevation ?? 0;
+        var z = view.GenLevel?.ProjectElevation ?? 0;
         var created = new List<long>();
         var skipped = new List<string>();
 

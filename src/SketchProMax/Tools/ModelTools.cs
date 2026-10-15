@@ -125,8 +125,8 @@ public sealed class CreateWallsTool : IRevitTool
         using var t = RevitHelpers.StartTransaction(doc, "Create walls");
         foreach (var seg in args.Array("segments"))
         {
-            var a = Point(doc, seg.GetProperty("start"), level.Elevation);
-            var b = Point(doc, seg.GetProperty("end"), level.Elevation);
+            var a = Point(doc, seg.GetProperty("start"), level.ProjectElevation);
+            var b = Point(doc, seg.GetProperty("end"), level.ProjectElevation);
             if (a.DistanceTo(b) < doc.Application.ShortCurveTolerance) continue;
             var wall = Wall.Create(doc, Line.CreateBound(a, b), typeId, level.Id, height, 0, false, args.OptBool("structural"));
             created.Add(wall.Id.Value);

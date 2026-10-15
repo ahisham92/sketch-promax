@@ -240,7 +240,8 @@ public sealed class ExportPdfTool : IRevitTool
       "view_ids": {"type": "array", "items": {"type": "integer"}, "description": "Sheets or views, in order."},
       "file_name": {"type": "string", "description": "Name for the combined PDF (no extension)."},
       "combine": {"type": "boolean", "description": "One PDF (default true) or one file per sheet."},
-      "folder": {"type": "string"}
+      "folder": {"type": "string"},
+      "name_pattern": {"type": "string", "description": "One file per sheet named from the pattern, e.g. '{number} - {name}' or 'PRJ-{number}-{revision}'. Placeholders: {number} {name} {revision} {view} {date} {project}. The result checks each file name."}
     }
     """;
     public string[] Required => ["view_ids"];
@@ -258,6 +259,23 @@ public sealed class ExportPdfTool : IRevitTool
             FileName = args.OptString("file_name") ?? $"{doc.Title} - {DateTime.Now:yyyy-MM-dd HHmm}",
         };
         var ids = args.LongList("view_ids").Select(i => new ElementId(i)).ToList();
+        if (args.OptString("name_pattern") is { } pattern)
+        {
+            ExportNames.RequireUnique(doc, ids, pattern);
+            var naming = new List<object>();
+            options.Combine = true;
+            foreach (var id in ids)
+            {
+                var view = doc.GetElement(id) as View ?? throw new ArgumentException($"{id.Value} is not a view or sheet.");
+                var expected = ExportNames.For(doc, view, pattern);
+                options.FileName = expected;
+                var before = new HashSet<string>(Directory.GetFiles(folder), StringComparer.OrdinalIgnoreCase);
+                var started = DateTime.UtcNow;
+                if (!doc.Export(folder, [id], options)) { naming.Add(new { view = view.Name, expected = expected + ".pdf", found = (string?)null, ok = false }); continue; }
+                naming.Add(ExportNames.Settle(folder, expected, ".pdf", before, started, view.Name));
+            }
+            return ToolResult.Ok(new { folder, exported = ids.Count, naming });
+        }
         var ok = doc.Export(folder, ids, options);
         return ok ? ToolResult.Ok(new { folder, exported = ids.Count }) : ToolResult.Error("Revit reported the PDF export failed.");
     }
