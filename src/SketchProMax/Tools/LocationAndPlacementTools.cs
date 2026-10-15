@@ -316,11 +316,7 @@ public sealed class PlaceManyTool : IRevitTool
         switch (kind)
         {
             case "family":
-                symbol = new FilteredElementCollector(doc).OfClass(typeof(FamilySymbol)).Cast<FamilySymbol>()
-                    .FirstOrDefault(s => string.Equals($"{s.FamilyName}: {s.Name}", source, StringComparison.OrdinalIgnoreCase))
-                    ?? new FilteredElementCollector(doc).OfClass(typeof(FamilySymbol)).Cast<FamilySymbol>()
-                        .FirstOrDefault(s => string.Equals(s.Name, source, StringComparison.OrdinalIgnoreCase) || string.Equals(s.FamilyName, source, StringComparison.OrdinalIgnoreCase))
-                    ?? throw new ArgumentException($"No family type '{source}'. Use list_types or load_family.");
+                symbol = TypeMatch.Find(new FilteredElementCollector(doc).OfClass(typeof(FamilySymbol)).Cast<FamilySymbol>().ToList(), source, "family type");
                 if (!symbol.IsActive) symbol.Activate();
                 break;
             case "group":
