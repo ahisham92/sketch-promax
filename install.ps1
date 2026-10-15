@@ -1,5 +1,7 @@
 # Installs Sketch ProMax for the current Windows user (no admin rights needed):
-#   1. Copies the add-in into each installed Revit version's add-ins folder (2024 to 2027).
+#   1. Copies the add-in into each installed Revit version's add-ins folder (2024 to 2027). The manifest
+#      (SketchProMax.addin) loads SketchProMax.Loader.dll, which loads the newest installed SketchProMax.dll and can
+#      switch to an update without restarting Revit.
 #   2. Copies the MCP server to %LOCALAPPDATA%\SketchProMax\mcp.
 #   3. Registers it with the Claude desktop app, if installed, so you can chat at no extra cost.
 # Run .\build.ps1 first. Close Revit and the Claude desktop app before installing.
@@ -17,8 +19,10 @@ foreach ($v in 2024, 2025, 2026, 2027) {
     if (-not (Test-Path $src)) { continue }
     if (-not (Test-Path (Join-Path $env:ProgramFiles "Autodesk\Revit $v"))) { Write-Host "Revit $v not found, skipping."; continue }
     New-Item -ItemType Directory -Force -Path (Join-Path $addins "SketchProMax") | Out-Null
-    Copy-Item (Join-Path $src "SketchProMax.addin") $addins -Force
+    if (-not (Test-Path (Join-Path $src "SketchProMax.Loader.dll"))) { throw "dist\Revit$v has no SketchProMax.Loader.dll. Run .\build.ps1 again." }
+    # Files first, manifest last, so Revit never finds a manifest naming a loader that isn't there yet.
     Get-ChildItem $src -Exclude "SketchProMax.addin" | Copy-Item -Destination (Join-Path $addins "SketchProMax") -Recurse -Force
+    Copy-Item (Join-Path $src "SketchProMax.addin") $addins -Force
     Write-Host "Installed add-in for Revit $v" -ForegroundColor Green
 }
 

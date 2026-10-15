@@ -1,0 +1,49 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The thin add-in Revit loads (SketchProMax.addin points here). It owns the ribbon and the button commands, and loads
+    the newest installed core (SketchProMax.dll) next to itself or under %LOCALAPPDATA%\SketchProMax\versions, so an update
+    can be switched to without restarting Revit.
+    Its AssemblyVersion never changes: every core version binds to whichever copy of the loader Revit loaded.
+    Build per Revit release like the core:  dotnet build -c Release -p:RevitVersion=2026
+  -->
+  <PropertyGroup>
+    <RevitVersion Condition="'$(RevitVersion)' == ''">2025</RevitVersion>
+    <TargetFramework Condition="'$(RevitVersion)' &lt; '2025'">net48</TargetFramework>
+    <TargetFramework Condition="'$(RevitVersion)' &gt;= '2025' AND '$(RevitVersion)' &lt; '2027'">net8.0-windows</TargetFramework>
+    <TargetFramework Condition="'$(RevitVersion)' &gt;= '2027'">net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>SketchProMax.Loader</RootNamespace>
+    <AssemblyName>SketchProMax.Loader</AssemblyName>
+    <!-- Fixed for good: the core references the loader, and every core version must bind to the loaded copy. -->
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <FileVersion>0.26.0.0</FileVersion>
+    <Version>0.26.0</Version>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <OutputPath>bin\$(Configuration)\Revit$(RevitVersion)\</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <DefineConstants>$(DefineConstants);REVIT$(RevitVersion)</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Nice3point.Revit.Api.RevitAPI" Version="$(RevitVersion).*" ExcludeAssets="runtime" PrivateAssets="all" />
+    <PackageReference Include="Nice3point.Revit.Api.RevitAPIUI" Version="$(RevitVersion).*" ExcludeAssets="runtime" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' == 'net48'">
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+    <PackageReference Include="PolySharp" Version="1.15.0" PrivateAssets="all" IncludeAssets="runtime; build; native; contentfiles; analyzers" />
+  </ItemGroup>
+
+  <!-- The product logo, for the main buttons. -->
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\assets\logo\sketch-promax-16.png" LogicalName="SketchProMax.Loader.logo-16.png" />
+    <EmbeddedResource Include="..\..\assets\logo\sketch-promax-32.png" LogicalName="SketchProMax.Loader.logo-32.png" />
+    <EmbeddedResource Include="..\..\assets\logo\sketch-promax-64.png" LogicalName="SketchProMax.Loader.logo-64.png" />
+  </ItemGroup>
+
+</Project>

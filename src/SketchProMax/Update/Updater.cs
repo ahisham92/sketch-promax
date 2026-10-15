@@ -8,14 +8,17 @@ using System.Xml.Linq;
 namespace SketchProMax.Update;
 
 /// <summary>
-/// Keeps Sketch ProMax up to date without reinstalling.
+/// Keeps Sketch ProMax up to date without reinstalling, and without restarting Revit.
 ///
-/// On Revit start it asks GitHub for the latest release. When a newer one exists it downloads the zip to
+/// It asks GitHub for the latest release at Revit start and hourly. When a newer one exists it downloads the zip to
 /// %LOCALAPPDATA%\SketchProMax\updates, unpacks it into %LOCALAPPDATA%\SketchProMax\versions\&lt;version&gt;, and:
-///   - points each installed Revit version's SketchProMax.addin at the new DLLs. Revit keeps the running
-///     DLLs locked, so nothing is overwritten; the new version loads the next time Revit starts.
+///   - tells the loader (SketchProMax.Loader, which Revit loads) that a newer core is ready. The loader switches to it
+///     the next time Revit is idle with no job running: the old core stops, the new one starts. Nothing is overwritten;
+///     the old DLLs stay loaded, unused, until Revit closes.
+///   - points each installed Revit version's SketchProMax.addin at the new version's loader, for the next Revit start.
 ///   - replaces the desktop-app connector (SketchProMax.Mcp.exe). Windows lets a running exe be renamed, so
-///     the old one is moved aside and the new one copied in; the Claude app uses it after its next restart.
+///     the old one is moved aside and the new one copied in; the Claude app uses it after its next restart. The tool
+///     list itself reaches the Claude app straight away: the new core rewrites tools.json, which the connector watches.
 /// Settings live in %APPDATA%\SketchProMax and are never touched.
 /// </summary>
 public static class Updater
@@ -37,6 +40,15 @@ public static class Updater
 
     public static string CurrentText => $"{Current.Major}.{Current.Minor}.{Current.Build}";
 
+    private const string LoaderContractKey = "SketchProMax.Loader.Contract";
+    private const string LoaderPendingKey = "SketchProMax.Loader.Pending";
+    private const string LoaderPathKey = "SketchProMax.Loader.Path";
+    private const string LoaderDll = "SketchProMax.Loader.dll";
+    private const string LoaderClass = "SketchProMax.Loader.LoaderApp";
+
+    /// <summary>True when the loader runs this core, so a new version can be switched to without restarting Revit.</summary>
+    public static bool CanSwitchLive => AppDomain.CurrentDomain.GetData(LoaderContractKey) is int;
+
     /// <summary>Version downloaded and ready for the next Revit start, if any.</summary>
     public static string? Staged => LoadState().Staged is { } s && Parse(s) > Current ? s : null;
 
@@ -45,7 +57,9 @@ public static class Updater
     {
         var state = LoadState();
         if (Staged is { } staged)
-            return $"Sketch ProMax {staged} is downloaded. Close and reopen Revit, and restart the Claude desktop app, to start using it.";
+            return CanSwitchLive
+                ? $"Sketch ProMax {staged} is downloaded and is switched to as soon as Revit is idle with no job running. No restart needed."
+                : $"Sketch ProMax {staged} is downloaded. Close and reopen Revit, and restart the Claude desktop app, to start using it.";
         if (state.LastError is { } error)
             return $"Sketch ProMax {CurrentText}. The last update check failed: {error}";
         return state.LastCheck is { } last
@@ -53,9 +67,16 @@ public static class Updater
             : $"Sketch ProMax {CurrentText}.";
     }
 
-    /// <summary>Checks for and stages an update. Returns the newly staged version, or null when there is nothing new.</summary>
-    public static async Task<string?> CheckAsync(bool force, CancellationToken ct = default)
+    /// <summary>
+    /// Checks for and stages an update, reporting each stage to <paramref name="progress"/>. When the loader runs this core
+    /// it is then asked to switch to the new version (the switch itself happens on Revit's thread, later). Returns the
+    /// newly staged version, or null when there is nothing new.
+    /// </summary>
+    public static async Task<string?> CheckAsync(bool force, UpdateProgress? progress = null, CancellationToken ct = default)
     {
+        progress ??= new UpdateProgress();
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, progress.Cancellation.Token);
+        ct = linked.Token;
         // Only one Revit window updates at a time. A lock file, because a mutex can't be released after an await.
         FileStream? gate;
         try
@@ -63,42 +84,63 @@ public static class Updater
             Directory.CreateDirectory(LocalRoot);
             gate = new FileStream(Path.Combine(LocalRoot, "update.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return null; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            progress.Report(UpdateStage.Failed, "Another Revit window is updating Sketch ProMax right now. This window follows it when it is done.");
+            return null;
+        }
 
         try
         {
             CleanUp();
             var state = LoadState();
-            if (!force && state.LastCheck is { } last && DateTime.UtcNow - last < TimeSpan.FromHours(1)) return null;
+            if (!force && state.LastCheck is { } last && DateTime.UtcNow - last < TimeSpan.FromHours(1))
+            {
+                progress.Report(UpdateStage.Idle);
+                return null;
+            }
 
+            progress.Report(UpdateStage.Checking, "Asking GitHub for the latest release…");
             var release = await LatestReleaseAsync(ct).ConfigureAwait(false);
             state.LastCheck = DateTime.UtcNow;
             state.LastError = null;
             if (release is null || Parse(release.Version) <= Current)
             {
                 SaveState(state);
+                progress.Report(UpdateStage.UpToDate, $"Sketch ProMax {CurrentText} is the latest version.", CurrentText);
                 return null;
             }
             var stagedFolder = Path.Combine(VersionsFolder, release.Version);
             if (release.Version == state.Staged && Directory.Exists(stagedFolder))
             {
-                // Already downloaded. A reinstall or repair may have pointed a manifest elsewhere since; point it back.
+                // Already downloaded (by this or another Revit window). A reinstall or repair may have pointed a manifest
+                // elsewhere since; point it back, and switch this window over too.
                 if (!AllManifestsPointAt(stagedFolder)) PointAddinsAt(stagedFolder);
                 SaveState(state);
+                Apply(stagedFolder, release.Version, progress);
                 return null;
             }
 
-            var folder = await DownloadAndUnpackAsync(release, ct).ConfigureAwait(false);
+            progress.Report(UpdateStage.Downloading, $"Downloading Sketch ProMax {release.Version}…", release.Version);
+            var folder = await DownloadAndUnpackAsync(release, progress, ct).ConfigureAwait(false);
+            progress.Report(UpdateStage.Applying, "Installing…");
             if (PointAddinsAt(folder) == 0)
             {
                 state.LastError = "no installed Revit add-in was found to update. Run Install.cmd once.";
                 SaveState(state);
+                progress.Report(UpdateStage.Failed, "No installed Sketch ProMax add-in was found to update. Run Install.cmd once.");
                 return null;
             }
             ReplaceConnector(folder);
             state.Staged = release.Version;
             SaveState(state);
+            Apply(folder, release.Version, progress);
             return release.Version;
+        }
+        catch (OperationCanceledException) when (progress.Cancellation.IsCancellationRequested)
+        {
+            progress.Report(UpdateStage.Cancelled, "The update was cancelled. Nothing changed; it is offered again at the next check.");
+            return null;
         }
         catch (Exception ex) when (ex is HttpRequestException or IOException or UnauthorizedAccessException
                                        or JsonException or InvalidDataException or OperationCanceledException or InvalidOperationException
@@ -106,14 +148,79 @@ public static class Updater
         {
             var state = LoadState();
             state.LastCheck = DateTime.UtcNow;
-            state.LastError = ex.Message;
+            state.LastError = ex is OperationCanceledException ? "the download took too long" : ex.Message;
             SaveState(state);
+            progress.Report(UpdateStage.Failed, $"The update didn't finish: {state.LastError}. Nothing changed; it is tried again later.");
             return null;
         }
         finally
         {
             gate.Dispose();
         }
+    }
+
+    /// <summary>
+    /// Hands a downloaded version to the loader, which switches to it when Revit is idle; the switch reports "updated"
+    /// back through <see cref="CoreEntry"/>. Without the loader (or without a build for this Revit), a restart is needed.
+    /// </summary>
+    private static void Apply(string versionFolder, string version, UpdateProgress progress)
+    {
+        var core = Path.Combine(versionFolder, "Revit" + App.RevitYear, "SketchProMax.dll");
+        if (CanSwitchLive && App.RevitYear.Length > 0 && File.Exists(core))
+        {
+            progress.Report(UpdateStage.Applying, "Switching over as soon as Revit is idle and no job is running…", version);
+            AppDomain.CurrentDomain.SetData(LoaderPendingKey, core);
+        }
+        else
+        {
+            progress.Report(UpdateStage.RestartNeeded,
+                $"Sketch ProMax {version} is installed. Restart Revit to finish (your work is not interrupted until then).", version);
+        }
+    }
+
+    /// <summary>
+    /// Manifests written by 0.25.x (or by an older install) load SketchProMax.dll directly. Points them at the loader next
+    /// to it, so from the next Revit start updates switch over without a restart. Returns how many were changed.
+    /// </summary>
+    public static int MoveManifestsToLoader()
+    {
+        var count = 0;
+        if (!Directory.Exists(RevitAddinsRoot)) return 0;
+        foreach (var revitFolder in Directory.GetDirectories(RevitAddinsRoot))
+        {
+            var manifest = Path.Combine(revitFolder, "SketchProMax.addin");
+            try
+            {
+                if (!File.Exists(manifest)) continue;
+                var xml = XDocument.Load(manifest);
+                var assembly = xml.Descendants("Assembly").FirstOrDefault();
+                var path = assembly?.Value?.Trim() ?? "";
+                if (assembly is null || !Path.GetFileName(path).Equals("SketchProMax.dll", StringComparison.OrdinalIgnoreCase)) continue;
+                var full = Path.IsPathRooted(path) ? path : Path.Combine(revitFolder, path);
+                var loader = Path.Combine(Path.GetDirectoryName(full) ?? "", LoaderDll);
+                if (!File.Exists(loader)) continue;
+                assembly.Value = Path.IsPathRooted(path) ? loader : Path.Combine(Path.GetDirectoryName(path) ?? "", LoaderDll);
+                SetClass(xml, LoaderClass);
+                Save(xml, manifest);
+                count++;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Xml.XmlException or ArgumentException) { }
+        }
+        return count;
+    }
+
+    private static void SetClass(XDocument xml, string fullClassName)
+    {
+        var element = xml.Descendants("FullClassName").FirstOrDefault();
+        if (element is not null) element.Value = fullClassName;
+    }
+
+    private static void Save(XDocument xml, string manifest)
+    {
+        var temp = manifest + ".new";
+        xml.Save(temp);
+        File.Copy(temp, manifest, true);
+        File.Delete(temp);
     }
 
     private sealed record Release(string Version, string ZipUrl, string? Sha256);
@@ -213,7 +320,7 @@ public static class Updater
         catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException) { return false; }
     }
 
-    private static async Task<string> DownloadAndUnpackAsync(Release release, CancellationToken ct)
+    private static async Task<string> DownloadAndUnpackAsync(Release release, UpdateProgress progress, CancellationToken ct)
     {
         Directory.CreateDirectory(UpdatesFolder);
         var zip = Path.Combine(UpdatesFolder, $"SketchProMax-{release.Version}.zip");
@@ -224,10 +331,23 @@ public static class Updater
             using var http = CreateClient();
             using var response = await http.GetAsync(release.ZipUrl, HttpCompletionOption.ResponseHeadersRead, download.Token).ConfigureAwait(false);
             response.EnsureSuccessStatusCode();
+            var total = response.Content.Headers.ContentLength;
             using var body = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
             using var file = File.Create(zip);
-            await body.CopyToAsync(file, 81920, download.Token).ConfigureAwait(false);
+            var buffer = new byte[81920];
+            long done = 0;
+            progress.ReportBytes(0, total);
+            int read;
+            while ((read = await body.ReadAsync(buffer, 0, buffer.Length, download.Token).ConfigureAwait(false)) > 0)
+            {
+                await file.WriteAsync(buffer, 0, read, download.Token).ConfigureAwait(false);
+                done += read;
+                progress.ReportBytes(done, total);
+            }
         }
+        // From here on the update completes: cancelling half an unpack would only leave a mess.
+        ct = CancellationToken.None;
+        progress.Report(UpdateStage.Verifying, "Checking the download is complete and undamaged…");
 
         if (release.Sha256 is { } expected)
         {
@@ -246,6 +366,7 @@ public static class Updater
                 throw new InvalidDataException("The downloaded update is incomplete (no SketchProMax.dll). It will be retried later.");
         }
 
+        progress.Report(UpdateStage.Unpacking, $"Unpacking Sketch ProMax {release.Version}…");
         var target = Path.Combine(VersionsFolder, release.Version);
         var temp = target + ".partial";
         if (Directory.Exists(temp)) Directory.Delete(temp, true);
@@ -273,11 +394,20 @@ public static class Updater
             var xml = XDocument.Load(manifest);
             var assembly = xml.Descendants("Assembly").FirstOrDefault();
             if (assembly is null) continue;
-            assembly.Value = dll;
-            var temp = manifest + ".new";
-            xml.Save(temp);
-            File.Copy(temp, manifest, true);
-            File.Delete(temp);
+            // Packages from 0.26 on carry the loader: the manifest loads it, and it loads the newest core. Older packages
+            // only have the core, which is then loaded directly as before.
+            var loader = Path.Combine(versionFolder, "Revit" + Path.GetFileName(revitFolder), LoaderDll);
+            if (File.Exists(loader))
+            {
+                assembly.Value = loader;
+                SetClass(xml, LoaderClass);
+            }
+            else
+            {
+                assembly.Value = dll;
+                SetClass(xml, "SketchProMax.App");
+            }
+            Save(xml, manifest);
             count++;
         }
         return count;
@@ -320,6 +450,7 @@ public static class Updater
 
         if (!Directory.Exists(VersionsFolder)) return;
         var running = Path.GetDirectoryName(typeof(Updater).Assembly.Location) ?? "";
+        var loaderPath = AppDomain.CurrentDomain.GetData(LoaderPathKey) as string ?? "";
         var keep = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { CurrentText };
         if (LoadState().Staged is { } staged) keep.Add(staged);
         // Any Revit version may load a different build; never delete one a manifest still points at.
@@ -334,6 +465,7 @@ public static class Updater
             }
             if (keep.Contains(name)) continue;
             if (IsUnder(running, folder)) continue;
+            if (loaderPath.Length > 0 && IsUnder(loaderPath, folder)) continue;
             if (referenced.Any(a => IsUnder(a, folder))) continue;
             // Renaming fails while Revit has a DLL in it loaded, so a folder in use is never half deleted.
             var doomed = folder + ".del";

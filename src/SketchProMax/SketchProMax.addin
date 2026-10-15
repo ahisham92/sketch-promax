@@ -2,8 +2,8 @@
 <RevitAddIns>
   <AddIn Type="Application">
     <Name>Sketch ProMax</Name>
-    <Assembly>SketchProMax\SketchProMax.dll</Assembly>
-    <FullClassName>SketchProMax.App</FullClassName>
+    <Assembly>SketchProMax\SketchProMax.Loader.dll</Assembly>
+    <FullClassName>SketchProMax.Loader.LoaderApp</FullClassName>
     <ClientId>6f3c2b1e-8a47-4d2f-9c51-3e7b9d0a4f12</ClientId>
     <VendorId>SPMX</VendorId>
     <VendorDescription>Sketch ProMax: AI agent for Revit</VendorDescription>

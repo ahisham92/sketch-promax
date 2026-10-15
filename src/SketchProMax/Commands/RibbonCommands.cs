@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.IO;
 using Autodesk.Revit.Attributes;
 using Autodesk.Revit.DB;
 using Autodesk.Revit.UI;
@@ -13,71 +15,170 @@ public sealed class AlwaysAvailable : IExternalCommandAvailability
     public bool IsCommandAvailable(UIApplication applicationData, CategorySet selectedCategories) => true;
 }
 
+// The command classes of the ribbon before the loader. Kept so a ribbon built without the loader (it is missing next to
+// this DLL) still has Status, Settings and Self-test; the loader's buttons reach the same code through CoreEntry.
+
 [Transaction(TransactionMode.Manual)]
 public sealed class SettingsCommand : IExternalCommand
 {
-    public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
-    {
-        new SettingsWindow().ShowDialog();
-        return Result.Succeeded;
-    }
+    public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements) => CoreCommands.Settings();
 }
 
 [Transaction(TransactionMode.Manual)]
 public sealed class StatusCommand : IExternalCommand
 {
-    public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
-    {
-        var doc = commandData.Application.ActiveUIDocument?.Document;
-        ClaudeRegistration.Ensure();
-        var registered = ClaudeRegistration.Registered();
-        var dialog = new TaskDialog("Sketch ProMax")
-        {
-            MainInstruction = App.Bridge?.IsListening == true ? "Sketch ProMax is ready" : "Sketch ProMax is not connected",
-            MainContent =
-                (doc is null ? "Open a model, then " : $"Active model: {doc.Title}\n\n") +
-                "chat in the Claude desktop app, for example: \"What's in my Revit model?\"\n\n" +
-                "If the Revit tools don't appear in Claude, quit Claude completely (system tray > Quit) and start it again.",
-            FooterText = Updater.Describe(),
-            ExpandedContent = $"Revit {commandData.Application.Application.VersionNumber}, session {BridgeServer.SessionId}\n\n" +
-                              "Registered with the Claude app in:\n" +
-                              (registered.Count > 0 ? string.Join("\n", registered) : "(nowhere yet - is the Claude desktop app installed?)"),
-        };
-        dialog.AddCommandLink(TaskDialogCommandLinkId.CommandLink1, "Check for updates now");
-        if (dialog.Show() != TaskDialogResult.CommandLink1) return Result.Succeeded;
-
-        // Downloading a new version can take a minute on slow connections, so it runs in the background and the
-        // result is shown once Revit is idle again.
-        _ = Task.Run(async () =>
-        {
-            string message;
-            try
-            {
-                var staged = await Updater.CheckAsync(force: true).ConfigureAwait(false);
-                message = staged is null ? Updater.Describe() : App.UpdateReadyMessage(staged);
-            }
-            catch (Exception ex) { message = $"The update check failed: {ex.Message}"; }
-            try
-            {
-                await App.Dispatcher.InvokeAsync(_ =>
-                {
-                    TaskDialog.Show("Sketch ProMax", message);
-                    return true;
-                }).ConfigureAwait(false);
-            }
-            catch (Exception) { /* Revit is closing; Status shows the result next time */ }
-        });
-        TaskDialog.Show("Sketch ProMax", "Checking for updates in the background. You can keep working; the result appears when it is done.");
-        return Result.Succeeded;
-    }
+    public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements) => CoreCommands.Status(commandData.Application);
 }
 
 [Transaction(TransactionMode.Manual)]
 public sealed class SelfTestCommand : IExternalCommand
 {
-    public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
+    public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements) => CoreCommands.SelfTest(commandData.Application);
+}
+
+/// <summary>What each ribbon button does. Runs on Revit's thread, inside the button's command.</summary>
+internal static class CoreCommands
+{
+    public const string ReleasesUrl = "https://github.com/" + Updater.Repository + "/releases/latest";
+    public const string HelpUrl = "https://github.com/" + Updater.Repository + "#readme";
+
+    public static Result Settings()
     {
-        var app = commandData.Application;
+        var window = new SettingsWindow();
+        Brand.Prepare(window);
+        window.ShowDialog();
+        return Result.Succeeded;
+    }
+
+    public static Result Status(UIApplication app)
+    {
+        var doc = app.ActiveUIDocument?.Document;
+        ClaudeRegistration.Ensure();
+        var registered = ClaudeRegistration.Registered();
+        var (state, _, detail) = Connection.Describe();
+        var dialog = new TaskDialog("Sketch ProMax")
+        {
+            MainInstruction = state switch
+            {
+                "connected" => "Claude is connected to this Revit window",
+                "ready" => "Ready: waiting for Claude",
+                "error" => "Sketch ProMax can't accept connections",
+                _ => "The Claude desktop app is not connected",
+            },
+            MainContent = detail + "\n\n" +
+                (doc is null ? "Open a model, then " : $"Active model: {doc.Title}\n\n") +
+                "chat in the Claude desktop app, for example: \"What's in my Revit model?\"\n\n" +
+                "If the Revit tools don't appear in Claude, quit Claude completely (system tray > Quit) and start it again.",
+            FooterText = Updater.Describe(),
+            ExpandedContent = $"Revit {app.Application.VersionNumber}, session {BridgeServer.SessionId}, Sketch ProMax {Updater.CurrentText}" +
+                              (Updater.CanSwitchLive ? " (updates without restarting)" : "") + "\n\n" +
+                              "Registered with the Claude app in:\n" +
+                              (registered.Count > 0 ? string.Join("\n", registered) : "(nowhere yet - is the Claude desktop app installed?)"),
+            CommonButtons = TaskDialogCommonButtons.Close,
+        };
+        dialog.AddCommandLink(TaskDialogCommandLinkId.CommandLink1, "Copy a starter prompt", "A good first message for Claude, on the clipboard.");
+        dialog.AddCommandLink(TaskDialogCommandLinkId.CommandLink2, "Open Claude");
+        dialog.AddCommandLink(TaskDialogCommandLinkId.CommandLink3, "Check for updates now");
+        switch (dialog.Show())
+        {
+            case TaskDialogResult.CommandLink1: return CopyPrompt(app);
+            case TaskDialogResult.CommandLink2: return OpenClaude();
+            case TaskDialogResult.CommandLink3: return CheckForUpdates();
+            default: return Result.Succeeded;
+        }
+    }
+
+    public static string StarterPrompt(UIApplication app)
+    {
+        var doc = app.ActiveUIDocument?.Document;
+        var model = doc is null ? "the model I have open in Revit" : $"the Revit model \"{doc.Title}\"";
+        return $"I'm working in Revit {app.Application.VersionNumber} on {model}, with Sketch ProMax connected.\n" +
+               "1. Look at the model first (get_model_context) and give me a short overview: levels, main element counts by category, " +
+               "views and sheets, and anything that looks wrong or unfinished.\n" +
+               "2. Then suggest five useful things you could do for me in this model (documentation, checks, quantities or modeling), " +
+               "and wait for me to choose.\n" +
+               "Ask me before changing anything, and keep each change undoable.";
+    }
+
+    public static Result CopyPrompt(UIApplication app)
+    {
+        var copied = ClipboardText.TrySet(StarterPrompt(app));
+        var dialog = new TaskDialog("Sketch ProMax")
+        {
+            MainInstruction = copied ? "Starter prompt copied" : "The clipboard is busy",
+            MainContent = copied
+                ? "Paste it (Ctrl+V) into a new chat in the Claude desktop app."
+                : "Another program is holding the clipboard. Try again in a moment.",
+            CommonButtons = TaskDialogCommonButtons.Close,
+        };
+        if (copied) dialog.AddCommandLink(TaskDialogCommandLinkId.CommandLink1, "Open Claude now");
+        if (dialog.Show() == TaskDialogResult.CommandLink1) return OpenClaude();
+        return copied ? Result.Succeeded : Result.Failed;
+    }
+
+    public static Result OpenClaude()
+    {
+        if (ClaudeLauncher.Start(out var how)) return Result.Succeeded;
+        TaskDialog.Show("Sketch ProMax", "The Claude desktop app wasn't found on this PC. Install it from claude.ai/download " +
+                                          $"(or the Microsoft Store), sign in, then click Open Claude again.\n\n{how}");
+        return Result.Failed;
+    }
+
+    public static Result Job()
+    {
+        var running = Jobs.Running;
+        if (running is null && Tools.SelfTest.IsRunning) return SelfTest(null);
+        var job = running ?? Jobs.Find(null);
+        if (job is null)
+        {
+            TaskDialog.Show("Sketch ProMax", "No job has run in this Revit window yet. When Claude runs a tool, it shows here with its progress.");
+            return Result.Succeeded;
+        }
+        var dialog = new TaskDialog("Sketch ProMax job")
+        {
+            MainInstruction = running is null ? $"Last job: {job.Tool}" : $"Running: {job.Tool}",
+            MainContent = Jobs.Status(job).Text,
+            CommonButtons = TaskDialogCommonButtons.Close,
+        };
+        if (running is not null) dialog.AddCommandLink(TaskDialogCommandLinkId.CommandLink1, "Ask it to stop");
+        if (dialog.Show() == TaskDialogResult.CommandLink1) return CancelJob();
+        return Result.Succeeded;
+    }
+
+    public static Result CancelJob()
+    {
+        if (Jobs.Running is null && Tools.SelfTest.IsRunning)
+        {
+            Tools.SelfTest.Stop();
+            TaskDialog.Show("Sketch ProMax", "The self-test stops after its current step.");
+            return Result.Succeeded;
+        }
+        var answer = CancelJobTool.Cancel(new Tools.ToolArgs(new Dictionary<string, System.Text.Json.JsonElement>()));
+        TaskDialog.Show("Sketch ProMax", answer.Text.Contains("nothing to cancel")
+            ? "Nothing is running."
+            : "Asked the job to stop. It stops at its next check; what it finished so far is kept as one Undo step.");
+        return Result.Succeeded;
+    }
+
+    public static Result QuickFolder()
+    {
+        var folder = Tools.Recipes.Folder;
+        try
+        {
+            Directory.CreateDirectory(folder);
+            Directory.CreateDirectory(Tools.LearnedTools.Folder);
+            Process.Start(new ProcessStartInfo("explorer.exe", $"\"{Path.GetDirectoryName(folder)}\"") { UseShellExecute = true })?.Dispose();
+            return Result.Succeeded;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
+        {
+            TaskDialog.Show("Sketch ProMax", $"Couldn't open {folder}: {ex.Message}");
+            return Result.Failed;
+        }
+    }
+
+    public static Result SelfTest(UIApplication? app)
+    {
         if (Tools.SelfTest.IsRunning)
         {
             var running = new TaskDialog("Sketch ProMax self-test")
@@ -90,7 +191,7 @@ public sealed class SelfTestCommand : IExternalCommand
             if (running.Show() == TaskDialogResult.CommandLink1) Tools.SelfTest.Stop();
             return Result.Succeeded;
         }
-        if (app.ActiveUIDocument is null)
+        if (app?.ActiveUIDocument is null)
         {
             TaskDialog.Show("Sketch ProMax", "Open a model first. A copy of a real project gives the most useful result.");
             return Result.Cancelled;
@@ -119,5 +220,155 @@ public sealed class SelfTestCommand : IExternalCommand
             FooterText = report.File is null ? "" : "Send the report file to Claude (attach it in the chat) to get any failures fixed.",
         }.Show());
         return Result.Succeeded;
+    }
+
+    public static Result UpdateInfo()
+    {
+        if (UpdateWindow.ShowCurrent()) return Result.Succeeded;
+        var dialog = new TaskDialog("Sketch ProMax")
+        {
+            MainInstruction = $"Sketch ProMax {Updater.CurrentText}",
+            MainContent = Updater.Describe() + (Updater.CanSwitchLive
+                ? "\n\nUpdates install while Revit stays open and switch over as soon as no job is running. No restart needed."
+                : ""),
+            CommonButtons = TaskDialogCommonButtons.Close,
+        };
+        dialog.AddCommandLink(TaskDialogCommandLinkId.CommandLink1, "Check for updates now");
+        dialog.AddCommandLink(TaskDialogCommandLinkId.CommandLink2, "What's new");
+        return dialog.Show() switch
+        {
+            TaskDialogResult.CommandLink1 => CheckForUpdates(),
+            TaskDialogResult.CommandLink2 => OpenUrl(ReleasesUrl),
+            _ => Result.Succeeded,
+        };
+    }
+
+    /// <summary>Checks now, in the background, with the progress window open from the start.</summary>
+    public static Result CheckForUpdates()
+    {
+        App.CheckForUpdatesInteractive();
+        return Result.Succeeded;
+    }
+
+    public static Result OpenUrl(string url)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true })?.Dispose();
+            return Result.Succeeded;
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            TaskDialog.Show("Sketch ProMax", $"Open this address in your browser:\n{url}");
+            return Result.Failed;
+        }
+    }
+}
+
+/// <summary>Is the Claude desktop app talking to this Revit window? Answered from memory for the ribbon.</summary>
+internal static class Connection
+{
+    private static volatile bool _claudeRunning;
+    private static DateTime _checked = DateTime.MinValue;
+    private static int _checking;
+
+    /// <summary>(state, short text, detail). State: connected, ready, offline or error.</summary>
+    public static (string State, string Short, string Detail) Describe()
+    {
+        RefreshProcessState();
+        var bridge = App.Bridge;
+        if (bridge is null) return ("offline", "starting", "Sketch ProMax is starting in this Revit window.");
+        if (!bridge.IsListening)
+            return ("error", "no link", "Sketch ProMax could not open its connection point in this Revit window. It keeps retrying; " +
+                                        "if this stays, restart Revit.");
+        var last = BridgeServer.LastContact;
+        var lastJob = Jobs.Find(null);
+        var jobText = lastJob is null ? "" : $" Last tool call: {lastJob.Tool} at {lastJob.Queued.ToLocalTime():HH:mm}.";
+        if (last is { } t && DateTime.UtcNow - t < TimeSpan.FromMinutes(10))
+            return ("connected", "connected", $"Claude last talked to this Revit window at {t.ToLocalTime():HH:mm} ({Ago(t)}).{jobText}");
+        if (_claudeRunning)
+            return ("ready", "ready", "The Claude desktop app is running and can reach this Revit window. Ask it something about the model." +
+                                      (last is { } older ? $" Last contact {Ago(older)}." : "") + jobText);
+        return ("offline", "not running", "The Claude desktop app is not running. Click Open Claude, or start it from the Start menu.");
+    }
+
+    private static string Ago(DateTime utc)
+    {
+        var span = DateTime.UtcNow - utc;
+        if (span.TotalSeconds < 60) return $"{Math.Max(1, (int)span.TotalSeconds)} s ago";
+        if (span.TotalMinutes < 60) return $"{(int)span.TotalMinutes} min ago";
+        return $"{(int)span.TotalHours} h ago";
+    }
+
+    /// <summary>Looks for the Claude app's process at most every 10 s, off Revit's thread.</summary>
+    private static void RefreshProcessState()
+    {
+        if (DateTime.UtcNow - _checked < TimeSpan.FromSeconds(10)) return;
+        if (Interlocked.Exchange(ref _checking, 1) == 1) return;
+        _checked = DateTime.UtcNow;
+        Task.Run(() =>
+        {
+            try
+            {
+                var processes = Process.GetProcessesByName("claude");
+                _claudeRunning = processes.Length > 0;
+                foreach (var p in processes) p.Dispose();
+            }
+            catch (Exception) { /* keep the last answer */ }
+            finally { Interlocked.Exchange(ref _checking, 0); }
+        });
+    }
+}
+
+/// <summary>Starts the Claude desktop app: the normal installer's exe, else the Microsoft Store build, else its link handler.</summary>
+internal static class ClaudeLauncher
+{
+    public static bool Start(out string tried)
+    {
+        var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        var files = new[]
+        {
+            Path.Combine(local, "AnthropicClaude", "claude.exe"),
+            Path.Combine(local, "Programs", "Claude", "Claude.exe"),
+            Path.Combine(local, "Programs", "claude-desktop", "Claude.exe"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Claude", "Claude.exe"),
+        };
+        var log = new List<string>();
+        tried = "";
+        foreach (var file in files)
+            if (File.Exists(file) && Launch(file, null, log)) return true;
+
+        // Microsoft Store (MSIX) build: started through its package family name.
+        var packages = Path.Combine(local, "Packages");
+        try
+        {
+            if (Directory.Exists(packages))
+            {
+                var family = new System.Text.RegularExpressions.Regex(@"(^|\.)Claude_[a-z0-9]+$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                foreach (var package in Directory.GetDirectories(packages).Select(Path.GetFileName))
+                    if (package is not null && family.IsMatch(package) && Launch("explorer.exe", $"shell:AppsFolder\\{package}!Claude", log)) return true;
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+
+        if (Launch("claude://", null, log)) return true;
+        tried = log.Count == 0 ? "" : "Tried: " + string.Join("; ", log);
+        return false;
+    }
+
+    private static bool Launch(string file, string? arguments, List<string> log)
+    {
+        try
+        {
+            var info = new ProcessStartInfo(file) { UseShellExecute = true };
+            if (arguments is not null) info.Arguments = arguments;
+            Process.Start(info)?.Dispose();
+            return true;
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or FileNotFoundException)
+        {
+            log.Add($"{file} {arguments}: {ex.Message}".Trim());
+            return false;
+        }
     }
 }
