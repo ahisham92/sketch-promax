@@ -134,7 +134,9 @@ public static class Updater
         using var http = CreateClient();
         using var response = await http.GetAsync($"https://api.github.com/repos/{Repository}/releases/latest", ct).ConfigureAwait(false);
         if (response.StatusCode == System.Net.HttpStatusCode.NotFound) return null; // no release published yet
-        response.EnsureSuccessStatusCode();
+        // GitHub's API allows 60 anonymous requests an hour per network address, which an office network shares.
+        // The release web page has no such limit, so fall back to it rather than fail.
+        if (!response.IsSuccessStatusCode) return await LatestReleaseFromWebAsync(ct).ConfigureAwait(false);
         using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync().ConfigureAwait(false));
         var root = doc.RootElement;
         var version = (root.GetProperty("tag_name").GetString() ?? "").TrimStart('v', 'V');
@@ -151,6 +153,30 @@ public static class Updater
             return new Release(version, asset.GetProperty("browser_download_url").GetString()!, sha);
         }
         return null;
+    }
+
+    /// <summary>
+    /// The latest release without the API: github.com/.../releases/latest redirects to the release's tag, and the
+    /// package name follows from the version. There is no published digest this way, so the zip's contents are checked instead.
+    /// </summary>
+    private static async Task<Release?> LatestReleaseFromWebAsync(CancellationToken ct)
+    {
+        using var handler = new HttpClientHandler { AllowAutoRedirect = false };
+        using var http = new HttpClient(handler) { Timeout = TimeSpan.FromMinutes(1) };
+        http.DefaultRequestHeaders.UserAgent.ParseAdd($"SketchProMax/{CurrentText}");
+        using var response = await http.GetAsync($"https://github.com/{Repository}/releases/latest", ct).ConfigureAwait(false);
+        var location = response.Headers.Location?.ToString() ?? "";
+        var marker = "/releases/tag/";
+        var at = location.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+        if (at < 0)
+        {
+            if (response.StatusCode == System.Net.HttpStatusCode.NotFound) return null;
+            throw new HttpRequestException($"GitHub did not say which release is the latest ({(int)response.StatusCode} {response.ReasonPhrase}).");
+        }
+        var tag = Uri.UnescapeDataString(location.Substring(at + marker.Length).Trim('/'));
+        var version = tag.TrimStart('v', 'V');
+        if (!Version.TryParse(version, out _)) throw new InvalidDataException($"The latest release tag '{tag}' is not a version number.");
+        return new Release(version, $"https://github.com/{Repository}/releases/download/{tag}/SketchProMax-{version}.zip", null);
     }
 
     /// <summary>True when every installed SketchProMax.addin loads a DLL from the given version folder.</summary>
