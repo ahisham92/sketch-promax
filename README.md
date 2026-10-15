@@ -1,6 +1,6 @@
 # Sketch ProMax
 
-An AI agent for Autodesk Revit 2024, 2025, 2026 and 2027, powered by Claude. Ask in plain language; it reads, documents, audits and edits the open model through 122 tools, and it learns new ones as you use it. It asks for your approval before every change, and every change can be undone with Ctrl+Z.
+An AI agent for Autodesk Revit 2024, 2025, 2026 and 2027, powered by Claude. Ask in plain language; it reads, documents, audits and edits the open model through 129 tools, and it learns new ones as you use it. It asks for your approval before every change, and every change can be undone with Ctrl+Z.
 
 See [docs/PLAN.md](docs/PLAN.md) for the comparison with SketchPro, the roadmap and the architecture.
 
@@ -107,6 +107,8 @@ To publish an update: bump `<Version>` in both project files and push to `main`.
 
 **Steel:** load steel sections from the content library by size (UB, UC, W, HSS, SHS, IPE, HEA...), place bracing in bays (X, diagonal, V, chevron), find joints and add steel connections (beam to column, beam to beam, base plates to footings or slabs, beam to concrete wall, brace gussets, column splices), and a steel tonnage takeoff to Excel.
 
+**Reinforcement:** rebar in concrete beams (bottom, top and side bars, stirrups), columns (perimeter bars, ties), isolated footings (mats both ways) and area reinforcement on slabs, rafts and walls, with cover set; rebar cross and long sections with tags and a bar note placed on sheets, rebar in plan views, 3D rebar views through see-through concrete, and a bar bending schedule with tonnage to Excel.
+
 **Coordination:** write issues (elements, snapshot and camera) to a BCF file for ACC, Navisworks, Solibri or BIMcollab.
 
 **Anything else:** Claude can write and run short Revit API code (C#) for what no dedicated tool covers, such as stairs, railings, materials, curtain walls or MEP. Read-only code runs freely; code that changes the model is shown to you first and is one Undo step.
@@ -148,7 +150,7 @@ src/SketchProMax/            The Revit add-in (net48 for Revit 2024, net8.0-wind
   Agent/SystemPrompt         Instructions the desktop app receives from the connector
   Bridge/BridgeServer        Per-Revit-window named-pipe server the connector talks to
   Revit/                     Main-thread dispatcher (ExternalEvent), helpers, Revit 2024 dependency loader
-  Tools/                     The 120 IRevitTool implementations and the registry (CodeTools compiles C# with Roslyn)
+  Tools/                     The 127 IRevitTool implementations and the registry (CodeTools compiles C# with Roslyn)
   UI/                        Settings dialog
   Settings/                  Per-user settings (approval switch, auto-update, firm standards)
   Update/Updater             Self-update from GitHub Releases

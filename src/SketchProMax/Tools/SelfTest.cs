@@ -5,6 +5,7 @@ using System.Text.Json;
 using Autodesk.Revit.DB;
 using Autodesk.Revit.DB.Architecture;
 using Autodesk.Revit.DB.Mechanical;
+using Autodesk.Revit.DB.Structure;
 using Autodesk.Revit.UI;
 
 namespace SketchProMax.Tools;
@@ -93,6 +94,12 @@ internal static class SelfTest
         public long PlanId => Plan?.Id.Value ?? throw new Skip("the model has no floor plan");
         public string UpperName => Upper?.Name ?? throw new Skip("the model needs two levels");
     }
+
+    /// <summary>The newest element of a category that can hold rebar (the one a setup step just placed, when it is concrete).</summary>
+    private static long Host(Ctx c, BuiltInCategory category, string what, Func<Element, bool>? where = null) =>
+        new FilteredElementCollector(c.Doc).OfCategory(category).WhereElementIsNotElementType()
+            .Where(e => (where is null || where(e)) && RebarHostData.IsValidHost(e)).OrderByDescending(e => e.Id.Value).FirstOrDefault()?.Id.Value
+        ?? throw new Skip($"no {what} in the model (the loaded family may be steel)");
 
     private sealed record Case(string Tool, Func<Ctx, object> Args, string[]? Setup = null, bool Heavy = false);
 
@@ -610,6 +617,15 @@ internal static class SelfTest
             return new { type_id = type.Id.Value, lines = new[] { new { start = c.At(0, 9000).Append(Z(c.Level!)).ToArray(), end = c.At(3000, 9000).Append(Z(c.Upper!)).ToArray(), level = c.LevelName } } };
         }),
         new("create_steel_connections", _ => new { kind = "beam_column", dry_run = true }) { Heavy = true },
+        new("reinforce_beam", c => new { element_ids = new[] { Host(c, BuiltInCategory.OST_StructuralFraming, "concrete beam") }, bottom = new { bar = "16", count = 3 }, top = new { bar = "12", count = 2 }, stirrups = new { bar = "10", spacing = c.P(150) } },
+            Setup: ["place_beams"]),
+        new("reinforce_column", c => new { element_ids = new[] { Host(c, BuiltInCategory.OST_StructuralColumns, "concrete column") }, bar = "20", bars_x = 3, bars_y = 3, ties = new { bar = "10", spacing = c.P(200) } },
+            Setup: ["place_columns"]),
+        new("reinforce_footing", c => new { element_ids = new[] { Host(c, BuiltInCategory.OST_StructuralFoundation, "isolated concrete footing", f => f is FamilyInstance) }, bottom = new { bar = "16", spacing = c.P(150) } }),
+        new("reinforce_slab_wall", c => new { element_ids = new[] { Host(c, BuiltInCategory.OST_Floors, "structural concrete floor") }, top = new { bar = "12", spacing = c.P(200) }, bottom = new { bar = "12", spacing = c.P(200) } }) { Heavy = true },
+        new("rebar_section", c => new { element_ids = new[] { Host(c, BuiltInCategory.OST_StructuralFraming, "concrete beam") }, cut = "cross" }, Setup: ["place_beams", "reinforce_beam"]),
+        new("rebar_3d_view", c => new { element_ids = new[] { Host(c, BuiltInCategory.OST_StructuralFraming, "concrete beam") } }, Setup: ["place_beams", "reinforce_beam"]),
+        new("export_bar_schedule", c => new { folder = c.Temp }, Setup: ["place_beams", "reinforce_beam"]),
         new("set_sheet_revisions", _ => new { revision = "Self-test revision", sheet_numbers = new[] { "ST-999" } }, Setup: ["create_sheets", "create_revision"]),
         new("dimension_openings", c => new { view_id = c.PlanId, wall_ids = new[] { c.Id(c.Wall ?? throw new Skip("the model has no walls")) } }, Setup: ["place_doors_windows"]),
         new("dimension_rooms", c => { Need(c.Room is not null, "the model has no placed rooms"); return new { view_id = c.PlanId, room_ids = new[] { c.Room!.Id.Value } }; }),

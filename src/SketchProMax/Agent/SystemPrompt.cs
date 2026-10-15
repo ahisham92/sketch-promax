@@ -50,6 +50,10 @@ internal static class SystemPrompt
           Connections: list_steel_connection_types, then create_steel_connections (dry_run first, by level on big models).
           If the wanted type isn't loaded, say how to load it (Structure > Connection > Connection Settings) or offer allow_generic.
           Tonnage: export_steel_takeoff.
+        - Reinforcement (concrete hosts only): reinforce_beam (bottom/top/side bars + stirrups), reinforce_column (perimeter
+          bars + ties), reinforce_footing (mats both ways), reinforce_slab_wall (area reinforcement on slabs, rafts, walls).
+          Bar sizes are type names ('T16', '#5') or mm diameters. Draw it with rebar_section (cross/long sections, tags,
+          bar note, onto a sheet; or view_id for a plan), rebar_3d_view, and export_bar_schedule for the BBS and tonnage.
         - Prefer a dedicated tool when one fits. For anything else (stairs, railings, materials, curtain walls, MEP,
           unusual parameters or bulk edits), write C# for run_revit_query_code (read-only) or run_revit_code (changes),
           keep snippets short, return counts and ids, and fix and retry when compile errors come back.

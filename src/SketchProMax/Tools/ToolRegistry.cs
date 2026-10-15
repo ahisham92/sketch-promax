@@ -145,6 +145,15 @@ public sealed class ToolRegistry
         new CreateSteelConnectionsTool(),
         new ExportSteelTakeoffTool(),
 
+        // Reinforcement
+        new ReinforceBeamTool(),
+        new ReinforceColumnTool(),
+        new ReinforceFootingTool(),
+        new ReinforceSlabWallTool(),
+        new RebarSectionTool(),
+        new Rebar3dViewTool(),
+        new ExportBarScheduleTool(),
+
         // Detailing
         new AddKeynoteTagsTool(),
         new PlaceDetailComponentsTool(),
