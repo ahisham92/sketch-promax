@@ -360,7 +360,7 @@ public sealed class ConvertCadTool : IRevitTool
     private static double DefaultHeight(Document doc, Level level)
     {
         var above = new FilteredElementCollector(doc).OfClass(typeof(Level)).Cast<Level>()
-            .Where(l => l.Elevation > level.ProjectElevation + 0.1).OrderBy(l => l.Elevation).FirstOrDefault();
+            .Where(l => l.ProjectElevation > level.ProjectElevation + 0.1).OrderBy(l => l.ProjectElevation).FirstOrDefault();
         return above != null ? above.ProjectElevation - level.ProjectElevation : UnitUtils.ConvertToInternalUnits(3, UnitTypeId.Meters);
     }
 
@@ -573,9 +573,10 @@ public sealed class ConvertCadTool : IRevitTool
     private static FamilySymbol? Symbol(Document doc, string? name, BuiltInCategory category)
     {
         var symbols = new FilteredElementCollector(doc).OfClass(typeof(FamilySymbol)).OfCategory(category).Cast<FamilySymbol>().ToList();
-        return name is null ? symbols.FirstOrDefault()
-            : symbols.FirstOrDefault(s => string.Equals(s.Name, name, StringComparison.OrdinalIgnoreCase) ||
-                                          string.Equals($"{s.FamilyName}: {s.Name}", name, StringComparison.OrdinalIgnoreCase));
+        if (name is null || symbols.Count == 0) return symbols.FirstOrDefault();
+        if (TypeMatch.TryFind(symbols, name, "family type", out var match, out var error)) return match;
+        // Several types fit the name: say which, rather than silently using one. Not found stays null for the caller's message.
+        return error!.Contains(" matches ") ? throw new ArgumentException(error) : null;
     }
 
     /// <summary>Names vertical grids 1,2,3 left to right and horizontal ones A,B,C bottom up; returns how many were named.</summary>

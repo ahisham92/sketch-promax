@@ -388,7 +388,7 @@ public sealed class Create3DViewTool : IRevitTool
         {
             var level = RevitHelpers.FindLevel(doc, levelName);
             var above = new FilteredElementCollector(doc).OfClass(typeof(Level)).Cast<Level>()
-                .Where(l => l.Elevation > level.ProjectElevation + 0.01).OrderBy(l => l.Elevation).FirstOrDefault();
+                .Where(l => l.ProjectElevation > level.ProjectElevation + 0.01).OrderBy(l => l.ProjectElevation).FirstOrDefault();
             var all = ViewKit.Extents(doc, new FilteredElementCollector(doc).OfClass(typeof(Wall)).WhereElementIsNotElementType());
             if (all != null)
                 box = new BoundingBoxXYZ
