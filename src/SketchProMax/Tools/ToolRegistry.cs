@@ -212,6 +212,27 @@ public sealed class ToolRegistry
         new RunRevitCodeTool(),
         new SketchProMax.Bridge.WaitForJobTool(),
         new SketchProMax.Bridge.CancelJobTool(),
+        // Worksharing
+        new ListWorksetsTool(),
+        new MakeWorksetsEditableTool(),
+        new BorrowElementsTool(),
+        new ElementOwnersTool(),
+        new RelinquishMineTool(),
+        // Detailing, views and annotation repair
+        new PlaceDetailItemCopyTool(),
+        new DuplicateViewToLocationTool(),
+        new RelocateViewWithDetailingTool(),
+        new CopyViewDetailingTool(),
+        new AddDimensionsTool(),
+        new CopyDimensionsTool(),
+        new ReflowAnnotationsTool(),
+        new TrimMatchlinesTool(),
+        // Cuts, voids and geometry repair
+        new PlaceVoidCutsTool(),
+        new VerifyVoidCutTool(),
+        new CutOpeningsInJoinedTool(),
+        new CreateFloorsFromFacesTool(),
+        new CutGeometryTool(),
     ]);
         // Recipes replay other tools, so they need the registry itself.
         registry.Add(new SaveRecipeTool(registry));

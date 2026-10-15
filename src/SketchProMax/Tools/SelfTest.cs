@@ -727,6 +727,40 @@ internal static class SelfTest
             return new { name = "sketch-promax-self-test" };
         }),
 
+        // 0.26 tools: worksharing, detailing and view repair, dimensions, cuts and voids.
+        new("list_worksets", _ => new { count_elements = true }),
+        new("element_owners", c => c.Doc.IsWorkshared ? new { view_id = c.PlanId, only_locked = true, limit = 20 } : throw new Skip("the model is not workshared")),
+        new("make_worksets_editable", c => c.Doc.IsWorkshared ? new { worksets = new[] { new FilteredWorksetCollector(c.Doc).OfKind(WorksetKind.UserWorkset).ToWorksets().First().Name } } : throw new Skip("the model is not workshared")) { Heavy = true },
+        new("borrow_elements", c => c.Doc.IsWorkshared ? new { element_ids = new[] { c.Id(c.Wall ?? throw new Skip("the model has no walls")) } } : throw new Skip("the model is not workshared")) { Heavy = true },
+        new("relinquish_mine", c => c.Doc.IsWorkshared ? new { borrowed_elements = true } : throw new Skip("the model is not workshared")) { Heavy = true },
+        new("place_detail_item_copy", c => new { view_id = c.PlanId, source_id = new FilteredElementCollector(c.Doc).OfCategory(BuiltInCategory.OST_DetailComponents).OfClass(typeof(FamilyInstance)).Max(e => (long?)e.Id.Value) ?? throw new Skip("no detail item to copy"), placements = new[] { new { at = c.At(3000, 3000), rotation_degrees = 90.0 } } }, Setup: ["place_detail_components"]),
+        new("duplicate_view_to_location", c => new { view_id = Newest<ViewSection>(c), offset = new[] { c.P(2000), 0 }, name = "Self-test moved section" }, Setup: ["create_section"]),
+        new("relocate_view_with_detailing", c => new { view_id = Newest<ViewSection>(c), offset = new[] { 0, c.P(1000) } }, Setup: ["create_section"]),
+        new("copy_view_detailing", c => new { source_view_id = c.PlanId, target_view_id = c.PlanId, offset = new[] { c.P(500), 0 } }, Setup: ["place_detail_components"]),
+        new("add_dimensions", c =>
+        {
+            var grids = new FilteredElementCollector(c.Doc).OfClass(typeof(Grid)).Cast<Grid>().Where(g => g.Name is "ST1" or "ST2").Select(g => g.Id.Value).ToArray();
+            Need(grids.Length == 2, "create_grids did not create the test grids");
+            return new { view_id = c.PlanId, items = new object[] { new { element_ids = grids, label = "grids" }, new { element_ids = new[] { grids[0] }, label = "one ref (should fail alone)" } } };
+        }, Setup: ["create_grids"]),
+        new("copy_dimensions", c =>
+        {
+            var dim = c.First<Dimension>(d => d.OwnerViewId == c.Plan!.Id) ?? throw new Skip("no dimension in the plan");
+            var target = c.First<ViewPlan>(v => !v.IsTemplate && v.Id != c.Plan!.Id && v.GenLevel?.Id == c.Plan!.GenLevel?.Id) ?? throw new Skip("no second plan of the same level");
+            return new { source_view_id = c.PlanId, target_view_ids = new[] { target.Id.Value }, dimension_ids = new[] { dim.Id.Value }, list_only = true };
+        }, Setup: ["create_grids", "dimension_grids"]),
+        new("reflow_annotations", c => new { view_id = c.PlanId, dry_run = true }, Setup: ["tag_elements_in_view"]) { Heavy = true },
+        new("trim_matchlines", c => new { view_ids = new[] { c.PlanId }, mode = "report" }),
+        new("place_void_cuts", c =>
+        {
+            var sym = c.Symbol(BuiltInCategory.OST_GenericModel, s => s.Family.FamilyPlacementType == FamilyPlacementType.WorkPlaneBased && s.Family.get_Parameter(BuiltInParameter.FAMILY_ALLOW_CUT_WITH_VOIDS)?.AsInteger() == 1) ?? throw new Skip("no face-based cutting void family loaded");
+            return new { family = $"{sym.FamilyName}: {sym.Name}", voids = new[] { new { host_id = Newest<Floor>(c), face = "top", point = c.At(2000, 2000) } } };
+        }, Setup: ["create_floors"]) { Heavy = true },
+        new("verify_void_cut", c => new { element_ids = new[] { Newest<Floor>(c) } }, Setup: ["create_floors"]),
+        new("cut_openings_in_joined", c => new { openings = new[] { new { host_id = Newest<Floor>(c), outline = c.Square(1000, 1000, 500) } } }, Setup: ["create_floors"]),
+        new("create_floors_from_faces", c => new { element_ids = new[] { Newest<Floor>(c) }, face = "bottom", level = c.LevelName }, Setup: ["create_floors"]),
+        new("cut_geometry", c => new { action = "join", pairs = new[] { new { cutting = c.Id(c.Wall ?? throw new Skip("the model has no walls")), cut = Newest<Floor>(c) } }, only_overlapping = false }, Setup: ["create_floors"]),
+
         new("delete_elements", c => new { element_ids = new[] { c.Id(c.Wall ?? throw new Skip("the model has no walls")) } }),
     ];
 
@@ -737,6 +771,15 @@ internal static class SelfTest
     /// </summary>
     private static IEnumerable<Case> RegressionCases() =>
     [
+        // 0.26 regressions from the field bug log.
+        new("set_parameters", c => new { changes = new[] { new { element_id = c.Id(c.Wall ?? throw new Skip("the model has no walls")), parameter = "Comments", value = "Sketch ProMax self-test" }, new { element_id = c.Id(c.Wall!), parameter = "Mark", value = "ST-1" } }, separate_steps = true }),
+        new("query_elements", _ => new { category = "Detail Items", family = "Break Line", limit = 5 }),
+        new("move_copy_rotate", c => new { element_ids = new[] { c.Id(c.First<Group>() ?? throw new Skip("the model has no model groups")) }, offset = new[] { 0, 0, c.P(500) }, copy = true }),
+        new("capture_view_image", c => new { view_id = c.PlanId, pixel_width = 800, resolution_dpi = 300 }) { Heavy = true },
+        new("find_clashes", c => new { set_a = new { categories = new[] { "Walls", "Floors", "Generic Models" } }, level = c.LevelName, limit = 50, folder = c.Temp, voids = "rebuild" }) { Heavy = true },
+        new("add_spot_elevations", c => new { view_id = c.PlanId, element_ids = new[] { Host(c, BuiltInCategory.OST_StructuralFoundation, "isolated concrete footing", f => f is FamilyInstance) } }),
+        new("dimension_elements", c => new { view_id = c.PlanId, element_ids = new[] { Host(c, BuiltInCategory.OST_StructuralColumns, "concrete column") }, direction = "x", family_refs = "faces" }, Setup: ["place_columns"]),
+        new("add_annotations", c => new { view_id = c.PlanId, dependent_view = "clip_to_crop", detail_lines = new[] { new { points = new[] { c.At(0, -5000), c.At(3000, -5000) } } } }),
         // 0.26: long snippets can report progress and be stopped (CheckCancel compiles and returns normally when not cancelled).
         new("run_revit_query_code", _ => new { code = "var n = 0; foreach (var id in new FilteredElementCollector(doc).OfClass(typeof(Level)).ToElementIds()) { CheckCancel(); n++; log.AppendLine(\"level \" + n); }\nreturn n;", description = "self-test cancel probe" }),
         new("list_types", _ => new { category = "Slab Edges" }),
