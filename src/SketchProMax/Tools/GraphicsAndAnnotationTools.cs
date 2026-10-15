@@ -119,11 +119,14 @@ public sealed class SetViewGraphicsTool : IRevitTool
                 {
                     if (view is not ViewPlan) throw new InvalidOperationException("only plan views");
                     var margin = args.OptDouble("crop_margin") is { } m ? RevitHelpers.ToInternal(doc, m) : UnitUtils.ConvertToInternalUnits(1, UnitTypeId.Meters);
-                    var box = ViewKit.Extents(doc, cropTo.Select(doc.GetElement).Where(e => e != null), view)
-                              ?? throw new ArgumentException("elements not visible in this view");
+                    var boxes = cropTo.Select(doc.GetElement).Where(e => e != null).Select(e => e.get_BoundingBox(view)).OfType<BoundingBoxXYZ>().ToList();
+                    if (boxes.Count == 0) throw new ArgumentException("elements not visible in this view");
                     var crop = view.CropBox;
-                    crop.Min = new XYZ(box.Min.X - margin, box.Min.Y - margin, crop.Min.Z);
-                    crop.Max = new XYZ(box.Max.X + margin, box.Max.Y + margin, crop.Max.Z);
+                    // The crop box lives in its own coordinates: bring every corner of every element box into them.
+                    var inverse = crop.Transform.Inverse;
+                    var corners = boxes.SelectMany(ViewKit.Corners).Select(inverse.OfPoint).ToList();
+                    crop.Min = new XYZ(corners.Min(c => c.X) - margin, corners.Min(c => c.Y) - margin, crop.Min.Z);
+                    crop.Max = new XYZ(corners.Max(c => c.X) + margin, corners.Max(c => c.Y) + margin, crop.Max.Z);
                     view.CropBoxActive = true;
                     view.CropBox = crop;
                 });
@@ -160,12 +163,7 @@ public sealed class AddAnnotationsTool : IRevitTool
     {
         var doc = app.ActiveUIDocument.Document;
         var view = ViewKit.ViewOrActive(doc, args.OptLong("view_id"));
-        XYZ ToModel(JsonElement p)
-        {
-            double x = RevitHelpers.ToInternal(doc, p[0].GetDouble()), y = RevitHelpers.ToInternal(doc, p[1].GetDouble());
-            if (view is ViewPlan plan) return new XYZ(x, y, plan.GenLevel?.Elevation ?? 0);
-            return view.Origin + view.RightDirection * x + view.UpDirection * y;
-        }
+        XYZ ToModel(JsonElement p) => ViewKit.ToModel(doc, view, p);
         List<Curve> Polyline(JsonElement spec, bool closed)
         {
             var pts = spec.GetProperty("points").EnumerateArray().Select(ToModel).ToList();
@@ -231,7 +229,7 @@ public sealed class ArrangeTagsTool : IRevitTool
     public string Name => "arrange_tags";
     public string Description =>
         "Tidy tags in a view: report overlapping tags, move overlapping tags apart (fix_overlaps), align tag heads in a row or column (left/right/top/bottom or " +
-        "center lines), or turn leaders on/off. Pick tags by id, or all tags of a tag category in the view (e.g. 'Door Tags', 'Room Tags').";
+        "center lines), or turn leaders on/off. Works on element tags and room/space/area tags. Pick tags by id, or all tags of a tag category in the view (e.g. 'Door Tags', 'Room Tags').";
     public string PropertiesJson => """
     {
       "view_id": {"type": "integer"},
@@ -243,89 +241,139 @@ public sealed class ArrangeTagsTool : IRevitTool
     public string[] Required => ["action"];
     public bool ModifiesModel => true;
 
+    /// <summary>Element tags and spatial (room/space/area) tags expose the same head and leader, but share no interface.</summary>
+    private sealed class TagRef(Element element)
+    {
+        public Element Element { get; } = element;
+        public XYZ Head
+        {
+            get => Element is IndependentTag t ? t.TagHeadPosition : ((SpatialElementTag)Element).TagHeadPosition;
+            set { if (Element is IndependentTag t) t.TagHeadPosition = value; else ((SpatialElementTag)Element).TagHeadPosition = value; }
+        }
+        public bool HasLeader
+        {
+            get => Element is IndependentTag t ? t.HasLeader : ((SpatialElementTag)Element).HasLeader;
+            set { if (Element is IndependentTag t) t.HasLeader = value; else ((SpatialElementTag)Element).HasLeader = value; }
+        }
+        public string Text => Element switch
+        {
+            IndependentTag t => t.TagText,
+            Autodesk.Revit.DB.Architecture.RoomTag r => r.TagText,
+            _ => Element.Name,
+        };
+    }
+
+    /// <summary>A tag's extent in view coordinates (u along RightDirection, v along UpDirection), cached as doubles.</summary>
+    private sealed class Rect
+    {
+        public TagRef Tag = null!;
+        public double U0, V0, U1, V1, Shift;
+        public bool Overlaps(Rect o) => U0 < o.U1 && o.U0 < U1 && V0 < o.V1 && o.V0 < V1;
+    }
+
     public ToolResult Execute(UIApplication app, ToolArgs args)
     {
         var doc = app.ActiveUIDocument.Document;
         var view = ViewKit.ViewOrActive(doc, args.OptLong("view_id"));
-        var tags = args.LongList("tag_ids").Select(i => doc.GetElement(new ElementId(i))).OfType<IndependentTag>().ToList();
-        if (tags.Count == 0)
+        var elements = args.LongList("tag_ids").Select(i => doc.GetElement(new ElementId(i)))
+            .Where(e => e is IndependentTag or SpatialElementTag).ToList();
+        if (elements.Count == 0)
         {
-            var collector = new FilteredElementCollector(doc, view.Id).OfClass(typeof(IndependentTag)).Cast<IndependentTag>();
+            IEnumerable<Element> collector = new FilteredElementCollector(doc, view.Id)
+                .WherePasses(new ElementMulticlassFilter([typeof(IndependentTag), typeof(SpatialElementTag)]));
             if (args.OptString("tag_category") is { } cat)
             {
                 var bic = RevitHelpers.ParseCategory(doc, cat);
                 collector = collector.Where(x => x.Category?.Id.Value == (long)bic);
             }
-            tags = collector.ToList();
+            elements = collector.ToList();
         }
-        if (tags.Count == 0) return ToolResult.Error("No tags found in that view.");
+        if (elements.Count == 0) return ToolResult.Error("No tags found in that view. Check the view and tag_category (e.g. 'Door Tags', 'Room Tags').");
+        var tags = elements.Select(e => new TagRef(e)).ToList();
+
+        XYZ right = view.RightDirection, up = view.UpDirection;
+        Rect? ToRect(TagRef tag)
+        {
+            if (tag.Element.get_BoundingBox(view) is not { } box) return null;
+            double u0 = double.MaxValue, v0 = double.MaxValue, u1 = double.MinValue, v1 = double.MinValue;
+            foreach (var c in ViewKit.Corners(box))
+            {
+                double u = c.DotProduct(right), v = c.DotProduct(up);
+                u0 = Math.Min(u0, u); u1 = Math.Max(u1, u); v0 = Math.Min(v0, v); v1 = Math.Max(v1, v);
+            }
+            return new Rect { Tag = tag, U0 = u0, V0 = v0, U1 = u1, V1 = v1 };
+        }
 
         var action = args.String("action");
-        if (action == "report_overlaps")
+        if (action is "report_overlaps" or "fix_overlaps")
         {
-            var boxes = tags.Select(x => (Tag: x, Box: x.get_BoundingBox(view))).Where(x => x.Box != null).ToList();
-            var overlaps = new List<object>();
-            for (var i = 0; i < boxes.Count; i++)
-                for (var j = i + 1; j < boxes.Count; j++)
+            // Bounding boxes read once; then sort by bottom edge and sweep, so only vertically close tags are compared.
+            var rects = tags.Select(ToRect).OfType<Rect>().OrderBy(r => r.V0).ThenBy(r => r.U0).ToList();
+            if (action == "report_overlaps")
+            {
+                var pairs = new List<(Rect a, Rect b)>();
+                for (var i = 0; i < rects.Count; i++)
+                    for (var j = i + 1; j < rects.Count && rects[j].V0 < rects[i].V1; j++)
+                        if (rects[i].Overlaps(rects[j])) pairs.Add((rects[i], rects[j]));
+                return ToolResult.Ok(new
                 {
-                    BoundingBoxXYZ a = boxes[i].Box, b = boxes[j].Box;
-                    if (a.Min.X < b.Max.X && b.Min.X < a.Max.X && a.Min.Y < b.Max.Y && b.Min.Y < a.Max.Y)
-                        overlaps.Add(new { a = boxes[i].Tag.Id.Value, b = boxes[j].Tag.Id.Value, aText = boxes[i].Tag.TagText, bText = boxes[j].Tag.TagText });
+                    tags = tags.Count,
+                    overlapping = pairs.Count,
+                    pairs = pairs.Take(100).Select(x => new { a = x.a.Tag.Element.Id.Value, b = x.b.Tag.Element.Id.Value, aText = x.a.Tag.Text, bText = x.b.Tag.Text }),
+                });
+            }
+
+            // Bottom-up: each tag is pushed up just clear of any already-settled tag it overlaps, with a small gap;
+            // leaders keep it tied to its element. Settled tags stay sorted by top edge so the scan can stop early.
+            var settled = new List<Rect>();
+            var moved = new List<Rect>();
+            foreach (var r in rects)
+            {
+                for (var guard = 0; guard <= settled.Count; guard++)
+                {
+                    Rect? hit = null;
+                    for (var k = settled.Count - 1; k >= 0 && settled[k].V1 > r.V0; k--)
+                        if (settled[k].Overlaps(r)) { hit = settled[k]; break; }
+                    if (hit is null) break;
+                    var shift = hit.V1 - r.V0 + (hit.V1 - hit.V0) * 0.15;
+                    r.V0 += shift; r.V1 += shift; r.Shift += shift;
                 }
-            return ToolResult.Ok(new { tags = tags.Count, overlapping = overlaps.Count, pairs = overlaps.Take(100) });
+                if (r.Shift > 0) moved.Add(r);
+                var at = settled.FindLastIndex(s => s.V1 <= r.V1) + 1;
+                settled.Insert(at, r);
+            }
+
+            using var tx = RevitHelpers.StartTransaction(doc, "Arrange tags");
+            foreach (var r in moved)
+            {
+                if (!r.Tag.HasLeader) r.Tag.HasLeader = true;
+                r.Tag.Head += up * r.Shift;
+            }
+            tx.Commit();
+            return ToolResult.Ok(new { moved = moved.Count, ids = moved.Select(r => r.Tag.Element.Id.Value) });
         }
 
         using var t = RevitHelpers.StartTransaction(doc, "Arrange tags");
-        if (action == "fix_overlaps")
-        {
-            var moved = new HashSet<long>();
-            for (var pass = 0; pass < 6; pass++)
-            {
-                var boxes = tags.Select(x => (Tag: x, Box: x.get_BoundingBox(view))).Where(x => x.Box != null)
-                    .OrderBy(x => x.Box.Min.Y).ThenBy(x => x.Box.Min.X).ToList();
-                var any = false;
-                for (var i = 0; i < boxes.Count; i++)
-                    for (var j = i + 1; j < boxes.Count; j++)
-                    {
-                        BoundingBoxXYZ a = boxes[i].Box, b = boxes[j].Box;
-                        if (!(a.Min.X < b.Max.X && b.Min.X < a.Max.X && a.Min.Y < b.Max.Y && b.Min.Y < a.Max.Y)) continue;
-                        // Push the upper tag up just clear of the lower one, with a small gap; leaders keep it tied to its element.
-                        var shift = a.Max.Y - b.Min.Y + (a.Max.Y - a.Min.Y) * 0.15;
-                        var tag = boxes[j].Tag;
-                        if (!tag.HasLeader) tag.HasLeader = true;
-                        tag.TagHeadPosition += view.UpDirection * shift;
-                        boxes[j] = (tag, new BoundingBoxXYZ { Min = b.Min + XYZ.BasisY * shift, Max = b.Max + XYZ.BasisY * shift });
-                        moved.Add(tag.Id.Value);
-                        any = true;
-                    }
-                if (!any) break;
-                doc.Regenerate();
-            }
-            t.Commit();
-            return ToolResult.Ok(new { moved = moved.Count, ids = moved });
-        }
         if (action is "leaders_on" or "leaders_off")
         {
             foreach (var tag in tags) tag.HasLeader = action == "leaders_on";
         }
         else
         {
-            var heads = tags.Select(x => x.TagHeadPosition).ToList();
+            // Heads in view coordinates, so alignment follows the view's own left/right/up even in rotated or section views.
+            var heads = tags.Select(x => (tag: x, p: x.Head)).Select(x => (x.tag, x.p, u: x.p.DotProduct(right), v: x.p.DotProduct(up))).ToList();
             double target = action switch
             {
-                "align_left" => heads.Min(p => p.X),
-                "align_right" => heads.Max(p => p.X),
-                "align_top" => heads.Max(p => p.Y),
-                "align_bottom" => heads.Min(p => p.Y),
-                "align_vertical_center" => heads.Average(p => p.X),
-                _ => heads.Average(p => p.Y),
+                "align_left" => heads.Min(h => h.u),
+                "align_right" => heads.Max(h => h.u),
+                "align_top" => heads.Max(h => h.v),
+                "align_bottom" => heads.Min(h => h.v),
+                "align_vertical_center" => heads.Average(h => h.u),
+                _ => heads.Average(h => h.v),
             };
-            var moveX = action is "align_left" or "align_right" or "align_vertical_center";
-            foreach (var tag in tags)
-            {
-                var p = tag.TagHeadPosition;
-                tag.TagHeadPosition = moveX ? new XYZ(target, p.Y, p.Z) : new XYZ(p.X, target, p.Z);
-            }
+            var moveU = action is "align_left" or "align_right" or "align_vertical_center";
+            foreach (var h in heads)
+                h.tag.Head = moveU ? h.p + right * (target - h.u) : h.p + up * (target - h.v);
         }
         t.Commit();
         return ToolResult.Ok(new { arranged = tags.Count, action });

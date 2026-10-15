@@ -21,7 +21,14 @@ internal static class ViewKit
         if (!string.IsNullOrWhiteSpace(name))
         {
             try { view.Name = name; }
-            catch (Autodesk.Revit.Exceptions.ArgumentException) { view.Name = Unique(doc, name!); }
+            catch (Autodesk.Revit.Exceptions.ArgumentException)
+            {
+                // Either a forbidden character or a duplicate: drop the characters Revit refuses, then make it unique.
+                var clean = new string(name!.Where(ch => "\\:{}[]|;<>?`~".IndexOf(ch) < 0).ToArray()).Trim();
+                if (clean.Length == 0) clean = "View";
+                try { view.Name = clean; }
+                catch (Autodesk.Revit.Exceptions.ArgumentException) { view.Name = Unique(doc, clean); }
+            }
         }
         if (scale is { } s && view.ViewTemplateId == ElementId.InvalidElementId) view.Scale = (int)s;
         if (ViewTemplates.Find(doc, template) is { } t) view.ViewTemplateId = t.Id;
@@ -45,6 +52,30 @@ internal static class ViewKit
     public static XYZ Point(Document doc, System.Text.Json.JsonElement p, double z = 0) =>
         new(RevitHelpers.ToInternal(doc, p[0].GetDouble()), RevitHelpers.ToInternal(doc, p[1].GetDouble()),
             p.GetArrayLength() > 2 ? RevitHelpers.ToInternal(doc, p[2].GetDouble()) : z);
+
+    /// <summary>
+    /// A point given in a view's own coordinates: plans take model x, y (at the level); sections, elevations and
+    /// drafting views take x along the view's right direction and y up from the view origin. Project units.
+    /// </summary>
+    public static XYZ ToModel(Document doc, View view, System.Text.Json.JsonElement p) =>
+        ToModel(doc, view, p[0].GetDouble(), p[1].GetDouble());
+
+    public static XYZ ToModel(Document doc, View view, double xProject, double yProject)
+    {
+        double x = RevitHelpers.ToInternal(doc, xProject), y = RevitHelpers.ToInternal(doc, yProject);
+        if (view is ViewPlan plan) return new XYZ(x, y, plan.GenLevel?.Elevation ?? 0);
+        return view.Origin + view.RightDirection * x + view.UpDirection * y;
+    }
+
+    /// <summary>All eight corners of a box, in model coordinates (its own transform applied).</summary>
+    public static IEnumerable<XYZ> Corners(BoundingBoxXYZ b)
+    {
+        var tr = b.Transform ?? Transform.Identity;
+        foreach (var x in new[] { b.Min.X, b.Max.X })
+            foreach (var y in new[] { b.Min.Y, b.Max.Y })
+                foreach (var z in new[] { b.Min.Z, b.Max.Z })
+                    yield return tr.OfPoint(new XYZ(x, y, z));
+    }
 
     public static BoundingBoxXYZ? Extents(Document doc, IEnumerable<Element> elements, View? view = null)
     {
@@ -287,9 +318,9 @@ public sealed class CreateCalloutTool : IRevitTool
         }
         else
         {
-            var z = (parent as ViewPlan)?.GenLevel?.Elevation ?? 0;
-            a = ViewKit.Point(doc, args.Raw["corner1"], z);
-            b = ViewKit.Point(doc, args.Raw["corner2"], z);
+            // Plans: model x, y at the level; other views: [u, v] along the view's right and up directions.
+            a = ViewKit.ToModel(doc, parent, args.Raw["corner1"]);
+            b = ViewKit.ToModel(doc, parent, args.Raw["corner2"]);
         }
 
         var family = parent.ViewType switch

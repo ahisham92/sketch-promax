@@ -63,8 +63,17 @@ public sealed class CreateSheetsTool : IRevitTool
                 if (tb is null) { results.Add(new { number, error = "no matching title block loaded" }); continue; }
                 sheet = ViewSheet.Create(doc, tb.Id);
             }
-            sheet.SheetNumber = number;
-            sheet.Name = name;
+            try
+            {
+                sheet.SheetNumber = number;
+                sheet.Name = name;
+            }
+            catch (Exception ex) when (ex is Autodesk.Revit.Exceptions.ApplicationException or ArgumentException)
+            {
+                doc.Delete(sheet.Id);
+                results.Add(new { number, error = $"could not set number/name ({ex.Message}); check for characters Revit refuses such as \\ : {{ }} [ ] | ; < > ? ` ~" });
+                continue;
+            }
             existingNumbers.Add(number);
 
             var ids = spec.TryGetProperty("view_ids", out var v) ? v.EnumerateArray().Select(e => e.GetInt64()).ToList() : [];
@@ -160,13 +169,16 @@ public sealed class RenameElementsTool : IRevitTool
         using var t = RevitHelpers.StartTransaction(doc, "Rename elements");
 
         // Sheet and room numbers must be unique at every step, so park changing numbers on temporary values first.
+        // The originals are kept so an element whose final number fails gets its old number back.
         var renumber = items.Where(i => i.TryGetProperty("number", out _)).ToList();
+        var original = new Dictionary<long, string>();
         foreach (var i in renumber)
         {
             var e = doc.GetElement(new ElementId(i.GetProperty("element_id").GetInt64()));
             if (e is not (ViewSheet or SpatialElement)) continue; // reported in the loop below
+            var old = GetNumber(e);
             // Letters and digits only: sheet numbers refuse characters such as ~ { } [ ] | ; < > ? \ :
-            try { SetNumber(e, "TMP" + Guid.NewGuid().ToString("N").Substring(0, 10)); }
+            try { SetNumber(e, "TMP" + Guid.NewGuid().ToString("N").Substring(0, 10)); original[e.Id.Value] = old; }
             catch (Autodesk.Revit.Exceptions.ApplicationException) { }
         }
 
@@ -177,7 +189,17 @@ public sealed class RenameElementsTool : IRevitTool
             if (e is null) { results.Add(new { element_id = id, status = "not found" }); continue; }
             try
             {
-                if (i.TryGetProperty("number", out var n)) SetNumber(e, n.GetString()!);
+                if (i.TryGetProperty("number", out var n))
+                {
+                    try { SetNumber(e, n.GetString()!); }
+                    catch (Exception) when (original.TryGetValue(id, out var old))
+                    {
+                        try { SetNumber(e, old); } catch (Autodesk.Revit.Exceptions.ApplicationException) { }
+                        original.Remove(id);
+                        throw;
+                    }
+                    original.Remove(id);
+                }
                 if (i.TryGetProperty("name", out var nm)) e.Name = nm.GetString()!;
                 results.Add(new { element_id = id, status = "ok" });
             }
@@ -189,6 +211,13 @@ public sealed class RenameElementsTool : IRevitTool
         t.Commit();
         return ToolResult.Ok(results);
     }
+
+    private static string GetNumber(Element e) => e switch
+    {
+        ViewSheet s => s.SheetNumber,
+        SpatialElement r => r.Number,
+        _ => "",
+    };
 
     private static void SetNumber(Element? e, string number)
     {

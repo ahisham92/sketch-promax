@@ -132,6 +132,7 @@ internal static class SelfTest
         var temp = Path.Combine(Path.GetTempPath(), "SketchProMax-self-test-" + Guid.NewGuid().ToString("N").Substring(0, 8));
         Directory.CreateDirectory(temp);
         var ctx = Collect(app, doc, registry, temp);
+        LearnedTools.MarkApproved(LearnedToolCode);
 
         // Large models: tools that touch every element in a view or the model are skipped, so nothing runs for minutes.
         var size = new FilteredElementCollector(doc).OfClass(typeof(FamilyInstance)).GetElementCount()
@@ -197,8 +198,12 @@ internal static class SelfTest
                 // Give Revit room to redraw and handle the user between steps.
                 await Task.Delay(150).ConfigureAwait(false);
             }
-            run.Report.Results.RemoveAll(r => r.Status == "stop");
+            lock (run.Report.Results) run.Report.Results.RemoveAll(r => r.Status == "stop");
             await App.Dispatcher.InvokeAsync(app => { Finish(run, registry); return true; }).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            run.StoppedBecause ??= $"the test could not finish ({ex.GetType().Name}: {ex.Message})";
         }
         finally
         {
@@ -206,8 +211,23 @@ internal static class SelfTest
             run.Finished = true;
         }
         if (onDone is not null)
-            await App.Dispatcher.InvokeAsync(_ => { onDone(run.Report); return true; }).ConfigureAwait(false);
+        {
+            try { await App.Dispatcher.InvokeAsync(_ => { onDone(run.Report); return true; }).ConfigureAwait(false); }
+            catch (Exception) { /* the result is still available through self_test_status */ }
+        }
     }
+
+    /// <summary>Asks the user before a full self-test, which makes (and rolls back) changes in the open model.</summary>
+    public static bool ConfirmFull(Document doc) => new TaskDialog("Sketch ProMax self-test")
+    {
+        MainInstruction = "Run the full self-test?",
+        MainContent = FullWarning(doc),
+        CommonButtons = TaskDialogCommonButtons.Yes | TaskDialogCommonButtons.No,
+        DefaultButton = TaskDialogResult.No,
+    }.Show() == TaskDialogResult.Yes;
+
+    public static string FullWarning(Document doc) =>
+        $"Full check makes and rolls back test changes on '{doc.Title}'. Run it on a copy, not a working model. Continue?";
 
     private static Outcome RunStep(UIApplication app, Run run, ToolRegistry registry, Case step)
     {
@@ -265,7 +285,8 @@ internal static class SelfTest
     private static void Finish(Run run, ToolRegistry registry)
     {
         var report = run.Report;
-        var tested = report.Results.Select(r => r.Tool).ToHashSet();
+        HashSet<string> tested;
+        lock (report.Results) tested = report.Results.Select(r => r.Tool).ToHashSet();
         foreach (var tool in registry.All.Where(t => !tested.Contains(t.Name)).OrderBy(t => t.Name))
         {
             var reason = tool.Name switch
@@ -278,12 +299,12 @@ internal static class SelfTest
                 _ when run.Mode == Mode.Safe && tool.ModifiesModel => "changes the model; runs in the full self-test",
                 _ => "no test written yet",
             };
-            report.Results.Add(new(tool.Name, "skip", 0, reason));
+            lock (report.Results) report.Results.Add(new(tool.Name, "skip", 0, reason));
         }
 
-        try { Directory.Delete(run.Ctx.Temp, true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
-        try { System.IO.File.Delete(Recipes.PathFor("sketch-promax-self-test")); } catch (IOException) { }
-        try { System.IO.File.Delete(LearnedTools.PathFor("self_test_count_walls")); } catch (IOException) { }
+        try { Directory.Delete(run.Ctx.Temp, true); } catch (Exception) { }
+        try { System.IO.File.Delete(Recipes.PathFor("sketch-promax-self-test")); } catch (Exception) { }
+        try { System.IO.File.Delete(LearnedTools.PathFor("self_test_count_walls")); } catch (Exception) { }
 
         try
         {
@@ -291,14 +312,16 @@ internal static class SelfTest
             Directory.CreateDirectory(folder);
             var safe = string.Concat(report.Model.Select(ch => Path.GetInvalidFileNameChars().Contains(ch) ? '_' : ch));
             report.File = Path.Combine(folder, $"{DateTime.Now:yyyyMMdd-HHmmss} {safe} Revit {report.RevitVersion}.json");
+            List<Outcome> results;
+            lock (report.Results) results = report.Results.ToList();
             System.IO.File.WriteAllText(report.File, JsonSerializer.Serialize(new
             {
                 report.Model, report.RevitVersion, report.AddinVersion, report.Mode, report.LargeModel, report.Ran,
                 report.Passed, report.Failed, report.Skipped, stoppedEarly = run.StoppedBecause,
-                results = report.Results.OrderBy(r => r.Status == "fail" ? 0 : r.Status == "skip" ? 2 : 1).ThenBy(r => r.Tool),
+                results = results.OrderBy(r => r.Status == "fail" ? 0 : r.Status == "skip" ? 2 : 1).ThenBy(r => r.Tool),
             }, new JsonSerializerOptions { WriteIndented = true }));
         }
-        catch (IOException) { report.File = null; }
+        catch (Exception) { report.File = null; }
     }
 
     private static Ctx Collect(UIApplication app, Document doc, ToolRegistry registry, string temp)
@@ -365,6 +388,7 @@ internal static class SelfTest
         new("get_activity_log", _ => new { limit = 5 }),
         new("list_recipes", _ => new { }),
         new("list_learned_tools", _ => new { }),
+        new("list_title_blocks", c => new { sheet_number = c.Sheet?.SheetNumber }),
         new("run_revit_query_code", _ => new { code = "return new { walls = new FilteredElementCollector(doc).OfClass(typeof(Wall)).GetElementCount(), title = doc.Title };", description = "self-test query" }),
         new("create_mep_openings", _ => new { method = "report", limit = 50 }) { Heavy = true },
     ];
@@ -380,12 +404,16 @@ internal static class SelfTest
         new("save_as_tool", _ => new
         {
             name = "self_test_count_walls", description = "Self-test: counts walls.", changes_model = false,
-            code = "return new FilteredElementCollector(doc).OfClass(typeof(Wall)).GetElementCount() + Convert.ToInt32(args[\"add\"]);",
+            code = LearnedToolCode,
             parameters = new { add = new { type = "integer" } }, required = new[] { "add" },
         }),
         new("self_test_count_walls", _ => new { add = 0 }),
         new("delete_learned_tool", _ => new { name = "self_test_count_walls" }),
     ];
+
+    // The learned tool the test saves and runs. Its code is the test's own, so it is approved up front instead of asking.
+    private const string LearnedToolCode =
+        "return new FilteredElementCollector(doc).OfClass(typeof(Wall)).GetElementCount() + Convert.ToInt32(args[\"add\"]);";
 
     private static IEnumerable<Case> ChangeCases() =>
     [
@@ -518,6 +546,39 @@ internal static class SelfTest
         new("arrange_tags", c => new { view_id = c.PlanId, action = "report_overlaps" }) { Heavy = true },
         new("dimension_grids", c => new { view_id = c.PlanId }, Setup: ["create_grids"]),
         new("dimension_walls", c => new { view_id = c.PlanId, wall_ids = new[] { c.Id(c.Wall ?? throw new Skip("the model has no walls")) } }),
+
+        // Title blocks and detailing.
+        new("set_sheet_title_block", c =>
+        {
+            var tb = c.Symbol(BuiltInCategory.OST_TitleBlocks) ?? throw new Skip("no title block family loaded");
+            return new { sheet_numbers = new[] { "ST-999" }, title_block = $"{tb.FamilyName}: {tb.Name}", move_to_origin = true };
+        }, Setup: ["create_sheets"]),
+        new("fill_title_blocks", _ => new { sheet_numbers = new[] { "ST-999" }, values = new Dictionary<string, string> { ["Sheet Name"] = "Self-test {number}" } },
+            Setup: ["create_sheets", "set_sheet_title_block"]),
+        new("add_keynote_tags", c =>
+        {
+            Need(c.Symbol(BuiltInCategory.OST_KeynoteTags) is not null, "no keynote tag family loaded");
+            return new { view_id = c.PlanId, element_ids = new[] { c.Id(c.Wall ?? throw new Skip("the model has no walls")) } };
+        }),
+        new("place_detail_components", c =>
+        {
+            var s = c.Symbol(BuiltInCategory.OST_DetailComponents) ?? throw new Skip("no detail item family loaded");
+            var family = $"{s.FamilyName}: {s.Name}";
+            return s.Family.FamilyPlacementType == FamilyPlacementType.CurveBasedDetail
+                ? new { view_id = c.PlanId, family, placements = new object[] { new { start = c.At(0, -6000), end = c.At(2000, -6000) } } }
+                : new { view_id = c.PlanId, family, placements = new object[] { new { at = c.At(0, -6000) } } };
+        }),
+        new("dimension_elements", c =>
+        {
+            var grids = new FilteredElementCollector(c.Doc).OfClass(typeof(Grid)).Cast<Grid>().Where(g => g.Name is "ST1" or "ST2").Select(g => g.Id.Value).ToArray();
+            Need(grids.Length == 2, "create_grids did not create the test grids");
+            return new { view_id = c.PlanId, element_ids = grids };
+        }, Setup: ["create_grids"]),
+        new("create_toposolid", c =>
+        {
+            double[] P(double x, double y, double z) => c.At(x, y).Append(c.P(z) + Math.Round(UnitUtils.ConvertFromInternalUnits(c.Level?.Elevation ?? 0, c.Unit), 4)).ToArray();
+            return new { level = c.LevelName, points = new[] { P(0, 22000, 0), P(8000, 22000, 500), P(8000, 28000, 1200), P(0, 28000, 300), P(4000, 25000, 800) } };
+        }),
         new("dimension_openings", c => new { view_id = c.PlanId, wall_ids = new[] { c.Id(c.Wall ?? throw new Skip("the model has no walls")) } }, Setup: ["place_doors_windows"]),
         new("dimension_rooms", c => { Need(c.Room is not null, "the model has no placed rooms"); return new { view_id = c.PlanId, room_ids = new[] { c.Room!.Id.Value } }; }),
         new("add_spot_elevations", c => new { view_id = c.PlanId, element_ids = new[] { c.Id(c.Floor ?? throw new Skip("the model has no floors")) } }),
@@ -597,7 +658,7 @@ public sealed class RunSelfTestTool : IRevitTool
     }
     """;
     public string[] Required => [];
-    // Full mode undoes everything it changes, so no approval is asked.
+    // Full mode undoes everything it changes, so the usual change approval is not asked; Execute asks its own question.
     public bool ModifiesModel => false;
 
     private readonly ToolRegistry _registry;
@@ -611,6 +672,8 @@ public sealed class RunSelfTestTool : IRevitTool
             return ToolResult.Ok(new { status = "Stopping after the current step." });
         }
         var mode = args.OptString("mode") == "full" ? SelfTest.Mode.Full : SelfTest.Mode.Safe;
+        if (mode == SelfTest.Mode.Full && !SelfTest.IsRunning && app.ActiveUIDocument?.Document is { } doc && !SelfTest.ConfirmFull(doc))
+            return ToolResult.Error("The user declined the full self-test on this model. Offer the safe mode, or ask them to open a copy of the model first.");
         return ToolResult.Ok(new { status = SelfTest.Start(app, _registry, mode) });
     }
 }

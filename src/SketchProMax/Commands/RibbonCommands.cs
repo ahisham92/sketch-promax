@@ -46,9 +46,28 @@ public sealed class StatusCommand : IExternalCommand
         dialog.AddCommandLink(TaskDialogCommandLinkId.CommandLink1, "Check for updates now");
         if (dialog.Show() != TaskDialogResult.CommandLink1) return Result.Succeeded;
 
-        // Checking blocks Revit briefly; downloading a new version can take a minute on slow connections.
-        var staged = Task.Run(() => Updater.CheckAsync(force: true)).GetAwaiter().GetResult();
-        TaskDialog.Show("Sketch ProMax", staged is null ? Updater.Describe() : App.UpdateReadyMessage(staged));
+        // Downloading a new version can take a minute on slow connections, so it runs in the background and the
+        // result is shown once Revit is idle again.
+        _ = Task.Run(async () =>
+        {
+            string message;
+            try
+            {
+                var staged = await Updater.CheckAsync(force: true).ConfigureAwait(false);
+                message = staged is null ? Updater.Describe() : App.UpdateReadyMessage(staged);
+            }
+            catch (Exception ex) { message = $"The update check failed: {ex.Message}"; }
+            try
+            {
+                await App.Dispatcher.InvokeAsync(_ =>
+                {
+                    TaskDialog.Show("Sketch ProMax", message);
+                    return true;
+                }).ConfigureAwait(false);
+            }
+            catch (Exception) { /* Revit is closing; Status shows the result next time */ }
+        });
+        TaskDialog.Show("Sketch ProMax", "Checking for updates in the background. You can keep working; the result appears when it is done.");
         return Result.Succeeded;
     }
 }
@@ -84,8 +103,10 @@ public sealed class SelfTestCommand : IExternalCommand
             CommonButtons = TaskDialogCommonButtons.Cancel,
         };
         ask.AddCommandLink(TaskDialogCommandLinkId.CommandLink1, "Quick check (recommended)", "Read-only tools only. Nothing in the model changes.");
+        // This choice is the confirmation for the full check, so it names the model and says to use a copy.
         ask.AddCommandLink(TaskDialogCommandLinkId.CommandLink2, "Full check, on a copy of a model",
-            "Also runs the tools that change the model. Each change is undone straight after it is checked.");
+            "Also runs the tools that change the model. Each change is undone straight after it is checked. " +
+            Tools.SelfTest.FullWarning(app.ActiveUIDocument.Document).Replace(" Continue?", ""));
         var choice = ask.Show();
         if (choice is not (TaskDialogResult.CommandLink1 or TaskDialogResult.CommandLink2)) return Result.Cancelled;
 

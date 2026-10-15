@@ -36,8 +36,10 @@ public sealed class CreatePlanViewsTool : IRevitTool
             ?? throw new InvalidOperationException($"No view type for {family} in this model.");
 
         var names = args.StringList("levels");
-        var levels = new FilteredElementCollector(doc).OfClass(typeof(Level)).Cast<Level>().OrderBy(l => l.Elevation)
-            .Where(l => names.Count == 0 || names.Contains(l.Name, StringComparer.OrdinalIgnoreCase)).ToList();
+        var allLevels = new FilteredElementCollector(doc).OfClass(typeof(Level)).Cast<Level>().OrderBy(l => l.Elevation).ToList();
+        var levels = allLevels.Where(l => names.Count == 0 || names.Contains(l.Name, StringComparer.OrdinalIgnoreCase)).ToList();
+        if (names.Count > 0 && levels.Count == 0)
+            return ToolResult.Error($"None of the levels {string.Join(", ", names.Select(n => $"'{n}'"))} exist. Available levels: {string.Join(", ", allLevels.Select(l => l.Name))}.");
         var template = ViewTemplates.Find(doc, args.OptString("view_template"));
         var pattern = args.OptString("name_pattern");
 

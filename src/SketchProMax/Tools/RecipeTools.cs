@@ -139,15 +139,24 @@ public sealed class RunRecipeTool : IRevitTool
             index++;
             var name = step.GetProperty("tool").GetString() ?? "";
             if (name is "run_recipe" or "batch_run_recipe") { results.Add(new { step = index, tool = name, error = "a recipe can't run another recipe" }); continue; }
-            var tool = registry.Find(name);
-            if (tool is null) { results.Add(new { step = index, tool = name, error = "unknown tool" }); if (!keepGoing) break; continue; }
             var stepArgs = step.TryGetProperty("arguments", out var a) && a.ValueKind == JsonValueKind.Object
                 ? a.EnumerateObject().ToDictionary(p => p.Name, p => p.Value.Clone())
                 : new Dictionary<string, JsonElement>();
+            // As in the bridge: run the learned tool itself, with its own inputs.
+            if (name == "run_learned_tool" && stepArgs.TryGetValue("name", out var inner) && inner.ValueKind == JsonValueKind.String
+                && LearnedTools.Load(inner.GetString()!) is { } learned)
+            {
+                name = learned.Name;
+                stepArgs = stepArgs.TryGetValue("arguments", out var la) && la.ValueKind == JsonValueKind.Object
+                    ? la.EnumerateObject().ToDictionary(p => p.Name, p => p.Value.Clone())
+                    : new Dictionary<string, JsonElement>();
+            }
+            var tool = registry.Find(name);
+            if (tool is null) { results.Add(new { step = index, tool = name, error = "unknown tool" }); if (!keepGoing) break; continue; }
             ToolResult result;
             try { result = tool.Execute(app, new ToolArgs(stepArgs)); }
             catch (Exception ex) { result = ToolResult.Error($"{ex.GetType().Name}: {ex.Message}"); }
-            ActivityLog.Write(app.ActiveUIDocument.Document.Title, tool, stepArgs, result);
+            ActivityLog.Write(app.ActiveUIDocument?.Document?.Title ?? "", tool, stepArgs, result);
             results.Add(new { step = index, tool = name, ok = !result.IsError, result = result.Text.Length > 800 ? result.Text.Substring(0, 800) + "…" : result.Text });
             if (result.IsError && !keepGoing) break;
         }
@@ -300,6 +309,6 @@ internal static class ActivityLog
                 File.AppendAllText(file, line + Environment.NewLine);
             }
         }
-        catch (IOException) { /* logging must never break a tool call */ }
+        catch (Exception) { /* logging must never break a tool call */ }
     }
 }

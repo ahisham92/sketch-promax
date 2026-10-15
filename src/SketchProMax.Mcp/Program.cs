@@ -18,7 +18,7 @@ builder.Logging.AddConsole(o => o.LogToStandardErrorThreshold = LogLevel.Trace);
 builder.Services
     .AddMcpServer(o =>
     {
-        o.ServerInfo = new() { Name = "sketch-promax", Version = "0.14.0" };
+        o.ServerInfo = new() { Name = "sketch-promax", Version = RevitBridge.Version };
         o.ServerInstructions = SystemPrompt.Build(RevitBridge.FirmStandards());
         // Learned tools can be added mid-chat; the client is told to refresh its list when that happens.
         o.Capabilities = new() { Tools = new() { ListChanged = true } };
@@ -42,6 +42,11 @@ internal static class RevitBridge
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "SketchProMax");
 
     private static string SessionsFolder => Path.Combine(Folder, "sessions");
+
+    /// <summary>This connector's version (major.minor.build), from the &lt;Version&gt; in the project file.</summary>
+    public static string Version { get; } = typeof(RevitBridge).Assembly.GetName().Version is { } v
+        ? $"{v.Major}.{v.Minor}.{Math.Max(v.Build, 0)}"
+        : "0.0.0";
 
     // The Revit session and model Claude is working on. Null until chosen, or picked automatically when only one is open.
     // Kept as one immutable record so concurrent tool calls never see a pid from one choice and a model from another.
@@ -90,13 +95,23 @@ internal static class RevitBridge
             ];
         }
 
-        using var doc = JsonDocument.Parse(File.ReadAllText(file));
-        var tools = doc.RootElement.EnumerateArray().Select(t => new Tool
+        List<Tool> tools;
+        try
         {
-            Name = t.GetProperty("name").GetString()!,
-            Description = t.GetProperty("description").GetString(),
-            InputSchema = t.GetProperty("inputSchema").Clone(),
-        }).ToList();
+            using var doc = JsonDocument.Parse(File.ReadAllText(file));
+            tools = doc.RootElement.EnumerateArray().Select(t => new Tool
+            {
+                Name = t.GetProperty("name").GetString()!,
+                Description = t.GetProperty("description").GetString(),
+                InputSchema = t.GetProperty("inputSchema").Clone(),
+            }).ToList();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException
+                                       or KeyNotFoundException or InvalidOperationException)
+        {
+            // Revit may be rewriting the catalogue right now, or it is damaged; Revit writes it again on its next start.
+            tools = [];
+        }
         tools.AddRange(ConnectionTools);
         tools.AddRange(LearnedTools(tools.Select(t => t.Name).ToHashSet()));
         return tools;
@@ -169,7 +184,8 @@ internal static class RevitBridge
 
         if (chosen!.Model is not null)
         {
-            var activate = await SendAsync(target.Pipe, JsonSerializer.Serialize(new { method = "activate_document", title = chosen.Model }), 5000, ct);
+            var activate = await SendAsync(target.Pipe, JsonSerializer.Serialize(new { method = "activate_document", title = chosen.Model }), 5000, ct,
+                readTimeoutMs: 15000);
             if (activate is null) return Text("The chosen Revit window stopped responding.", true);
             using var a = JsonDocument.Parse(activate);
             if (a.RootElement.TryGetProperty("isError", out var ae) && ae.GetBoolean())

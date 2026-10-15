@@ -25,8 +25,62 @@ internal static class LearnedTools
         if (!ValidName.IsMatch(name)) return null;
         var path = PathFor(name);
         if (!File.Exists(path)) return null;
-        try { return LearnedTool.FromJson(File.ReadAllText(path)); }
-        catch (Exception ex) when (ex is IOException or JsonException or KeyNotFoundException or InvalidOperationException) { return null; }
+        try
+        {
+            // A copied or renamed file must not run under a name other than its own, or replace a built-in tool's name.
+            var tool = LearnedTool.FromJson(File.ReadAllText(path));
+            return tool.Name == name ? tool : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or KeyNotFoundException
+                                       or InvalidOperationException or FormatException) { return null; }
+    }
+
+    // Learned tools are plain files anyone can drop into the folder, so the first run of any code asks the user.
+    // Approved code is remembered by its SHA-256, so editing a tool asks again.
+    private static readonly object ApprovalGate = new();
+
+    // Kept beside the learned-tools folder, not in it: copying that folder to a colleague must not carry approvals,
+    // and no learned tool can be saved over it.
+    public static string ApprovedFile => Path.Combine(Path.GetDirectoryName(Folder)!, "learned-tools-approved.json");
+
+    public static string Hash(string code)
+    {
+        using var sha = System.Security.Cryptography.SHA256.Create();
+        return BitConverter.ToString(sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(code))).Replace("-", "").ToLowerInvariant();
+    }
+
+    public static bool IsApproved(string code)
+    {
+        lock (ApprovalGate) return ReadApproved().Contains(Hash(code));
+    }
+
+    public static void MarkApproved(string code)
+    {
+        lock (ApprovalGate)
+        {
+            var approved = ReadApproved();
+            if (!approved.Add(Hash(code))) return;
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(ApprovedFile)!);
+                var temp = ApprovedFile + ".tmp";
+                File.WriteAllText(temp, JsonSerializer.Serialize(approved.OrderBy(h => h, StringComparer.Ordinal)));
+                if (File.Exists(ApprovedFile)) File.Replace(temp, ApprovedFile, null);
+                else File.Move(temp, ApprovedFile);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* asked again next time */ }
+        }
+    }
+
+    private static HashSet<string> ReadApproved()
+    {
+        try
+        {
+            if (File.Exists(ApprovedFile))
+                return JsonSerializer.Deserialize<HashSet<string>>(File.ReadAllText(ApprovedFile)) ?? [];
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException) { }
+        return [];
     }
 
     public static List<LearnedTool> All()
@@ -45,7 +99,7 @@ internal static class LearnedTools
     public static object? Plain(JsonElement e) => e.ValueKind switch
     {
         JsonValueKind.String => e.GetString(),
-        JsonValueKind.Number => e.TryGetInt64(out var l) ? l : e.GetDouble(),
+        JsonValueKind.Number => e.TryGetInt64(out var l) ? (object)l : e.GetDouble(),
         JsonValueKind.True => true,
         JsonValueKind.False => false,
         JsonValueKind.Array => e.EnumerateArray().Select(Plain).ToList(),
@@ -70,6 +124,9 @@ public sealed class LearnedTool : IRevitTool
 
     public ToolResult Execute(UIApplication app, ToolArgs args)
     {
+        // The bridge asks before calling; this covers every other way in (recipes, for one).
+        if (!LearnedTools.IsApproved(Code) && !Bridge.BridgeServer.Approve(this, args.Raw))
+            return ToolResult.Error($"The user did not approve running the learned tool '{Name}'. Ask them how to proceed.");
         var values = args.Raw.ToDictionary(p => p.Key, p => LearnedTools.Plain(p.Value));
         var result = RevitCodeToolBase.RunScript(app, Code, Name.Replace('_', ' '), ModifiesModel, values);
         if (!result.IsError) CountUse();
@@ -85,10 +142,11 @@ public sealed class LearnedTool : IRevitTool
     {
         try
         {
+            if (!LearnedTools.ValidName.IsMatch(Name)) return;
             Uses++;
             File.WriteAllText(LearnedTools.PathFor(Name), ToJson());
         }
-        catch (IOException) { /* the count is only informative */ }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* the count is only informative */ }
     }
 
     public static LearnedTool Create(string name, string summary, string code, string propertiesJson, string[] required,
@@ -119,9 +177,11 @@ public sealed class LearnedTool : IRevitTool
         using var doc = JsonDocument.Parse(json);
         var r = doc.RootElement;
         var schema = r.GetProperty("inputSchema");
+        var name = r.GetProperty("name").GetString() ?? "";
+        if (!LearnedTools.ValidName.IsMatch(name)) throw new FormatException($"'{name}' is not a valid learned tool name.");
         return new LearnedTool
         {
-            Name = r.GetProperty("name").GetString()!,
+            Name = name,
             Summary = r.GetProperty("summary").GetString() ?? "",
             Code = r.GetProperty("code").GetString()!,
             ModifiesModel = r.GetProperty("modifiesModel").GetBoolean(),

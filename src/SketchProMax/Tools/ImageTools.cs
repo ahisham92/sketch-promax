@@ -29,7 +29,7 @@ public sealed class ImportImageTool : IRevitTool
         var doc = app.ActiveUIDocument.Document;
         var path = args.String("path");
         if (!File.Exists(path)) return ToolResult.Error($"File not found: {path}");
-        var view = args.OptLong("view_id") is { } vid ? (View)doc.GetElement(new ElementId(vid)) : doc.ActiveView;
+        var view = ViewKit.ViewOrActive(doc, args.OptLong("view_id"));
 
         XYZ center;
         if (args.Has("center")) center = Modeling.Point(doc, args.Raw["center"]);
@@ -89,7 +89,8 @@ public sealed class CreateDraftingViewTool : IRevitTool
             .FirstOrDefault(v => v.ViewFamily == ViewFamily.Drafting)
             ?? throw new InvalidOperationException("No drafting view type in this model.");
         var styles = new FilteredElementCollector(doc).OfClass(typeof(GraphicsStyle)).Cast<GraphicsStyle>()
-            .Where(g => g.GraphicsStyleCategory?.Parent?.Id.Value == (long)BuiltInCategory.OST_Lines).ToList();
+            .Where(g => g.GraphicsStyleType == GraphicsStyleType.Projection
+                        && g.GraphicsStyleCategory?.Parent?.Id.Value == (long)BuiltInCategory.OST_Lines).ToList();
         GraphicsStyle? Style(JsonElement item) =>
             item.TryGetProperty("style", out var s)
                 ? styles.FirstOrDefault(g => string.Equals(g.Name, s.GetString(), StringComparison.OrdinalIgnoreCase))
@@ -312,8 +313,15 @@ public sealed class CreateFamilyFromShapesTool : IRevitTool
             {
                 z = s.TryGetProperty("base", out var b) ? U(b) : 0;
                 height = U(s.GetProperty("height"));
-                var pts = s.GetProperty("points").EnumerateArray()
+                var raw = s.GetProperty("points").EnumerateArray()
                     .Select(p => p.EnumerateArray().Select(U).ToArray()).Select(a => new XYZ(a[0], a[1], z)).ToList();
+                // Drop consecutive duplicates and a repeated closing point: the loop closes itself, and a zero-length edge is refused.
+                var tol = fam.Application.ShortCurveTolerance;
+                var pts = new List<XYZ>();
+                foreach (var p in raw)
+                    if (pts.Count == 0 || pts[pts.Count - 1].DistanceTo(p) > tol) pts.Add(p);
+                while (pts.Count > 1 && pts[0].DistanceTo(pts[pts.Count - 1]) <= tol) pts.RemoveAt(pts.Count - 1);
+                if (pts.Count < 3) throw new ArgumentException("An extrusion needs at least three distinct points.");
                 for (int i = 0; i < pts.Count; i++) profile.Append(Line.CreateBound(pts[i], pts[(i + 1) % pts.Count]));
                 break;
             }

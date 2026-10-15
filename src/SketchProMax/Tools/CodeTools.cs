@@ -14,7 +14,7 @@ namespace SketchProMax.Tools;
 /// <summary>
 /// The catch-all: Claude writes a short C# snippet against the Revit API and it runs in the open model.
 /// This covers anything the dedicated tools don't (stairs, railings, materials, unusual parameters, bulk edits...).
-/// The read-only variant runs without a transaction, so Revit itself refuses any attempt to change the model.
+/// The read-only variant runs inside a transaction group that is always rolled back, so nothing it does is kept.
 /// </summary>
 public abstract class RevitCodeToolBase : IRevitTool
 {
@@ -69,8 +69,23 @@ public abstract class RevitCodeToolBase : IRevitTool
         }
         else
         {
-            try { result = run(app, uidoc, doc, log, values); }
+            // Without a transaction Revit refuses changes, but a snippet could open and commit its own; the group
+            // around it is always rolled back, so nothing a read-only snippet does is kept.
+            var group = doc.IsReadOnly ? null : new TransactionGroup(doc, "Sketch ProMax: read-only code (rolled back)");
+            try
+            {
+                group?.Start();
+                result = run(app, uidoc, doc, log, values);
+            }
             catch (Exception ex) { return ToolResult.Error($"The code failed. {Unwrap(ex)}\n{log}"); }
+            finally
+            {
+                if (group is not null)
+                {
+                    if (group.HasStarted() && !group.HasEnded()) group.RollBack();
+                    group.Dispose();
+                }
+            }
         }
 
         return new ToolResult(JsonSerializer.Serialize(new { result = SafeJson(result), log = log.Length > 0 ? log.ToString() : null }));
@@ -118,7 +133,7 @@ public sealed class RunRevitQueryCodeTool : RevitCodeToolBase
     public override string Name => "run_revit_query_code";
     public override string Description =>
         "Run read-only C# against the Revit API to answer a question the other tools can't (any element, parameter, " +
-        "geometry or setting). Runs without a transaction, so it cannot change the model." + CodeGuidance;
+        "geometry or setting). Anything it changes is rolled back, so it cannot change the model." + CodeGuidance;
     public override bool ModifiesModel => false;
 }
 
@@ -138,12 +153,14 @@ internal static class ScriptCompiler
 {
     public delegate object? Script(UIApplication app, UIDocument uidoc, Document doc, StringBuilder log, IDictionary<string, object?> args);
 
-    private static readonly Dictionary<string, Script> Cache = new();
+    private sealed record Entry(Script Run, object? Context);
+
+    private static readonly Dictionary<string, Entry> Cache = new();
     private static List<MetadataReference>? _references;
 
     public static (Script? Run, string Errors) Compile(string code)
     {
-        if (Cache.TryGetValue(code, out var cached)) return (cached, "");
+        if (Cache.TryGetValue(code, out var cached)) return (cached.Run, "");
 
         var tree = CSharpSyntaxTree.ParseText(ScriptSource.Wrap(code), new CSharpParseOptions(LanguageVersion.Latest));
         var compilation = CSharpCompilation.Create(
@@ -165,11 +182,11 @@ internal static class ScriptCompiler
             return (null, string.Join("\n", errors));
         }
 
-        var assembly = Load(pe.ToArray(), pdb.ToArray());
+        var (assembly, context) = Load(pe.ToArray(), pdb.ToArray());
         var method = assembly.GetType("SketchProMaxScript")!.GetMethod("Run")!;
         Script run = (app, uidoc, doc, log, args) => method.Invoke(null, [app, uidoc, doc, log, args]);
-        if (Cache.Count > 50) Cache.Clear();
-        Cache[code] = run;
+        if (Cache.Count > 50) Evict();
+        Cache[code] = new Entry(run, context);
         return (run, "");
     }
 
@@ -182,15 +199,30 @@ internal static class ScriptCompiler
         return null;
     }
 
-    private static Assembly Load(byte[] image, byte[] symbols)
+    /// <summary>Loads a compiled snippet. On .NET 8+ also returns its load context, so it can be unloaded later.</summary>
+    private static (Assembly Assembly, object? Context) Load(byte[] image, byte[] symbols)
     {
 #if NETFRAMEWORK
-        return Assembly.Load(image, symbols);
+        // .NET Framework can't unload an assembly short of the whole AppDomain; the cache limit keeps this small.
+        return (Assembly.Load(image, symbols), null);
 #else
-        // Each snippet gets its own context; Revit API types resolve from the context that loaded Revit.
-        var context = new System.Runtime.Loader.AssemblyLoadContext("SketchProMaxScript", isCollectible: false);
-        return context.LoadFromStream(new MemoryStream(image), new MemoryStream(symbols));
+        // Each snippet gets its own collectible context, unloaded when it leaves the cache, so a long session
+        // doesn't keep every snippet it ever ran in memory. Revit API types resolve from the context that loaded Revit.
+        var context = new System.Runtime.Loader.AssemblyLoadContext("SketchProMaxScript", isCollectible: true);
+        return (context.LoadFromStream(new MemoryStream(image), new MemoryStream(symbols)), context);
 #endif
+    }
+
+    /// <summary>Empties the cache. Snippets only run on Revit's main thread, as does this, so none is running now.</summary>
+    private static void Evict()
+    {
+#if !NETFRAMEWORK
+        // Unload only starts the process: a context stays alive while anything (an event handler a snippet
+        // registered, say) still references it, and is freed once nothing does.
+        foreach (var entry in Cache.Values)
+            if (entry.Context is System.Runtime.Loader.AssemblyLoadContext context) context.Unload();
+#endif
+        Cache.Clear();
     }
 
     private static List<MetadataReference> References()

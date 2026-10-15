@@ -144,7 +144,12 @@ public sealed class ApplyTextTool : IRevitTool
                     default:
                         if (field.StartsWith("heading:", StringComparison.Ordinal) && e is ViewSchedule schedule)
                         {
-                            var f = schedule.Definition.GetField(int.Parse(field.Substring(8)));
+                            if (!int.TryParse(field.Substring(8), out var index) || index < 0 || index >= schedule.Definition.GetFieldCount())
+                            {
+                                problems.Add($"{key}: bad column number");
+                                continue;
+                            }
+                            var f = schedule.Definition.GetField(index);
                             f.ColumnHeading = Combine(f.ColumnHeading, separator);
                         }
                         else if (field.StartsWith("param:", StringComparison.Ordinal) && e.LookupParameter(field.Substring(6)) is { IsReadOnly: false } p)

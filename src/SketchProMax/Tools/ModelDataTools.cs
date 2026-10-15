@@ -21,8 +21,10 @@ public sealed class PlaceRoomsTool : IRevitTool
     {
         var doc = app.ActiveUIDocument.Document;
         var level = RevitHelpers.FindLevel(doc, args.String("level"));
+        // Rooms go in the active view's phase, so they show up where the user is looking.
+        var phase = doc.GetElement(app.ActiveUIDocument.ActiveView.get_Parameter(BuiltInParameter.VIEW_PHASE)?.AsElementId() ?? ElementId.InvalidElementId) as Phase;
         using var t = RevitHelpers.StartTransaction(doc, $"Place rooms on {level.Name}");
-        var ids = doc.Create.NewRooms2(level);
+        var ids = phase != null ? doc.Create.NewRooms2(level, phase) : doc.Create.NewRooms2(level);
         t.Commit();
         return ToolResult.Ok(new { created = ids.Select(i => i.Value) });
     }

@@ -50,5 +50,14 @@ Check("snippet reads args", withArgs.Errors == "" && Equals(withArgs.Result, 3.0
 var bad = Run("var x = 1;\nreturn y;");
 Check("errors report the snippet's own line number", bad.Errors.StartsWith("line 2:"), bad.Errors);
 
+// With --addin <folder of a built SketchProMax.dll>, also check the whole tool catalogue.
+var addinAt = Array.IndexOf(args, "--addin");
+if (addinAt >= 0 && addinAt + 1 < args.Length)
+{
+    var repoRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../.."));
+    if (!File.Exists(Path.Combine(repoRoot, "README.md"))) repoRoot = Directory.GetCurrentDirectory();
+    CatalogTests.Run(Path.GetFullPath(args[addinAt + 1]), repoRoot, (name, ok, detail) => Check(name, ok, detail));
+}
+
 Console.WriteLine(failures == 0 ? "All tests passed." : $"{failures} test(s) failed.");
 return failures == 0 ? 0 : 1;

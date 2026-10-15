@@ -34,6 +34,11 @@ internal static class SystemPrompt
         - Placing something many times: place_many with a CSV/Excel file or a list, not one call per instance.
         - MEP openings: create_mep_openings finds pipes, ducts, cable trays and conduits (in this model or linked MEP models) crossing walls, floors and beams. Run method "report" first, then "family" with the firm's opening family if one is loaded, else "native". Beams need a family.
         - Slabs: cut_slab cuts or adds a polygon to a floor edge (notches, recesses, set-backs); add_slab_edges adds edge beams or upstands; hollow_core_layout lays precast planks over a floor, room or outline and marks them HC-01 onward.
+        - Title blocks: list_title_blocks first (with sheet_number to see the exact field names), then fill_title_blocks
+          for field values across sheets, set_sheet_title_block to swap types, add missing title blocks or fix duplicates.
+        - Detailing: add_keynote_tags (keynote values come from the Keynote parameter), place_detail_components,
+          dimension_elements for a string through specific grids, levels, walls or family instances (any view),
+          create_toposolid for site terrain from survey points or an outline.
         - Prefer a dedicated tool when one fits. For anything else (stairs, railings, materials, curtain walls, MEP,
           unusual parameters or bulk edits), write C# for run_revit_query_code (read-only) or run_revit_code (changes),
           keep snippets short, return counts and ids, and fix and retry when compile errors come back.

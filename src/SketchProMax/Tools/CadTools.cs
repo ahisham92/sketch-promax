@@ -43,31 +43,55 @@ internal static class Cad
                 }
             }
         }
-        Walk(cad.get_Geometry(new Options()));
+        // A CAD file placed in one view only has its geometry in that view.
+        var options = new Options();
+        if (cad.ViewSpecific && doc.GetElement(cad.OwnerViewId) is View owner) options.View = owner;
+        Walk(cad.get_Geometry(options));
         return result;
     }
 
-    public static Curve Flatten(Curve c, double z)
+    /// <summary>The curve moved onto elevation z; null when it is shorter than <paramref name="shortest"/> in plan (e.g. a vertical line).</summary>
+    public static Curve? Flatten(Curve c, double z, double shortest)
     {
-        var t = Transform.CreateTranslation(new XYZ(0, 0, z - c.GetEndPoint(0).Z));
-        var moved = c.CreateTransformed(t);
-        if (moved is Line l && Math.Abs(l.GetEndPoint(1).Z - z) > 1e-6)
-            return Line.CreateBound(new XYZ(l.GetEndPoint(0).X, l.GetEndPoint(0).Y, z), new XYZ(l.GetEndPoint(1).X, l.GetEndPoint(1).Y, z));
-        return moved;
+        if (c is Line { IsBound: true } l)
+        {
+            XYZ a = l.GetEndPoint(0), b = l.GetEndPoint(1);
+            a = new XYZ(a.X, a.Y, z);
+            b = new XYZ(b.X, b.Y, z);
+            return a.DistanceTo(b) < shortest ? null : Line.CreateBound(a, b);
+        }
+        var start = c.IsBound ? c.GetEndPoint(0) : c.Evaluate(0, false);
+        var moved = c.CreateTransformed(Transform.CreateTranslation(new XYZ(0, 0, z - start.Z)));
+        return moved.IsBound && moved.Length < shortest ? null : moved;
     }
 
     /// <summary>Groups curves whose ends touch into connected pieces (rectangles, circles, closed outlines).</summary>
     public static List<List<Curve>> Pieces(List<Curve> curves, double tolerance)
     {
         var parent = Enumerable.Range(0, curves.Count).ToArray();
-        int Root(int i) => parent[i] == i ? i : parent[i] = Root(parent[i]);
+        int Root(int i)
+        {
+            while (parent[i] != i) i = parent[i] = parent[parent[i]];
+            return i;
+        }
+        // Endpoints go into a grid of tolerance-sized cells; touching ends are in the same or a neighbouring cell.
+        var cells = new Dictionary<(long, long), List<(int Curve, XYZ Point)>>();
         for (var i = 0; i < curves.Count; i++)
-            for (var j = i + 1; j < curves.Count; j++)
+        {
+            if (!curves[i].IsBound) continue;
+            for (var end = 0; end < 2; end++)
             {
-                if (!curves[i].IsBound || !curves[j].IsBound) continue;
-                var touch = new[] { 0, 1 }.Any(a => new[] { 0, 1 }.Any(b => curves[i].GetEndPoint(a).DistanceTo(curves[j].GetEndPoint(b)) < tolerance));
-                if (touch) parent[Root(i)] = Root(j);
+                var p = curves[i].GetEndPoint(end);
+                long cx = (long)Math.Floor(p.X / tolerance), cy = (long)Math.Floor(p.Y / tolerance);
+                for (var dx = -1; dx <= 1; dx++)
+                    for (var dy = -1; dy <= 1; dy++)
+                        if (cells.TryGetValue((cx + dx, cy + dy), out var near))
+                            foreach (var (j, q) in near)
+                                if (q.DistanceTo(p) < tolerance) parent[Root(i)] = Root(j);
+                if (!cells.TryGetValue((cx, cy), out var cell)) cells[(cx, cy)] = cell = [];
+                cell.Add((i, p));
             }
+        }
         return Enumerable.Range(0, curves.Count).GroupBy(Root).Select(g => g.Select(i => curves[i]).ToList()).ToList();
     }
 
@@ -209,10 +233,13 @@ public sealed class ConvertCadTool : IRevitTool
         var tolerance = Mm(5);
         var report = new List<object>();
 
+        var shortest = doc.Application.ShortCurveTolerance;
+
         using var t = new Transaction(doc, "Sketch ProMax: Convert CAD");
         t.Start();
         var failure = t.GetFailureHandlingOptions();
-        failure.SetFailuresPreprocessor(new TypeKit.SwallowWarnings());
+        var swallow = new TypeKit.SwallowWarnings(doc);
+        failure.SetFailuresPreprocessor(swallow);
         t.SetFailureHandlingOptions(failure);
 
         foreach (var spec in args.Array("conversions"))
@@ -220,12 +247,24 @@ public sealed class ConvertCadTool : IRevitTool
             var pattern = spec.GetProperty("layer").GetString() ?? "";
             var regex = new System.Text.RegularExpressions.Regex("^" + System.Text.RegularExpressions.Regex.Escape(pattern).Replace("\\*", ".*") + "$",
                 System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-            var layerCurves = curves.Where(c => regex.IsMatch(c.Layer)).Select(c => Cad.Flatten(c.Curve, level.Elevation)).ToList();
+            var matching = curves.Where(c => regex.IsMatch(c.Layer)).ToList();
+            var layerCurves = matching.Select(c => Cad.Flatten(c.Curve, level.Elevation, shortest)).OfType<Curve>().ToList();
             var kind = spec.GetProperty("as").GetString();
             string? typeName = spec.TryGetProperty("type", out var tn) ? tn.GetString() : null;
             double? Opt(string key) => spec.TryGetProperty(key, out var v) ? RevitHelpers.ToInternal(doc, v.GetDouble()) : null;
             var created = 0;
             var notes = new List<string>();
+            if (matching.Count > layerCurves.Count) notes.Add($"{matching.Count - layerCurves.Count} curves too short in plan were skipped");
+            var failed = new Dictionary<string, int>();
+            // One bad item is noted and skipped instead of stopping the whole conversion.
+            void Make(Action create)
+            {
+                try { create(); created++; }
+                catch (Exception ex) when (ex is Autodesk.Revit.Exceptions.ApplicationException or ArgumentException or InvalidOperationException)
+                {
+                    failed[ex.Message] = failed.TryGetValue(ex.Message, out var n) ? n + 1 : 1;
+                }
+            }
 
             switch (kind)
             {
@@ -239,17 +278,17 @@ public sealed class ConvertCadTool : IRevitTool
                     var types = new Dictionary<long, WallType>();
                     foreach (var (line, width) in centerlines)
                     {
-                        var type = WallTypeFor(doc, typeName, width, types);
-                        Wall.Create(doc, line, type.Id, level.Id, height, 0, false, false);
-                        created++;
+                        if (line.Length < shortest) continue;
+                        Make(() => Wall.Create(doc, line, WallTypeFor(doc, typeName, width, types).Id, level.Id, height, 0, false, false));
                     }
                     if (kind == "walls") notes.Add($"{layerCurves.Count} lines paired into {created} walls");
                     break;
                 }
                 case "grids":
                 {
-                    var grids = layerCurves.OfType<Line>().Where(l => l.Length > Mm(500)).Select(l => Grid.Create(doc, l)).ToList();
-                    created = grids.Count;
+                    var grids = new List<Grid>();
+                    foreach (var l in layerCurves.OfType<Line>().Where(l => l.Length > Mm(500)))
+                        Make(() => grids.Add(Grid.Create(doc, l)));
                     if (spec.TryGetProperty("auto_name", out var an) && an.GetBoolean()) NameGrids(grids);
                     break;
                 }
@@ -259,14 +298,16 @@ public sealed class ConvertCadTool : IRevitTool
                                  ?? throw new InvalidOperationException("No column family is loaded. Use load_family first.");
                     if (!symbol.IsActive) symbol.Activate();
                     var maxSize = Opt("max_size") ?? Mm(1500);
+                    var open = 0;
                     foreach (var piece in Cad.Pieces(layerCurves, tolerance))
                     {
+                        if (piece.Count > 1 && Cad.Loop(piece, tolerance) is null) { open++; continue; }
                         var box = Cad.Box(piece);
                         if (box.Max.U - box.Min.U > maxSize || box.Max.V - box.Min.V > maxSize) continue;
                         var centre = new XYZ((box.Min.U + box.Max.U) / 2, (box.Min.V + box.Max.V) / 2, level.Elevation);
-                        doc.Create.NewFamilyInstance(centre, symbol, level, symbol.Category.Id.Value == (long)BuiltInCategory.OST_StructuralColumns ? StructuralType.Column : StructuralType.NonStructural);
-                        created++;
+                        Make(() => doc.Create.NewFamilyInstance(centre, symbol, level, symbol.Category.Id.Value == (long)BuiltInCategory.OST_StructuralColumns ? StructuralType.Column : StructuralType.NonStructural));
                     }
+                    if (open > 0) notes.Add($"{open} open shapes (lines that don't close) were skipped");
                     break;
                 }
                 case "floors":
@@ -275,8 +316,7 @@ public sealed class ConvertCadTool : IRevitTool
                     foreach (var piece in Cad.Pieces(layerCurves, tolerance))
                     {
                         if (Cad.Loop(piece, tolerance) is not { } loop) { notes.Add("an outline that doesn't close was skipped"); continue; }
-                        Floor.Create(doc, [loop], type.Id, level.Id);
-                        created++;
+                        Make(() => Floor.Create(doc, [loop], type.Id, level.Id));
                     }
                     break;
                 }
@@ -285,15 +325,18 @@ public sealed class ConvertCadTool : IRevitTool
                 {
                     var plane = SketchPlane.Create(doc, Plane.CreateByNormalAndOrigin(XYZ.BasisZ, new XYZ(0, 0, level.Elevation)));
                     if (kind == "model_lines")
-                        foreach (var c in layerCurves) { doc.Create.NewModelCurve(c, plane); created++; }
+                        foreach (var c in layerCurves) Make(() => doc.Create.NewModelCurve(c, plane));
                     else
                     {
                         var plan = new FilteredElementCollector(doc).OfClass(typeof(ViewPlan)).Cast<ViewPlan>()
-                            .FirstOrDefault(p => !p.IsTemplate && p.GenLevel?.Id == level.Id)
-                            ?? throw new InvalidOperationException($"No plan view for {level.Name}.");
-                        var array = new CurveArray();
-                        foreach (var c in layerCurves) array.Append(c);
-                        created = doc.Create.NewRoomBoundaryLines(plane, array, plan).Size;
+                            .FirstOrDefault(p => !p.IsTemplate && p.ViewType == ViewType.FloorPlan && p.GenLevel?.Id == level.Id)
+                            ?? throw new InvalidOperationException($"No floor plan for {level.Name}. Create one first (create_levels makes plans).");
+                        foreach (var c in layerCurves)
+                        {
+                            var one = new CurveArray();
+                            one.Append(c);
+                            Make(() => doc.Create.NewRoomBoundaryLines(plane, one, plan));
+                        }
                     }
                     break;
                 }
@@ -301,10 +344,11 @@ public sealed class ConvertCadTool : IRevitTool
                     notes.Add($"unknown conversion '{kind}'");
                     break;
             }
+            foreach (var f in failed.Take(10)) notes.Add(f.Value > 1 ? $"{f.Value} failed: {f.Key}" : $"1 failed: {f.Key}");
             report.Add(new { layer = pattern, @as = kind, curves = layerCurves.Count, created, notes });
         }
         t.Commit();
-        return ToolResult.Ok(new { level = level.Name, conversions = report });
+        return ToolResult.Ok(new { level = level.Name, conversions = report, removedByRevit = swallow.Deleted.Take(50) });
     }
 
     private static double DefaultHeight(Document doc, Level level)
@@ -319,6 +363,40 @@ public sealed class ConvertCadTool : IRevitTool
     {
         var used = new bool[lines.Count];
         var result = new List<(Curve, double?)>();
+        if (lines.Count == 0) return result;
+
+        // Parallel lines (within ~0.6 degrees) sit in the same or a neighbouring 1-degree direction bucket. Inside a
+        // bucket, lines are sorted by their offset along the bucket's normal, so only lines about a wall-thickness
+        // away are compared. The slack covers the small angle between a line's own normal and the bucket's.
+        const int buckets = 180;
+        const double step = Math.PI / buckets;
+        var centre = new XYZ(lines.Average(l => l.GetEndPoint(0).X), lines.Average(l => l.GetEndPoint(0).Y), 0);
+        var reach = lines.Max(l => Math.Max(Flat(l.GetEndPoint(0) - centre).GetLength(), Flat(l.GetEndPoint(1) - centre).GetLength()));
+        var slack = 2 * reach * 2 * step;
+        XYZ Normal(int bucket) => new XYZ(-Math.Sin((bucket + 0.5) * step), Math.Cos((bucket + 0.5) * step), 0);
+        int Bucket(XYZ d)
+        {
+            var angle = Math.Atan2(d.Y, d.X);
+            if (angle < 0) angle += Math.PI;
+            return Math.Min(buckets - 1, Math.Max(0, (int)(angle / step)));
+        }
+        double Offset(Line l, int bucket) => (l.GetEndPoint(0) - centre).DotProduct(Normal(bucket));
+        var sorted = lines.Select((l, i) => (Index: i, Bucket: Bucket(l.Direction))).GroupBy(x => x.Bucket).ToDictionary(
+            g => g.Key,
+            g => g.Select(x => (Offset: Offset(lines[x.Index], g.Key), x.Index)).OrderBy(x => x.Offset).ToArray());
+        IEnumerable<int> Near(Line a)
+        {
+            var own = Bucket(a.Direction);
+            foreach (var k in new[] { own, (own + 1) % buckets, (own + buckets - 1) % buckets }.Distinct())
+            {
+                if (!sorted.TryGetValue(k, out var list)) continue;
+                var at = Offset(a, k);
+                int lo = 0, hi = list.Length;
+                while (lo < hi) { var m = (lo + hi) / 2; if (list[m].Offset < at - max - slack) lo = m + 1; else hi = m; }
+                for (var n = lo; n < list.Length && list[n].Offset <= at + max + slack; n++) yield return list[n].Index;
+            }
+        }
+
         for (var i = 0; i < lines.Count; i++)
         {
             if (used[i]) continue;
@@ -327,7 +405,7 @@ public sealed class ConvertCadTool : IRevitTool
             var normal = new XYZ(-dir.Y, dir.X, 0);
             var best = -1;
             double bestGap = double.MaxValue, bestFrom = 0, bestTo = 0;
-            for (var j = 0; j < lines.Count; j++)
+            foreach (var j in Near(a))
             {
                 if (j == i || used[j]) continue;
                 var b = lines[j];
@@ -350,6 +428,8 @@ public sealed class ConvertCadTool : IRevitTool
         }
         return result;
     }
+
+    private static XYZ Flat(XYZ v) => new(v.X, v.Y, 0);
 
     /// <summary>A basic wall type of the requested name, or the closest width (duplicating one when no width is close).</summary>
     private static WallType WallTypeFor(Document doc, string? name, double? width, Dictionary<long, WallType> cache)
@@ -392,7 +472,7 @@ public sealed class ConvertCadTool : IRevitTool
         var vertical = grids.Where(g => Math.Abs(((Line)g.Curve).Direction.Y) > 0.7).OrderBy(g => g.Curve.Evaluate(0.5, true).X).ToList();
         var horizontal = grids.Except(vertical).OrderBy(g => g.Curve.Evaluate(0.5, true).Y).ToList();
         for (var i = 0; i < vertical.Count; i++) TryName(vertical[i], (i + 1).ToString());
-        for (var i = 0; i < horizontal.Count; i++) TryName(horizontal[i], Letters(i));
+        for (var i = 0; i < horizontal.Count; i++) TryName(horizontal[i], Modeling.Letters(i));
     }
 
     private static void TryName(Grid g, string name)
@@ -400,6 +480,4 @@ public sealed class ConvertCadTool : IRevitTool
         try { g.Name = name; }
         catch (Autodesk.Revit.Exceptions.ArgumentException) { g.Name = name + "'"; }
     }
-
-    private static string Letters(int i) => i < 26 ? ((char)('A' + i)).ToString() : Letters(i / 26 - 1) + (char)('A' + i % 26);
 }

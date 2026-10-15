@@ -274,6 +274,18 @@ public sealed class SetCurtainGridTool : IRevitTool
                 report.Add(new { wall = id, error = "not a straight curtain wall" });
                 continue;
             }
+
+            var bottom = wall.get_BoundingBox(null).Min.Z;
+            var top = wall.get_BoundingBox(null).Max.Z;
+            var vertical = args.OptDouble("vertical_spacing") is { } vs ? RevitHelpers.ToInternal(doc, vs) : (double?)null;
+            var horizontal = args.OptDouble("horizontal_spacing") is { } hs ? RevitHelpers.ToInternal(doc, hs) : (double?)null;
+            // A zero, negative or tiny spacing would never finish (or bury the wall in lines); check before touching it.
+            if (SpacingProblem(vertical, line.Length, horizontal, top - bottom) is { } problem)
+            {
+                report.Add(new { wall = id, error = problem });
+                continue;
+            }
+
             if (args.OptBool("clear_existing"))
             {
                 // Lines set by the wall type can't be deleted; those stay.
@@ -284,29 +296,39 @@ public sealed class SetCurtainGridTool : IRevitTool
                 }
             }
 
-            var bottom = wall.get_BoundingBox(null).Min.Z;
-            var top = wall.get_BoundingBox(null).Max.Z;
             var mid = (bottom + top) / 2;
             var start = line.GetEndPoint(0);
             var added = 0;
 
-            if (args.OptDouble("vertical_spacing") is { } vs)
+            if (vertical is { } step)
             {
-                var spacing = RevitHelpers.ToInternal(doc, vs);
-                for (var d = spacing; d < line.Length - spacing * 0.1; d += spacing)
+                for (var d = step; d < line.Length - step * 0.1; d += step)
                     if (AddLine(doc, grid, new XYZ(start.X, start.Y, mid) + line.Direction * d, vertical: true)) added++;
             }
-            if (args.OptDouble("horizontal_spacing") is { } hs)
+            if (horizontal is { } rise)
             {
-                var spacing = RevitHelpers.ToInternal(doc, hs);
                 var centre = line.Evaluate(0.5, true);
-                for (var z = bottom + spacing; z < top - spacing * 0.1; z += spacing)
+                for (var z = bottom + rise; z < top - rise * 0.1; z += rise)
                     if (AddLine(doc, grid, new XYZ(centre.X, centre.Y, z), vertical: false)) added++;
             }
             report.Add(new { wall = id, added });
         }
         t.Commit();
         return ToolResult.Ok(new { walls = report });
+    }
+
+    private const double MinSpacingFeet = 50 / 304.8;
+    private const int MaxLinesPerWall = 500;
+
+    /// <summary>Why the spacings (feet) can't be used on a wall of this length and height, or null when they are fine.</summary>
+    private static string? SpacingProblem(double? vertical, double length, double? horizontal, double height)
+    {
+        if (vertical is { } v && (double.IsNaN(v) || v < MinSpacingFeet)) return "vertical_spacing must be at least 50 mm";
+        if (horizontal is { } h && (double.IsNaN(h) || h < MinSpacingFeet)) return "horizontal_spacing must be at least 50 mm";
+        var lines = (vertical is { } vs ? length / vs : 0) + (horizontal is { } hs ? height / hs : 0);
+        return lines > MaxLinesPerWall
+            ? $"these spacings would add about {lines:N0} grid lines to this wall (at most {MaxLinesPerWall}); use larger spacings"
+            : null;
     }
 
     /// <summary>Adds a grid line through a point; tries both grid directions and keeps the one with the wanted orientation.</summary>

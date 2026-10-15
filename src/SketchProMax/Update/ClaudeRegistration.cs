@@ -38,6 +38,26 @@ public static class ClaudeRegistration
     {
         var changed = new List<string>();
         if (!File.Exists(ConnectorPath)) return changed;
+        // Several Revit windows start at once; only one reads and rewrites the Claude config at a time.
+        using var mutex = new Mutex(false, @"Local\SketchProMax.ClaudeConfig");
+        try
+        {
+            if (!mutex.WaitOne(TimeSpan.FromSeconds(10))) return changed;
+        }
+        catch (AbandonedMutexException) { /* the previous holder exited mid-write; we own it now */ }
+        try
+        {
+            EnsureLocked(changed);
+        }
+        finally
+        {
+            mutex.ReleaseMutex();
+        }
+        return changed;
+    }
+
+    private static void EnsureLocked(List<string> changed)
+    {
         foreach (var folder in ConfigFolders())
         {
             try
@@ -61,12 +81,35 @@ public static class ClaudeRegistration
 
                 servers["sketch-promax"] = new JsonObject { ["command"] = ConnectorPath };
                 Directory.CreateDirectory(folder);
-                if (File.Exists(file)) File.Copy(file, file + ".bak", true);
-                File.WriteAllText(file, config.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
+                WriteAtomically(file, config.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
                 changed.Add(file);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException) { }
         }
-        return changed;
+    }
+
+    /// <summary>Writes a temp file and swaps it in, so the Claude app never reads a half-written config.</summary>
+    private static void WriteAtomically(string file, string text)
+    {
+        var temp = file + ".tmp";
+        File.WriteAllText(temp, text, new UTF8Encoding(false));
+        try
+        {
+            if (File.Exists(file))
+            {
+                try { File.Replace(temp, file, file + ".bak", true); }
+                catch (Exception ex) when (ex is IOException or PlatformNotSupportedException)
+                {
+                    // Some file systems can't replace in one step; keep a backup and copy over.
+                    File.Copy(file, file + ".bak", true);
+                    File.Copy(temp, file, true);
+                }
+            }
+            else File.Move(temp, file);
+        }
+        finally
+        {
+            try { if (File.Exists(temp)) File.Delete(temp); } catch (IOException) { }
+        }
     }
 }

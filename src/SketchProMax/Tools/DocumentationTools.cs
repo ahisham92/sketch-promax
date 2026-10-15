@@ -24,7 +24,7 @@ public sealed class TagElementsInViewTool : IRevitTool
     public ToolResult Execute(UIApplication app, ToolArgs args)
     {
         var doc = app.ActiveUIDocument.Document;
-        var view = args.OptLong("view_id") is { } vid ? (View)doc.GetElement(new ElementId(vid)) : doc.ActiveView;
+        var view = ViewKit.ViewOrActive(doc, args.OptLong("view_id"));
         var bic = RevitHelpers.ParseCategory(doc, args.String("category"));
 
         var alreadyTagged = new HashSet<long>();
@@ -113,7 +113,7 @@ public sealed class CreateScheduleTool : IRevitTool
 
         using var t = RevitHelpers.StartTransaction(doc, $"Create schedule {args.String("name")}");
         var schedule = ViewSchedule.CreateSchedule(doc, new ElementId(bic));
-        schedule.Name = args.String("name");
+        var name = ViewKit.Finish(doc, schedule, args.String("name"), null, null); // made unique if the name is taken
 
         var def = schedule.Definition;
         var schedulable = def.GetSchedulableFields();
@@ -133,6 +133,7 @@ public sealed class CreateScheduleTool : IRevitTool
         return ToolResult.Ok(new
         {
             scheduleId = schedule.Id.Value,
+            name,
             missingFields = missing,
             availableFieldsHint = missing.Count > 0 ? schedulable.Select(f => f.GetName(doc)).Take(80) : null,
         });

@@ -63,7 +63,7 @@ public static class Updater
             Directory.CreateDirectory(LocalRoot);
             gate = new FileStream(Path.Combine(LocalRoot, "update.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
         }
-        catch (IOException) { return null; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return null; }
 
         try
         {
@@ -74,8 +74,16 @@ public static class Updater
             var release = await LatestReleaseAsync(ct).ConfigureAwait(false);
             state.LastCheck = DateTime.UtcNow;
             state.LastError = null;
-            if (release is null || Parse(release.Version) <= Current || release.Version == state.Staged)
+            if (release is null || Parse(release.Version) <= Current)
             {
+                SaveState(state);
+                return null;
+            }
+            var stagedFolder = Path.Combine(VersionsFolder, release.Version);
+            if (release.Version == state.Staged && Directory.Exists(stagedFolder))
+            {
+                // Already downloaded. A reinstall or repair may have pointed a manifest elsewhere since; point it back.
+                if (!AllManifestsPointAt(stagedFolder)) PointAddinsAt(stagedFolder);
                 SaveState(state);
                 return null;
             }
@@ -93,7 +101,8 @@ public static class Updater
             return release.Version;
         }
         catch (Exception ex) when (ex is HttpRequestException or IOException or UnauthorizedAccessException
-                                       or JsonException or InvalidDataException or TaskCanceledException or InvalidOperationException)
+                                       or JsonException or InvalidDataException or OperationCanceledException or InvalidOperationException
+                                       or System.Xml.XmlException)
         {
             var state = LoadState();
             state.LastCheck = DateTime.UtcNow;
@@ -144,16 +153,54 @@ public static class Updater
         return null;
     }
 
+    /// <summary>True when every installed SketchProMax.addin loads a DLL from the given version folder.</summary>
+    private static bool AllManifestsPointAt(string folder)
+    {
+        var manifests = ManifestAssemblies().ToList();
+        return manifests.Count > 0 && manifests.All(a => IsUnder(a, folder));
+    }
+
+    /// <summary>The Assembly path of every installed SketchProMax.addin, for all Revit versions.</summary>
+    private static IEnumerable<string> ManifestAssemblies()
+    {
+        if (!Directory.Exists(RevitAddinsRoot)) yield break;
+        foreach (var revitFolder in Directory.GetDirectories(RevitAddinsRoot))
+        {
+            var manifest = Path.Combine(revitFolder, "SketchProMax.addin");
+            if (!File.Exists(manifest)) continue;
+            string? path;
+            try { path = XDocument.Load(manifest).Descendants("Assembly").FirstOrDefault()?.Value?.Trim(); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Xml.XmlException) { continue; }
+            if (!string.IsNullOrEmpty(path)) yield return path!;
+        }
+    }
+
+    private static bool IsUnder(string path, string folder)
+    {
+        try
+        {
+            var full = Path.GetFullPath(path);
+            var root = Path.GetFullPath(folder).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            return full.Equals(root, StringComparison.OrdinalIgnoreCase)
+                   || full.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException) { return false; }
+    }
+
     private static async Task<string> DownloadAndUnpackAsync(Release release, CancellationToken ct)
     {
         Directory.CreateDirectory(UpdatesFolder);
         var zip = Path.Combine(UpdatesFolder, $"SketchProMax-{release.Version}.zip");
-        using (var http = CreateClient())
-        using (var response = await http.GetAsync(release.ZipUrl, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false))
+        // HttpClient.Timeout does not cover reading the body after the headers arrive, so the whole download gets a limit.
+        using (var download = CancellationTokenSource.CreateLinkedTokenSource(ct))
         {
+            download.CancelAfter(TimeSpan.FromMinutes(5));
+            using var http = CreateClient();
+            using var response = await http.GetAsync(release.ZipUrl, HttpCompletionOption.ResponseHeadersRead, download.Token).ConfigureAwait(false);
             response.EnsureSuccessStatusCode();
+            using var body = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
             using var file = File.Create(zip);
-            await response.Content.CopyToAsync(file).ConfigureAwait(false);
+            await body.CopyToAsync(file, 81920, download.Token).ConfigureAwait(false);
         }
 
         if (release.Sha256 is { } expected)
@@ -163,6 +210,14 @@ public static class Updater
             var actual = BitConverter.ToString(sha.ComputeHash(stream)).Replace("-", "");
             if (!actual.Equals(expected, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException("The downloaded update is damaged (checksum mismatch). It will be retried later.");
+        }
+        else
+        {
+            // No published digest: at least make sure the zip opens and holds what an update needs.
+            using var archive = ZipFile.OpenRead(zip);
+            var names = archive.Entries.Select(e => e.FullName.Replace('\\', '/')).ToList();
+            if (!names.Any(n => n.Contains("dist/") && n.EndsWith("/SketchProMax.dll", StringComparison.OrdinalIgnoreCase)))
+                throw new InvalidDataException("The downloaded update is incomplete (no SketchProMax.dll). It will be retried later.");
         }
 
         var target = Path.Combine(VersionsFolder, release.Version);
@@ -208,13 +263,26 @@ public static class Updater
         var target = Path.Combine(McpFolder, "SketchProMax.Mcp.exe");
         if (!File.Exists(source)) return;
         Directory.CreateDirectory(McpFolder);
-        if (File.Exists(target))
+        // Copy first, so a failed copy leaves the working connector where it was.
+        var incoming = target + ".new";
+        File.Copy(source, incoming, true);
+        string? aside = null;
+        try
         {
-            // The Claude app may be running it; a running exe can be renamed but not overwritten.
-            var aside = Path.Combine(McpFolder, $"SketchProMax.Mcp.{DateTime.UtcNow.Ticks}.old");
-            File.Move(target, aside);
+            if (File.Exists(target))
+            {
+                // The Claude app may be running it; a running exe can be renamed but not overwritten.
+                aside = Path.Combine(McpFolder, $"SketchProMax.Mcp.{DateTime.UtcNow.Ticks}.old");
+                File.Move(target, aside);
+            }
+            File.Move(incoming, target);
         }
-        File.Copy(source, target);
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            if (aside is not null && !File.Exists(target) && File.Exists(aside)) TryDelete(() => File.Move(aside, target));
+            TryDelete(() => File.Delete(incoming));
+            throw;
+        }
     }
 
     /// <summary>Removes old connector copies and version folders no Revit is using. Anything still locked is left for next time.</summary>
@@ -228,11 +296,28 @@ public static class Updater
         var running = Path.GetDirectoryName(typeof(Updater).Assembly.Location) ?? "";
         var keep = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { CurrentText };
         if (LoadState().Staged is { } staged) keep.Add(staged);
+        // Any Revit version may load a different build; never delete one a manifest still points at.
+        var referenced = ManifestAssemblies().ToList();
         foreach (var folder in Directory.GetDirectories(VersionsFolder))
         {
-            if (keep.Contains(Path.GetFileName(folder))) continue;
-            if (running.StartsWith(folder, StringComparison.OrdinalIgnoreCase)) continue;
-            TryDelete(() => Directory.Delete(folder, true));
+            var name = Path.GetFileName(folder);
+            if (name.EndsWith(".del", StringComparison.OrdinalIgnoreCase))
+            {
+                TryDelete(() => Directory.Delete(folder, true));
+                continue;
+            }
+            if (keep.Contains(name)) continue;
+            if (IsUnder(running, folder)) continue;
+            if (referenced.Any(a => IsUnder(a, folder))) continue;
+            // Renaming fails while Revit has a DLL in it loaded, so a folder in use is never half deleted.
+            var doomed = folder + ".del";
+            try
+            {
+                if (Directory.Exists(doomed)) Directory.Delete(doomed, true);
+                Directory.Move(folder, doomed);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { continue; }
+            TryDelete(() => Directory.Delete(doomed, true));
         }
     }
 

@@ -52,7 +52,14 @@ public sealed class SetParametersTool : IRevitTool
             if (e is null) status = "element not found";
             else if (p is null) status = "parameter not found";
             else if (p.IsReadOnly) status = "parameter is read-only";
-            else status = Write(p, value) ? "ok" : "value rejected";
+            else
+            {
+                try { status = Write(p, value) ? "ok" : "value rejected"; }
+                catch (Exception ex) when (ex is Autodesk.Revit.Exceptions.ApplicationException or ArgumentException or FormatException)
+                {
+                    status = ex.Message;
+                }
+            }
 
             results.Add(new { element_id = id, parameter = name, status });
         }
@@ -61,7 +68,7 @@ public sealed class SetParametersTool : IRevitTool
         return ToolResult.Ok(results);
     }
 
-    private static bool Write(Parameter p, string value) => p.StorageType switch
+    internal static bool Write(Parameter p, string value) => p.StorageType switch
     {
         StorageType.String => p.Set(value),
         StorageType.Integer when value.Equals("yes", StringComparison.OrdinalIgnoreCase) => p.Set(1),

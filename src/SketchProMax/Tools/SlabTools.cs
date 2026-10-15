@@ -77,26 +77,36 @@ public sealed class CutSlabTool : IRevitTool
         var result = BooleanOperationsUtils.ExecuteBooleanOperation(Outlines.Extrude(current), Outlines.Extrude(region), op);
         var pieces = Outlines.Pieces(result);
         if (pieces.Count == 0) return ToolResult.Error("Nothing would be left of the floor.");
-        if (pieces.Count > 1 && op == BooleanOperationsType.Difference)
-            return ToolResult.Error($"That cut would split the floor into {pieces.Count} pieces. Cut it in two steps, or split it with run_revit_code.");
+        if (pieces.Count > 1)
+            return ToolResult.Error(op == BooleanOperationsType.Difference
+                ? $"That cut would split the floor into {pieces.Count} pieces. Cut it in two steps, or split it with run_revit_code."
+                : $"That region doesn't overlap the floor, so the result would be {pieces.Count} separate pieces. Make the region overlap the slab edge.");
 
         var sketch = (Sketch)doc.GetElement(floor.SketchId);
         var z = sketch.SketchPlane.GetPlane().Origin.Z;
         var lift = Transform.CreateTranslation(new XYZ(0, 0, z));
 
-        var scope = new SketchEditScope(doc, "Sketch ProMax: Cut slab");
+        using var scope = new SketchEditScope(doc, "Sketch ProMax: Cut slab");
         scope.Start(floor.SketchId);
-        using (var t = new Transaction(doc, "Sketch ProMax: slab outline"))
+        try
         {
-            t.Start();
-            foreach (var id in sketch.GetAllElements())
-                if (doc.GetElement(id) is CurveElement) doc.Delete(id);
-            foreach (var loop in pieces[0])
-                foreach (var curve in loop)
-                    doc.Create.NewModelCurve(curve.CreateTransformed(lift), sketch.SketchPlane);
-            t.Commit();
+            using (var t = new Transaction(doc, "Sketch ProMax: slab outline"))
+            {
+                t.Start();
+                foreach (var id in sketch.GetAllElements())
+                    if (doc.GetElement(id) is CurveElement) doc.Delete(id);
+                foreach (var loop in pieces[0])
+                    foreach (var curve in loop)
+                        doc.Create.NewModelCurve(curve.CreateTransformed(lift), sketch.SketchPlane);
+                t.Commit();
+            }
+            scope.Commit(new TypeKit.SwallowWarnings());
         }
-        scope.Commit(new TypeKit.SwallowWarnings());
+        catch
+        {
+            if (scope.IsActive) scope.Cancel();
+            throw;
+        }
         return ToolResult.Ok(new { floor = floor.Id.Value, operation = op == BooleanOperationsType.Union ? "add" : "cut", loops = pieces[0].Count });
     }
 }
@@ -132,13 +142,12 @@ public sealed class AddSlabEdgesTool : IRevitTool
             if (top.Face is null) { problems.Add($"{id}: no flat top face"); continue; }
             var refs = new ReferenceArray();
             var outer = top.Face.EdgeLoops.Cast<EdgeArray>().OrderByDescending(loop => loop.Cast<Edge>().Sum(e => e.ApproximateLength)).First();
-            var centre = (top.Face.GetBoundingBox().Min + top.Face.GetBoundingBox().Max) / 2;
-            var mid = top.Face.Evaluate(centre);
             foreach (Edge edge in outer)
             {
-                var curve = edge.AsCurve();
-                var p = curve.Evaluate(0.5, true);
-                var outward = new XYZ(p.X - mid.X, p.Y - mid.Y, 0);
+                // Following the face, the face lies to the left of the edge, so direction x normal points out of the slab.
+                var tangent = edge.AsCurveFollowingFace(top.Face).ComputeDerivatives(0.5, true).BasisX;
+                var side = tangent.CrossProduct(top.Face.FaceNormal);
+                var outward = new XYZ(side.X, side.Y, 0);
                 if (facing.Count > 0 && !facing.Contains(ViewKit.Compass(outward).ToLowerInvariant())) continue;
                 refs.Append(edge.Reference);
             }
@@ -240,12 +249,14 @@ public sealed class HollowCoreLayoutTool : IRevitTool
         using var t = new Transaction(doc, "Sketch ProMax: Hollow core layout");
         t.Start();
         var failure = t.GetFailureHandlingOptions();
-        failure.SetFailuresPreprocessor(new TypeKit.SwallowWarnings());
+        var swallow = new TypeKit.SwallowWarnings(doc);
+        failure.SetFailuresPreprocessor(swallow);
         t.SetFailureHandlingOptions(failure);
 
         var type = PlankType(doc, depth);
         var prefix = args.OptString("mark_prefix") ?? "HC-";
-        var planks = new List<object>();
+        var heightOffset = original?.get_Parameter(BuiltInParameter.FLOOR_HEIGHTABOVELEVEL_PARAM)?.AsDouble();
+        var planks = new List<(string Mark, long Id, double Length, double Width, bool Cut)>();
         var n = 0;
         foreach (var (from, to) in strips)
         {
@@ -262,23 +273,21 @@ public sealed class HollowCoreLayoutTool : IRevitTool
                 catch (Autodesk.Revit.Exceptions.ApplicationException) { continue; }
                 n++;
                 plank.get_Parameter(BuiltInParameter.ALL_MODEL_MARK)?.Set($"{prefix}{n:00}");
+                if (heightOffset is { } ho) plank.get_Parameter(BuiltInParameter.FLOOR_HEIGHTABOVELEVEL_PARAM)?.Set(ho);
                 var pieceBox = Outlines.Extrude(piece).GetBoundingBox();
                 var length = spanAlongX ? pieceBox.Max.X - pieceBox.Min.X : pieceBox.Max.Y - pieceBox.Min.Y;
                 var plankWidth = to - from;
-                planks.Add(new
-                {
-                    mark = $"{prefix}{n:00}", id = plank.Id.Value,
-                    length = RevitHelpers.FromInternal(doc, length), width = RevitHelpers.FromInternal(doc, plankWidth),
-                    cut = plankWidth < width - Mm(1),
-                });
+                planks.Add(($"{prefix}{n:00}", plank.Id.Value, length, plankWidth, plankWidth < width - Mm(1)));
             }
         }
         if (original != null && args.OptString("original") == "delete") doc.Delete(original.Id);
         t.Commit();
+        var kept = planks.Where(p => !swallow.Deleted.Contains(p.Id)).ToList();
         return ToolResult.Ok(new
         {
-            planks = planks.Count, type = type.Name, spanDirection = spanAlongX ? "x" : "y",
-            cutPlanks = planks.Count(p => (bool)p.GetType().GetProperty("cut")!.GetValue(p)!), list = planks,
+            planks = kept.Count, type = type.Name, spanDirection = spanAlongX ? "x" : "y", cutPlanks = kept.Count(p => p.Cut),
+            list = kept.Select(p => new { mark = p.Mark, id = p.Id, length = RevitHelpers.FromInternal(doc, p.Length), width = RevitHelpers.FromInternal(doc, p.Width), cut = p.Cut }),
+            removedByRevit = swallow.Deleted,
         });
     }
 

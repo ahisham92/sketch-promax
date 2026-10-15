@@ -46,7 +46,7 @@ public sealed class DimensionGridsTool : IRevitTool
     public ToolResult Execute(UIApplication app, ToolArgs args)
     {
         var doc = app.ActiveUIDocument.Document;
-        var view = args.OptLong("view_id") is { } vid ? (View)doc.GetElement(new ElementId(vid)) : doc.ActiveView;
+        var view = ViewKit.ViewOrActive(doc, args.OptLong("view_id"));
         if (view is not ViewPlan) return ToolResult.Error("dimension_grids works in plan views.");
         var offset = args.OptDouble("offset") is { } o ? RevitHelpers.ToInternal(doc, o) : 3.0;
 
@@ -70,6 +70,7 @@ public sealed class DimensionGridsTool : IRevitTool
 
         var z = view.GenLevel?.Elevation ?? 0;
         var created = new List<long>();
+        var skipped = 0;
         using var t = RevitHelpers.StartTransaction(doc, "Dimension grids");
         foreach (var group in groups.Where(g => g.Count >= 2))
         {
@@ -78,10 +79,19 @@ public sealed class DimensionGridsTool : IRevitTool
             var dir = ((Line)group[0].Curve).Direction;
             var pts = group.SelectMany(g => new[] { g.Curve.GetEndPoint(0), g.Curve.GetEndPoint(1) }).ToList();
             var line = DimensionGeometry.Across(pts, dir, offset, z);
-            created.Add(doc.Create.NewDimension(view, line, refs).Id.Value);
+            try { created.Add(doc.Create.NewDimension(view, line, refs).Id.Value); }
+            catch (Autodesk.Revit.Exceptions.ApplicationException) { skipped++; }
+        }
+        if (created.Count == 0)
+        {
+            t.RollBack();
+            return ToolResult.Error(groups.All(g => g.Count < 2)
+                ? $"No two grids in '{view.Name}' are parallel, so there is nothing to dimension between."
+                : $"Revit refused every dimension string in '{view.Name}' ({skipped} tried). The grids may be multi-segment, " +
+                  "pinned in a way that hides their references, or not cut by this view; try dimension_walls or dimension the grids by hand.");
         }
         t.Commit();
-        return ToolResult.Ok(new { dimensionStrings = created.Count, ids = created, gridsFound = grids.Count });
+        return ToolResult.Ok(new { dimensionStrings = created.Count, ids = created, gridsFound = grids.Count, skipped });
     }
 }
 
@@ -105,7 +115,7 @@ public sealed class DimensionWallsTool : IRevitTool
     public ToolResult Execute(UIApplication app, ToolArgs args)
     {
         var doc = app.ActiveUIDocument.Document;
-        var view = args.OptLong("view_id") is { } vid ? (View)doc.GetElement(new ElementId(vid)) : doc.ActiveView;
+        var view = ViewKit.ViewOrActive(doc, args.OptLong("view_id"));
         if (view is not ViewPlan) return ToolResult.Error("dimension_walls works in plan views.");
         var offset = args.OptDouble("offset") is { } o ? RevitHelpers.ToInternal(doc, o) : 3.0;
         var mode = args.OptString("measure_to") ?? "exterior_face";
@@ -156,10 +166,15 @@ public sealed class DimensionWallsTool : IRevitTool
 
     private static XYZ Dir(Wall w) => ((Line)((LocationCurve)w.Location).Curve).Direction;
 
-    private static Reference? WallReference(Wall w, string mode)
+    internal static Reference? WallReference(Wall w, string mode)
     {
         var side = mode == "interior_face" ? ShellLayerType.Interior : ShellLayerType.Exterior;
-        var faces = HostObjectUtils.GetSideFaces(w, side);
-        return faces.Count > 0 ? faces[0] : null;
+        try
+        {
+            var faces = HostObjectUtils.GetSideFaces(w, side);
+            return faces.Count > 0 ? faces[0] : null;
+        }
+        catch (Autodesk.Revit.Exceptions.ApplicationException) { return null; } // curtain/stacked walls have no side faces
+
     }
 }

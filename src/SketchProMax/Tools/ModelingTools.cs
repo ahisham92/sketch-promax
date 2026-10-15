@@ -70,6 +70,12 @@ internal static class Modeling
         return symbol;
     }
 
+    public const string Alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
+    /// <summary>Grid-style letters for a 0-based index: A..Z, then AA, AB... (from the given alphabet).</summary>
+    public static string Letters(int i, string alphabet = Alphabet) =>
+        i < alphabet.Length ? alphabet[i].ToString() : Letters(i / alphabet.Length - 1, alphabet) + alphabet[i % alphabet.Length];
+
     /// <summary>2D intersections of all pairs of straight grids.</summary>
     public static List<(XYZ point, string a, string b)> GridIntersections(Document doc)
     {
@@ -193,16 +199,18 @@ public sealed class CreateGridsTool : IRevitTool
             var ys = Cumulative(r.TryGetProperty("y_spacings", out var ysp) ? ysp.EnumerateArray().Select(Conv) : []);
             var ext = r.TryGetProperty("extension", out var e) ? Conv(e) : 5.0;
             int number = r.TryGetProperty("first_number", out var fn) ? fn.GetInt32() : 1;
-            char letter = r.TryGetProperty("first_letter", out var fl) && fl.GetString() is { Length: > 0 } s ? s[0] : 'A';
+            // Letters skip I and O (easily confused with 1 and 0), and run on to AA, AB... after Z.
+            const string letters = "ABCDEFGHJKLMNPQRSTUVWXYZ";
+            var letter = r.TryGetProperty("first_letter", out var fl) && fl.GetString() is { Length: > 0 } s
+                ? Math.Max(0, letters.IndexOf(char.ToUpperInvariant(s[0])))
+                : 0;
             double xMax = xs.Last(), yMax = ys.Last();
 
             foreach (var x in xs)
                 Make(origin + new XYZ(x, -ext, 0), origin + new XYZ(x, yMax + ext, 0), (number++).ToString());
             foreach (var y in ys)
             {
-                Make(origin + new XYZ(-ext, y, 0), origin + new XYZ(xMax + ext, y, 0), letter.ToString());
-                letter++;
-                if (letter is 'I' or 'O') letter++; // skip letters easily confused with 1 and 0
+                Make(origin + new XYZ(-ext, y, 0), origin + new XYZ(xMax + ext, y, 0), Modeling.Letters(letter++, letters));
             }
         }
         t.Commit();
@@ -447,22 +455,32 @@ public sealed class PlaceFamilyInstancesTool : IRevitTool
     {
         var doc = app.ActiveUIDocument.Document;
         var level = RevitHelpers.FindLevel(doc, args.OptString("level"));
-        var symbol = Modeling.Symbol(doc, args.OptLong("type_id") ?? -1);
         var created = new List<long>();
-        using var t = RevitHelpers.StartTransaction(doc, $"Place {symbol.FamilyName}");
+        var errors = new List<string>();
+        using var t = RevitHelpers.StartTransaction(doc, "Place family instances");
+        var symbol = Modeling.Symbol(doc, args.OptLong("type_id") ?? -1);
+        var index = 0;
         foreach (var p in args.Array("placements"))
         {
-            var pt = Modeling.Point(doc, p.GetProperty("point"));
-            var fi = doc.Create.NewFamilyInstance(new XYZ(pt.X, pt.Y, level.Elevation + pt.Z), symbol, level, StructuralType.NonStructural);
-            if (p.TryGetProperty("rotation_degrees", out var r) && r.GetDouble() != 0)
+            index++;
+            try
             {
-                var axis = Line.CreateBound(new XYZ(pt.X, pt.Y, 0), new XYZ(pt.X, pt.Y, 1));
-                ElementTransformUtils.RotateElement(doc, fi.Id, axis, r.GetDouble() * Math.PI / 180);
+                var pt = Modeling.Point(doc, p.GetProperty("point"));
+                var fi = doc.Create.NewFamilyInstance(new XYZ(pt.X, pt.Y, level.Elevation + pt.Z), symbol, level, StructuralType.NonStructural);
+                if (p.TryGetProperty("rotation_degrees", out var r) && r.GetDouble() != 0)
+                {
+                    var axis = Line.CreateBound(new XYZ(pt.X, pt.Y, 0), new XYZ(pt.X, pt.Y, 1));
+                    ElementTransformUtils.RotateElement(doc, fi.Id, axis, r.GetDouble() * Math.PI / 180);
+                }
+                created.Add(fi.Id.Value);
             }
-            created.Add(fi.Id.Value);
+            catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or KeyNotFoundException or IndexOutOfRangeException or Autodesk.Revit.Exceptions.ApplicationException)
+            {
+                errors.Add($"placement {index}: {ex.Message}");
+            }
         }
         t.Commit();
-        return ToolResult.Ok(new { created });
+        return ToolResult.Ok(new { family = symbol.FamilyName, created, errors });
     }
 }
 
@@ -490,7 +508,6 @@ public sealed class PlaceColumnsTool : IRevitTool
         var doc = app.ActiveUIDocument.Document;
         var baseLevel = RevitHelpers.FindLevel(doc, args.String("base_level"));
         var topLevel = RevitHelpers.FindLevel(doc, args.String("top_level"));
-        var symbol = Modeling.Symbol(doc, args.OptLong("type_id") ?? -1);
         var kind = args.OptBool("architectural") ? StructuralType.NonStructural : StructuralType.Column;
 
         var points = args.Array("points").Select(p => Modeling.Point(doc, p)).ToList();
@@ -500,6 +517,7 @@ public sealed class PlaceColumnsTool : IRevitTool
 
         var created = new List<long>();
         using var t = RevitHelpers.StartTransaction(doc, "Place columns");
+        var symbol = Modeling.Symbol(doc, args.OptLong("type_id") ?? -1);
         foreach (var p in points)
         {
             var fi = doc.Create.NewFamilyInstance(new XYZ(p.X, p.Y, baseLevel.Elevation), symbol, baseLevel, kind);
@@ -535,7 +553,6 @@ public sealed class PlaceBeamsTool : IRevitTool
     {
         var doc = app.ActiveUIDocument.Document;
         var level = RevitHelpers.FindLevel(doc, args.String("level"));
-        var symbol = Modeling.Symbol(doc, args.OptLong("type_id") ?? -1);
         var z = level.Elevation;
 
         var segments = args.Array("lines")
@@ -560,6 +577,7 @@ public sealed class PlaceBeamsTool : IRevitTool
 
         var created = new List<long>();
         using var t = RevitHelpers.StartTransaction(doc, "Place beams");
+        var symbol = Modeling.Symbol(doc, args.OptLong("type_id") ?? -1);
         foreach (var (a, b) in segments)
         {
             if (a.DistanceTo(b) < doc.Application.ShortCurveTolerance) continue;
@@ -592,6 +610,7 @@ public sealed class TransformElementsTool : IRevitTool
     {
         var doc = app.ActiveUIDocument.Document;
         ICollection<ElementId> ids = args.LongList("element_ids").Select(i => new ElementId(i)).Where(id => doc.GetElement(id) != null).ToList();
+        if (ids.Count == 0) return ToolResult.Error("None of those element ids exist in the model. Check them with query_elements.");
         var offset = args.Has("offset") ? Modeling.Point(doc, args.Raw["offset"]) : XYZ.Zero;
 
         using var t = RevitHelpers.StartTransaction(doc, args.OptBool("copy") ? "Copy elements" : "Move elements");
@@ -606,6 +625,7 @@ public sealed class TransformElementsTool : IRevitTool
             if (args.Has("rotation_center")) center = Modeling.Point(doc, args.Raw["rotation_center"]);
             else
             {
+                doc.Regenerate(); // bounding boxes must reflect the move/copy above
                 var boxes = ids.Select(id => doc.GetElement(id).get_BoundingBox(null)).Where(b => b != null).ToList();
                 center = boxes.Count == 0 ? XYZ.Zero
                     : new XYZ(boxes.Average(b => (b.Min.X + b.Max.X) / 2), boxes.Average(b => (b.Min.Y + b.Max.Y) / 2), 0);

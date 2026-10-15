@@ -66,9 +66,12 @@ public sealed class RunModelAuditTool : IRevitTool
                 viewsNotOnSheets = viewsNotOnSheets.Count,
                 emptySheets = emptySheets.Count,
             },
-            unplacedRooms, unboundedRooms, roomsWithoutNumber, duplicateRoomNumbers,
+            note = "Lists are capped at 200 entries (duplicate room numbers at 100); the summary has the full counts.",
+            unplacedRooms = unplacedRooms.Take(200), unboundedRooms = unboundedRooms.Take(200),
+            roomsWithoutNumber = roomsWithoutNumber.Take(200),
+            duplicateRoomNumbers = duplicateRoomNumbers.Take(100).ToDictionary(k => k.Key, k => k.Value.Take(200).ToList()),
             untaggedDoors = untaggedDoors.Take(200), untaggedWindows = untaggedWindows.Take(200),
-            viewsNotOnSheets = viewsNotOnSheets.Take(200), emptySheets,
+            viewsNotOnSheets = viewsNotOnSheets.Take(200), emptySheets = emptySheets.Take(200),
         });
     }
 }
@@ -114,21 +117,28 @@ public sealed class CaptureViewImageTool : IRevitTool
         options.SetViewsAndSheets([viewId]);
 
         // Zooming crops the view for the export only: the crop is committed inside a group that is then rolled back.
-        TransactionGroup? zoom = null;
+        ViewPlan? plan = null;
+        List<BoundingBoxXYZ> boxes = [];
+        double margin = 0;
         var ids = args.LongList("element_ids");
         if (ids.Count > 0)
         {
-            if (doc.GetElement(viewId) is not ViewPlan plan) return ToolResult.Error("element_ids zoom works on plan views; capture the whole view instead.");
-            var boxes = ids.Select(i => doc.GetElement(new ElementId(i))?.get_BoundingBox(null)).Where(b => b != null).ToList();
+            plan = doc.GetElement(viewId) as ViewPlan;
+            if (plan is null) return ToolResult.Error("element_ids zoom works on plan views; capture the whole view instead.");
+            boxes = ids.Select(i => doc.GetElement(new ElementId(i))?.get_BoundingBox(null)).OfType<BoundingBoxXYZ>().ToList();
             if (boxes.Count == 0) return ToolResult.Error("None of those elements have a location to zoom to.");
-            var margin = args.OptDouble("margin") is { } m ? RevitHelpers.ToInternal(doc, m) : 2000 / 304.8;
-            var crop = plan.CropBox;
-            var inverse = crop.Transform.Inverse;
-            var corners = boxes.SelectMany(b => new[] { inverse.OfPoint(b!.Min), inverse.OfPoint(b.Max) }).ToList();
-            zoom = new TransactionGroup(doc, "Sketch ProMax: zoom for image");
-            zoom.Start();
-            using (var t = new Transaction(doc, "Sketch ProMax: zoom for image"))
+            margin = args.OptDouble("margin") is { } m ? RevitHelpers.ToInternal(doc, m) : 2000 / 304.8;
+        }
+        var zoom = plan is null ? null : new TransactionGroup(doc, "Sketch ProMax: zoom for image");
+        try
+        {
+            if (plan != null && zoom != null)
             {
+                zoom.Start();
+                var crop = plan.CropBox;
+                var inverse = crop.Transform.Inverse;
+                var corners = boxes.SelectMany(ViewKit.Corners).Select(inverse.OfPoint).ToList();
+                using var t = new Transaction(doc, "Sketch ProMax: zoom for image");
                 t.Start();
                 plan.CropBox = new BoundingBoxXYZ
                 {
@@ -139,9 +149,9 @@ public sealed class CaptureViewImageTool : IRevitTool
                 plan.CropBoxActive = true;
                 t.Commit();
             }
+            doc.ExportImage(options);
         }
-        try { doc.ExportImage(options); }
-        finally { if (zoom is { } g) { if (g.HasStarted() && !g.HasEnded()) g.RollBack(); g.Dispose(); } }
+        finally { if (zoom != null) { if (zoom.HasStarted() && !zoom.HasEnded()) zoom.RollBack(); zoom.Dispose(); } }
 
         var file = Directory.GetFiles(dir, "*.png").FirstOrDefault();
         if (file is null) return ToolResult.Error("Revit did not produce an image for that view.");

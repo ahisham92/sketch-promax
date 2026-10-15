@@ -7,7 +7,7 @@ namespace SketchProMax.Tools;
 public sealed class ListRevisionsTool : IRevitTool
 {
     public string Name => "list_revisions";
-    public string Description => "List revisions (id, sequence, description, date, issued) and which sheets carry each.";
+    public string Description => "List revisions (id, sequence, description, date, issued) and which sheets carry each (count plus the first 30 sheet numbers).";
     public string PropertiesJson => "{}";
     public string[] Required => [];
     public bool ModifiesModel => false;
@@ -15,15 +15,27 @@ public sealed class ListRevisionsTool : IRevitTool
     public ToolResult Execute(UIApplication app, ToolArgs args)
     {
         var doc = app.ActiveUIDocument.Document;
-        var sheets = new FilteredElementCollector(doc).OfClass(typeof(ViewSheet)).Cast<ViewSheet>().ToList();
-        return ToolResult.Ok(Revision.GetAllRevisionIds(doc).Select(id => (Revision)doc.GetElement(id)).Select(r => new
+        // One GetAllRevisionIds call per sheet, then invert to revision -> sheet numbers.
+        var byRevision = new Dictionary<long, List<string>>();
+        foreach (var s in new FilteredElementCollector(doc).OfClass(typeof(ViewSheet)).Cast<ViewSheet>().OrderBy(s => s.SheetNumber))
+            foreach (var rid in s.GetAllRevisionIds())
+            {
+                if (!byRevision.TryGetValue(rid.Value, out var list)) byRevision[rid.Value] = list = [];
+                list.Add(s.SheetNumber);
+            }
+        return ToolResult.Ok(Revision.GetAllRevisionIds(doc).Select(id => doc.GetElement(id)).OfType<Revision>().Select(r =>
         {
-            id = r.Id.Value,
-            sequence = r.SequenceNumber,
-            description = r.Description,
-            date = r.RevisionDate,
-            issued = r.Issued,
-            sheets = sheets.Where(s => s.GetAllRevisionIds().Contains(r.Id)).Select(s => s.SheetNumber),
+            var sheets = byRevision.TryGetValue(r.Id.Value, out var l) ? l : [];
+            return new
+            {
+                id = r.Id.Value,
+                sequence = r.SequenceNumber,
+                description = r.Description,
+                date = r.RevisionDate,
+                issued = r.Issued,
+                sheetCount = sheets.Count,
+                sheets = sheets.Take(30),
+            };
         }));
     }
 }
@@ -90,14 +102,20 @@ public sealed class CloudElementsTool : IRevitTool
     public ToolResult Execute(UIApplication app, ToolArgs args)
     {
         var doc = app.ActiveUIDocument.Document;
-        var view = args.OptLong("view_id") is { } vid ? (View)doc.GetElement(new ElementId(vid)) : doc.ActiveView;
+        var view = ViewKit.ViewOrActive(doc, args.OptLong("view_id"));
         var revId = new ElementId(args.OptLong("revision_id") ?? -1);
+        if (doc.GetElement(revId) is not Revision revision) return ToolResult.Error("revision_id is not a revision. Use list_revisions to find it, or create_revision.");
+        if (revision.Issued)
+            return ToolResult.Error($"Revision {revision.SequenceNumber} ('{revision.Description}') is issued, so Revit won't add clouds to it. " +
+                "Create a new revision, or un-issue this one in Sheet Issues/Revisions first.");
         var margin = args.OptDouble("margin") is { } m ? RevitHelpers.ToInternal(doc, m) : 1.0;
 
         // Work in the view's own 2D frame so clouds lie on the view plane for any view direction.
         XYZ right = view.RightDirection, up = view.UpDirection, origin = view.Origin;
         var created = new List<long>();
         var skipped = new List<long>();
+        var failed = new List<object>();
+        string? firstError = null;
         using var t = RevitHelpers.StartTransaction(doc, "Revision clouds");
         foreach (var id in args.LongList("element_ids"))
         {
@@ -112,10 +130,17 @@ public sealed class CloudElementsTool : IRevitTool
                 Line.CreateBound(P(u0, v0), P(u1, v0)), Line.CreateBound(P(u1, v0), P(u1, v1)),
                 Line.CreateBound(P(u1, v1), P(u0, v1)), Line.CreateBound(P(u0, v1), P(u0, v0)),
             };
-            created.Add(RevisionCloud.Create(doc, view, revId, curves).Id.Value);
+            try { created.Add(RevisionCloud.Create(doc, view, revId, curves).Id.Value); }
+            catch (Exception ex) when (ex is Autodesk.Revit.Exceptions.ApplicationException or ArgumentException)
+            { failed.Add(new { element_id = id, error = ex.Message }); firstError ??= ex.Message; }
+        }
+        if (created.Count == 0 && failed.Count > 0)
+        {
+            t.RollBack();
+            return ToolResult.Error($"No clouds were drawn in '{view.Name}'. Revit said: {firstError}");
         }
         t.Commit();
-        return ToolResult.Ok(new { clouds = created, skipped });
+        return ToolResult.Ok(new { clouds = created, skipped, failed });
     }
 
     private static IEnumerable<XYZ> Corners(BoundingBoxXYZ bb)
@@ -165,7 +190,7 @@ public sealed class UpdateTextNotesTool : IRevitTool
         "properties": {"id": {"type": "integer"}, "text": {"type": "string"}}, "required": ["id", "text"]}},
       "create": {"type": "array", "items": {"type": "object",
         "properties": {"view_id": {"type": "integer"}, "x": {"type": "number"}, "y": {"type": "number"}, "text": {"type": "string"}},
-        "required": ["view_id", "x", "y", "text"]}, "description": "x/y in project units, model coordinates (plans)."}
+        "required": ["view_id", "x", "y", "text"]}, "description": "x/y in project units: model coordinates in plans; in sections, elevations and drafting views, along the view's right and up directions from its origin (as add_annotations)."}
     }
     """;
     public string[] Required => [];
@@ -188,8 +213,9 @@ public sealed class UpdateTextNotesTool : IRevitTool
         var typeId = doc.GetDefaultElementTypeId(ElementTypeGroup.TextNoteType);
         foreach (var c in args.Array("create"))
         {
-            var p = new XYZ(RevitHelpers.ToInternal(doc, c.GetProperty("x").GetDouble()), RevitHelpers.ToInternal(doc, c.GetProperty("y").GetDouble()), 0);
-            var note = TextNote.Create(doc, new ElementId(c.GetProperty("view_id").GetInt64()), p, c.GetProperty("text").GetString() ?? "", typeId);
+            var view = ViewKit.ViewOrActive(doc, c.GetProperty("view_id").GetInt64());
+            var p = ViewKit.ToModel(doc, view, c.GetProperty("x").GetDouble(), c.GetProperty("y").GetDouble());
+            var note = TextNote.Create(doc, view.Id, p, c.GetProperty("text").GetString() ?? "", typeId);
             created.Add(note.Id.Value);
         }
         t.Commit();

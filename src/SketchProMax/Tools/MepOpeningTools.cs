@@ -51,12 +51,34 @@ public sealed class CreateMepOpeningsTool : IRevitTool
         var hosts = args.StringList("hosts");
         var levelFilter = args.OptString("level") is { } ln ? RevitHelpers.FindLevel(doc, ln).Id : null;
 
+        var hostCats = new List<BuiltInCategory>();
+        if (hosts.Count == 0 || hosts.Contains("walls")) hostCats.Add(BuiltInCategory.OST_Walls);
+        if (hosts.Count == 0 || hosts.Contains("floors")) hostCats.Add(BuiltInCategory.OST_Floors);
+        if (hosts.Count == 0 || hosts.Contains("beams")) hostCats.Add(BuiltInCategory.OST_StructuralFraming);
+        var hostFilter = new ElementMulticategoryFilter(hostCats);
+        var solids = new Dictionary<long, List<Solid>>();
+
         var crossings = new List<Crossing>();
         foreach (var (sourceDoc, transform, sourceName) in Sources(doc, args.StringList("sources")))
             foreach (var mep in MepCurves(sourceDoc, services))
-                crossings.AddRange(Find(doc, mep, transform, sourceName, hosts, levelFilter, minSize));
+                crossings.AddRange(Find(doc, mep, transform, sourceName, hostFilter, solids, levelFilter, minSize));
+
+        FamilySymbol? rect = null, round = null;
+        if (method == "family")
+        {
+            rect = FindSymbol(doc, args.OptString("family") ?? throw new ArgumentException("Give the opening family as 'Family: Type'."));
+            round = args.OptString("round_family") is { } rf ? FindSymbol(doc, rf) : null;
+        }
 
         var existing = new FilteredElementCollector(doc).OfClass(typeof(Opening)).Select(e => e.get_BoundingBox(null)).Where(b => b != null).ToList();
+        if (rect != null)
+        {
+            // Openings already placed with the opening families (any of their types) count too.
+            var familyTypes = new[] { rect, round }.OfType<FamilySymbol>().SelectMany(sym => sym.Family.GetFamilySymbolIds()).Distinct()
+                .Select(id => (ElementFilter)new FamilyInstanceFilter(doc, id)).ToList();
+            existing.AddRange(new FilteredElementCollector(doc).WherePasses(familyTypes.Count == 1 ? familyTypes[0] : new LogicalOrFilter(familyTypes))
+                .Select(e => e.get_BoundingBox(null)).Where(b => b != null));
+        }
         bool AlreadyOpen(XYZ p) => existing.Any(b => p.X >= b.Min.X - 0.05 && p.X <= b.Max.X + 0.05 && p.Y >= b.Min.Y - 0.05 && p.Y <= b.Max.Y + 0.05 && p.Z >= b.Min.Z - 0.05 && p.Z <= b.Max.Z + 0.05);
 
         if (method == "report")
@@ -73,12 +95,6 @@ public sealed class CreateMepOpeningsTool : IRevitTool
             });
         }
 
-        FamilySymbol? rect = null, round = null;
-        if (method == "family")
-        {
-            rect = FindSymbol(doc, args.OptString("family") ?? throw new ArgumentException("Give the opening family as 'Family: Type'."));
-            round = args.OptString("round_family") is { } rf ? FindSymbol(doc, rf) : null;
-        }
         var wParam = args.OptString("width_parameter") ?? "Width";
         var hParam = args.OptString("height_parameter") ?? "Height";
         var dParam = args.OptString("diameter_parameter") ?? "Diameter";
@@ -91,7 +107,8 @@ public sealed class CreateMepOpeningsTool : IRevitTool
         using var t = new Transaction(doc, "Sketch ProMax: MEP openings");
         t.Start();
         var failure = t.GetFailureHandlingOptions();
-        failure.SetFailuresPreprocessor(new TypeKit.SwallowWarnings());
+        var swallow = new TypeKit.SwallowWarnings(doc);
+        failure.SetFailuresPreprocessor(swallow);
         t.SetFailureHandlingOptions(failure);
         if (rect is { IsActive: false }) rect.Activate();
         if (round is { IsActive: false }) round.Activate();
@@ -102,7 +119,7 @@ public sealed class CreateMepOpeningsTool : IRevitTool
             if (AlreadyOpen(x.Center)) { skipped++; continue; }
             try
             {
-                Element? made = method == "native" ? Native(doc, x, clearance) : Family(doc, x, x.Round && round != null ? round : rect!, clearance, wParam, hParam, dParam, depthParam);
+                Element? made = method == "native" ? Native(doc, x, clearance) : Family(doc, x, x.Round && round != null ? round : rect!, clearance, wParam, hParam, dParam, depthParam, solids);
                 if (made is null) { problems.Add($"{x.Host.Category?.Name} {x.Host.Id.Value}: native openings can't cut this host; use method 'family'"); continue; }
                 created.Add(made.Id.Value);
                 var bb = made.get_BoundingBox(null);
@@ -114,7 +131,8 @@ public sealed class CreateMepOpeningsTool : IRevitTool
             }
         }
         t.Commit();
-        return ToolResult.Ok(new { crossings = crossings.Count, created = created.Count, alreadyOpen = skipped, ids = created.Take(50), problems = problems.Distinct() });
+        created.RemoveAll(id => swallow.Deleted.Contains(id));
+        return ToolResult.Ok(new { crossings = crossings.Count, created = created.Count, alreadyOpen = skipped, ids = created.Take(50), removedByRevit = swallow.Deleted.Take(50), problems = problems.Distinct() });
     }
 
     private static IEnumerable<(Document Doc, Transform Transform, string Name)> Sources(Document doc, List<string> wanted)
@@ -142,7 +160,7 @@ public sealed class CreateMepOpeningsTool : IRevitTool
         return new FilteredElementCollector(doc).WherePasses(new ElementMulticategoryFilter(cats)).WhereElementIsNotElementType().OfType<MEPCurve>();
     }
 
-    private static IEnumerable<Crossing> Find(Document doc, MEPCurve mep, Transform transform, string source, List<string> hosts, ElementId? level, double minSize)
+    private static IEnumerable<Crossing> Find(Document doc, MEPCurve mep, Transform transform, string source, ElementFilter hostFilter, Dictionary<long, List<Solid>> solids, ElementId? level, double minSize)
     {
         if (mep.Location is not LocationCurve { Curve: Line local }) yield break;
         var line = (Line)local.CreateTransformed(transform);
@@ -169,17 +187,13 @@ public sealed class CreateMepOpeningsTool : IRevitTool
         var pad = Math.Max(width, height);
         var min = new XYZ(Math.Min(line.GetEndPoint(0).X, line.GetEndPoint(1).X) - pad, Math.Min(line.GetEndPoint(0).Y, line.GetEndPoint(1).Y) - pad, Math.Min(line.GetEndPoint(0).Z, line.GetEndPoint(1).Z) - pad);
         var max = new XYZ(Math.Max(line.GetEndPoint(0).X, line.GetEndPoint(1).X) + pad, Math.Max(line.GetEndPoint(0).Y, line.GetEndPoint(1).Y) + pad, Math.Max(line.GetEndPoint(0).Z, line.GetEndPoint(1).Z) + pad);
-        var cats = new List<BuiltInCategory>();
-        if (hosts.Count == 0 || hosts.Contains("walls")) cats.Add(BuiltInCategory.OST_Walls);
-        if (hosts.Count == 0 || hosts.Contains("floors")) cats.Add(BuiltInCategory.OST_Floors);
-        if (hosts.Count == 0 || hosts.Contains("beams")) cats.Add(BuiltInCategory.OST_StructuralFraming);
-        var candidates = new FilteredElementCollector(doc).WherePasses(new ElementMulticategoryFilter(cats))
+        var candidates = new FilteredElementCollector(doc).WherePasses(hostFilter)
             .WherePasses(new BoundingBoxIntersectsFilter(new Outline(min, max))).WhereElementIsNotElementType();
 
         foreach (var host in candidates)
         {
             if (level != null && host.LevelId != level && host.get_Parameter(BuiltInParameter.INSTANCE_REFERENCE_LEVEL_PARAM)?.AsElementId() != level) continue;
-            foreach (var solid in Solids(host))
+            foreach (var solid in Solids(host, solids))
             {
                 SolidCurveIntersection hit;
                 try { hit = solid.IntersectWithCurve(line, new SolidCurveIntersectionOptions { ResultType = SolidCurveIntersectionMode.CurveSegmentsInside }); }
@@ -193,15 +207,50 @@ public sealed class CreateMepOpeningsTool : IRevitTool
         }
     }
 
-    private static IEnumerable<Solid> Solids(Element e)
+    /// <summary>A host's solids in model coordinates, computed once per host.</summary>
+    private static List<Solid> Solids(Element e, Dictionary<long, List<Solid>> cache)
     {
+        if (cache.TryGetValue(e.Id.Value, out var cached)) return cached;
+        var list = new List<Solid>();
         var geometry = e.get_Geometry(new Options { ComputeReferences = true, DetailLevel = ViewDetailLevel.Fine });
+        if (geometry != null)
+            foreach (var obj in geometry)
+            {
+                if (obj is Solid { Volume: > 0 } s) list.Add(s);
+                else if (obj is GeometryInstance gi) list.AddRange(gi.GetInstanceGeometry().OfType<Solid>().Where(x => x.Volume > 0));
+            }
+        return cache[e.Id.Value] = list;
+    }
+
+    /// <summary>
+    /// Planar faces a face-based family can be hosted on, each with the transform from its coordinates to the model.
+    /// Family instance geometry that is still shared with the type (an uncut beam) comes as a GeometryInstance; only
+    /// its symbol geometry carries references Revit accepts as a host face, so those are used with the instance transform.
+    /// </summary>
+    private static IEnumerable<(PlanarFace Face, Transform Transform)> HostFaces(Element host, Dictionary<long, List<Solid>> cache)
+    {
+        if (host is not FamilyInstance)
+        {
+            foreach (var solid in Solids(host, cache))
+                foreach (Face f in solid.Faces)
+                    if (f is PlanarFace pf) yield return (pf, Transform.Identity);
+            yield break;
+        }
+        var geometry = host.get_Geometry(new Options { ComputeReferences = true, DetailLevel = ViewDetailLevel.Fine });
         if (geometry is null) yield break;
         foreach (var obj in geometry)
         {
-            if (obj is Solid { Volume: > 0 } s) yield return s;
+            if (obj is Solid { Volume: > 0 } s)
+            {
+                foreach (Face f in s.Faces)
+                    if (f is PlanarFace pf) yield return (pf, Transform.Identity);
+            }
             else if (obj is GeometryInstance gi)
-                foreach (var inner in gi.GetInstanceGeometry().OfType<Solid>().Where(x => x.Volume > 0)) yield return inner;
+            {
+                foreach (var inner in gi.GetSymbolGeometry().OfType<Solid>().Where(x => x.Volume > 0))
+                    foreach (Face f in inner.Faces)
+                        if (f is PlanarFace pf) yield return (pf, gi.Transform);
+            }
         }
     }
 
@@ -221,6 +270,16 @@ public sealed class CreateMepOpeningsTool : IRevitTool
                 var halfZ = HalfAlong(x, XYZ.BasisZ) + clearance;
                 return doc.Create.NewOpening(wall, x.Center - along * halfU - XYZ.BasisZ * halfZ, x.Center + along * halfU + XYZ.BasisZ * halfZ);
             }
+            case Floor floor when x.Round && Math.Abs(x.Flow.Normalize().Z) > 0.9:
+            {
+                // A vertical round service gets a round opening.
+                var r = x.Width / 2 + clearance;
+                var c = x.Center;
+                var circle = new CurveArray();
+                circle.Append(Arc.Create(c, r, 0, Math.PI, XYZ.BasisX, XYZ.BasisY));
+                circle.Append(Arc.Create(c, r, Math.PI, 2 * Math.PI, XYZ.BasisX, XYZ.BasisY));
+                return doc.Create.NewOpening(floor, circle, true);
+            }
             case Floor floor:
             {
                 var hx = HalfAlong(x, XYZ.BasisX) + clearance;
@@ -236,7 +295,7 @@ public sealed class CreateMepOpeningsTool : IRevitTool
         }
     }
 
-    private static Element Family(Document doc, Crossing x, FamilySymbol symbol, double clearance, string wParam, string hParam, string dParam, string? depthParam)
+    private static Element Family(Document doc, Crossing x, FamilySymbol symbol, double clearance, string wParam, string hParam, string dParam, string? depthParam, Dictionary<long, List<Solid>> solids)
     {
         FamilyInstance instance;
         var placement = symbol.Family.FamilyPlacementType;
@@ -255,7 +314,7 @@ public sealed class CreateMepOpeningsTool : IRevitTool
         }
         else if (placement is FamilyPlacementType.WorkPlaneBased or FamilyPlacementType.OneLevelBasedHosted)
         {
-            var (face, at) = NearestFace(x) ?? throw new InvalidOperationException("no host face found for a face-based family");
+            var (face, at) = NearestFace(x, solids) ?? throw new InvalidOperationException("no host face found for a face-based family");
             var refDir = Math.Abs(x.Flow.Z) > 0.7 ? XYZ.BasisX : new XYZ(0, 0, 1).CrossProduct(x.Flow).Normalize();
             if (refDir.IsZeroLength()) refDir = XYZ.BasisX;
             instance = doc.Create.NewFamilyInstance(face, at, refDir, symbol);
@@ -282,19 +341,18 @@ public sealed class CreateMepOpeningsTool : IRevitTool
         return instance;
     }
 
-    private static (Reference Face, XYZ At)? NearestFace(Crossing x)
+    private static (Reference Face, XYZ At)? NearestFace(Crossing x, Dictionary<long, List<Solid>> solids)
     {
         (Reference, XYZ)? best = null;
         var bestDistance = double.MaxValue;
-        foreach (var solid in Solids(x.Host))
-            foreach (Face f in solid.Faces)
-            {
-                if (f is not PlanarFace pf || pf.Reference is null || Math.Abs(pf.FaceNormal.DotProduct(x.Flow)) < 0.7) continue;
-                var hit = pf.Project(x.Center);
-                if (hit is null || hit.Distance >= bestDistance) continue;
-                bestDistance = hit.Distance;
-                best = (pf.Reference, hit.XYZPoint);
-            }
+        foreach (var (pf, toModel) in HostFaces(x.Host, solids))
+        {
+            if (pf.Reference is null || Math.Abs(toModel.OfVector(pf.FaceNormal).DotProduct(x.Flow)) < 0.7) continue;
+            var hit = pf.Project(toModel.Inverse.OfPoint(x.Center));
+            if (hit is null || hit.Distance >= bestDistance) continue;
+            bestDistance = hit.Distance;
+            best = (pf.Reference, toModel.OfPoint(hit.XYZPoint));
+        }
         return best;
     }
 

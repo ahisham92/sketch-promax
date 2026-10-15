@@ -158,9 +158,11 @@ public sealed class ConvertCoordinatesTool : IRevitTool
 /// <summary>Reads placement tables from CSV or Excel (.xlsx, first sheet) into rows of column -> text.</summary>
 internal static class Table
 {
-    public static List<Dictionary<string, string>> Read(string path)
+    /// <summary>Rows of the table; <paramref name="separator"/> is the CSV field separator ('\0' for Excel).</summary>
+    public static List<Dictionary<string, string>> Read(string path, out char separator)
     {
-        var rows = Path.GetExtension(path).Equals(".xlsx", StringComparison.OrdinalIgnoreCase) ? Xlsx(path) : Csv(path);
+        separator = '\0';
+        var rows = Path.GetExtension(path).Equals(".xlsx", StringComparison.OrdinalIgnoreCase) ? Xlsx(path) : Csv(path, out separator);
         if (rows.Count < 2) return [];
         var header = rows[0].Select(h => h.Trim().ToLowerInvariant()).ToList();
         return rows.Skip(1).Where(r => r.Any(c => c.Trim().Length > 0)).Select(r =>
@@ -171,15 +173,19 @@ internal static class Table
         }).ToList();
     }
 
-    private static List<List<string>> Csv(string path)
+    private static List<List<string>> Csv(string path, out char separator)
     {
         var rows = new List<List<string>>();
-        foreach (var line in File.ReadAllLines(path))
+        var lines = File.ReadAllLines(path);
+        // The separator is whichever of , ; or tab the header uses most (decimal commas in data rows don't confuse it).
+        var header = lines.FirstOrDefault(l => l.Trim().Length > 0) ?? "";
+        var sep = new[] { ',', ';', '\t' }.OrderByDescending(ch => header.Count(x => x == ch)).First();
+        separator = sep;
+        foreach (var line in lines)
         {
             var cells = new List<string>();
             var cell = new StringBuilder();
             var quoted = false;
-            var sep = line.Contains(';') && !line.Contains(',') ? ';' : line.Contains('\t') && !line.Contains(',') ? '\t' : ',';
             for (var i = 0; i < line.Length; i++)
             {
                 var ch = line[i];
@@ -247,10 +253,11 @@ public sealed class PlaceManyTool : IRevitTool
     {
         var doc = app.ActiveUIDocument.Document;
         var rows = new List<Dictionary<string, string>>();
+        var separator = '\0';
         if (args.OptString("file") is { } file)
         {
             if (!File.Exists(file)) return ToolResult.Error($"File not found: {file}");
-            rows = Table.Read(file);
+            rows = Table.Read(file, out separator);
         }
         foreach (var p in args.Array("placements"))
         {
@@ -274,7 +281,8 @@ public sealed class PlaceManyTool : IRevitTool
         using var t = new Transaction(doc, $"Sketch ProMax: Place {rows.Count} x {source}");
         t.Start();
         var failure = t.GetFailureHandlingOptions();
-        failure.SetFailuresPreprocessor(new TypeKit.SwallowWarnings());
+        var swallow = new TypeKit.SwallowWarnings(doc);
+        failure.SetFailuresPreprocessor(swallow);
         t.SetFailureHandlingOptions(failure);
 
         FamilySymbol? symbol = null;
@@ -302,7 +310,9 @@ public sealed class PlaceManyTool : IRevitTool
                 {
                     if (!File.Exists(source)) throw new ArgumentException($"No linked model '{source}', and it isn't a file path.");
                     var result = RevitLinkType.Create(doc, ModelPathUtils.ConvertUserVisiblePathToModelPath(source), new RevitLinkOptions(false));
-                    linkType = (RevitLinkType)doc.GetElement(result.ElementId);
+                    if (result.LoadResult != LinkLoadResultType.LinkLoaded || doc.GetElement(result.ElementId) is not RevitLinkType loaded)
+                        throw new ArgumentException($"Revit could not load '{source}' as a link ({result.LoadResult}). Check that it is a Revit model of this version or older and not open elsewhere.");
+                    linkType = loaded;
                 }
                 break;
         }
@@ -315,12 +325,16 @@ public sealed class PlaceManyTool : IRevitTool
             rowNumber++;
             try
             {
-                double Num(string key, double fallback = 0) =>
-                    row.TryGetValue(key, out var s) && double.TryParse(s, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : fallback;
+                double Num(string key, bool required = false)
+                {
+                    if (!row.TryGetValue(key, out var s) || s.Length == 0)
+                        return required ? throw new ArgumentException($"no {key} value") : 0;
+                    return Parse(s, separator) ?? throw new ArgumentException($"{key} value '{s}' is not a number");
+                }
                 var level = row.TryGetValue("level", out var ln) && ln.Length > 0
                     ? levels.FirstOrDefault(l => string.Equals(l.Name, ln, StringComparison.OrdinalIgnoreCase)) ?? throw new ArgumentException($"no level '{ln}'")
                     : defaultLevel;
-                var point = new XYZ(RevitHelpers.ToInternal(doc, Num("x")), RevitHelpers.ToInternal(doc, Num("y")), 0);
+                var point = new XYZ(RevitHelpers.ToInternal(doc, Num("x", true)), RevitHelpers.ToInternal(doc, Num("y", true)), 0);
                 if (fromShared != null) point = fromShared.OfPoint(new XYZ(point.X, point.Y, 0));
                 var offset = RevitHelpers.ToInternal(doc, Num("z"));
                 var at = new XYZ(point.X, point.Y, level.Elevation + offset);
@@ -360,6 +374,17 @@ public sealed class PlaceManyTool : IRevitTool
             }
         }
         t.Commit();
-        return ToolResult.Ok(new { placed = created.Count, of = rows.Count, firstIds = created.Take(20), problems });
+        created.RemoveAll(id => swallow.Deleted.Contains(id));
+        return ToolResult.Ok(new { placed = created.Count, of = rows.Count, firstIds = created.Take(20), removedByRevit = swallow.Deleted.Take(50), problems });
+    }
+
+    /// <summary>A number written either way: 1.5, in this computer's format, or 1,5 in a semicolon-separated file.</summary>
+    private static double? Parse(string s, char separator)
+    {
+        const System.Globalization.NumberStyles style = System.Globalization.NumberStyles.Float;
+        if (double.TryParse(s, style, System.Globalization.CultureInfo.InvariantCulture, out var v)) return v;
+        if (double.TryParse(s, style, System.Globalization.CultureInfo.CurrentCulture, out v)) return v;
+        if (separator == ';' && double.TryParse(s.Replace(',', '.'), style, System.Globalization.CultureInfo.InvariantCulture, out v)) return v;
+        return null;
     }
 }

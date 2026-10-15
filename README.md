@@ -1,6 +1,6 @@
 # Sketch ProMax
 
-An AI agent for Autodesk Revit 2024, 2025, 2026 and 2027, powered by Claude. Ask in plain language; it reads, documents, audits and edits the open model through 101 tools, and it learns new ones as you use it. It asks for your approval before every change, and every change can be undone with Ctrl+Z.
+An AI agent for Autodesk Revit 2024, 2025, 2026 and 2027, powered by Claude. Ask in plain language; it reads, documents, audits and edits the open model through 108 tools, and it learns new ones as you use it. It asks for your approval before every change, and every change can be undone with Ctrl+Z.
 
 See [docs/PLAN.md](docs/PLAN.md) for the comparison with SketchPro, the roadmap and the architecture.
 
@@ -99,6 +99,10 @@ To publish an update: bump `<Version>` in both project files and push to `main`.
 
 
 **Openings and slabs:** find where pipes, ducts, cable trays and conduits (in this model or linked MEP models) cross walls, floors and beams, and add openings with your own opening family or a plain cut; cut notches or recesses into slab edges; add slab edges; lay out hollow core planks over a slab, room or outline with plank marks.
+**Title blocks:** list title block types and which sheets use them, find sheets with no title block or two, fill title block fields on many sheets at once (with {number} and {name} placeholders, and Project Information), swap the title block type, add missing ones and move them to the origin.
+
+**Detailing:** keynote tags, detail components (point and line-based, e.g. break lines, insulation, blocking), dimension strings through any grids, levels, reference planes, walls or family instances in plans and sections, and toposolids from survey points or a site outline.
+
 **Coordination:** write issues (elements, snapshot and camera) to a BCF file for ACC, Navisworks, Solibri or BIMcollab.
 
 **Anything else:** Claude can write and run short Revit API code (C#) for what no dedicated tool covers, such as stairs, railings, materials, curtain walls or MEP. Read-only code runs freely; code that changes the model is shown to you first and is one Undo step.
@@ -115,6 +119,8 @@ To publish an update: bump `<Version>` in both project files and push to `main`.
 - "Which Revit models do you have open? Switch to the Podium model."
 - "Add openings in the walls and slabs wherever the linked mechanical model's ducts and pipes pass, 50 mm clearance."
 - "Lay hollow core planks over the Level 2 slab, 1200 wide, spanning north-south."
+- "Put the A1 title block on every A-series sheet and fill Drawn By with AH and the date with today."
+- "Dimension columns C1 to C6 along grid B, then keynote the walls in this section."
 - "Color the Level 1 plan by room department and give me the legend."
 - (attach a chair cut sheet) "Make a family from this and place 6 in the meeting room."
 - (attach a sketch photo) "Turn this sketch into a 1:10 drafting view."
@@ -138,7 +144,7 @@ src/SketchProMax/            The Revit add-in (net48 for Revit 2024, net8.0-wind
   Agent/SystemPrompt         Instructions the desktop app receives from the connector
   Bridge/BridgeServer        Per-Revit-window named-pipe server the connector talks to
   Revit/                     Main-thread dispatcher (ExternalEvent), helpers, Revit 2024 dependency loader
-  Tools/                     The 99 IRevitTool implementations and the registry (CodeTools compiles C# with Roslyn)
+  Tools/                     The 106 IRevitTool implementations and the registry (CodeTools compiles C# with Roslyn)
   UI/                        Settings dialog
   Settings/                  Per-user settings (approval switch, auto-update, firm standards)
   Update/Updater             Self-update from GitHub Releases

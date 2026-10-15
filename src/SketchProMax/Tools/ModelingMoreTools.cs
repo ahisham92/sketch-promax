@@ -24,14 +24,60 @@ internal static class TypeKit
     public static List<XYZ> Points(Document doc, JsonElement array, double z) =>
         array.EnumerateArray().Select(p => ViewKit.Point(doc, p, z)).ToList();
 
-    /// <summary>Accepts Revit warnings during a commit so they don't block the change.</summary>
+    /// <summary>
+    /// Failure handling for batch commits. Warnings are dismissed. An error caused only by elements this transaction
+    /// created deletes those elements, and an error Revit can fix without deleting anything is resolved, so one bad
+    /// item doesn't undo a whole batch. Anything else falls through to FailureGuard, which rolls the transaction back.
+    /// (This preprocessor runs before the global FailuresProcessing event; when it handles something it asks Revit to
+    /// commit again, and the new pass is checked from the start.) Construct it with the document right after the
+    /// transaction starts so it can tell new elements (ids above every existing id) from the user's; without the
+    /// document it never deletes anything.
+    /// </summary>
     public sealed class SwallowWarnings : IFailuresPreprocessor
     {
+        private readonly long _lastExistingId = long.MaxValue;
+        private int _passes;
+
+        /// <summary>Ids of new elements deleted to settle errors.</summary>
+        public List<long> Deleted { get; } = [];
+
+        public SwallowWarnings() { }
+
+        public SwallowWarnings(Document doc) =>
+            _lastExistingId = new FilteredElementCollector(doc).WhereElementIsNotElementType().ToElementIds()
+                .Concat(new FilteredElementCollector(doc).WhereElementIsElementType().ToElementIds())
+                .Select(id => id.Value).DefaultIfEmpty(0).Max();
+
         public FailureProcessingResult PreprocessFailures(FailuresAccessor accessor)
         {
+            var handled = false;
+            var deleting = new HashSet<long>();
             foreach (var f in accessor.GetFailureMessages())
-                if (f.GetSeverity() == FailureSeverity.Warning) accessor.DeleteWarning(f);
-            return FailureProcessingResult.Continue;
+            {
+                if (f.GetSeverity() == FailureSeverity.Warning) { accessor.DeleteWarning(f); continue; }
+                if (f.GetSeverity() != FailureSeverity.Error || _passes >= 5) continue; // still failing after 5 tries: let FailureGuard roll back
+                var failing = f.GetFailingElementIds().Select(id => id.Value).ToList();
+                try
+                {
+                    if (failing.Count > 0 && failing.All(id => id > _lastExistingId))
+                    {
+                        var fresh = failing.Where(id => !deleting.Contains(id)).ToList();
+                        if (fresh.Count > 0) accessor.DeleteElements(fresh.Select(id => new ElementId(id)).ToList());
+                        deleting.UnionWith(fresh);
+                        handled = true;
+                    }
+                    else if (f.HasResolutions() && f.GetCurrentResolutionType() != FailureResolutionType.DeleteElements)
+                    {
+                        accessor.ResolveFailure(f);
+                        handled = true;
+                    }
+                }
+                catch (Autodesk.Revit.Exceptions.ApplicationException) { }
+            }
+            if (!handled) return FailureProcessingResult.Continue;
+            Deleted.AddRange(deleting);
+            _passes++;
+            return FailureProcessingResult.ProceedWithCommit;
         }
     }
 }
@@ -428,17 +474,21 @@ public sealed class DimensionOpeningsTool : IRevitTool
         return ToolResult.Ok(new { dimensionStrings = created.Count, ids = created, skipped });
     }
 
-    /// <summary>The two end faces of a straight wall, found from its geometry.</summary>
+    /// <summary>The two end faces of a straight wall, found from its geometry (not the jambs of openings or recesses).</summary>
     private static IEnumerable<Reference> WallEnds(Wall wall)
     {
         var line = (Line)((LocationCurve)wall.Location).Curve;
         var dir = line.Direction;
+        var start = line.GetEndPoint(0);
         var geometry = wall.get_Geometry(new Options { ComputeReferences = true });
         if (geometry is null) yield break;
         foreach (var solid in geometry.OfType<Solid>())
             foreach (Face face in solid.Faces)
-                if (face is PlanarFace pf && Math.Abs(pf.FaceNormal.DotProduct(dir)) > 0.99 && pf.Reference != null)
-                    yield return pf.Reference;
+            {
+                if (face is not PlanarFace pf || Math.Abs(pf.FaceNormal.DotProduct(dir)) <= 0.99 || pf.Reference is null) continue;
+                var along = (pf.Origin - start).DotProduct(dir);
+                if (Math.Abs(along) < 0.05 || Math.Abs(along - line.Length) < 0.05) yield return pf.Reference;
+            }
     }
 }
 
@@ -463,9 +513,11 @@ public sealed class DimensionRoomsTool : IRevitTool
         var doc = app.ActiveUIDocument.Document;
         if (ViewKit.ViewOrActive(doc, args.OptLong("view_id")) is not ViewPlan view) return ToolResult.Error("Use a plan view.");
         var ids = args.LongList("room_ids");
-        var rooms = ids.Count > 0
-            ? ids.Select(i => doc.GetElement(new ElementId(i))).OfType<Room>().ToList()
-            : new FilteredElementCollector(doc, view.Id).OfCategory(BuiltInCategory.OST_Rooms).OfType<Room>().Where(r => r.Area > 0).ToList();
+        // Unplaced or unenclosed rooms (area 0) have no boundary to dimension.
+        var rooms = (ids.Count > 0
+                ? ids.Select(i => doc.GetElement(new ElementId(i))).OfType<Room>()
+                : new FilteredElementCollector(doc, view.Id).OfCategory(BuiltInCategory.OST_Rooms).OfType<Room>())
+            .Where(r => r.Area > 0).ToList();
         var which = args.OptString("directions") ?? "both";
         var z = view.GenLevel?.Elevation ?? 0;
         var created = new List<long>();
@@ -478,7 +530,9 @@ public sealed class DimensionRoomsTool : IRevitTool
             var c = lp.Point;
             var faces = new List<PlanarFace>();
             var refs = new Dictionary<PlanarFace, Reference>();
-            var walls = room.GetBoundarySegments(new SpatialElementBoundaryOptions()).SelectMany(l => l)
+            var boundary = room.GetBoundarySegments(new SpatialElementBoundaryOptions());
+            if (boundary is null) { skipped.Add($"{room.Number}: no boundary"); continue; }
+            var walls = boundary.Where(l => l != null).SelectMany(l => l).Where(seg => seg != null)
                 .Select(seg => doc.GetElement(seg.ElementId)).OfType<Wall>().Distinct();
             foreach (var wall in walls)
                 foreach (var shell in new[] { ShellLayerType.Interior, ShellLayerType.Exterior })

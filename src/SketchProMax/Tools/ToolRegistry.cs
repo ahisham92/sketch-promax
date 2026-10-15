@@ -124,6 +124,17 @@ public sealed class ToolRegistry
         new AddSlabEdgesTool(),
         new HollowCoreLayoutTool(),
 
+        // Title blocks
+        new ListTitleBlocksTool(),
+        new FillTitleBlocksTool(),
+        new SetSheetTitleBlockTool(),
+
+        // Detailing
+        new AddKeynoteTagsTool(),
+        new PlaceDetailComponentsTool(),
+        new DimensionElementsTool(),
+        new CreateToposolidTool(),
+
         // Activity log
         new GetActivityLogTool(),
         new ListRecipesTool(),

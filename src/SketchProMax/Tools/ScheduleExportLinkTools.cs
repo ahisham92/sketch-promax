@@ -100,17 +100,20 @@ public sealed class FormatScheduleTool : IRevitTool
             try
             {
                 if (value is null) def.AddFilter(new ScheduleFilter(field.FieldId, op));
-                else
+                else if (SpecOf(field) is { } fieldSpec && UnitUtils.IsMeasurableSpec(fieldSpec))
                 {
-                    try { def.AddFilter(new ScheduleFilter(field.FieldId, op, value)); }
-                    catch (Autodesk.Revit.Exceptions.ArgumentException) when (double.TryParse(value, out var number))
+                    // Measurable fields (length, area, volume, angle, ...) compare in internal units; parse as Revit would ('2100 mm', '3.5').
+                    if (!UnitFormatUtils.TryParse(doc.GetUnits(), fieldSpec, value, out double number))
                     {
-                        // Numeric field: lengths are compared in internal units.
-                        var spec2 = field.GetSpecTypeId();
-                        var internalValue = spec2 == SpecTypeId.Length ? RevitHelpers.ToInternal(doc, number) : number;
-                        def.AddFilter(new ScheduleFilter(field.FieldId, op, internalValue));
+                        problems.Add($"filter on {field.GetName()}: '{value}' is not a valid value; type a number, with units if needed (e.g. '2100 mm').");
+                        continue;
                     }
+                    def.AddFilter(new ScheduleFilter(field.FieldId, op, number));
                 }
+                else if (SpecOf(field) == SpecTypeId.Int.Integer
+                         && int.TryParse(value, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var whole))
+                    def.AddFilter(new ScheduleFilter(field.FieldId, op, whole));
+                else def.AddFilter(new ScheduleFilter(field.FieldId, op, value));
             }
             catch (Autodesk.Revit.Exceptions.ApplicationException ex) { problems.Add($"filter on {field.GetName()}: {ex.Message}"); }
         }
@@ -142,6 +145,13 @@ public sealed class FormatScheduleTool : IRevitTool
         }
         t.Commit();
         return ToolResult.Ok(new { schedule = schedule.Name, fields = Enumerable.Range(0, def.GetFieldCount()).Select(i => def.GetField(i).ColumnHeading), problems });
+    }
+
+    /// <summary>The field's data type, or null for fields that have none (e.g. formulas Revit can't type, count).</summary>
+    private static ForgeTypeId? SpecOf(ScheduleField field)
+    {
+        try { return field.GetSpecTypeId() is { } id && !id.Empty() ? id : null; }
+        catch (Autodesk.Revit.Exceptions.ApplicationException) { return null; }
     }
 }
 
@@ -233,7 +243,9 @@ public sealed class ExportFilesTool : IRevitTool
         Directory.CreateDirectory(folder);
         var name = args.OptString("file_name") ?? $"{doc.Title} - {DateTime.Now:yyyy-MM-dd HHmm}";
         var ids = args.LongList("view_ids").Select(i => new ElementId(i)).ToList();
+        // Exports overwrite same-named files, so a file counts as produced if it is new or was written after we started.
         var before = new HashSet<string>(Directory.GetFiles(folder), StringComparer.OrdinalIgnoreCase);
+        var started = DateTime.UtcNow.AddSeconds(-2);
         var format = args.String("format");
 
         switch (format)
@@ -291,7 +303,8 @@ public sealed class ExportFilesTool : IRevitTool
             }
         }
 
-        var files = Directory.GetFiles(folder).Where(f => !before.Contains(f)).Select(Path.GetFileName).ToList();
+        var files = Directory.GetFiles(folder).Where(f => !before.Contains(f) || File.GetLastWriteTimeUtc(f) >= started)
+            .Select(Path.GetFileName).ToList();
         return ToolResult.Ok(new { folder, files });
     }
 }
@@ -345,8 +358,7 @@ public sealed class QueryLinkedModelsTool : IRevitTool
             var counts = new FilteredElementCollector(linkDoc).WhereElementIsNotElementType()
                 .Where(e => e.Category != null && e.Category.CategoryType == CategoryType.Model && !e.ViewSpecific
                             && !e.Category.Name.StartsWith("<", StringComparison.Ordinal)
-                            && e.Category.Name.IndexOf("Analytical", StringComparison.OrdinalIgnoreCase) < 0
-                            && e.get_BoundingBox(null) != null)
+                            && e.Category.Name.IndexOf("Analytical", StringComparison.OrdinalIgnoreCase) < 0)
                 .GroupBy(e => e.Category.Name).Select(g => new { category = g.Key, count = g.Count() })
                 .OrderByDescending(x => x.count).ToList();
             return ToolResult.Ok(new { link = link.Name, categories = counts });

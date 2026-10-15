@@ -1,5 +1,9 @@
 using System.IO;
 using System.IO.Pipes;
+#if NETFRAMEWORK
+using System.Security.AccessControl;
+using System.Security.Principal;
+#endif
 using System.Text;
 using System.Text.Json;
 using Autodesk.Revit.UI;
@@ -83,43 +87,86 @@ public sealed class BridgeServer
                 description = ToolSchema.Description(t),
                 inputSchema = ToolSchema.InputSchema(t),
             });
-            File.WriteAllText(ToolsFile, JsonSerializer.Serialize(tools, new JsonSerializerOptions { WriteIndented = true }));
+            // Written to a temp file and swapped in, so the MCP server never reads a half-written catalogue.
+            var temp = ToolsFile + $".{SessionId}.tmp";
+            File.WriteAllText(temp, JsonSerializer.Serialize(tools, new JsonSerializerOptions { WriteIndented = true }));
+            try
+            {
+                if (File.Exists(ToolsFile)) File.Replace(temp, ToolsFile, null);
+                else File.Move(temp, ToolsFile);
+            }
+            catch (IOException)
+            {
+                // Another Revit window wrote it at the same moment; copying over is still better than a stale file.
+                File.Copy(temp, ToolsFile, true);
+            }
+            finally
+            {
+                try { File.Delete(temp); } catch (IOException) { }
+            }
         }
-        catch (IOException) { /* non-fatal: the MCP server reports that Revit hasn't run yet */ }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            /* non-fatal: the MCP server reports that Revit hasn't run yet */
+        }
     }
 
     private async Task AcceptLoop(CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)
         {
-            NamedPipeServerStream pipe;
+            NamedPipeServerStream? pipe = null;
             try
             {
                 // Several connections at once: a status ping must not wait behind a long tool call.
-                pipe = new NamedPipeServerStream(PipeName, PipeDirection.InOut, NamedPipeServerStream.MaxAllowedServerInstances,
-                    PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
+                pipe = CreatePipe();
                 IsListening = true;
                 await pipe.WaitForConnectionAsync(ct).ConfigureAwait(false);
             }
-            catch (OperationCanceledException) { return; }
-            catch (IOException)
+            catch (OperationCanceledException) { pipe?.Dispose(); return; }
+            catch (Exception)
             {
-                await Task.Delay(2000, ct).ConfigureAwait(false);
+                // Whatever went wrong (pipe name taken, out of handles...), keep trying rather than go quiet for good.
+                pipe?.Dispose();
+                IsListening = false;
+                try { await Task.Delay(2000, ct).ConfigureAwait(false); }
+                catch (OperationCanceledException) { return; }
                 continue;
             }
             _ = Task.Run(() => Serve(pipe, ct));
         }
     }
 
+    /// <summary>A pipe only this Windows user can open, and never from another machine.</summary>
+    private static NamedPipeServerStream CreatePipe()
+    {
+#if NETFRAMEWORK
+        var security = new PipeSecurity();
+        var user = WindowsIdentity.GetCurrent().User ?? throw new InvalidOperationException("No current Windows user.");
+        security.AddAccessRule(new PipeAccessRule(user, PipeAccessRights.FullControl, AccessControlType.Allow));
+        security.AddAccessRule(new PipeAccessRule(new SecurityIdentifier(WellKnownSidType.NetworkSid, null),
+            PipeAccessRights.FullControl, AccessControlType.Deny));
+        return new NamedPipeServerStream(PipeName, PipeDirection.InOut, NamedPipeServerStream.MaxAllowedServerInstances,
+            PipeTransmissionMode.Byte, PipeOptions.Asynchronous, 0, 0, security);
+#else
+        // CurrentUserOnly gives the pipe an ACL for this user alone.
+        return new NamedPipeServerStream(PipeName, PipeDirection.InOut, NamedPipeServerStream.MaxAllowedServerInstances,
+            PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+#endif
+    }
+
     private async Task Serve(NamedPipeServerStream pipe, CancellationToken ct)
     {
         using (pipe)
+        using (var request = CancellationTokenSource.CreateLinkedTokenSource(ct))
         {
             try
             {
                 var reader = new StreamReader(pipe, new UTF8Encoding(false), false, 4096, leaveOpen: true);
                 var line = await reader.ReadLineAsync().ConfigureAwait(false);
-                var response = line is null ? Error("empty request") : await Handle(line).ConfigureAwait(false);
+                // If the connector goes away (Claude cancelled the call), work still queued for Revit is dropped.
+                _ = WatchForDisconnect(pipe, request);
+                var response = line is null ? Error("empty request") : await Handle(line, request.Token).ConfigureAwait(false);
                 var bytes = new UTF8Encoding(false).GetBytes(response + "\n");
                 await pipe.WriteAsync(bytes, 0, bytes.Length, ct).ConfigureAwait(false);
                 await pipe.FlushAsync(ct).ConfigureAwait(false);
@@ -129,10 +176,30 @@ public sealed class BridgeServer
         }
     }
 
+    /// <summary>
+    /// The connector sends one line and then only reads, so a read that ends means it disconnected. Cancels the request
+    /// then. Once the response is sent the pipe is disposed, which ends this read too; the request is over by then.
+    /// </summary>
+    private static async Task WatchForDisconnect(Stream pipe, CancellationTokenSource request)
+    {
+        var gone = false;
+        try
+        {
+            var buffer = new byte[1];
+            while (await pipe.ReadAsync(buffer, 0, 1, request.Token).ConfigureAwait(false) > 0) { }
+            gone = true;
+        }
+        catch (IOException) { gone = true; }
+        catch (Exception) { /* disposed or cancelled: the request finished normally */ }
+        if (!gone) return;
+        try { request.Cancel(); }
+        catch (ObjectDisposedException) { }
+    }
+
     // The open models as of the last time Revit answered, for pings that arrive while Revit is busy.
     private volatile object _lastDocuments = Array.Empty<object>();
 
-    private async Task<string> Handle(string line)
+    private async Task<string> Handle(string line, CancellationToken ct)
     {
         try
         {
@@ -148,7 +215,7 @@ public sealed class BridgeServer
                             .Where(d => !d.IsFamilyDocument && !d.IsLinked)
                             .Select(d => new { title = d.Title, path = d.PathName, active = active != null && d.Equals(active) })
                             .ToList();
-                    });
+                    }, ct);
                     // Revit only answers when idle; a busy Revit still reports itself, with the last known models.
                     var busy = await Task.WhenAny(lookup, Task.Delay(1500)).ConfigureAwait(false) != lookup;
                     if (!busy) _lastDocuments = await lookup.ConfigureAwait(false);
@@ -156,7 +223,7 @@ public sealed class BridgeServer
 
                 case "activate_document":
                     var wanted = root.GetProperty("title").GetString() ?? "";
-                    var error = await _dispatcher.InvokeAsync(app => Activate(app, wanted)).ConfigureAwait(false);
+                    var error = await _dispatcher.InvokeAsync(app => Activate(app, wanted), ct).ConfigureAwait(false);
                     return error is null ? JsonSerializer.Serialize(new { ok = true }) : Error(error);
 
                 case "call_tool":
@@ -164,7 +231,7 @@ public sealed class BridgeServer
                     var args = root.TryGetProperty("arguments", out var a) && a.ValueKind == JsonValueKind.Object
                         ? a.EnumerateObject().ToDictionary(p => p.Name, p => p.Value.Clone())
                         : new Dictionary<string, JsonElement>();
-                    var result = await CallTool(name, args).ConfigureAwait(false);
+                    var result = await CallTool(name, args, ct).ConfigureAwait(false);
                     return JsonSerializer.Serialize(new
                     {
                         text = result.Text,
@@ -182,7 +249,7 @@ public sealed class BridgeServer
         }
     }
 
-    private Task<ToolResult> CallTool(string name, Dictionary<string, JsonElement> args)
+    private Task<ToolResult> CallTool(string name, Dictionary<string, JsonElement> args, CancellationToken ct)
     {
         if (name == "run_learned_tool" && args.TryGetValue("name", out var inner) && inner.ValueKind == JsonValueKind.String
             && LearnedTools.Load(inner.GetString()!) is { } learned)
@@ -195,7 +262,9 @@ public sealed class BridgeServer
         }
         var tool = _registry.Find(name);
         if (tool is null) return Task.FromResult(ToolResult.Error($"Unknown tool '{name}'."));
-        var confirm = tool.ModifiesModel && AgentSettings.Load().RequireApprovalForChanges;
+        // A learned tool's code is asked about the first time it runs (and after it changes), even when read-only.
+        var confirm = tool.ModifiesModel && AgentSettings.Load().RequireApprovalForChanges
+                      || tool is LearnedTool unapproved && !LearnedTools.IsApproved(unapproved.Code);
 
         return _dispatcher.InvokeAsync(app =>
         {
@@ -207,9 +276,9 @@ public sealed class BridgeServer
                 try { return tool.Execute(app, new ToolArgs(args)); }
                 catch (Exception ex) { return ToolResult.Error(Describe(tool, ex)); }
             });
-            ActivityLog.Write(app.ActiveUIDocument.Document.Title, tool, args, result);
+            ActivityLog.Write(app.ActiveUIDocument?.Document?.Title ?? "", tool, args, result);
             return Capped(result);
-        });
+        }, ct);
     }
 
     /// <summary>Makes the named open model the active one, so tools act on it. Returns an error message or null.</summary>
@@ -232,24 +301,47 @@ public sealed class BridgeServer
         }
     }
 
-    private static bool Approve(IRevitTool tool, Dictionary<string, JsonElement> args)
+    /// <summary>
+    /// Asks the user before a tool runs. Call on Revit's main thread. Approving a learned tool also approves its code,
+    /// so it isn't asked about again until the code changes.
+    /// </summary>
+    internal static bool Approve(IRevitTool tool, IReadOnlyDictionary<string, JsonElement> args)
     {
         // Show code as code, so the user can read what will run.
         var json = tool is LearnedTool learned
             ? $"Learned tool: {learned.Summary}\n\nInputs: {JsonSerializer.Serialize(args)}\n\n{learned.Code}"
             : args.TryGetValue("code", out var code) && code.ValueKind == JsonValueKind.String
             ? (args.TryGetValue("description", out var d) ? d.GetString() + "\n\n" : "") + code.GetString()
-            : JsonSerializer.Serialize(args, new JsonSerializerOptions { WriteIndented = true });
+            : JsonSerializer.Serialize(args, new JsonSerializerOptions { WriteIndented = true }) + RecipeText(tool, args);
         if (json.Length > 6000) json = json.Substring(0, 6000) + "\n…";
+        var firstRun = tool is LearnedTool l && !LearnedTools.IsApproved(l.Code);
         var dialog = new TaskDialog("Sketch ProMax")
         {
             MainInstruction = $"Claude wants to run '{tool.Name}'",
-            MainContent = "This changes the model. Each change can be undone with Ctrl+Z.",
+            MainContent = (firstRun ? "This learned tool's code has not been approved on this PC yet, or it changed since. Read it below. " : "") +
+                          (tool.ModifiesModel
+                              ? "This changes the model. Each change can be undone with Ctrl+Z."
+                              : "It only reads the model; any change it tries is rolled back."),
             ExpandedContent = json,
             CommonButtons = TaskDialogCommonButtons.Yes | TaskDialogCommonButtons.No,
-            DefaultButton = TaskDialogResult.Yes,
+            DefaultButton = TaskDialogResult.No,
         };
-        return dialog.Show() == TaskDialogResult.Yes;
+        var yes = dialog.Show() == TaskDialogResult.Yes;
+        if (yes && tool is LearnedTool approved) LearnedTools.MarkApproved(approved.Code);
+        return yes;
+    }
+
+    /// <summary>For run_recipe and batch_run_recipe, the recipe's own steps, so the user sees what will actually run.</summary>
+    private static string RecipeText(IRevitTool tool, IReadOnlyDictionary<string, JsonElement> args)
+    {
+        var key = tool.Name switch { "run_recipe" => "name", "batch_run_recipe" => "recipe", _ => null };
+        if (key is null || !args.TryGetValue(key, out var name) || name.ValueKind != JsonValueKind.String) return "";
+        try
+        {
+            var path = Recipes.PathFor(name.GetString()!);
+            return File.Exists(path) ? $"\n\nRecipe ({path}):\n{File.ReadAllText(path)}" : "\n\n(No recipe file with that name.)";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException) { return ""; }
     }
 
     /// <summary>An unexpected exception, with where it happened so a bug report can be fixed without guessing.</summary>
