@@ -111,7 +111,9 @@ public sealed class CreateStairsTool : IRevitTool
         var baseLevel = RevitHelpers.FindLevel(doc, args.String("base_level"));
         var topLevel = RevitHelpers.FindLevel(doc, args.String("top_level"));
         if (topLevel.ProjectElevation <= baseLevel.ProjectElevation) return ToolResult.Error("The top level must be above the base level.");
-        var start = ViewKit.Point(doc, args.Raw["start"], baseLevel.ProjectElevation);
+        // Run location paths are drawn at the run's base elevation measured from the stairs' base level, not in model Z.
+        var start = ViewKit.Point(doc, args.Raw["start"], 0);
+        start = new XYZ(start.X, start.Y, 0);
         var d = args.Raw["direction"];
         var dir = new XYZ(d[0].GetDouble(), d[1].GetDouble(), 0).Normalize();
 
@@ -140,6 +142,9 @@ public sealed class CreateStairsTool : IRevitTool
                 var r1 = (int)(args.OptLong("first_run_risers") ?? risers / 2);
                 var r2 = risers - r1;
                 if (r1 < 2 || r2 < 2) throw new ArgumentException("Each run needs at least 2 risers.");
+                var riserHeight = stairs.ActualRiserHeight > 1e-9
+                    ? stairs.ActualRiserHeight
+                    : (topLevel.ProjectElevation - baseLevel.ProjectElevation) / Math.Max(1, risers);
                 var run1 = StairsRun.CreateStraightRun(doc, stairsId,
                     Line.CreateBound(start, start + dir * (r1 - 1) * tread), StairsRunJustification.Center);
                 if (width is { } rw1) run1.ActualRunWidth = rw1;
@@ -157,10 +162,11 @@ public sealed class CreateStairsTool : IRevitTool
                     start2 = end1 + side * runWidth;
                     dir2 = -dir;
                 }
+                // The second run starts where the first one ends: r1 risers above the stairs' base.
+                start2 = new XYZ(start2.X, start2.Y, r1 * riserHeight);
                 var run2 = StairsRun.CreateStraightRun(doc, stairsId,
                     Line.CreateBound(start2, start2 + dir2 * (r2 - 1) * tread), StairsRunJustification.Center);
                 run2.ActualRunWidth = runWidth;
-                run2.BaseElevation = run1.TopElevation;
                 if (StairsLanding.CanCreateAutomaticLanding(doc, run1.Id, run2.Id))
                     StairsLanding.CreateAutomaticLanding(doc, run1.Id, run2.Id);
             }
@@ -169,14 +175,35 @@ public sealed class CreateStairsTool : IRevitTool
         }
 
         var railingIds = new List<long>();
+        string? railingNote = null;
         if (args.OptBool("railings", true))
         {
-            using var t = RevitHelpers.StartTransaction(doc, "Stair railings");
-            var type = TypeKit.Pick<RailingType>(doc, args.OptString("railing_type"), "railing");
-            foreach (var id in Railing.Create(doc, stairsId, type.Id, RailingPlacementPosition.Treads)) railingIds.Add(id.Value);
-            t.Commit();
+            railingNote = CreateRailingsTool.NoRailingTypes(doc);
+            if (railingNote is null)
+            {
+                var created = new List<ElementId>();
+                using (var t = RevitHelpers.StartTransaction(doc, "Stair railings"))
+                {
+                    try
+                    {
+                        var type = TypeKit.Pick<RailingType>(doc, args.OptString("railing_type"), "railing");
+                        created.AddRange(Railing.Create(doc, stairsId, type.Id, RailingPlacementPosition.Treads));
+                    }
+                    catch (Exception ex) when (ex is Autodesk.Revit.Exceptions.ApplicationException or ArgumentException or InvalidOperationException)
+                    {
+                        railingNote = "The stair was made, but its railings weren't: " + ex.Message.Trim();
+                    }
+                    if (t.GetStatus() == TransactionStatus.Started) t.Commit();
+                }
+                // Revit can roll railings back at commit (e.g. a railing type whose rail or baluster families are missing).
+                railingIds = CreateRailingsTool.Surviving(doc, created);
+                if (railingNote is null && created.Count > 0 && railingIds.Count < created.Count)
+                    railingNote = railingIds.Count == 0
+                        ? "Revit removed the railings when committing, so the stair has none. Check that the railing type's rail and baluster families are loaded."
+                        : $"Revit removed {created.Count - railingIds.Count} of {created.Count} railings when committing.";
+            }
         }
-        return ToolResult.Ok(new { stairsId = stairsId.Value, risers, railings = railingIds });
+        return ToolResult.Ok(new { stairsId = stairsId.Value, risers, railings = railingIds, railingNote });
     }
 }
 
@@ -198,22 +225,39 @@ public sealed class CreateRailingsTool : IRevitTool
     public ToolResult Execute(UIApplication app, ToolArgs args)
     {
         var doc = app.ActiveUIDocument.Document;
+        if (NoRailingTypes(doc) is { } none) return ToolResult.Error(none);
+        if (args.OptLong("host_id") is null && !args.Has("points")) return ToolResult.Error("Give points or host_id.");
         var type = TypeKit.Pick<RailingType>(doc, args.OptString("railing_type"), "railing");
-        using var t = RevitHelpers.StartTransaction(doc, "Create railing");
-        List<long> ids;
-        if (args.OptLong("host_id") is { } host)
-            ids = Railing.Create(doc, new ElementId(host), type.Id, RailingPlacementPosition.Treads).Select(i => i.Value).ToList();
-        else
+        var created = new List<ElementId>();
+        using (var t = RevitHelpers.StartTransaction(doc, "Create railing"))
         {
-            var level = RevitHelpers.FindLevel(doc, args.OptString("level"));
-            var pts = TypeKit.Points(doc, args.Raw["points"], level.ProjectElevation);
-            var loop = new CurveLoop();
-            for (var i = 0; i + 1 < pts.Count; i++) loop.Append(Line.CreateBound(pts[i], pts[i + 1]));
-            ids = [Railing.Create(doc, loop, type.Id, level.Id).Id.Value];
+            if (args.OptLong("host_id") is { } host)
+                created.AddRange(Railing.Create(doc, new ElementId(host), type.Id, RailingPlacementPosition.Treads));
+            else
+            {
+                var level = RevitHelpers.FindLevel(doc, args.OptString("level"));
+                var pts = TypeKit.Points(doc, args.Raw["points"], level.ProjectElevation);
+                var loop = new CurveLoop();
+                for (var i = 0; i + 1 < pts.Count; i++) loop.Append(Line.CreateBound(pts[i], pts[i + 1]));
+                created.Add(Railing.Create(doc, loop, type.Id, level.Id).Id);
+            }
+            t.Commit();
         }
-        t.Commit();
-        return ToolResult.Ok(new { railings = ids });
+        // Only report railings that are still there after the commit: Revit can roll them back.
+        var ids = Surviving(doc, created);
+        if (created.Count > 0 && ids.Count == 0)
+            return ToolResult.Error("Revit removed the railing when committing, so nothing was created. Check that the railing type's rail and baluster families are loaded.");
+        return ToolResult.Ok(new { railings = ids, removedByRevit = created.Count - ids.Count });
     }
+
+    /// <summary>A message when the model has no railing types to use, else null.</summary>
+    internal static string? NoRailingTypes(Document doc) =>
+        new FilteredElementCollector(doc).OfClass(typeof(RailingType)).GetElementCount() == 0
+            ? "No railing type loaded, so no railings were added. Load a railing type (e.g. from a template or another project with Transfer Project Standards) and run create_railings."
+            : null;
+
+    internal static List<long> Surviving(Document doc, IEnumerable<ElementId> ids) =>
+        ids.Where(id => doc.GetElement(id) is { IsValidObject: true }).Select(id => id.Value).ToList();
 }
 
 public sealed class CreateRoomSeparationLinesTool : IRevitTool
@@ -372,15 +416,55 @@ public sealed class CreateMepRunsTool : IRevitTool
 
         var elbows = 0;
         var problems = new List<string>();
+        var missingElbow = segments.Count > 1 ? MissingElbow(doc, segments[0]) : null;
         for (var i = 0; i + 1 < segments.Count; i++)
         {
             var (a, b) = Closest(segments[i], segments[i + 1]);
             if (a is null || b is null) continue;
             try { doc.Create.NewElbowFitting(a, b); elbows++; }
-            catch (Autodesk.Revit.Exceptions.ApplicationException ex) { problems.Add($"turn {i + 1}: {ex.Message}"); }
+            catch (Autodesk.Revit.Exceptions.ApplicationException ex)
+            {
+                problems.Add(missingElbow != null ? $"turn {i + 1}: no elbow made. {missingElbow}" : $"turn {i + 1}: {ex.Message.Trim()}");
+            }
         }
         t.Commit();
         return ToolResult.Ok(new { segments = segments.Select(s => s.Id.Value), elbows, problems });
+    }
+
+    /// <summary>
+    /// Why Revit can't make an elbow for this segment's type, when the reason is that no elbow fitting is set:
+    /// ducts and pipes take elbows from the type's routing preferences, cable trays and conduits from the type's
+    /// Horizontal Bend / Bend fitting. Null when an elbow is set (or it can't be told).
+    /// </summary>
+    private static string? MissingElbow(Document doc, MEPCurve seg)
+    {
+        try
+        {
+            if (doc.GetElement(seg.GetTypeId()) is not MEPCurveType type) return null;
+            if (seg is Duct or Pipe)
+            {
+                var rpm = type.RoutingPreferenceManager;
+                if (rpm is null) return null;
+                var rules = rpm.GetNumberOfRules(RoutingPreferenceRuleGroupType.Elbows);
+                var hasPart = false;
+                for (var i = 0; i < rules; i++)
+                {
+                    var partId = rpm.GetRule(RoutingPreferenceRuleGroupType.Elbows, i).MEPPartId;
+                    if (partId != ElementId.InvalidElementId && doc.GetElement(partId) != null) { hasPart = true; break; }
+                }
+                return hasPart ? null
+                    : $"The {(seg is Duct ? "duct" : "pipe")} type '{type.Name}' has no elbow fitting in its routing preferences. " +
+                      "Load an elbow family and set it under Edit Type > Routing Preferences > Elbows, then run again.";
+            }
+            var bend = type.get_Parameter(BuiltInParameter.RBS_CURVETYPE_DEFAULT_HORIZONTAL_BEND_PARAM)
+                       ?? type.get_Parameter(BuiltInParameter.RBS_CURVETYPE_DEFAULT_BEND_PARAM);
+            if (bend is null) return null;
+            var bendId = bend.AsElementId();
+            return bendId != ElementId.InvalidElementId && doc.GetElement(bendId) != null ? null
+                : $"The {(seg is CableTray ? "cable tray" : "conduit")} type '{type.Name}' has no bend fitting set. " +
+                  "Load a bend family and set it in the type's Fittings (Horizontal Bend / Bend), then run again.";
+        }
+        catch (Autodesk.Revit.Exceptions.ApplicationException) { return null; }
     }
 
     private static void SetSize(Document doc, MEPCurve seg, ToolArgs args)
