@@ -180,6 +180,12 @@ public sealed class ToolRegistry
         new FindMissingItemsTool(),
         new ModelSnapshotTool(),
         new CoordinationProgressTool(),
+        new BoqCheckTool(),
+        new BoqItemBreakdownTool(),
+        new CostEstimateTool(),
+        new SpecCheckTool(),
+        new AnalyticalCheckTool(),
+        new ExportAnalyticalTool(),
         new CreateRaftTool(),
         new WorkProgressTool(),
 

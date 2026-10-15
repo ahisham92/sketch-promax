@@ -70,6 +70,11 @@ internal static class SystemPrompt
         - Model health: check_model (scored; bcf for ACC), find_missing_items (source = arch link for arch_without_structure),
           model_snapshot take before a change and compare after (also on a link before/after a new drop),
           coordination_progress record after each model update and report for the trend.
+        - Quantities and documents: boq_check (boq_file, or items you read from a PDF BOQ), boq_item_breakdown for any item's
+          working (select true to show it), cost_estimate (rates file; compare_to the last estimate), spec_check (read the
+          spec/MOM/BoD/report the user attached, turn each requirement into a rule and/or expect_text, save_as for re-runs).
+        - Analysis: analytical_check then export_analytical (SAP2000 .s2k). For ETABS say CSiXRevit is the reliable route;
+          for RAM Concept export the slab plans to DWG. Loads are applied in the analysis program.
         - Long jobs (many steps, e.g. "link the arch model, build the structure, raft, GA drawings, rebar drawings, issue for
           construction"): first work_progress set with the steps, then after each step work_progress update with what was
           made (ids, sheet numbers). When the user says continue, work_progress get first and resume at the next step.

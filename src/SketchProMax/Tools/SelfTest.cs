@@ -542,6 +542,20 @@ internal static class SelfTest
         new("find_missing_items", c => new { checks = new[] { "rooms_without_door", "columns_without_footing", "untagged_structure", "sheets_without_views" }, folder = c.Temp }),
         new("model_snapshot", c => new { action = "take", name = "self-test" }) { Heavy = true },
         new("coordination_progress", c => new { action = "record", test = "Self-test walls/floors", clash_args = new { set_a = new { categories = new[] { "Walls", "Floors" } }, level = c.LevelName, folder = c.Temp } }) { Heavy = true },
+        new("boq_check", c => new { items = new[] { new { @ref = "1", description = "Concrete in suspended slabs", unit = "m3", quantity = 100.0 } }, folder = c.Temp }, Setup: ["create_floors"]) { Heavy = true },
+        new("boq_item_breakdown", c => new { item = new { @ref = "1", description = "Concrete in suspended slabs", unit = "m3" }, method = "NRM2", folder = c.Temp }, Setup: ["create_floors"]),
+        new("cost_estimate", c => new { rates = new[] { new { description = "Concrete in slabs", unit = "m3", rate = 150.0 } }, folder = c.Temp }, Setup: ["create_floors"]),
+        new("spec_check", c => new { requirements = new[] { new { id = "S1", text = "Notes state the concrete grade", expect_text = new[] { "C" } } }, folder = c.Temp }),
+        new("analytical_check", c =>
+        {
+            Need(new FilteredElementCollector(c.Doc).OfClass(typeof(AnalyticalMember)).Any(), "the model has no analytical members");
+            return new { folder = c.Temp };
+        }),
+        new("export_analytical", c =>
+        {
+            Need(new FilteredElementCollector(c.Doc).OfClass(typeof(AnalyticalMember)).Any(), "the model has no analytical members");
+            return new { folder = c.Temp };
+        }),
         new("link_model", c =>
         {
             var lt = new FilteredElementCollector(c.Doc).OfClass(typeof(RevitLinkType)).Cast<RevitLinkType>().FirstOrDefault(t => t.GetExternalFileReference() != null)
