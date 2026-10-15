@@ -402,7 +402,7 @@ internal static partial class SelfTest
         new("run_model_audit", _ => new { }),
         new("capture_view_image", c => new { view_id = c.PlanId, pixel_width = 800 }) { Heavy = true },
         new("create_legend", c => new { name = "SPM Selftest Legend", scale = 50 }),
-        new("save_legend_seed", c => new { path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "spm-legend-seed-test.rvt") }) { Heavy = true },
+        new("save_legend_seed", c => new { path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "spm-legend-seed-test.rvt"), overwrite = true }) { Heavy = true },
         new("in_place_guide", c => new { action = "convert" }),
         new("list_view_filters", _ => new { }),
         new("query_linked_models", _ => new { }),
