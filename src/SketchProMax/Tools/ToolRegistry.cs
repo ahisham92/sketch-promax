@@ -159,6 +159,14 @@ public sealed class ToolRegistry
         new PlacePtTendonsTool(),
         new ExportTendonScheduleTool(),
 
+        // Coordination and checks
+        new FindClashesTool(),
+        new CheckDrawingsTool(),
+        new CheckCodeRulesTool(),
+        new ConstructionSequenceTool(),
+        new CopyMonitorTool(),
+        new LoadingPlanTool(),
+
         // Detailing
         new AddKeynoteTagsTool(),
         new PlaceDetailComponentsTool(),

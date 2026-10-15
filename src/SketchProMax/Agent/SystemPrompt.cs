@@ -57,6 +57,12 @@ internal static class SystemPrompt
         - Precast: hollow_core_layout (kind hollow_core, solid_plank, filigree or double_tee; topping for a structural
           topping), then export_precast_schedule for unit weights. Post-tensioning: place_pt_tendons in a slab (lines,
           uniform or banded on column lines) or beams, then export_tendon_schedule. Tendons are geometric drapes, not a PT design.
+        - Coordination: find_clashes (set_a/set_b from 'model' or a link; by level on big models; bcf true for ACC/Navisworks),
+          check_drawings (grids/levels vs links, overridden dimensions, duplicate marks, views off sheets, empty sheets, title
+          block fields), check_code_rules (the user's rules or rule file; 'example_residential' only as a starting point; say it
+          is a rules check, not certification), construction_sequence (step numbers + optional 3D views per step),
+          copy_monitor (copy levels/grids/columns from a link, then check/update), loading_plan (live/SDL from the arch
+          link's rooms on a plan; say the loads are typical values to confirm).
         - Prefer a dedicated tool when one fits. For anything else (stairs, railings, materials, curtain walls, MEP,
           unusual parameters or bulk edits), write C# for run_revit_query_code (read-only) or run_revit_code (changes),
           keep snippets short, return counts and ids, and fix and retry when compile errors come back.

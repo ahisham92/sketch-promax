@@ -104,6 +104,11 @@ internal static class SelfTest
     private static long Newest<T>(Ctx c) where T : Element =>
         new FilteredElementCollector(c.Doc).OfClass(typeof(T)).WhereElementIsNotElementType().Max(e => (long?)e.Id.Value) ?? throw new Skip($"no {typeof(T).Name} in the model");
 
+    private static string FirstLink(Ctx c, Func<Document, bool>? where = null) =>
+        new FilteredElementCollector(c.Doc).OfClass(typeof(RevitLinkInstance)).Cast<RevitLinkInstance>()
+            .Where(l => l.GetLinkDocument() is { } d && (where is null || where(d))).Select(l => c.Doc.GetElement(l.GetTypeId())?.Name).FirstOrDefault(n => n != null)
+        ?? throw new Skip(where is null ? "the model has no loaded Revit links" : "no loaded link has what this test needs");
+
     private sealed record Case(string Tool, Func<Ctx, object> Args, string[]? Setup = null, bool Heavy = false);
 
     public enum Mode { Safe, Full }
@@ -507,6 +512,17 @@ internal static class SelfTest
         new("hollow_core_layout", c => new { points = c.Square(0, 14000, 6000), level = c.LevelName, plank_width = c.P(1200) }),
         new("export_precast_schedule", c => new { folder = c.Temp, mark_prefix = "HC-" }, Setup: ["hollow_core_layout"]),
         new("place_pt_tendons", c => new { floor_id = Newest<Floor>(c), uniform = new { direction = "x", spacing = c.P(1000) } }, Setup: ["create_floors"]),
+        new("find_clashes", c => new { set_a = new { categories = new[] { "Walls", "Floors" } }, level = c.LevelName, limit = 50, folder = c.Temp }) { Heavy = true },
+        new("check_drawings", c => new { folder = c.Temp }) { Heavy = true },
+        new("check_code_rules", c => new { pack = "example_residential", folder = c.Temp }),
+        new("construction_sequence", c => new { categories = new[] { "Structural Columns", "Floors" }, shared_parameter_file = Path.Combine(c.Temp, "SharedParameters.txt"), folder = c.Temp }) { Heavy = true },
+        new("copy_monitor", c => new { mode = "copy", link = FirstLink(c), what = new[] { "levels" } }),
+        new("loading_plan", c => new
+        {
+            link = FirstLink(c, d => new FilteredElementCollector(d).OfCategory(BuiltInCategory.OST_Rooms).OfType<Room>()
+                .Any(r => r.Area > 0 && r.Level is { } rl && Math.Abs(rl.ProjectElevation - (c.Plan?.GenLevel?.ProjectElevation ?? double.NaN)) < 1)),
+            view_id = c.PlanId, folder = c.Temp,
+        }) { Heavy = true },
         new("export_tendon_schedule", c => new { folder = c.Temp }, Setup: ["create_floors", "place_pt_tendons"]),
         new("set_curtain_grid", c =>
         {
