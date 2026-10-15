@@ -35,7 +35,7 @@ internal static class SelfTest
 
         public string Summary()
         {
-            var sb = new StringBuilder($"{Passed} passed, {Failed} failed, {Skipped} skipped (of {Results.Count} tools).");
+            var sb = new StringBuilder($"{Passed} passed, {Failed} failed, {Skipped} skipped (of {Results.Count} steps).");
             foreach (var r in Results.Where(r => r.Status == "fail"))
                 sb.Append($"\n• {r.Tool}: {Short(r.Message, 220)}");
             return sb.ToString();
@@ -156,7 +156,7 @@ internal static class SelfTest
         var big = size > 5000;
 
         var steps = ReadOnlyCases().Concat(FileCases()).ToList();
-        if (mode == Mode.Full) steps.AddRange(ChangeCases());
+        if (mode == Mode.Full) steps.AddRange(ChangeCases().Concat(RegressionCases()));
 
         var run = new Run
         {
@@ -295,7 +295,7 @@ internal static class SelfTest
         return Revit.FailureGuard.Run(() => tool.Execute(app, new ToolArgs(args)));
     }
 
-    private static IEnumerable<Case> AllCases() => ReadOnlyCases().Concat(FileCases()).Concat(ChangeCases());
+    private static IEnumerable<Case> AllCases() => ReadOnlyCases().Concat(FileCases()).Concat(ChangeCases()).Concat(RegressionCases());
 
     private static void Finish(Run run, ToolRegistry registry)
     {
@@ -322,6 +322,7 @@ internal static class SelfTest
 
         try { Directory.Delete(run.Ctx.Temp, true); } catch (Exception) { }
         try { System.IO.File.Delete(Recipes.PathFor("sketch-promax-self-test")); } catch (Exception) { }
+        try { System.IO.File.Delete(Recipes.PathFor("sketch-promax-self-test-typed")); } catch (Exception) { }
         try { System.IO.File.Delete(LearnedTools.PathFor("self_test_count_walls")); } catch (Exception) { }
 
         try
@@ -442,7 +443,7 @@ internal static class SelfTest
     [
         // Levels, grids and new geometry go in an empty area east of the model.
         new("create_levels", c => new { levels = new[] { new { name = "Self-test level", elevation = c.P(new FilteredElementCollector(c.Doc).OfClass(typeof(Level)).Cast<Level>().Select(l => l.Elevation).DefaultIfEmpty(0).Max() * 304.8 + 3000) } }, create_plans = true }),
-        new("create_grids", c => new { lines = new[] { new { name = "ST1", start = c.At(0, -2000), end = c.At(0, 12000) }, new { name = "ST2", start = c.At(6000, -2000), end = c.At(6000, 12000) } } }),
+        new("create_grids", c => new { lines = new[] { new { name = "ST1", start = c.At(0, -2000), end = c.At(0, 12000) }, new { name = "ST2", start = c.At(6000, -2000), end = c.At(6000, 12000) }, new { name = "STA", start = c.At(-1000, 5000), end = c.At(7000, 5000) } } }),
         new("create_walls", c => new { segments = new[] { new { start = c.At(0, 0), end = c.At(6000, 0) }, new { start = c.At(6000, 0), end = c.At(6000, 4000) } }, level = c.LevelName, height = c.P(3000) }),
         new("create_floors", c => new { floors = new[] { new { points = c.Square(0, 0, 4000), level = c.LevelName } } }),
         new("create_ceilings", c => new { ceilings = new[] { new { points = c.Square(0, 0, 4000), level = c.LevelName, height = c.P(2700) } } }),
@@ -725,6 +726,74 @@ internal static class SelfTest
         }),
 
         new("delete_elements", c => new { element_ids = new[] { c.Id(c.Wall ?? throw new Skip("the model has no walls")) } }),
+    ];
+
+
+    /// <summary>
+    /// Regression cases for bugs found in use (0.25: the 0.24 field test). A tool may appear here again with the
+    /// arguments that broke it; setup steps always use the tool's first case above. Run in full mode only.
+    /// </summary>
+    private static IEnumerable<Case> RegressionCases() =>
+    [
+        new("list_types", _ => new { category = "Slab Edges" }),
+        new("collect_text", c => new { view_ids = new[] { c.PlanId }, include = new[] { "view_names" }, text_contains = "Level", limit = 50 }),
+        // A placeholder standing for a whole value must reach the tool as the schema's type (here an integer).
+        new("save_recipe", _ => new { name = "sketch-promax-self-test-typed", description = "Self-test typed placeholder", steps = new[] { new { tool = "collect_text", arguments = new { limit = "{n}" } } } }),
+        new("create_roof", c => new { points = c.Square(5000, 6000, 4000), level = c.Upper?.Name ?? c.LevelName, slope_degrees = 25, overhang = c.P(500) }),
+        new("create_roof", c => new { points = c.Square(10000, 6000, 4000), level = c.Upper?.Name ?? c.LevelName, slope_degrees = 25, gable_edges = new[] { 1, 3 } }),
+        new("create_levels", c => new { levels = new[] { new { name = "Self-test level displayed", elevation = c.P(new FilteredElementCollector(c.Doc).OfClass(typeof(Level)).Cast<Level>().Select(l => l.Elevation).DefaultIfEmpty(0).Max() * 304.8 + 4000) } }, create_plans = false }),
+        new("place_columns", c =>
+        {
+            var type = c.Symbol(BuiltInCategory.OST_StructuralColumns) ?? c.Symbol(BuiltInCategory.OST_Columns) ?? throw new Skip("no column family loaded");
+            return new { type_id = type.Id.Value, base_level = c.LevelName, top_level = c.UpperName, at_grid_intersections = true, grids = new[] { "ST1", "ST2", "STA" },
+                area = new { min = c.At(-1000, -3000), max = c.At(7000, 13000) }, architectural = type.Category?.Id.Value == (long)BuiltInCategory.OST_Columns };
+        }, Setup: ["create_grids"]),
+        new("create_walls", c => new { segments = new[] {
+            new { start = c.At(0, 20000), end = c.At(4000, 20000) }, new { start = c.At(4000, 20000), end = c.At(4000, 23000) },
+            new { start = c.At(4000, 23000), end = c.At(0, 23000) }, new { start = c.At(0, 23000), end = c.At(0, 20000) } },
+            level = c.LevelName, height = c.P(3000) }),
+        new("add_slab_edges", c =>
+        {
+            Need(c.First<SlabEdgeType>() is not null, "the model has no slab edge types");
+            return new { floor_ids = new[] { Newest<Floor>(c) } };
+        }, Setup: ["create_floors"]),
+        new("create_stairs", c => new { base_level = c.LevelName, top_level = c.UpperName, start = c.At(8000, 4000), direction = new[] { 0, 1 }, width = c.P(1000), shape = "u_left", railings = false }),
+        new("create_stairs", c => new { base_level = c.LevelName, top_level = c.UpperName, start = c.At(12000, 4000), direction = new[] { 1, 0 }, width = c.P(1000), shape = "l_right", railings = false }),
+        new("hollow_core_layout", c => new { points = c.Square(0, 14000, 6000), level = c.LevelName, plank_width = c.P(1200), topping = c.P(75) }),
+        new("create_railings", c =>
+        {
+            Need(c.First<RailingType>() is not null, "the model has no railing types");
+            return new { host_id = Newest<Stairs>(c) };
+        }, Setup: ["create_stairs"]),
+        new("create_mep_runs", c =>
+        {
+            Need(c.First<Autodesk.Revit.DB.Plumbing.PipeType>() is not null, "the model has no pipe types");
+            return new { kind = "pipe", level = c.LevelName, points = new[] { c.At(0, 12000).Append(c.P(2800)).ToArray(), c.At(4000, 12000).Append(c.P(2800)).ToArray(), c.At(4000, 16000).Append(c.P(2800)).ToArray() }, diameter = c.P(50) };
+        }),
+        new("create_sheets", c => new { sheets = new[] { new { number = "ST-998", name = "Self-test TB match",
+            title_block = c.Symbol(BuiltInCategory.OST_TitleBlocks) is { } tb ? $"{tb.FamilyName}: {tb.Name}" : throw new Skip("no title block loaded") } } }),
+        new("run_model_audit", _ => new { }, Setup: ["create_schedule", "create_sheets"]),
+        new("create_drafting_view", c => new { name = "Self-test styles " + Guid.NewGuid().ToString("N").Substring(0, 4),
+            lines = new[] { new { start = new[] { 0.0, 0.0 }, end = new[] { c.P(1000), 0.0 }, style = "Wide Lines" } } }),
+        new("import_image", c => new { path = WriteBitmap(c.Temp), view_id = c.First<ViewSheet>(s => s.IsPlaceholder)?.Id.Value ?? throw new Skip("no placeholder sheet") }),
+        new("convert_cad", c => new { import_id = c.Id(LatestImport(c.Doc) ?? throw new Skip("import_cad did not import the test drawing")), level = c.LevelName,
+            conversions = new[] { new { layer = "SELFTEST", @as = "grids", auto_name = true } } }, Setup: ["import_cad"]) { Heavy = true },
+        new("convert_cad", c => new { import_id = c.Id(LatestImport(c.Doc) ?? throw new Skip("import_cad did not import the test drawing")), level = c.LevelName,
+            conversions = new[] { new { layer = "SELFTEST", @as = "walls" } } }, Setup: ["import_cad"]) { Heavy = true },
+        new("create_section", c => new { start = c.At(-1500, 2500), end = c.At(13500, 2500), depth = c.P(4000), name = "Self-test section line" }),
+        new("create_3d_view", c => new { name = "Self-test 3D box", element_ids = new[] { c.Id(c.Wall ?? throw new Skip("the model has no walls")) }, show_all = true }),
+        new("run_recipe", _ =>
+        {
+            Need(System.IO.File.Exists(Recipes.PathFor("sketch-promax-self-test-typed")), "the typed self-test recipe was not saved");
+            return new { name = "sketch-promax-self-test-typed", values = new Dictionary<string, string> { ["n"] = "5" } };
+        }),
+        new("tag_elements_in_view", c => new { category = "Rooms", view_id = c.PlanId }, Setup: ["place_rooms"]) { Heavy = true },
+        new("arrange_tags", c => new { view_id = c.PlanId, tag_category = "Room Tags", action = "report_overlaps" }, Setup: ["place_rooms"]) { Heavy = true },
+        new("place_rooms", c => new { level = c.LevelName }, Setup: ["place_rooms"]) { Heavy = true },
+        new("set_coordinates", _ => new { latitude = 25.2, longitude = 55.27, place_name = "Self-test place" }),
+        new("format_schedule", _ => new { schedule = "Self-test wall schedule", sort_by = new[] { new { field = "Type" } } }, Setup: ["create_schedule"]),
+        new("export_files", c => new { format = "ifc", ifc_version = "IFC4", folder = c.Temp, file_name = "selftest-ifc4" }) { Heavy = true },
+        new("run_revit_code", _ => new { code = "using (var t = new Transaction(doc, \"st\")) { t.Start(); var n = new FilteredElementCollector(doc).OfClass(typeof(Level)).GetElementCount(); t.Commit(); return n; }", description = "self-test own transactions", own_transactions = true }),
     ];
 
     private static ImportInstance? LatestImport(Document doc) =>

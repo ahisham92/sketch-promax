@@ -95,7 +95,10 @@ internal static class CatalogTests
         var setups = Regex.Matches(caseSource, @"Setup: \[([^\]]*)\]").SelectMany(m => Regex.Matches(m.Groups[1].Value, @"""([a-z0-9_]+)""").Select(x => x.Groups[1].Value))
             .Distinct().Where(s => !names.Contains(s)).ToList();
         check("self-test setup steps name real tools", setups.Count == 0, string.Join(", ", setups));
-        var caseDupes = caseTools.GroupBy(c => c).Where(g => g.Count() > 1).Select(g => g.Key).ToList();
+        // Regression cases may repeat a tool on purpose; the main lists must not.
+        var regressionStart = caseSource.IndexOf("IEnumerable<Case> RegressionCases()", StringComparison.Ordinal);
+        var mainTools = Regex.Matches(regressionStart < 0 ? caseSource : caseSource.Substring(0, regressionStart), @"^\s*new\(""([a-z0-9_]+)""", RegexOptions.Multiline).Select(m => m.Groups[1].Value).ToList();
+        var caseDupes = mainTools.GroupBy(c => c).Where(g => g.Count() > 1).Select(g => g.Key).ToList();
         check("one self-test case per tool", caseDupes.Count == 0, string.Join(", ", caseDupes));
 
         // Documentation counts (two connection tools live in the MCP connector)
