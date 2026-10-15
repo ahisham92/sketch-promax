@@ -504,14 +504,17 @@ public sealed class PlaceFamilyInstancesTool : IRevitTool
     public string Name => "place_family_instances";
     public string Description =>
         "Place any loaded family type (furniture, equipment, fixtures, lighting, casework, site, generic models...) " +
-        "at points on a level, with optional rotation in degrees.";
+        "at points on a level, with optional rotation in degrees and instance parameter values. Each placement is its own step; " +
+        "parameters are set after placing, read back after regeneration, re-applied once if they did not stick, and anything " +
+        "still different is reported with the reason (formula, read-only, type parameter).";
     public string PropertiesJson => """
     {
       "type_id": {"type": "integer"},
       "level": {"type": "string"},
       "placements": {"type": "array", "items": {"type": "object", "properties": {
         "point": {"type": "array", "items": {"type": "number"}, "description": "[x, y] or [x, y, z offset]"},
-        "rotation_degrees": {"type": "number"}}, "required": ["point"]}}
+        "rotation_degrees": {"type": "number"},
+        "parameters": {"type": "object", "description": "Instance parameters to set, name -> value as typed in Revit."}}, "required": ["point"]}}
     }
     """;
     public string[] Required => ["type_id", "placements"];
@@ -521,10 +524,10 @@ public sealed class PlaceFamilyInstancesTool : IRevitTool
     {
         var doc = app.ActiveUIDocument.Document;
         var level = RevitHelpers.FindLevel(doc, args.OptString("level"));
-        var created = new List<long>();
+        var symbol = doc.GetElement(new ElementId(args.OptLong("type_id") ?? -1)) as FamilySymbol
+                     ?? throw new ArgumentException($"{args.OptLong("type_id")} is not a loadable family type. Use list_types to find one.");
         var errors = new List<string>();
-        using var t = RevitHelpers.StartTransaction(doc, "Place family instances");
-        var symbol = Modeling.Symbol(doc, args.OptLong("type_id") ?? -1);
+        var items = new List<(int index, XYZ point, double rotation, List<ParamEdits.Want> wants)>();
         var index = 0;
         foreach (var p in args.Array("placements"))
         {
@@ -532,21 +535,46 @@ public sealed class PlaceFamilyInstancesTool : IRevitTool
             try
             {
                 var pt = Modeling.Point(doc, p.GetProperty("point"));
-                var fi = doc.Create.NewFamilyInstance(new XYZ(pt.X, pt.Y, level.ProjectElevation + pt.Z), symbol, level, StructuralType.NonStructural);
-                if (p.TryGetProperty("rotation_degrees", out var r) && r.GetDouble() != 0)
-                {
-                    var axis = Line.CreateBound(new XYZ(pt.X, pt.Y, 0), new XYZ(pt.X, pt.Y, 1));
-                    ElementTransformUtils.RotateElement(doc, fi.Id, axis, r.GetDouble() * Math.PI / 180);
-                }
-                created.Add(fi.Id.Value);
+                var rot = p.TryGetProperty("rotation_degrees", out var r) ? r.GetDouble() : 0;
+                var wants = p.TryGetProperty("parameters", out var ps) ? ParamEdits.FromJson(ps) : [];
+                items.Add((index, pt, rot, wants));
             }
-            catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or KeyNotFoundException or IndexOutOfRangeException or Autodesk.Revit.Exceptions.ApplicationException)
+            catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or KeyNotFoundException or IndexOutOfRangeException or FormatException)
             {
                 errors.Add($"placement {index}: {ex.Message}");
             }
         }
-        t.Commit();
-        return ToolResult.Ok(new { family = symbol.FamilyName, created, errors });
+
+        var created = new List<long>();
+        var parameterIssues = new List<object>();
+        Batch.InGroup(doc, "Place family instances", () =>
+        {
+            var batch = ItemBatch.Run(doc, "Place family instances", items, i => $"placement {i.index}", _ => [], i =>
+            {
+                if (!symbol.IsActive) { symbol.Activate(); doc.Regenerate(); }
+                var pt = i.point;
+                var fi = doc.Create.NewFamilyInstance(new XYZ(pt.X, pt.Y, level.ProjectElevation + pt.Z), symbol, level, StructuralType.NonStructural);
+                if (i.rotation != 0)
+                {
+                    var axis = Line.CreateBound(new XYZ(pt.X, pt.Y, 0), new XYZ(pt.X, pt.Y, 1));
+                    ElementTransformUtils.RotateElement(doc, fi.Id, axis, i.rotation * Math.PI / 180);
+                }
+                return fi.Id;
+            }, borrow: false);
+            var targets = new List<ParamEdits.Target>();
+            for (var k = 0; k < items.Count; k++)
+            {
+                var o = batch.Items[k];
+                if (!o.Ok) { errors.Add($"{o.Item}: {o.Error}"); continue; }
+                var id = (ElementId)o.Value!;
+                created.Add(id.Value);
+                if (items[k].wants.Count > 0) targets.Add(new ParamEdits.Target { Id = id, Label = o.Item, Wants = items[k].wants });
+            }
+            foreach (var l in ParamEdits.Problems(ParamEdits.Apply(doc, "Instance parameters", targets, borrow: false)))
+                parameterIssues.Add(new { element_id = l.element_id, l.parameter, l.value, l.status, l.now, l.note });
+            return created.Count;
+        }, n => n > 0);
+        return ToolResult.Ok(new { family = symbol.FamilyName, created, errors, parameters = parameterIssues.Count > 0 ? parameterIssues : null });
     }
 }
 
@@ -722,7 +750,8 @@ public sealed class TransformElementsTool : IRevitTool
     public string Name => "move_copy_rotate";
     public string Description =>
         "Move or copy elements by an offset [dx, dy, dz] (project units), and/or rotate them about a vertical axis " +
-        "through a point. With copy=true the originals stay and the copies are returned.";
+        "through a point. With copy=true the originals stay and the copies are returned. Workshared: elements another user owns are " +
+        "left in place and named with their owner; if Revit refuses the set as a whole, each element is tried on its own.";
     public string PropertiesJson => """
     {
       "element_ids": {"type": "array", "items": {"type": "integer"}},
@@ -741,28 +770,69 @@ public sealed class TransformElementsTool : IRevitTool
         ICollection<ElementId> ids = args.LongList("element_ids").Select(i => new ElementId(i)).Where(id => doc.GetElement(id) != null).ToList();
         if (ids.Count == 0) return ToolResult.Error("None of those element ids exist in the model. Check them with query_elements.");
         var offset = args.Has("offset") ? Modeling.Point(doc, args.Raw["offset"]) : XYZ.Zero;
+        var copy = args.OptBool("copy");
+        var deg = args.OptDouble("rotation_degrees") ?? 0;
 
-        using var t = RevitHelpers.StartTransaction(doc, args.OptBool("copy") ? "Copy elements" : "Move elements");
-        if (args.OptBool("copy"))
-            ids = ElementTransformUtils.CopyElements(doc, ids, offset);
-        else if (!offset.IsZeroLength())
-            ElementTransformUtils.MoveElements(doc, ids, offset);
+        // Moving or rotating needs ownership; copying only reads the originals. Locked ones are left and named.
+        var locked = copy ? new Dictionary<long, string>() : Batch.Locked(doc, ids);
+        var work = ids.Where(id => !locked.ContainsKey(id.Value)).ToList();
+        if (work.Count == 0) return ToolResult.Error($"Nothing moved: {string.Join("; ", locked.Values.Take(10))}");
 
-        if (args.OptDouble("rotation_degrees") is { } deg && deg != 0)
+        // The rotation centre is fixed before anything moves, so a per-element retry turns everything about the same point.
+        XYZ? center = null;
+        if (deg != 0)
         {
-            XYZ center;
             if (args.Has("rotation_center")) center = Modeling.Point(doc, args.Raw["rotation_center"]);
             else
             {
-                doc.Regenerate(); // bounding boxes must reflect the move/copy above
-                var boxes = ids.Select(id => doc.GetElement(id).get_BoundingBox(null)).Where(b => b != null).ToList();
+                var boxes = work.Select(id => doc.GetElement(id).get_BoundingBox(null)).Where(b => b != null).ToList();
                 center = boxes.Count == 0 ? XYZ.Zero
-                    : new XYZ(boxes.Average(b => (b.Min.X + b.Max.X) / 2), boxes.Average(b => (b.Min.Y + b.Max.Y) / 2), 0);
+                    : new XYZ(boxes.Average(b => (b.Min.X + b.Max.X) / 2), boxes.Average(b => (b.Min.Y + b.Max.Y) / 2), 0) + offset;
             }
-            var axis = Line.CreateBound(new XYZ(center.X, center.Y, 0), new XYZ(center.X, center.Y, 1));
-            ElementTransformUtils.RotateElements(doc, ids, axis, deg * Math.PI / 180);
         }
-        t.Commit();
-        return ToolResult.Ok(new { elements = ids.Select(i => i.Value) });
+        ICollection<ElementId> Apply(ICollection<ElementId> set)
+        {
+            var result = set;
+            if (copy) result = ElementTransformUtils.CopyElements(doc, set, offset);
+            else if (!offset.IsZeroLength()) ElementTransformUtils.MoveElements(doc, set, offset);
+            if (center is not null)
+            {
+                var axis = Line.CreateBound(new XYZ(center.X, center.Y, 0), new XYZ(center.X, center.Y, 1));
+                ElementTransformUtils.RotateElements(doc, result, axis, deg * Math.PI / 180);
+            }
+            return result;
+        }
+
+        // All together first; if Revit refuses that, each element on its own (hosted elements travel with a host in the set).
+        var method = "together";
+        var failures = new List<object>();
+        var done = new List<long>();
+        var withHost = new List<long>();
+        Batch.InGroup(doc, copy ? "Copy elements" : "Move elements", () =>
+        {
+            var all = ItemBatch.Run(doc, copy ? "Copy elements" : "Move elements", [work], _ => "all", x => copy ? [] : x, x => Apply(x));
+            if (all.Done == 1) { done.AddRange(((ICollection<ElementId>)all.Items[0].Value!).Select(i => i.Value)); return done.Count; }
+            method = "one by one";
+            var set = new HashSet<long>(work.Select(i => i.Value));
+            var single = work.Where(id => !(doc.GetElement(id) is FamilyInstance { Host: { } h } && set.Contains(h.Id.Value))).ToList();
+            withHost.AddRange(work.Where(id => !single.Contains(id)).Select(i => i.Value));
+            var each = ItemBatch.Run(doc, copy ? "Copy elements" : "Move elements", single, id => id.Value.ToString(), id => copy ? [] : [id],
+                id => Apply([id]), borrow: false);
+            foreach (var o in each.Items.Where(o => o.Ok)) done.AddRange(((ICollection<ElementId>)o.Value!).Select(i => i.Value));
+            failures.AddRange(Batch.Failures(each));
+            if (each.Done == 0 && all.Failed.FirstOrDefault()?.Error is { } why) failures.Insert(0, new { item = "all together", reason = why });
+            return each.Done;
+        }, n => n > 0);
+
+        if (done.Count == 0)
+            return ToolResult.Error($"Revit refused the {(copy ? "copy" : "move")}; nothing changed. {System.Text.Json.JsonSerializer.Serialize(failures.Take(10))}");
+        return ToolResult.Ok(new
+        {
+            elements = done,
+            method,
+            movedWithHost = withHost.Count > 0 ? withHost : null,
+            locked = locked.Count > 0 ? locked.Select(kv => new { id = kv.Key, reason = kv.Value }) : null,
+            failures = failures.Count > 0 ? failures : null,
+        });
     }
 }

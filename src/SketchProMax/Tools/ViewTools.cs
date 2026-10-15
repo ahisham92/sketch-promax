@@ -112,7 +112,7 @@ public sealed class DuplicateViewsTool : IRevitTool
 public sealed class ApplyViewTemplateTool : IRevitTool
 {
     public string Name => "apply_view_template";
-    public string Description => "Assign a view template to views (or remove it with template = '').";
+    public string Description => "Assign a view template to views (or remove it with template = ''). Each view is its own step: views another user owns (workshared) or that can't take the template are listed with the reason.";
     public string PropertiesJson => """
     { "view_ids": {"type": "array", "items": {"type": "integer"}}, "template": {"type": "string"} }
     """;
@@ -124,21 +124,23 @@ public sealed class ApplyViewTemplateTool : IRevitTool
         var doc = app.ActiveUIDocument.Document;
         var name = args.String("template");
         var template = name.Length == 0 ? null : ViewTemplates.Find(doc, name);
-        int applied = 0;
-        var failed = new List<long>();
-        using var t = RevitHelpers.StartTransaction(doc, "Apply view template");
-        foreach (var id in args.LongList("view_ids"))
+        var ids = args.LongList("view_ids").Distinct().ToList();
+        var failed = ids.Where(i => doc.GetElement(new ElementId(i)) is not View).ToList();
+        var failures = failed.Select(i => (object)new { item = i.ToString(), reason = "not a view" }).ToList();
+        ids = ids.Except(failed).ToList();
+        // Each view is its own step: a view another user owns (workshared) is skipped and named, the rest get the template.
+        var batch = Batch.InGroup(doc, "Apply view template", () => ItemBatch.Run(doc, "Apply view template", ids, i => i.ToString(), i => [new ElementId(i)], i =>
         {
-            if (doc.GetElement(new ElementId(id)) is View v &&
-                (template is null || v.IsValidViewTemplate(template.Id)))
-            {
-                v.ViewTemplateId = template?.Id ?? ElementId.InvalidElementId;
-                applied++;
-            }
-            else failed.Add(id);
-        }
-        t.Commit();
-        return ToolResult.Ok(new { applied, failed });
+            var v = (View)doc.GetElement(new ElementId(i));
+            if (template is not null && !v.IsValidViewTemplate(template.Id))
+                throw new ArgumentException($"'{template.Name}' is a {template.ViewType} template and can't control '{v.Name}' ({v.ViewType}).");
+            v.ViewTemplateId = template?.Id ?? ElementId.InvalidElementId;
+            return null;
+        }), _ => true);
+        var applied = batch.Done;
+        failed.AddRange(batch.Failed.Select(f => long.Parse(f.Item)));
+        failures.AddRange(Batch.Failures(batch));
+        return ToolResult.Ok(new { applied, failed, failures });
     }
 }
 
