@@ -59,6 +59,7 @@ public sealed class ModelAvailable : IExternalCommandAvailability
 [Transaction(TransactionMode.Manual)] public sealed class QuickRefreshCommand : ForwardCommand { protected override string Name => "quick-refresh"; }
 [Transaction(TransactionMode.Manual)] public sealed class QuickFolderCommand : ForwardCommand { protected override string Name => "quick-folder"; }
 [Transaction(TransactionMode.Manual)] public sealed class ModelCheckCommand : ForwardCommand { protected override string Name => "model-check"; }
+[Transaction(TransactionMode.Manual)] public sealed class ExportPackCommand : ForwardCommand { protected override string Name => "export-pack"; }
 [Transaction(TransactionMode.Manual)] public sealed class SelfTestCommand : ForwardCommand { protected override string Name => "self-test"; }
 [Transaction(TransactionMode.Manual)] public sealed class UpdateInfoCommand : ForwardCommand { protected override string Name => "update-info"; }
 [Transaction(TransactionMode.Manual)] public sealed class UpdateCheckCommand : ForwardCommand { protected override string Name => "update-check"; }

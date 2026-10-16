@@ -416,6 +416,7 @@ internal static partial class SelfTest
         new("read_schedule", c => new { schedule_id = c.Id(c.Schedule ?? throw new Skip("the model has no schedules")), max_rows = 20 }),
         new("select_elements", c => new { element_ids = new[] { c.Id(c.Wall ?? throw new Skip("the model has no walls")) }, zoom = false }),
         new("run_model_audit", _ => new { }),
+        new("export_project_pack", c => new { folder = c.Temp, include_chat = false, max_schedules = 3, max_schedule_rows = 50, max_elements = 20000 }),
         new("capture_view_image", c => new { view_id = c.PlanId, pixel_width = 800 }) { Heavy = true },
         new("create_legend", c => new { name = "SPM Selftest Legend", scale = 50 }),
         new("save_legend_seed", c => new { path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "spm-legend-seed-test.rvt"), overwrite = true }) { Heavy = true },

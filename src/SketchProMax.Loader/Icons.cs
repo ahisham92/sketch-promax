@@ -182,6 +182,10 @@ internal static class Icons
                 Path(dc, "M16,5 L25,8.5 V15 C25,21 21,25 16,27 C11,25 7,21 7,15 V8.5 Z", white);
                 Path(dc, "M11.5,16 L15,19.5 L21,12.5", amber);
                 break;
+            case "pack": // parcel with an arrow leaving it
+                Path(dc, "M6,15 L16,11 L26,15 V24 L16,28 L6,24 Z M6,15 L16,19 L26,15 M16,19 V28", white);
+                Path(dc, "M16,3.5 V9 M12.5,7 L16,3.5 L19.5,7", amber);
+                break;
             case "test": // flask
                 Path(dc, "M13,6 V13 L7,24 A1.5,1.5 0 0 0 8.3,26 H23.7 A1.5,1.5 0 0 0 25,24 L19,13 V6 M11.5,6 H20.5", white);
                 Path(dc, "M10,20 H22 L24,24.5 H8 Z", null, amberFill);

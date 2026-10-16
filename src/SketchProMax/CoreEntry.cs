@@ -38,6 +38,7 @@ public static class CoreEntry
             "cancel-job" => CoreCommands.CancelJob(),
             "quick-folder" => CoreCommands.QuickFolder(),
             "model-check" => QuickTools.ModelCheck(app),
+            "export-pack" => QuickTools.ExportPack(app),
             "self-test" => CoreCommands.SelfTest(app),
             "field-test" => Tools.FieldTest.RibbonCommand(app),
             "update-info" => CoreCommands.UpdateInfo(),
