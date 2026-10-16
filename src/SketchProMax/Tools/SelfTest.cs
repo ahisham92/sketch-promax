@@ -331,6 +331,8 @@ internal static partial class SelfTest
                 "run_learned_tool" => "tested through save_as_tool",
                 "run_self_test" or "self_test_status" => "this test",
                 "run_field_test" => "opens its own throwaway project; run it from the ribbon or on its own",
+                "report_bug" => "writes a bug report zip to the user's bug folder; run it by hand",
+                "export_chats_and_bugs" => "writes a zip to the user's bug folder; run it by hand",
                 _ when run.Mode == Mode.Safe && tool.ModifiesModel => "changes the model; runs in the full self-test",
                 _ => "no test written yet",
             };
@@ -429,6 +431,7 @@ internal static partial class SelfTest
         new("get_coordinates", _ => new { }),
         new("convert_coordinates", _ => new { points = new[] { new[] { 0.0, 0.0, 0.0 } }, from = "internal" }),
         new("get_activity_log", _ => new { limit = 5 }),
+        new("memory_note", _ => new { action = "list" }),
         new("list_recipes", _ => new { }),
         new("list_learned_tools", _ => new { }),
         new("list_steel_connection_types", _ => new { }),

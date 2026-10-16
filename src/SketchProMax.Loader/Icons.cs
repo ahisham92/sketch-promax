@@ -233,6 +233,11 @@ internal static class Icons
                 Path(dc, "M12.5,5.5 H19.5 V10 H12.5 Z", white);
                 Path(dc, "M11.5,18 L15,21.5 L21,14.5", amber);
                 break;
+            case "bug": // beetle: head, body with a centre line, three legs a side
+                dc.DrawEllipse(null, white, new Point(16, 9), 3, 2.6);
+                Path(dc, "M16,11.5 C21.5,11.5 22.5,16 22.5,19 C22.5,23.5 19.5,26.5 16,26.5 C12.5,26.5 9.5,23.5 9.5,19 C9.5,16 10.5,11.5 16,11.5 Z M16,14 V26", white);
+                Path(dc, "M9.5,15 L6,13 M9.5,19.5 H5.5 M10,23.5 L6.5,26 M22.5,15 L26,13 M22.5,19.5 H26.5 M22,23.5 L25.5,26", amber);
+                break;
             case "help":
                 Path(dc, "M11.5,12 A4.5,4.5 0 1 1 18,16 C16.5,17 16,18 16,20", white);
                 dc.DrawEllipse(amberFill, null, new Point(16, 24.5), 2, 2);

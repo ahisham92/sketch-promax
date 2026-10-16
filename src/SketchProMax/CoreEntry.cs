@@ -15,7 +15,7 @@ namespace SketchProMax;
 ///   Command(name, app) a ribbon button; returns a Revit Result as int.
 ///   Query(key)         a short text answer for the ribbon or the dockable pane, or a notice about switching versions.
 ///   PaneContent(name)  optional (0.29+; loaders that don't know it never call it): a WPF element for a tab of the
-///                      loader's dockable pane ("chat", or a tab the manifest declares), or null. Asked again after each
+///                      loader's dockable pane ("chat", "notes" from 0.30, or a tab the manifest declares), or null. Asked again after each
 ///                      version switch.
 ///   Query("ribbon")    (0.30+ loaders) the buttons, pane buttons and pane tabs this core declares (UI/CoreRibbonManifest),
 ///                      added by the loader while Revit runs.
@@ -33,13 +33,14 @@ public static class CoreEntry
     public static void Shutdown() => App.ShutdownCore();
 
     /// <summary>
-    /// Content the core puts into the loader's dockable pane: "chat" is the Claude chat. Returns a WPF FrameworkElement
+    /// Content the core puts into the loader's dockable pane: "chat" is the Claude chat, "notes" its memory notes. Returns a WPF FrameworkElement
     /// (typed object so the signature stays primitive), or null for a name this core doesn't provide. Called on Revit's
     /// UI thread, after Start.
     /// </summary>
     public static object? PaneContent(string name) => name switch
     {
         "chat" => Chat.ChatPane.Get(),
+        "notes" => Chat.NotesView.Get(),
         _ => null,
     };
 
@@ -62,6 +63,10 @@ public static class CoreEntry
             "whats-new" => CoreCommands.OpenUrl(CoreCommands.ReleasesUrl),
             "settings" => CoreCommands.Settings(),
             "help" => CoreCommands.OpenUrl(CoreCommands.HelpUrl),
+            // Bug reports (0.30+): one small zip per report, in Documents\Sketch ProMax\Bugs.
+            "report-bug" => Bugs.BugReport.Command(app),
+            "bug-folder" => Bugs.BugReport.OpenFolder(),
+            "export-chats-bugs" => QuickTools.ExportChatsAndBugs(app),
             // The loader's dockable pane (0.27+): select and zoom to element ids, stop the running job quietly.
             "pane-cancel" => Pane.Cancel(),
             _ when name.StartsWith("pane-select\t", StringComparison.Ordinal) => Pane.Select(app, name.Substring("pane-select\t".Length)),

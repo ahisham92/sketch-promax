@@ -278,7 +278,22 @@ internal static class ScreenGrab
         int x = Math.Max(0, view.Left - w.Left), y = Math.Max(0, view.Top - w.Top);
         int cw = Math.Min(width - x, view.Right - view.Left), ch = Math.Min(height - y, view.Bottom - view.Top);
         if (cw < 50 || ch < 50) throw new InvalidOperationException("The view window is too small or off-screen to capture; use source=export.");
+        return Grab(main, width, height, x, y, cw, ch, maxWidth, new System.Windows.Media.Imaging.PngBitmapEncoder());
+    }
 
+    /// <summary>All of Revit's main window as a JPEG at most <paramref name="maxWidth"/> wide (bug reports).</summary>
+    public static byte[] Window(IntPtr main, int maxWidth)
+    {
+        if (main == IntPtr.Zero) throw new InvalidOperationException("Revit's main window was not found.");
+        if (IsIconic(main)) throw new InvalidOperationException("Revit is minimized.");
+        if (!GetWindowRect(main, out var w)) throw new InvalidOperationException("Could not read Revit's window position.");
+        int width = w.Right - w.Left, height = w.Bottom - w.Top;
+        if (width < 50 || height < 50) throw new InvalidOperationException("Revit's window is too small to capture.");
+        return Grab(main, width, height, 0, 0, width, height, maxWidth, new System.Windows.Media.Imaging.JpegBitmapEncoder { QualityLevel = 70 });
+    }
+
+    private static byte[] Grab(IntPtr main, int width, int height, int x, int y, int cw, int ch, int maxWidth, System.Windows.Media.Imaging.BitmapEncoder encoder)
+    {
         var windowDc = GetWindowDC(main);
         var memDc = CreateCompatibleDC(windowDc);
         var bitmap = CreateCompatibleBitmap(windowDc, width, height);
@@ -296,7 +311,8 @@ internal static class ScreenGrab
                 var k = maxWidth / (double)cw;
                 image = new System.Windows.Media.Imaging.TransformedBitmap(image, new System.Windows.Media.ScaleTransform(k, k));
             }
-            var encoder = new System.Windows.Media.Imaging.PngBitmapEncoder();
+            if (encoder is System.Windows.Media.Imaging.JpegBitmapEncoder)
+                image = new System.Windows.Media.Imaging.FormatConvertedBitmap(image, System.Windows.Media.PixelFormats.Bgr24, null, 0);
             encoder.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(image));
             using var stream = new MemoryStream();
             encoder.Save(stream);

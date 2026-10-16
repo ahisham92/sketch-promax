@@ -91,6 +91,11 @@ internal sealed class ChatPane : DockPanel
     /// <summary>The key a model's conversation is saved under (ChatStore): its path, or its title when never saved.</summary>
     internal static string ModelKey(Autodesk.Revit.DB.Document doc) => string.IsNullOrEmpty(doc.PathName) ? doc.Title : doc.PathName;
 
+    /// <summary>The open model's key (see <see cref="ModelKey"/>), "" before one is open: memory notes are kept under it.</summary>
+    internal static string CurrentModelKey => _modelKey;
+
+    internal static string CurrentModelTitle => _modelTitle;
+
     private static void SetModel(Autodesk.Revit.DB.Document doc)
     {
         var key = ModelKey(doc);

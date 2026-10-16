@@ -233,7 +233,20 @@ internal static class ClaudeCli
           DXF files, pass the path to the Revit tools (for example import_cad); don't try to Read them.
         - Answer in Markdown: short paragraphs, lists and tables. Keep tables narrow (the pane is narrow), and put numbers
           with their units.
-        """;
+        - When the user says "remember that ..." (or "from now on ..."), save it with memory_note action=remember: scope=global
+          for habits and standards that hold for every model, scope=model for facts about this model. When they say
+          "forget ...", use action=forget. Confirm in one line. They can see and edit the notes in the pane's Notes tab.
+        - When the user says something is a bug ("that's a bug", "report this"), call report_bug with one plain line you
+          write from the conversation: what they did, what happened, what they expected, and the tool involved. Then say
+          the report is saved in Documents\Sketch ProMax\Bugs\Reports.
+        """ + Notes();
+
+    /// <summary>The memory notes for this chat (global and the open model's), as a block at the end of the prompt.</summary>
+    private static string Notes()
+    {
+        var block = MemoryNotes.PromptFor(ChatPane.CurrentModelKey);
+        return block.Length == 0 ? "" : "\n\n" + block;
+    }
 
     /// <summary>Runs a short command hidden and returns its exit code and output (stdout then stderr); -1 on timeout or failure.</summary>
     public static (int Code, string Output) Run(string exe, string arguments, int timeoutMs)

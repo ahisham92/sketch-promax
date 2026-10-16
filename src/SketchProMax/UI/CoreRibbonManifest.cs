@@ -22,13 +22,17 @@ internal static class CoreRibbonManifest
 {
     private static readonly string[] Lines =
     [
-        // Bug reports (0.30): handled by CoreEntry.Command "report-bug" / "bug-folder"; the notes tab by PaneContent("notes").
+        // Bug reports (0.30): handled by CoreEntry.Command "report-bug" / "bug-folder" / "export-chats-bugs"; the notes tab by PaneContent("notes").
         Button("Sketch ProMax", "ReportBug", "Report\nbug", "report-bug", "bug",
             "Writes a bug report for Sketch ProMax with what just happened, ready to send."),
         Button("Sketch ProMax", "BugFolder", "Bug\nfolder", "bug-folder", "folder",
             "Opens the folder with the bug reports written so far."),
+        Button("Sketch ProMax", "ExportChatsBugs", "Export chats\n& bugs", "export-chats-bugs", "pack",
+            "Writes one zip with the chats of every model, all bug reports, the tool-call log and the versions, to send to the developer."),
         Pane("Bugs", "ReportBug", "Report bug", "report-bug", "Writes a bug report for Sketch ProMax with what just happened, ready to send."),
         Pane("Bugs", "BugFolder", "Open bug folder", "bug-folder", "Opens the folder with the bug reports written so far."),
+        Pane("Bugs", "ExportChatsBugs", "Export chats & bugs", "export-chats-bugs",
+            "Writes one zip with the chats of every model, all bug reports, the tool-call log and the versions, to send to the developer. Asks for the period first; nothing is sent."),
         Tab("notes", "Notes", "Notes for this model"),
     ];
 
