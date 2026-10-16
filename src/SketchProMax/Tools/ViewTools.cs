@@ -9,14 +9,20 @@ public sealed class CreatePlanViewsTool : IRevitTool
     public string Name => "create_plan_views";
     public string Description =>
         "Create floor, ceiling or structural plans for one or more levels, optionally applying a view template, " +
-        "a scale and a name pattern where {level} is replaced by the level name (e.g. 'A - {level} - Furniture Plan').";
+        "a scale and a name pattern where {level} is replaced by the level name (e.g. 'A - {level} - Furniture Plan'). " +
+        "Structural plans are engineering plans looking down, with a view range set from top_offset, cut_offset and " +
+        "view_depth (defaults +2300, +1200 and -1500 mm from the level, so beams under the slab show); the result says " +
+        "when a view template controls the view range instead.";
     public string PropertiesJson => """
     {
       "levels": {"type": "array", "items": {"type": "string"}, "description": "Level names. Empty = all levels."},
       "kind": {"type": "string", "enum": ["floor", "ceiling", "structural"]},
       "name_pattern": {"type": "string"},
       "view_template": {"type": "string", "description": "View template name to apply."},
-      "scale": {"type": "integer", "description": "e.g. 100 for 1:100. Ignored when the template controls scale."}
+      "scale": {"type": "integer", "description": "e.g. 100 for 1:100. Ignored when the template controls scale."},
+      "top_offset": {"type": "number", "description": "View range top above the level, project units (structural default 2300 mm)."},
+      "cut_offset": {"type": "number", "description": "Cut plane above the level, project units (structural default 1200 mm)."},
+      "view_depth": {"type": "number", "description": "Bottom and view depth relative to the level, project units, usually negative (structural default -1500 mm)."}
     }
     """;
     public string[] Required => ["kind"];
@@ -31,9 +37,20 @@ public sealed class CreatePlanViewsTool : IRevitTool
             "structural" => ViewFamily.StructuralPlan,
             _ => ViewFamily.FloorPlan,
         };
+        // A structural plan type whose name says it looks up (reflected) is used only when there is no other.
         var vft = new FilteredElementCollector(doc).OfClass(typeof(ViewFamilyType)).Cast<ViewFamilyType>()
-            .FirstOrDefault(t => t.ViewFamily == family)
+            .Where(t => t.ViewFamily == family)
+            .OrderBy(t => family == ViewFamily.StructuralPlan && new[] { "Reflected", "Ceiling", "Up", "RCP" }.Any(w => ModelRules.FirstWord(t.Name, [w]) != null) ? 1 : 0)
+            .FirstOrDefault()
             ?? throw new InvalidOperationException($"No view type for {family} in this model.");
+        var structural = family == ViewFamily.StructuralPlan;
+        double? Offset(string key, double defaultMm) =>
+            args.OptDouble(key) is { } v ? RevitHelpers.ToInternal(doc, v) : structural ? defaultMm / 304.8 : null;
+        var top = Offset("top_offset", 2300);
+        var cut = Offset("cut_offset", 1200);
+        var depth = Offset("view_depth", -1500);
+        if (top is { } tv && cut is { } cv && depth is { } dv && !(tv >= cv && cv >= dv))
+            return ToolResult.Error("The view range must run top_offset >= cut_offset >= view_depth (all from the level).");
 
         var names = args.StringList("levels");
         var allLevels = new FilteredElementCollector(doc).OfClass(typeof(Level)).Cast<Level>().OrderBy(l => l.Elevation).ToList();
@@ -55,10 +72,55 @@ public sealed class CreatePlanViewsTool : IRevitTool
             }
             if (args.OptLong("scale") is { } scale) view.Scale = (int)scale;
             if (template != null) view.ViewTemplateId = template.Id;
-            created.Add(new { id = view.Id.Value, name = view.Name, level = level.Name });
+            var rangeNote = top is null && cut is null && depth is null ? null : SetRange(view, level, top, cut, depth, structural);
+            created.Add(new { id = view.Id.Value, name = view.Name, level = level.Name, viewType = view.ViewType.ToString(), viewRange = rangeNote });
         }
         t.Commit();
         return ToolResult.Ok(new { created });
+    }
+
+    /// <summary>
+    /// Structural plans look down (some types default to looking up), then the view range is set from the level.
+    /// Returns what was set, or why it could not be.
+    /// </summary>
+    private static string SetRange(ViewPlan view, Level level, double? top, double? cut, double? depth, bool structural)
+    {
+        var doc = view.Document;
+        var notes = new List<string>();
+        if (structural)
+        {
+            if (view.get_Parameter(BuiltInParameter.PLAN_VIEW_VIEW_DIR) is { IsReadOnly: false } dir && dir.AsInteger() != (int)PlanViewDirection.Down)
+                if (!dir.Set((int)PlanViewDirection.Down)) notes.Add("couldn't set the view direction to Down");
+            if (view.ViewType != ViewType.EngineeringPlan) notes.Add($"Revit made a {view.ViewType} view, not an engineering plan; check the structural plan view type");
+        }
+        // A template that includes the view range owns it: say so rather than fight it.
+        if (view.ViewTemplateId != ElementId.InvalidElementId && doc.GetElement(view.ViewTemplateId) is View template
+            && template.GetNonControlledTemplateParameterIds().All(id => id.Value != (long)BuiltInParameter.PLAN_VIEW_RANGE))
+        {
+            notes.Add($"view range not set: the view template '{template.Name}' controls it");
+            return string.Join("; ", notes);
+        }
+        try
+        {
+            var range = view.GetViewRange();
+            var c = cut ?? range.GetOffset(PlanViewPlane.CutPlane);
+            var tp = Math.Max(top ?? range.GetOffset(PlanViewPlane.TopClipPlane), c);
+            var d = Math.Min(depth ?? range.GetOffset(PlanViewPlane.ViewDepthPlane), c);
+            foreach (var plane in new[] { PlanViewPlane.TopClipPlane, PlanViewPlane.CutPlane, PlanViewPlane.BottomClipPlane, PlanViewPlane.ViewDepthPlane })
+                range.SetLevelId(plane, level.Id);
+            range.SetOffset(PlanViewPlane.TopClipPlane, tp);
+            range.SetOffset(PlanViewPlane.CutPlane, c);
+            range.SetOffset(PlanViewPlane.BottomClipPlane, d);
+            range.SetOffset(PlanViewPlane.ViewDepthPlane, d);
+            view.SetViewRange(range);
+            string Mm(double v) => $"{(v >= 0 ? "+" : "")}{Math.Round(v * 304.8)}";
+            notes.Insert(0, $"top {Mm(tp)}, cut {Mm(c)}, bottom and depth {Mm(d)} mm from {level.Name}");
+        }
+        catch (Exception ex) when (ex is Autodesk.Revit.Exceptions.ApplicationException or ArgumentException or InvalidOperationException)
+        {
+            notes.Add($"view range not set: {ex.Message.Trim()}");
+        }
+        return string.Join("; ", notes);
     }
 }
 

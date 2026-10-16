@@ -74,12 +74,17 @@ public sealed class CheckModelTool : IRevitTool
         "type in the same place), wall ends that stop short of another wall, beams with an end on nothing, columns off " +
         "the grid intersections, walls/beams/grids slightly off-axis (under 1°), elements far above or below their level " +
         "(probably on the wrong level), rooms not placed or not enclosed, and empty required parameters. CSV of every " +
-        "finding, optional BCF per check.";
+        "finding, optional BCF per check. Columns off the grid report their offsets in mm. Intentional cases go in " +
+        "exceptions (element ids, Marks or Comments; 'columns_off_grid:C12' for one check only); save_exceptions keeps " +
+        "them with this model for later runs.";
     public string PropertiesJson => """
     {
       "checks": {"type": "array", "items": {"type": "string", "enum": ["warnings", "duplicates", "wall_gaps", "unsupported_beams", "columns_off_grid", "off_axis", "level_offsets", "rooms", "required_parameters"]}, "description": "Default all."},
       "required_parameters": {"type": "array", "items": {"type": "string"}, "description": "Parameter names that must have a value (default Mark) on structural columns, framing, foundations, walls and floors."},
       "tolerance": {"type": "number", "description": "Column-on-grid tolerance, project units (default 50 mm)."},
+      "exceptions": {"type": "array", "items": {"type": "string"}, "description": "Elements not to report: ids, Marks or Comments values; prefix with a check name and ':' to limit it to that check (e.g. 'columns_off_grid:C12')."},
+      "save_exceptions": {"type": "boolean", "description": "Add these exceptions to the list saved with this model, used on every later check_model run."},
+      "clear_exceptions": {"type": "boolean", "description": "Forget this model's saved exceptions first."},
       "gap_tolerance": {"type": "number", "description": "Wall gap and beam support search distance, project units (default 300 mm)."},
       "max_level_offset": {"type": "number", "description": "Flag base offsets larger than this, project units (default 1500 mm)."},
       "bcf": {"type": "boolean"},
@@ -98,7 +103,14 @@ public sealed class CheckModelTool : IRevitTool
         var population = new Dictionary<string, int>();
         var tol = args.OptDouble("tolerance") is { } t ? RevitHelpers.ToInternal(doc, t) : (double?)null;
         var maxOffset = args.OptDouble("max_level_offset") is { } mo ? RevitHelpers.ToInternal(doc, mo) : 1500 / 304.8;
-        void Add(string check, Element? e, string issue) => findings.Add(new Checks.Finding(check, e?.Id.Value ?? 0, e is null ? "" : Checks.Describe(e), issue));
+        var (exceptions, savedExceptions) = Exceptions(doc, args);
+        var excepted = 0;
+        void Add(string check, Element? e, string issue)
+        {
+            if (e is not null && exceptions.Count > 0 && ModelRules.IsException(check, e.Id.Value, e.get_Parameter(BuiltInParameter.ALL_MODEL_MARK)?.AsString(),
+                    e.get_Parameter(BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS)?.AsString(), exceptions)) { excepted++; return; }
+            findings.Add(new Checks.Finding(check, e?.Id.Value ?? 0, e is null ? "" : Checks.Describe(e), issue));
+        }
 
         var walls = new FilteredElementCollector(doc).OfClass(typeof(Wall)).Cast<Wall>().Where(w => w.WallType.Kind == WallKind.Basic && w.Location is LocationCurve).ToList();
         var columns = Checks.Of(doc, BuiltInCategory.OST_StructuralColumns).OfType<FamilyInstance>().ToList();
@@ -195,17 +207,19 @@ public sealed class CheckModelTool : IRevitTool
 
         if (On("columns_off_grid"))
         {
-            var grids = new FilteredElementCollector(doc).OfClass(typeof(Grid)).Cast<Grid>().Select(g => g.Curve).OfType<Line>().ToList();
+            var grids = new FilteredElementCollector(doc).OfClass(typeof(Grid)).Cast<Grid>().Where(g => g.Curve is Line)
+                .Select(g => (name: g.Name, line: Line.CreateUnbound(new XYZ(((Line)g.Curve).Origin.X, ((Line)g.Curve).Origin.Y, 0), new XYZ(((Line)g.Curve).Direction.X, ((Line)g.Curve).Direction.Y, 0))))
+                .ToList();
             if (grids.Count >= 2)
             {
-                var gt = tol ?? 50 / 304.8;
+                var gtMm = (tol ?? 50 / 304.8) * 304.8;
                 population["columns_off_grid"] = columns.Count;
                 foreach (var c in columns)
                 {
                     if (c.Location is not LocationPoint lp) continue;
-                    var on = grids.Where(g => Line.CreateUnbound(new XYZ(g.Origin.X, g.Origin.Y, 0), new XYZ(g.Direction.X, g.Direction.Y, 0)).Distance(new XYZ(lp.Point.X, lp.Point.Y, 0)) < gt).ToList();
-                    var crossing = on.Any(a => on.Any(b => Math.Abs(a.Direction.DotProduct(b.Direction)) < 0.99));
-                    if (!crossing) Add("columns_off_grid", c, on.Count == 0 ? "not on any grid line" : "on one grid line only, not at an intersection");
+                    var at = new XYZ(lp.Point.X, lp.Point.Y, 0);
+                    var distances = grids.Select(g => new ModelRules.GridDistance(g.name, Math.Atan2(g.line.Direction.Y, g.line.Direction.X), g.line.Distance(at) * 304.8)).ToList();
+                    if (ModelRules.OffGridIssue(distances, gtMm) is { } issue) Add("columns_off_grid", c, issue);
                 }
             }
         }
@@ -269,10 +283,34 @@ public sealed class CheckModelTool : IRevitTool
         return ToolResult.Ok(new
         {
             overallScore = scores.Count == 0 ? 100 : (int)Math.Round(scores.Average(s => s.score)),
-            scores, findings = findings.Count, file, bcf = Checks.Bcf(app, args, $"{doc.Title} - Model check", findings),
+            scores, findings = findings.Count, file,
+            exceptions = exceptions.Count > 0 || savedExceptions is not null ? new { skippedFindings = excepted, list = exceptions.Take(50), savedFile = savedExceptions } : null, bcf = Checks.Bcf(app, args, $"{doc.Title} - Model check", findings),
             warningTypes = findings.Where(f => f.Check == "warnings").GroupBy(f => f.Issue).Select(g => new { warning = g.Key, count = g.Count() }).OrderByDescending(g => g.count).Take(25),
             sample = findings.Where(f => f.Check != "warnings").GroupBy(f => f.Check).SelectMany(g => g.Take(15)).Select(f => new { f.Check, f.Id, f.What, f.Issue }),
         });
+    }
+
+    /// <summary>This run's exceptions: the ones saved with this model plus the ones given; saved back when asked. Returns the saved file when there is one.</summary>
+    private static (List<string> list, string? file) Exceptions(Document doc, ToolArgs args)
+    {
+        var file = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "SketchProMax", "check-exceptions", $"{Checks.ModelKey(doc)}.json");
+        var saved = new List<string>();
+        if (!args.OptBool("clear_exceptions"))
+            try { if (File.Exists(file)) saved = JsonSerializer.Deserialize<List<string>>(File.ReadAllText(file)) ?? []; }
+            catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException) { saved = []; }
+        var given = args.StringList("exceptions").Select(x => x.Trim()).Where(x => x.Length > 0).ToList();
+        var all = saved.Concat(given).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        if (args.OptBool("save_exceptions") || args.OptBool("clear_exceptions"))
+        {
+            var keep = args.OptBool("save_exceptions") ? all : [];
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+                File.WriteAllText(file, JsonSerializer.Serialize(keep, new JsonSerializerOptions { WriteIndented = true }));
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return (all, $"not saved: {ex.Message}"); }
+        }
+        return (all, File.Exists(file) ? file : null);
     }
 }
 

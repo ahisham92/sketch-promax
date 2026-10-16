@@ -15,7 +15,8 @@ namespace SketchProMax.Tools;
 /// The catch-all: Claude writes a short C# snippet against the Revit API and it runs in the open model.
 /// This covers anything the dedicated tools don't (stairs, railings, materials, unusual parameters, bulk edits...).
 /// run_revit_code can also leave transactions to the snippet (own_transactions) for edit scopes such as StairsEditScope.
-/// The read-only variant runs inside a transaction group that is always rolled back, so nothing it does is kept.
+/// The read-only variant runs inside a transaction (in a group) that is always rolled back, so probes may create or
+/// change elements and nothing they do is kept.
 /// </summary>
 public abstract class RevitCodeToolBase : IRevitTool
 {
@@ -108,23 +109,51 @@ public abstract class RevitCodeToolBase : IRevitTool
         }
         else
         {
-            // Without a transaction Revit refuses changes, but a snippet could open and commit its own; the group
-            // around it is always rolled back, so nothing a read-only snippet does is kept.
-            var group = doc.IsReadOnly ? null : new TransactionGroup(doc, "Sketch ProMax: read-only code (rolled back)");
+            // A transaction is opened so probes that create or change elements work, inside a group, and both are
+            // always rolled back, so nothing a read-only snippet does is kept. With ownTransactions only the group is
+            // opened: the snippet starts its own (and can call EditFamily, which refuses to run inside one).
+            var group = doc.IsReadOnly || doc.IsModifiable ? null : new TransactionGroup(doc, "Sketch ProMax: read-only code (rolled back)");
+            Transaction? probe = null;
+            JsonElement json;
             try
             {
                 group?.Start();
+                if (group is not null && !ownTransactions)
+                {
+                    probe = new Transaction(doc, "Sketch ProMax: probe (rolled back)");
+                    // Warnings from a probe must not stop it with a dialog; it is rolled back anyway.
+                    var fo = probe.GetFailureHandlingOptions();
+                    fo.SetClearAfterRollback(true);
+                    fo.SetForcedModalHandling(false);
+                    probe.SetFailureHandlingOptions(fo);
+                    probe.Start();
+                }
                 result = run(app, uidoc, doc, log, values);
+                // Read the result now: elements the snippet made are gone after the rollback.
+                json = SafeJson(result);
             }
-            catch (Exception ex) { return ToolResult.Error($"The code failed. {Unwrap(ex)}\n{log}"); }
+            catch (Exception ex)
+            {
+                var hint = probe is not null && Unwrap(ex).IndexOf("transaction", StringComparison.OrdinalIgnoreCase) >= 0
+                    ? " A transaction is already open for the code (and rolled back after it); don't start your own, or set own_transactions to true (needed for EditFamily)."
+                    : "";
+                return ToolResult.Error($"The code failed. {Unwrap(ex)}{hint}\n{log}");
+            }
             finally
             {
+                if (probe is not null)
+                {
+                    try { if (probe.HasStarted() && !probe.HasEnded()) probe.RollBack(); }
+                    catch (Autodesk.Revit.Exceptions.ApplicationException) { /* the group rollback below still undoes it */ }
+                    probe.Dispose();
+                }
                 if (group is not null)
                 {
                     if (group.HasStarted() && !group.HasEnded()) group.RollBack();
                     group.Dispose();
                 }
             }
+            return new ToolResult(JsonSerializer.Serialize(new { result = json, log = log.Length > 0 ? log.ToString() : null, rolledBack = group is not null ? true : (bool?)null }));
         }
 
         return new ToolResult(JsonSerializer.Serialize(new { result = SafeJson(result), log = log.Length > 0 ? log.ToString() : null }));
@@ -182,8 +211,21 @@ public sealed class RunRevitQueryCodeTool : RevitCodeToolBase
     public override string Name => "run_revit_query_code";
     public override string Description =>
         "Run read-only C# against the Revit API to answer a question the other tools can't (any element, parameter, " +
-        "geometry or setting). Anything it changes is rolled back, so it cannot change the model." + CodeGuidance;
+        "geometry or setting). It runs inside a transaction that is opened for it and always rolled back, so it can create " +
+        "or change elements to probe (e.g. measure a temporary element) but nothing is kept; do not start your own " +
+        "Transaction. To call EditFamily or open your own transactions, set own_transactions to true (still all rolled back)." + CodeGuidance;
     public override bool ModifiesModel => false;
+
+    public override string PropertiesJson => """
+    {
+      "code": {"type": "string", "description": "C# method body. Variables available: app (UIApplication), uidoc (UIDocument), doc (Document), log (StringBuilder for notes). Must end with a return statement; return counts, ids or small anonymous objects, not Revit elements. Namespaces imported: System, System.Linq, System.Collections.Generic, Autodesk.Revit.DB (+ .Architecture, .Structure, .Mechanical, .Plumbing, .Electrical), Autodesk.Revit.UI. Lengths are in feet (Revit internal units); convert with UnitUtils."},
+      "description": {"type": "string", "description": "What the code does, in a few words."},
+      "own_transactions": {"type": "boolean", "description": "Default false. true: no transaction is opened for you (needed for EditFamily); open your own. Everything is still rolled back at the end."}
+    }
+    """;
+
+    public override ToolResult Execute(UIApplication app, ToolArgs args) =>
+        RunScript(app, args.String("code"), args.String("description"), false, new Dictionary<string, object?>(), args.OptBool("own_transactions"));
 }
 
 public sealed class RunRevitCodeTool : RevitCodeToolBase

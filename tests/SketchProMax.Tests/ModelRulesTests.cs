@@ -1,0 +1,48 @@
+using SketchProMax.Tools;
+using static SketchProMax.Tools.ModelRules;
+
+/// <summary>Rules behind arch_to_structure, create_raft, link_model and check_model, which need no Revit.</summary>
+internal static class ModelRulesTests
+{
+    public static void Run(Action<string, bool, string> check)
+    {
+        string? Floor(string type, bool structural = false, string? material = null, double mm = 200) =>
+            FloorSkipReason(new FloorFacts(type, structural, material, mm), FloorStructureWords, FloorFinishWords, 100);
+
+        check("floors: concrete type name is taken", Floor("CL_Concrete_250") is null, Floor("CL_Concrete_250") ?? "");
+        check("floors: Structural flag is taken", Floor("Generic 300mm", structural: true) is null, "");
+        check("floors: concrete material is taken", Floor("Generic 300mm", material: "Concrete, Cast-in-Place Concrete") is null, "");
+        check("floors: finish type skipped", Floor("FL_Finish_100", material: "Concrete")?.Contains("finish") == true, Floor("FL_Finish_100") ?? "");
+        check("floors: roof build-up skipped even when flagged", Floor("Roof Layers_510 mm", structural: true)?.Contains("Roof Layer") == true, Floor("Roof Layers_510 mm", true) ?? "");
+        check("floors: screed and tile skipped", Floor("Screed 50") != null && Floor("FL_Tiles_20") != null && Floor("Ceramic Tile 10mm") != null, "");
+        check("floors: thin non-structural floor skipped", Floor("Generic 50mm", material: "Concrete", mm: 50)?.Contains("thin") == true, "");
+        check("floors: thin structural floor kept", Floor("Thin RC", structural: true, mm: 60) is null, "");
+        check("floors: plain generic floor skipped", Floor("Generic 300mm", material: "Default")?.StartsWith("not structural") == true, "");
+        check("floors: short words need word ends", FirstWord("FL_RC_250", ["RC"]) == "RC" && FirstWord("Source Floor", ["RC"]) is null && FirstWord("PTFE 10", ["PT"]) is null, "");
+        check("floors: no exclude words skips none", FloorSkipReason(new FloorFacts("FL_Finish_100", true, null, 100), FloorStructureWords, [], 100) is null, "");
+
+        check("raft: thickness replaces the size, not the grade", WithThickness("FL_SC_40MPa_Raft_1200", 1500) == "FL_SC_40MPa_Raft_1500", WithThickness("FL_SC_40MPa_Raft_1200", 1500));
+        check("raft: mm suffix kept", WithThickness("Raft 1000mm", 1500) == "Raft 1500mm", WithThickness("Raft 1000mm", 1500));
+        check("raft: thickness appended when absent", WithThickness("FL_SC_40MPa_Raft", 1500) == "FL_SC_40MPa_Raft_1500" && WithThickness("Mat Foundation", 900) == "Mat Foundation 900mm", WithThickness("FL_SC_40MPa_Raft", 1500));
+        check("raft: wildcard match", Wildcard("FL_SC_40MPa_Raft_1500", "fl_sc_*raft*") && !Wildcard("FL_SC_40MPa_SOG_400", "FL_SC_*Raft*") && Wildcard("FL_SC_40MPa_SOG_400", "40MPa"), "");
+
+        check("link: newer release detected", IsNewerRelease("2025", "2024") && IsNewerRelease("Autodesk Revit 2026", "2025"), "");
+        check("link: same or older release fine", !IsNewerRelease("2025", "2025") && !IsNewerRelease("2023", "2025") && !IsNewerRelease("", "2025"), "");
+
+        const double X = 0, Y = Math.PI / 2;
+        var onCrossing = OffGridIssue([new("A", Y, 10), new("1", X, 20), new("B", Y, 6000)], 25);
+        check("grid: within tolerance at a crossing", onCrossing is null, onCrossing ?? "");
+        var offBoth = OffGridIssue([new("A", Y, 120), new("1", X, 60), new("B", Y, 6000)], 25);
+        check("grid: offsets reported in mm", offBoth == "60 mm off grid 1 and 120 mm off grid A (tolerance 25 mm)", offBoth ?? "");
+        var oneLine = OffGridIssue([new("A", Y, 5), new("1", X, 160)], 50);
+        check("grid: on one line, off the other", oneLine == "on grid A but 160 mm off grid 1 (tolerance 50 mm)", oneLine ?? "");
+        check("grid: larger tolerance accepts it", OffGridIssue([new("A", Y, 5), new("1", X, 160)], 200) is null, "");
+        var parallel = OffGridIssue([new("A", Y, 30), new("B", Y, 7000)], 25);
+        check("grid: only parallel grids", parallel == "not at a grid intersection; 30 mm off grid A (tolerance 25 mm)", parallel ?? "");
+
+        check("exceptions: by id, mark or comment", IsException("columns_off_grid", 123, null, null, ["123"]) && IsException("columns_off_grid", 1, "c12", null, [" C12 "])
+                                                     && IsException("columns_off_grid", 1, null, "facade offset", ["Facade offset"]), "");
+        check("exceptions: scoped to a check", IsException("columns_off_grid", 1, "C12", null, ["columns_off_grid:C12"]) && !IsException("duplicates", 1, "C12", null, ["columns_off_grid:C12"]), "");
+        check("exceptions: no match", !IsException("columns_off_grid", 5, "C1", null, ["C12", "", "50"]), "");
+    }
+}

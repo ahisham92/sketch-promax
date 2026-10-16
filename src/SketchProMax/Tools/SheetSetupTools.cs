@@ -155,6 +155,7 @@ public sealed class CreateProjectParametersTool : IRevitTool
             try
             {
                 var family = FamilyEdit.FindFamily(doc, byFamily.Key);
+                var familyName = family.Name;
                 famDoc = doc.EditFamily(family);
                 var added = new List<string>();
                 using (var ft = new Transaction(famDoc, "Add parameters"))
@@ -168,8 +169,9 @@ public sealed class CreateProjectParametersTool : IRevitTool
                     }
                     ft.Commit();
                 }
+                // Reloading replaces the family element, so 'family' is not touched after it.
                 if (added.Count > 0) FamilyEdit.LoadBack(famDoc, doc);
-                families.Add(new { family = family.Name, added });
+                families.Add(new { family = familyName, added });
             }
             catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or Autodesk.Revit.Exceptions.ApplicationException)
             {
@@ -266,13 +268,15 @@ public sealed class EditFamilyTextTool : IRevitTool
         var doc = app.ActiveUIDocument.Document;
         var family = FamilyEdit.FindFamily(doc, args.String("family"));
         if (!family.IsEditable) return ToolResult.Error($"'{family.Name}' is a system or in-place family and can't be opened for editing.");
+        // Reloading replaces the family element: everything the result needs is read before LoadBack, nothing after.
+        var familyName = family.Name;
         var famDoc = doc.EditFamily(family);
         try
         {
             var notes = new FilteredElementCollector(famDoc).OfClass(typeof(TextNote)).Cast<TextNote>().ToList();
             var changing = args.Has("replace") || args.Has("set") || args.Has("add");
             if (!changing)
-                return ToolResult.Ok(new { family = family.Name, textNotes = notes.Select(n => new { id = n.Id.Value, text = n.Text.TrimEnd('\r', '\n') }) });
+                return ToolResult.Ok(new { family = familyName, textNotes = notes.Select(n => new { id = n.Id.Value, text = n.Text.TrimEnd('\r', '\n') }) });
 
             var changed = 0;
             var problems = new List<string>();
@@ -311,11 +315,16 @@ public sealed class EditFamilyTextTool : IRevitTool
                 }
                 t.Commit();
             }
-            if (changed == 0) return ToolResult.Error($"Nothing changed in '{family.Name}': {string.Join("; ", problems)}");
+            if (changed == 0) return ToolResult.Error($"Nothing changed in '{familyName}': {string.Join("; ", problems)}");
             FamilyEdit.LoadBack(famDoc, doc);
-            return ToolResult.Ok(new { family = family.Name, changed, problems });
+            return ToolResult.Ok(new { family = familyName, changed, problems, reloaded = true });
         }
-        finally { famDoc.Close(false); }
+        finally
+        {
+            // The family document can already be gone after a reload; closing it then is not an error.
+            try { if (famDoc.IsValidObject) famDoc.Close(false); }
+            catch (Autodesk.Revit.Exceptions.ApplicationException) { }
+        }
     }
 }
 

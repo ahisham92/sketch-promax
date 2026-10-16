@@ -40,6 +40,9 @@ public sealed class LinkModelTool : IRevitTool
             if (inst != null) return ToolResult.Ok(new { alreadyLinked = true, link = existing.Name, instanceId = inst.Id.Value, loaded = inst.GetLinkDocument() != null });
         }
 
+        // A model saved by a newer Revit can't be linked (Revit reports it as corrupt); say so plainly before trying.
+        if (existing is null && LinkVersion.Problem(path, app.Application.VersionNumber) is { } versionProblem) return ToolResult.Error(versionProblem);
+
         using var t = RevitHelpers.StartTransaction(doc, "Link model");
         var typeId = existing?.Id;
         if (typeId is null)
@@ -70,13 +73,35 @@ public sealed class LinkModelTool : IRevitTool
     }
 }
 
+/// <summary>The Revit release a model file was saved in, read from the file without opening it.</summary>
+internal static class LinkVersion
+{
+    public static string? Problem(string path, string running)
+    {
+        BasicFileInfo info;
+        try { info = BasicFileInfo.Extract(path); }
+        catch (Exception ex) when (ex is Autodesk.Revit.Exceptions.ApplicationException or ArgumentException or IOException)
+        {
+            return $"Couldn't read the file's header ({ex.Message.Trim()}). Check it is a Revit model that isn't open elsewhere, then try again.";
+        }
+        var saved = (info.Format ?? "").Trim();
+        if (info.IsSavedInLaterVersion || ModelRules.IsNewerRelease(saved, running))
+            return $"This model was saved in Revit {(saved.Length > 0 ? saved : "a newer version")}, and this is Revit {running}: Revit can't link a model saved in a newer version. " +
+                   $"Open this project in Revit {(saved.Length > 0 ? saved : "that version")} (or later) and link it there, or ask for a copy saved in Revit {running}.";
+        return null;
+    }
+}
+
 public sealed class CreateRaftTool : IRevitTool
 {
     public string Name => "create_raft";
     public string Description =>
         "Model a raft (mat) foundation under a floor: its outline follows the floor's outer edge (plus an optional projection), " +
         "its top a given depth below the floor's top (e.g. 1500 mm under the slab on grade), at a thickness. The floor is " +
-        "named by id, by Mark, or as the lowest floor on a level. Uses a foundation slab type made by thickness (Raft 1000mm).";
+        "named by id, by Mark, or as the lowest floor on a level. The raft is hosted on the level nearest its top (or host_level). " +
+        "Follow the project's type naming: type_match reuses an existing floor/foundation type (e.g. 'FL_SC_*Raft*') at the " +
+        "raft thickness, or makes one from it renamed for the thickness; type_name names the type ({thickness} = mm). " +
+        "Without either it uses a foundation slab type made by thickness (Raft 1000mm).";
     public string PropertiesJson => """
     {
       "floor_id": {"type": "integer", "description": "The floor (e.g. slab on grade) the raft sits under."},
@@ -84,7 +109,11 @@ public sealed class CreateRaftTool : IRevitTool
       "level": {"type": "string", "description": "Or the level: its lowest, largest floor."},
       "depth_below": {"type": "number", "description": "Raft top below the floor's top, project units (default 1500 mm)."},
       "thickness": {"type": "number", "description": "Raft thickness, project units (default 1000 mm)."},
-      "projection": {"type": "number", "description": "Raft edge past the floor's edge, project units (default 0)."}
+      "projection": {"type": "number", "description": "Raft edge past the floor's edge, project units (default 0)."},
+      "host_level": {"type": "string", "description": "Level to host the raft on (default: the level nearest the raft top)."},
+      "type_name": {"type": "string", "description": "Raft type name, e.g. 'FL_SC_40MPa_Raft_{thickness}'; an existing type with this name is reused."},
+      "type_match": {"type": "string", "description": "Wildcard for an existing floor/foundation type to follow, e.g. 'FL_SC_*Raft*' or '*40MPa*'."},
+      "material": {"type": "string", "description": "Material name for a new raft type (default the model's concrete)."}
     }
     """;
     public string[] Required => [];
@@ -129,17 +158,31 @@ public sealed class CreateRaftTool : IRevitTool
             flat = Area(a) > Area(flat) ? a : CurveLoop.CreateViaOffset(flat, -projection, XYZ.BasisZ);
         }
 
+        // Hosted on the level nearest its top, so the offset stays small and the raft schedules with the foundation level.
+        var levels = new FilteredElementCollector(doc).OfClass(typeof(Level)).Cast<Level>().ToList();
+        var host = args.OptString("host_level") is { } hl ? RevitHelpers.FindLevel(doc, hl) : levels.OrderBy(l => Math.Abs(l.ProjectElevation - raftTop)).First();
+        flat = CurveLoop.CreateViaTransform(flat, Transform.CreateTranslation(new XYZ(0, 0, host.ProjectElevation - floorLevel.ProjectElevation)));
+        Material? material = null;
+        if (args.OptString("material") is { } mn)
+        {
+            var materials = new FilteredElementCollector(doc).OfClass(typeof(Material)).Cast<Material>().ToList();
+            material = materials.FirstOrDefault(m => m.Name.Equals(mn, StringComparison.OrdinalIgnoreCase))
+                       ?? materials.Where(m => m.Name.IndexOf(mn, StringComparison.OrdinalIgnoreCase) >= 0).OrderBy(m => m.Name.Length).FirstOrDefault()
+                       ?? throw new ArgumentException($"No material named '{mn}'. Concrete materials here: {string.Join(", ", materials.Where(m => m.Name.IndexOf("Concrete", StringComparison.OrdinalIgnoreCase) >= 0).Select(m => m.Name).Take(15))}.");
+        }
+        var notes = new List<string>();
+
         using var t = RevitHelpers.StartTransaction(doc, "Raft");
-        var type = ConcreteTypes.Slab(doc, thickness, "Raft", foundation: true);
+        var type = RaftType(doc, thickness, args.OptString("type_name"), args.OptString("type_match"), material, notes);
         Floor raft;
-        try { raft = Floor.Create(doc, [flat], type.Id, floorLevel.Id, true, null, 0); }
+        try { raft = Floor.Create(doc, [flat], type.Id, host.Id, true, null, 0); }
         catch (ArgumentException) when (type.IsFoundationSlab)
         {
-            // Some versions refuse foundation slab types here: fall back to a structural floor type named Raft.
-            type = ConcreteTypes.Slab(doc, thickness, "Raft (structural floor)");
-            raft = Floor.Create(doc, [flat], type.Id, floorLevel.Id, true, null, 0);
+            // Some versions refuse foundation slab types here: fall back to a structural floor type of the same name style.
+            type = ConcreteTypes.SlabNamed(doc, type.Name + " (structural floor)", thickness, null, false, material);
+            raft = Floor.Create(doc, [flat], type.Id, host.Id, true, null, 0);
         }
-        if (raft.get_Parameter(BuiltInParameter.FLOOR_HEIGHTABOVELEVEL_PARAM) is not { IsReadOnly: false } offset || !offset.Set(raftTop - floorLevel.ProjectElevation))
+        if (raft.get_Parameter(BuiltInParameter.FLOOR_HEIGHTABOVELEVEL_PARAM) is not { IsReadOnly: false } offset || !offset.Set(raftTop - host.ProjectElevation))
         {
             t.RollBack();
             return ToolResult.Error("Couldn't set the raft's height offset from the level.");
@@ -149,10 +192,43 @@ public sealed class CreateRaftTool : IRevitTool
         return ToolResult.Ok(new
         {
             id = raft.Id.Value, type = type.Name, foundationSlab = type.IsFoundationSlab, under = floor.Id.Value,
+            level = host.Name, offsetFromLevel = RevitHelpers.FromInternal(doc, raftTop - host.ProjectElevation),
+            material = (doc.GetElement(type.GetCompoundStructure()?.GetLayers() is { Count: > 0 } ls ? ls[Math.Max(0, type.GetCompoundStructure()!.StructuralMaterialIndex)].MaterialId : ElementId.InvalidElementId) as Material)?.Name,
+            notes = notes.Count > 0 ? notes : null,
             topElevation = Elevations.FromInternalZ(doc, raftTop), bottomElevation = Elevations.FromInternalZ(doc, raftTop - thickness),
             otherAreas = profile.Count > 1 && profile.Skip(1).Any(l => Area(l) > Area(outer) * 0.05) ? "The floor's sketch has more than one loop; only the largest outline was used (holes are ignored for a raft). Check separate floor areas." : null,
             next = "Reinforce it with reinforce_slab_wall (cover 75 mm) and show it with rebar_section / a foundation plan.",
         });
+    }
+
+    /// <summary>
+    /// The raft's type: type_name when that type exists; else a type_match type at this thickness; else a new type
+    /// made from the first type_match type (named type_name, or its name with the thickness changed), or by thickness.
+    /// </summary>
+    private static FloorType RaftType(Document doc, double thickness, string? typeName, string? match, Material? material, List<string> notes)
+    {
+        var mm = (int)Math.Round(thickness * 304.8);
+        var all = new FilteredElementCollector(doc).OfClass(typeof(FloorType)).Cast<FloorType>().ToList();
+        bool Same(FloorType ft) => Math.Abs((ft.GetCompoundStructure()?.GetWidth() ?? 0) - thickness) < 1 / 304.8;
+        var name = typeName?.Replace("{thickness}", mm.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        if (name != null && all.Where(ft => ft.Name == name).OrderByDescending(ft => ft.IsFoundationSlab).FirstOrDefault() is { } named)
+        {
+            if (!Same(named)) notes.Add($"Type '{name}' already exists at {Math.Round((named.GetCompoundStructure()?.GetWidth() ?? 0) * 304.8)} mm, not {mm} mm; it was used as it is. Give another type_name for a {mm} mm raft.");
+            if (material != null) notes.Add("material applies to new types only; the existing type keeps its material.");
+            return named;
+        }
+        var matching = match is null ? [] : all.Where(ft => ModelRules.Wildcard(ft.Name, match)).OrderByDescending(ft => ft.IsFoundationSlab).ThenBy(ft => ft.Name).ToList();
+        if (match != null && matching.Count == 0) notes.Add($"No floor or foundation type matches '{match}'; a new type was made.");
+        if (name is null && matching.FirstOrDefault(Same) is { } reuse)
+        {
+            if (material != null) notes.Add("material applies to new types only; the matching type keeps its material.");
+            return reuse;
+        }
+        var basis = matching.FirstOrDefault();
+        if (basis is null) return name is null ? ConcreteTypes.Slab(doc, thickness, "Raft", foundation: true, material) : ConcreteTypes.SlabNamed(doc, name, thickness, null, true, material);
+        // Keep the basis's own material unless one was asked for.
+        var keep = material ?? (basis.GetCompoundStructure() is { } bcs && bcs.GetLayers() is { Count: > 0 } bl ? doc.GetElement(bl[Math.Max(0, bcs.StructuralMaterialIndex)].MaterialId) as Material : null);
+        return ConcreteTypes.SlabNamed(doc, name ?? ModelRules.WithThickness(basis.Name, mm), thickness, basis, basis.IsFoundationSlab, keep);
     }
 
     private static double Area(CurveLoop loop)

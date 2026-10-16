@@ -43,17 +43,21 @@ internal static class ConcreteTypes
         return type;
     }
 
-    public static FloorType Slab(Document doc, double thickness, string label = "RC Slab", bool foundation = false)
+    public static FloorType Slab(Document doc, double thickness, string label = "RC Slab", bool foundation = false, Material? material = null) =>
+        SlabNamed(doc, $"{label} {Mm(thickness)}mm", thickness, null, foundation, material);
+
+    /// <summary>The floor type with this name, else one made from 'basis' (or a concrete floor type) at this thickness and material.</summary>
+    public static FloorType SlabNamed(Document doc, string name, double thickness, FloorType? basis, bool foundation, Material? material)
     {
-        var name = $"{label} {Mm(thickness)}mm";
         var all = new FilteredElementCollector(doc).OfClass(typeof(FloorType)).Cast<FloorType>().ToList();
         var types = all.Where(t => t.IsFoundationSlab == foundation).ToList();
         if (types.Count == 0) types = all;
-        if (types.FirstOrDefault(t => t.Name == name) is { } existing) return existing;
-        var basis = types.FirstOrDefault(t => t.Name.IndexOf("Concrete", StringComparison.OrdinalIgnoreCase) >= 0) ?? types.FirstOrDefault()
-                    ?? throw new InvalidOperationException("The model has no floor types to start from.");
+        var pool = basis is null ? types : all.Where(t => t.IsFoundationSlab == basis.IsFoundationSlab).ToList();
+        if (pool.FirstOrDefault(t => t.Name == name) is { } existing) return existing;
+        basis ??= types.FirstOrDefault(t => t.Name.IndexOf("Concrete", StringComparison.OrdinalIgnoreCase) >= 0) ?? types.FirstOrDefault()
+                  ?? throw new InvalidOperationException("The model has no floor types to start from.");
         var type = (FloorType)basis.Duplicate(name);
-        if (type.GetCompoundStructure() is { } cs) type.SetCompoundStructure(Single(cs, thickness, Concrete(doc)));
+        if (type.GetCompoundStructure() is { } cs) type.SetCompoundStructure(Single(cs, thickness, material ?? Concrete(doc)));
         return type;
     }
 
@@ -111,13 +115,28 @@ public sealed class ArchToStructureTool : IRevitTool
         return Math.Abs(shift) < 1e-6 ? curve : curve.CreateTransformed(Transform.CreateTranslation(w.Orientation * shift));
     }
 
+    /// <summary>The floor type's structural material name and class (else its first layer's), for the floor filter.</summary>
+    private static string? StructuralMaterial(Document src, FloorType type)
+    {
+        var cs = type.GetCompoundStructure();
+        var layers = cs?.GetLayers();
+        var id = layers is { Count: > 0 }
+            ? (cs!.StructuralMaterialIndex >= 0 && cs.StructuralMaterialIndex < layers.Count ? layers[cs.StructuralMaterialIndex] : layers.FirstOrDefault(l => l.Function == MaterialFunctionAssignment.Structure) ?? layers[0]).MaterialId
+            : type.get_Parameter(BuiltInParameter.STRUCTURAL_MATERIAL_PARAM)?.AsElementId();
+        return id is not null && src.GetElement(id) is Material m ? $"{m.Name} {m.MaterialClass}" : null;
+    }
+
     public string Name => "arch_to_structure";
     public string Description =>
         "Turn the architectural model (a link, or this model) into a structural model: load-bearing walls become " +
-        "structural concrete walls, architectural columns become concrete structural columns of the same size, and floors " +
-        "become structural slabs, on the matching levels of this model. Walls count as load-bearing when the architect set " +
+        "structural concrete walls, the link's Structural Columns become concrete structural columns of the same size, and " +
+        "structural floors become slabs, on the matching levels of this model. Walls count as load-bearing when the architect set " +
         "them structural, their type name has Concrete/RC/Core/Shear (or your words), or they are at least min_wall_thickness. " +
-        "Types are made by size (RC Wall 200mm, RC Slab 250mm, 400 x 600mm). Re-running skips what was already made. dry_run first.";
+        "Floors are taken when set structural, or their type name has Concrete/RC/Slab/Structural (or your words) or their " +
+        "material is concrete; finish and build-up floors (Finish, Screed, Tile, Roof Layers...) and thin floors are skipped. " +
+        "The architectural Columns category is usually cladding and is skipped unless include_architectural_columns. " +
+        "The result says what was skipped and why. Types are made by size (RC Wall 200mm, RC Slab 250mm, 400 x 600mm). " +
+        "Re-running skips what was already made. dry_run first.";
     public string PropertiesJson => """
     {
       "source": {"type": "string", "description": "Architectural link name, or 'model'."},
@@ -128,6 +147,11 @@ public sealed class ArchToStructureTool : IRevitTool
       "slab_thickness": {"type": "number", "description": "Structural slab thickness, project units (default 200 mm)."},
       "slab_top_offset": {"type": "number", "description": "Slab top relative to the architect's floor top (e.g. -50 for screed), project units. Default 0."},
       "level": {"type": "string", "description": "Only elements on this level (the architect's level name)."},
+      "structural_columns": {"type": "boolean", "description": "Take the source's Structural Columns category (default true)."},
+      "include_architectural_columns": {"type": "boolean", "description": "Also convert the architectural Columns category (default false: usually cladding or finishes)."},
+      "floor_type_words": {"type": "array", "items": {"type": "string"}, "description": "Type name words meaning a structural floor (default Concrete, RC, Slab, Structural, SOG, Hollowcore, PT...)."},
+      "floor_exclude_words": {"type": "array", "items": {"type": "string"}, "description": "Type name words meaning a finish or build-up floor to skip (default Finish, Screed, Tile, Topping, Roof Layer, Build-up, Insulation, Membrane, Paving...). [] skips none."},
+      "min_floor_thickness": {"type": "number", "description": "Skip floors thinner than this unless set structural, project units (default 100 mm)."},
       "dry_run": {"type": "boolean"}
     }
     """;
@@ -165,6 +189,22 @@ public sealed class ArchToStructureTool : IRevitTool
         var dry = args.OptBool("dry_run");
         var made = new Dictionary<string, int> { ["walls"] = 0, ["columns"] = 0, ["floors"] = 0 };
         var skipped = new Dictionary<string, int> { ["walls"] = 0, ["columns"] = 0, ["floors"] = 0, ["already made"] = 0 };
+        // Why elements were left out, with a few of their type names, so the user can adjust the words or flags.
+        var why = new Dictionary<string, (int count, SortedSet<string> types)>();
+        void Skip(string kind, string reason, string typeName)
+        {
+            skipped[kind]++;
+            var key = $"{kind}: {reason}";
+            if (!why.TryGetValue(key, out var w)) w = (0, new SortedSet<string>(StringComparer.OrdinalIgnoreCase));
+            if (w.types.Count < 8) w.types.Add(typeName);
+            why[key] = (w.count + 1, w.types);
+        }
+        var floorWords = args.StringList("floor_type_words");
+        if (floorWords.Count == 0) floorWords = [.. ModelRules.FloorStructureWords];
+        var finishWords = args.Has("floor_exclude_words") ? args.StringList("floor_exclude_words") : [.. ModelRules.FloorFinishWords];
+        var minFloorMm = args.OptDouble("min_floor_thickness") is { } mft ? RevitHelpers.ToInternal(doc, mft) * 304.8 : 100;
+        var archColumns = args.OptBool("include_architectural_columns");
+        var structColumns = args.OptBool("structural_columns", true);
         var errors = new List<string>();
         var dz = tr.Origin.Z;
 
@@ -180,8 +220,8 @@ public sealed class ArchToStructureTool : IRevitTool
                 var bearing = w.get_Parameter(BuiltInParameter.WALL_STRUCTURAL_SIGNIFICANT)?.AsInteger() == 1
                               || words.Any(x => System.Text.RegularExpressions.Regex.IsMatch(w.WallType.Name, $@"(^|[^A-Za-z]){System.Text.RegularExpressions.Regex.Escape(x)}([^A-Za-z]|$)", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
                               || w.Width >= minWall;
-                if (!bearing) { skipped["walls"]++; continue; }
-                if (src == doc && w.get_Parameter(BuiltInParameter.WALL_STRUCTURAL_SIGNIFICANT)?.AsInteger() == 1) { skipped["walls"]++; continue; }
+                if (!bearing) { Skip("walls", "not load-bearing (no Structural flag, load-bearing word or thickness)", w.WallType.Name); continue; }
+                if (src == doc && w.get_Parameter(BuiltInParameter.WALL_STRUCTURAL_SIGNIFICANT)?.AsInteger() == 1) { Skip("walls", "already structural in this model", w.WallType.Name); continue; }
                 if (done.Contains(w.UniqueId)) { skipped["already made"]++; continue; }
                 if (dry) { made["walls"]++; continue; }
                 try
@@ -227,10 +267,25 @@ public sealed class ArchToStructureTool : IRevitTool
                 catch (Exception ex) when (ex is Autodesk.Revit.Exceptions.ApplicationException or ArgumentException or InvalidOperationException) { errors.Add($"wall {w.Id.Value}: {ex.Message.Trim()}"); }
             }
         if (what.Contains("columns"))
-            foreach (var c in new FilteredElementCollector(src).OfCategory(BuiltInCategory.OST_Columns).WhereElementIsNotElementType().OfType<FamilyInstance>().Where(OnLevel))
+        {
+            var sourceColumns = new List<FamilyInstance>();
+            string TypeOf(FamilyInstance f) => $"{f.Symbol?.FamilyName}: {f.Symbol?.Name}";
+            var arch = new FilteredElementCollector(src).OfCategory(BuiltInCategory.OST_Columns).WhereElementIsNotElementType().OfType<FamilyInstance>().Where(OnLevel).ToList();
+            if (archColumns) sourceColumns.AddRange(arch);
+            else foreach (var c in arch) Skip("columns", "architectural Columns category (usually cladding; set include_architectural_columns to convert)", TypeOf(c));
+            var structural = new FilteredElementCollector(src).OfCategory(BuiltInCategory.OST_StructuralColumns).WhereElementIsNotElementType().OfType<FamilyInstance>().Where(OnLevel).ToList();
+            foreach (var c in structural)
+            {
+                if (src == doc) Skip("columns", "already structural in this model", TypeOf(c));
+                else if (!structColumns) Skip("columns", "Structural Columns not taken (structural_columns is false)", TypeOf(c));
+                else if (c.Symbol?.Family?.StructuralMaterialType is StructuralMaterialType.Steel or StructuralMaterialType.Wood or StructuralMaterialType.Aluminum or StructuralMaterialType.PrecastConcrete)
+                    Skip("columns", "not cast-in-place concrete (copy it with copy_monitor instead)", TypeOf(c));
+                else sourceColumns.Add(c);
+            }
+            foreach (var c in sourceColumns)
             {
                 if (done.Contains(c.UniqueId)) { skipped["already made"]++; continue; }
-                if (c.Location is not LocationPoint lp) { skipped["columns"]++; continue; }
+                if (c.Location is not LocationPoint lp) { Skip("columns", "no point location (slanted or in-place)", TypeOf(c)); continue; }
                 if (dry) { made["columns"]++; continue; }
                 try
                 {
@@ -260,10 +315,14 @@ public sealed class ArchToStructureTool : IRevitTool
                     if (ex is InvalidOperationException) break;
                 }
             }
+        }
         if (what.Contains("floors"))
             foreach (var fl in new FilteredElementCollector(src).OfClass(typeof(Floor)).Cast<Floor>().Where(OnLevel))
             {
-                if (fl.get_Parameter(BuiltInParameter.FLOOR_PARAM_IS_STRUCTURAL)?.AsInteger() == 1 && src == doc) { skipped["floors"]++; continue; }
+                var flagged = fl.get_Parameter(BuiltInParameter.FLOOR_PARAM_IS_STRUCTURAL)?.AsInteger() == 1;
+                if (flagged && src == doc) { Skip("floors", "already structural in this model", fl.FloorType.Name); continue; }
+                if (ModelRules.FloorSkipReason(new ModelRules.FloorFacts(fl.FloorType.Name, flagged, StructuralMaterial(src, fl.FloorType), (fl.FloorType.GetCompoundStructure()?.GetWidth() ?? 0) * 304.8),
+                        floorWords, finishWords, minFloorMm) is { } reason) { Skip("floors", reason, fl.FloorType.Name); continue; }
                 if (done.Contains(fl.UniqueId)) { skipped["already made"]++; continue; }
                 if (fl.get_BoundingBox(null) is { } fb && fb.Max.Z - fb.Min.Z - (fl.FloorType.GetCompoundStructure()?.GetWidth() ?? 0) > 10 / 304.8) sloped++;
                 if (dry) { made["floors"]++; continue; }
@@ -288,7 +347,9 @@ public sealed class ArchToStructureTool : IRevitTool
         }
         return ToolResult.Ok(new
         {
-            source = sourceName, dryRun = dry, made, skipped, errors = errors.Take(40), moreErrors = Math.Max(0, errors.Count - 40),
+            source = sourceName, dryRun = dry, made, skipped,
+            skippedWhy = why.OrderByDescending(w => w.Value.count).Select(w => new { reason = w.Key, count = w.Value.count, types = w.Value.types }),
+            errors = errors.Take(40), moreErrors = Math.Max(0, errors.Count - 40),
             deletedAtSave = swallow?.Deleted.Count ?? 0, wallOpenings = openingsMade,
             slopedFloors = sloped > 0 ? $"{sloped} architectural floor(s) are sloped or shape-edited; their slabs were made flat. Re-slope them (create_ramp or shape editing)." : null,
             note = "Check wall joins and slab edges; beams over openings and transfer structure still need adding (place_beams).",

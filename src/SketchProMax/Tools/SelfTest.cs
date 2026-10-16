@@ -433,7 +433,7 @@ internal static partial class SelfTest
         new("list_learned_tools", _ => new { }),
         new("list_steel_connection_types", _ => new { }),
         new("list_title_blocks", c => new { sheet_number = c.Sheet?.SheetNumber }),
-        new("run_revit_query_code", _ => new { code = "return new { walls = new FilteredElementCollector(doc).OfClass(typeof(Wall)).GetElementCount(), title = doc.Title };", description = "self-test query" }),
+        new("run_revit_query_code", _ => new { code = "Level.Create(doc, 1234.5);\nreturn new { walls = new FilteredElementCollector(doc).OfClass(typeof(Wall)).GetElementCount(), title = doc.Title };", description = "self-test query that makes a level (rolled back)" }),
         new("create_mep_openings", _ => new { method = "report", limit = 50 }) { Heavy = true },
     ];
 
