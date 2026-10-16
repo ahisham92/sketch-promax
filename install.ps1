@@ -29,6 +29,22 @@ if (Get-Process Revit -ErrorAction SilentlyContinue) {
 $installed = @()
 $registered = @()
 
+# Revit asks about an unsigned add-in ("Always Load") again when the place it loads from or the file there changes. So
+# SketchProMax.addin always names the same SketchProMax\SketchProMax.Loader.dll, and a file already identical is not copied.
+function Test-SameFile($a, $b) {
+    (Test-Path $b) -and ((Get-FileHash $a -Algorithm SHA256).Hash -eq (Get-FileHash $b -Algorithm SHA256).Hash)
+}
+function Copy-IfChanged($from, $to) {
+    if (Test-SameFile $from $to) { return }
+    Copy-Item $from $to -Force
+}
+# Our add-in ID; any other manifest with it (or naming our DLLs) would load Sketch ProMax a second time.
+$clientId = "6f3c2b1e-8a47-4d2f-9c51-3e7b9d0a4f12"
+function Test-OurManifest($path) {
+    $text = Get-Content $path -Raw -ErrorAction SilentlyContinue
+    $text -and ($text -match [regex]::Escape($clientId) -or $text -match '[\\/>]SketchProMax(\.Loader)?\.dll\s*<')
+}
+
 foreach ($v in 2024, 2025, 2026, 2027) {
     $src = Join-Path $dist "Revit$v"
     $addins = Join-Path $env:APPDATA "Autodesk\Revit\Addins\$v"
@@ -37,8 +53,23 @@ foreach ($v in 2024, 2025, 2026, 2027) {
     New-Item -ItemType Directory -Force -Path (Join-Path $addins "SketchProMax") | Out-Null
     if (-not (Test-Path (Join-Path $src "SketchProMax.Loader.dll"))) { throw "dist\Revit$v has no SketchProMax.Loader.dll. Run .\build.ps1 again." }
     # Files first, manifest last, so Revit never finds a manifest naming a loader that isn't there yet.
-    Get-ChildItem $src -Exclude "SketchProMax.addin" | Copy-Item -Destination (Join-Path $addins "SketchProMax") -Recurse -Force
-    Copy-Item (Join-Path $src "SketchProMax.addin") $addins -Force
+    $target = Join-Path $addins "SketchProMax"
+    Get-ChildItem $src -Exclude "SketchProMax.addin" | ForEach-Object {
+        if ($_.PSIsContainer) { Copy-Item $_.FullName -Destination $target -Recurse -Force }
+        else { Copy-IfChanged $_.FullName (Join-Path $target $_.Name) }
+    }
+    Copy-IfChanged (Join-Path $src "SketchProMax.addin") (Join-Path $addins "SketchProMax.addin")
+    # One Sketch ProMax entry per Revit version: set aside other manifests that would load it too (a test copy, a leftover).
+    Get-ChildItem $addins -Filter "*.addin" -File | Where-Object { $_.Name -ne "SketchProMax.addin" -and (Test-OurManifest $_.FullName) } | ForEach-Object {
+        Move-Item $_.FullName "$($_.FullName).disabled" -Force
+        Write-Warning "Disabled $($_.FullName): it loaded Sketch ProMax a second time."
+    }
+    $machine = Join-Path $env:ProgramData "Autodesk\Revit\Addins\$v"
+    if (Test-Path $machine) {
+        Get-ChildItem $machine -Filter "*.addin" -File | Where-Object { Test-OurManifest $_.FullName } | ForEach-Object {
+            Write-Warning "$($_.FullName) also loads Sketch ProMax for every user of this PC. Ask IT to remove it; Revit then loads only this install."
+        }
+    }
     Clear-DownloadMark (Join-Path $addins "SketchProMax")
     Unblock-File (Join-Path $addins "SketchProMax.addin") -ErrorAction SilentlyContinue
     $installed += [pscustomobject]@{ Revit = $v; Folder = (Join-Path $addins "SketchProMax") }
@@ -119,5 +150,5 @@ if ($registered.Count -gt 0) {
 Write-Host ""
 Write-Host "Next steps:" -ForegroundColor Cyan
 Write-Host "  1. Quit the Claude desktop app completely (system tray > Quit) and open it again to load the Revit tools."
-Write-Host "  2. Open Revit$(if ($installed.Count -gt 0) { ' ' + (($installed | ForEach-Object { $_.Revit }) -join ' / ') }) and a model. If Revit asks about loading Sketch ProMax, choose 'Always Load'."
+Write-Host "  2. Open Revit$(if ($installed.Count -gt 0) { ' ' + (($installed | ForEach-Object { $_.Revit }) -join ' / ') }) and a model. If Revit asks about loading Sketch ProMax, choose 'Always Load'; it asks again only when the loader itself changes."
 Write-Host "  3. On the Sketch ProMax ribbon tab click Claude > Status: it should say 'Ready' or 'Connected'. Then ask Claude something about the model."

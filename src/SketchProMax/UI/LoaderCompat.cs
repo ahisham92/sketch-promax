@@ -10,7 +10,8 @@ internal static class LoaderCompat
     /// The release whose loader last added buttons or pane parts of its own (SketchProMax.Loader Ribbon.cs / Pane.cs).
     /// Raise it whenever the loader's own ribbon or pane gains something: a core running under an older loader then
     /// tells the user to restart Revit to see it. Buttons a core declares in its manifest (CoreRibbonManifest) don't
-    /// need this; a loader from 0.30 on adds them live.
+    /// need this; a loader from 0.30 on adds them live. The loader publishes its LoaderVersion (SketchProMax.Loader.csproj),
+    /// not the product version, so raise that with it; a test checks LoaderVersion is never below this.
     /// </summary>
     public static readonly Version RibbonChangedIn = new(0, 30, 0);
 

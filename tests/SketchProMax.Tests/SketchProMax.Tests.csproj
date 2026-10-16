@@ -17,6 +17,7 @@
     <Compile Include="../../src/SketchProMax/UI/CoreRibbonManifest.cs" Link="CoreRibbonManifest.cs" />
     <Compile Include="../../src/SketchProMax/UI/LoaderCompat.cs" Link="LoaderCompat.cs" />
     <Compile Include="../../src/SketchProMax/Revit/RevitBlock.cs" Link="RevitBlock.cs" />
+    <Compile Include="../../src/SketchProMax/Update/AddinFiles.cs" Link="AddinFiles.cs" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.8.0" />
