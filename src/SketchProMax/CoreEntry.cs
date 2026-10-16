@@ -72,6 +72,9 @@ public static class CoreEntry
             "report-bug" => Bugs.BugReport.Command(app),
             "bug-folder" => Bugs.BugReport.OpenFolder(),
             "export-chats-bugs" => QuickTools.ExportChatsAndBugs(app),
+            // Favourites on the My tools panel (0.30.1+): the manager, and the slot buttons ("fav:1"...).
+            Favourites.ManagerCommand => FavouritesRibbon.Manage(app),
+            _ when Favourites.Slot(name, "fav:") > 0 => FavouritesRibbon.Run(app, Favourites.Slot(name, "fav:")),
             // The loader's dockable pane (0.27+): select and zoom to element ids, stop the running job quietly.
             "pane-cancel" => Pane.Cancel(),
             _ when name.StartsWith("pane-select\t", StringComparison.Ordinal) => Pane.Select(app, name.Substring("pane-select\t".Length)),
@@ -122,6 +125,8 @@ public static class CoreEntry
             case "restartnote":
                 // From a 0.30+ loader once it added this core's buttons: what can only appear after a restart ("" = nothing).
                 RestartNote.FromLoader(arg);
+                // It follows every manifest the loader applies: the favourite slots it made or showed are put right.
+                try { FavouritesRibbon.AfterSync(); } catch (Exception) { /* the live labels still say "Empty" */ }
                 return "ok";
             case "swapnote":
                 // Sent to the outgoing core just before "swapped": the new version's restart note, for its update window.
@@ -161,19 +166,25 @@ public static class CoreEntry
     }
 
     private static string? _swapNote;
-    private static string? _ribbon;
 
-    /// <summary>The manifest with the tools this core has; each tool's own summary is its button's long tooltip.</summary>
+    /// <summary>
+    /// The manifest with the tools this core has; each tool's own summary is its button's long tooltip. The favourite
+    /// slots start with what is pinned now (asked when the loader starts this core, so it is not cached).
+    /// </summary>
     private static string RibbonText()
     {
-        if (_ribbon is not null) return _ribbon;
         var registry = App.Bridge?.Registry ?? Tools.ToolRegistry.CreateDefault();
-        return _ribbon = CoreRibbonManifest.Build(name => registry.IsBuiltIn(name) && registry.Find(name) is { } tool ? RibbonTools.Summary(tool.Description) : null);
+        IReadOnlyList<Favourites.Item> favourites;
+        try { favourites = FavouritesRibbon.Shown; }
+        catch (Exception) { favourites = []; }
+        return CoreRibbonManifest.Build(name => registry.IsBuiltIn(name) && registry.Find(name) is { } tool ? RibbonTools.Summary(tool.Description) : null,
+            favourites);
     }
 
     /// <summary>
     /// Live ribbon labels a manifest button can follow (flag live:key): "status" (the Claude connection, logo with a
-    /// coloured dot), "job" (the running job and its progress) and "update" (the update badge). "" for an unknown key.
+    /// coloured dot), "job" (the running job and its progress), "update" (the update badge) and "fav1"... (the favourite
+    /// slots on My tools). "" for an unknown key.
     /// </summary>
     private static string LiveLabel(string key)
     {
@@ -220,6 +231,8 @@ public static class CoreEntry
                 };
                 return CoreRibbonManifest.LiveLine(text, tip, glyph);
             }
+            case var _ when Favourites.Slot(key, "fav") > 0:
+                return FavouritesRibbon.Live(Favourites.Slot(key, "fav"));
             default: return "";
         }
     }

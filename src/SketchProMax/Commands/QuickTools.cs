@@ -114,7 +114,7 @@ internal static class QuickTools
         var window = new InputsWindow($"Run recipe: {recipe.Name}", "A saved workflow, run here without the AI.",
             (recipe.Description is null ? "" : recipe.Description + "\n\n") +
             $"It runs these {recipe.Steps.Count} step(s) on '{app.ActiveUIDocument!.Document.Title}'. Each step is its own Undo entry.",
-            steps, fields, "Run", "Keep going after a step fails");
+            steps, fields, "Run", "Keep going after a step fails", favourite: Favourites.Key("recipe", name));
         if (window.ShowDialog() != true) return Result.Cancelled;
         LastValues[key] = new Dictionary<string, string>(window.Values);
 
@@ -171,7 +171,7 @@ internal static class QuickTools
             tool.Summary + "\n\n" + (tool.ModifiesModel
                 ? $"It changes '{app.ActiveUIDocument!.Document.Title}'. Ctrl+Z undoes it."
                 : "It only reads the model."),
-            [], fields, "Run");
+            [], fields, "Run", favourite: Favourites.Key("learned", name));
         if (window.ShowDialog() != true) return Result.Cancelled;
         LastValues[key] = new Dictionary<string, string>(window.Values);
 

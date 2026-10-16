@@ -15,6 +15,7 @@
     <Compile Include="../../src/SketchProMax/Tools/ModelRules.cs" Link="ModelRules.cs" />
     <Compile Include="../../src/SketchProMax.Loader/RibbonManifest.cs" Link="RibbonManifest.cs" />
     <Compile Include="../../src/SketchProMax/UI/CoreRibbonManifest.cs" Link="CoreRibbonManifest.cs" />
+    <Compile Include="../../src/SketchProMax/UI/Favourites.cs" Link="Favourites.cs" />
     <Compile Include="../../src/SketchProMax/UI/LoaderCompat.cs" Link="LoaderCompat.cs" />
     <Compile Include="../../src/SketchProMax/Revit/RevitBlock.cs" Link="RevitBlock.cs" />
     <Compile Include="../../src/SketchProMax/Chat/MemoryNotes.cs" Link="MemoryNotes.cs" />

@@ -61,7 +61,8 @@ internal static class RibbonTools
         var window = new InputsWindow(title,
             tool.ModifiesModel ? "Changes the model. Ctrl+Z undoes it." : "Reads the model. Nothing in it changes.",
             Summary(tool.Description) + $"\n\nRuns on '{doc.Title}'." + (fields.Count == 0 ? " It needs no options." : " Fields marked * are needed; leave the others empty for the tool's defaults."),
-            [], form, "Run", selection: selection)
+            [], form, "Run", selection: selection,
+            favourite: FavouritesRibbon.CanPin(Favourites.Key("tool", tool.Name)) ? Favourites.Key("tool", tool.Name) : null)
         {
             Validate = values =>
             {

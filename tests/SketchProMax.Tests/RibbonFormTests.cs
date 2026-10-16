@@ -115,7 +115,7 @@ internal static class RibbonFormTests
         // ---- The workflow manifest
         var all = RibbonManifest.Parse(CoreRibbonManifest.Text);
         var panels = all.Controls.Select(c => c.Group).Distinct().ToList();
-        check("ribbon: panels in workflow order", panels.SequenceEqual(["Claude", "Model", "Documents", "Check", "Issue", "Sketch ProMax"]), string.Join(",", panels));
+        check("ribbon: panels in workflow order", panels.SequenceEqual(["Claude", "Model", "Documents", "Check", "Issue", "My tools", "Sketch ProMax"]), string.Join(",", panels));
         check("ribbon: every tool entry runs its tool and needs a model", all.Entries.Values.SelectMany(e => e).Concat(all.Controls)
             .Where(c => c.Command.StartsWith("tool:", StringComparison.Ordinal)).All(c => c.NeedsModel && c.Id == "Tool." + c.Command.Substring(5)), "");
         check("ribbon: every control has a tooltip", all.Controls.Concat(all.Entries.Values.SelectMany(e => e)).All(c => c.Tip.Length > 20),

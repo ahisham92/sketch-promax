@@ -118,6 +118,7 @@ public sealed class App : IExternalApplication
         RevitYear = app.Application.VersionNumber;
         Ui = System.Windows.Threading.Dispatcher.CurrentDispatcher;
         try { MainWindow = app.MainWindowHandle; } catch (Exception) { MainWindow = IntPtr.Zero; }
+        UI.FavouritesRibbon.Attach(app);
 
         try
         {

@@ -162,9 +162,10 @@ internal static class CoreRibbonManifest
 
     /// <summary>
     /// The manifest the loader is sent. <paramref name="describe"/> gives a tool's summary (its long tooltip), or null
-    /// when this core has no tool of that name: its entry is left out.
+    /// when this core has no tool of that name: its entry is left out. <paramref name="favourites"/>: what the My tools
+    /// panel's favourite slots show at first (see <see cref="Favourites"/>; their live labels follow later changes).
     /// </summary>
-    public static string Build(Func<string, string?> describe)
+    public static string Build(Func<string, string?> describe, IReadOnlyList<Favourites.Item>? favourites = null)
     {
         var lines = new List<string>();
         foreach (var (line, tool) in Items)
@@ -180,8 +181,29 @@ internal static class CoreRibbonManifest
         // A drop-down none of whose entries are left goes too.
         var used = new HashSet<string>(lines.Select(l => l.Split('\t')).Where(f => f[0] == "item" && f.Length > 1).Select(f => f[1]), StringComparer.Ordinal);
         lines.RemoveAll(l => l.Split('\t') is var f && f[0] is "pulldown" or "split" && f.Length > 2 && !used.Contains(f[2]));
+        // My tools (between Issue and Sketch ProMax, as on the tab): the Favourites button and the favourite slots, next
+        // to the loader's own My tools drop-down.
+        var at = lines.FindIndex(l => l.Split('\t') is var f && f.Length > 1 && f[1] == "Sketch ProMax");
+        lines.InsertRange(at < 0 ? lines.Count : at, Favourites.ManifestLines(favourites ?? []));
         return string.Join("\n", lines);
     }
+
+    /// <summary>
+    /// The tools the ribbon runs through their options window (tool name, one-line label, glyph, tooltip), in ribbon
+    /// order, whether or not this core has them: what can be pinned besides recipes and learned tools.
+    /// </summary>
+    public static IEnumerable<(string Tool, string Text, string Glyph, string Tip)> Tools()
+    {
+        foreach (var (line, tool) in Items)
+        {
+            if (tool is null) continue;
+            var f = line.Split('\t');
+            if (f.Length < 7) continue;
+            yield return (tool, Unescape(f[3]).Replace('\n', ' '), Unescape(f[5]), Unescape(f[6]));
+        }
+    }
+
+    private static string Unescape(string value) => value.Replace("\\n", "\n").Replace("\\\\", "\\");
 
     private static (string, string?) L(string line) => (line, null);
 

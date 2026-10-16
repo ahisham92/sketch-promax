@@ -28,9 +28,10 @@ internal sealed class InputsWindow : Window
     public Func<Dictionary<string, string>, IReadOnlyList<string>>? Validate { get; init; }
 
     public InputsWindow(string title, string subtitle, string? intro, IReadOnlyList<string> details, IReadOnlyList<Field> fields,
-        string runLabel, string? optionLabel = null, string selection = "")
+        string runLabel, string? optionLabel = null, string selection = "", string? favourite = null)
     {
         // selection: the ids selected in Revit when the window opened ("1, 2, 3"), offered to element-id fields.
+        // favourite: its key on the My tools panel ("tool:name", see Favourites), for the Pin to My tools box; null for none.
         Title = title;
         Width = 520;
         SizeToContent = SizeToContent.Height;
@@ -111,6 +112,7 @@ internal sealed class InputsWindow : Window
             _option = new CheckBox { Content = optionLabel, Margin = new Thickness(0, 12, 0, 0) };
             body.Children.Add(_option);
         }
+        if (favourite is not null) body.Children.Add(PinBox(favourite));
         body.Children.Add(_error);
 
         // One primary action (Enter); Cancel (Esc) only closes this window, nothing runs.
@@ -128,6 +130,48 @@ internal sealed class InputsWindow : Window
         root.Children.Add(new ScrollViewer { Content = body, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled });
         Content = root;
         Loaded += (_, _) => (_controls.FirstOrDefault().Control as Control ?? run).Focus();
+    }
+
+    /// <summary>
+    /// "Pin to My tools": a button for this tool, recipe or learned tool next to My tools, saved as soon as it is ticked
+    /// (running or cancelling this window doesn't change it).
+    /// </summary>
+    private static FrameworkElement PinBox(string key)
+    {
+        var panel = new StackPanel { Margin = new Thickness(0, 12, 0, 0) };
+        var pinned = FavouritesRibbon.IsPinned(key);
+        var full = !pinned && FavouritesRibbon.Pinned.Count >= Favourites.Max;
+        var box = new CheckBox { Content = "Pin to My tools", IsChecked = pinned, IsEnabled = !full };
+        var note = Brand.Text("", Brand.K.Muted, size: 11);
+        AutomationProperties.SetLiveSetting(note, AutomationLiveSetting.Polite);
+        void Say(string text, string colour = Brand.K.Muted)
+        {
+            note.Text = text;
+            note.SetResourceReference(TextBlock.ForegroundProperty, colour);
+            AutomationProperties.SetHelpText(box, text);
+        }
+        string Plain() => box.IsChecked == true
+            ? "Pinned: it has its own button on the My tools panel. Untick to remove it."
+            : "Gives it its own button on the My tools panel, next to My tools. Order your pins with Favourites there.";
+        if (full) Say($"{Favourites.Max} are pinned already, the most My tools holds. Unpin one with Favourites on the My tools panel first.", Brand.K.WarningText);
+        else Say(Plain());
+        var busy = false;
+        void Toggle()
+        {
+            if (busy) return;
+            var problem = FavouritesRibbon.SetPinned(key, box.IsChecked == true);
+            if (problem is null) { Say(Plain()); return; }
+            busy = true;
+            box.IsChecked = !box.IsChecked; // it didn't happen: show what is true
+            busy = false;
+            Say(problem, Brand.K.DangerText);
+        }
+        box.Checked += (_, _) => Toggle();
+        box.Unchecked += (_, _) => Toggle();
+        AutomationProperties.SetName(box, "Pin to My tools");
+        panel.Children.Add(box);
+        panel.Children.Add(note);
+        return panel;
     }
 
     private void Submit()
