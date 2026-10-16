@@ -47,10 +47,28 @@ foreach ($v in 2024, 2025, 2026, 2027) {
 
 $mcpDir = Join-Path $env:LOCALAPPDATA "SketchProMax\mcp"
 New-Item -ItemType Directory -Force -Path $mcpDir | Out-Null
-Copy-Item (Join-Path $dist "mcp\*") $mcpDir -Recurse -Force
-Clear-DownloadMark $mcpDir
 $exe = Join-Path $mcpDir "SketchProMax.Mcp.exe"
-Write-Host "Installed MCP server: $exe" -ForegroundColor Green
+# The Claude app keeps the connector running while it is open, which locks the file. Stop our own connector (only
+# SketchProMax.Mcp.exe; the Claude app starts it again when it next starts), then copy, retrying while Windows lets go.
+Get-Process SketchProMax.Mcp -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+$copied = $false
+for ($try = 1; $try -le 5 -and -not $copied; $try++) {
+    try {
+        Copy-Item (Join-Path $dist "mcp\*") $mcpDir -Recurse -Force -ErrorAction Stop
+        $copied = $true
+    }
+    catch {
+        if ($try -eq 5) { break }
+        Get-Process SketchProMax.Mcp -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 2
+    }
+}
+if ($copied) {
+    Clear-DownloadMark $mcpDir
+    Write-Host "Installed MCP server: $exe" -ForegroundColor Green
+} else {
+    Write-Warning "The Claude connector is in use and was not updated. Quit the Claude app (right-click its icon by the clock, Quit) and run Install.cmd again. The Revit add-in above is installed."
+}
 
 # The Claude desktop app keeps its config in %APPDATA%\Claude, or, for the Microsoft Store / MSIX build,
 # in %LOCALAPPDATA%\Packages\<package>\LocalCache\Roaming\Claude. Register in every place that exists, and
