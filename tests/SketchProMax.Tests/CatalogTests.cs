@@ -82,6 +82,34 @@ internal static class CatalogTests
         }
         check("every tool has a valid schema and description", schemaProblems.Count == 0, "\n  " + string.Join("\n  ", schemaProblems));
 
+        // Every tool a message tells Claude to call must be one it can see: a registered tool or a connector tool. Words
+        // after "call", "use", "with" and the like in the sources' strings that look like tool names are checked; argument
+        // names and enum values of any tool are allowed (they read the same).
+        var known = new HashSet<string>(names) { "list_revit_models", "use_revit_model" };
+        void Collect(JsonElement e)
+        {
+            if (e.ValueKind == JsonValueKind.Object)
+                foreach (var p in e.EnumerateObject()) { known.Add(p.Name); Collect(p.Value); }
+            else if (e.ValueKind == JsonValueKind.Array)
+                foreach (var v in e.EnumerateArray()) { if (v.ValueKind == JsonValueKind.String) known.Add(v.GetString()!); else Collect(v); }
+        }
+        foreach (var tool in tools)
+            try { Collect(JsonDocument.Parse("{\"p\":" + Prop(tool, "PropertiesJson") + "}").RootElement); } catch (JsonException) { }
+        var toolWord = new Regex(@"(?:[Cc]all|[Uu]se|[Rr]un|[Tt]ry|with|via|then)\s+\(?'?`?([a-z]+(?:_[a-z0-9]+)+)\b");
+        var unseen = new List<string>();
+        foreach (var dir in new[] { "SketchProMax", "SketchProMax.Mcp", "SketchProMax.Loader" })
+            foreach (var file in Directory.GetFiles(Path.Combine(repoRoot, "src", dir), "*.cs", SearchOption.AllDirectories))
+            {
+                if (file.Contains(Path.DirectorySeparatorChar + "obj" + Path.DirectorySeparatorChar) || file.Contains(Path.DirectorySeparatorChar + "bin" + Path.DirectorySeparatorChar)) continue;
+                foreach (var line in File.ReadLines(file))
+                {
+                    if (!line.Contains('"') || line.TrimStart().StartsWith("//", StringComparison.Ordinal)) continue;
+                    foreach (Match m in toolWord.Matches(line))
+                        if (!known.Contains(m.Groups[1].Value)) unseen.Add($"{Path.GetFileName(file)}: {m.Groups[1].Value}");
+                }
+            }
+        check("messages only name tools Claude can see", unseen.Count == 0, string.Join(", ", unseen.Distinct()));
+
         // Self-test coverage. The cases' lambdas touch Revit types, which can't run here, so read them from the source.
         var selfTestSource = File.ReadAllText(Path.Combine(repoRoot, "src", "SketchProMax", "Tools", "SelfTest.cs"));
         var casesStart = selfTestSource.IndexOf("IEnumerable<Case> ReadOnlyCases()", StringComparison.Ordinal);

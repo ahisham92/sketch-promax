@@ -235,13 +235,27 @@ public sealed class BridgeServer
                         answered = await Task.WhenAny(lookup, Task.Delay(2500)).ConfigureAwait(false) == lookup;
                     var busy = !answered && _dispatcher.IsRunning;
                     if (answered) _lastDocuments = await lookup.ConfigureAwait(false);
-                    return JsonSerializer.Serialize(new { ok = true, pid = SessionId, revitVersion = _revitVersion, busy, documents = _lastDocuments });
+                    // Not answered and nothing of ours running: say what holds Revit (a dialog, a long operation, an edit mode).
+                    var blocked = answered || busy ? null : Blocked(_dispatcher.Blocker());
+                    return JsonSerializer.Serialize(new { ok = true, pid = SessionId, revitVersion = _revitVersion, busy, blocked, documents = _lastDocuments });
 
                 case "activate_document":
                     if (Jobs.Running is { } busyWith) return Error(Jobs.Busy(busyWith).Text);
                     var wanted = root.GetProperty("title").GetString() ?? "";
-                    var error = await _dispatcher.InvokeAsync(app => Activate(app, wanted), ct).ConfigureAwait(false);
-                    return error is null ? JsonSerializer.Serialize(new { ok = true }) : Error(error);
+                    // Switching documents is only allowed from the external event, not from Idling. Bounded: a Revit that
+                    // doesn't take it (a dialog, an edit mode) is reported with the reason rather than left hanging.
+                    using (var switching = CancellationTokenSource.CreateLinkedTokenSource(ct))
+                    {
+                        var activation = _dispatcher.InvokeFromEventAsync(app => Activate(app, wanted), switching.Token);
+                        var why = await _dispatcher.WaitForPickupAsync(activation, "Switching to the chosen model", ActivateWaitMs, DialogWaitMs, ct).ConfigureAwait(false);
+                        if (why is not null && !activation.IsCompleted)
+                        {
+                            switching.Cancel();
+                            return Error(why);
+                        }
+                        var error = await activation.ConfigureAwait(false);
+                        return error is null ? JsonSerializer.Serialize(new { ok = true }) : Error(error);
+                    }
 
                 case "call_tool":
                     var name = root.GetProperty("name").GetString() ?? "";
@@ -269,6 +283,20 @@ public sealed class BridgeServer
 
     /// <summary>How long a call waits for Revit to pick it up before concluding Revit is in an edit mode or a dialog.</summary>
     private const int StartWaitMs = 20000;
+
+    /// <summary>How long switching models may wait for Revit (the connector waits 20 s for the answer).</summary>
+    private const int ActivateWaitMs = 12000;
+
+    /// <summary>A modal dialog open this long ends the wait early: Revit runs no add-in work behind one.</summary>
+    private const int DialogWaitMs = 4000;
+
+    /// <summary>A short "why Revit isn't answering" for pings, or null when there is nothing to say.</summary>
+    private static string? Blocked(RevitBlock.State state) => state.Kind switch
+    {
+        RevitBlock.Kind.Dialog => string.IsNullOrWhiteSpace(state.Title) ? "a dialog is open in Revit" : $"a dialog is open in Revit: '{state.Title!.Trim()}'",
+        RevitBlock.Kind.NotResponding => "Revit is busy with a long operation of its own",
+        _ => null,
+    };
 
     /// <summary>How long a call waits for its result before returning "still running" (the connector gives up later than this).</summary>
     private const int InlineWaitMs = 45000;
@@ -338,19 +366,13 @@ public sealed class BridgeServer
         }, queued.Token);
         job.Task = Jobs.Follow(job, firstCall);
 
-        // Revit picks work up within a second when idle. If it doesn't, it is in an edit mode (in-place family, sketch,
-        // group edit), showing a dialog, or busy with something of its own: say so rather than time out.
-        var first = await Task.WhenAny(job.Task, job.StartedSignal.Task, Task.Delay(StartWaitMs, ct)).ConfigureAwait(false);
-        if (first != job.Task && first != job.StartedSignal.Task && !ct.IsCancellationRequested)
-        {
-            // Only "dropped" when the bridge, not Revit, won the race: otherwise the job is running and is waited for below.
-            if (job.TryAbandon())
-                return ToolResult.Error(
-                    $"Revit didn't pick up the request within {StartWaitMs / 1000} s, so it was dropped and nothing was changed. Revit is probably " +
-                    "in an edit mode (editing an in-place family or group, a sketch such as a floor boundary, or Edit Profile), has a dialog open, " +
-                    "or is busy with a command of its own (sync, loading, printing). Ask the user to finish or cancel that in Revit (Finish/Cancel " +
-                    "Edit Mode, close the dialog), then try again.");
-        }
+        // Revit picks work up within a second when idle. If it doesn't, it is showing a dialog (said within a few seconds,
+        // with its title), busy with a long operation of its own, or in an edit mode (in-place family, sketch, group
+        // edit): say which rather than time out.
+        var pickedUp = Task.WhenAny(job.Task, job.StartedSignal.Task);
+        var why = await _dispatcher.WaitForPickupAsync(pickedUp, $"{tool.Name} (job {job.Id})", StartWaitMs, DialogWaitMs, ct).ConfigureAwait(false);
+        // Only "dropped" when the bridge, not Revit, won the race: otherwise the job is running and is waited for below.
+        if (why is not null && !ct.IsCancellationRequested && job.TryAbandon()) return ToolResult.Error(why);
 
         await Task.WhenAny(job.Task, Task.Delay(InlineWaitMs, ct)).ConfigureAwait(false);
         if (job.Task.IsCompleted) return job.Task.Status == TaskStatus.RanToCompletion ? job.Task.Result : Jobs.Status(job);
@@ -358,7 +380,7 @@ public sealed class BridgeServer
         {
             status = "still running in Revit",
             job = job.Id, tool = job.Tool, elapsed = Jobs.Duration(job.Elapsed), progress = job.Progress(),
-            next = $"Call wait_for_job (job_id {job.Id}) to wait for the result; it is kept when it finishes. Don't send other model work meanwhile, " +
+            next = $"Call wait_for_job (a sketch-promax tool) with job_id {job.Id} to wait for the result; it is kept when it finishes. Don't send other model work meanwhile, " +
                    "and use cancel_job if it should stop.",
         }));
     }

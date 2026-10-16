@@ -6,6 +6,10 @@ namespace SketchProMax.Loader;
 /// <summary>
 /// The Sketch ProMax tab. Built once at startup by the loader, so it survives switching to a new core; its live parts
 /// (Claude connection, running job, update state, quick tools list) are refreshed from the running core every 2 s.
+/// Buttons added here appear only after Revit restarts with the new loader. A new button that should appear right
+/// after an in-session update is declared by the core instead (CoreEntry's "ribbon" manifest, see CoreRibbon), and a
+/// change here should also raise UI/LoaderCompat.RibbonChangedIn in the core, so a newer core running under an older
+/// loader tells the user to restart for its buttons.
 /// Every button is a large (32 px icon) button: Revit's stacked small buttons are about 22 px tall, under the 24 px
 /// minimum click target. Destructive buttons (Cancel job) use the red danger tile.
 /// </summary>
@@ -295,6 +299,19 @@ internal static class TabOrder
     public static void OnInitialized()
     {
         _initialized = true;
+        Try();
+    }
+
+    /// <summary>
+    /// After switching to a new core (which may have added panels): checks the order again, for a fresh window of idle
+    /// moments, with a fresh move budget. Does nothing once AdWindows has failed.
+    /// </summary>
+    public static void Again()
+    {
+        if (_broken) return;
+        _done = false;
+        _idles = 0;
+        _moves = 0;
         Try();
     }
 

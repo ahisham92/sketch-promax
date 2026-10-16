@@ -202,6 +202,37 @@ public sealed class RevitDispatcher : IExternalEventHandler
         if (!_queue.IsEmpty || !_eventOnly.IsEmpty) e.SetRaiseWithoutDelay();
     }
 
+    /// <summary>What is keeping Revit from running queued work right now (a dialog, a busy UI thread, an edit mode).</summary>
+    internal RevitBlock.State Blocker() => RevitBlock.Read(_mainWindow);
+
+    /// <summary>
+    /// Waits until <paramref name="pickedUp"/> completes (Revit started the work), for at most <paramref name="maxMs"/>.
+    /// Returns null once it is picked up (or <paramref name="ct"/> ends the wait), else why Revit didn't take it, worded
+    /// for Claude (<see cref="RevitBlock.Explain"/>). A modal dialog that stays open for <paramref name="dialogMs"/> ends
+    /// the wait early: Revit runs no add-in work until it is closed, so waiting longer only delays the answer.
+    /// The caller drops the queued work when this returns a reason.
+    /// </summary>
+    internal async Task<string?> WaitForPickupAsync(Task pickedUp, string what, int maxMs, int dialogMs, CancellationToken ct)
+    {
+        var started = Environment.TickCount;
+        var dialogSince = -1;
+        while (true)
+        {
+            var elapsed = unchecked(Environment.TickCount - started);
+            if (elapsed >= maxMs) return RevitBlock.Explain(Blocker(), what, (elapsed + 500) / 1000);
+            var step = Task.Delay(Math.Min(1000, maxMs - elapsed), ct);
+            if (await Task.WhenAny(pickedUp, step).ConfigureAwait(false) == pickedUp || ct.IsCancellationRequested) return null;
+            // Our own work (a tool, its approval prompt) disables Revit's window too: only look while nothing of ours runs.
+            if (_running) { dialogSince = -1; continue; }
+            var state = Blocker();
+            if (state.Kind != RevitBlock.Kind.Dialog) { dialogSince = -1; continue; }
+            var now = Environment.TickCount;
+            if (dialogSince < 0) dialogSince = now;
+            else if (unchecked(now - dialogSince) >= dialogMs)
+                return RevitBlock.Explain(state, what, (unchecked(now - started) + 500) / 1000);
+        }
+    }
+
     /// <summary>Wakes Revit's message loop so it notices the queued work, without needing a click or mouse move.</summary>
     private void Nudge()
     {
