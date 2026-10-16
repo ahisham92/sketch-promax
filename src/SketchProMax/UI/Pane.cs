@@ -224,15 +224,15 @@ internal static class Pane
             try { uidoc.RequestViewChange(view); return Result.Succeeded; }
             catch (Autodesk.Revit.Exceptions.ApplicationException ex)
             {
-                TaskDialog.Show("Sketch ProMax", $"Couldn't open the view {view.Name}: {ex.Message}");
+                TaskDialog.Show("Sketch ProMax", $"Couldn't open the view {view.Name}: {ex.Message}\n\nOpen it from the Project Browser instead.");
                 return Result.Failed;
             }
         }
         if (found.Count == 0)
         {
             TaskDialog.Show("Sketch ProMax", wanted.Count == 1
-                ? $"Element {wanted[0]} is not in the active model ({doc.Title}). It may have been deleted, be in another model, or be a type."
-                : $"None of these {wanted.Count} elements is in the active model ({doc.Title}).");
+                ? $"Element {wanted[0]} is not in the active model ({doc.Title}). It may have been deleted, be in another model, or be a type.\n\nSwitch to the model the job ran in and click it again."
+                : $"None of these {wanted.Count} elements is in the active model ({doc.Title}).\n\nSwitch to the model the job ran in and click again.");
             return Result.Cancelled;
         }
         uidoc.Selection.SetElementIds(found);

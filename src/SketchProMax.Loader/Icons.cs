@@ -19,6 +19,13 @@ internal static class Icons
     public static readonly Color Red = Color.FromRgb(0xEF, 0x44, 0x44);
     public static readonly Color Gray = Color.FromRgb(0x94, 0xA3, 0xB8);
 
+    /// <summary>The tile of destructive buttons (Cancel job): the theme's danger red, so it never reads as just another blue button.</summary>
+    public static readonly Color DangerTop = Color.FromRgb(0xB9, 0x1C, 0x1C);
+    public static readonly Color DangerBottom = Color.FromRgb(0x7F, 0x1D, 0x1D);
+
+    /// <summary>Glyphs drawn on the danger tile.</summary>
+    private static readonly HashSet<string> Destructive = new(StringComparer.Ordinal) { "cancel" };
+
     private static readonly Dictionary<string, BitmapSource> Cache = new();
 
     /// <summary>A glyph icon at 16 or 32 px.</summary>
@@ -28,7 +35,7 @@ internal static class Icons
         if (Cache.TryGetValue(key, out var hit)) return hit;
         var image = Render(size, dc =>
         {
-            Tile(dc);
+            Tile(dc, Destructive.Contains(glyph));
             Glyph(dc, glyph, size);
         });
         Cache[key] = image;
@@ -96,9 +103,11 @@ internal static class Icons
         return b;
     }
 
-    private static void Tile(DrawingContext dc)
+    private static void Tile(DrawingContext dc, bool danger = false)
     {
-        var gradient = new LinearGradientBrush(Blue, Navy, new Point(0, 0), new Point(1, 1));
+        var gradient = danger
+            ? new LinearGradientBrush(DangerTop, DangerBottom, new Point(0, 0), new Point(1, 1))
+            : new LinearGradientBrush(Blue, Navy, new Point(0, 0), new Point(1, 1));
         gradient.Freeze();
         dc.DrawRoundedRectangle(gradient, null, new Rect(1, 1, 30, 30), 7, 7);
     }
@@ -146,9 +155,9 @@ internal static class Icons
                 Path(dc, "M16,7 A9,9 0 0 1 25,16", Stroke(Amber, w + 0.8));
                 Path(dc, "M16,11 V16 L20,18", white);
                 break;
-            case "cancel": // stop: X in a circle
+            case "cancel": // stop: X in a circle, all white on the red danger tile
                 dc.DrawEllipse(null, white, new Point(16, 16), 9, 9);
-                Path(dc, "M12.5,12.5 L19.5,19.5 M19.5,12.5 L12.5,19.5", amber);
+                Path(dc, "M12.5,12.5 L19.5,19.5 M19.5,12.5 L12.5,19.5", white);
                 break;
             case "bolt": // quick tools
                 Path(dc, "M18,5 L9,18 H15 L13,27 L23,13 H17 Z", null, amberFill);

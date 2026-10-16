@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Threading;
@@ -27,10 +28,13 @@ internal sealed class UpdateWindow : Window
     private readonly UpdateProgress? _progress;
     private readonly List<(TextBlock Mark, TextBlock Label)> _rows = [];
     private readonly ProgressBar _bar = new() { Height = 8, Minimum = 0, Maximum = 100, Margin = new Thickness(0, 14, 0, 6) };
-    private readonly TextBlock _detail = new() { TextWrapping = TextWrapping.Wrap, Foreground = Brand.Brush(Brand.Muted) };
-    private readonly TextBlock _final = new() { TextWrapping = TextWrapping.Wrap, FontSize = 14, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 10, 0, 0) };
-    private readonly Button _cancel = Brand.Button("Cancel");
-    private readonly Button _hide = Brand.Button("Hide", primary: true);
+    private readonly TextBlock _detail = Brand.Text("", Brand.K.Muted);
+    private readonly TextBlock _final = Brand.Text("", Brand.K.Text, 14, bold: true);
+    private readonly TextBlock _next = Brand.Text("", Brand.K.Muted);
+    // Stopping a download is destructive for the run: danger style, never the Enter key's target.
+    private readonly Button _cancel = Brand.Button("Cancel update", Brand.Weight.Danger);
+    private readonly Button _retry = Brand.Button("Try again", Brand.Weight.Primary);
+    private readonly Button _hide = Brand.Button("Hide", Brand.Weight.Primary);
     private readonly DispatcherTimer? _autoClose;
 
     private UpdateWindow(UpdateProgress? progress, TimeSpan? autoClose)
@@ -47,29 +51,40 @@ internal sealed class UpdateWindow : Window
         var body = new StackPanel { Margin = new Thickness(18, 14, 18, 14) };
         foreach (var (_, label) in Steps)
         {
-            var mark = new TextBlock { Width = 22, FontSize = 14, Text = "○", Foreground = Brand.Brush(Brand.Muted) };
-            var text = new TextBlock { Text = label, FontSize = 13, Foreground = Brand.Brush(Brand.Muted) };
+            var mark = Brand.Fg(new TextBlock { Width = 22, FontSize = 14, Text = "○" }, Brand.K.Muted);
+            var text = Brand.Fg(new TextBlock { Text = label, FontSize = 13, TextWrapping = TextWrapping.Wrap }, Brand.K.Muted);
             var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 2, 0, 2) };
             row.Children.Add(mark);
             row.Children.Add(text);
             body.Children.Add(row);
             _rows.Add((mark, text));
         }
-        _bar.Foreground = Brand.Brush(Brand.Blue);
+        AutomationProperties.SetName(_bar, "Update progress");
         body.Children.Add(_bar);
         body.Children.Add(_detail);
+        _final.Margin = new Thickness(0, 10, 0, 0);
+        AutomationProperties.SetLiveSetting(_final, AutomationLiveSetting.Polite);
         body.Children.Add(_final);
+        _next.Margin = new Thickness(0, 4, 0, 0);
+        body.Children.Add(_next);
 
-        var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 16, 0, 0) };
         _cancel.Click += (_, _) =>
         {
+            if (Brand.IsBusy(_cancel)) return;
             try { _progress?.Cancellation.Cancel(); } catch (ObjectDisposedException) { }
-            _cancel.IsEnabled = false;
+            Brand.SetBusy(_cancel, true, "Cancelling…");
         };
+        _retry.Click += (_, _) =>
+        {
+            Brand.SetBusy(_retry, true, "Starting…");
+            App.CheckForUpdatesInteractive(); // opens a fresh run in this window's place
+        };
+        _retry.Visibility = Visibility.Collapsed;
+        // Hide (Esc / Enter) never stops the update; it keeps running and the Version button brings this back.
+        _hide.IsDefault = true;
+        _hide.IsCancel = true;
         _hide.Click += (_, _) => { if (_isFinal) Close(); else Hide(); };
-        buttons.Children.Add(_cancel);
-        buttons.Children.Add(_hide);
-        body.Children.Add(buttons);
+        body.Children.Add(Brand.ButtonRow(_cancel, _hide, _retry));
 
         var root = new DockPanel();
         var header = Brand.Header("Sketch ProMax update", $"Installed: {Updater.CurrentText}. Revit stays usable while this runs.");
@@ -142,16 +157,16 @@ internal sealed class UpdateWindow : Window
         for (var i = 0; i < _rows.Count; i++)
         {
             var (mark, label) = _rows[i];
-            string glyph; Color color;
-            if (finalOk && (s.Stage == UpdateStage.Updated || i == 0)) { glyph = "✓"; color = Brand.Green; }
-            else if (s.Stage == UpdateStage.RestartNeeded) { glyph = i == _rows.Count - 1 ? "!" : "✓"; color = i == _rows.Count - 1 ? Brand.Amber : Brand.Green; }
-            else if (failedAt >= 0) { glyph = i < failedAt ? "✓" : i == failedAt ? "✕" : "○"; color = i < failedAt ? Brand.Green : i == failedAt ? Brand.Red : Brand.Muted; }
-            else if (current >= 0 && i < current) { glyph = "✓"; color = Brand.Green; }
-            else if (i == current) { glyph = "●"; color = Brand.Blue; }
-            else { glyph = "○"; color = Brand.Muted; }
+            string glyph, color;
+            if (finalOk && (s.Stage == UpdateStage.Updated || i == 0)) { glyph = "✓"; color = Brand.K.SuccessText; }
+            else if (s.Stage == UpdateStage.RestartNeeded) { glyph = i == _rows.Count - 1 ? "!" : "✓"; color = i == _rows.Count - 1 ? Brand.K.WarningText : Brand.K.SuccessText; }
+            else if (failedAt >= 0) { glyph = i < failedAt ? "✓" : i == failedAt ? "✕" : "○"; color = i < failedAt ? Brand.K.SuccessText : i == failedAt ? Brand.K.DangerText : Brand.K.Muted; }
+            else if (current >= 0 && i < current) { glyph = "✓"; color = Brand.K.SuccessText; }
+            else if (i == current) { glyph = "●"; color = Brand.K.Link; }
+            else { glyph = "○"; color = Brand.K.Muted; }
             mark.Text = glyph;
-            mark.Foreground = Brand.Brush(color);
-            label.Foreground = Brand.Brush(i == current ? Brand.Navy : color == Brand.Muted ? Brand.Muted : Colors.Black);
+            Brand.Fg(mark, color);
+            Brand.Fg(label, color == Brand.K.Muted ? Brand.K.Muted : Brand.K.Text);
             label.FontWeight = i == current ? FontWeights.SemiBold : FontWeights.Normal;
             if (i == 1 && s.Stage == UpdateStage.Downloading)
                 label.Text = s.Percent is { } p
@@ -164,7 +179,7 @@ internal sealed class UpdateWindow : Window
         _bar.IsIndeterminate = s.Stage is UpdateStage.Checking or UpdateStage.Verifying or UpdateStage.Unpacking or UpdateStage.Applying
                                || s.Stage == UpdateStage.Downloading && s.Percent is null;
         _bar.Value = s.Stage == UpdateStage.Downloading ? s.Percent ?? 0 : s.IsFinal ? 100 : 0;
-        _bar.Foreground = Brand.Brush(s.Stage is UpdateStage.Failed or UpdateStage.Cancelled ? Brand.Red : s.IsFinal ? Brand.Green : Brand.Blue);
+        _bar.SetResourceReference(ForegroundProperty, s.Stage is UpdateStage.Failed or UpdateStage.Cancelled ? Brand.K.Danger : s.IsFinal ? Brand.K.BadgeOk : Brand.K.Accent);
         _bar.Visibility = s.Stage == UpdateStage.UpToDate ? Visibility.Collapsed : Visibility.Visible;
 
         _detail.Text = s.IsFinal ? "" : s.Detail ?? "";
@@ -177,19 +192,42 @@ internal sealed class UpdateWindow : Window
             UpdateStage.Cancelled => s.Detail ?? "The update was cancelled.",
             _ => "",
         };
-        _final.Foreground = Brand.Brush(s.Stage switch
+        Brand.Fg(_final, s.Stage switch
         {
-            UpdateStage.Updated or UpdateStage.UpToDate => Brand.Green,
-            UpdateStage.Failed => Brand.Red,
-            UpdateStage.RestartNeeded or UpdateStage.Cancelled => Color.FromRgb(0xB4, 0x53, 0x09),
-            _ => Brand.Navy,
+            UpdateStage.Updated or UpdateStage.UpToDate => Brand.K.SuccessText,
+            UpdateStage.Failed => Brand.K.DangerText,
+            UpdateStage.RestartNeeded or UpdateStage.Cancelled => Brand.K.WarningText,
+            _ => Brand.K.Text,
         });
         _final.Visibility = _final.Text.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
 
+        // What to do next, for every state that needs the user.
+        var canRetry = _progress is not null && s.Stage is UpdateStage.Failed or UpdateStage.Cancelled;
+        _next.Text = s.Stage switch
+        {
+            UpdateStage.Failed => canRetry
+                ? "Check the internet connection, then press Try again. If it keeps failing, open What's new in the Updates panel " +
+                  "and install the release by hand."
+                : "Use Check now in the Updates panel to try again.",
+            UpdateStage.Cancelled => canRetry ? "Press Try again to update now, or Close to keep this version." : "",
+            UpdateStage.RestartNeeded => "Save your work, then close and reopen Revit when it suits you.",
+            UpdateStage.Downloading or UpdateStage.Checking when _progress is not null =>
+                "You can keep working. Hide keeps the update running; the Version button brings this window back.",
+            _ => "",
+        };
+        _next.Visibility = _next.Text.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
+
         var cancellable = _progress is not null && s.Stage is UpdateStage.Checking or UpdateStage.Downloading;
         _cancel.Visibility = cancellable ? Visibility.Visible : Visibility.Collapsed;
+        if (!cancellable) Brand.SetBusy(_cancel, false);
         _isFinal = s.IsFinal;
         _hide.Content = s.IsFinal ? "Close" : "Hide";
+
+        // One primary action: Try again after a failure (Close becomes secondary), Hide/Close otherwise.
+        _retry.Visibility = canRetry ? Visibility.Visible : Visibility.Collapsed;
+        _retry.IsDefault = canRetry;
+        _hide.IsDefault = !canRetry;
+        _hide.SetResourceReference(StyleProperty, canRetry ? "SpmSecondaryButton" : "SpmPrimaryButton");
     }
 
     private bool _isFinal;

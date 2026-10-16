@@ -6,6 +6,8 @@ namespace SketchProMax.Loader;
 /// <summary>
 /// The Sketch ProMax tab. Built once at startup by the loader, so it survives switching to a new core; its live parts
 /// (Claude connection, running job, update state, quick tools list) are refreshed from the running core every 2 s.
+/// Every button is a large (32 px icon) button: Revit's stacked small buttons are about 22 px tall, under the 24 px
+/// minimum click target. Destructive buttons (Cancel job) use the red danger tile.
 /// </summary>
 internal static class Ribbon
 {
@@ -52,19 +54,17 @@ internal static class Ribbon
             "Green: Claude has talked to this Revit window in the last few minutes. Amber: ready, waiting for Claude. " +
             "Gray: the Claude desktop app is not running or can't reach Revit.\n\nClick for details, the models Claude can see, " +
             "and how to fix a missing connection.", false));
-        var stacked = claude.AddStackedItems(
-            Button<CopyPromptCommand>("CopyPrompt", "Copy starter prompt", "copy",
-                "Copies a good first message for Claude to the clipboard. Paste it into a new chat in the Claude desktop app.",
-                "The prompt names the open model and asks Claude to look at it and suggest what it can do for you."),
-            Button<OpenClaudeCommand>("OpenClaude", "Open Claude", "open",
-                "Starts the Claude desktop app, or brings it to the front.",
-                "Works with the normal installer and the Microsoft Store version."),
-            Button<PaneCommand>("Pane", "Show pane", "pane",
-                "Shows or hides the Sketch ProMax pane: connection, the running job with its steps and a Cancel button, " +
-                "the last result with clickable element ids, and your quick tools.",
-                "Click an element id in the pane to select it and zoom to it. The pane docks like the Properties palette; " +
-                "drag its tab to move it."));
-        _pane = stacked.Count > 2 ? stacked[2] as PushButton : null;
+        claude.AddItem(Button<CopyPromptCommand>("CopyPrompt", "Copy\nprompt", "copy",
+            "Copies a good first message for Claude to the clipboard. Paste it into a new chat in the Claude desktop app.",
+            "The prompt names the open model and asks Claude to look at it and suggest what it can do for you."));
+        claude.AddItem(Button<OpenClaudeCommand>("OpenClaude", "Open\nClaude", "open",
+            "Starts the Claude desktop app, or brings it to the front.",
+            "Works with the normal installer and the Microsoft Store version."));
+        _pane = claude.AddItem(Button<PaneCommand>("Pane", "Show\npane", "pane",
+            "Shows or hides the Sketch ProMax pane: connection, the running job with its steps and a Cancel button, " +
+            "the last result with clickable element ids, and your quick tools.",
+            "Click an element id in the pane to select it and zoom to it. The pane docks like the Properties palette; " +
+            "drag its tab to move it.")) as PushButton;
 
         // Jobs: what Revit is doing for Claude right now.
         var jobs = app.CreateRibbonPanel(Tab, "Jobs");
@@ -73,7 +73,7 @@ internal static class Ribbon
             "Revit runs one job at a time. While a long job runs, Claude waits for it (wait_for_job) and other requests are " +
             "told what is running. Click for details of the running or the last job.", false));
         _cancel = (PushButton)jobs.AddItem(Button<CancelJobCommand>("CancelJob", "Cancel\njob", "cancel",
-            "Asks the running job (or a running self-test) to stop, like cancel_job in the chat.",
+            "Stops the running job (or a running self-test) at its next check, like cancel_job in the chat.",
             "Batch tools stop between items and keep what they finished as one Undo step. A single Revit operation that has " +
             "already started (a regeneration, a big join) always runs to its end."));
         _cancel.Enabled = false;
@@ -139,11 +139,10 @@ internal static class Ribbon
             "The installed version and the state of updates.",
             "Updates download in the background and switch over while Revit stays open, as soon as no job is running. " +
             "Click to see the update window.", false));
-        updates.AddStackedItems(
-            Button<UpdateCheckCommand>("UpdateCheck", "Check now", "update",
-                "Looks for a newer version right away and installs it without restarting Revit."),
-            Button<WhatsNewCommand>("WhatsNew", "What's new", "news",
-                "Opens the release notes of the latest version."));
+        updates.AddItem(Button<UpdateCheckCommand>("UpdateCheck", "Check\nnow", "update",
+            "Looks for a newer version right away and installs it without restarting Revit."));
+        updates.AddItem(Button<WhatsNewCommand>("WhatsNew", "What's\nnew", "news",
+            "Opens the release notes of the latest version."));
 
         // Settings and help.
         var more = app.CreateRibbonPanel(Tab, "Sketch ProMax");
@@ -253,7 +252,7 @@ internal static class Ribbon
     /// <summary>Keeps the Pane button's text in step with the pane ("Show pane" / "Hide pane").</summary>
     public static void SetPaneShown(bool shown)
     {
-        try { Set(_pane, shown ? "Hide pane" : "Show pane"); }
+        try { Set(_pane, shown ? "Hide\npane" : "Show\npane"); }
         catch (Exception) { /* cosmetic */ }
     }
 

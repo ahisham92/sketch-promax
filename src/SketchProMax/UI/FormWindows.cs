@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.IO;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Media;
 
@@ -15,7 +16,7 @@ internal sealed class InputsWindow : Window
     public sealed record Field(string Key, string Label, string? Help, string Type, bool Required, string[]? Choices, string? Value);
 
     private readonly List<(Field Field, FrameworkElement Control)> _controls = [];
-    private readonly TextBlock _error = new() { Foreground = Brand.Brush(Brand.Red), TextWrapping = TextWrapping.Wrap, Visibility = Visibility.Collapsed, Margin = new Thickness(0, 8, 0, 0) };
+    private readonly TextBlock _error = Brand.Text("", Brand.K.DangerText);
     private readonly CheckBox? _option;
 
     public Dictionary<string, string> Values { get; } = new();
@@ -31,24 +32,29 @@ internal sealed class InputsWindow : Window
         ResizeMode = ResizeMode.NoResize;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         Brand.Prepare(this);
+        _error.Visibility = Visibility.Collapsed;
+        _error.Margin = new Thickness(0, 8, 0, 0);
+        AutomationProperties.SetLiveSetting(_error, AutomationLiveSetting.Assertive);
 
         var body = new StackPanel { Margin = new Thickness(18, 14, 18, 14) };
         if (!string.IsNullOrWhiteSpace(intro))
-            body.Children.Add(new TextBlock { Text = intro, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 8) });
+        {
+            var introText = Brand.Text(intro!);
+            introText.Margin = new Thickness(0, 0, 0, 8);
+            body.Children.Add(introText);
+        }
         if (details.Count > 0)
         {
             var list = new StackPanel { Margin = new Thickness(0, 0, 0, 8) };
             foreach (var d in details)
-                list.Children.Add(new TextBlock { Text = "•  " + d, TextWrapping = TextWrapping.Wrap, Foreground = Brand.Brush(Brand.Muted) });
+                list.Children.Add(Brand.Text("•  " + d, Brand.K.Muted));
             body.Children.Add(list);
         }
 
         foreach (var field in fields)
         {
-            var label = new TextBlock
-            {
-                Text = field.Label + (field.Required ? " *" : ""), FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 8, 0, 2),
-            };
+            var label = Brand.Text(field.Label + (field.Required ? " *" : ""), bold: true);
+            label.Margin = new Thickness(0, 8, 0, 2);
             FrameworkElement control;
             if (field.Type == "boolean")
             {
@@ -64,12 +70,14 @@ internal sealed class InputsWindow : Window
             }
             else
             {
-                control = new TextBox { Text = field.Value ?? "", Padding = new Thickness(4, 2, 4, 2) };
+                control = new TextBox { Text = field.Value ?? "" };
             }
+            AutomationProperties.SetName(control, field.Label + (field.Required ? " (required)" : ""));
+            if (!string.IsNullOrWhiteSpace(field.Help)) AutomationProperties.SetHelpText(control, field.Help);
             if (field.Type != "boolean") body.Children.Add(label);
             body.Children.Add(control);
             if (!string.IsNullOrWhiteSpace(field.Help))
-                body.Children.Add(new TextBlock { Text = field.Help, TextWrapping = TextWrapping.Wrap, FontSize = 11, Foreground = Brand.Brush(Brand.Muted) });
+                body.Children.Add(Brand.Text(field.Help!, Brand.K.Muted, size: 11));
             _controls.Add((field, control));
         }
 
@@ -80,21 +88,19 @@ internal sealed class InputsWindow : Window
         }
         body.Children.Add(_error);
 
-        var run = Brand.Button(runLabel, primary: true);
+        // One primary action (Enter); Cancel (Esc) only closes this window, nothing runs.
+        var run = Brand.Button(runLabel, Brand.Weight.Primary);
         run.IsDefault = true;
         run.Click += (_, _) => Submit();
         var cancel = Brand.Button("Cancel");
         cancel.IsCancel = true;
-        var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 16, 0, 0) };
-        buttons.Children.Add(cancel);
-        buttons.Children.Add(run);
-        body.Children.Add(buttons);
+        body.Children.Add(Brand.ButtonRow(cancel, run));
 
         var root = new DockPanel();
         var header = Brand.Header(title, subtitle);
         DockPanel.SetDock(header, Dock.Top);
         root.Children.Add(header);
-        root.Children.Add(new ScrollViewer { Content = body, VerticalScrollBarVisibility = ScrollBarVisibility.Auto });
+        root.Children.Add(new ScrollViewer { Content = body, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled });
         Content = root;
         Loaded += (_, _) => (_controls.FirstOrDefault().Control as Control ?? run).Focus();
     }
@@ -121,8 +127,10 @@ internal sealed class InputsWindow : Window
         }
         if (missing.Count > 0)
         {
-            _error.Text = "Please fill in: " + string.Join(", ", missing);
+            _error.Text = $"Fill in {string.Join(", ", missing)}, then press Enter to run (Esc closes without running).";
             _error.Visibility = Visibility.Visible;
+            var first = _controls.FirstOrDefault(c => missing.Contains(c.Field.Label)).Control;
+            first?.Focus();
             return;
         }
         DialogResult = true;
@@ -143,18 +151,24 @@ internal sealed class ResultWindow : Window
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         Brand.Prepare(this);
 
-        var status = new TextBlock
+        var status = new StackPanel { Margin = new Thickness(0, 0, 0, 10) };
+        status.Children.Add(Brand.Text((ok ? "✓  " : "✕  ") + headline, ok ? Brand.K.SuccessText : Brand.K.DangerText, 14, bold: true));
+        if (!ok)
         {
-            Text = (ok ? "✓  " : "✕  ") + headline, FontSize = 14, FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap,
-            Foreground = Brand.Brush(ok ? Brand.Green : Brand.Red), Margin = new Thickness(0, 0, 0, 10),
-        };
+            var next = Brand.Text("Read the details below. To get it fixed, press Copy and paste them into a chat in the Claude app; " +
+                                  "Ctrl+Z in Revit undoes anything it changed.", Brand.K.Muted);
+            next.Margin = new Thickness(0, 4, 0, 0);
+            status.Children.Add(next);
+        }
         var box = new TextBox
         {
             Text = text, IsReadOnly = true, TextWrapping = TextWrapping.Wrap, FontFamily = new FontFamily("Consolas"), FontSize = 12,
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
         };
+        AutomationProperties.SetName(box, "Result");
 
-        var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 12, 0, 0) };
+        var buttons = Brand.ButtonRow();
+        buttons.Margin = new Thickness(0, 12, 0, 0);
         var file = FindFile(text);
         if (file is not null)
         {
@@ -167,8 +181,14 @@ internal sealed class ResultWindow : Window
             buttons.Children.Add(open);
         }
         var copy = Brand.Button("Copy");
-        copy.Click += (_, _) => ClipboardText.TrySet(text);
-        var close = Brand.Button("Close", primary: true);
+        copy.Click += (_, _) =>
+        {
+            copy.Content = ClipboardText.TrySet(text) ? "Copied" : "Copy failed, try again";
+            AutomationProperties.SetItemStatus(copy, copy.Content as string ?? "");
+        };
+        // The one primary action: Enter and Esc both close.
+        var close = Brand.Button("Close", Brand.Weight.Primary);
+        close.IsDefault = true;
         close.IsCancel = true;
         close.Click += (_, _) => Close();
         buttons.Children.Add(copy);
@@ -187,6 +207,7 @@ internal sealed class ResultWindow : Window
         root.Children.Add(header);
         root.Children.Add(body);
         Content = root;
+        Loaded += (_, _) => close.Focus();
     }
 
     /// <summary>The first existing file path in a result (a CSV, a BCF, a report), if any.</summary>
