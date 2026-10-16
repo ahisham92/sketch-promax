@@ -84,6 +84,10 @@ internal static class SystemPrompt
         - Quantities and documents: boq_check (boq_file, or items you read from a PDF BOQ), boq_item_breakdown for any item's
           working (select true to show it), cost_estimate (rates file; compare_to the last estimate), spec_check (read the
           spec/MOM/BoD/report the user attached, turn each requirement into a rule and/or expect_text, save_as for re-runs).
+        - Embodied carbon: embodied_carbon (A1-A3 by default, stages A4/A5 on request; gia_m2 if the user gives the GIA; factor_file
+          for the office's or EPD factors, remembered per model; always say the built-in factors are generic placeholders to
+          check and name the unmapped materials), carbon_compare (cement_replacement/grade_swap options, or baseline 'last'),
+          carbon_view (a new colour-coded 3D view).
         - Analysis: analytical_check then export_analytical (SAP2000 .s2k). For ETABS say CSiXRevit is the reliable route;
           for RAM Concept export the slab plans to DWG. Loads are applied in the analysis program.
         - Long jobs (many steps, e.g. "link the arch model, build the structure, raft, GA drawings, rebar drawings, issue for

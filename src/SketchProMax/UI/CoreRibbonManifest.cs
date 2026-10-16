@@ -116,6 +116,10 @@ internal static class CoreRibbonManifest
         B("Check", "find_clashes", "Clashes", "clash", "Finds clashes between two sets of elements, in this model or in linked models."),
         B("Check", "check_drawings", "Drawing\ncheck", "drawing-check", "Looks for mistakes across the drawings, such as grids and levels that differ from the links and overridden dimensions."),
         B("Check", "boq_check", "BOQ\ncheck", "boq", "Checks a bill of quantities against the model."),
+        L(Pulldown("Check", "Carbon", "Embodied\ncarbon", "boq", "Embodied carbon (A1-A3, optional A4/A5) from the model's quantities: assessment, comparing options, colour-coded 3D view.")),
+        T("Carbon", "embodied_carbon", "Embodied carbon", "boq", "Total tCO2e and kgCO2e/m² with breakdowns, top contributors and assumptions, to Excel and CSV. Reads the model only."),
+        T("Carbon", "carbon_compare", "Compare options", "boq", "Compares two options or snapshots (e.g. cement replacement or a grade swap) and shows the saving."),
+        T("Carbon", "carbon_view", "Carbon 3D view", "boq", "Makes a new 3D view coloured green to red by carbon intensity. Existing views are not changed."),
 
         // ---- Issue
         B("Issue", "export_pdf", "Export\nPDF", "pdf", "Prints sheets or views to PDF, as one combined file by default."),
