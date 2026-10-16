@@ -427,11 +427,14 @@ public sealed class CopyFromFileTool : IRevitTool
     public string Description =>
         "Bring title blocks, legends, drafting views (typical details, general notes) or schedules in from another Revit " +
         "project or template (.rvt/.rte), or load an .rfa family. The other file is opened in the background " +
-        "(detached if workshared) and closed without saving. Types that already exist keep this project's version.";
+        "(detached if workshared) and closed without saving. Types that already exist keep this project's version. " +
+        "After copying title blocks, the shared parameters their labels use (drawing number parts, phase, zone...) are bound to " +
+        "Sheets in this project with the same GUIDs, so the labels fill in from each sheet; the result lists what was bound.";
     public string PropertiesJson => """
     {
       "path": {"type": "string", "description": ".rvt, .rte or .rfa file on this PC."},
       "title_blocks": {"type": "array", "items": {"type": "string"}, "description": "Title block family or 'Family: Type' names to copy; ['*'] for all."},
+      "bind_title_block_parameters": {"type": "string", "enum": ["sheets", "project_information", "none"], "description": "Where to bind the copied title blocks' shared label parameters (default sheets)."},
       "views": {"type": "array", "items": {"type": "string"}, "description": "Names of legends, drafting views or schedules to copy; ['*legends'] or ['*drafting'] for all of a kind."},
       "list_only": {"type": "boolean", "description": "Just list what the file has."}
     }
@@ -519,7 +522,18 @@ public sealed class CopyFromFileTool : IRevitTool
             }
             if (copied.Count == 0) { t.RollBack(); return ToolResult.Error($"Nothing was copied: {JsonSerializer.Serialize(errors)}"); }
             t.Commit();
-            return ToolResult.Ok(new { file = Path.GetFileName(path), copied, errors, notFound = missing });
+
+            // Labels show sheet values only when the project has the same shared parameters (same GUIDs) on Sheets.
+            object? parameters = null;
+            var bindTo = args.OptString("bind_title_block_parameters") ?? "sheets";
+            if (pickTb.Count > 0 && bindTo != "none")
+            {
+                var families = pickTb.Select(s => s.FamilyName).Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Select(n => new FilteredElementCollector(doc).OfClass(typeof(Family)).Cast<Family>().FirstOrDefault(f => string.Equals(f.Name, n, StringComparison.OrdinalIgnoreCase)))
+                    .OfType<Family>().ToList();
+                parameters = TitleBlockParameters.Bind(app, doc, families, bindTo == "project_information" ? BuiltInCategory.OST_ProjectInformation : BuiltInCategory.OST_Sheets);
+            }
+            return ToolResult.Ok(new { file = Path.GetFileName(path), copied, errors, notFound = missing, titleBlockParameters = parameters });
         }
         finally { if (open is null) source.Close(false); }
     }
@@ -919,5 +933,121 @@ public sealed class CheckScheduleTool : IRevitTool
             emptyCells = empty, duplicates, elementsInSchedule = inSchedule, elementsInModel = inModel,
             filters = def.GetFilterCount(), issues, ok = issues.Count == 0,
         });
+    }
+}
+
+/// <summary>
+/// Binds the shared parameters a title block family uses (its labels' sheet parameters) to Sheets, or Project
+/// Information, in the project, keeping their GUIDs so the labels pick the values up. The family is opened read-only;
+/// the definitions come from a temporary shared parameter file holding exactly those GUIDs, and the user's own shared
+/// parameter file setting is put back afterwards. Call with no transaction open.
+/// </summary>
+internal static class TitleBlockParameters
+{
+    private sealed record Wanted(string Name, Guid Guid, ForgeTypeId DataType, ForgeTypeId Group, string Family);
+
+    public static object Bind(UIApplication app, Document doc, List<Family> families, BuiltInCategory target)
+    {
+        var wanted = new Dictionary<Guid, Wanted>();
+        var unreadable = new List<string>();
+        foreach (var family in families)
+        {
+            if (!family.IsEditable) { unreadable.Add($"{family.Name}: the family can't be opened"); continue; }
+            Document? fdoc = null;
+            try
+            {
+                fdoc = doc.EditFamily(family);
+                foreach (FamilyParameter fp in fdoc.FamilyManager.Parameters)
+                    if (fp.IsShared && fp.Definition is { } d)
+                        wanted[fp.GUID] = new Wanted(d.Name, fp.GUID, d.GetDataType(), d.GetGroupTypeId(), family.Name);
+                // Label parameters added from a shared parameter file are kept as shared parameter elements in the family.
+                foreach (var spe in new FilteredElementCollector(fdoc).OfClass(typeof(SharedParameterElement)).Cast<SharedParameterElement>())
+                    if (!wanted.ContainsKey(spe.GuidValue) && spe.GetDefinition() is { } d)
+                        wanted[spe.GuidValue] = new Wanted(spe.Name, spe.GuidValue, d.GetDataType(), d.GetGroupTypeId(), family.Name);
+            }
+            catch (Exception ex) when (ex is Autodesk.Revit.Exceptions.ApplicationException or InvalidOperationException)
+            {
+                unreadable.Add($"{family.Name}: {ex.Message.Trim()}");
+            }
+            finally { try { fdoc?.Close(false); } catch (Autodesk.Revit.Exceptions.ApplicationException) { } }
+        }
+        if (wanted.Count == 0)
+            return new { bound = Array.Empty<string>(), note = "The copied title blocks use no shared parameters.", unreadable };
+
+        var category = Category.GetCategory(doc, target);
+        var bound = new List<string>();
+        var already = new List<string>();
+        var problems = new List<string>();
+        var revit = app.Application;
+        var original = revit.SharedParametersFilename;
+        var file = Path.Combine(Path.GetTempPath(), "SketchProMax", $"TitleBlockParameters-{Guid.NewGuid():N}.txt");
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+            File.WriteAllText(file, "", new UTF8Encoding(false));
+            revit.SharedParametersFilename = file;
+            var defFile = revit.OpenSharedParameterFile() ?? throw new InvalidOperationException("Revit can't use a temporary shared parameter file.");
+            var group = defFile.Groups.Create("Title block");
+            using var t = RevitHelpers.StartTransaction(doc, "Bind title block parameters");
+            foreach (var w in wanted.Values.OrderBy(w => w.Name))
+            {
+                try
+                {
+                    var existing = SharedParameterElement.Lookup(doc, w.Guid);
+                    if (existing is null && Existing(doc, w.Name) is not null)
+                    {
+                        problems.Add($"{w.Name}: the project already has a different parameter with this name; rename it, then copy again");
+                        continue;
+                    }
+                    var cats = revit.Create.NewCategorySet();
+                    cats.Insert(category);
+                    if (existing is not null && doc.ParameterBindings.get_Item(existing.GetDefinition()) is ElementBinding old)
+                    {
+                        if (old.Categories.Contains(category)) { already.Add(w.Name); continue; }
+                        if (old is TypeBinding) { problems.Add($"{w.Name}: bound as a type parameter to other categories; bind it to {category.Name} by hand"); continue; }
+                        foreach (Category c in old.Categories) cats.Insert(c);
+                        if (doc.ParameterBindings.ReInsert(existing.GetDefinition(), revit.Create.NewInstanceBinding(cats), w.Group)) bound.Add($"{w.Name} (added {category.Name})");
+                        else problems.Add($"{w.Name}: Revit refused the binding");
+                        continue;
+                    }
+                    var def = group.Definitions.Create(new ExternalDefinitionCreationOptions(w.Name, w.DataType) { GUID = w.Guid });
+                    if (doc.ParameterBindings.Insert(def, revit.Create.NewInstanceBinding(cats), w.Group)) bound.Add(w.Name);
+                    else problems.Add($"{w.Name}: Revit refused the binding");
+                }
+                catch (Exception ex) when (ex is Autodesk.Revit.Exceptions.ApplicationException or ArgumentException or InvalidOperationException)
+                {
+                    problems.Add($"{w.Name}: {ex.Message.Trim()}");
+                }
+            }
+            if (bound.Count > 0) t.Commit(); else t.RollBack();
+        }
+        catch (Exception ex) when (ex is Autodesk.Revit.Exceptions.ApplicationException or InvalidOperationException or IOException or UnauthorizedAccessException)
+        {
+            problems.Add(ex.Message.Trim());
+        }
+        finally
+        {
+            try { revit.SharedParametersFilename = original ?? ""; }
+            catch (Exception ex) when (ex is Autodesk.Revit.Exceptions.ApplicationException or ArgumentException) { }
+            try { File.Delete(file); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        }
+        return new
+        {
+            category = category.Name,
+            bound,
+            alreadyBound = already,
+            problems,
+            unreadable = unreadable.Count > 0 ? unreadable : null,
+            guids = wanted.Values.OrderBy(w => w.Name).Select(w => new { w.Name, guid = w.Guid.ToString(), family = w.Family }),
+            note = bound.Count > 0 ? $"Fill these {category.Name} parameters (set_parameters) and the title block labels show them." : null,
+        };
+    }
+
+    private static (Definition def, Binding binding)? Existing(Document doc, string name)
+    {
+        var it = doc.ParameterBindings.ForwardIterator();
+        while (it.MoveNext())
+            if (it.Key is { } d && string.Equals(d.Name, name, StringComparison.OrdinalIgnoreCase)) return (d, (Binding)it.Current);
+        return null;
     }
 }

@@ -62,6 +62,8 @@ internal static class SystemPrompt
           bars + ties), reinforce_footing (mats both ways), reinforce_slab_wall (area reinforcement on slabs, rafts, walls).
           Bar sizes are type names ('T16', '#5') or mm diameters. Draw it with rebar_section (cross/long sections, tags,
           bar note, onto a sheet; or view_id for a plan), rebar_3d_view, and export_bar_schedule for the BBS and tonnage.
+          Offices that detail reinforcement in 2D with their own detail families: rft_detail_families first (which families,
+          their parameter names), then place_additional_reinforcement, place_mesh_symbols, place_column_section_details.
         - Precast: hollow_core_layout (kind hollow_core, solid_plank, filigree or double_tee; topping for a structural
           topping), then export_precast_schedule for unit weights. Post-tensioning: place_pt_tendons in a slab (lines,
           uniform or banded on column lines) or beams, then export_tendon_schedule. Tendons are geometric drapes, not a PT design.

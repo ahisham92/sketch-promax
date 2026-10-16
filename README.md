@@ -2,7 +2,7 @@
 
 <p align="center"><img src="assets/logo/sketch-promax-wordmark.png" alt="Sketch ProMax" width="420"></p>
 
-An AI agent for Autodesk Revit 2024, 2025, 2026 and 2027, powered by Claude. Ask in plain language; it reads, documents, audits and edits the open model through 192 tools, and it learns new ones as you use it. It asks for your approval before every change, and every change can be undone with Ctrl+Z.
+An AI agent for Autodesk Revit 2024, 2025, 2026 and 2027, powered by Claude. Ask in plain language; it reads, documents, audits and edits the open model through 196 tools, and it learns new ones as you use it. It asks for your approval before every change, and every change can be undone with Ctrl+Z.
 
 See [docs/PLAN.md](docs/PLAN.md) for the comparison with SketchPro, the roadmap and the architecture.
 
@@ -121,7 +121,7 @@ To publish an update: bump `<Version>` in both project files and push to `main`.
 
 **Steel:** load steel sections from the content library by size (UB, UC, W, HSS, SHS, IPE, HEA...), place bracing in bays (X, diagonal, V, chevron), find joints and add steel connections (beam to column, beam to beam, base plates to footings or slabs, beam to concrete wall, brace gussets, column splices), and a steel tonnage takeoff to Excel.
 
-**Reinforcement:** rebar in concrete beams (bottom, top and side bars, stirrups), columns (perimeter bars, ties), isolated footings (mats both ways) and area reinforcement on slabs, rafts and walls, with cover set; rebar cross and long sections with tags and a bar note placed on sheets, rebar in plan views, 3D rebar views through see-through concrete, and a bar bending schedule with tonnage to Excel.
+**Reinforcement:** rebar in concrete beams (bottom, top and side bars, stirrups), columns (perimeter bars, ties), isolated footings (mats both ways) and area reinforcement on slabs, rafts and walls, with cover set; rebar cross and long sections with tags and a bar note placed on sheets, rebar in plan views, 3D rebar views through see-through concrete, and a bar bending schedule with tonnage to Excel. For offices that detail reinforcement in 2D, the same drawings can be made with the office's own detail families instead of 3D rebar: additional-bar lines across slabs (in named groups), a mesh symbol on each slab, and column section details in schedule cells, with the family names remembered per model and every family parameter written and read back (rft_detail_families lists the families and their parameters).
 
 **Precast and post-tensioning:** precast slab layouts (hollow core, solid planks, filigree planks, double tees) with joints, cut units and an optional structural topping, a precast unit schedule with lifting weights, post-tensioning tendons in slabs (along lines, uniform or banded on column lines) and beams with a parabolic drape over the supports, and a tendon schedule with strand quantities.
 
@@ -182,7 +182,7 @@ src/SketchProMax/            The Revit add-in core (net48 for Revit 2024, net8.0
   Agent/SystemPrompt         Instructions the desktop app receives from the connector
   Bridge/BridgeServer        Per-Revit-window named-pipe server the connector talks to
   Revit/                     Main-thread dispatcher (ExternalEvent), helpers, Revit 2024 dependency loader
-  Tools/                     The 190 IRevitTool implementations and the registry (CodeTools compiles C# with Roslyn)
+  Tools/                     The 194 IRevitTool implementations and the registry (CodeTools compiles C# with Roslyn)
   UI/                        Settings, update progress, quick-tool input and result windows
   Settings/                  Per-user settings (approval switch, auto-update, firm standards)
   Update/Updater             Self-update from GitHub Releases, with progress, switched to without restarting Revit

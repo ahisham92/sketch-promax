@@ -414,6 +414,7 @@ internal static partial class SelfTest
         new("list_types", _ => new { category = "Walls" }),
         new("list_revisions", _ => new { }),
         new("list_text_notes", _ => new { limit = 20 }),
+        new("rft_detail_families", _ => new { parameters = false }),
         new("check_schedule", c => new { schedule = c.Id(c.Schedule ?? throw new Skip("the model has no schedules")).ToString() }),
         new("read_schedule", c => new { schedule_id = c.Id(c.Schedule ?? throw new Skip("the model has no schedules")), max_rows = 20 }),
         new("select_elements", c => new { element_ids = new[] { c.Id(c.Wall ?? throw new Skip("the model has no walls")) }, zoom = false }),
@@ -758,6 +759,22 @@ internal static partial class SelfTest
         new("borrow_elements", c => c.Doc.IsWorkshared ? new { element_ids = new[] { c.Id(c.Wall ?? throw new Skip("the model has no walls")) } } : throw new Skip("the model is not workshared")) { Heavy = true },
         new("relinquish_mine", c => !c.Throwaway ? throw new Skip("releasing ownership can't be rolled back; runs only in the field test's own project") : c.Doc.IsWorkshared ? new { borrowed_elements = true } : throw new Skip("the model is not workshared")) { Heavy = true, NoGroup = true },
         new("place_detail_item_copy", c => new { view_id = c.PlanId, source_id = new FilteredElementCollector(c.Doc).OfCategory(BuiltInCategory.OST_DetailComponents).OfClass(typeof(FamilyInstance)).Max(e => (long?)e.Id.Value) ?? throw new Skip("no detail item to copy"), placements = new[] { new { at = c.At(3000, 3000), rotation_degrees = 90.0 } } }, Setup: ["place_detail_components"]),
+        new("place_additional_reinforcement", c =>
+        {
+            var s = c.Symbol(BuiltInCategory.OST_DetailComponents, x => x.Family.FamilyPlacementType == FamilyPlacementType.CurveBasedDetail) ?? throw new Skip("no line-based detail item family loaded");
+            return new { view_id = c.PlanId, family = $"{s.FamilyName}: {s.Name}", bars = new[] { new { start = c.At(0, -7000), end = c.At(3000, -7000), group = "Self-test RFT" } } };
+        }),
+        new("place_mesh_symbols", c =>
+        {
+            var s = c.Symbol(BuiltInCategory.OST_DetailComponents, x => x.Family.FamilyPlacementType != FamilyPlacementType.CurveBasedDetail) ?? throw new Skip("no point-based detail item family loaded");
+            return new { view_id = c.PlanId, family = $"{s.FamilyName}: {s.Name}", slab_ids = new[] { Newest<Floor>(c) } };
+        }, Setup: ["create_floors"]),
+        new("place_column_section_details", c =>
+        {
+            var s = c.Symbol(BuiltInCategory.OST_DetailComponents, x => x.Family.FamilyPlacementType != FamilyPlacementType.CurveBasedDetail) ?? throw new Skip("no point-based detail item family loaded");
+            return new { view_id = c.PlanId, family = $"{s.FamilyName}: {s.Name}", cells = new[] { new { label = "C1" }, new { label = "C2" } },
+                grid = new { origin = c.At(0, -9000), spacing = new[] { c.P(1500), c.P(1500) }, per_row = 2 } };
+        }),
         new("duplicate_view_to_location", c => new { view_id = Newest<ViewSection>(c), offset = new[] { c.P(2000), 0 }, name = "Self-test moved section" }, Setup: ["create_section"]),
         new("relocate_view_with_detailing", c => new { view_id = Newest<ViewSection>(c), offset = new[] { 0, c.P(1000) } }, Setup: ["create_section"]),
         new("copy_view_detailing", c => new { source_view_id = c.PlanId, target_view_id = c.PlanId, offset = new[] { c.P(500), 0 } }, Setup: ["place_detail_components"]),

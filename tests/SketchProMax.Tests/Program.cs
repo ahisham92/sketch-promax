@@ -54,6 +54,7 @@ ChatTests.Run((name, ok, detail) => Check(name, ok, detail));
 ModelRulesTests.Run((name, ok, detail) => Check(name, ok, detail));
 LoaderTests.Run((name, ok, detail) => Check(name, ok, detail));
 BugAndMemoryTests.Run((name, ok, detail) => Check(name, ok, detail));
+LayoutTests.Run((name, ok, detail) => Check(name, ok, detail));
 
 // With --addin <folder of a built SketchProMax.dll>, also check the whole tool catalogue.
 var addinAt = Array.IndexOf(args, "--addin");
