@@ -449,7 +449,8 @@ public sealed class PlaceHostedFamiliesTool : IRevitTool
     public string Description =>
         "Insert doors or windows (or any wall-hosted family) into walls. Position is the distance from the wall's " +
         "start point along its length, in project units (use query_elements/get_element_parameters to read wall length). " +
-        "Windows take an optional sill height.";
+        "Windows take an optional sill height. Each item is placed on its own; one that would overlap a door, window or opening " +
+        "already in the wall is slid to the nearest free stretch (listed under moved), since an overlapping insert can't cut the wall.";
     public string PropertiesJson => """
     {
       "items": {"type": "array", "items": {"type": "object", "properties": {
@@ -469,34 +470,102 @@ public sealed class PlaceHostedFamiliesTool : IRevitTool
         var doc = app.ActiveUIDocument.Document;
         var created = new List<long>();
         var errors = new List<string>();
-        using var t = RevitHelpers.StartTransaction(doc, "Place doors and windows");
+        var moved = new List<(long id, object what)>();
+        var items = new List<(int index, Wall wall, FamilySymbol symbol, double d, double? sill, bool flipFacing, bool flipHand)>();
+        var n = 0;
         foreach (var spec in args.Array("items"))
         {
+            n++;
             try
             {
                 var wall = doc.GetElement(new ElementId(spec.GetProperty("wall_id").GetInt64())) as Wall
                            ?? throw new ArgumentException("wall_id is not a wall.");
-                var curve = ((LocationCurve)wall.Location).Curve;
+                if (wall.Location is not LocationCurve { Curve: { } curve }) throw new ArgumentException($"Wall {wall.Id.Value} has no location line.");
+                if (wall.WallType.Kind != WallKind.Basic && wall.WallType.Kind != WallKind.Stacked)
+                    throw new ArgumentException($"Wall {wall.Id.Value} is a {wall.WallType.Kind} wall; doors and windows go into basic or stacked walls (a curtain wall takes a curtain door panel instead).");
                 var d = RevitHelpers.ToInternal(doc, spec.GetProperty("distance_along_wall").GetDouble());
                 if (d < 0 || d > curve.Length) throw new ArgumentException($"Distance is outside wall {wall.Id.Value} (length {RevitHelpers.FromInternal(doc, curve.Length)}).");
-                var point = curve.Evaluate(d / curve.Length, true);
-                var level = (Level)doc.GetElement(wall.LevelId);
                 var symbol = Modeling.Symbol(doc, spec.GetProperty("type_id").GetInt64());
-
-                var fi = doc.Create.NewFamilyInstance(point, symbol, wall, level, StructuralType.NonStructural);
-                if (spec.TryGetProperty("sill_height", out var sill))
-                    fi.get_Parameter(BuiltInParameter.INSTANCE_SILL_HEIGHT_PARAM)?.Set(RevitHelpers.ToInternal(doc, sill.GetDouble()));
-                if (spec.TryGetProperty("flip_facing", out var ff) && ff.GetBoolean()) fi.flipFacing();
-                if (spec.TryGetProperty("flip_hand", out var fh) && fh.GetBoolean()) fi.flipHand();
-                created.Add(fi.Id.Value);
+                double? sill = spec.TryGetProperty("sill_height", out var sh) ? RevitHelpers.ToInternal(doc, sh.GetDouble()) : null;
+                items.Add((n, wall, symbol, d, sill,
+                    spec.TryGetProperty("flip_facing", out var ff) && ff.GetBoolean(),
+                    spec.TryGetProperty("flip_hand", out var fh) && fh.GetBoolean()));
             }
-            catch (Exception ex) when (ex is ArgumentException or InvalidCastException or Autodesk.Revit.Exceptions.ApplicationException)
+            catch (Exception ex) when (ex is ArgumentException or InvalidCastException or InvalidOperationException or KeyNotFoundException or Autodesk.Revit.Exceptions.ApplicationException)
             {
-                errors.Add(ex.Message);
+                errors.Add($"item {n}: {ex.Message}");
             }
         }
-        t.Commit();
-        return ToolResult.Ok(new { created, errors });
+
+        // One transaction per item, so a door Revit refuses doesn't undo the others.
+        var batch = ItemBatch.Run(doc, "Place doors and windows", items, i => $"item {i.index}", i => [i.wall.Id], i =>
+        {
+            if (!i.symbol.IsActive) { i.symbol.Activate(); doc.Regenerate(); }
+            var curve = ((LocationCurve)i.wall.Location).Curve;
+            var width = Size(i.symbol, BuiltInParameter.DOOR_WIDTH, BuiltInParameter.WINDOW_WIDTH, BuiltInParameter.FAMILY_WIDTH_PARAM, BuiltInParameter.FAMILY_ROUGH_WIDTH_PARAM) ?? 3.0;
+            // A door or window placed over an existing one can't cut the wall ("Instance(s) of ... not cutting anything"),
+            // so slide it along the wall to the nearest free stretch and say so.
+            var d = FreeSpot(doc, i.wall, curve, i.d, width, out var why);
+            if (d is null) throw new InvalidOperationException(why);
+            // On the wall's location line at the wall's base level; Revit puts the sill/threshold on the level from there.
+            var level = (Level)doc.GetElement(i.wall.LevelId);
+            var point = curve.Evaluate(d.Value / curve.Length, true);
+            var fi = doc.Create.NewFamilyInstance(point, i.symbol, i.wall, level, StructuralType.NonStructural);
+            if (i.sill is { } sill) fi.get_Parameter(BuiltInParameter.INSTANCE_SILL_HEIGHT_PARAM)?.Set(sill);
+            if (i.flipFacing) fi.flipFacing();
+            if (i.flipHand) fi.flipHand();
+            doc.Regenerate();
+            if (fi.Host?.Id != i.wall.Id)
+                throw new InvalidOperationException($"Revit did not host it in wall {i.wall.Id.Value}; check that the family is wall-hosted.");
+            if (Math.Abs(d.Value - i.d) > 1e-6)
+                moved.Add((fi.Id.Value, new { item = i.index, id = fi.Id.Value, from = RevitHelpers.FromInternal(doc, i.d), to = RevitHelpers.FromInternal(doc, d.Value), why }));
+            return fi.Id.Value;
+        });
+        created.AddRange(batch.Items.Where(o => o.Ok && o.Value is long).Select(o => (long)o.Value!));
+        errors.AddRange(batch.Failed.Select(f => $"{f.Item}: {f.Error}"));
+        if (created.Count == 0 && errors.Count > 0) return ToolResult.Error($"Nothing was placed: {string.Join("; ", errors)}");
+        var movedKept = moved.Where(m => created.Contains(m.id)).Select(m => m.what).ToList();
+        return ToolResult.Ok(new { created, errors, moved = movedKept.Count > 0 ? movedKept : null });
+    }
+
+    /// <summary>A dimension of a family type (width/height), from the first of the parameters it has.</summary>
+    private static double? Size(FamilySymbol s, params BuiltInParameter[] ps)
+    {
+        foreach (var p in ps)
+            if (s.get_Parameter(p) is { HasValue: true, StorageType: StorageType.Double } par && par.AsDouble() > 1e-6) return par.AsDouble();
+        return null;
+    }
+
+    /// <summary>
+    /// The distance along the wall nearest to the one asked for where an insert of this width doesn't overlap the
+    /// doors, windows and openings already in the wall (with a small gap), or null with the reason.
+    /// </summary>
+    private static double? FreeSpot(Document doc, Wall wall, Curve curve, double want, double width, out string why)
+    {
+        why = "";
+        var start = curve.GetEndPoint(0);
+        var dir = (curve.GetEndPoint(1) - start).Normalize();
+        var taken = new List<(double lo, double hi)>();
+        foreach (var id in wall.FindInserts(true, false, true, true))
+        {
+            if (doc.GetElement(id) is not { } e || e.get_BoundingBox(null) is not { } b) continue;
+            var along = new[] { b.Min.X, b.Max.X }.SelectMany(x => new[] { b.Min.Y, b.Max.Y }.Select(y => (new XYZ(x, y, start.Z) - start).DotProduct(dir))).ToList();
+            taken.Add((along.Min(), along.Max()));
+        }
+        const double Gap = 0.25; // ~75 mm between inserts
+        var half = width / 2;
+        bool Free(double c) => c - half >= 0 && c + half <= curve.Length && taken.All(t => c + half + Gap <= t.lo || c - half - Gap >= t.hi);
+        if (taken.Count == 0 || Free(want)) return want;
+        // Candidates: just either side of each existing insert, and the wall's ends.
+        var candidates = taken.SelectMany(t => new[] { t.lo - Gap - half, t.hi + Gap + half }).Concat([half, curve.Length - half])
+            .Where(Free).OrderBy(c => Math.Abs(c - want)).ToList();
+        if (candidates.Count == 0)
+        {
+            why = $"Wall {wall.Id.Value} has no free stretch {RevitHelpers.FromInternal(doc, width):0.##} wide clear of the doors, windows and openings already in it.";
+            return null;
+        }
+        why = "the spot asked for overlaps a door, window or opening already in the wall, so it was moved to the nearest free stretch";
+        return candidates[0];
     }
 }
 

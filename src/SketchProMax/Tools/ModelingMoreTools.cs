@@ -176,7 +176,22 @@ public sealed class CreateStairsTool : IRevitTool
 
         var railingIds = new List<long>();
         string? railingNote = null;
-        if (args.OptBool("railings", true))
+        // Revit can add its own railings when a stair is created (per the project's stair settings). railings: false means
+        // none, so remove those; railings: true must not try to add a second set (Revit refuses that).
+        var auto = doc.GetElement(stairsId) is Stairs madeStairs ? madeStairs.GetAssociatedRailings().ToList() : [];
+        if (auto.Count > 0 && !args.OptBool("railings", true))
+        {
+            using var t = RevitHelpers.StartTransaction(doc, "Remove automatic stair railings");
+            doc.Delete(auto);
+            t.Commit();
+            railingNote = $"Revit added {auto.Count} railing(s) automatically; they were removed because railings is false.";
+        }
+        else if (auto.Count > 0)
+        {
+            railingIds = auto.Select(i => i.Value).ToList();
+            railingNote = "Revit added the railings automatically when it made the stair.";
+        }
+        else if (args.OptBool("railings", true))
         {
             railingNote = CreateRailingsTool.NoRailingTypes(doc);
             if (railingNote is null)
@@ -216,7 +231,8 @@ public sealed class CreateRailingsTool : IRevitTool
       "level": {"type": "string"},
       "points": {"type": "array", "items": {"type": "array", "items": {"type": "number"}}, "description": "[[x, y], ...] in project units."},
       "host_id": {"type": "integer", "description": "Stair or ramp id instead of a path."},
-      "railing_type": {"type": "string"}
+      "railing_type": {"type": "string"},
+      "replace_existing": {"type": "boolean", "description": "host_id: when the stair/ramp already has railings, delete them and add new ones (default false: report it as already railed and change nothing)."}
     }
     """;
     public string[] Required => [];
@@ -229,10 +245,28 @@ public sealed class CreateRailingsTool : IRevitTool
         if (args.OptLong("host_id") is null && !args.Has("points")) return ToolResult.Error("Give points or host_id.");
         var type = TypeKit.Pick<RailingType>(doc, args.OptString("railing_type"), "railing");
         var created = new List<ElementId>();
+        var replaced = new List<long>();
+        if (args.OptLong("host_id") is { } hostId)
+        {
+            var hostEl = doc.GetElement(new ElementId(hostId)) ?? throw new ArgumentException($"No element {hostId}.");
+            if (hostEl is not Stairs && hostEl.Category?.BuiltInCategory != BuiltInCategory.OST_Ramps)
+                throw new ArgumentException($"{hostId} is not a stair or a ramp.");
+            var existing = ExistingRailings(doc, hostEl);
+            if (existing.Count > 0 && !args.OptBool("replace_existing"))
+                return ToolResult.Ok(new
+                {
+                    railings = existing.Select(i => i.Value).ToList(), alreadyRailed = true, removedByRevit = 0,
+                    note = $"This {(hostEl is Stairs ? "stair" : "ramp")} already has {existing.Count} railing(s), so nothing was added. Pass replace_existing: true to replace them with '{type.Name}', or change_type to swap their type.",
+                });
+            if (existing.Count > 0) replaced = existing.Select(i => i.Value).ToList();
+        }
         using (var t = RevitHelpers.StartTransaction(doc, "Create railing"))
         {
             if (args.OptLong("host_id") is { } host)
+            {
+                if (replaced.Count > 0) doc.Delete(replaced.Select(i => new ElementId(i)).ToList());
                 created.AddRange(Railing.Create(doc, new ElementId(host), type.Id, RailingPlacementPosition.Treads));
+            }
             else
             {
                 var level = RevitHelpers.FindLevel(doc, args.OptString("level"));
@@ -247,7 +281,15 @@ public sealed class CreateRailingsTool : IRevitTool
         var ids = Surviving(doc, created);
         if (created.Count > 0 && ids.Count == 0)
             return ToolResult.Error("Revit removed the railing when committing, so nothing was created. Check that the railing type's rail and baluster families are loaded.");
-        return ToolResult.Ok(new { railings = ids, removedByRevit = created.Count - ids.Count });
+        return ToolResult.Ok(new { railings = ids, removedByRevit = created.Count - ids.Count, replaced = replaced.Count > 0 ? replaced : null });
+    }
+
+    /// <summary>Railings hosted by a stair (Revit's association) or a ramp (railing HostId).</summary>
+    internal static List<ElementId> ExistingRailings(Document doc, Element host)
+    {
+        if (host is Stairs stairs) return stairs.GetAssociatedRailings().ToList();
+        return new FilteredElementCollector(doc).OfClass(typeof(Railing)).Cast<Railing>()
+            .Where(r => r.HostId == host.Id).Select(r => r.Id).ToList();
     }
 
     /// <summary>A message when the model has no railing types to use, else null.</summary>

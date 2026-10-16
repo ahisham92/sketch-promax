@@ -241,12 +241,11 @@ public sealed class CreateElevationsTool : IRevitTool
                 if (room.Location is not LocationPoint lp) { skipped.Add($"{room.Number}: not placed"); continue; }
                 var plan = HostPlan(doc, args.OptLong("plan_view_id"), room.LevelId);
                 var marker = ElevationMarker.CreateElevationMarker(doc, vft.Id, lp.Point, (int)scale);
-                for (var i = 0; i < 4; i++)
+                var keep = KeepViews(doc, marker, plan.Id, v => sides.Contains(ViewKit.Compass(-v.ViewDirection), StringComparer.OrdinalIgnoreCase));
+                if (keep.Count == 0) { skipped.Add($"{room.Number}: no elevation faces the sides asked for"); continue; }
+                foreach (var view in keep)
                 {
-                    if (!marker.IsAvailableIndex(i)) continue;
-                    var view = marker.CreateElevation(doc, plan.Id, i);
                     var side = ViewKit.Compass(-view.ViewDirection); // interior: the wall you look at
-                    if (!sides.Contains(side, StringComparer.OrdinalIgnoreCase)) { doc.Delete(view.Id); continue; }
                     var name = ViewKit.Finish(doc, view,
                         pattern.Replace("{number}", room.Number).Replace("{name}", room.get_Parameter(BuiltInParameter.ROOM_NAME)?.AsString() ?? "").Replace("{side}", side),
                         scale, args.OptString("view_template"));
@@ -275,20 +274,42 @@ public sealed class CreateElevationsTool : IRevitTool
                     _ => (new XYZ(box.Min.X - offset, mid.Y, z), -XYZ.BasisX),
                 };
                 var marker = ElevationMarker.CreateElevationMarker(doc, vft.Id, point, (int)scale);
-                ViewSection? made = null;
-                for (var i = 0; i < 4 && made is null; i++)
-                {
-                    var view = marker.CreateElevation(doc, plan.Id, i);
-                    if (view.ViewDirection.DotProduct(outward) > 0.9) made = view;
-                    else doc.Delete(view.Id);
-                }
-                if (made is null) { doc.Delete(marker.Id); skipped.Add(side); continue; }
+                // ViewDirection points towards the viewer, i.e. outward for an exterior elevation.
+                var keep = KeepViews(doc, marker, plan.Id, v => v.ViewDirection.DotProduct(outward) > 0.9, firstOnly: true);
+                if (keep.Count == 0) { skipped.Add(side); continue; }
+                var made = keep[0];
                 var name = ViewKit.Finish(doc, made, pattern.Replace("{side}", side), scale, args.OptString("view_template"));
                 created.Add(new { id = made.Id.Value, name });
             }
         }
         t.Commit();
         return ToolResult.Ok(new { created = created.Count, views = created, skipped });
+    }
+
+    /// <summary>
+    /// Creates a view on every free index of the marker (IsAvailableIndex up to MaximumViewCount), keeps the ones that
+    /// match and deletes the rest only at the end. Deleting a marker's last view deletes the marker itself, so views are
+    /// never deleted one by one while more are still to be created on it (that gave "index is occupied or out of range").
+    /// When nothing matches the marker is removed too.
+    /// </summary>
+    private static List<ViewSection> KeepViews(Document doc, ElevationMarker marker, ElementId planId, Func<ViewSection, bool> match,
+        bool firstOnly = false)
+    {
+        var made = new List<ViewSection>();
+        var max = Math.Max(1, marker.MaximumViewCount);
+        for (var i = 0; i < max; i++)
+        {
+            if (!marker.IsAvailableIndex(i)) continue;
+            try { made.Add(marker.CreateElevation(doc, planId, i)); }
+            catch (Autodesk.Revit.Exceptions.ArgumentException) { }
+            catch (Autodesk.Revit.Exceptions.InvalidOperationException) { }
+        }
+        var keep = made.Where(match).ToList();
+        if (firstOnly && keep.Count > 1) keep = [keep[0]];
+        var drop = made.Where(v => !keep.Contains(v)).Select(v => v.Id).ToList();
+        if (keep.Count == 0) drop.Add(marker.Id);
+        if (drop.Count > 0) doc.Delete(drop);
+        return keep;
     }
 
     private static double FromMeters(Document doc, double m) =>

@@ -893,7 +893,8 @@ internal static class FieldTest
         var file = lib.Find(category, material, nameWord);
         if (file is null)
         {
-            result.Sample.Add($"{what}: none in the template and none found in the Revit content library, so tools needing one will skip");
+            result.Sample.Add($"{what}: none in the template and none found in the Revit content library (searched {lib.Searched}), so tools needing one will skip. " +
+                              "Install the Revit content library (Imperial or Metric) to test them.");
             return null;
         }
         return Step(doc, result, $"load {what} ({Path.GetFileName(file)})", () =>
@@ -906,26 +907,51 @@ internal static class FieldTest
         });
     }
 
-    /// <summary>Structural families in Revit's content library folders, listed once per run.</summary>
+    /// <summary>
+    /// Structural families in Revit's content library folders, listed once per run: the library paths set in Revit's
+    /// options first, then every library under %ProgramData%\Autodesk\RVT {version}\Libraries (Imperial and Metric,
+    /// any language), since the configured paths often point at a library that isn't installed. Capped so a huge
+    /// network library can't stall the build.
+    /// </summary>
     private sealed class Library(Autodesk.Revit.ApplicationServices.Application app)
     {
+        private const int MaxFiles = 20000;
         private List<string>? _files;
+        private readonly List<string> _searched = [];
+
+        /// <summary>Where Find looked, for the report when nothing is found.</summary>
+        public string Searched => _searched.Count == 0 ? "no content library folder exists on this PC" : string.Join("; ", _searched.Take(6)) + (_searched.Count > 6 ? "; ..." : "");
 
         private List<string> Files()
         {
             if (_files is not null) return _files;
             _files = [];
-            IEnumerable<string> roots;
-            try { roots = app.GetLibraryPaths().Values.Where(Directory.Exists).ToList(); }
-            catch (Exception) { roots = []; }
-            foreach (var root in roots)
+            var roots = new List<string>();
+            try { roots.AddRange(app.GetLibraryPaths().Values.Where(Directory.Exists)); }
+            catch (Exception) { }
+            try
             {
+                var libraries = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Autodesk", $"RVT {app.VersionNumber}", "Libraries");
+                if (Directory.Exists(libraries))
+                    roots.AddRange(Directory.GetDirectories(libraries).OrderBy(d => Path.GetFileName(d).IndexOf("Imperial", StringComparison.OrdinalIgnoreCase) >= 0 ? 0 : 1));
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException) { }
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var root in roots.Select(r => r.TrimEnd('\\', '/')).Where(r => seen.Add(r)))
+            {
+                // A configured path inside one already listed (or containing it) would list the same files twice.
+                if (_searched.Any(done => root.StartsWith(done + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))) continue;
+                _searched.Add(root);
                 try
                 {
-                    _files.AddRange(Directory.EnumerateFiles(root, "*.rfa", SearchOption.AllDirectories)
-                        .Where(f => (Path.GetDirectoryName(f) ?? "").IndexOf("Structural", StringComparison.OrdinalIgnoreCase) >= 0));
+                    foreach (var f in Directory.EnumerateFiles(root, "*.rfa", SearchOption.AllDirectories))
+                    {
+                        if ((Path.GetDirectoryName(f) ?? "").IndexOf("Structural", StringComparison.OrdinalIgnoreCase) < 0) continue;
+                        _files.Add(f);
+                        if (_files.Count >= MaxFiles) return _files;
+                    }
                 }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException) { }
             }
             return _files;
         }
@@ -943,10 +969,16 @@ internal static class FieldTest
             IEnumerable<string> hits = inFolder;
             if (nameWord is not null) hits = hits.Where(f => Has(Path.GetFileName(f), nameWord));
             if (material == StructuralMaterialType.Concrete)
-                hits = hits.Where(f => Has(f, "Concrete")).OrderBy(f => Has(Path.GetFileName(f), "Rectangular") ? 0 : 1);
+                // e.g. Structural Framing\Concrete\Concrete-Rectangular Beam.rfa (Imperial) or M_Concrete-Rectangular Beam.rfa (Metric);
+                // precast shapes (tees, hollow core) last.
+                hits = hits.Where(f => Has(f, "Concrete") && !Has(Path.GetFileName(f), "Joist"))
+                    .OrderBy(f => Has(Path.GetFileName(f), "Rectangular") ? 0 : Has(f, "Precast") ? 2 : 1);
             else if (material == StructuralMaterialType.Steel)
                 hits = hits.Where(f => Has(Path.GetDirectoryName(f) ?? "", "Steel") && File.Exists(Path.ChangeExtension(f, ".txt")))
                     .OrderBy(f => Has(Path.GetFileName(f), "Wide Flange") || Has(Path.GetFileName(f), "Universal") ? 0 : 1);
+            else if (nameWord is not null && nameWord.Equals("Pile", StringComparison.OrdinalIgnoreCase))
+                // Pile-Steel Pipe.rfa / M_Pile-Steel Pipe.rfa before Pile Cap-2 Pile.rfa (a cap with nested piles).
+                hits = hits.OrderBy(f => Path.GetFileNameWithoutExtension(f).TrimStart('M', '_').StartsWith("Pile-", StringComparison.OrdinalIgnoreCase) ? 0 : Has(Path.GetFileName(f), "Cap") ? 2 : 1);
             else hits = hits.OrderBy(f => Has(Path.GetFileName(f), "Rectangular") ? 0 : 1);
             return hits.FirstOrDefault();
         }

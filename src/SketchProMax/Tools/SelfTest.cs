@@ -109,7 +109,9 @@ internal static partial class SelfTest
             .Where(l => l.GetLinkDocument() is { } d && (where is null || where(d))).Select(l => c.Doc.GetElement(l.GetTypeId())?.Name).FirstOrDefault(n => n != null)
         ?? throw new Skip(where is null ? "the model has no loaded Revit links" : "no loaded link has what this test needs");
 
-    private sealed record Case(string Tool, Func<Ctx, object> Args, string[]? Setup = null, bool Heavy = false);
+    /// <summary>NoGroup: run outside the rolled-back transaction group (tools such as relinquish_mine that Revit refuses
+    /// to run inside one, and that change ownership, not model content).</summary>
+    private sealed record Case(string Tool, Func<Ctx, object> Args, string[]? Setup = null, bool Heavy = false, bool NoGroup = false);
 
     public enum Mode { Safe, Full }
 
@@ -259,14 +261,18 @@ internal static partial class SelfTest
         TransactionGroup? group = null;
         try
         {
-            if (tool.ModifiesModel || step.Setup is not null)
+            if ((tool.ModifiesModel && !step.NoGroup) || step.Setup is not null)
             {
                 group = new TransactionGroup(doc, $"Sketch ProMax: self-test {step.Tool} (rolled back)");
                 group.Start();
                 foreach (var name in step.Setup ?? [])
                 {
-                    var setup = AllCases().First(c => c.Tool == name);
-                    var setupResult = Execute(app, registry.Find(name)!, setup, run.Ctx);
+                    // "tool" is the tool's first case; "tool#2" its second, and so on.
+                    var hash = name.IndexOf('#');
+                    var setupTool = hash < 0 ? name : name.Substring(0, hash);
+                    var nth = hash < 0 ? 1 : int.Parse(name.Substring(hash + 1), System.Globalization.CultureInfo.InvariantCulture);
+                    var setup = AllCases().Where(c => c.Tool == setupTool).Skip(nth - 1).First();
+                    var setupResult = Execute(app, registry.Find(setupTool)!, setup, run.Ctx);
                     if (setupResult.IsError)
                         return new(step.Tool, "skip", watch.ElapsedMilliseconds, $"setup step {name} failed: {Short(setupResult.Text, 300)}");
                 }
@@ -638,7 +644,7 @@ internal static partial class SelfTest
             detail_lines = new[] { new { points = new[] { c.At(0, -3500), c.At(3000, -3500) } } } }),
         new("update_text_notes", c => new { create = new[] { new { view_id = c.PlanId, x = c.At(0, -4000)[0], y = c.At(0, -4000)[1], text = "Self-test text" } } }),
         new("tag_elements_in_view", c => new { category = "Doors", view_id = c.PlanId }) { Heavy = true },
-        new("arrange_tags", c => new { view_id = c.PlanId, action = "report_overlaps" }) { Heavy = true },
+        new("arrange_tags", c => new { view_id = c.PlanId, action = "report_overlaps" }, Setup: ["tag_elements_in_view"]) { Heavy = true },
         new("dimension_grids", c => new { view_id = c.PlanId }, Setup: ["create_grids"]),
         new("dimension_walls", c => new { view_id = c.PlanId, wall_ids = new[] { c.Id(c.Wall ?? throw new Skip("the model has no walls")) } }),
 
@@ -736,7 +742,7 @@ internal static partial class SelfTest
         new("element_owners", c => c.Doc.IsWorkshared ? new { view_id = c.PlanId, only_locked = true, limit = 20 } : throw new Skip("the model is not workshared")),
         new("make_worksets_editable", c => c.Doc.IsWorkshared ? new { worksets = new[] { new FilteredWorksetCollector(c.Doc).OfKind(WorksetKind.UserWorkset).ToWorksets().First().Name } } : throw new Skip("the model is not workshared")) { Heavy = true },
         new("borrow_elements", c => c.Doc.IsWorkshared ? new { element_ids = new[] { c.Id(c.Wall ?? throw new Skip("the model has no walls")) } } : throw new Skip("the model is not workshared")) { Heavy = true },
-        new("relinquish_mine", c => c.Doc.IsWorkshared ? new { borrowed_elements = true } : throw new Skip("the model is not workshared")) { Heavy = true },
+        new("relinquish_mine", c => c.Doc.IsWorkshared ? new { borrowed_elements = true } : throw new Skip("the model is not workshared")) { Heavy = true, NoGroup = true },
         new("place_detail_item_copy", c => new { view_id = c.PlanId, source_id = new FilteredElementCollector(c.Doc).OfCategory(BuiltInCategory.OST_DetailComponents).OfClass(typeof(FamilyInstance)).Max(e => (long?)e.Id.Value) ?? throw new Skip("no detail item to copy"), placements = new[] { new { at = c.At(3000, 3000), rotation_degrees = 90.0 } } }, Setup: ["place_detail_components"]),
         new("duplicate_view_to_location", c => new { view_id = Newest<ViewSection>(c), offset = new[] { c.P(2000), 0 }, name = "Self-test moved section" }, Setup: ["create_section"]),
         new("relocate_view_with_detailing", c => new { view_id = Newest<ViewSection>(c), offset = new[] { 0, c.P(1000) } }, Setup: ["create_section"]),
@@ -754,7 +760,13 @@ internal static partial class SelfTest
             return new { source_view_id = c.PlanId, target_view_ids = new[] { target.Id.Value }, dimension_ids = new[] { dim.Id.Value }, list_only = true };
         }, Setup: ["create_grids", "dimension_grids"]),
         new("reflow_annotations", c => new { view_id = c.PlanId, dry_run = true }, Setup: ["tag_elements_in_view"]) { Heavy = true },
-        new("trim_matchlines", c => new { view_ids = new[] { c.PlanId }, mode = "report" }),
+        new("trim_matchlines", c =>
+        {
+            // The API can't create matchlines (Revit has no method for it), so this only runs where the plan has one.
+            Need(new FilteredElementCollector(c.Doc, c.Plan?.Id ?? throw new Skip("the model has no floor plan")).OfCategory(BuiltInCategory.OST_Matchline)
+                .WhereElementIsNotElementType().GetElementCount() > 0, "the plan has no matchlines (the API can't add one)");
+            return new { view_ids = new[] { c.PlanId }, mode = "report" };
+        }),
         new("place_void_cuts", c =>
         {
             var sym = c.Symbol(BuiltInCategory.OST_GenericModel, s => s.Family.FamilyPlacementType == FamilyPlacementType.WorkPlaneBased && s.Family.get_Parameter(BuiltInParameter.FAMILY_ALLOW_CUT_WITH_VOIDS)?.AsInteger() == 1) ?? throw new Skip("no face-based cutting void family loaded");
@@ -771,7 +783,7 @@ internal static partial class SelfTest
 
     /// <summary>
     /// Regression cases for bugs found in use (0.25: the 0.24 field test). A tool may appear here again with the
-    /// arguments that broke it; setup steps always use the tool's first case above. Run in full mode only.
+    /// arguments that broke it; a setup step "tool" uses the tool's first case, "tool#2" its second. Run in full mode only.
     /// </summary>
     private static IEnumerable<Case> RegressionCases() =>
     [
@@ -779,7 +791,12 @@ internal static partial class SelfTest
         new("capture_view_image", c => new { pixel_width = 800 }) { Heavy = true },
         // 0.26 regressions from the field bug log.
         new("set_parameters", c => new { changes = new[] { new { element_id = c.Id(c.Wall ?? throw new Skip("the model has no walls")), parameter = "Comments", value = "Sketch ProMax self-test" }, new { element_id = c.Id(c.Wall!), parameter = "Mark", value = "ST-1" } }, separate_steps = true }),
-        new("query_elements", _ => new { category = "Detail Items", family = "Break Line", limit = 5 }),
+        new("query_elements", c =>
+        {
+            Need(c.Symbol(BuiltInCategory.OST_DetailComponents, s => s.FamilyName.IndexOf("Break Line", StringComparison.OrdinalIgnoreCase) >= 0) is not null,
+                "no 'Break Line' detail item family is loaded (the Imperial templates don't have one)");
+            return new { category = "Detail Items", family = "Break Line", limit = 5 };
+        }),
         new("move_copy_rotate", c => new { element_ids = new[] { c.Id(c.First<Group>() ?? throw new Skip("the model has no model groups")) }, offset = new[] { 0, 0, c.P(500) }, copy = true }),
         new("capture_view_image", c => new { view_id = c.PlanId, pixel_width = 800, resolution_dpi = 300 }) { Heavy = true },
         new("find_clashes", c => new { set_a = new { categories = new[] { "Walls", "Floors", "Generic Models" } }, level = c.LevelName, limit = 50, folder = c.Temp, voids = "rebuild" }) { Heavy = true },
@@ -841,7 +858,41 @@ internal static partial class SelfTest
             return new { name = "sketch-promax-self-test-typed", values = new Dictionary<string, string> { ["n"] = "5" } };
         }),
         new("tag_elements_in_view", c => new { category = "Rooms", view_id = c.PlanId }, Setup: ["place_rooms"]) { Heavy = true },
-        new("arrange_tags", c => new { view_id = c.PlanId, tag_category = "Room Tags", action = "report_overlaps" }, Setup: ["place_rooms"]) { Heavy = true },
+        // 0.27.2 field test (Revit 2024): a stair that already has railings is reported (or its railings replaced), not an error.
+        new("create_railings", c =>
+        {
+            Need(c.First<RailingType>() is not null, "the model has no railing types");
+            return new { host_id = Newest<Stairs>(c), replace_existing = true };
+        }, Setup: ["create_stairs", "create_railings#2"]),
+        // A notch at the corner of a plain new floor (the case above cuts the model's floor, which may carry slab edges).
+        new("cut_slab", c =>
+        {
+            var floor = Newest<Floor>(c);
+            var box = c.Doc.GetElement(new ElementId(floor)).get_BoundingBox(null) ?? throw new Skip("the floor has no extents");
+            double U(double ft) => Math.Round(UnitUtils.ConvertFromInternalUnits(ft, c.Unit), 4);
+            var x = box.Max.X; var y = box.Max.Y; var d = 500 / 304.8;
+            return new { floor_id = floor, points = new[] { new[] { U(x - d), U(y - d) }, new[] { U(x + d), U(y - d) }, new[] { U(x + d), U(y + d) }, new[] { U(x - d), U(y + d) } } };
+        }, Setup: ["create_floors"]),
+        // A second door asked for exactly where one already is: slid along the wall instead of "not cutting anything".
+        new("place_doors_windows", c =>
+        {
+            Need(c.Wall is not null, "the model has no walls");
+            Need(c.Door is not null, "the model has no door types loaded");
+            var length = ((LocationCurve)c.Wall!.Location).Curve.Length * 304.8;
+            var item = new { wall_id = c.Wall.Id.Value, type_id = c.Door!.Id.Value, distance_along_wall = c.P(length / 2) };
+            return new { items = new[] { item, item } };
+        }),
+        // dimension_walls on the four walls of a room (the case above gives one wall and relies on its facing partner).
+        new("dimension_walls", c =>
+        {
+            var walls = new FilteredElementCollector(c.Doc, c.Plan?.Id ?? throw new Skip("the model has no floor plan")).OfClass(typeof(Wall)).Cast<Wall>()
+                .Where(w => w.Location is LocationCurve { Curve: Line }).Take(8).Select(w => w.Id.Value).ToArray();
+            Need(walls.Length >= 2, "the plan shows fewer than two straight walls");
+            return new { view_id = c.PlanId, wall_ids = walls };
+        }),
+        new("create_elevations", c => new { mode = "building", plan_view_id = c.PlanId, sides = new[] { "North", "East", "South", "West" }, name_pattern = "{side} self-test 2" }) { Heavy = true },
+        new("in_place_guide", _ => new { action = "list", limit = 5, offset = 0 }),
+        new("arrange_tags", c => new { view_id = c.PlanId, tag_category = "Room Tags", action = "report_overlaps" }, Setup: ["place_rooms", "tag_elements_in_view#2"]) { Heavy = true },
         new("place_rooms", c => new { level = c.LevelName }, Setup: ["place_rooms"]) { Heavy = true },
         new("set_coordinates", _ => new { latitude = 25.2, longitude = 55.27, place_name = "Self-test place" }),
         new("format_schedule", _ => new { schedule = "Self-test wall schedule", sort_by = new[] { new { field = "Type" } } }, Setup: ["create_schedule"]),

@@ -465,18 +465,47 @@ public sealed class ModelSnapshotTool : IRevitTool
         var folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "SketchProMax", "snapshots", Checks.ModelKey(doc), Safe(sourceName));
         var extra = args.StringList("parameters");
 
+        // Unbound curves (a full circle wall, a cylindrical grid, an unbound model line) throw on GetEndPoint, so
+        // fingerprint them by centre and radius instead; any other curve that cannot be read gives an empty key.
+        static string CurveKey(LocationCurve lc, Func<double, string> R)
+        {
+            try
+            {
+                // The Curve getter itself can throw "The input curve is not bound" for some elements.
+                var c = lc.Curve;
+                if (c is null) return "";
+                if (c.IsBound)
+                {
+                    XYZ a = c.GetEndPoint(0), z = c.GetEndPoint(1);
+                    return $"{R(a.X)},{R(a.Y)},{R(a.Z)}>{R(z.X)},{R(z.Y)},{R(z.Z)}";
+                }
+                return c switch
+                {
+                    Arc arc => $"circle {R(arc.Center.X)},{R(arc.Center.Y)},{R(arc.Center.Z)} r{R(arc.Radius)}",
+                    Ellipse el => $"ellipse {R(el.Center.X)},{R(el.Center.Y)},{R(el.Center.Z)} r{R(el.RadiusX)}x{R(el.RadiusY)}",
+                    _ => "unbound " + c.GetType().Name,
+                };
+            }
+            catch (Autodesk.Revit.Exceptions.ApplicationException) { return ""; }
+            catch (ArgumentException) { return ""; }
+        }
+
         Dictionary<string, Item> Take()
         {
             var items = new Dictionary<string, Item>();
             using var md5 = MD5.Create();
             foreach (var e in new FilteredElementCollector(src).WhereElementIsNotElementType())
             {
-                if (e.Category is not { CategoryType: CategoryType.Model } || e.get_BoundingBox(null) is not { } b) continue;
+                BoundingBoxXYZ? bb;
+                try { bb = e.Category is { CategoryType: CategoryType.Model } ? e.get_BoundingBox(null) : null; }
+                catch (Autodesk.Revit.Exceptions.ApplicationException) { bb = null; }
+                catch (ArgumentException) { bb = null; }
+                if (bb is not { } b) continue;
                 string R(double v) => Math.Round(v * 304.8).ToString(CultureInfo.InvariantCulture);
                 var loc = e.Location switch
                 {
                     LocationPoint lp => $"{R(lp.Point.X)},{R(lp.Point.Y)},{R(lp.Point.Z)}",
-                    LocationCurve lc => $"{R(lc.Curve.GetEndPoint(0).X)},{R(lc.Curve.GetEndPoint(0).Y)},{R(lc.Curve.GetEndPoint(0).Z)}>{R(lc.Curve.GetEndPoint(1).X)},{R(lc.Curve.GetEndPoint(1).Y)},{R(lc.Curve.GetEndPoint(1).Z)}",
+                    LocationCurve lc => CurveKey(lc, R),
                     _ => "",
                 };
                 var geo = $"{R(b.Min.X)},{R(b.Min.Y)},{R(b.Min.Z)}|{R(b.Max.X)},{R(b.Max.Y)},{R(b.Max.Z)}|{loc}";

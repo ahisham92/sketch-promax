@@ -96,7 +96,8 @@ public sealed class DimensionWallsTool : IRevitTool
     public string Name => "dimension_walls";
     public string Description =>
         "Add dimension strings across parallel straight walls in a plan view, measuring between wall faces " +
-        "(exterior or interior). Works on the given walls, or all walls in the view. Produces one string per wall direction.";
+        "(exterior or interior). Works on the given walls, or all walls in the view. Produces one string per wall direction. " +
+        "A given wall with no parallel partner among the ids is dimensioned to the nearest parallel wall in the view that faces it.";
     public string PropertiesJson => """
     {
       "view_id": {"type": "integer"},
@@ -130,6 +131,24 @@ public sealed class DimensionWallsTool : IRevitTool
             if (group is null) groups.Add([w]); else group.Add(w);
         }
 
+        // A wall given on its own is dimensioned to the nearest parallel wall in the view that faces it (e.g. the
+        // opposite wall of a room), so "dimension this wall" works without listing both walls.
+        var partnersAdded = new List<long>();
+        if (ids.Count > 0 && groups.Any(g => g.Count == 1))
+        {
+            var given = new HashSet<long>(straight.Select(w => w.Id.Value));
+            var candidates = new FilteredElementCollector(doc, view.Id).OfClass(typeof(Wall)).Cast<Wall>()
+                .Where(w => !given.Contains(w.Id.Value) && w.Location is LocationCurve { Curve: Line }).ToList();
+            foreach (var group in groups.Where(g => g.Count == 1))
+            {
+                var partner = NearestFacing(group[0], candidates);
+                if (partner is null) continue;
+                group.Add(partner);
+                partnersAdded.Add(partner.Id.Value);
+                candidates.Remove(partner);
+            }
+        }
+
         var z = view.GenLevel?.ProjectElevation ?? 0;
         var skipped = 0;
         // One string per transaction: a string Revit refuses is reported and the others are kept.
@@ -157,10 +176,33 @@ public sealed class DimensionWallsTool : IRevitTool
                 : "Revit could not find usable faces on these walls (curtain or stacked walls, or walls joined in a way that hides the face)";
             return ToolResult.Error($"No dimension strings were added in '{view.Name}': {reason}.");
         }
-        return ToolResult.Ok(new { dimensionStrings = created.Count, ids = created, wallsConsidered = straight.Count, skipped, failures });
+        return ToolResult.Ok(new { dimensionStrings = created.Count, ids = created, wallsConsidered = straight.Count, skipped, failures,
+            partnersAdded = partnersAdded.Count > 0 ? partnersAdded : null });
     }
 
     private static XYZ Dir(Wall w) => ((Line)((LocationCurve)w.Location).Curve).Direction;
+
+    /// <summary>The closest parallel straight wall whose extent overlaps this wall's along its direction.</summary>
+    private static Wall? NearestFacing(Wall wall, IEnumerable<Wall> candidates)
+    {
+        var line = (Line)((LocationCurve)wall.Location).Curve;
+        var along = new XYZ(line.Direction.X, line.Direction.Y, 0).Normalize();
+        var across = new XYZ(-along.Y, along.X, 0);
+        double a0 = line.GetEndPoint(0).DotProduct(along), a1 = line.GetEndPoint(1).DotProduct(along);
+        double lo = Math.Min(a0, a1), hi = Math.Max(a0, a1), mine = line.GetEndPoint(0).DotProduct(across);
+        Wall? best = null; var bestGap = double.MaxValue;
+        foreach (var c in candidates)
+        {
+            var cl = (Line)((LocationCurve)c.Location).Curve;
+            if (!DimensionGeometry.IsParallel(cl.Direction, line.Direction)) continue;
+            double c0 = cl.GetEndPoint(0).DotProduct(along), c1 = cl.GetEndPoint(1).DotProduct(along);
+            if (Math.Min(hi, Math.Max(c0, c1)) - Math.Max(lo, Math.Min(c0, c1)) < 1e-3) continue; // no overlap
+            var gap = Math.Abs(cl.GetEndPoint(0).DotProduct(across) - mine);
+            if (gap < 1e-3 || gap >= bestGap) continue; // collinear walls are not a partner
+            best = c; bestGap = gap;
+        }
+        return best;
+    }
 
     internal static Reference? WallReference(Wall w, string mode)
     {
