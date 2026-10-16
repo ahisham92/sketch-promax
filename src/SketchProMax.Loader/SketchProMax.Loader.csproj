@@ -32,6 +32,8 @@
   <ItemGroup>
     <PackageReference Include="Nice3point.Revit.Api.RevitAPI" Version="$(RevitVersion).*" ExcludeAssets="runtime" PrivateAssets="all" />
     <PackageReference Include="Nice3point.Revit.Api.RevitAPIUI" Version="$(RevitVersion).*" ExcludeAssets="runtime" PrivateAssets="all" />
+    <!-- AdWindows (Autodesk.Windows.ComponentManager), only to place the tab next to SketchPro's. Revit ships it. -->
+    <PackageReference Include="Nice3point.Revit.Api.AdWindows" Version="$(RevitVersion).*" ExcludeAssets="runtime" PrivateAssets="all" />
   </ItemGroup>
 
   <ItemGroup Condition="'$(TargetFramework)' == 'net48'">

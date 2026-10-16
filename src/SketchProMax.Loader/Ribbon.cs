@@ -265,3 +265,138 @@ internal static class Ribbon
         return text.Length == 0 ? name : char.ToUpperInvariant(text[0]) + text.Substring(1);
     }
 }
+
+/// <summary>
+/// Puts the Sketch ProMax tab right after the SketchPro add-in's tab (or after Add-Ins when SketchPro is a panel there).
+/// Revit only appends API tabs, and add-ins load in any order, so this is tried when Revit has finished starting, on its
+/// first idle moments and whenever the tab list changes, until that window closes. It never throws and leaves the tab
+/// where it is when SketchPro isn't installed. Uses AdWindows (the ribbon control Revit is built on), which has no
+/// Revit API equivalent.
+/// </summary>
+internal static class TabOrder
+{
+    private const int IdleTries = 12;   // Idling events after startup during which the order is still checked
+    private const int MaxMoves = 4;     // never fight another add-in that also moves tabs
+    private static int _idles, _moves;
+    private static bool _initialized, _done, _hooked, _queued, _moving, _broken;
+    private static object? _tabs;
+
+    /// <summary>Revit raised ApplicationInitialized: every add-in's OnStartup has run.</summary>
+    public static void OnInitialized()
+    {
+        _initialized = true;
+        Try();
+    }
+
+    /// <summary>Called on Idling; cheap once the window has closed.</summary>
+    public static void OnIdling()
+    {
+        if (_done || _broken) return;
+        _initialized = true; // Revit only idles once it has started
+        Try();
+        if (_initialized && ++_idles >= IdleTries) Finish();
+    }
+
+    private static void Finish()
+    {
+        _done = true;
+        try { Unhook(); } catch (Exception) { }
+    }
+
+    private static void Try()
+    {
+        if (_done || _broken || _moving) return;
+        try
+        {
+            Hook();
+            Place();
+        }
+        catch (Exception) { _broken = true; try { Unhook(); } catch (Exception) { } }
+    }
+
+    // AdWindows is touched only inside these NoInlining methods, so a missing or changed AdWindows ends up in the
+    // catch above instead of failing the caller's JIT.
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private static void Hook()
+    {
+        if (_hooked) return;
+        var tabs = Autodesk.Windows.ComponentManager.Ribbon?.Tabs;
+        if (tabs is System.Collections.Specialized.INotifyCollectionChanged changes)
+        {
+            changes.CollectionChanged += OnTabsChanged;
+            _tabs = changes;
+            _hooked = true;
+        }
+    }
+
+    private static void Unhook()
+    {
+        if (_tabs is System.Collections.Specialized.INotifyCollectionChanged changes) changes.CollectionChanged -= OnTabsChanged;
+        _tabs = null;
+        _hooked = false;
+    }
+
+    private static void OnTabsChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
+    {
+        if (_moving || _queued || _done || _broken) return;
+        // The collection can't be changed inside its own CollectionChanged event: look again once it is over.
+        _queued = true;
+        try
+        {
+            System.Windows.Threading.Dispatcher.CurrentDispatcher.BeginInvoke(
+                System.Windows.Threading.DispatcherPriority.Background, new Action(() => { _queued = false; Try(); }));
+        }
+        catch (Exception) { _queued = false; }
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private static void Place()
+    {
+        var ribbon = Autodesk.Windows.ComponentManager.Ribbon;
+        if (ribbon?.Tabs is not { } tabs) return;
+        Autodesk.Windows.RibbonTab? ours = null, sketchPro = null, addIns = null;
+        foreach (var tab in tabs)
+        {
+            if (tab is null) continue;
+            if (ours is null && (Is(tab.Id, Ribbon.Tab) || Is(tab.Title, Ribbon.Tab))) ours = tab;
+            else if (sketchPro is null && (IsSketchPro(tab.Title) || IsSketchPro(tab.Id))) sketchPro = tab;
+            else if (addIns is null && (Is(tab.Id, "Add-Ins") || Is(tab.Title, "Add-Ins"))) addIns = tab;
+        }
+        if (ours is null) return;
+        var anchor = sketchPro;
+        if (anchor is null && addIns is not null && HasSketchProPanel(addIns)) anchor = addIns;
+        if (anchor is null) return; // SketchPro not (yet) loaded: leave the tab where Revit put it
+        if (tabs.IndexOf(ours) == tabs.IndexOf(anchor) + 1) return;
+        if (_moves >= MaxMoves) return;
+        _moves++;
+        _moving = true;
+        try
+        {
+            var wasActive = ribbon.ActiveTab == ours;
+            tabs.Remove(ours);
+            var at = tabs.IndexOf(anchor);
+            tabs.Insert(at < 0 ? tabs.Count : at + 1, ours);
+            if (wasActive) ribbon.ActiveTab = ours;
+        }
+        finally { _moving = false; }
+    }
+
+    private static bool HasSketchProPanel(Autodesk.Windows.RibbonTab tab)
+    {
+        foreach (var panel in tab.Panels)
+            if (panel?.Source is { } source && (IsSketchPro(source.Title) || IsSketchPro(source.Name))) return true;
+        return false;
+    }
+
+    private static bool Is(string? a, string b) => a is not null && string.Equals(a.Trim(), b, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>"SketchPro", "Sketch Pro", "Sketch-Pro 2" and the like; not "Sketch ProMax".</summary>
+    internal static bool IsSketchPro(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return false;
+        var plain = new string(text!.Where(char.IsLetterOrDigit).ToArray()).ToLowerInvariant();
+        if (!plain.StartsWith("sketchpro", StringComparison.Ordinal)) return false;
+        var rest = plain.Substring("sketchpro".Length);
+        return rest.Length == 0 || rest.All(char.IsDigit);
+    }
+}

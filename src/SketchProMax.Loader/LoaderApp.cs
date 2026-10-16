@@ -77,6 +77,10 @@ internal static class Host
         try { PaneHost.Register(application); }
         catch (Exception) { /* no pane this session: the Pane button says so */ }
 
+        // Next to the SketchPro add-in's tab, once the add-ins that load after this one have made their tabs.
+        try { application.ControlledApplication.ApplicationInitialized += (_, _) => TabOrder.OnInitialized(); }
+        catch (Exception) { /* the tab stays where Revit put it */ }
+
         application.Idling += OnIdling;
         // Revit raises Idling once per idle spell, so the ribbon's live text runs on a UI timer instead.
         _timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
@@ -103,6 +107,7 @@ internal static class Host
         if (sender is not UIApplication app) return;
         _uiApp = app;
         PaneHost.EnsureEvent();
+        TabOrder.OnIdling();
         if (_core is null)
         {
             if (!_booted) Boot(app);

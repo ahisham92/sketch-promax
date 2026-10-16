@@ -91,6 +91,10 @@ public sealed class CutSlabTool : IRevitTool
 
         string? refused = null;
         int kept = 0, changed = 0, added = 0, removed = 0;
+        // A structural floor's span direction, to put back if the edit moved it (it throws on a non-structural floor).
+        double? span = null;
+        try { if (floor.get_Parameter(BuiltInParameter.FLOOR_PARAM_IS_STRUCTURAL)?.AsInteger() == 1) span = floor.SpanDirectionAngle; }
+        catch (Exception) { span = null; }
         // This attempt reports its own outcome (and falls back to an opening), so the failures Revit raises here must
         // not also mark the whole call as refused.
         FailureGuard.Muted++;
@@ -120,8 +124,11 @@ public sealed class CutSlabTool : IRevitTool
         }
         finally { FailureGuard.Muted--; }
         if (refused is null)
+        {
+            if (span is { } angle) KeepSpan(doc, floor, angle);
             return ToolResult.Ok(new { floor = floor.Id.Value, operation = opName, loops = pieces[0].Count, method = "sketch edited",
                 edges = new { kept, changed, added, removed } });
+        }
 
         if (op == BooleanOperationsType.Union)
             return ToolResult.Error($"Revit refused to edit the floor's sketch ({refused}), so nothing was added. Check elements hosted on the slab " +
@@ -160,16 +167,46 @@ public sealed class CutSlabTool : IRevitTool
         });
     }
 
+    /// <summary>Sets a structural floor's span direction back when the sketch edit changed it. Best effort.</summary>
+    private static void KeepSpan(Document doc, Floor floor, double angle)
+    {
+        try
+        {
+            if (Math.Abs(Math.IEEERemainder(floor.SpanDirectionAngle - angle, Math.PI)) < 1e-6) return;
+            using var t = new Transaction(doc, "Sketch ProMax: keep span direction");
+            var options = t.GetFailureHandlingOptions();
+            options.SetFailuresPreprocessor(new TypeKit.SwallowWarnings());
+            t.SetFailureHandlingOptions(options);
+            t.Start();
+            floor.SpanDirectionAngle = angle;
+            if (t.Commit() != TransactionStatus.Committed && t.HasStarted() && !t.HasEnded()) t.RollBack();
+        }
+        catch (Exception) { /* the outline is what was asked for; the span direction stays where Revit put it */ }
+    }
+
     /// <summary>
-    /// Turns the sketch's curves into the target outline while keeping as many sketch lines as possible: a line that is
-    /// already right is kept, a line on the same straight edge is shortened or lengthened in place (so slab edges and
-    /// other things hosted on that edge stay attached), and only the remaining curves are deleted or drawn new.
+    /// Turns the sketch's boundary lines into the target outline while keeping as many of them as possible: a line that
+    /// is already right is kept, a line on the same straight edge is shortened or lengthened in place, and a line whose
+    /// edge is gone is moved onto the nearest new parallel edge before anything is deleted, so slab edges and other
+    /// things hosted on a floor edge stay attached. Only the remaining curves are deleted or drawn new.
+    /// A floor's sketch also holds curves that are not boundary lines (Revit 2024 field test: a 4-sided floor's sketch
+    /// has 5 curve elements; the extra one carries the span direction of a structural floor). Those are never deleted:
+    /// deleting it made Revit refuse the edit ("Structural floor span direction not specified"). When the edge it lies
+    /// on changes, it follows that edge.
     /// </summary>
     private static (int kept, int changed, int added, int removed) Reshape(Document doc, Sketch sketch, List<Curve> target)
     {
         const double Tol = 1e-4;
-        var existing = sketch.GetAllElements().Select(doc.GetElement).OfType<CurveElement>().ToList();
-        var unused = new List<CurveElement>(existing);
+        var all = sketch.GetAllElements().Select(doc.GetElement).OfType<CurveElement>().ToList();
+        var boundary = BoundaryLines(sketch, all);
+        var others = all.Where(e => !boundary.Contains(e)).ToList();
+        // Where each non-boundary line sits before the edit: the boundary line it lies on, if any.
+        var sitsOn = new List<(CurveElement e, Line g, CurveElement? on)>();
+        foreach (var e in others)
+            if (e.GeometryCurve is Line g)
+                sitsOn.Add((e, g, boundary.FirstOrDefault(b => b.GeometryCurve is Line bl && Collinear(bl, g, Tol) && Overlaps(bl, g))));
+
+        var unused = new List<CurveElement>(boundary);
         var todo = new List<Curve>();
         bool Same(XYZ a, XYZ b) => a.DistanceTo(b) < Tol;
         int kept = 0, changed = 0, added = 0;
@@ -185,22 +222,97 @@ public sealed class CutSlabTool : IRevitTool
         }
         var fresh = new List<Curve>();
         var reshaped = new List<(CurveElement e, Curve c)>();
+        // First the lines that stay on their own edge (shortened or lengthened)...
         foreach (var c in todo)
         {
             CurveElement? on = null;
             if (c is Line l)
-                on = unused.FirstOrDefault(e => e.GeometryCurve is Line g && DimensionGeometry.IsParallel(g.Direction, l.Direction) &&
-                    (l.GetEndPoint(0) - g.GetEndPoint(0)).CrossProduct(g.Direction).GetLength() < Tol &&
-                    Overlaps(g, l));
+                on = unused.FirstOrDefault(e => e.GeometryCurve is Line g && Collinear(g, l, Tol) && Overlaps(g, l));
             if (on is null) { fresh.Add(c); continue; }
             unused.Remove(on);
             reshaped.Add((on, c));
         }
+        // ...then a line whose edge is gone moves to the nearest new parallel edge (a set-back keeps its slab edge).
+        foreach (var c in fresh.ToList())
+        {
+            if (c is not Line l) continue;
+            var move = unused.Where(e => e.GeometryCurve is Line g && DimensionGeometry.IsParallel(g.Direction, l.Direction))
+                .OrderBy(e => Distance((Line)e.GeometryCurve, l)).FirstOrDefault();
+            if (move is null) continue;
+            unused.Remove(move);
+            fresh.Remove(c);
+            reshaped.Add((move, c));
+        }
+
         var removed = unused.Count;
         if (unused.Count > 0) doc.Delete(unused.Select(e => e.Id).ToList());
         foreach (var (e, c) in reshaped) { e.SetGeometryCurve(c, true); changed++; }
         foreach (var c in fresh) { doc.Create.NewModelCurve(c, sketch.SketchPlane); added++; }
+
+        // The span direction (and any other non-boundary line on an edge) follows its edge.
+        var targetLines = target.OfType<Line>().ToList();
+        foreach (var (e, g, on) in sitsOn)
+        {
+            if (on is null || !e.IsValidObject) continue;
+            Line? edge = null;
+            if (on.IsValidObject && on.GeometryCurve is Line now) edge = now;
+            else
+                edge = targetLines.Where(t => DimensionGeometry.IsParallel(t.Direction, g.Direction)).OrderBy(t => Distance(t, g)).FirstOrDefault()
+                       ?? targetLines.OrderByDescending(t => t.Length).FirstOrDefault();
+            if (edge is null || Within(g, edge, Tol)) continue;
+            try { e.SetGeometryCurve(Line.CreateBound(edge.GetEndPoint(0), edge.GetEndPoint(1)), true); }
+            catch (Autodesk.Revit.Exceptions.ApplicationException) { /* Revit settles it at commit, or refuses the edit */ }
+        }
         return (kept, changed, added, removed);
+    }
+
+    /// <summary>
+    /// The sketch's boundary lines: the curve elements behind Sketch.Profile (each profile curve's Reference names its
+    /// ModelCurve). When those references are missing, every curve element except span direction or slope arrow lines.
+    /// </summary>
+    private static HashSet<CurveElement> BoundaryLines(Sketch sketch, List<CurveElement> all)
+    {
+        var ids = new HashSet<long>();
+        var curves = 0;
+        try
+        {
+            foreach (CurveArray array in sketch.Profile)
+                foreach (Curve c in array)
+                {
+                    curves++;
+                    if (c.Reference?.ElementId is { } id && id != ElementId.InvalidElementId) ids.Add(id.Value);
+                }
+        }
+        catch (Autodesk.Revit.Exceptions.ApplicationException) { ids.Clear(); }
+        var byRef = all.Where(e => ids.Contains(e.Id.Value)).ToList();
+        if (byRef.Count > 0 && byRef.Count >= curves) return new HashSet<CurveElement>(byRef);
+        return new HashSet<CurveElement>(all.Where(e => !NotBoundaryByName(e)));
+    }
+
+    private static bool NotBoundaryByName(CurveElement e)
+    {
+        string name;
+        try { name = (e.LineStyle?.Name ?? "") + " " + (e.Category?.Name ?? ""); }
+        catch (Exception) { return false; }
+        return name.IndexOf("span", StringComparison.OrdinalIgnoreCase) >= 0 || name.IndexOf("slope", StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+
+    private static bool Collinear(Line a, Line b, double tol) =>
+        DimensionGeometry.IsParallel(a.Direction, b.Direction) &&
+        (b.GetEndPoint(0) - a.GetEndPoint(0)).CrossProduct(a.Direction).GetLength() < tol;
+
+    /// <summary>Distance between two parallel lines (from b's start to a's infinite line).</summary>
+    private static double Distance(Line a, Line b) => (b.GetEndPoint(0) - a.GetEndPoint(0)).CrossProduct(a.Direction).GetLength();
+
+    /// <summary>Line g lies on line edge, within its ends.</summary>
+    private static bool Within(Line g, Line edge, double tol)
+    {
+        if (!Collinear(edge, g, tol)) return false;
+        var d = edge.Direction;
+        double e0 = edge.GetEndPoint(0).DotProduct(d), e1 = edge.GetEndPoint(1).DotProduct(d);
+        double lo = Math.Min(e0, e1) - tol, hi = Math.Max(e0, e1) + tol;
+        double g0 = g.GetEndPoint(0).DotProduct(d), g1 = g.GetEndPoint(1).DotProduct(d);
+        return g0 >= lo && g0 <= hi && g1 >= lo && g1 <= hi;
     }
 
     /// <summary>Two collinear lines share some length.</summary>
@@ -489,17 +601,22 @@ public sealed class HollowCoreLayoutTool : IRevitTool
 /// Commits a floor sketch edit: dismisses warnings, and settles "Structural floor span direction not specified" (raised
 /// when the edge that carried the span direction was redrawn) with Revit's own resolution, which puts the span
 /// direction back on an edge. Any other error still makes Revit refuse the edit.
+/// The resolution is tried once: Revit runs this again after it, and a failure that is still there is refused at once.
+/// (0.28.1 resolved it on every pass; in the Revit 2024 field test the edit went round for 14 s before Revit gave up.)
 /// </summary>
 internal sealed class SketchCommitFailures : IFailuresPreprocessor
 {
+    private int _passes;
+
     public FailureProcessingResult PreprocessFailures(FailuresAccessor accessor)
     {
+        _passes++;
         bool resolved = false, unresolved = false;
         foreach (var f in accessor.GetFailureMessages())
         {
             if (f.GetSeverity() == FailureSeverity.Warning) { accessor.DeleteWarning(f); continue; }
             var text = f.GetDescriptionText() ?? "";
-            if (text.IndexOf("span direction", StringComparison.OrdinalIgnoreCase) >= 0 && f.HasResolutions())
+            if (_passes == 1 && text.IndexOf("span direction", StringComparison.OrdinalIgnoreCase) >= 0 && f.HasResolutions())
             {
                 accessor.ResolveFailure(f);
                 resolved = true;
