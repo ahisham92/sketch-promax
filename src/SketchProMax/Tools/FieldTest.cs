@@ -1144,6 +1144,10 @@ internal static class FieldTest
 
             md.AppendLine("## Test project").AppendLine();
             foreach (var note in r.Sample) md.AppendLine($"- {note}");
+            md.AppendLine();
+            // Which copies of the shared libraries (System.Memory, Roslyn, System.Text.Json) this Revit really uses.
+            try { md.AppendLine(SketchProMax.Revit.AssemblyReport.Describe()); }
+            catch (Exception ex) { md.AppendLine("## Assemblies").AppendLine().AppendLine("Could not be read: " + ex.Message); }
             File.WriteAllText(r.ReportPath, md.ToString());
 
             File.WriteAllText(r.JsonPath, JsonSerializer.Serialize(new

@@ -32,6 +32,14 @@ internal static partial class SelfTest
         public int Failed => Results.Count(r => r.Status == "fail");
         public int Skipped => Results.Count(r => r.Status == "skip");
         public string? File { get; set; }
+        /// <summary>Which copies of the shared libraries (System.Memory, Roslyn, System.Text.Json) this Revit uses.</summary>
+        public string Libraries { get; } = SafeLibraries();
+
+        private static string SafeLibraries()
+        {
+            try { return SketchProMax.Revit.AssemblyReport.Describe(); }
+            catch (Exception ex) { return "Could not be read: " + ex.Message; }
+        }
 
         public string Summary()
         {
