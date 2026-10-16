@@ -4,6 +4,7 @@ using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Automation;
 using System.Windows.Shapes;
 using System.Windows.Threading;
 using RevitUI = Autodesk.Revit.UI;
@@ -45,6 +46,9 @@ internal static class PaneHost
         catch (Exception) { Registered = false; /* already registered by another copy, or too late: the button says so */ }
         try { app.DockableFrameVisibilityChanged += (_, e) => { if (e.PaneId == Id) Ribbon.SetPaneShown(e.DockableFrameShown); }; }
         catch (Exception) { }
+        // Follow Revit's light/dark UI theme live (Revit 2024+); the page also rechecks whenever it is shown.
+        try { app.ThemeChanged += (_, _) => _page?.ApplyTheme(); }
+        catch (Exception) { /* no theme event: the page still picks the theme up when it is next shown */ }
         EnsureEvent();
     }
 
@@ -139,40 +143,31 @@ internal static class PaneHost
     }
 }
 
-/// <summary>Brand colours (the same as the core's UI.Brand; the loader can't reference the core).</summary>
-internal static class PaneBrand
-{
-    public static readonly Color Blue = Color.FromRgb(0x1D, 0x4E, 0xD8);
-    public static readonly Color Navy = Color.FromRgb(0x0B, 0x1E, 0x4F);
-    public static readonly Color Amber = Color.FromRgb(0xFB, 0xBF, 0x24);
-    public static readonly Color Green = Color.FromRgb(0x16, 0xA3, 0x4A);
-    public static readonly Color Red = Color.FromRgb(0xDC, 0x26, 0x26);
-    public static readonly Color Muted = Color.FromRgb(0x64, 0x74, 0x8B);
-    public static readonly Color Ink = Color.FromRgb(0x0F, 0x17, 0x2A);
-    public static readonly Color Paper = Color.FromRgb(0xFF, 0xFF, 0xFF);
-    public static readonly Color Soft = Color.FromRgb(0xF1, 0xF5, 0xF9);
-    public static readonly Color Line = Color.FromRgb(0xE2, 0xE8, 0xF0);
-
-    public static SolidColorBrush Brush(Color c)
-    {
-        var b = new SolidColorBrush(c);
-        b.Freeze();
-        return b;
-    }
-}
-
-/// <summary>The pane's content. Built in code (no XAML), rebuilt section by section only when that section's text changed.</summary>
+/// <summary>
+/// The pane's content. Built in code (no XAML) and themed with <see cref="Theme"/>: it follows Revit's light/dark UI
+/// theme live. Lists are rebuilt only when their text changed; the current job's controls are built once and updated
+/// in place, so keyboard focus on Cancel survives the once-a-second refresh. Nothing scrolls sideways: text wraps,
+/// long names end in an ellipsis with the full text in a tooltip.
+/// </summary>
 internal sealed class PanePage : Page
 {
     private static readonly Regex Digits = new(@"\d{2,}", RegexOptions.CultureInvariant);
     private static readonly FontFamily Mono = new("Consolas, Courier New");
+    private const string K_Text = Theme.K.Text, K_Muted = Theme.K.Muted;
 
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromSeconds(1) };
     private readonly Ellipse _light = new() { Width = 10, Height = 10, Margin = new Thickness(0, 0, 6, 0), VerticalAlignment = VerticalAlignment.Center };
-    private readonly TextBlock _connection = new() { Foreground = Brushes.White, FontSize = 12, TextTrimming = TextTrimming.CharacterEllipsis };
-    private readonly TextBlock _version = new() { Foreground = PaneBrand.Brush(Color.FromRgb(0xC7, 0xD2, 0xFE)), FontSize = 11 };
+    private readonly TextBlock _connection = new() { FontSize = 12, TextTrimming = TextTrimming.CharacterEllipsis };
+    private readonly TextBlock _version = new() { FontSize = 11 };
     private readonly StackPanel _notice = new();
     private readonly StackPanel _job = new();
+    private readonly TextBlock _jobIdle = Text("", K_Muted);
+    private readonly StackPanel _jobActive = new();
+    private readonly TextBlock _jobName = Text("", K_Text, bold: true, size: 13);
+    private readonly TextBlock _jobWhen = Text("", K_Muted, size: 11);
+    private readonly TextBlock _jobProgress = Text("");
+    private readonly Button _cancel;
+    private string _jobKey = "", _cancelFor = "";
     private readonly StackPanel _log = new();
     private readonly ScrollViewer _logScroll;
     private readonly StackPanel _last = new();
@@ -184,35 +179,87 @@ internal sealed class PanePage : Page
     public PanePage()
     {
         Title = PaneHost.Title;
-        Background = PaneBrand.Brush(PaneBrand.Paper);
-        TextElement.SetForeground(this, PaneBrand.Brush(PaneBrand.Ink));
+        Theme.Use(this);
+        SetResourceReference(BackgroundProperty, Theme.K.Bg);
+        SetResourceReference(TextElement.ForegroundProperty, Theme.K.Text);
         TextElement.SetFontSize(this, 12);
+
+        // Current job: built once, updated in place.
+        _cancel = Theme.Button("Cancel job", "SpmDangerButton");
+        _cancel.VerticalAlignment = VerticalAlignment.Top;
+        _cancel.Margin = new Thickness(8, 0, 0, 0);
+        _cancel.ToolTip = "Stops the running job at its next check (like cancel_job). Batch tools keep what they finished as one Undo step.";
+        AutomationProperties.SetName(_cancel, "Cancel the running job");
+        _cancel.Click += (_, _) =>
+        {
+            if (Theme.IsBusy(_cancel)) return;
+            _cancelFor = _jobKey;
+            Theme.SetBusy(_cancel, true, "Stopping…");
+            Host.PaneCancel();
+            RefreshSoon();
+        };
+        var head = new DockPanel();
+        DockPanel.SetDock(_cancel, Dock.Right);
+        head.Children.Add(_cancel);
+        var title = new StackPanel();
+        title.Children.Add(_jobName);
+        title.Children.Add(_jobWhen);
+        head.Children.Add(title);
+        _jobActive.Children.Add(head);
+        _jobProgress.Margin = new Thickness(0, 4, 0, 0);
+        _jobActive.Children.Add(_jobProgress);
+        var bar = new ProgressBar { IsIndeterminate = true, Height = 3, Margin = new Thickness(0, 6, 0, 0), BorderThickness = new Thickness(0) };
+        AutomationProperties.SetName(bar, "Job running");
+        _jobActive.Children.Add(bar);
+        _job.Children.Add(_jobIdle);
+        _job.Children.Add(_jobActive);
+        _jobActive.Visibility = Visibility.Collapsed;
 
         var root = new StackPanel();
         root.Children.Add(Header());
         var body = new StackPanel { Margin = new Thickness(10, 8, 10, 10) };
         body.Children.Add(_notice);
         body.Children.Add(Section("Current job", _job));
-        _logScroll = new ScrollViewer { Content = _log, MaxHeight = 220, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto };
+        _logScroll = new ScrollViewer
+        {
+            Content = _log, MaxHeight = 220, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Focusable = false,
+        };
         _logBox = Section("Steps", Box(_logScroll));
         body.Children.Add(_logBox);
         _lastBox = Section("Last job", _last);
         body.Children.Add(_lastBox);
         body.Children.Add(Section("Quick tools", _quick));
         root.Children.Add(body);
-        Content = new ScrollViewer { Content = root, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+        // The adorner layer inside the page keeps keyboard focus rings in reach of the page's theme resources.
+        Content = new AdornerDecorator
+        {
+            Child = new ScrollViewer
+            {
+                Content = root, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Focusable = false,
+            },
+        };
 
         _timer.Tick += (_, _) => Refresh();
         IsVisibleChanged += (_, e) =>
         {
             if (e.NewValue is true)
             {
+                ApplyTheme();
                 Ribbon.SetPaneShown(true);
                 Refresh();
                 _timer.Start();
             }
             else _timer.Stop();
         };
+    }
+
+    /// <summary>Switches the palette to Revit's current theme (from the ThemeChanged event, and whenever the pane is shown).</summary>
+    public void ApplyTheme()
+    {
+        if (Dispatcher.CheckAccess()) Theme.Use(this);
+        else Dispatcher.BeginInvoke(new Action(() => Theme.Use(this)));
     }
 
     /// <summary>After a click ran: show its effect without waiting for the next tick.</summary>
@@ -223,25 +270,30 @@ internal sealed class PanePage : Page
 
     private UIElement Header()
     {
-        var gradient = new LinearGradientBrush(PaneBrand.Blue, PaneBrand.Navy, new Point(0, 0), new Point(1, 1));
+        // The brand band: the same blue in both themes, white text on it.
+        var gradient = new LinearGradientBrush(Theme.Blue, Theme.Navy, new Point(0, 0), new Point(1, 1));
         gradient.Freeze();
         var row = new DockPanel { LastChildFill = true };
         var logo = new Image { Source = Icons.Logo(32), Width = 28, Height = 28, Margin = new Thickness(0, 0, 10, 0) };
+        AutomationProperties.SetName(logo, "Sketch ProMax");
         DockPanel.SetDock(logo, Dock.Left);
         row.Children.Add(logo);
         var text = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
         var title = new DockPanel();
-        var version = _version;
+        var version = Theme.Fg(_version, Theme.K.HeaderSub);
         version.VerticalAlignment = VerticalAlignment.Bottom;
         version.Margin = new Thickness(6, 0, 0, 1);
         DockPanel.SetDock(version, Dock.Right);
         title.Children.Add(version);
-        title.Children.Add(new TextBlock { Text = "Sketch ProMax", Foreground = Brushes.White, FontSize = 14, FontWeight = FontWeights.SemiBold });
+        title.Children.Add(Theme.Fg(new TextBlock
+        {
+            Text = "Sketch ProMax", FontSize = 14, FontWeight = FontWeights.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis,
+        }, Theme.K.HeaderText));
         text.Children.Add(title);
         var status = new DockPanel();
         DockPanel.SetDock(_light, Dock.Left);
         status.Children.Add(_light);
-        status.Children.Add(_connection);
+        status.Children.Add(Theme.Fg(_connection, Theme.K.HeaderText));
         text.Children.Add(status);
         row.Children.Add(text);
         return new Border { Background = gradient, Padding = new Thickness(10, 8, 10, 8), Child = row };
@@ -250,26 +302,28 @@ internal sealed class PanePage : Page
     private static Border Section(string title, UIElement content)
     {
         var panel = new StackPanel { Margin = new Thickness(0, 8, 0, 0) };
-        panel.Children.Add(new TextBlock
-        {
-            Text = title.ToUpperInvariant(), FontSize = 10.5, FontWeight = FontWeights.SemiBold,
-            Foreground = PaneBrand.Brush(PaneBrand.Muted), Margin = new Thickness(0, 0, 0, 4),
-        });
+        var heading = Text(title.ToUpperInvariant(), K_Muted, bold: true, size: 10.5);
+        heading.Margin = new Thickness(0, 0, 0, 4);
+        panel.Children.Add(heading);
         panel.Children.Add(content);
         return new Border { Child = panel };
     }
 
-    private static Border Box(UIElement content) => new()
+    private static Border Box(UIElement content)
     {
-        Background = PaneBrand.Brush(PaneBrand.Soft), BorderBrush = PaneBrand.Brush(PaneBrand.Line), BorderThickness = new Thickness(1),
-        CornerRadius = new CornerRadius(4), Padding = new Thickness(6, 4, 6, 4), Child = content,
-    };
+        var box = new Border
+        {
+            BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(4), Padding = new Thickness(6, 4, 6, 4), Child = content,
+        };
+        box.SetResourceReference(Border.BackgroundProperty, Theme.K.Surface);
+        box.SetResourceReference(Border.BorderBrushProperty, Theme.K.Border);
+        return box;
+    }
 
-    private static TextBlock Text(string text, Color? color = null, bool bold = false, double size = 12) => new()
+    private static TextBlock Text(string text, string key = K_Text, bool bold = false, double size = 12) => Theme.Fg(new TextBlock
     {
-        Text = text, TextWrapping = TextWrapping.Wrap, FontSize = size,
-        Foreground = PaneBrand.Brush(color ?? PaneBrand.Ink), FontWeight = bold ? FontWeights.SemiBold : FontWeights.Normal,
-    };
+        Text = text, TextWrapping = TextWrapping.Wrap, FontSize = size, FontWeight = bold ? FontWeights.SemiBold : FontWeights.Normal,
+    }, key);
 
     /// <summary>Rebuilds <paramref name="panel"/> only when <paramref name="key"/> differs from what it shows.</summary>
     private bool Changed(FrameworkElement panel, string key)
@@ -285,11 +339,8 @@ internal sealed class PanePage : Page
         catch (Exception ex)
         {
             // Never let a pane refresh reach Revit; a core being switched answers again on the next tick.
-            if (Changed(_notice, "error" + ex.Message))
-            {
-                _notice.Children.Clear();
-                _notice.Children.Add(Text("The pane could not refresh: " + ex.Message, PaneBrand.Red));
-            }
+            Notice("The pane could not refresh: " + ex.Message + "\nIt tries again every second. If this stays, hide the pane " +
+                   "and show it again (Show pane on the Sketch ProMax tab).", Theme.K.DangerText);
         }
     }
 
@@ -300,7 +351,10 @@ internal sealed class PanePage : Page
         {
             var failed = Host.BootError;
             SetConnection(failed is null ? "starting" : "error", failed is null ? "Starting…" : "Not started", "");
-            Notice(failed ?? "Sketch ProMax starts as soon as Revit is ready.", failed is null ? PaneBrand.Muted : PaneBrand.Red);
+            Notice(failed is null
+                    ? "Sketch ProMax starts as soon as Revit is ready. Nothing to do; this pane fills in by itself."
+                    : failed + (failed.Contains("Install.cmd") ? "" : "\nRestart Revit. If it still doesn't start, run Install.cmd again."),
+                failed is null ? K_Text : Theme.K.DangerText);
             ShowJob(new Dictionary<string, List<string[]>>(), new HashSet<string>(), hasPane: false);
             ShowQuick("");
             return;
@@ -316,12 +370,12 @@ internal sealed class PanePage : Page
         if (snapshot.Length == 0)
         {
             Notice($"Update Sketch ProMax to see details here: version {core.VersionText} doesn't send the running job, its steps " +
-                   "or element links to this pane yet. Use Check now in the Updates panel.", PaneBrand.Muted);
+                   "or element links to this pane yet. Use Check now in the Updates panel.", K_Text);
             ShowJob(new Dictionary<string, List<string[]>>(), new HashSet<string>(), hasPane: false);
         }
         else
         {
-            Notice(null, PaneBrand.Muted);
+            Notice(null, K_Text);
             ShowJob(records, Ids(records), hasPane: true);
         }
         // The quick tools list rarely changes; the core rereads its folders only when they changed.
@@ -353,71 +407,63 @@ internal sealed class PanePage : Page
 
     private void SetConnection(string state, string text, string detail)
     {
+        _connection.Text = "Claude: " + text;
+        // The line ends in an ellipsis in a narrow pane: the tooltip always has all of it.
+        _connection.ToolTip = detail.Length > 0 ? "Claude: " + text + "\n" + detail : "Claude: " + text;
+        AutomationProperties.SetName(_connection, "Claude: " + text + (detail.Length > 0 ? ". " + detail : ""));
+        if (!Changed(_light, state)) return;
         var color = state switch
         {
             "connected" => Icons.Green, "ready" => Icons.Amber, "error" => Icons.Red, _ => Icons.Gray,
         };
-        if (!Changed(_light, state)) { _connection.Text = "Claude: " + text; _connection.ToolTip = detail.Length > 0 ? detail : null; return; }
-        _light.Fill = PaneBrand.Brush(color);
+        _light.Fill = Theme.Brush(color);
         _light.Stroke = Brushes.White;
         _light.StrokeThickness = 1;
-        _connection.Text = "Claude: " + text;
-        _connection.ToolTip = detail.Length > 0 ? detail : null;
     }
 
-    private void Notice(string? text, Color color)
+    private void Notice(string? text, string key)
     {
-        if (!Changed(_notice, text ?? "")) return;
+        if (!Changed(_notice, (text ?? "") + "\u0001" + key)) return;
         _notice.Children.Clear();
         if (text is null) return;
-        _notice.Children.Add(new Border
+        var box = new Border
         {
-            Background = PaneBrand.Brush(Color.FromRgb(0xFF, 0xF7, 0xE0)), BorderBrush = PaneBrand.Brush(PaneBrand.Amber),
-            BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(4), Padding = new Thickness(8, 6, 8, 6),
-            Child = Text(text, color == PaneBrand.Muted ? PaneBrand.Ink : color),
-        });
+            BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(4), Padding = new Thickness(8, 6, 8, 6), Child = Text(text, key),
+        };
+        box.SetResourceReference(Border.BackgroundProperty, Theme.K.NoticeBg);
+        box.SetResourceReference(Border.BorderBrushProperty, Theme.K.NoticeBorder);
+        AutomationProperties.SetLiveSetting(box, AutomationLiveSetting.Polite);
+        _notice.Children.Add(box);
     }
 
     private static string Field(string[] row, int i) => i < row.Length ? row[i] : "";
 
     private void ShowJob(Dictionary<string, List<string[]>> records, HashSet<string> ids, bool hasPane)
     {
-        // Current job.
+        // Current job: update the controls in place.
         var job = records.TryGetValue("job", out var j) && j.Count > 0 ? j[0] : new string[0];
         var state = Field(job, 0);
-        if (Changed(_job, hasPane + "\u0001" + string.Join("\u0001", job)))
+        var active = hasPane && state is "running" or "waiting" or "selftest";
+        _jobActive.Visibility = active ? Visibility.Visible : Visibility.Collapsed;
+        _jobIdle.Visibility = active ? Visibility.Collapsed : Visibility.Visible;
+        if (active)
         {
-            _job.Children.Clear();
-            if (!hasPane) _job.Children.Add(Text("—", PaneBrand.Muted));
-            else if (state is "running" or "waiting" or "selftest")
-            {
-                var head = new DockPanel();
-                var cancel = new Button
-                {
-                    Content = "Cancel", Padding = new Thickness(10, 2, 10, 2), Margin = new Thickness(8, 0, 0, 0),
-                    Background = PaneBrand.Brush(PaneBrand.Red), Foreground = Brushes.White, BorderBrush = PaneBrand.Brush(PaneBrand.Red),
-                    ToolTip = "Ask it to stop at its next check (like cancel_job). Batch tools keep what they finished as one Undo step.",
-                    VerticalAlignment = VerticalAlignment.Top,
-                };
-                cancel.Click += (_, _) => { cancel.IsEnabled = false; Host.PaneCancel(); RefreshSoon(); };
-                DockPanel.SetDock(cancel, Dock.Right);
-                head.Children.Add(cancel);
-                var title = new StackPanel();
-                var name = state == "selftest" ? "Self-test" : $"{Field(job, 2)}  (job {Field(job, 1)})";
-                title.Children.Add(Text(name, PaneBrand.Navy, bold: true, size: 13));
-                var when = state == "waiting" ? "waiting for Revit" : Field(job, 3).Length > 0 ? "running for " + Field(job, 3) : "running";
-                title.Children.Add(Text(when, PaneBrand.Muted, size: 11));
-                head.Children.Add(title);
-                _job.Children.Add(head);
-                if (Field(job, 4).Length > 0)
-                {
-                    var progress = Text(Field(job, 4));
-                    progress.Margin = new Thickness(0, 4, 0, 0);
-                    _job.Children.Add(progress);
-                }
-                _job.Children.Add(new ProgressBar { IsIndeterminate = true, Height = 3, Margin = new Thickness(0, 6, 0, 0), Foreground = PaneBrand.Brush(PaneBrand.Blue), BorderThickness = new Thickness(0) });
-            }
-            else _job.Children.Add(Text("Nothing is running. Tools Claude runs in Revit show here with their progress.", PaneBrand.Muted));
+            _jobKey = state == "selftest" ? "selftest" : Field(job, 1);
+            _jobName.Text = state == "selftest" ? "Self-test" : $"{Field(job, 2)}  (job {Field(job, 1)})";
+            _jobWhen.Text = state == "waiting" ? "waiting for Revit" : Field(job, 3).Length > 0 ? "running for " + Field(job, 3) : "running";
+            _jobProgress.Text = Field(job, 4);
+            _jobProgress.Visibility = Field(job, 4).Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+            // A stop asked for this job keeps its "Stopping…" spinner until the job ends.
+            if (_cancelFor != _jobKey) { _cancelFor = ""; Theme.SetBusy(_cancel, false); }
+        }
+        else
+        {
+            _jobKey = _cancelFor = "";
+            Theme.SetBusy(_cancel, false);
+            _jobIdle.Text = hasPane
+                ? "Nothing is running. Ask Claude something about this model in the Claude app (or run a quick tool below); " +
+                  "its progress and a Cancel job button show here."
+                : "The running job shows here once Sketch ProMax has started.";
         }
 
         // Step log.
@@ -439,53 +485,67 @@ internal sealed class PanePage : Page
         {
             _last.Children.Clear();
             var outcome = Field(last, 2);
-            var (label, color) = outcome switch
+            var (label, badge) = outcome switch
             {
-                "ok" => ("worked", PaneBrand.Green),
-                "stopped" => ("stopped on request", PaneBrand.Amber),
-                "cancelled" => ("cancelled", PaneBrand.Muted),
-                _ => ("did not work", PaneBrand.Red),
+                "ok" => ("worked", Theme.K.BadgeOk),
+                "stopped" => ("stopped on request", Theme.K.BadgeWarn),
+                "cancelled" => ("cancelled", Theme.K.BadgeMuted),
+                _ => ("did not work", Theme.K.BadgeError),
             };
             var head = new WrapPanel();
-            head.Children.Add(Text($"{Field(last, 1)}  ", PaneBrand.Navy, bold: true, size: 13));
-            head.Children.Add(new Border
+            head.Children.Add(Text($"{Field(last, 1)}  ", K_Text, bold: true, size: 13));
+            var pill = new Border
             {
-                Background = PaneBrand.Brush(color), CornerRadius = new CornerRadius(3), Padding = new Thickness(5, 0, 5, 1),
-                VerticalAlignment = VerticalAlignment.Center,
-                Child = new TextBlock { Text = label, Foreground = Brushes.White, FontSize = 11 },
-            });
+                CornerRadius = new CornerRadius(3), Padding = new Thickness(5, 0, 5, 1), VerticalAlignment = VerticalAlignment.Center,
+                Child = Theme.Fg(new TextBlock { Text = label, FontSize = 11 }, Theme.K.OnAccent),
+            };
+            pill.SetResourceReference(Border.BackgroundProperty, badge);
+            head.Children.Add(pill);
             _last.Children.Add(head);
             var when = $"job {Field(last, 0)}" + (Field(last, 3).Length > 0 ? $", finished {Field(last, 3)}" : "") +
                        (Field(last, 4).Length > 0 ? $" after {Field(last, 4)}" : "");
-            _last.Children.Add(Text(when, PaneBrand.Muted, size: 11));
+            _last.Children.Add(Text(when, K_Muted, size: 11));
+            if (outcome is "error" or "failed")
+            {
+                var next = Text("Ask Claude in the chat what went wrong; it can read this result and try another way. Ctrl+Z in " +
+                                "Revit undoes anything the job changed.", K_Muted, size: 11);
+                next.Margin = new Thickness(0, 2, 0, 0);
+                _last.Children.Add(next);
+            }
             if (result.Count > 0)
             {
                 var lines = new StackPanel();
                 foreach (var line in result) lines.Children.Add(Linked(line, ids, mono: true));
-                var box = Box(new ScrollViewer { Content = lines, MaxHeight = 260, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto });
+                var box = Box(new ScrollViewer
+                {
+                    Content = lines, MaxHeight = 260, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                    HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Focusable = false,
+                });
                 box.Margin = new Thickness(0, 4, 0, 0);
                 _last.Children.Add(box);
             }
+            // Select all the element ids found: a real button, so it is a full-size click target.
+            if (ids.Count > 1)
+            {
+                var list = string.Join(",", ids);
+                var all = Theme.Button($"Select all {ids.Count} elements");
+                all.HorizontalAlignment = HorizontalAlignment.Left;
+                all.Margin = new Thickness(0, 6, 0, 0);
+                all.ToolTip = "Selects every element id found in the steps and the result, and zooms to them.";
+                all.Click += (_, _) => PaneHost.Request("pane-select\t" + list);
+                _last.Children.Add(all);
+            }
         }
         else if (last is null) _shown.Remove(_last);
-
-        // Select all the element ids found.
-        if (ids.Count > 1 && last is not null && _last.Children.Count > 0 && _last.Children[_last.Children.Count - 1] is not TextBlock { Tag: "all" })
-        {
-            var all = new TextBlock { Tag = "all", Margin = new Thickness(0, 6, 0, 0) };
-            var link = new Hyperlink(new Run($"Select all {ids.Count} elements")) { Foreground = PaneBrand.Brush(PaneBrand.Blue) };
-            var list = string.Join(",", ids);
-            link.Click += (_, _) => PaneHost.Request("pane-select\t" + list);
-            all.Inlines.Add(link);
-            all.Inlines.Add(new Run("  (found in the steps and result)") { Foreground = PaneBrand.Brush(PaneBrand.Muted) });
-            _last.Children.Add(all);
-        }
     }
 
-    /// <summary>A line with every known element id in it as a link that selects and zooms to that element.</summary>
+    /// <summary>
+    /// A wrapping line with every known element id in it as a link that selects and zooms to that element. Ids are
+    /// inline links in running text (exempt from the 24 px target size); "Select all" below is the full-size target.
+    /// </summary>
     private static TextBlock Linked(string line, HashSet<string> ids, bool mono)
     {
-        var block = new TextBlock { TextWrapping = TextWrapping.NoWrap, FontSize = mono ? 11 : 12 };
+        var block = new TextBlock { TextWrapping = TextWrapping.Wrap, FontSize = mono ? 11 : 12 };
         if (mono) block.FontFamily = Mono;
         var at = 0;
         if (ids.Count > 0)
@@ -496,7 +556,8 @@ internal sealed class PanePage : Page
                 if (m.Index > 0 && (char.IsLetterOrDigit(line[m.Index - 1]) || line[m.Index - 1] == '.')) continue;
                 if (m.Index > at) block.Inlines.Add(new Run(line.Substring(at, m.Index - at)));
                 var id = m.Value;
-                var link = new Hyperlink(new Run(id)) { Foreground = PaneBrand.Brush(PaneBrand.Blue), ToolTip = $"Select element {id} and zoom to it" };
+                var link = new Hyperlink(new Run(id)) { ToolTip = $"Select element {id} and zoom to it" };
+                AutomationProperties.SetName(link, $"Select element {id}");
                 link.Click += (_, _) => PaneHost.Request("pane-select\t" + id);
                 block.Inlines.Add(link);
                 at = m.Index + m.Length;
@@ -516,24 +577,25 @@ internal sealed class PanePage : Page
             _quick.Children.Add(Text(Host.Core is null
                 ? "Your saved recipes and learned tools show here once Sketch ProMax has started."
                 : "Nothing saved yet. In the Claude app, after a workflow you liked, say \"save that as a recipe\"; when Claude wrote " +
-                  "code that worked, say \"save it as a tool\". It then appears here and runs in Revit without the AI.", PaneBrand.Muted));
+                  "code that worked, say \"save it as a tool\". It then appears here and runs in Revit without the AI.", K_Muted));
             return;
         }
         foreach (var p in items)
         {
             var (kind, name, summary) = (p[0], p[1], p[2]);
-            var button = new Button
-            {
-                HorizontalContentAlignment = HorizontalAlignment.Left, Padding = new Thickness(6, 3, 6, 3), Margin = new Thickness(0, 0, 0, 4),
-                Background = PaneBrand.Brush(PaneBrand.Soft), BorderBrush = PaneBrand.Brush(PaneBrand.Line),
-                ToolTip = (kind == "recipe" ? "Recipe. " : "Learned tool. ") + summary,
-            };
+            var kindText = kind == "recipe" ? "Recipe" : "Learned tool";
             var row = new DockPanel();
             var icon = new Image { Source = Icons.Get(kind == "recipe" ? "recipe" : "learned", 16), Width = 16, Height = 16, Margin = new Thickness(0, 0, 6, 0) };
             DockPanel.SetDock(icon, Dock.Left);
             row.Children.Add(icon);
             row.Children.Add(new TextBlock { Text = Pretty(name), TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center });
-            button.Content = row;
+            var button = Theme.Button(row);
+            button.HorizontalContentAlignment = HorizontalAlignment.Stretch;
+            button.Padding = new Thickness(6, 3, 6, 3);
+            button.Margin = new Thickness(0, 0, 0, 4);
+            button.ToolTip = $"{Pretty(name)}\n{kindText}. {summary}";
+            AutomationProperties.SetName(button, $"Run {kindText.ToLowerInvariant()} {Pretty(name)}");
+            AutomationProperties.SetHelpText(button, summary);
             var key = $"quick\t{kind}\t{name}";
             button.Click += (_, _) => PaneHost.Request(key);
             _quick.Children.Add(button);
