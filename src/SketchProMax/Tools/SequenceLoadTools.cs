@@ -325,7 +325,10 @@ public sealed class LoadingPlanTool : IRevitTool
         "Draw a loading plan from the architectural link: each room in the link on this view's level is classed by its name " +
         "(office, residential, corridor, stairs, storage, plant, parking, assembly, retail, balcony, roof...) and given live " +
         "and superimposed dead loads from EN 1991, ASCE 7 or your own table; the plan gets a coloured filled region and a " +
-        "load label per room and a legend, plus a CSV. Loads are typical code values to confirm, not a design.";
+        "load label per room, plus a CSV. Rooms the link leaves unbounded are covered by zones made from the slab outlines on that " +
+        "level (slab minus the rooms that could be drawn), each taking the heaviest class of the rooms inside it. The legend is a " +
+        "table in its own drafting view (colour, class, loads, area) with a list of what could not be loaded; place it with " +
+        "place_views_on_sheet. Loads are typical code values to confirm, not a design.";
     public string PropertiesJson => """
     {
       "link": {"type": "string", "description": "Architectural link name."},
@@ -333,7 +336,9 @@ public sealed class LoadingPlanTool : IRevitTool
       "standard": {"type": "string", "enum": ["EN1991", "ASCE7"], "description": "Default EN1991."},
       "sdl": {"type": "number", "description": "Superimposed dead load kPa for every room (finishes, services, partitions), default 1.5."},
       "overrides": {"type": "array", "items": {"type": "object", "properties": {"contains": {"type": "string"}, "label": {"type": "string"}, "live": {"type": "number"}, "sdl": {"type": "number"}}, "required": ["contains", "live"]}, "description": "Your own classes, checked first: room name contains this text -> loads in kPa."},
-      "label_rooms": {"type": "boolean", "description": "Write the loads in each room (default true)."},
+      "label_rooms": {"type": "boolean", "description": "Write the loads in each room and zone (default true)."},
+      "fallback_zones": {"type": "boolean", "description": "Cover unbounded rooms with zones from the slab outlines (default true)."},
+      "zone_default": {"type": "object", "properties": {"label": {"type": "string"}, "live": {"type": "number"}, "sdl": {"type": "number"}}, "required": ["live"], "description": "Loads for a slab zone with no room inside it (default: Unclassified, the office value)."},
       "folder": {"type": "string"}
     }
     """;
@@ -374,6 +379,7 @@ public sealed class LoadingPlanTool : IRevitTool
         var doc = app.ActiveUIDocument.Document;
         var view = doc.GetElement(new ElementId(args.OptLong("view_id") ?? -1)) as ViewPlan ?? throw new ArgumentException("view_id must be a plan view.");
         var level = view.GenLevel ?? throw new ArgumentException("That view has no level.");
+        var z = level.ProjectElevation;
         var links = new FilteredElementCollector(doc).OfClass(typeof(RevitLinkInstance)).Cast<RevitLinkInstance>().ToList();
         var link = LinkMatch.Find(doc, links, args.String("link"));
         var linkDoc = link.GetLinkDocument() ?? throw new ArgumentException($"Link '{link.Name}' is not loaded.");
@@ -382,103 +388,346 @@ public sealed class LoadingPlanTool : IRevitTool
         var sdl = args.OptDouble("sdl") ?? 1.5;
         var overrides = args.Array("overrides").Select(o => (contains: o.GetProperty("contains").GetString() ?? "", label: o.TryGetProperty("label", out var l) ? l.GetString() : null,
             live: o.GetProperty("live").GetDouble(), sdl: o.TryGetProperty("sdl", out var s) ? s.GetDouble() : (double?)null)).ToList();
+        var fallback = args.OptBool("fallback_zones", true);
+        var zoneDefault = (cls: "Unclassified", live: asce ? Live["Unclassified"].asce : Live["Unclassified"].en, sdl);
+        if (args.Has("zone_default"))
+        {
+            var zd = args.Raw["zone_default"];
+            zoneDefault = (zd.TryGetProperty("label", out var zl) ? zl.GetString() ?? "Default zone" : "Default zone", zd.GetProperty("live").GetDouble(),
+                zd.TryGetProperty("sdl", out var zs) ? zs.GetDouble() : sdl);
+        }
+        (string cls, double live, double sdl) Classify(string name)
+        {
+            var o = overrides.FirstOrDefault(x => name.IndexOf(x.contains, StringComparison.OrdinalIgnoreCase) >= 0);
+            if (o.contains is { Length: > 0 }) return (o.label ?? o.contains, o.live, o.sdl ?? sdl);
+            var cls = Classes.FirstOrDefault(c => c.words.Any(w => name.IndexOf(w, StringComparison.OrdinalIgnoreCase) >= 0)).cls ?? "Unclassified";
+            return (cls, asce ? Live[cls].asce : Live[cls].en, sdl);
+        }
 
+        // Placed rooms on this level, bounded or not: an unbounded room still says what its area is used for.
         var rooms = new FilteredElementCollector(linkDoc).OfCategory(BuiltInCategory.OST_Rooms).WhereElementIsNotElementType().OfType<Room>()
-            .Where(r => r.Area > 0 && r.Level is { } rl && Math.Abs(rl.ProjectElevation + tr.Origin.Z - level.ProjectElevation) < 300 / 304.8).ToList();
-        if (rooms.Count == 0) return ToolResult.Error($"No placed rooms in '{link.Name}' at the level of '{view.Name}'.");
+            .Where(r => r.Location is LocationPoint && r.Level is { } rl && Math.Abs(rl.ProjectElevation + tr.Origin.Z - z) < 300 / 304.8).ToList();
+        if (rooms.Count == 0 && !fallback) return ToolResult.Error($"No placed rooms in '{link.Name}' at the level of '{view.Name}'.");
 
-        var rows = new List<(Room room, string cls, double live, double sdl, List<CurveLoop> loops)>();
+        var rows = new List<RoomRow>();
         foreach (var r in rooms)
         {
             var name = r.get_Parameter(BuiltInParameter.ROOM_NAME)?.AsString() ?? "";
-            var o = overrides.FirstOrDefault(x => name.IndexOf(x.contains, StringComparison.OrdinalIgnoreCase) >= 0);
-            string cls; double live, roomSdl = sdl;
-            if (o.contains is { Length: > 0 }) { cls = o.label ?? o.contains; live = o.live; roomSdl = o.sdl ?? sdl; }
+            var (cls, live, roomSdl) = Classify(name);
+            var row = new RoomRow(r, name, cls, live, roomSdl, tr.OfPoint(((LocationPoint)r.Location).Point));
+            if (r.Area <= 0) row.Why = "not enclosed (no boundary in the link)";
             else
-            {
-                cls = Classes.FirstOrDefault(c => c.words.Any(w => name.IndexOf(w, StringComparison.OrdinalIgnoreCase) >= 0)).cls ?? "Unclassified";
-                live = asce ? Live[cls].asce : Live[cls].en;
-            }
-            var loops = new List<CurveLoop>();
-            foreach (var segs in r.GetBoundarySegments(new SpatialElementBoundaryOptions()) ?? [])
-            {
-                try
+                foreach (var segs in r.GetBoundarySegments(new SpatialElementBoundaryOptions()) ?? [])
                 {
-                    var loop = CurveLoop.Create(segs.Select(s => s.GetCurve().CreateTransformed(tr)).Select(c => Flatten(c, level.ProjectElevation)).ToList());
-                    loops.Add(loop);
+                    try { row.Loops.Add(CurveLoop.Create(segs.Select(sg => Flatten(sg.GetCurve().CreateTransformed(tr), z)).ToList())); }
+                    catch (Autodesk.Revit.Exceptions.ArgumentException)
+                    {
+                        if (row.Loops.Count == 0) { row.Why = "its boundary is not a closed loop"; break; } // without its outer loop the room can't be drawn
+                    }
                 }
-                catch (Autodesk.Revit.Exceptions.ArgumentException) { if (loops.Count == 0) break; } // without its outer loop the room can't be drawn
-            }
-            rows.Add((r, cls, live, roomSdl, loops));
+            if (row.Loops.Count == 0) row.Why ??= "no usable boundary";
+            rows.Add(row);
         }
 
-        var made = 0; var failed = new List<string>();
-        var classes = rows.Select(r => (r.cls, r.live, r.sdl)).Distinct().OrderBy(c => c.live).ToList();
         using var t = RevitHelpers.StartTransaction(doc, "Loading plan");
         var solid = new FilteredElementCollector(doc).OfClass(typeof(FillPatternElement)).Cast<FillPatternElement>().FirstOrDefault(f => f.GetFillPattern().IsSolidFill && f.GetFillPattern().Target == FillPatternTarget.Drafting);
         var baseType = new FilteredElementCollector(doc).OfClass(typeof(FilledRegionType)).Cast<FilledRegionType>().FirstOrDefault()
                        ?? throw new InvalidOperationException("The model has no filled region types.");
         var types = new Dictionary<(string, double, double), FilledRegionType>();
-        for (var i = 0; i < classes.Count; i++)
+        FilledRegionType TypeFor((string cls, double live, double sdl) c)
         {
-            var c = classes[i];
+            if (types.TryGetValue(c, out var known)) return known;
             var typeName = $"Load - {c.cls} LL {c.live.ToString("0.0#", CultureInfo.InvariantCulture)} SDL {c.sdl.ToString("0.0#", CultureInfo.InvariantCulture)}";
             var type = new FilteredElementCollector(doc).OfClass(typeof(FilledRegionType)).Cast<FilledRegionType>().FirstOrDefault(x => x.Name == typeName)
                        ?? (FilledRegionType)baseType.Duplicate(typeName);
             if (solid != null) type.ForegroundPatternId = solid.Id;
-            type.ForegroundPatternColor = Palette[i % Palette.Length];
+            type.ForegroundPatternColor = Palette[types.Count % Palette.Length];
             type.BackgroundPatternId = ElementId.InvalidElementId;
-            types[c] = type;
+            return types[c] = type;
         }
         var textType = doc.GetDefaultElementTypeId(ElementTypeGroup.TextNoteType);
-        foreach (var r in rows)
+        var labels = args.OptBool("label_rooms", true);
+        var made = 0;
+        foreach (var r in rows.Where(r => r.Loops.Count > 0).OrderBy(r => r.Live))
         {
             try
             {
-                if (r.loops.Count == 0) throw new ArgumentException("no usable boundary");
-                FilledRegion.Create(doc, types[(r.cls, r.live, r.sdl)].Id, view.Id, r.loops);
+                FilledRegion.Create(doc, TypeFor((r.Cls, r.Live, r.Sdl)).Id, view.Id, r.Loops);
+                r.Drawn = true;
                 made++;
-                if (args.OptBool("label_rooms", true) && r.room.Location is LocationPoint lp)
-                {
-                    var at = tr.OfPoint(lp.Point);
-                    TextNote.Create(doc, view.Id, new XYZ(at.X, at.Y, level.ProjectElevation), $"{r.cls.ToUpperInvariant()}\nLL {r.live:0.0#} kPa\nSDL {r.sdl:0.0#} kPa", textType);
-                }
+                if (labels) TextNote.Create(doc, view.Id, new XYZ(r.At.X, r.At.Y, z), $"{r.Cls.ToUpperInvariant()}\nLL {r.Live:0.0#} kPa\nSDL {r.Sdl:0.0#} kPa", textType);
             }
-            catch (Exception ex) when (ex is ArgumentException or Autodesk.Revit.Exceptions.ApplicationException)
+            catch (Exception ex) when (ex is ArgumentException or Autodesk.Revit.Exceptions.ApplicationException) { r.Why = ex.Message.Trim(); }
+        }
+
+        // Zones: the slabs on this level minus the rooms drawn above, for everything the rooms could not cover.
+        var zones = new List<ZoneRow>();
+        string? zoneNote = null;
+        if (fallback && rows.Any(r => !r.Drawn) || fallback && rows.Count == 0)
+        {
+            var pieces = SlabZones.Pieces(doc, linkDoc, tr, z, rows.Where(r => r.Drawn).Select(r => r.Loops).ToList(), out zoneNote);
+            foreach (var piece in pieces)
             {
-                failed.Add($"{r.room.get_Parameter(BuiltInParameter.ROOM_NAME)?.AsString()} {r.room.Number}: {ex.Message.Trim()}");
+                var inside = rows.Where(r => !r.Drawn && piece.Contains(r.At.X, r.At.Y)).ToList();
+                var gov = inside.OrderByDescending(r => r.Live).ThenByDescending(r => r.Sdl).FirstOrDefault();
+                (string cls, double live, double sdl) c = gov is null ? zoneDefault : (gov.Cls, gov.Live, gov.Sdl);
+                var zone = new ZoneRow(c.cls, c.live, c.sdl, piece.AreaM2, inside.Select(r => $"{r.Name} {r.Room.Number}".Trim()).ToList());
+                try
+                {
+                    FilledRegion.Create(doc, TypeFor(c).Id, view.Id, piece.Loops);
+                    zone.Drawn = true;
+                    foreach (var r in inside) r.Zone = zones.Count + 1;
+                    if (labels && piece.Label is { } at)
+                        TextNote.Create(doc, view.Id, new XYZ(at.x, at.y, z), $"{c.cls.ToUpperInvariant()} (ZONE {zones.Count + 1})\nLL {c.live:0.0#} kPa\nSDL {c.sdl:0.0#} kPa", textType);
+                }
+                catch (Exception ex) when (ex is ArgumentException or Autodesk.Revit.Exceptions.ApplicationException) { zone.Error = ex.Message.Trim(); }
+                zones.Add(zone);
             }
         }
-        // Legend beside the rooms.
-        var pts = rows.SelectMany(r => r.loops).SelectMany(l => l).Select(c => c.GetEndPoint(0)).ToList();
-        if (pts.Count > 0)
+        var notLoaded = rows.Where(r => !r.Drawn && r.Zone is null).ToList();
+
+        // Legend: a table in its own drafting view, with a colour swatch per class, then what was not loaded.
+        var classes = rows.Where(r => r.Drawn).Select(r => (r.Cls, r.Live, r.Sdl)).Concat(zones.Where(zn => zn.Drawn).Select(zn => (zn.Cls, zn.Live, zn.Sdl)))
+            .Distinct().OrderBy(c => c.Item2).ThenBy(c => c.Item1).ToList();
+        ViewDrafting? legend = null;
+        if (classes.Count > 0)
         {
-            var legend = $"LOADING PLAN - {level.Name} ({(asce ? "ASCE 7" : "EN 1991")}, kPa)\n" +
-                         string.Join("\n", classes.Select(c => $"{c.cls}: LL {c.live:0.0#}, SDL {c.sdl:0.0#}")) +
-                         "\nTypical code values; confirm with the project's design criteria.";
-            TextNote.Create(doc, view.Id, new XYZ(pts.Max(p => p.X) + 2000 / 304.8, pts.Max(p => p.Y), level.ProjectElevation), legend, textType);
+            legend = Drafting.Create(doc, $"Loading legend - {level.Name}", 1);
+            string N(double v) => v.ToString("0.0#", CultureInfo.InvariantCulture);
+            var table = classes.Select(c =>
+            {
+                var roomArea = rows.Where(r => r.Drawn && (r.Cls, r.Live, r.Sdl) == c).Sum(r => UnitUtils.ConvertFromInternalUnits(r.Room.Area, UnitTypeId.SquareMeters));
+                var zoneArea = zones.Where(zn => zn.Drawn && (zn.Cls, zn.Live, zn.Sdl) == c).Sum(zn => zn.AreaM2);
+                var source = roomArea > 0 && zoneArea > 0 ? "rooms + slab zones" : zoneArea > 0 ? "slab zones" : "rooms";
+                return (IList<string>)["", c.Item1, N(c.Item2), N(c.Item3), (roomArea + zoneArea).ToString("0.#", CultureInfo.InvariantCulture), source];
+            }).ToList();
+            var title = $"LOADING PLAN - {level.Name} ({(asce ? "ASCE 7" : "EN 1991")}, kPa). Typical code values; confirm with the project's design criteria.";
+            var height = Drafting.Table(doc, legend, XYZ.Zero, ["Colour", "Use", "LL (kPa)", "SDL (kPa)", "Area (m²)", "From"], table, [16, 50, 22, 22, 24, 36], title);
+            // Swatches: the table puts the title 10 mm down, then 8 mm rows with the header first.
+            for (var i = 0; i < classes.Count; i++)
+            {
+                var top = -Drafting.Mm(10) - Drafting.Mm(8) * (i + 1);
+                var loop = CurveLoop.Create(new List<Curve>
+                {
+                    Line.CreateBound(new XYZ(Drafting.Mm(2), top - Drafting.Mm(1.5), 0), new XYZ(Drafting.Mm(14), top - Drafting.Mm(1.5), 0)),
+                    Line.CreateBound(new XYZ(Drafting.Mm(14), top - Drafting.Mm(1.5), 0), new XYZ(Drafting.Mm(14), top - Drafting.Mm(6.5), 0)),
+                    Line.CreateBound(new XYZ(Drafting.Mm(14), top - Drafting.Mm(6.5), 0), new XYZ(Drafting.Mm(2), top - Drafting.Mm(6.5), 0)),
+                    Line.CreateBound(new XYZ(Drafting.Mm(2), top - Drafting.Mm(6.5), 0), new XYZ(Drafting.Mm(2), top - Drafting.Mm(1.5), 0)),
+                });
+                try { FilledRegion.Create(doc, TypeFor(classes[i]).Id, legend.Id, [loop]); }
+                catch (Autodesk.Revit.Exceptions.ApplicationException) { }
+            }
+            if (notLoaded.Count > 0)
+                Drafting.Table(doc, legend, new XYZ(0, -height - Drafting.Mm(12), 0), ["Room", "Name", "Not loaded because"],
+                    notLoaded.Take(60).Select(r => (IList<string>)[r.Room.Number ?? "", Cut(r.Name, 30), Cut(r.Why ?? "", 60)]).ToList(), [20, 60, 110],
+                    $"NOT LOADED ({notLoaded.Count}{(notLoaded.Count > 60 ? ", first 60 listed" : "")})");
         }
         if (t.Commit() != TransactionStatus.Committed) return ToolResult.Error("Revit refused the loading plan when saving it.");
 
         var folder = OutputPaths.Checked(args.OptString("folder")) ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "SketchProMax");
         Directory.CreateDirectory(folder);
         var file = Path.Combine(folder, $"{doc.Title} - Loading plan {level.Name} {DateTime.Now:yyyy-MM-dd}.csv");
-        string Csv(string s) => s.IndexOfAny([',', '"', '\n']) >= 0 ? "\"" + s.Replace("\"", "\"\"") + "\"" : s;
-        File.WriteAllText(file, "Room number,Room name,Class,Area (m²),Live (kPa),SDL (kPa)\n" + string.Join("\n", rows.Select(r =>
-            $"{Csv(r.room.Number ?? "")},{Csv(r.room.get_Parameter(BuiltInParameter.ROOM_NAME)?.AsString() ?? "")},{Csv(r.cls)}," +
-            $"{UnitUtils.ConvertFromInternalUnits(r.room.Area, UnitTypeId.SquareMeters).ToString("0.##", CultureInfo.InvariantCulture)},{r.live.ToString(CultureInfo.InvariantCulture)},{r.sdl.ToString(CultureInfo.InvariantCulture)}")), new UTF8Encoding(true));
+        string Csv(string v) => v.IndexOfAny([',', '"', '\n']) >= 0 ? "\"" + v.Replace("\"", "\"\"") + "\"" : v;
+        string F(double v) => v.ToString(CultureInfo.InvariantCulture);
+        var csv = new StringBuilder("Room number,Room name,Class,Area (m²),Live (kPa),SDL (kPa),Loaded as\n");
+        foreach (var r in rows)
+            csv.Append($"{Csv(r.Room.Number ?? "")},{Csv(r.Name)},{Csv(r.Cls)},{UnitUtils.ConvertFromInternalUnits(r.Room.Area, UnitTypeId.SquareMeters).ToString("0.##", CultureInfo.InvariantCulture)},{F(r.Live)},{F(r.Sdl)}," +
+                       $"{Csv(r.Drawn ? "room" : r.Zone is { } zi ? $"zone {zi}" : "not loaded: " + r.Why)}\n");
+        for (var i = 0; i < zones.Count; i++)
+            csv.Append($",{Csv($"Zone {i + 1}")},{Csv(zones[i].Cls)},{zones[i].AreaM2.ToString("0.##", CultureInfo.InvariantCulture)},{F(zones[i].Live)},{F(zones[i].Sdl)},{Csv(zones[i].Drawn ? "slab zone" : "not drawn: " + zones[i].Error)}\n");
+        File.WriteAllText(file, csv.ToString(), new UTF8Encoding(true));
+
+        if (made == 0 && zones.All(zn => !zn.Drawn))
+            return ToolResult.Error($"Nothing could be loaded on '{view.Name}': {rows.Count} room(s), none with a usable boundary, and no slab zones. {zoneNote}".Trim());
         return ToolResult.Ok(new
         {
-            rooms = rows.Count, regions = made, failed, file,
-            classes = classes.Select(c => new { c.cls, liveKpa = c.live, sdlKpa = c.sdl, rooms = rows.Count(r => r.cls == c.cls) }),
-            unclassified = rows.Where(r => r.cls == "Unclassified").Select(r => r.room.get_Parameter(BuiltInParameter.ROOM_NAME)?.AsString()).Distinct().Take(30),
-            note = "Unclassified rooms got the office value; add overrides for them. Values are typical code loads to confirm, not a design.",
+            rooms = rows.Count, roomRegions = made,
+            zones = zones.Select((zn, i) => new { zone = i + 1, zn.Cls, liveKpa = zn.Live, sdlKpa = zn.Sdl, areaM2 = Math.Round(zn.AreaM2, 1), rooms = zn.Rooms.Take(20), error = zn.Error,
+                note = zn.Rooms.Count == 0 ? "no room inside: default loads" : null }),
+            zoneNote,
+            notLoaded = notLoaded.Select(r => new { number = r.Room.Number, name = r.Name, why = r.Why }).Take(100),
+            legendViewId = legend?.Id.Value, legendView = legend?.Name,
+            file,
+            classes = classes.Select(c => new { cls = c.Item1, liveKpa = c.Item2, sdlKpa = c.Item3 }),
+            unclassified = rows.Where(r => r.Cls == "Unclassified").Select(r => r.Name).Distinct().Take(30),
+            note = "Unclassified rooms got the office value; add overrides for them. Values are typical code loads to confirm, not a design. " +
+                   (legend is null ? "" : "Put the legend on the sheet with place_views_on_sheet (legendViewId)."),
         });
+    }
+
+    private static string Cut(string s, int n) => s.Length <= n ? s : s.Substring(0, n - 1) + "…";
+
+    private sealed class RoomRow(Room room, string name, string cls, double live, double sdl, XYZ at)
+    {
+        public Room Room { get; } = room;
+        public string Name { get; } = name;
+        public string Cls { get; } = cls;
+        public double Live { get; } = live;
+        public double Sdl { get; } = sdl;
+        public XYZ At { get; } = at;
+        public List<CurveLoop> Loops { get; } = [];
+        public bool Drawn;
+        public int? Zone;
+        public string? Why;
+    }
+
+    private sealed class ZoneRow(string cls, double live, double sdl, double areaM2, List<string> rooms)
+    {
+        public string Cls { get; } = cls;
+        public double Live { get; } = live;
+        public double Sdl { get; } = sdl;
+        public double AreaM2 { get; } = areaM2;
+        public List<string> Rooms { get; } = rooms;
+        public bool Drawn;
+        public string? Error;
     }
 
     private static Curve Flatten(Curve c, double z)
     {
         var tr = Transform.CreateTranslation(new XYZ(0, 0, z - c.GetEndPoint(0).Z));
         return c.CreateTransformed(tr);
+    }
+}
+
+/// <summary>
+/// Load zones for areas the architectural rooms don't cover: the outlines of the slabs on a level (this model's, else
+/// the link's), minus the rooms already drawn (grown a little so the wall strips between them go too), split into
+/// separate pieces. Thin leftovers (strips under walls and along slab edges) are dropped.
+/// </summary>
+internal static class SlabZones
+{
+    public sealed class Piece
+    {
+        public List<CurveLoop> Loops = [];
+        public List<(double x, double y)> Outer = [];
+        public List<IReadOnlyList<(double x, double y)>> Holes = [];
+        public double AreaM2;
+        public (double x, double y)? Label;
+        public bool Contains(double x, double y) => LayoutMath.InPolygon(Outer, x, y) && !Holes.Any(h => LayoutMath.InPolygon(h, x, y));
+    }
+
+    private const double Height = 1.0;          // extrusion height for the 2D booleans, feet
+    private static readonly double Grow = 350 / 304.8;   // drawn rooms are grown by this before subtracting
+    private static readonly double MinArea = 2 / 0.09290304;   // 2 m², in square feet
+    private static readonly double MinWidth = 0.9 / 0.3048;    // pieces narrower than this (area / half perimeter) are slivers
+
+    public static List<Piece> Pieces(Document doc, Document linkDoc, Transform tr, double z, List<List<CurveLoop>> drawnRooms, out string? note)
+    {
+        note = null;
+        var tol = 600 / 304.8;
+        var slabs = Slabs(doc, Transform.Identity, z, tol);
+        var from = "this model's";
+        if (slabs.Count == 0) { slabs = Slabs(linkDoc, tr, z, tol); from = "the link's"; }
+        if (slabs.Count == 0) { note = "No slabs at this level in this model or the link, so unbounded rooms could not be zoned."; return []; }
+
+        Solid? union = null;
+        var separate = new List<Solid>();
+        foreach (var s in slabs)
+        {
+            if (union is null) { union = s; continue; }
+            try { union = BooleanOperationsUtils.ExecuteBooleanOperation(union, s, BooleanOperationsType.Union); }
+            catch (Autodesk.Revit.Exceptions.ApplicationException) { separate.Add(s); }
+        }
+        var solids = new List<Solid>();
+        if (union is not null) solids.Add(union);
+        solids.AddRange(separate);
+
+        var failedRooms = 0;
+        foreach (var loops in drawnRooms)
+        {
+            var cutter = RoomCutter(loops, z);
+            if (cutter is null) { failedRooms++; continue; }
+            for (var i = 0; i < solids.Count; i++)
+            {
+                try { solids[i] = BooleanOperationsUtils.ExecuteBooleanOperation(solids[i], cutter, BooleanOperationsType.Difference); }
+                catch (Autodesk.Revit.Exceptions.ApplicationException) { failedRooms++; }
+            }
+        }
+
+        var pieces = new List<Piece>();
+        var slivers = 0;
+        foreach (var solid in solids)
+            foreach (Face f in solid.Faces)
+            {
+                if (f is not PlanarFace pf || pf.FaceNormal.Z > -0.99) continue;
+                var loops = pf.GetEdgesAsCurveLoops().Select(l => CurveLoop.CreateViaTransform(l, Transform.CreateTranslation(new XYZ(0, 0, z - pf.Origin.Z)))).ToList();
+                var rings = loops.Select(Ring).Where(r => r.Count >= 3).OrderByDescending(r => Math.Abs(Signed(r))).ToList();
+                if (rings.Count == 0) continue;
+                var perimeter = loops.Sum(l => l.GetExactLength());
+                if (pf.Area < MinArea || pf.Area / (perimeter / 2) < MinWidth / 2) { slivers++; continue; }
+                var piece = new Piece { Loops = loops, Outer = rings[0], Holes = rings.Skip(1).Cast<IReadOnlyList<(double x, double y)>>().ToList(), AreaM2 = pf.Area * 0.09290304 };
+                var inside = LayoutMath.InteriorPoints(piece.Outer, piece.Holes);
+                if (inside.Count > 0) piece.Label = (inside[0].x, inside[0].y);
+                pieces.Add(piece);
+            }
+        note = $"Zones made from {from} {slabs.Count} slab outline(s) on this level, minus the rooms drawn" +
+               (slivers > 0 ? $"; {slivers} thin strip(s) under walls or along edges were left out" : "") +
+               (failedRooms > 0 ? $"; {failedRooms} room cut(s) failed, so a zone may overlap a room" : "") + ".";
+        return pieces;
+    }
+
+    /// <summary>Each floor near the level as a flat extrusion of its top outline at the level.</summary>
+    private static List<Solid> Slabs(Document source, Transform tr, double z, double tol)
+    {
+        var result = new List<Solid>();
+        foreach (var floor in new FilteredElementCollector(source).OfCategory(BuiltInCategory.OST_Floors).WhereElementIsNotElementType().OfType<Floor>())
+        {
+            if (floor.get_BoundingBox(null) is not { } bb || Math.Abs(bb.Max.Z + tr.Origin.Z - z) > tol) continue;
+            try
+            {
+                PlanarFace? top = null;
+                foreach (var r in HostObjectUtils.GetTopFaces(floor))
+                    if (floor.GetGeometryObjectFromReference(r) is PlanarFace f && (top is null || f.Area > top.Area)) top = f;
+                if (top is null) continue;
+                var loops = top.GetEdgesAsCurveLoops().Select(l => CurveLoop.CreateViaTransform(CurveLoop.CreateViaTransform(l, tr),
+                    Transform.CreateTranslation(new XYZ(0, 0, z - tr.OfPoint(top.Origin).Z)))).ToList();
+                result.Add(GeometryCreationUtilities.CreateExtrusionGeometry(loops, XYZ.BasisZ, Height));
+            }
+            catch (Autodesk.Revit.Exceptions.ApplicationException) { }
+        }
+        return result;
+    }
+
+    /// <summary>The room's outer loop grown outward, extruded a little taller than the slabs so the cut is clean.</summary>
+    private static Solid? RoomCutter(List<CurveLoop> loops, double z)
+    {
+        var outer = loops.OrderByDescending(l => Math.Abs(Signed(Ring(l)))).FirstOrDefault();
+        if (outer is null) return null;
+        var area = Math.Abs(Signed(Ring(outer)));
+        var shape = outer;
+        foreach (var d in new[] { Grow, -Grow })
+        {
+            try
+            {
+                var grown = CurveLoop.CreateViaOffset(outer, d, XYZ.BasisZ);
+                if (Math.Abs(Signed(Ring(grown))) > area) { shape = grown; break; }
+            }
+            catch (Autodesk.Revit.Exceptions.ApplicationException) { }
+        }
+        try
+        {
+            var low = CurveLoop.CreateViaTransform(shape, Transform.CreateTranslation(new XYZ(0, 0, -0.1)));
+            if (!low.IsCounterclockwise(XYZ.BasisZ)) low.Flip();
+            return GeometryCreationUtilities.CreateExtrusionGeometry([low], XYZ.BasisZ, Height + 0.2);
+        }
+        catch (Autodesk.Revit.Exceptions.ApplicationException) { return null; }
+    }
+
+    private static List<(double x, double y)> Ring(CurveLoop loop)
+    {
+        var pts = new List<(double x, double y)>();
+        foreach (var c in loop)
+        {
+            var t = c.Tessellate();
+            for (var i = 0; i < t.Count - 1; i++) pts.Add((t[i].X, t[i].Y));
+        }
+        return pts;
+    }
+
+    private static double Signed(List<(double x, double y)> ring)
+    {
+        double a = 0;
+        for (int i = 0, j = ring.Count - 1; i < ring.Count; j = i++) a += (ring[j].x + ring[i].x) * (ring[j].y - ring[i].y);
+        return a / 2;
     }
 }

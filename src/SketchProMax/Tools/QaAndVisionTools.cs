@@ -91,7 +91,9 @@ public sealed class CaptureViewImageTool : IRevitTool
         "Render a view or sheet to a PNG image and return it so you can look at it. Use this to visually " +
         "check drawings: overlapping tags or dimensions, crowded annotation, missing labels, layout issues. " +
         "By default it grabs the screen when the view is the open, active view in Revit and no export-only option " +
-        "(element_ids, margin, resolution_dpi) is given, and otherwise uses Revit's image export; the result says which and why. " +
+        "(element_ids, margin, region, resolution_dpi) is given, and otherwise uses Revit's image export; the result says which and why. " +
+        "To read small print on a sheet (the title panel, a drawing number, a schedule), pass region [x_min, y_min, x_max, y_max] in sheet " +
+        "coordinates (project units on paper, as place_views_on_sheet reports them): the sheet is exported at high resolution and that region cut out. " +
         "source 'export' forces Revit's image export, which prints the view like a print/PDF would; " +
         "source 'screen' forces a grab of exactly what Revit shows in the open, active view window (selection highlights included). " +
         "Note: Revit draws a CUT pattern override only where the cut plane passes through an element; parts seen beyond " +
@@ -101,7 +103,8 @@ public sealed class CaptureViewImageTool : IRevitTool
     {
       "view_id": {"type": "integer", "description": "View or sheet id. Defaults to the active view."},
       "pixel_width": {"type": "integer", "description": "Image width in pixels (default 1600, max 2400)."},
-      "element_ids": {"type": "array", "items": {"type": "integer"}, "description": "Plan views: zoom to these elements (the view itself is left unchanged)."},
+      "element_ids": {"type": "array", "items": {"type": "integer"}, "description": "Plan views: zoom to these elements (the view itself is left unchanged). The image is exported at the pixel density of the export resolution, so it can come out narrower than pixel_width; for small print use a sheet region."},
+      "region": {"type": "array", "items": {"type": "number"}, "description": "Sheets: [x_min, y_min, x_max, y_max] in sheet coordinates (project units, paper size) to export at high resolution, e.g. the title panel."},
       "margin": {"type": "number", "description": "Around element_ids, project units. Default 2 m."},
       "source": {"type": "string", "enum": ["export", "screen"], "description": "Default: screen when the view is the active view and no element_ids/margin/resolution_dpi are given, else export. export: Revit image export. screen: what the open, active view window shows right now."},
       "resolution_dpi": {"type": "integer", "enum": [72, 150, 300, 600], "description": "Export resolution, which sets how line weights and patterns are drawn (default 150)."}
@@ -122,7 +125,7 @@ public sealed class CaptureViewImageTool : IRevitTool
         if (source is null)
         {
             // Screen is what the user sees and is instant; export is needed for zooming to elements or a set resolution.
-            var exportOnly = new[] { "element_ids", "margin", "resolution_dpi" }.Where(args.Has).ToList();
+            var exportOnly = new[] { "element_ids", "margin", "region", "resolution_dpi" }.Where(args.Has).ToList();
             var isActive = doc.ActiveView.Id == viewId && app.ActiveUIDocument.GetOpenUIViews().Any(u => u.ViewId == viewId);
             if (exportOnly.Count > 0) how = $"Used image export because {string.Join(", ", exportOnly)} need{(exportOnly.Count == 1 ? "s" : "")} it.";
             else if (!isActive) how = "Used image export because this view is not the active view in Revit (screen capture needs it open and current).";
@@ -142,8 +145,8 @@ public sealed class CaptureViewImageTool : IRevitTool
         else how = source == "export" ? "source=export as asked." : "";
         if (source == "screen")
         {
-            if (args.LongList("element_ids").Count > 0)
-                return ToolResult.Error("source=screen shows the view as it is on screen; zoom in Revit, or use source=export with element_ids.");
+            if (args.LongList("element_ids").Count > 0 || args.Has("region"))
+                return ToolResult.Error("source=screen shows the view as it is on screen; zoom in Revit, or use source=export with element_ids or region.");
             var uiView = app.ActiveUIDocument.GetOpenUIViews().FirstOrDefault(u => u.ViewId == viewId);
             if (uiView is null || doc.ActiveView.Id != viewId)
                 return ToolResult.Error($"'{doc.GetElement(viewId)?.Name}' is not the active view in Revit. Open it (make it the current tab), then capture again, or use source=export.");
@@ -170,6 +173,27 @@ public sealed class CaptureViewImageTool : IRevitTool
             },
         };
         options.SetViewsAndSheets([viewId]);
+
+        // Sheet region: print the whole sheet at a resolution that makes the region about pixel_width wide, then cut it out.
+        var regionArgs = args.Has("region") ? args.Array("region").Select(e => e.GetDouble()).ToList() : null;
+        LayoutMath.Rect? page = null, region = null;
+        if (regionArgs is not null)
+        {
+            if (doc.GetElement(viewId) is not ViewSheet sheet) return ToolResult.Error("region works on sheets; for a plan, use element_ids (or capture the sheet it is on).");
+            if (regionArgs.Count != 4) return ToolResult.Error("region needs four numbers [x_min, y_min, x_max, y_max] in sheet coordinates.");
+            var o = sheet.Outline;
+            page = new LayoutMath.Rect(o.Min.U, o.Min.V, o.Max.U, o.Max.V);
+            double r0 = RevitHelpers.ToInternal(doc, regionArgs[0]), r1 = RevitHelpers.ToInternal(doc, regionArgs[1]);
+            double r2 = RevitHelpers.ToInternal(doc, regionArgs[2]), r3 = RevitHelpers.ToInternal(doc, regionArgs[3]);
+            region = new LayoutMath.Rect(Math.Min(r0, r2), Math.Min(r1, r3), Math.Max(r0, r2), Math.Max(r1, r3));
+            if (page.Value.W <= 0 || region.Value.W <= 0 || region.Value.H <= 0 || !region.Value.Overlaps(page.Value))
+                return ToolResult.Error($"region is outside the sheet; the sheet spans x {RevitHelpers.FromInternal(doc, page.Value.X0)}..{RevitHelpers.FromInternal(doc, page.Value.X1)}, " +
+                                        $"y {RevitHelpers.FromInternal(doc, page.Value.Y0)}..{RevitHelpers.FromInternal(doc, page.Value.Y1)}.");
+            var (dpi, pixels) = LayoutMath.ExportSize(page.Value.W * 304.8, region.Value.W * 304.8, maxWidth, MaxSheetPixels);
+            options.PixelSize = pixels;
+            options.ImageResolution = Resolution(dpi);
+            how += $" Exported the sheet {pixels} px wide at {dpi} dpi and cut out the region.";
+        }
 
         // Zooming crops the view for the export only: the crop is committed inside a group that is then rolled back.
         ViewPlan? plan = null;
@@ -203,6 +227,17 @@ public sealed class CaptureViewImageTool : IRevitTool
                 };
                 plan.CropBoxActive = true;
                 t.Commit();
+                // Keep the pixel width at the export resolution's density for this crop on paper. A much larger image of a
+                // small crop is drawn at a zoom Revit's text placement doesn't follow, which shifts tags and text off their lines.
+                var paperMm = (corners.Max(p => p.X) - corners.Min(p => p.X) + 2 * margin) * 304.8 / Math.Max(1, plan.Scale);
+                var (dpi, pixels) = args.OptLong("resolution_dpi") is { } asked
+                    ? ((int)asked, (int)Math.Max(64, Math.Min(maxWidth, Math.Round(paperMm / 25.4 * asked))))
+                    : LayoutMath.ExportSize(paperMm, paperMm, maxWidth, maxWidth);
+                options.PixelSize = pixels;
+                options.ImageResolution = Resolution(dpi);
+                if (pixels < maxWidth * 0.8)
+                    how += $" The zoomed area is {paperMm:0} mm wide on paper, so it was exported {pixels} px wide at {dpi} dpi to keep text in place; " +
+                           "use a larger margin for a wider image, or capture the sheet with region for full-resolution print.";
             }
             doc.ExportImage(options);
         }
@@ -212,8 +247,44 @@ public sealed class CaptureViewImageTool : IRevitTool
         if (file is null) return ToolResult.Error("Revit did not produce an image for that view.");
         var bytes = File.ReadAllBytes(file);
         try { Directory.Delete(dir, true); } catch (IOException) { }
+        if (page is { } pg && region is { } rg) bytes = CropPng(bytes, pg, rg, maxWidth, ref how);
 
         return new ToolResult($"Image of view '{doc.GetElement(viewId)?.Name}' (Revit image export). {how}" + patternNotes, PngImage: bytes);
+    }
+
+    /// <summary>Widest sheet export for a region capture; an A0 sheet at this width is about 170 dpi.</summary>
+    private const int MaxSheetPixels = 8000;
+
+    private static ImageResolution Resolution(long dpi) => dpi switch
+    {
+        <= 72 => ImageResolution.DPI_72,
+        <= 150 => ImageResolution.DPI_150,
+        <= 300 => ImageResolution.DPI_300,
+        _ => ImageResolution.DPI_600,
+    };
+
+    /// <summary>Cuts a sheet region out of the exported page image and scales it to at most maxWidth.</summary>
+    private static byte[] CropPng(byte[] png, LayoutMath.Rect page, LayoutMath.Rect region, int maxWidth, ref string how)
+    {
+        using var input = new MemoryStream(png);
+        var frame = new System.Windows.Media.Imaging.PngBitmapDecoder(input, System.Windows.Media.Imaging.BitmapCreateOptions.PreservePixelFormat,
+            System.Windows.Media.Imaging.BitmapCacheOption.OnLoad).Frames[0];
+        int w = frame.PixelWidth, h = frame.PixelHeight;
+        // The export fits the sheet's outline to the image; a different shape means the image holds more than the outline.
+        if (Math.Abs(w / (double)h - page.W / page.H) > 0.02 * (page.W / page.H))
+            how += " Note: the exported image's shape differs from the sheet outline, so the cut-out may be offset a little.";
+        var (x, y, cw, ch) = LayoutMath.PixelRegion(page, region, w, h);
+        System.Windows.Media.Imaging.BitmapSource image = new System.Windows.Media.Imaging.CroppedBitmap(frame, new System.Windows.Int32Rect(x, y, cw, ch));
+        if (cw > maxWidth)
+        {
+            var k = maxWidth / (double)cw;
+            image = new System.Windows.Media.Imaging.TransformedBitmap(image, new System.Windows.Media.ScaleTransform(k, k));
+        }
+        var encoder = new System.Windows.Media.Imaging.PngBitmapEncoder();
+        encoder.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(image));
+        using var output = new MemoryStream();
+        encoder.Save(output);
+        return output.ToArray();
     }
 
     /// <summary>

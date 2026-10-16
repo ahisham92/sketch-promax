@@ -220,6 +220,11 @@ public sealed class ToolRegistry
         new RelinquishMineTool(),
         // Detailing, views and annotation repair
         new PlaceDetailItemCopyTool(),
+        // 2D reinforcement drawings with the office's detail families
+        new RftDetailFamiliesTool(),
+        new PlaceAdditionalReinforcementTool(),
+        new PlaceMeshSymbolsTool(),
+        new PlaceColumnSectionDetailsTool(),
         new DuplicateViewToLocationTool(),
         new RelocateViewWithDetailingTool(),
         new CopyViewDetailingTool(),
