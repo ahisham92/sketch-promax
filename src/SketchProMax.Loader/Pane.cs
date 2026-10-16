@@ -259,6 +259,16 @@ internal sealed class PanePage : Page
         _lastBox = Section("Last job", _last);
         body.Children.Add(_lastBox);
         body.Children.Add(Section("Quick tools", _quick));
+        // One small zip of the whole project, to upload to a Claude chat for a report (cores from 0.29 on).
+        var export = Theme.Button(new TextBlock { Text = "Export for Claude", TextWrapping = TextWrapping.Wrap });
+        export.Margin = new Thickness(0, 6, 0, 0);
+        export.MinHeight = 28;
+        export.HorizontalAlignment = HorizontalAlignment.Stretch;
+        export.ToolTip = "Writes one small zip describing this project (quantities, sheets, revisions, schedules, latest checks) " +
+                         "to upload to a Claude chat. The folder opens with the zip selected.";
+        AutomationProperties.SetName(export, "Export for Claude");
+        export.Click += (_, _) => PaneHost.Request("export-pack");
+        body.Children.Add(Section("Share", export));
         _activity = new ScrollViewer
         {
             Content = body, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,

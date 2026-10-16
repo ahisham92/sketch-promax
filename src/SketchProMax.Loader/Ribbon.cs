@@ -57,6 +57,10 @@ internal static class Ribbon
         claude.AddItem(Button<CopyPromptCommand>("CopyPrompt", "Copy\nprompt", "copy",
             "Copies a good first message for Claude to the clipboard. Paste it into a new chat in the Claude desktop app.",
             "The prompt names the open model and asks Claude to look at it and suggest what it can do for you."));
+        claude.AddItem(Button<ChatCommand>("Chat", "Chat", "chat",
+            "Chat with Claude about this model, inside Revit, using your Claude plan.",
+            "Opens the Sketch ProMax pane on its Chat tab. Replies stream in with every Sketch ProMax tool; attach images, " +
+            "PDFs and drawings, or send the current view. The first time, it helps you install Claude Code and sign in."));
         claude.AddItem(Button<OpenClaudeCommand>("OpenClaude", "Open\nClaude", "open",
             "Starts the Claude desktop app, or brings it to the front.",
             "Works with the normal installer and the Microsoft Store version."));
