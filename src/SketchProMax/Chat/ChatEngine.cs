@@ -54,6 +54,15 @@ internal sealed class ChatEngine : IDisposable
         }
     }
 
+    /// <summary>Waits up to <paramref name="ms"/> for the process to end; true when it has. Blocks: call off the UI thread.</summary>
+    public bool WaitForExit(int ms)
+    {
+        Process? process;
+        lock (_gate) process = _process;
+        try { return process is null || process.WaitForExit(ms); }
+        catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception) { return true; }
+    }
+
     /// <summary>Starts the process off the UI thread and writes <paramref name="firstLine"/> to it.</summary>
     public Task StartAsync(string firstLine) => Task.Run(() =>
     {

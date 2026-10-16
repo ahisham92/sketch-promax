@@ -134,9 +134,11 @@ internal static class ClaudeCli
 
     /// <summary>
     /// The engine's start info: Claude Code in print mode with stream-json in and out, our MCP server (the same command
-    /// the desktop app is given) and its tools allowed without prompts, Read for attached files, and nothing else that
-    /// could act on the PC. Anything that would need a permission prompt is denied (dontAsk), because nobody can answer
-    /// a prompt in a hidden process; model changes still go through Revit's own approval dialog in the bridge.
+    /// the desktop app is given) and its tools allowed without prompts, Read, Glob and Grep for attached files, and
+    /// nothing else that could act on the PC. Anything that would need a permission prompt is denied (dontAsk), because
+    /// nobody can answer a prompt in a hidden process. The MCP server is told it serves the chat (SKETCHPROMAX_CHAT), so
+    /// Revit's own dialog asks before model changes (per the settings) and always before code, recipes and files written
+    /// to a folder Claude chose.
     /// </summary>
     public static ProcessStartInfo EngineStart(Install install, string? resumeSessionId)
     {
@@ -155,7 +157,8 @@ internal static class ClaudeCli
                     ["type"] = "stdio",
                     ["command"] = ClaudeRegistration.ConnectorPath,
                     ["args"] = new JsonArray(),
-                    ["env"] = new JsonObject { ["SKETCHPROMAX_REVIT_PID"] = pid },
+                    // SKETCHPROMAX_CHAT: the bridge then asks in Revit before code, recipes and files written where Claude chose.
+                    ["env"] = new JsonObject { ["SKETCHPROMAX_REVIT_PID"] = pid, ["SKETCHPROMAX_CHAT"] = "1" },
                 },
             },
         };
@@ -174,6 +177,13 @@ internal static class ClaudeCli
             "--allowedTools", $"mcp__{ServerName},mcp__{ServerName}__*,Read,Glob,Grep",
             "--permission-mode", "dontAsk",
         };
+        // A connector older than this add-in may not pass SKETCHPROMAX_CHAT on, so Revit would not know to ask: then the
+        // code and recipe tools are left out of the chat altogether.
+        if (ConnectorIsOlder())
+        {
+            args.Add("--disallowedTools");
+            args.Add(string.Join(",", SketchProMax.Tools.OutputPaths.CodeTools.Select(t => $"mcp__{ServerName}__{t}")));
+        }
         if (!string.IsNullOrEmpty(resumeSessionId)) { args.Add("--resume"); args.Add(resumeSessionId!); }
 
         var command = string.Join(" ", args.Select(Quote));
@@ -195,13 +205,30 @@ internal static class ClaudeCli
         return info;
     }
 
+    /// <summary>True when the installed connector's file version is known and older than this add-in.</summary>
+    private static bool ConnectorIsOlder()
+    {
+        try
+        {
+            var info = FileVersionInfo.GetVersionInfo(ClaudeRegistration.ConnectorPath);
+            if (info.FileMajorPart == 0 && info.FileMinorPart == 0 && info.FileBuildPart == 0) return false;
+            return new Version(info.FileMajorPart, info.FileMinorPart, info.FileBuildPart) < Updater.Current;
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or ArgumentException) { return false; }
+    }
+
     /// <summary>Sketch ProMax's agent instructions (also sent by the MCP server) plus what is special about the pane.</summary>
     private static string Prompt() => SketchProMax.Agent.SystemPrompt.Build(AgentSettings.Load().FirmStandards) + """
 
 
         You are chatting in the Sketch ProMax pane inside this Revit window. The person is a structural engineer.
         - The Revit tools come from the sketch-promax MCP server and act on this Revit window. Use them for anything about
-          the model; you cannot run shell commands, edit files or browse the web here.
+          the model. Besides them you have only Read, Glob and Grep (to look at files on this PC); there is no shell, file
+          editing or web access here.
+        - Revit asks the user to approve some calls before they run: model changes (unless they turned that off), and
+          always run_revit_query_code, run_revit_code, recipes, and tools that write files to a folder or file name you
+          give. Prefer the dedicated tools, and leave folder and file_name out unless the user asked for a location. If
+          the user declines, ask what they want instead.
         - Files the user attaches are named by full path. Read them with the Read tool (PDFs and images too). For DWG or
           DXF files, pass the path to the Revit tools (for example import_cad); don't try to Read them.
         - Answer in Markdown: short paragraphs, lists and tables. Keep tables narrow (the pane is narrow), and put numbers

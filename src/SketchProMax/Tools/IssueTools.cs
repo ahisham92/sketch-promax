@@ -270,7 +270,7 @@ public sealed class IssueDrawingsTool : IRevitTool
         if (sheets.Count == 0) return ToolResult.Error("No sheets match.");
         var missing = numbers.Where(n => sheets.All(s => s.SheetNumber != n)).ToList();
         var date = args.OptString("date") ?? DateTime.Now.ToString("yyyy-MM-dd");
-        var folder = args.OptString("folder") ?? System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "SketchProMax", $"Issue {date}");
+        var folder = OutputPaths.Checked(args.OptString("folder")) ?? System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "SketchProMax", $"Issue {date}");
         var pattern = args.OptString("name_pattern") ?? "{number} - {name}";
         var steps = new List<object>();
         string Short(ToolResult r) => (r.IsError ? "ERROR: " : "") + (r.Text.Length > 600 ? r.Text.Substring(0, 600) + "..." : r.Text);

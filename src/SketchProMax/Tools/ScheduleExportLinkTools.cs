@@ -247,10 +247,10 @@ public sealed class ExportFilesTool : IRevitTool
     public ToolResult Execute(UIApplication app, ToolArgs args)
     {
         var doc = app.ActiveUIDocument.Document;
-        var folder = args.OptString("folder")
+        var folder = OutputPaths.Checked(args.OptString("folder"))
             ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "SketchProMax");
         Directory.CreateDirectory(folder);
-        var name = args.OptString("file_name") ?? $"{doc.Title} - {DateTime.Now:yyyy-MM-dd HHmm}";
+        var name = OutputPaths.Checked(args.OptString("file_name")) ?? $"{doc.Title} - {DateTime.Now:yyyy-MM-dd HHmm}";
         var ids = args.LongList("view_ids").Select(i => new ElementId(i)).ToList();
         // Exports overwrite same-named files, so a file counts as produced if it is new or was written after we started.
         var before = new HashSet<string>(Directory.GetFiles(folder), StringComparer.OrdinalIgnoreCase);

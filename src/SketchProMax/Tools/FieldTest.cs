@@ -1314,7 +1314,7 @@ public sealed class RunFieldTestTool : IRevitTool
             IncludeHeavy = args.OptBool("include_heavy", true),
             KeepProject = args.OptBool("keep_project"),
             Workshared = args.OptBool("workshared", true),
-            ReportFolder = args.OptString("report_folder"),
+            ReportFolder = OutputPaths.Checked(args.OptString("report_folder")),
             ToolCapSeconds = (int)Math.Max(10, Math.Min(1800, args.OptLong("tool_time_cap_seconds") ?? 120)),
         };
         if (Jobs.CanContinue(Name) is not { } job)

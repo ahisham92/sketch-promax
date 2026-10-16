@@ -17,17 +17,32 @@ internal sealed class PackProgress : IDisposable
     private Dispatcher? _dispatcher;
     private Window? _window;
 
+    // Set by Dispose. Guarded with _dispatcher by _gate, so a close asked for before the window's thread is up is never lost.
+    private readonly object _gate = new();
+    private bool _closeRequested;
+
     private PackProgress() { }
 
     public static PackProgress Show(string title, string headline)
     {
         var progress = new PackProgress();
-        using var ready = new ManualResetEventSlim();
+        // Not disposed: the thread may still set it after Show stopped waiting.
+        var ready = new ManualResetEventSlim();
         var thread = new Thread(() =>
         {
             try
             {
-                progress._dispatcher = Dispatcher.CurrentDispatcher;
+                lock (progress._gate)
+                {
+                    if (progress._closeRequested) return;
+                    progress._dispatcher = Dispatcher.CurrentDispatcher;
+                }
+                // This thread is not Revit's, but an exception escaping it would still end Revit: swallow it, close the window.
+                progress._dispatcher.UnhandledException += (_, e) =>
+                {
+                    e.Handled = true;
+                    try { progress._window?.Close(); } catch (Exception) { }
+                };
                 var line = new TextBlock { Text = "Starting…", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 12), MinHeight = 34 };
                 var bar = new ProgressBar { IsIndeterminate = true, Height = 6 };
                 var stop = new Button { Content = "Stop", Padding = new Thickness(16, 4, 16, 4), HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 12, 0, 0) };
@@ -61,7 +76,9 @@ internal sealed class PackProgress : IDisposable
             }
             catch (Exception) { progress._window = null; }
             finally { ready.Set(); }
-            Dispatcher.Run();
+            if (progress._dispatcher is null) return;
+            try { Dispatcher.Run(); }
+            catch (Exception) { /* never take Revit down with a progress window */ }
         })
         { IsBackground = true, Name = "Sketch ProMax progress" };
         thread.SetApartmentState(ApartmentState.STA);
@@ -72,7 +89,13 @@ internal sealed class PackProgress : IDisposable
 
     public void Dispose()
     {
-        var dispatcher = _dispatcher;
+        Dispatcher? dispatcher;
+        lock (_gate)
+        {
+            _closeRequested = true;
+            dispatcher = _dispatcher;
+        }
+        // Null: the thread is not up yet, and sees _closeRequested before it shows anything.
         if (dispatcher is null || dispatcher.HasShutdownStarted) return;
         try
         {

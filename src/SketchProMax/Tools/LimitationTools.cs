@@ -261,7 +261,8 @@ public sealed class SaveLegendSeedTool : IRevitTool
         if (legend is null)
             return ToolResult.Error("No open model has a legend. Make one by hand once (View > Legends > Legend), then run save_legend_seed again.");
 
-        var path = Environment.ExpandEnvironmentVariables((args.OptString("path") ?? LegendSeeds.SavedSeedPath).Trim().Trim('"'));
+        var given = args.OptString("path") is { } p ? OutputPaths.Checked(Environment.ExpandEnvironmentVariables(p.Trim().Trim('"'))) : null;
+        var path = given ?? Environment.ExpandEnvironmentVariables(LegendSeeds.SavedSeedPath.Trim().Trim('"'));
         if (!path.EndsWith(".rvt", StringComparison.OrdinalIgnoreCase)) throw new ArgumentException("path must end in .rvt.");
         if (app.Application.Documents.Cast<Document>().Any(d => string.Equals(d.PathName, path, StringComparison.OrdinalIgnoreCase)))
             return ToolResult.Error($"{path} is open in Revit; close it first.");

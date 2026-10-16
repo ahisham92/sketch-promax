@@ -769,9 +769,9 @@ public sealed class ExportBarScheduleTool : IRevitTool
         sb.AppendLine("Bar size,Diameter (mm),Total length (m),Weight (kg),Weight (t)");
         foreach (var kv in totals) sb.AppendLine($"{Csv(kv.Value.size)},{N(kv.Key)},{N(kv.Value.m)},{N(kv.Value.kg)},{N(kv.Value.kg / 1000)}");
 
-        var folder = args.OptString("folder") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "SketchProMax");
+        var folder = OutputPaths.Checked(args.OptString("folder")) ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "SketchProMax");
         Directory.CreateDirectory(folder);
-        var file = Path.Combine(folder, (args.OptString("file_name") ?? $"{doc.Title} - Bar schedule {DateTime.Now:yyyy-MM-dd}") + ".csv");
+        var file = Path.Combine(folder, (OutputPaths.Checked(args.OptString("file_name")) ?? $"{doc.Title} - Bar schedule {DateTime.Now:yyyy-MM-dd}") + ".csv");
         File.WriteAllText(file, sb.ToString(), new UTF8Encoding(true));
         return ToolResult.Ok(new
         {

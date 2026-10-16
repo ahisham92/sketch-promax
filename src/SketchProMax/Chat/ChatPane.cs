@@ -88,9 +88,12 @@ internal sealed class ChatPane : DockPanel
         pane._engine = null;
     }
 
+    /// <summary>The key a model's conversation is saved under (ChatStore): its path, or its title when never saved.</summary>
+    internal static string ModelKey(Autodesk.Revit.DB.Document doc) => string.IsNullOrEmpty(doc.PathName) ? doc.Title : doc.PathName;
+
     private static void SetModel(Autodesk.Revit.DB.Document doc)
     {
-        var key = string.IsNullOrEmpty(doc.PathName) ? doc.Title : doc.PathName;
+        var key = ModelKey(doc);
         if (string.Equals(key, _modelKey, StringComparison.OrdinalIgnoreCase)) return;
         _modelKey = key;
         _modelTitle = doc.Title;
@@ -760,14 +763,23 @@ internal sealed class ChatPane : DockPanel
         {
             turn.Line = await Task.Run(() => BuildMessage(text, attachments));
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or InvalidOperationException or ArgumentException)
+        catch (Exception ex)
         {
-            EndTurn();
+            // Whatever went wrong (an unreadable file, a picture WPF can't decode), the pane must not stay busy.
+            if (_turn == turn) EndTurn();
             Error($"An attachment couldn't be read: {ex.Message} Remove it or attach it again, then send.");
             return;
         }
         if (_turn != turn) return; // stopped meanwhile
-        await Deliver(turn);
+        try
+        {
+            await Deliver(turn);
+        }
+        catch (Exception ex)
+        {
+            if (_turn == turn) EndTurn();
+            Error($"The message could not be sent to Claude Code ({ex.Message}). Send it again.");
+        }
     }
 
     private async Task Deliver(Turn turn)
@@ -793,8 +805,10 @@ internal sealed class ChatPane : DockPanel
         {
             if (_turn != turn) return;
             // Writing failed because Claude Code already ended (a bad option, a session it couldn't open): its Exited
-            // event follows and says why, or starts fresh.
-            if (ex is IOException && _engine is { IsAlive: false }) return;
+            // event follows and says why, or starts fresh. The pipe can break a moment before the process is seen to end,
+            // so it gets half a second to end before it is killed.
+            if (ex is IOException && _engine is { } ended && await Task.Run(() => ended.WaitForExit(500))) return;
+            if (_turn != turn) return; // stopped meanwhile
             _engine?.Kill();
             _engine = null;
             EndTurn();
@@ -856,25 +870,31 @@ internal sealed class ChatPane : DockPanel
         var bytes = File.ReadAllBytes(path);
         var type = ImageType(path)!;
         var native = System.IO.Path.GetExtension(path).ToLowerInvariant() is ".png" or ".jpg" or ".jpeg" or ".gif" or ".webp";
-        if (native && bytes.Length <= 3_500_000 && type != "image/webp")
-        {
-            try
-            {
-                var probe = BitmapDecoder.Create(new MemoryStream(bytes), BitmapCreateOptions.DelayCreation, BitmapCacheOption.None).Frames[0];
-                if (Math.Max(probe.PixelWidth, probe.PixelHeight) <= 2000) return (type, Convert.ToBase64String(bytes));
-            }
-            catch (Exception ex) when (ex is NotSupportedException or FileFormatException or ArgumentException or InvalidOperationException) { }
-        }
-        else if (native && bytes.Length <= 3_500_000) return (type, Convert.ToBase64String(bytes)); // WebP: WPF may not decode it
+        if (native && bytes.Length <= 3_500_000 && type == "image/webp") return (type, Convert.ToBase64String(bytes)); // WPF may not decode it
 
-        var frame = BitmapDecoder.Create(new MemoryStream(bytes), BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad).Frames[0];
-        BitmapSource source = frame;
-        var longest = Math.Max(frame.PixelWidth, frame.PixelHeight);
-        if (longest > 1568)
+        // The size from the header only, so a huge photo is never decoded at full resolution.
+        int width = 0, height = 0;
+        try
         {
-            var scale = 1568.0 / longest;
-            source = new TransformedBitmap(frame, new ScaleTransform(scale, scale));
+            var probe = BitmapDecoder.Create(new MemoryStream(bytes), BitmapCreateOptions.DelayCreation, BitmapCacheOption.None).Frames[0];
+            (width, height) = (probe.PixelWidth, probe.PixelHeight);
         }
+        catch (Exception ex) when (ex is NotSupportedException or FileFormatException or ArgumentException or InvalidOperationException) { }
+        if (native && bytes.Length <= 3_500_000 && width > 0 && Math.Max(width, height) <= 2000) return (type, Convert.ToBase64String(bytes));
+
+        // Decoded straight to at most 1568 px on the long side (setting one side keeps the aspect ratio).
+        var image = new BitmapImage();
+        image.BeginInit();
+        image.CacheOption = BitmapCacheOption.OnLoad;
+        image.StreamSource = new MemoryStream(bytes);
+        if (width <= 0 || Math.Max(width, height) > 1568)
+        {
+            if (width >= height) image.DecodePixelWidth = 1568;
+            else image.DecodePixelHeight = 1568;
+        }
+        image.EndInit();
+        image.Freeze();
+        BitmapSource source = image;
         var png = Encode(new PngBitmapEncoder(), source);
         if (png.Length <= 3_500_000) return ("image/png", Convert.ToBase64String(png));
         var jpeg = Encode(new JpegBitmapEncoder { QualityLevel = 85 }, new FormatConvertedBitmap(source, PixelFormats.Bgr24, null, 0));

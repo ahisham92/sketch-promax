@@ -24,6 +24,7 @@ namespace SketchProMax.Bridge;
 ///   {"method":"ping"}                                   -> {"ok":true,"pid":..,"revitVersion":"2025","documents":[..]}
 ///   {"method":"activate_document","title":"..."}       -> {"ok":true} or {"text":"...","isError":true}
 ///   {"method":"call_tool","name":"...","arguments":{}}  -> {"text":"...","isError":false,"pngBase64":null}
+///   (call_tool may carry "origin":"chat" when the in-Revit chat started the connector; see OutputPaths.ChatApprovalReason.)
 /// The tool catalogue is written to %APPDATA%\SketchProMax\tools.json at startup so the MCP server can
 /// list tools even before Revit is running.
 /// </summary>
@@ -247,7 +248,8 @@ public sealed class BridgeServer
                     var args = root.TryGetProperty("arguments", out var a) && a.ValueKind == JsonValueKind.Object
                         ? a.EnumerateObject().ToDictionary(p => p.Name, p => p.Value.Clone())
                         : new Dictionary<string, JsonElement>();
-                    var result = await CallTool(name, args, ct).ConfigureAwait(false);
+                    var fromChat = root.TryGetProperty("origin", out var origin) && origin.ValueKind == JsonValueKind.String && origin.GetString() == "chat";
+                    var result = await CallTool(name, args, fromChat, ct).ConfigureAwait(false);
                     return JsonSerializer.Serialize(new
                     {
                         text = result.Text,
@@ -271,7 +273,7 @@ public sealed class BridgeServer
     /// <summary>How long a call waits for its result before returning "still running" (the connector gives up later than this).</summary>
     private const int InlineWaitMs = 45000;
 
-    private async Task<ToolResult> CallTool(string name, Dictionary<string, JsonElement> args, CancellationToken ct)
+    private async Task<ToolResult> CallTool(string name, Dictionary<string, JsonElement> args, bool fromChat, CancellationToken ct)
     {
         // Job questions are answered here, without Revit's thread, so they work while Revit is busy.
         if (name == "wait_for_job") return await WaitForJobTool.AnswerAsync(new ToolArgs(args), ct).ConfigureAwait(false);
@@ -294,8 +296,12 @@ public sealed class BridgeServer
         if (_dispatcher.IsRunning) return Jobs.Busy(null);
 
         // A learned tool's code is asked about the first time it runs (and after it changes), even when read-only.
+        // From the in-Revit chat, code, recipes and files written where Claude chose are always asked about: Claude Code
+        // runs there without its own permission prompts, so this dialog is the only place the user sees them.
+        var chatReason = fromChat ? OutputPaths.ChatApprovalReason(tool.Name, args) : null;
         var confirm = tool.ModifiesModel && AgentSettings.Load().RequireApprovalForChanges
-                      || tool is LearnedTool unapproved && !LearnedTools.IsApproved(unapproved.Code);
+                      || tool is LearnedTool unapproved && !LearnedTools.IsApproved(unapproved.Code)
+                      || chatReason is not null;
 
         var job = Jobs.TryCreate(tool.Name, out var inTheWay);
         if (job is null) return Jobs.Busy(inTheWay);
@@ -310,7 +316,7 @@ public sealed class BridgeServer
             try
             {
                 if (app.ActiveUIDocument is null) return ToolResult.Error("No model is open in Revit. Ask the user to open one.");
-                if (confirm && !Approve(tool, args)) return ToolResult.Error("The user rejected this change in Revit. Ask them how to proceed.");
+                if (confirm && !Approve(tool, args, chatReason)) return ToolResult.Error("The user rejected this change in Revit. Ask them how to proceed.");
                 var result = FailureGuard.Run(() =>
                 {
                     try { return tool.Execute(app, new ToolArgs(args)); }
@@ -379,9 +385,10 @@ public sealed class BridgeServer
 
     /// <summary>
     /// Asks the user before a tool runs. Call on Revit's main thread. Approving a learned tool also approves its code,
-    /// so it isn't asked about again until the code changes.
+    /// so it isn't asked about again until the code changes. <paramref name="reason"/>: why it is asked, when that is
+    /// not simply a model change (a call from the in-Revit chat).
     /// </summary>
-    internal static bool Approve(IRevitTool tool, IReadOnlyDictionary<string, JsonElement> args)
+    internal static bool Approve(IRevitTool tool, IReadOnlyDictionary<string, JsonElement> args, string? reason = null)
     {
         // Show code as code, so the user can read what will run.
         var json = tool is LearnedTool learned
@@ -394,7 +401,8 @@ public sealed class BridgeServer
         var dialog = new TaskDialog("Sketch ProMax")
         {
             MainInstruction = $"Claude wants to run '{tool.Name}'",
-            MainContent = (firstRun ? "This learned tool's code has not been approved on this PC yet, or it changed since. Read it below. " : "") +
+            MainContent = (reason is null ? "" : reason + " ") +
+                          (firstRun ? "This learned tool's code has not been approved on this PC yet, or it changed since. Read it below. " : "") +
                           (tool.ModifiesModel
                               ? "This changes the model. Each change can be undone with Ctrl+Z."
                               : "It only reads the model; any change it tries is rolled back."),

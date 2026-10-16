@@ -49,6 +49,50 @@ internal static class ChatTests
         var error = new StreamParser().ParseLine("""{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["boom"],"session_id":"s"}""");
         check("stream: error result", error.SingleOrDefault() is ResultEvent { IsError: true } r && r.Errors.SequenceEqual(new[] { "boom" }), "");
 
+        // Several lines in one chunk, a chunk that ends exactly at a newline, empty chunks, CRLF line ends.
+        var bulk = new StreamParser();
+        var got = new List<ChatEvent>();
+        got.AddRange(bulk.Feed(""));
+        got.AddRange(bulk.Feed(lines[3] + "\r\n" + lines[4] + "\n"));
+        got.AddRange(bulk.Feed(""));
+        got.AddRange(bulk.Feed(lines[14].Substring(0, 20)));
+        var beforeEnd = got.Count;
+        got.AddRange(bulk.Feed(lines[14].Substring(20) + "\n"));
+        check("stream: many lines per chunk, CRLF and empty chunks",
+            string.Concat(got.OfType<TextDeltaEvent>().Select(d => d.Text)) == "Hello **there**" && beforeEnd == 2 && got.Last() is ResultEvent, "");
+        // A long line in many small pieces: each piece is searched once, so this stays fast.
+        var longText = new string('x', 400_000);
+        var longLine = "{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"result\":\"" + longText + "\",\"session_id\":\"s\"}\n";
+        var slow = new StreamParser();
+        var timer = System.Diagnostics.Stopwatch.StartNew();
+        var longEvents = new List<ChatEvent>();
+        for (var at = 0; at < longLine.Length; at += 64) longEvents.AddRange(slow.Feed(longLine.Substring(at, Math.Min(64, longLine.Length - at))));
+        check("stream: a long line in small pieces parses quickly",
+            longEvents.SingleOrDefault() is ResultEvent && timer.ElapsedMilliseconds < 2000, $"{timer.ElapsedMilliseconds} ms");
+
+        // Caller-supplied output paths.
+        string?[] fine = [null, "", @"C:\Users\me\Documents\packs", @"D:\Projects\Tower", "packs", @"sub\name", "Console notes", "Connection.csv", "my.con.txt"];
+        foreach (var p in fine)
+            check($"paths: '{p}' is allowed", SketchProMax.Tools.OutputPaths.Problem(p) is null, SketchProMax.Tools.OutputPaths.Problem(p) ?? "");
+        string[] refused = [@"\\server\share\packs", "//server/share", @"\\?\C:\x", @"\\.\PhysicalDrive0", "CON", @"C:\temp\nul.txt", "com1", @"C:\x\LPT9 ", @"C:\x\file.txt:stream", "ab:c", @" \\server\s"];
+        foreach (var p in refused)
+            check($"paths: '{p}' is refused", SketchProMax.Tools.OutputPaths.Problem(p) is not null, "");
+        var threw = false;
+        try { SketchProMax.Tools.OutputPaths.Checked(@"\\server\share"); } catch (ArgumentException) { threw = true; }
+        check("paths: Checked throws ArgumentException", threw && SketchProMax.Tools.OutputPaths.Checked(@"C:\a") == @"C:\a", "");
+
+        // Which chat calls Revit always asks about.
+        Dictionary<string, JsonElement> Args(string json) =>
+            JsonDocument.Parse(json).RootElement.EnumerateObject().ToDictionary(p => p.Name, p => p.Value.Clone());
+        check("chat approval: code tools", SketchProMax.Tools.OutputPaths.ChatApprovalReason("run_revit_query_code", Args("{}")) is not null &&
+                                          SketchProMax.Tools.OutputPaths.ChatApprovalReason("run_recipe", Args("""{"name":"x"}""")) is not null, "");
+        check("chat approval: a folder Claude chose",
+            SketchProMax.Tools.OutputPaths.ChatApprovalReason("export_project_pack", Args("""{"folder":"C:\\x"}"""))?.Contains(@"C:\x") == true, "");
+        check("chat approval: defaults need none",
+            SketchProMax.Tools.OutputPaths.ChatApprovalReason("export_project_pack", Args("""{"include_chat":true,"folder":""}""")) is null &&
+            SketchProMax.Tools.OutputPaths.ChatApprovalReason("import_cad", Args("""{"path":"C:\\a.dwg"}""")) is null &&
+            SketchProMax.Tools.OutputPaths.ChatApprovalReason("save_legend_seed", Args("""{"path":"C:\\a.rvt"}""")) is not null, "");
+
         // What the pane writes.
         using (var doc = JsonDocument.Parse(StreamInput.UserMessage("hi \"there\"", new[] { ("image/png", "AAAA") })))
         {

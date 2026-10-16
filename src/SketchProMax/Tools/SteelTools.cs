@@ -645,9 +645,9 @@ public sealed class ExportSteelTakeoffTool : IRevitTool
             .GroupBy(h => doc.GetElement(h.GetTypeId())?.Name ?? "?").ToDictionary(g => g.Key, g => g.Count());
         if (rows.Count == 0 && connections.Count == 0) return ToolResult.Error("No steel framing, columns or connections found.");
 
-        var folder = args.OptString("folder") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "SketchProMax");
+        var folder = OutputPaths.Checked(args.OptString("folder")) ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "SketchProMax");
         Directory.CreateDirectory(folder);
-        var file = Path.Combine(folder, (args.OptString("file_name") ?? $"{doc.Title} - Steel takeoff {DateTime.Now:yyyy-MM-dd}") + ".csv");
+        var file = Path.Combine(folder, (OutputPaths.Checked(args.OptString("file_name")) ?? $"{doc.Title} - Steel takeoff {DateTime.Now:yyyy-MM-dd}") + ".csv");
         string Csv(string s) => s.IndexOfAny([',', '"', '\n']) >= 0 ? "\"" + s.Replace("\"", "\"\"") + "\"" : s;
         string N(double v) => Math.Round(v, 2).ToString(System.Globalization.CultureInfo.InvariantCulture);
         var sb = new StringBuilder();

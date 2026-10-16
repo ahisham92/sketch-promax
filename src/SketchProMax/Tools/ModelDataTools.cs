@@ -116,10 +116,10 @@ public sealed class ExportScheduleTool : IRevitTool
         var doc = app.ActiveUIDocument.Document;
         if (doc.GetElement(new ElementId(args.OptLong("schedule_id") ?? -1)) is not ViewSchedule schedule)
             return ToolResult.Error("schedule_id is not a schedule.");
-        var folder = args.OptString("folder")
+        var folder = OutputPaths.Checked(args.OptString("folder"))
             ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "SketchProMax");
         Directory.CreateDirectory(folder);
-        var name = (args.OptString("file_name") ?? schedule.Name) + ".csv";
+        var name = (OutputPaths.Checked(args.OptString("file_name")) ?? schedule.Name) + ".csv";
         foreach (var bad in Path.GetInvalidFileNameChars()) name = name.Replace(bad, '_');
         schedule.Export(folder, name, new ViewScheduleExportOptions { FieldDelimiter = ",", TextQualifier = ExportTextQualifier.DoubleQuote });
         return ToolResult.Ok(new { file = Path.Combine(folder, name) });

@@ -356,7 +356,7 @@ public sealed class BatchRunRecipeTool : IRevitTool
         if (!File.Exists(Recipes.PathFor(args.String("recipe")))) return ToolResult.Error($"No recipe named '{args.String("recipe")}'.");
 
         var startDoc = app.ActiveUIDocument?.Document;
-        var output = args.OptString("output_folder");
+        var output = OutputPaths.Checked(args.OptString("output_folder"));
         if (output != null) Directory.CreateDirectory(output);
         var values = args.Has("values") ? args.Raw["values"] : (JsonElement?)null;
         var report = new List<object>();

@@ -55,15 +55,17 @@ internal sealed class StreamParser
     public List<ChatEvent> Feed(string chunk)
     {
         var events = new List<ChatEvent>();
-        _pending.Append(chunk);
-        while (true)
+        // Only the new chunk is searched for line ends: a long line arriving in many pieces is not rescanned each time.
+        var start = 0;
+        for (var nl = chunk.IndexOf('\n'); nl >= 0; nl = chunk.IndexOf('\n', start))
         {
-            var text = _pending.ToString();
-            var nl = text.IndexOf('\n');
-            if (nl < 0) break;
-            _pending.Remove(0, nl + 1);
-            events.AddRange(ParseLine(text.Substring(0, nl)));
+            _pending.Append(chunk, start, nl - start);
+            var line = _pending.ToString();
+            _pending.Clear();
+            start = nl + 1;
+            events.AddRange(ParseLine(line));
         }
+        _pending.Append(chunk, start, chunk.Length - start);
         return events;
     }
 

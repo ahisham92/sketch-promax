@@ -125,7 +125,7 @@ public sealed class ConstructionSequenceTool : IRevitTool
         if (notWritten == groups.Values.Sum(g => g.Count)) { t.RollBack(); return ToolResult.Error($"No element has a writable whole-number '{paramName}' parameter; pick another parameter name."); }
         if (t.Commit() != TransactionStatus.Committed) return ToolResult.Error("Revit refused the sequence when saving it.");
 
-        var folder = args.OptString("folder") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "SketchProMax");
+        var folder = OutputPaths.Checked(args.OptString("folder")) ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "SketchProMax");
         Directory.CreateDirectory(folder);
         var file = Path.Combine(folder, $"{doc.Title} - Construction sequence {DateTime.Now:yyyy-MM-dd}.csv");
         File.WriteAllText(file, "Step,Storey,Trade,Elements\n" + string.Join("\n", steps.Select(s => $"{s.step},\"{s.storey}\",\"{s.trade}\",{s.count}")), new UTF8Encoding(true));
@@ -460,7 +460,7 @@ public sealed class LoadingPlanTool : IRevitTool
         }
         if (t.Commit() != TransactionStatus.Committed) return ToolResult.Error("Revit refused the loading plan when saving it.");
 
-        var folder = args.OptString("folder") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "SketchProMax");
+        var folder = OutputPaths.Checked(args.OptString("folder")) ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "SketchProMax");
         Directory.CreateDirectory(folder);
         var file = Path.Combine(folder, $"{doc.Title} - Loading plan {level.Name} {DateTime.Now:yyyy-MM-dd}.csv");
         string Csv(string s) => s.IndexOfAny([',', '"', '\n']) >= 0 ? "\"" + s.Replace("\"", "\"\"") + "\"" : s;

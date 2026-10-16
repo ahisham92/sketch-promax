@@ -12,7 +12,7 @@ namespace SketchProMax.Tools;
 
 /// <summary>
 /// "Export for Claude": one small zip that describes the open project (project data, quantities, drawings, schedules,
-/// the latest saved check results, change tracking, worksets, links and recent chats) so it can be uploaded to a Claude
+/// the latest saved check results, change tracking, worksets, links and this model's chat) so it can be uploaded to a Claude
 /// chat to prepare a report. Read-only on the model. Every part is capped so the zip stays small on big models.
 /// </summary>
 public sealed class ExportProjectPackTool : IRevitTool
@@ -26,7 +26,7 @@ public sealed class ExportProjectPackTool : IRevitTool
         "drawings.csv (sheets with current revision and issue status), views.csv, revisions.csv, schedules/ (up to 30 " +
         "schedules as CSV, sheet-placed first), checks/ (the newest saved results of the model check, clash, drawing, " +
         "rules, spec, BOQ, steel, rebar and precast tools), changes.json (snapshots and the latest change comparison), " +
-        "worksets.csv, links.csv (Revit and CAD links with paths and load status) and chat/ (recent in-Revit chats). " +
+        "worksets.csv, links.csv (Revit and CAD links with paths and load status) and chat/ (this model's in-Revit chat). " +
         "No images unless include_images. Read-only. Defaults to Documents\\SketchProMax\\packs.";
     public string PropertiesJson => """
     {
@@ -34,7 +34,7 @@ public sealed class ExportProjectPackTool : IRevitTool
       "next_to_model": {"type": "boolean", "description": "Write the zip in the model's own folder instead (default false; ignored for cloud or unsaved models)."},
       "include_images": {"type": "boolean", "description": "Add small JPEG images of the active view and the first sheets (default false)."},
       "max_images": {"type": "integer", "description": "With include_images: how many sheet images, 0-12 (default 4)."},
-      "include_chat": {"type": "boolean", "description": "Add recent in-Revit chat transcripts if there are any (default true)."},
+      "include_chat": {"type": "boolean", "description": "Add this model's in-Revit chat, if it has one (default true)."},
       "run_checks": {"type": "boolean", "description": "Run the model check first so checks/ has a fresh result (default false: only results already saved are packed)."},
       "max_schedules": {"type": "integer", "description": "How many schedules to export, 0-60 (default 30; sheet-placed schedules first)."},
       "max_schedule_rows": {"type": "integer", "description": "Rows kept per schedule, 10-5000 (default 500)."},
@@ -51,7 +51,10 @@ internal static class ProjectPack
 {
     private const int CheckFileCap = 300_000, ChecksTotalCap = 1_500_000;
     private const int ScheduleFileCap = 150_000, SchedulesTotalCap = 1_500_000;
-    private const int ChatFileCap = 150_000, ChatTotalCap = 400_000;
+    private const int ChatFileCap = 400_000;
+
+    /// <summary>Schedules with more body rows than this are not exported at all: Revit's export of them alone can take minutes.</summary>
+    private const int HugeScheduleRows = 20_000;
 
     /// <summary>Where packs go when no folder is given.</summary>
     public static string DefaultFolder =>
@@ -141,7 +144,7 @@ internal static class ProjectPack
         var modelName = ModelName(doc);
 
         string folder;
-        if (args.OptString("folder") is { Length: > 0 } f) folder = f;
+        if (OutputPaths.Checked(args.OptString("folder")) is { Length: > 0 } f) folder = f;
         else if (args.OptBool("next_to_model") && !string.IsNullOrEmpty(doc.PathName) && Path.IsPathRooted(doc.PathName) && Path.GetDirectoryName(doc.PathName) is { Length: > 0 } dir) folder = dir;
         else folder = DefaultFolder;
         try { Directory.CreateDirectory(folder); }
@@ -183,24 +186,35 @@ internal static class ProjectPack
             if (checkRun is not null) pack.Notes.Add(checkRun);
             Step("change tracking");
             Changes(doc, modelName, pack);
-            if (args.OptBool("include_chat", true)) Chats(doc, modelName, pack);
+            if (args.OptBool("include_chat", true)) Chat(doc, pack);
             if (args.OptBool("include_images")) Images(doc, app, pack, temp, (int)Math.Max(0, Math.Min(12, args.OptLong("max_images") ?? 4)));
 
             Step("writing the zip");
             var readme = Readme(app, doc, modelName, started, pack);
             var file = Path.Combine(folder, $"{Safe(modelName)} - Claude pack {started:yyyy-MM-dd HHmm}.zip");
             if (File.Exists(file)) file = Path.Combine(folder, $"{Safe(modelName)} - Claude pack {started:yyyy-MM-dd HHmmss}.zip");
-            using (var stream = new FileStream(file, FileMode.Create, FileAccess.Write))
-            using (var zip = new ZipArchive(stream, ZipArchiveMode.Create))
+            // Written beside the final name and moved into place, so a failed write never leaves a broken zip behind.
+            var partial = file + ".partial";
+            try
             {
-                void Add(string name, byte[] data)
+                using (var stream = new FileStream(partial, FileMode.Create, FileAccess.Write))
+                using (var zip = new ZipArchive(stream, ZipArchiveMode.Create))
                 {
-                    var entry = zip.CreateEntry(name, name.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase) ? CompressionLevel.NoCompression : CompressionLevel.Optimal);
-                    using var s = entry.Open();
-                    s.Write(data, 0, data.Length);
+                    void Add(string name, byte[] data)
+                    {
+                        var entry = zip.CreateEntry(name, name.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase) ? CompressionLevel.NoCompression : CompressionLevel.Optimal);
+                        using var s = entry.Open();
+                        s.Write(data, 0, data.Length);
+                    }
+                    Add("README.md", Encoding.UTF8.GetBytes(readme));
+                    foreach (var (name, data, _) in pack.Files) Add(name, data);
                 }
-                Add("README.md", Encoding.UTF8.GetBytes(readme));
-                foreach (var (name, data, _) in pack.Files) Add(name, data);
+                File.Move(partial, file);
+            }
+            catch
+            {
+                try { File.Delete(partial); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+                throw;
             }
             var size = new FileInfo(file).Length;
 
@@ -588,10 +602,21 @@ internal static class ProjectPack
         var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         long total = 0;
         int done = 0, failed = 0;
+        var huge = new List<string>();
         var index = new StringBuilder("File,Schedule,On a sheet,Rows exported,Rows in schedule,Truncated\n");
         foreach (var s in all)
         {
             if (done >= max || total >= SchedulesTotalCap) break;
+            // Counted before exporting: a schedule of every element in a big model would stall the pack for minutes.
+            int bodyRows;
+            try { bodyRows = s.GetTableData().GetSectionData(SectionType.Body)?.NumberOfRows ?? 0; }
+            catch (Autodesk.Revit.Exceptions.ApplicationException) { bodyRows = 0; }
+            if (bodyRows > HugeScheduleRows)
+            {
+                huge.Add($"{s.Name} ({bodyRows:N0} rows)");
+                index.AppendLine(Row("", s.Name, placed.Contains(s.Id.Value) ? "Yes" : "No", 0, bodyRows, "Skipped: too many rows"));
+                continue;
+            }
             Step($"schedule {done + 1} of {Math.Min(max, all.Count)}: {s.Name}");
             var name = Safe(s.Name);
             for (var i = 2; !used.Add(name); i++) name = Safe(s.Name) + " " + i;
@@ -601,25 +626,28 @@ internal static class ProjectPack
                 s.Export(dir, file, new ViewScheduleExportOptions { FieldDelimiter = ",", TextQualifier = ExportTextQualifier.DoubleQuote });
                 var path = Path.Combine(dir, file);
                 if (!File.Exists(path)) { failed++; continue; }
-                var lines = File.ReadAllLines(path);
                 var keep = new StringBuilder();
                 var kept = 0;
-                foreach (var line in lines)
+                var more = false;
+                // One line past the cap is read, only to know whether anything was left out.
+                foreach (var line in File.ReadLines(path).Take(maxRows + 1))
                 {
-                    if (kept >= maxRows || keep.Length + line.Length > ScheduleFileCap) break;
+                    if (kept >= maxRows || keep.Length + line.Length > ScheduleFileCap) { more = true; break; }
                     keep.AppendLine(line);
                     kept++;
                 }
-                var truncated = kept < lines.Length;
-                if (truncated) keep.AppendLine($"\"… {lines.Length - kept} more rows not included (Export for Claude caps each schedule)\"");
+                if (more) keep.AppendLine("\"… more rows not included (Export for Claude caps each schedule)\"");
                 pack.Text($"schedules/{name}.csv", keep.ToString(), "Schedule", bom: true);
                 total += keep.Length;
                 done++;
-                index.AppendLine(Row(name + ".csv", s.Name, placed.Contains(s.Id.Value) ? "Yes" : "No", kept, lines.Length, truncated ? "Yes" : ""));
+                index.AppendLine(Row(name + ".csv", s.Name, placed.Contains(s.Id.Value) ? "Yes" : "No", kept, bodyRows, more ? "Yes" : ""));
             }
             catch (Exception ex) when (ex is Autodesk.Revit.Exceptions.ApplicationException or IOException or UnauthorizedAccessException or ArgumentException) { failed++; }
         }
-        if (done > 0) pack.Text("schedules/_index.csv", index.ToString(), "Which schedule each file is.", bom: true);
+        if (done > 0 || huge.Count > 0) pack.Text("schedules/_index.csv", index.ToString(), "Which schedule each file is.", bom: true);
+        if (huge.Count > 0)
+            pack.Notes.Add($"schedules/: {huge.Count} schedule{(huge.Count == 1 ? "" : "s")} with more than {HugeScheduleRows:N0} rows left out (too big to export quickly): " +
+                           string.Join("; ", huge.Take(10)) + (huge.Count > 10 ? "; …" : "") + ". Ask the user for a filtered version if one matters.");
         if (all.Count > done) pack.Notes.Add($"schedules/: {done} of {all.Count} schedules exported (sheet-placed first; max_schedules {max})" + (failed > 0 ? $", {failed} could not be exported." : "."));
     }
 
@@ -824,34 +852,45 @@ internal static class ProjectPack
 
     // ---------------------------------------------------------------- chat/, images/
 
-    private static void Chats(Document doc, string modelName, Pack pack)
+    private static void Chat(Document doc, Pack pack)
     {
-        // The in-Revit chat keeps its transcripts in %LOCALAPPDATA%\SketchProMax\chat\conversations (older builds: ...\chats).
-        var local = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SketchProMax");
-        var folder = new[] { Path.Combine(local, "chat", "conversations"), Path.Combine(local, "chats") }.FirstOrDefault(Directory.Exists);
-        if (folder is null) return;
-        var names = Prefixes(doc, modelName).SelectMany(p => new[] { p, Safe(p) }).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-        bool ThisModel(FileInfo f) => names.Any(n => f.FullName.IndexOf(n, StringComparison.OrdinalIgnoreCase) >= 0);
-        Step("recent chats");
-        List<FileInfo> files;
-        try
+        // Only this model's conversation, as the chat pane keeps it (same key), never other projects' chats.
+        Step("this model's chat");
+        var conv = SketchProMax.Chat.ChatStore.Load(SketchProMax.Chat.ChatPane.ModelKey(doc), doc.Title);
+        if (conv.Items.Count == 0) return;
+        var sb = new StringBuilder();
+        sb.AppendLine($"# In-Revit chat: {conv.Title}");
+        if (conv.Updated != default) sb.AppendLine($"Last updated {conv.Updated.ToLocalTime():yyyy-MM-dd HH:mm}");
+        foreach (var item in conv.Items)
         {
-            files = new DirectoryInfo(folder).GetFiles("*.*", SearchOption.AllDirectories)
-                .Where(f => f.Extension.Equals(".md", StringComparison.OrdinalIgnoreCase) || f.Extension.Equals(".jsonl", StringComparison.OrdinalIgnoreCase))
-                .OrderBy(f => ThisModel(f) ? 0 : 1).ThenByDescending(f => f.LastWriteTimeUtc).Take(10).ToList();
+            sb.AppendLine();
+            switch (item.Kind)
+            {
+                case "user":
+                    sb.AppendLine("## User");
+                    if (item.Name.Length > 0) sb.AppendLine($"(attached: {item.Name})");
+                    sb.AppendLine(item.Text);
+                    break;
+                case "assistant":
+                    sb.AppendLine("## Claude");
+                    sb.AppendLine(item.Text);
+                    break;
+                case "tool":
+                    sb.AppendLine($"- Tool {item.Name}: {(item.State.Length > 0 ? item.State : "run")}" + (item.Text.Length > 0 ? $" ({item.Text})" : ""));
+                    break;
+                default:
+                    sb.AppendLine($"_{item.Kind}: {item.Text}_");
+                    break;
+            }
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return; }
-        long total = 0;
-        var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var f in files)
+        var text = sb.ToString();
+        if (text.Length > ChatFileCap)
         {
-            if (total >= ChatTotalCap) break;
-            var (text, _) = ReadCapped(f.FullName, (int)Math.Min(ChatFileCap, ChatTotalCap - total), keepTail: true);
-            var name = Safe(Path.GetFileNameWithoutExtension(f.Name));
-            for (var i = 2; !used.Add(name); i++) name = Safe(Path.GetFileNameWithoutExtension(f.Name)) + " " + i;
-            pack.Text($"chat/{name}{f.Extension.ToLowerInvariant()}", text, "Chat transcript");
-            total += text.Length;
+            var tail = text.Substring(text.Length - ChatFileCap);
+            var nl = tail.IndexOf('\n');
+            text = "… (earlier part left out to keep the pack small)\n" + (nl >= 0 ? tail.Substring(nl + 1) : tail);
         }
+        pack.Text("chat/conversation.md", text, "This model's in-Revit chat, oldest first.");
     }
 
     private static void Images(Document doc, UIApplication app, Pack pack, string temp, int maxSheets)
@@ -917,7 +956,7 @@ internal static class ProjectPack
                 {
                     "schedules/" => $"{g.Count()} schedules exported from Revit as CSV (sheet-placed first; long ones cut). See schedules/_index.csv.",
                     "checks/" => $"{g.Count()} newest saved check results (CSV, BCF as topic summaries). See checks/_index.csv.",
-                    "chat/" => $"{g.Count()} recent in-Revit chat transcripts (this model's first, then newest; long ones keep their end).",
+                    "chat/" => "This model's in-Revit chat as readable text (a long one keeps its end).",
                     "images/" => $"{g.Count()} small JPEG images (active view and first sheets).",
                     _ => $"{g.Count()} files",
                 }

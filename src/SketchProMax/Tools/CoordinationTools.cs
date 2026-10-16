@@ -33,10 +33,10 @@ public sealed class ExportBcfTool : IRevitTool
     public ToolResult Execute(UIApplication app, ToolArgs args)
     {
         var doc = app.ActiveUIDocument.Document;
-        var folder = args.OptString("folder")
+        var folder = OutputPaths.Checked(args.OptString("folder"))
             ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "SketchProMax");
         Directory.CreateDirectory(folder);
-        var file = Path.Combine(folder, (args.OptString("file_name") ?? $"{doc.Title} issues {DateTime.Now:yyyy-MM-dd HHmm}") + ".bcf");
+        var file = Path.Combine(folder, (OutputPaths.Checked(args.OptString("file_name")) ?? $"{doc.Title} issues {DateTime.Now:yyyy-MM-dd HHmm}") + ".bcf");
         var author = args.OptString("author") ?? app.Application.Username;
         var now = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
         var temp = Path.Combine(Path.GetTempPath(), "SketchProMaxBcf_" + Guid.NewGuid().ToString("N"));

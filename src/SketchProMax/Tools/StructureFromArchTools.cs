@@ -532,9 +532,9 @@ public sealed class SleeveScheduleTool : IRevitTool
             sb.AppendLine(string.Join(",", r.e.Id.Value, Csv(r.kind), Csv(r.e.get_Parameter(BuiltInParameter.ALL_MODEL_MARK)?.AsString() ?? ""),
                 Csv(r.e is FamilyInstance fi ? $"{fi.Symbol.FamilyName}: {fi.Symbol.Name}" : r.e.Name), Csv(r.host?.Category?.Name ?? ""), r.host?.Id.Value,
                 Csv(r.host?.get_Parameter(BuiltInParameter.ALL_MODEL_MARK)?.AsString() ?? ""), Csv(LevelOf(r.at)), Csv(r.size), L(r.at.X), L(r.at.Y), L(r.at.Z - Elevations.BaseZ(doc))));
-        var folder = args.OptString("folder") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "SketchProMax");
+        var folder = OutputPaths.Checked(args.OptString("folder")) ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "SketchProMax");
         Directory.CreateDirectory(folder);
-        var file = Path.Combine(folder, (args.OptString("file_name") ?? $"{doc.Title} - Sleeve schedule {DateTime.Now:yyyy-MM-dd}") + ".csv");
+        var file = Path.Combine(folder, (OutputPaths.Checked(args.OptString("file_name")) ?? $"{doc.Title} - Sleeve schedule {DateTime.Now:yyyy-MM-dd}") + ".csv");
         File.WriteAllText(file, sb.ToString(), new UTF8Encoding(true));
         return ToolResult.Ok(new
         {

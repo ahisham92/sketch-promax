@@ -35,7 +35,7 @@ internal static class Checks
         $"{e.Category?.Name} {(e.Document.GetElement(e.GetTypeId()) as ElementType)?.Name ?? e.Name}".Trim();
 
     public static string Folder(ToolArgs args) =>
-        args.OptString("folder") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "SketchProMax");
+        OutputPaths.Checked(args.OptString("folder")) ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "SketchProMax");
 
     public static string Write(ToolArgs args, string name, IEnumerable<Finding> findings)
     {

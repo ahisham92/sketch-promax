@@ -200,9 +200,17 @@ public sealed class CutSlabTool : IRevitTool
         var all = sketch.GetAllElements().Select(doc.GetElement).OfType<CurveElement>().ToList();
         var boundary = BoundaryLines(sketch, all);
         var others = all.Where(e => !boundary.Contains(e)).ToList();
-        // Where each non-boundary line sits before the edit: the boundary line it lies on, if any.
+        // Where the span direction line sits before the edit: the boundary line it lies on, if any. Other non-boundary
+        // lines (a slope arrow) are left where they are.
         var sitsOn = new List<(CurveElement e, Line g, CurveElement? on)>();
-        foreach (var e in others)
+        var span = others.Where(e => LineName(e).IndexOf("span", StringComparison.OrdinalIgnoreCase) >= 0).ToList();
+        if (span.Count == 0)
+        {
+            // Unnamed: the one non-boundary line that is not a slope arrow, if there is exactly one.
+            var unnamed = others.Where(e => LineName(e).IndexOf("slope", StringComparison.OrdinalIgnoreCase) < 0).ToList();
+            if (unnamed.Count == 1) span = unnamed;
+        }
+        foreach (var e in span)
             if (e.GeometryCurve is Line g)
                 sitsOn.Add((e, g, boundary.FirstOrDefault(b => b.GeometryCurve is Line bl && Collinear(bl, g, Tol) && Overlaps(bl, g))));
 
@@ -249,7 +257,8 @@ public sealed class CutSlabTool : IRevitTool
         foreach (var (e, c) in reshaped) { e.SetGeometryCurve(c, true); changed++; }
         foreach (var c in fresh) { doc.Create.NewModelCurve(c, sketch.SketchPlane); added++; }
 
-        // The span direction (and any other non-boundary line on an edge) follows its edge.
+        // The span direction follows its edge: the same element when it was kept or reshaped, else the nearest new parallel
+        // edge. With no parallel edge it is left alone, and Revit settles it at commit (SketchCommitFailures).
         var targetLines = target.OfType<Line>().ToList();
         foreach (var (e, g, on) in sitsOn)
         {
@@ -257,8 +266,7 @@ public sealed class CutSlabTool : IRevitTool
             Line? edge = null;
             if (on.IsValidObject && on.GeometryCurve is Line now) edge = now;
             else
-                edge = targetLines.Where(t => DimensionGeometry.IsParallel(t.Direction, g.Direction)).OrderBy(t => Distance(t, g)).FirstOrDefault()
-                       ?? targetLines.OrderByDescending(t => t.Length).FirstOrDefault();
+                edge = targetLines.Where(t => DimensionGeometry.IsParallel(t.Direction, g.Direction)).OrderBy(t => Distance(t, g)).FirstOrDefault();
             if (edge is null || Within(g, edge, Tol)) continue;
             try { e.SetGeometryCurve(Line.CreateBound(edge.GetEndPoint(0), edge.GetEndPoint(1)), true); }
             catch (Autodesk.Revit.Exceptions.ApplicationException) { /* Revit settles it at commit, or refuses the edit */ }
@@ -287,6 +295,12 @@ public sealed class CutSlabTool : IRevitTool
         var byRef = all.Where(e => ids.Contains(e.Id.Value)).ToList();
         if (byRef.Count > 0 && byRef.Count >= curves) return new HashSet<CurveElement>(byRef);
         return new HashSet<CurveElement>(all.Where(e => !NotBoundaryByName(e)));
+    }
+
+    private static string LineName(CurveElement e)
+    {
+        try { return (e.LineStyle?.Name ?? "") + " " + (e.Category?.Name ?? ""); }
+        catch (Exception) { return ""; }
     }
 
     private static bool NotBoundaryByName(CurveElement e)

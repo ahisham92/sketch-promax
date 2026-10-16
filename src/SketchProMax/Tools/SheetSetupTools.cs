@@ -699,9 +699,9 @@ public sealed class ExportDrawingListTool : IRevitTool
             rows.Add(row);
         }
 
-        var folder = args.OptString("folder") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "SketchProMax");
+        var folder = OutputPaths.Checked(args.OptString("folder")) ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "SketchProMax");
         Directory.CreateDirectory(folder);
-        var file = Path.Combine(folder, (args.OptString("file_name") ?? $"{doc.Title} - Drawing list {DateTime.Now:yyyy-MM-dd}") + ".csv");
+        var file = Path.Combine(folder, (OutputPaths.Checked(args.OptString("file_name")) ?? $"{doc.Title} - Drawing list {DateTime.Now:yyyy-MM-dd}") + ".csv");
         var columns = rows[0].Keys.ToList();
         var sb = new StringBuilder();
         sb.AppendLine(string.Join(",", columns.Select(Csv)));
@@ -798,9 +798,9 @@ public sealed class ExportQuantitiesTool : IRevitTool
         }
         if (rows.Count == 0) return ToolResult.Error("No elements found in those categories.");
 
-        var folder = args.OptString("folder") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "SketchProMax");
+        var folder = OutputPaths.Checked(args.OptString("folder")) ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "SketchProMax");
         Directory.CreateDirectory(folder);
-        var file = Path.Combine(folder, (args.OptString("file_name") ?? $"{doc.Title} - Quantities {DateTime.Now:yyyy-MM-dd}") + ".csv");
+        var file = Path.Combine(folder, (OutputPaths.Checked(args.OptString("file_name")) ?? $"{doc.Title} - Quantities {DateTime.Now:yyyy-MM-dd}") + ".csv");
         string Csv(string s) => s.IndexOfAny([',', '"', '\n']) >= 0 ? "\"" + s.Replace("\"", "\"\"") + "\"" : s;
         var areaUnit = LabelUtils.GetLabelForUnit(doc.GetUnits().GetFormatOptions(SpecTypeId.Area).GetUnitTypeId());
         var volUnit = LabelUtils.GetLabelForUnit(doc.GetUnits().GetFormatOptions(SpecTypeId.Volume).GetUnitTypeId());

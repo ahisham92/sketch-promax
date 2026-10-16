@@ -313,7 +313,7 @@ public sealed class ExportAnalyticalTool : IRevitTool
 
         var folder = Checks.Folder(args);
         Directory.CreateDirectory(folder);
-        var baseName = args.OptString("file_name") ?? $"{doc.Title} - Analytical {DateTime.Now.ToString("yyyy-MM-dd HHmm", CultureInfo.InvariantCulture)}";
+        var baseName = OutputPaths.Checked(args.OptString("file_name")) ?? $"{doc.Title} - Analytical {DateTime.Now.ToString("yyyy-MM-dd HHmm", CultureInfo.InvariantCulture)}";
         var s2k = Path.Combine(folder, baseName + ".s2k");
         File.WriteAllText(s2k, sb.ToString(), new UTF8Encoding(false));
 

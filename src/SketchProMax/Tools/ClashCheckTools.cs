@@ -267,7 +267,7 @@ public sealed class FindClashesTool : IRevitTool
         }
 
 
-        var folder = args.OptString("folder") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "SketchProMax");
+        var folder = OutputPaths.Checked(args.OptString("folder")) ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "SketchProMax");
         Directory.CreateDirectory(folder);
         var file = Path.Combine(folder, $"{doc.Title} - Clashes {DateTime.Now:yyyy-MM-dd HHmm}.csv");
         string Csv(string s) => s.IndexOfAny([',', '"', '\n']) >= 0 ? "\"" + s.Replace("\"", "\"\"") + "\"" : s;
@@ -508,7 +508,7 @@ public sealed class CheckDrawingsTool : IRevitTool
             }
         }
 
-        var folder = args.OptString("folder") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "SketchProMax");
+        var folder = OutputPaths.Checked(args.OptString("folder")) ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "SketchProMax");
         Directory.CreateDirectory(folder);
         var file = Path.Combine(folder, $"{doc.Title} - Drawing check {DateTime.Now:yyyy-MM-dd HHmm}.csv");
         string Csv(string s) => s.IndexOfAny([',', '"', '\n']) >= 0 ? "\"" + s.Replace("\"", "\"\"") + "\"" : s;
@@ -631,7 +631,7 @@ public sealed class CheckCodeRulesTool : IRevitTool
             }
         }
 
-        var folder = args.OptString("folder") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "SketchProMax");
+        var folder = OutputPaths.Checked(args.OptString("folder")) ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "SketchProMax");
         Directory.CreateDirectory(folder);
         var csv = Path.Combine(folder, $"{doc.Title} - Rules check {DateTime.Now:yyyy-MM-dd HHmm}.csv");
         File.WriteAllText(csv, rows.ToString(), new UTF8Encoding(true));

@@ -72,9 +72,9 @@ public sealed class ExportPrecastScheduleTool : IRevitTool
         foreach (var g in byType)
             sb.AppendLine($"{Csv(g.Key)},{g.Count()},{N(g.Sum(r => r.area))},{N(g.Sum(r => r.kg) / 1000)},{N(g.Max(r => r.kg))}");
 
-        var folder = args.OptString("folder") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "SketchProMax");
+        var folder = OutputPaths.Checked(args.OptString("folder")) ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "SketchProMax");
         Directory.CreateDirectory(folder);
-        var file = Path.Combine(folder, (args.OptString("file_name") ?? $"{doc.Title} - Precast schedule {DateTime.Now:yyyy-MM-dd}") + ".csv");
+        var file = Path.Combine(folder, (OutputPaths.Checked(args.OptString("file_name")) ?? $"{doc.Title} - Precast schedule {DateTime.Now:yyyy-MM-dd}") + ".csv");
         File.WriteAllText(file, sb.ToString(), new UTF8Encoding(true));
         return ToolResult.Ok(new
         {
@@ -398,9 +398,9 @@ public sealed class ExportTendonScheduleTool : IRevitTool
         }
         sb.AppendLine();
         sb.AppendLine($"Total,,,,,,,{N(totalStrandM)},{N(totalKg)}");
-        var folder = args.OptString("folder") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "SketchProMax");
+        var folder = OutputPaths.Checked(args.OptString("folder")) ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "SketchProMax");
         Directory.CreateDirectory(folder);
-        var file = Path.Combine(folder, (args.OptString("file_name") ?? $"{doc.Title} - Tendon schedule {DateTime.Now:yyyy-MM-dd}") + ".csv");
+        var file = Path.Combine(folder, (OutputPaths.Checked(args.OptString("file_name")) ?? $"{doc.Title} - Tendon schedule {DateTime.Now:yyyy-MM-dd}") + ".csv");
         File.WriteAllText(file, sb.ToString(), new UTF8Encoding(true));
         return ToolResult.Ok(new
         {
