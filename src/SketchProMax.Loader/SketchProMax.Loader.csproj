@@ -21,8 +21,8 @@
     <AssemblyName>SketchProMax.Loader</AssemblyName>
     <!-- Fixed for good: the core references the loader, and every core version must bind to the loaded copy. -->
     <AssemblyVersion>1.0.0.0</AssemblyVersion>
-    <FileVersion>0.27.0.0</FileVersion>
-    <Version>0.27.0</Version>
+    <FileVersion>0.27.1.0</FileVersion>
+    <Version>0.27.1</Version>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
     <OutputPath>bin\$(Configuration)\Revit$(RevitVersion)\</OutputPath>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>

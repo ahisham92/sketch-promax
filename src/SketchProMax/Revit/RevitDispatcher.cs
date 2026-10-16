@@ -55,9 +55,26 @@ public sealed class RevitDispatcher : IExternalEventHandler
         Initialize();
         try { _mainWindow = application.MainWindowHandle; }
         catch (Exception) { _mainWindow = IntPtr.Zero; }
-        application.Idling += OnIdling;
+        // The loader starts the core from inside Revit's Idling event, and Revit refuses a subscription to an event while
+        // that event runs ("Can not subscribe to an event during execution of that event"). Then hook Idling from the
+        // external event instead, which is its own API context; until then the external event and the wake timer keep
+        // queued work moving.
+        try
+        {
+            application.Idling += OnIdling;
+            _idlingHooked = true;
+        }
+        catch (Exception)
+        {
+            _hookIdlingLater = true;
+            try { _event?.Raise(); } catch (Exception) { }
+        }
         _wake = new Timer(_ => Nudge(), null, 250, 250);
     }
+
+    private volatile bool _idlingHooked;
+    private volatile bool _hookIdlingLater;
+    private volatile bool _stopped;
 
     /// <summary>True while anything is queued or running, so switching to a new core must wait.</summary>
     public bool HasWork => _running || !_queue.IsEmpty || !_eventOnly.IsEmpty;
@@ -68,7 +85,13 @@ public sealed class RevitDispatcher : IExternalEventHandler
     /// </summary>
     public void Shutdown(UIApplication application)
     {
-        try { application.Idling -= OnIdling; } catch (Exception) { /* not subscribed through this object */ }
+        _stopped = true;
+        _hookIdlingLater = false;
+        // Revit may refuse this too when the loader switches versions from inside Idling; the handler then does nothing.
+        if (_idlingHooked)
+        {
+            try { application.Idling -= OnIdling; _idlingHooked = false; } catch (Exception) { }
+        }
         Drain(application, fromEvent: false);
         // Work that may only run from the external event can't run here (this may be an event handler): fail it.
         while (_eventOnly.TryDequeue(out var pending)) pending.Fail();
@@ -129,7 +152,20 @@ public sealed class RevitDispatcher : IExternalEventHandler
         return tcs.Task;
     }
 
-    public void Execute(UIApplication app) => Drain(app, fromEvent: true);
+    public void Execute(UIApplication app)
+    {
+        if (_hookIdlingLater && !_stopped)
+        {
+            _hookIdlingLater = false;
+            try
+            {
+                app.Idling += OnIdling;
+                _idlingHooked = true;
+            }
+            catch (Exception) { /* the external event and the wake timer still move queued work */ }
+        }
+        Drain(app, fromEvent: true);
+    }
 
     public string GetName() => "Sketch ProMax dispatcher";
 
@@ -153,6 +189,7 @@ public sealed class RevitDispatcher : IExternalEventHandler
 
     private void OnIdling(object? sender, IdlingEventArgs e)
     {
+        if (_stopped) return;
         if (_queue.IsEmpty && _eventOnly.IsEmpty) return;
         if (!_queue.IsEmpty)
         {
@@ -168,7 +205,7 @@ public sealed class RevitDispatcher : IExternalEventHandler
     /// <summary>Wakes Revit's message loop so it notices the queued work, without needing a click or mouse move.</summary>
     private void Nudge()
     {
-        if ((_queue.IsEmpty && _eventOnly.IsEmpty) || _running || _mainWindow == IntPtr.Zero) return;
+        if ((_queue.IsEmpty && _eventOnly.IsEmpty && !_hookIdlingLater) || _running || _mainWindow == IntPtr.Zero) return;
         try { PostMessage(_mainWindow, 0 /* WM_NULL */, IntPtr.Zero, IntPtr.Zero); }
         catch (Exception) { /* the window is gone: nothing to wake */ }
     }
