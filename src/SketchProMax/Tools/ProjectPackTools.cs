@@ -26,7 +26,8 @@ public sealed class ExportProjectPackTool : IRevitTool
         "drawings.csv (sheets with current revision and issue status), views.csv, revisions.csv, schedules/ (up to 30 " +
         "schedules as CSV, sheet-placed first), checks/ (the newest saved results of the model check, clash, drawing, " +
         "rules, spec, BOQ, steel, rebar and precast tools), changes.json (snapshots and the latest change comparison), " +
-        "worksets.csv, links.csv (Revit and CAD links with paths and load status) and chat/ (this model's in-Revit chat). " +
+        "worksets.csv, links.csv (Revit and CAD links with paths and load status), chat/ (this model's in-Revit chat) and " +
+        "bugs/ (bug report zips on this PC not yet in the published bug log). " +
         "No images unless include_images. Read-only. Defaults to Documents\\SketchProMax\\packs.";
     public string PropertiesJson => """
     {
@@ -35,6 +36,7 @@ public sealed class ExportProjectPackTool : IRevitTool
       "include_images": {"type": "boolean", "description": "Add small JPEG images of the active view and the first sheets (default false)."},
       "max_images": {"type": "integer", "description": "With include_images: how many sheet images, 0-12 (default 4)."},
       "include_chat": {"type": "boolean", "description": "Add this model's in-Revit chat, if it has one (default true)."},
+      "include_bug_reports": {"type": "boolean", "description": "Add the bug reports not sent yet (Documents\\Sketch ProMax\\Bugs\\Reports; default true)."},
       "run_checks": {"type": "boolean", "description": "Run the model check first so checks/ has a fresh result (default false: only results already saved are packed)."},
       "max_schedules": {"type": "integer", "description": "How many schedules to export, 0-60 (default 30; sheet-placed schedules first)."},
       "max_schedule_rows": {"type": "integer", "description": "Rows kept per schedule, 10-5000 (default 500)."},
@@ -52,6 +54,7 @@ internal static class ProjectPack
     private const int CheckFileCap = 300_000, ChecksTotalCap = 1_500_000;
     private const int ScheduleFileCap = 150_000, SchedulesTotalCap = 1_500_000;
     private const int ChatFileCap = 400_000;
+    private const int BugReportsCap = 4_000_000, MaxBugReports = 10;
 
     /// <summary>Schedules with more body rows than this are not exported at all: Revit's export of them alone can take minutes.</summary>
     private const int HugeScheduleRows = 20_000;
@@ -187,6 +190,7 @@ internal static class ProjectPack
             Step("change tracking");
             Changes(doc, modelName, pack);
             if (args.OptBool("include_chat", true)) Chat(doc, pack);
+            if (args.OptBool("include_bug_reports", true)) BugReports(pack);
             if (args.OptBool("include_images")) Images(doc, app, pack, temp, (int)Math.Max(0, Math.Min(12, args.OptLong("max_images") ?? 4)));
 
             Step("writing the zip");
@@ -202,7 +206,7 @@ internal static class ProjectPack
                 {
                     void Add(string name, byte[] data)
                     {
-                        var entry = zip.CreateEntry(name, name.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase) ? CompressionLevel.NoCompression : CompressionLevel.Optimal);
+                        var entry = zip.CreateEntry(name, name.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase) || name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) ? CompressionLevel.NoCompression : CompressionLevel.Optimal);
                         using var s = entry.Open();
                         s.Write(data, 0, data.Length);
                     }
@@ -893,6 +897,26 @@ internal static class ProjectPack
         pack.Text("chat/conversation.md", text, "This model's in-Revit chat, oldest first.");
     }
 
+    /// <summary>The bug report zips not sent yet (see BugLog), newest first, as they are.</summary>
+    private static void BugReports(Pack pack)
+    {
+        Step("bug reports not sent yet");
+        var unsent = SketchProMax.Bugs.BugLog.UnsentReports();
+        long total = 0;
+        var added = 0;
+        foreach (var report in unsent)
+        {
+            if (added >= MaxBugReports) { pack.Notes.Add($"{unsent.Count - added} older bug report(s) left out; send them from Documents\\Sketch ProMax\\Bugs\\Reports."); break; }
+            byte[] data;
+            try { data = File.ReadAllBytes(report.Path); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { pack.Notes.Add($"Bug report {Path.GetFileName(report.Path)} could not be read: {ex.Message}"); continue; }
+            if (total + data.Length > BugReportsCap) { pack.Notes.Add($"Bug report {Path.GetFileName(report.Path)} left out to keep the pack small."); continue; }
+            total += data.Length;
+            added++;
+            pack.Files.Add(($"bugs/{Path.GetFileName(report.Path)}", data, report.Description));
+        }
+    }
+
     private static void Images(Document doc, UIApplication app, Pack pack, string temp, int maxSheets)
     {
         var views = new List<View>();
@@ -958,6 +982,8 @@ internal static class ProjectPack
                     "checks/" => $"{g.Count()} newest saved check results (CSV, BCF as topic summaries). See checks/_index.csv.",
                     "chat/" => "This model's in-Revit chat as readable text (a long one keeps its end).",
                     "images/" => $"{g.Count()} small JPEG images (active view and first sheets).",
+                    "bugs/" => $"{g.Count()} Sketch ProMax bug report zips not sent yet (each: report.md, description, screenshot, last tool calls, assemblies). " +
+                               "For the add-in's developer, not about the project.",
                     _ => $"{g.Count()} files",
                 }
                 : g.First().What;

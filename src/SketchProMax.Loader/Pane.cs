@@ -204,6 +204,7 @@ internal sealed class PanePage : Page
     private readonly TabControl _tabs = new();
     private readonly TabItem _chatTab = new() { Header = "Chat" };
     private readonly TabItem _activityTab = new() { Header = "Activity" };
+    private readonly TabItem _notesTab = new() { Header = "Notes" };
     private CoreHandle? _chatCore;
     private bool _chatAsked, _wantChat;
 
@@ -269,6 +270,25 @@ internal sealed class PanePage : Page
         AutomationProperties.SetName(export, "Export for Claude");
         export.Click += (_, _) => PaneHost.Request("export-pack");
         body.Children.Add(Section("Share", export));
+        // Bug reports (cores from 0.30 on): one small zip each, in Documents\Sketch ProMax\Bugs.
+        var bugs = new StackPanel();
+        var report = Theme.Button(new TextBlock { Text = "Report bug", TextWrapping = TextWrapping.Wrap });
+        report.MinHeight = 28;
+        report.HorizontalAlignment = HorizontalAlignment.Stretch;
+        report.ToolTip = "Asks for one line on what went wrong and saves a small zip with a picture of the Revit window, the versions, " +
+                         "the model's name and the last tool calls. Nothing is sent. In the chat, just say \"that's a bug\".";
+        AutomationProperties.SetName(report, "Report bug");
+        report.Click += (_, _) => PaneHost.Request("report-bug");
+        bugs.Children.Add(report);
+        var folder = Theme.Button(new TextBlock { Text = "Open bug folder", TextWrapping = TextWrapping.Wrap });
+        folder.Margin = new Thickness(0, 6, 0, 0);
+        folder.MinHeight = 28;
+        folder.HorizontalAlignment = HorizontalAlignment.Stretch;
+        folder.ToolTip = "Opens Documents\\Sketch ProMax\\Bugs: your reports, and Bug log.md with every known bug, its status and your reports not sent yet.";
+        AutomationProperties.SetName(folder, "Open bug folder");
+        folder.Click += (_, _) => PaneHost.Request("bug-folder");
+        bugs.Children.Add(folder);
+        body.Children.Add(Section("Bugs", bugs));
         _activity = new ScrollViewer
         {
             Content = body, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
@@ -285,6 +305,7 @@ internal sealed class PanePage : Page
         AutomationProperties.SetName(_tabs, "Sketch ProMax pane");
         AutomationProperties.SetName(_chatTab, "Chat with Claude");
         AutomationProperties.SetName(_activityTab, "Activity: connection, running job and quick tools");
+        AutomationProperties.SetName(_notesTab, "Notes Claude remembers for you");
         // The adorner layer inside the page keeps keyboard focus rings in reach of the page's theme resources.
         Content = new AdornerDecorator { Child = _root };
 
@@ -409,8 +430,15 @@ internal sealed class PanePage : Page
         _chatAsked = true;
         _chatCore = core;
         _chatTab.Content = null; // the old core's element, if any: it was stopped with its core
+        _notesTab.Content = null;
         var chat = core?.PaneContent("chat");
         if (chat is not null && chat.Parent is ContentControl { } holder && !ReferenceEquals(holder, _chatTab)) holder.Content = null;
+        // Notes (cores from 0.30 on): what Claude remembers for the user. An older core has none: no Notes tab.
+        var notes = chat is null ? null : core?.PaneContent("notes");
+        if (notes is not null && notes.Parent is ContentControl { } notesHolder && !ReferenceEquals(notesHolder, _notesTab)) notesHolder.Content = null;
+        _notesTab.Content = notes;
+        if (notes is not null && !_tabs.Items.Contains(_notesTab)) _tabs.Items.Add(_notesTab);
+        else if (notes is null && _tabs.Items.Contains(_notesTab)) _tabs.Items.Remove(_notesTab);
         var tabs = chat is not null;
         if (tabs)
         {

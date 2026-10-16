@@ -160,6 +160,14 @@ internal static class Ribbon
             "Firm standards, whether Revit asks before Claude changes the model, and automatic updates."));
         more.AddItem(Button<HelpCommand>("Help", "Help", Icons.Logo(16), Icons.Logo(32),
             "How to use Sketch ProMax, what it can do, and what to try first.", null, false));
+        more.AddItem(Button<ReportBugCommand>("ReportBug", "Report\nbug", "bug",
+            "Saves one small bug report zip: your one-line description, a picture of the Revit window, the versions, the model's " +
+            "name and the last tool calls with their errors.",
+            "Nothing is sent: the zip goes to Documents\\Sketch ProMax\\Bugs\\Reports and the folder opens with it selected. In the " +
+            "chat you can also just say \"that's a bug\"."));
+        more.AddItem(Button<BugFolderCommand>("BugFolder", "Bug\nfolder", "folder",
+            "Opens Documents\\Sketch ProMax\\Bugs: your bug reports and Bug log.md, the published list of bugs and their status.",
+            "Bug log.md is refreshed at every update check; its \"Not sent yet\" part lists the reports on this PC that the log doesn't have yet."));
     }
 
     private static void Set(RibbonItem? item, string text, string? tip = null)

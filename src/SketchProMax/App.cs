@@ -144,9 +144,11 @@ public sealed class App : IExternalApplication
             try { ClaudeRegistration.Ensure(); } catch (Exception) { }
             try { if (Updater.CanSwitchLive) Updater.MoveManifestsToLoader(); } catch (Exception) { }
         });
-        // Check at every start, then hourly while Revit stays open.
+        // Check at every start, then hourly while Revit stays open. The bug log is fetched with each check (or once, at
+        // start, when automatic updates are off).
         var token = _life.Token;
         if (AgentSettings.Load().AutoUpdate) _ = Task.Run(() => UpdateLoopAsync(token));
+        else _ = Task.Run(() => SyncBugLogAsync(token));
     }
 
     /// <summary>
@@ -159,6 +161,7 @@ public sealed class App : IExternalApplication
         _started = false;
         _life?.Cancel();
         try { Chat.ChatPane.Stop(app); } catch (Exception) { }
+        try { Chat.NotesView.Stop(); } catch (Exception) { }
         Bridge?.Stop(keepSession: true);
         Bridge = null;
         try { app.Application.FailuresProcessing -= FailureGuard.Handle; } catch (Exception) { }
@@ -219,7 +222,15 @@ public sealed class App : IExternalApplication
             {
                 if (!progress.Surfaced && s.Stage is UpdateStage.Downloading or UpdateStage.Applying or UpdateStage.RestartNeeded) Surface(progress);
             };
-        await Updater.CheckAsync(force, progress, stop).ConfigureAwait(false);
+        try { await Updater.CheckAsync(force, progress, stop).ConfigureAwait(false); }
+        finally { await SyncBugLogAsync(stop).ConfigureAwait(false); }
+    }
+
+    /// <summary>Downloads the published bug log into Documents\Sketch ProMax\Bugs. Silent; never throws.</summary>
+    private static async Task SyncBugLogAsync(CancellationToken stop)
+    {
+        try { await Bugs.BugLog.SyncAsync($"SketchProMax/{Updater.CurrentText}", stop).ConfigureAwait(false); }
+        catch (Exception) { }
     }
 
     private static void Surface(UpdateProgress progress)

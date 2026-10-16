@@ -239,6 +239,9 @@ public sealed class ToolRegistry
         new InPlaceGuideTool(),
         // Export for Claude: one small zip describing the project, to upload to a chat
         new ExportProjectPackTool(),
+        // Bug reports and the chat's memory notes
+        new SketchProMax.Bugs.ReportBugTool(),
+        new MemoryNoteTool(),
     ]);
         // Recipes replay other tools, so they need the registry itself.
         registry.Add(new SaveRecipeTool(registry));
