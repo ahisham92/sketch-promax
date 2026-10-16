@@ -91,6 +91,11 @@ public sealed class CutSlabTool : IRevitTool
 
         string? refused = null;
         int kept = 0, changed = 0, added = 0, removed = 0;
+        // This attempt reports its own outcome (and falls back to an opening), so the failures Revit raises here must
+        // not also mark the whole call as refused.
+        FailureGuard.Muted++;
+        try
+        {
         using (var scope = new SketchEditScope(doc, "Sketch ProMax: Cut slab"))
         {
             try
@@ -104,7 +109,7 @@ public sealed class CutSlabTool : IRevitTool
                 }
                 // Warnings are dismissed; an error the edit can't settle (e.g. an element hosted on a removed edge)
                 // makes Revit refuse the commit, and the cut falls back to an opening below.
-                scope.Commit(new TypeKit.SwallowWarnings());
+                scope.Commit(new SketchCommitFailures());
             }
             catch (Exception ex) when (ex is Autodesk.Revit.Exceptions.ApplicationException or InvalidOperationException)
             {
@@ -112,6 +117,8 @@ public sealed class CutSlabTool : IRevitTool
                 if (scope.IsActive) scope.Cancel();
             }
         }
+        }
+        finally { FailureGuard.Muted--; }
         if (refused is null)
             return ToolResult.Ok(new { floor = floor.Id.Value, operation = opName, loops = pieces[0].Count, method = "sketch edited",
                 edges = new { kept, changed, added, removed } });
@@ -475,5 +482,39 @@ public sealed class HollowCoreLayoutTool : IRevitTool
             type.SetCompoundStructure(cs);
         }
         return type;
+    }
+}
+
+/// <summary>
+/// Commits a floor sketch edit: dismisses warnings, and settles "Structural floor span direction not specified" (raised
+/// when the edge that carried the span direction was redrawn) with Revit's own resolution, which puts the span
+/// direction back on an edge. Any other error still makes Revit refuse the edit.
+/// </summary>
+internal sealed class SketchCommitFailures : IFailuresPreprocessor
+{
+    public FailureProcessingResult PreprocessFailures(FailuresAccessor accessor)
+    {
+        bool resolved = false, unresolved = false;
+        foreach (var f in accessor.GetFailureMessages())
+        {
+            if (f.GetSeverity() == FailureSeverity.Warning) { accessor.DeleteWarning(f); continue; }
+            var text = f.GetDescriptionText() ?? "";
+            if (text.IndexOf("span direction", StringComparison.OrdinalIgnoreCase) >= 0 && f.HasResolutions())
+            {
+                accessor.ResolveFailure(f);
+                resolved = true;
+            }
+            else unresolved = true;
+        }
+        if (unresolved)
+        {
+            // Refuse quietly (no dialog): the commit throws and the tool falls back to an opening.
+            var options = accessor.GetFailureHandlingOptions();
+            options.SetClearAfterRollback(true);
+            options.SetForcedModalHandling(false);
+            accessor.SetFailureHandlingOptions(options);
+            return FailureProcessingResult.ProceedWithRollBack;
+        }
+        return resolved ? FailureProcessingResult.ProceedWithCommit : FailureProcessingResult.Continue;
     }
 }
