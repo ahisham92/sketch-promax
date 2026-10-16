@@ -8,35 +8,61 @@ namespace SketchProMax.Tools;
 
 /// <summary>
 /// 2D reinforcement detailing with an office's own detail families instead of 3D rebar: additional-bar lines on slab
-/// plans, mesh symbols per slab, and column section details for column schedules. Each kind of family has a role with
-/// a generic default name; a family named in a call is remembered in the model for that role, so later calls can leave
-/// it out. Placement, the copy fallback and parameter read-back are <see cref="DetailPlacement"/>'s.
+/// plans, mesh symbols per slab, and column section details for column schedules. Each kind of family has a role; the
+/// family is the one named in the call, else the one remembered in the model for that role, else the best match by name
+/// among the loaded detail and annotation families (<see cref="ModelRules.DetailRoleRule"/>). The family used is
+/// remembered in the model for its role, so later calls can leave it out. Placement, the copy fallback and parameter
+/// read-back are <see cref="DetailPlacement"/>'s.
 /// </summary>
 internal static class Rft2d
 {
-    public sealed record Role(string Key, string Default, string What);
+    public sealed record Role(string Key, string What, ModelRules.DetailRoleRule Rule);
 
-    public static readonly Role AdditionalBars = new("additional_bars", "RFT_ADD_MODIFIED", "additional reinforcement (line-based detail item)");
-    public static readonly Role Mesh = new("mesh", "AN_RebarMesh02", "mesh symbol (detail item or generic annotation)");
-    public static readonly Role ColumnSection = new("column_section", "DT_RectangularColumnAndBeamRFT", "column / beam section reinforcement (detail item)");
-    public static readonly Role Ties = new("ties", "DT_TransversalRebar", "transversal bars / links (detail item)");
+    public static readonly Role AdditionalBars = new("additional_bars", "additional reinforcement (line-based detail item)", ModelRules.AdditionalBarsRule);
+    public static readonly Role Mesh = new("mesh", "mesh symbol (detail item or generic annotation)", ModelRules.MeshRule);
+    public static readonly Role ColumnSection = new("column_section", "column / beam section reinforcement (detail item)", ModelRules.ColumnSectionRule);
+    public static readonly Role Ties = new("ties", "transversal bars / links (detail item)", ModelRules.TiesRule);
     public static readonly Role[] All = [AdditionalBars, Mesh, ColumnSection, Ties];
 
     private const string KeyPrefix = "rft2d.family.";
+    private const string Found = "found by name among the loaded families";
 
-    /// <summary>The family name for a role: given, else remembered in the model, else the default; and where it came from.</summary>
-    public static (string name, string from) FamilyName(Document doc, Role role, string? given)
+    /// <summary>
+    /// The family name for a role: given, else remembered in the model, else the best match among the loaded families
+    /// (null when none fits); where it came from, with the other matches when it was found by name.
+    /// </summary>
+    public static (string? name, string from) FamilyName(Document doc, Role role, string? given)
     {
         if (!string.IsNullOrWhiteSpace(given)) return (given!.Trim(), "argument");
         if (ProjectStore.Get(doc, KeyPrefix + role.Key) is { Length: > 0 } kept) return (kept, "remembered in this model");
-        return (role.Default, "default");
+        var ranked = Candidates(doc, role);
+        if (ranked.Count == 0) return (null, "nothing given, remembered or found");
+        var others = ranked.Skip(1).Take(5).ToList();
+        return (ranked[0], others.Count > 0 ? $"{Found}; other matches: {string.Join(", ", others)} (pass family to use one)" : Found);
     }
 
-    /// <summary>Remembers a family given in a call for its role. Needs an open transaction.</summary>
-    public static void Remember(Document doc, Role role, string? given)
+    /// <summary>The loaded families that fit a role, best first.</summary>
+    public static List<string> Candidates(Document doc, Role role) =>
+        ModelRules.RankDetailFamilies(role.Rule, Symbols(doc).Select(s => (s.FamilyName, s.Family.FamilyPlacementType == FamilyPlacementType.CurveBasedDetail)));
+
+    /// <summary>
+    /// What to remember for a role after a placement with it worked: the family named in the call or found by name
+    /// (nothing when it was already the remembered one). Saved with <see cref="ProjectStore.TryRemember"/>.
+    /// </summary>
+    public static KeyValuePair<string, string?>? Remembering(Document doc, Role role, FamilySymbol used, string? given)
     {
-        if (string.IsNullOrWhiteSpace(given) || ProjectStore.Get(doc, KeyPrefix + role.Key) == given!.Trim()) return;
-        ProjectStore.Set(doc, KeyPrefix + role.Key, given.Trim());
+        var name = string.IsNullOrWhiteSpace(given) ? used.FamilyName : given!.Trim();
+        return ProjectStore.Get(doc, KeyPrefix + role.Key) == name ? null : new KeyValuePair<string, string?>(KeyPrefix + role.Key, name);
+    }
+
+    /// <summary>Saves what <see cref="Remembering"/> asked for, after the placement is committed; a note when it could not.</summary>
+    public static string? SaveRemembered(Document doc, params KeyValuePair<string, string?>?[] entries)
+    {
+        var list = entries.Where(e => e is not null).Select(e => e!.Value).ToList();
+        if (list.Count == 0) return null;
+        return ProjectStore.TryRemember(doc, list) is { } why
+            ? $"The family was used but not remembered for next time ({why}); pass family again in later calls."
+            : null;
     }
 
     private static List<FamilySymbol> Symbols(Document doc) =>
@@ -45,11 +71,20 @@ internal static class Rft2d
             .OrderBy(s => s.FamilyName).ThenBy(s => s.Name).ToList();
 
     /// <summary>The type to place: "Family" (its first type) or "Family: Type"; numbered family copies ("X 1") are accepted.</summary>
-    public static FamilySymbol? TryFind(Document doc, Role role, string? given, out string name, out string problem)
+    public static FamilySymbol? TryFind(Document doc, Role role, string? given, out string name, out string from, out string problem)
     {
-        (name, var from) = FamilyName(doc, role, given);
+        var (found, source) = FamilyName(doc, role, given);
+        from = source;
+        name = found ?? "";
         var symbols = Symbols(doc);
-        var wanted = name;
+        if (found is null)
+        {
+            problem = $"No {role.What} family was given or remembered in this model, and no loaded detail or annotation family has a name " +
+                      $"that looks like one (looked for {string.Join(" + ", role.Rule.Need.Select(g => string.Join("/", g)))}). Load your office's " +
+                      "family (load_family with its .rfa, or copy_from_file from a project that has it), or pass family with its name; it is then remembered.";
+            return null;
+        }
+        var wanted = found;
         string? type = null;
         var colon = wanted.IndexOf(':');
         if (colon > 0) { type = wanted.Substring(colon + 1).Trim(); wanted = wanted.Substring(0, colon).Trim(); }
@@ -59,19 +94,17 @@ internal static class Rft2d
         var hit = type is null ? family.FirstOrDefault() : family.FirstOrDefault(s => Same(s.Name, type));
         if (hit is not null) { problem = ""; return hit; }
 
-        var tokens = new[] { "RFT", "REBAR", "MESH", "BAR", "REINF", wanted.Split('_')[0] };
-        var similar = symbols.Select(s => s.FamilyName).Distinct()
-            .Where(f => tokens.Any(tk => tk.Length >= 2 && f.IndexOf(tk, StringComparison.OrdinalIgnoreCase) >= 0)).Take(15).ToList();
+        var similar = Candidates(doc, role).Take(15).ToList();
         problem = family.Count > 0
             ? $"Family '{wanted}' has no type '{type}'. Its types: {string.Join(", ", family.Select(s => s.Name))}."
             : $"The {role.What} family '{wanted}' ({from}) is not loaded in this model. Load it (load_family with its .rfa, or copy_from_file " +
               "from a project that has it), or pass family with the name your office uses. " +
-              (similar.Count > 0 ? $"Possibly related families loaded: {string.Join(", ", similar)}." : "No detail or annotation family with a reinforcement-like name is loaded.");
+              (similar.Count > 0 ? $"Loaded families that look like one: {string.Join(", ", similar)}." : "No loaded detail or annotation family has a name that looks like one.");
         return null;
     }
 
-    public static FamilySymbol Find(Document doc, Role role, string? given) =>
-        TryFind(doc, role, given, out _, out var problem) ?? throw new ArgumentException(problem);
+    public static FamilySymbol Find(Document doc, Role role, string? given, out string from) =>
+        TryFind(doc, role, given, out _, out from, out var problem) ?? throw new ArgumentException(problem);
 
     /// <summary>Outline rings of a slab's largest top face in plan (outer first, then holes), in model coordinates.</summary>
     public static List<IReadOnlyList<(double x, double y)>> SlabRings(Element slab)
@@ -138,12 +171,12 @@ public sealed class RftDetailFamiliesTool : IRevitTool
     public string Description =>
         "Check the detail families used for 2D reinforcement drawings (place_additional_reinforcement, place_mesh_symbols, " +
         "place_column_section_details): for each role (additional_bars, mesh, column_section, ties) which family is used " +
-        "(given, remembered in this model, or the default), whether it is loaded, its types, whether it is line- or point-based, " +
+        "(given, remembered in this model, or the best match by name among the loaded families, with the other matches), whether it is loaded, its types, whether it is line- or point-based, " +
         "and its parameters (instance or type, formula-driven or not), so you know which names to pass in 'parameters'. " +
         "Missing families are listed with what to do. Opens each family read-only to read its parameters.";
     public string PropertiesJson => """
     {
-      "families": {"type": "object", "description": "Optional role -> family name to check instead, e.g. {\"additional_bars\": \"MY_RFT_ADD\"}. Roles: additional_bars, mesh, column_section, ties."},
+      "families": {"type": "object", "description": "Optional role -> family name to check instead, e.g. {\"additional_bars\": \"My_Additional_Bars\"}. Roles: additional_bars, mesh, column_section, ties."},
       "parameters": {"type": "boolean", "description": "List each family's parameters (default true)."}
     }
     """;
@@ -162,12 +195,11 @@ public sealed class RftDetailFamiliesTool : IRevitTool
         foreach (var role in Rft2d.All)
         {
             given.TryGetValue(role.Key, out var name);
-            var (familyName, from) = Rft2d.FamilyName(doc, role, name);
-            var symbol = Rft2d.TryFind(doc, role, name, out _, out var problem);
+            var symbol = Rft2d.TryFind(doc, role, name, out var familyName, out var from, out var problem);
             if (symbol is null)
             {
                 missing.Add($"{role.Key}: {problem}");
-                roles.Add(new { role = role.Key, what = role.What, family = familyName, from, loaded = false });
+                roles.Add(new { role = role.Key, what = role.What, family = familyName.Length > 0 ? familyName : null, from, loaded = false });
                 continue;
             }
             var family = symbol.Family;
@@ -184,7 +216,7 @@ public sealed class RftDetailFamiliesTool : IRevitTool
         {
             roles, missing,
             unknownRoles = unknown.Count > 0 ? unknown : null,
-            note = "A family passed to a placement tool is remembered in this model for its role. Pass parameters by the names listed here; " +
+            note = "The family a placement tool uses (passed, or found by name) is remembered in this model for its role. Pass parameters by the names listed here; " +
                    "formula-driven and type parameters can't be set per item.",
         });
     }
@@ -216,8 +248,8 @@ public sealed class PlaceAdditionalReinforcementTool : IRevitTool
 {
     public string Name => "place_additional_reinforcement";
     public string Description =>
-        "Draw additional (top/bottom) reinforcement on a slab plan with the office's 2D bar detail family (role additional_bars, " +
-        "default 'RFT_ADD_MODIFIED'; a line-based detail item), instead of 3D rebar. Each bar is a line given by start/end, or " +
+        "Draw additional (top/bottom) reinforcement on a slab plan with the office's 2D bar detail family (role additional_bars: " +
+        "a line-based detail item; by default the one remembered in this model, else the loaded one whose name fits best), instead of 3D rebar. Each bar is a line given by start/end, or " +
         "across a slab: slab_id with direction x or y and the coordinate it runs along (default the slab's middle), clipped to the " +
         "slab outline (openings split it; the longest span is used) and shortened by inset at both ends. The bar text values go " +
         "in 'parameters' (common) or per bar, by the family's own parameter names (rft_detail_families lists them); every value is read " +
@@ -226,7 +258,7 @@ public sealed class PlaceAdditionalReinforcementTool : IRevitTool
     public string PropertiesJson => DependentGuard.AddTo("""
     {
       "view_id": {"type": "integer", "description": "Plan view (default: active view)."},
-      "family": {"type": "string", "description": "Family or 'Family: Type' (default: the one remembered in this model, else RFT_ADD_MODIFIED)."},
+      "family": {"type": "string", "description": "Family or 'Family: Type' (default: the one remembered in this model, else the best match by name among loaded line-based detail items, such as names with RFT/rebar/bar)."},
       "parameters": {"type": "object", "description": "Instance parameters for every bar, name -> value (e.g. bar text, diameter, spacing)."},
       "bars": {"type": "array", "items": {"type": "object", "properties": {
         "start": {"type": "array", "items": {"type": "number"}},
@@ -250,8 +282,7 @@ public sealed class PlaceAdditionalReinforcementTool : IRevitTool
         var view = Rft2d.PlanOrActive(doc, args, planOnly: false);
         var guard = DependentGuard.For(doc, view, args.OptString("dependent_view"));
         var given = args.OptString("family");
-        var symbol = Rft2d.Find(doc, Rft2d.AdditionalBars, given);
-        var (_, from) = Rft2d.FamilyName(doc, Rft2d.AdditionalBars, given);
+        var symbol = Rft2d.Find(doc, Rft2d.AdditionalBars, given, out var from);
         if (symbol.Family.FamilyPlacementType != FamilyPlacementType.CurveBasedDetail)
             return ToolResult.Error($"'{symbol.FamilyName}' is not a line-based detail family, so it can't be drawn along a bar. Pass the line-based family with family.");
         var method = args.OptString("method") ?? "auto";
@@ -308,7 +339,7 @@ public sealed class PlaceAdditionalReinforcementTool : IRevitTool
         Batch.InGroup(doc, "Place additional reinforcement", () =>
         {
             DetailPlacement.Run(doc, target, specs, method, null);
-            using var t = new Transaction(doc, "Group and remember additional reinforcement");
+            using var t = new Transaction(doc, "Group additional reinforcement");
             t.Start();
             foreach (var byName in groups.Where(kv => specs[kv.Key].Created is not null).GroupBy(kv => kv.Value))
             {
@@ -320,14 +351,14 @@ public sealed class PlaceAdditionalReinforcementTool : IRevitTool
                 }
                 catch (Autodesk.Revit.Exceptions.ApplicationException ex) { grouped.Add(new { group = byName.Key, error = ex.Message.Trim() }); }
             }
-            if (specs.Any(s => s.Created is not null)) Rft2d.Remember(doc, Rft2d.AdditionalBars, given);
             t.Commit();
             return specs;
         }, s => s.Any(x => x.Created is not null));
+        var remembered = specs.Any(s => s.Created is not null) ? Rft2d.SaveRemembered(doc, Rft2d.Remembering(doc, Rft2d.AdditionalBars, symbol, given)) : null;
 
         if (specs.All(s => s.Created is null))
             return ToolResult.Error($"No bars were placed. {JsonSerializer.Serialize(specs.Select(s => new { index = s.Index, error = s.Error ?? s.FallbackReason }).Take(10))}");
-        return ToolResult.Ok(new { view = view.Name, result = Rft2d.Report(specs, symbol, from), groups = grouped.Count > 0 ? grouped : null, dependentView = guard.Report() });
+        return ToolResult.Ok(new { view = view.Name, result = Rft2d.Report(specs, symbol, from), groups = grouped.Count > 0 ? grouped : null, note = remembered, dependentView = guard.Report() });
     }
 }
 
@@ -335,7 +366,7 @@ public sealed class PlaceMeshSymbolsTool : IRevitTool
 {
     public string Name => "place_mesh_symbols";
     public string Description =>
-        "Put the office's mesh symbol (role mesh, default 'AN_RebarMesh02'; a point-based detail item or generic annotation) on " +
+        "Put the office's mesh symbol (role mesh: a point-based detail item or generic annotation; by default the one remembered in this model, else the loaded one with 'mesh' in its name) on " +
         "each slab in a plan: at a point well inside the slab's own outline, kept apart from other mesh symbols. Slabs default to " +
         "every floor shown in the view; slabs that already show this symbol are skipped. The mesh text values go in 'parameters' " +
         "(common) or per slab, by the family's own parameter names (rft_detail_families lists them); the result lists which " +
@@ -343,7 +374,7 @@ public sealed class PlaceMeshSymbolsTool : IRevitTool
     public string PropertiesJson => DependentGuard.AddTo("""
     {
       "view_id": {"type": "integer", "description": "Plan view (default: active view)."},
-      "family": {"type": "string", "description": "Family or 'Family: Type' (default: the one remembered in this model, else AN_RebarMesh02)."},
+      "family": {"type": "string", "description": "Family or 'Family: Type' (default: the one remembered in this model, else the best match by name, such as a family with 'mesh' in its name)."},
       "slab_ids": {"type": "array", "items": {"type": "integer"}, "description": "Default: every floor shown in the view."},
       "parameters": {"type": "object", "description": "Instance parameters for every symbol, name -> value."},
       "slabs": {"type": "array", "items": {"type": "object", "properties": {
@@ -365,8 +396,7 @@ public sealed class PlaceMeshSymbolsTool : IRevitTool
         var view = Rft2d.PlanOrActive(doc, args, planOnly: true);
         var guard = DependentGuard.For(doc, view, args.OptString("dependent_view"));
         var given = args.OptString("family");
-        var symbol = Rft2d.Find(doc, Rft2d.Mesh, given);
-        var (_, from) = Rft2d.FamilyName(doc, Rft2d.Mesh, given);
+        var symbol = Rft2d.Find(doc, Rft2d.Mesh, given, out var from);
         if (symbol.Family.FamilyPlacementType == FamilyPlacementType.CurveBasedDetail)
             return ToolResult.Error($"'{symbol.FamilyName}' is line-based; a mesh symbol is placed at a point. Pass the point-based family with family.");
         var z = (view as ViewPlan)?.GenLevel?.ProjectElevation ?? 0;
@@ -429,21 +459,15 @@ public sealed class PlaceMeshSymbolsTool : IRevitTool
         Batch.InGroup(doc, "Place mesh symbols", () =>
         {
             DetailPlacement.Run(doc, target, specs, method, null);
-            if (specs.Any(s => s.Created is not null) && !string.IsNullOrWhiteSpace(given))
-            {
-                using var t = new Transaction(doc, "Remember mesh family");
-                t.Start();
-                Rft2d.Remember(doc, Rft2d.Mesh, given);
-                t.Commit();
-            }
             return specs;
         }, s => s.Any(x => x.Created is not null));
+        var remembered = specs.Any(s => s.Created is not null) ? Rft2d.SaveRemembered(doc, Rft2d.Remembering(doc, Rft2d.Mesh, symbol, given)) : null;
 
         if (specs.All(s => s.Created is null))
             return ToolResult.Error($"No mesh symbols were placed. {JsonSerializer.Serialize(specs.Select(s => new { index = s.Index, error = s.Error ?? s.FallbackReason }).Take(10))}");
         return ToolResult.Ok(new
         {
-            view = view.Name, result = Rft2d.Report(specs, symbol, from), skipped,
+            view = view.Name, result = Rft2d.Report(specs, symbol, from), skipped, note = remembered,
             slabs = specs.Where(sp => sp.Created is not null).Select(sp => new { slab_id = slabOf[sp.Index], symbol_id = sp.Created!.Value }).Take(200),
             dependentView = guard.Report(),
         });
@@ -455,8 +479,8 @@ public sealed class PlaceColumnSectionDetailsTool : IRevitTool
     public string Name => "place_column_section_details";
     public string Description =>
         "Fill column schedule cells (in a drafting, legend, section or plan view) with the office's column section reinforcement " +
-        "detail (role column_section, default 'DT_RectangularColumnAndBeamRFT'), optionally with a transversal bar / link item " +
-        "(role ties, default 'DT_TransversalRebar') at the same point, and the column mark written below. Cells are placed at 'at', " +
+        "detail (role column_section; by default the one remembered in this model, else the loaded detail item whose name has column and " +
+        "RFT/rebar), optionally with a transversal bar / link item (role ties; else a name with tie/stirrup/transversal) at the same point, and the column mark written below. Cells are placed at 'at', " +
         "or on a grid (origin, spacing, per_row). With column_id, the column's section size is written to width_parameter / " +
         "depth_parameter (the family's own names) and its Mark becomes the label. Bar values go in 'parameters' / 'ties_parameters' " +
         "(common) or per cell, by the family's own parameter names (rft_detail_families lists them); the result lists which " +
@@ -464,10 +488,10 @@ public sealed class PlaceColumnSectionDetailsTool : IRevitTool
     public string PropertiesJson => DependentGuard.AddTo("""
     {
       "view_id": {"type": "integer", "description": "Default: active view."},
-      "family": {"type": "string", "description": "Section family or 'Family: Type' (default: remembered in this model, else DT_RectangularColumnAndBeamRFT)."},
+      "family": {"type": "string", "description": "Section family or 'Family: Type' (default: remembered in this model, else the best match by name among loaded detail items)."},
       "parameters": {"type": "object", "description": "Section item parameters for every cell, name -> value."},
       "ties": {"type": "boolean", "description": "Also place the ties family in each cell (default false)."},
-      "ties_family": {"type": "string", "description": "Default: remembered in this model, else DT_TransversalRebar."},
+      "ties_family": {"type": "string", "description": "Default: remembered in this model, else the best match by name (tie, stirrup, transversal)."},
       "ties_parameters": {"type": "object"},
       "width_parameter": {"type": "string", "description": "Section family parameter that takes the column's width (b) when a cell has column_id."},
       "depth_parameter": {"type": "string", "description": "Section family parameter that takes the column's depth (h)."},
@@ -495,11 +519,11 @@ public sealed class PlaceColumnSectionDetailsTool : IRevitTool
         var view = Rft2d.PlanOrActive(doc, args, planOnly: false);
         var guard = DependentGuard.For(doc, view, args.OptString("dependent_view"));
         var given = args.OptString("family");
-        var symbol = Rft2d.Find(doc, Rft2d.ColumnSection, given);
-        var (_, from) = Rft2d.FamilyName(doc, Rft2d.ColumnSection, given);
+        var symbol = Rft2d.Find(doc, Rft2d.ColumnSection, given, out var from);
         var withTies = args.OptBool("ties") || args.Has("ties_family");
         var tiesGiven = args.OptString("ties_family");
-        FamilySymbol? tiesSymbol = withTies ? Rft2d.Find(doc, Rft2d.Ties, tiesGiven) : null;
+        var tiesFrom = "";
+        FamilySymbol? tiesSymbol = withTies ? Rft2d.Find(doc, Rft2d.Ties, tiesGiven, out tiesFrom) : null;
         var cells = args.Array("cells").ToList();
         if (cells.Count == 0) return ToolResult.Error("Give at least one cell.");
         if (cells.Count * (withTies ? 2 : 1) > DetailPlacement.MaxPerCall) return ToolResult.Error($"Too many cells for one call (limit {DetailPlacement.MaxPerCall} items).");
@@ -584,11 +608,13 @@ public sealed class PlaceColumnSectionDetailsTool : IRevitTool
                 }
                 catch (Autodesk.Revit.Exceptions.ApplicationException) { }
             }
-            if (sections.Any(s => s.Created is not null)) Rft2d.Remember(doc, Rft2d.ColumnSection, given);
-            if (ties.Any(s => s.Created is not null)) Rft2d.Remember(doc, Rft2d.Ties, tiesGiven);
             t.Commit();
             return sections;
         }, s => s.Any(x => x.Created is not null));
+        var remembered = Rft2d.SaveRemembered(doc,
+            sections.Any(s => s.Created is not null) ? Rft2d.Remembering(doc, Rft2d.ColumnSection, symbol, given) : null,
+            tiesSymbol is not null && ties.Any(s => s.Created is not null) ? Rft2d.Remembering(doc, Rft2d.Ties, tiesSymbol, tiesGiven) : null);
+        if (remembered is not null) notes.Add(remembered);
 
         if (sections.All(s => s.Created is null))
             return ToolResult.Error($"No column sections were placed. {JsonSerializer.Serialize(sections.Select(s => new { index = s.Index, error = s.Error ?? s.FallbackReason }).Take(10))}");
@@ -596,7 +622,7 @@ public sealed class PlaceColumnSectionDetailsTool : IRevitTool
         {
             view = view.Name,
             sections = Rft2d.Report(sections, symbol, from),
-            ties = tiesSymbol is null ? null : Rft2d.Report(ties, tiesSymbol, Rft2d.FamilyName(doc, Rft2d.Ties, tiesGiven).from),
+            ties = tiesSymbol is null ? null : Rft2d.Report(ties, tiesSymbol, tiesFrom),
             labels = labelled,
             notes = notes.Count > 0 ? notes : null,
             dependentView = guard.Report(),

@@ -410,6 +410,9 @@ internal sealed class PanePage : Page
     public void SelectChat()
     {
         _wantChat = true;
+        // Adopt the core's chat now rather than at the next refresh, so a command right after this (Send view) finds it.
+        try { UpdateChat(Host.Core); }
+        catch (Exception) { /* the refresh below tries again */ }
         if (_tabs.Parent is not null) _tabs.SelectedItem = _chatTab;
         RefreshSoon();
     }

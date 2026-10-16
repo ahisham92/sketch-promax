@@ -194,8 +194,9 @@ internal static class CoreCommands
     }
 
     /// <summary>
-    /// The version whose release notes were last opened. The first time (nothing stored) it is this version: a fresh
-    /// install doesn't start with a "What's new" badge, an update does.
+    /// The version whose release notes were last opened. The first time (nothing stored) it is this version on a fresh
+    /// install, so that doesn't start with a "What's new" badge; after an update from a version that recorded nothing,
+    /// the older version (<see cref="UpdateBadge.FirstRunSeen"/>), so it does.
     /// </summary>
     private static Version SeenVersion()
     {
@@ -205,17 +206,42 @@ internal static class CoreCommands
             if (File.Exists(SeenFile) && Version.TryParse(File.ReadAllText(SeenFile).Trim(), out var v)) return _seen = v;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
-        MarkSeen();
+        Record(UpdateBadge.FirstRunSeen(Updater.Current, VersionFolders(), EarlierUpdateState()));
         return _seen ?? Updater.Current;
     }
 
-    private static void MarkSeen()
+    private static string LocalRoot => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SketchProMax");
+
+    private static IEnumerable<string> VersionFolders()
     {
-        _seen = Updater.Current;
+        try
+        {
+            var folder = Path.Combine(LocalRoot, "versions");
+            return Directory.Exists(folder) ? Directory.GetDirectories(folder).Select(Path.GetFileName).OfType<string>().ToList() : [];
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return []; }
+    }
+
+    /// <summary>True when an update check wrote its state before this Revit session started (so an older version ran here).</summary>
+    private static bool EarlierUpdateState()
+    {
+        try
+        {
+            var state = Path.Combine(LocalRoot, "update-state.json");
+            return File.Exists(state) && File.GetCreationTime(state) < Process.GetCurrentProcess().StartTime;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or System.ComponentModel.Win32Exception) { return false; }
+    }
+
+    private static void MarkSeen() => Record(Updater.Current);
+
+    private static void Record(Version seen)
+    {
+        _seen = seen;
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(SeenFile)!);
-            File.WriteAllText(SeenFile, Updater.CurrentText);
+            File.WriteAllText(SeenFile, $"{seen.Major}.{seen.Minor}.{Math.Max(seen.Build, 0)}");
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
     }

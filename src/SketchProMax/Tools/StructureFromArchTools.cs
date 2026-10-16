@@ -115,13 +115,13 @@ public sealed class ArchToStructureTool : IRevitTool
         return Math.Abs(shift) < 1e-6 ? curve : curve.CreateTransformed(Transform.CreateTranslation(w.Orientation * shift));
     }
 
-    /// <summary>The floor type's structural material name and class (else its first layer's), for the floor filter.</summary>
+    /// <summary>The floor type's structural material name and class (null when no layer is structural), for the floor filter.</summary>
     private static string? StructuralMaterial(Document src, FloorType type)
     {
         var cs = type.GetCompoundStructure();
         var layers = cs?.GetLayers();
         var id = layers is { Count: > 0 }
-            ? (cs!.StructuralMaterialIndex >= 0 && cs.StructuralMaterialIndex < layers.Count ? layers[cs.StructuralMaterialIndex] : layers.FirstOrDefault(l => l.Function == MaterialFunctionAssignment.Structure) ?? layers[0]).MaterialId
+            ? (cs!.StructuralMaterialIndex >= 0 && cs.StructuralMaterialIndex < layers.Count ? layers[cs.StructuralMaterialIndex] : layers.FirstOrDefault(l => l.Function == MaterialFunctionAssignment.Structure))?.MaterialId
             : type.get_Parameter(BuiltInParameter.STRUCTURAL_MATERIAL_PARAM)?.AsElementId();
         return id is not null && src.GetElement(id) is Material m ? $"{m.Name} {m.MaterialClass}" : null;
     }
@@ -133,7 +133,8 @@ public sealed class ArchToStructureTool : IRevitTool
         "structural floors become slabs, on the matching levels of this model. Walls count as load-bearing when the architect set " +
         "them structural, their type name has Concrete/RC/Core/Shear (or your words), or they are at least min_wall_thickness. " +
         "Floors are taken when set structural, or their type name has Concrete/RC/Slab/Structural (or your words) or their " +
-        "material is concrete; finish and build-up floors (Finish, Screed, Tile, Roof Layers...) and thin floors are skipped. " +
+        "structural layer is concrete; other floors are skipped (finish and build-up names such as Finish, Screed, Tile, Roof Layers " +
+        "are named as the reason), and so are thin floors not set structural. " +
         "The architectural Columns category is usually cladding and is skipped unless include_architectural_columns. " +
         "The result says what was skipped and why. Types are made by size (RC Wall 200mm, RC Slab 250mm, 400 x 600mm). " +
         "Re-running skips what was already made. dry_run first.";
@@ -150,7 +151,7 @@ public sealed class ArchToStructureTool : IRevitTool
       "structural_columns": {"type": "boolean", "description": "Take the source's Structural Columns category (default true)."},
       "include_architectural_columns": {"type": "boolean", "description": "Also convert the architectural Columns category (default false: usually cladding or finishes)."},
       "floor_type_words": {"type": "array", "items": {"type": "string"}, "description": "Type name words meaning a structural floor (default Concrete, RC, Slab, Structural, SOG, Hollowcore, PT...)."},
-      "floor_exclude_words": {"type": "array", "items": {"type": "string"}, "description": "Type name words meaning a finish or build-up floor to skip (default Finish, Screed, Tile, Topping, Roof Layer, Build-up, Insulation, Membrane, Paving...). [] skips none."},
+      "floor_exclude_words": {"type": "array", "items": {"type": "string"}, "description": "Type name words meaning a finish or build-up floor (default Finish, Screed, Tile, Topping, Roof Layer, Build-up, Insulation, Membrane, Paving...). They never skip a floor set structural, with a structural word or a concrete structural layer; they only name why other floors are skipped."},
       "min_floor_thickness": {"type": "number", "description": "Skip floors thinner than this unless set structural, project units (default 100 mm)."},
       "dry_run": {"type": "boolean"}
     }

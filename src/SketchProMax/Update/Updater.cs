@@ -282,8 +282,9 @@ public static class Updater
     }
 
     /// <summary>
-    /// Other manifests in the same folder that would load Sketch ProMax too (a test copy, an older install's leftover)
-    /// are renamed to .disabled, so Revit sees one entry for it, not two. Other add-ins are never touched.
+    /// Other manifests in the same folder that load only Sketch ProMax (a test copy, an older install's leftover) are
+    /// renamed to .disabled, so Revit sees one entry for it, not two. A file that also loads another add-in is never
+    /// touched: it is written to the update log (update.log) for the user or IT to tidy by hand.
     /// </summary>
     private static void DisableOtherManifests(string revitFolder, string manifest)
     {
@@ -294,8 +295,23 @@ public static class Updater
             try { text = File.ReadAllText(other); }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { continue; }
             if (!AddinFiles.NamesSketchProMax(text)) continue;
-            TryDelete(() => File.Move(other, other + ".disabled"));
+            if (AddinFiles.OnlySketchProMax(text)) TryDelete(() => File.Move(other, other + ".disabled"));
+            else LogWarning($"{other} loads Sketch ProMax a second time but also loads other add-ins, so it was left as it is. " +
+                            "Remove its Sketch ProMax entry by hand; Revit then loads Sketch ProMax once.");
         }
+    }
+
+    private static string LogFile => Path.Combine(LocalRoot, "update.log");
+
+    /// <summary>Appends a dated line to update.log. Never throws.</summary>
+    private static void LogWarning(string text)
+    {
+        try
+        {
+            Directory.CreateDirectory(LocalRoot);
+            File.AppendAllText(LogFile, $"{DateTime.Now:yyyy-MM-dd HH:mm} warning: {text}{Environment.NewLine}");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
     }
 
     private static string? Hash(string path)

@@ -28,12 +28,15 @@ internal static class TitleBlockArea
         return parts is { Length: 4 } && parts.All(v => !double.IsNaN(v)) ? new LayoutMath.Rect(parts[0], parts[1], parts[2], parts[3]) : null;
     }
 
-    /// <summary>Remembers a drawing area (sheet coordinates) for the instance's type. Needs an open transaction.</summary>
-    public static void Remember(Document doc, FamilyInstance titleBlock, LayoutMath.Rect sheetArea)
+    /// <summary>
+    /// The value that remembers a drawing area (sheet coordinates) for the instance's type, for
+    /// <see cref="ProjectStore.TryRemember"/> once the sheet work is committed.
+    /// </summary>
+    public static KeyValuePair<string, string?> Remembering(FamilyInstance titleBlock, LayoutMath.Rect sheetArea)
     {
         var o = titleBlock.GetTransform().Origin;
         var r = sheetArea.Move(-o.X, -o.Y);
-        ProjectStore.Set(doc, KeyPrefix + titleBlock.Symbol.UniqueId,
+        return new KeyValuePair<string, string?>(KeyPrefix + titleBlock.Symbol.UniqueId,
             string.Join(",", new[] { r.X0, r.Y0, r.X1, r.Y1 }.Select(v => v.ToString("R", CultureInfo.InvariantCulture))));
     }
 

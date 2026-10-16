@@ -56,6 +56,7 @@ public sealed class CreateSheetsTool : IRevitTool
         }
 
         var results = new List<object>();
+        var layouts = new List<SheetLayout.Result>();
         using var t = RevitHelpers.StartTransaction(doc, "Create sheets");
         foreach (var spec in args.Array("sheets"))
         {
@@ -102,11 +103,13 @@ public sealed class CreateSheetsTool : IRevitTool
             if (ids.Count > 0 && !sheet.IsPlaceholder)
             {
                 var layout = SheetLayout.PlaceViews(doc, sheet, ids, area);
+                layouts.Add(layout);
                 results.Add(new { number, sheetId = sheet.Id.Value, titleBlock = tb is null ? null : TypeMatch.Label(tb), layout.placed, layout.skipped, layout.warnings, layout.drawingArea });
             }
             else results.Add(new { number, sheetId = sheet.Id.Value, titleBlock = tb is null ? null : TypeMatch.Label(tb), placed = new List<long>(), skipped = new List<object>() });
         }
         t.Commit();
+        SheetLayout.SaveRemembered(doc, layouts);
         return ToolResult.Ok(results);
     }
 }
@@ -141,6 +144,7 @@ public sealed class PlaceViewsOnSheetTool : IRevitTool
         var area = args.Has("drawing_area") ? args.Array("drawing_area").Select(e => e.GetDouble()).ToList() : null;
         var layout = SheetLayout.PlaceViews(doc, sheet, args.LongList("view_ids"), area);
         t.Commit();
+        SheetLayout.SaveRemembered(doc, [layout]);
         return ToolResult.Ok(new { layout.placed, layout.skipped, layout.warnings, layout.drawingArea });
     }
 }
@@ -363,7 +367,25 @@ internal static class SheetLayout
 {
     private const double Gap = 8 / 304.8; // 8 mm on paper, in feet
 
-    public sealed record Result(List<long> placed, List<object> skipped, List<string> warnings, object drawingArea);
+    /// <summary>
+    /// What was placed. A drawing area to remember is in Remember: the caller saves it with <see cref="SaveRemembered"/>
+    /// after committing, so a busy settings element in a workshared model never undoes the sheet work.
+    /// </summary>
+    public sealed record Result(List<long> placed, List<object> skipped, List<string> warnings, Dictionary<string, object?> drawingArea)
+    {
+        public KeyValuePair<string, string?>? Remember { get; init; }
+    }
+
+    /// <summary>Saves the drawing areas the layouts asked to remember (call with no transaction open); notes when it could not.</summary>
+    public static void SaveRemembered(Document doc, IReadOnlyList<Result> layouts)
+    {
+        var asked = layouts.Where(l => l.Remember is not null).ToList();
+        if (asked.Count == 0) return;
+        var values = asked.Select(l => l.Remember!.Value).GroupBy(kv => kv.Key).Select(g => g.Last()).ToList();
+        if (ProjectStore.TryRemember(doc, values) is not { } why) return;
+        foreach (var l in asked)
+            l.drawingArea["note"] = $"The drawing area was used but not remembered for this title block type ({why}); pass drawing_area again next time.";
+    }
 
     private readonly record struct Box(double X0, double Y0, double X1, double Y1)
     {
@@ -392,6 +414,7 @@ internal static class SheetLayout
         Box usable;
         string source;
         string? note = null;
+        KeyValuePair<string, string?>? toRemember = null;
         if (area is { Count: 4 })
         {
             double a0 = RevitHelpers.ToInternal(doc, area[0]), a1 = RevitHelpers.ToInternal(doc, area[1]);
@@ -400,7 +423,7 @@ internal static class SheetLayout
             source = "given";
             if (remember && tb is not null)
             {
-                TitleBlockArea.Remember(doc, tb, new LayoutMath.Rect(usable.X0, usable.Y0, usable.X1, usable.Y1));
+                toRemember = TitleBlockArea.Remembering(tb, new LayoutMath.Rect(usable.X0, usable.Y0, usable.X1, usable.Y1));
                 note = $"Remembered this drawing area for title block '{TypeMatch.Label(tb.Symbol)}' in this model; later create_sheets and place_views_on_sheet calls use it without drawing_area.";
             }
         }
@@ -448,7 +471,7 @@ internal static class SheetLayout
             }
             catch (Autodesk.Revit.Exceptions.ApplicationException ex) { skipped.Add(new { id, reason = ex.Message }); }
         }
-        if (made.Count == 0) return new Result(placed, skipped, warnings, AreaInfo(doc, usable, source, note));
+        if (made.Count == 0) return new Result(placed, skipped, warnings, AreaInfo(doc, usable, source, note)) { Remember = toRemember };
         doc.Regenerate();
 
         double offX = full.X1 + 4 * Gap, offTop = full.Y1;
@@ -483,17 +506,17 @@ internal static class SheetLayout
             }
             placed.Add(id);
         }
-        return new Result(placed, skipped, warnings, AreaInfo(doc, usable, source, note));
+        return new Result(placed, skipped, warnings, AreaInfo(doc, usable, source, note)) { Remember = toRemember };
     }
 
     private static string Len(Document doc, double feet) => RevitHelpers.FromInternal(doc, feet).ToString("0.#");
 
-    private static object AreaInfo(Document doc, Box b, string source, string? note) => new
+    private static Dictionary<string, object?> AreaInfo(Document doc, Box b, string source, string? note) => new()
     {
-        min = new[] { RevitHelpers.FromInternal(doc, b.X0), RevitHelpers.FromInternal(doc, b.Y0) },
-        max = new[] { RevitHelpers.FromInternal(doc, b.X1), RevitHelpers.FromInternal(doc, b.Y1) },
-        source,
-        note,
+        ["min"] = new[] { RevitHelpers.FromInternal(doc, b.X0), RevitHelpers.FromInternal(doc, b.Y0) },
+        ["max"] = new[] { RevitHelpers.FromInternal(doc, b.X1), RevitHelpers.FromInternal(doc, b.Y1) },
+        ["source"] = source,
+        ["note"] = note,
     };
 
     /// <summary>The highest, then leftmost, free spot of w x h inside the area, touching the area corner or another box.</summary>

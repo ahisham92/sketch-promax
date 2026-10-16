@@ -10,14 +10,15 @@ namespace SketchProMax.Bugs;
 /// <summary>
 /// The bug folder in Documents\Sketch ProMax\Bugs: Reports\ holds the bug report zips this PC wrote, and "Bug log.md" is
 /// the published bug log (docs/bug-log.md in the public repository, downloaded at every update check) followed by a
-/// "Not sent yet" list of local reports. A report counts as sent once the published log names it or has a row dated
-/// after the report's day. A failed download changes nothing: the last copy stays. No Revit or WPF here.
+/// "Not sent yet" list of local reports. A report counts as sent only once a row of the published log's tables names its
+/// id (the time in the zip's name), so a report older than the newest row but never logged stays listed. The local file
+/// is rewritten automatically and says so at its top: the zips in Reports\ are the source. A failed download changes
+/// nothing: the last copy stays. No Revit or WPF here.
 /// </summary>
 internal static class BugLog
 {
     public const string PublishedUrl = "https://raw.githubusercontent.com/ahisham92/sketch-promax/main/docs/bug-log.md";
 
-    private static readonly Regex Date = new(@"\b(20\d\d-\d\d-\d\d)\b", RegexOptions.CultureInvariant);
     private static readonly object Gate = new();
 
     public static string Root => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Sketch ProMax", "Bugs");
@@ -42,34 +43,30 @@ internal static class BugLog
 
     // ---- Pure text --------------------------------------------------------------------------------------------------
 
-    /// <summary>The newest date in the published log's table rows, or null.</summary>
-    public static DateTime? NewestDate(string published)
-    {
-        DateTime? newest = null;
-        foreach (var line in published.Replace("\r", "").Split('\n'))
-        {
-            if (!line.TrimStart().StartsWith("|", StringComparison.Ordinal)) continue;
-            foreach (Match m in Date.Matches(line))
-                if (DateTime.TryParseExact(m.Value, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var d) && (newest is null || d > newest))
-                    newest = d;
-        }
-        return newest;
-    }
+    /// <summary>The published log's table rows, where a report's id counts (an id mentioned in the intro does not).</summary>
+    private static string Rows(string published) =>
+        string.Join("\n", published.Replace("\r", "").Split('\n').Where(l => l.TrimStart().StartsWith("|", StringComparison.Ordinal)));
 
-    /// <summary>Reports the published log doesn't cover yet, newest first.</summary>
+    /// <summary>Reports no row of the published log names yet, newest first.</summary>
     public static List<Report> Unsent(string? published, IEnumerable<Report> reports)
     {
-        var newest = published is null ? null : NewestDate(published);
+        var rows = published is null ? "" : Rows(published);
         return reports
-            .Where(r => published is null || published.IndexOf(r.Id, StringComparison.OrdinalIgnoreCase) < 0)
-            .Where(r => newest is null || r.Created.Date >= newest.Value.Date)
+            .Where(r => rows.IndexOf(r.Id, StringComparison.OrdinalIgnoreCase) < 0)
             .OrderByDescending(r => r.Created).ToList();
     }
+
+    /// <summary>The first line of the local file: it is rebuilt, so edits there are lost.</summary>
+    public const string RewrittenNote =
+        "> This file is rewritten automatically (at every update check and after each new report); edits made here are lost. " +
+        "The report zips in the Reports folder are the source.";
 
     /// <summary>The local "Bug log.md": the published log as it is, then the local reports not sent yet.</summary>
     public static string Compose(string? published, IReadOnlyList<Report> unsent, DateTime? downloaded)
     {
         var sb = new StringBuilder();
+        sb.AppendLine(RewrittenNote);
+        sb.AppendLine();
         if (published is null)
         {
             sb.AppendLine("# Sketch ProMax bug log");

@@ -103,6 +103,9 @@ internal static class RibbonFormTests
         var v30 = new Version(0, 30, 0);
         check("badge: working wins", UpdateBadge.For("Downloading\n45%", true, v30, v30, now, false, now) == ("Downloading 45%", UpdateBadge.Kind.Working), "");
         check("badge: restart before what's new", UpdateBadge.For(null, true, v30, new Version(0, 29, 0), now, false, now).Kind == UpdateBadge.Kind.Restart, "");
+        check("badge: first run of a fresh install is seen", UpdateBadge.FirstRunSeen(v30, [], false) == new Version(0, 30, 0), "");
+        check("badge: first run after an update from an older version folder", UpdateBadge.FirstRunSeen(v30, ["0.28.1", "0.29.0", "0.30.0", "0.29.0.partial"], false) == new Version(0, 29, 0), "");
+        check("badge: first run after an update shown by earlier update state", UpdateBadge.For(null, false, v30, UpdateBadge.FirstRunSeen(v30, [], true), now, false, now).Kind == UpdateBadge.Kind.WhatsNew, "");
         check("badge: what's new after an update", UpdateBadge.For(null, false, v30, new Version(0, 29, 0), now, false, now) == ("What's new", UpdateBadge.Kind.WhatsNew), "");
         check("badge: check when never checked, failed or stale", UpdateBadge.For(null, false, v30, v30, null, false, now).Kind == UpdateBadge.Kind.Check
             && UpdateBadge.For(null, false, v30, v30, now, true, now).Kind == UpdateBadge.Kind.Check

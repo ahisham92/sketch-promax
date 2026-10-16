@@ -99,7 +99,7 @@ public sealed class CreateRaftTool : IRevitTool
         "Model a raft (mat) foundation under a floor: its outline follows the floor's outer edge (plus an optional projection), " +
         "its top a given depth below the floor's top (e.g. 1500 mm under the slab on grade), at a thickness. The floor is " +
         "named by id, by Mark, or as the lowest floor on a level. The raft is hosted on the level nearest its top (or host_level). " +
-        "Follow the project's type naming: type_match reuses an existing floor/foundation type (e.g. 'FL_SC_*Raft*') at the " +
+        "Follow the project's type naming: type_match reuses an existing floor/foundation type (e.g. 'FL_*Raft*') at the " +
         "raft thickness, or makes one from it renamed for the thickness; type_name names the type ({thickness} = mm). " +
         "Without either it uses a foundation slab type made by thickness (Raft 1000mm).";
     public string PropertiesJson => """
@@ -111,8 +111,8 @@ public sealed class CreateRaftTool : IRevitTool
       "thickness": {"type": "number", "description": "Raft thickness, project units (default 1000 mm)."},
       "projection": {"type": "number", "description": "Raft edge past the floor's edge, project units (default 0)."},
       "host_level": {"type": "string", "description": "Level to host the raft on (default: the level nearest the raft top)."},
-      "type_name": {"type": "string", "description": "Raft type name, e.g. 'FL_SC_40MPa_Raft_{thickness}'; an existing type with this name is reused."},
-      "type_match": {"type": "string", "description": "Wildcard for an existing floor/foundation type to follow, e.g. 'FL_SC_*Raft*' or '*40MPa*'."},
+      "type_name": {"type": "string", "description": "Raft type name, e.g. 'FL_Raft_{thickness}'; an existing type with this name is reused."},
+      "type_match": {"type": "string", "description": "Wildcard for an existing floor/foundation type to follow, e.g. 'FL_*Raft*' or '*Raft*'."},
       "material": {"type": "string", "description": "Material name for a new raft type (default the model's concrete)."}
     }
     """;

@@ -83,6 +83,9 @@ public static class CoreEntry
 
     private static Result SendView()
     {
+        // The loader has shown the pane with its Chat tab; on the first Send view of a session the chat may not be made
+        // yet: make it now (the pane adopts this same element), so the view is attached instead of refused.
+        Chat.ChatPane.Get();
         if (Chat.ChatPane.AttachCurrentView()) return Result.Succeeded;
         TaskDialog.Show("Sketch ProMax", "The chat isn't open in this Revit session. Click Chat first, then Send view.");
         return Result.Cancelled;

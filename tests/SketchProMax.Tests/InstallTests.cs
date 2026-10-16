@@ -13,7 +13,9 @@ internal static class InstallTests
         check("loader: identical bytes are left alone", DecideLoader("AB", v31, "ab", v30) == LoaderAction.Keep, "");
         check("loader: none installed is copied", DecideLoader("AB", v30, null, null) == LoaderAction.Replace, "");
         check("loader: a changed loader replaces the old one", DecideLoader("AB", v31, "CD", v30) == LoaderAction.Replace, "");
-        check("loader: same version, other bytes still replaces", DecideLoader("AB", v30, "CD", v30) == LoaderAction.Replace, "");
+        check("loader: same version, other bytes is kept (no ping-pong between rebuilds)", DecideLoader("AB", v30, "CD", v30) == LoaderAction.Keep
+            && DecideLoader("CD", v30, "AB", v30) == LoaderAction.Keep, "");
+        check("loader: unknown versions with other bytes replace", DecideLoader("AB", null, "CD", v30) == LoaderAction.Replace, "");
         check("loader: an older core never puts back an older loader", DecideLoader("AB", v30, "CD", v31) == LoaderAction.KeepNewer, "");
         check("loader: nothing to copy", DecideLoader(null, null, "CD", v30) == LoaderAction.Keep, "");
 
@@ -53,6 +55,10 @@ internal static class InstallTests
             && NamesSketchProMax(head + Entry(@"D:\dev\bin\SketchProMax.Loader.dll", "X") + "</RevitAddIns>"), "");
         check("duplicates: another add-in is not ours", !NamesSketchProMax(head
             + "  <AddIn Type=\"Application\">\n    <Assembly>SketchPro\\SketchPro.dll</Assembly>\n    <ClientId>11111111-2222-3333-4444-555555555555</ClientId>\n  </AddIn>\n</RevitAddIns>"), "");
+
+        check("duplicates: a file of only our entries may be set aside", OnlySketchProMax(versioned) && OnlySketchProMax(twice), "");
+        check("duplicates: a file that also loads another add-in is left alone", NamesSketchProMax(other) && !OnlySketchProMax(other), "");
+        check("duplicates: an empty or unreadable file is not ours", !OnlySketchProMax(head + "</RevitAddIns>") && !OnlySketchProMax("not xml"), "");
 
         // The loader's release (its fixed file version) must be at least the release the core expects its ribbon from.
         var csproj = repoRoot is null ? null : Path.Combine(repoRoot, "src", "SketchProMax.Loader", "SketchProMax.Loader.csproj");

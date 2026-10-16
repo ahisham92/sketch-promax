@@ -40,10 +40,20 @@ function Copy-IfChanged($from, $to) {
 }
 # Our add-in ID; any other manifest with it (or naming our DLLs) would load Sketch ProMax a second time.
 $clientId = "6f3c2b1e-8a47-4d2f-9c51-3e7b9d0a4f12"
-function Test-OurManifest($path) {
-    $text = Get-Content $path -Raw -ErrorAction SilentlyContinue
-    $text -and ($text -match [regex]::Escape($clientId) -or $text -match '[\\/>]SketchProMax(\.Loader)?\.dll\s*<')
+# "none", "only" (every AddIn entry is Sketch ProMax's) or "mixed" (it also loads other add-ins).
+function Get-OurManifestKind($path) {
+    try { [xml]$xml = Get-Content $path -Raw -ErrorAction Stop } catch { return "none" }
+    $entries = @($xml.RevitAddIns.AddIn)
+    if ($entries.Count -eq 0 -or $null -eq $entries[0]) { return "none" }
+    $ours = @($entries | Where-Object {
+        $id = "$($_.ClientId)$($_.AddInId)".Trim('{', '}', ' ')
+        $asm = "$($_.Assembly)".Trim()
+        $file = if ($asm) { Split-Path $asm -Leaf } else { "" }
+        $id -eq $clientId -or $file -eq "SketchProMax.Loader.dll" -or $file -eq "SketchProMax.dll"
+    })
+    if ($ours.Count -eq 0) { "none" } elseif ($ours.Count -eq $entries.Count) { "only" } else { "mixed" }
 }
+function Test-OurManifest($path) { (Get-OurManifestKind $path) -ne "none" }
 
 foreach ($v in 2024, 2025, 2026, 2027) {
     $src = Join-Path $dist "Revit$v"
@@ -60,9 +70,15 @@ foreach ($v in 2024, 2025, 2026, 2027) {
     }
     Copy-IfChanged (Join-Path $src "SketchProMax.addin") (Join-Path $addins "SketchProMax.addin")
     # One Sketch ProMax entry per Revit version: set aside other manifests that would load it too (a test copy, a leftover).
-    Get-ChildItem $addins -Filter "*.addin" -File | Where-Object { $_.Name -ne "SketchProMax.addin" -and (Test-OurManifest $_.FullName) } | ForEach-Object {
-        Move-Item $_.FullName "$($_.FullName).disabled" -Force
-        Write-Warning "Disabled $($_.FullName): it loaded Sketch ProMax a second time."
+    # A file that also loads other add-ins is never changed: it is reported for the user to tidy by hand.
+    Get-ChildItem $addins -Filter "*.addin" -File | Where-Object { $_.Name -ne "SketchProMax.addin" } | ForEach-Object {
+        switch (Get-OurManifestKind $_.FullName) {
+            "only" {
+                Move-Item $_.FullName "$($_.FullName).disabled" -Force
+                Write-Warning "Disabled $($_.FullName): it loaded Sketch ProMax a second time."
+            }
+            "mixed" { Write-Warning "$($_.FullName) loads Sketch ProMax a second time but also loads other add-ins, so it was left as it is. Remove its Sketch ProMax entry by hand." }
+        }
     }
     $machine = Join-Path $env:ProgramData "Autodesk\Revit\Addins\$v"
     if (Test-Path $machine) {

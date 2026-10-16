@@ -40,6 +40,9 @@ internal static class CoreRibbon
     private static readonly List<Made> Retired = [];
     private static readonly string?[] SlotCommands = new string?[Slots];
     private static readonly HashSet<string> Hidden = new(StringComparer.Ordinal);
+    // Slots of retired buttons are never given out again in this session: a hidden button may still be on the Quick
+    // Access Toolbar, and must not run another button's command from there.
+    private static readonly HashSet<int> Spent = [];
     private static readonly Dictionary<string, int> Generation = new(StringComparer.Ordinal);
     private static string _applied = "\u0001";
     private static List<string> _restart = [];
@@ -53,6 +56,12 @@ internal static class CoreRibbon
     public static RibbonManifest.Parsed Current { get; private set; } = RibbonManifest.Parse(null);
 
     /// <summary>
+    /// True once a core's manifest put its buttons on the ribbon. False before that, under a core that declares none
+    /// (older than 0.30, or an empty manifest) and when applying it failed: the loader then shows its fallback set.
+    /// </summary>
+    public static bool Applied { get; private set; }
+
+    /// <summary>
     /// Brings the ribbon in line with the running core's manifest. Returns what can only appear after a restart (empty
     /// when everything was applied). Call on Revit's UI thread once the core has started. Never throws.
     /// </summary>
@@ -64,14 +73,14 @@ internal static class CoreRibbon
         var manifest = RibbonManifest.Parse(text);
         Current = manifest;
         if (text == _applied) return _restart.ToList();
-        _applied = text;
         var restart = _restart = [];
         restart.AddRange(manifest.Unknown);
 
         Dictionary<string, RibbonPanel> panels;
         HashSet<string> existing;
         try { (panels, existing) = Read(app); }
-        catch (Exception) { return restart; }
+        catch (Exception) { Applied = false; return restart; } // tried again at the next sync
+        _applied = text;
         var ours = new HashSet<string>(Active.Values.Concat(Retired).Select(m => m.Name), StringComparer.Ordinal);
         var wanted = new HashSet<string>(StringComparer.Ordinal);
 
@@ -139,6 +148,7 @@ internal static class CoreRibbon
                 }
         }
         catch (Exception) { /* cosmetic */ }
+        Applied = manifest.Controls.Count > 0 && Active.Values.Any(m => m.Parent is null);
         Ribbon.Tidy();
         return restart;
     }
@@ -266,8 +276,12 @@ internal static class CoreRibbon
     private static void Retire(Made made)
     {
         Active.Remove(made.Spec.Id);
-        if (made.Slot >= 0 && SlotCommands[made.Slot] == made.Spec.Command) SlotCommands[made.Slot] = null;
-        made.Slot = -1; // its slot may serve another button; this one is hidden and can't be clicked
+        if (made.Slot >= 0)
+        {
+            SlotCommands[made.Slot] = null;
+            Spent.Add(made.Slot); // never given to another button in this session
+        }
+        made.Slot = -1;
         Retired.Add(made);
         try { if (made.Item.Visible) made.Item.Visible = false; }
         catch (Exception) { }
@@ -278,6 +292,7 @@ internal static class CoreRibbon
     private static int FreeSlot(IEnumerable<int>? taken = null)
     {
         var used = new HashSet<int>(Active.Values.Select(m => m.Slot));
+        used.UnionWith(Spent);
         if (taken is not null) used.UnionWith(taken);
         for (var i = 0; i < Slots; i++)
             if (!used.Contains(i)) return i;

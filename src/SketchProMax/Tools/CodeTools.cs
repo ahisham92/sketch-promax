@@ -112,7 +112,11 @@ public abstract class RevitCodeToolBase : IRevitTool
             // A transaction is opened so probes that create or change elements work, inside a group, and both are
             // always rolled back, so nothing a read-only snippet does is kept. With ownTransactions only the group is
             // opened: the snippet starts its own (and can call EditFamily, which refuses to run inside one).
-            var group = doc.IsReadOnly || doc.IsModifiable ? null : new TransactionGroup(doc, "Sketch ProMax: read-only code (rolled back)");
+            // Inside someone else's open transaction nothing could be rolled back afterwards: refuse rather than keep changes.
+            if (doc.IsModifiable && !doc.IsReadOnly)
+                return ToolResult.Error("A transaction is already open in this model (another command or tool is still running), so the query " +
+                                        "could not be rolled back afterwards and was not run. Finish or cancel that first, then run it again.");
+            var group = doc.IsReadOnly ? null : new TransactionGroup(doc, "Sketch ProMax: read-only code (rolled back)");
             Transaction? probe = null;
             JsonElement json;
             try

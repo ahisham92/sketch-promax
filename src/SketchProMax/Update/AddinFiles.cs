@@ -7,7 +7,8 @@ namespace SketchProMax.Update;
 /// add-in by its add-in ID and the place it loads from (and asks again when the file there changes), so:
 ///   - SketchProMax.addin always names the loader at one fixed path, SketchProMax\SketchProMax.Loader.dll next to it, and
 ///     never a version folder or the core;
-///   - the loader there is replaced only when its bytes differ, and never by an older one;
+///   - the loader there is replaced only by a newer LoaderVersion (or when none is installed, or a version can't be
+///     read and the bytes differ): two packages that carry the same LoaderVersion built twice never swap it back and forth;
 ///   - a file that is already right is never written again.
 /// Pure logic, no Revit types, so the tests compile it.
 /// </summary>
@@ -27,7 +28,7 @@ internal static class AddinFiles
 
     public enum LoaderAction
     {
-        /// <summary>Nothing to do: no new loader, or the installed one is byte for byte the same.</summary>
+        /// <summary>Nothing to do: no new loader, the installed one is byte for byte the same, or it has the same version.</summary>
         Keep,
         /// <summary>Put the new loader in place.</summary>
         Replace,
@@ -44,7 +45,12 @@ internal static class AddinFiles
         if (string.IsNullOrEmpty(packageHash)) return LoaderAction.Keep;
         if (string.IsNullOrEmpty(installedHash)) return LoaderAction.Replace;
         if (string.Equals(packageHash, installedHash, StringComparison.OrdinalIgnoreCase)) return LoaderAction.Keep;
-        if (packageVersion is not null && installedVersion is not null && packageVersion < installedVersion) return LoaderAction.KeepNewer;
+        if (packageVersion is not null && installedVersion is not null)
+        {
+            if (packageVersion < installedVersion) return LoaderAction.KeepNewer;
+            // Same LoaderVersion, other bytes (a rebuild): keep the installed one, so Revit's trust in it holds.
+            if (packageVersion == installedVersion) return LoaderAction.Keep;
+        }
         return LoaderAction.Replace;
     }
 
@@ -96,6 +102,17 @@ internal static class AddinFiles
     {
         var doc = TryParse(manifest);
         return doc?.Root is not null && doc.Root.Elements("AddIn").Any(IsOurs);
+    }
+
+    /// <summary>
+    /// True when every add-in entry in a manifest is Sketch ProMax's, so the whole file can be set aside. A file that
+    /// also loads another add-in is never changed: it is reported instead.
+    /// </summary>
+    public static bool OnlySketchProMax(string? manifest)
+    {
+        var doc = TryParse(manifest);
+        var entries = doc?.Root?.Elements("AddIn").ToList();
+        return entries is { Count: > 0 } && entries.All(IsOurs);
     }
 
     private static bool IsOurs(XElement addIn)

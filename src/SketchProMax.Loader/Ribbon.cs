@@ -12,6 +12,9 @@ namespace SketchProMax.Loader;
 /// A change here appears only after Revit restarts with the new loader: also raise UI/LoaderCompat.RibbonChangedIn in
 /// the core, so a newer core running under an older loader tells the user to restart for its buttons.
 /// Panels with nothing visible (no core yet) are hidden. Destructive buttons use the red danger tile.
+/// A core that declares no buttons (one older than 0.30, or one whose manifest is empty or could not be applied) would
+/// leave the tab almost empty: the status stays and a small fallback set (pane, updates, settings, help) is shown, using
+/// commands every core handles, until a manifest applies.
 /// </summary>
 internal static class Ribbon
 {
@@ -24,6 +27,8 @@ internal static class Ribbon
 
     private static PushButton? _status;
     private static PulldownButton? _quick;
+    private static readonly List<PushButton> Fallback = [];
+    private static bool _fallbackShown;
     private static readonly List<RibbonPanel> Made = [];
     private static readonly PushButton?[] SlotButtons = new PushButton?[Slots];
     private static readonly string?[] SlotKeys = new string?[Slots];
@@ -67,6 +72,22 @@ internal static class Ribbon
         _status = (PushButton)panels["Claude"].AddItem(Button<StatusCommand>("Starting", "Claude\nstarting", Icons.Logo(16, Icons.Gray), Icons.Logo(32, Icons.Gray),
             "Sketch ProMax is starting. Its buttons appear here as soon as Revit is ready.",
             "If it stays like this, click for the reason Sketch ProMax could not start and what to do.", false));
+
+        // Fallback for a core that declares no buttons (see the summary): hidden until one is needed. Their names are not
+        // "SketchProMax.<id>", so no manifest button is ever taken as one of them.
+        var tools = panels["Sketch ProMax"];
+        foreach (var data in new[]
+                 {
+                     Button<PaneCommand>("Fallback.Pane", "Show or\nhide pane", "pane", "Shows or hides the Sketch ProMax pane: connection, jobs and quick tools."),
+                     Button<UpdateCheckCommand>("Fallback.Update", "Check for\nupdates", "update", "Looks for a newer Sketch ProMax now. A newer version brings back the full set of buttons."),
+                     Button<SettingsCommand>("Fallback.Settings", "Settings", "settings", "Firm standards, whether Revit asks before Claude changes the model, and automatic updates."),
+                     Button<HelpCommand>("Fallback.Help", "Help", "help", "Opens the guide: how to use Sketch ProMax, what it can do and what to try first."),
+                 })
+        {
+            var button = (PushButton)tools.AddItem(data);
+            button.Visible = false;
+            Fallback.Add(button);
+        }
 
         // My tools: saved recipes and learned tools, run straight in Revit without AI or internet.
         var pulldown = new PulldownButtonData("SketchProMax.Quick", "My\ntools")
@@ -146,15 +167,38 @@ internal static class Ribbon
     {
         if (++_ticks % 15 == 0) RefreshQuickTools();
         if (_status is null) return;
-        if (Host.Core is not null)
+        if (Host.Core is { } core)
         {
-            if (_status.Visible) { _status.Visible = false; Tidy(); }
+            // Hidden once the core's own buttons are on the ribbon; otherwise the status and the fallback set stay.
+            var fallback = !CoreRibbon.Applied;
+            if (fallback)
+            {
+                Set(_status, "Claude\nstatus", $"Sketch ProMax {core.VersionText} is running. Click for the connection status. " +
+                    "Its full set of buttons comes with a newer version: use Check for updates, or restart Revit.");
+                Image(_status, "logo", s => Icons.Logo(s));
+            }
+            ShowFallback(fallback);
             return;
         }
         var failed = Host.BootError is not null;
         Set(_status, failed ? "Claude\nnot started" : "Claude\nstarting", Host.BootError ?? "Sketch ProMax starts as soon as Revit is ready.");
         Image(_status, failed ? "red" : "gray", s => Icons.Logo(s, failed ? Icons.Red : Icons.Gray));
         if (!_status.Visible) { _status.Visible = true; Tidy(); }
+    }
+
+    /// <summary>Shows or hides the status and the fallback set together (only when that changes). Never throws.</summary>
+    private static void ShowFallback(bool show)
+    {
+        if (_status is null || (_fallbackShown == show && _status.Visible == show)) return;
+        _fallbackShown = show;
+        try
+        {
+            if (_status.Visible != show) _status.Visible = show;
+            foreach (var button in Fallback)
+                if (button.Visible != show) button.Visible = show;
+        }
+        catch (Exception) { /* cosmetic */ }
+        Tidy();
     }
 
     /// <summary>Fills the quick-tool slots from the running core's list of recipes and learned tools.</summary>

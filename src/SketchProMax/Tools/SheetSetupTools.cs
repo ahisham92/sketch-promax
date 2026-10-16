@@ -937,7 +937,8 @@ public sealed class CheckScheduleTool : IRevitTool
 }
 
 /// <summary>
-/// Binds the shared parameters a title block family uses (its labels' sheet parameters) to Sheets, or Project
+/// Binds the sheet parameters a title block family's labels use (shared parameter elements in the family with no
+/// family parameter behind them; the family's own shared parameters stay the title block's) to Sheets, or Project
 /// Information, in the project, keeping their GUIDs so the labels pick the values up. The family is opened read-only;
 /// the definitions come from a temporary shared parameter file holding exactly those GUIDs, and the user's own shared
 /// parameter file setting is put back afterwards. Call with no transaction open.
@@ -957,12 +958,12 @@ internal static class TitleBlockParameters
             try
             {
                 fdoc = doc.EditFamily(family);
-                foreach (FamilyParameter fp in fdoc.FamilyManager.Parameters)
-                    if (fp.IsShared && fp.Definition is { } d)
-                        wanted[fp.GUID] = new Wanted(d.Name, fp.GUID, d.GetDataType(), d.GetGroupTypeId(), family.Name);
-                // Label parameters added from a shared parameter file are kept as shared parameter elements in the family.
+                // The title block's own shared family parameters belong to the title block, not to the sheet: never bound.
+                var own = new HashSet<Guid>(fdoc.FamilyManager.Parameters.Cast<FamilyParameter>().Where(fp => fp.IsShared).Select(fp => fp.GUID));
+                // Sheet parameters a label shows (added from a shared parameter file) are kept as shared parameter
+                // elements in the family with no family parameter behind them: those are the ones the sheets need.
                 foreach (var spe in new FilteredElementCollector(fdoc).OfClass(typeof(SharedParameterElement)).Cast<SharedParameterElement>())
-                    if (!wanted.ContainsKey(spe.GuidValue) && spe.GetDefinition() is { } d)
+                    if (!own.Contains(spe.GuidValue) && !wanted.ContainsKey(spe.GuidValue) && spe.GetDefinition() is { } d)
                         wanted[spe.GuidValue] = new Wanted(spe.Name, spe.GuidValue, d.GetDataType(), d.GetGroupTypeId(), family.Name);
             }
             catch (Exception ex) when (ex is Autodesk.Revit.Exceptions.ApplicationException or InvalidOperationException)
@@ -972,7 +973,7 @@ internal static class TitleBlockParameters
             finally { try { fdoc?.Close(false); } catch (Autodesk.Revit.Exceptions.ApplicationException) { } }
         }
         if (wanted.Count == 0)
-            return new { bound = Array.Empty<string>(), note = "The copied title blocks use no shared parameters.", unreadable };
+            return new { bound = Array.Empty<string>(), note = "The copied title blocks' labels use no shared sheet parameters (the title block's own family parameters are not bound to sheets).", unreadable };
 
         var category = Category.GetCategory(doc, target);
         var bound = new List<string>();

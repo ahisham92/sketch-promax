@@ -12,19 +12,32 @@ internal static class ModelRulesTests
         check("floors: concrete type name is taken", Floor("CL_Concrete_250") is null, Floor("CL_Concrete_250") ?? "");
         check("floors: Structural flag is taken", Floor("Generic 300mm", structural: true) is null, "");
         check("floors: concrete material is taken", Floor("Generic 300mm", material: "Concrete, Cast-in-Place Concrete") is null, "");
-        check("floors: finish type skipped", Floor("FL_Finish_100", material: "Concrete")?.Contains("finish") == true, Floor("FL_Finish_100") ?? "");
-        check("floors: roof build-up skipped even when flagged", Floor("Roof Layers_510 mm", structural: true)?.Contains("Roof Layer") == true, Floor("Roof Layers_510 mm", true) ?? "");
+        check("floors: finish type skipped", Floor("FL_Finish_100")?.Contains("finish") == true, Floor("FL_Finish_100") ?? "");
+        check("floors: finish word doesn't override concrete structure", Floor("FL_Finish_100", material: "Concrete") is null, Floor("FL_Finish_100", material: "Concrete") ?? "");
+        check("floors: Structural flag beats finish words", Floor("Roof Layers_510 mm", structural: true) is null, Floor("Roof Layers_510 mm", true) ?? "");
+        check("floors: structural word beats finish words", Floor("RC Slab with Screed 250") is null, Floor("RC Slab with Screed 250") ?? "");
         check("floors: screed and tile skipped", Floor("Screed 50") != null && Floor("FL_Tiles_20") != null && Floor("Ceramic Tile 10mm") != null, "");
         check("floors: thin non-structural floor skipped", Floor("Generic 50mm", material: "Concrete", mm: 50)?.Contains("thin") == true, "");
         check("floors: thin structural floor kept", Floor("Thin RC", structural: true, mm: 60) is null, "");
         check("floors: plain generic floor skipped", Floor("Generic 300mm", material: "Default")?.StartsWith("not structural") == true, "");
         check("floors: short words need word ends", FirstWord("FL_RC_250", ["RC"]) == "RC" && FirstWord("Source Floor", ["RC"]) is null && FirstWord("PTFE 10", ["PT"]) is null, "");
-        check("floors: no exclude words skips none", FloorSkipReason(new FloorFacts("FL_Finish_100", true, null, 100), FloorStructureWords, [], 100) is null, "");
+        check("floors: no exclude words still skips non-structural", FloorSkipReason(new FloorFacts("FL_Finish_100", false, null, 100), FloorStructureWords, [], 100)?.StartsWith("not structural") == true, "");
 
-        check("raft: thickness replaces the size, not the grade", WithThickness("FL_SC_40MPa_Raft_1200", 1500) == "FL_SC_40MPa_Raft_1500", WithThickness("FL_SC_40MPa_Raft_1200", 1500));
+        check("raft: thickness replaces the size, not the grade", WithThickness("FL_40MPa_Raft_1200", 1500) == "FL_40MPa_Raft_1500", WithThickness("FL_40MPa_Raft_1200", 1500));
         check("raft: mm suffix kept", WithThickness("Raft 1000mm", 1500) == "Raft 1500mm", WithThickness("Raft 1000mm", 1500));
-        check("raft: thickness appended when absent", WithThickness("FL_SC_40MPa_Raft", 1500) == "FL_SC_40MPa_Raft_1500" && WithThickness("Mat Foundation", 900) == "Mat Foundation 900mm", WithThickness("FL_SC_40MPa_Raft", 1500));
-        check("raft: wildcard match", Wildcard("FL_SC_40MPa_Raft_1500", "fl_sc_*raft*") && !Wildcard("FL_SC_40MPa_SOG_400", "FL_SC_*Raft*") && Wildcard("FL_SC_40MPa_SOG_400", "40MPa"), "");
+        check("raft: thickness appended when absent", WithThickness("FL_40MPa_Raft", 1500) == "FL_40MPa_Raft_1500" && WithThickness("Mat Foundation", 900) == "Mat Foundation 900mm", WithThickness("FL_40MPa_Raft", 1500));
+        check("raft: wildcard match", Wildcard("FL_40MPa_Raft_1500", "fl_*raft*") && !Wildcard("FL_40MPa_SOG_400", "FL_*Raft*") && Wildcard("FL_40MPa_SOG_400", "40MPa"), "");
+
+        var lineBars = new[] { ("Bar Tag", false), ("Additional Bars RFT", true), ("Rebar Mesh 2", false), ("Bottom Rebar", true), ("Column RFT Section", false), ("Generic Line", true) };
+        var bars = RankDetailFamilies(AdditionalBarsRule, lineBars);
+        check("rft families: additional bars are line-based bar/rft names, best first", bars.SequenceEqual(["Additional Bars RFT", "Bottom Rebar"]), string.Join(", ", bars));
+        var mesh = RankDetailFamilies(MeshRule, lineBars);
+        check("rft families: mesh needs 'mesh' and a point family", mesh.SequenceEqual(["Rebar Mesh 2"]), string.Join(", ", mesh));
+        var col = RankDetailFamilies(ColumnSectionRule, [("Column RFT Section", false), ("Column Tag", false), ("Column Rebar Ties", false)]);
+        check("rft families: column section needs column + rft/rebar, ties ranked down", col.SequenceEqual(["Column RFT Section", "Column Rebar Ties"]), string.Join(", ", col));
+        var ties = RankDetailFamilies(TiesRule, [("Transversal Rebar", false), ("Stirrup", true), ("Mesh Tie Tag", false)]);
+        check("rft families: ties by tie/stirrup/transversal", ties.Count == 3 && ties[0] == "Transversal Rebar" && ties[2] == "Mesh Tie Tag", string.Join(", ", ties));
+        check("rft families: nothing fits", RankDetailFamilies(MeshRule, [("Section Head", false)]).Count == 0, "");
 
         check("link: newer release detected", IsNewerRelease("2025", "2024") && IsNewerRelease("Autodesk Revit 2026", "2025"), "");
         check("link: same or older release fine", !IsNewerRelease("2025", "2025") && !IsNewerRelease("2023", "2025") && !IsNewerRelease("", "2025"), "");

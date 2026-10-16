@@ -25,19 +25,20 @@ internal static class ModelRules
     public sealed record FloorFacts(string TypeName, bool Structural, string? Material, double ThicknessMm);
 
     /// <summary>
-    /// Why an architectural floor is not turned into a slab, or null to take it. Finish and build-up names are
-    /// skipped first (even when flagged structural), then the Structural flag takes it, then floors thinner than
-    /// the minimum are skipped, and the rest need a structural word in the type name or a concrete material.
+    /// Why an architectural floor is not turned into a slab, or null to take it. The Structural flag always takes it;
+    /// otherwise floors thinner than the minimum are skipped, and a structural word in the type name or a concrete
+    /// structural material takes it. Finish and build-up words never override those: they only name why a floor with
+    /// none of them is skipped.
     /// </summary>
     public static string? FloorSkipReason(FloorFacts f, IReadOnlyCollection<string> structureWords, IReadOnlyCollection<string> finishWords, double minThicknessMm)
     {
-        if (FirstWord(f.TypeName, finishWords) is { } finish) return $"finish or build-up floor (type name has '{finish}')";
         if (f.Structural) return null;
         if (f.ThicknessMm > 0 && f.ThicknessMm < minThicknessMm - 0.5)
             return $"thin non-structural floor (under {minThicknessMm.ToString("0", CultureInfo.InvariantCulture)} mm)";
         if (FirstWord(f.TypeName, structureWords) is not null) return null;
         if (f.Material is { } m && m.IndexOf("Concrete", StringComparison.OrdinalIgnoreCase) >= 0) return null;
-        return "not structural (no Structural flag, concrete material or structural word in the type name)";
+        if (FirstWord(f.TypeName, finishWords) is { } finish) return $"finish or build-up floor (type name has '{finish}')";
+        return "not structural (no Structural flag, concrete structural material or structural word in the type name)";
     }
 
     /// <summary>
@@ -56,6 +57,39 @@ internal static class ModelRules
         }
         return null;
     }
+
+    /// <summary>
+    /// How a 2D reinforcement role's family is recognised among the loaded detail and annotation families when none is
+    /// given or remembered: every group in Need must have a word in the family name (anywhere, ignoring case), Bonus
+    /// words rank it up, Avoid words down, and LineBased (when set) must match how the family is placed.
+    /// </summary>
+    public sealed record DetailRoleRule(string Key, string[][] Need, string[] Bonus, string[] Avoid, bool? LineBased);
+
+    public static readonly DetailRoleRule AdditionalBarsRule = new("additional_bars",
+        [["rft", "rebar", "reinf", "bar"]], ["add", "additional", "extra", "top", "bottom"], ["mesh", "tie", "stirrup", "transvers", "column", "section", "tag"], true);
+    public static readonly DetailRoleRule MeshRule = new("mesh",
+        [["mesh"]], ["rebar", "rft", "reinf"], ["tag"], false);
+    public static readonly DetailRoleRule ColumnSectionRule = new("column_section",
+        [["column"], ["rft", "rebar", "reinf"]], ["section", "beam", "rect"], ["tie", "stirrup", "transvers", "tag"], false);
+    public static readonly DetailRoleRule TiesRule = new("ties",
+        [["tie", "stirrup", "transvers", "link"]], ["rebar", "rft", "bar"], ["tag", "mesh"], null);
+
+    /// <summary>How well a family fits a role (higher is better), or null when it doesn't fit at all.</summary>
+    public static int? DetailRoleScore(DetailRoleRule rule, string familyName, bool lineBased)
+    {
+        if (rule.LineBased is { } lb && lb != lineBased) return null;
+        bool Has(string w) => familyName.IndexOf(w, StringComparison.OrdinalIgnoreCase) >= 0;
+        if (!rule.Need.All(group => group.Any(Has))) return null;
+        return 10 + rule.Need.Sum(group => group.Count(Has)) + 3 * rule.Bonus.Count(Has) - 5 * rule.Avoid.Count(Has);
+    }
+
+    /// <summary>The families that fit a role, best first (ties by name), each once.</summary>
+    public static List<string> RankDetailFamilies(DetailRoleRule rule, IEnumerable<(string family, bool lineBased)> loaded) =>
+        loaded.Select(f => (f.family, score: DetailRoleScore(rule, f.family, f.lineBased)))
+            .Where(f => f.score is not null)
+            .GroupBy(f => f.family, StringComparer.OrdinalIgnoreCase).Select(g => (family: g.Key, score: g.Max(f => f.score!.Value)))
+            .OrderByDescending(f => f.score).ThenBy(f => f.family, StringComparer.OrdinalIgnoreCase)
+            .Select(f => f.family).ToList();
 
     /// <summary>'*' and '?' wildcards, ignoring case; a pattern without wildcards matches names that contain it.</summary>
     public static bool Wildcard(string name, string pattern)

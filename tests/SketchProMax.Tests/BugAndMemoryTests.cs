@@ -18,9 +18,6 @@ internal static class BugAndMemoryTests
             | 1 | 2026-10-16 | Something | 0.29.0 | Fixed in 0.30 (please check) |
             | 2 | 2026-10-17 | Another, report 2026-10-17 0900 | 0.28.1 | Open |
             """;
-        check("bug log: newest date read from table rows only", BugLog.NewestDate(published) == new DateTime(2026, 10, 17), $"{BugLog.NewestDate(published)}");
-        check("bug log: no rows, no date", BugLog.NewestDate("# x\n\nno table") is null, "");
-
         var reports = new[]
         {
             new BugLog.Report("a.zip", "2026-10-16 1000", new DateTime(2026, 10, 16, 10, 0, 0), "older than the log"),
@@ -29,12 +26,14 @@ internal static class BugAndMemoryTests
             new BugLog.Report("d.zip", "2026-10-18 0800", new DateTime(2026, 10, 18, 8, 0, 0), "newer"),
         };
         var unsent = BugLog.Unsent(published, reports);
-        check("bug log: not sent = from the newest day on, not named, newest first",
-            unsent.Select(r => r.Id).SequenceEqual(["2026-10-18 0800", "2026-10-17 1500"]), string.Join(", ", unsent.Select(r => r.Id)));
+        check("bug log: not sent = not named in a row (older ones too), newest first",
+            unsent.Select(r => r.Id).SequenceEqual(["2026-10-18 0800", "2026-10-17 1500", "2026-10-16 1000"]), string.Join(", ", unsent.Select(r => r.Id)));
+        check("bug log: an id outside the table doesn't count as sent",
+            BugLog.Unsent("# log\n\nSee 2026-10-16 1000.\n\n| # | x |\n|---|---|\n", reports.Take(1)).Count == 1, "");
         check("bug log: nothing downloaded yet lists every report", BugLog.Unsent(null, reports).Count == 4, "");
         var local = BugLog.Compose(published, unsent, new DateTime(2026, 10, 18, 9, 30, 0));
         check("bug log: local file keeps the published log and adds Not sent yet",
-            local.StartsWith("# Sketch ProMax bug log") && local.Contains("## Not sent yet") && local.Contains("| c.zip | same day, not named |")
+            local.StartsWith(BugLog.RewrittenNote) && local.Contains("# Sketch ProMax bug log") && local.Contains("## Not sent yet") && local.Contains("| c.zip | same day, not named |")
             && local.IndexOf("d.zip", StringComparison.Ordinal) < local.IndexOf("c.zip", StringComparison.Ordinal), local);
         check("bug log: empty list says how to report", BugLog.Compose(null, [], null).Contains("Report bug"), "");
         check("bug log: error pages are not taken for the log", !BugLog.LooksLikeLog("<html>404</html>") && BugLog.LooksLikeLog(published.Trim()), "");

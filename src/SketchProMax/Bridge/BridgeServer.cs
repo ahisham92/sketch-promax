@@ -244,15 +244,28 @@ public sealed class BridgeServer
                     var wanted = root.GetProperty("title").GetString() ?? "";
                     // Switching documents is only allowed from the external event, not from Idling. Bounded: a Revit that
                     // doesn't take it (a dialog, an edit mode) is reported with the reason rather than left hanging.
+                    // Only not being picked up means nothing changed: once Revit has started the switch it runs to the end,
+                    // however long opening the model takes.
                     using (var switching = CancellationTokenSource.CreateLinkedTokenSource(ct))
                     {
-                        var activation = _dispatcher.InvokeFromEventAsync(app => Activate(app, wanted), switching.Token);
-                        var why = await _dispatcher.WaitForPickupAsync(activation, "Switching to the chosen model", ActivateWaitMs, DialogWaitMs, ct).ConfigureAwait(false);
-                        if (why is not null && !activation.IsCompleted)
+                        var started = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                        var waitStart = Environment.TickCount;
+                        var activation = _dispatcher.InvokeFromEventAsync(app =>
+                        {
+                            started.TrySetResult(true);
+                            return Activate(app, wanted);
+                        }, switching.Token);
+                        var pickedUp = Task.WhenAny(activation, started.Task);
+                        var why = await _dispatcher.WaitForPickupAsync(pickedUp, "Switching to the chosen model", ActivateWaitMs, DialogWaitMs, ct).ConfigureAwait(false);
+                        if (why is not null && !started.Task.IsCompleted && !activation.IsCompleted)
                         {
                             switching.Cancel();
                             return Error(why);
                         }
+                        var left = Math.Max(1000, ActivateWaitMs - unchecked(Environment.TickCount - waitStart));
+                        if (await Task.WhenAny(activation, Task.Delay(left, ct)).ConfigureAwait(false) != activation)
+                            return Error($"Revit is switching to '{wanted}', and opening it is taking a while (a large model). The switch carries on; " +
+                                         "nothing else was run. Try the call again in a moment.");
                         var error = await activation.ConfigureAwait(false);
                         return error is null ? JsonSerializer.Serialize(new { ok = true }) : Error(error);
                     }

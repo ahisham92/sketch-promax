@@ -24,5 +24,18 @@ internal static class UpdateBadge
         return ("Up to date", Kind.UpToDate);
     }
 
+    /// <summary>
+    /// The "seen" version to record the first time this version runs with nothing recorded yet. An older version was here
+    /// before (an older version folder, or update state written before this run) means this is an update: its newest such
+    /// version, or 0.0.0 when only the state shows it, so the "What's new" badge shows. Otherwise a fresh install: the
+    /// current version, so it doesn't start with the badge.
+    /// </summary>
+    public static Version FirstRunSeen(Version current, IEnumerable<string> versionFolders, bool earlierUpdateState)
+    {
+        var older = versionFolders.Select(n => Version.TryParse(n, out var v) ? v : null)
+            .Where(v => v is not null && Plain(v) < Plain(current)).Select(v => Plain(v!)).OrderByDescending(v => v).FirstOrDefault();
+        return older ?? (earlierUpdateState ? new Version(0, 0, 0) : Plain(current));
+    }
+
     private static Version Plain(Version v) => new(v.Major, v.Minor, Math.Max(v.Build, 0));
 }
