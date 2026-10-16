@@ -206,6 +206,45 @@ internal static class QuickTools
         return result.IsError ? Result.Failed : Result.Succeeded;
     }
 
+    /// <summary>
+    /// Export for Claude (ribbon button, or the pane through CoreEntry.Command("export-pack")): writes the project pack
+    /// with its defaults as a job, with a progress window that can stop it, then opens its folder with the zip selected.
+    /// </summary>
+    public static Result ExportPack(UIApplication app)
+    {
+        if (app.ActiveUIDocument?.Document is not { IsFamilyDocument: false })
+        {
+            TaskDialog.Show("Sketch ProMax", "Open a project model first.");
+            return Result.Cancelled;
+        }
+        ToolResult result;
+        using (PackProgress.Show("Export for Claude", $"Packing '{ProjectPack.ModelName(app.ActiveUIDocument.Document)}' for Claude"))
+            result = Execute(app, "export_project_pack", new Dictionary<string, JsonElement>());
+        if (result.IsError)
+        {
+            Show("Export for Claude", result, result.Text.StartsWith("Stopped on request", StringComparison.Ordinal) ? "Stopped; no pack was written" : "The pack was not written");
+            return Result.Failed;
+        }
+        string? file = null;
+        try
+        {
+            using var parsed = JsonDocument.Parse(result.Text);
+            if (parsed.RootElement.TryGetProperty("file", out var f)) file = f.GetString();
+        }
+        catch (JsonException) { }
+        if (file is null || !File.Exists(file))
+        {
+            Show("Export for Claude", result, "Pack written");
+            return Result.Succeeded;
+        }
+        try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("explorer.exe", $"/select,\"{file}\"") { UseShellExecute = true })?.Dispose(); }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            Show("Export for Claude", result, "Pack written");
+        }
+        return Result.Succeeded;
+    }
+
     /// <summary>Runs a tool on Revit's thread, now, as a job: the ribbon's counterpart of the bridge's call path.</summary>
     internal static ToolResult Execute(UIApplication app, string name, Dictionary<string, JsonElement> args)
     {

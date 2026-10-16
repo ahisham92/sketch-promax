@@ -122,6 +122,12 @@ internal static class Ribbon
             "off-axis elements, wrong levels, rooms, empty required parameters.",
             "Read-only: nothing in the model changes. Runs here without the AI; the findings are listed with a CSV of every item.",
             needsModel: true));
+        checks.AddItem(Button<ExportPackCommand>("ExportPack", "Export for\nClaude", "pack",
+            "Writes one small zip describing this project (project data, quantities, sheets, revisions, schedules, the latest " +
+            "check results, changes, worksets, links) to upload to a Claude chat to prepare a report.",
+            "Read-only: nothing in the model changes. Runs here without the AI; usually a few MB at most even on large models. " +
+            "The folder opens with the zip selected when it is done (Documents\\SketchProMax\\packs).",
+            needsModel: true));
         checks.AddItem(Button<SelfTestCommand>("SelfTest", "Self-test", "test",
             "Runs every Sketch ProMax tool once on the open model and reports what works.",
             "The quick check is read-only. The full check also runs the tools that change the model and undoes each change " +

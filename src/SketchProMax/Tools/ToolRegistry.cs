@@ -237,6 +237,8 @@ public sealed class ToolRegistry
         new CreateLegendTool(),
         new SaveLegendSeedTool(),
         new InPlaceGuideTool(),
+        // Export for Claude: one small zip describing the project, to upload to a chat
+        new ExportProjectPackTool(),
     ]);
         // Recipes replay other tools, so they need the registry itself.
         registry.Add(new SaveRecipeTool(registry));
