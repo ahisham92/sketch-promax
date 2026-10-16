@@ -50,6 +50,8 @@ Check("snippet reads args", withArgs.Errors == "" && Equals(withArgs.Result, 3.0
 var bad = Run("var x = 1;\nreturn y;");
 Check("errors report the snippet's own line number", bad.Errors.StartsWith("line 2:"), bad.Errors);
 
+ChatTests.Run((name, ok, detail) => Check(name, ok, detail));
+
 // With --addin <folder of a built SketchProMax.dll>, also check the whole tool catalogue.
 var addinAt = Array.IndexOf(args, "--addin");
 if (addinAt >= 0 && addinAt + 1 < args.Length)

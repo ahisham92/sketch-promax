@@ -65,6 +65,8 @@ public sealed class ModelAvailable : IExternalCommandAvailability
 [Transaction(TransactionMode.Manual)] public sealed class WhatsNewCommand : ForwardCommand { protected override string Name => "whats-new"; }
 [Transaction(TransactionMode.Manual)] public sealed class SettingsCommand : ForwardCommand { protected override string Name => "settings"; }
 [Transaction(TransactionMode.Manual)] public sealed class PaneCommand : ForwardCommand { protected override string Name => "pane"; }
+/// <summary>Shows the pane with its Chat tab in front (cores without a chat show the pane as it is).</summary>
+[Transaction(TransactionMode.Manual)] public sealed class ChatCommand : ForwardCommand { protected override string Name => "chat"; }
 [Transaction(TransactionMode.Manual)] public sealed class FieldTestCommand : ForwardCommand { protected override string Name => "field-test"; }
 [Transaction(TransactionMode.Manual)] public sealed class HelpCommand : ForwardCommand { protected override string Name => "help"; }
 

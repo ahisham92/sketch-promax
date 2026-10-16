@@ -171,6 +171,12 @@ internal static class RevitBridge
 
         var chosen = _target;
         var target = sessions.FirstOrDefault(s => s.Pid == chosen?.Pid);
+        if (target is null && PreferredPid() is { } own && sessions.FirstOrDefault(s => s.Pid == own) is { } mine)
+        {
+            // Started by the chat pane inside a Revit window: work on that window unless Claude chose another model.
+            target = mine;
+            chosen = _target = new Target(mine.Pid, null);
+        }
         if (target is null)
         {
             if (sessions.Count > 1)
@@ -208,6 +214,10 @@ internal static class RevitBridge
 
         return new CallToolResult { Content = content, IsError = isError };
     }
+
+    /// <summary>The Revit process whose chat pane started this server (SKETCHPROMAX_REVIT_PID), if any.</summary>
+    private static int? PreferredPid() =>
+        int.TryParse(Environment.GetEnvironmentVariable("SKETCHPROMAX_REVIT_PID"), out var pid) && pid > 0 ? pid : null;
 
     private static CallToolResult Choose(List<Session> sessions, IDictionary<string, JsonElement>? arguments)
     {

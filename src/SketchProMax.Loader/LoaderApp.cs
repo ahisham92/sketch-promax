@@ -265,6 +265,7 @@ internal static class Host
         }
         // The dockable pane belongs to the loader, so its button works with any core, or none yet.
         if (name == "pane") return PaneHost.Toggle(app);
+        if (name == "chat") return PaneHost.ShowChat(app);
         if (_core is null) Boot(app);
         if (_core is null)
         {

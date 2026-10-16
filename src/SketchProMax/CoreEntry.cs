@@ -14,6 +14,8 @@ namespace SketchProMax;
 ///   Shutdown           Revit is closing.
 ///   Command(name, app) a ribbon button; returns a Revit Result as int.
 ///   Query(key)         a short text answer for the ribbon or the dockable pane, or a notice about switching versions.
+///   PaneContent(name)  optional (0.29+; loaders that don't know it never call it): a WPF element for a tab of the
+///                      loader's dockable pane ("chat"), or null. Asked again after each version switch.
 /// All are called on Revit's main thread; Start, Stop and Command in a valid Revit API context.
 /// </summary>
 public static class CoreEntry
@@ -26,6 +28,17 @@ public static class CoreEntry
     public static void Stop(UIApplication app) => App.StopCore(app);
 
     public static void Shutdown() => App.ShutdownCore();
+
+    /// <summary>
+    /// Content the core puts into the loader's dockable pane: "chat" is the Claude chat. Returns a WPF FrameworkElement
+    /// (typed object so the signature stays primitive), or null for a name this core doesn't provide. Called on Revit's
+    /// UI thread, after Start.
+    /// </summary>
+    public static object? PaneContent(string name) => name switch
+    {
+        "chat" => Chat.ChatPane.Get(),
+        _ => null,
+    };
 
     public static int Command(string name, UIApplication app)
     {
