@@ -226,19 +226,22 @@ internal static class ScriptCompiler
         if (Cache.TryGetValue(code, out var cached)) return (cached.Run, "");
 
         var tree = CSharpSyntaxTree.ParseText(ScriptSource.Wrap(code), new CSharpParseOptions(LanguageVersion.Latest));
-        var compilation = CSharpCompilation.Create(
-            "SketchProMaxScript_" + Guid.NewGuid().ToString("N"),
-            [tree],
-            References(),
-            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, optimizationLevel: OptimizationLevel.Debug,
-                nullableContextOptions: NullableContextOptions.Disable));
+        // No member whose signature names ImmutableArray (System.Collections.Immutable) is called from here: the
+        // options come from Roslyn's own defaults via With*, and the diagnostics are read as a plain IEnumerable. On
+        // Revit 2024 this DLL and Roslyn could otherwise disagree about which System.Collections.Immutable they use
+        // (another add-in's copy), and the CSharpCompilationOptions constructor was then "not found".
+        var compilation = CSharpCompilation.Create("SketchProMaxScript_" + Guid.NewGuid().ToString("N"), [tree], References());
+        compilation = compilation.WithOptions(compilation.Options
+            .WithOutputKind(OutputKind.DynamicallyLinkedLibrary)
+            .WithOptimizationLevel(OptimizationLevel.Debug)
+            .WithNullableContextOptions(NullableContextOptions.Disable));
 
         using var pe = new MemoryStream();
         using var pdb = new MemoryStream();
         var emitted = compilation.Emit(pe, pdb);
         if (!emitted.Success)
         {
-            var errors = emitted.Diagnostics
+            var errors = Diagnostics(emitted)
                 .Where(d => d.Severity == DiagnosticSeverity.Error)
                 .Take(15)
                 .Select(d => $"line {d.Location.GetMappedLineSpan().StartLinePosition.Line + 1}: {d.GetMessage()}");
@@ -255,6 +258,10 @@ internal static class ScriptCompiler
         Cache[code] = new Entry(run, context);
         return (run, "");
     }
+
+    /// <summary>EmitResult.Diagnostics without naming its ImmutableArray type in this assembly (see Compile).</summary>
+    private static IEnumerable<Diagnostic> Diagnostics(Microsoft.CodeAnalysis.Emit.EmitResult result) =>
+        (result.GetType().GetProperty("Diagnostics")?.GetValue(result) as System.Collections.IEnumerable)?.OfType<Diagnostic>() ?? [];
 
     /// <summary>Line within the snippet where an exception was thrown, when the stack trace has it.</summary>
     public static int? LineOf(Exception ex)

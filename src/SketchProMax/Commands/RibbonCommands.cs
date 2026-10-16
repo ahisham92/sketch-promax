@@ -71,7 +71,8 @@ internal static class CoreCommands
                 "If the Revit tools don't appear in Claude, quit Claude completely (system tray > Quit) and start it again.",
             FooterText = Updater.Describe(),
             ExpandedContent = $"Revit {app.Application.VersionNumber}, session {BridgeServer.SessionId}, Sketch ProMax {Updater.CurrentText}" +
-                              (Updater.CanSwitchLive ? " (updates without restarting)" : "") + "\n\n" +
+                              (Updater.CanSwitchLive ? " (updates without restarting)" : "") + "\n" +
+                              SketchProMax.Revit.AssemblyReport.Summary() + "\n\n" +
                               "Registered with the Claude app in:\n" +
                               (registered.Count > 0 ? string.Join("\n", registered) : "(nowhere yet - is the Claude desktop app installed?)"),
             CommonButtons = TaskDialogCommonButtons.Close,

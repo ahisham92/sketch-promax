@@ -323,7 +323,9 @@ internal static class QuickTools
     {
         using var stream = new MemoryStream();
         using (var w = new Utf8JsonWriter(stream)) write(w);
-        using var parsed = JsonDocument.Parse(stream.ToArray());
+        // Parsed from a string: JsonDocument.Parse(byte[]) binds the ReadOnlyMemory<byte> overload, which names
+        // System.Memory in this DLL and fails when Revit 2024 hands this DLL and System.Text.Json different copies of it.
+        using var parsed = JsonDocument.Parse(System.Text.Encoding.UTF8.GetString(stream.ToArray()));
         return parsed.RootElement.Clone();
     }
 

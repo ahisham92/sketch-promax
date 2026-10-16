@@ -69,7 +69,7 @@ internal static class Host
         domain.SetData(DispatchKey, (Func<string, UIApplication, int>)Dispatch);
 #if NETFRAMEWORK
         Resolver.Register();
-        if (preloaded is not null) Resolver.Loaded.Add(preloaded);
+        if (preloaded is not null) Resolver.AddCore(preloaded);
 #endif
         try { Ribbon.Build(application); }
         catch (Exception ex) { _bootError = "The ribbon could not be built: " + ex.Message; }

@@ -55,14 +55,11 @@ internal sealed class CoreHandle
 #if NETFRAMEWORK
         Resolver.AddFolder(folder);
         var assembly = Assembly.LoadFile(path);
+        Resolver.AddCore(assembly);
 #else
         var assembly = new CoreContext(folder).LoadFromAssemblyPath(path);
 #endif
-        var handle = new CoreHandle(assembly, path);
-#if NETFRAMEWORK
-        Resolver.Loaded.Add(assembly);
-#endif
-        return handle;
+        return new CoreHandle(assembly, path);
     }
 
     public void Start(UIApplication app) => Invoke(_start, app);
@@ -101,20 +98,34 @@ internal sealed class CoreHandle
 
 #if NETFRAMEWORK
 /// <summary>
-/// Resolves the dependencies of cores loaded with Assembly.LoadFile (System.Text.Json, Roslyn, ...) from their own
-/// folders, newest first, reusing an already loaded assembly when it is the exact same version.
+/// Resolves the dependencies of cores loaded with Assembly.LoadFile (System.Text.Json, Roslyn, System.Memory, ...).
+///
+/// Why it works this way: a LoadFile'd core is in no binding context, so its references never probe its folder; they
+/// go to Revit's own folder (the Load context) and then to AssemblyResolve. Roslyn and System.Text.Json, which we hand
+/// out with LoadFrom, are in the LoadFrom context, where their references DO probe their folder and reuse whatever
+/// LoadFrom-context assembly already has the same identity. For SketchProMax.dll and Roslyn/System.Text.Json to see
+/// the same System.Memory and System.Collections.Immutable, the core's own references must land in that same place:
+/// so a request from one of our core folders is answered with Assembly.LoadFrom of the file in THAT folder, which
+/// returns exactly the instance the LoadFrom context hands Roslyn and System.Text.Json (the one with that identity,
+/// or the Load-context one when Revit's folder has it, in which case the core never asks here at all).
+/// It is never answered with "some loaded assembly of that name": another add-in may have loaded its own copy with
+/// Assembly.Load(bytes) or a different version, and binding the core to it is what broke run_revit_code and run_recipe
+/// on Revit 2024 (MissingMethodException on members whose signatures use ImmutableArray or ReadOnlyMemory).
+/// The handler is put first in the AppDomain's AssemblyResolve list, because handlers run in order and the first
+/// non-null answer wins: another add-in's (or an old core's) resolver would otherwise answer for our assemblies.
+/// Requests from anyone else get the old behaviour: the exact loaded version, else our folders.
 /// </summary>
 internal static class Resolver
 {
     private static readonly List<string> Folders = [];
-    public static readonly List<Assembly> Loaded = [];
+    private static readonly List<Assembly> Loaded = [];
     private static bool _registered;
 
     public static void Register()
     {
         if (_registered) return;
         _registered = true;
-        AppDomain.CurrentDomain.AssemblyResolve += Resolve;
+        AddFirst(AppDomain.CurrentDomain, Resolve);
     }
 
     public static void AddFolder(string folder)
@@ -127,6 +138,37 @@ internal static class Resolver
         }
     }
 
+    /// <summary>A core this process loaded (by us with LoadFile, or by Revit from an old manifest).</summary>
+    public static void AddCore(Assembly core)
+    {
+        Register();
+        lock (Folders)
+            if (!Loaded.Contains(core)) Loaded.Add(core);
+    }
+
+    /// <summary>
+    /// Adds <paramref name="handler"/> at the front of AssemblyResolve (.NET Framework keeps the handlers in the private
+    /// _AssemblyResolve delegate and returns the first non-null answer). Falls back to a plain subscription.
+    /// </summary>
+    internal static void AddFirst(AppDomain domain, ResolveEventHandler handler)
+    {
+        try
+        {
+            var field = typeof(AppDomain).GetField("_AssemblyResolve", BindingFlags.Instance | BindingFlags.NonPublic);
+            if (field is not null && field.FieldType == typeof(ResolveEventHandler))
+            {
+                lock (domain)
+                {
+                    var current = field.GetValue(domain) as ResolveEventHandler;
+                    field.SetValue(domain, (ResolveEventHandler)Delegate.Combine(handler, current));
+                }
+                return;
+            }
+        }
+        catch (Exception ex) when (ex is FieldAccessException or MemberAccessException or ArgumentException or System.Security.SecurityException) { }
+        domain.AssemblyResolve += handler;
+    }
+
     private static Assembly? Resolve(object? sender, ResolveEventArgs args)
     {
         AssemblyName wanted;
@@ -137,32 +179,64 @@ internal static class Resolver
         if (name == "SketchProMax")
             lock (Folders) return Loaded.FirstOrDefault(a => a.FullName == args.Name);
 
-        var exact = AppDomain.CurrentDomain.GetAssemblies().FirstOrDefault(a => !a.IsDynamic && a.FullName == args.Name);
-        if (exact is not null) return exact;
-
         List<string> folders;
-        lock (Folders) folders = Folders.ToList();
-        // The folder of the assembly asking, when it is one of ours, before the others.
-        var asking = args.RequestingAssembly is { IsDynamic: false } r ? SafeFolder(r) : null;
-        if (asking is not null && folders.Any(f => string.Equals(f, asking, StringComparison.OrdinalIgnoreCase)))
+        List<Assembly> cores;
+        lock (Folders)
         {
-            folders.RemoveAll(f => string.Equals(f, asking, StringComparison.OrdinalIgnoreCase));
-            folders.Insert(0, asking);
+            folders = Folders.ToList();
+            cores = Loaded.ToList();
         }
+
+        // Asked by a core or by something we loaded from a core folder (a core Revit loaded itself counts too): that
+        // folder's file, or nothing of ours.
+        var asking = args.RequestingAssembly is { IsDynamic: false } r ? SafeFolder(r) : null;
+        var own = asking is null ? null
+            : folders.Concat(cores.Select(SafeFolder)).FirstOrDefault(f => f is not null && string.Equals(f, asking, StringComparison.OrdinalIgnoreCase));
+        if (own is not null)
+            return LoadFrom(System.IO.Path.Combine(own, name + ".dll")) ?? Exact(args.Name);
+
+        var exact = Exact(args.Name);
+        if (exact is not null) return exact;
         foreach (var folder in folders)
         {
-            var path = System.IO.Path.Combine(folder, name + ".dll");
-            if (!File.Exists(path)) continue;
-            try { return Assembly.LoadFrom(path); }
-            catch (Exception ex) when (ex is IOException or BadImageFormatException) { }
+            var found = LoadFrom(System.IO.Path.Combine(folder, name + ".dll"));
+            if (found is not null) return found;
         }
         return null;
     }
 
+    private static Assembly? LoadFrom(string path)
+    {
+        if (!File.Exists(path)) return null;
+        try { return Assembly.LoadFrom(path); }
+        catch (Exception ex) when (ex is IOException or BadImageFormatException or System.Security.SecurityException) { return null; }
+    }
+
+    /// <summary>An already loaded assembly with exactly this identity, preferring one loaded from a file.</summary>
+    private static Assembly? Exact(string fullName)
+    {
+        Assembly? fromBytes = null;
+        foreach (var a in AppDomain.CurrentDomain.GetAssemblies())
+        {
+            if (a.IsDynamic || a.FullName != fullName) continue;
+            if (!string.IsNullOrEmpty(SafeLocation(a))) return a;
+            fromBytes ??= a;
+        }
+        return fromBytes;
+    }
+
+    private static string? SafeLocation(Assembly a)
+    {
+        try { return a.Location; }
+        catch (Exception ex) when (ex is NotSupportedException or ArgumentException) { return null; }
+    }
+
     private static string? SafeFolder(Assembly a)
     {
-        try { return System.IO.Path.GetDirectoryName(a.Location); }
-        catch (Exception ex) when (ex is NotSupportedException or ArgumentException) { return null; }
+        var location = SafeLocation(a);
+        if (string.IsNullOrEmpty(location)) return null;
+        try { return System.IO.Path.GetDirectoryName(location); }
+        catch (Exception ex) when (ex is NotSupportedException or ArgumentException or PathTooLongException) { return null; }
     }
 }
 #else
