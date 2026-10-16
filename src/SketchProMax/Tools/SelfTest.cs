@@ -448,6 +448,8 @@ internal static partial class SelfTest
         new("export_drawing_list", c => new { folder = c.Temp, fields = new[] { "Drawn By" } }),
         new("export_steel_takeoff", c => new { folder = c.Temp }) { Heavy = true },
         new("export_quantities", c => new { folder = c.Temp, categories = new[] { "Walls", "Floors" }, group_by = new[] { "level" } }) { Heavy = true },
+        new("embodied_carbon", c => new { folder = c.Temp, stages = new[] { "A1-A3", "A4", "A5" }, categories = new[] { "Walls", "Floors", "Structural Columns", "Structural Framing" } }) { Heavy = true },
+        new("carbon_compare", c => new { folder = c.Temp, cement_replacement = "ggbs50", cement_replacement_all = true, categories = new[] { "Walls", "Floors" }, excel = false }) { Heavy = true },
         new("export_pdf", c => new { view_ids = new[] { c.Sheet?.Id.Value ?? c.PlanId }, folder = c.Temp, file_name = "sheets" }) { Heavy = true },
         new("export_files", c => new { format = "dwg", view_ids = new[] { c.PlanId }, folder = c.Temp, file_name = "plan" }) { Heavy = true },
         new("export_bcf", c => new { issues = new[] { new { title = "Self-test issue", element_ids = c.Wall is null ? Array.Empty<long>() : [c.Wall.Id.Value] } }, folder = c.Temp, file_name = "issues" }),
@@ -573,6 +575,7 @@ internal static partial class SelfTest
         new("boq_check", c => new { items = new[] { new { @ref = "1", description = "Concrete in suspended slabs", unit = "m3", quantity = 100.0 } }, folder = c.Temp }, Setup: ["create_floors"]) { Heavy = true },
         new("boq_item_breakdown", c => new { item = new { @ref = "1", description = "Concrete in suspended slabs", unit = "m3" }, method = "NRM2", folder = c.Temp }, Setup: ["create_floors"]),
         new("cost_estimate", c => new { rates = new[] { new { description = "Concrete in slabs", unit = "m3", rate = 150.0 } }, folder = c.Temp }, Setup: ["create_floors"]),
+        new("carbon_view", c => new { name = "Self-test carbon view", categories = new[] { "Walls", "Floors" }, open = false }, Setup: ["create_floors"]) { Heavy = true },
         new("spec_check", c => new { requirements = new[] { new { id = "S1", text = "Notes state the concrete grade", expect_text = new[] { "C" } } }, folder = c.Temp }),
         new("analytical_check", c =>
         {

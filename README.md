@@ -2,7 +2,7 @@
 
 <p align="center"><img src="assets/logo/sketch-promax-wordmark.png" alt="Sketch ProMax" width="420"></p>
 
-An AI agent for Autodesk Revit 2024, 2025, 2026 and 2027, powered by Claude. Ask in plain language; it reads, documents, audits and edits the open model through 196 tools, and it learns new ones as you use it. It asks for your approval before every change, and every change can be undone with Ctrl+Z.
+An AI agent for Autodesk Revit 2024, 2025, 2026 and 2027, powered by Claude. Ask in plain language; it reads, documents, audits and edits the open model through 199 tools, and it learns new ones as you use it. It asks for your approval before every change, and every change can be undone with Ctrl+Z.
 
 See [docs/PLAN.md](docs/PLAN.md) for the comparison with SketchPro, the roadmap and the architecture.
 
@@ -14,7 +14,7 @@ The **Sketch ProMax** ribbon tab, by workflow (it sits right after SketchPro's t
 - **Claude**: **Chat** (Claude inside Revit), **Send view** (attach the active view to the chat), **Copy prompt**, the connection as a coloured dot (green: talked to it recently; amber: ready; gray: not running), and **Open Claude** / **Show or hide pane** under **More**.
 - **Model**: **Structure** (columns, beams, slabs, slab edge cuts, raft, piles, walls), **Steel** (sections, bracing, connections, takeoff), **Marine & infrastructure** and **Arch to structure**.
 - **Documents**: **Sheets & views**, **Tags & dimensions**, **Reinforcement** (3D rebar and 2D detail drawings) and **Title blocks & revisions**.
-- **Check**: **Model check**, **Clashes**, **Drawing check**, **BOQ check**. **Issue**: **Export PDF**, **List of drawings**, **Quantities / BOQ**, **Export for Claude** (one small zip describing the project, to upload to a Claude chat for a report; see below).
+- **Check**: **Model check**, **Clashes**, **Drawing check**, **BOQ check**, **Embodied carbon** (assessment, compare options, carbon 3D view). **Issue**: **Export PDF**, **List of drawings**, **Quantities / BOQ**, **Export for Claude** (one small zip describing the project, to upload to a Claude chat for a report; see below).
 - **My tools**: your saved recipes and learned tools, run right in Revit with no AI and no internet. It asks for any blanks ({level}...) and shows the result.
 - **Sketch ProMax**: the running **Job** (click to stop it), **Update** (Up to date, Check, What's new), **Report bug**, **Bug folder**, **Export chats & bugs**, **Settings** and **Help** with the self-test and field test.
 
@@ -133,6 +133,8 @@ To publish an update: bump `<Version>` in both project files and push to `main`.
 
 **Quantities, cost and documents:** check a hand-made BOQ (Excel, CSV, or rows read from a PDF) item by item against the model with differences flagged, find double-counted concrete where elements overlap without joining, show the basis of calculation for any item (elements, dimensions, formula, deductions, waste, NRM2/POMI/CESMM4 void rules) and select its elements, estimate cost from your rate table and compare with the last estimate, and check requirements from specifications, minutes, the basis of design or design reports against the model and the drawing notes.
 
+**Embodied carbon:** assess the model's embodied carbon following EN 15978 and the RICS whole life carbon conventions: modules A1-A3 by default, with optional A4 transport (distance and mode) and A5 site waste. Quantities come from the model's material volumes: concrete by strength class (C32/40, 40MPa...) and cement replacement, reinforcement from modelled bars or an assumed kg/m³ per category that you can change, structural steel, timber, masonry, glass, aluminium and others, optionally in linked models. You get the total tCO2e and kgCO2e/m² (from a gross area plan, the slab areas, or the GIA you give), breakdowns by material class, level, category, type and material, the top contributors, the materials no factor covers (listed, never dropped), and an assumptions section, in Excel and CSV. The built-in factor table (`src/SketchProMax/Data/carbon-factors.csv`, versioned) holds generic placeholder values with their sources (ICE v3.0 as tabulated by IStructE, RICS defaults) that must be checked before reporting; give your own table (CSV or Excel: material pattern, class, unit, kgCO2e per unit, stage, source) and it is remembered for the model. Compare two options or snapshots (for example GGBS instead of CEM I, or C32/40 instead of C40/50) to show the saving, and colour the model by carbon intensity in a new 3D view.
+
 **Analysis:** check the analytical model (free ends, gaps, short members, missing analytical or physical elements) and export it to SAP2000 (.s2k) with sections, shells, materials and supports, plus CSV tables.
 
 **One prompt to an issued package:** link the architectural model (link_model), build the structure from it with door and window openings, add a raft a set depth under the slab on grade (create_raft), make GA plans with sheets, tags and dimensions, reinforce rafts, slabs, beams and columns with typical values marked ASSUMED, and issue the set "Issued for Construction" (revision, checks, PDF/DWG, list of drawings). work_progress saves the plan and each step's result with the model, so a long job picks up where it stopped after "continue".
@@ -184,7 +186,7 @@ src/SketchProMax/            The Revit add-in core (net48 for Revit 2024, net8.0
   Agent/SystemPrompt         Instructions the desktop app receives from the connector
   Bridge/BridgeServer        Per-Revit-window named-pipe server the connector talks to
   Revit/                     Main-thread dispatcher (ExternalEvent), helpers, Revit 2024 dependency loader
-  Tools/                     The 194 IRevitTool implementations and the registry (CodeTools compiles C# with Roslyn)
+  Tools/                     The 197 IRevitTool implementations and the registry (CodeTools compiles C# with Roslyn)
   UI/                        Settings, update progress, quick-tool input and result windows
   Settings/                  Per-user settings (approval switch, auto-update, firm standards)
   Update/Updater             Self-update from GitHub Releases, with progress, switched to without restarting Revit

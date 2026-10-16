@@ -65,6 +65,11 @@
     <EmbeddedResource Include="..\..\assets\logo\sketch-promax.ico" LogicalName="SketchProMax.sketch-promax.ico" />
   </ItemGroup>
 
+  <!-- The built-in embodied carbon factor table (generic placeholders, versioned inside the file). -->
+  <ItemGroup>
+    <EmbeddedResource Include="Data\carbon-factors.csv" LogicalName="SketchProMax.carbon-factors.csv" />
+  </ItemGroup>
+
   <!-- On Windows, copy the build into the per-user Revit add-ins folder so Revit picks it up. -->
   <Target Name="DeployToRevit" AfterTargets="Build" Condition="'$(OS)' == 'Windows_NT' AND '$(Configuration)' == 'Debug'">
     <PropertyGroup>

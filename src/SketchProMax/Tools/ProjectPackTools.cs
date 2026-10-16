@@ -75,6 +75,8 @@ internal static class ProjectPack
         ("Analytical check", [".csv"]),
         ("BOQ check", [".csv"]),
         ("Cost estimate", [".csv"]),
+        ("Embodied carbon", [".csv"]),
+        ("Carbon comparison", [".csv"]),
         ("Quantities", [".csv"]),
         ("Steel takeoff", [".csv"]),
         ("Bar schedule", [".csv"]),

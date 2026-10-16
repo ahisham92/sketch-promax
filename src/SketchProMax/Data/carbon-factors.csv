@@ -1,0 +1,83 @@
+# Sketch ProMax built-in embodied carbon factors
+# version: 2026.1
+# GENERIC PLACEHOLDERS. These are rounded generic values of the kind published in public generic databases, given so a
+# first assessment can run. They are not product-specific and have not been checked for any project. Before reporting,
+# check every factor used against the current edition of the source named in its row, or replace it with the supplier's
+# EPD (EN 15804+A2) through your own factor table. Biogenic carbon (sequestration) is not included in any timber value.
+# Sources named below:
+#   ICE    = Inventory of Carbon and Energy (ICE) database v3.0, Circular Ecology / University of Bath, generic values
+#   IStructE = IStructE "How to calculate embodied carbon", 2nd edition (2022), which tabulates ICE v3.0 values
+#   RICS   = RICS "Whole life carbon assessment for the built environment", 2nd edition (2023), default scenarios
+#   DESNZ  = UK Government greenhouse gas conversion factors for company reporting, freighting goods (approximate)
+# Columns: id, class, match (name pattern; | separates alternatives, * and ? are wildcards, empty = class default),
+# grade (concrete strength class), replacement (cement replacement variant), unit (kg, t, m3, m2; t.km for transport;
+# km for distances; % for waste), kgco2e_per_unit, density_kg_m3, stage (A1-A3, A4 or A5), source, note.
+# Rows with class a4_mode, a4_distance and a5_waste are scenario defaults, not material factors.
+id,class,match,grade,replacement,unit,kgco2e_per_unit,density_kg_m3,stage,source,note
+conc-c16-cem1,concrete,,C16/20,none,kg,0.099,2400,A1-A3,ICE v3.0 via IStructE (approximate),placeholder: check; CEM I (no replacement)
+conc-c16-fa25,concrete,,C16/20,fa25,kg,0.081,2400,A1-A3,ICE v3.0 via IStructE (approximate),placeholder: check; 25% fly ash
+conc-c16-ggbs50,concrete,,C16/20,ggbs50,kg,0.065,2400,A1-A3,ICE v3.0 via IStructE (approximate),placeholder: check; 50% GGBS
+conc-c20-cem1,concrete,,C20/25,none,kg,0.107,2400,A1-A3,ICE v3.0 via IStructE (approximate),placeholder: check; CEM I (no replacement)
+conc-c20-fa25,concrete,,C20/25,fa25,kg,0.087,2400,A1-A3,ICE v3.0 via IStructE (approximate),placeholder: check; 25% fly ash
+conc-c20-ggbs50,concrete,,C20/25,ggbs50,kg,0.070,2400,A1-A3,ICE v3.0 via IStructE (approximate),placeholder: check; 50% GGBS
+conc-c25-cem1,concrete,,C25/30,none,kg,0.120,2400,A1-A3,ICE v3.0 via IStructE (approximate),placeholder: check; CEM I (no replacement)
+conc-c25-fa25,concrete,,C25/30,fa25,kg,0.097,2400,A1-A3,ICE v3.0 via IStructE (approximate),placeholder: check; 25% fly ash
+conc-c25-ggbs50,concrete,,C25/30,ggbs50,kg,0.078,2400,A1-A3,ICE v3.0 via IStructE (approximate),placeholder: check; 50% GGBS
+conc-c28-cem1,concrete,,C28/35,none,kg,0.127,2400,A1-A3,ICE v3.0 via IStructE (approximate),placeholder: check; CEM I (no replacement)
+conc-c28-fa25,concrete,,C28/35,fa25,kg,0.102,2400,A1-A3,ICE v3.0 via IStructE (approximate),placeholder: check; 25% fly ash
+conc-c28-ggbs50,concrete,,C28/35,ggbs50,kg,0.082,2400,A1-A3,ICE v3.0 via IStructE (approximate),placeholder: check; 50% GGBS
+conc-c30-cem1,concrete,,C30/37,none,kg,0.132,2400,A1-A3,ICE v3.0 via IStructE (approximate),placeholder: check; CEM I (no replacement)
+conc-c30-fa25,concrete,,C30/37,fa25,kg,0.106,2400,A1-A3,ICE v3.0 via IStructE (approximate),placeholder: check; 25% fly ash
+conc-c30-ggbs50,concrete,,C30/37,ggbs50,kg,0.085,2400,A1-A3,ICE v3.0 via IStructE (approximate),placeholder: check; 50% GGBS
+conc-c32-cem1,concrete,,C32/40,none,kg,0.138,2400,A1-A3,ICE v3.0 via IStructE (approximate),placeholder: check; CEM I (no replacement)
+conc-c32-fa25,concrete,,C32/40,fa25,kg,0.111,2400,A1-A3,ICE v3.0 via IStructE (approximate),placeholder: check; 25% fly ash
+conc-c32-ggbs50,concrete,,C32/40,ggbs50,kg,0.089,2400,A1-A3,ICE v3.0 via IStructE (approximate),placeholder: check; 50% GGBS
+conc-c35-cem1,concrete,,C35/45,none,kg,0.148,2400,A1-A3,ICE v3.0 via IStructE (approximate),placeholder: check; CEM I (no replacement)
+conc-c35-fa25,concrete,,C35/45,fa25,kg,0.119,2400,A1-A3,ICE v3.0 via IStructE (approximate),placeholder: check; 25% fly ash
+conc-c35-ggbs50,concrete,,C35/45,ggbs50,kg,0.095,2400,A1-A3,ICE v3.0 via IStructE (approximate),placeholder: check; 50% GGBS
+conc-c40-cem1,concrete,,C40/50,none,kg,0.159,2400,A1-A3,ICE v3.0 via IStructE (approximate),placeholder: check; CEM I (no replacement)
+conc-c40-fa25,concrete,,C40/50,fa25,kg,0.127,2400,A1-A3,ICE v3.0 via IStructE (approximate),placeholder: check; 25% fly ash
+conc-c40-ggbs50,concrete,,C40/50,ggbs50,kg,0.101,2400,A1-A3,ICE v3.0 via IStructE (approximate),placeholder: check; 50% GGBS
+conc-c45-cem1,concrete,,C45/55,none,kg,0.170,2400,A1-A3,ICE v3.0 via IStructE (approximate),placeholder: check; CEM I (no replacement)
+conc-c45-fa25,concrete,,C45/55,fa25,kg,0.135,2400,A1-A3,ICE v3.0 via IStructE (approximate),placeholder: check; 25% fly ash
+conc-c45-ggbs50,concrete,,C45/55,ggbs50,kg,0.107,2400,A1-A3,ICE v3.0 via IStructE (approximate),placeholder: check; 50% GGBS
+conc-c50-cem1,concrete,,C50/60,none,kg,0.180,2400,A1-A3,ICE v3.0 via IStructE (approximate),placeholder: check; CEM I (no replacement)
+conc-c50-fa25,concrete,,C50/60,fa25,kg,0.143,2400,A1-A3,ICE v3.0 via IStructE (approximate),placeholder: check; 25% fly ash
+conc-c50-ggbs50,concrete,,C50/60,ggbs50,kg,0.113,2400,A1-A3,ICE v3.0 via IStructE (approximate),placeholder: check; 50% GGBS
+conc-c60-cem1,concrete,,C60/75,none,kg,0.200,2400,A1-A3,extrapolated from ICE v3.0 trend,placeholder: check; outside the tabulated range; use an EPD
+conc-c60-fa25,concrete,,C60/75,fa25,kg,0.159,2400,A1-A3,extrapolated from ICE v3.0 trend,placeholder: check; outside the tabulated range; use an EPD
+conc-c60-ggbs50,concrete,,C60/75,ggbs50,kg,0.126,2400,A1-A3,extrapolated from ICE v3.0 trend,placeholder: check; outside the tabulated range; use an EPD
+rebar,rebar,,,,kg,1.99,7850,A1-A3,ICE v3.0 (world average reinforcing bar),placeholder: check; electric-arc-furnace rebar with high recycled content is much lower: use the mill's EPD
+steel-stainless,steel,stainless,,,kg,6.15,7900,A1-A3,ICE v3.0 (stainless steel),placeholder: check
+steel-sheet,steel,*galvan*|*deck*|*sheet*|*cladding*,,,kg,2.76,7850,A1-A3,ICE v3.0 (galvanised sheet),placeholder: check
+steel-hollow,steel,*hollow*|SHS|RHS|CHS|*tube*|*pipe*,,,kg,2.50,7850,A1-A3,ICE v3.0 (tube/pipe; approximate),placeholder: check
+steel-section,steel,,,,kg,1.55,7850,A1-A3,ICE v3.0 (world average open sections),placeholder: check; UK/EU sections from EAF route differ: use the producer's EPD
+aluminium,aluminium,,,,kg,13.0,2700,A1-A3,ICE v3.0 (aluminium general; approximate),placeholder: check; strongly depends on recycled content
+timber-glulam,timber,*glulam*|*glue*lam*,,,kg,0.512,470,A1-A3,ICE v3.0 (glulam; biogenic carbon excluded),placeholder: check
+timber-clt,timber,CLT|*cross*lam*,,,kg,0.437,470,A1-A3,ICE v3.0 (CLT; biogenic carbon excluded),placeholder: check
+timber-plywood,timber,*plywood*|OSB,,,kg,0.681,600,A1-A3,ICE v3.0 (plywood; biogenic carbon excluded),placeholder: check
+timber-sawn,timber,,,,kg,0.263,500,A1-A3,ICE v3.0 (sawn softwood; biogenic carbon excluded),placeholder: check
+masonry-brick,masonry,*brick*,,,kg,0.213,1800,A1-A3,ICE v3.0 (clay brick general),placeholder: check
+masonry-aac,masonry,AAC|*aerated*|*autoclaved*|*thermalite*,,,kg,0.28,600,A1-A3,ICE v3.0 (aerated block; approximate),placeholder: check
+masonry-block,masonry,,,,kg,0.093,2000,A1-A3,ICE v3.0 (precast concrete block),placeholder: check
+glass,glass,,,,kg,1.44,2500,A1-A3,ICE v3.0 (general glass),placeholder: check; IGU and coatings not included
+insulation-eps,insulation,EPS|XPS|*polystyrene*|PIR|PUR,,,kg,3.29,25,A1-A3,ICE v3.0 (EPS; approximate for other foams),placeholder: check
+insulation-wool,insulation,,,,kg,1.28,30,A1-A3,ICE v3.0 (mineral wool),placeholder: check
+plasterboard,plasterboard,,,,kg,0.39,800,A1-A3,ICE v3.0 (plasterboard),placeholder: check
+mortar,mortar,,,,kg,0.20,1900,A1-A3,ICE v3.0 (mortar/screed; approximate),placeholder: check
+tile,tile,,,,kg,0.78,2000,A1-A3,ICE v3.0 (ceramic tile),placeholder: check
+aggregate,aggregate,,,,kg,0.0075,2000,A1-A3,ICE v3.0 (aggregate general),placeholder: check
+stone,stone,,,,kg,0.079,2600,A1-A3,ICE v3.0 (stone general; approximate),placeholder: check
+air,air,,,,m3,0,0,A1-A3,none,air and void layers carry no material
+mode-road,a4_mode,road,,,t.km,0.107,,A4,DESNZ (HGV all diesel average laden; approximate),placeholder: check current year
+mode-rail,a4_mode,rail,,,t.km,0.028,,A4,DESNZ (freight train; approximate),placeholder: check current year
+mode-sea,a4_mode,sea,,,t.km,0.016,,A4,DESNZ (container ship average; approximate),placeholder: check current year
+dist-local,a4_distance,concrete|masonry|mortar|aggregate|stone,,,km,50,,A4,RICS (locally manufactured: 50 km by road),default scenario; replace with known distances
+dist-national,a4_distance,*,,,km,300,,A4,RICS (nationally manufactured: 300 km by road),default scenario; replace with known distances
+waste-concrete,a5_waste,concrete,,,%,5,,A5,RICS (default waste rate; approximate),check against the site waste plan
+waste-rebar,a5_waste,rebar,,,%,5,,A5,RICS (default waste rate; approximate),check against the site waste plan
+waste-steel,a5_waste,steel|aluminium,,,%,1,,A5,RICS (default waste rate; approximate),check against the site waste plan
+waste-timber,a5_waste,timber,,,%,10,,A5,RICS (default waste rate; approximate),check against the site waste plan
+waste-masonry,a5_waste,masonry,,,%,20,,A5,RICS (default waste rate; approximate),check against the site waste plan
+waste-board,a5_waste,plasterboard,,,%,22.5,,A5,RICS (default waste rate; approximate),check against the site waste plan
+waste-other,a5_waste,*,,,%,5,,A5,RICS (default waste rate; approximate),check against the site waste plan
