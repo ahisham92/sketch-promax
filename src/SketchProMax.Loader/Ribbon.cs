@@ -168,6 +168,11 @@ internal static class Ribbon
         more.AddItem(Button<BugFolderCommand>("BugFolder", "Bug\nfolder", "folder",
             "Opens Documents\\Sketch ProMax\\Bugs: your bug reports and Bug log.md, the published list of bugs and their status.",
             "Bug log.md is refreshed at every update check; its \"Not sent yet\" part lists the reports on this PC that the log doesn't have yet."));
+        more.AddItem(Button<ExportChatsBugsCommand>("ExportChatsBugs", "Export chats\n& bugs", "pack",
+            "Writes one zip with the in-Revit chats of every model, all your bug reports, the log of the tools Claude ran and the " +
+            "versions, to send to the developer.",
+            "Asks for the period first (last day, last week or everything). Nothing is sent and the model is not changed; the zip goes " +
+            "to Documents\\Sketch ProMax\\Bugs\\Exports and the folder opens with it selected."));
     }
 
     private static void Set(RibbonItem? item, string text, string? tip = null)

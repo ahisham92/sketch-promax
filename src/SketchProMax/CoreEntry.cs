@@ -63,6 +63,7 @@ public static class CoreEntry
             // Bug reports (0.30+): one small zip per report, in Documents\Sketch ProMax\Bugs.
             "report-bug" => Bugs.BugReport.Command(app),
             "bug-folder" => Bugs.BugReport.OpenFolder(),
+            "export-chats-bugs" => QuickTools.ExportChatsAndBugs(app),
             // The loader's dockable pane (0.27+): select and zoom to element ids, stop the running job quietly.
             "pane-cancel" => Pane.Cancel(),
             _ when name.StartsWith("pane-select\t", StringComparison.Ordinal) => Pane.Select(app, name.Substring("pane-select\t".Length)),

@@ -245,6 +245,47 @@ internal static class QuickTools
         return Result.Succeeded;
     }
 
+    /// <summary>
+    /// The Export chats &amp; bugs button: asks the period (last week by default), then writes the zip with a progress
+    /// window and opens the folder with it selected.
+    /// </summary>
+    public static Result ExportChatsAndBugs(UIApplication app)
+    {
+        string[] choices = ["Last day", "Last week", "Everything"];
+        var window = new InputsWindow("Export chats & bugs", "One zip to send to the Sketch ProMax developer.",
+            "Puts the in-Revit chats of every model, all your bug reports, the log of the tools Claude ran and the versions into one " +
+            "zip in Documents\\Sketch ProMax\\Bugs\\Exports. Nothing is sent and the model is not changed.",
+            [], [new InputsWindow.Field("period", "Chats and activity from", "Bug reports are always all included.", "string", true, choices, "Last week")],
+            "Export");
+        if (window.ShowDialog() != true) return Result.Cancelled;
+        var period = window.Values.TryGetValue("period", out var p) && p == "Last day" ? "day" : p == "Everything" ? "all" : "week";
+        ToolResult result;
+        using (PackProgress.Show("Export chats & bugs", "Collecting chats and bug reports"))
+            result = Execute(app, "export_chats_and_bugs", new Dictionary<string, JsonElement> { ["period"] = Element(w => w.WriteStringValue(period)) });
+        if (result.IsError)
+        {
+            Show("Export chats & bugs", result, "The zip was not written");
+            return Result.Failed;
+        }
+        string? file = null;
+        try
+        {
+            using var parsed = JsonDocument.Parse(result.Text);
+            if (parsed.RootElement.TryGetProperty("file", out var f)) file = f.GetString();
+        }
+        catch (JsonException) { }
+        try
+        {
+            if (file is null || !File.Exists(file)) throw new InvalidOperationException("no file");
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("explorer.exe", $"/select,\"{file}\"") { UseShellExecute = true })?.Dispose();
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            Show("Export chats & bugs", result, "Zip written");
+        }
+        return Result.Succeeded;
+    }
+
     /// <summary>Runs a tool on Revit's thread, now, as a job: the ribbon's counterpart of the bridge's call path.</summary>
     internal static ToolResult Execute(UIApplication app, string name, Dictionary<string, JsonElement> args)
     {

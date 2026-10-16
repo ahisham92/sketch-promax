@@ -115,7 +115,7 @@ internal static class ProjectPack
         _ => Csv(c.ToString()),
     }));
 
-    private static string Safe(string s)
+    internal static string Safe(string s)
     {
         var bad = Path.GetInvalidFileNameChars();
         var clean = new string(s.Select(c => bad.Contains(c) || c is '#' or '%' ? '_' : c).ToArray()).Trim().TrimEnd('.');
@@ -862,6 +862,12 @@ internal static class ProjectPack
         Step("this model's chat");
         var conv = SketchProMax.Chat.ChatStore.Load(SketchProMax.Chat.ChatPane.ModelKey(doc), doc.Title);
         if (conv.Items.Count == 0) return;
+        pack.Text("chat/conversation.md", RenderChat(conv), "This model's in-Revit chat, oldest first.");
+    }
+
+    /// <summary>A saved in-Revit chat as readable Markdown, tool calls and errors included; a long one keeps its end.</summary>
+    internal static string RenderChat(SketchProMax.Chat.Conversation conv)
+    {
         var sb = new StringBuilder();
         sb.AppendLine($"# In-Revit chat: {conv.Title}");
         if (conv.Updated != default) sb.AppendLine($"Last updated {conv.Updated.ToLocalTime():yyyy-MM-dd HH:mm}");
@@ -894,7 +900,7 @@ internal static class ProjectPack
             var nl = tail.IndexOf('\n');
             text = "… (earlier part left out to keep the pack small)\n" + (nl >= 0 ? tail.Substring(nl + 1) : tail);
         }
-        pack.Text("chat/conversation.md", text, "This model's in-Revit chat, oldest first.");
+        return text;
     }
 
     /// <summary>The bug report zips not sent yet (see BugLog), newest first, as they are.</summary>

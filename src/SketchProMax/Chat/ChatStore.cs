@@ -60,6 +60,26 @@ internal static class ChatStore
         return new Conversation { Key = key, Title = title };
     }
 
+    /// <summary>Every saved conversation (all models), unreadable files skipped.</summary>
+    public static List<Conversation> All()
+    {
+        var list = new List<Conversation>();
+        try
+        {
+            if (!Directory.Exists(Folder)) return list;
+            foreach (var file in Directory.GetFiles(Folder, "*.json"))
+            {
+                try
+                {
+                    if (JsonSerializer.Deserialize<Conversation>(File.ReadAllText(file)) is { } conv) list.Add(conv);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or NotSupportedException) { }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        return list;
+    }
+
     public static void Save(Conversation conversation)
     {
         try

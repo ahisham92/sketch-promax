@@ -241,6 +241,7 @@ public sealed class ToolRegistry
         new ExportProjectPackTool(),
         // Bug reports and the chat's memory notes
         new SketchProMax.Bugs.ReportBugTool(),
+        new SketchProMax.Bugs.ExportChatsAndBugsTool(),
         new MemoryNoteTool(),
     ]);
         // Recipes replay other tools, so they need the registry itself.

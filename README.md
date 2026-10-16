@@ -2,7 +2,7 @@
 
 <p align="center"><img src="assets/logo/sketch-promax-wordmark.png" alt="Sketch ProMax" width="420"></p>
 
-An AI agent for Autodesk Revit 2024, 2025, 2026 and 2027, powered by Claude. Ask in plain language; it reads, documents, audits and edits the open model through 191 tools, and it learns new ones as you use it. It asks for your approval before every change, and every change can be undone with Ctrl+Z.
+An AI agent for Autodesk Revit 2024, 2025, 2026 and 2027, powered by Claude. Ask in plain language; it reads, documents, audits and edits the open model through 192 tools, and it learns new ones as you use it. It asks for your approval before every change, and every change can be undone with Ctrl+Z.
 
 See [docs/PLAN.md](docs/PLAN.md) for the comparison with SketchPro, the roadmap and the architecture.
 
@@ -103,7 +103,7 @@ To publish an update: bump `<Version>` in both project files and push to `main`.
 
 **Export for Claude:** the Export for Claude button (Checks panel), or asking Claude to "export a project pack", writes one small zip to `Documents\SketchProMax\packs` named `<model> - Claude pack <date time>.zip` and opens the folder with it selected. Upload it to any Claude chat to prepare a report without Revit. It holds a README for Claude, project information, coordinates, levels and grids, element counts and quantities by category, type, material and level, Revit warnings, the sheet list with current revisions and issue status, views, revisions, up to 30 schedules (very large ones are skipped and listed), the newest saved check results (model check, clashes, drawing, rules, spec and BOQ checks, steel, rebar and precast schedules), change tracking, worksets, links, this model's in-Revit chat and any bug reports not sent yet. It is read-only, a few MB at most even on large models, has no images unless asked, and can be stopped from its progress window.
 
-**Bug reports:** Report bug (Sketch ProMax panel or the pane), or telling Claude "that's a bug" in the Revit chat, saves one small zip to `Documents\Sketch ProMax\Bugs\Reports` with your one-line description, a picture of the Revit window, the versions, the model's name, the last 50 tool calls and the loaded-assemblies report. Nothing is sent. `Bug log.md` in that folder is this repository's [bug log](docs/bug-log.md), refreshed at every update check, with a "Not sent yet" list of your reports it doesn't have yet.
+**Bug reports:** Report bug (Sketch ProMax panel or the pane), or telling Claude "that's a bug" in the Revit chat, saves one small zip to `Documents\Sketch ProMax\Bugs\Reports` with your one-line description, a picture of the Revit window, the versions, the model's name, the last 50 tool calls and the loaded-assemblies report. Nothing is sent. `Bug log.md` in that folder is this repository's [bug log](docs/bug-log.md), refreshed at every update check, with a "Not sent yet" list of your reports it doesn't have yet. Export chats & bugs puts the in-Revit chats of every model (last day, last week or everything), all bug reports, the tool-call log and the versions into one zip in `Documents\Sketch ProMax\Bugs\Exports`, to send to the developer.
 
 **Notes Claude remembers:** say "remember that ..." in the Revit chat and Claude keeps it in `%APPDATA%\SketchProMax\memory.md`, for every model or for this model only; every chat starts with them. See, edit and delete them in the pane's Notes tab, or say "forget ...".
 
@@ -182,7 +182,7 @@ src/SketchProMax/            The Revit add-in core (net48 for Revit 2024, net8.0
   Agent/SystemPrompt         Instructions the desktop app receives from the connector
   Bridge/BridgeServer        Per-Revit-window named-pipe server the connector talks to
   Revit/                     Main-thread dispatcher (ExternalEvent), helpers, Revit 2024 dependency loader
-  Tools/                     The 189 IRevitTool implementations and the registry (CodeTools compiles C# with Roslyn)
+  Tools/                     The 190 IRevitTool implementations and the registry (CodeTools compiles C# with Roslyn)
   UI/                        Settings, update progress, quick-tool input and result windows
   Settings/                  Per-user settings (approval switch, auto-update, firm standards)
   Update/Updater             Self-update from GitHub Releases, with progress, switched to without restarting Revit

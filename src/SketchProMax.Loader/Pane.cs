@@ -288,6 +288,15 @@ internal sealed class PanePage : Page
         AutomationProperties.SetName(folder, "Open bug folder");
         folder.Click += (_, _) => PaneHost.Request("bug-folder");
         bugs.Children.Add(folder);
+        var chatsBugs = Theme.Button(new TextBlock { Text = "Export chats & bugs", TextWrapping = TextWrapping.Wrap });
+        chatsBugs.Margin = new Thickness(0, 6, 0, 0);
+        chatsBugs.MinHeight = 28;
+        chatsBugs.HorizontalAlignment = HorizontalAlignment.Stretch;
+        chatsBugs.ToolTip = "Writes one zip with the chats of every model, all bug reports, the tool-call log and the versions, to send to the " +
+                            "developer. Asks for the period first; nothing is sent.";
+        AutomationProperties.SetName(chatsBugs, "Export chats and bugs");
+        chatsBugs.Click += (_, _) => PaneHost.Request("export-chats-bugs");
+        bugs.Children.Add(chatsBugs);
         body.Children.Add(Section("Bugs", bugs));
         _activity = new ScrollViewer
         {
