@@ -26,6 +26,10 @@ internal sealed class CoreHandle
 
     private readonly MethodInfo _start, _stop, _command, _query, _shutdown;
 
+    // Optional (cores from 0.29 on): content for a tab of the dockable pane. Older cores don't have it, which is fine:
+    // the pane then shows only its own activity view. Not part of Contract, so no core needs a newer loader for it.
+    private readonly MethodInfo? _paneContent;
+
     private CoreHandle(Assembly assembly, string path)
     {
         Assembly = assembly;
@@ -43,6 +47,7 @@ internal sealed class CoreHandle
         _command = M("Command");
         _query = M("Query");
         _shutdown = M("Shutdown");
+        _paneContent = entry.GetMethod("PaneContent", BindingFlags.Public | BindingFlags.Static, null, new[] { typeof(string) }, null);
     }
 
     /// <summary>Wraps a core Revit already loaded (an older manifest pointed straight at SketchProMax.dll).</summary>
@@ -76,6 +81,17 @@ internal sealed class CoreHandle
     {
         try { return Invoke(_query, key) as string ?? ""; }
         catch (Exception) { return ""; }
+    }
+
+    /// <summary>
+    /// A WPF element the core provides for a tab of the pane ("chat"), or null when this core has none (older cores) or
+    /// it failed. Call on Revit's UI thread, after Start.
+    /// </summary>
+    public System.Windows.FrameworkElement? PaneContent(string name)
+    {
+        if (_paneContent is null) return null;
+        try { return Invoke(_paneContent, name) as System.Windows.FrameworkElement; }
+        catch (Exception) { return null; }
     }
 
     private static object? Invoke(MethodInfo method, params object?[] args)

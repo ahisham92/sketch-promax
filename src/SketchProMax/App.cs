@@ -14,8 +14,9 @@ namespace SketchProMax;
 
 /// <summary>
 /// The core of Sketch ProMax: the bridge the Claude desktop app talks to (through SketchProMax.Mcp.exe), the dispatcher
-/// onto Revit's thread, the failure guard and the update loop. There is no chat inside Revit: conversations happen in
-/// the Claude desktop app on the user's Claude plan, so there is no API key and no per-use cost.
+/// onto Revit's thread, the failure guard and the update loop. Conversations happen in the Claude desktop app, or in
+/// the pane's Chat tab (Chat/ChatPane.cs), which runs Claude Code signed in with the user's Claude account: both use
+/// the user's Claude plan, so there is no API key and no per-use cost.
 ///
 /// Normally the loader (SketchProMax.Loader, which the add-in manifest names) starts and stops this core through
 /// <see cref="CoreEntry"/>, and can switch to a newer core while Revit runs. This class is also still an
@@ -42,7 +43,7 @@ public sealed class App : IExternalApplication
     private static bool _viaLoader;
 
     /// <summary>True while anything is running or queued, so switching to a new core must wait.</summary>
-    internal static bool IsBusy => Jobs.Running is not null || Dispatcher.HasWork || SelfTest.IsRunning;
+    internal static bool IsBusy => Jobs.Running is not null || Dispatcher.HasWork || SelfTest.IsRunning || Chat.ChatPane.IsBusy;
 
     public Result OnStartup(UIControlledApplication application)
     {
@@ -136,6 +137,7 @@ public sealed class App : IExternalApplication
             throw;
         }
         _started = true;
+        try { Chat.ChatPane.Start(app); } catch (Exception) { /* the chat tab says what is wrong when it is opened */ }
 
         _ = Task.Run(() =>
         {
@@ -156,6 +158,7 @@ public sealed class App : IExternalApplication
         if (!_started) return;
         _started = false;
         _life?.Cancel();
+        try { Chat.ChatPane.Stop(app); } catch (Exception) { }
         Bridge?.Stop(keepSession: true);
         Bridge = null;
         try { app.Application.FailuresProcessing -= FailureGuard.Handle; } catch (Exception) { }
@@ -169,6 +172,7 @@ public sealed class App : IExternalApplication
     internal static void ShutdownCore()
     {
         _life?.Cancel();
+        try { Chat.ChatPane.Shutdown(); } catch (Exception) { }
         Bridge?.Stop();
 #if NETFRAMEWORK
         DependencyResolver.Unregister();

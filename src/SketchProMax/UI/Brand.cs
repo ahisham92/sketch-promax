@@ -144,6 +144,13 @@ internal static class Brand
         _poll.Start();
     }
 
+    /// <summary>Stops following the theme for a root that is going away (the chat element of a core being replaced).</summary>
+    public static void ReleaseTheme(FrameworkElement root)
+    {
+        Themed.Remove(root);
+        if (Themed.Count == 0) _poll?.Stop();
+    }
+
     private static void Recheck()
     {
         var dark = IsDark;

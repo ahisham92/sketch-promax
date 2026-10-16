@@ -92,6 +92,23 @@ internal static class PaneHost
         return 0;
     }
 
+    /// <summary>Shows the pane with the Chat tab in front (the ribbon's Chat button). Without a chat, just shows the pane.</summary>
+    public static int ShowChat(RevitUI.UIApplication app)
+    {
+        RevitUI.DockablePane? pane = null;
+        try { pane = app.GetDockablePane(Id); }
+        catch (Exception) { }
+        if (pane is null)
+        {
+            RevitUI.TaskDialog.Show(Title, "The Sketch ProMax pane could not be set up in this Revit session. Restart Revit to get it.");
+            return -1;
+        }
+        pane.Show();
+        Ribbon.SetPaneShown(true);
+        Page.SelectChat();
+        return 0;
+    }
+
     private sealed class Provider : RevitUI.IDockablePaneProvider
     {
         public void SetupDockablePane(RevitUI.DockablePaneProviderData data)
@@ -148,6 +165,10 @@ internal static class PaneHost
 /// theme live. Lists are rebuilt only when their text changed; the current job's controls are built once and updated
 /// in place, so keyboard focus on Cancel survives the once-a-second refresh. Nothing scrolls sideways: text wraps,
 /// long names end in an ellipsis with the full text in a tooltip.
+///
+/// When the running core provides a chat (CoreEntry.PaneContent("chat"), cores from 0.29 on), the page shows two tabs
+/// under the header: Chat (the core's element) and Activity (the view below). After a version switch the old core's
+/// element is removed and the new core is asked again; an older core, or none, gets the Activity view alone.
 /// </summary>
 internal sealed class PanePage : Page
 {
@@ -175,6 +196,16 @@ internal sealed class PanePage : Page
     private readonly Border _logBox, _lastBox;
     private readonly Dictionary<FrameworkElement, string> _shown = new();
     private int _ticks;
+
+    // Tabs: shown only while the running core provides a chat.
+    private readonly DockPanel _root = new();
+    private readonly ScrollViewer _activity;
+    private readonly ContentControl _single = new() { Focusable = false };
+    private readonly TabControl _tabs = new();
+    private readonly TabItem _chatTab = new() { Header = "Chat" };
+    private readonly TabItem _activityTab = new() { Header = "Activity" };
+    private CoreHandle? _chatCore;
+    private bool _chatAsked, _wantChat;
 
     public PanePage()
     {
@@ -215,8 +246,6 @@ internal sealed class PanePage : Page
         _job.Children.Add(_jobActive);
         _jobActive.Visibility = Visibility.Collapsed;
 
-        var root = new StackPanel();
-        root.Children.Add(Header());
         var body = new StackPanel { Margin = new Thickness(10, 8, 10, 10) };
         body.Children.Add(_notice);
         body.Children.Add(Section("Current job", _job));
@@ -230,16 +259,24 @@ internal sealed class PanePage : Page
         _lastBox = Section("Last job", _last);
         body.Children.Add(_lastBox);
         body.Children.Add(Section("Quick tools", _quick));
-        root.Children.Add(body);
-        // The adorner layer inside the page keeps keyboard focus rings in reach of the page's theme resources.
-        Content = new AdornerDecorator
+        _activity = new ScrollViewer
         {
-            Child = new ScrollViewer
-            {
-                Content = root, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Focusable = false,
-            },
+            Content = body, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Focusable = false,
         };
+        var header = Header();
+        DockPanel.SetDock(header, Dock.Top);
+        _root.Children.Add(header);
+        _single.Content = _activity;
+        _root.Children.Add(_single);
+        _tabs.Resources.MergedDictionaries.Add(TabStyles());
+        _tabs.Items.Add(_chatTab);
+        _tabs.Items.Add(_activityTab);
+        AutomationProperties.SetName(_tabs, "Sketch ProMax pane");
+        AutomationProperties.SetName(_chatTab, "Chat with Claude");
+        AutomationProperties.SetName(_activityTab, "Activity: connection, running job and quick tools");
+        // The adorner layer inside the page keeps keyboard focus rings in reach of the page's theme resources.
+        Content = new AdornerDecorator { Child = _root };
 
         _timer.Tick += (_, _) => Refresh();
         IsVisibleChanged += (_, e) =>
@@ -344,9 +381,105 @@ internal sealed class PanePage : Page
         }
     }
 
+    /// <summary>Brings the Chat tab to the front (now, or as soon as the core provides it).</summary>
+    public void SelectChat()
+    {
+        _wantChat = true;
+        if (_tabs.Parent is not null) _tabs.SelectedItem = _chatTab;
+        RefreshSoon();
+    }
+
+    /// <summary>
+    /// Asks the running core for its chat element when the core changed (first start, version switch): with one, the
+    /// page shows the Chat and Activity tabs; without one (an older core, or none yet), the Activity view alone.
+    /// </summary>
+    private void UpdateChat(CoreHandle? core)
+    {
+        if (_chatAsked && ReferenceEquals(core, _chatCore)) return;
+        _chatAsked = true;
+        _chatCore = core;
+        _chatTab.Content = null; // the old core's element, if any: it was stopped with its core
+        var chat = core?.PaneContent("chat");
+        if (chat is not null && chat.Parent is ContentControl { } holder && !ReferenceEquals(holder, _chatTab)) holder.Content = null;
+        var tabs = chat is not null;
+        if (tabs)
+        {
+            _chatTab.Content = chat;
+            if (_tabs.Parent is null)
+            {
+                _single.Content = null;
+                _activityTab.Content = _activity;
+                _root.Children.Remove(_single);
+                _root.Children.Add(_tabs);
+                _tabs.SelectedItem = _chatTab; // the chat is what the pane is for once it exists
+            }
+            if (_wantChat) _tabs.SelectedItem = _chatTab;
+        }
+        else if (_tabs.Parent is not null)
+        {
+            _activityTab.Content = null;
+            _root.Children.Remove(_tabs);
+            _single.Content = _activity;
+            _root.Children.Add(_single);
+        }
+        _wantChat = false;
+    }
+
+    /// <summary>Tab styles in the palette (the stock ones paint fixed light colours). Never fails: plain tabs then.</summary>
+    private static ResourceDictionary TabStyles()
+    {
+        const string xaml = """
+            <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                                xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+              <Style TargetType="TabControl">
+                <Setter Property="Background" Value="Transparent"/>
+                <Setter Property="BorderThickness" Value="0"/>
+                <Setter Property="Padding" Value="0"/>
+                <Setter Property="Template"><Setter.Value>
+                  <ControlTemplate TargetType="TabControl">
+                    <DockPanel KeyboardNavigation.TabNavigation="Local">
+                      <Border DockPanel.Dock="Top" BorderThickness="0,0,0,1" BorderBrush="{DynamicResource SpmBorder}" Padding="6,4,6,0">
+                        <TabPanel IsItemsHost="True" KeyboardNavigation.TabIndex="1"/>
+                      </Border>
+                      <ContentPresenter x:Name="PART_SelectedContentHost" ContentSource="SelectedContent" KeyboardNavigation.TabIndex="2"/>
+                    </DockPanel>
+                  </ControlTemplate>
+                </Setter.Value></Setter>
+              </Style>
+              <Style TargetType="TabItem">
+                <Setter Property="Foreground" Value="{DynamicResource SpmMuted}"/>
+                <Setter Property="FocusVisualStyle" Value="{DynamicResource SpmFocusVisual}"/>
+                <Setter Property="MinHeight" Value="30"/>
+                <Setter Property="MinWidth" Value="64"/>
+                <Setter Property="Template"><Setter.Value>
+                  <ControlTemplate TargetType="TabItem">
+                    <Border x:Name="bd" Background="Transparent" BorderThickness="0,0,0,2" BorderBrush="Transparent" Padding="12,5,12,4" Margin="0,0,2,0">
+                      <ContentPresenter ContentSource="Header" HorizontalAlignment="Center" VerticalAlignment="Center" RecognizesAccessKey="True"/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                      <Trigger Property="IsMouseOver" Value="True">
+                        <Setter TargetName="bd" Property="Background" Value="{DynamicResource SpmSurfaceHover}"/>
+                        <Setter Property="Foreground" Value="{DynamicResource SpmText}"/>
+                      </Trigger>
+                      <Trigger Property="IsSelected" Value="True">
+                        <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource SpmAccent}"/>
+                        <Setter Property="Foreground" Value="{DynamicResource SpmText}"/>
+                        <Setter Property="FontWeight" Value="SemiBold"/>
+                      </Trigger>
+                    </ControlTemplate.Triggers>
+                  </ControlTemplate>
+                </Setter.Value></Setter>
+              </Style>
+            </ResourceDictionary>
+            """;
+        try { return (ResourceDictionary)System.Windows.Markup.XamlReader.Parse(xaml); }
+        catch (Exception) { return new ResourceDictionary(); }
+    }
+
     private void Render()
     {
         _ticks++;
+        UpdateChat(Host.Core);
         if (Host.Core is not { } core)
         {
             var failed = Host.BootError;
@@ -461,8 +594,8 @@ internal sealed class PanePage : Page
             _jobKey = _cancelFor = "";
             Theme.SetBusy(_cancel, false);
             _jobIdle.Text = hasPane
-                ? "Nothing is running. Ask Claude something about this model in the Claude app (or run a quick tool below); " +
-                  "its progress and a Cancel job button show here."
+                ? "Nothing is running. Ask Claude something about this model " + (_tabs.Parent is null ? "in the Claude app" : "in the Chat tab or the Claude app") +
+                  " (or run a quick tool below); its progress and a Cancel job button show here."
                 : "The running job shows here once Sketch ProMax has started.";
         }
 
