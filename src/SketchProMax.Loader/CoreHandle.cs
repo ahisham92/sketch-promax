@@ -194,6 +194,8 @@ internal static class Resolver
             : folders.Concat(cores.Select(SafeFolder)).FirstOrDefault(f => f is not null && string.Equals(f, asking, StringComparison.OrdinalIgnoreCase));
         if (own is not null)
             return LoadFrom(System.IO.Path.Combine(own, name + ".dll")) ?? Exact(args.Name);
+        // Another add-in's request: this handler runs before theirs, so never hand them our copies; leave it to them.
+        if (asking is not null) return null;
 
         var exact = Exact(args.Name);
         if (exact is not null) return exact;
