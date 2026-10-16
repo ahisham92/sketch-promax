@@ -52,6 +52,13 @@ public static class Updater
     /// <summary>Version downloaded and ready for the next Revit start, if any.</summary>
     public static string? Staged => LoadState().Staged is { } s && Parse(s) > Current ? s : null;
 
+    /// <summary>When updates were last looked for, and whether that look failed (for the Update button's badge).</summary>
+    public static (DateTime? LastCheck, bool Failed) LastCheckState()
+    {
+        var state = LoadState();
+        return (state.LastCheck, state.LastError is not null);
+    }
+
     /// <summary>A one-line description for the Status button and for Claude.</summary>
     public static string Describe()
     {

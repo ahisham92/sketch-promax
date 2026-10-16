@@ -238,6 +238,95 @@ internal static class Icons
                 Path(dc, "M16,11.5 C21.5,11.5 22.5,16 22.5,19 C22.5,23.5 19.5,26.5 16,26.5 C12.5,26.5 9.5,23.5 9.5,19 C9.5,16 10.5,11.5 16,11.5 Z M16,14 V26", white);
                 Path(dc, "M9.5,15 L6,13 M9.5,19.5 H5.5 M10,23.5 L6.5,26 M22.5,15 L26,13 M22.5,19.5 H26.5 M22,23.5 L25.5,26", amber);
                 break;
+            // Workflow panels (0.30): one glyph per drop-down and per check / issue button, same line style.
+            case "structure": // frame: two columns, a beam and a slab edge
+                Path(dc, "M9,25 V11 M23,25 V11 M6,11 H26", white);
+                Path(dc, "M6,7.5 H26", amber);
+                break;
+            case "column":
+                Path(dc, "M12,7 H20 V25 H12 Z", white);
+                Path(dc, "M9,25 H23 M9,7 H23", amber);
+                break;
+            case "beam": // I-section in elevation, on two supports
+                Path(dc, "M5,12 H27 M5,18 H27", white);
+                Path(dc, "M8,18 V25 M24,18 V25", amber);
+                break;
+            case "slab":
+                Path(dc, "M5,14 L13,9 H27 L19,14 Z M5,14 V18 H19 V14 M19,18 L27,13 V9", white);
+                Path(dc, "M9,24 H23", amber);
+                break;
+            case "raft": // thick slab with columns on it
+                Path(dc, "M5,20 H27 V25 H5 Z", white);
+                Path(dc, "M10,8 V20 M22,8 V20", amber);
+                break;
+            case "pile": // cap with piles into the ground
+                Path(dc, "M7,8 H25 V13 H7 Z M11,13 V26 M21,13 V26", white);
+                Path(dc, "M5,18 H27", amber);
+                break;
+            case "wall":
+                Path(dc, "M6,9 H26 V25 H6 Z M6,14.5 H26 M6,20 H26 M13,9 V14.5 M19,14.5 V20 M13,20 V25", white);
+                break;
+            case "steel": // I-section
+                Path(dc, "M8,7 H24 M8,25 H24 M16,7 V25", white);
+                Path(dc, "M11,16 H21", amber);
+                break;
+            case "marine": // pier on piles over a wave
+                Path(dc, "M5,11 H27 M9,11 V22 M16,11 V22 M23,11 V22", white);
+                Path(dc, "M5,22 C8,19 11,25 14,22 C17,19 20,25 23,22 C24.5,20.5 26,21 27,22", amber);
+                break;
+            case "arch": // house outline becoming a frame
+                Path(dc, "M6,15 L16,7 L26,15 M8,13.5 V25 H24 V13.5", white);
+                Path(dc, "M13,25 V18 H19 V25", amber);
+                break;
+            case "sheet": // drawing sheet with a title block
+                Path(dc, "M7,7 H25 V25 H7 Z", white);
+                Path(dc, "M17,20 H25 M17,20 V25 M10,10 H21 V17 H10 Z", amber);
+                break;
+            case "tag": // tag with a leader and a dimension tick
+                Path(dc, "M15,8 H25 V15 H15 Z M15,11.5 L8,20", white);
+                Path(dc, "M6,25 H26 M6,22.5 V27.5 M26,22.5 V27.5", amber);
+                break;
+            case "rebar": // section with bars and a link
+                Path(dc, "M8,7 H24 V25 H8 Z", white);
+                Path(dc, "M11,10 H21 V22 H11 Z", amber);
+                dc.DrawEllipse(whiteFill, null, new Point(12.5, 11.5), 1.8, 1.8);
+                dc.DrawEllipse(whiteFill, null, new Point(19.5, 11.5), 1.8, 1.8);
+                dc.DrawEllipse(whiteFill, null, new Point(12.5, 20.5), 1.8, 1.8);
+                dc.DrawEllipse(whiteFill, null, new Point(19.5, 20.5), 1.8, 1.8);
+                break;
+            case "titleblock": // sheet with a revision triangle
+                Path(dc, "M7,7 H25 V25 H7 Z M7,19 H25", white);
+                Path(dc, "M16,9 L21,16 H11 Z", amber);
+                break;
+            case "clash": // two crossing members with a spark
+                Path(dc, "M6,10 H26 M10,6 V26", white);
+                dc.DrawEllipse(amberFill, null, new Point(10, 10), 3.4, 3.4);
+                break;
+            case "drawing-check": // sheet with a tick
+                Path(dc, "M8,6 H20 L25,11 V26 H8 Z M20,6 V11 H25", white);
+                Path(dc, "M11.5,18 L15,21.5 L21,14.5", amber);
+                break;
+            case "boq": // table with a sum
+                Path(dc, "M6,7 H26 V25 H6 Z M6,12 H26 M14,7 V25", white);
+                Path(dc, "M17,17 H23 M17,21 H23", amber);
+                break;
+            case "pdf": // page with an arrow down
+                Path(dc, "M8,6 H20 L25,11 V26 H8 Z M20,6 V11 H25", white);
+                Path(dc, "M16.5,13 V22 M12.5,18.5 L16.5,22 L20.5,18.5", amber);
+                break;
+            case "list": // list of drawings
+                Path(dc, "M12,9 H25 M12,16 H25 M12,23 H25", white);
+                Path(dc, "M7,9 H8 M7,16 H8 M7,23 H8", amber);
+                break;
+            case "view": // camera, for sending the current view
+                Path(dc, "M6,12 H10 L12,9 H20 L22,12 H26 V24 H6 Z", white);
+                dc.DrawEllipse(null, amber, new Point(16, 17.5), 4, 4);
+                break;
+            case "more": // three dots
+                dc.DrawEllipse(whiteFill, null, new Point(9, 16), 2.3, 2.3);
+                dc.DrawEllipse(whiteFill, null, new Point(16, 16), 2.3, 2.3);
+                dc.DrawEllipse(amberFill, null, new Point(23, 16), 2.3, 2.3);
+                break;
             case "help":
                 Path(dc, "M11.5,12 A4.5,4.5 0 1 1 18,16 C16.5,17 16,18 16,20", white);
                 dc.DrawEllipse(amberFill, null, new Point(16, 24.5), 2, 2);

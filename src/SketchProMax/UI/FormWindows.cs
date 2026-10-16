@@ -13,7 +13,9 @@ namespace SketchProMax.UI;
 /// </summary>
 internal sealed class InputsWindow : Window
 {
-    public sealed record Field(string Key, string Label, string? Help, string Type, bool Required, string[]? Choices, string? Value);
+    /// <param name="ElementIds">Takes element ids: a "Use current selection" button fills in the ids selected in Revit when the window opened.</param>
+    public sealed record Field(string Key, string Label, string? Help, string Type, bool Required, string[]? Choices, string? Value,
+        bool ElementIds = false);
 
     private readonly List<(Field Field, FrameworkElement Control)> _controls = [];
     private readonly TextBlock _error = Brand.Text("", Brand.K.DangerText);
@@ -22,9 +24,13 @@ internal sealed class InputsWindow : Window
     public Dictionary<string, string> Values { get; } = new();
     public bool OptionChecked => _option?.IsChecked == true;
 
+    /// <summary>Checks the values before the window closes; the lines it returns are shown and the window stays open.</summary>
+    public Func<Dictionary<string, string>, IReadOnlyList<string>>? Validate { get; init; }
+
     public InputsWindow(string title, string subtitle, string? intro, IReadOnlyList<string> details, IReadOnlyList<Field> fields,
-        string runLabel, string? optionLabel = null)
+        string runLabel, string? optionLabel = null, string selection = "")
     {
+        // selection: the ids selected in Revit when the window opened ("1, 2, 3"), offered to element-id fields.
         Title = title;
         Width = 520;
         SizeToContent = SizeToContent.Height;
@@ -58,7 +64,7 @@ internal sealed class InputsWindow : Window
             FrameworkElement control;
             if (field.Type == "boolean")
             {
-                control = new CheckBox { Content = field.Label, IsChecked = field.Value is "true" or "True", Margin = new Thickness(0, 8, 0, 0) };
+                control = new CheckBox { Content = field.Label, IsChecked = field.Value is "true" or "True" or "yes", Margin = new Thickness(0, 8, 0, 0) };
             }
             else if (field.Choices is { Length: > 0 } choices)
             {
@@ -70,12 +76,31 @@ internal sealed class InputsWindow : Window
             }
             else
             {
-                control = new TextBox { Text = field.Value ?? "" };
+                control = new TextBox { Text = field.Value ?? "", MinHeight = 24 };
             }
             AutomationProperties.SetName(control, field.Label + (field.Required ? " (required)" : ""));
             if (!string.IsNullOrWhiteSpace(field.Help)) AutomationProperties.SetHelpText(control, field.Help);
             if (field.Type != "boolean") body.Children.Add(label);
-            body.Children.Add(control);
+            if (field.ElementIds && control is TextBox ids)
+            {
+                // Element ids: the selection made in Revit before opening this window, one click away.
+                var count = selection.Length == 0 ? 0 : selection.Split(',').Length;
+                var use = Brand.Button(count == 0 ? "Use selection" : $"Use selection ({count})");
+                use.Margin = new Thickness(8, 0, 0, 0);
+                use.IsEnabled = count > 0;
+                use.ToolTip = count > 0
+                    ? $"Fills in the {count} element(s) selected in Revit."
+                    : "Nothing is selected in Revit. Close this window, select elements, then run the tool again.";
+                ToolTipService.SetShowOnDisabled(use, true);
+                AutomationProperties.SetName(use, $"Use current selection for {field.Label}");
+                use.Click += (_, _) => { ids.Text = selection; ids.Focus(); };
+                var row = new DockPanel();
+                DockPanel.SetDock(use, Dock.Right);
+                row.Children.Add(use);
+                row.Children.Add(ids);
+                body.Children.Add(row);
+            }
+            else body.Children.Add(control);
             if (!string.IsNullOrWhiteSpace(field.Help))
                 body.Children.Add(Brand.Text(field.Help!, Brand.K.Muted, size: 11));
             _controls.Add((field, control));
@@ -130,6 +155,14 @@ internal sealed class InputsWindow : Window
             _error.Text = $"Fill in {string.Join(", ", missing)}, then press Enter to run (Esc closes without running).";
             _error.Visibility = Visibility.Visible;
             var first = _controls.FirstOrDefault(c => missing.Contains(c.Field.Label)).Control;
+            first?.Focus();
+            return;
+        }
+        if (Validate?.Invoke(Values) is { Count: > 0 } problems)
+        {
+            _error.Text = string.Join("\n", problems) + "\nCorrect it, then press Enter to run (Esc closes without running).";
+            _error.Visibility = Visibility.Visible;
+            var first = _controls.FirstOrDefault(c => problems.Any(p => p.StartsWith(c.Field.Label + ":", StringComparison.Ordinal))).Control;
             first?.Focus();
             return;
         }

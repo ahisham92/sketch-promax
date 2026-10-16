@@ -16,6 +16,7 @@ namespace SketchProMax.Loader;
 /// Flags (comma separated):
 ///   model       needs an open model (greyed out without one)
 ///   small       a small button: consecutive small buttons and drop-downs in a panel are stacked, up to three high
+///   break       (with small) starts a new stack here, so a panel can stack two and two
 ///   live:key    text, tooltip, icon and state follow Query("live|key") every two seconds, answered as
 ///               "text \t tooltip \t glyph \t state" (state "disabled" greys it out; empty fields keep what is shown)
 /// Glyphs are the loader's icon names (Icons.Get), or "logo" / "logo:green|amber|red|gray" for the logo with a status dot.
@@ -30,6 +31,7 @@ internal static class RibbonManifest
         private IEnumerable<string> FlagList => Flags.Split(',').Select(f => f.Trim());
         public bool NeedsModel => FlagList.Contains("model");
         public bool Small => FlagList.Contains("small");
+        public bool Break => FlagList.Contains("break");
         public string? LiveKey => FlagList.FirstOrDefault(f => f.StartsWith("live:", StringComparison.Ordinal))?.Substring(5) is { Length: > 0 } k ? k : null;
         public bool IsDropDown => Kind is "pulldown" or "split";
     }
@@ -92,7 +94,8 @@ internal static class RibbonManifest
 
     /// <summary>
     /// How the controls of one panel are added, in order: a large control alone, or a run of consecutive small ones
-    /// stacked two or three high (a lone small one is added large: Revit stacks only two or three).
+    /// stacked two or three high (a lone small one is added large: Revit stacks only two or three). A "break" flag starts
+    /// a new stack.
     /// </summary>
     public static List<List<Item>> Units(IEnumerable<Item> panelControls)
     {
@@ -101,7 +104,7 @@ internal static class RibbonManifest
         foreach (var c in panelControls)
         {
             if (!c.Small) { stack = null; units.Add([c]); continue; }
-            if (stack is null || stack.Count == 3) { stack = []; units.Add(stack); }
+            if (stack is null || stack.Count == 3 || c.Break && stack.Count > 0) { stack = []; units.Add(stack); }
             stack.Add(c);
         }
         return units;

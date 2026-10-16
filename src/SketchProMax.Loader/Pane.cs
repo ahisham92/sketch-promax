@@ -266,7 +266,7 @@ internal sealed class PanePage : Page
         body.Children.Add(_logBox);
         _lastBox = Section("Last job", _last);
         body.Children.Add(_lastBox);
-        body.Children.Add(Section("Quick tools", _quick));
+        body.Children.Add(Section("My tools", _quick));
         // One small zip of the whole project, to upload to a Claude chat for a report (cores from 0.29 on).
         var export = Theme.Button(new TextBlock { Text = "Export for Claude", TextWrapping = TextWrapping.Wrap });
         export.Margin = new Thickness(0, 6, 0, 0);
@@ -299,7 +299,7 @@ internal sealed class PanePage : Page
         _tabs.Items.Add(_activityTab);
         AutomationProperties.SetName(_tabs, "Sketch ProMax pane");
         AutomationProperties.SetName(_chatTab, "Chat with Claude");
-        AutomationProperties.SetName(_activityTab, "Activity: connection, running job and quick tools");
+        AutomationProperties.SetName(_activityTab, "Activity: connection, running job and your tools");
         // The adorner layer inside the page keeps keyboard focus rings in reach of the page's theme resources.
         Content = new AdornerDecorator { Child = _root };
 

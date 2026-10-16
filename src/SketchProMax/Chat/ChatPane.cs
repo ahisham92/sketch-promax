@@ -1349,6 +1349,14 @@ internal sealed class ChatPane : DockPanel
         return path;
     }
 
+    /// <summary>The ribbon's Send view button (the loader shows the chat first). False when the chat isn't there.</summary>
+    internal static bool AttachCurrentView()
+    {
+        if (_instance is null) return false;
+        _instance.AttachView();
+        return true;
+    }
+
     /// <summary>"Send current view": the same capture as capture_view_image (screen when possible), run on Revit's thread.</summary>
     private async void AttachView()
     {

@@ -63,6 +63,11 @@ public static class CoreEntry
             "whats-new" => CoreCommands.OpenUrl(CoreCommands.ReleasesUrl),
             "settings" => CoreCommands.Settings(),
             "help" => CoreCommands.OpenUrl(CoreCommands.HelpUrl),
+            // The 0.30 ribbon: tools run through their options window, the live Job and Update buttons, Send view.
+            _ when name.StartsWith("tool:", StringComparison.Ordinal) => RibbonTools.Run(app, name.Substring("tool:".Length)),
+            "job-button" => CoreCommands.JobButton(),
+            "update-button" => CoreCommands.UpdateButton(),
+            "send-view" => SendView(),
             // Bug reports (0.30+): one small zip per report, in Documents\Sketch ProMax\Bugs.
             "report-bug" => Bugs.BugReport.Command(app),
             "bug-folder" => Bugs.BugReport.OpenFolder(),
@@ -74,6 +79,13 @@ public static class CoreEntry
             _ => Unknown(name),
         };
         return result switch { Result.Succeeded => 0, Result.Cancelled => 1, _ => -1 };
+    }
+
+    private static Result SendView()
+    {
+        if (Chat.ChatPane.AttachCurrentView()) return Result.Succeeded;
+        TaskDialog.Show("Sketch ProMax", "The chat isn't open in this Revit session. Click Chat first, then Send view.");
+        return Result.Cancelled;
     }
 
     private static Result Unknown(string name)
@@ -102,7 +114,7 @@ public static class CoreEntry
             case "quick": return QuickTools.List();
             case "quick-reload": return QuickTools.List(force: true);
             case "pane": return Pane.Snapshot(); // the dockable pane's content, see UI/Pane.cs for the format
-            case "ribbon": return CoreRibbonManifest.Text;
+            case "ribbon": return RibbonText();
             case "live": return LiveLabel(arg);
             case "restartnote":
                 // From a 0.30+ loader once it added this core's buttons: what can only appear after a restart ("" = nothing).
@@ -146,6 +158,15 @@ public static class CoreEntry
     }
 
     private static string? _swapNote;
+    private static string? _ribbon;
+
+    /// <summary>The manifest with the tools this core has; each tool's own summary is its button's long tooltip.</summary>
+    private static string RibbonText()
+    {
+        if (_ribbon is not null) return _ribbon;
+        var registry = App.Bridge?.Registry ?? Tools.ToolRegistry.CreateDefault();
+        return _ribbon = CoreRibbonManifest.Build(name => registry.IsBuiltIn(name) && registry.Find(name) is { } tool ? RibbonTools.Summary(tool.Description) : null);
+    }
 
     /// <summary>
     /// Live ribbon labels a manifest button can follow (flag live:key): "status" (the Claude connection, logo with a
@@ -159,18 +180,42 @@ public static class CoreEntry
             {
                 var (state, text, detail) = Connection.Describe();
                 var dot = state switch { "connected" => "green", "ready" => "amber", "error" => "red", _ => "gray" };
-                return CoreRibbonManifest.LiveLine("Claude\n" + text, detail, "logo:" + dot);
+                // A small button: one line, the coloured dot on the logo says the rest.
+                var label = text.Length == 0 ? "Claude" : char.ToUpperInvariant(text[0]) + text.Substring(1);
+                return CoreRibbonManifest.LiveLine(label, detail, "logo:" + dot);
             }
             case "job":
             {
                 var f = JobLine().Split('\t');
                 var running = f[0] is "running" or "selftest";
-                return f.Length < 3 ? "" : CoreRibbonManifest.LiveLine(f[1], f[2], running ? "job-running" : "job");
+                // While something runs, the button stops it: the red stop tile, and the tooltip says so.
+                return f.Length < 3 ? "" : CoreRibbonManifest.LiveLine(f[1].Replace('\n', ' '),
+                    running ? f[2] + " Click to ask it to stop." : f[2] + " Click for details of the last job.", running ? "cancel" : "job");
             }
             case "update":
             {
                 var f = UpdateLine().Split('\t');
                 return f.Length < 3 ? "" : CoreRibbonManifest.LiveLine(f[0], f[1], f[2]);
+            }
+            case "update-badge":
+            {
+                var (text, kind) = CoreCommands.Badge();
+                var tip = kind switch
+                {
+                    UpdateBadge.Kind.WhatsNew => $"Sketch ProMax {Updater.CurrentText} is installed. Click to read what's new in it.",
+                    UpdateBadge.Kind.Check => Updater.Describe() + " Click to look for a newer version now.",
+                    UpdateBadge.Kind.Restart => $"Sketch ProMax {Updater.CurrentText}. {RestartNote.Text}",
+                    UpdateBadge.Kind.Working => UpdateLine().Split('\t')[1],
+                    _ => Updater.Describe() + " Click for the version, a check now and the release notes.",
+                };
+                var glyph = kind switch
+                {
+                    UpdateBadge.Kind.WhatsNew => "news",
+                    UpdateBadge.Kind.Check or UpdateBadge.Kind.Restart => "update",
+                    UpdateBadge.Kind.Working => UpdateLine().Split('\t')[2],
+                    _ => "version",
+                };
+                return CoreRibbonManifest.LiveLine(text, tip, glyph);
             }
             default: return "";
         }

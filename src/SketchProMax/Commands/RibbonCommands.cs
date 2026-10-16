@@ -146,6 +146,80 @@ internal static class CoreCommands
         return Result.Succeeded;
     }
 
+    /// <summary>The Sketch ProMax panel's Job button: stops what is running, else shows the last job.</summary>
+    public static Result JobButton() => Jobs.Running is not null || Tools.SelfTest.IsRunning ? CancelJob() : Job();
+
+    /// <summary>
+    /// The Update button: "What's new" opens the release notes (and the badge goes back to normal), "Check" looks for a
+    /// new version now, anything else shows the version with its update window or choices.
+    /// </summary>
+    public static Result UpdateButton()
+    {
+        switch (Badge().Kind)
+        {
+            case UpdateBadge.Kind.WhatsNew:
+                MarkSeen();
+                return OpenUrl(ReleasesUrl);
+            case UpdateBadge.Kind.Check:
+                _checkState = null;
+                return CheckForUpdates();
+            default:
+                return UpdateInfo();
+        }
+    }
+
+    private static (DateTime? Last, bool Failed)? _checkState;
+    private static int _checkStateAt;
+    private static Version? _seen;
+
+    private static string SeenFile => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SketchProMax", "whats-new-seen.txt");
+
+    /// <summary>The Update button's badge, asked every two seconds: the update-state file is read at most every half minute.</summary>
+    internal static (string Text, UpdateBadge.Kind Kind) Badge()
+    {
+        string? working = null;
+        if (UpdateProgress.Current is { Surfaced: true } progress)
+        {
+            var snapshot = progress.Snapshot;
+            if (!snapshot.IsFinal && snapshot.Stage != UpdateStage.Idle) working = UpdateProgress.Short(snapshot);
+        }
+        if (_checkState is null || unchecked(Environment.TickCount - _checkStateAt) > 30000)
+        {
+            _checkState = Updater.LastCheckState();
+            _checkStateAt = Environment.TickCount;
+        }
+        var (last, failed) = _checkState.Value;
+        return UpdateBadge.For(working, RestartNote.Text is not null, Updater.Current, SeenVersion(), last, failed, DateTime.UtcNow);
+    }
+
+    /// <summary>
+    /// The version whose release notes were last opened. The first time (nothing stored) it is this version: a fresh
+    /// install doesn't start with a "What's new" badge, an update does.
+    /// </summary>
+    private static Version SeenVersion()
+    {
+        if (_seen is not null) return _seen;
+        try
+        {
+            if (File.Exists(SeenFile) && Version.TryParse(File.ReadAllText(SeenFile).Trim(), out var v)) return _seen = v;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        MarkSeen();
+        return _seen ?? Updater.Current;
+    }
+
+    private static void MarkSeen()
+    {
+        _seen = Updater.Current;
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(SeenFile)!);
+            File.WriteAllText(SeenFile, Updater.CurrentText);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+    }
+
     public static Result CancelJob()
     {
         if (Jobs.Running is null && Tools.SelfTest.IsRunning)

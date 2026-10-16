@@ -24,7 +24,7 @@ namespace SketchProMax.Loader;
 /// </summary>
 internal static class CoreRibbon
 {
-    public const int Slots = 64;
+    public const int Slots = 128;
 
     private sealed class Made
     {
@@ -139,6 +139,7 @@ internal static class CoreRibbon
                 }
         }
         catch (Exception) { /* cosmetic */ }
+        Ribbon.Tidy();
         return restart;
     }
 
@@ -332,7 +333,18 @@ internal static class CoreRibbon
         typeof(CoreSlot42), typeof(CoreSlot43), typeof(CoreSlot44), typeof(CoreSlot45), typeof(CoreSlot46), typeof(CoreSlot47),
         typeof(CoreSlot48), typeof(CoreSlot49), typeof(CoreSlot50), typeof(CoreSlot51), typeof(CoreSlot52), typeof(CoreSlot53),
         typeof(CoreSlot54), typeof(CoreSlot55), typeof(CoreSlot56), typeof(CoreSlot57), typeof(CoreSlot58), typeof(CoreSlot59),
-        typeof(CoreSlot60), typeof(CoreSlot61), typeof(CoreSlot62), typeof(CoreSlot63),
+        typeof(CoreSlot60), typeof(CoreSlot61), typeof(CoreSlot62), typeof(CoreSlot63), typeof(CoreSlot64), typeof(CoreSlot65),
+        typeof(CoreSlot66), typeof(CoreSlot67), typeof(CoreSlot68), typeof(CoreSlot69), typeof(CoreSlot70), typeof(CoreSlot71),
+        typeof(CoreSlot72), typeof(CoreSlot73), typeof(CoreSlot74), typeof(CoreSlot75), typeof(CoreSlot76), typeof(CoreSlot77),
+        typeof(CoreSlot78), typeof(CoreSlot79), typeof(CoreSlot80), typeof(CoreSlot81), typeof(CoreSlot82), typeof(CoreSlot83),
+        typeof(CoreSlot84), typeof(CoreSlot85), typeof(CoreSlot86), typeof(CoreSlot87), typeof(CoreSlot88), typeof(CoreSlot89),
+        typeof(CoreSlot90), typeof(CoreSlot91), typeof(CoreSlot92), typeof(CoreSlot93), typeof(CoreSlot94), typeof(CoreSlot95),
+        typeof(CoreSlot96), typeof(CoreSlot97), typeof(CoreSlot98), typeof(CoreSlot99), typeof(CoreSlot100), typeof(CoreSlot101),
+        typeof(CoreSlot102), typeof(CoreSlot103), typeof(CoreSlot104), typeof(CoreSlot105), typeof(CoreSlot106), typeof(CoreSlot107),
+        typeof(CoreSlot108), typeof(CoreSlot109), typeof(CoreSlot110), typeof(CoreSlot111), typeof(CoreSlot112), typeof(CoreSlot113),
+        typeof(CoreSlot114), typeof(CoreSlot115), typeof(CoreSlot116), typeof(CoreSlot117), typeof(CoreSlot118), typeof(CoreSlot119),
+        typeof(CoreSlot120), typeof(CoreSlot121), typeof(CoreSlot122), typeof(CoreSlot123), typeof(CoreSlot124), typeof(CoreSlot125),
+        typeof(CoreSlot126), typeof(CoreSlot127),
     ];
 }
 
@@ -401,3 +413,67 @@ internal static class CoreRibbon
 [Transaction(TransactionMode.Manual)] public sealed class CoreSlot61 : ForwardCommand { protected override string Name => "core:61"; }
 [Transaction(TransactionMode.Manual)] public sealed class CoreSlot62 : ForwardCommand { protected override string Name => "core:62"; }
 [Transaction(TransactionMode.Manual)] public sealed class CoreSlot63 : ForwardCommand { protected override string Name => "core:63"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot64 : ForwardCommand { protected override string Name => "core:64"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot65 : ForwardCommand { protected override string Name => "core:65"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot66 : ForwardCommand { protected override string Name => "core:66"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot67 : ForwardCommand { protected override string Name => "core:67"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot68 : ForwardCommand { protected override string Name => "core:68"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot69 : ForwardCommand { protected override string Name => "core:69"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot70 : ForwardCommand { protected override string Name => "core:70"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot71 : ForwardCommand { protected override string Name => "core:71"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot72 : ForwardCommand { protected override string Name => "core:72"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot73 : ForwardCommand { protected override string Name => "core:73"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot74 : ForwardCommand { protected override string Name => "core:74"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot75 : ForwardCommand { protected override string Name => "core:75"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot76 : ForwardCommand { protected override string Name => "core:76"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot77 : ForwardCommand { protected override string Name => "core:77"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot78 : ForwardCommand { protected override string Name => "core:78"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot79 : ForwardCommand { protected override string Name => "core:79"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot80 : ForwardCommand { protected override string Name => "core:80"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot81 : ForwardCommand { protected override string Name => "core:81"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot82 : ForwardCommand { protected override string Name => "core:82"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot83 : ForwardCommand { protected override string Name => "core:83"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot84 : ForwardCommand { protected override string Name => "core:84"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot85 : ForwardCommand { protected override string Name => "core:85"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot86 : ForwardCommand { protected override string Name => "core:86"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot87 : ForwardCommand { protected override string Name => "core:87"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot88 : ForwardCommand { protected override string Name => "core:88"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot89 : ForwardCommand { protected override string Name => "core:89"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot90 : ForwardCommand { protected override string Name => "core:90"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot91 : ForwardCommand { protected override string Name => "core:91"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot92 : ForwardCommand { protected override string Name => "core:92"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot93 : ForwardCommand { protected override string Name => "core:93"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot94 : ForwardCommand { protected override string Name => "core:94"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot95 : ForwardCommand { protected override string Name => "core:95"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot96 : ForwardCommand { protected override string Name => "core:96"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot97 : ForwardCommand { protected override string Name => "core:97"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot98 : ForwardCommand { protected override string Name => "core:98"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot99 : ForwardCommand { protected override string Name => "core:99"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot100 : ForwardCommand { protected override string Name => "core:100"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot101 : ForwardCommand { protected override string Name => "core:101"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot102 : ForwardCommand { protected override string Name => "core:102"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot103 : ForwardCommand { protected override string Name => "core:103"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot104 : ForwardCommand { protected override string Name => "core:104"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot105 : ForwardCommand { protected override string Name => "core:105"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot106 : ForwardCommand { protected override string Name => "core:106"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot107 : ForwardCommand { protected override string Name => "core:107"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot108 : ForwardCommand { protected override string Name => "core:108"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot109 : ForwardCommand { protected override string Name => "core:109"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot110 : ForwardCommand { protected override string Name => "core:110"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot111 : ForwardCommand { protected override string Name => "core:111"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot112 : ForwardCommand { protected override string Name => "core:112"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot113 : ForwardCommand { protected override string Name => "core:113"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot114 : ForwardCommand { protected override string Name => "core:114"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot115 : ForwardCommand { protected override string Name => "core:115"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot116 : ForwardCommand { protected override string Name => "core:116"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot117 : ForwardCommand { protected override string Name => "core:117"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot118 : ForwardCommand { protected override string Name => "core:118"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot119 : ForwardCommand { protected override string Name => "core:119"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot120 : ForwardCommand { protected override string Name => "core:120"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot121 : ForwardCommand { protected override string Name => "core:121"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot122 : ForwardCommand { protected override string Name => "core:122"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot123 : ForwardCommand { protected override string Name => "core:123"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot124 : ForwardCommand { protected override string Name => "core:124"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot125 : ForwardCommand { protected override string Name => "core:125"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot126 : ForwardCommand { protected override string Name => "core:126"; }
+[Transaction(TransactionMode.Manual)] public sealed class CoreSlot127 : ForwardCommand { protected override string Name => "core:127"; }

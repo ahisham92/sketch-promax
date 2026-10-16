@@ -4,14 +4,14 @@ using Autodesk.Revit.UI;
 namespace SketchProMax.Loader;
 
 /// <summary>
-/// The Sketch ProMax tab. Built once at startup by the loader, so it survives switching to a new core; its live parts
-/// (Claude connection, running job, update state, quick tools list) are refreshed from the running core every 2 s.
-/// Buttons added here appear only after Revit restarts with the new loader. A new button that should appear right
-/// after an in-session update is declared by the core instead (CoreEntry's "ribbon" manifest, see CoreRibbon), and a
-/// change here should also raise UI/LoaderCompat.RibbonChangedIn in the core, so a newer core running under an older
-/// loader tells the user to restart for its buttons.
-/// Every button is a large (32 px icon) button: Revit's stacked small buttons are about 22 px tall, under the 24 px
-/// minimum click target. Destructive buttons (Cancel job) use the red danger tile.
+/// The Sketch ProMax tab. The loader makes the panels, in workflow order, and only the two things that must work
+/// without a running core: the start-up status (shown until a core runs, then hidden; it explains why none started)
+/// and the My tools pulldown, whose recipes and learned tools change while Revit runs. Everything else on the tab
+/// (Claude, Model, Documents, Check, Issue and the Sketch ProMax panel) is declared by the running core
+/// (UI/CoreRibbonManifest, applied by <see cref="CoreRibbon"/>), so a core update changes it live.
+/// A change here appears only after Revit restarts with the new loader: also raise UI/LoaderCompat.RibbonChangedIn in
+/// the core, so a newer core running under an older loader tells the user to restart for its buttons.
+/// Panels with nothing visible (no core yet) are hidden. Destructive buttons use the red danger tile.
 /// </summary>
 internal static class Ribbon
 {
@@ -19,8 +19,12 @@ internal static class Ribbon
     public const string HelpUrl = "https://github.com/ahisham92/sketch-promax#readme";
     public const int Slots = 20;
 
-    private static PushButton? _status, _job, _cancel, _version, _pane;
+    /// <summary>The panels, left to right. A core fills them by name; a panel a core names that isn't here goes at the end.</summary>
+    public static readonly string[] Panels = ["Claude", "Model", "Documents", "Check", "Issue", "My tools", "Sketch ProMax"];
+
+    private static PushButton? _status;
     private static PulldownButton? _quick;
+    private static readonly List<RibbonPanel> Made = [];
     private static readonly PushButton?[] SlotButtons = new PushButton?[Slots];
     private static readonly string?[] SlotKeys = new string?[Slots];
     private static readonly Dictionary<RibbonItem, string> Shown = new();
@@ -51,44 +55,21 @@ internal static class Ribbon
         try { app.CreateRibbonTab(Tab); }
         catch (Autodesk.Revit.Exceptions.ArgumentException) { /* already there */ }
 
-        // Claude: is the desktop app connected to this Revit window, and how to start.
-        var claude = app.CreateRibbonPanel(Tab, "Claude");
-        _status = (PushButton)claude.AddItem(Button<StatusCommand>("Status", "Claude\nstarting", Icons.Logo(16, Icons.Gray), Icons.Logo(32, Icons.Gray),
-            "Whether the Claude desktop app is connected to this Revit window.",
-            "Green: Claude has talked to this Revit window in the last few minutes. Amber: ready, waiting for Claude. " +
-            "Gray: the Claude desktop app is not running or can't reach Revit.\n\nClick for details, the models Claude can see, " +
-            "and how to fix a missing connection.", false));
-        claude.AddItem(Button<CopyPromptCommand>("CopyPrompt", "Copy\nprompt", "copy",
-            "Copies a good first message for Claude to the clipboard. Paste it into a new chat in the Claude desktop app.",
-            "The prompt names the open model and asks Claude to look at it and suggest what it can do for you."));
-        claude.AddItem(Button<ChatCommand>("Chat", "Chat", "chat",
-            "Chat with Claude about this model, inside Revit, using your Claude plan.",
-            "Opens the Sketch ProMax pane on its Chat tab. Replies stream in with every Sketch ProMax tool; attach images, " +
-            "PDFs and drawings, or send the current view. The first time, it helps you install Claude Code and sign in."));
-        claude.AddItem(Button<OpenClaudeCommand>("OpenClaude", "Open\nClaude", "open",
-            "Starts the Claude desktop app, or brings it to the front.",
-            "Works with the normal installer and the Microsoft Store version."));
-        _pane = claude.AddItem(Button<PaneCommand>("Pane", "Show\npane", "pane",
-            "Shows or hides the Sketch ProMax pane: connection, the running job with its steps and a Cancel button, " +
-            "the last result with clickable element ids, and your quick tools.",
-            "Click an element id in the pane to select it and zoom to it. The pane docks like the Properties palette; " +
-            "drag its tab to move it.")) as PushButton;
+        var panels = new Dictionary<string, RibbonPanel>(StringComparer.Ordinal);
+        foreach (var name in Panels)
+        {
+            var panel = app.CreateRibbonPanel(Tab, name);
+            panels[name] = panel;
+            Made.Add(panel);
+        }
 
-        // Jobs: what Revit is doing for Claude right now.
-        var jobs = app.CreateRibbonPanel(Tab, "Jobs");
-        _job = (PushButton)jobs.AddItem(Button<JobCommand>("Job", "No job", "job",
-            "The tool Claude is running in Revit, how long it has run and its progress.",
-            "Revit runs one job at a time. While a long job runs, Claude waits for it (wait_for_job) and other requests are " +
-            "told what is running. Click for details of the running or the last job.", false));
-        _cancel = (PushButton)jobs.AddItem(Button<CancelJobCommand>("CancelJob", "Cancel\njob", "cancel",
-            "Stops the running job (or a running self-test) at its next check, like cancel_job in the chat.",
-            "Batch tools stop between items and keep what they finished as one Undo step. A single Revit operation that has " +
-            "already started (a regeneration, a big join) always runs to its end."));
-        _cancel.Enabled = false;
+        // Shown until a core runs: "starting", or why Sketch ProMax could not start (click for the details).
+        _status = (PushButton)panels["Claude"].AddItem(Button<StatusCommand>("Starting", "Claude\nstarting", Icons.Logo(16, Icons.Gray), Icons.Logo(32, Icons.Gray),
+            "Sketch ProMax is starting. Its buttons appear here as soon as Revit is ready.",
+            "If it stays like this, click for the reason Sketch ProMax could not start and what to do.", false));
 
-        // Quick tools: saved recipes and learned tools, run straight in Revit without AI or internet.
-        var quick = app.CreateRibbonPanel(Tab, "Quick tools");
-        var pulldown = new PulldownButtonData("SketchProMax.Quick", "Quick\ntools")
+        // My tools: saved recipes and learned tools, run straight in Revit without AI or internet.
+        var pulldown = new PulldownButtonData("SketchProMax.Quick", "My\ntools")
         {
             Image = Icons.Get("bolt", 16),
             LargeImage = Icons.Get("bolt", 32),
@@ -97,7 +78,7 @@ internal static class Ribbon
                               "wrote code that worked. They appear here. Blanks such as {level} are asked for when you run one.",
         };
         pulldown.SetContextualHelp(new ContextualHelp(ContextualHelpType.Url, HelpUrl));
-        _quick = (PulldownButton)quick.AddItem(pulldown);
+        _quick = (PulldownButton)panels["My tools"].AddItem(pulldown);
         var slotTypes = new[]
         {
             typeof(QuickSlot00), typeof(QuickSlot01), typeof(QuickSlot02), typeof(QuickSlot03), typeof(QuickSlot04),
@@ -122,48 +103,21 @@ internal static class Ribbon
             "Reads the recipes and learned tools again (the list also refreshes by itself every half minute)."));
         _quick.AddPushButton(Button<QuickFolderCommand>("QuickFolder", "Open recipes folder", "folder",
             "Opens the folder with your recipes and learned tools. Copy files from a colleague into it to share them."));
+        Tidy();
+    }
 
-        // Checks.
-        var checks = app.CreateRibbonPanel(Tab, "Checks");
-        checks.AddItem(Button<ModelCheckCommand>("ModelCheck", "Model\ncheck", "check",
-            "Checks the open model and scores it: Revit warnings, duplicates, wall gaps, unsupported beams, columns off grid, " +
-            "off-axis elements, wrong levels, rooms, empty required parameters.",
-            "Read-only: nothing in the model changes. Runs here without the AI; the findings are listed with a CSV of every item.",
-            needsModel: true));
-        checks.AddItem(Button<ExportPackCommand>("ExportPack", "Export for\nClaude", "pack",
-            "Writes one small zip describing this project (project data, quantities, sheets, revisions, schedules, the latest " +
-            "check results, changes, worksets, links) to upload to a Claude chat to prepare a report.",
-            "Read-only: nothing in the model changes. Runs here without the AI; usually a few MB at most even on large models. " +
-            "The folder opens with the zip selected when it is done (Documents\\SketchProMax\\packs).",
-            needsModel: true));
-        checks.AddItem(Button<SelfTestCommand>("SelfTest", "Self-test", "test",
-            "Runs every Sketch ProMax tool once on the open model and reports what works.",
-            "The quick check is read-only. The full check also runs the tools that change the model and undoes each change " +
-            "straight after it; use it on a copy of a model. Click again while it runs to see progress or stop it."));
-        checks.AddItem(Button<FieldTestCommand>("FieldTest", "Field\ntest", "field",
-            "Builds a throwaway test project, runs every Sketch ProMax tool family on it one tool at a time and writes one report of what works and what to fix.",
-            "Your open models are not changed: the test project opens in its own window and is closed without saving, and Revit " +
-            "switches back to your model at the end. Save your models first. Takes about 5 to 15 minutes; Revit stays responsive " +
-            "between tools. Click again while it runs to see progress or stop it after the current tool.",
-            needsModel: true));
-
-        // Updates.
-        var updates = app.CreateRibbonPanel(Tab, "Updates");
-        _version = (PushButton)updates.AddItem(Button<UpdateInfoCommand>("Version", "Version", "version",
-            "The installed version and the state of updates.",
-            "Updates download in the background and switch over while Revit stays open, as soon as no job is running. " +
-            "Click to see the update window.", false));
-        updates.AddItem(Button<UpdateCheckCommand>("UpdateCheck", "Check\nnow", "update",
-            "Looks for a newer version right away and installs it without restarting Revit."));
-        updates.AddItem(Button<WhatsNewCommand>("WhatsNew", "What's\nnew", "news",
-            "Opens the release notes of the latest version."));
-
-        // Settings and help.
-        var more = app.CreateRibbonPanel(Tab, "Sketch ProMax");
-        more.AddItem(Button<SettingsCommand>("Settings", "Settings", "settings",
-            "Firm standards, whether Revit asks before Claude changes the model, and automatic updates."));
-        more.AddItem(Button<HelpCommand>("Help", "Help", Icons.Logo(16), Icons.Logo(32),
-            "How to use Sketch ProMax, what it can do, and what to try first.", null, false));
+    /// <summary>Hides the panels that show nothing (before a core has filled them) and shows them once they do. Never throws.</summary>
+    public static void Tidy()
+    {
+        foreach (var panel in Made)
+        {
+            try
+            {
+                var any = panel.GetItems().Any(i => i is not null && i.Visible);
+                if (panel.Visible != any) panel.Visible = any;
+            }
+            catch (Exception) { /* cosmetic */ }
+        }
     }
 
     private static void Set(RibbonItem? item, string text, string? tip = null)
@@ -187,44 +141,20 @@ internal static class Ribbon
         button.LargeImage = make(32);
     }
 
-    /// <summary>Updates the live parts. Cheap: the core answers from memory.</summary>
+    /// <summary>Updates the start-up status (the core's own buttons are refreshed by CoreRibbon). Cheap.</summary>
     public static void Refresh()
     {
         if (++_ticks % 15 == 0) RefreshQuickTools();
-        if (Host.Core is null)
+        if (_status is null) return;
+        if (Host.Core is not null)
         {
-            var failed = Host.BootError is not null;
-            Set(_status, failed ? "Claude\nnot started" : "Claude\nstarting", Host.BootError ?? "Sketch ProMax starts as soon as Revit is ready.");
-            Image(_status, failed ? "red" : "gray", s => Icons.Logo(s, failed ? Icons.Red : Icons.Gray));
+            if (_status.Visible) { _status.Visible = false; Tidy(); }
             return;
         }
-
-        // "state \t text \t tooltip"
-        var claude = Host.Query("claude").Split('\t');
-        if (claude.Length >= 3)
-        {
-            Set(_status, "Claude\n" + claude[1], claude[2]);
-            var color = claude[0] switch { "connected" => Icons.Green, "ready" => Icons.Amber, "error" => Icons.Red, _ => Icons.Gray };
-            Image(_status, claude[0], s => Icons.Logo(s, color));
-        }
-
-        // "state \t text \t tooltip", state running / selftest / idle
-        var job = Host.Query("job").Split('\t');
-        if (job.Length >= 3)
-        {
-            var running = job[0] is "running" or "selftest";
-            Set(_job, job[1], job[2]);
-            Image(_job, running ? "run" : "idle", s => Icons.Get(running ? "job-running" : "job", s));
-            if (_cancel is not null && _cancel.Enabled != running) _cancel.Enabled = running;
-        }
-
-        // "text \t tooltip \t glyph"
-        var update = Host.Query("update").Split('\t');
-        if (update.Length >= 3)
-        {
-            Set(_version, update[0], update[1]);
-            Image(_version, update[2], s => Icons.Get(update[2], s));
-        }
+        var failed = Host.BootError is not null;
+        Set(_status, failed ? "Claude\nnot started" : "Claude\nstarting", Host.BootError ?? "Sketch ProMax starts as soon as Revit is ready.");
+        Image(_status, failed ? "red" : "gray", s => Icons.Logo(s, failed ? Icons.Red : Icons.Gray));
+        if (!_status.Visible) { _status.Visible = true; Tidy(); }
     }
 
     /// <summary>Fills the quick-tool slots from the running core's list of recipes and learned tools.</summary>
@@ -263,12 +193,8 @@ internal static class Ribbon
         }
     }
 
-    /// <summary>Keeps the Pane button's text in step with the pane ("Show pane" / "Hide pane").</summary>
-    public static void SetPaneShown(bool shown)
-    {
-        try { Set(_pane, shown ? "Hide\npane" : "Show\npane"); }
-        catch (Exception) { /* cosmetic */ }
-    }
+    /// <summary>The pane's own button is core-declared now ("Show or hide pane"); kept for the pane's callers.</summary>
+    public static void SetPaneShown(bool shown) { }
 
     /// <summary>The core command for a slot, or null when the slot is empty.</summary>
     public static string? QuickKey(int slot) => slot >= 0 && slot < Slots ? SlotKeys[slot] : null;

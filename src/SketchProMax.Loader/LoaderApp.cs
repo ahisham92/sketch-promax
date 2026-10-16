@@ -304,33 +304,36 @@ internal static class Host
     public static int Dispatch(string name, UIApplication app)
     {
         _uiApp = app;
+        if (name.StartsWith("core:", StringComparison.Ordinal))
+        {
+            // A button the running core declared (CoreRibbon): its slot says which command it is now.
+            var command = int.TryParse(name.Substring(5), out var slot) ? CoreRibbon.Command(slot) : null;
+            if (command is null)
+            {
+                TaskDialog.Show("Sketch ProMax", _core is null
+                    ? _bootError ?? "Sketch ProMax is still starting. Try again in a moment."
+                    : "This button belongs to another version of Sketch ProMax and does nothing in this one. Restart Revit to tidy up the ribbon.");
+                return 1;
+            }
+            name = command;
+        }
         if (name == "quick-refresh")
         {
             Ribbon.RefreshQuickTools(reload: true);
             return 0;
         }
-        // The dockable pane belongs to the loader, so its button works with any core, or none yet.
+        // The dockable pane belongs to the loader, so its commands work with any core, or none yet.
         if (name == "pane") return PaneHost.Toggle(app);
         if (name == "chat") return PaneHost.ShowChat(app);
+        // Send current view: the chat is shown first, then the core attaches the view to it.
+        if (name == "send-view" && PaneHost.ShowChat(app) != 0) return -1;
         if (_core is null) Boot(app);
         if (_core is null)
         {
             TaskDialog.Show("Sketch ProMax", _bootError ?? "Sketch ProMax is still starting. Try again in a moment.");
             return -1;
         }
-        if (name.StartsWith("core:", StringComparison.Ordinal))
-        {
-            // A button the running core declared (CoreRibbon): its slot says which core command it is now.
-            var command = int.TryParse(name.Substring(5), out var slot) ? CoreRibbon.Command(slot) : null;
-            if (command is null)
-            {
-                TaskDialog.Show("Sketch ProMax", "This button belongs to another version of Sketch ProMax and does nothing in this one. " +
-                                                 "Restart Revit to tidy up the ribbon.");
-                return 1;
-            }
-            name = command;
-        }
-        else if (name.StartsWith("quick:", StringComparison.Ordinal))
+        if (name.StartsWith("quick:", StringComparison.Ordinal))
         {
             var key = Ribbon.QuickKey(int.Parse(name.Substring(6)));
             if (key is null)
@@ -338,7 +341,7 @@ internal static class Host
                 Ribbon.RefreshQuickTools();
                 TaskDialog.Show("Sketch ProMax quick tools",
                     "Nothing saved yet. In the Claude app, after a workflow you liked, say \"save that as a recipe\"; when Claude wrote " +
-                    "code that worked, say \"save it as a tool\". It then appears under Quick tools and runs here without the AI.");
+                    "code that worked, say \"save it as a tool\". It then appears under My tools and runs here without the AI.");
                 return 1;
             }
             name = key;

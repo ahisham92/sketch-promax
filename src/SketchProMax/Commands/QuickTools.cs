@@ -322,7 +322,7 @@ internal static class QuickTools
         return result;
     }
 
-    private static void Show(string title, ToolResult result, string headline)
+    internal static void Show(string title, ToolResult result, string headline)
     {
         var window = new ResultWindow(title, !result.IsError, headline, Readable(result.Text));
         window.Show();
