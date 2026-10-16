@@ -56,7 +56,8 @@ public sealed class CutSlabTool : IRevitTool
     public string Description =>
         "Change a floor's outline by cutting a region away (an edge cut, notch, chamfered corner or recess at the slab " +
         "edge) or adding a region to it. Give the region as plan points. Edits the floor's own sketch, so hosted " +
-        "elements, tags and schedules stay connected. For a hole fully inside the slab, create_mep_openings or run_revit_code can make an opening instead.";
+        "elements, tags and schedules stay connected (unchanged edges keep their sketch lines). If Revit refuses the sketch edit, a cut " +
+        "falls back to an opening of the same shape and the result says so. For a hole fully inside the slab, create_mep_openings can make an opening instead.";
     public string PropertiesJson => """
     {
       "floor_id": {"type": "integer"},
@@ -85,29 +86,123 @@ public sealed class CutSlabTool : IRevitTool
         var sketch = (Sketch)doc.GetElement(floor.SketchId);
         var z = sketch.SketchPlane.GetPlane().Origin.Z;
         var lift = Transform.CreateTranslation(new XYZ(0, 0, z));
+        var target = pieces[0].SelectMany(l => l).Select(c => c.CreateTransformed(lift)).ToList();
+        var opName = op == BooleanOperationsType.Union ? "add" : "cut";
 
-        using var scope = new SketchEditScope(doc, "Sketch ProMax: Cut slab");
-        scope.Start(floor.SketchId);
-        try
+        string? refused = null;
+        int kept = 0, changed = 0, added = 0, removed = 0;
+        using (var scope = new SketchEditScope(doc, "Sketch ProMax: Cut slab"))
         {
-            using (var t = new Transaction(doc, "Sketch ProMax: slab outline"))
+            try
             {
-                t.Start();
-                foreach (var id in sketch.GetAllElements())
-                    if (doc.GetElement(id) is CurveElement) doc.Delete(id);
-                foreach (var loop in pieces[0])
-                    foreach (var curve in loop)
-                        doc.Create.NewModelCurve(curve.CreateTransformed(lift), sketch.SketchPlane);
+                scope.Start(floor.SketchId);
+                using (var t = new Transaction(doc, "Sketch ProMax: slab outline"))
+                {
+                    t.Start();
+                    (kept, changed, added, removed) = Reshape(doc, sketch, target);
+                    t.Commit();
+                }
+                // Warnings are dismissed; an error the edit can't settle (e.g. an element hosted on a removed edge)
+                // makes Revit refuse the commit, and the cut falls back to an opening below.
+                scope.Commit(new TypeKit.SwallowWarnings());
+            }
+            catch (Exception ex) when (ex is Autodesk.Revit.Exceptions.ApplicationException or InvalidOperationException)
+            {
+                refused = ex.Message.Trim();
+                if (scope.IsActive) scope.Cancel();
+            }
+        }
+        if (refused is null)
+            return ToolResult.Ok(new { floor = floor.Id.Value, operation = opName, loops = pieces[0].Count, method = "sketch edited",
+                edges = new { kept, changed, added, removed } });
+
+        if (op == BooleanOperationsType.Union)
+            return ToolResult.Error($"Revit refused to edit the floor's sketch ({refused}), so nothing was added. Check elements hosted on the slab " +
+                                    "edges (slab edges, railings, rebar) and edit the boundary in Revit (Edit Boundary) if it keeps refusing.");
+
+        // Fallback for a cut: an opening shaped like the part of the region that overlaps the floor.
+        var overlap = Outlines.Pieces(BooleanOperationsUtils.ExecuteBooleanOperation(Outlines.Extrude(current), Outlines.Extrude(region), BooleanOperationsType.Intersect));
+        if (overlap.Count == 0) return ToolResult.Error($"Revit refused to edit the floor's sketch ({refused}) and the region doesn't overlap the floor.");
+        var openings = new List<long>();
+        using (var t = RevitHelpers.StartTransaction(doc, "Cut slab (opening)"))
+        {
+            try
+            {
+                foreach (var piece in overlap)
+                {
+                    var profile = new CurveArray();
+                    foreach (var c in piece.OrderByDescending(l => l.GetExactLength()).First()) profile.Append(c.CreateTransformed(lift));
+                    openings.Add(doc.Create.NewOpening(floor, profile, true).Id.Value);
+                }
                 t.Commit();
             }
-            scope.Commit(new TypeKit.SwallowWarnings());
+            catch (Autodesk.Revit.Exceptions.ApplicationException ex)
+            {
+                if (t.HasStarted() && !t.HasEnded()) t.RollBack();
+                return ToolResult.Error($"Revit refused both the sketch edit ({refused}) and an opening in its place ({ex.Message.Trim()}), so the floor is unchanged.");
+            }
         }
-        catch
+        openings = openings.Where(i => doc.GetElement(new ElementId(i)) is not null).ToList();
+        if (openings.Count == 0)
+            return ToolResult.Error($"Revit refused both the sketch edit ({refused}) and an opening in its place, so the floor is unchanged.");
+        return ToolResult.Ok(new
         {
-            if (scope.IsActive) scope.Cancel();
-            throw;
+            floor = floor.Id.Value, operation = opName, method = "opening", openings,
+            note = $"Revit refused to edit the floor's own sketch ({refused}), so the region was cut with an opening instead. " +
+                   "The floor's outline (and its area in schedules) is unchanged; edit the boundary in Revit if the outline itself must change.",
+        });
+    }
+
+    /// <summary>
+    /// Turns the sketch's curves into the target outline while keeping as many sketch lines as possible: a line that is
+    /// already right is kept, a line on the same straight edge is shortened or lengthened in place (so slab edges and
+    /// other things hosted on that edge stay attached), and only the remaining curves are deleted or drawn new.
+    /// </summary>
+    private static (int kept, int changed, int added, int removed) Reshape(Document doc, Sketch sketch, List<Curve> target)
+    {
+        const double Tol = 1e-4;
+        var existing = sketch.GetAllElements().Select(doc.GetElement).OfType<CurveElement>().ToList();
+        var unused = new List<CurveElement>(existing);
+        var todo = new List<Curve>();
+        bool Same(XYZ a, XYZ b) => a.DistanceTo(b) < Tol;
+        int kept = 0, changed = 0, added = 0;
+        foreach (var c in target)
+        {
+            var match = unused.FirstOrDefault(e => e.GeometryCurve is { } g && g.GetType() == c.GetType() &&
+                ((Same(g.GetEndPoint(0), c.GetEndPoint(0)) && Same(g.GetEndPoint(1), c.GetEndPoint(1))) ||
+                 (Same(g.GetEndPoint(0), c.GetEndPoint(1)) && Same(g.GetEndPoint(1), c.GetEndPoint(0)))) &&
+                (c is Line || Same(g.Evaluate(0.5, true), c.Evaluate(0.5, true))));
+            if (match is null) { todo.Add(c); continue; }
+            unused.Remove(match);
+            kept++;
         }
-        return ToolResult.Ok(new { floor = floor.Id.Value, operation = op == BooleanOperationsType.Union ? "add" : "cut", loops = pieces[0].Count });
+        var fresh = new List<Curve>();
+        var reshaped = new List<(CurveElement e, Curve c)>();
+        foreach (var c in todo)
+        {
+            CurveElement? on = null;
+            if (c is Line l)
+                on = unused.FirstOrDefault(e => e.GeometryCurve is Line g && DimensionGeometry.IsParallel(g.Direction, l.Direction) &&
+                    (l.GetEndPoint(0) - g.GetEndPoint(0)).CrossProduct(g.Direction).GetLength() < Tol &&
+                    Overlaps(g, l));
+            if (on is null) { fresh.Add(c); continue; }
+            unused.Remove(on);
+            reshaped.Add((on, c));
+        }
+        var removed = unused.Count;
+        if (unused.Count > 0) doc.Delete(unused.Select(e => e.Id).ToList());
+        foreach (var (e, c) in reshaped) { e.SetGeometryCurve(c, true); changed++; }
+        foreach (var c in fresh) { doc.Create.NewModelCurve(c, sketch.SketchPlane); added++; }
+        return (kept, changed, added, removed);
+    }
+
+    /// <summary>Two collinear lines share some length.</summary>
+    private static bool Overlaps(Line a, Line b)
+    {
+        var d = a.Direction;
+        double a0 = a.GetEndPoint(0).DotProduct(d), a1 = a.GetEndPoint(1).DotProduct(d);
+        double b0 = b.GetEndPoint(0).DotProduct(d), b1 = b.GetEndPoint(1).DotProduct(d);
+        return Math.Min(Math.Max(a0, a1), Math.Max(b0, b1)) - Math.Max(Math.Min(a0, a1), Math.Min(b0, b1)) > 1e-4;
     }
 }
 

@@ -321,7 +321,9 @@ public sealed class InPlaceGuideTool : IRevitTool
       "level": {"type": "string", "description": "Only elements on this level (name)."},
       "element_ids": {"type": "array", "items": {"type": "integer"}, "description": "Only these elements."},
       "select": {"type": "boolean", "description": "Select the found elements in Revit."},
-      "isolate": {"type": "string", "enum": ["none", "temporary", "new_3d_view"], "description": "temporary: Temporary Isolate in the active view (Reset with the sunglasses icon). new_3d_view: a new 3D view with a section box around them."}
+      "isolate": {"type": "string", "enum": ["none", "temporary", "new_3d_view"], "description": "temporary: Temporary Isolate in the active view (Reset with the sunglasses icon). new_3d_view: a new 3D view with a section box around them."},
+      "offset": {"type": "integer", "description": "Skip this many elements in the element list (for the next page)."},
+      "limit": {"type": "integer", "description": "Max elements listed one by one (default 50); counts by category and level always cover all of them."}
     }
     """;
     public string[] Required => [];
@@ -367,23 +369,31 @@ public sealed class InPlaceGuideTool : IRevitTool
             shown = approved ? New3DView(uidoc, found.Select(f => (Element)f.E).ToList(), foundIds) : "the user declined the new 3D view";
         }
 
-        var list = found
-            .GroupBy(f => f.E.Category?.Name ?? "(no category)").OrderBy(g => g.Key)
+        // Counts first (always complete), then the elements one by one, a page at a time, so a model with hundreds of
+        // in-place elements still fits a chat.
+        var byCategory = found
+            .GroupBy(f => f.E.Category?.Name ?? "(no category)").OrderByDescending(g => g.Count()).ThenBy(g => g.Key)
             .Select(g => new
             {
                 category = g.Key,
                 count = g.Count(),
-                levels = g.GroupBy(f => f.Level ?? "(no level)").OrderBy(l => l.Key).Select(l => new
-                {
-                    level = l.Key,
-                    elements = l.Take(200).Select(f => new { id = f.E.Id.Value, family = f.E.Symbol.Family.Name, volume = Value(f.E, BuiltInParameter.HOST_VOLUME_COMPUTED), area = Value(f.E, BuiltInParameter.HOST_AREA_COMPUTED) }),
-                }),
-            }).Take(50).ToList();
+                byLevel = g.GroupBy(f => f.Level ?? "(no level)").OrderBy(l => l.Key).Take(30).Select(l => new { level = l.Key, count = l.Count() }).ToList(),
+            }).ToList();
+        var categoriesShown = byCategory.Take(40).ToList();
+        var ordered = found.OrderBy(f => f.E.Category?.Name ?? "").ThenBy(f => f.Level ?? "").ThenBy(f => f.E.Id.Value);
+        var (page, pageInfo) = Paging.Page(ordered, args, defaultLimit: 50);
 
         return ToolResult.Ok(new
         {
             found = found.Count,
-            inPlace = list,
+            inPlace = categoriesShown,
+            moreCategories = byCategory.Count > categoriesShown.Count ? byCategory.Count - categoriesShown.Count : (int?)null,
+            elements = page.Select(f => new
+            {
+                id = f.E.Id.Value, category = f.E.Category?.Name, level = f.Level, family = f.E.Symbol.Family.Name,
+                volume = Value(f.E, BuiltInParameter.HOST_VOLUME_COMPUTED), area = Value(f.E, BuiltInParameter.HOST_AREA_COMPUTED),
+            }).ToList(),
+            page = found.Count > 0 ? pageInfo : null,
             notInPlace = notInPlace.Count > 0 ? notInPlace : null,
             selected = args.OptBool("select") ? found.Count : (int?)null,
             isolated = shown,

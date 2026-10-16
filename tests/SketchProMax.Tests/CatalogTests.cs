@@ -92,7 +92,7 @@ internal static class CatalogTests
         check("every tool has a self-test case", uncovered.Count == 0, string.Join(", ", uncovered));
         var stale = caseTools.Where(c => !names.Contains(c) && !c.StartsWith("self_test_")).Distinct().ToList();
         check("self-test cases name real tools", stale.Count == 0, string.Join(", ", stale));
-        var setups = Regex.Matches(caseSource, @"Setup: \[([^\]]*)\]").SelectMany(m => Regex.Matches(m.Groups[1].Value, @"""([a-z0-9_]+)""").Select(x => x.Groups[1].Value))
+        var setups = Regex.Matches(caseSource, @"Setup: \[([^\]]*)\]").SelectMany(m => Regex.Matches(m.Groups[1].Value, @"""([a-z0-9_]+)(?:#\d+)?""").Select(x => x.Groups[1].Value))
             .Distinct().Where(s => !names.Contains(s)).ToList();
         check("self-test setup steps name real tools", setups.Count == 0, string.Join(", ", setups));
         // Regression cases may repeat a tool on purpose; the main lists must not.

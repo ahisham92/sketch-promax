@@ -439,22 +439,52 @@ public sealed class RelinquishMineTool : IRevitTool
             FamilyWorksets = args.OptBool("family_worksets", true),
             StandardWorksets = args.OptBool("standard_worksets", true),
         };
-        RelinquishedItems items;
-        try { items = WorksharingUtils.RelinquishOwnership(doc, options, null); }
+        if (doc.IsModifiable)
+            return ToolResult.Error("A transaction is open on this model; ownership can only be given back outside one. Finish or cancel the current edit and call the tool again.");
+
+        // Relinquishing everything at once can fail with Revit's bare "An internal error has occurred" when the local file
+        // holds changes that are not in central yet (e.g. a new local file right after edits): those elements and their
+        // worksets can't be released before a sync. Then release what can be released, part by part, and say what stays.
+        var table = doc.GetWorksetTable();
+        var worksets = new List<string>();
+        var elements = 0;
+        var refused = new List<string>();
+        void Take(RelinquishedItems items)
+        {
+            worksets.AddRange(items.GetRelinquishedWorksets().Select(id => table.GetWorkset(id)?.Name ?? id.IntegerValue.ToString()));
+            elements += items.GetRelinquishedElements().Count;
+        }
+        try { Take(WorksharingUtils.RelinquishOwnership(doc, options, null)); }
+        catch (Autodesk.Revit.Exceptions.InternalException)
+        {
+            var parts = new List<(string what, RelinquishOptions opt)>();
+            if (options.CheckedOutElements) parts.Add(("borrowed elements", new RelinquishOptions(false) { CheckedOutElements = true }));
+            if (options.UserWorksets) parts.Add(("user worksets", new RelinquishOptions(false) { UserWorksets = true }));
+            if (options.ViewWorksets) parts.Add(("view worksets", new RelinquishOptions(false) { ViewWorksets = true }));
+            if (options.FamilyWorksets) parts.Add(("family worksets", new RelinquishOptions(false) { FamilyWorksets = true }));
+            if (options.StandardWorksets) parts.Add(("standard worksets", new RelinquishOptions(false) { StandardWorksets = true }));
+            foreach (var (what, opt) in parts)
+            {
+                try { Take(WorksharingUtils.RelinquishOwnership(doc, opt, null)); }
+                catch (Autodesk.Revit.Exceptions.InternalException) { refused.Add(what); }
+                catch (Autodesk.Revit.Exceptions.ApplicationException ex) { return ToolResult.Error(Workshare.Explain(ex)); }
+            }
+        }
         catch (Autodesk.Revit.Exceptions.ApplicationException ex) { return ToolResult.Error(Workshare.Explain(ex)); }
 
-        var table = doc.GetWorksetTable();
-        var worksets = items.GetRelinquishedWorksets().Select(id => table.GetWorkset(id)?.Name ?? id.IntegerValue.ToString()).ToList();
-        var elements = items.GetRelinquishedElements().Count;
         var stillMine = Workshare.Worksets(doc, allKinds: true).Where(w => w.IsEditable).Select(w => w.Name).ToList();
         return ToolResult.Ok(new
         {
             relinquishedElements = elements,
-            relinquishedWorksets = worksets,
+            relinquishedWorksets = worksets.Distinct().ToList(),
             worksetsStillYours = stillMine,
             hadEditableWorksets = mineBefore.Count,
             unsavedChanges = doc.IsModified,
-            note = stillMine.Count > 0 || doc.IsModified
+            notReleased = refused.Count > 0 ? refused : null,
+            note = refused.Count > 0
+                ? $"Revit would not release the {string.Join(", ", refused)} yet: this local file holds changes that are not in central, and those " +
+                  "elements and their worksets stay yours until you Synchronize with Central (with 'Relinquish' ticked). Everything else was released."
+                : stillMine.Count > 0 || doc.IsModified
                 ? "What you changed (or created) since the last sync stays yours: Revit can only release it by Synchronize with Central " +
                   "(with relinquish ticked). The API can't relinquish modified elements without syncing."
                 : "Everything you held was released.",
