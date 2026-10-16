@@ -15,7 +15,8 @@ namespace SketchProMax.Update;
 ///   - tells the loader (SketchProMax.Loader, which Revit loads) that a newer core is ready. The loader switches to it
 ///     the next time Revit is idle with no job running: the old core stops, the new one starts. Nothing is overwritten;
 ///     the old DLLs stay loaded, unused, until Revit closes.
-///   - points each installed Revit version's SketchProMax.addin at the new version's loader, for the next Revit start.
+///   - puts the new loader in place of the installed one (Addins\&lt;year&gt;\SketchProMax\SketchProMax.Loader.dll), only when
+///     it changed. SketchProMax.addin keeps naming that one path, so Revit's "Always Load" for it holds (AddinFiles).
 ///   - replaces the desktop-app connector (SketchProMax.Mcp.exe). Windows lets a running exe be renamed, so
 ///     the old one is moved aside and the new one copied in; the Claude app uses it after its next restart. The tool
 ///     list itself reaches the Claude app straight away: the new core rewrites tools.json, which the connector watches.
@@ -43,8 +44,7 @@ public static class Updater
     private const string LoaderContractKey = "SketchProMax.Loader.Contract";
     private const string LoaderPendingKey = "SketchProMax.Loader.Pending";
     private const string LoaderPathKey = "SketchProMax.Loader.Path";
-    private const string LoaderDll = "SketchProMax.Loader.dll";
-    private const string LoaderClass = "SketchProMax.Loader.LoaderApp";
+    private const string LoaderDll = AddinFiles.LoaderDll;
 
     /// <summary>True when the loader runs this core, so a new version can be switched to without restarting Revit.</summary>
     public static bool CanSwitchLive => AppDomain.CurrentDomain.GetData(LoaderContractKey) is int;
@@ -120,9 +120,9 @@ public static class Updater
             var stagedFolder = Path.Combine(VersionsFolder, release.Version);
             if (release.Version == state.Staged && Directory.Exists(stagedFolder))
             {
-                // Already downloaded (by this or another Revit window). A reinstall or repair may have pointed a manifest
-                // elsewhere since; point it back, and switch this window over too.
-                if (!AllManifestsPointAt(stagedFolder)) PointAddinsAt(stagedFolder);
+                // Already downloaded (by this or another Revit window). Make sure its loader is in place (nothing is written
+                // when it is), and switch this window over too.
+                SettleInstall(stagedFolder);
                 SaveState(state);
                 Apply(stagedFolder, release.Version, progress);
                 return null;
@@ -131,7 +131,7 @@ public static class Updater
             progress.Report(UpdateStage.Downloading, $"Downloading Sketch ProMax {release.Version}…", release.Version);
             var folder = await DownloadAndUnpackAsync(release, progress, ct).ConfigureAwait(false);
             progress.Report(UpdateStage.Applying, "Installing…");
-            if (PointAddinsAt(folder) == 0)
+            if (SettleInstall(folder) == 0)
             {
                 state.LastError = "no installed Revit add-in was found to update. Run Install.cmd once.";
                 SaveState(state);
@@ -186,48 +186,133 @@ public static class Updater
     }
 
     /// <summary>
-    /// Manifests written by 0.25.x (or by an older install) load SketchProMax.dll directly. Points them at the loader next
-    /// to it, so from the next Revit start updates switch over without a restart. Returns how many were changed.
+    /// Puts each installed Revit version's add-in in its settled form (see <see cref="AddinFiles"/>): the newest loader at
+    /// Addins\&lt;year&gt;\SketchProMax\SketchProMax.Loader.dll, and SketchProMax.addin naming that path with one entry. Manifests
+    /// from older releases (naming the core, or a loader in a version folder) are moved there once. Nothing is written
+    /// when it is already so, because Revit asks about an unsigned add-in again when the file or its place changes.
+    /// <paramref name="packageFolder"/> is a just-downloaded version folder; without it the running version's files are
+    /// used. Returns how many Revit versions have Sketch ProMax installed and settled.
     /// </summary>
-    public static int MoveManifestsToLoader()
+    public static int SettleInstall(string? packageFolder = null)
     {
         var count = 0;
         if (!Directory.Exists(RevitAddinsRoot)) return 0;
         foreach (var revitFolder in Directory.GetDirectories(RevitAddinsRoot))
         {
-            var manifest = Path.Combine(revitFolder, "SketchProMax.addin");
-            try
-            {
-                if (!File.Exists(manifest)) continue;
-                var xml = XDocument.Load(manifest);
-                var assembly = xml.Descendants("Assembly").FirstOrDefault();
-                var path = assembly?.Value?.Trim() ?? "";
-                if (assembly is null || !Path.GetFileName(path).Equals("SketchProMax.dll", StringComparison.OrdinalIgnoreCase)) continue;
-                var full = Path.IsPathRooted(path) ? path : Path.Combine(revitFolder, path);
-                var loader = Path.Combine(Path.GetDirectoryName(full) ?? "", LoaderDll);
-                if (!File.Exists(loader)) continue;
-                assembly.Value = Path.IsPathRooted(path) ? loader : Path.Combine(Path.GetDirectoryName(path) ?? "", LoaderDll);
-                SetClass(xml, LoaderClass);
-                Save(xml, manifest);
-                count++;
-            }
+            try { if (Settle(revitFolder, packageFolder)) count++; }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Xml.XmlException or ArgumentException) { }
         }
         return count;
     }
 
-    private static void SetClass(XDocument xml, string fullClassName)
+    private static bool Settle(string revitFolder, string? packageFolder)
     {
-        var element = xml.Descendants("FullClassName").FirstOrDefault();
-        if (element is not null) element.Value = fullClassName;
+        var manifest = Path.Combine(revitFolder, AddinFiles.ManifestName);
+        if (!File.Exists(manifest)) return false;
+        var year = Path.GetFileName(revitFolder);
+        var loader = Path.Combine(revitFolder, AddinFiles.LoaderFolder, LoaderDll);
+        var source = PackageFolders(year, packageFolder).FirstOrDefault(f => File.Exists(Path.Combine(f, LoaderDll)));
+        if (source is not null) PlaceLoader(Path.Combine(source, LoaderDll), loader);
+        // Never name a loader that isn't there: the manifest stays as it is until one is.
+        if (!File.Exists(loader)) return false;
+
+        var existing = File.ReadAllText(manifest);
+        var templatePath = source is null ? null : Path.Combine(source, AddinFiles.ManifestName);
+        var template = templatePath is not null && File.Exists(templatePath) ? File.ReadAllText(templatePath) : null;
+        if (AddinFiles.IsSettled(template))
+        {
+            if (!AddinFiles.SameManifest(existing, template)) WriteManifest(manifest, template!);
+        }
+        else if (AddinFiles.Settle(existing) is { } settled && !AddinFiles.SameManifest(existing, settled))
+        {
+            WriteManifest(manifest, settled);
+        }
+        DisableOtherManifests(revitFolder, manifest);
+        return true;
     }
 
-    private static void Save(XDocument xml, string manifest)
+    /// <summary>Where a loader (and settled manifest) for Revit <paramref name="year"/> may come from, best first.</summary>
+    private static IEnumerable<string> PackageFolders(string year, string? packageFolder)
     {
-        var temp = manifest + ".new";
-        xml.Save(temp);
+        if (packageFolder is not null) yield return Path.Combine(packageFolder, "Revit" + year);
+        if (year == App.RevitYear && Path.GetDirectoryName(typeof(Updater).Assembly.Location) is { Length: > 0 } running) yield return running;
+        yield return Path.Combine(VersionsFolder, CurrentText, "Revit" + year);
+    }
+
+    /// <summary>
+    /// Replaces the installed loader with <paramref name="source"/> when <see cref="AddinFiles.DecideLoader"/> says so.
+    /// Revit may have it loaded: Windows lets a loaded DLL be renamed but not overwritten, so it is moved aside (removed
+    /// by a later clean-up) and the new one copied in. When even that fails the installed loader stays; it runs any core.
+    /// </summary>
+    private static void PlaceLoader(string source, string target)
+    {
+        if (string.Equals(Path.GetFullPath(source), Path.GetFullPath(target), StringComparison.OrdinalIgnoreCase)) return;
+        var exists = File.Exists(target);
+        var action = AddinFiles.DecideLoader(Hash(source), FileVersionOf(source), exists ? Hash(target) : null, exists ? FileVersionOf(target) : null);
+        if (action != AddinFiles.LoaderAction.Replace) return;
+        var folder = Path.GetDirectoryName(target)!;
+        Directory.CreateDirectory(folder);
+        var stamp = DateTime.UtcNow.Ticks;
+        var incoming = Path.Combine(folder, $"SketchProMax.Loader.{stamp}.new");
+        string? aside = null;
+        try
+        {
+            File.Copy(source, incoming, true);
+            ClearDownloadMark(incoming);
+            if (exists)
+            {
+                aside = Path.Combine(folder, $"SketchProMax.Loader.{stamp}.old");
+                File.Move(target, aside);
+            }
+            File.Move(incoming, target);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            if (aside is not null && !File.Exists(target) && File.Exists(aside)) TryDelete(() => File.Move(aside, target));
+            TryDelete(() => File.Delete(incoming));
+        }
+    }
+
+    private static void WriteManifest(string manifest, string text)
+    {
+        var temp = manifest + $".{DateTime.UtcNow.Ticks}.new";
+        File.WriteAllText(temp, text);
         File.Copy(temp, manifest, true);
         File.Delete(temp);
+    }
+
+    /// <summary>
+    /// Other manifests in the same folder that would load Sketch ProMax too (a test copy, an older install's leftover)
+    /// are renamed to .disabled, so Revit sees one entry for it, not two. Other add-ins are never touched.
+    /// </summary>
+    private static void DisableOtherManifests(string revitFolder, string manifest)
+    {
+        foreach (var other in Directory.GetFiles(revitFolder, "*.addin"))
+        {
+            if (string.Equals(other, manifest, StringComparison.OrdinalIgnoreCase)) continue;
+            string text;
+            try { text = File.ReadAllText(other); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { continue; }
+            if (!AddinFiles.NamesSketchProMax(text)) continue;
+            TryDelete(() => File.Move(other, other + ".disabled"));
+        }
+    }
+
+    private static string? Hash(string path)
+    {
+        try
+        {
+            using var sha = SHA256.Create();
+            using var stream = File.OpenRead(path);
+            return BitConverter.ToString(sha.ComputeHash(stream)).Replace("-", "");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return null; }
+    }
+
+    private static Version? FileVersionOf(string path)
+    {
+        try { return Version.TryParse(System.Diagnostics.FileVersionInfo.GetVersionInfo(path).FileVersion, out var v) ? v : null; }
+        catch (Exception ex) when (ex is IOException or FileNotFoundException) { return null; }
     }
 
     private sealed record Release(string Version, string ZipUrl, string? Sha256);
@@ -291,13 +376,6 @@ public static class Updater
         var version = tag.TrimStart('v', 'V');
         if (!Version.TryParse(version, out _)) throw new InvalidDataException($"The latest release tag '{tag}' is not a version number.");
         return new Release(version, $"https://github.com/{Repository}/releases/download/{tag}/SketchProMax-{version}.zip", null);
-    }
-
-    /// <summary>True when every installed SketchProMax.addin loads a DLL from the given version folder.</summary>
-    private static bool AllManifestsPointAt(string folder)
-    {
-        var manifests = ManifestAssemblies().ToList();
-        return manifests.Count > 0 && manifests.All(a => IsUnder(a, folder));
     }
 
     /// <summary>The Assembly path of every installed SketchProMax.addin, for all Revit versions.</summary>
@@ -389,39 +467,6 @@ public static class Updater
         return target;
     }
 
-    /// <summary>Rewrites SketchProMax.addin in each Revit version that has it so it loads the new build. Returns how many were updated.</summary>
-    private static int PointAddinsAt(string versionFolder)
-    {
-        var count = 0;
-        if (!Directory.Exists(RevitAddinsRoot)) return 0;
-        foreach (var revitFolder in Directory.GetDirectories(RevitAddinsRoot))
-        {
-            var manifest = Path.Combine(revitFolder, "SketchProMax.addin");
-            var dll = Path.Combine(versionFolder, "Revit" + Path.GetFileName(revitFolder), "SketchProMax.dll");
-            if (!File.Exists(manifest) || !File.Exists(dll)) continue;
-
-            var xml = XDocument.Load(manifest);
-            var assembly = xml.Descendants("Assembly").FirstOrDefault();
-            if (assembly is null) continue;
-            // Packages from 0.26 on carry the loader: the manifest loads it, and it loads the newest core. Older packages
-            // only have the core, which is then loaded directly as before.
-            var loader = Path.Combine(versionFolder, "Revit" + Path.GetFileName(revitFolder), LoaderDll);
-            if (File.Exists(loader))
-            {
-                assembly.Value = loader;
-                SetClass(xml, LoaderClass);
-            }
-            else
-            {
-                assembly.Value = dll;
-                SetClass(xml, "SketchProMax.App");
-            }
-            Save(xml, manifest);
-            count++;
-        }
-        return count;
-    }
-
     private static void ReplaceConnector(string versionFolder)
     {
         var source = Path.Combine(versionFolder, "mcp", "SketchProMax.Mcp.exe");
@@ -456,6 +501,15 @@ public static class Updater
         if (Directory.Exists(McpFolder))
             foreach (var old in Directory.GetFiles(McpFolder, "*.old"))
                 TryDelete(() => File.Delete(old));
+        // Loaders moved aside by PlaceLoader; one Revit still has loaded stays until it closes.
+        if (Directory.Exists(RevitAddinsRoot))
+            foreach (var revitFolder in Directory.GetDirectories(RevitAddinsRoot))
+            {
+                var folder = Path.Combine(revitFolder, AddinFiles.LoaderFolder);
+                if (!Directory.Exists(folder)) continue;
+                foreach (var old in Directory.GetFiles(folder, "SketchProMax.Loader.*.old").Concat(Directory.GetFiles(folder, "SketchProMax.Loader.*.new")))
+                    TryDelete(() => File.Delete(old));
+            }
 
         if (!Directory.Exists(VersionsFolder)) return;
         var running = Path.GetDirectoryName(typeof(Updater).Assembly.Location) ?? "";

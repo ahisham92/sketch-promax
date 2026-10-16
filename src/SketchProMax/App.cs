@@ -143,7 +143,8 @@ public sealed class App : IExternalApplication
         _ = Task.Run(() =>
         {
             try { ClaudeRegistration.Ensure(); } catch (Exception) { }
-            try { if (Updater.CanSwitchLive) Updater.MoveManifestsToLoader(); } catch (Exception) { }
+            // Moves a manifest from an older release onto the one fixed loader path, once; writes nothing when settled.
+            try { Updater.SettleInstall(); } catch (Exception) { }
         });
         // Check at every start, then hourly while Revit stays open. The bug log is fetched with each check (or once, at
         // start, when automatic updates are off).

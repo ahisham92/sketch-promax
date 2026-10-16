@@ -22,6 +22,7 @@
     <Compile Include="../../src/SketchProMax/Tools/LayoutMath.cs" Link="LayoutMath.cs" />
     <Compile Include="../../src/SketchProMax/Tools/ToolForm.cs" Link="ToolForm.cs" />
     <Compile Include="../../src/SketchProMax/UI/UpdateBadge.cs" Link="UpdateBadge.cs" />
+    <Compile Include="../../src/SketchProMax/Update/AddinFiles.cs" Link="AddinFiles.cs" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.8.0" />

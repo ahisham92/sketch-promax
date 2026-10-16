@@ -21,8 +21,25 @@
     <AssemblyName>SketchProMax.Loader</AssemblyName>
     <!-- Fixed for good: the core references the loader, and every core version must bind to the loaded copy. -->
     <AssemblyVersion>1.0.0.0</AssemblyVersion>
-    <FileVersion>0.29.0.0</FileVersion>
-    <Version>0.29.0</Version>
+    <!--
+      The loader's own release, NOT the product version: raise it only when the loader's code changes. Revit trusts an
+      unsigned add-in ("Always Load") for the file it saw at that path, so the loader must come out byte for byte the same
+      from a release that doesn't change it. Updates and Install.cmd replace it only when its bytes differ, and never with
+      an older LoaderVersion. The core reads it (LoaderCompat) to tell whether the ribbon is current.
+    -->
+    <LoaderVersion>0.30.0</LoaderVersion>
+    <Version>$(LoaderVersion)</Version>
+    <FileVersion>$(LoaderVersion).0</FileVersion>
+    <InformationalVersion>$(LoaderVersion)</InformationalVersion>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <!--
+      Same sources, same bytes: no build paths, times or commit ids in the DLL. No debug symbols either: a PDB (embedded
+      or beside it) carries the commit id and build paths, so every release would differ.
+    -->
+    <Deterministic>true</Deterministic>
+    <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
+    <DebugType>none</DebugType>
+    <DebugSymbols>false</DebugSymbols>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
     <OutputPath>bin\$(Configuration)\Revit$(RevitVersion)\</OutputPath>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>

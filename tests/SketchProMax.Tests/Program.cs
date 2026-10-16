@@ -56,6 +56,10 @@ LoaderTests.Run((name, ok, detail) => Check(name, ok, detail));
 BugAndMemoryTests.Run((name, ok, detail) => Check(name, ok, detail));
 LayoutTests.Run((name, ok, detail) => Check(name, ok, detail));
 RibbonFormTests.Run((name, ok, detail) => Check(name, ok, detail));
+{
+    var root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../.."));
+    InstallTests.Run(File.Exists(Path.Combine(root, "README.md")) ? root : Directory.GetCurrentDirectory(), (name, ok, detail) => Check(name, ok, detail));
+}
 
 // With --addin <folder of a built SketchProMax.dll>, also check the whole tool catalogue.
 var addinAt = Array.IndexOf(args, "--addin");
