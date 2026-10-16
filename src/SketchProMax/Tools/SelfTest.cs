@@ -64,6 +64,8 @@ internal static partial class SelfTest
         public required Document Doc;
         public required ToolRegistry Registry;
         public required string Temp;
+        /// <summary>The field test's own throwaway project: steps that can't be rolled back may run.</summary>
+        public bool Throwaway;
         public ForgeTypeId Unit = UnitTypeId.Millimeters;
 
         public Level? Level;
@@ -750,7 +752,7 @@ internal static partial class SelfTest
         new("element_owners", c => c.Doc.IsWorkshared ? new { view_id = c.PlanId, only_locked = true, limit = 20 } : throw new Skip("the model is not workshared")),
         new("make_worksets_editable", c => c.Doc.IsWorkshared ? new { worksets = new[] { new FilteredWorksetCollector(c.Doc).OfKind(WorksetKind.UserWorkset).ToWorksets().First().Name } } : throw new Skip("the model is not workshared")) { Heavy = true },
         new("borrow_elements", c => c.Doc.IsWorkshared ? new { element_ids = new[] { c.Id(c.Wall ?? throw new Skip("the model has no walls")) } } : throw new Skip("the model is not workshared")) { Heavy = true },
-        new("relinquish_mine", c => c.Doc.IsWorkshared ? new { borrowed_elements = true } : throw new Skip("the model is not workshared")) { Heavy = true, NoGroup = true },
+        new("relinquish_mine", c => !c.Throwaway ? throw new Skip("releasing ownership can't be rolled back; runs only in the field test's own project") : c.Doc.IsWorkshared ? new { borrowed_elements = true } : throw new Skip("the model is not workshared")) { Heavy = true, NoGroup = true },
         new("place_detail_item_copy", c => new { view_id = c.PlanId, source_id = new FilteredElementCollector(c.Doc).OfCategory(BuiltInCategory.OST_DetailComponents).OfClass(typeof(FamilyInstance)).Max(e => (long?)e.Id.Value) ?? throw new Skip("no detail item to copy"), placements = new[] { new { at = c.At(3000, 3000), rotation_degrees = 90.0 } } }, Setup: ["place_detail_components"]),
         new("duplicate_view_to_location", c => new { view_id = Newest<ViewSection>(c), offset = new[] { c.P(2000), 0 }, name = "Self-test moved section" }, Setup: ["create_section"]),
         new("relocate_view_with_detailing", c => new { view_id = Newest<ViewSection>(c), offset = new[] { 0, c.P(1000) } }, Setup: ["create_section"]),

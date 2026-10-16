@@ -90,13 +90,15 @@ internal static class Brand
 
     // ---- Theme -------------------------------------------------------------------------------------------------
 
-    /// <summary>True when Revit's UI theme is dark (Revit 2024+). Light when it can't be read.</summary>
+    /// <summary>True when Revit's UI theme is dark (Revit 2024+). The last theme read when it can't be read now (light at first).</summary>
+    private static bool _lastDark;
+
     public static bool IsDark
     {
         get
         {
-            try { return ReadDark(); }
-            catch (Exception) { return false; } // TypeLoad/MissingMethod on an unexpected Revit, or not readable right now
+            try { return _lastDark = ReadDark(); }
+            catch (Exception) { return _lastDark; } // not readable right now: keep the last theme read
         }
     }
 
@@ -361,7 +363,9 @@ internal static class Brand
               </Style>
             </ResourceDictionary>
             """;
-        _styles = (ResourceDictionary)XamlReader.Parse(xaml);
+        // Never let a styling problem stop a window or the pane from opening: fall back to the plain WPF look.
+        try { _styles = (ResourceDictionary)XamlReader.Parse(xaml); }
+        catch (Exception) { _styles = new ResourceDictionary(); }
         return _styles;
     }
 

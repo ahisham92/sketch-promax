@@ -11,7 +11,7 @@ See [docs/PLAN.md](docs/PLAN.md) for the comparison with SketchPro, the roadmap 
 You chat in the **Claude desktop app**, next to Revit, on your normal Claude plan: no API key and no extra payment. The work happens in Revit. There is no chat inside Revit, because that would need a paid API key; your Claude plan can only be used through Anthropic's own apps.
 
 The **Sketch ProMax** ribbon tab:
-- **Claude**: whether the Claude desktop app is connected to this Revit window (green: talked to it recently; amber: ready; gray: not running), **Copy starter prompt** (a good first message, ready to paste) and **Open Claude** (also the Microsoft Store version).
+- **Claude**: whether the Claude desktop app is connected to this Revit window (green: talked to it recently; amber: ready; gray: not running), **Copy prompt** (a good first message, ready to paste) and **Open Claude** (also the Microsoft Store version).
 - **Jobs**: the tool Claude is running, for how long and how far it got, and **Cancel job**.
 - **Quick tools**: your saved recipes and learned tools, run right in Revit with no AI and no internet. It asks for any blanks ({level}...) and shows the result.
 - **Checks**: **Model check** (warnings, duplicates, gaps, unsupported beams, columns off grid, wrong levels, rooms, empty parameters) and **Self-test**.

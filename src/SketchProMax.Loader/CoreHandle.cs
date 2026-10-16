@@ -126,6 +126,8 @@ internal static class Resolver
         if (_registered) return;
         _registered = true;
         AddFirst(AppDomain.CurrentDomain, Resolve);
+        // Requests that don't say who asks go last, so other add-ins' resolvers answer theirs first.
+        AppDomain.CurrentDomain.AssemblyResolve += ResolveLast;
     }
 
     public static void AddFolder(string folder)
@@ -194,17 +196,39 @@ internal static class Resolver
             : folders.Concat(cores.Select(SafeFolder)).FirstOrDefault(f => f is not null && string.Equals(f, asking, StringComparison.OrdinalIgnoreCase));
         if (own is not null)
             return LoadFrom(System.IO.Path.Combine(own, name + ".dll")) ?? Exact(args.Name);
-        // Another add-in's request: this handler runs before theirs, so never hand them our copies; leave it to them.
-        if (asking is not null) return null;
+        // Anything else waits for ResolveLast: this handler runs before other add-ins' handlers.
+        return null;
+    }
 
-        var exact = Exact(args.Name);
-        if (exact is not null) return exact;
+    /// <summary>
+    /// Last in line, for requests that don't say who asks (Type.GetType, XAML, a run_revit_code snippet loaded from
+    /// bytes): the newest core folder's file when it is at least the version asked for, else the exact version loaded.
+    /// </summary>
+    private static Assembly? ResolveLast(object? sender, ResolveEventArgs args)
+    {
+        AssemblyName wanted;
+        try { wanted = new AssemblyName(args.Name); }
+        catch (Exception ex) when (ex is ArgumentException or FileLoadException) { return null; }
+        var name = wanted.Name ?? "";
+        if (name is "SketchProMax" or "SketchProMax.Loader") return null;
+        if (args.RequestingAssembly is { IsDynamic: false } r && SafeFolder(r) is not null) return null;
+        List<string> folders;
+        lock (Folders) folders = Folders.ToList();
         foreach (var folder in folders)
         {
-            var found = LoadFrom(System.IO.Path.Combine(folder, name + ".dll"));
-            if (found is not null) return found;
+            var path = System.IO.Path.Combine(folder, name + ".dll");
+            if (!File.Exists(path)) continue;
+            if (AtLeast(path, wanted.Version)) return LoadFrom(path);
+            break;
         }
-        return null;
+        return Exact(args.Name);
+    }
+
+    private static bool AtLeast(string path, Version? wanted)
+    {
+        if (wanted is null) return true;
+        try { return AssemblyName.GetAssemblyName(path).Version is { } v && v >= wanted; }
+        catch (Exception ex) when (ex is IOException or BadImageFormatException or ArgumentException or System.Security.SecurityException) { return false; }
     }
 
     private static Assembly? LoadFrom(string path)

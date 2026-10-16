@@ -27,6 +27,8 @@ internal static class DependencyResolver
         if (_registered) return;
         _registered = true;
         AddFirst(AppDomain.CurrentDomain, Resolve);
+        // Requests nobody else answered and that don't say who asks go last, so other add-ins' resolvers answer theirs.
+        AppDomain.CurrentDomain.AssemblyResolve += ResolveLast;
     }
 
     public static void Unregister()
@@ -34,6 +36,7 @@ internal static class DependencyResolver
         if (!_registered) return;
         _registered = false;
         AppDomain.CurrentDomain.AssemblyResolve -= Resolve;
+        AppDomain.CurrentDomain.AssemblyResolve -= ResolveLast;
     }
 
     /// <summary>
@@ -68,17 +71,39 @@ internal static class DependencyResolver
         // version's SketchProMax.dll (or the loader) to the other.
         if (name == "SketchProMax") return args.Name == typeof(DependencyResolver).Assembly.FullName ? typeof(DependencyResolver).Assembly : null;
 
-        var requester = args.RequestingAssembly is { IsDynamic: false } r ? FolderOf(r) : null;
-        var ours = requester is not null && string.Equals(requester, Folder, StringComparison.OrdinalIgnoreCase);
-        // Another add-in's own dependencies are left to it. When nobody says who is asking (Type.GetType, XAML,
-        // serializers, a run_revit_code snippet loaded from bytes): the exact version already loaded, else our file.
-        if (!ours && requester is not null) return null;
+        // The loader answers for itself; loading a second copy from a versions folder would split its state.
+        if (name == "SketchProMax.Loader") return null;
 
+        // First in line: only requests from this core's folder. Everything else waits for ResolveLast.
+        var requester = args.RequestingAssembly is { IsDynamic: false } r ? FolderOf(r) : null;
+        if (requester is null || !string.Equals(requester, Folder, StringComparison.OrdinalIgnoreCase)) return null;
         var path = Path.Combine(Folder, name + ".dll");
-        if (ours && File.Exists(path)) return LoadFrom(path);
-        var exact = Exact(args.Name);
-        if (exact is not null) return exact;
         return File.Exists(path) ? LoadFrom(path) : null;
+    }
+
+    /// <summary>
+    /// Last in line, for requests that don't say who asks (Type.GetType, XAML, serializers, a run_revit_code snippet
+    /// loaded from bytes): our file when it is at least the version asked for, so a snippet binds to the same copy as
+    /// this core, else the exact version already loaded.
+    /// </summary>
+    private static Assembly? ResolveLast(object? sender, ResolveEventArgs args)
+    {
+        AssemblyName wanted;
+        try { wanted = new AssemblyName(args.Name); }
+        catch (Exception ex) when (ex is ArgumentException or FileLoadException) { return null; }
+        var name = wanted.Name ?? "";
+        if (name is "SketchProMax" or "SketchProMax.Loader") return null;
+        if (args.RequestingAssembly is { IsDynamic: false } r && FolderOf(r) is not null) return null;
+        var path = Path.Combine(Folder, name + ".dll");
+        if (File.Exists(path) && AtLeast(path, wanted.Version)) return LoadFrom(path);
+        return Exact(args.Name);
+    }
+
+    private static bool AtLeast(string path, Version? wanted)
+    {
+        if (wanted is null) return true;
+        try { return AssemblyName.GetAssemblyName(path).Version is { } v && v >= wanted; }
+        catch (Exception ex) when (ex is IOException or BadImageFormatException or ArgumentException or System.Security.SecurityException) { return false; }
     }
 
     private static Assembly? LoadFrom(string path)

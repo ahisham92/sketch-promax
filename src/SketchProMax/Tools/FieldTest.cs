@@ -33,6 +33,7 @@ internal static partial class SelfTest
     {
         Directory.CreateDirectory(temp);
         var ctx = Collect(app, doc, registry, temp);
+        ctx.Throwaway = true;
         LearnedTools.MarkApproved(LearnedToolCode);
         var run = new Run
         {
