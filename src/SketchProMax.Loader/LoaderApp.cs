@@ -37,6 +37,9 @@ internal static class Host
     public const string DispatchKey = "SketchProMax.Loader.Dispatch";
     public const string PendingKey = "SketchProMax.Loader.Pending";
     public const string PathKey = "SketchProMax.Loader.Path";
+    // This loader's release (its file version, e.g. "0.30.0"): a core newer than the loader's ribbon uses it to tell the
+    // user that its new buttons appear after a restart. Loaders before 0.30 don't set it.
+    public const string ReleaseKey = "SketchProMax.Loader.Release";
 
     private static UIControlledApplication? _application;
     private static Assembly? _preloaded;
@@ -55,6 +58,12 @@ internal static class Host
     public static string Year => _year;
     public static string? BootError => _bootError;
 
+    /// <summary>
+    /// Set when the running core declares buttons or pane parts this loader could not add while Revit runs: the pane
+    /// and the update window then say to restart Revit. Null when everything is shown.
+    /// </summary>
+    public static string? RestartNote { get; private set; }
+
     public static Result Startup(UIControlledApplication application, Assembly? preloaded)
     {
         if (_application is not null) return Result.Succeeded; // a second manifest for the same add-in
@@ -66,6 +75,7 @@ internal static class Host
         var domain = AppDomain.CurrentDomain;
         domain.SetData(ContractKey, CoreHandle.Contract);
         domain.SetData(PathKey, typeof(Host).Assembly.Location);
+        domain.SetData(ReleaseKey, Release());
         domain.SetData(DispatchKey, (Func<string, UIApplication, int>)Dispatch);
 #if NETFRAMEWORK
         Resolver.Register();
@@ -98,6 +108,7 @@ internal static class Host
     private static void Tick()
     {
         try { Ribbon.Refresh(); } catch (Exception) { /* ribbon refresh is cosmetic */ }
+        CoreRibbon.RefreshLive(_core);
         // Work that needs Revit's API (starting a core, switching to a new one) waits for Idling; give Revit a nudge.
         if (_core is null ? !_booted : Pending() is not null) Nudge();
     }
@@ -150,6 +161,7 @@ internal static class Host
                     handle.Start(app);
                     _core = handle;
                     _bootError = null;
+                    ApplyCoreParts(app, handle);
                     break;
                 }
                 catch (Exception ex)
@@ -200,9 +212,38 @@ internal static class Host
         }
 
         _core = next;
-        // The old core's update window, if open, shows the result; otherwise the new core announces itself.
+        // The new core's own buttons and pane parts, live; what can't be shown before a restart is said plainly. The old
+        // core hears it first ("swapnote", unknown to cores before 0.30, which answer ""), so its update window, if open,
+        // shows it with the result; otherwise the new core announces itself, note included.
+        var note = ApplyCoreParts(app, next);
+        if (note is not null) old.Query("swapnote|" + note);
         if (old.Query("swapped|" + next.VersionText) != "shown") next.Query("announce|" + old.VersionText);
+        // Revit may have put the tab back at the end while panels were added: place it next to SketchPro's again.
+        TabOrder.Again();
         try { Ribbon.Refresh(); Ribbon.RefreshQuickTools(reload: true); } catch (Exception) { }
+        PaneHost.Page.RefreshSoon();
+    }
+
+    /// <summary>
+    /// Adds the buttons the core declares (<see cref="CoreRibbon"/>) and tells the core what can only appear after a
+    /// restart. Returns that note, or null. Never throws.
+    /// </summary>
+    private static string? ApplyCoreParts(UIApplication app, CoreHandle core)
+    {
+        List<string> missing;
+        try { missing = CoreRibbon.Sync(app, core); }
+        catch (Exception) { missing = []; }
+        RestartNote = missing.Count == 0 ? null : RibbonManifest.RestartNote(missing);
+        // Cores before 0.30 don't know "restartnote" and answer "".
+        core.Query("restartnote|" + (RestartNote ?? ""));
+        return RestartNote;
+    }
+
+    private static string Release()
+    {
+        var file = typeof(Host).Assembly.GetCustomAttributes(typeof(AssemblyFileVersionAttribute), false)
+            .OfType<AssemblyFileVersionAttribute>().FirstOrDefault()?.Version;
+        return Version.TryParse(file, out var v) ? $"{v.Major}.{v.Minor}.{Math.Max(v.Build, 0)}" : "";
     }
 
     /// <summary>A newer core to switch to: one the running core announced, or (every minute) one found on disk.</summary>
@@ -277,7 +318,19 @@ internal static class Host
             TaskDialog.Show("Sketch ProMax", _bootError ?? "Sketch ProMax is still starting. Try again in a moment.");
             return -1;
         }
-        if (name.StartsWith("quick:", StringComparison.Ordinal))
+        if (name.StartsWith("core:", StringComparison.Ordinal))
+        {
+            // A button the running core declared (CoreRibbon): its slot says which core command it is now.
+            var command = int.TryParse(name.Substring(5), out var slot) ? CoreRibbon.Command(slot) : null;
+            if (command is null)
+            {
+                TaskDialog.Show("Sketch ProMax", "This button belongs to another version of Sketch ProMax and does nothing in this one. " +
+                                                 "Restart Revit to tidy up the ribbon.");
+                return 1;
+            }
+            name = command;
+        }
+        else if (name.StartsWith("quick:", StringComparison.Ordinal))
         {
             var key = Ribbon.QuickKey(int.Parse(name.Substring(6)));
             if (key is null)

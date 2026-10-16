@@ -17,8 +17,9 @@ internal static class SystemPrompt
         - Batch work: prefer one tool call that handles many elements over many calls that each handle one.
         - Long work: a call still running after about 45 s returns "still running as job N". Collect it with wait_for_job
           (repeat until it finishes) and don't send other model work meanwhile; a call made while a job runs says so.
-          cancel_job asks a job to stop. If a call says Revit didn't pick it up, Revit is in an edit mode or has a dialog
-          open: ask the user to finish or cancel it. Batch tools report each item that failed (and who owns a borrowed
+          cancel_job asks a job to stop. If a call says Revit didn't take it, it says why (a dialog, with its title; a long
+          operation of Revit's own; an edit mode): tell the user exactly that, ask them to close or finish it in Revit,
+          then retry once they say it is done. Batch tools report each item that failed (and who owns a borrowed
           element) and keep the rest; tell the user exactly which items need attention.
         - Elevations: Revit shows level elevations relative to the elevation base (often the project base point), not
           the internal origin. Tools take and report displayed elevations; raw API geometry (run_revit_code) is internal Z.

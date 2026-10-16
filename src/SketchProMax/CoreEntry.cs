@@ -15,7 +15,10 @@ namespace SketchProMax;
 ///   Command(name, app) a ribbon button; returns a Revit Result as int.
 ///   Query(key)         a short text answer for the ribbon or the dockable pane, or a notice about switching versions.
 ///   PaneContent(name)  optional (0.29+; loaders that don't know it never call it): a WPF element for a tab of the
-///                      loader's dockable pane ("chat"), or null. Asked again after each version switch.
+///                      loader's dockable pane ("chat", or a tab the manifest declares), or null. Asked again after each
+///                      version switch.
+///   Query("ribbon")    (0.30+ loaders) the buttons, pane buttons and pane tabs this core declares (UI/CoreRibbonManifest),
+///                      added by the loader while Revit runs.
 /// All are called on Revit's main thread; Start, Stop and Command in a valid Revit API context.
 /// </summary>
 public static class CoreEntry
@@ -94,12 +97,24 @@ public static class CoreEntry
             case "quick": return QuickTools.List();
             case "quick-reload": return QuickTools.List(force: true);
             case "pane": return Pane.Snapshot(); // the dockable pane's content, see UI/Pane.cs for the format
+            case "ribbon": return CoreRibbonManifest.Text;
+            case "live": return LiveLabel(arg);
+            case "restartnote":
+                // From a 0.30+ loader once it added this core's buttons: what can only appear after a restart ("" = nothing).
+                RestartNote.FromLoader(arg);
+                return "ok";
+            case "swapnote":
+                // Sent to the outgoing core just before "swapped": the new version's restart note, for its update window.
+                _swapNote = arg.Trim().Length == 0 ? null : arg.Trim();
+                return "ok";
             case "swapped":
             {
                 // The loader switched from this core to version <arg>; this core is stopped. Finish its update window.
                 var progress = UpdateProgress.Current;
+                var note = _swapNote;
+                _swapNote = null;
                 if (progress is null) return "";
-                progress.Report(UpdateStage.Updated, null, arg);
+                progress.Report(UpdateStage.Updated, note, arg);
                 return UpdateWindow.IsShowing ? "shown" : "";
             }
             case "swapfailed":
@@ -119,8 +134,39 @@ public static class CoreEntry
             case "announce":
                 // Started by the loader after an update this window followed from another Revit window, or whose window
                 // was hidden: say so briefly.
-                UpdateWindow.Announce(new UpdateSnapshot(UpdateStage.Updated, Updater.CurrentText, 0, null, null, DateTime.UtcNow));
+                UpdateWindow.Announce(new UpdateSnapshot(UpdateStage.Updated, Updater.CurrentText, 0, null, RestartNote.Text, DateTime.UtcNow));
                 return "shown";
+            default: return "";
+        }
+    }
+
+    private static string? _swapNote;
+
+    /// <summary>
+    /// Live ribbon labels a manifest button can follow (flag live:key): "status" (the Claude connection, logo with a
+    /// coloured dot), "job" (the running job and its progress) and "update" (the update badge). "" for an unknown key.
+    /// </summary>
+    private static string LiveLabel(string key)
+    {
+        switch (key)
+        {
+            case "status":
+            {
+                var (state, text, detail) = Connection.Describe();
+                var dot = state switch { "connected" => "green", "ready" => "amber", "error" => "red", _ => "gray" };
+                return CoreRibbonManifest.LiveLine("Claude\n" + text, detail, "logo:" + dot);
+            }
+            case "job":
+            {
+                var f = JobLine().Split('\t');
+                var running = f[0] is "running" or "selftest";
+                return f.Length < 3 ? "" : CoreRibbonManifest.LiveLine(f[1], f[2], running ? "job-running" : "job");
+            }
+            case "update":
+            {
+                var f = UpdateLine().Split('\t');
+                return f.Length < 3 ? "" : CoreRibbonManifest.LiveLine(f[0], f[1], f[2]);
+            }
             default: return "";
         }
     }
@@ -159,6 +205,8 @@ public static class CoreEntry
                 return $"{UpdateProgress.Short(s)}\t{tip}\t{glyph}";
             }
         }
+        // New buttons or pane parts this Revit session can't show yet: the Version button says so (every loader asks).
+        if (RestartNote.Text is { } restart) return $"Restart\nRevit\tSketch ProMax {Updater.CurrentText}. {restart}\tupdate";
         return $"Version\n{Updater.CurrentText}\t{Updater.Describe()}\tversion";
     }
 }

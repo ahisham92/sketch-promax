@@ -278,6 +278,11 @@ public sealed class ExportPdfTool : IRevitTool
                 var view = doc.GetElement(id) as View ?? throw new ArgumentException($"{id.Value} is not a view or sheet.");
                 var expected = ExportNames.For(doc, view, pattern);
                 options.FileName = expected;
+                if (FileInUse.Why(Path.Combine(folder, expected + ".pdf")) is { } inUse)
+                {
+                    naming.Add(new { view = view.Name, expected = expected + ".pdf", found = (string?)null, ok = false, error = inUse });
+                    continue;
+                }
                 var before = new HashSet<string>(Directory.GetFiles(folder), StringComparer.OrdinalIgnoreCase);
                 var started = DateTime.UtcNow;
                 if (!doc.Export(folder, [id], options)) { naming.Add(new { view = view.Name, expected = expected + ".pdf", found = (string?)null, ok = false }); continue; }
@@ -285,8 +290,51 @@ public sealed class ExportPdfTool : IRevitTool
             }
             return ToolResult.Ok(new { folder, exported = ids.Count, naming });
         }
+        // Revit only says "failed" when it can't write the file; the usual cause is the same PDF open in a viewer.
+        var combined = options.Combine ? Path.Combine(folder, options.FileName + ".pdf") : null;
+        if (combined is not null && FileInUse.Why(combined) is { } locked) return ToolResult.Error(locked);
+        var exportStarted = DateTime.UtcNow;
         var ok = doc.Export(folder, ids, options);
-        return ok ? ToolResult.Ok(new { folder, exported = ids.Count }) : ToolResult.Error("Revit reported the PDF export failed.");
+        if (ok) return ToolResult.Ok(new { folder, exported = ids.Count });
+        var held = combined is not null
+            ? FileInUse.Why(combined)
+            : FileInUse.Describe(Directory.GetFiles(folder, "*.pdf").Where(f => File.GetLastWriteTimeUtc(f) < exportStarted && FileInUse.Why(f) is not null).ToList());
+        return ToolResult.Error(held ?? "Revit reported the PDF export failed. Check that the folder can be written to and that no PDF of " +
+                                         "the same name is open in a PDF viewer, or pass another file_name or folder, then try again.");
+    }
+}
+
+/// <summary>Why an export can't write a file: it is open in another program (a PDF viewer) or read-only. Null when it can.</summary>
+internal static class FileInUse
+{
+    public static string? Why(string path)
+    {
+        if (!File.Exists(path)) return null;
+        try
+        {
+            using (new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None)) { }
+            return null;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return $"'{Path.GetFileName(path)}' is read-only (or this user may not change it), so it can't be overwritten. " +
+                   "Pass another file_name or folder, or ask the user to clear the read-only flag.";
+        }
+        catch (IOException)
+        {
+            return $"'{Path.GetFileName(path)}' is open in another program, most likely a PDF viewer, so Revit can't overwrite it. " +
+                   "Ask the user to close it there (or pass another file_name), then try again.";
+        }
+    }
+
+    /// <summary>One message for several files held open, or null when there are none.</summary>
+    public static string? Describe(List<string> held)
+    {
+        if (held.Count == 0) return null;
+        if (held.Count == 1) return Why(held[0]);
+        return $"{held.Count} PDFs in the folder are open in another program, most likely a PDF viewer, so Revit can't overwrite them (" +
+               string.Join(", ", held.Take(5).Select(Path.GetFileName)) + (held.Count > 5 ? ", ..." : "") +
+               "). Ask the user to close them there (or pass another folder), then try again.";
     }
 }
 

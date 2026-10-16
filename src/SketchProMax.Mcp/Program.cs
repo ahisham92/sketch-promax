@@ -56,7 +56,7 @@ internal static class RevitBridge
     // Revit windows that are running but did not answer the last ping (busy with a long operation, or frozen).
     private static volatile int _unresponsive;
 
-    private sealed record Session(int Pid, string Pipe, string RevitVersion, bool Busy, List<(string Title, string Path, bool Active)> Documents);
+    private sealed record Session(int Pid, string Pipe, string RevitVersion, bool Busy, string? Blocked, List<(string Title, string Path, bool Active)> Documents);
 
     private static readonly Tool[] ConnectionTools =
     [
@@ -75,6 +75,35 @@ internal static class RevitBridge
                   "model":{"type":"string","description":"Model name as shown in Revit's title bar, or part of it"},
                   "revitVersion":{"type":"string","description":"Optional, e.g. 2024"}},
                  "required":["model"]}
+                """).RootElement,
+        },
+    ];
+
+    /// <summary>
+    /// The job tools that tool results refer to ("still running as job N, call wait_for_job"). Always listed, first, even
+    /// when the catalogue Revit wrote is missing them or damaged: a result must never name a tool Claude can't see.
+    /// Revit's own definitions (tools.json) replace these when present.
+    /// </summary>
+    private static readonly Tool[] JobTools =
+    [
+        new Tool
+        {
+            Name = "wait_for_job",
+            Description = "Get the result of a long tool call that was still running when its call returned (it said 'still running as job N'), " +
+                          "or see what Revit is busy with. Waits up to wait_seconds for the job to finish, then returns its result, or its " +
+                          "progress so far if it is still running. Call again to keep waiting.",
+            InputSchema = JsonDocument.Parse("""
+                {"type":"object","properties":{
+                  "job_id":{"type":"integer","description":"The job number. Default: the latest job."},
+                  "wait_seconds":{"type":"integer","description":"How long to wait for it to finish, 0-50 (default 40)."}}}
+                """).RootElement,
+        },
+        new Tool
+        {
+            Name = "cancel_job",
+            Description = "Ask a long-running tool call to stop. A job still waiting for Revit is dropped; a running one stops at its next check.",
+            InputSchema = JsonDocument.Parse("""
+                {"type":"object","properties":{"job_id":{"type":"integer","description":"Default: the running job."}}}
                 """).RootElement,
         },
     ];
@@ -112,7 +141,11 @@ internal static class RevitBridge
             // Revit may be rewriting the catalogue right now, or it is damaged; Revit writes it again on its next start.
             tools = [];
         }
-        tools.AddRange(ConnectionTools);
+        // The tools other results point to come first, so a client that shows only part of a long list still has them.
+        var first = JobTools.Select(j => tools.FirstOrDefault(t => t.Name == j.Name) ?? j).ToList();
+        tools.RemoveAll(t => JobTools.Any(j => j.Name == t.Name));
+        tools.InsertRange(0, first);
+        tools.InsertRange(0, ConnectionTools);
         tools.AddRange(LearnedTools(tools.Select(t => t.Name).ToHashSet()));
         return tools;
     }
@@ -191,7 +224,14 @@ internal static class RevitBridge
         {
             var activate = await SendAsync(target.Pipe, JsonSerializer.Serialize(new { method = "activate_document", title = chosen.Model }), 5000, ct,
                 readTimeoutMs: 15000);
-            if (activate is null) return Text("The chosen Revit window stopped responding.", true);
+            // Revit answers within about 12 s with the reason when it can't switch (a dialog, an edit mode); no answer at
+            // all means even the add-in's connection thread didn't get to answer.
+            if (activate is null)
+                return Text("The chosen Revit window didn't answer within 20 s, so nothing was run. Revit is probably showing a dialog " +
+                            "(possibly behind another window), busy with a long operation of its own (a sync, loading, printing), or frozen. " +
+                            "Ask the user to look at Revit: close the dialog or wait for the operation to end, then try again. " +
+                            "list_revit_models shows whether the window answers again." +
+                            (target.Blocked is { } why ? $" Last seen: {why}." : ""), true);
             using var a = JsonDocument.Parse(activate);
             if (a.RootElement.TryGetProperty("isError", out var ae) && ae.GetBoolean())
                 return Text(a.RootElement.GetProperty("text").GetString() ?? "Could not switch models.", true);
@@ -257,7 +297,8 @@ internal static class RevitBridge
         foreach (var s in sessions)
         {
             var current = s.Pid == chosen?.Pid ? " (current)" : "";
-            sb.AppendLine($"- Revit {s.RevitVersion}{current}{(s.Busy ? " (busy right now)" : "")}");
+            sb.AppendLine($"- Revit {s.RevitVersion}{current}{(s.Busy ? " (busy right now)" : "")}" +
+                          (s.Blocked is { } why ? $" (waiting: {why}; ask the user to deal with it in Revit)" : ""));
             if (s.Documents.Count == 0) sb.AppendLine("    no model open");
             foreach (var d in s.Documents)
             {
@@ -314,7 +355,8 @@ internal static class RevitBridge
                         d.TryGetProperty("active", out var da) && da.GetBoolean())).ToList()
                     : [];
                 var busy = p.RootElement.TryGetProperty("busy", out var b) && b.ValueKind == JsonValueKind.True;
-                found.Add(new Session(pid, pipe, version, busy, docs));
+                var blocked = p.RootElement.TryGetProperty("blocked", out var bl) && bl.ValueKind == JsonValueKind.String ? bl.GetString() : null;
+                found.Add(new Session(pid, pipe, version, busy, blocked, docs));
             }
             catch (JsonException) { }
         }

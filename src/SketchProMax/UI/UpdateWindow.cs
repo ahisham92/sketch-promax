@@ -139,7 +139,8 @@ internal sealed class UpdateWindow : Window
         _open = new UpdateWindow(null, TimeSpan.FromSeconds(15));
         _open.Render(final);
         _open.Show();
-        _open._autoClose?.Start();
+        // A restart note stays until it is closed; a plain "updated" closes by itself.
+        if (final.Detail is null) _open._autoClose?.Start();
     }
 
     private void OnChanged(UpdateSnapshot s)
@@ -185,7 +186,8 @@ internal sealed class UpdateWindow : Window
         _detail.Text = s.IsFinal ? "" : s.Detail ?? "";
         _final.Text = s.Stage switch
         {
-            UpdateStage.Updated => $"Updated to {s.Version}. You can keep working; no restart needed.",
+            // A detail on "updated" is the restart note: what of the new version shows only after Revit restarts.
+            UpdateStage.Updated => s.Detail is { } note ? $"Updated to {s.Version}. {note}" : $"Updated to {s.Version}. You can keep working; no restart needed.",
             UpdateStage.UpToDate => s.Detail ?? $"Sketch ProMax {Updater.CurrentText} is up to date.",
             UpdateStage.RestartNeeded => s.Detail ?? "Restart Revit to finish (your work is not interrupted until then).",
             UpdateStage.Failed => s.Detail ?? "The update didn't finish. Nothing changed; it is tried again later.",
@@ -194,6 +196,7 @@ internal sealed class UpdateWindow : Window
         };
         Brand.Fg(_final, s.Stage switch
         {
+            UpdateStage.Updated when s.Detail is not null => Brand.K.WarningText,
             UpdateStage.Updated or UpdateStage.UpToDate => Brand.K.SuccessText,
             UpdateStage.Failed => Brand.K.DangerText,
             UpdateStage.RestartNeeded or UpdateStage.Cancelled => Brand.K.WarningText,
@@ -211,6 +214,7 @@ internal sealed class UpdateWindow : Window
                 : "Use Check now in the Updates panel to try again.",
             UpdateStage.Cancelled => canRetry ? "Press Try again to update now, or Close to keep this version." : "",
             UpdateStage.RestartNeeded => "Save your work, then close and reopen Revit when it suits you.",
+            UpdateStage.Updated when s.Detail is not null => "You can keep working now. Save your work and restart Revit when it suits you.",
             UpdateStage.Downloading or UpdateStage.Checking when _progress is not null =>
                 "You can keep working. Hide keeps the update running; the Version button brings this window back.",
             _ => "",

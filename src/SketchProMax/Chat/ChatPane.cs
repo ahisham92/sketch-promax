@@ -158,6 +158,16 @@ internal sealed class ChatPane : DockPanel
     private readonly DispatcherTimer _render = new(DispatcherPriority.Background) { Interval = TimeSpan.FromMilliseconds(120) };
     private readonly DispatcherTimer _poll = new() { Interval = TimeSpan.FromSeconds(4) };
     private readonly DispatcherTimer _idle = new() { Interval = TimeSpan.FromMinutes(1) };
+    private readonly Border _restartNote = new() { Visibility = Visibility.Collapsed };
+    private readonly TextBlock _restartNoteText = Brand.Text("", Brand.K.Text, 12);
+
+    private void ShowRestartNote()
+    {
+        var note = UI.RestartNote.Text;
+        _restartNoteText.Text = note ?? "";
+        _restartNote.Visibility = note is null ? Visibility.Collapsed : Visibility.Visible;
+        AutomationProperties.SetName(_restartNote, note ?? "");
+    }
 
     private ChatPane()
     {
@@ -189,6 +199,20 @@ internal sealed class ChatPane : DockPanel
         SetDock(_setupCard, Dock.Top);
         _setupCard.Margin = new Thickness(10, 4, 10, 4);
         Children.Add(_setupCard);
+
+        // "Restart Revit to see the new buttons and pane" after an in-session update that couldn't show everything.
+        SetDock(_restartNote, Dock.Top);
+        _restartNote.Margin = new Thickness(10, 0, 10, 4);
+        _restartNote.Padding = new Thickness(8, 6, 8, 6);
+        _restartNote.BorderThickness = new Thickness(1);
+        _restartNote.CornerRadius = new CornerRadius(4);
+        _restartNote.SetResourceReference(Border.BackgroundProperty, Brand.K.NoticeBg);
+        _restartNote.SetResourceReference(Border.BorderBrushProperty, Brand.K.NoticeBorder);
+        _restartNote.Child = _restartNoteText;
+        AutomationProperties.SetLiveSetting(_restartNote, AutomationLiveSetting.Polite);
+        Children.Add(_restartNote);
+        ShowRestartNote();
+        UI.RestartNote.Changed += ShowRestartNote;
 
         // Bottom: status, attachments, the message box and its buttons.
         var composer = new StackPanel { Margin = new Thickness(10, 4, 10, 10) };

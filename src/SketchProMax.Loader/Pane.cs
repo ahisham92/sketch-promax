@@ -169,6 +169,8 @@ internal static class PaneHost
 /// When the running core provides a chat (CoreEntry.PaneContent("chat"), cores from 0.29 on), the page shows two tabs
 /// under the header: Chat (the core's element) and Activity (the view below). After a version switch the old core's
 /// element is removed and the new core is asked again; an older core, or none, gets the Activity view alone.
+/// Cores from 0.30 on can also declare more tabs and Activity buttons in their manifest (see <see cref="CoreRibbon"/>);
+/// they are rebuilt after every version switch, so a new tab or button needs no new loader and no restart.
 /// </summary>
 internal sealed class PanePage : Page
 {
@@ -206,6 +208,12 @@ internal sealed class PanePage : Page
     private readonly TabItem _activityTab = new() { Header = "Activity" };
     private CoreHandle? _chatCore;
     private bool _chatAsked, _wantChat;
+    private string _tabsKey = "";
+    private readonly List<TabItem> _coreTabs = new();
+    // The core's own Activity buttons, and the "restart Revit to see ..." band above everything.
+    private readonly StackPanel _coreActions = new();
+    private readonly Border _restart = new() { Visibility = Visibility.Collapsed, BorderThickness = new Thickness(0, 0, 0, 1), Padding = new Thickness(10, 6, 10, 6) };
+    private readonly TextBlock _restartText = new() { TextWrapping = TextWrapping.Wrap };
 
     public PanePage()
     {
@@ -269,6 +277,7 @@ internal sealed class PanePage : Page
         AutomationProperties.SetName(export, "Export for Claude");
         export.Click += (_, _) => PaneHost.Request("export-pack");
         body.Children.Add(Section("Share", export));
+        body.Children.Add(_coreActions);
         _activity = new ScrollViewer
         {
             Content = body, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
@@ -277,6 +286,12 @@ internal sealed class PanePage : Page
         var header = Header();
         DockPanel.SetDock(header, Dock.Top);
         _root.Children.Add(header);
+        _restart.Child = Theme.Fg(_restartText, K_Text);
+        _restart.SetResourceReference(Border.BackgroundProperty, Theme.K.NoticeBg);
+        _restart.SetResourceReference(Border.BorderBrushProperty, Theme.K.NoticeBorder);
+        AutomationProperties.SetLiveSetting(_restart, AutomationLiveSetting.Polite);
+        DockPanel.SetDock(_restart, Dock.Top);
+        _root.Children.Add(_restart);
         _single.Content = _activity;
         _root.Children.Add(_single);
         _tabs.Resources.MergedDictionaries.Add(TabStyles());
@@ -400,30 +415,56 @@ internal sealed class PanePage : Page
     }
 
     /// <summary>
-    /// Asks the running core for its chat element when the core changed (first start, version switch): with one, the
-    /// page shows the Chat and Activity tabs; without one (an older core, or none yet), the Activity view alone.
+    /// Asks the running core for its pane content when the core changed (first start, version switch) or its manifest
+    /// lists other tabs: the chat (cores from 0.29 on) and any tab the core declares (0.30 on). With any, the page shows
+    /// those tabs and Activity; without (an older core, or none yet), the Activity view alone.
     /// </summary>
     private void UpdateChat(CoreHandle? core)
     {
-        if (_chatAsked && ReferenceEquals(core, _chatCore)) return;
+        var declared = core is null ? new List<RibbonManifest.Item>() : CoreRibbon.Current.Tabs.Where(t => t.Id != "chat").ToList();
+        var key = string.Join("\n", declared.Select(t => t.Id + "\t" + t.Text));
+        if (_chatAsked && ReferenceEquals(core, _chatCore) && key == _tabsKey) return;
         _chatAsked = true;
         _chatCore = core;
-        _chatTab.Content = null; // the old core's element, if any: it was stopped with its core
-        var chat = core?.PaneContent("chat");
-        if (chat is not null && chat.Parent is ContentControl { } holder && !ReferenceEquals(holder, _chatTab)) holder.Content = null;
-        var tabs = chat is not null;
-        if (tabs)
+        _tabsKey = key;
+        // The old core's elements, if any: they were stopped with their core.
+        _chatTab.Content = null;
+        foreach (var old in _coreTabs)
+        {
+            old.Content = null;
+            _tabs.Items.Remove(old);
+        }
+        _coreTabs.Clear();
+
+        var chat = Adopt(core?.PaneContent("chat"));
+        if (chat is not null)
         {
             _chatTab.Content = chat;
+            if (!_tabs.Items.Contains(_chatTab)) _tabs.Items.Insert(0, _chatTab);
+        }
+        else _tabs.Items.Remove(_chatTab);
+        foreach (var tab in declared)
+        {
+            if (Adopt(core!.PaneContent(tab.Id)) is not { } element) continue;
+            var item = new TabItem { Header = tab.Text, Content = element };
+            AutomationProperties.SetName(item, tab.Tip.Length > 0 ? tab.Tip : tab.Text);
+            _tabs.Items.Insert(_tabs.Items.IndexOf(_activityTab), item);
+            _coreTabs.Add(item);
+        }
+
+        if (chat is not null || _coreTabs.Count > 0)
+        {
             if (_tabs.Parent is null)
             {
                 _single.Content = null;
                 _activityTab.Content = _activity;
                 _root.Children.Remove(_single);
                 _root.Children.Add(_tabs);
-                _tabs.SelectedItem = _chatTab; // the chat is what the pane is for once it exists
+                // The chat is what the pane is for once it exists.
+                _tabs.SelectedItem = chat is not null ? _chatTab : _coreTabs[0];
             }
-            if (_wantChat) _tabs.SelectedItem = _chatTab;
+            if (_wantChat && chat is not null) _tabs.SelectedItem = _chatTab;
+            if (_tabs.SelectedItem is null) _tabs.SelectedItem = _activityTab;
         }
         else if (_tabs.Parent is not null)
         {
@@ -433,6 +474,48 @@ internal sealed class PanePage : Page
             _root.Children.Add(_single);
         }
         _wantChat = false;
+    }
+
+    /// <summary>A core's element, taken out of whatever held it before (a pane of an earlier switch).</summary>
+    private static FrameworkElement? Adopt(FrameworkElement? element)
+    {
+        if (element?.Parent is ContentControl holder) holder.Content = null;
+        return element;
+    }
+
+    /// <summary>The "restart Revit to see ..." band, shown while the loader couldn't add something the core declares.</summary>
+    private void ShowRestart(string? note)
+    {
+        if (!Changed(_restart, note ?? "")) return;
+        _restartText.Text = note ?? "";
+        _restart.Visibility = note is null ? Visibility.Collapsed : Visibility.Visible;
+        AutomationProperties.SetName(_restart, note ?? "");
+    }
+
+    /// <summary>The running core's own Activity buttons (its manifest's "pane" lines), grouped by section.</summary>
+    private void ShowCoreActions(List<RibbonManifest.Item> actions)
+    {
+        var key = string.Join("\n", actions.Select(a => string.Join("\t", a.Group, a.Id, a.Text, a.Command, a.Tip)));
+        if (!Changed(_coreActions, key)) return;
+        _coreActions.Children.Clear();
+        foreach (var group in actions.GroupBy(a => a.Group.Length > 0 ? a.Group : "More"))
+        {
+            var list = new StackPanel();
+            foreach (var action in group)
+            {
+                var button = Theme.Button(new TextBlock { Text = action.Text.Replace('\n', ' '), TextWrapping = TextWrapping.Wrap });
+                button.Margin = new Thickness(0, 0, 0, 4);
+                button.MinHeight = 28;
+                button.HorizontalAlignment = HorizontalAlignment.Stretch;
+                if (action.Tip.Length > 0) button.ToolTip = action.Tip;
+                AutomationProperties.SetName(button, action.Text.Replace('\n', ' '));
+                if (action.Tip.Length > 0) AutomationProperties.SetHelpText(button, action.Tip);
+                var command = action.Command;
+                button.Click += (_, _) => PaneHost.Request(command);
+                list.Children.Add(button);
+            }
+            _coreActions.Children.Add(Section(group.Key, list));
+        }
     }
 
     /// <summary>Tab styles in the palette (the stock ones paint fixed light colours). Never fails: plain tabs then.</summary>
@@ -490,6 +573,8 @@ internal sealed class PanePage : Page
     {
         _ticks++;
         UpdateChat(Host.Core);
+        ShowRestart(Host.Core is null ? null : Host.RestartNote);
+        ShowCoreActions(Host.Core is null ? new List<RibbonManifest.Item>() : CoreRibbon.Current.PaneActions);
         if (Host.Core is not { } core)
         {
             var failed = Host.BootError;

@@ -138,6 +138,7 @@ public sealed class App : IExternalApplication
         }
         _started = true;
         try { Chat.ChatPane.Start(app); } catch (Exception) { /* the chat tab says what is wrong when it is opened */ }
+        try { UI.RestartNote.AfterStart(Ui); } catch (Exception) { /* the chat and the Version button still say it */ }
 
         _ = Task.Run(() =>
         {
