@@ -285,6 +285,10 @@ public sealed class BridgeServer
                         : new Dictionary<string, JsonElement>();
                     var fromChat = root.TryGetProperty("origin", out var origin) && origin.ValueKind == JsonValueKind.String && origin.GetString() == "chat";
                     var result = await CallTool(name, args, fromChat, ct).ConfigureAwait(false);
+                    // Messages the user typed while the chat task ran go with the answer Claude reads now (any tool's,
+                    // "still running" too). Not when the caller has gone: they then stay queued, and the chat sends
+                    // what is left when the turn ends.
+                    if (fromChat && !ct.IsCancellationRequested) result = result with { Text = JobNotes.Attach(name, result.Text) };
                     return JsonSerializer.Serialize(new
                     {
                         text = result.Text,
@@ -375,32 +379,38 @@ public sealed class BridgeServer
             if (!job.TryStart()) return ToolResult.Error("Dropped before Revit started it; nothing was changed.");
             Jobs.Running = job;
             job.StartedSignal.TrySetResult(true);
+            // The chat task this call belongs to, for its whole run (a later task gets a control of its own).
+            var chat = fromChat ? JobControl.Current : null;
+            JobControl.Tool = chat;
             if (fromChat)
             {
                 JobFeed.StepStarted(tool.Name);
                 JobUndo.BeginTool();
             }
+            // Every way out of a chat call ends its step (the feed, and a skip is used up), rejected or not.
+            ToolResult Ended(ToolResult r) => fromChat && job.Continuation is null ? AfterStep(chat, tool.Name, r) : r;
             try
             {
                 // Time saved and AI time: from here (the approval wait included) to the end of the run.
                 TimeLog.BeginTool(app, tool, fromChat);
-                if (app.ActiveUIDocument is null) return ToolResult.Error("No model is open in Revit. Ask the user to open one.");
-                if (confirm && !Approve(tool, args, chatReason)) return ToolResult.Error("The user rejected this change in Revit. Ask them how to proceed.");
+                if (app.ActiveUIDocument is null) return Ended(ToolResult.Error("No model is open in Revit. Ask the user to open one."));
+                if (confirm && !Approve(tool, args, chatReason)) return Ended(ToolResult.Error("The user rejected this change in Revit. Ask them how to proceed."));
                 var result = FailureGuard.Run(() =>
                 {
                     try { return tool.Execute(app, new ToolArgs(args)); }
                     catch (ManualStepException manual) { return Handoff.FromException(tool, app, new ToolArgs(args), manual); }
-                    catch (OperationCanceledException) when (job.CancelRequested || fromChat && JobControl.Current?.Halting == true) { return ToolResult.Error("Stopped on request (cancel_job). Steps this call had already finished are kept; check the model before continuing."); }
+                    catch (OperationCanceledException) when (job.CancelRequested || chat?.Halting == true) { return ToolResult.Error("Stopped on request (cancel_job). Steps this call had already finished are kept; check the model before continuing."); }
                     catch (Exception ex) { return ToolResult.Error(Describe(tool, ex)); }
                 });
                 ActivityLog.Write(app.ActiveUIDocument?.Document?.Title ?? "", tool, args, result);
                 TimeLog.EndTool(result);
-                return fromChat && job.Continuation is null ? AfterStep(tool.Name, Capped(result)) : Capped(result);
+                return Ended(Capped(result));
             }
             finally
             {
                 TimeLog.EndTool(null); // rejected or no model: only the wait is counted (no-op once ended above)
                 if (fromChat) JobUndo.EndTool();
+                JobControl.Tool = null;
                 // A tool that handed on to a continuation (the field test) is still running: the continuation ends the job.
                 if (job.Continuation is null)
                 {
@@ -443,25 +453,28 @@ public sealed class BridgeServer
             JobFeed.SetPaused(true);
             try { await control.WaitWhilePausedAsync(PauseWaitMs, ct).ConfigureAwait(false); }
             finally { JobFeed.SetPaused(false); }
-            if (control.State == JobState.Paused) return ToolResult.Error(JobNotes.Attach(tool, JobControl.PausedText));
+            if (control.State == JobState.Paused) return ToolResult.Error(JobControl.PausedText);
         }
         switch (control.State)
         {
             case JobState.Skipping:
                 control.StepEnded();
                 JobFeed.StepEnded(tool, "skipped", "skipped by the user before it started");
-                return new ToolResult(JobNotes.Attach(tool, JobControl.SkippedText + " (It was skipped before it started; nothing was run.)"));
+                return new ToolResult(JobControl.SkippedText + " (It was skipped before it started; nothing was run.)");
             case JobState.Stopping:
                 JobFeed.StepEnded(tool, "stopped", "the user stopped the task before it started");
-                return ToolResult.Error(JobNotes.Attach(tool, JobControl.StoppedText + " (Nothing of this step was run.)"));
+                return ToolResult.Error(JobControl.StoppedText + " (Nothing of this step was run.)");
         }
         return null;
     }
 
-    /// <summary>A chat tool call ended: says Skip step or Stop first, adds the user's messages sent meanwhile, and ends the step in the job feed.</summary>
-    private static ToolResult AfterStep(string tool, ToolResult result)
+    /// <summary>
+    /// A chat tool call ended: says Skip step or Stop first and ends the step in the job feed. The user's messages are
+    /// added where the answer goes back to Claude (a result collected later by wait_for_job carries them then).
+    /// </summary>
+    private static ToolResult AfterStep(JobControl? control, string tool, ToolResult result)
     {
-        var text = JobControl.AfterStep(JobControl.Current, tool, result.Text, result.IsError, out var state);
+        var text = JobControl.AfterStep(control, tool, result.Text, result.IsError, out var state, notes: false);
         var reason = state == "failed" ? (result.Text.Replace("\r", "").Split('\n').FirstOrDefault(l => l.Trim().Length > 0) ?? "") : "";
         JobFeed.StepEnded(tool, state, reason.Length > 200 ? reason.Substring(0, 200) + "…" : reason);
         // A skipped step is not an error: Claude should move on, not try it again.

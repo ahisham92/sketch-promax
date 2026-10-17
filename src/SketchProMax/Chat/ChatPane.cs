@@ -194,6 +194,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     private readonly Border _working = new() { Visibility = Visibility.Collapsed, Padding = new Thickness(0, ChatUi.S4, 0, ChatUi.S1) };
     private readonly FrameworkElement _shimmer = ChatUi.Shimmer();
     private bool _gliding, _workingShown, _shimmerShown, _drawerOpen;
+    private int _glideStill;
+    private double _glideLast = -1;
     private readonly bool _sample;
     private readonly TextBlock _workingText = Brand.Text("", Brand.K.Muted, ChatUi.SmallSize);
     private readonly TextBox _input;
@@ -1463,6 +1465,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     {
         if (_gliding) return;
         _gliding = true;
+        _glideStill = 0;
         CompositionTarget.Rendering += Glide;
     }
 
@@ -1477,13 +1480,24 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     private void Glide(object? sender, EventArgs e)
     {
         var target = _scroll.ScrollableHeight;
-        if (!_follow.Following || !IsVisible && PresentationSource.FromVisual(this) is null)
+        if (!_follow.Following)
         {
             StopGlide();
             return;
         }
-        var next = SmoothScroll.Next(_scroll.VerticalOffset, target, _scroll.ViewportHeight, VisualTreeHelper.GetDpi(this).PixelsPerDip);
-        if (next != _scroll.VerticalOffset) _scroll.ScrollToVerticalOffset(next);
+        // Hidden (the pane closed or behind another tab): layout doesn't run, so the offset would never move and this
+        // handler would keep WPF drawing every frame. Jump instead; the same when the offset stops following.
+        if (!IsVisible || PresentationSource.FromVisual(this) is null || _glideStill > 10)
+        {
+            StopGlide();
+            _scroll.ScrollToEnd();
+            return;
+        }
+        var offset = _scroll.VerticalOffset;
+        _glideStill = offset == _glideLast ? _glideStill + 1 : 0;
+        _glideLast = offset;
+        var next = SmoothScroll.Next(offset, target, _scroll.ViewportHeight, VisualTreeHelper.GetDpi(this).PixelsPerDip);
+        if (next != offset) _scroll.ScrollToVerticalOffset(next);
         if (next >= target) StopGlide();
     }
 

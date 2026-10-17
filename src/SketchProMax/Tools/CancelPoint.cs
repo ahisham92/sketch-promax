@@ -19,7 +19,7 @@ internal static class CancelPoint
 {
     public const string Stopped = "Stopped on request (cancel_job)";
 
-    public static bool Requested => Jobs.CancelRequested || JobControl.Current?.Halting == true;
+    public static bool Requested => Jobs.CancelRequested;
 
     /// <summary>The field test's hook: told each item <see cref="Stop"/> checks (what, index), so it can ask for a stop part-way. Null otherwise.</summary>
     internal static Action<string, int>? TestItem;

@@ -1,5 +1,7 @@
 using System.Globalization;
 using System.Text;
+using System.Text.Encodings.Web;
+using System.Text.Json;
 
 namespace SketchProMax.Bridge;
 
@@ -36,6 +38,24 @@ internal sealed class JobControl
         set => Volatile.Write(ref _current, value);
     }
     private static JobControl? _current;
+
+    /// <summary>
+    /// The control of the chat tool call running on Revit's thread now (null while none, or while a call from elsewhere
+    /// runs): set by the bridge for the length of the call. Item boundaries and Jobs.CancelRequested read this, not
+    /// <see cref="Current"/>, so a Pause, Skip or Stop pressed on the chat's card never reaches another client's job, and
+    /// a call that outlives its chat task keeps the control it started with.
+    /// </summary>
+    public static JobControl? Tool
+    {
+        get => Volatile.Read(ref _tool);
+        set => Volatile.Write(ref _tool, value);
+    }
+    private static JobControl? _tool;
+
+    private bool _over;
+
+    /// <summary>The task ended (<see cref="Finish"/>): nothing more is queued for it.</summary>
+    public bool Over { get { lock (_gate) return _over; } }
 
     public JobState State { get { lock (_gate) return _state; } }
 
@@ -78,8 +98,15 @@ internal sealed class JobControl
         return was;
     }
 
-    /// <summary>The task ended: nothing waits any more and later buttons do nothing.</summary>
-    public void Finish() => Move(_ => JobState.Finished);
+    /// <summary>
+    /// The task ended: nothing waits any more and later buttons do nothing. A Stop already pressed stands, so a tool
+    /// call still running in Revit (one that outlived its turn) stops at its next item instead of carrying on.
+    /// </summary>
+    public void Finish()
+    {
+        lock (_gate) _over = true;
+        Move(s => s == JobState.Stopping ? s : JobState.Finished);
+    }
 
     private bool Move(Func<JobState, JobState> next)
     {
@@ -147,7 +174,7 @@ internal sealed class JobControl
     public static JobState AtBoundary(string what, int index)
     {
         TestBoundary?.Invoke(what, index);
-        if (Current is not { } control) return JobState.Running;
+        if (Tool is not { } control) return JobState.Running;
         if (control.EnterPause())
         {
             JobFeed.SetPaused(true);
@@ -167,7 +194,7 @@ internal sealed class JobControl
     public static bool StopNow(string what, int index)
     {
         TestAfterItem?.Invoke(what, index);
-        return Current?.State == JobState.Stopping;
+        return Tool?.State == JobState.Stopping;
     }
 
     /// <summary>A batch item's reason when Skip or Stop ended the batch before it.</summary>
@@ -180,10 +207,11 @@ internal sealed class JobControl
 
     /// <summary>
     /// What Claude gets back from a chat tool call that just ended: Skip and Stop say so first (a skip is then used up),
-    /// and the user's messages sent meanwhile are added at the end, so Claude sees them before its next step.
+    /// and (with <paramref name="notes"/>) the user's messages sent meanwhile are added at the end, so Claude sees them
+    /// before its next step. A JSON result stays JSON (see <see cref="JobText"/>).
     /// <paramref name="state"/>: done, failed, skipped or stopped (for the card).
     /// </summary>
-    public static string AfterStep(JobControl? control, string tool, string text, bool isError, out string state)
+    public static string AfterStep(JobControl? control, string tool, string text, bool isError, out string state, bool notes = true)
     {
         state = isError ? "failed" : "done";
         if (control is not null)
@@ -192,15 +220,15 @@ internal sealed class JobControl
             {
                 case JobState.Skipping:
                     state = "skipped";
-                    text = SkippedText + "\n\n" + text;
+                    text = JobText.Add(text, SkippedText, null);
                     break;
                 case JobState.Stopping:
                     state = "stopped";
-                    text = StoppedText + "\n\n" + text;
+                    text = JobText.Add(text, StoppedText, null);
                     break;
             }
         }
-        return JobNotes.Attach(tool, text);
+        return notes ? JobNotes.Attach(tool, text) : text;
     }
 
     public const string SkippedText =
@@ -457,7 +485,7 @@ internal static class JobNotes
         var notes = Take();
         if (notes.Count == 0) return text;
         try { Delivered?.Invoke(tool, notes.Select(n => n.Id).ToList()); } catch (Exception) { }
-        return text + "\n\n" + Block(notes.Select(n => n.Text));
+        return JobText.Add(text, null, Block(notes.Select(n => n.Text)));
     }
 
     /// <summary>How the notes read to Claude.</summary>
@@ -467,4 +495,64 @@ internal static class JobNotes
         foreach (var n in notes) sb.Append("\n- ").Append(n.Replace("\r", "").Replace("\n", "\n  "));
         return sb.ToString();
     }
+}
+
+/// <summary>
+/// Adds the job card's own lines to a tool result: the user's Skip or Stop before it, the user's messages after it. A
+/// result that is JSON stays valid JSON: an object gets the lines as its first and last fields
+/// (<see cref="ActionField"/>, <see cref="NoteField"/>), anything else is wrapped as <c>result</c>. Other text gets them as
+/// paragraphs before and after.
+/// </summary>
+internal static class JobText
+{
+    public const string ActionField = "user_action", NoteField = "message_from_user", ResultField = "result";
+
+    private static readonly JsonWriterOptions Options = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
+
+    public static string Add(string text, string? before, string? after)
+    {
+        if (before is null && after is null) return text;
+        if (Json(text, before, after) is { } json) return json;
+        if (before is not null) text = before + "\n\n" + text;
+        if (after is not null) text = text + "\n\n" + after;
+        return text;
+    }
+
+    private static string? Json(string text, string? before, string? after)
+    {
+        var start = text.TrimStart();
+        if (start.Length == 0 || start[0] is not ('{' or '[')) return null;
+        try
+        {
+            using var doc = JsonDocument.Parse(text);
+            var root = doc.RootElement;
+            // Lines added earlier (a skip, then messages) are kept: ours go before or after them.
+            string? Earlier(string name) =>
+                root.ValueKind == JsonValueKind.Object && root.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+            var action = Join(before, Earlier(ActionField));
+            var note = Join(Earlier(NoteField), after);
+            using var stream = new System.IO.MemoryStream();
+            using (var w = new Utf8JsonWriter(stream, Options))
+            {
+                w.WriteStartObject();
+                if (action is not null) w.WriteString(ActionField, action);
+                if (root.ValueKind == JsonValueKind.Object)
+                {
+                    foreach (var p in root.EnumerateObject())
+                        if (!p.NameEquals(ActionField) && !p.NameEquals(NoteField)) p.WriteTo(w);
+                }
+                else
+                {
+                    w.WritePropertyName(ResultField);
+                    root.WriteTo(w);
+                }
+                if (note is not null) w.WriteString(NoteField, note);
+                w.WriteEndObject();
+            }
+            return Encoding.UTF8.GetString(stream.ToArray());
+        }
+        catch (JsonException) { return null; }
+    }
+
+    private static string? Join(string? a, string? b) => a is null ? b : b is null ? a : a + "\n\n" + b;
 }

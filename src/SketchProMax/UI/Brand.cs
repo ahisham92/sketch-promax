@@ -545,8 +545,25 @@ internal static class Brand
             new Binding { Path = new PropertyPath(TextElement.ForegroundProperty), RelativeSource = RelativeSource.Self });
         var spin = new RotateTransform();
         arc.RenderTransform = spin;
-        spin.BeginAnimation(RotateTransform.AngleProperty, new DoubleAnimation(0, 360, TimeSpan.FromSeconds(0.9)) { RepeatBehavior = RepeatBehavior.Forever });
+        WhileVisible(arc,
+            () => spin.BeginAnimation(RotateTransform.AngleProperty, new DoubleAnimation(0, 360, TimeSpan.FromSeconds(0.9)) { RepeatBehavior = RepeatBehavior.Forever }),
+            () => spin.BeginAnimation(RotateTransform.AngleProperty, null));
         AutomationProperties.SetName(arc, "Working");
         return arc;
+    }
+
+    /// <summary>
+    /// Runs a looping animation only while <paramref name="element"/> is on screen: a clock that repeats forever keeps
+    /// WPF drawing every frame and stays alive with its element, so one left on a hidden, collapsed or discarded element
+    /// (a step's spinner replaced by a check, a closed pane) would never stop.
+    /// </summary>
+    public static void WhileVisible(UIElement element, Action start, Action stop)
+    {
+        element.IsVisibleChanged += (_, e) =>
+        {
+            if (e.NewValue is true) start();
+            else stop();
+        };
+        if (element.IsVisible) start();
     }
 }

@@ -21,7 +21,13 @@ internal static class JobUndo
     private static bool _job, _tool, _spoilt, _changedSince, _undoPosted;
     private static int _steps, _groupDepth, _inGroup, _outside, _groups;
     private static string? _doc;
+    // The model itself, not just its key: two open copies of one central model share a key, and a model closed and
+    // opened again is another Document whose Undo list no longer holds the task.
+    private static Document? _model;
     private static readonly HashSet<long> Elements = [];
+
+    /// <summary>Counts chat tasks: Undo all is for the latest one only (an older card's button must never undo a newer task).</summary>
+    public static int TaskNumber { get; private set; }
 
     /// <summary>Raised on Revit's thread when the posted Undo has run.</summary>
     public static event Action? Undone;
@@ -36,6 +42,8 @@ internal static class JobUndo
         _tool = _spoilt = _changedSince = _undoPosted = false;
         _steps = _groupDepth = _inGroup = _outside = _groups = 0;
         _doc = null;
+        _model = null;
+        TaskNumber++;
         Elements.Clear();
     }
 
@@ -99,8 +107,12 @@ internal static class JobUndo
                 _spoilt = true;
                 return;
             }
-            if (_doc is null) _doc = key;
-            else if (!string.Equals(_doc, key, StringComparison.OrdinalIgnoreCase)) _spoilt = true;
+            if (_doc is null)
+            {
+                _doc = key;
+                _model = doc;
+            }
+            else if (!string.Equals(_doc, key, StringComparison.OrdinalIgnoreCase) || !Same(_model, doc)) _spoilt = true;
             if (_groupDepth > 0) _inGroup++;
             else _outside++;
             var info = doc.ProjectInformation?.Id;
@@ -130,11 +142,13 @@ internal static class JobUndo
     /// Posts Revit's Undo for the task, after checking again: null when posted, else why not. Call from the external
     /// event (App.Dispatcher.InvokeFromEventAsync).
     /// </summary>
-    public static string? Undo(UIApplication app)
+    public static string? Undo(UIApplication app, int task)
     {
+        if (task != TaskNumber) return "Undo all is only for the latest task: another task has run since. Use Revit's Undo list to choose what to undo.";
         if (!CanUndo(out var why)) return "Undo all isn't safe now: " + why + ". Use Revit's Undo list to choose what to undo.";
+        if (_model is not { IsValidObject: true }) return "The model the task changed was closed, so its Undo list is gone.";
         var doc = app.ActiveUIDocument?.Document;
-        if (doc is null || !string.Equals(TimeLog.Key(doc), _doc, StringComparison.OrdinalIgnoreCase))
+        if (doc is null || !string.Equals(TimeLog.Key(doc), _doc, StringComparison.OrdinalIgnoreCase) || !Same(_model, doc))
             return "Switch back to the model the task changed, then press Undo all again.";
         if (doc.IsModifiable) return "Revit is in the middle of a change; try again in a moment.";
         var id = RevitCommandId.LookupPostableCommandId(PostableCommand.Undo);
@@ -142,5 +156,11 @@ internal static class JobUndo
         app.PostCommand(id);
         _undoPosted = true;
         return null;
+    }
+
+    private static bool Same(Document? a, Document b)
+    {
+        try { return a is { IsValidObject: true } && a.Equals(b); }
+        catch (Exception) { return false; }
     }
 }

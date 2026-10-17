@@ -75,7 +75,11 @@ internal static class JobCardTests
         c.Apply(JobAction.Stop);
         check("job: a stop is not used up", c.StepEnded() == JobState.Stopping && c.State == JobState.Stopping && !c.Apply(JobAction.Pause), c.State.ToString());
         c.Finish();
-        check("job: finished ends everything", c.State == JobState.Finished && !c.Apply(JobAction.Stop) && !c.Halting, "");
+        check("job: finishing a stopped task keeps the stop (buttons do nothing)", c.State == JobState.Stopping && c.Over && !c.Apply(JobAction.Stop) && !c.Apply(JobAction.Resume) && c.Halting, c.State.ToString());
+        var f = new JobControl();
+        f.Changed += changes.Add;
+        f.Finish();
+        check("job: finished ends everything", f.State == JobState.Finished && f.Over && !f.Apply(JobAction.Stop) && !f.Halting, "");
         check("job: Changed is raised for each change", changes.SequenceEqual([JobState.PauseRequested, JobState.Paused, JobState.Running, JobState.Skipping, JobState.Running, JobState.Stopping, JobState.Finished]),
             string.Join(",", changes));
         var p = new JobControl();
@@ -87,10 +91,15 @@ internal static class JobCardTests
         check("job: the bridge's wait ends on Stop", asyncWait.Wait(2000) && asyncWait.Result == JobState.Stopping, "");
 
         // ---- At a boundary
-        var keep = JobControl.Current;
+        var keep = JobControl.Tool;
         try
         {
-            var b = JobControl.Current = new JobControl();
+            JobControl.Tool = null;
+            JobControl.Current = new JobControl();
+            JobControl.Current.Apply(JobAction.Stop);
+            check("job: the chat's control never reaches a call from elsewhere", JobControl.AtBoundary("x", 0) == JobState.Running && !JobControl.StopNow("x", 0), "");
+            JobControl.Current = null;
+            var b = JobControl.Tool = new JobControl();
             check("job: no control, nothing to do", JobControl.AtBoundary("x", 0) == JobState.Running, "");
             b.Apply(JobAction.Pause);
             JobState? during = null;
@@ -110,20 +119,40 @@ internal static class JobCardTests
         }
         finally
         {
-            JobControl.Current = keep;
+            JobControl.Tool = keep;
+            JobControl.Current = null;
             JobControl.TestWait = null;
         }
+
+        // ---- The end of a task
+        var ended = new JobControl();
+        ended.Apply(JobAction.Stop);
+        ended.Finish();
+        check("job: a Stop pressed before the task ended still stops a call that outlived it", ended.State == JobState.Stopping && ended.Halting && ended.Over, ended.State.ToString());
+        var quiet = new JobControl();
+        quiet.Apply(JobAction.Pause);
+        quiet.Finish();
+        check("job: otherwise the end finishes it and buttons do nothing", quiet.State == JobState.Finished && !quiet.Apply(JobAction.Resume) && !quiet.Apply(JobAction.Stop), quiet.State.ToString());
 
         // ---- After a step: Skip, Stop and the user's messages
         JobNotes.Take();
         var skipping = new JobControl();
         skipping.Apply(JobAction.Skip);
         var skipped = JobControl.AfterStep(skipping, "create_sheets", "{\"done\":5}", isError: true, out var skipState);
-        check("job: a skipped step says so first and is used up", skipState == "skipped" && skipped.StartsWith(JobControl.SkippedText) && skipped.EndsWith("{\"done\":5}") && skipping.State == JobState.Running, skipped);
+        check("job: a skipped step says so first, as JSON when the result is, and is used up",
+            skipState == "skipped" && skipped == "{\"user_action\":\"" + JobControl.SkippedText + "\",\"done\":5}" && skipping.State == JobState.Running, skipped);
         var stopping = new JobControl();
         stopping.Apply(JobAction.Stop);
         var stopped = JobControl.AfterStep(stopping, "create_sheets", "ok", false, out var stopState);
-        check("job: a stopped step says so first", stopState == "stopped" && stopped.StartsWith(JobControl.StoppedText), stopped);
+        check("job: a stopped step says so first", stopState == "stopped" && stopped == JobControl.StoppedText + "\n\nok", stopped);
+        var list = JobText.Add("[{\"id\":1}]", JobControl.StoppedText, "[Message from the user]\n- \"quoted\" and \\ slash");
+        using (var parsed = System.Text.Json.JsonDocument.Parse(list))
+            check("job: an array result is wrapped and stays JSON, the note readable", parsed.RootElement.GetProperty("result")[0].GetProperty("id").GetInt32() == 1
+                && parsed.RootElement.GetProperty("message_from_user").GetString() == "[Message from the user]\n- \"quoted\" and \\ slash"
+                && list.StartsWith("{\"user_action\":"), list);
+        var twice = JobText.Add(JobText.Add("{\"a\":1}", null, "first"), null, "second");
+        check("job: notes added twice keep one field", twice == "{\"a\":1,\"message_from_user\":\"first\\n\\nsecond\"}", twice);
+        check("job: text that only looks like JSON is left as text", JobText.Add("{cut off…", "A", "B") == "A\n\n{cut off…\n\nB", "");
         JobControl.AfterStep(null, "t", "x", true, out var failState);
         JobControl.AfterStep(new JobControl(), "t", "x", false, out var doneState);
         check("job: plain steps are done or failed", failState == "failed" && doneState == "done", failState + doneState);
@@ -135,10 +164,15 @@ internal static class JobCardTests
             var id1 = JobNotes.Add("  use B- for the new sheets ");
             var id2 = JobNotes.Add("and skip the\nlegends");
             var text = JobControl.AfterStep(new JobControl(), "create_sheets", "{\"created\":3}", false, out _);
-            check("job: messages reach the next step's result, once",
-                text.StartsWith("{\"created\":3}\n\n[Message from the user") && text.Contains("\n- use B- for the new sheets") && text.Contains("\n- and skip the\n  legends")
+            using var json = System.Text.Json.JsonDocument.Parse(text);
+            var note = json.RootElement.GetProperty("message_from_user").GetString() ?? "";
+            check("job: messages reach the next step's result, once, as a marked field of its JSON",
+                json.RootElement.GetProperty("created").GetInt32() == 3 && note.StartsWith("[Message from the user") && note.Contains("\n- use B- for the new sheets") && note.Contains("\n- and skip the\n  legends")
                 && JobNotes.Count == 0 && JobControl.AfterStep(null, "x", "y", false, out _) == "y", text);
-            check("job: delivery is reported with the tool and ids", delivered.Count == 1 && delivered[0].Item1 == "create_sheets" && delivered[0].Item2.SequenceEqual([id1, id2]), "");
+            JobNotes.Add("plain");
+            var plain = JobControl.AfterStep(null, "x", "Done.", false, out _, notes: false);
+            check("job: the bridge's step end leaves the messages for the reply", plain == "Done." && JobNotes.Count == 1 && JobNotes.Attach("x", "Done.").StartsWith("Done.\n\n[Message from the user"), plain);
+            check("job: delivery is reported with the tool and ids", delivered.Count == 2 && delivered[0].Item1 == "create_sheets" && delivered[0].Item2.SequenceEqual([id1, id2]), "");
             check("job: note ids are unique", id1 != id2, "");
         }
         finally { JobNotes.Delivered -= Got; JobNotes.Take(); }

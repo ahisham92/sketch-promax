@@ -63,6 +63,8 @@ internal static class JobWindow
     {
         try
         {
+            lock (Gate)
+                if (_closeRequested || _for != control) return; // closed before it opened: no dispatcher made for nothing
             var dispatcher = Dispatcher.CurrentDispatcher;
             lock (Gate)
             {
@@ -170,6 +172,8 @@ internal static class JobWindow
         {
             var text = box.Text.Trim();
             if (text.Length == 0) { ack.Text = "Type a message first."; return; }
+            // The task ended meanwhile (this window closes in a moment): a note queued now would wait for the next task.
+            if (control.Over) { ack.Text = "The task has ended. Type your message in the chat."; return; }
             var id = JobNotes.Add(text);
             box.Clear();
             ack.Text = "Got it, will apply after this item.";
@@ -188,7 +192,7 @@ internal static class JobWindow
         timer.Tick += (_, _) =>
         {
             var state = control.State;
-            if (state == JobState.Finished) { window.Close(); return; }
+            if (control.Over) { window.Close(); return; }
             var snap = JobFeed.Now;
             var title = JobMath.Title(snap.Tool);
             var text = title.Length == 0 ? "Working…" : title + (snap.Label.Length > 0 ? " · " + snap.Label : "");

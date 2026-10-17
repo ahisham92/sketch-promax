@@ -117,7 +117,7 @@ public static class Jobs
     /// True when the user (through cancel_job, or Skip step or Stop on the chat's job card) asked the running job to stop.
     /// Long loops should check it.
     /// </summary>
-    public static bool CancelRequested => Running is { } job && (job.CancelRequested || job.Limit?.Hit == true || JobControl.Current?.Halting == true);
+    public static bool CancelRequested => Running is { } job && (job.CancelRequested || job.Limit?.Hit == true || JobControl.Tool?.Halting == true);
 
     /// <summary>
     /// From a tool's Execute: the running job when the tool may hand it on by setting <see cref="Job.Continuation"/> (each

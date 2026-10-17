@@ -18,6 +18,8 @@ internal sealed partial class ChatPane
 {
     private JobControl? _control;
     private JobCardView? _job;
+    /// <summary>The finished card that offers Undo all (only one does: the latest task's).</summary>
+    private JobCardView? _undoView;
     private ChatItem? _jobItem;
     private DispatcherTimer? _jobTimer, _undoTimer;
     private readonly Dictionary<string, JobStep> _jobSteps = new();
@@ -33,6 +35,7 @@ internal sealed partial class ChatPane
     private void BeginJob(PromptBrief? plan)
     {
         EndJobHooks();
+        DropUndo(); // a new task: the last one's Undo all would no longer be the top of Revit's Undo list
         _control = new JobControl();
         JobControl.Current = _control;
         JobControl.WaitAtBoundary ??= JobWindow.WaitPaused;
@@ -207,8 +210,9 @@ internal sealed partial class ChatPane
             item.Job = view.Model.ToJson();
             if (Revit.JobUndo.CanUndo(out _) && !_sample)
             {
+                var task = Revit.JobUndo.TaskNumber;
                 view.CanUndo = true;
-                view.UndoPressed += () => UndoJob(view, item);
+                view.UndoPressed += () => UndoJob(view, item, task);
                 WatchUndo(view);
             }
             view.End();
@@ -240,26 +244,39 @@ internal sealed partial class ChatPane
     /// <summary>Undo all stays only while it is safe: once the model changes, the button goes.</summary>
     private void WatchUndo(JobCardView view)
     {
-        _undoTimer?.Stop();
-        _undoTimer = new DispatcherTimer(DispatcherPriority.Background, Dispatcher) { Interval = TimeSpan.FromSeconds(2) };
-        _undoTimer.Tick += (_, _) =>
+        DropUndo();
+        _undoView = view;
+        var timer = _undoTimer = new DispatcherTimer(DispatcherPriority.Background, Dispatcher) { Interval = TimeSpan.FromSeconds(2) };
+        timer.Tick += (_, _) =>
         {
-            if (view.CanUndo && Revit.JobUndo.CanUndo(out _) && !_stopped) return;
-            _undoTimer?.Stop();
+            if (view.CanUndo && _undoView == view && Revit.JobUndo.CanUndo(out _) && !_stopped) return;
+            timer.Stop();
             if (!view.CanUndo) return;
             view.CanUndo = false;
             view.End();
         };
-        _undoTimer.Start();
+        timer.Start();
     }
 
-    private async void UndoJob(JobCardView view, ChatItem item)
+    /// <summary>Takes Undo all off the card that offers it.</summary>
+    private void DropUndo()
     {
-        if (!view.CanUndo) return;
-        view.CanUndo = false;
-        view.End();
+        _undoTimer?.Stop();
+        _undoTimer = null;
+        if (_undoView is { } old && old.CanUndo)
+        {
+            old.CanUndo = false;
+            old.End();
+        }
+        _undoView = null;
+    }
+
+    private async void UndoJob(JobCardView view, ChatItem item, int task)
+    {
+        if (!view.CanUndo || _undoView != view) return;
+        DropUndo();
         string? problem;
-        try { problem = await App.Dispatcher.InvokeFromEventAsync(app => Revit.JobUndo.Undo(app)); }
+        try { problem = await App.Dispatcher.InvokeFromEventAsync(app => Revit.JobUndo.Undo(app, task)); }
         catch (Exception ex) when (ex is InvalidOperationException or OperationCanceledException or Autodesk.Revit.Exceptions.ApplicationException) { problem = ex.Message; }
         if (problem is not null)
         {

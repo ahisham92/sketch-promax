@@ -873,6 +873,7 @@ internal static partial class FieldTest
         var type = new FilteredElementCollector(doc).OfClass(typeof(ViewFamilyType)).Cast<ViewFamilyType>().FirstOrDefault(t => t.ViewFamily == ViewFamily.Drafting);
         if (type is null) return Fail("the test project has no drafting view type");
         var keepControl = JobControl.Current;
+        var keepTool = JobControl.Tool;
         var keepLong = JobFeed.LongStep;
         using var group = new TransactionGroup(doc, "Field test: " + title);
         group.Start();
@@ -893,6 +894,7 @@ internal static partial class FieldTest
             }
             var control = new JobControl();
             JobControl.Current = control;
+            JobControl.Tool = control; // as the bridge sets it for a chat call
             JobFeed.LongStep = null; // no job window during the test
             JobFeed.Reset();
             JobNotes.Take();
@@ -904,6 +906,7 @@ internal static partial class FieldTest
             JobControl.TestAfterItem = null;
             JobControl.TestWait = null;
             JobControl.Current = keepControl;
+            JobControl.Tool = keepTool;
             JobFeed.LongStep = keepLong;
             JobNotes.Take();
             RollBack(group);
@@ -924,6 +927,13 @@ internal static partial class FieldTest
         }
         var text = JobControl.AfterStep(control, "rename_elements", result.Text, result.IsError, out var state);
         return new JobRun(result, statuses, text, state);
+    }
+
+    /// <summary>The step's text is still one JSON value (the card's lines are added as fields).</summary>
+    private static bool Json(string text)
+    {
+        try { using var _ = JsonDocument.Parse(text); return true; }
+        catch (JsonException) { return false; }
     }
 
     private static bool Renamed(ViewDrafting view) => view.Name.StartsWith("SPM renamed", StringComparison.Ordinal);
@@ -1001,7 +1011,7 @@ internal static partial class FieldTest
             if (run.Statuses.Skip(9).Any(st => !st.StartsWith("not done: the user stopped", StringComparison.Ordinal)) || views.Skip(9).Any(Renamed))
                 problems.Add("items after the stop were not all left undone");
         }
-        if (run.State != "stopped" || !run.Text.StartsWith(JobControl.StoppedText, StringComparison.Ordinal)) problems.Add($"the step ended {run.State} and Claude's text starts \"{Short(run.Text, 80)}\"");
+        if (run.State != "stopped" || !run.Text.Contains(JobControl.StoppedText) || !Json(run.Text)) problems.Add($"the step ended {run.State} and Claude's text starts \"{Short(run.Text, 80)}\"");
         return problems.Count == 0
             ? Pass("Stop while item 9 of 24 ran: it was rolled back (name unchanged), items 1-8 kept, 10-24 not done; Claude is told the user stopped")
             : Fail(string.Join("; ", problems));
@@ -1015,7 +1025,7 @@ internal static partial class FieldTest
         var problems = new List<string>();
         if (run.Ok != 5 || views.Count(Renamed) != 5) problems.Add($"{run.Ok} renamed ({views.Count(Renamed)} by name), not 5");
         if (run.Statuses.Skip(5).Any(st => !st.StartsWith("not done: the user skipped", StringComparison.Ordinal))) problems.Add("the items after the skip don't say skipped");
-        if (run.State != "skipped" || !run.Text.StartsWith(JobControl.SkippedText, StringComparison.Ordinal)) problems.Add($"the step ended {run.State}");
+        if (run.State != "skipped" || !run.Text.Contains(JobControl.SkippedText) || !Json(run.Text)) problems.Add($"the step ended {run.State}");
         if (control.State != JobState.Running) problems.Add($"after the step the task is {control.State}, not running (the skip was not used up)");
         // The next step runs normally.
         JobControl.TestBoundary = null;
@@ -1042,6 +1052,7 @@ internal static partial class FieldTest
             var times = Regex.Matches(run.Text, Regex.Escape(note)).Count;
             if (id is null) problems.Add("the hook never queued the message");
             if (times != 1 || !run.Text.Contains("[Message from the user")) problems.Add($"the step's result carries the message {times} time(s)");
+            if (!Json(run.Text)) problems.Add("the result with the message is no longer valid JSON");
             if (JobNotes.Count != 0) problems.Add($"{JobNotes.Count} message(s) still waiting");
             if (delivered.Count != 1 || delivered[0].Tool != "rename_elements" || !delivered[0].Ids.SequenceEqual([id!])) problems.Add($"delivered {delivered.Count} time(s)");
             if (run.Ok != JobItems) problems.Add($"the batch was interrupted: {run.Ok} of {JobItems} renamed");

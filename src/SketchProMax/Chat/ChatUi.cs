@@ -342,7 +342,13 @@ internal static class ChatUi
             pulse.KeyFrames.Add(new LinearDoubleKeyFrame(1, KeyTime.FromTimeSpan(TimeSpan.FromSeconds(start + 0.3))));
             pulse.KeyFrames.Add(new LinearDoubleKeyFrame(0.35, KeyTime.FromTimeSpan(TimeSpan.FromSeconds(start + 0.6))));
             pulse.KeyFrames.Add(new LinearDoubleKeyFrame(0.35, KeyTime.FromTimeSpan(TimeSpan.FromSeconds(1.2))));
-            dot.BeginAnimation(UIElement.OpacityProperty, pulse);
+            // Only while shown, and still (each dot a step lighter) when Windows' animations are off.
+            var still = 0.35 + 0.25 * k;
+            Brand.WhileVisible(dot, () =>
+            {
+                if (Animate) dot.BeginAnimation(UIElement.OpacityProperty, pulse);
+                else dot.Opacity = still;
+            }, () => dot.BeginAnimation(UIElement.OpacityProperty, null));
             panel.Children.Add(dot);
         }
         return panel;
@@ -393,6 +399,11 @@ internal static class ChatUi
     /// </summary>
     public static void Reveal(FrameworkElement element, bool open, Action? closed = null)
     {
+        // Each call outdates the one before: a late Completed of a replaced animation must not collapse an element that
+        // is opening again, or hand back a height.
+        var turn = Turns.GetOrCreateValue(element);
+        var mine = ++turn.Value;
+        bool Current() => turn.Value == mine;
         element.BeginAnimation(FrameworkElement.HeightProperty, null);
         var shown = element.Visibility == Visibility.Visible;
         if (!Animate || (open && shown && double.IsNaN(element.Height)) || (!open && !shown))
@@ -415,6 +426,7 @@ internal static class ChatUi
             element.Height = from;
             element.BeginAnimation(FrameworkElement.HeightProperty, Ease(from, to, () =>
             {
+                if (!Current()) return;
                 element.BeginAnimation(FrameworkElement.HeightProperty, null);
                 element.Height = double.NaN;
             }));
@@ -423,6 +435,7 @@ internal static class ChatUi
         {
             element.BeginAnimation(FrameworkElement.HeightProperty, Ease(element.ActualHeight, 0, () =>
             {
+                if (!Current()) return;
                 element.BeginAnimation(FrameworkElement.HeightProperty, null);
                 element.Visibility = Visibility.Collapsed;
                 element.Height = double.NaN;
@@ -430,6 +443,8 @@ internal static class ChatUi
             }));
         }
     }
+
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<FrameworkElement, System.Runtime.CompilerServices.StrongBox<int>> Turns = new();
 
     /// <summary>Slides an element in from <paramref name="dx"/> px to the side (or back out), ease-out; no transform once settled.</summary>
     public static void Slide(UIElement element, double dx, bool open, Action? done = null)
@@ -483,8 +498,11 @@ internal static class ChatUi
             sweep.GradientStops.Add(new GradientStop(Color.FromArgb(0x48, 255, 255, 255), 0.5));
             sweep.GradientStops.Add(new GradientStop(Color.FromArgb(0, 255, 255, 255), 0.8));
             bar.Children.Add(new Border { CornerRadius = new CornerRadius(5), Background = sweep });
-            if (Animate)
-                shift.BeginAnimation(TranslateTransform.XProperty, new DoubleAnimation(-1, 1, TimeSpan.FromSeconds(1.4)) { RepeatBehavior = RepeatBehavior.Forever });
+            // The sweep runs only while the placeholder shows: it is made once per pane and spends most of its life hidden.
+            Brand.WhileVisible(bar, () =>
+            {
+                if (Animate) shift.BeginAnimation(TranslateTransform.XProperty, new DoubleAnimation(-1, 1, TimeSpan.FromSeconds(1.4)) { RepeatBehavior = RepeatBehavior.Forever });
+            }, () => shift.BeginAnimation(TranslateTransform.XProperty, null));
             // A share of the width, so the bars read as lines of text at any pane width.
             var row = new Grid();
             row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(width, GridUnitType.Star) });
