@@ -538,7 +538,7 @@ internal static class CarbonRun
         {
             sb.AppendLine(Carbon.Csv(name));
             foreach (var row in rows)
-                sb.AppendLine(string.Join(",", row.Select(c => c is null ? "" : Carbon.Csv(Convert.ToString(c, CultureInfo.InvariantCulture) ?? ""))));
+                sb.AppendLine(string.Join(",", row.Select(c => c is null ? "" : Carbon.Csv(Convert.ToString(c is Xlsx.Formula f ? f.Cached : c, CultureInfo.InvariantCulture) ?? ""))));
             sb.AppendLine();
         }
         File.WriteAllText(stem + ".csv", sb.ToString(), new UTF8Encoding(true));

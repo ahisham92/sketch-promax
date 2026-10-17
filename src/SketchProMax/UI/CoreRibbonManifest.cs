@@ -126,6 +126,8 @@ internal static class CoreRibbonManifest
         T("ValueEng", "ve_compare_options", "Compare systems", "structure", "Flat slab, beam and slab, PT, hollow-core, steel; raft or piles: quantities, cost, carbon, programme and risks side by side."),
         T("ValueEng", "ve_view", "VE 3D view", "view", "Makes a new 3D view coloured by the ranked VE items. Existing views are not changed."),
         T("ValueEng", "ve_apply", "Apply to a copy", "bolt", "Applies chosen VE changes to a saved copy or a design option, with before and after cost and carbon."),
+        T("ValueEng", "cost_estimate", "Cost plan", "boq", "Cost plan from the firm's rate table: total, rates per m² GFA, per m, per m³ and per tonne, add-ons, options side by side, to Excel. Reads the model only."),
+        T("ValueEng", "what_if", "What if", "bolt", "Tries a slab thickness, column size, grade or grid spacing on a copy and compares quantities, cost, carbon and the drawings affected. Previews first."),
         T("ValueEng", "ve_register", "VE register", "list", "Exports the VE register and sets each item's status (proposed, accepted, rejected) and owner."),
 
         // ---- Issue (0.33: the issue check gates Issue drawings and Export PDF of sheets, see UI/IssueGateWindow)

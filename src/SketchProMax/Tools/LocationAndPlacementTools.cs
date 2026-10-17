@@ -224,33 +224,7 @@ internal static class Table
         return rows;
     }
 
-    private static List<List<string>> Xlsx(string path)
-    {
-        using var zip = ZipFile.OpenRead(path);
-        XNamespace ns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
-        var shared = new List<string>();
-        if (zip.GetEntry("xl/sharedStrings.xml") is { } ss)
-            using (var s = ss.Open())
-                shared = XDocument.Load(s).Root!.Elements(ns + "si").Select(si => string.Concat(si.Descendants(ns + "t").Select(x => x.Value))).ToList();
-        var sheet = zip.GetEntry("xl/worksheets/sheet1.xml") ?? throw new InvalidDataException("The workbook has no first sheet.");
-        using var stream = sheet.Open();
-        var rows = new List<List<string>>();
-        foreach (var row in XDocument.Load(stream).Descendants(ns + "row"))
-        {
-            var cells = new List<string>();
-            foreach (var c in row.Elements(ns + "c"))
-            {
-                var col = 0;
-                foreach (var ch in ((string?)c.Attribute("r") ?? "A").TakeWhile(char.IsLetter)) col = col * 26 + (ch - 'A' + 1);
-                while (cells.Count < col - 1) cells.Add("");
-                var value = c.Element(ns + "v")?.Value ?? string.Concat(c.Descendants(ns + "t").Select(x => x.Value));
-                if ((string?)c.Attribute("t") == "s" && int.TryParse(value, out var idx) && idx < shared.Count) value = shared[idx];
-                cells.Add(value);
-            }
-            rows.Add(cells);
-        }
-        return rows;
-    }
+    private static List<List<string>> Xlsx(string path) => Tools.Xlsx.Read(path);
 }
 
 public sealed class PlaceManyTool : IRevitTool

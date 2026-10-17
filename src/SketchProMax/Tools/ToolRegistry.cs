@@ -197,6 +197,7 @@ public sealed class ToolRegistry
         new RedlineReadTool(),
         new RedlinePlanTool(),
         new RedlineApplyTool(),
+        new WhatIfTool(),
         new SpecCheckTool(),
         new AnalyticalCheckTool(),
         new ExportAnalyticalTool(),

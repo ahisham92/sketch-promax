@@ -1142,7 +1142,7 @@ public sealed class VeApplyTool : IRevitTool
     private static string San(string s) => new(s.Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '_' : c).ToArray());
 
     /// <summary>A type of the element's category by name ("Type" or "Family: Type").</summary>
-    private static ElementType? TypeNamed(Document doc, Element e, string name)
+    internal static ElementType? TypeNamed(Document doc, Element e, string name)
     {
         var cat = e.Category?.Id;
         return new FilteredElementCollector(doc).WhereElementIsElementType().Cast<ElementType>()
@@ -1151,7 +1151,7 @@ public sealed class VeApplyTool : IRevitTool
     }
 
     /// <summary>The material named, else an existing concrete material of the grade (the shortest name, most likely the plain one).</summary>
-    private static Material? MaterialFor(Document doc, string? name, string? grade)
+    internal static Material? MaterialFor(Document doc, string? name, string? grade)
     {
         var all = new FilteredElementCollector(doc).OfClass(typeof(Material)).Cast<Material>().ToList();
         if (name != null) return all.FirstOrDefault(m => m.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
@@ -1160,7 +1160,7 @@ public sealed class VeApplyTool : IRevitTool
             .OrderBy(m => m.Name.Length).FirstOrDefault();
     }
 
-    private static void SetTypeMaterial(ElementType type, ElementId material)
+    internal static void SetTypeMaterial(ElementType type, ElementId material)
     {
         if (type.get_Parameter(BuiltInParameter.STRUCTURAL_MATERIAL_PARAM) is { IsReadOnly: false } p) { p.Set(material); return; }
         if (type is HostObjAttributes host && host.GetCompoundStructure() is { } cs)

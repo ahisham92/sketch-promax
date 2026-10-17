@@ -67,6 +67,7 @@ UpdateNoticeTests.Run((name, ok, detail) => Check(name, ok, detail));
 CarbonTests.Run((name, ok, detail) => Check(name, ok, detail));
 VeTests.Run((name, ok, detail) => Check(name, ok, detail));
 RedlineTests.Run((name, ok, detail) => Check(name, ok, detail));
+CostTests.Run((name, ok, detail) => Check(name, ok, detail));
 HandoffTests.Run((name, ok, detail) => Check(name, ok, detail));
 TimeTests.Run((name, ok, detail) => Check(name, ok, detail));
 IssueGateTests.Run((name, ok, detail) => Check(name, ok, detail));
