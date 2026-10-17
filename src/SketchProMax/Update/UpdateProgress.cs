@@ -3,13 +3,15 @@ namespace SketchProMax.Update;
 public enum UpdateStage
 {
     Idle, Checking, UpToDate, Downloading, Verifying, Unpacking, Applying, Updated, RestartNeeded, Failed, Cancelled,
+    /// <summary>A newer version is out, but automatic updates are off: nothing was downloaded.</summary>
+    Available,
 }
 
 /// <summary>An immutable picture of an update in progress, safe to hand to any thread.</summary>
 public sealed record UpdateSnapshot(UpdateStage Stage, string? Version, long Bytes, long? Total, string? Detail, DateTime Changed)
 {
     public bool IsFinal => Stage is UpdateStage.UpToDate or UpdateStage.Updated or UpdateStage.RestartNeeded
-        or UpdateStage.Failed or UpdateStage.Cancelled;
+        or UpdateStage.Failed or UpdateStage.Cancelled or UpdateStage.Available;
 
     public int? Percent => Total is > 0 ? (int)Math.Min(100, Bytes * 100 / Total.Value) : null;
 
@@ -89,6 +91,7 @@ public sealed class UpdateProgress
         UpdateStage.UpToDate => "Up to date",
         UpdateStage.Failed => "Update\nfailed",
         UpdateStage.Cancelled => "Update\ncancelled",
+        UpdateStage.Available => $"Update\n{s.Version}",
         _ => "",
     };
 }

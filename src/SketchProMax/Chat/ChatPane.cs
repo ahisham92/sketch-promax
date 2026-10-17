@@ -258,6 +258,12 @@ internal sealed class ChatPane : DockPanel, IHistoryHost
         ShowRestartNote();
         UI.RestartNote.Changed += ShowRestartNote;
 
+        // "Sketch ProMax 0.32.0 is available" / "Updated to ...": the same message as the update toast (UI/UpdateNotice).
+        var updateBand = UI.UpdateNotice.Banner();
+        SetDock(updateBand, Dock.Top);
+        KeyboardNavigation.SetTabIndex(updateBand, 2);
+        Children.Add(updateBand);
+
         // Bottom: status, attachments, the message box and its buttons.
         var composer = new StackPanel { Margin = new Thickness(ChatUi.S3, ChatUi.S2, ChatUi.S3, ChatUi.S3) };
         KeyboardNavigation.SetTabIndex(composer, 4);

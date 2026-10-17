@@ -10,7 +10,8 @@ namespace SketchProMax.Update;
 /// <summary>
 /// Keeps Sketch ProMax up to date without reinstalling, and without restarting Revit.
 ///
-/// It asks GitHub for the latest release at Revit start and hourly. When a newer one exists it downloads the zip to
+/// It asks GitHub for the latest release at Revit start and hourly (see App.UpdateLoopAsync). With automatic updates off
+/// it only says a newer one is out (<see cref="Latest"/>, UI/UpdateNotice). Otherwise, when a newer one exists it downloads the zip to
 /// %LOCALAPPDATA%\SketchProMax\updates, unpacks it into %LOCALAPPDATA%\SketchProMax\versions\&lt;version&gt;, and:
 ///   - tells the loader (SketchProMax.Loader, which Revit loads) that a newer core is ready. The loader switches to it
 ///     the next time Revit is idle with no job running: the old core stops, the new one starts. Nothing is overwritten;
@@ -52,17 +53,39 @@ public static class Updater
     /// <summary>Version downloaded and ready for the next Revit start, if any.</summary>
     public static string? Staged => LoadState().Staged is { } s && Parse(s) > Current ? s : null;
 
-    /// <summary>When updates were last looked for, and whether that look failed (for the Update button's badge).</summary>
-    public static (DateTime? LastCheck, bool Failed) LastCheckState()
+    /// <summary>
+    /// The newest release the last successful check saw, when it is newer than this version; null otherwise. The state
+    /// file is shared by every Revit window, and another window may run a newer version: a check that window made says
+    /// "up to date" for it, not for this one, so the badge compares this version with what was seen.
+    /// </summary>
+    public static string? Latest => LoadState().Latest is { } l && Parse(l) > Current ? l : null;
+
+    /// <summary>The release notes of <see cref="Latest"/> (GitHub's text, Markdown), when the check could read them.</summary>
+    public static string? LatestNotes => Latest is null ? null : LoadState().Notes;
+
+    /// <summary>The release notes the last check read for <paramref name="version"/>, or null.</summary>
+    public static string? NotesFor(string version) => LoadState() is { Latest: { } l, Notes: { } n } && Parse(l) == Parse(version) ? n : null;
+
+    /// <summary>When updates were last looked for, and why that look failed (null when it worked), for the Update button's badge.</summary>
+    public static (DateTime? LastCheck, string? Error) LastCheckState()
     {
         var state = LoadState();
-        return (state.LastCheck, state.LastError is not null);
+        return (state.LastCheck, state.LastError);
     }
+
+    /// <summary>
+    /// True when the last check (by any Revit window) is at least <paramref name="every"/> old by the wall clock, or
+    /// there was none, or the clock went back. The update loop asks every few minutes rather than sleeping an hour: a
+    /// timer stands still while Windows sleeps, so after a night asleep an hourly timer still had most of its hour to go.
+    /// </summary>
+    public static bool IsDue(TimeSpan every) => UI.UpdateBadge.CheckDue(LoadState().LastCheck, every, DateTime.UtcNow);
 
     /// <summary>A one-line description for the Status button and for Claude.</summary>
     public static string Describe()
     {
         var state = LoadState();
+        if (Latest is { } latest && Staged is null)
+            return $"Sketch ProMax {latest} is available (this is {CurrentText}). Click Update to install it; Revit stays open.";
         if (Staged is { } staged)
             return CanSwitchLive
                 ? $"Sketch ProMax {staged} is downloaded and is switched to as soon as Revit is idle with no job running. No restart needed."
@@ -77,9 +100,10 @@ public static class Updater
     /// <summary>
     /// Checks for and stages an update, reporting each stage to <paramref name="progress"/>. When the loader runs this core
     /// it is then asked to switch to the new version (the switch itself happens on Revit's thread, later). Returns the
-    /// newly staged version, or null when there is nothing new.
+    /// newly staged version, or null when there is nothing new. With <paramref name="install"/> false (automatic updates
+    /// off) a newer release is only recorded and reported as <see cref="UpdateStage.Available"/>; nothing is downloaded.
     /// </summary>
-    public static async Task<string?> CheckAsync(bool force, UpdateProgress? progress = null, CancellationToken ct = default)
+    public static async Task<string?> CheckAsync(bool force, UpdateProgress? progress = null, CancellationToken ct = default, bool install = true)
     {
         progress ??= new UpdateProgress();
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, progress.Cancellation.Token);
@@ -111,6 +135,8 @@ public static class Updater
             var release = await LatestReleaseAsync(ct).ConfigureAwait(false);
             state.LastCheck = DateTime.UtcNow;
             state.LastError = null;
+            state.Latest = release?.Version;
+            state.Notes = release?.Notes is { Length: > 4000 } full ? full.Substring(0, 4000) : release?.Notes;
             if (release is null || Parse(release.Version) <= Current)
             {
                 SaveState(state);
@@ -118,7 +144,14 @@ public static class Updater
                 return null;
             }
             var stagedFolder = Path.Combine(VersionsFolder, release.Version);
-            if (release.Version == state.Staged && Directory.Exists(stagedFolder))
+            var downloaded = release.Version == state.Staged && Directory.Exists(stagedFolder);
+            if (!install && !downloaded)
+            {
+                SaveState(state);
+                progress.Report(UpdateStage.Available, $"Sketch ProMax {release.Version} is available. Automatic updates are off, so nothing was downloaded.", release.Version);
+                return null;
+            }
+            if (downloaded)
             {
                 // Already downloaded (by this or another Revit window). Make sure its loader is in place (nothing is written
                 // when it is), and switch this window over too.
@@ -128,6 +161,8 @@ public static class Updater
                 return null;
             }
 
+            // What was found is kept even if the download then fails: the badge still offers the new version.
+            SaveState(state);
             progress.Report(UpdateStage.Downloading, $"Downloading Sketch ProMax {release.Version}…", release.Version);
             var folder = await DownloadAndUnpackAsync(release, progress, ct).ConfigureAwait(false);
             progress.Report(UpdateStage.Applying, "Installing…");
@@ -331,7 +366,7 @@ public static class Updater
         catch (Exception ex) when (ex is IOException or FileNotFoundException) { return null; }
     }
 
-    private sealed record Release(string Version, string ZipUrl, string? Sha256);
+    private sealed record Release(string Version, string ZipUrl, string? Sha256, string? Notes = null);
 
     private static HttpClient CreateClient()
     {
@@ -357,17 +392,23 @@ public static class Updater
         var version = (root.GetProperty("tag_name").GetString() ?? "").TrimStart('v', 'V');
         if (root.TryGetProperty("draft", out var d) && d.GetBoolean()) return null;
         if (root.TryGetProperty("prerelease", out var p) && p.GetBoolean()) return null;
+        var notes = root.TryGetProperty("body", out var b) && b.ValueKind == JsonValueKind.String ? b.GetString() : null;
+        var tag = root.GetProperty("tag_name").GetString() ?? "";
 
-        foreach (var asset in root.GetProperty("assets").EnumerateArray())
-        {
-            var name = asset.GetProperty("name").GetString() ?? "";
-            if (!name.StartsWith("SketchProMax-", StringComparison.OrdinalIgnoreCase) || !name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)) continue;
-            // GitHub publishes a "sha256:..." digest for each release file; verify it when present.
-            var digest = asset.TryGetProperty("digest", out var dg) && dg.ValueKind == JsonValueKind.String ? dg.GetString() : null;
-            var sha = digest is not null && digest.StartsWith("sha256:", StringComparison.Ordinal) ? digest.Substring(7) : null;
-            return new Release(version, asset.GetProperty("browser_download_url").GetString()!, sha);
-        }
-        return null;
+        if (root.TryGetProperty("assets", out var assets) && assets.ValueKind == JsonValueKind.Array)
+            foreach (var asset in assets.EnumerateArray())
+            {
+                var name = asset.GetProperty("name").GetString() ?? "";
+                if (!name.StartsWith("SketchProMax-", StringComparison.OrdinalIgnoreCase) || !name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)) continue;
+                // GitHub publishes a "sha256:..." digest for each release file; verify it when present.
+                var digest = asset.TryGetProperty("digest", out var dg) && dg.ValueKind == JsonValueKind.String ? dg.GetString() : null;
+                var sha = digest is not null && digest.StartsWith("sha256:", StringComparison.Ordinal) ? digest.Substring(7) : null;
+                return new Release(version, asset.GetProperty("browser_download_url").GetString()!, sha, notes);
+            }
+        // A newer release whose package isn't listed (yet): not "up to date". Its package has the usual name; when it is
+        // not there the download fails, the error is shown and the next check tries again.
+        if (!Version.TryParse(version, out _)) return null;
+        return new Release(version, $"https://github.com/{Repository}/releases/download/{Uri.EscapeDataString(tag)}/SketchProMax-{version}.zip", null, notes);
     }
 
     /// <summary>
@@ -587,6 +628,8 @@ public static class Updater
         public DateTime? LastCheck { get; set; }
         public string? Staged { get; set; }
         public string? LastError { get; set; }
+        public string? Latest { get; set; }
+        public string? Notes { get; set; }
     }
 
     private static State LoadState()

@@ -138,6 +138,8 @@ public static class CoreEntry
                 var synced = System.Diagnostics.Stopwatch.StartNew();
                 try { FavouritesRibbon.AfterSync(); } catch (Exception) { /* the live labels still say "Empty" */ }
                 Revit.StartupTimings.Phase("favourite slots", synced.ElapsedMilliseconds);
+                // Small buttons keep their labels on a narrow ribbon.
+                try { RibbonLabels.Keep(); } catch (Exception) { /* cosmetic */ }
                 return "ok";
             case "swapnote":
                 // Sent to the outgoing core just before "swapped": the new version's restart note, for its update window.
@@ -168,9 +170,10 @@ public static class CoreEntry
                 return "shown";
             }
             case "announce":
-                // Started by the loader after an update this window followed from another Revit window, or whose window
-                // was hidden: say so briefly.
-                UpdateWindow.Announce(new UpdateSnapshot(UpdateStage.Updated, Updater.CurrentText, 0, null, RestartNote.Text, DateTime.UtcNow));
+                // Started by the loader after an automatic update, one this window followed from another Revit window, or
+                // one whose window was hidden: a toast that doesn't take the focus, and the band at the top of the chat.
+                UpdateNotice.Offer(new UpdateNotice.Notice(UpdateNotice.Kind.Updated, Updater.CurrentText,
+                    UpdateNotice.TopLines(Updater.NotesFor(Updater.CurrentText)), RestartNote.Text));
                 return "shown";
             default: return "";
         }
@@ -214,7 +217,8 @@ public static class CoreEntry
                 var f = JobLine().Split('\t');
                 var running = f[0] is "running" or "selftest";
                 // While something runs, the button stops it: the red stop tile, and the tooltip says so.
-                return f.Length < 3 ? "" : CoreRibbonManifest.LiveLine(f[1].Replace('\n', ' '),
+                // A large button: the tool's name and its running time on two lines.
+                return f.Length < 3 ? "" : CoreRibbonManifest.LiveLine(f[1],
                     running ? f[2] + " Click to ask it to stop." : f[2] + " Click for details of the last job.", running ? "cancel" : "job");
             }
             case "update":
@@ -224,22 +228,9 @@ public static class CoreEntry
             }
             case "update-badge":
             {
-                var (text, kind) = CoreCommands.Badge();
-                var tip = kind switch
-                {
-                    UpdateBadge.Kind.WhatsNew => $"Sketch ProMax {Updater.CurrentText} is installed. Click to read what's new in it.",
-                    UpdateBadge.Kind.Check => Updater.Describe() + " Click to look for a newer version now.",
-                    UpdateBadge.Kind.Restart => $"Sketch ProMax {Updater.CurrentText}. {RestartNote.Text}",
-                    UpdateBadge.Kind.Working => UpdateLine().Split('\t')[1],
-                    _ => Updater.Describe() + " Click for the version, a check now and the release notes.",
-                };
-                var glyph = kind switch
-                {
-                    UpdateBadge.Kind.WhatsNew => "news",
-                    UpdateBadge.Kind.Check or UpdateBadge.Kind.Restart => "update",
-                    UpdateBadge.Kind.Working => UpdateLine().Split('\t')[2],
-                    _ => "version",
-                };
+                var ((text, _), tip, glyph) = CoreCommands.BadgeWithTip();
+                // Asked every two seconds on Revit's thread: also the moment a waiting update notice may be shown.
+                try { UpdateNotice.Pump(); } catch (Exception) { /* the badge still says it */ }
                 return CoreRibbonManifest.LiveLine(text, tip, glyph);
             }
             case var _ when Favourites.Slot(key, "fav") > 0:

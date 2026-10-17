@@ -137,17 +137,20 @@ internal static class CoreRibbonManifest
             "Read-only: nothing in the model changes. Runs here without the AI; usually a few MB at most. The folder opens " +
             "with the zip selected when it is done.", needsModel: true)),
 
-        // ---- Sketch ProMax (small): job, updates, bugs, settings, help
+        // ---- Sketch ProMax: Job and Update large and labelled, then two stacks of short labels (three, then two). A
+        // stack's widest label is the first Revit hides when the ribbon is narrow, so the labels are short and of a
+        // length; RibbonLabels then asks Revit to keep them (it shrinks the panel by other means).
         L(Button("Sketch ProMax", "JobLive", "No job", "job-button", "job",
-            "The tool running in Revit and its progress. While one runs, click to ask it to stop.", small: true, live: "job")),
-        L(Button("Sketch ProMax", "UpdateLive", "Up to date", "update-button", "version",
-            "The installed version and updates: Up to date, Check (look for a new version now), What's new (release notes).", small: true, live: "update-badge")),
+            "The tool running in Revit and its progress. While one runs, click to ask it to stop.", live: "job")),
+        L(Button("Sketch ProMax", "UpdateLive", "Updates", "update-button", "version",
+            "The installed version and updates: Update ready (install it now), Updated – What's new (release notes), Up to date " +
+            "with the time of the last check, Couldn't check (why, in this tooltip).", live: "update-badge")),
         // Bug reports (0.30): CoreEntry.Command "report-bug" / "bug-folder" / "export-chats-bugs"; the notes tab by PaneContent("notes").
         L(Button("Sketch ProMax", "ReportBug", "Report bug", "report-bug", "bug",
             "Writes a bug report for Sketch ProMax with what just happened, ready to send.", small: true, breakBefore: true)),
         L(Button("Sketch ProMax", "BugFolder", "Bug folder", "bug-folder", "folder",
             "Opens the folder with the bug reports written so far.", small: true)),
-        L(Button("Sketch ProMax", "ExportChatsBugs", "Export chats & bugs", "export-chats-bugs", "pack",
+        L(Button("Sketch ProMax", "ExportChatsBugs", "Export chats", "export-chats-bugs", "pack",
             "Writes one zip with the chats of every model, all bug reports, the tool-call log and the versions, to send to the developer.", small: true)),
         L(Button("Sketch ProMax", "SettingsButton", "Settings", "settings", "settings",
             "Firm standards, whether Revit asks before Claude changes the model, and automatic updates.", small: true, breakBefore: true)),

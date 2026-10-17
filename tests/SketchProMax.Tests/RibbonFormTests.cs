@@ -98,19 +98,14 @@ internal static class RibbonFormTests
         }
         finally { try { Directory.Delete(folder, true); } catch (IOException) { } }
 
-        // ---- Update badge
+        // ---- Update badge (more in UpdateNoticeTests)
         var now = new DateTime(2026, 10, 16, 12, 0, 0, DateTimeKind.Utc);
         var v30 = new Version(0, 30, 0);
-        check("badge: working wins", UpdateBadge.For("Downloading\n45%", true, v30, v30, now, false, now) == ("Downloading 45%", UpdateBadge.Kind.Working), "");
-        check("badge: restart before what's new", UpdateBadge.For(null, true, v30, new Version(0, 29, 0), now, false, now).Kind == UpdateBadge.Kind.Restart, "");
+        check("badge: working wins", UpdateBadge.For("Downloading\n45%", "0.31.0", true, v30, v30, now, null, now) == ("Downloading\n45%", UpdateBadge.Kind.Working), "");
+        check("badge: restart before what's new", UpdateBadge.For(null, null, true, v30, new Version(0, 29, 0), now, null, now).Kind == UpdateBadge.Kind.Restart, "");
         check("badge: first run of a fresh install is seen", UpdateBadge.FirstRunSeen(v30, [], false) == new Version(0, 30, 0), "");
         check("badge: first run after an update from an older version folder", UpdateBadge.FirstRunSeen(v30, ["0.28.1", "0.29.0", "0.30.0", "0.29.0.partial"], false) == new Version(0, 29, 0), "");
-        check("badge: first run after an update shown by earlier update state", UpdateBadge.For(null, false, v30, UpdateBadge.FirstRunSeen(v30, [], true), now, false, now).Kind == UpdateBadge.Kind.WhatsNew, "");
-        check("badge: what's new after an update", UpdateBadge.For(null, false, v30, new Version(0, 29, 0), now, false, now) == ("What's new", UpdateBadge.Kind.WhatsNew), "");
-        check("badge: check when never checked, failed or stale", UpdateBadge.For(null, false, v30, v30, null, false, now).Kind == UpdateBadge.Kind.Check
-            && UpdateBadge.For(null, false, v30, v30, now, true, now).Kind == UpdateBadge.Kind.Check
-            && UpdateBadge.For(null, false, v30, v30, now.AddDays(-3), false, now).Kind == UpdateBadge.Kind.Check, "");
-        check("badge: up to date after a recent check", UpdateBadge.For(null, false, v30, v30, now.AddHours(-1), false, now) == ("Up to date", UpdateBadge.Kind.UpToDate), "");
+        check("badge: first run after an update shown by earlier update state", UpdateBadge.For(null, null, false, v30, UpdateBadge.FirstRunSeen(v30, [], true), now, null, now).Kind == UpdateBadge.Kind.WhatsNew, "");
 
         // ---- The workflow manifest
         var all = RibbonManifest.Parse(CoreRibbonManifest.Text);
@@ -121,7 +116,7 @@ internal static class RibbonFormTests
         check("ribbon: every control has a tooltip", all.Controls.Concat(all.Entries.Values.SelectMany(e => e)).All(c => c.Tip.Length > 20),
             string.Join(",", all.Controls.Concat(all.Entries.Values.SelectMany(e => e)).Where(c => c.Tip.Length <= 20).Select(c => c.Id)));
         var units = RibbonManifest.Units(all.Controls.Where(c => c.Group == "Sketch ProMax")).Select(u => u.Count).ToList();
-        check("ribbon: Sketch ProMax panel stacks 2, 3, 2", units.SequenceEqual([2, 3, 2]), string.Join(",", units));
+        check("ribbon: Sketch ProMax panel is Job and Update large, then stacks of 3 and 2", units.SequenceEqual([1, 1, 3, 2]), string.Join(",", units));
         var claudeUnits = RibbonManifest.Units(all.Controls.Where(c => c.Group == "Claude")).Select(u => u.Count).ToList();
         check("ribbon: Claude panel is Chat, then two stacks of two", claudeUnits.SequenceEqual([1, 2, 2]), string.Join(",", claudeUnits));
         var steelGone = RibbonManifest.Parse(CoreRibbonManifest.Build(t => t.Contains("steel") || t == "place_bracing" ? null : "Summary of " + t));

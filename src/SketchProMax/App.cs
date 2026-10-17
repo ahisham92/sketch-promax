@@ -127,6 +127,7 @@ public sealed class App : IExternalApplication
         Ui = System.Windows.Threading.Dispatcher.CurrentDispatcher;
         try { MainWindow = app.MainWindowHandle; } catch (Exception) { MainWindow = IntPtr.Zero; }
         UI.FavouritesRibbon.Attach(app);
+        UI.RibbonLabels.Attach(app);
         // The loader asks for the ribbon (favourites included) right after this returns: read the recipe and learned-tool
         // folders on a background thread meanwhile, not on Revit's.
         Commands.QuickTools.Warm();
@@ -190,12 +191,9 @@ public sealed class App : IExternalApplication
         // Moves a manifest from an older release onto the one fixed loader path, once; writes nothing when settled.
         try { Updater.SettleInstall(); } catch (Exception) { }
         if (stop.IsCancellationRequested) return;
-        // Check at every start, then hourly while Revit stays open. The bug log is fetched with each check (or once, at
-        // start, when automatic updates are off).
-        bool auto;
-        try { auto = AgentSettings.Load().AutoUpdate; } catch (Exception) { auto = true; }
-        if (auto) await UpdateLoopAsync(stop).ConfigureAwait(false);
-        else await SyncBugLogAsync(stop).ConfigureAwait(false);
+        // Check at every start, then hourly while Revit stays open; the bug log is fetched with each check. With
+        // automatic updates off a newer version is only announced (UI/UpdateNotice), never downloaded.
+        await UpdateLoopAsync(stop).ConfigureAwait(false);
     }
 
     private static void OnDocumentOpening(object? sender, Autodesk.Revit.DB.Events.DocumentOpeningEventArgs e) => StartupTimings.Opening();
@@ -225,6 +223,7 @@ public sealed class App : IExternalApplication
         try { app.Application.FailuresProcessing -= FailureGuard.Handle; } catch (Exception) { }
         try { app.Application.DocumentOpening -= OnDocumentOpening; } catch (Exception) { }
         try { app.Application.DocumentOpened -= OnDocumentOpened; } catch (Exception) { }
+        try { UI.UpdateNotice.Stop(); } catch (Exception) { }
         UI.LazyPane.Forget();
         Dispatcher.Shutdown(app);
 #if NETFRAMEWORK
@@ -243,17 +242,43 @@ public sealed class App : IExternalApplication
 #endif
     }
 
+    /// <summary>How often updates are looked for while Revit stays open, by any Revit window (they share the last check).</summary>
+    internal static readonly TimeSpan CheckEvery = TimeSpan.FromHours(1);
+
+    /// <summary>
+    /// How often the loop looks at the clock. Not one long hourly wait: a timer stands still while Windows sleeps, so a
+    /// Revit left open overnight would go on for most of an hour after waking without checking.
+    /// </summary>
+    private static readonly TimeSpan LoopTick = TimeSpan.FromMinutes(5);
+
+    /// <summary>The newer version this core last announced as available.</summary>
+    private static string? _offered;
+
     private static async Task UpdateLoopAsync(CancellationToken stop)
     {
-        var force = true;
+        var first = true;
         while (!stop.IsCancellationRequested)
         {
-            try { await RunUpdateAsync(force, interactive: false, stop).ConfigureAwait(false); }
-            catch (Exception) { /* a failed check is retried next round; Status shows the last error */ }
-            force = false;
-            try { await Task.Delay(TimeSpan.FromHours(1), stop).ConfigureAwait(false); }
+            try
+            {
+                bool auto;
+                try { auto = AgentSettings.Load().AutoUpdate; } catch (Exception) { auto = true; }
+                if (first || Updater.IsDue(CheckEvery))
+                {
+                    await RunUpdateAsync(force: first, interactive: false, stop, install: auto).ConfigureAwait(false);
+                    first = false;
+                }
+                else if (!auto && Updater.Latest is { } latest && latest != _offered && Updater.Staged is null)
+                {
+                    // Another Revit window made the check that found it: say so here too (with automatic updates on, this
+                    // window follows that window's download instead, and announces "Updated to").
+                    _offered = latest;
+                    UI.UpdateNotice.Offer(new UI.UpdateNotice.Notice(UI.UpdateNotice.Kind.Available, latest, UI.UpdateNotice.TopLines(Updater.NotesFor(latest))));
+                }
+            }
+            catch (Exception) { first = false; /* a failed check is retried at the next round; the badge shows the last error */ }
+            try { await Task.Delay(LoopTick, stop).ConfigureAwait(false); }
             catch (OperationCanceledException) { return; }
-            if (!AgentSettings.Load().AutoUpdate) return;
         }
     }
 
@@ -271,19 +296,32 @@ public sealed class App : IExternalApplication
     }
 
     /// <summary>
-    /// One update run. Automatic runs stay silent unless a new version is found; then the update window opens. The
-    /// window and the ribbon follow the run through its <see cref="UpdateProgress"/>, never blocking Revit.
+    /// One update run. The ribbon's Update button follows every run through its <see cref="UpdateProgress"/>. A run the
+    /// user asked for opens the update window from the start. An automatic run never opens a window: a newer version
+    /// is announced by a small toast that doesn't take the focus (<see cref="UI.UpdateNotice"/>), "available" when
+    /// automatic updates are off, "installed" when Revit must restart; a live switch is announced by the new version.
     /// </summary>
-    private static async Task RunUpdateAsync(bool force, bool interactive, CancellationToken stop)
+    private static async Task RunUpdateAsync(bool force, bool interactive, CancellationToken stop, bool install = true)
     {
         var progress = new UpdateProgress { Interactive = interactive };
+        UpdateProgress.Current = progress;
         if (interactive) Surface(progress);
         else
             progress.Changed += s =>
             {
-                if (!progress.Surfaced && s.Stage is UpdateStage.Downloading or UpdateStage.Applying or UpdateStage.RestartNeeded) Surface(progress);
+                // The Version button of older loaders shows a run once it is surfaced.
+                if (s.Stage is UpdateStage.Downloading or UpdateStage.Applying or UpdateStage.RestartNeeded or UpdateStage.Available) progress.Surfaced = true;
+                if (s.Stage == UpdateStage.Available && s.Version is { } available)
+                {
+                    _offered = available;
+                    UI.UpdateNotice.Offer(new UI.UpdateNotice.Notice(UI.UpdateNotice.Kind.Available, available,
+                        UI.UpdateNotice.TopLines(Updater.NotesFor(available))));
+                }
+                else if (s.Stage == UpdateStage.RestartNeeded && s.Version is { } installed)
+                    UI.UpdateNotice.Offer(new UI.UpdateNotice.Notice(UI.UpdateNotice.Kind.Installed, installed,
+                        UI.UpdateNotice.TopLines(Updater.NotesFor(installed)), s.Detail));
             };
-        try { await Updater.CheckAsync(force, progress, stop).ConfigureAwait(false); }
+        try { await Updater.CheckAsync(force, progress, stop, install).ConfigureAwait(false); }
         finally { await SyncBugLogAsync(stop).ConfigureAwait(false); }
     }
 

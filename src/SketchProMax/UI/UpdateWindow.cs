@@ -127,7 +127,8 @@ internal sealed class UpdateWindow : Window
     /// <summary>Brings back the window of the current run, if any. Returns false when there is none to show.</summary>
     public static bool ShowCurrent()
     {
-        if (UpdateProgress.Current is not { } p || p.Snapshot.Stage == UpdateStage.Idle) return false;
+        // An automatic check that found nothing has no window of its own: the version dialog shows instead.
+        if (UpdateProgress.Current is not { } p || p.Snapshot.Stage == UpdateStage.Idle || !p.Surfaced && p.Snapshot.IsFinal) return false;
         ShowFor(p);
         return true;
     }
@@ -192,6 +193,7 @@ internal sealed class UpdateWindow : Window
             UpdateStage.RestartNeeded => s.Detail ?? "Restart Revit to finish (your work is not interrupted until then).",
             UpdateStage.Failed => s.Detail ?? "The update didn't finish. Nothing changed; it is tried again later.",
             UpdateStage.Cancelled => s.Detail ?? "The update was cancelled.",
+            UpdateStage.Available => $"Sketch ProMax {s.Version} is available. Use Update on the ribbon to install it now.",
             _ => "",
         };
         Brand.Fg(_final, s.Stage switch

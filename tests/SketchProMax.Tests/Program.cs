@@ -62,6 +62,7 @@ BugAndMemoryTests.Run((name, ok, detail) => Check(name, ok, detail));
 LayoutTests.Run((name, ok, detail) => Check(name, ok, detail));
 RibbonFormTests.Run((name, ok, detail) => Check(name, ok, detail));
 FavouritesTests.Run((name, ok, detail) => Check(name, ok, detail));
+UpdateNoticeTests.Run((name, ok, detail) => Check(name, ok, detail));
 CarbonTests.Run((name, ok, detail) => Check(name, ok, detail));
 VeTests.Run((name, ok, detail) => Check(name, ok, detail));
 {

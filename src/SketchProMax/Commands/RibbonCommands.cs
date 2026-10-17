@@ -150,16 +150,18 @@ internal static class CoreCommands
     public static Result JobButton() => Jobs.Running is not null || Tools.SelfTest.IsRunning ? CancelJob() : Job();
 
     /// <summary>
-    /// The Update button: "What's new" opens the release notes (and the badge goes back to normal), "Check" looks for a
-    /// new version now, anything else shows the version with its update window or choices.
+    /// The Update button: "Update ready" installs the newer version now (in this Revit session), "What's new" opens the
+    /// release notes (and the badge goes back to normal), "Couldn't check" and "Check for updates" look for a new version
+    /// now, anything else shows the version with its update window or choices.
     /// </summary>
     public static Result UpdateButton()
     {
         switch (Badge().Kind)
         {
             case UpdateBadge.Kind.WhatsNew:
-                MarkSeen();
-                return OpenUrl(ReleasesUrl);
+                return WhatsNew();
+            case UpdateBadge.Kind.Ready:
+            case UpdateBadge.Kind.Failed:
             case UpdateBadge.Kind.Check:
                 _checkState = null;
                 return CheckForUpdates();
@@ -168,30 +170,61 @@ internal static class CoreCommands
         }
     }
 
-    private static (DateTime? Last, bool Failed)? _checkState;
+    /// <summary>Opens the release notes; the "What's new" badge goes back to normal.</summary>
+    public static Result WhatsNew()
+    {
+        MarkSeen();
+        return OpenUrl(ReleasesUrl);
+    }
+
+    private static (DateTime? Last, string? Error, string? Latest, string? Staged)? _checkState;
     private static int _checkStateAt;
     private static Version? _seen;
 
     private static string SeenFile => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SketchProMax", "whats-new-seen.txt");
 
-    /// <summary>The Update button's badge, asked every two seconds: the update-state file is read at most every half minute.</summary>
-    internal static (string Text, UpdateBadge.Kind Kind) Badge()
+    /// <summary>
+    /// The Update button's badge, asked every two seconds: the update-state file is read at most every half minute, and
+    /// at once after a run of this window changed it.
+    /// </summary>
+    internal static (string Text, UpdateBadge.Kind Kind) Badge() => BadgeWithTip().Badge;
+
+    internal static ((string Text, UpdateBadge.Kind Kind) Badge, string Tip, string Glyph) BadgeWithTip()
     {
-        string? working = null;
-        if (UpdateProgress.Current is { Surfaced: true } progress)
+        string? working = null, ready = null;
+        if (UpdateProgress.Current is { } progress)
         {
             var snapshot = progress.Snapshot;
-            if (!snapshot.IsFinal && snapshot.Stage != UpdateStage.Idle) working = UpdateProgress.Short(snapshot);
+            // Applying: downloaded, waiting for Revit to be idle with no job running.
+            if (snapshot.Stage == UpdateStage.Applying) ready = snapshot.Version;
+            else if (!snapshot.IsFinal && snapshot.Stage != UpdateStage.Idle) working = UpdateProgress.Short(snapshot);
+            if (snapshot.IsFinal && snapshot.Changed > _checkStateTime) _checkState = null;
         }
         if (_checkState is null || unchecked(Environment.TickCount - _checkStateAt) > 30000)
         {
-            _checkState = Updater.LastCheckState();
+            var (last, error) = Updater.LastCheckState();
+            _checkState = (last, error, Updater.Latest, Updater.Staged);
             _checkStateAt = Environment.TickCount;
+            _checkStateTime = DateTime.UtcNow;
         }
-        var (last, failed) = _checkState.Value;
-        return UpdateBadge.For(working, RestartNote.Text is not null, Updater.Current, SeenVersion(), last, failed, DateTime.UtcNow);
+        var (lastCheck, lastError, latest, staged) = _checkState.Value;
+        ready ??= staged ?? latest;
+        var badge = UpdateBadge.For(working, ready, RestartNote.Text is not null, Updater.Current, SeenVersion(), lastCheck, lastError, DateTime.UtcNow);
+        var tip = UpdateBadge.Tip(badge.Kind, Updater.CurrentText, lastError, lastCheck, Updater.Describe(), RestartNote.Text,
+            working is null ? null : UpdateProgress.Current?.Snapshot.Detail is { Length: > 0 } d ? d + " Click to see the update window." : null);
+        var glyph = badge.Kind switch
+        {
+            UpdateBadge.Kind.WhatsNew => "news",
+            UpdateBadge.Kind.Ready => "download",
+            UpdateBadge.Kind.Working => UpdateProgress.Current?.Snapshot.Stage == UpdateStage.Downloading ? "download" : "update",
+            UpdateBadge.Kind.Check or UpdateBadge.Kind.Restart or UpdateBadge.Kind.Failed => "update",
+            _ => "version",
+        };
+        return (badge, tip, glyph);
     }
+
+    private static DateTime _checkStateTime;
 
     /// <summary>
     /// The version whose release notes were last opened. The first time (nothing stored) it is this version on a fresh
