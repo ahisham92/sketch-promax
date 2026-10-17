@@ -74,6 +74,8 @@ public static class CoreEntry
             "report-bug" => Bugs.BugReport.Command(app),
             "bug-folder" => Bugs.BugReport.OpenFolder(),
             "export-chats-bugs" => QuickTools.ExportChatsAndBugs(app),
+            // Time saved and working time for the active model (0.32+).
+            "time-saved" => TimeSavedWindow.Command(app),
             // Favourites on the My tools panel (0.30.1+): the manager, and the slot buttons ("fav:1"...).
             Favourites.ManagerCommand => FavouritesRibbon.Manage(app),
             _ when Favourites.Slot(name, "fav:") > 0 => FavouritesRibbon.Run(app, Favourites.Slot(name, "fav:")),

@@ -99,6 +99,8 @@ internal static class ItemBatch
             finally { FailureGuard.Muted--; }
         }
 
+        // The time log writes in one more transaction of the group, so the batch stays one undo step.
+        if (result.Done > 0) TimeLog.InBatch(doc, name, result.Done);
         if (result.Done > 0) group.Assimilate();
         else group.RollBack();
         if (manual is not null)

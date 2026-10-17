@@ -26,7 +26,6 @@ internal sealed partial class ChatPane
 
     /// <summary>
     /// The brief the running task was started from ("" when it runs as typed, had no brief, or nothing runs).
-    /// TODO(time log): the time-saved log entry can carry this text when a task ends.
     /// </summary>
     internal static string ActiveBrief => _instance?._turn?.Brief ?? "";
 

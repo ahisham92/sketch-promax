@@ -318,6 +318,7 @@ internal static class QuickTools
         ToolResult result;
         try
         {
+            TimeLog.BeginTool(app, tool, fromChat: false);
             result = FailureGuard.Run(() =>
             {
                 try { return tool.Execute(app, new ToolArgs(args)); }
@@ -326,9 +327,11 @@ internal static class QuickTools
                 catch (Exception ex) { return ToolResult.Error(BridgeServer.Describe(tool, ex)); }
             });
             ActivityLog.Write(app.ActiveUIDocument?.Document?.Title ?? "", tool, args, result);
+            TimeLog.EndTool(result);
         }
         finally
         {
+            TimeLog.EndTool(null);
             job.Finished = DateTime.UtcNow;
             Jobs.Running = null;
         }

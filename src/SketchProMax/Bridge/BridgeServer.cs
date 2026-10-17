@@ -364,6 +364,8 @@ public sealed class BridgeServer
             job.StartedSignal.TrySetResult(true);
             try
             {
+                // Time saved and AI time: from here (the approval wait included) to the end of the run.
+                TimeLog.BeginTool(app, tool, fromChat);
                 if (app.ActiveUIDocument is null) return ToolResult.Error("No model is open in Revit. Ask the user to open one.");
                 if (confirm && !Approve(tool, args, chatReason)) return ToolResult.Error("The user rejected this change in Revit. Ask them how to proceed.");
                 var result = FailureGuard.Run(() =>
@@ -374,10 +376,12 @@ public sealed class BridgeServer
                     catch (Exception ex) { return ToolResult.Error(Describe(tool, ex)); }
                 });
                 ActivityLog.Write(app.ActiveUIDocument?.Document?.Title ?? "", tool, args, result);
+                TimeLog.EndTool(result);
                 return Capped(result);
             }
             finally
             {
+                TimeLog.EndTool(null); // rejected or no model: only the wait is counted (no-op once ended above)
                 // A tool that handed on to a continuation (the field test) is still running: the continuation ends the job.
                 if (job.Continuation is null)
                 {

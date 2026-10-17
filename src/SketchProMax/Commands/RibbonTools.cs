@@ -92,7 +92,7 @@ internal static class RibbonTools
             result = QuickTools.Execute(app, tool.Name, args);
         var headline = result.IsError
             ? result.Text.StartsWith("Stopped on request", StringComparison.Ordinal) ? "Stopped; what it finished is kept" : "It did not work"
-            : "Done";
+            : Revit.TimeLog.LastLine ?? "Done"; // "Done in X. By hand: about Y. Saved: Z."
         QuickTools.Show(title, result, headline);
         return result.IsError ? Result.Failed : Result.Succeeded;
     }
