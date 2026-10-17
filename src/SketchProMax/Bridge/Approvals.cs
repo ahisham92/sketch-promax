@@ -25,7 +25,13 @@ internal static class Approvals
         var settings = AgentSettings.Load();
         settings.Approvals = level;
         settings.Save();
+        LevelChanged?.Invoke();
     }
+
+    /// <summary>The level was changed (the chat's menu, the dialog's "Always allow", Settings): the chat shows it.</summary>
+    public static event Action? LevelChanged;
+
+    internal static void RaiseLevelChanged() => LevelChanged?.Invoke();
 
     /// <summary>Tools the user said not to ask about again.</summary>
     public static List<string> Remembered() => AgentSettings.Load().NoAskTools ?? [];
@@ -90,7 +96,7 @@ internal static class Approvals
         if (call is { Asked: true }) return false;
         if (call?.Decision.Kind == AskKind.Change) return true;
         var level = Level;
-        if (level == ApprovalLevel.RiskyOnly || Remembered().Contains(tool, StringComparer.Ordinal)) return false;
+        if (level is ApprovalLevel.RiskyOnly or ApprovalLevel.AlwaysAllow || Remembered().Contains(tool, StringComparer.Ordinal)) return false;
         if (call is null) return level == ApprovalLevel.EveryChange;
         return call.Chat is not { ApprovedForTask: true };
     }
@@ -142,7 +148,7 @@ internal static class Approvals
 
     // ---- The dialog ------------------------------------------------------------------------------------------------
 
-    internal enum Answer { No, Yes, RestOfTask, NeverAsk }
+    internal enum Answer { No, Yes, RestOfTask, NeverAsk, AlwaysAllow }
 
     /// <summary>Test hook (the field test): answers instead of the dialog, and sees what would have been asked.</summary>
     internal static Func<string, ApprovalDecision, Answer>? TestAnswer;
@@ -165,6 +171,9 @@ internal static class Approvals
     {
         var friendly = ApprovalPolicy.Friendly(tool);
         var level = Level;
+        // "Always allow": nothing asks (the bridge already decided so); this catches the dialogs tools and the ribbon
+        // show themselves. Only the issue gate's sign-off (AskKind.Always at this level) is still shown.
+        if (level == ApprovalLevel.AlwaysAllow && decision.Kind != AskKind.Always) return true;
         var silence = decision.CanSilence;
         var onceTask = silence && chat is not null && level == ApprovalLevel.OncePerTask;
         Answer answer;
@@ -189,15 +198,26 @@ internal static class Approvals
                     "Remembered for you. Settings lists it, to clear.");
             dialog.AddCommandLink(TaskDialogCommandLinkId.CommandLink4, "Don't allow", "Nothing changes. Claude is told, and asks you what to do.");
             dialog.DefaultButton = silence ? TaskDialogResult.CommandLink1 : TaskDialogResult.CommandLink4;
-            answer = dialog.Show() switch
+            // One click to stop being asked at all (the dialog has room for four links, so it is the tick box under them).
+            var gate = decision.Kind == AskKind.Always && ApprovalPolicy.IsIssueGate(tool);
+            if (!gate) dialog.VerificationText = "Always allow: don't ask me again for any change (risky ones included; change it in Settings)";
+            var shown = dialog.Show();
+            answer = shown switch
             {
                 TaskDialogResult.CommandLink1 => onceTask ? Answer.RestOfTask : Answer.Yes,
                 TaskDialogResult.CommandLink2 => Answer.RestOfTask,
                 TaskDialogResult.CommandLink3 => Answer.NeverAsk,
                 _ => Answer.No,
             };
+            if (!gate && answer != Answer.No && dialog.WasVerificationChecked()) answer = Answer.AlwaysAllow;
         }
         if (answer == Answer.No) return false;
+        if (answer == Answer.AlwaysAllow)
+        {
+            try { SetLevel(ApprovalLevel.AlwaysAllow); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* this one is allowed; the next asks again */ }
+            return true;
+        }
         if (!silence) return true;
         if (answer == Answer.RestOfTask && chat is not null) chat.ApprovedForTask = true;
         if (answer == Answer.NeverAsk) Remember(tool);

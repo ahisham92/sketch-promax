@@ -97,7 +97,7 @@ Claude desktop app ──stdio──► SketchProMax.Mcp.exe ──┬─ named 
 Key decisions:
 - **Threading.** The Revit API is single-threaded. The pipe server waits on a background thread; every tool runs on Revit's main thread via one `ExternalEvent` queue (`RevitDispatcher`). Revit stays responsive while Claude thinks.
 - **Tools are small, typed and composable.** Each tool declares a JSON schema, whether it changes the model, and returns JSON (or an image). Counts and ids come back so Claude can verify its own work.
-- **Human in the loop.** Risky calls (code, new recipes and learned tools, deletes that take other elements, overwriting files, what-ifs, the issue gate) always ask in Revit; other model changes ask per the approval level in Settings (only risky, once per task, or every change). Each change is a named transaction, so Undo works per step.
+- **Human in the loop.** Risky calls (code, new recipes and learned tools, deletes that take other elements, overwriting files, what-ifs, the issue gate) always ask in Revit; other model changes ask per the approval level in Settings (only risky, once per task, or every change). At Always allow nothing asks but the issue gate. Each change is a named transaction, so Undo works per step.
 - **Deterministic where it matters.** QA checks and future code checks are plain code. Claude interprets, explains and fixes; it doesn't do the counting.
 - **One front end: the Claude desktop app.** Each Revit window announces itself with a file in `%APPDATA%\SketchProMax\sessions` and listens on its own pipe. The connector pings them, drops stale ones, and routes calls to the window and model the user named (`list_revit_models`, `use_revit_model`), or to the only one open.
 - **No secrets.** No API key is stored or needed.

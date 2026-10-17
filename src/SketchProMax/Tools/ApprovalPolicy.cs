@@ -11,6 +11,11 @@ public enum ApprovalLevel
     OncePerTask,
     /// <summary>Every model change is asked (how it worked before the levels).</summary>
     EveryChange,
+    /// <summary>
+    /// Nothing is asked, risky changes included (code, deletes that take others, overwrites, what-ifs, value engineering
+    /// on the open model). Only the issue check's accept and issue-past-open-items still ask: they are a QA sign-off.
+    /// </summary>
+    AlwaysAllow,
 }
 
 /// <summary>Why a call is asked about: a normal change (can be silenced), risky (asked each time), or always asked (whatever the setting).</summary>
@@ -73,7 +78,10 @@ internal static class ApprovalPolicy
         ApprovalLevel level, ICollection<string> remembered, bool taskApproved, Func<string, PathState> probe, IReadOnlyList<string> outputRoots)
     {
         // Whatever the level, wherever it comes from: what_if with confirm, accepting issue items, issuing with open items.
-        if (OutputPaths.AlwaysAskReason(tool, args) is { } always) return new(true, AskKind.Always, always);
+        // At "Always allow" only the issue gate's (a QA sign-off, not an approval) is left.
+        if (OutputPaths.AlwaysAskReason(tool, args) is { } always)
+            return level != ApprovalLevel.AlwaysAllow || IsIssueGate(tool) ? new(true, AskKind.Always, always) : ApprovalDecision.No;
+        if (level == ApprovalLevel.AlwaysAllow) return ApprovalDecision.No;
 
         var risks = new List<string>();
         if (fromChat && RunsNewCode.Contains(tool))
@@ -104,6 +112,9 @@ internal static class ApprovalPolicy
         if (level == ApprovalLevel.RiskyOnly || remembered.Contains(tool) || fromChat && taskApproved) return ApprovalDecision.No;
         return new(true, AskKind.Change, "It changes the model. Ctrl+Z undoes it.");
     }
+
+    /// <summary>The issue check's ways past an open item, which ask at every level (see OutputPaths.AlwaysAskReason).</summary>
+    public static bool IsIssueGate(string tool) => tool is "issue_check" or "issue_drawings";
 
     /// <summary>The full paths a call writes to (empty values are the tool's default folder, which is ours).</summary>
     public static List<string> WritePaths(string tool, IReadOnlyDictionary<string, JsonElement> args) =>
@@ -170,6 +181,7 @@ internal static class ApprovalPolicy
     {
         "once_per_task" or "oncepertask" => ApprovalLevel.OncePerTask,
         "every_change" or "everychange" => ApprovalLevel.EveryChange,
+        "always_allow" or "alwaysallow" => ApprovalLevel.AlwaysAllow,
         _ => ApprovalLevel.RiskyOnly,
     };
 
@@ -177,6 +189,7 @@ internal static class ApprovalPolicy
     {
         ApprovalLevel.OncePerTask => "once_per_task",
         ApprovalLevel.EveryChange => "every_change",
+        ApprovalLevel.AlwaysAllow => "always_allow",
         _ => "risky_only",
     };
 
@@ -184,6 +197,7 @@ internal static class ApprovalPolicy
     {
         ApprovalLevel.OncePerTask => "Ask once per task",
         ApprovalLevel.EveryChange => "Ask for every change",
+        ApprovalLevel.AlwaysAllow => "Always allow (never ask)",
         _ => "Ask only for risky changes",
     };
 
@@ -191,8 +205,9 @@ internal static class ApprovalPolicy
     {
         ApprovalLevel.OncePerTask => "The first change of a chat task asks; the rest run",
         ApprovalLevel.EveryChange => "A dialog before every change",
+        ApprovalLevel.AlwaysAllow => "Nothing asks, risky changes and code included; only the issue check's sign-off still asks",
         _ => "Changes just run (Ctrl+Z undoes them); risky ones still ask",
     };
 
-    public static readonly ApprovalLevel[] Levels = [ApprovalLevel.RiskyOnly, ApprovalLevel.OncePerTask, ApprovalLevel.EveryChange];
+    public static readonly ApprovalLevel[] Levels = [ApprovalLevel.RiskyOnly, ApprovalLevel.OncePerTask, ApprovalLevel.EveryChange, ApprovalLevel.AlwaysAllow];
 }

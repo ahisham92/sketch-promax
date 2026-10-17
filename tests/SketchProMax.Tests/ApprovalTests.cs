@@ -55,7 +55,7 @@ internal static class ApprovalTests
         var readsAsk = ApprovalPolicy.Levels.Where(l => D("get_elements", false, "{}", l).Ask || D("export_pdf", false, """{"folder":""}""", l).Ask).ToList();
         check("approval: reads never ask", readsAsk.Count == 0, string.Join(", ", readsAsk));
 
-        // ---- Always asked, whatever the level, the task or don't ask again
+        // ---- Always asked, whatever the level (but Always allow, below), the task or don't ask again
         foreach (var (tool, json) in new[] { ("what_if", """{"confirm":true}"""), ("issue_check", """{"accept":[{"key":"k","reason":"r"}]}"""), ("issue_drawings", """{"allow_open_items":true}""") })
         {
             var d = D(tool, true, json, ApprovalLevel.RiskyOnly, task: true, remembered: [tool]);
@@ -108,6 +108,30 @@ internal static class ApprovalTests
             before == 13 && once == 1 && risky == 0 && brief == 0, $"{before} {once} {risky} {brief}");
         var withCode = task.Prepend(("run_revit_query_code", false, (IReadOnlyDictionary<string, JsonElement>)Args("""{"code":"x"}"""))).ToList();
         check("approval: chat code still asks after a brief", ApprovalPolicy.CountAsks(withCode, ApprovalLevel.RiskyOnly, true) == 1, "");
+
+        // ---- Always allow: nothing asks, risky included; only the issue gate's sign-off still does
+        var aa = ApprovalLevel.AlwaysAllow;
+        check("approval: always allow, typical task asks 0 times", ApprovalPolicy.CountAsks(task, aa, false) == 0, ApprovalPolicy.CountAsks(task, aa, false).ToString());
+        var riskyTask = withCode.Concat(new[]
+        {
+            ("delete_elements", true, (IReadOnlyDictionary<string, JsonElement>)Args("""{"element_ids":[1]}""")),
+            ("ve_apply", true, (IReadOnlyDictionary<string, JsonElement>)Args("""{"target":"main"}""")),
+            ("what_if", true, (IReadOnlyDictionary<string, JsonElement>)Args("""{"confirm":true}""")),
+            ("run_revit_code", true, (IReadOnlyDictionary<string, JsonElement>)Args("""{"code":"x"}""")),
+        }).ToList();
+        check("approval: always allow, a risky task asks 0 times", ApprovalPolicy.CountAsks(riskyTask, aa, false) == 0, ApprovalPolicy.CountAsks(riskyTask, aa, false).ToString());
+        ApprovalDecision A(string tool, bool modifies, string json, ApprovalFacts? facts = null, bool learned = false, bool chat = true) =>
+            D(tool, modifies, json, aa, chat: chat, facts: facts, learned: learned);
+        check("approval: always allow runs new code, deletes that take others, overwrites and ve on the open model",
+            !A("my_tool", false, "{}", new ApprovalFacts { NewCode = true }, learned: true).Ask
+            && !A("run_recipe", true, """{"name":"x"}""", new ApprovalFacts { NewCode = true }).Ask
+            && !A("delete_elements", true, """{"element_ids":[1]}""", new ApprovalFacts { DeleteTakes = "It also deletes 2 Doors." }).Ask
+            && !A("export_schedule", false, """{"file_name":"D:\\Jobs\\report.xlsx"}""").Ask
+            && !A("ve_apply", true, """{"target":"main"}""", chat: false).Ask && !A("what_if", true, """{"confirm":true}""").Ask, "");
+        var acceptGate = A("issue_check", true, """{"accept":[{"key":"k","reason":"r"}]}""");
+        check("approval: always allow still asks the issue check's accept and issue past open items",
+            acceptGate.Ask && acceptGate.Kind == AskKind.Always && A("issue_drawings", true, """{"allow_open_items":true}""").Ask, "");
+        check("approval: always allow is the last level and reads back", ApprovalPolicy.Levels[^1] == aa && ApprovalPolicy.Parse("always_allow") == aa, "");
 
         // ---- The setting
         check("approval: settings written before the levels read as risky only", ApprovalPolicy.Parse(null) == ApprovalLevel.RiskyOnly && ApprovalPolicy.Parse("") == ApprovalLevel.RiskyOnly, "");

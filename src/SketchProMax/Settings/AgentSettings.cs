@@ -16,7 +16,8 @@ public sealed class AgentSettings
     public bool RequireApprovalForChanges { get; set; } = true;
 
     /// <summary>
-    /// How often Revit asks before Claude changes something: risky_only (the default), once_per_task or every_change.
+    /// How often Revit asks before Claude changes something: risky_only (the default), once_per_task, every_change or
+    /// always_allow.
     /// Empty in files written before the levels, which read as the default (Tools.ApprovalPolicy.Parse).
     /// </summary>
     public string? ApprovalLevel { get; set; }
@@ -32,7 +33,7 @@ public sealed class AgentSettings
         set
         {
             ApprovalLevel = Tools.ApprovalPolicy.Store(value);
-            RequireApprovalForChanges = value != Tools.ApprovalLevel.RiskyOnly;
+            RequireApprovalForChanges = value is not (Tools.ApprovalLevel.RiskyOnly or Tools.ApprovalLevel.AlwaysAllow);
         }
     }
 

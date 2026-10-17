@@ -1390,7 +1390,7 @@ internal static partial class FieldTest
                 Bridge.Approvals.TestLevel = level;
                 var fresh = new Bridge.JobControl();
                 var d = Bridge.Approvals.Decide(app, tool, args, true, fresh);
-                if (d.Ask != (level != ApprovalLevel.RiskyOnly)) problems.Add($"{ApprovalPolicy.Label(level)}: a new sheet {(d.Ask ? "asked" : "did not ask")}");
+                if (d.Ask != (level is not (ApprovalLevel.RiskyOnly or ApprovalLevel.AlwaysAllow))) problems.Add($"{ApprovalPolicy.Label(level)}: a new sheet {(d.Ask ? "asked" : "did not ask")}");
                 fresh.ApprovedForTask = true;
                 if (Bridge.Approvals.Decide(app, tool, args, true, fresh).Ask) problems.Add($"{ApprovalPolicy.Label(level)}: an approved task still asked");
             }
@@ -1421,6 +1421,19 @@ internal static partial class FieldTest
             if (Bridge.Approvals.AskOwn("redline_apply")) problems.Add("from the ribbon, redlines asked at risky only");
             Bridge.Approvals.TestLevel = ApprovalLevel.EveryChange;
             if (!Bridge.Approvals.AskOwn("redline_apply") && !Bridge.Approvals.Remembered().Contains("redline_apply")) problems.Add("from the ribbon, redlines did not ask at every change");
+
+            // "Always allow": nothing asks, chat code and the ribbon's own dialogs included; the issue check's accept still does.
+            Bridge.Approvals.TestLevel = ApprovalLevel.AlwaysAllow;
+            if (code is not null && Bridge.Approvals.Decide(app, code, codeArgs, true, new Bridge.JobControl()).Ask) problems.Add("Always allow: chat code asked");
+            if (Bridge.Approvals.AskOwn("redline_apply")) problems.Add("Always allow: the ribbon's redlines asked");
+            var before = asked.Count;
+            if (!Bridge.Approvals.Show("run_revit_code", new ApprovalDecision(true, AskKind.Risky, "test"), "", null) || asked.Count != before)
+                problems.Add("Always allow: a tool's own risky dialog was shown");
+            if (s.Registry.Find("issue_check") is { } gate)
+            {
+                var accept = new Dictionary<string, JsonElement> { ["accept"] = JsonDocument.Parse("[{\"key\":\"x\",\"reason\":\"test\"}]").RootElement.Clone() };
+                if (!Bridge.Approvals.Decide(app, gate, accept, true, new Bridge.JobControl()).Ask) problems.Add("Always allow: accepting issue check items did not ask");
+            }
         }
         finally
         {

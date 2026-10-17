@@ -378,7 +378,7 @@ internal sealed partial class ChatPane
     }
 
     /// <summary>
-    /// Adds "Ask before changes: only risky / once per task / every change" under the brief choice: the same setting as
+    /// Adds "Ask before changes: only risky / once per task / every change / always allow" under the brief choice: the same setting as
     /// Settings, one click away while chatting.
     /// </summary>
     private void AddApprovalMenu()

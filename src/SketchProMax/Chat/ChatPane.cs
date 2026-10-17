@@ -79,6 +79,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             pane._handedOver = false;
             UI.RestartNote.Changed -= pane.ShowRestartNote;
             UI.RestartNote.Changed += pane.ShowRestartNote;
+            Bridge.Approvals.LevelChanged -= pane.ShowApprovalLevel;
+            Bridge.Approvals.LevelChanged += pane.ShowApprovalLevel;
             pane._idle.Start();
             Brand.UseTheme(pane);
             pane.ShowStatus();
@@ -184,6 +186,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     private readonly TextBlock _modelLine, _chatName;
     private readonly Button _newChat, _refresh, _send, _stop, _attach, _view, _menu, _prompts, _modelPill, _briefPill;
     private readonly TextBlock _briefLabel = new() { FontSize = ChatUi.SmallSize, VerticalAlignment = VerticalAlignment.Center };
+    // "Always allow" next to the brief pill while nothing asks before changes (a quiet reminder; it opens the same menu).
+    private Button _allowPill = null!;
     private readonly Border _promptPanel = new() { Visibility = Visibility.Collapsed, Margin = new Thickness(0, 0, 0, ChatUi.S2) };
     private List<SavedPrompt>? _saved;
     private HistoryDrawer? _drawer;
@@ -427,11 +431,25 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         AutomationProperties.SetItemStatus(_briefPill, "Collapsed");
         DockPanel.SetDock(_briefPill, Dock.Right);
         ShowBriefChoice();
+        _allowPill = new Button
+        {
+            Content = ChatUi.Small("Always allow"), Margin = new Thickness(0, 0, ChatUi.S1, 0), VerticalAlignment = VerticalAlignment.Center,
+            Padding = new Thickness(ChatUi.S2, ChatUi.S1, ChatUi.S2, ChatUi.S1),
+            ToolTip = "Ask before changes: Always allow. Nothing asks in Revit before Claude changes the model, risky changes included. Click to change.",
+        };
+        _allowPill.SetResourceReference(StyleProperty, "SpmChatGhost");
+        _allowPill.Click += (_, _) => ToggleModelMenu(brief: true);
+        AutomationProperties.SetName(_allowPill, "Ask before changes: Always allow");
+        AutomationProperties.SetHelpText(_allowPill, (string)_allowPill.ToolTip);
+        DockPanel.SetDock(_allowPill, Dock.Right);
+        ShowApprovalLevel();
+        if (sample is null) Bridge.Approvals.LevelChanged += ShowApprovalLevel;
         _attach.Margin = _prompts.Margin = _view.Margin = new Thickness(0, 0, 2, 0);
         buttons.Children.Add(_send);
         buttons.Children.Add(_stop);
         buttons.Children.Add(_modelPill);
         buttons.Children.Add(_briefPill);
+        buttons.Children.Add(_allowPill);
         buttons.Children.Add(_attach);
         buttons.Children.Add(_prompts);
         buttons.Children.Add(_view);
@@ -440,6 +458,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         KeyboardNavigation.SetTabIndex(_attach, 1);
         KeyboardNavigation.SetTabIndex(_prompts, 2);
         KeyboardNavigation.SetTabIndex(_view, 3);
+        KeyboardNavigation.SetTabIndex(_allowPill, 4);
         KeyboardNavigation.SetTabIndex(_briefPill, 4);
         KeyboardNavigation.SetTabIndex(_modelPill, 5);
         KeyboardNavigation.SetTabIndex(_stop, 6);
@@ -725,6 +744,15 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         _briefPill.ToolTip = "Brief before running: " + PromptBriefs.Label(_briefMode) + ". " + PromptBriefs.Hint(_briefMode) + ". Click to change.";
         AutomationProperties.SetName(_briefPill, "Brief before running: " + PromptBriefs.Label(_briefMode));
         AutomationProperties.SetHelpText(_briefPill, _briefPill.ToolTip as string ?? "");
+    }
+
+    /// <summary>Shows or hides the "Always allow" reminder by the message box.</summary>
+    private void ShowApprovalLevel()
+    {
+        Tools.ApprovalLevel level;
+        try { level = Bridge.Approvals.Level; }
+        catch (Exception) { level = Tools.ApprovalLevel.RiskyOnly; }
+        _allowPill.Visibility = level == Tools.ApprovalLevel.AlwaysAllow ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private static StackPanel Row(params UIElement[] children)
@@ -2453,6 +2481,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         _render.Stop();
         _saveSoon.Stop();
         UI.RestartNote.Changed -= ShowRestartNote;
+        Bridge.Approvals.LevelChanged -= ShowApprovalLevel;
         try
         {
             if (_turn is { } turn)

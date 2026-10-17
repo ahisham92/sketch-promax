@@ -131,9 +131,10 @@ public sealed class SettingsWindow : Window
             section.Children.Add(radio);
         }
         var always = Brand.Text(
-            "Always asked, whatever you choose: code Claude wrote, deletes that take other elements with them, overwriting a " +
-            "file outside Documents\\SketchProMax, what-ifs, value engineering on the open model, and accepting or issuing past " +
-            "open issue check items. A brief you run counts as approving its task.", Brand.K.Muted, size: 11);
+            "Asked at the first three levels, whatever you choose: code Claude wrote, deletes that take other elements with them, " +
+            "overwriting a file outside Documents\\SketchProMax, what-ifs, and value engineering on the open model. Always allow " +
+            "runs those too, without asking. Accepting or issuing past open issue check items asks at every level. A brief you " +
+            "run counts as approving its task.", Brand.K.Muted, size: 11);
         always.Margin = new Thickness(0, 6, 0, 0);
         section.Children.Add(always);
         var noAskHeading = Brand.Text("Not asked again", bold: true);
@@ -266,6 +267,7 @@ public sealed class SettingsWindow : Window
             return;
         }
         Revit.TimeLog.ReadSettings();
+        Bridge.Approvals.RaiseLevelChanged();
         DialogResult = true;
     }
 }
