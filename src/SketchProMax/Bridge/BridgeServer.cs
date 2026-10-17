@@ -24,7 +24,7 @@ namespace SketchProMax.Bridge;
 ///   {"method":"ping"}                                   -> {"ok":true,"pid":..,"revitVersion":"2025","documents":[..]}
 ///   {"method":"activate_document","title":"..."}       -> {"ok":true} or {"text":"...","isError":true}
 ///   {"method":"call_tool","name":"...","arguments":{}}  -> {"text":"...","isError":false,"pngBase64":null}
-///   (call_tool may carry "origin":"chat" when the in-Revit chat started the connector; see OutputPaths.ChatApprovalReason.)
+///   (call_tool may carry "origin":"chat" when the in-Revit chat started the connector; see Approvals and ApprovalPolicy.)
 /// The tool catalogue is written to %APPDATA%\SketchProMax\tools.json at startup so the MCP server can
 /// list tools even before Revit is running.
 /// </summary>
@@ -364,16 +364,6 @@ public sealed class BridgeServer
         if (Jobs.Running is { } running) return Jobs.Busy(running);
         if (_dispatcher.IsRunning) return Jobs.Busy(null);
 
-        // A learned tool's code is asked about the first time it runs (and after it changes), even when read-only.
-        // From the in-Revit chat, code, recipes and files written where Claude chose are always asked about: Claude Code
-        // runs there without its own permission prompts, so this dialog is the only place the user sees them.
-        var chatReason = fromChat ? OutputPaths.ChatApprovalReason(tool.Name, args) : null;
-        // A few calls are always asked about, from the chat or the Claude app (what_if with confirm).
-        if (OutputPaths.AlwaysAskReason(tool.Name, args) is { } always) chatReason = chatReason is null ? always : always + " " + chatReason;
-        var confirm = tool.ModifiesModel && AgentSettings.Load().RequireApprovalForChanges
-                      || tool is LearnedTool unapproved && !LearnedTools.IsApproved(unapproved.Code)
-                      || chatReason is not null;
-
         var job = Jobs.TryCreate(tool.Name, out var inTheWay);
         if (job is null) return Jobs.Busy(inTheWay);
         job.Key = key;
@@ -400,7 +390,14 @@ public sealed class BridgeServer
                 // Time saved and AI time: from here (the approval wait included) to the end of the run.
                 TimeLog.BeginTool(app, tool, fromChat);
                 if (app.ActiveUIDocument is null) return Ended(ToolResult.Error("No model is open in Revit. Ask the user to open one."));
-                if (confirm && !Approve(tool, args, chatReason)) return Ended(ToolResult.Error("The user rejected this change in Revit. Ask them how to proceed."));
+                // Whether to ask first (Approvals, ApprovalPolicy): risky calls and the always-asked ones always; normal
+                // changes per the approval level, unless the task is approved or the user said not to ask about the tool
+                // again. From the chat this dialog is the only prompt the user sees (Claude Code runs there without its own).
+                var decision = Approvals.Decide(app, tool, args, fromChat, chat);
+                // A tool with its own approval dialog (the package plan, each redline) asks a normal change there instead.
+                var askHere = decision.Ask && !(decision.CanSilence && Approvals.OwnDialog(tool.Name));
+                Approvals.Call = new Approvals.CallState(decision, chat, askHere);
+                if (askHere && !Approvals.Ask(tool, args, decision, chat)) return Ended(ToolResult.Error("The user rejected this change in Revit. Ask them how to proceed."));
                 var result = FailureGuard.Run(() =>
                 {
                     try { return tool.Execute(app, new ToolArgs(args)); }
@@ -415,6 +412,7 @@ public sealed class BridgeServer
             finally
             {
                 TimeLog.EndTool(null); // rejected or no model: only the wait is counted (no-op once ended above)
+                Approvals.Call = null;
                 if (fromChat) JobUndo.EndTool();
                 JobControl.Tool = null;
                 // The chat step of a call that handed on ends with its continuation (Jobs.Follow).
@@ -598,49 +596,14 @@ public sealed class BridgeServer
     }
 
     /// <summary>
-    /// Asks the user before a tool runs. Call on Revit's main thread. Approving a learned tool also approves its code,
-    /// so it isn't asked about again until the code changes. <paramref name="reason"/>: why it is asked, when that is
-    /// not simply a model change (a call from the in-Revit chat).
+    /// Asks the user before a tool runs whose code is new (a learned tool started from the ribbon or a recipe) or that is
+    /// always asked about. Call on Revit's main thread. Approving a learned tool also approves its code, so it isn't asked
+    /// about again until the code changes. <paramref name="reason"/>: why it is asked.
     /// </summary>
-    internal static bool Approve(IRevitTool tool, IReadOnlyDictionary<string, JsonElement> args, string? reason = null)
-    {
-        // Show code as code, so the user can read what will run.
-        var json = tool is LearnedTool learned
-            ? $"Learned tool: {learned.Summary}\n\nInputs: {JsonSerializer.Serialize(args)}\n\n{learned.Code}"
-            : args.TryGetValue("code", out var code) && code.ValueKind == JsonValueKind.String
-            ? (args.TryGetValue("description", out var d) ? d.GetString() + "\n\n" : "") + code.GetString()
-            : JsonSerializer.Serialize(args, new JsonSerializerOptions { WriteIndented = true }) + RecipeText(tool, args);
-        if (json.Length > 6000) json = json.Substring(0, 6000) + "\n…";
-        var firstRun = tool is LearnedTool l && !LearnedTools.IsApproved(l.Code);
-        var dialog = new TaskDialog("Sketch ProMax")
-        {
-            MainInstruction = $"Claude wants to run '{tool.Name}'",
-            MainContent = (reason is null ? "" : reason + " ") +
-                          (firstRun ? "This learned tool's code has not been approved on this PC yet, or it changed since. Read it below. " : "") +
-                          (tool.ModifiesModel
-                              ? "This changes the model. Each change can be undone with Ctrl+Z."
-                              : "It only reads the model; any change it tries is rolled back."),
-            ExpandedContent = json,
-            CommonButtons = TaskDialogCommonButtons.Yes | TaskDialogCommonButtons.No,
-            DefaultButton = TaskDialogResult.No,
-        };
-        var yes = dialog.Show() == TaskDialogResult.Yes;
-        if (yes && tool is LearnedTool approved) LearnedTools.MarkApproved(approved.Code);
-        return yes;
-    }
-
-    /// <summary>For run_recipe and batch_run_recipe, the recipe's own steps, so the user sees what will actually run.</summary>
-    private static string RecipeText(IRevitTool tool, IReadOnlyDictionary<string, JsonElement> args)
-    {
-        var key = tool.Name switch { "run_recipe" => "name", "batch_run_recipe" => "recipe", _ => null };
-        if (key is null || !args.TryGetValue(key, out var name) || name.ValueKind != JsonValueKind.String) return "";
-        try
-        {
-            var path = Recipes.PathFor(name.GetString()!);
-            return File.Exists(path) ? $"\n\nRecipe ({path}):\n{File.ReadAllText(path)}" : "\n\n(No recipe file with that name.)";
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException) { return ""; }
-    }
+    internal static bool Approve(IRevitTool tool, IReadOnlyDictionary<string, JsonElement> args, string? reason = null) =>
+        Approvals.Ask(tool, args, new ApprovalDecision(true, AskKind.Risky,
+            reason ?? (tool is LearnedTool ? "This learned tool's code has not been allowed on this PC yet, or it changed since. Read it in the details." : "Check the details before you allow it.")),
+            null);
 
     /// <summary>An unexpected exception, with where it happened so a bug report can be fixed without guessing.</summary>
     internal static string Describe(IRevitTool tool, Exception ex)

@@ -169,7 +169,8 @@ public sealed class DrawingPackageTool : IRevitTool
             return ToolResult.Error("The package can't be made as asked; nothing was changed. " + string.Join(" ", plan.Errors) +
                                     " Plan it with get_drawing_package_plan and fix these first.");
         if (doc.IsModifiable) return ToolResult.Error("A transaction is already open; run drawing_package on its own.");
-        if (!args.OptBool("approved") && !Ask(plan, rates)) return ToolResult.Error("The user did not approve the package in Revit; nothing was changed. Ask them what to change.");
+        // The plan is the approval when the level asks for normal changes (Settings); otherwise it runs (one Undo step).
+        if (!args.OptBool("approved") && Bridge.Approvals.AskOwn(Name) && !Ask(plan, rates)) return ToolResult.Error("The user did not approve the package in Revit; nothing was changed. Ask them what to change.");
         var folder = OutputPaths.Checked(args.OptString("folder")) ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "SketchProMax");
         var run = new PackageRun(app, doc, plan, folder, rates);
         var result = run.Run(Name);
@@ -193,14 +194,9 @@ public sealed class DrawingPackageTool : IRevitTool
             $"By hand this would take about {TimeMath.Duration(DrawingPackage.PlannedByHandMinutes(plan, rates) * 60)} (estimate).",
         };
         lines.AddRange(plan.Warnings.Select(w => "Note: " + w));
-        var dialog = new TaskDialog("Sketch ProMax")
-        {
-            MainInstruction = "Make this drawing package?",
-            MainContent = string.Join("\n", lines) + "\n\nIt is one Undo step, and existing views and sheets are not changed.",
-            CommonButtons = TaskDialogCommonButtons.Yes | TaskDialogCommonButtons.No,
-            DefaultButton = TaskDialogResult.No,
-        };
-        return dialog.Show() == TaskDialogResult.Yes;
+        var decision = new ApprovalDecision(true, AskKind.Change,
+            $"{plan.Sheets.Count} sheets and {plan.Views.Count} views. One Undo step; existing views and sheets are not changed.");
+        return Bridge.Approvals.Show("drawing_package", decision, string.Join("\n", lines), Bridge.Approvals.Call?.Chat, "Make this drawing package?");
     }
 }
 

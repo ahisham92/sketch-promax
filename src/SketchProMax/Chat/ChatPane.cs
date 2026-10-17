@@ -654,6 +654,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             if (selected) chosen = item;
         }
         AddBriefMenu();
+        AddApprovalMenu();
         _modelMenu.IsOpen = true;
         AutomationProperties.SetItemStatus(_modelPill, "Expanded");
         AutomationProperties.SetItemStatus(_briefPill, brief ? "Expanded" : "Collapsed");

@@ -9,8 +9,32 @@ namespace SketchProMax.Settings;
 /// </summary>
 public sealed class AgentSettings
 {
-    /// <summary>Show a Yes/No dialog in Revit before any tool changes the model.</summary>
+    /// <summary>
+    /// The old on/off switch, kept only so an older Sketch ProMax reading this file still behaves: written as true unless
+    /// the level is "Ask only for risky changes". <see cref="ApprovalLevel"/> is what counts.
+    /// </summary>
     public bool RequireApprovalForChanges { get; set; } = true;
+
+    /// <summary>
+    /// How often Revit asks before Claude changes something: risky_only (the default), once_per_task or every_change.
+    /// Empty in files written before the levels, which read as the default (Tools.ApprovalPolicy.Parse).
+    /// </summary>
+    public string? ApprovalLevel { get; set; }
+
+    /// <summary>Tools the user said not to ask about again ("Don't ask again" in the dialog); cleared in Settings.</summary>
+    public List<string>? NoAskTools { get; set; }
+
+    /// <summary>The approval level as an enum.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public Tools.ApprovalLevel Approvals
+    {
+        get => Tools.ApprovalPolicy.Parse(ApprovalLevel);
+        set
+        {
+            ApprovalLevel = Tools.ApprovalPolicy.Store(value);
+            RequireApprovalForChanges = value != Tools.ApprovalLevel.RiskyOnly;
+        }
+    }
 
     /// <summary>Firm standards in plain English (naming, sheet numbering, tag styles...), given to Claude.</summary>
     public string FirmStandards { get; set; } = "";

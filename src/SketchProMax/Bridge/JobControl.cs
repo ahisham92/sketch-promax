@@ -53,6 +53,13 @@ internal sealed class JobControl
     private static JobControl? _tool;
 
     private bool _over;
+    private volatile bool _approved;
+
+    /// <summary>
+    /// The user approved this task as a whole: they ran its brief, pressed "Allow the rest of this task", or (at "Ask once
+    /// per task") allowed its first change. Its normal changes then run without asking; risky ones still ask.
+    /// </summary>
+    public bool ApprovedForTask { get => _approved; set => _approved = value; }
 
     /// <summary>The task ended (<see cref="Finish"/>): nothing more is queued for it.</summary>
     public bool Over { get { lock (_gate) return _over; } }

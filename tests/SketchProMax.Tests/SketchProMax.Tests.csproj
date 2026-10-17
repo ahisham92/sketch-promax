@@ -22,6 +22,7 @@
     <Compile Include="../../src/SketchProMax/Chat/PromptLibrary.cs" Link="PromptLibrary.cs" />
     <EmbeddedResource Include="../../src/SketchProMax/Chat/chat-prompts.json" LogicalName="SketchProMax.chat-prompts.json" />
     <Compile Include="../../src/SketchProMax/Tools/OutputPaths.cs" Link="OutputPaths.cs" />
+    <Compile Include="../../src/SketchProMax/Tools/ApprovalPolicy.cs" Link="ApprovalPolicy.cs" />
     <Compile Include="../../src/SketchProMax/Tools/ModelRules.cs" Link="ModelRules.cs" />
     <Compile Include="../../src/SketchProMax.Loader/RibbonManifest.cs" Link="RibbonManifest.cs" />
     <Compile Include="../../src/SketchProMax/UI/CoreRibbonManifest.cs" Link="CoreRibbonManifest.cs" />

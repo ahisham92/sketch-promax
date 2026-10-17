@@ -275,10 +275,11 @@ internal static class ClaudeCli
         - The Revit tools come from the sketch-promax MCP server and act on this Revit window. Use them for anything about
           the model. Besides them you have only Read, Glob and Grep (to look at files on this PC); there is no shell, file
           editing or web access here.
-        - Revit asks the user to approve some calls before they run: model changes (unless they turned that off), and
-          always run_revit_query_code, run_revit_code, recipes, and tools that write files to a folder or file name you
-          give. Prefer the dedicated tools, and leave folder and file_name out unless the user asked for a location. If
-          the user declines, ask what they want instead.
+        - Revit asks the user to approve some calls before they run: always run_revit_query_code, run_revit_code, new
+          recipes and learned tools, deletes that take other elements with them, and writing over existing files outside
+          Sketch ProMax's own folders; other model changes only if the user set it to ask. Prefer the dedicated tools,
+          and leave folder and file_name out unless the user asked for a location. If the user declines, ask what they
+          want instead. Don't ask the user for permission in the chat before a normal change: Revit asks when needed.
         - Files the user attaches are named by full path. Read them with the Read tool (PDFs and images too). For DWG or
           DXF files, pass the path to the Revit tools (for example import_cad); don't try to Read them.
         - Keep it easy: lead with the answer in a sentence or two of plain words, then only the detail that helps. No tool

@@ -31,12 +31,16 @@ internal sealed partial class ChatPane
     private bool _thinking;
     private DateTime _jobStarted;
 
-    /// <summary>A chat task starts: its control, a fresh feed, and the card when the brief plans several steps.</summary>
+    /// <summary>
+    /// A chat task starts: its control, a fresh feed, and the card when the brief plans several steps. <paramref name="plan"/>:
+    /// the brief the user ran (null when run as typed).
+    /// </summary>
     private void BeginJob(PromptBrief? plan)
     {
         EndJobHooks();
         DropUndo(); // a new task: the last one's Undo all would no longer be the top of Revit's Undo list
-        _control = new JobControl();
+        // A brief the user ran is their approval of the task: its steps don't ask again, except the risky ones.
+        _control = new JobControl { ApprovedForTask = plan is not null };
         JobControl.Current = _control;
         JobControl.WaitAtBoundary ??= JobWindow.WaitPaused;
         JobFeed.Reset();

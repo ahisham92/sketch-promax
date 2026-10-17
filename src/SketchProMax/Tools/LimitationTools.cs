@@ -359,12 +359,10 @@ public sealed class InPlaceGuideTool : IRevitTool
         if (found.Count > 0 && isolate == "temporary") shown = IsolateTemporary(doc, doc.ActiveView, foundIds);
         if (found.Count > 0 && isolate == "new_3d_view")
         {
-            var approved = !AgentSettings.Load().RequireApprovalForChanges || new TaskDialog("Sketch ProMax")
-            {
-                MainInstruction = "Claude wants to create a 3D view",
-                MainContent = $"A new 3D view with a section box around {found.Count} in-place element(s). This changes the model; Ctrl+Z undoes it.",
-                CommonButtons = TaskDialogCommonButtons.Yes | TaskDialogCommonButtons.No, DefaultButton = TaskDialogResult.No,
-            }.Show() == TaskDialogResult.Yes;
+            // A read that makes one view: asked about only when the approval level asks for every change.
+            var approved = !Bridge.Approvals.AskOwn(Name) || Bridge.Approvals.Show(Name,
+                new ApprovalDecision(true, AskKind.Change, $"A new 3D view with a section box around {found.Count} in-place element(s). Ctrl+Z undoes it."),
+                "", Bridge.Approvals.Call?.Chat, "Create a 3D view?");
             shown = approved ? New3DView(uidoc, found.Select(f => (Element)f.E).ToList(), foundIds) : "the user declined the new 3D view";
         }
 

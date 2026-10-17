@@ -84,7 +84,7 @@ internal static class RibbonTools
         }
         var args = ToolForm.Parse(json);
         if (tool is LearnedTool learned && !LearnedTools.IsApproved(learned.Code)
-            && !BridgeServer.Approve(tool, args, "You started it from the ribbon."))
+            && !BridgeServer.Approve(tool, args))
             return Result.Cancelled;
         // Issuing or exporting sheets runs the issue check first; open items stop it until fixed or accepted.
         if (IssueGateWindow.Gated(tool.Name) && !IssueGateWindow.Before(app, tool.Name, args)) return Result.Cancelled;

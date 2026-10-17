@@ -6,11 +6,13 @@ using SketchProMax.Settings;
 
 namespace SketchProMax.UI;
 
-/// <summary>Settings dialog opened from the ribbon: approval gate and firm standards.</summary>
+/// <summary>Settings dialog opened from the ribbon: when to ask before changes, firm standards, time saved.</summary>
 public sealed class SettingsWindow : Window
 {
     private readonly AgentSettings _settings = AgentSettings.Load();
-    private readonly CheckBox _approval = new() { Content = "Ask me in Revit before Claude changes the model" };
+    private readonly List<(RadioButton Button, Tools.ApprovalLevel Level)> _levels = [];
+    private readonly List<string> _noAsk;
+    private readonly StackPanel _noAskList = new();
     private readonly CheckBox _autoUpdate = new() { Content = "Update Sketch ProMax automatically", Margin = new Thickness(0, 6, 0, 0) };
     private readonly CheckBox _openItems = new()
     {
@@ -18,7 +20,7 @@ public sealed class SettingsWindow : Window
     };
     private readonly TextBox _standards = new()
     {
-        AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, Height = 220, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+        AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, Height = 160, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
     };
 
     private readonly TextBox _legendSeed = new();
@@ -37,7 +39,7 @@ public sealed class SettingsWindow : Window
         ResizeMode = ResizeMode.NoResize;
         Brand.UseTheme(this);
 
-        _approval.IsChecked = _settings.RequireApprovalForChanges;
+        _noAsk = [.. _settings.NoAskTools ?? []];
         _autoUpdate.IsChecked = _settings.AutoUpdate;
         _openItems.IsChecked = _settings.AllowIssueWithOpenItems;
         _standards.Text = _settings.FirmStandards;
@@ -54,7 +56,7 @@ public sealed class SettingsWindow : Window
         cancel.IsCancel = true;
 
         var stack = new StackPanel { Margin = new Thickness(18, 14, 18, 14) };
-        stack.Children.Add(_approval);
+        stack.Children.Add(ApprovalSection());
         stack.Children.Add(_autoUpdate);
         AutomationProperties.SetHelpText(_openItems, "Off: an issue waits until every item of the issue check is fixed or accepted with a reason.");
         stack.Children.Add(_openItems);
@@ -92,7 +94,93 @@ public sealed class SettingsWindow : Window
         root.Children.Add(header);
         root.Children.Add(stack);
         Content = root;
-        Loaded += (_, _) => _approval.Focus();
+        Loaded += (_, _) => _levels.FirstOrDefault(l => l.Button.IsChecked == true).Button?.Focus();
+    }
+
+    /// <summary>
+    /// When Revit asks before Claude changes something: the three levels, and the tools the user said not to ask about
+    /// again, each with "Ask again". What is always asked (code, deletes that take other elements, overwriting files,
+    /// what-ifs, the issue gate) is said under the levels.
+    /// </summary>
+    private StackPanel ApprovalSection()
+    {
+        var section = new StackPanel();
+        var heading = Brand.Text("Ask before changes", bold: true);
+#if !NETFRAMEWORK
+        AutomationProperties.SetHeadingLevel(heading, AutomationHeadingLevel.Level2);
+#endif
+        section.Children.Add(heading);
+        var current = _settings.Approvals;
+        foreach (var level in Tools.ApprovalPolicy.Levels)
+        {
+            var radio = new RadioButton
+            {
+                GroupName = "approvals", IsChecked = level == current, Margin = new Thickness(0, 6, 0, 0), MinHeight = 24,
+                Content = new StackPanel
+                {
+                    Children =
+                    {
+                        Brand.Text(Tools.ApprovalPolicy.Label(level) + (level == Tools.ApprovalLevel.RiskyOnly ? " (recommended)" : "")),
+                        Brand.Text(Tools.ApprovalPolicy.Hint(level) + ".", Brand.K.Muted, size: 11),
+                    },
+                },
+            };
+            AutomationProperties.SetName(radio, Tools.ApprovalPolicy.Label(level));
+            AutomationProperties.SetHelpText(radio, Tools.ApprovalPolicy.Hint(level));
+            _levels.Add((radio, level));
+            section.Children.Add(radio);
+        }
+        var always = Brand.Text(
+            "Always asked, whatever you choose: code Claude wrote, deletes that take other elements with them, overwriting a " +
+            "file outside Documents\\SketchProMax, what-ifs, value engineering on the open model, and accepting or issuing past " +
+            "open issue check items. A brief you run counts as approving its task.", Brand.K.Muted, size: 11);
+        always.Margin = new Thickness(0, 6, 0, 0);
+        section.Children.Add(always);
+        var noAskHeading = Brand.Text("Not asked again", bold: true);
+        noAskHeading.Margin = new Thickness(0, 10, 0, 2);
+        section.Children.Add(noAskHeading);
+        section.Children.Add(_noAskList);
+        FillNoAsk();
+        return section;
+    }
+
+    /// <summary>The tools picked with "Don't ask again", each with Ask again, or a line saying there are none.</summary>
+    private void FillNoAsk()
+    {
+        _noAskList.Children.Clear();
+        if (_noAsk.Count == 0)
+        {
+            _noAskList.Children.Add(Brand.Text("None. In an approval dialog, \"Don't ask again\" adds a tool here.", Brand.K.Muted, size: 11));
+            return;
+        }
+        foreach (var tool in _noAsk.OrderBy(t => t, StringComparer.Ordinal).ToList())
+        {
+            var row = new DockPanel { Margin = new Thickness(0, 2, 0, 0) };
+            var again = Brand.Button("Ask again");
+            again.MinHeight = 24;
+            AutomationProperties.SetName(again, "Ask again for " + Tools.ApprovalPolicy.Friendly(tool));
+            again.Click += (_, _) =>
+            {
+                _noAsk.Remove(tool);
+                FillNoAsk();
+                (_noAskList.Children.OfType<DockPanel>().FirstOrDefault()?.Children.OfType<Button>().FirstOrDefault() as UIElement ?? _levels[0].Button).Focus();
+            };
+            DockPanel.SetDock(again, Dock.Right);
+            row.Children.Add(again);
+            var name = Brand.Text(Tools.ApprovalPolicy.Friendly(tool));
+            name.VerticalAlignment = VerticalAlignment.Center;
+            row.Children.Add(name);
+            _noAskList.Children.Add(row);
+        }
+        if (_noAsk.Count > 1)
+        {
+            var all = Brand.Button("Ask again for all");
+            all.HorizontalAlignment = HorizontalAlignment.Left;
+            all.Margin = new Thickness(0, 4, 0, 0);
+            all.MinHeight = 24;
+            all.Click += (_, _) => { _noAsk.Clear(); FillNoAsk(); _levels[0].Button.Focus(); };
+            _noAskList.Children.Add(all);
+        }
     }
 
     /// <summary>Time saved and working time (Revit/TimeLog): on or off, the idle threshold, the by-hand rates, who sees the totals.</summary>
@@ -153,7 +241,8 @@ public sealed class SettingsWindow : Window
 
     private void Save()
     {
-        _settings.RequireApprovalForChanges = _approval.IsChecked == true;
+        _settings.Approvals = _levels.FirstOrDefault(l => l.Button.IsChecked == true).Level;
+        _settings.NoAskTools = _noAsk.Count > 0 ? _noAsk : null;
         _settings.AutoUpdate = _autoUpdate.IsChecked == true;
         _settings.AllowIssueWithOpenItems = _openItems.IsChecked == true;
         _settings.FirmStandards = _standards.Text;

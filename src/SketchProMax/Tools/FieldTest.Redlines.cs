@@ -199,7 +199,7 @@ internal static partial class FieldTest
 
     /// <summary>
     /// The whole pipeline on a marked-up image of a test sheet: the known markup JSON stands in for Claude's reading
-    /// (Redlines.TestExtract), every change is approved (Redlines.TestApprove) and the one markup with no instruction is
+    /// (Redlines.TestExtract), every change is asked one by one (review_each) and approved (Redlines.TestApprove) and the one markup with no instruction is
     /// skipped when handed over. Checks the mapping, the changes, clouds and revision, the PDF and the report.
     /// </summary>
     private static (string, string) RedlinePipeline(UIApplication app, State s)
@@ -228,7 +228,7 @@ internal static partial class FieldTest
             Redlines.TestExtract = (_, _) => json;
             Redlines.TestApprove = p => { asked.Add(p.Markup.Id); return true; };
             Handoff.TestResponder = (_, _) => HandoffChoice.Skip;
-            var result = CallHandingOff(app, s.Registry, "redline_apply", new { file = page, folder, revision_description = "Field test redlines" });
+            var result = CallHandingOff(app, s.Registry, "redline_apply", new { file = page, folder, revision_description = "Field test redlines", review_each = true });
             if (result.IsError) return Fail(Short(result.Text, 600));
 
             using var parsed = JsonDocument.Parse(result.Text);

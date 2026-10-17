@@ -230,7 +230,7 @@ internal sealed partial class ChatPane
             }
             else if (pending)
             {
-                row.Children.Add(Pill("Run this", true, "Runs the brief above, with your answers.", () => Choose(item, brief, BriefChoice.RunBrief, null, Render)));
+                row.Children.Add(Pill("Run this", true, "Runs the brief above, with your answers. Running it approves the task: its steps don't ask again in Revit, except risky ones.", () => Choose(item, brief, BriefChoice.RunBrief, null, Render)));
                 row.Children.Add(Pill("Edit", false, "Opens the brief as text to change before running it.", () => { editing = true; Render(); }));
                 row.Children.Add(Pill("Run as I typed", false, "Runs your message exactly as you typed it, without the brief.", () => Choose(item, brief, BriefChoice.RunAsTyped, null, Render)));
             }
@@ -372,6 +372,53 @@ internal sealed partial class ChatPane
                 PromptBriefs.SaveMode(ClaudeCli.Folder, chosen);
                 ShowBriefChoice();
                 Status("Brief before running: " + PromptBriefs.Label(chosen) + ". " + PromptBriefs.Hint(chosen) + ".", spin: false);
+            };
+            _modelList.Children.Add(item);
+        }
+    }
+
+    /// <summary>
+    /// Adds "Ask before changes: only risky / once per task / every change" under the brief choice: the same setting as
+    /// Settings, one click away while chatting.
+    /// </summary>
+    private void AddApprovalMenu()
+    {
+        var heading = Brand.Text("Ask before changes", Brand.K.Muted, ChatUi.SmallSize, bold: true);
+        heading.Margin = new Thickness(10, ChatUi.S3, 10, 4);
+        _modelList.Children.Add(heading);
+        var current = Tools.ApprovalPolicy.Parse(Settings.AgentSettings.Load().ApprovalLevel);
+        foreach (var level in Tools.ApprovalPolicy.Levels)
+        {
+            var selected = level == current;
+            var label = Tools.ApprovalPolicy.Label(level);
+            var hint = Tools.ApprovalPolicy.Hint(level);
+            var text = new StackPanel();
+            text.Children.Add(Brand.Text(label, Brand.K.Text, ChatUi.BodySize, bold: selected));
+            var sub = Brand.Text(hint, Brand.K.Muted, ChatUi.SmallSize);
+            sub.Margin = new Thickness(0, 1, 0, 0);
+            text.Children.Add(sub);
+            var row = new DockPanel();
+            var check = ChatUi.Glyph(ChatUi.GlyphCheck, Brand.K.Accent, 12);
+            check.Margin = new Thickness(ChatUi.S2, 0, 0, 0);
+            check.Visibility = selected ? Visibility.Visible : Visibility.Hidden;
+            DockPanel.SetDock(check, Dock.Right);
+            row.Children.Add(check);
+            row.Children.Add(text);
+            var item = new Button { Content = row, HorizontalContentAlignment = HorizontalAlignment.Stretch };
+            item.SetResourceReference(StyleProperty, "SpmChatMenuItem");
+            AutomationProperties.SetName(item, "Ask before changes: " + label + (selected ? ", chosen" : ""));
+            AutomationProperties.SetHelpText(item, hint);
+            var chosen = level;
+            item.Click += (_, _) =>
+            {
+                CloseModelMenu(focusPill: true);
+                try { Bridge.Approvals.SetLevel(chosen); }
+                catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException)
+                {
+                    Status($"Couldn't save that ({ex.Message}). Try again, or change it in Settings.", spin: false);
+                    return;
+                }
+                Status(label + ". " + hint + ".", spin: false);
             };
             _modelList.Children.Add(item);
         }

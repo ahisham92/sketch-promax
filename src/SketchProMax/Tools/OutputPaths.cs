@@ -4,8 +4,8 @@ using System.Text.Json;
 namespace SketchProMax.Tools;
 
 /// <summary>
-/// Checks on file paths Claude passes to the tools, and which calls from the in-Revit chat need the user's approval.
-/// No Revit API here, so the tests check it directly.
+/// Checks on file paths Claude passes to the tools, and the calls that are always asked about (see ApprovalPolicy for
+/// the rest of the approval rules). No Revit API here, so the tests check it directly.
 /// </summary>
 internal static class OutputPaths
 {
@@ -45,41 +45,11 @@ internal static class OutputPaths
     public static string? Checked(string? path) =>
         Problem(path) is { } why ? throw new ArgumentException($"Can't use '{path}': {why}.") : path;
 
-    /// <summary>Tools that run code or a saved recipe of tool calls. From the chat, each call is shown to the user first.</summary>
+    /// <summary>Tools that run or save code or recipes of tool calls (left out of the chat when its connector is too old to say it is the chat).</summary>
     public static readonly HashSet<string> CodeTools = new(StringComparer.Ordinal)
     {
         "run_revit_query_code", "run_revit_code", "save_recipe", "run_recipe", "batch_run_recipe",
     };
-
-    /// <summary>Arguments that name a file or folder a tool writes to (or, for some, reads from).</summary>
-    private static readonly HashSet<string> PathKeys = new(StringComparer.Ordinal)
-    {
-        "folder", "output_folder", "report_folder", "file_name", "copy_path", "template_path",
-    };
-
-    /// <summary>Tools whose "path" argument is where they write.</summary>
-    private static readonly HashSet<string> WritesToPath = new(StringComparer.Ordinal) { "save_legend_seed" };
-
-    /// <summary>
-    /// Whether a call that came from the in-Revit chat must be approved in Revit whatever the settings say, and why
-    /// (shown in the dialog). The chat runs Claude Code headless, so Revit's dialog is the only place a person sees it.
-    /// </summary>
-    public static string? ChatApprovalReason(string tool, IReadOnlyDictionary<string, JsonElement> args)
-    {
-        if (CodeTools.Contains(tool))
-            return "The Sketch ProMax chat asks to run code or a recipe. Read it below before you allow it.";
-        var reasons = new List<string>();
-        // Changes to the open model itself (or to its design options) are always shown, whatever the settings say.
-        if (tool == "ve_apply" && args.TryGetValue("target", out var t) && t.ValueKind == JsonValueKind.String && t.GetString() is "main" or "design_option")
-            reasons.Add(t.GetString() == "main"
-                ? "The Sketch ProMax chat asks to apply value engineering changes to the open model itself."
-                : "The Sketch ProMax chat asks to apply value engineering changes to elements in a design option of the open model.");
-        var paths = args.Where(a => (PathKeys.Contains(a.Key) || a.Key == "path" && WritesToPath.Contains(tool))
-                                    && a.Value.ValueKind == JsonValueKind.String && a.Value.GetString() is { Length: > 0 })
-            .Select(a => FullPath(a.Value.GetString()!)).ToList();
-        if (paths.Count > 0) reasons.Add("The Sketch ProMax chat asks to write files at a location it chose: " + string.Join(", ", paths) + ".");
-        return reasons.Count > 0 ? string.Join(" ", reasons) : null;
-    }
 
     /// <summary>
     /// Calls that are asked about in Revit whatever the settings say and wherever they come from (the chat, the Claude app
@@ -90,9 +60,9 @@ internal static class OutputPaths
     {
         // The issue gate's ways past an open item: only the user decides them, so Claude can't clear the gate on its own.
         if (tool == "issue_check" && args.TryGetValue("accept", out var acc) && acc.ValueKind == JsonValueKind.Array && acc.GetArrayLength() > 0)
-            return $"Claude asks to accept {acc.GetArrayLength()} open item(s) of the issue check with the reasons below; accepted items no longer block the issue.";
+            return $"Claude asks to accept {acc.GetArrayLength()} open item(s) of the issue check with the reasons in the details; accepted items no longer block the issue.";
         if (tool == "issue_drawings" && args.TryGetValue("allow_open_items", out var allow) && allow.ValueKind == JsonValueKind.True)
-            return "Claude asks to issue these drawings even though the issue check has open items (the reason below goes into the issue record).";
+            return "Claude asks to issue these drawings even though the issue check has open items (the reason in the details goes into the issue record).";
         if (tool != "what_if" || !(args.TryGetValue("confirm", out var c) && c.ValueKind == JsonValueKind.True)) return null;
         var option = args.TryGetValue("target", out var t) && t.ValueKind == JsonValueKind.String && t.GetString() == "design_option";
         return option

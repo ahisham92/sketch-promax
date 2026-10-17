@@ -141,7 +141,7 @@ internal static class CoreRibbonManifest
             "(model-wide ones under Model). Fix an item (it takes you there) or accept it with a reason; Issue stays off until " +
             "nothing is open. Reads the model only.", needsModel: true)),
         B("Issue", "issue_drawings", "Issue\ndrawings", "pdf", "Issues sheets end to end after the issue check: revision, PDF/DWG, list of drawings and the transmittal."),
-        B("Issue", "redline_apply", "Redlines\nto sheets", "titleblock", "Applies a marked-up PDF or photo: each markup matched to its sheet and element, approved one by one, applied, clouded under a new revision, the revised sheets exported, and a done / not done report."),
+        B("Issue", "redline_apply", "Redlines\nto sheets", "titleblock", "Applies a marked-up PDF or photo: each markup matched to its sheet and element, applied (asked one by one when Settings asks for every change), clouded under a new revision, the revised sheets exported, and a done / not done report."),
         B("Issue", "export_pdf", "Export\nPDF", "pdf", "Prints sheets or views to PDF, as one combined file by default."),
         B("Issue", "export_drawing_list", "List of\ndrawings", "list", "Writes the list of drawings (sheet numbers, names, current revisions) to a CSV that opens in Excel."),
         B("Issue", "export_quantities", "Quantities\n/ BOQ", "boq", "Writes quantities per category and type (count, length, area, volume) to a CSV that opens in Excel."),

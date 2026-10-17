@@ -597,12 +597,17 @@ internal static class Redlines
 
     // ---- Applying ---------------------------------------------------------------------------------------------------------
 
-    /// <summary>Asks whether to apply one change: true apply, false skip, null stop asking (skip the rest).</summary>
-    public static bool? Ask(Planned p, int index, int count)
+    /// <summary>The answer to one markup's dialog.</summary>
+    public enum MarkupAnswer { Apply, Skip, Stop, ApplyRest }
+
+    /// <summary>
+    /// Asks whether to apply one change. <paramref name="also"/>: what a delete takes with it (then it is always asked).
+    /// <paramref name="offerRest"/>: offer "Apply this and the rest" (the rest then asks only for such deletes).
+    /// </summary>
+    public static MarkupAnswer Ask(Planned p, int index, int count, string? also, bool offerRest)
     {
-        if (TestApprove is { } hook) return hook(p);
+        if (TestApprove is { } hook) return hook(p) switch { true => MarkupAnswer.Apply, false => MarkupAnswer.Skip, _ => MarkupAnswer.Stop };
         var m = p.Markup;
-        var also = m.Kind == "delete" && p.Element is { } struck ? AlsoDeleted(struck.Document, struck.Id) : null;
         var dialog = new TaskDialog("Sketch ProMax: redlines")
         {
             MainInstruction = $"Apply markup {m.Id}? ({index} of {count})",
@@ -613,13 +618,17 @@ internal static class Redlines
         };
         dialog.AddCommandLink(TaskDialogCommandLinkId.CommandLink1, m.Kind == "delete" ? "Delete it" : "Apply this change");
         dialog.AddCommandLink(TaskDialogCommandLinkId.CommandLink2, "Skip it", "It is listed as not done in the report.");
-        dialog.AddCommandLink(TaskDialogCommandLinkId.CommandLink3, "Stop asking", "Skips this markup and the ones after it.");
+        if (offerRest)
+            dialog.AddCommandLink(TaskDialogCommandLinkId.CommandLink3, "Apply this and the rest",
+                "The other markups are applied without asking; deletes that take other elements with them still ask.");
+        dialog.AddCommandLink(TaskDialogCommandLinkId.CommandLink4, "Stop asking", "Skips this markup and the ones after it.");
         dialog.DefaultButton = TaskDialogResult.CommandLink2;
         return dialog.Show() switch
         {
-            TaskDialogResult.CommandLink1 => true,
-            TaskDialogResult.CommandLink2 => false,
-            _ => null,
+            TaskDialogResult.CommandLink1 => MarkupAnswer.Apply,
+            TaskDialogResult.CommandLink2 => MarkupAnswer.Skip,
+            TaskDialogResult.CommandLink3 => MarkupAnswer.ApplyRest,
+            _ => MarkupAnswer.Stop,
         };
     }
 
@@ -628,9 +637,13 @@ internal static class Redlines
     /// 2 Doors, 3 Door Tags.": found by deleting it in a transaction that is rolled back, so nothing changes. Null when
     /// nothing else goes. Call with no transaction open.
     /// </summary>
-    public static string? AlsoDeleted(Document doc, ElementId id)
+    public static string? AlsoDeleted(Document doc, ElementId id) => AlsoDeleted(doc, [id]);
+
+    /// <summary>As above for several elements at once: what goes besides them.</summary>
+    public static string? AlsoDeleted(Document doc, ICollection<ElementId> ids)
     {
         List<ElementId> gone;
+        var asked = new HashSet<long>(ids.Select(i => i.Value));
         if (doc.IsModifiable || doc.IsReadOnly) return "What else it deletes could not be checked.";
         using (var t = new Transaction(doc, "Sketch ProMax: what a delete takes with it"))
         {
@@ -643,7 +656,7 @@ internal static class Redlines
             try
             {
                 t.Start();
-                try { gone = doc.Delete(id).Where(x => x != id).ToList(); }
+                try { gone = doc.Delete(ids).Where(x => !asked.Contains(x.Value)).ToList(); }
                 catch (Exception ex) when (ex is Autodesk.Revit.Exceptions.ApplicationException or ArgumentException) { return "What else it deletes could not be checked."; }
             }
             finally
@@ -835,8 +848,9 @@ public sealed class RedlineApplyTool : IRevitTool
     public string Name => "redline_apply";
     public string Description =>
         "Redlines in, revised sheets out: applies the markups of a marked-up PDF or photo to the model. Each markup is matched " +
-        "to its sheet, view and element (as redline_plan lists), Revit asks the user to approve each change one by one, then " +
-        "each approved change is applied (text and notes, parameter values, dimension overrides or explicit moves, deletes " +
+        "to its sheet, view and element (as redline_plan lists); with review_each (or when the user's approval setting asks for " +
+        "every change) Revit asks the user to approve each change one by one, otherwise only deletes that take other elements " +
+        "with them are asked about. Then each approved change is applied (text and notes, parameter values, dimension overrides or explicit moves, deletes " +
         "for strike-throughs) with a revision cloud round it on the sheet, under one new revision, and the revised sheets are " +
         "exported to PDF. Markups it can't interpret go to the user as manual steps. Writes a done / not done report to Excel " +
         "and returns it for the chat. One Undo step. The same call again within 10 minutes of a run that applied changes returns " +
@@ -848,6 +862,7 @@ public sealed class RedlineApplyTool : IRevitTool
       "export": {"type": "boolean", "description": "Export the revised sheets to PDF (default true)."},
       "folder": {"type": "string", "description": "Where the report and PDFs go (default Documents\\SketchProMax)."},
       "dry_run": {"type": "boolean", "description": "Only list the planned changes, as redline_plan (default false)."},
+      "review_each": {"type": "boolean", "description": "Ask the user in Revit to approve each markup one by one (default false; pass true when the user asks to approve them one by one)."},
       "force": {"type": "boolean", "description": "Apply even though the same markups were just applied to this model (a repeat within 10 minutes otherwise returns the first run's result)."}
     }
     """;
@@ -875,19 +890,24 @@ public sealed class RedlineApplyTool : IRevitTool
                 note = markups.Count == 0 ? "No markups were found; nothing was changed." : "Nothing was changed (dry run).",
             });
 
-        // Approval, one change at a time, before anything changes.
+        // Approval before anything changes: one change at a time when asked for (review_each, or the approval level says
+        // so); otherwise only a delete that takes other elements with it is asked about.
         var ready = plan.Where(p => p.Problem is null).ToList();
         var approved = new List<Redlines.Planned>();
         var status = new Dictionary<Redlines.Planned, (string Status, string Note)>();
         var stopped = false;
+        var askEach = args.OptBool("review_each") || Bridge.Approvals.AskOwn(Name);
         for (var i = 0; i < ready.Count; i++)
         {
             var p = ready[i];
             if (stopped) { status[p] = ("skipped", "not asked: you stopped the approvals"); continue; }
-            switch (Redlines.Ask(p, i + 1, ready.Count))
+            var also = p.Markup.Kind == "delete" && p.Element is { } struck ? Redlines.AlsoDeleted(struck.Document, struck.Id) : null;
+            if (!askEach && also is null) { approved.Add(p); continue; }
+            switch (Redlines.Ask(p, i + 1, ready.Count, also, offerRest: askEach))
             {
-                case true: approved.Add(p); break;
-                case false: status[p] = ("skipped", "you skipped it"); break;
+                case Redlines.MarkupAnswer.Apply: approved.Add(p); break;
+                case Redlines.MarkupAnswer.ApplyRest: approved.Add(p); askEach = false; break;
+                case Redlines.MarkupAnswer.Skip: status[p] = ("skipped", "you skipped it"); break;
                 default: stopped = true; status[p] = ("skipped", "you stopped the approvals here"); break;
             }
         }

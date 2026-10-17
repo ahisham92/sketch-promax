@@ -472,6 +472,7 @@ internal static partial class FieldTest
         await Probe(s, "job.skip", app => JobSkip(app, s)).ConfigureAwait(false);
         await Probe(s, "job.message", app => JobMessage(app, s)).ConfigureAwait(false);
         await Probe(s, "job.thinking", _ => JobThinking()).ConfigureAwait(false);
+        await Probe(s, "approvals.flow", app => ApprovalFlow(app, s)).ConfigureAwait(false);
         await Probe(s, "time.tracking", app => TimeTracking(app, s)).ConfigureAwait(false);
         await Probe(s, "time.export", app => TimeExport(app, s)).ConfigureAwait(false);
         await Probe(s, "time.queue", app => TimeQueue(app, s)).ConfigureAwait(false);
@@ -1322,6 +1323,74 @@ internal static partial class FieldTest
         }
         finally { JobNotes.Delivered -= Got; }
     });
+
+    /// <summary>
+    /// When Revit asks (Bridge/Approvals): each level's decision for a normal change on the open model, the dialog's
+    /// answers (a test hook answers it, so no dialog shows and your settings are not written), "Allow the rest of this
+    /// task", a risky call that can't be silenced, a tool's own dialog after the bridge asked, and the typical task's count.
+    /// </summary>
+    private static (string, string) ApprovalFlow(UIApplication app, State s)
+    {
+        var problems = new List<string>();
+        var tool = s.Registry.Find("create_sheets");
+        if (tool is null) return Fail("create_sheets is not registered");
+        if (Bridge.Approvals.Remembered().Contains(tool.Name)) return ("skip", "you chose not to be asked about create_sheets again; clear it in Settings to run this check");
+        var args = new Dictionary<string, JsonElement>();
+        var asked = new List<string>();
+        try
+        {
+            foreach (var level in ApprovalPolicy.Levels)
+            {
+                Bridge.Approvals.TestLevel = level;
+                var fresh = new Bridge.JobControl();
+                var d = Bridge.Approvals.Decide(app, tool, args, true, fresh);
+                if (d.Ask != (level != ApprovalLevel.RiskyOnly)) problems.Add($"{ApprovalPolicy.Label(level)}: a new sheet {(d.Ask ? "asked" : "did not ask")}");
+                fresh.ApprovedForTask = true;
+                if (Bridge.Approvals.Decide(app, tool, args, true, fresh).Ask) problems.Add($"{ApprovalPolicy.Label(level)}: an approved task still asked");
+            }
+
+            // At "Ask once per task", Allow on the first change approves the rest of the chat task.
+            Bridge.Approvals.TestLevel = ApprovalLevel.OncePerTask;
+            var chat = new Bridge.JobControl();
+            Bridge.Approvals.TestAnswer = (t, d) => { asked.Add(t + ":" + d.Kind); return Bridge.Approvals.Answer.RestOfTask; };
+            var first = Bridge.Approvals.Decide(app, tool, args, true, chat);
+            if (!first.Ask || !Bridge.Approvals.Ask(tool, args, first, chat) || !chat.ApprovedForTask) problems.Add("Allow the rest of this task did not approve the task");
+            if (Bridge.Approvals.Decide(app, tool, args, true, chat).Ask) problems.Add("the second change of an approved task asked");
+
+            // Chat code is risky: asked even in the approved task, and its answer can't approve anything else.
+            var code = s.Registry.Find("run_revit_query_code");
+            var codeArgs = new Dictionary<string, JsonElement> { ["code"] = JsonDocument.Parse("\"return 1;\"").RootElement.Clone() };
+            var other = new Bridge.JobControl();
+            var risky = code is null ? null : Bridge.Approvals.Decide(app, code, codeArgs, true, other);
+            if (risky is not { Ask: true, CanSilence: false }) problems.Add("chat code was not asked as risky");
+            else if (Bridge.Approvals.Ask(code!, codeArgs, risky, other) && other.ApprovedForTask) problems.Add("allowing chat code approved the whole task");
+
+            // A tool with its own dialog: asks a normal change there, but not again after the bridge asked; the ribbon asks only at every change.
+            Bridge.Approvals.Call = new Bridge.Approvals.CallState(first, chat, Asked: false);
+            if (!Bridge.Approvals.AskOwn("drawing_package")) problems.Add("the package plan was not asked for a normal change");
+            Bridge.Approvals.Call = new Bridge.Approvals.CallState(first, chat, Asked: true);
+            if (Bridge.Approvals.AskOwn("drawing_package")) problems.Add("the package plan asked again after the bridge asked");
+            Bridge.Approvals.Call = null;
+            Bridge.Approvals.TestLevel = ApprovalLevel.RiskyOnly;
+            if (Bridge.Approvals.AskOwn("redline_apply")) problems.Add("from the ribbon, redlines asked at risky only");
+            Bridge.Approvals.TestLevel = ApprovalLevel.EveryChange;
+            if (!Bridge.Approvals.AskOwn("redline_apply") && !Bridge.Approvals.Remembered().Contains("redline_apply")) problems.Add("from the ribbon, redlines did not ask at every change");
+        }
+        finally
+        {
+            Bridge.Approvals.TestLevel = null;
+            Bridge.Approvals.TestAnswer = null;
+            Bridge.Approvals.Call = null;
+        }
+        var typical = new List<(string, bool, IReadOnlyDictionary<string, JsonElement>)>();
+        foreach (var name in new[] { "get_model_context", "create_plan_views", "apply_view_template", "create_sheets", "place_views_on_sheet", "tag_elements_in_view" })
+            if (s.Registry.Find(name) is { } t) typical.Add((name, t.ModifiesModel, args));
+        var counts = ApprovalPolicy.Levels.Select(l => $"{ApprovalPolicy.Label(l)} {ApprovalPolicy.CountAsks(typical, l, false)}").ToList();
+        return problems.Count == 0
+            ? Pass($"each level decided as set; Allow the rest of this task approved the task; chat code asked as risky; asked: {string.Join(", ", asked)}; " +
+                   $"dialogs for a plans, sheets and tags task: {string.Join(", ", counts)}")
+            : Fail(string.Join("; ", problems));
+    }
 
     /// <summary>A sample stream with a streamed thinking block, and one without streaming, build the card's Thinking line.</summary>
     private static (string, string) JobThinking()
