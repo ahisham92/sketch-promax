@@ -21,7 +21,11 @@ internal static class BugLog
 
     private static readonly object Gate = new();
 
-    public static string Root => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Sketch ProMax", "Bugs");
+    /// <summary>Set only by the self-test and field test around report_bug and export_chats_and_bugs, so their zips go to the
+    /// test's temporary folder. Not a tool argument.</summary>
+    internal static string? RootOverride;
+
+    public static string Root => RootOverride ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Sketch ProMax", "Bugs");
     public static string ReportsFolder => Path.Combine(Root, "Reports");
     public static string LocalLog => Path.Combine(Root, "Bug log.md");
 

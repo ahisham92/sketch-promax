@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using System.Text.RegularExpressions;
 
 namespace SketchProMax.Tools;
@@ -169,5 +170,65 @@ internal static class ModelRules
             if (comments is { } c && string.Equals(c.Trim(), x, StringComparison.OrdinalIgnoreCase)) return true;
         }
         return false;
+    }
+    /// <summary>One group of elements arch_to_structure left out: "kind: reason", how many, and a few of their type names.</summary>
+    public sealed record ArchSkip(string Reason, int Count, IReadOnlyCollection<string> Types);
+
+    /// <summary>
+    /// What to change so arch_to_structure converts the groups it skipped: one hint per kind of skip reason, naming
+    /// the argument (include_architectural_columns, floor_type_words, ...) and, where it helps, a word from the types.
+    /// </summary>
+    public static List<string> ArchSkipHints(IEnumerable<ArchSkip> skipped, int alreadyMade)
+    {
+        var hints = new List<string>();
+        void Add(string hint) { if (!hints.Contains(hint)) hints.Add(hint); }
+        static string? Word(IEnumerable<string> types) =>
+            types.Select(t => Regex.Match(t, "[A-Za-z]{2,}")).Where(m => m.Success).Select(m => m.Value).FirstOrDefault();
+        foreach (var s in skipped)
+        {
+            var r = s.Reason;
+            var example = Word(s.Types) is { } w ? $" (e.g. '{w}')" : "";
+            if (r.StartsWith("columns:", StringComparison.Ordinal) && r.Contains("architectural Columns"))
+                Add("Architectural columns were left out: pass include_architectural_columns=true to convert them too.");
+            else if (r.Contains("structural_columns is false"))
+                Add("Pass structural_columns=true to take the source's Structural Columns.");
+            else if (r.Contains("not cast-in-place concrete"))
+                Add("Steel, timber and precast columns are not rebuilt in concrete: copy them with copy_monitor.");
+            else if (r.Contains("already structural in this model"))
+                Add("Elements already structural in this model are not converted again: to rebuild from the architect's model, give its link name as source.");
+            else if (r.Contains("no point location"))
+                Add("Slanted and in-place columns are not converted: model them by hand.");
+            else if (r.StartsWith("floors:", StringComparison.Ordinal) && r.Contains("thin"))
+                Add("Thin floors were left out: lower min_floor_thickness, or set those floors' Structural flag.");
+            else if (r.StartsWith("floors:", StringComparison.Ordinal))
+                Add($"Floors were left out: pass floor_type_words with a word from their type names{example}, or set those floors' Structural flag.");
+            else if (r.StartsWith("walls:", StringComparison.Ordinal))
+                Add($"Walls were left out: pass wall_type_words with a word from their type names{example}, or min_wall_thickness, or set those walls' Structural flag.");
+        }
+        if (alreadyMade > 0)
+            Add($"{alreadyMade} element(s) were already converted by an earlier run and are skipped; delete what that run made to remake them.");
+        return hints;
+    }
+
+    /// <summary>
+    /// The error when arch_to_structure made nothing: what it found in the source per kind, every skip reason with its
+    /// count and types, what Revit refused, and the hints. Never just "Nothing was made."
+    /// </summary>
+    public static string NothingMadeMessage(string source, string? level, IReadOnlyCollection<string> what, IReadOnlyDictionary<string, int> found,
+        IReadOnlyCollection<ArchSkip> skipped, IReadOnlyCollection<string> errors, int alreadyMade)
+    {
+        var on = level is null ? "" : $" on level '{level}'";
+        var sb = new StringBuilder($"Nothing was made from {source}{on}.");
+        var parts = found.Where(f => f.Value > 0).Select(f => $"{f.Value} {f.Key}").ToList();
+        sb.Append(parts.Count == 0
+            ? $" It has no {string.Join(", ", what.Where(w => w != "openings"))} to convert{on}" + (level is null ? "." : " (check the level name: it is the source's level).")
+            : $" Found {string.Join(", ", parts)}.");
+        if (skipped.Count > 0)
+            sb.Append(" Skipped: " + string.Join("; ", skipped.Select(s => $"{s.Reason}: {s.Count}" + (s.Types.Count > 0 ? $" [{string.Join(", ", s.Types.Take(4))}]" : ""))) + ".");
+        if (errors.Count > 0)
+            sb.Append(" Revit refused: " + string.Join("; ", errors.Take(10)) + (errors.Count > 10 ? $"; and {errors.Count - 10} more" : "") + ".");
+        var hints = ArchSkipHints(skipped, alreadyMade);
+        if (hints.Count > 0) sb.Append(" " + string.Join(" ", hints));
+        return sb.ToString();
     }
 }

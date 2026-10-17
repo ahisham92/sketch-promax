@@ -70,7 +70,7 @@ internal static partial class SelfTest
 /// self-test case against it, and writes one report grouped by tool family. The models the user had open are never
 /// edited; Revit only switches back to one of them at the end so the test project can be closed.
 /// </summary>
-internal static class FieldTest
+internal static partial class FieldTest
 {
     internal sealed class Options
     {
@@ -195,8 +195,6 @@ internal static class FieldTest
 
     private static string NoCaseReason(string tool) => tool switch
     {
-        "load_family" => "needs a family file on this PC (the field test loads library families itself while building the project)",
-        "copy_from_file" => "needs another Revit file on this PC",
         "load_steel_sections" => "depends on the content library installed on this PC",
         "title_block_from_cad" => "needs a DWG title block on this PC",
         "run_learned_tool" => "tested through save_as_tool",
@@ -216,6 +214,8 @@ internal static class FieldTest
         public string Folder = "";
         public Document? Original, Built, Test;
         public string? LinkPath, ProjectFile, NoView;
+        public Library? Lib;
+        public FamilyTemplates? Templates;
         public SelfTest.IFieldSession? Session;
         public bool KeepFolder = o.KeepProject;
     }
@@ -286,14 +286,16 @@ internal static class FieldTest
                 s.Folder = Path.Combine(Path.GetTempPath(), $"SketchProMax-field-test-{DateTime.Now:yyyyMMdd-HHmmss}");
                 Directory.CreateDirectory(s.Folder);
                 Jobs.Report("Field test: building the architectural link model");
-                s.LinkPath = BuildArchLink(a, s.Folder, result);
+                s.Lib = new Library(a);
+                s.Templates = new FamilyTemplates(a);
+                s.LinkPath = BuildArchLink(a, s, result);
             }).ConfigureAwait(false);
             if (!Cancelled())
                 await OnRevit(app =>
                 {
                     Jobs.Report("Field test: building the test project");
                     s.Built = NewProject(app.Application, result);
-                    Build(app.Application, s.Built, s.LinkPath, result);
+                    Build(app.Application, s.Built, s, result);
                 }).ConfigureAwait(false);
             if (!Cancelled())
                 await OnRevit(app =>
@@ -618,7 +620,7 @@ internal static class FieldTest
         return shell;
     }
 
-    private static string? BuildArchLink(Autodesk.Revit.ApplicationServices.Application a, string folder, RunReport result)
+    private static string? BuildArchLink(Autodesk.Revit.ApplicationServices.Application a, State s, RunReport result)
     {
         Document? doc = null;
         try
@@ -626,8 +628,18 @@ internal static class FieldTest
             doc = NewProject(a, new RunReport());
             var shell = BuildShell(doc, result, "link");
             if (shell is not null)
-                Step(doc, result, "link: floor", () => Floor.Create(doc, [Rectangle(-1000, -1000, 13000, 13000)], FloorTypeId(doc), shell.Upper.Id));
-            var path = Path.Combine(folder, "FieldTest-Arch.rvt");
+            {
+                // A structural floor arch_to_structure must convert, and a thin finish floor it must skip.
+                Step(doc, result, "link: structural floor", () =>
+                {
+                    var floor = Floor.Create(doc, [Rectangle(-1000, -1000, 13000, 13000)], FloorTypeId(doc), shell.Upper.Id);
+                    floor.get_Parameter(BuiltInParameter.FLOOR_PARAM_IS_STRUCTURAL)?.Set(1);
+                    return floor;
+                });
+                Step(doc, result, "link: finish floor", () => Floor.Create(doc, [Rectangle(1000, 1000, 5000, 5000)], FinishFloorType(doc).Id, shell.Base.Id));
+                BuildLinkColumns(a, doc, s, shell, result);
+            }
+            var path = Path.Combine(s.Folder, "FieldTest-Arch.rvt");
             doc.SaveAs(path, new SaveAsOptions { OverwriteExistingFile = true });
             return path;
         }
@@ -655,10 +667,11 @@ internal static class FieldTest
             .OrderBy(f => f.Name.IndexOf("Concrete", StringComparison.OrdinalIgnoreCase) >= 0 ? 0 : 1).FirstOrDefault()?.Id
         ?? throw new InvalidOperationException("no floor type");
 
-    private static void Build(Autodesk.Revit.ApplicationServices.Application a, Document doc, string? linkPath, RunReport result)
+    private static void Build(Autodesk.Revit.ApplicationServices.Application a, Document doc, State s, RunReport result)
     {
         var shell = BuildShell(doc, result, "project") ?? throw new InvalidOperationException("could not create levels in the test project");
-        var lib = new Library(a);
+        var lib = s.Lib ??= new Library(a);
+        var linkPath = s.LinkPath;
 
         Step(doc, result, "grids", () =>
         {
@@ -681,7 +694,9 @@ internal static class FieldTest
         PlaceColumns(doc, result, shell, steelColumn, steelPoints, "steel columns");
 
         // Beams at the upper level: concrete on grid 1, steel on grid 3.
-        var concreteBeam = Symbol(doc, result, lib, BuiltInCategory.OST_StructuralFraming, StructuralMaterialType.Concrete, "concrete beam");
+        var concreteBeam = Symbol(doc, result, lib, BuiltInCategory.OST_StructuralFraming, StructuralMaterialType.Concrete, "concrete beam",
+                               orElse: "the field test makes one")
+                           ?? ConcreteBeam(a, doc, s, result);
         var steelBeam = Symbol(doc, result, lib, BuiltInCategory.OST_StructuralFraming, StructuralMaterialType.Steel, "steel beam");
         var beams = new List<(FamilyInstance Beam, Line Line)>();
         beams.AddRange(PlaceBeams(doc, result, shell, concreteBeam, 0, "concrete beams"));
@@ -742,6 +757,7 @@ internal static class FieldTest
             });
 
         BuildViews(doc, result, shell);
+        BuildExtras(a, doc, s, shell, result);
 
         if (linkPath is not null)
             Step(doc, result, "architectural link", () =>
@@ -883,7 +899,7 @@ internal static class FieldTest
 
     /// <summary>A loaded type of the category and material, else one loaded from Revit's content library.</summary>
     private static FamilySymbol? Symbol(Document doc, RunReport result, Library lib, BuiltInCategory category, StructuralMaterialType? material,
-        string what, string? nameWord = null)
+        string what, string? nameWord = null, string? orElse = null)
     {
         bool Fits(FamilySymbol s) =>
             (material is null || s.Family?.StructuralMaterialType == material) &&
@@ -894,8 +910,10 @@ internal static class FieldTest
         var file = lib.Find(category, material, nameWord);
         if (file is null)
         {
-            result.Sample.Add($"{what}: none in the template and none found in the Revit content library (searched {lib.Searched}), so tools needing one will skip. " +
-                              "Install the Revit content library (Imperial or Metric) to test them.");
+            result.Sample.Add(orElse is not null
+                ? $"{what}: none in the template and none found in the Revit content library (searched {lib.Searched}); {orElse}."
+                : $"{what}: none in the template and none found in the Revit content library (searched {lib.Searched}), so tools needing one will skip. " +
+                  "Install the Revit content library (Imperial or Metric) to test them.");
             return null;
         }
         return Step(doc, result, $"load {what} ({Path.GetFileName(file)})", () =>

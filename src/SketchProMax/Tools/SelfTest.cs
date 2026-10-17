@@ -121,7 +121,17 @@ internal static partial class SelfTest
 
     /// <summary>NoGroup: run outside the rolled-back transaction group (tools such as relinquish_mine that Revit refuses
     /// to run inside one, and that change ownership, not model content).</summary>
-    private sealed record Case(string Tool, Func<Ctx, object> Args, string[]? Setup = null, bool Heavy = false, bool NoGroup = false);
+    private sealed record Case(string Tool, Func<Ctx, object> Args, string[]? Setup = null, bool Heavy = false, bool NoGroup = false)
+    {
+        /// <summary>Checks a successful result's JSON: null when it is as expected, else what is wrong (the step fails).</summary>
+        public Func<JsonElement, string?>? Expect { get; init; }
+
+        /// <summary>The bug tools write to a "Bugs" folder in the test's temporary folder instead of the user's Documents.</summary>
+        public bool TempBugFolder { get; init; }
+
+        /// <summary>The case checks a refusal: it passes when the tool returns an error containing this text.</summary>
+        public string? ExpectError { get; init; }
+    }
 
     public enum Mode { Safe, Full }
 
@@ -287,9 +297,24 @@ internal static partial class SelfTest
                         return new(step.Tool, "skip", watch.ElapsedMilliseconds, $"setup step {name} failed: {Short(setupResult.Text, 300)}");
                 }
             }
-            var result = Execute(app, tool, step, run.Ctx);
+            ToolResult result;
+            if (step.TempBugFolder) Bugs.BugLog.RootOverride = Path.Combine(run.Ctx.Temp, "Bugs");
+            try { result = Execute(app, tool, step, run.Ctx); }
+            finally { if (step.TempBugFolder) Bugs.BugLog.RootOverride = null; }
             if (!result.IsError && result.Text.Length > 24000)
                 return new(step.Tool, "fail", watch.ElapsedMilliseconds, $"Output too large for a chat ({result.Text.Length:N0} characters).");
+            if (step.ExpectError is { } refusal)
+                return result.IsError && result.Text.IndexOf(refusal, StringComparison.OrdinalIgnoreCase) >= 0
+                    ? new(step.Tool, "pass", watch.ElapsedMilliseconds, "Refused as expected: " + Short(result.Text, 500))
+                    : new(step.Tool, "fail", watch.ElapsedMilliseconds, $"Expected an error mentioning '{refusal}'. Got: " + Short(result.Text, 500));
+            if (!result.IsError && step.Expect is not null)
+            {
+                string? wrong;
+                try { using var json = JsonDocument.Parse(result.Text); wrong = step.Expect(json.RootElement); }
+                catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException) { wrong = $"the result could not be read ({ex.Message})"; }
+                if (wrong is not null)
+                    return new(step.Tool, "fail", watch.ElapsedMilliseconds, $"Ran, but {wrong}. {Short(result.Text, 500)}");
+            }
             return new(step.Tool, result.IsError ? "fail" : "pass", watch.ElapsedMilliseconds, Short(result.Text, 600));
         }
         catch (Skip s) { return new(step.Tool, "skip", 0, s.Message); }
@@ -324,15 +349,11 @@ internal static partial class SelfTest
             {
                 _ when run.StoppedBecause is not null => "not reached: " + run.StoppedBecause,
                 "batch_run_recipe" => "opens other model files; run it by hand on a folder of copies",
-                "load_family" => "needs a family file on this PC",
-                "copy_from_file" => "needs another Revit file on this PC",
                 "load_steel_sections" => "depends on the content library installed on this PC",
                 "title_block_from_cad" => "needs a DWG title block on this PC",
                 "run_learned_tool" => "tested through save_as_tool",
                 "run_self_test" or "self_test_status" => "this test",
                 "run_field_test" => "opens its own throwaway project; run it from the ribbon or on its own",
-                "report_bug" => "writes a bug report zip to the user's bug folder; run it by hand",
-                "export_chats_and_bugs" => "writes a zip to the user's bug folder; run it by hand",
                 _ when run.Mode == Mode.Safe && tool.ModifiesModel => "changes the model; runs in the full self-test",
                 _ => "no test written yet",
             };
@@ -463,7 +484,21 @@ internal static partial class SelfTest
         }),
         new("self_test_count_walls", _ => new { add = 0 }),
         new("delete_learned_tool", _ => new { name = "self_test_count_walls" }),
+        // The bug tools write to the test's temporary folder, never the user's bug folder.
+        new("report_bug", _ => new { description = "Self-test: report_bug writes its zip (a test, not a real bug)." })
+        {
+            TempBugFolder = true, Expect = r => InTemp(r, "file"),
+        },
+        new("export_chats_and_bugs", _ => new { period = "day" }) { TempBugFolder = true, Expect = r => InTemp(r, "file") },
     ];
+
+    /// <summary>The file a result names exists and is in the temporary folder.</summary>
+    private static string? InTemp(JsonElement result, string property)
+    {
+        var file = result.GetProperty(property).GetString() ?? "";
+        if (!System.IO.File.Exists(file)) return $"the file it names is not there ({file})";
+        return file.StartsWith(Path.GetTempPath(), StringComparison.OrdinalIgnoreCase) ? null : $"it wrote outside the test's temporary folder ({file})";
+    }
 
     // The learned tool the test saves and runs. Its code is the test's own, so it is approved up front instead of asking.
     private const string LearnedToolCode =
@@ -554,7 +589,12 @@ internal static partial class SelfTest
                 .Any(r => r.Area > 0 && r.Level is { } rl && Math.Abs(rl.ProjectElevation - (c.Plan?.GenLevel?.ProjectElevation ?? double.NaN)) < 1)),
             view_id = c.PlanId, folder = c.Temp,
         }) { Heavy = true },
-        new("arch_to_structure", c => new { source = "model", what = new[] { "floors" }, level = c.LevelName }, Setup: ["create_floors"]) { Heavy = true },
+        // The floor create_floors just made, with its own type name as the structural word: converted whatever the template calls it.
+        new("arch_to_structure", c => new
+        {
+            source = "model", what = new[] { "floors" }, level = c.LevelName, min_floor_thickness = 0,
+            floor_type_words = new[] { ((Floor)c.Doc.GetElement(new ElementId(Newest<Floor>(c)))).FloorType.Name },
+        }, Setup: ["create_floors"]) { Heavy = true, Expect = r => r.GetProperty("made").GetProperty("floors").GetInt32() >= 1 ? null : "no slab was made from the new floor" },
         new("create_ramp", c => new { start = c.At(0, 20000), end = c.At(12000, 20000), width = c.P(3000), base_level = c.LevelName, rise = c.P(1500), landing = c.P(1500) }),
         new("equipment_pads", c =>
         {
@@ -593,6 +633,18 @@ internal static partial class SelfTest
             var lt = new FilteredElementCollector(c.Doc).OfClass(typeof(RevitLinkType)).Cast<RevitLinkType>().FirstOrDefault(t => t.GetExternalFileReference() != null)
                      ?? throw new Skip("the model has no Revit links");
             return new { path = ModelPathUtils.ConvertModelPathToUserVisiblePath(lt.GetExternalFileReference().GetAbsolutePath()) };
+        }),
+        new("copy_from_file", c =>
+        {
+            var lt = new FilteredElementCollector(c.Doc).OfClass(typeof(RevitLinkType)).Cast<RevitLinkType>().FirstOrDefault(t => t.GetExternalFileReference() != null)
+                     ?? throw new Skip("needs another Revit file on this PC (it reads the model's first Revit link)");
+            return new { path = ModelPathUtils.ConvertModelPathToUserVisiblePath(lt.GetExternalFileReference().GetAbsolutePath()), list_only = true };
+        }),
+        new("load_family", c =>
+        {
+            Need(c.Throwaway, "needs a family file on this PC: runs in the field test, which loads back a family it made");
+            var file = FieldTest.FamilyFiles(c.Temp).FirstOrDefault() ?? throw new Skip("the field test made no family to load back (see the Test project notes)");
+            return new { path = file, overwrite = true };
         }),
         new("create_raft", c => new { level = c.LevelName, depth_below = c.P(1500), thickness = c.P(1000), projection = c.P(500) }, Setup: ["create_floors"]),
         new("work_progress", _ => new { action = "get" }),
@@ -880,7 +932,7 @@ internal static partial class SelfTest
         new("run_model_audit", _ => new { }, Setup: ["create_schedule", "create_sheets"]),
         new("create_drafting_view", c => new { name = "Self-test styles " + Guid.NewGuid().ToString("N").Substring(0, 4),
             lines = new[] { new { start = new[] { 0.0, 0.0 }, end = new[] { c.P(1000), 0.0 }, style = "Wide Lines" } } }),
-        new("import_image", c => new { path = WriteBitmap(c.Temp), view_id = c.First<ViewSheet>(s => s.IsPlaceholder)?.Id.Value ?? throw new Skip("no placeholder sheet") }),
+        new("import_image", c => new { path = WriteBitmap(c.Temp), view_id = c.First<ViewSheet>(s => s.IsPlaceholder)?.Id.Value ?? throw new Skip("no placeholder sheet") }) { ExpectError = "placeholder" },
         new("convert_cad", c => new { import_id = c.Id(LatestImport(c.Doc) ?? throw new Skip("import_cad did not import the test drawing")), level = c.LevelName,
             conversions = new[] { new { layer = "SELFTEST", @as = "grids", auto_name = true } } }, Setup: ["import_cad"]) { Heavy = true },
         new("convert_cad", c => new { import_id = c.Id(LatestImport(c.Doc) ?? throw new Skip("import_cad did not import the test drawing")), level = c.LevelName,
@@ -933,7 +985,33 @@ internal static partial class SelfTest
         new("format_schedule", _ => new { schedule = "Self-test wall schedule", sort_by = new[] { new { field = "Type" } } }, Setup: ["create_schedule"]),
         new("export_files", c => new { format = "ifc", ifc_version = "IFC4", folder = c.Temp, file_name = "selftest-ifc4" }) { Heavy = true },
         new("run_revit_code", _ => new { code = "using (var t = new Transaction(doc, \"st\")) { t.Start(); var n = new FilteredElementCollector(doc).OfClass(typeof(Level)).GetElementCount(); t.Commit(); return n; }", description = "self-test own transactions", own_transactions = true }),
+        // 0.30 field test: the architect's link has a structural column and floor to convert, and a cladding column and a
+        // finish floor to leave out. Both outcomes are checked.
+        new("arch_to_structure", c =>
+        {
+            Need(c.Throwaway, "converts the field test's own architectural link; runs in the field test");
+            static bool Has(Document d, BuiltInCategory category) => new FilteredElementCollector(d).OfCategory(category).WhereElementIsNotElementType().Any();
+            var link = new FilteredElementCollector(c.Doc).OfClass(typeof(RevitLinkInstance)).Cast<RevitLinkInstance>().FirstOrDefault(l => l.GetLinkDocument() is not null)
+                       ?? throw new Skip("the architectural link is not loaded");
+            var d = link.GetLinkDocument();
+            Need(Has(d, BuiltInCategory.OST_StructuralColumns), "the link has no structural column (no concrete column family; see the Test project notes)");
+            Need(Has(d, BuiltInCategory.OST_Columns), "the link has no cladding column (no Column or Generic Model family template; see the Test project notes)");
+            return new { source = c.Doc.GetElement(link.GetTypeId()).Name, what = new[] { "columns", "floors" } };
+        }) { Heavy = true, Expect = ArchLinkOutcome },
     ];
+
+    /// <summary>The structural column and floor were converted; the cladding column and the finish floor were left out.</summary>
+    private static string? ArchLinkOutcome(JsonElement r)
+    {
+        var made = r.GetProperty("made");
+        var reasons = r.GetProperty("skippedWhy").EnumerateArray().Select(w => w.GetProperty("reason").GetString() ?? "").ToList();
+        var wrong = new List<string>();
+        if (made.GetProperty("columns").GetInt32() < 1) wrong.Add("the structural column was not converted");
+        if (made.GetProperty("floors").GetInt32() < 1) wrong.Add("the structural floor was not converted");
+        if (!reasons.Any(x => x.StartsWith("columns: architectural Columns", StringComparison.Ordinal))) wrong.Add("the cladding column was not skipped as architectural");
+        if (!reasons.Any(x => x.StartsWith("floors:", StringComparison.Ordinal))) wrong.Add("the finish floor was not skipped");
+        return wrong.Count == 0 ? null : string.Join("; ", wrong);
+    }
 
     private static ImportInstance? LatestImport(Document doc) =>
         new FilteredElementCollector(doc).OfClass(typeof(ImportInstance)).Cast<ImportInstance>()
