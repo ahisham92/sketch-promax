@@ -425,7 +425,15 @@ internal static partial class FieldTest
                 result.Rows.Add(new(family, label, "skip", 0, "not reached: " + outcome.Message));
                 continue;
             }
-            result.Rows.Add(new(family, label, outcome.Status, outcome.Ms, message));
+            // Skipped for want of something the API can't make (a legend component): the checklist covers it.
+            var status = outcome.Status;
+            if (status == "skip" && FieldTestCoverage.ManualWhenSkipped.TryGetValue(step.Tool, out var feature)
+                && FieldTestCoverage.Features.FirstOrDefault(f => f.Key == feature) is { } manual)
+            {
+                status = "manual";
+                message = $"manual (checklist: \"{manual.Title}\"): {message}";
+            }
+            result.Rows.Add(new(family, label, status, outcome.Ms, message));
 
             // A tool that leaves a transaction open would block every tool after it (and switching away at the end).
             if (run.LeftOpen)
@@ -1027,9 +1035,9 @@ internal static partial class FieldTest
         {
             try
             {
-                var line = File.ReadLines(catalog).Skip(1).FirstOrDefault(l => !string.IsNullOrWhiteSpace(l));
-                var name = line?.Split(',')[0].Trim().Trim('"');
-                return string.IsNullOrEmpty(name) ? null : name;
+                // A catalog Revit can't parse would raise a modal dialog in LoadFamilySymbol: treat it as no catalog.
+                var lines = File.ReadAllLines(catalog);
+                return TypeCatalog.Problem(lines) is null ? TypeCatalog.Types(lines).FirstOrDefault() : null;
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return null; }
         }

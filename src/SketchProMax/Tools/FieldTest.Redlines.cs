@@ -96,8 +96,8 @@ internal static partial class FieldTest
         ];
     }
 
-    /// <summary>The test sheet exported to an image with the markups drawn on in red, as a reviewer would.</summary>
-    private static string RedlinePageImage(Document doc, RedlineSet r, List<object> markups, string folder)
+    /// <summary>The test sheet exported to an image (Revit draws the sheet for it, so where things are on it is settled after).</summary>
+    private static string RedlineSheetImage(Document doc, RedlineSet r, string folder)
     {
         var options = new ImageExportOptions
         {
@@ -107,8 +107,12 @@ internal static partial class FieldTest
         options.SetViewsAndSheets([r.Sheet.Id]);
         var before = new HashSet<string>(Directory.GetFiles(folder, "*.png"), StringComparer.OrdinalIgnoreCase);
         doc.ExportImage(options);
-        var exported = Directory.GetFiles(folder, "*.png").FirstOrDefault(f => !before.Contains(f)) ?? throw new InvalidOperationException("Revit exported no image of the test sheet");
+        return Directory.GetFiles(folder, "*.png").FirstOrDefault(f => !before.Contains(f)) ?? throw new InvalidOperationException("Revit exported no image of the test sheet");
+    }
 
+    /// <summary>The sheet's image with the markups drawn on in red, as a reviewer would.</summary>
+    private static string RedlinePageImage(string exported, List<object> markups, string folder)
+    {
         System.Windows.Media.Imaging.BitmapSource page;
         using (var input = File.OpenRead(exported))
             page = System.Windows.Media.Imaging.BitmapDecoder.Create(input, System.Windows.Media.Imaging.BitmapCreateOptions.PreservePixelFormat,
@@ -208,10 +212,16 @@ internal static partial class FieldTest
         try
         {
             if (RedlineSetup(doc, out why) is not { } r) return Fail(why);
-            var markups = RedlineMarkups(r, out _);
+            // The markups are worked out after Revit has drawn the sheet for the image (as the tool sees it); if the sheet's
+            // mapping moved when it was drawn, the failure says so.
+            var early = JsonSerializer.Serialize(RedlineMarkups(r, out _));
+            var sheetImage = RedlineSheetImage(doc, r, folder);
+            var markups = RedlineMarkups(r, out var frame);
+            var moved = early == JsonSerializer.Serialize(markups) ? null
+                : $"the sheet's mapping changed once Revit drew it (frame now {frame}; markups before: {Short(early, 160)})";
             // Ids now: the struck-through note is deleted by the run, and a deleted element can't be read.
             long oldId = r.Old.Id.Value, wallId = r.Wall.Id.Value, struckId = r.Struck.Id.Value;
-            var page = RedlinePageImage(doc, r, markups, folder);
+            var page = RedlinePageImage(sheetImage, markups, folder);
             _redlinePage = page;
             var json = JsonSerializer.Serialize(new { sheet_number = r.Sheet.SheetNumber, markups });
             var asked = new List<string>();
@@ -225,13 +235,14 @@ internal static partial class FieldTest
             var root = parsed.RootElement;
             var lines = root.GetProperty("markups").EnumerateArray().ToDictionary(x => x.GetProperty("id").GetString()!, x => x.Clone());
             string Where(string id) => lines.TryGetValue(id, out var l) ? l.GetProperty("where").GetString() ?? "" : "";
+            string Note(string id) => lines.TryGetValue(id, out var l) && l.TryGetProperty("note", out var n) ? n.GetString() ?? "" : "";
             bool Done(string id) => lines.TryGetValue(id, out var l) && l.GetProperty("done").GetBoolean();
             var problems = new List<string>();
 
             // Mapping: the right viewport's view and element for each markup.
             foreach (var (id, element) in new[] { ("M1", oldId), ("M2", wallId), ("M3", struckId) })
                 if (!Where(id).Contains($"'{r.Plan.Name}'") || !Where(id).Contains(element.ToString()))
-                    problems.Add($"{id} was placed at \"{Where(id)}\", not on element {element} in '{r.Plan.Name}'");
+                    problems.Add($"{id} was placed at \"{Where(id)}\", not on element {element} in '{r.Plan.Name}' ({Short(Note(id), 160)})");
             if (!asked.SequenceEqual(["M1", "M2", "M3", "M4"])) problems.Add("approval was asked for " + (asked.Count == 0 ? "nothing" : string.Join(", ", asked)) + ", not M1 to M4 one by one");
 
             // The changes.
@@ -261,6 +272,7 @@ internal static partial class FieldTest
             var steps = HandoffSteps(result.Text);
             if (steps is not [("skipped", false)]) problems.Add("the hand-off for the cloud says " + Steps(steps));
 
+            if (problems.Count > 0 && moved is not null) problems.Add(moved);
             return problems.Count == 0
                 ? Pass($"5 markups drawn on the test sheet's image ({Path.GetFileName(page)}): the text edit, parameter change, strike-through and new note were matched to " +
                        $"'{r.Plan.Name}' and their elements, approved one by one, applied and clouded ({clouds} clouds) under the new revision; {pdfs[0]} exported; " +

@@ -379,19 +379,29 @@ public static class Updater
         return http;
     }
 
+    /// <summary>
+    /// The latest release: GitHub's API first, with a short time limit; on any failure of it (an error status, a refused or
+    /// timed-out connection, an unreadable answer) the github.com release page, whose package has a fixed address there.
+    /// </summary>
     private static async Task<Release?> LatestReleaseAsync(CancellationToken ct)
+    {
+        var (release, _) = await ReleaseSource.ApiThenWebAsync(LatestReleaseFromApiAsync, LatestReleaseFromWebAsync, ReleaseSource.ApiTimeout, ct).ConfigureAwait(false);
+        return release;
+    }
+
+    private static async Task<ReleaseSource.Answer<Release>> LatestReleaseFromApiAsync(CancellationToken ct)
     {
         using var http = CreateClient();
         using var response = await http.GetAsync($"https://api.github.com/repos/{Repository}/releases/latest", ct).ConfigureAwait(false);
-        if (response.StatusCode == System.Net.HttpStatusCode.NotFound) return null; // no release published yet
+        if (response.StatusCode == System.Net.HttpStatusCode.NotFound) return ReleaseSource.Found<Release>(null); // no release published yet
         // GitHub's API allows 60 anonymous requests an hour per network address, which an office network shares.
         // The release web page has no such limit, so fall back to it rather than fail.
-        if (!response.IsSuccessStatusCode) return await LatestReleaseFromWebAsync(ct).ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode) return ReleaseSource.Fallback<Release>($"GitHub's API answered {(int)response.StatusCode}");
         using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync().ConfigureAwait(false));
         var root = doc.RootElement;
         var version = (root.GetProperty("tag_name").GetString() ?? "").TrimStart('v', 'V');
-        if (root.TryGetProperty("draft", out var d) && d.GetBoolean()) return null;
-        if (root.TryGetProperty("prerelease", out var p) && p.GetBoolean()) return null;
+        if (root.TryGetProperty("draft", out var d) && d.GetBoolean()) return ReleaseSource.Found<Release>(null);
+        if (root.TryGetProperty("prerelease", out var p) && p.GetBoolean()) return ReleaseSource.Found<Release>(null);
         var notes = root.TryGetProperty("body", out var b) && b.ValueKind == JsonValueKind.String ? b.GetString() : null;
         var tag = root.GetProperty("tag_name").GetString() ?? "";
 
@@ -403,12 +413,12 @@ public static class Updater
                 // GitHub publishes a "sha256:..." digest for each release file; verify it when present.
                 var digest = asset.TryGetProperty("digest", out var dg) && dg.ValueKind == JsonValueKind.String ? dg.GetString() : null;
                 var sha = digest is not null && digest.StartsWith("sha256:", StringComparison.Ordinal) ? digest.Substring(7) : null;
-                return new Release(version, asset.GetProperty("browser_download_url").GetString()!, sha, notes);
+                return ReleaseSource.Found(new Release(version, asset.GetProperty("browser_download_url").GetString()!, sha, notes));
             }
         // A newer release whose package isn't listed (yet): not "up to date". Its package has the usual name; when it is
         // not there the download fails, the error is shown and the next check tries again.
-        if (!Version.TryParse(version, out _)) return null;
-        return new Release(version, $"https://github.com/{Repository}/releases/download/{Uri.EscapeDataString(tag)}/SketchProMax-{version}.zip", null, notes);
+        if (!Version.TryParse(version, out _)) return ReleaseSource.Found<Release>(null);
+        return ReleaseSource.Found(new Release(version, ReleaseSource.DownloadUrl(Repository, tag, version), null, notes));
     }
 
     /// <summary>
@@ -421,18 +431,14 @@ public static class Updater
         using var http = new HttpClient(handler) { Timeout = TimeSpan.FromMinutes(1) };
         http.DefaultRequestHeaders.UserAgent.ParseAdd($"SketchProMax/{CurrentText}");
         using var response = await http.GetAsync($"https://github.com/{Repository}/releases/latest", ct).ConfigureAwait(false);
-        var location = response.Headers.Location?.ToString() ?? "";
-        var marker = "/releases/tag/";
-        var at = location.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
-        if (at < 0)
+        if (ReleaseSource.TagFromRedirect(response.Headers.Location?.ToString()) is not { } tag)
         {
             if (response.StatusCode == System.Net.HttpStatusCode.NotFound) return null;
             throw new HttpRequestException($"GitHub did not say which release is the latest ({(int)response.StatusCode} {response.ReasonPhrase}).");
         }
-        var tag = Uri.UnescapeDataString(location.Substring(at + marker.Length).Trim('/'));
         var version = tag.TrimStart('v', 'V');
         if (!Version.TryParse(version, out _)) throw new InvalidDataException($"The latest release tag '{tag}' is not a version number.");
-        return new Release(version, $"https://github.com/{Repository}/releases/download/{tag}/SketchProMax-{version}.zip", null);
+        return new Release(version, ReleaseSource.DownloadUrl(Repository, tag, version), null);
     }
 
     /// <summary>The Assembly path of every installed SketchProMax.addin, for all Revit versions.</summary>

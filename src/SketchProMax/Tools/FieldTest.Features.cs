@@ -878,6 +878,9 @@ internal static partial class FieldTest
         t.Start();
         var a = Autodesk.Revit.DB.Grid.Create(doc, Line.CreateBound(new XYZ(-6, -10, 0), new XYZ(-6, 30, 0)));
         var b = Autodesk.Revit.DB.Grid.Create(doc, Line.CreateBound(new XYZ(4, -10, 0), new XYZ(4, 30, 0)));
+        // New grids have no geometry in the plan until the model regenerates; a dimension to them before that is refused
+        // ("The references are not geometric references").
+        doc.Regenerate();
         var dim = Dimension(doc, plan, a, b);
         var targets = Enumerable.Range(0, copies).Select(_ => (ViewPlan)doc.GetElement(plan.Duplicate(ViewDuplicateOption.Duplicate))).ToList();
         t.Commit();
@@ -886,13 +889,28 @@ internal static partial class FieldTest
 
     private static Dimension Dimension(Document doc, View view, Autodesk.Revit.DB.Grid a, Autodesk.Revit.DB.Grid b)
     {
+        var z = (view as ViewPlan)?.GenLevel?.ProjectElevation ?? 0;
+        var line = Line.CreateBound(new XYZ(-10, 20, z), new XYZ(8, 20, z));
         var refs = new ReferenceArray();
         refs.Append(new Reference(a));
         refs.Append(new Reference(b));
-        var z = (view as ViewPlan)?.GenLevel?.ProjectElevation ?? 0;
-        return doc.Create.NewDimension(view, Line.CreateBound(new XYZ(-10, 20, z), new XYZ(8, 20, z)), refs)
-               ?? throw new InvalidOperationException($"Revit made no dimension between the grids in '{view.Name}'");
+        Dimension? dim;
+        try { dim = doc.Create.NewDimension(view, line, refs); }
+        catch (Autodesk.Revit.Exceptions.ArgumentException)
+        {
+            // Some views take only the grid line's own reference, read from its geometry in that view.
+            refs = new ReferenceArray();
+            refs.Append(GridLineReference(a, view));
+            refs.Append(GridLineReference(b, view));
+            dim = doc.Create.NewDimension(view, line, refs);
+        }
+        return dim ?? throw new InvalidOperationException($"Revit made no dimension between the grids in '{view.Name}'");
     }
+
+    private static Reference GridLineReference(Autodesk.Revit.DB.Grid grid, View view) =>
+        grid.get_Geometry(new Autodesk.Revit.DB.Options { View = view, ComputeReferences = true, IncludeNonVisibleObjects = true })?
+            .OfType<Line>().Select(l => l.Reference).FirstOrDefault(r => r is not null)
+        ?? throw new InvalidOperationException($"grid {grid.Name} has no line in '{view.Name}' to dimension to");
 
     /// <summary>The step the user would do for a cut-edge hand-off: a dimension added by hand in the target view.</summary>
     private static void AddDimensionByHand(Document doc, View view, DimSetup d)
@@ -1458,6 +1476,8 @@ internal static partial class FieldTest
         using var group = new TransactionGroup(doc, "Field test: issue check");
         group.Start();
         var problems = new List<string>();
+        // Which part ran last, so a crash names it.
+        var step = "making the sheet";
         try
         {
             const string number = "FT-ISSUE";
@@ -1473,20 +1493,31 @@ internal static partial class FieldTest
             IssueGateMath.GroupResult Mine(IssueGate.Run r) => r.Groups.First(g => g.Group == number);
             bool Has(IssueGate.Run r, string check, IssueGateMath.Status status) => Mine(r).Items.Any(i => i.Finding.Check == check && i.Status == status);
 
+            // A check that crashed shows as "could not run" (and blocks): name it, it is a fault in that check.
+            void Crashed(IssueGate.Run r)
+            {
+                foreach (var (tool, outcome) in r.Checks.Where(c => c.Outcome.StartsWith("could not run", StringComparison.Ordinal)))
+                    if (!problems.Any(p => p.StartsWith(tool + " ", StringComparison.Ordinal))) problems.Add($"{tool} {Short(outcome, 300)}");
+            }
+
             // 1. Blocked, with the seeded faults on the sheet.
+            step = "1. first check";
             var run = IssueGate.Check(app, [sheet], null, null, reports);
+            Crashed(run);
             if (!run.Blocked) problems.Add("the gate did not block a sheet with no views and empty title block fields");
             if (!Has(run, "empty_sheets", IssueGateMath.Status.Open) || !Has(run, "sheet_fields", IssueGateMath.Status.Open))
                 problems.Add($"the sheet's group lists {string.Join(", ", Mine(run).Items.Select(i => i.Finding.Check))}, not empty_sheets and sheet_fields");
             if (run.Report is null || !File.Exists(run.Report)) problems.Add("no Excel report");
 
             // 2. issue_drawings refuses and changes nothing.
+            step = "2. issue_drawings while blocked";
             var revisions = new FilteredElementCollector(doc).OfClass(typeof(Revision)).GetElementCount();
             var refused = Call(app, s.Registry, "issue_drawings", new { sheet_numbers = new[] { number }, revision_description = "Field test issue", folder = Path.Combine(s.Folder, "issue") });
             if (refused.IsError || !refused.Text.Contains("\"stopped\"")) problems.Add("issue_drawings was not stopped: " + Short(refused.Text, 200));
             if (new FilteredElementCollector(doc).OfClass(typeof(Revision)).GetElementCount() != revisions) problems.Add("issue_drawings made a revision while blocked");
 
             // 3. Accept the title block item, then change the finding (one field filled): it must come back open.
+            step = "3. accept, then change the finding";
             IssueGate.Accept(doc, run, Mine(run).Items.Where(i => i.Finding.Check == "sheet_fields"), "Field test: filled at issue");
             if (!Has(run, "sheet_fields", IssueGateMath.Status.Accepted)) problems.Add("the accepted item did not show as accepted");
             void Set(Action<ViewSheet> edit)
@@ -1498,21 +1529,28 @@ internal static partial class FieldTest
             }
             Set(x => x.get_Parameter(BuiltInParameter.SHEET_DRAWN_BY)?.Set("FT"));
             run = IssueGate.Check(app, [sheet], null, null, reports);
+            Crashed(run);
             if (!Has(run, "sheet_fields", IssueGateMath.Status.Open)) problems.Add("a changed finding did not come back open after it was accepted");
 
             // 4. Fix the sheet: the fields filled and a view placed, then re-check: the sheet passes.
+            step = "4. fix the sheet";
             Set(x =>
             {
                 x.get_Parameter(BuiltInParameter.SHEET_CHECKED_BY)?.Set("FT");
                 x.get_Parameter(BuiltInParameter.SHEET_APPROVED_BY)?.Set("FT");
                 x.get_Parameter(BuiltInParameter.SHEET_ISSUE_DATE)?.Set("2026-01-01");
                 var view = Drafting.Create(doc, "Issue check probe view " + Guid.NewGuid().ToString("N").Substring(0, 6), 50);
-                Drafting.Place(doc, x, view, 0);
+                // Revit won't put an empty view on a sheet.
+                TextNote.Create(doc, view.Id, XYZ.Zero, "Issue check probe", doc.GetDefaultElementTypeId(ElementTypeGroup.TextNoteType));
+                if (Drafting.Place(doc, x, view, 0) is null) problems.Add("the probe's drafting view could not be placed on the sheet");
             });
+            step = "4. re-check after the fix";
             run = IssueGate.Check(app, [sheet], null, null, reports);
+            Crashed(run);
             if (!Mine(run).Pass) problems.Add("after the fix the sheet still has: " + string.Join("; ", Mine(run).Items.Where(i => i.Status == IssueGateMath.Status.Open).Select(i => i.Finding.Issue).Take(3)));
 
             // 5. Accept the rest with a reason: clear, and still clear on the next check.
+            step = "5. accept the rest";
             var rest = run.Open.ToList();
             if (rest.Count > 0) IssueGate.Accept(doc, run, rest, "Field test: known in the test project");
             if (run.Blocked) problems.Add("still blocked after accepting every open item");
@@ -1524,6 +1562,11 @@ internal static partial class FieldTest
                 ? Pass($"blocked on the seeded sheet ({string.Join(", ", new[] { "empty_sheets", "sheet_fields" })}) and issue_drawings refused with no revision; an accepted item came back when its text changed; " +
                        $"the fixed sheet passed on re-check; {rest.Count} other item(s) accepted with a reason cleared the gate and stayed accepted; report {Path.GetFileName(again.Report ?? "")}")
                 : Fail(string.Join("; ", problems));
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            problems.Add($"at step {step}: {ex.GetType().Name}: {ex.Message}{IssueGate.Where(ex)}");
+            return Fail(string.Join("; ", problems));
         }
         finally
         {

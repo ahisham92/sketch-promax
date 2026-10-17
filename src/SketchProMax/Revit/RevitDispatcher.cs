@@ -213,6 +213,12 @@ public sealed class RevitDispatcher : IExternalEventHandler
     /// <summary>Raised at each Idling this dispatcher gets, on Revit's thread (the time log looks for input here).</summary>
     internal static event Action<UIApplication>? Idle;
 
+    private static bool StillOpen(UIApplication app, string title)
+    {
+        try { return app.Application.Documents.Cast<Autodesk.Revit.DB.Document>().Any(d => d.Title == title); }
+        catch (Exception) { return true; }
+    }
+
     private void OnIdling(object? sender, IdlingEventArgs e)
     {
         if (_stopped) return;
@@ -221,7 +227,8 @@ public sealed class RevitDispatcher : IExternalEventHandler
             try { idle(idleApp); }
             catch (Exception) { /* listeners are best effort */ }
         }
-        if (StartupTimings.FirstIdle() is { } opened) ActivityLog.Note("model_open_timing", opened);
+        if (StartupTimings.AwaitingIdle && StartupTimings.FirstIdle(sender is UIApplication ui ? title => StillOpen(ui, title) : null) is { } opened)
+            ActivityLog.Note("model_open_timing", opened);
         if (_queue.IsEmpty && _eventOnly.IsEmpty)
         {
             if (_later.IsEmpty || _running) return;

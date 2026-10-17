@@ -40,6 +40,10 @@ internal static class StartupTests
             && StartupTimings.FirstIdle() is null, first ?? "null");
         check("startup: report section lists start and opens", StartupTimings.Describe().Contains("core start 57 ms") && StartupTimings.Describe().Contains("Model A"),
             StartupTimings.Describe());
+        StartupTimings.Opening();
+        StartupTimings.Opened("Copy", 0);
+        var gone = StartupTimings.FirstIdle(_ => false);
+        check("startup: a model closed before the first idle says so", gone?.Contains("closed again before Revit was idle") == true && !gone.Contains("first Idling"), gone ?? "null");
         check("startup: unknown open time shows ?", StartupTimings.OpenLine("m", -1, 0, 5).Contains("took ? ms"), "");
         check("startup: an ordinary open is not labelled as a test", !first!.Contains("(test running)"), first);
         StartupTimings.TestRunning = true;

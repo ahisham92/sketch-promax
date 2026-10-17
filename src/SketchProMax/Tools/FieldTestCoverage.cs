@@ -33,6 +33,12 @@ internal static class FieldTestCoverage
     /// <summary>Tools no test can run, with the reason. Each also becomes a checklist step. Empty: every tool runs.</summary>
     public static readonly Dictionary<string, (string Reason, string Steps)> ManualTools = new(StringComparer.Ordinal);
 
+    /// <summary>
+    /// Tools whose case needs something the API can't make and the test project may lack: when the case is skipped for
+    /// that, the row is "manual (checklist)" under this feature (a Manual one), never "not run".
+    /// </summary>
+    public static readonly Dictionary<string, string> ManualWhenSkipped = new(StringComparer.Ordinal) { ["add_legend_components"] = "legend.components" };
+
     public const string Chat = "Chat", RibbonArea = "Ribbon and favourites", Carbon = "Embodied carbon", Ve = "Value engineering",
         Rebar2D = "2D rebar", Bugs = "Report bug and exports", Updates = "Updates and the Claude app", Model = "Real-model checks",
         Limits = "Revit limits", BugFixes = "Bug fixes", Tasks = "Hand-off and Cancel", Job = "Live job card", Time = "Time saved",
@@ -181,6 +187,8 @@ internal static class FieldTestCoverage
             "On a _detached copy: place a void cut on a slab joined to beams (Clashes > Void cuts) and run a clash check with voids on. Check the void cuts and is reported."),
 
         // ---- Revit limits
+        new("legend.components", Limits, "Legend components copied from one placed by hand", How.Manual, "", "the Revit API can't place a legend component from scratch, and the test project's template has none to copy (the field test looks in the Revit templates first)",
+            "On a _detached copy, open a legend and place one legend component by hand (Annotate > Component > Legend Component). Then run Add legend components for two wall types: both appear in the legend, each with its type name as a label."),
         new("matchlines.trim", Limits, "Trimming a real matchline", How.Manual, "", "the Revit API can't create a matchline, so the field test only checks the tool on a dependent-view pair with none",
             "On a _detached copy with dependent views and a matchline: ask Claude to trim the matchlines in a plan (trim_matchlines). The redrawn lines stop at the crop."),
     ];

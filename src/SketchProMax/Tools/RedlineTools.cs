@@ -397,32 +397,35 @@ internal static class Redlines
             if (doc.GetElement(id) is not Viewport vp || doc.GetElement(vp.ViewId) is not View view) continue;
             var o = vp.GetBoxOutline();
             var box = new LayoutMath.Rect(o.MinimumPoint.X, o.MinimumPoint.Y, o.MaximumPoint.X, o.MaximumPoint.Y);
-            Func<XYZ, (double, double)> toSheet;
-            Func<double, double, XYZ> fromSheet;
+            // The view's scale and centre (crop box), turned as the viewport is: always there, and the check on Revit's own.
+            XYZ right = view.RightDirection, up = view.UpDirection, origin = view.Origin;
+            var c = view.CropBox is { } cb ? cb.Transform.OfPoint((cb.Min + cb.Max) / 2) : origin;
+            double cu = (c - origin).DotProduct(right), cv = (c - origin).DotProduct(up);
+            var center = vp.GetBoxCenter();
+            var rotation = vp.Rotation switch { ViewportRotation.Clockwise => -90.0, ViewportRotation.Counterclockwise => 90.0, _ => 0.0 };
+            var scale = Math.Max(1, view.Scale);
+            Func<XYZ, (double, double)> toSheet = p => Redline.ViewToSheet((p - origin).DotProduct(right), (p - origin).DotProduct(up), cu, cv, center.X, center.Y, scale, rotation);
+            Func<double, double, XYZ> fromSheet = (x, y) =>
+            {
+                var (u, v) = Redline.SheetToView(x, y, cu, cv, center.X, center.Y, scale, rotation);
+                return OnPlane(view, origin + right * u + up * v);
+            };
             try
             {
                 var p2s = vp.GetProjectionToSheetTransform();
                 var m2p = view.GetModelToProjectionTransforms() is { Count: > 0 } list ? list[0].GetModelToProjectionTransform() : Transform.Identity;
                 Transform s2p = p2s.Inverse, p2m = m2p.Inverse;
-                toSheet = p => { var s = p2s.OfPoint(m2p.OfPoint(p)); return (s.X, s.Y); };
-                fromSheet = (x, y) => OnPlane(view, p2m.OfPoint(s2p.OfPoint(new XYZ(x, y, 0))));
-            }
-            catch (Exception ex) when (ex is Autodesk.Revit.Exceptions.ApplicationException or Autodesk.Revit.Exceptions.InvalidOperationException)
-            {
-                // The view's scale and centre (crop box), turned as the viewport is.
-                XYZ right = view.RightDirection, up = view.UpDirection, origin = view.Origin;
-                var c = view.CropBox is { } cb ? cb.Transform.OfPoint((cb.Min + cb.Max) / 2) : origin;
-                double cu = (c - origin).DotProduct(right), cv = (c - origin).DotProduct(up);
-                var center = vp.GetBoxCenter();
-                var rotation = vp.Rotation switch { ViewportRotation.Clockwise => -90.0, ViewportRotation.Counterclockwise => 90.0, _ => 0.0 };
-                var scale = Math.Max(1, view.Scale);
-                toSheet = p => Redline.ViewToSheet((p - origin).DotProduct(right), (p - origin).DotProduct(up), cu, cv, center.X, center.Y, scale, rotation);
-                fromSheet = (x, y) =>
+                Func<XYZ, (double, double)> revitTo = p => { var s = p2s.OfPoint(m2p.OfPoint(p)); return (s.X, s.Y); };
+                // Revit's transforms win when they put a cropped view's centre inside its viewport (they handle what the
+                // scale and centre can't); when they don't, the scale and centre do.
+                var (sx, sy) = revitTo(c);
+                if (!view.CropBoxActive || box.Grow(Math.Max(box.W, box.H) * 0.1).Contains(sx, sy))
                 {
-                    var (u, v) = Redline.SheetToView(x, y, cu, cv, center.X, center.Y, scale, rotation);
-                    return OnPlane(view, origin + right * u + up * v);
-                };
+                    toSheet = revitTo;
+                    fromSheet = (x, y) => OnPlane(view, p2m.OfPoint(s2p.OfPoint(new XYZ(x, y, 0))));
+                }
             }
+            catch (Exception ex) when (ex is Autodesk.Revit.Exceptions.ApplicationException or Autodesk.Revit.Exceptions.InvalidOperationException) { }
             ports.Add(new Port { Viewport = vp, View = view, Box = box, ToSheet = toSheet, FromSheet = fromSheet });
         }
         return ports;

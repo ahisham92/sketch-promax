@@ -26,7 +26,9 @@ internal static partial class FieldTest
         if (!Directory.Exists(folder)) return null;
         foreach (var catalog in Directory.GetFiles(folder, "*.txt", SearchOption.AllDirectories))
         {
-            var types = File.ReadLines(catalog).Skip(1).Select(l => l.Split(',')[0].Trim().Trim('"')).Where(n => n.Length > 0).ToList();
+            var lines = File.ReadAllLines(catalog);
+            if (TypeCatalog.Problem(lines) is not null) continue;
+            var types = TypeCatalog.Types(lines);
             if (types.Count > 0) return (folder, types[Math.Min(1, types.Count - 1)]);
         }
         return null;
@@ -231,6 +233,17 @@ internal static partial class FieldTest
         return "400 x 400, 3 m tall";
     }
 
+    /// <summary>The type parameter the made steel family's catalog sets (a catalog has to name one).</summary>
+    private const string SteelDepthParameter = "FT Section Depth";
+
+    private static string? SteelBeamBody(Document fam)
+    {
+        var note = ColumnBody(fam);
+        if (fam.FamilyManager.get_Parameter(SteelDepthParameter) is null)
+            fam.FamilyManager.AddParameter(SteelDepthParameter, GroupTypeId.Geometry, SpecTypeId.Length, false);
+        return note;
+    }
+
     private static string? EquipmentBody(Document fam)
     {
         Box(fam, 1000, 800, 0, 1200, true);
@@ -380,6 +393,64 @@ internal static partial class FieldTest
 
         SteelCatalog(a, doc, s, result);
         ExportDwg(doc, s, result);
+        LegendComponent(a, doc, result);
+    }
+
+    /// <summary>At most this many Revit templates are opened looking for a legend component (each takes seconds).</summary>
+    private const int MaxTemplatesOpened = 3;
+
+    /// <summary>
+    /// A legend with a legend component, for add_legend_components (the API can't place one from scratch): copied with
+    /// its legend from the first Revit template that has one, the test project's own first, then the others beside it.
+    /// None found: that case becomes a checklist step (FieldTestCoverage.ManualWhenSkipped).
+    /// </summary>
+    private static void LegendComponent(RevitApp a, Document doc, RunReport result)
+    {
+        if (LegendComponents.Any(doc)) return;
+        var candidates = new List<string>();
+        if (File.Exists(result.Template)) candidates.Add(result.Template);
+        try
+        {
+            if (Path.GetDirectoryName(result.Template) is { Length: > 0 } dir && Directory.Exists(dir))
+                candidates.AddRange(Directory.GetFiles(dir, "*.rte").Where(f => !string.Equals(f, result.Template, StringComparison.OrdinalIgnoreCase)).OrderBy(f => f, StringComparer.OrdinalIgnoreCase));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        var looked = new List<string>();
+        foreach (var file in candidates.Take(MaxTemplatesOpened))
+        {
+            looked.Add(Path.GetFileName(file));
+            Document? source = null;
+            try
+            {
+                source = a.OpenDocumentFile(file);
+                var legend = new FilteredElementCollector(source).OfClass(typeof(View)).Cast<View>()
+                    .FirstOrDefault(v => !v.IsTemplate && v.ViewType == ViewType.Legend && LegendComponents.In(source, v).Any());
+                if (legend is null) continue;
+                using var t = new Transaction(doc, "Field test: a legend with a legend component");
+                t.Start();
+                var options = LegendSeeds.CopyOptions();
+                var view = ElementTransformUtils.CopyElements(source, [legend.Id], doc, Transform.Identity, options).Select(doc.GetElement).OfType<View>().FirstOrDefault()
+                           ?? throw new InvalidOperationException("Revit copied no legend view");
+                var component = LegendComponents.In(source, legend).First().Id;
+                ElementTransformUtils.CopyElements(legend, [component], view, Transform.Identity, options);
+                t.Commit();
+                if (LegendComponents.Any(doc))
+                {
+                    result.Sample.Add($"legend component: copied legend '{legend.Name}' with a component from {Path.GetFileName(file)}");
+                    return;
+                }
+            }
+            catch (Exception ex) when (ex is Autodesk.Revit.Exceptions.ApplicationException or InvalidOperationException or ArgumentException)
+            {
+                looked[^1] += $" ({ex.Message.Trim()})";
+            }
+            finally
+            {
+                try { source?.Close(false); } catch (Exception) { }
+            }
+        }
+        result.Sample.Add("legend component: none in the template" + (looked.Count > 0 ? $" or the Revit templates looked in ({string.Join(", ", looked)})" : "") +
+                          ", and the API can't place one, so add_legend_components is a checklist step");
     }
 
     /// <summary>
@@ -400,9 +471,10 @@ internal static partial class FieldTest
                 result.Sample.Add($"steel sections: copied {Path.GetFileName(library)} and its type catalog from the content library");
                 return;
             }
-            if (MakeFamily(a, doc, s, result, "steel section family", "FT Steel Beam", ["Structural Framing - Beams and Braces"], null, ColumnBody) is null) return;
+            if (MakeFamily(a, doc, s, result, "steel section family", "FT Steel Beam", ["Structural Framing - Beams and Braces"], null, SteelBeamBody) is null) return;
             File.Copy(Path.Combine(s.Folder, FamiliesFolder, "FT Steel Beam.rfa"), Path.Combine(folder, "FT Steel Beam.rfa"), true);
-            File.WriteAllText(Path.Combine(folder, "FT Steel Beam.txt"), ",\r\nFT 200x100,\r\nFT 300x150,\r\n");
+            // A catalog header must name at least one parameter as name##spec##units, or Revit stops on a modal dialog.
+            File.WriteAllText(Path.Combine(folder, "FT Steel Beam.txt"), $",{SteelDepthParameter}##length##millimeters\r\nFT 200x100,200\r\nFT 300x150,300\r\n");
             result.Sample.Add("steel sections: no steel catalog in the content library, so the field test made FT Steel Beam with a two-type catalog");
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)

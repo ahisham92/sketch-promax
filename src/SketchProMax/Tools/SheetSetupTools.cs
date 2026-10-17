@@ -382,9 +382,14 @@ public sealed class TitleBlockFromCadTool : IRevitTool
                 t.Start();
                 if (!args.OptBool("keep_template_border"))
                 {
-                    var lines = new FilteredElementCollector(famDoc).OfClass(typeof(CurveElement)).ToElementIds();
-                    removed = lines.Count;
-                    if (lines.Count > 0) famDoc.Delete(lines);
+                    // Some templates hold curves Revit won't delete (Revit 2024's metric ones do), and one of those in
+                    // the list makes the whole Delete throw: delete only those it allows, one at a time.
+                    foreach (var id in new FilteredElementCollector(famDoc).OfClass(typeof(CurveElement)).ToElementIds())
+                    {
+                        if (!DocumentValidation.CanDeleteElement(famDoc, id)) continue;
+                        try { if (famDoc.GetElement(id) is not null && famDoc.Delete(id).Count > 0) removed++; }
+                        catch (Autodesk.Revit.Exceptions.ArgumentException) { }
+                    }
                 }
                 var options = new DWGImportOptions
                 {

@@ -175,7 +175,8 @@ internal static class ChatUi
         Geometry Scaled(string data)
         {
             if (k == 1) return Geometry(data);
-            var g = System.Windows.Media.Geometry.Parse(data);
+            // Geometry.Parse hands back a frozen geometry: setting Transform on it throws, so transform a copy.
+            var g = System.Windows.Media.Geometry.Parse(data).Clone();
             g.Transform = scale;
             g.Freeze();
             return g;

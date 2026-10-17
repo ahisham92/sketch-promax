@@ -317,6 +317,13 @@ internal static partial class SelfTest
                 });
             }
             try { result = Execute(app, tool, step, run.Ctx); }
+            // A tool refuses by throwing as often as by returning an error (the bridge turns both into the same reply), so
+            // a thrown refusal is checked against ExpectError too.
+            catch (Exception ex) when (step.ExpectError is not null && ex is ArgumentException or InvalidOperationException
+                                           or Autodesk.Revit.Exceptions.ArgumentException or Autodesk.Revit.Exceptions.InvalidOperationException)
+            {
+                result = ToolResult.Error(Bridge.BridgeServer.Describe(tool, ex));
+            }
             finally
             {
                 if (step.TempBugFolder) { Bugs.BugLog.RootOverride = null; Chat.ChatStore.RootOverride = null; }
@@ -1195,12 +1202,15 @@ internal static partial class SelfTest
 
     private static string? VoidsRebuilt(JsonElement r) =>
         r.TryGetProperty("voids", out var v) && v.ValueKind == JsonValueKind.Object && v.TryGetProperty("rebuilt", out var n) && n.GetInt32() >= 1
-            ? null : "no void was rebuilt from the void cut";
+            ? null
+            : "no void was rebuilt from the void cut" + (v.ValueKind == JsonValueKind.Object ? $" (voids: {Short(v.GetRawText(), 300)})" : " (the void cut was not in the sets checked)");
 
     /// <summary>The slab that names 50% GGBS used a GGBS factor, and the one that names no mix the CEM I one.</summary>
     private static string? MixAndNoMix(JsonElement r)
     {
-        var ids = r.GetProperty("factorsUsed").EnumerateArray().Select(f => f.GetProperty("Id").GetString() ?? "").Where(i => i.StartsWith("conc-", StringComparison.Ordinal)).ToList();
+        // The factors are in the result's summary.
+        var factors = r.TryGetProperty("summary", out var summary) && summary.TryGetProperty("factorsUsed", out var inSummary) ? inSummary : r.GetProperty("factorsUsed");
+        var ids = factors.EnumerateArray().Select(f => f.GetProperty("Id").GetString() ?? "").Where(i => i.StartsWith("conc-", StringComparison.Ordinal)).ToList();
         var wrong = new List<string>();
         if (!ids.Any(i => i.EndsWith("-ggbs50", StringComparison.Ordinal))) wrong.Add("the slab whose material names 50% GGBS did not use a GGBS factor");
         if (!ids.Any(i => i.EndsWith("-cem1", StringComparison.Ordinal))) wrong.Add("the slab whose material names no mix did not use the CEM I factor");

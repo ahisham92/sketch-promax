@@ -102,7 +102,9 @@ internal static class StartupTimings
     /// The first Idling after a model opened: the line for the activity log, once per open; null otherwise. Cheap when
     /// nothing is waiting (called on every Idling).
     /// </summary>
-    public static string? FirstIdle()
+    /// <param name="stillOpen">Whether a model of that title is still open; one opened and closed again before Revit was
+    /// idle (a copy a tool opened, changed and closed) has no first-Idling time of its own to report.</param>
+    public static string? FirstIdle(Func<string, bool>? stillOpen = null)
     {
         if (!AwaitingIdle) return null;
         lock (Gate)
@@ -110,7 +112,8 @@ internal static class StartupTimings
             if (!AwaitingIdle) return null;
             AwaitingIdle = false;
             var idle = Clock.ElapsedMilliseconds - _openedAt;
-            var line = OpenLine(_openTitle, _openMs, _openedHandlersMs, idle, _openDuringTest || TestRunning);
+            var closed = stillOpen is not null && _openTitle.Length > 0 && !stillOpen(_openTitle);
+            var line = OpenLine(_openTitle, _openMs, _openedHandlersMs, closed ? -1 : idle, _openDuringTest || TestRunning);
             Opens.Add(line);
             if (Opens.Count > MaxOpens) Opens.RemoveAt(0);
             return line;
@@ -119,7 +122,8 @@ internal static class StartupTimings
 
     internal static string OpenLine(string title, long openMs, long handlersMs, long idleMs, bool testRunning = false) =>
         $"model open '{title}': Revit took {(openMs < 0 ? "?" : openMs.ToString(System.Globalization.CultureInfo.InvariantCulture))} ms " +
-        $"(DocumentOpening to DocumentOpened), Sketch ProMax DocumentOpened handlers {handlersMs} ms, first Idling {idleMs} ms after open" +
+        $"(DocumentOpening to DocumentOpened), Sketch ProMax DocumentOpened handlers {handlersMs} ms, " +
+        (idleMs < 0 ? "closed again before Revit was idle" : $"first Idling {idleMs} ms after open") +
         (testRunning ? " (test running)" : "");
 
     /// <summary>The model opens measured in this session, oldest first.</summary>

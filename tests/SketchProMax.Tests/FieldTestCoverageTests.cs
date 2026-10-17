@@ -15,6 +15,10 @@ internal static class FieldTestCoverageTests
             && FieldTestCoverage.RibbonKey("item\tx\tA\tY\ttool:place_rooms") is null
             && FieldTestCoverage.RibbonKey("tab\tx\tnotes") == "tab:notes", "");
 
+        check("coverage: a tool skipped for want of a hand-made element points at a manual checklist step",
+            FieldTestCoverage.ManualWhenSkipped.All(p => FieldTestCoverage.Features.Any(f => f.Key == p.Value && f.How == FieldTestCoverage.How.Manual && f.Steps.Length > 0))
+            && FieldTestCoverage.ManualWhenSkipped.ContainsKey("add_legend_components"), "");
+
         // The checklist: manual items first, then one per fixed bug.
         const string log = """
             | # | Date | What | Version | Status |

@@ -121,7 +121,12 @@ internal static class IssueGate
             // Read-only: progress per check on the job card; a stop ends the run between checks (nothing to undo).
             if (CancelPoint.Stop("Issue check", i, steps.Length)) CancelPoint.ThrowIfRequested("The issue check did not finish; nothing was issued.");
             Bridge.Jobs.Report($"Issue check: {IssueGateMath.Tools[i]} ({i + 1} of {steps.Length})");
-            steps[i]();
+            // One check crashing must not take the gate down: it shows as a check that could not run, which blocks.
+            try { steps[i](); }
+            catch (Exception ex) when (ex is not OperationCanceledException && !Fatal(ex))
+            {
+                Ran(IssueGateMath.Tools[i], ToolResult.Error($"{ex.GetType().Name}: {ex.Message}{Where(ex)}"), null);
+            }
         }
         Bridge.JobFeed.Item("Issue check", steps.Length, steps.Length, "");
 
@@ -131,6 +136,15 @@ internal static class IssueGate
         run.Report = WriteReport(run, folder);
         Last = run;
         return run;
+    }
+
+    private static bool Fatal(Exception ex) => ex is OutOfMemoryException or StackOverflowException or AccessViolationException;
+
+    /// <summary>The first frame of the add-in's own code a crash came from, for the report (empty when there is none).</summary>
+    internal static string Where(Exception ex)
+    {
+        var frame = ex.StackTrace?.Split('\n').Select(l => l.Trim()).FirstOrDefault(l => l.Contains("SketchProMax."));
+        return frame is null ? "" : $" ({frame})";
     }
 
     /// <summary>Accepts items of a run with a reason (kept with the model) and updates the run's list. Returns how many.</summary>

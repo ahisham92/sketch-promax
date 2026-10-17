@@ -93,7 +93,9 @@ internal static class Sources
         var list = new List<Placed>();
         foreach (var e in new FilteredElementCollector(from).WherePasses(filter).WhereElementIsNotElementType())
         {
-            if (e.get_BoundingBox(null) is not { } bb) continue;
+            // A void-only family (a cutting void) has no box of its own: the elements it cuts stand in, so its rebuilt void
+            // still takes part.
+            if ((e.get_BoundingBox(null) ?? CutBox(from, e)) is not { } bb) continue;
             var p = new Placed(e, tr, name, inHost);
             if (tr.IsIdentity) { p.Min = bb.Min; p.Max = bb.Max; }
             else
@@ -107,6 +109,18 @@ internal static class Sources
             list.Add(p);
         }
         return list;
+    }
+
+    private static BoundingBoxXYZ? CutBox(Document doc, Element e)
+    {
+        if (e is not FamilyInstance fi || !InstanceVoidCutUtils.IsVoidInstanceCuttingElement(fi)) return null;
+        var boxes = InstanceVoidCutUtils.GetElementsBeingCut(fi).Select(id => doc.GetElement(id)?.get_BoundingBox(null)).OfType<BoundingBoxXYZ>().ToList();
+        if (boxes.Count == 0) return null;
+        return new BoundingBoxXYZ
+        {
+            Min = new XYZ(boxes.Min(b => b.Min.X), boxes.Min(b => b.Min.Y), boxes.Min(b => b.Min.Z)),
+            Max = new XYZ(boxes.Max(b => b.Max.X), boxes.Max(b => b.Max.Y), boxes.Max(b => b.Max.Z)),
+        };
     }
 }
 

@@ -538,6 +538,14 @@ public sealed class LoadFamilyTool : IRevitTool
             path = matches[0];
         }
         if (!File.Exists(path)) return ToolResult.Error($"File not found: {path}");
+        // Revit reads a type catalog beside the family while loading and shows a modal dialog when its header is wrong.
+        var catalog = Path.ChangeExtension(path, ".txt");
+        try
+        {
+            if (File.Exists(catalog) && TypeCatalog.Problem(File.ReadAllLines(catalog)) is { } bad)
+                return ToolResult.Error($"The type catalog beside this family can't be read by Revit ({Path.GetFileName(catalog)}: {bad}), so it was not loaded. Fix the catalog's first line, or move the .txt away to load the family's own types.");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
 
         using var t = RevitHelpers.StartTransaction(doc, "Load family");
         var loaded = doc.LoadFamily(path, new LoadOptions(args.OptBool("overwrite")), out Family family);

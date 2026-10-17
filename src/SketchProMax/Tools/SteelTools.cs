@@ -118,10 +118,14 @@ public sealed class LoadSteelSectionsTool : IRevitTool
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
         }
+        // A catalog Revit can't parse makes LoadFamilySymbol show a modal dialog, so each one is checked first and a bad one skipped.
+        var badCatalogs = new List<string>();
         var catalogs = families.Select(f => (family: f, catalog: Path.ChangeExtension(f, ".txt"))).Where(x => File.Exists(x.catalog))
-            .Select(x => (x.family, types: CatalogTypes(x.catalog))).ToList();
+            .Select(x => (x.family, types: CatalogTypes(x.catalog, badCatalogs))).Where(x => x.types.Count > 0).ToList();
         if (catalogs.Count == 0)
-            return ToolResult.Error($"No steel families with type catalogs found in: {string.Join("; ", roots)}. Install the Revit content library or pass folder.");
+            return ToolResult.Error(badCatalogs.Count > 0
+                ? $"The steel type catalogs found can't be read by Revit, so nothing was loaded: {string.Join("; ", badCatalogs.Take(3))}. Fix the catalog's first line or pass another folder."
+                : $"No steel families with type catalogs found in: {string.Join("; ", roots)}. Install the Revit content library or pass folder.");
 
         var loaded = new List<object>();
         var notFound = new List<string>();
@@ -153,9 +157,15 @@ public sealed class LoadSteelSectionsTool : IRevitTool
                 }
             }
         }
-        if (loaded.Count == 0) { t.RollBack(); return ToolResult.Error($"None of these sizes were found in the library: {string.Join(", ", notFound)}."); }
+        var skipped = badCatalogs.Count == 0 ? null : badCatalogs;
+        if (loaded.Count == 0)
+        {
+            t.RollBack();
+            return ToolResult.Error($"None of these sizes were found in the library: {string.Join(", ", notFound)}." +
+                                    (skipped is null ? "" : $" Skipped catalogs Revit can't read: {string.Join("; ", skipped.Take(3))}."));
+        }
         t.Commit();
-        return ToolResult.Ok(new { loaded, notFound });
+        return ToolResult.Ok(new { loaded, notFound, skippedCatalogs = skipped });
     }
 
     private static string Normal(string s) => Regex.Replace(s.ToUpperInvariant().Replace('×', 'X'), @"[\s\-_]", "");
@@ -166,11 +176,13 @@ public sealed class LoadSteelSectionsTool : IRevitTool
         return $"{m.Groups[1].Value}{m.Groups[3].Value}|{m.Groups[2].Value}";
     }
 
-    private static List<string> CatalogTypes(string catalog)
+    private static List<string> CatalogTypes(string catalog, List<string> bad)
     {
         try
         {
-            return File.ReadLines(catalog).Skip(1).Select(l => l.Split(',')[0].Trim().Trim('"')).Where(n => n.Length > 0).ToList();
+            var lines = File.ReadAllLines(catalog);
+            if (TypeCatalog.Problem(lines) is { } problem) { bad.Add($"{Path.GetFileName(catalog)}: {problem}"); return []; }
+            return TypeCatalog.Types(lines);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return []; }
     }

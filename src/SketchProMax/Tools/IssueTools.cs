@@ -32,14 +32,18 @@ internal static class Drafting
     public static long? Place(Document doc, ViewSheet? sheet, View view, int index)
     {
         if (sheet is null || !Viewport.CanAddViewToSheet(doc, sheet.Id, view.Id)) return null;
+        // A sheet with no title block can have no outline (or an empty one): lay out on an A1 sheet then.
         var o = sheet.Outline;
-        double w = o.Max.U - o.Min.U, h = o.Max.V - o.Min.V;
+        double minU = 0, maxU = Mm(841), minV = 0, maxV = Mm(594);
+        if (o is not null && o.Max.U - o.Min.U > Mm(50) && o.Max.V - o.Min.V > Mm(50))
+            (minU, maxU, minV, maxV) = (o.Min.U, o.Max.U, o.Min.V, o.Max.V);
+        double w = maxU - minU, h = maxV - minV;
         var col = index % 3; var row = index / 3;
-        var at = new XYZ(o.Min.U + w * (0.2 + 0.28 * col), o.Max.V - h * (0.3 + 0.35 * row), 0);
+        var at = new XYZ(minU + w * (0.2 + 0.28 * col), maxV - h * (0.3 + 0.35 * row), 0);
         var vp = Viewport.Create(doc, sheet.Id, view.Id, at);
         // Keep a tall view (long notes) inside the sheet: move it so its top sits near the sheet's top.
         var box = vp.GetBoxOutline();
-        var dy = o.Max.V - h * 0.05 - box.MaximumPoint.Y;
+        var dy = maxV - h * 0.05 - box.MaximumPoint.Y;
         if (dy < 0) ElementTransformUtils.MoveElement(doc, vp.Id, new XYZ(0, dy, 0));
         return vp.Id.Value;
     }
