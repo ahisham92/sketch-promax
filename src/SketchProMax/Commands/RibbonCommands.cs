@@ -163,10 +163,10 @@ internal static class CoreCommands
             case UpdateBadge.Kind.Ready:
             case UpdateBadge.Kind.Failed:
             case UpdateBadge.Kind.Check:
+            default:
+                // One click always checks now and installs what it finds (the progress window shows it); details stay under Settings.
                 _checkState = null;
                 return CheckForUpdates();
-            default:
-                return UpdateInfo();
         }
     }
 

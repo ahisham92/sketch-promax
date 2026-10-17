@@ -31,6 +31,10 @@ internal static class CoreRibbonManifest
             "Chat with Claude about this model, inside Revit, using your Claude plan.",
             "Opens the Sketch ProMax pane on its Chat tab. Replies stream in with every Sketch ProMax tool; attach images, PDFs " +
             "and drawings, or send the current view. The first time, it helps you install Claude Code and sign in.")),
+        // Update (0.33.1): also in the first panel, which Revit never folds away on a narrow ribbon, so updating is always one click.
+        L(Button("Claude", "UpdateClaude", "Update", "update-button", "version",
+            "The installed version and updates: Update ready (click to install now), Updated – What's new (release notes), Up to date " +
+            "with the time of the last check (click to check now), Couldn't check (why, in this tooltip).", live: "update-first")),
         L(Button("Claude", "ClaudeStatus", "Claude", "status", "logo:gray",
             "Whether Claude is connected to this Revit window: green connected, amber ready, gray not running, red no link. Click for details.",
             "Green: Claude has talked to this Revit window in the last few minutes. Amber: ready, waiting for Claude. Gray: the " +

@@ -232,6 +232,12 @@ public static class CoreEntry
                 var f = UpdateLine().Split('\t');
                 return f.Length < 3 ? "" : CoreRibbonManifest.LiveLine(f[0], f[1], f[2]);
             }
+            case "update-first":
+            {
+                // The Claude panel's copy of the badge; the Sketch ProMax panel's one also pumps the notice.
+                var ((text, _), tip, glyph) = CoreCommands.BadgeWithTip();
+                return CoreRibbonManifest.LiveLine(text, tip, glyph);
+            }
             case "update-badge":
             {
                 var ((text, _), tip, glyph) = CoreCommands.BadgeWithTip();
