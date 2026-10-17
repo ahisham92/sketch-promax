@@ -9,10 +9,10 @@ internal static class CarbonTests
     {
         // The built-in table
         var t = BuiltIn();
-        check("carbon: built-in table has a version", t.Version == "2026.1", t.Version);
+        check("carbon: built-in table has a version", t.Version == "2026.2", t.Version);
         check("carbon: built-in table reads without problems", t.Problems.Count == 0, string.Join("; ", t.Problems));
         check("carbon: built-in table has materials, modes, distances and waste rates",
-            t.Materials.Count > 40 && t.Modes.Count == 3 && t.Distances.Count == 2 && t.Waste.Count >= 5, $"{t.Materials.Count} {t.Modes.Count} {t.Distances.Count} {t.Waste.Count}");
+            t.Materials.Count > 40 && t.Modes.Count == 3 && t.Distances.Count == 4 && t.Waste.Count >= 5, $"{t.Materials.Count} {t.Modes.Count} {t.Distances.Count} {t.Waste.Count}");
         var unsourced = t.Materials.Concat(t.Modes).Concat(t.Distances).Concat(t.Waste).Where(f => f.Source.Length == 0).Select(f => f.Id).ToList();
         check("carbon: every built-in row names its source", unsourced.Count == 0, string.Join(", ", unsourced));
         var unmarked = t.Materials.Where(f => f.Class != "air" && f.Note.IndexOf("placeholder", StringComparison.OrdinalIgnoreCase) < 0).Select(f => f.Id).ToList();
@@ -96,15 +96,15 @@ internal static class CarbonTests
         // Stages
         var c32 = t.Materials.First(f => f.Id == "conc-c32-fa25");
         var a13Only = Emissions(c32, "concrete", 1, 0, null, new Options(), t, null, null, null, out var q);
-        check("carbon: A1-A3 = quantity x factor", Math.Abs(a13Only.A1A3 - 2400 * 0.111) < 1e-9 && a13Only.A4 == 0 && a13Only.A5 == 0 && q == 2400, $"{a13Only}");
+        check("carbon: A1-A3 = quantity x factor", Math.Abs(a13Only.A1A3 - 2400 * 0.133) < 1e-9 && a13Only.A4 == 0 && a13Only.A5 == 0 && q == 2400, $"{a13Only}");
         var all = Emissions(c32, "concrete", 1, 0, null, new Options { A4 = true, A5 = true }, t, null, null, null, out _);
-        var a4 = 2.4 * 50 * 0.107;
-        check("carbon: A4 = t x km x mode factor (concrete 50 km by road)", Math.Abs(all.A4 - a4) < 1e-9, $"{all.A4}");
-        check("carbon: A5 = w/(1-w) x (A1-A3 + A4)", Math.Abs(all.A5 - 5.0 / 95 * (2400 * 0.111 + a4)) < 1e-9 && Math.Abs(all.Total - (all.A1A3 + all.A4 + all.A5)) < 1e-12, $"{all.A5}");
+        var a4 = 2.4 * 20 * 0.107;
+        check("carbon: A4 = t x km x mode factor (concrete 20 km by road)", Math.Abs(all.A4 - a4) < 1e-9, $"{all.A4}");
+        check("carbon: A5 = w/(1-w) x (A1-A3 + A4)", Math.Abs(all.A5 - 5.0 / 95 * (2400 * 0.133 + a4)) < 1e-9 && Math.Abs(all.Total - (all.A1A3 + all.A4 + all.A5)) < 1e-12, $"{all.A5}");
         var steel = t.Materials.First(f => f.Id == "steel-section");
         var rail = Emissions(steel, "steel", 0, 0, 1000, new Options { A4 = true, A4Mode = "rail", A4DistanceKm = 100 }, t, null, null, null, out _);
         check("carbon: A4 with given distance and mode", Math.Abs(rail.A4 - 1 * 100 * 0.028) < 1e-9 && Math.Abs(rail.A1A3 - 1550) < 1e-9, $"{rail}");
-        check("carbon: steel uses the national distance", Distance("steel", new Options(), t, null) == 300 && Distance("masonry", new Options(), t, null) == 50, "");
+        check("carbon: steel uses the national distance", Distance("steel", new Options(), t, null) == 120 && Distance("masonry", new Options(), t, null) == 80 && Distance("concrete", new Options(), t, null) == 20, "");
         check("carbon: waste rates per class", WasteRate("masonry", new Options(), t, null) == 20 && WasteRate("glass", new Options(), t, null) == 5 && WasteRate("steel", new Options { WastePercent = 3 }, t, null) == 3, "");
         check("carbon: waste factor and its limits", Math.Abs(WasteFactor(20) - 0.25) < 1e-12 && Throws(() => WasteFactor(100)) && Throws(() => ModeFactor("air freight", t, null)), "");
         var userA4 = new Factor { Unit = "t", Value = 5, Stage = "A4" };
