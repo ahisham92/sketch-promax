@@ -96,5 +96,34 @@ internal static class ChatViewTests
             check("styles: corners from the spacing scale", xaml.Contains("CornerRadius=\"8\"") && xaml.Contains("CornerRadius=\"12\"") && xaml.Contains("RadiusX=\"10\""), "");
         }
         check("greeting: line", Greeting.Line("Ahmed") == "Hey Ahmed!" && Greeting.Line(null) == "Hey there!", "");
+
+        // Hover fades and presses: on the chrome only, never on the label; no fade when Windows' animations are off.
+        var still = ChatStyles.Xaml(8, 12, animate: false);
+        check("styles: hover fades in 160 ms, ease-out", xaml.Contains("Duration=\"0:0:0.160\"") && xaml.Contains("CubicEase EasingMode=\"EaseOut\"") && !xaml.Contains("Duration=\"0:0:0\""), "");
+        check("styles: no fade with animations off", still.Contains("Duration=\"0:0:0\"") && !still.Contains("0:0:0.160"), "");
+        check("styles: press shrinks the chrome, not the text", xaml.Contains("ScaleX\" Value=\"0.98\"") && !System.Text.RegularExpressions.Regex.IsMatch(xaml, @"Property=""Opacity"" Value=""0\.\d"""), "");
+        check("styles: every template has a hover layer", System.Text.RegularExpressions.Regex.Matches(xaml, "x:Name=\"hv\"").Count >= 8, "");
+
+        // The type scale.
+        check("type: 12/13/14/16/20", ChatStyles.Caption == 12 && ChatStyles.Body == 13 && ChatStyles.Subtitle == 14 && ChatStyles.Title == 16 && ChatStyles.Display == 20, "");
+        check("type: Ideal text from 15 px", ChatStyles.Title >= ChatStyles.IdealFrom && ChatStyles.Subtitle < ChatStyles.IdealFrom, "");
+
+        // The glide to the newest message: ease-out on whole device pixels, never past the end.
+        var g1 = SmoothScroll.Next(0, 400, 600, 1);
+        check("glide: a quarter of the way per frame", g1 == 100, g1.ToString());
+        var g2 = SmoothScroll.Next(0, 401, 600, 1.25);
+        check("glide: whole device pixels at 125 %", Math.Abs(g2 * 1.25 - Math.Round(g2 * 1.25)) < 1e-9, g2.ToString());
+        check("glide: from far away starts a viewport above the end", SmoothScroll.Next(0, 5000, 600, 1) == 4550, SmoothScroll.Next(0, 5000, 600, 1).ToString());
+        check("glide: lands exactly on the end", SmoothScroll.Next(399.6, 400, 600, 1) == 400 && SmoothScroll.Next(398, 400, 600, 1) == 399, SmoothScroll.Next(398, 400, 600, 1).ToString());
+        var pos = 0.0;
+        var steps = 0;
+        while (pos < 300 && steps < 100) { pos = SmoothScroll.Next(pos, 300, 600, 1.5); steps++; }
+        check("glide: arrives within half a second at 60 Hz", pos == 300 && steps <= 30, steps.ToString());
+
+        // Frame times.
+        var stamps = new[] { 0, 16, 33, 33, 50, 116, 133 }.Select(ms => TimeSpan.FromMilliseconds(ms)).ToList();
+        var frames = FrameTimes.Of(stamps);
+        check("frames: repeated stamps skipped, average and worst", frames.Frames == 5 && Math.Abs(frames.AverageMs - 133.0 / 5) < 1e-9 && frames.WorstMs == 66 && frames.Hitches == 1, $"{frames}");
+        check("frames: smooth at 60 fps, not with a long stall", FrameTimes.Smooth(16.7, 40) && !FrameTimes.Smooth(16.7, 400) && !FrameTimes.Smooth(40, 60) && !FrameTimes.Smooth(0, 0), "");
     }
 }

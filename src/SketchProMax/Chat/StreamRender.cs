@@ -139,3 +139,46 @@ internal static class History
     /// </summary>
     public static int Trim(int drawn, bool following) => following && drawn > 2 * Page ? drawn - Page : 0;
 }
+
+/// <summary>
+/// The list's glide to the newest message: each frame covers a quarter of the way left (ease-out), on whole device
+/// pixels so the text stays sharp while it moves. From far away it first jumps to a viewport above the end.
+/// </summary>
+internal static class SmoothScroll
+{
+    public const double Share = 0.25;
+
+    /// <param name="pixelsPerDip">Device pixels per WPF unit (1 at 100 %, 1.5 at 150 %).</param>
+    public static double Next(double current, double target, double viewport, double pixelsPerDip)
+    {
+        if (pixelsPerDip <= 0) pixelsPerDip = 1;
+        var gap = target - current;
+        if (Math.Abs(gap) * pixelsPerDip < 1) return target;
+        if (viewport > 0 && Math.Abs(gap) > viewport * 1.5) current = target - Math.Sign(gap) * viewport;
+        var step = (target - current) * Share;
+        if (Math.Abs(step) * pixelsPerDip < 1) step = Math.Sign(gap) / pixelsPerDip;
+        var next = Math.Round((current + step) * pixelsPerDip) / pixelsPerDip;
+        return (target - next) * Math.Sign(gap) <= 0 ? target : next;
+    }
+}
+
+/// <summary>Frame times from rendering timestamps (the field test's smoothness check): the average and the worst gap.</summary>
+internal static class FrameTimes
+{
+    /// <summary>A frame over this long is a visible hitch at 60 Hz (two frames missed).</summary>
+    public const double HitchMs = 50;
+
+    public static (double AverageMs, double WorstMs, int Frames, int Hitches) Of(IReadOnlyList<TimeSpan> stamps)
+    {
+        var gaps = new List<double>();
+        for (var k = 1; k < stamps.Count; k++)
+        {
+            var ms = (stamps[k] - stamps[k - 1]).TotalMilliseconds;
+            if (ms > 0) gaps.Add(ms); // WPF repeats a timestamp when it renders nothing new
+        }
+        return gaps.Count == 0 ? (0, 0, 0, 0) : (gaps.Average(), gaps.Max(), gaps.Count, gaps.Count(g => g > HitchMs));
+    }
+
+    /// <summary>Smooth: about 60 frames a second on average (under 25 ms) and no frame longer than a fifth of a second.</summary>
+    public static bool Smooth(double averageMs, double worstMs) => averageMs > 0 && averageMs < 25 && worstMs < 200;
+}

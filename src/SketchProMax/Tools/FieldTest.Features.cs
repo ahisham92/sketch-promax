@@ -226,6 +226,8 @@ internal static partial class FieldTest
         await Probe(s, "ribbon.dialogs", _ => Dialogs(s.Registry, s.Folder)).ConfigureAwait(false);
         await Probe(s, "favourites", _ => FavouriteRoundTrip()).ConfigureAwait(false);
         await Probe(s, "chat.history", _ => ChatHistoryRoundTrip(s.Folder)).ConfigureAwait(false);
+        await Probe(s, "chat.dpi", _ => ChatDpi(s)).ConfigureAwait(false);
+        await ProbeCore(s, "chat.frames", () => ChatFrames()).ConfigureAwait(false);
         await Probe(s, "update.loader", _ => Loader()).ConfigureAwait(false);
         // In the test project, each rolled back afterwards (time records excepted: they are what is checked).
         await Probe(s, "handoff.continue", app => HandoffContinue(app, s)).ConfigureAwait(false);
@@ -1008,6 +1010,39 @@ internal static partial class FieldTest
             ? Pass($"on {where}, with every element owned by someone else (test hook): the session's time stayed in the totals (model write: {sim.GetProperty("written").GetString()}) and the " +
                    $"parameters waited, nothing borrowed; once this user owned Project Information, the next write ({write}) brought them to the totals (working {TimeMath.Hours(totals.Working):0.##} h, AI {TimeMath.Hours(totals.Ai):0.##} h)")
             : Fail($"on {where}: " + string.Join("; ", problems));
+    }
+
+    // ---- The chat's look and feel: screenshots per scale, frame times ---------------------------------------------------
+
+    /// <summary>
+    /// The chat pane with sample content (a table, code, steps, a brief) drawn at 100, 125, 150 and 175 % in both
+    /// themes, saved next to the report. A test can't judge sharpness: it checks the files are there, and the
+    /// checklist's "Chat is sharp at every scale" step has a person compare them.
+    /// </summary>
+    private static (string, string) ChatDpi(State s)
+    {
+        var folder = Path.Combine(s.O.ReportFolder ?? DefaultReportFolder, $"{s.Result.Started:yyyyMMdd-HHmmss} chat-dpi");
+        var files = Chat.ChatPane.Snapshot.Render(folder);
+        var bad = files.Where(f => !File.Exists(f) || new FileInfo(f).Length < 1000).Select(Path.GetFileName).ToList();
+        var expected = Chat.ChatPane.Snapshot.Scales.Length * 2;
+        if (files.Count != expected || bad.Count > 0)
+            return Fail($"{files.Count} of {expected} screenshots made" + (bad.Count > 0 ? "; empty: " + string.Join(", ", bad) : "") + $" (in {folder})");
+        return Pass($"{files.Count} screenshots (light and dark at 100, 125, 150 and 175 %) saved in {folder}: " +
+                    string.Join(", ", files.Select(Path.GetFileName)) + ". Compare them (checklist: \"Chat is sharp at every scale\")");
+    }
+
+    /// <summary>
+    /// Frame times in a hidden window while the history drawer opens and closes and a sample reply streams in: the
+    /// average and the worst frame go in the report. How it feels is the checklist's "Chat feels smooth" step.
+    /// </summary>
+    private static async Task<(string, string)> ChatFrames()
+    {
+        var run = await App.Dispatcher.InvokeAsync(_ => Chat.ChatPane.Snapshot.Frames()).ConfigureAwait(false);
+        var (average, worst, frames, hitches, animated) = await run.ConfigureAwait(false);
+        var line = $"{frames} frames while the drawer opened and closed and a reply streamed: average {average:0.0} ms " +
+                   $"({(average > 0 ? 1000 / average : 0):0} fps), worst {worst:0} ms, {hitches} over {Chat.FrameTimes.HitchMs:0} ms" +
+                   (animated ? "" : ". Windows' animations are off, so the pane doesn't animate");
+        return Chat.FrameTimes.Smooth(average, worst) ? Pass(line) : Fail(line + ". Expected under 25 ms on average and no frame over 200 ms");
     }
 
     // ---- Prompt enhancer (with chat_round_trip) and the guided checklist ------------------------------------------------

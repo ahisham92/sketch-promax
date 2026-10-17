@@ -44,6 +44,7 @@ internal sealed class HistoryDrawer : Border
     {
         _host = host;
         SetResourceReference(BackgroundProperty, Brand.K.Bg);
+        ChatUi.Opaque(this);
         SetResourceReference(BorderBrushProperty, Brand.K.Border);
         BorderThickness = new Thickness(0, 0, 1, 0);
         AutomationProperties.SetName(this, "Chat history");
@@ -151,7 +152,7 @@ internal sealed class HistoryDrawer : Border
         var mine = string.Equals(chat.Key, _host.ModelKey, StringComparison.OrdinalIgnoreCase);
         var text = new StackPanel();
         var name = ChatUi.Small((chat.Pinned ? "★ " : "") + chat.Name, Brand.K.Text, bold: current);
-        name.FontSize = 12;
+        name.FontSize = ChatUi.SmallSize;
         text.Children.Add(name);
         var sub = StreamRender.Stamp(chat.Updated.ToLocalTime(), DateTime.Now) + (!mine || _all.IsChecked == true ? " · " + chat.ModelTitle : "");
         text.Children.Add(ChatUi.Small(sub));
@@ -196,7 +197,7 @@ internal sealed class HistoryDrawer : Border
         var row = new StackPanel { Margin = new Thickness(0, 0, 0, 2) };
         row.Children.Add(line);
         row.Children.Add(actions);
-        var frame = new Border { Child = row, CornerRadius = new CornerRadius(5), BorderThickness = new Thickness(3, 0, 0, 0) };
+        var frame = new Border { Child = row, CornerRadius = new CornerRadius(ChatUi.RadiusSmall), BorderThickness = new Thickness(3, 0, 0, 0) };
         if (current)
         {
             frame.SetResourceReference(BackgroundProperty, Brand.K.Surface);

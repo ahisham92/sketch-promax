@@ -143,7 +143,7 @@ internal static partial class UpdateNotice
         var title = Brand.Text("", Brand.K.Text, 13, bold: true);
         title.VerticalAlignment = VerticalAlignment.Center;
         var line = Brand.Text("", Brand.K.Text, 12);
-        var next = Brand.Text("", Brand.K.Muted, 11);
+        var next = Brand.Text("", Brand.K.Muted, 12);
         var update = BandButton("Update now", primary: true);
         var notes = BandButton("What's new", primary: false);
         var close = Chat.ChatUi.Ghost(Chat.ChatUi.GlyphCross, null, "Dismiss the update message",

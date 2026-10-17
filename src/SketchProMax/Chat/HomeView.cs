@@ -26,7 +26,7 @@ internal sealed class HomeView : StackPanel
     private readonly StackPanel _home = new();
     private readonly Grid _cards = new() { Margin = new Thickness(0, ChatUi.S2, 0, 0) };
     private readonly StackPanel _library = new() { Visibility = Visibility.Collapsed };
-    private readonly TextBlock _libraryTitle = Brand.Text("", Brand.K.Text, ChatUi.TitleSize + 1, bold: true);
+    private readonly TextBlock _libraryTitle = ChatUi.Large(Brand.Text("", Brand.K.Text, ChatUi.HeadingSize, bold: true));
     private readonly TextBlock _libraryCount = ChatUi.Small("");
     private readonly Button _back;
     private readonly ContentControl _body = new() { Focusable = false };
@@ -55,7 +55,7 @@ internal sealed class HomeView : StackPanel
         DockPanel.SetDock(mark, Dock.Left);
         hello.Children.Add(mark);
         _greeting.VerticalAlignment = VerticalAlignment.Center;
-        TextOptions.SetTextFormattingMode(_greeting, TextFormattingMode.Ideal); // large text: Ideal keeps its shapes
+        ChatUi.Large(_greeting).FontFamily = ChatUi.Display; // large text: Ideal keeps its shapes
         hello.Children.Add(_greeting);
         _home.Children.Add(hello);
         _sub.Margin = new Thickness(0, ChatUi.S2, 0, 0);
@@ -168,7 +168,7 @@ internal sealed class HomeView : StackPanel
     private static TextBlock SectionLabel(string text)
     {
         var spaced = string.Join("\u200A", text.ToUpperInvariant().ToCharArray());
-        var label = Brand.Text(spaced, Brand.K.Muted, 11, bold: true);
+        var label = Brand.Text(spaced, Brand.K.Muted, ChatUi.SmallSize, bold: true);
         AutomationProperties.SetName(label, text);
         return label;
     }
@@ -394,7 +394,7 @@ internal sealed class HomeView : StackPanel
         }
         if (!any)
         {
-            var none = Brand.Text("Nothing matches. Try another word, or just ask Claude in the box below.", Brand.K.Muted, ChatUi.SmallSize + 0.5);
+            var none = Brand.Text("Nothing matches. Try another word, or just ask Claude in the box below.", Brand.K.Muted, ChatUi.SmallSize);
             _results.Children.Add(none);
         }
     }
@@ -411,7 +411,7 @@ internal sealed class HomeView : StackPanel
         text.Children.Add(name);
         if (summary.Length > 0)
         {
-            var line = Brand.Text(summary, Brand.K.Muted, ChatUi.SmallSize + 0.5);
+            var line = Brand.Text(summary, Brand.K.Muted, ChatUi.SmallSize);
             line.Margin = new Thickness(0, 1, 0, 0);
             text.Children.Add(line);
         }
@@ -437,7 +437,7 @@ internal sealed class HomeView : StackPanel
         var panel = new StackPanel();
         var saved = _saved();
         if (saved.Count == 0)
-            panel.Children.Add(Brand.Text("No saved prompts yet. Save one from any message: ⋯ › Save prompt. They are kept on this PC for your Windows account.", Brand.K.Muted, ChatUi.SmallSize + 0.5));
+            panel.Children.Add(Brand.Text("No saved prompts yet. Save one from any message: ⋯ › Save prompt. They are kept on this PC for your Windows account.", Brand.K.Muted, ChatUi.SmallSize));
         foreach (var prompt in saved)
             panel.Children.Add(Idea(prompt.Title, prompt.Text.Length > prompt.Title.Length + 2 ? ChatHistory.AutoTitle(prompt.Text, 120) : "", prompt.Text));
         _body.Content = panel;
@@ -474,7 +474,7 @@ internal sealed class HomeView : StackPanel
         Choices("Project type", _lib.ProjectTypes, _type, id => _type = id);
         Choices("Phase", _lib.Phases, _phase, id => _phase = id);
         var ideas = _lib.For(_type, _phase).ToList();
-        if (ideas.Count == 0) panel.Children.Add(Brand.Text("No ideas for this pair yet.", Brand.K.Muted, ChatUi.SmallSize + 0.5));
+        if (ideas.Count == 0) panel.Children.Add(Brand.Text("No ideas for this pair yet.", Brand.K.Muted, ChatUi.SmallSize));
         foreach (var idea in ideas) panel.Children.Add(Idea(idea.Title, PromptLibrary.FirstSentence(idea.Prompt), idea.Prompt));
         _body.Content = panel;
     }
