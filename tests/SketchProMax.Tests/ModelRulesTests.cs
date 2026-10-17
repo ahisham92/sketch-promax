@@ -23,6 +23,26 @@ internal static class ModelRulesTests
         check("floors: short words need word ends", FirstWord("FL_RC_250", ["RC"]) == "RC" && FirstWord("Source Floor", ["RC"]) is null && FirstWord("PTFE 10", ["PT"]) is null, "");
         check("floors: no exclude words still skips non-structural", FloorSkipReason(new FloorFacts("FL_Finish_100", false, null, 100), FloorStructureWords, [], 100)?.StartsWith("not structural") == true, "");
 
+        // arch_to_structure never says a bare "Nothing was made.": counts, reasons per group and the argument to change.
+        var skips = new List<ArchSkip>
+        {
+            new("columns: architectural Columns category (usually cladding; set include_architectural_columns to convert)", 1, ["Rectangular Column: 18 x 18"]),
+            new("floors: not structural (no Structural flag, concrete structural material or structural word in the type name)", 2, ["Generic - 12\""]),
+        };
+        var found = new Dictionary<string, int> { ["walls"] = 0, ["architectural columns"] = 1, ["structural columns"] = 0, ["floors"] = 2 };
+        var nothing = NothingMadeMessage("FieldTest-Arch.rvt", null, ["columns", "floors"], found, skips, [], 0);
+        check("arch: nothing-made message counts what it found", nothing.Contains("Found 1 architectural columns, 2 floors"), nothing);
+        check("arch: nothing-made message names each reason with its count and types", nothing.Contains("architectural Columns category") && nothing.Contains(": 2 [Generic - 12\"]"), nothing);
+        check("arch: hint for architectural columns", nothing.Contains("include_architectural_columns=true"), nothing);
+        check("arch: hint for floors names floor_type_words with a word from the types", nothing.Contains("floor_type_words") && nothing.Contains("'Generic'"), nothing);
+        check("arch: never a bare message", nothing != "Nothing was made." && nothing.Length > 60, nothing);
+        var empty = NothingMadeMessage("this model", "L9", ["walls", "columns", "floors", "openings"], new Dictionary<string, int> { ["walls"] = 0 }, [], [], 0);
+        check("arch: empty source says so and points at the level", empty.Contains("no walls, columns, floors") && empty.Contains("level name"), empty);
+        var refused = NothingMadeMessage("this model", null, ["floors"], new Dictionary<string, int> { ["floors"] = 1 }, [], ["floor 12: boundary is open"], 3);
+        check("arch: Revit's refusals and earlier runs are reported", refused.Contains("Revit refused: floor 12") && refused.Contains("3 element(s) were already converted"), refused);
+        check("arch: thin floors hint at min_floor_thickness", ArchSkipHints([new("floors: thin non-structural floor (under 100 mm)", 1, [])], 0).Single().Contains("min_floor_thickness"), "");
+        check("arch: wall hint", ArchSkipHints([new("walls: not load-bearing (no Structural flag, load-bearing word or thickness)", 4, ["Basic Wall: Generic - 8\""])], 0).Single().Contains("wall_type_words"), "");
+
         check("raft: thickness replaces the size, not the grade", WithThickness("FL_40MPa_Raft_1200", 1500) == "FL_40MPa_Raft_1500", WithThickness("FL_40MPa_Raft_1200", 1500));
         check("raft: mm suffix kept", WithThickness("Raft 1000mm", 1500) == "Raft 1500mm", WithThickness("Raft 1000mm", 1500));
         check("raft: thickness appended when absent", WithThickness("FL_40MPa_Raft", 1500) == "FL_40MPa_Raft_1500" && WithThickness("Mat Foundation", 900) == "Mat Foundation 900mm", WithThickness("FL_40MPa_Raft", 1500));

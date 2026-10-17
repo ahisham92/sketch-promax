@@ -190,6 +190,8 @@ public sealed class ArchToStructureTool : IRevitTool
         var dry = args.OptBool("dry_run");
         var made = new Dictionary<string, int> { ["walls"] = 0, ["columns"] = 0, ["floors"] = 0 };
         var skipped = new Dictionary<string, int> { ["walls"] = 0, ["columns"] = 0, ["floors"] = 0, ["already made"] = 0 };
+        // What the source has of each asked-for kind, so a run that makes nothing can say what it looked at.
+        var found = new Dictionary<string, int> { ["walls"] = 0, ["architectural columns"] = 0, ["structural columns"] = 0, ["floors"] = 0 };
         // Why elements were left out, with a few of their type names, so the user can adjust the words or flags.
         var why = new Dictionary<string, (int count, SortedSet<string> types)>();
         void Skip(string kind, string reason, string typeName)
@@ -218,6 +220,7 @@ public sealed class ArchToStructureTool : IRevitTool
             foreach (var w in new FilteredElementCollector(src).OfClass(typeof(Wall)).Cast<Wall>().Where(OnLevel))
             {
                 if (w.WallType.Kind != WallKind.Basic || (w.Location as LocationCurve)?.Curve is not { } curve) continue;
+                found["walls"]++;
                 var bearing = w.get_Parameter(BuiltInParameter.WALL_STRUCTURAL_SIGNIFICANT)?.AsInteger() == 1
                               || words.Any(x => System.Text.RegularExpressions.Regex.IsMatch(w.WallType.Name, $@"(^|[^A-Za-z]){System.Text.RegularExpressions.Regex.Escape(x)}([^A-Za-z]|$)", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
                               || w.Width >= minWall;
@@ -272,9 +275,11 @@ public sealed class ArchToStructureTool : IRevitTool
             var sourceColumns = new List<FamilyInstance>();
             string TypeOf(FamilyInstance f) => $"{f.Symbol?.FamilyName}: {f.Symbol?.Name}";
             var arch = new FilteredElementCollector(src).OfCategory(BuiltInCategory.OST_Columns).WhereElementIsNotElementType().OfType<FamilyInstance>().Where(OnLevel).ToList();
+            found["architectural columns"] = arch.Count;
             if (archColumns) sourceColumns.AddRange(arch);
             else foreach (var c in arch) Skip("columns", "architectural Columns category (usually cladding; set include_architectural_columns to convert)", TypeOf(c));
             var structural = new FilteredElementCollector(src).OfCategory(BuiltInCategory.OST_StructuralColumns).WhereElementIsNotElementType().OfType<FamilyInstance>().Where(OnLevel).ToList();
+            found["structural columns"] = structural.Count;
             foreach (var c in structural)
             {
                 if (src == doc) Skip("columns", "already structural in this model", TypeOf(c));
@@ -320,6 +325,7 @@ public sealed class ArchToStructureTool : IRevitTool
         if (what.Contains("floors"))
             foreach (var fl in new FilteredElementCollector(src).OfClass(typeof(Floor)).Cast<Floor>().Where(OnLevel))
             {
+                found["floors"]++;
                 var flagged = fl.get_Parameter(BuiltInParameter.FLOOR_PARAM_IS_STRUCTURAL)?.AsInteger() == 1;
                 if (flagged && src == doc) { Skip("floors", "already structural in this model", fl.FloorType.Name); continue; }
                 if (ModelRules.FloorSkipReason(new ModelRules.FloorFacts(fl.FloorType.Name, flagged, StructuralMaterial(src, fl.FloorType), (fl.FloorType.GetCompoundStructure()?.GetWidth() ?? 0) * 304.8),
@@ -341,15 +347,22 @@ public sealed class ArchToStructureTool : IRevitTool
                 }
                 catch (Exception ex) when (ex is Autodesk.Revit.Exceptions.ApplicationException or ArgumentException or InvalidOperationException) { errors.Add($"floor {fl.Id.Value}: {ex.Message.Trim()}"); }
             }
+        var skips = why.OrderByDescending(w => w.Value.count).Select(w => new ModelRules.ArchSkip(w.Key, w.Value.count, w.Value.types)).ToList();
         if (t != null)
         {
-            if (made.Values.Sum() == 0) { t.RollBack(); return ToolResult.Error($"Nothing was made. {string.Join("; ", errors.Take(10))}"); }
+            // Never a bare "nothing": what was found, why each group was left out, and which argument would take it.
+            if (made.Values.Sum() == 0)
+            {
+                t.RollBack();
+                return ToolResult.Error(ModelRules.NothingMadeMessage(sourceName, levelFilter, what, found, skips, errors, skipped["already made"]));
+            }
             if (t.Commit() != TransactionStatus.Committed) return ToolResult.Error("Revit refused the structure when saving it.");
         }
         return ToolResult.Ok(new
         {
-            source = sourceName, dryRun = dry, made, skipped,
-            skippedWhy = why.OrderByDescending(w => w.Value.count).Select(w => new { reason = w.Key, count = w.Value.count, types = w.Value.types }),
+            source = sourceName, dryRun = dry, made, skipped, found,
+            skippedWhy = skips.Select(w => new { reason = w.Reason, count = w.Count, types = w.Types }),
+            hints = ModelRules.ArchSkipHints(skips, skipped["already made"]) is { Count: > 0 } hints ? hints : null,
             errors = errors.Take(40), moreErrors = Math.Max(0, errors.Count - 40),
             deletedAtSave = swallow?.Deleted.Count ?? 0, wallOpenings = openingsMade,
             slopedFloors = sloped > 0 ? $"{sloped} architectural floor(s) are sloped or shape-edited; their slabs were made flat. Re-slope them (create_ramp or shape editing)." : null,
