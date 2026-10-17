@@ -39,6 +39,7 @@
     <Compile Include="../../src/SketchProMax/Tools/VeMath.cs" Link="VeMath.cs" />
     <Compile Include="../../src/SketchProMax/Tools/TimeMath.cs" Link="TimeMath.cs" />
     <Compile Include="../../src/SketchProMax/Tools/IssueGateMath.cs" Link="IssueGateMath.cs" />
+    <Compile Include="../../src/SketchProMax/Tools/DrawingPackageMath.cs" Link="DrawingPackageMath.cs" />
     <EmbeddedResource Include="../../src/SketchProMax/Data/carbon-factors.csv" LogicalName="SketchProMax.carbon-factors.csv" />
     <Compile Include="../../src/SketchProMax/Revit/StartupTimings.cs" Link="StartupTimings.cs" />
     <Compile Include="../../src/SketchProMax/Tools/HandoffCore.cs" Link="HandoffCore.cs" />

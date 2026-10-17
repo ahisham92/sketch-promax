@@ -36,7 +36,7 @@ internal static class FieldTestCoverage
     public const string Chat = "Chat", RibbonArea = "Ribbon and favourites", Carbon = "Embodied carbon", Ve = "Value engineering",
         Rebar2D = "2D rebar", Bugs = "Report bug and exports", Updates = "Updates and the Claude app", Model = "Real-model checks",
         Limits = "Revit limits", BugFixes = "Bug fixes", Tasks = "Hand-off and Cancel", Job = "Live job card", Time = "Time saved",
-        Issue = "Issue check";
+        Issue = "Issue check", Package = "Drawing package";
 
     public static readonly Feature[] Features =
     [
@@ -106,6 +106,12 @@ internal static class FieldTestCoverage
         new("issue.report", Issue, "Transmittal with the issue record and pass/fail report", How.Case, "issue_drawings", "issue_drawings with open items let through writes the transmittal workbook (drawings, the issue record saying it was overridden, the pass/fail report)"),
         new("issue.ui", Issue, "The issue check window", How.Manual, "", "the window, Fix taking you to the element and the ribbon flow are what a person sees and does",
             "On a _detached copy: Issue > Issue check. The list shows each sheet PASS or FAIL with its items, and Model. Press Fix on an item: the window closes and the element is selected and shown; fix it and click Issue check again: it is gone. Tick two items, type a reason, Accept: they show as accepted and Issue stays off while anything is open. Accept the rest: Issue turns on; press it and the Issue drawings options open. Run Issue drawings from the ribbon on a sheet with an open item: the window opens first. Run Export PDF on that sheet: the same. In Settings tick \"Allow issue with open items\": the window offers it in red, needs a reason, and the transmittal's Issue record says YES with the reason. Ask Claude in the chat to check the issue: it lists pass/fail per sheet and accepts only with your reason."),
+
+        // ---- Drawing package
+        new("package.sentence", Package, "A drawing package from one sentence", How.Probe, "", "on the test project, \"GA plans, sections and column schedule for levels 1-2 on A1 with our title block\" is planned (counts) and made: every planned view, each stage's check passes (views exist, every view placed, nothing overlaps, no orphan tags), the register sheet and its Excel copy, the time-saved line, and every view and sheet that was there before is unchanged; a step only the user can do is handed over (answered Skip); rolled back after"),
+        new("package.skip", Package, "Drawing package: Skip step skips one stage", How.Probe, "", "Skip pressed at the second view ends the Views stage with one view kept and says so; the skip is used up there, so the Sheets stage still runs and the step ends done"),
+        new("package.real", Package, "Drawing package on a real model", How.Manual, "", "how the drawings look, the office title block and tag families need a person on a real project",
+            "On a _detached copy: Documents > Sheets & views > Drawing package, type \"GA plans, sections and column schedule for levels 1-3 on A1 with our title block\" and run it. Check the counts in the dialog, then the sheets: views inside the frame, tags and grid dimensions readable, the register sheet lists the drawings and the Excel file opens. Press Undo once: the whole package goes and your own views and sheets are still there. In the chat, ask for the same sentence and press Skip step during the Tags stage: the sheets are still made."),
 
         // ---- Carbon, VE, 2D rebar
         new("carbon.mix", Carbon, "Carbon with and without the mix in the material name", How.Case, "embodied_carbon", "a slab whose material names the mix and one whose doesn't (assumed CEM I) are both assessed"),
@@ -229,7 +235,7 @@ internal static class FieldTestCoverage
     {
         var items = Features.Where(f => f.How == How.Manual).Select(f => new CheckItem(f.Key, f.Area, f.Title, f.Steps, f.Reason)).ToList();
         items.AddRange(ManualTools.OrderBy(t => t.Key).Select(t => new CheckItem("tool:" + t.Key, Limits, t.Key, t.Value.Steps, t.Value.Reason)));
-        string[] order = [Chat, RibbonArea, Tasks, Job, Time, Issue, Carbon, Ve, Rebar2D, Bugs, Updates, Model, Limits];
+        string[] order = [Chat, RibbonArea, Tasks, Job, Time, Issue, Package, Carbon, Ve, Rebar2D, Bugs, Updates, Model, Limits];
         items = items.OrderBy(i => Array.IndexOf(order, i.Area) is var x && x < 0 ? order.Length : x).ToList();
         items.AddRange(fixedBugs.Select(b => new CheckItem("bug:" + b.Number, BugFixes, $"#{b.Number}: {b.What}",
             "Do what the row describes on a _detached copy and check it no longer happens.", b.Status)));

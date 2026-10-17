@@ -495,6 +495,10 @@ internal static partial class SelfTest
         new("list_learned_tools", _ => new { }),
         new("list_steel_connection_types", _ => new { }),
         new("list_title_blocks", c => new { sheet_number = c.Sheet?.SheetNumber }),
+        new("get_drawing_package_plan", c => new { request = "GA plans, sections and column schedule for all levels on A1 with our title block" })
+        {
+            Expect = r => r.GetProperty("counts").GetProperty("sheets").GetInt32() > 0 ? null : "the plan has no sheets: " + r.GetRawText(),
+        },
         new("run_revit_query_code", _ => new { code = "Level.Create(doc, 1234.5);\nreturn new { walls = new FilteredElementCollector(doc).OfClass(typeof(Wall)).GetElementCount(), title = doc.Title };", description = "self-test query that makes a level (rolled back)" }),
         new("create_mep_openings", _ => new { method = "report", limit = 50 }) { Heavy = true },
     ];
@@ -674,6 +678,11 @@ internal static partial class SelfTest
         {
             Heavy = true, GateOverride = true,
             Expect = r => r.TryGetProperty("transmittal", out var t) && t.ValueKind == JsonValueKind.String ? null : "no transmittal written: " + r.ToString().Substring(0, Math.Min(300, r.ToString().Length)),
+        },
+        new("drawing_package", c => new { levels = new[] { c.LevelName }, views = new[] { "floor_plan" }, schedules = new[] { "Walls" }, tags = Array.Empty<string>(), sheet_prefix = "STP-", approved = true, folder = c.Temp })
+        {
+            Heavy = true,
+            Expect = r => r.GetProperty("counts").GetProperty("views").GetInt32() == 2 ? null : "it did not make the plan and the schedule: " + r.GetRawText(),
         },
         new("check_model", c => new { folder = c.Temp }) { Heavy = true },
         new("find_missing_items", c => new { checks = new[] { "rooms_without_door", "columns_without_footing", "untagged_structure", "sheets_without_views" }, folder = c.Temp }),

@@ -141,6 +141,76 @@ internal static class ItemBatch
         return result;
     }
 
+    /// <summary>
+    /// Like <see cref="Run"/>, for items that each run a whole tool (code that starts its own transactions): each item gets
+    /// a transaction group instead of a transaction, rolled back when the item throws or Stop is pressed while it runs, so
+    /// a failed or stopped item leaves nothing behind. Progress, Pause, Skip step and Stop work at the item boundaries as
+    /// in <see cref="Run"/>, and the batch is one transaction group (one Undo step, or part of the caller's).
+    /// No ownership check or borrowing: the tools each item runs do their own. Call it with no transaction open.
+    /// </summary>
+    public static Result RunGrouped<T>(Document doc, string name, IEnumerable<T> items, Func<T, string> label, Func<T, object?> apply, bool cancellable = true)
+    {
+        var list = items.ToList();
+        var result = new Result();
+        if (doc.IsModifiable)
+            throw new InvalidOperationException("ItemBatch needs to start its own transactions; a transaction is already open.");
+
+        using var group = new TransactionGroup(doc, $"Sketch ProMax: {name}");
+        group.Start();
+        Revit.JobUndo.GroupOpened();
+        var kept = false;
+        try
+        {
+            var index = 0;
+            var halted = JobState.Running;
+            foreach (var item in list)
+            {
+                var what = label(item);
+                index++;
+                if (cancellable && halted == JobState.Running)
+                {
+                    JobFeed.Item(name, index - 1, list.Count, what);
+                    var state = JobControl.AtBoundary(name, index - 1);
+                    if (state is JobState.Skipping or JobState.Stopping) halted = state;
+                }
+                if (halted != JobState.Running) { result.Items.Add(new(what, false, JobControl.NotDone(halted), null)); continue; }
+                if (cancellable && Jobs.CancelRequested) { result.Items.Add(new(what, false, "not done: stopped on request (cancel_job)", null)); continue; }
+                if (list.Count > 20 && index % 10 == 0) Jobs.Report($"{name}: {index} of {list.Count}");
+
+                using var one = new TransactionGroup(doc, name);
+                one.Start();
+                object? value;
+                try { value = apply(item); }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    if (one.HasStarted() && !one.HasEnded()) one.RollBack();
+                    result.Items.Add(new(what, false, Message(ex), null));
+                    continue;
+                }
+                if (cancellable && JobControl.StopNow(name, index - 1))
+                {
+                    // Stop pressed while this item ran: undo just this item; the finished ones are kept.
+                    one.RollBack();
+                    result.Items.Add(new(what, false, JobControl.RolledBack, null));
+                    halted = JobState.Stopping;
+                    continue;
+                }
+                one.Assimilate();
+                result.Items.Add(new(what, true, null, value));
+            }
+            if (cancellable && list.Count > 0) JobFeed.Item(name, result.Items.Count(i => !IsNotDone(i)), list.Count, "");
+            kept = result.Done > 0;
+            if (kept) group.Assimilate();
+            else group.RollBack();
+        }
+        finally
+        {
+            if (group.HasStarted() && !group.HasEnded()) group.RollBack();
+            Revit.JobUndo.GroupClosed(kept);
+        }
+        return result;
+    }
+
     /// <summary>An item a stop or skip ended the batch before (it never ran): not counted as finished in the progress.</summary>
     private static bool IsNotDone(Outcome o) => !o.Ok && o.Error is { } e && e.StartsWith("not done:", StringComparison.Ordinal);
 

@@ -52,6 +52,8 @@ internal static class TimeMath
         ["place_legend_on_sheets"] = (1, 0.5), ["general_notes"] = (15, 0), ["typical_details"] = (10, 2),
         ["issue_drawings"] = (20, 1), ["apply_text"] = (2, 0.3), ["create_view_filter"] = (3, 0), ["apply_view_filter"] = (1, 0.5),
         ["color_by_parameter"] = (10, 0), ["create_project_parameters"] = (3, 1),
+        // A drawing package: planning the set by hand, then per item made (views, sheets, tags, dimension strings).
+        ["get_drawing_package_plan"] = (10, 0), ["drawing_package"] = (15, 1.5),
         // Modelling
         ["create_levels"] = (1, 1), ["create_grids"] = (1, 1), ["create_walls"] = (1, 1.5), ["create_floors"] = (2, 3),
         ["create_ceilings"] = (2, 3), ["create_roof"] = (5, 0), ["place_columns"] = (1, 0.5), ["place_beams"] = (1, 0.75),
