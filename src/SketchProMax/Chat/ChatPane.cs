@@ -115,7 +115,7 @@ internal sealed class ChatPane : DockPanel
     private sealed class Turn
     {
         public string Line = "";
-        public bool Stopping, Retried, SawText;
+        public bool Stopping, Retried, SawText, ModelRetried;
         public DispatcherTimer? KillTimer;
     }
 
@@ -161,6 +161,8 @@ internal sealed class ChatPane : DockPanel
 
     private readonly TextBlock _modelLine;
     private readonly Button _newChat, _send, _stop, _attach, _view;
+    private readonly ComboBox _modelPick = new() { MinWidth = 96, MinHeight = 28, VerticalAlignment = VerticalAlignment.Center };
+    private string _model = ChatModels.Load(ClaudeCli.Folder), _lastWorkingModel = "";
     private readonly Border _setupCard = new() { Visibility = Visibility.Collapsed };
     private readonly StackPanel _messages = new();
     private readonly ScrollViewer _scroll;
@@ -293,16 +295,38 @@ internal sealed class ChatPane : DockPanel
         DockPanel.SetDock(_stop, Dock.Right);
         _attach.Margin = new Thickness(0, 0, 6, 0);
         _view.Margin = new Thickness(0, 0, 6, 0);
+        // The model for the next message, just left of Send.
+        _lastWorkingModel = _model;
+        foreach (var choice in ChatModels.All)
+        {
+            var option = new ComboBoxItem { Content = choice.Label, Tag = choice.Id, ToolTip = choice.Hint };
+            AutomationProperties.SetHelpText(option, choice.Hint);
+            _modelPick.Items.Add(option);
+        }
+        AutomationProperties.SetName(_modelPick, "Claude model");
+        ShowModelChoice();
+        _modelPick.SelectionChanged += (_, _) =>
+        {
+            if (_modelPick.SelectedItem is not ComboBoxItem { Tag: string id } || id == _model) return;
+            _model = id;
+            ChatModels.Save(ClaudeCli.Folder, id);
+            ShowModelChoice();
+            if (_turn is null) Status($"Your next message goes to {ChatModels.Find(id).Label}.", spin: false);
+        };
+        _modelPick.Margin = new Thickness(0, 0, ChatUi.S2, 0);
+        DockPanel.SetDock(_modelPick, Dock.Right);
         buttons.Children.Add(_send);
         buttons.Children.Add(_stop);
+        buttons.Children.Add(_modelPick);
         buttons.Children.Add(_attach);
         buttons.Children.Add(_view);
         // Keyboard order follows the reading order (left to right), not the docking order.
         KeyboardNavigation.SetTabNavigation(buttons, KeyboardNavigationMode.Local);
         KeyboardNavigation.SetTabIndex(_attach, 1);
         KeyboardNavigation.SetTabIndex(_view, 2);
-        KeyboardNavigation.SetTabIndex(_stop, 3);
-        KeyboardNavigation.SetTabIndex(_send, 4);
+        KeyboardNavigation.SetTabIndex(_modelPick, 3);
+        KeyboardNavigation.SetTabIndex(_stop, 4);
+        KeyboardNavigation.SetTabIndex(_send, 5);
         buttons.Children.Add(new Border()); // fills the middle
         composer.Children.Add(buttons);
         SetDock(composer, Dock.Bottom);
@@ -418,6 +442,15 @@ internal sealed class ChatPane : DockPanel
     private static string ConversationKey => _modelKey.Length > 0 ? _modelKey : "(no model)";
 
     private static string ConversationTitle => _modelTitle.Length > 0 ? _modelTitle : "no model open";
+
+    /// <summary>Shows the chosen model in the picker, with its hint as the tooltip.</summary>
+    private void ShowModelChoice()
+    {
+        var choice = ChatModels.Find(_model);
+        _modelPick.SelectedItem = _modelPick.Items.Cast<ComboBoxItem>().FirstOrDefault(i => (string)i.Tag == choice.Id);
+        _modelPick.ToolTip = $"Claude model: {choice.Label}. {choice.Hint}. Used from the next message on.";
+        AutomationProperties.SetHelpText(_modelPick, _modelPick.ToolTip as string ?? "");
+    }
 
     private static StackPanel Row(params UIElement[] children)
     {
@@ -1243,7 +1276,7 @@ internal sealed class ChatPane : DockPanel
     {
         try
         {
-            if (_engine is { IsAlive: true } engine)
+            if (_engine is { IsAlive: true } engine && engine.Model == _model)
             {
                 ShowStatus();
                 await engine.SendAsync(turn.Line);
@@ -1251,7 +1284,8 @@ internal sealed class ChatPane : DockPanel
             }
             _engine?.Dispose();
             var resume = _conv.SessionId.Length > 0 && !turn.Retried ? _conv.SessionId : null;
-            var fresh = new ChatEngine(Dispatcher, _install!, resume);
+            // A new model needs a new Claude Code process; it resumes the same conversation.
+            var fresh = new ChatEngine(Dispatcher, _install!, resume, _model);
             fresh.Event += e => { if (_engine == fresh) OnEvent(e); };
             fresh.Exited += tail => { if (_engine == fresh) OnExited(fresh, tail); };
             _engine = fresh;
@@ -1464,6 +1498,8 @@ internal sealed class ChatPane : DockPanel
             _ = Deliver(turn);
             return;
         }
+        if (end.IsError && !turn.Stopping && ChatModels.IsRejection(message) && _engine is { } refused && FallBack(turn, refused.Model, message)) return;
+        if (!end.IsError && _engine is { } worked) _lastWorkingModel = worked.Model;
         if (turn.Stopping)
             Note("Stopped. Ask again, or tell Claude what to do instead.");
         else if (end.IsError)
@@ -1495,6 +1531,25 @@ internal sealed class ChatPane : DockPanel
         Error((message.Length > 0 ? message : "Claude Code reported an error.") + " Send your message again; if it keeps happening, press New chat.");
     }
 
+    /// <summary>
+    /// The plan can't use the chosen model: say so with Claude Code's own words, go back to the model that last worked
+    /// (or the default) and send the same message again, once. False when there is nothing to go back to.
+    /// </summary>
+    private bool FallBack(Turn turn, string refused, string said)
+    {
+        if (turn.ModelRetried || ChatModels.Fallback(refused, _lastWorkingModel) is not { } back) return false;
+        turn.ModelRetried = true;
+        _engine?.Kill();
+        _engine = null;
+        _model = back;
+        ChatModels.Save(ClaudeCli.Folder, back);
+        ShowModelChoice();
+        Error($"{ChatModels.Find(refused).Label} isn't available with your Claude plan, so the chat went back to {ChatModels.Find(back).Label} " +
+              $"and sent your message again. Claude Code said: {said.Trim()}");
+        _ = Deliver(turn);
+        return true;
+    }
+
     private static bool LooksSignedOut(string text) =>
         Regex.IsMatch(text, @"not logged in|/login\b|\blog ?in again|invalid api key|authentication_failed|authentication failed|oauth token (has )?expired|please run .*login|\bsign in again\b", RegexOptions.IgnoreCase);
 
@@ -1520,6 +1575,7 @@ internal sealed class ChatPane : DockPanel
             _ = Deliver(turn);
             return;
         }
+        if (ChatModels.IsRejection(tail) && FallBack(turn, engine.Model, Last(tail, 300))) return;
         MarkRunningTools("stopped");
         EndTurn();
         var detail = Last(tail, 500);

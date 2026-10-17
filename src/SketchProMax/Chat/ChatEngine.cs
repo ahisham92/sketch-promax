@@ -23,12 +23,16 @@ internal sealed class ChatEngine : IDisposable
     private StreamWriter? _stdin;
     private bool _disposed;
 
-    public ChatEngine(Dispatcher ui, ClaudeCli.Install install, string? resumeSessionId)
+    public ChatEngine(Dispatcher ui, ClaudeCli.Install install, string? resumeSessionId, string model)
     {
         _ui = ui;
         _install = install;
         ResumedFrom = resumeSessionId;
+        Model = model;
     }
+
+    /// <summary>The Claude model this process runs (--model); a different choice needs a new process.</summary>
+    public string Model { get; }
 
     /// <summary>The session this engine was asked to resume, if any.</summary>
     public string? ResumedFrom { get; }
@@ -66,7 +70,7 @@ internal sealed class ChatEngine : IDisposable
     /// <summary>Starts the process off the UI thread and writes <paramref name="firstLine"/> to it.</summary>
     public Task StartAsync(string firstLine) => Task.Run(() =>
     {
-        var info = ClaudeCli.EngineStart(_install, ResumedFrom);
+        var info = ClaudeCli.EngineStart(_install, ResumedFrom, Model);
         var process = new Process { StartInfo = info, EnableRaisingEvents = true };
         process.Exited += (_, _) => OnExited();
         process.Start();
