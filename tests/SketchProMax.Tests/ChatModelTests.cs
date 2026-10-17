@@ -14,6 +14,9 @@ internal static class ChatModelTests
         check("models: 404 for the model recognised", ChatModels.IsRejection("API Error: 404 {\"type\":\"error\",\"error\":{\"type\":\"not_found_error\",\"message\":\"model: claude-x\"}}"), "");
         check("models: plan wording recognised", ChatModels.IsRejection("This model is not available on your plan."), "");
         check("models: other errors are not refusals", !ChatModels.IsRejection("Claude Code stopped unexpectedly") && !ChatModels.IsRejection("rate limit reached") && !ChatModels.IsRejection(""), "");
+        check("models: a Revit tool's model errors are not refusals", !ChatModels.IsRejection("The model element 123 was not found.")
+            && !ChatModels.IsRejection("Linked model 'Site' is not available (unloaded).") && !ChatModels.IsRejection("Invalid model path") && !ChatModels.IsRejection("This model may not exist on disk"), "");
+        check("models: escaped JSON 404 recognised", ChatModels.IsRejection("API Error: 404 {\\\"type\\\":\\\"not_found_error\\\",\\\"message\\\":\\\"model: claude-x\\\"}"), "");
 
         check("models: back to the last that worked", ChatModels.Fallback("claude-opus-5-5", "claude-haiku-5-5") == "claude-haiku-5-5", "");
         check("models: back to the default when the last one is refused", ChatModels.Fallback("claude-opus-5-5", "claude-opus-5-5") == ChatModels.DefaultId, "");

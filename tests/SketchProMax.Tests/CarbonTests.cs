@@ -45,12 +45,13 @@ internal static class CarbonTests
         Pick P(string material, string type = "", Options? opt = null, IReadOnlyList<Factor>? custom = null, string? cls = null) =>
             Resolve(material, type, cls, custom ?? [], t, opt ?? o);
         var c40 = P("Concrete C40/50");
-        check("carbon: concrete grade and default replacement", c40.Factor?.Id == "conc-c40-fa25" && c40.Note?.Contains("25% fly ash") == true, $"{c40.Factor?.Id} {c40.Note}");
-        check("carbon: grade from the type name", P("Concrete", "FL_35MPa_Slab").Factor?.Id == "conc-c35-fa25", P("Concrete", "FL_35MPa_Slab").Factor?.Id ?? "");
+        check("carbon: concrete grade and default replacement (published CEM I, conservative)", c40.Factor?.Id == "conc-c40-cem1" && c40.Note?.Contains("CEM I") == true && c40.Note.Contains("conservative"), $"{c40.Factor?.Id} {c40.Note}");
+        check("carbon: grade from the type name", P("Concrete", "FL_35MPa_Slab").Factor?.Id == "conc-c35-cem1", P("Concrete", "FL_35MPa_Slab").Factor?.Id ?? "");
+        check("carbon: fly ash only when asked or named", P("Concrete C40/50", opt: new Options { Replacement = "fa25" }).Factor?.Id == "conc-c40-fa25" && P("C40/50 25% PFA").Factor?.Id == "conc-c40-fa25", "");
         var c37 = P("Concrete 37MPa");
         check("carbon: between classes takes the next one up", c37.Factor?.Grade == "C40/50" && c37.Note?.Contains("next class up") == true, $"{c37.Factor?.Grade} {c37.Note}");
         var plain = P("Concrete - Cast in place");
-        check("carbon: unknown grade assumed C32/40 and said so", plain.Factor?.Id == "conc-c32-fa25" && plain.Note?.Contains("assumed C32/40") == true, plain.Note ?? "");
+        check("carbon: unknown grade assumed C32/40 and said so", plain.Factor?.Id == "conc-c32-cem1" && plain.Note?.Contains("assumed C32/40") == true, plain.Note ?? "");
         check("carbon: stated replacement wins unless forced", P("C32/40 CEM I concrete").Factor?.Id == "conc-c32-cem1"
             && P("C32/40 CEM I concrete", opt: new Options { Replacement = "ggbs50", ReplacementAll = true }).Factor?.Id == "conc-c32-ggbs50", "");
         check("carbon: grade swap", P("Concrete C40/50", opt: new Options { GradeSwap = ParseGradeSwap("C40/50>C32/40") }).Factor?.Grade == "C32/40", "");
@@ -72,9 +73,12 @@ internal static class CarbonTests
             Glass,,kg,abc,,,
             Brick,,kg,0.2,B1,,
             ,steel,kg,1.1,A1-A3,Section EPD,
+            Gravel,,t.km,0.1,A1-A3,x,
+            Sand,,%,5,A1-A3,x,
             """, custom: true);
         check("carbon: custom table rows read", custom.Materials.Count == 3, string.Join(" | ", custom.Materials.Select(f => f.Match + f.Class)));
-        check("carbon: custom table problems listed", custom.Problems.Count == 3 && custom.Problems.Any(p => p.Contains("furlong")) && custom.Problems.Any(p => p.Contains("no kgCO2e"))
+        check("carbon: material rows in t.km or % refused", custom.Problems.Count(p => p.Contains("not a material")) == 2, string.Join("; ", custom.Problems));
+        check("carbon: custom table problems listed", custom.Problems.Count == 5 && custom.Problems.Any(p => p.Contains("furlong")) && custom.Problems.Any(p => p.Contains("no kgCO2e"))
                                                       && custom.Problems.Any(p => p.Contains("stage 'B1'")), string.Join("; ", custom.Problems));
         check("carbon: custom units normalised", custom.Materials[0].Unit == "m3" && custom.Materials[1].Unit == "t" && custom.Materials[1].Stage == "A1-A3", $"{custom.Materials[0].Unit} {custom.Materials[1].Unit}");
         var mine = Resolve("Concrete C40/50", "", null, custom.Materials, t, o);
@@ -104,11 +108,26 @@ internal static class CarbonTests
         var steel = t.Materials.First(f => f.Id == "steel-section");
         var rail = Emissions(steel, "steel", 0, 0, 1000, new Options { A4 = true, A4Mode = "rail", A4DistanceKm = 100 }, t, null, null, null, out _);
         check("carbon: A4 with given distance and mode", Math.Abs(rail.A4 - 1 * 100 * 0.028) < 1e-9 && Math.Abs(rail.A1A3 - 1550) < 1e-9, $"{rail}");
+        check("carbon: precast named from the material or type", IsPrecast("Concrete - Precast C40/50", "") && IsPrecast("Concrete", "Hollow-core 200") && IsPrecast("", "PC plank 150")
+                                                                 && !IsPrecast("Concrete C32/40", "Floor 200") && !IsPrecast("PCC", "Topping"), "");
+        check("carbon: precast concrete travels the national distance, ready-mix 20 km", Distance("concrete", new Options(), t, null, precast: true) == 120
+                                                                                         && Distance("concrete", new Options(), t, null) == 20, "");
+        var precastA4 = Emissions(c32, "concrete", 1, 0, null, new Options { A4 = true }, t, null, null, null, out _, precast: true);
+        check("carbon: precast A4 uses 120 km", Math.Abs(precastA4.A4 - 2.4 * 120 * 0.107) < 1e-9, $"{precastA4.A4}");
         check("carbon: steel uses the national distance", Distance("steel", new Options(), t, null) == 120 && Distance("masonry", new Options(), t, null) == 80 && Distance("concrete", new Options(), t, null) == 20, "");
         check("carbon: waste rates per class", WasteRate("masonry", new Options(), t, null) == 20 && WasteRate("glass", new Options(), t, null) == 5 && WasteRate("steel", new Options { WastePercent = 3 }, t, null) == 3, "");
         check("carbon: waste factor and its limits", Math.Abs(WasteFactor(20) - 0.25) < 1e-12 && Throws(() => WasteFactor(100)) && Throws(() => ModeFactor("air freight", t, null)), "");
         var userA4 = new Factor { Unit = "t", Value = 5, Stage = "A4" };
         check("carbon: a user's A4 row replaces the computed transport", Math.Abs(Emissions(c32, "concrete", 1, 0, null, new Options { A4 = true }, t, null, userA4, null, out _).A4 - 12) < 1e-9, "");
+
+        // Quantities that can't be had are listed, not counted as 0
+        var perM2 = new Factor { Id = "x-m2", Unit = "m2", Value = 10 };
+        check("carbon: area factor with no area is a problem", QuantityProblem(perM2, null, 1, 0, null, new Options(), null, null)?.Contains("no area") == true, "");
+        var noDensity = new Factor { Id = "x-kg", Unit = "kg", Value = 1 };
+        check("carbon: mass factor with no density is a problem", QuantityProblem(noDensity, null, 1, 0, null, new Options(), null, null)?.Contains("density") == true, "");
+        check("carbon: A4 with no density is a problem", QuantityProblem(perM2, null, 1, 5, null, new Options { A4 = true }, null, null)?.Contains("A4") == true
+                                                         && QuantityProblem(perM2, null, 1, 5, null, new Options(), null, null) is null, "");
+        check("carbon: a computable part has no problem", QuantityProblem(c32, "concrete", 1, 0, null, new Options { A4 = true, A5 = true }, null, null) is null, "");
 
         // Rebar rates, intensity
         check("carbon: rebar rates default and override", RebarRate("Floors", null) == 110 && RebarRate("Floors", new Dictionary<string, double> { ["floors"] = 90 }) == 90 && RebarRate("Other", null) == 100, "");

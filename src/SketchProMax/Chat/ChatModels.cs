@@ -25,10 +25,12 @@ internal static class ChatModels
     public static Choice Find(string? id) =>
         All.FirstOrDefault(c => string.Equals(c.Id, id?.Trim(), StringComparison.OrdinalIgnoreCase)) ?? All.First(c => c.Id == DefaultId);
 
-    // Claude Code's words when the plan or account can't use the model asked for ("There's an issue with the selected
-    // model (…). It may not exist or you may not have access to it", a 404 for the model, "not available on your plan").
+    // Claude Code's own words when the plan or account can't use the model asked for, and nothing looser (a Revit tool's
+    // "model ... not found" must not count): "There's an issue with the selected model (…). It may not exist or you may
+    // not have access to it", the API's 404 not_found_error for "model: …", model_not_found, "not available on your plan".
     private static readonly Regex Rejected = new(
-        @"selected model|model\W.{0,80}(may not exist|not (be )?(available|allowed|supported|found|enabled)|do(es)? not have access|don't have access|isn't available)|invalid model|model_not_found|not_found_error.{0,80}model|(not available|not included) (on|in|with) your (plan|subscription)",
+        @"issue with the selected model|selected model\b.{0,120}(may not exist|not have access)|\bmodel_not_found\b|not_found_error.{0,80}message\W{1,8}model:" +
+        @"|\bmodel\b.{0,60}\b(not available|not included) (on|in|with) your (plan|subscription)",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Singleline);
 
     /// <summary>True when Claude Code's error says the chosen model can't be used.</summary>

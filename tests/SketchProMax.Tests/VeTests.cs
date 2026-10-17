@@ -76,7 +76,9 @@ internal static class VeTests
         var table = Carbon.BuiltIn();
         var c32 = ConcreteCarbonPerM3("C32/40", table);
         var c40 = ConcreteCarbonPerM3("C40/50", table);
-        check("ve: concrete carbon per m³ from the factor table", Math.Abs(c32 - 0.133 * 2400) < 1e-6 && c40 > c32, $"{c32} {c40}");
+        check("ve: concrete carbon per m³ from the factor table", Math.Abs(c32 - 0.150 * 2400) < 1e-6 && c40 > c32, $"{c32} {c40}");
+        var mine = Carbon.FromRows([new Dictionary<string, string> { ["material"] = "*C32/40*", ["unit"] = "m3", ["kgco2e"] = "250", ["source"] = "EPD" }], custom: true).Materials;
+        check("ve: the model's own factor rows come first", ConcreteCarbonPerM3("C32/40", table, null, mine) == 250 && ConcreteCarbonPerM3("C40/50", table, null, mine) == c40, "");
         check("ve: rebar, section and deck carbon per kg", SteelCarbonPerKg("rebar", table) == 1.99 && SteelCarbonPerKg("section", table) == 1.55 && SteelCarbonPerKg("deck", table) == 2.76, "");
 
         // ---- Ranking

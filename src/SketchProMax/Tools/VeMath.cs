@@ -372,20 +372,20 @@ internal static class Ve
     // ---------------------------------------------------------------- carbon per unit (from the carbon factor table)
 
     /// <summary>A1-A3 kgCO2e per m³ of concrete of a strength class (cement replacement as the carbon options say).</summary>
-    public static double ConcreteCarbonPerM3(string grade, Carbon.Table table, Carbon.Options? o = null)
+    public static double ConcreteCarbonPerM3(string grade, Carbon.Table table, Carbon.Options? o = null, IReadOnlyList<Carbon.Factor>? custom = null)
     {
-        var pick = Carbon.Resolve("Concrete " + grade, "", null, [], table, o ?? new Carbon.Options(), forcedClass: "concrete");
+        var pick = Carbon.Resolve("Concrete " + grade, "", null, custom ?? [], table, o ?? new Carbon.Options(), forcedClass: "concrete");
         return pick.Factor is { } f ? Carbon.Emissions(f, "concrete", 1, 0, null, new Carbon.Options(), table, null, null, null, out _).A1A3 : 0;
     }
 
-    /// <summary>A1-A3 kgCO2e per kg of a steel product: rebar, sections, decking/sheet (galvanised).</summary>
-    public static double SteelCarbonPerKg(string kind, Carbon.Table table)
+    /// <summary>A1-A3 kgCO2e per kg of a steel product: rebar, sections, decking/sheet (galvanised). The user's rows (custom) first, as embodied_carbon.</summary>
+    public static double SteelCarbonPerKg(string kind, Carbon.Table table, IReadOnlyList<Carbon.Factor>? custom = null)
     {
         var pick = kind switch
         {
-            "rebar" => Carbon.Resolve("Reinforcement", "", null, [], table, new Carbon.Options(), forcedClass: "rebar"),
-            "deck" => Carbon.Resolve("Galvanised steel deck", "", null, [], table, new Carbon.Options(), forcedClass: "steel"),
-            _ => Carbon.Resolve("Steel", "UB", null, [], table, new Carbon.Options(), forcedClass: "steel"),
+            "rebar" => Carbon.Resolve("Reinforcement", "", null, custom ?? [], table, new Carbon.Options(), forcedClass: "rebar"),
+            "deck" => Carbon.Resolve("Galvanised steel deck", "", null, custom ?? [], table, new Carbon.Options(), forcedClass: "steel"),
+            _ => Carbon.Resolve("Steel", "UB", null, custom ?? [], table, new Carbon.Options(), forcedClass: "steel"),
         };
         return pick.Factor is { } f ? Carbon.Emissions(f, kind == "rebar" ? "rebar" : "steel", 0, 0, 1, new Carbon.Options(), table, null, null, null, out _).A1A3 : 0;
     }
@@ -716,9 +716,9 @@ internal static class Ve
         + o.PrecastM3 * r.PrecastM3 + o.FormworkM2 * r.FormworkM2 + o.PileM * r.PileM;
 
     /// <summary>A1-A3 kgCO2e of one m² of an option from the carbon factor table.</summary>
-    public static double CarbonKg(Option o, Carbon.Table t, Carbon.Options? co = null) =>
-        o.ConcreteM3 * ConcreteCarbonPerM3(o.Grade, t, co) + o.PrecastM3 * ConcreteCarbonPerM3(o.PrecastGrade, t, co)
-        + (o.RebarKg + o.StrandKg) * SteelCarbonPerKg("rebar", t) + o.SteelKg * SteelCarbonPerKg("section", t) + o.DeckKg * SteelCarbonPerKg("deck", t);
+    public static double CarbonKg(Option o, Carbon.Table t, Carbon.Options? co = null, IReadOnlyList<Carbon.Factor>? custom = null) =>
+        o.ConcreteM3 * ConcreteCarbonPerM3(o.Grade, t, co, custom) + o.PrecastM3 * ConcreteCarbonPerM3(o.PrecastGrade, t, co, custom)
+        + (o.RebarKg + o.StrandKg) * SteelCarbonPerKg("rebar", t, custom) + o.SteelKg * SteelCarbonPerKg("section", t, custom) + o.DeckKg * SteelCarbonPerKg("deck", t, custom);
 
     // ---------------------------------------------------------------- text
 

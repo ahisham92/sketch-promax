@@ -298,9 +298,23 @@ internal static partial class SelfTest
                 }
             }
             ToolResult result;
-            if (step.TempBugFolder) Bugs.BugLog.RootOverride = Path.Combine(run.Ctx.Temp, "Bugs");
+            if (step.TempBugFolder)
+            {
+                // Bug reports and exports go to the test's folder, and the chats an export reads are a fake one there:
+                // the user's real chats are never copied into a test's output.
+                Bugs.BugLog.RootOverride = Path.Combine(run.Ctx.Temp, "Bugs");
+                Chat.ChatStore.RootOverride = Path.Combine(run.Ctx.Temp, "Chats");
+                Chat.ChatStore.Save(new Chat.Conversation
+                {
+                    Key = "Self-test model", Title = "Self-test model", Id = "selftest",
+                    Items = [new Chat.ChatItem { Kind = "user", Text = "Self-test chat", Time = DateTime.UtcNow }],
+                });
+            }
             try { result = Execute(app, tool, step, run.Ctx); }
-            finally { if (step.TempBugFolder) Bugs.BugLog.RootOverride = null; }
+            finally
+            {
+                if (step.TempBugFolder) { Bugs.BugLog.RootOverride = null; Chat.ChatStore.RootOverride = null; }
+            }
             if (!result.IsError && result.Text.Length > 24000)
                 return new(step.Tool, "fail", watch.ElapsedMilliseconds, $"Output too large for a chat ({result.Text.Length:N0} characters).");
             if (step.ExpectError is { } refusal)
@@ -326,6 +340,10 @@ internal static partial class SelfTest
                 if (group.HasStarted() && !group.HasEnded()) group.RollBack();
                 group.Dispose();
             }
+            // The step's output is checked above; it is never kept (the field test's output folder lives on otherwise).
+            if (step.TempBugFolder)
+                foreach (var folder in new[] { Path.Combine(run.Ctx.Temp, "Bugs"), Path.Combine(run.Ctx.Temp, "Chats") })
+                    try { if (Directory.Exists(folder)) Directory.Delete(folder, true); } catch (Exception) { }
         }
     }
 
@@ -879,6 +897,9 @@ internal static partial class SelfTest
     /// </summary>
     private static IEnumerable<Case> RegressionCases() =>
     [
+        // 0.31: ve_apply's default target (a copy) as a dry run: nothing is copied or opened.
+        new("ve_apply", c => new { target = "copy", dry_run = true, changes = new[] { new { kind = "change_type", element_ids = new[] { c.Id(c.Wall) }, to_type = c.Wall!.Name } } })
+            { Expect = r => r.GetProperty("dryRun").GetBoolean() ? null : "it was not a dry run" },
         // 0.27: with no source given, an open active view is captured from the screen.
         new("capture_view_image", c => new { pixel_width = 800 }) { Heavy = true },
         // 0.26 regressions from the field bug log.

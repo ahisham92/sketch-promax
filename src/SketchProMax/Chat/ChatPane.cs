@@ -65,6 +65,9 @@ internal sealed class ChatPane : DockPanel, IHistoryHost
             _instance = pane;
             _retired = null;
             pane._stopped = false;
+            UI.RestartNote.Changed -= pane.ShowRestartNote;
+            UI.RestartNote.Changed += pane.ShowRestartNote;
+            pane._idle.Start();
             Brand.UseTheme(pane);
             pane.ShowStatus();
             pane.ModelChanged();
@@ -115,7 +118,7 @@ internal sealed class ChatPane : DockPanel, IHistoryHost
     private sealed class Turn
     {
         public string Line = "";
-        public bool Stopping, Retried, SawText, ModelRetried;
+        public bool Stopping, Retried, SawText, SawTool, ModelRetried;
         public DispatcherTimer? KillTimer;
     }
 
@@ -869,12 +872,17 @@ internal sealed class ChatPane : DockPanel, IHistoryHost
     private void SavePrompt(string text)
     {
         if (text.Trim().Length == 0) return;
-        _saved = SavedPrompts.Add(Saved, text, DateTime.UtcNow);
-        Status(SavedPrompts.Save(SavedPrompts.DefaultFile, _saved)
-            ? "Saved to your prompts. Use it again from the bookmark button below."
-            : "The prompt couldn't be saved (the prompts file is in use or read-only).", spin: false);
-        if (_promptPanel.Visibility == Visibility.Visible) ShowPrompts();
-        PromptsChanged?.Invoke();
+        try
+        {
+            var (list, saved) = SavedPrompts.Update(SavedPrompts.DefaultFile, l => SavedPrompts.Add(l, text, DateTime.UtcNow));
+            _saved = list;
+            Status(saved
+                ? "Saved to your prompts. Use it again from the bookmark button below."
+                : "The prompt couldn't be saved (the prompts file is in use or read-only).", spin: false);
+            if (_promptPanel.Visibility == Visibility.Visible) ShowPrompts();
+            PromptsChanged?.Invoke();
+        }
+        catch (Exception ex) { Status($"The prompt couldn't be saved ({ex.Message}).", spin: false); } // never into Revit's dispatcher
     }
 
     /// <summary>Raised when the saved prompts change (the home screen lists them).</summary>
@@ -919,11 +927,16 @@ internal sealed class ChatPane : DockPanel, IHistoryHost
             var delete = ChatUi.Ghost(ChatUi.GlyphDelete, null, "Delete saved prompt " + prompt.Title, "Delete this saved prompt");
             delete.Click += (_, _) =>
             {
-                _saved = SavedPrompts.Remove(Saved, prompt.Text);
-                SavedPrompts.Save(SavedPrompts.DefaultFile, _saved);
-                ShowPrompts();
-                PromptsChanged?.Invoke();
-                _prompts.Focus();
+                try
+                {
+                    var (list, saved) = SavedPrompts.Update(SavedPrompts.DefaultFile, l => SavedPrompts.Remove(l, prompt.Text));
+                    _saved = list;
+                    if (!saved) Status("The prompt couldn't be deleted (the prompts file is in use or read-only).", spin: false);
+                    ShowPrompts();
+                    PromptsChanged?.Invoke();
+                    _prompts.Focus();
+                }
+                catch (Exception ex) { Status($"The prompt couldn't be deleted ({ex.Message}).", spin: false); }
             };
             DockPanel.SetDock(delete, Dock.Right);
             row.Children.Add(delete);
@@ -933,8 +946,12 @@ internal sealed class ChatPane : DockPanel, IHistoryHost
             AutomationProperties.SetHelpText(use, "Puts it in the message box to edit or send.");
             use.Click += (_, _) =>
             {
-                UsePrompt(prompt.Text);
-                TogglePrompts();
+                try
+                {
+                    UsePrompt(prompt.Text);
+                    TogglePrompts();
+                }
+                catch (Exception ex) { Status($"The prompt couldn't be used ({ex.Message}).", spin: false); }
             };
             row.Children.Add(use);
             list.Children.Add(row);
@@ -1249,14 +1266,24 @@ internal sealed class ChatPane : DockPanel, IHistoryHost
     {
         var drop = History.Trim(_messages.Children.Count, _follow.Following);
         if (drop <= 0) return;
-        for (var k = 0; k < drop && _firstShown + k < _conv.Items.Count; k++)
-        {
-            _views.Remove(_conv.Items[_firstShown + k]);
-            _rows.Remove(_conv.Items[_firstShown + k]);
-        }
+        Forget(_conv.Items.Skip(_firstShown).Take(drop));
         _messages.Children.RemoveRange(0, drop);
         _firstShown += drop;
         ShowEarlierButton();
+    }
+
+    /// <summary>Lets go of everything kept for items no longer drawn (their views, tool rows and streaming keys).</summary>
+    private void Forget(IEnumerable<ChatItem> items)
+    {
+        var gone = new HashSet<ChatItem>(items);
+        if (gone.Count == 0) return;
+        foreach (var item in gone)
+        {
+            _views.Remove(item);
+            _rows.Remove(item);
+        }
+        foreach (var key in _texts.Where(kv => gone.Contains(kv.Value.Item)).Select(kv => kv.Key).ToList()) { _texts.Remove(key); _dirty.Remove(key); }
+        foreach (var id in _tools.Where(kv => gone.Contains(kv.Value.Item)).Select(kv => kv.Key).ToList()) _tools.Remove(id);
     }
 
     private void RenderDirty()
@@ -1587,6 +1614,7 @@ internal sealed class ChatPane : DockPanel, IHistoryHost
                     row = _rows[item];
                     _tools[tool.Id] = row;
                 }
+                if (turn is not null) turn.SawTool = true;
                 if (tool.InputJson.Length > 0)
                 {
                     row.Item.Input = Pretty(tool.InputJson);
@@ -1674,7 +1702,8 @@ internal sealed class ChatPane : DockPanel, IHistoryHost
     /// </summary>
     private bool FallBack(Turn turn, string refused, string said)
     {
-        if (turn.ModelRetried || ChatModels.Fallback(refused, _lastWorkingModel) is not { } back) return false;
+        // Only a turn that did nothing yet is sent again: never after text was streamed or a tool ran (it could run twice).
+        if (turn.SawText || turn.SawTool || turn.ModelRetried || ChatModels.Fallback(refused, _lastWorkingModel) is not { } back) return false;
         turn.ModelRetried = true;
         _engine?.Kill();
         _engine = null;
@@ -1745,6 +1774,10 @@ internal sealed class ChatPane : DockPanel, IHistoryHost
         if (_turn?.KillTimer is { } timer) timer.Stop();
         MarkRunningTools("stopped");
         _turn = null;
+        // Idle now: the streaming keys and tool ids of the turn are no longer needed (the drawn items stay in _views/_rows).
+        if (_dirty.Count > 0) RenderDirty();
+        _texts.Clear();
+        _tools.Clear();
         _lastActivity = DateTime.UtcNow;
         Save();
         ShowStatus();
@@ -1931,11 +1964,12 @@ internal sealed class ChatPane : DockPanel, IHistoryHost
 
     private void Save()
     {
-        var before = _conv.Items.Count;
+        var old = _conv.Items.ToList();
         ChatStore.Save(_conv);
         // The store keeps the latest items only: let go of the drawn ones it dropped too.
-        var removed = before - _conv.Items.Count;
+        var removed = old.Count - _conv.Items.Count;
         if (removed <= 0) return;
+        Forget(old.Take(removed));
         var drawnGone = Math.Min(Math.Max(0, removed - _firstShown), _messages.Children.Count);
         if (drawnGone > 0) _messages.Children.RemoveRange(0, drawnGone);
         _firstShown = Math.Max(0, _firstShown - removed);
@@ -1947,6 +1981,10 @@ internal sealed class ChatPane : DockPanel, IHistoryHost
     {
         _stopped = true;
         _poll.Stop();
+        // Nothing may keep a retired pane alive after a hot swap: timers (rooted by the dispatcher while running) and static events.
+        _idle.Stop();
+        _render.Stop();
+        UI.RestartNote.Changed -= ShowRestartNote;
         _turn?.KillTimer?.Stop();
         if (_turn is not null) MarkRunningTools("stopped");
         _turn = null;

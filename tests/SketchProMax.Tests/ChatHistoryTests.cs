@@ -64,8 +64,22 @@ internal static class SavedPromptTests
         {
             check("prompts: none before saving", SavedPrompts.Load(file).Count == 0, "");
             check("prompts: saved and read back", SavedPrompts.Save(file, list) && SavedPrompts.Load(file).Select(p => p.Text).SequenceEqual(list.Select(p => p.Text)), "");
+            // Another Revit saves a prompt meanwhile: an update reads the file again, so it is kept.
+            SavedPrompts.Save(file, SavedPrompts.Add(SavedPrompts.Load(file), "From the other window", now));
+            var (merged, ok) = SavedPrompts.Update(file, l => SavedPrompts.Remove(l, "Check the beams"));
+            check("prompts: an update merges what another window saved", ok && merged.Any(p => p.Text == "From the other window") && merged.All(p => p.Text != "Check the beams")
+                                                                         && SavedPrompts.Load(file).Count == merged.Count, string.Join("|", merged.Select(p => p.Text)));
+            check("prompts: no temporary file left", Directory.GetFiles(Path.GetDirectoryName(file)!, "*.tmp").Length == 0, "");
+            File.WriteAllText(file, "[null, {\"Text\": null}, {\"Title\": null, \"Text\": \"kept\"}, 5]");
+            check("prompts: odd entries in the file don't throw", SavedPrompts.Load(file).Count == 0, "");
+            File.WriteAllText(file, "[null, {\"Text\": null}, {\"Title\": null, \"Text\": \"kept\"}]");
+            check("prompts: null entries skipped", SavedPrompts.Load(file) is [{ Text: "kept", Title: "" }], "");
             File.WriteAllText(file, "{ not json");
             check("prompts: damaged file reads as none", SavedPrompts.Load(file).Count == 0, "");
+            // A save cut off between writing and swapping leaves only the temporary file: it is read back.
+            File.Delete(file);
+            File.WriteAllText(file + ".0123abcd.tmp", "[{\"Title\": \"t\", \"Text\": \"from the temp file\"}]");
+            check("prompts: a leftover temporary file is read when the file is missing", SavedPrompts.Load(file) is [{ Text: "from the temp file" }], "");
         }
         finally { try { Directory.Delete(Path.GetDirectoryName(file)!, true); } catch (IOException) { } }
     }

@@ -90,7 +90,7 @@ internal static class SystemPrompt
           carbon_view (a new colour-coded 3D view).
         - Value engineering (screening aids, not design; always say an engineer must confirm each item): ve_opportunities (ranked
           savings with VE ids; rates_file = cost_estimate's table), ve_compare_options (floor systems, raft vs piles), ve_view,
-          ve_apply (a saved copy or a design option, never the main model unless the user asks; dry_run first), ve_register.
+          ve_apply (a saved copy or a design option, never the main model unless the user asks; dry_run first; a workshared model can't be copied: the user detaches a copy and runs it there, or uses a design option), ve_register.
         - Analysis: analytical_check then export_analytical (SAP2000 .s2k). For ETABS say CSiXRevit is the reliable route;
           for RAM Concept export the slab plans to DWG. Loads are applied in the analysis program.
         - Long jobs (many steps, e.g. "link the arch model, build the structure, raft, GA drawings, rebar drawings, issue for

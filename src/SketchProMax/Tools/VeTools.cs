@@ -42,16 +42,24 @@ internal static class VeRun
         public Ve.Rates Rates = Ve.PlaceholderRates();
         public Carbon.Table Factors = new();
         public Carbon.Options CarbonOptions = new();
+        /// <summary>The model's remembered carbon factor table (as embodied_carbon uses it), its material rows first; empty without one.</summary>
+        public List<Carbon.Factor> Custom = [];
         public string? DesignOption;
+        /// <summary>Where the rates and the carbon factors came from, for the assumptions.</summary>
+        public List<string> Notes = [];
+
+        /// <summary>The carbon factors used, for the assumptions.</summary>
+        public string CarbonSource => "built-in generic factors " + Factors.Version + " (placeholders to check)" +
+                                      (Custom.Count > 0 ? $", with {Custom.Count} row(s) of the model's own factor table first" : "");
     }
 
     public const string InputsJson = """
       "rules": {"type": "object", "description": "Rules of thumb to replace, e.g. {\"ratios\": {\"flat_slab\": 30, \"rc_beam\": {\"ratio\": 16, \"min_mm\": 350}}, \"rebar\": {\"beam\": 160}, \"grades\": {\"column\": \"C50/60\"}, \"steel_kg_per_m2\": 50, \"depth_tolerance\": 0.2}. Defaults: span/depth flat_slab 28, slab_on_beams 30, pt_slab 40, rc_beam 15, steel_beam 20, wall height/thickness 25; rebar kg/m³ slab 100, beam 180, column 200, wall 90, foundation 100; grades C32/40 (columns C40/50); steel 55 kg/m²."},
-      "rates_file": {"type": "string", "description": "A cost_estimate rate table (CSV/.xlsx: Description, Unit, Rate, optional Category). Concrete per m³ (by element where named), rebar per kg/t, steel per t, formwork per m², precast per m³, PT strand per kg, piling per m."},
+      "rates_file": {"type": "string", "description": "A cost_estimate rate table (CSV/.xlsx: Description, Unit, Rate, optional Category); remembered for this model, so later runs use it when neither rates_file nor rates is given. Concrete per m³ (by element where named), rebar per kg/t, steel per t, formwork per m², precast per m³, PT strand per kg, piling per m."},
       "rates": {"type": "array", "items": {"type": "object", "properties": {"description": {"type": "string"}, "unit": {"type": "string"}, "rate": {"type": "number"}, "category": {"type": "string"}}}, "description": "Rate rows given directly, as cost_estimate takes them."},
       "unit_rates": {"type": "object", "description": "Direct rates laid over the table: concrete_m3, rebar_kg, steel_t, formwork_m2, precast_m3, strand_kg, pile_m."},
       "currency": {"type": "string", "description": "Label only."},
-      "cement_replacement": {"type": "string", "enum": ["none", "fa25", "ggbs50"], "description": "For carbon: concrete whose name gives no replacement (default fa25, as embodied_carbon)."}
+      "cement_replacement": {"type": "string", "enum": ["none", "fa25", "ggbs50"], "description": "For carbon: concrete whose name gives no replacement (default none: CEM I, as embodied_carbon)."}
     """;
 
     public static Inputs Read(Document doc, ToolArgs args)
@@ -62,10 +70,32 @@ internal static class VeRun
             Factors = Carbon.BuiltIn(),
             DesignOption = args.OptString("design_option"),
         };
-        i.CarbonOptions.Replacement = args.OptString("cement_replacement") ?? "fa25";
+        i.CarbonOptions.Replacement = args.OptString("cement_replacement") ?? "none";
         if (i.CarbonOptions.Replacement is not ("none" or "fa25" or "ggbs50")) throw new ArgumentException("cement_replacement is none, fa25 or ggbs50.");
+        // The factor table remembered for this model by embodied_carbon, so both tools give the same carbon.
+        if (CarbonRun.SavedFactorFile(doc) is { } factorFile)
+        {
+            if (!File.Exists(factorFile)) i.Notes.Add($"The carbon factor table remembered for this model is missing ({factorFile}); the built-in factors were used.");
+            else
+                try
+                {
+                    var table = Carbon.FromRows(Table.Read(factorFile, out _), custom: true);
+                    i.Custom = table.Materials.Where(f => f.Stage == "A1-A3").ToList();
+                    i.Notes.Add($"Carbon factors: the table remembered for this model ({factorFile}), {i.Custom.Count} material row(s), before the built-in ones.");
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or InvalidOperationException or FormatException)
+                { i.Notes.Add($"The carbon factor table remembered for this model ({factorFile}) can't be read ({ex.Message}); the built-in factors were used."); }
+        }
+        // The rates file: given (and remembered for this model), else the one remembered.
+        var path = args.OptString("rates_file");
+        if (path != null) RememberRatesFile(doc, path);
+        else if (!args.Has("rates") && SavedRatesFile(doc) is { } savedRates)
+        {
+            if (File.Exists(savedRates)) { path = savedRates; i.Notes.Add($"Rates: the rate table remembered for this model ({savedRates})."); }
+            else i.Notes.Add($"The rate table remembered for this model is missing ({savedRates}); placeholder rates were used.");
+        }
         var rows = new List<Ve.RateRow>();
-        var items = args.OptString("rates_file") is { } path ? Measure.ReadBoq(path) : args.Array("rates").Select(Measure.FromJson).ToList();
+        var items = path != null ? Measure.ReadBoq(path) : args.Array("rates").Select(Measure.FromJson).ToList();
         foreach (var it in items.Where(r => r.Rate is not null)) rows.Add(new Ve.RateRow(it.Description, it.Unit, it.Rate!.Value, it.Category));
         i.Rates = Ve.RatesFrom(rows, args.OptString("currency") ?? "");
         Ve.Override(i.Rates, args.Has("unit_rates") ? args.Raw["unit_rates"] : null);
@@ -189,8 +219,8 @@ internal static class VeRun
         var grade = x.Grade.Length > 0 ? x.Grade : typical;
         var steps = x.Cyl is { } c && Carbon.CylinderStrength(typical) is { } tc ? Ve.GradeSteps(c, tc) : 0;
         x.Cost = x.ConcreteM3 * inp.Rates.Concrete(x.Class) * (1 + inp.Rules.GradeStepPremium * steps) + x.RebarKg * inp.Rates.RebarKg + x.SteelKg / 1000 * inp.Rates.SteelT;
-        x.CarbonKg = x.ConcreteM3 * Ve.ConcreteCarbonPerM3(grade, inp.Factors, inp.CarbonOptions) + x.RebarKg * Ve.SteelCarbonPerKg("rebar", inp.Factors)
-                     + x.SteelKg * Ve.SteelCarbonPerKg("section", inp.Factors);
+        x.CarbonKg = x.ConcreteM3 * Ve.ConcreteCarbonPerM3(grade, inp.Factors, inp.CarbonOptions, inp.Custom) + x.RebarKg * Ve.SteelCarbonPerKg("rebar", inp.Factors, inp.Custom)
+                     + x.SteelKg * Ve.SteelCarbonPerKg("section", inp.Factors, inp.Custom);
     }
 
     /// <summary>
@@ -383,8 +413,8 @@ internal static class VeRun
                     Key = $"grade|{gp.Key.Class}|{gp.Key.Grade}", Check = "Concrete grade above typical", Item = $"{gp.Key.Class} in {gp.Key.Grade} ({gp.Count()} element(s), {Ve.F(m3, 1)} m³)",
                     Current = gp.Key.Grade, Proposed = typical,
                     SavingCost = m3 * concreteRate * rules.GradeStepPremium * steps,
-                    SavingCarbonKg = m3 * (Ve.ConcreteCarbonPerM3(gp.Key.Grade, inp.Factors, inp.CarbonOptions) - Ve.ConcreteCarbonPerM3(typical, inp.Factors, inp.CarbonOptions)),
-                    Confidence = "low", Basis = $"{steps} strength class step(s) at {Ve.F(rules.GradeStepPremium * 100, 0)}% of the concrete rate each; carbon from the built-in factors",
+                    SavingCarbonKg = m3 * (Ve.ConcreteCarbonPerM3(gp.Key.Grade, inp.Factors, inp.CarbonOptions, inp.Custom) - Ve.ConcreteCarbonPerM3(typical, inp.Factors, inp.CarbonOptions, inp.Custom)),
+                    Confidence = "low", Basis = $"{steps} strength class step(s) at {Ve.F(rules.GradeStepPremium * 100, 0)}% of the concrete rate each; carbon from {inp.CarbonSource}",
                     Risk = "strength, exposure class, early-age strength for the programme and fire may need the higher grade", Ids = gp.Select(f => f.Id).ToList(),
                     ApplyKind = "grade", ToGrade = typical,
                 });
@@ -406,7 +436,7 @@ internal static class VeRun
                 {
                     Key = $"rebar|{t.Key.Class}|{t.Key.Type}", Check = "Reinforcement above typical", Item = $"{t.Key.Class} type {t.Key.Type} ({t.Count()} element(s))",
                     Current = $"{Ve.F(kg / m3, 0)} kg/m³", Proposed = $"about {Ve.F(typical, 0)} kg/m³ (typical {t.Key.Class})",
-                    SavingCost = excess * inp.Rates.RebarKg, SavingCarbonKg = excess * Ve.SteelCarbonPerKg("rebar", inp.Factors), Confidence = "medium",
+                    SavingCost = excess * inp.Rates.RebarKg, SavingCarbonKg = excess * Ve.SteelCarbonPerKg("rebar", inp.Factors, inp.Custom), Confidence = "medium",
                     Basis = $"{Ve.F(excess / 1000, 2)} t of modelled reinforcement above the typical density", Risk = "high density may follow from loads, crack control, seismic detailing or laps",
                     Ids = t.Select(f => f.Id).ToList(),
                 });
@@ -429,7 +459,7 @@ internal static class VeRun
                     {
                         Key = "steel|frame", Check = "Steel tonnage above typical", Item = $"Steel frame: {Ve.F(kg / 1000, 1)} t over {Ve.F(s.FloorAreaM2, 0)} m²",
                         Current = $"{Ve.F(perM2, 0)} kg/m²", Proposed = $"about {Ve.F(rules.SteelKgPerM2, 0)} kg/m²",
-                        SavingCost = excess / 1000 * inp.Rates.SteelT, SavingCarbonKg = excess * Ve.SteelCarbonPerKg("section", inp.Factors), Confidence = "low",
+                        SavingCost = excess / 1000 * inp.Rates.SteelT, SavingCarbonKg = excess * Ve.SteelCarbonPerKg("section", inp.Factors, inp.Custom), Confidence = "low",
                         Basis = $"{Ve.F(excess / 1000, 1)} t above a typical frame; floor area {(args.OptDouble("gia_m2") is null ? "from the slabs (approximate)" : "given")}",
                         Risk = "long spans, transfer, vibration, plant loads or lateral bracing can need more steel", Ids = steel.Select(f => f.Id).ToList(),
                     });
@@ -478,7 +508,8 @@ internal static class VeRun
         s.Assumptions.InsertRange(0, Ve.Describe(rules));
         s.Assumptions.Add("Rates: " + string.Join(", ", inp.Rates.From.OrderBy(kv => kv.Key).Select(kv => $"{kv.Key} {kv.Value}")) +
                           (inp.Rates.AnyPlaceholder ? ". Placeholder rates are generic round numbers in no particular currency: give rates_file (cost_estimate's rate table) for real costs." : "."));
-        s.Assumptions.Add($"Carbon: A1-A3 from the built-in generic factor table {inp.Factors.Version} (placeholders to check), cement replacement {Carbon.ReplacementLabel(inp.CarbonOptions.Replacement)} where the name gives none; reinforcement modelled where present, else the typical rates above.");
+        s.Assumptions.AddRange(inp.Notes);
+        s.Assumptions.Add($"Carbon: A1-A3 from the {inp.CarbonSource}, cement replacement {Carbon.ReplacementLabel(inp.CarbonOptions.Replacement)} where the name gives none; reinforcement modelled where present, else the typical rates above.");
         s.Assumptions.Add(inp.DesignOption is null ? "Scope: the main model and the primary design options." : $"Scope: design option(s) named like '{inp.DesignOption}'.");
         return s;
     }
@@ -522,7 +553,7 @@ internal static class VeRun
                         Key = "spec|" + id, Check = "Over-specified against the spec", Item = $"{id}: {cls} above the spec's {spec} ({over.Count} element(s))",
                         Current = string.Join(", ", over.Select(f => f.Grade).Distinct()), Proposed = spec + " as the spec requires",
                         SavingCost = over.Sum(f => f.ConcreteM3 * inp.Rates.Concrete(cls) * inp.Rules.GradeStepPremium * Ve.GradeSteps(f.Cyl!.Value, specCyl)),
-                        SavingCarbonKg = over.Sum(f => f.ConcreteM3 * (Ve.ConcreteCarbonPerM3(f.Grade, inp.Factors, inp.CarbonOptions) - Ve.ConcreteCarbonPerM3(spec, inp.Factors, inp.CarbonOptions))),
+                        SavingCarbonKg = over.Sum(f => f.ConcreteM3 * (Ve.ConcreteCarbonPerM3(f.Grade, inp.Factors, inp.CarbonOptions, inp.Custom) - Ve.ConcreteCarbonPerM3(spec, inp.Factors, inp.CarbonOptions, inp.Custom))),
                         Confidence = "medium", Basis = $"spec '{Short(text)}'; {Ve.F(m3, 1)} m³ at a higher class", Risk = "the spec may set a minimum only; check why the higher grade was chosen",
                         Ids = over.Select(f => f.Id).ToList(), ApplyKind = "grade", ToGrade = spec,
                     });
@@ -601,6 +632,42 @@ internal static class VeRun
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "SketchProMax", "ve", Checks.ModelKey(doc));
 
     private static readonly JsonSerializerOptions Indented = new() { WriteIndented = true };
+
+    private sealed class Settings { public string? RatesFile { get; set; } }
+
+    /// <summary>The rate table (rates_file) remembered for this model, or null.</summary>
+    public static string? SavedRatesFile(Document doc)
+    {
+        try
+        {
+            var file = Path.Combine(Store(doc), "settings.json");
+            return File.Exists(file) ? JsonSerializer.Deserialize<Settings>(File.ReadAllText(file))?.RatesFile : null;
+        }
+        catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException) { return null; }
+    }
+
+    private static void RememberRatesFile(Document doc, string path)
+    {
+        try
+        {
+            if (!File.Exists(path)) return;
+            Directory.CreateDirectory(Store(doc));
+            File.WriteAllText(Path.Combine(Store(doc), "settings.json"), JsonSerializer.Serialize(new Settings { RatesFile = Path.GetFullPath(path) }));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) { }
+    }
+
+    /// <summary>Whether two file paths name the same file (full paths, case-insensitive); false when either is empty or bad.</summary>
+    public static bool SamePath(string? a, string? b)
+    {
+        if (string.IsNullOrWhiteSpace(a) || string.IsNullOrWhiteSpace(b)) return false;
+        try
+        {
+            string N(string x) => Path.GetFullPath(x.Trim().Trim('"')).TrimEnd('\\', '/');
+            return string.Equals(N(a!), N(b!), StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException) { return false; }
+    }
 
     public static Ve.Register LoadRegister(Document doc)
     {
@@ -797,7 +864,7 @@ public sealed class VeCompareOptionsTool : IRevitTool
             if (k.Equals("model", StringComparison.OrdinalIgnoreCase) || k.StartsWith("option:", StringComparison.OrdinalIgnoreCase))
             {
                 var name = k.StartsWith("option:", StringComparison.OrdinalIgnoreCase) ? k.Substring(7).Trim() : null;
-                var facts = name is null ? main : VeRun.Facts(doc, new VeRun.Inputs { Rules = inp.Rules, Rates = inp.Rates, Factors = inp.Factors, CarbonOptions = inp.CarbonOptions, DesignOption = name })
+                var facts = name is null ? main : VeRun.Facts(doc, new VeRun.Inputs { Rules = inp.Rules, Rates = inp.Rates, Factors = inp.Factors, CarbonOptions = inp.CarbonOptions, Custom = inp.Custom, DesignOption = name })
                     .Where(f => f.Class is "slab" or "beam").ToList();
                 var area = facts.Where(f => f.Class == "slab").Sum(f => f.AreaM2);
                 if (area <= 0) { notes.Add(name is null ? "model: no slabs to measure." : $"option:{name}: no slabs in a design option named like that."); continue; }
@@ -821,13 +888,14 @@ public sealed class VeCompareOptionsTool : IRevitTool
         var rows = options.Select(o =>
         {
             var cost = Ve.Cost(o, inp.Rates);
-            var carbon = Ve.CarbonKg(o, inp.Factors, inp.CarbonOptions);
+            var carbon = Ve.CarbonKg(o, inp.Factors, inp.CarbonOptions, inp.Custom);
             var area = o.Foundation ? footprint : floorArea;
             return (o, cost, carbon, area);
         }).ToList();
         double Min(Func<(Ve.Option o, double cost, double carbon, double area), double> f, bool foundation) =>
             rows.Where(r => r.o.Foundation == foundation).Select(f).DefaultIfEmpty(0).Min();
 
+        notes.InsertRange(0, inp.Notes);
         var cur = inp.Rates.Currency;
         var sheet = new List<object?[]> { new object?[] { "Option", "Source", "Sizes", "Per", "Concrete m3", "Grade", "Precast m3", "Rebar kg", "Steel kg", "Deck kg", "PT strand kg", "Formwork m2", "Piles m",
             $"Cost{(cur.Length > 0 ? " " + cur : "")}/m2", "kgCO2e/m2", "Area m2", "Total cost", "Total tCO2e", "Cost vs cheapest %", "Carbon vs lowest %", "Programme (flat slab = 1)", "Risks and notes" } };
@@ -845,7 +913,7 @@ public sealed class VeCompareOptionsTool : IRevitTool
             new object?[] { "Columns, cores, stairs, fire protection, finishes and temporary works are not counted in the floor systems. Programme index: frame time per floor relative to an RC flat slab (lower is faster), a rough indicator only." },
             new object?[] { "Rule-of-thumb sizing values: " + string.Join(", ", a.Select(kv => $"{kv.Key} {Ve.F(kv.Value, 3)}")) },
             new object?[] { "Rates: " + string.Join(", ", inp.Rates.From.OrderBy(kv => kv.Key).Select(kv => $"{kv.Key} {kv.Value}")) + (inp.Rates.AnyPlaceholder ? " (placeholders are generic round numbers: give rates_file)" : "") },
-            new object?[] { $"Carbon: A1-A3, built-in generic factors {inp.Factors.Version} (placeholders to check); precast at {options.FirstOrDefault()?.PrecastGrade ?? "C40/50"}." } };
+            new object?[] { $"Carbon: A1-A3, {inp.CarbonSource}; precast at {options.FirstOrDefault()?.PrecastGrade ?? "C40/50"}." } };
         assumptions.AddRange(notes.Select(n => new object?[] { n }));
         var (csv, xlsx) = CarbonRun.Write(doc, args, "VE options", [("Options", sheet), ("Assumptions", assumptions)]);
 
@@ -872,7 +940,8 @@ public sealed class VeApplyTool : IRevitTool
 {
     public string Name => "ve_apply";
     public string Description =>
-        "Applies a value engineering change to a SAVED COPY of the model (default) or to the elements in a Revit design " +
+        "Applies a value engineering change to a SAVED COPY of the model (default; not for workshared models: run it in a " +
+        "detached copy or use design_option) or to the elements in a Revit design " +
         "option, never silently to the main model: switch element types (e.g. a thinner slab or beam type), rationalise " +
         "sizes (many types to one), or change the concrete grade (material; type-level materials get a duplicated type so " +
         "other elements are not touched). Changes come from ve_opportunities items (rank or VE id) or are given directly. " +
@@ -880,7 +949,7 @@ public sealed class VeApplyTool : IRevitTool
         "dry_run lists what would change. An engineer must confirm the result.";
     public string PropertiesJson => "{" + VeRun.InputsJson + """
       ,
-      "target": {"type": "string", "enum": ["copy", "design_option", "main"], "description": "copy (default): a copy of the saved model, opened, changed, saved and closed; design_option: only elements in design_option; main: the open model, only with confirm_main_model."},
+      "target": {"type": "string", "enum": ["copy", "design_option", "main"], "description": "copy (default): a copy of the saved model, opened, changed, saved and closed (refused for workshared models: detach a copy and run it there, or use design_option); design_option: only elements in design_option; main: the open model, only with confirm_main_model."},
       "design_option": {"type": "string", "description": "With target design_option: the option's name (or part of it). Make the option and copy the elements into it in Revit first."},
       "confirm_main_model": {"type": "boolean", "description": "Required with target main: the user asked for the change in the main model itself."},
       "copy_path": {"type": "string", "description": "Where to save the copy (default: '<model> - VE <date>.rvt' in the output folder)."},
@@ -907,6 +976,7 @@ public sealed class VeApplyTool : IRevitTool
         var active = app.ActiveUIDocument.Document;
         var inp = VeRun.Read(active, args);
         var target = args.OptString("target") ?? "copy";
+        var dry = args.OptBool("dry_run");
         if (target is not ("copy" or "design_option" or "main")) throw new ArgumentException("target is copy, design_option or main.");
         if (target == "main" && !args.OptBool("confirm_main_model"))
             throw new ArgumentException("target main changes the open model itself. Use target copy (a saved copy) or design_option; only when the user asked for the main model, set confirm_main_model true.");
@@ -948,28 +1018,34 @@ public sealed class VeApplyTool : IRevitTool
         }
         if (requests.Count == 0) throw new ArgumentException("Nothing to apply: give items (VE ids or ranks from ve_opportunities) or changes.");
 
-        var dry = args.OptBool("dry_run");
         var warnings = new List<string>();
         Document doc = active;
         string? copyPath = null;
         var opened = false;
+        // A dry run opens nothing, so it is allowed (it says the real run is refused).
+        if (target == "copy" && active.IsWorkshared && !dry)
+            throw new ArgumentException("This model is workshared, so ve_apply won't open or copy it (opening it again could act on the model you have open or on the central file). " +
+                                        "Make a detached copy (e.g. a _detached file), open it and run ve_apply there, or use target=design_option.");
         if (target == "copy" && !dry)
         {
             if (string.IsNullOrEmpty(active.PathName)) throw new InvalidOperationException("Save the model first: ve_apply makes its copy from the saved file.");
             if (active.IsModified) warnings.Add("The open model has unsaved changes; the copy is made from the last saved file and does not have them.");
-            copyPath = args.OptString("copy_path") is { } cp ? OutputPaths.Checked(cp) ?? cp : Path.Combine(Checks.Folder(args), $"{San(active.Title)} - VE {DateTime.Now:yyyy-MM-dd HHmm}.rvt");
+            if (args.OptString("copy_path") is { } given && !Path.IsPathRooted(given.Trim().Trim('"')))
+                throw new ArgumentException("copy_path must be a full path (e.g. D:\\Models\\Tower - VE.rvt), not a relative name.");
+            copyPath = args.OptString("copy_path") is { } cp ? OutputPaths.Checked(cp.Trim().Trim('"')) ?? cp : Path.Combine(Checks.Folder(args), $"{San(active.Title)} - VE {DateTime.Now:yyyy-MM-dd HHmm}.rvt");
             if (!copyPath.EndsWith(".rvt", StringComparison.OrdinalIgnoreCase)) copyPath += ".rvt";
-            Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(copyPath))!);
+            copyPath = Path.GetFullPath(copyPath);
+            if (VeRun.SamePath(copyPath, active.PathName)) throw new ArgumentException("copy_path is the open model's own file; give another copy_path.");
+            Directory.CreateDirectory(Path.GetDirectoryName(copyPath)!);
             if (File.Exists(copyPath)) throw new ArgumentException($"{copyPath} exists already; give another copy_path.");
-            if (active.IsWorkshared)
+            File.Copy(active.PathName, copyPath);
+            doc = app.Application.OpenDocumentFile(copyPath);
+            // Revit hands back the open document when the file is already open: never change or close that one.
+            if (doc.Equals(active) || VeRun.SamePath(doc.PathName, active.PathName))
             {
-                var mp = ModelPathUtils.ConvertUserVisiblePathToModelPath(active.PathName);
-                doc = app.Application.OpenDocumentFile(mp, new OpenOptions { DetachFromCentralOption = DetachFromCentralOption.DetachAndPreserveWorksets });
-            }
-            else
-            {
-                File.Copy(active.PathName, copyPath);
-                doc = app.Application.OpenDocumentFile(copyPath);
+                if (!doc.Equals(active)) try { doc.Close(false); } catch (Autodesk.Revit.Exceptions.ApplicationException) { }
+                doc = active;
+                throw new InvalidOperationException("Revit returned the open model instead of the copy, so nothing was changed. The copy file is at " + copyPath + "; open it and run ve_apply there.");
             }
             opened = true;
         }
@@ -1008,6 +1084,8 @@ public sealed class VeApplyTool : IRevitTool
                 {
                     dryRun = dry, target, changes = changes.Count, list = changes.Take(100).Select(c => new { id = c.Id, c.Kind, c.What }), skipped = skipped.Take(50),
                     before = VeRun.Show(before), note = changes.Count == 0 ? "Nothing to change." : "Nothing was changed (dry run).", caution = Ve.Caution,
+                    workshared = target == "copy" && active.IsWorkshared
+                        ? "This model is workshared: the real run won't make a copy. Make a detached copy (e.g. a _detached file) and run ve_apply there, or use target=design_option." : null,
                 });
 
             var batch = ItemBatch.Run(doc, "VE apply", changes, c => $"{c.Id}: {c.What}", c => [new ElementId(c.Id)], c =>
@@ -1031,16 +1109,7 @@ public sealed class VeApplyTool : IRevitTool
             }, borrow: target != "copy");
 
             var after = VeRun.Sum(VeRun.Facts(doc, inp, ids));
-            if (opened)
-            {
-                if (doc.IsWorkshared)
-                {
-                    var o = new SaveAsOptions { OverwriteExistingFile = false, MaximumBackups = 1 };
-                    o.SetWorksharingOptions(new WorksharingSaveAsOptions { SaveAsCentral = true });
-                    doc.SaveAs(copyPath!, o);
-                }
-                else doc.Save();
-            }
+            if (opened) doc.Save();
             // Record it against the register items it came from.
             var veIds = args.StringList("items").Where(p => p.StartsWith("VE-", StringComparison.OrdinalIgnoreCase)).ToList();
             if (veIds.Count > 0 && batch.Done > 0)

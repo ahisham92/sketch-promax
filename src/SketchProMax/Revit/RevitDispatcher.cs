@@ -29,6 +29,10 @@ public sealed class RevitDispatcher : IExternalEventHandler
     // Deferred UI work (pane content, the chat following a newly opened model): one item per Idling, so nothing of ours
     // runs while Revit opens a model and each slice stays short.
     private readonly ConcurrentQueue<Action> _later = new();
+    // When the last Later slice ran: during a long agent run the queue is rarely empty, so one slice still runs after a
+    // drain once this is a few seconds old (see OnIdling).
+    private int _lastSlice = Environment.TickCount;
+    private const int LaterStarveMs = 3000;
     private ExternalEvent? _event;
     private IntPtr _mainWindow;
     private Timer? _wake;
@@ -183,6 +187,7 @@ public sealed class RevitDispatcher : IExternalEventHandler
             catch (Exception) { /* the external event and the wake timer still move queued work */ }
         }
         Drain(app, fromEvent: true);
+        if (!_stopped && !_running && !_later.IsEmpty && unchecked(Environment.TickCount - _lastSlice) > LaterStarveMs) RunSlice();
     }
 
     public string GetName() => "Sketch ProMax dispatcher";
@@ -213,11 +218,7 @@ public sealed class RevitDispatcher : IExternalEventHandler
         {
             if (_later.IsEmpty || _running) return;
             // Nothing else waiting: one slice of deferred UI work, and come back soon for the next.
-            if (_later.TryDequeue(out var slice))
-            {
-                try { slice(); }
-                catch (Exception) { /* deferred UI work is best effort */ }
-            }
+            RunSlice();
             if (!_later.IsEmpty) e.SetRaiseWithoutDelay();
             return;
         }
@@ -225,11 +226,22 @@ public sealed class RevitDispatcher : IExternalEventHandler
         {
             if (sender is UIApplication app) Drain(app, fromEvent: false);
             else _event?.Raise();
+            // A long agent run keeps the queue busy: still let one deferred slice through every few seconds so it isn't starved.
+            if (!_running && !_later.IsEmpty && unchecked(Environment.TickCount - _lastSlice) > LaterStarveMs) RunSlice();
         }
         // Work that must not run inside an event handler: have the external event pick it up.
         if (!_eventOnly.IsEmpty) _event?.Raise();
         // Keep Idling coming without waiting for user input while anything is still queued.
         if (!_queue.IsEmpty || !_eventOnly.IsEmpty) e.SetRaiseWithoutDelay();
+    }
+
+    /// <summary>One item of deferred UI work.</summary>
+    private void RunSlice()
+    {
+        _lastSlice = Environment.TickCount;
+        if (!_later.TryDequeue(out var slice)) return;
+        try { slice(); }
+        catch (Exception) { /* deferred UI work is best effort */ }
     }
 
     /// <summary>What is keeping Revit from running queued work right now (a dialog, a busy UI thread, an edit mode).</summary>

@@ -73,25 +73,21 @@ internal static class Favourites
         try
         {
             path ??= DefaultPath;
-            return File.Exists(path) ? Parse(File.ReadAllText(path)) : [];
+            return SafeFile.Read(path) is { } json ? Parse(json) : [];
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return []; }
+        catch (Exception) { return []; } // a damaged or unreadable file is no pins, never an error
     }
 
-    /// <summary>Writes the pins (through a temporary file, so a crash never leaves half a file). False when it couldn't.</summary>
+    /// <summary>Writes the pins (through a uniquely named temporary file, so a crash never leaves half a file). False when it couldn't.</summary>
     public static bool Save(IEnumerable<string> keys, string? path = null)
     {
         path ??= DefaultPath;
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            var temp = path + ".tmp";
-            File.WriteAllText(temp, Serialize(keys));
-            if (File.Exists(path)) File.Delete(path);
-            File.Move(temp, path);
+            SafeFile.Write(path, Serialize(keys));
             return true;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return false; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) { return false; }
     }
 
     // ---- Changing the list -----------------------------------------------------------------------------------

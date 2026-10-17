@@ -133,6 +133,7 @@ internal static partial class FieldTest
         ("marine", "Marine / infrastructure", ["infrastructure", "port", "ports", "marineinfrastructure"]),
         ("checkers", "Checkers / spec check", ["checker", "check", "checks", "speccheck", "spec", "qa", "checkersspeccheck"]),
         ("boq", "BOQ / quantities", ["quantities", "quantity", "boqquantities", "cost", "costs", "carbon", "embodiedcarbon"]),
+        ("ve", "Value engineering", ["valueengineering", "vengineering"]),
         ("analytical", "Analytical export", ["analysis", "analyticalexport"]),
         ("views_sheets", "Views, sheets and annotation", ["views", "sheets", "annotation", "documentation", "drawings", "viewssheets", "viewssheetsannotation", "viewssheetsandannotation"]),
         ("worksharing", "Worksharing", ["worksets", "workset"]),
@@ -149,6 +150,7 @@ internal static partial class FieldTest
         ["marine"] = ["create_piles", "marine_structure", "port_furniture", "design_vessel", "vessel_collision_check", "progressive_collapse_check", "create_toposolid", "create_raft"],
         ["checkers"] = ["check_drawings", "check_code_rules", "check_model", "find_missing_items", "run_model_audit", "model_snapshot", "check_schedule", "spec_check"],
         ["boq"] = ["boq_check", "boq_item_breakdown", "cost_estimate", "export_quantities", "work_progress", "construction_sequence", "embodied_carbon", "carbon_compare", "carbon_view"],
+        ["ve"] = ["ve_opportunities", "ve_compare_options", "ve_register", "ve_view", "ve_apply"],
         ["analytical"] = ["analytical_check", "export_analytical", "loading_plan"],
         ["worksharing"] = ["list_worksets", "make_worksets_editable", "borrow_elements", "element_owners", "relinquish_mine", "manage_worksets"],
         ["views_sheets"] = ["export_pdf", "export_drawing_list", "issue_drawings", "general_notes", "typical_details", "cloud_elements", "collect_text", "apply_text",
@@ -1311,7 +1313,7 @@ public sealed class RunFieldTestTool : IRevitTool
         "several minutes: the call returns a job id; use wait_for_job for progress and the result, cancel_job to stop between tools.";
     public string PropertiesJson => """
     {
-      "families": {"type": "array", "items": {"type": "string"}, "description": "Only test these families: steel, rebar, precast_pt, clashes, arch_to_structure, marine, checkers, boq, analytical, views_sheets, worksharing, other. Default: all."},
+      "families": {"type": "array", "items": {"type": "string"}, "description": "Only test these families: steel, rebar, precast_pt, clashes, arch_to_structure, marine, checkers, boq, ve, analytical, views_sheets, worksharing, other. Default: all."},
       "include_heavy": {"type": "boolean", "description": "Also run the slow tools (exports, whole-model checks, image capture). Default true; the test project is small."},
       "keep_project": {"type": "boolean", "description": "Keep the test project files in a temp folder and return the path. Default false: closed without saving and deleted."},
       "workshared": {"type": "boolean", "description": "Make the test project workshared (central + local) so worksharing tools run. Default true."},

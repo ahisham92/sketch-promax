@@ -1,3 +1,4 @@
+using System.IO;
 using System.Text.Json;
 
 namespace SketchProMax.Tools;
@@ -53,7 +54,7 @@ internal static class OutputPaths
     /// <summary>Arguments that name a file or folder a tool writes to (or, for some, reads from).</summary>
     private static readonly HashSet<string> PathKeys = new(StringComparer.Ordinal)
     {
-        "folder", "output_folder", "report_folder", "file_name",
+        "folder", "output_folder", "report_folder", "file_name", "copy_path",
     };
 
     /// <summary>Tools whose "path" argument is where they write.</summary>
@@ -67,11 +68,23 @@ internal static class OutputPaths
     {
         if (CodeTools.Contains(tool))
             return "The Sketch ProMax chat asks to run code or a recipe. Read it below before you allow it.";
+        var reasons = new List<string>();
+        // Changes to the open model itself (or to its design options) are always shown, whatever the settings say.
+        if (tool == "ve_apply" && args.TryGetValue("target", out var t) && t.ValueKind == JsonValueKind.String && t.GetString() is "main" or "design_option")
+            reasons.Add(t.GetString() == "main"
+                ? "The Sketch ProMax chat asks to apply value engineering changes to the open model itself."
+                : "The Sketch ProMax chat asks to apply value engineering changes to elements in a design option of the open model.");
         var paths = args.Where(a => (PathKeys.Contains(a.Key) || a.Key == "path" && WritesToPath.Contains(tool))
                                     && a.Value.ValueKind == JsonValueKind.String && a.Value.GetString() is { Length: > 0 })
-            .Select(a => a.Value.GetString()!).ToList();
-        return paths.Count > 0
-            ? "The Sketch ProMax chat asks to write files at a location it chose: " + string.Join(", ", paths) + "."
-            : null;
+            .Select(a => FullPath(a.Value.GetString()!)).ToList();
+        if (paths.Count > 0) reasons.Add("The Sketch ProMax chat asks to write files at a location it chose: " + string.Join(", ", paths) + ".");
+        return reasons.Count > 0 ? string.Join(" ", reasons) : null;
+    }
+
+    /// <summary>The path as Windows will resolve it, so the dialog shows where a relative name really lands; unchanged when it can't be resolved.</summary>
+    public static string FullPath(string path)
+    {
+        try { return Path.GetFullPath(path.Trim().Trim('"')); }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException or System.Security.SecurityException) { return path; }
     }
 }

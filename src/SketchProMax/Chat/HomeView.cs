@@ -96,13 +96,13 @@ internal sealed class HomeView : StackPanel
         var selected = _tab == id;
         var button = Pill(text, selected, tip);
         AutomationProperties.SetItemStatus(button, selected ? "Selected" : "");
-        button.Click += (_, _) =>
+        button.Click += (_, _) => Guarded(() =>
         {
             _tab = id;
             DrawTabs();
             Draw();
             if (_tabs.Children.OfType<Button>().FirstOrDefault(b => AutomationProperties.GetItemStatus(b) == "Selected") is { } now) now.Focus();
-        };
+        });
         _tabs.Children.Add(button);
     }
 
@@ -187,12 +187,12 @@ internal sealed class HomeView : StackPanel
             toggle.SetResourceReference(StyleProperty, "SpmChatDisclosure");
             AutomationProperties.SetName(toggle, $"{group}, {found.Count} capabilities. {blurb}");
             AutomationProperties.SetItemStatus(toggle, open ? "Expanded" : "Collapsed");
-            toggle.Click += (_, _) =>
+            toggle.Click += (_, _) => Guarded(() =>
             {
                 if (!_open.Remove(group)) _open.Add(group);
                 DrawGroups();
                 FocusGroup(group);
-            };
+            });
             toggle.Tag = group;
             _results.Children.Add(toggle);
             if (!open) continue;
@@ -203,11 +203,11 @@ internal sealed class HomeView : StackPanel
             {
                 var more = ChatUi.Ghost(ChatUi.GlyphDown, $"Show all {found.Count}", $"Show all {found.Count} in {group}", "Lists every match in this group.");
                 more.HorizontalAlignment = HorizontalAlignment.Left;
-                more.Click += (_, _) =>
+                more.Click += (_, _) => Guarded(() =>
                 {
                     _showAll.Add(group);
                     DrawGroups();
-                };
+                });
                 list.Children.Add(more);
             }
             _results.Children.Add(list);
@@ -239,8 +239,15 @@ internal sealed class HomeView : StackPanel
         button.SetResourceReference(StyleProperty, "SpmChatGhost");
         AutomationProperties.SetName(button, title + ". " + summary);
         AutomationProperties.SetHelpText(button, "Puts this prompt in the message box to edit before sending.");
-        button.Click += (_, _) => _use(prompt);
+        button.Click += (_, _) => Guarded(() => _use(prompt));
         return button;
+    }
+
+    /// <summary>Runs a click's work; nothing it throws may reach Revit's dispatcher (that would end Revit).</summary>
+    private static void Guarded(Action work)
+    {
+        try { work(); }
+        catch (Exception ex) { System.Diagnostics.Trace.WriteLine("Sketch ProMax home screen: " + ex); }
     }
 
     // ---- Saved prompts -------------------------------------------------------------------------------------------
@@ -272,11 +279,11 @@ internal sealed class HomeView : StackPanel
                 var button = Pill(option.Name, selected, $"{label}: {option.Name}");
                 AutomationProperties.SetItemStatus(button, selected ? "Selected" : "");
                 var id = option.Id;
-                button.Click += (_, _) =>
+                button.Click += (_, _) => Guarded(() =>
                 {
                     pick(id);
                     DrawTailored();
-                };
+                });
                 row.Children.Add(button);
             }
             panel.Children.Add(row);

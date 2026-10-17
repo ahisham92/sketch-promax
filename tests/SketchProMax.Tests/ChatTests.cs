@@ -92,6 +92,13 @@ internal static class ChatTests
             SketchProMax.Tools.OutputPaths.ChatApprovalReason("export_project_pack", Args("""{"include_chat":true,"folder":""}""")) is null &&
             SketchProMax.Tools.OutputPaths.ChatApprovalReason("import_cad", Args("""{"path":"C:\\a.dwg"}""")) is null &&
             SketchProMax.Tools.OutputPaths.ChatApprovalReason("save_legend_seed", Args("""{"path":"C:\\a.rvt"}""")) is not null, "");
+        check("chat approval: ve_apply's copy_path is a path Claude chose",
+            SketchProMax.Tools.OutputPaths.ChatApprovalReason("ve_apply", Args("""{"copy_path":"D:\\x\\copy.rvt"}"""))?.Contains("copy.rvt") == true &&
+            SketchProMax.Tools.OutputPaths.ChatApprovalReason("ve_apply", Args("""{"target":"copy"}""")) is null, "");
+        check("chat approval: ve_apply on the open model or a design option is always asked",
+            SketchProMax.Tools.OutputPaths.ChatApprovalReason("ve_apply", Args("""{"target":"main","confirm_main_model":true}""")) is not null &&
+            SketchProMax.Tools.OutputPaths.ChatApprovalReason("ve_apply", Args("""{"target":"design_option","design_option":"VE","dry_run":true}""")) is not null, "");
+        check("chat approval: relative paths shown in full", SketchProMax.Tools.OutputPaths.FullPath("out") == Path.GetFullPath("out"), "");
 
         // What the pane writes.
         using (var doc = JsonDocument.Parse(StreamInput.UserMessage("hi \"there\"", new[] { ("image/png", "AAAA") })))

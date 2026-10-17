@@ -45,7 +45,7 @@ internal static class Carbon
         public List<string> Problems = [];
     }
 
-    /// <summary>What the assessment counts and assumes. Defaults: A1-A3 only, 25% fly ash where the name doesn't say.</summary>
+    /// <summary>What the assessment counts and assumes. Defaults: A1-A3 only, CEM I (no replacement, the conservative value) where the name doesn't say.</summary>
     public sealed class Options
     {
         public bool A4, A5;
@@ -53,7 +53,7 @@ internal static class Carbon
         public string A4Mode = "road";
         public double? WastePercent;
         /// <summary>Cement replacement variant for concrete whose name doesn't give one: none, fa25 or ggbs50.</summary>
-        public string Replacement = "fa25";
+        public string Replacement = "none";
         /// <summary>Use <see cref="Replacement"/> for all concrete, even where the name gives another.</summary>
         public bool ReplacementAll;
         public string DefaultGrade = "C32/40";
@@ -165,6 +165,8 @@ internal static class Carbon
                 case "a4_distance": t.Distances.Add(f); break;
                 case "a5_waste": t.Waste.Add(f); break;
                 default:
+                    // A material's quantity is kg, t, m3 or m2; transport and waste units belong on a4_mode, a4_distance and a5_waste rows.
+                    if (f.Unit is "%" or "km" or "t.km") { t.Problems.Add($"{label} ({match}{cls}): unit '{unitText}' is for a4_mode, a4_distance or a5_waste rows, not a material (use kg, t, m3 or m2)"); continue; }
                     if (custom && f.Source.Length == 0) f.Source = "user table (no source given)";
                     t.Materials.Add(f);
                     break;
@@ -356,7 +358,8 @@ internal static class Carbon
             if (Math.Abs(kv.Key - cyl.Value) < 0.5) { notes.Add($"strength class swapped from {cyl:0} to {kv.Value:0} MPa (cylinder)"); cyl = kv.Value; break; }
         var stated = ReplacementOf(material) ?? ReplacementOf(type);
         var rep = o.ReplacementAll || stated is null ? o.Replacement : stated;
-        if (stated is null && !o.ReplacementAll) notes.Add($"cement replacement not in the name: assumed {ReplacementLabel(rep)}");
+        if (stated is null && !o.ReplacementAll)
+            notes.Add($"cement replacement not in the name: assumed {ReplacementLabel(rep)}" + (rep == "none" ? ", the conservative ICE v3.0 value" : ""));
         var rows = builtIn.Materials.Where(f => f.Class == "concrete" && f.Replacement == rep && GradeCylinder(f.Grade) is not null)
             .OrderBy(f => GradeCylinder(f.Grade)).ToList();
         if (rows.Count == 0) return new Pick(null, "concrete", $"no built-in concrete factor for replacement '{rep}'");
@@ -401,15 +404,51 @@ internal static class Carbon
         _ => null,
     };
 
+    /// <summary>
+    /// Why a part's emissions can't be worked out (so it is listed as unmapped rather than counted as 0), or null: an
+    /// area factor with no area, a mass factor or A4 transport with no density, or a unit that isn't a material quantity.
+    /// </summary>
+    public static string? QuantityProblem(Factor f, string? cls, double volumeM3, double areaM2, double? massKg, Options o, Factor? a4Row, Factor? a5Row)
+    {
+        var density = f.Density ?? DefaultDensity(cls);
+        string? Why(Factor row, double d, string what)
+        {
+            if (InUnit(row.Unit, volumeM3, areaM2, massKg, d) is not null) return null;
+            return row.Unit switch
+            {
+                "m2" => $"{what} factor {row.Id} is per m² but Revit gives no area for it",
+                "kg" or "t" when d <= 0 && volumeM3 > 0 => $"{what} factor {row.Id} is per {row.Unit} but there is no density for it: add a density column to the factor row",
+                "kg" or "t" or "m3" => $"{what} factor {row.Id}: no volume or mass to measure",
+                _ => $"{what} factor {row.Id} has unit '{row.Unit}', which isn't a material quantity (kg, t, m3 or m2)",
+            };
+        }
+        if (Why(f, density, "A1-A3") is { } a) return a;
+        if (o.A4)
+        {
+            if (a4Row != null) { if (Why(a4Row, a4Row.Density ?? density, "A4") is { } b) return b; }
+            else if (Mass(volumeM3, massKg, density) <= 0) return $"A4 transport needs its mass, but factor {f.Id} gives no density: add a density column to the factor row";
+        }
+        if (o.A5 && a5Row != null && Why(a5Row, a5Row.Density ?? density, "A5") is { } c) return c;
+        return null;
+    }
+
     /// <summary>Emissions of one quantity of material by module, kgCO2e.</summary>
     public sealed record Stages(double A1A3, double A4, double A5)
     {
         public double Total => A1A3 + A4 + A5;
     }
 
-    /// <summary>Transport distance (km) for a class: the option, else the first scenario row naming it (or *).</summary>
-    public static double Distance(string? cls, Options o, Table builtIn, Table? custom) =>
-        o.A4DistanceKm ?? (custom?.Distances ?? []).Concat(builtIn.Distances).FirstOrDefault(f => ClassIn(cls, f.Match))?.Value ?? 0;
+    /// <summary>
+    /// Transport distance (km) for a class: the option, else the first scenario row naming it (or *). Precast concrete
+    /// is made nationally, not ready-mixed nearby: a row naming precast, else the national (*) row.
+    /// </summary>
+    public static double Distance(string? cls, Options o, Table builtIn, Table? custom, bool precast = false) =>
+        o.A4DistanceKm ?? (custom?.Distances ?? []).Concat(builtIn.Distances)
+            .FirstOrDefault(f => precast && cls == "concrete" ? ClassIn("precast", f.Match) : ClassIn(cls, f.Match))?.Value ?? 0;
+
+    /// <summary>Whether a concrete material or type name says precast (precast, hollow-core, PC).</summary>
+    public static bool IsPrecast(string material, string type) =>
+        new[] { material, type }.Any(n => Regex.IsMatch(n ?? "", @"pre-?cast|hollow[\s_-]?core|(?<![A-Za-z0-9])PC(?![A-Za-z])", RegexOptions.IgnoreCase));
 
     /// <summary>kgCO2e per tonne-km of a transport mode.</summary>
     public static double ModeFactor(string mode, Table builtIn, Table? custom) =>
@@ -438,7 +477,7 @@ internal static class Carbon
     /// + A4) (or the user's A5 row). End of life of the wasted material (C2-C4 of A5) is not counted.
     /// </summary>
     public static Stages Emissions(Factor f, string? cls, double volumeM3, double areaM2, double? massKg, Options o, Table builtIn, Table? custom,
-        Factor? a4Row, Factor? a5Row, out double quantity)
+        Factor? a4Row, Factor? a5Row, out double quantity, bool precast = false)
     {
         var density = f.Density ?? DefaultDensity(cls);
         quantity = InUnit(f.Unit, volumeM3, areaM2, massKg, density) ?? 0;
@@ -447,7 +486,7 @@ internal static class Carbon
         if (o.A4)
         {
             if (a4Row != null) a4 = (InUnit(a4Row.Unit, volumeM3, areaM2, massKg, a4Row.Density ?? density) ?? 0) * a4Row.Value;
-            else a4 = Mass(volumeM3, massKg, density) / 1000 * Distance(cls, o, builtIn, custom) * ModeFactor(o.A4Mode, builtIn, custom);
+            else a4 = Mass(volumeM3, massKg, density) / 1000 * Distance(cls, o, builtIn, custom, precast) * ModeFactor(o.A4Mode, builtIn, custom);
         }
         if (o.A5)
         {

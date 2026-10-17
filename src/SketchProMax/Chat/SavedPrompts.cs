@@ -23,15 +23,18 @@ internal static class SavedPrompts
     public static string DefaultFile =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "SketchProMax", "prompts.json");
 
+    /// <summary>The saved prompts; an empty list when there are none or the file is damaged (never an error).</summary>
     public static List<SavedPrompt> Load(string file)
     {
         try
         {
-            if (!File.Exists(file)) return [];
-            return (JsonSerializer.Deserialize<List<SavedPrompt>>(File.ReadAllText(file)) ?? [])
-                .Where(p => p is not null && p.Text.Trim().Length > 0).Take(Max).ToList();
+            if (SafeFile.Read(file) is not { } json) return [];
+            return (JsonSerializer.Deserialize<List<SavedPrompt>?>(json) ?? [])
+                .Where(p => p?.Text is { } t && t.Trim().Length > 0)
+                .Select(p => { p.Title ??= ""; return p; })
+                .Take(Max).ToList();
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or NotSupportedException) { return []; }
+        catch (Exception) { return []; }
     }
 
     /// <summary>Saves the list; false when it couldn't be written.</summary>
@@ -39,14 +42,20 @@ internal static class SavedPrompts
     {
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(file)!);
-            var temp = file + ".tmp";
-            File.WriteAllText(temp, JsonSerializer.Serialize(prompts.Take(Max).ToList(), new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
-            if (File.Exists(file)) File.Delete(file);
-            File.Move(temp, file);
+            SafeFile.Write(file, JsonSerializer.Serialize(prompts.Take(Max).ToList(), new JsonSerializerOptions { WriteIndented = true }));
             return true;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException) { return false; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException) { return false; }
+    }
+
+    /// <summary>
+    /// Reads the file again, applies <paramref name="change"/> (Add or Remove) and saves, so prompts saved meanwhile in
+    /// another Revit are kept. Returns the list as saved, and whether it was written.
+    /// </summary>
+    public static (List<SavedPrompt> List, bool Saved) Update(string file, Func<List<SavedPrompt>, List<SavedPrompt>> change)
+    {
+        var list = change(Load(file));
+        return (list, Save(file, list));
     }
 
     /// <summary>The list with <paramref name="text"/> added at the top; the same text saved before moves up instead of repeating.</summary>

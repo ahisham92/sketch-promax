@@ -19,21 +19,27 @@ internal static class CarbonRun
 {
     private const double M = 0.3048, M2 = M * M, M3 = M * M * M;
 
-    /// <summary>Categories measured by default: structure, envelope and the main architectural elements.</summary>
+    /// <summary>
+    /// Categories measured by default: structure, envelope and the main architectural elements. Architectural columns are
+    /// left out (they are usually finishes or cladding round a structural column, which would count it twice); they can be listed in categories.
+    /// </summary>
     public static readonly BuiltInCategory[] DefaultCategories =
     [
         BuiltInCategory.OST_StructuralFoundation, BuiltInCategory.OST_StructuralColumns, BuiltInCategory.OST_StructuralFraming,
-        BuiltInCategory.OST_Floors, BuiltInCategory.OST_Walls, BuiltInCategory.OST_Roofs, BuiltInCategory.OST_Columns,
+        BuiltInCategory.OST_Floors, BuiltInCategory.OST_Walls, BuiltInCategory.OST_Roofs,
         BuiltInCategory.OST_StairsRuns, BuiltInCategory.OST_StairsLandings, BuiltInCategory.OST_Ramps, BuiltInCategory.OST_StructConnections,
         BuiltInCategory.OST_Ceilings, BuiltInCategory.OST_Windows, BuiltInCategory.OST_Doors, BuiltInCategory.OST_CurtainWallPanels,
         BuiltInCategory.OST_CurtainWallMullions, BuiltInCategory.OST_GenericModel,
     ];
 
-    /// <summary>English category names for the assumed rebar rates (category names are translated in other Revit languages).</summary>
+    /// <summary>
+    /// English category names for the assumed rebar rates (category names are translated in other Revit languages).
+    /// Architectural columns get none: they are not structure.
+    /// </summary>
     private static readonly Dictionary<BuiltInCategory, string> RateKey = new()
     {
         [BuiltInCategory.OST_Floors] = "Floors", [BuiltInCategory.OST_StructuralFraming] = "Structural Framing",
-        [BuiltInCategory.OST_StructuralColumns] = "Structural Columns", [BuiltInCategory.OST_Columns] = "Columns", [BuiltInCategory.OST_Walls] = "Walls",
+        [BuiltInCategory.OST_StructuralColumns] = "Structural Columns", [BuiltInCategory.OST_Walls] = "Walls",
         [BuiltInCategory.OST_StructuralFoundation] = "Structural Foundations", [BuiltInCategory.OST_StairsRuns] = "Stairs",
         [BuiltInCategory.OST_StairsLandings] = "Stairs", [BuiltInCategory.OST_Roofs] = "Roofs",
     };
@@ -50,6 +56,8 @@ internal static class CarbonRun
         public string? CustomNote;
         public bool Links;
         public List<BuiltInCategory> Categories = [];
+        /// <summary>Whether categories were given (else the defaults).</summary>
+        public bool CategoriesGiven;
         public string RebarSource = "auto";
         public Dictionary<string, double>? RebarRates;
         public double? Gia;
@@ -58,10 +66,10 @@ internal static class CarbonRun
     /// <summary>The schema properties every carbon tool shares (inserted into each tool's PropertiesJson).</summary>
     public const string OptionsJson = """
       "stages": {"type": "array", "items": {"type": "string", "enum": ["A1-A3", "A4", "A5"]}, "description": "Life cycle modules to count (EN 15978). Default A1-A3 only; A4 transport and A5 site waste are optional."},
-      "a4_distance_km": {"type": "number", "description": "A4: one transport distance for every material. Default: 50 km for concrete, masonry and aggregates, 300 km for the rest (RICS default scenarios)."},
+      "a4_distance_km": {"type": "number", "description": "A4: one transport distance for every material. Default: RICS default scenarios: 20 km for ready-mixed concrete, 50 km for aggregates, 80 km for masonry, plasterboard, insulation and glass, 120 km for the rest (precast concrete included)."},
       "a4_mode": {"type": "string", "enum": ["road", "rail", "sea"], "description": "A4 transport mode (default road)."},
       "waste_percent": {"type": "number", "description": "A5: one waste rate for every material. Default: per material (concrete 5%, steel 1%, masonry 20%...)."},
-      "cement_replacement": {"type": "string", "enum": ["none", "fa25", "ggbs50"], "description": "Concrete whose name gives no replacement: none (CEM I), fa25 (25% fly ash, default) or ggbs50 (50% GGBS)."},
+      "cement_replacement": {"type": "string", "enum": ["none", "fa25", "ggbs50"], "description": "Concrete whose name gives no replacement: none (CEM I, default: the conservative published value), fa25 (25% fly ash, interpolated) or ggbs50 (50% GGBS)."},
       "cement_replacement_all": {"type": "boolean", "description": "Apply cement_replacement to all concrete, even where the material name gives another (default false)."},
       "default_grade": {"type": "string", "description": "Strength class for concrete whose name gives none (default C32/40)."},
       "grade_swap": {"type": "string", "description": "Strength class swaps for an option, e.g. 'C40/50>C32/40, C50/60>C40/50'."},
@@ -96,7 +104,7 @@ internal static class CarbonRun
         o.A4Mode = args.OptString("a4_mode") ?? "road";
         o.WastePercent = args.OptDouble("waste_percent");
         if (o.WastePercent is { } w) Carbon.WasteFactor(w);
-        o.Replacement = args.OptString("cement_replacement") ?? "fa25";
+        o.Replacement = args.OptString("cement_replacement") ?? "none";
         if (o.Replacement is not ("none" or "fa25" or "ggbs50")) throw new ArgumentException("cement_replacement is none, fa25 or ggbs50.");
         o.ReplacementAll = args.OptBool("cement_replacement_all");
         o.DefaultGrade = args.OptString("default_grade") ?? "C32/40";
@@ -113,6 +121,7 @@ internal static class CarbonRun
         i.Links = args.OptBool("include_links");
         i.Gia = args.OptDouble("gia_m2") is { } g && g > 0 ? g : null;
         i.Categories = args.StringList("categories") is { Count: > 0 } cats ? cats.Select(c => RevitHelpers.ParseCategory(doc, c)).Distinct().ToList() : DefaultCategories.ToList();
+        i.CategoriesGiven = args.StringList("categories").Count > 0;
 
         // The user's table: given now (and remembered), else the one remembered for this model.
         var rows = new List<Dictionary<string, string>>();
@@ -172,13 +181,20 @@ internal static class CarbonRun
         int modelledBars = 0, assumedHosts = 0, curtainWalls = 0;
         double modelledKg = 0;
 
-        void AddLine(Document d, bool isHost, long hostId, string source, string level, string category, string type, string material, Carbon.Pick pick,
+        bool AddLine(Document d, bool isHost, long hostId, string source, string level, string category, string type, string material, Carbon.Pick pick,
             double vol, double area, double? mass, bool assumed, int count)
         {
             var f = pick.Factor!;
             var a4Row = i.Custom is null ? null : Carbon.StageRow(custom, "A4", material, type, pick.Class);
             var a5Row = i.Custom is null ? null : Carbon.StageRow(custom, "A5", material, type, pick.Class);
-            var st = Carbon.Emissions(f, pick.Class, vol, area, mass, o, i.BuiltIn, i.Custom, a4Row, a5Row, out var qty);
+            // A quantity that can't be had is listed with the reason, not counted as 0.
+            if (Carbon.QuantityProblem(f, pick.Class, vol, area, mass, o, a4Row, a5Row) is { } problem)
+            {
+                AddUnmapped(source, category, type, material, "", vol, problem);
+                if (isHost) outcome.NotAssessed.Add(hostId);
+                return false;
+            }
+            var st = Carbon.Emissions(f, pick.Class, vol, area, mass, o, i.BuiltIn, i.Custom, a4Row, a5Row, out var qty, Carbon.IsPrecast(material, type));
             var density = f.Density ?? Carbon.DefaultDensity(pick.Class);
             Carbon.Add(lines, new Carbon.Line
             {
@@ -199,6 +215,7 @@ internal static class CarbonRun
                 var had = outcome.Elements.TryGetValue(hostId, out var e) ? e : (kg: 0.0, m3: 0.0);
                 outcome.Elements[hostId] = (had.kg + st.Total, had.m3 + (assumed || pick.Class == "rebar" ? 0 : vol));
             }
+            return true;
         }
 
         void AddUnmapped(string source, string category, string type, string material, string revitClass, double vol, string reason)
@@ -220,15 +237,18 @@ internal static class CarbonRun
         {
             // Modelled reinforcement, by host.
             var barsByHost = new Dictionary<long, double>();
+            var measured = new HashSet<BuiltInCategory>(i.Categories);
             if (i.RebarSource != "rates")
                 foreach (var bar in new FilteredElementCollector(d).OfClass(typeof(Rebar)).Cast<Element>().Concat(new FilteredElementCollector(d).OfClass(typeof(RebarInSystem))))
                 {
+                    var hostId = bar is Rebar rb ? rb.GetHostId() : ((RebarInSystem)bar).GetHostId();
+                    var host = d.GetElement(hostId);
+                    // Only bars whose host is in a measured category (bars with no host only when rebar is listed or the defaults are used).
+                    if (host?.Category is { } hc ? !measured.Contains(hc.BuiltInCategory) : i.CategoriesGiven && !measured.Contains(BuiltInCategory.OST_Rebar)) continue;
                     double kg;
                     try { kg = Measure.Of(d, bar, "kg", 0).Qty; }
                     catch (Exception ex) when (ex is ArgumentException or Autodesk.Revit.Exceptions.ApplicationException) { continue; }
                     if (kg <= 0) continue;
-                    var hostId = bar is Rebar rb ? rb.GetHostId() : ((RebarInSystem)bar).GetHostId();
-                    var host = d.GetElement(hostId);
                     barsByHost[hostId.Value] = (barsByHost.TryGetValue(hostId.Value, out var k) ? k : 0) + kg;
                     modelledBars++; modelledKg += kg;
                     var barType = (d.GetElement(bar.GetTypeId()) as ElementType)?.Name ?? "";
@@ -254,7 +274,8 @@ internal static class CarbonRun
                         continue;
                     }
                     var concreteM3 = 0.0;
-                    foreach (var (name, revitClass, vol, area) in parts)
+                    var structural = StructuralMaterials(d, e, cat);
+                    foreach (var (materialId, name, revitClass, vol, area) in parts)
                     {
                         var pick = Carbon.Resolve(name, type, revitClass, custom, i.BuiltIn, o);
                         if (pick.Factor is null)
@@ -263,8 +284,9 @@ internal static class CarbonRun
                             if (isHost) outcome.NotAssessed.Add(e.Id.Value);
                             continue;
                         }
-                        AddLine(d, isHost, e.Id.Value, source, level, category, type, name, pick, vol, area, null, false, 1);
-                        if (pick.Class == "concrete") concreteM3 += vol;
+                        if (!AddLine(d, isHost, e.Id.Value, source, level, category, type, name, pick, vol, area, null, false, 1)) continue;
+                        // Rebar is assumed only in structural concrete: the structural layer of a floor, wall or roof, never a screed or topping.
+                        if (pick.Class == "concrete" && (structural is null || structural.Contains(materialId) || materialId < 0 && structural.Count > 0)) concreteM3 += vol;
                     }
                     // Assumed reinforcement in concrete without modelled bars.
                     if (concreteM3 > 0 && i.RebarSource != "model" && RateKey.TryGetValue(cat, out var key) && (i.RebarSource == "rates" || !barsByHost.ContainsKey(e.Id.Value)))
@@ -272,7 +294,7 @@ internal static class CarbonRun
                         var rate = Carbon.RebarRate(key, i.RebarRates);
                         if (rate <= 0) continue;
                         if (rebarPick.Factor is null) { AddUnmapped(source, category, type, "Reinforcement (assumed)", "", 0, rebarPick.Note ?? "no rebar factor"); continue; }
-                        AddLine(d, isHost, e.Id.Value, source, level, category, type, $"Reinforcement (assumed {Carbon.F(rate, 0)} kg/m³)", rebarPick, 0, 0, concreteM3 * rate, true, 1);
+                        if (!AddLine(d, isHost, e.Id.Value, source, level, category, type, $"Reinforcement (assumed {Carbon.F(rate, 0)} kg/m³)", rebarPick, 0, 0, concreteM3 * rate, true, 1)) continue;
                         assumedHosts++;
                         rateUse[key] = (rate, (rateUse.TryGetValue(key, out var ru) ? ru.m3 : 0) + concreteM3);
                     }
@@ -325,6 +347,8 @@ internal static class CarbonRun
         if (i.Custom != null) a.Add($"Your factors ({r.CustomTable}{(i.CustomNote is { } cn ? ", " + cn : "")}): {i.Custom.Materials.Count} material row(s) used before the built-in ones" +
                                     (i.Custom.Problems.Count > 0 ? $"; {i.Custom.Problems.Count} row(s) skipped: {string.Join("; ", i.Custom.Problems.Take(5))}" : "") + ".");
         else if (i.CustomNote != null) a.Add("Factor table: " + i.CustomNote + ".");
+        if (!o.ReplacementAll && o.Replacement == "none")
+            a.Add("Concrete whose name gives no cement replacement: the published ICE v3.0 CEM I row (no replacement), the conservative value; name the mix (e.g. '30% GGBS') or give cement_replacement for a lower one.");
         a.Add("Quantities: Revit's volume per material of each element (compound layers separately), as modelled; densities from the factor rows (concrete 2400, steel 7850 kg/m³).");
         foreach (var kv in picks.OrderByDescending(kv => kv.Value).Take(15)) a.Add($"Concrete ({kv.Value} element part(s)): {kv.Key}.");
         a.Add(i.RebarSource switch
@@ -336,7 +360,7 @@ internal static class CarbonRun
         foreach (var kv in rateUse.OrderBy(kv => kv.Key)) a.Add($"Assumed reinforcement: {kv.Key} {Carbon.F(kv.Value.rate, 0)} kg/m³ of concrete over {Carbon.F(kv.Value.m3, 1)} m³ (typical value; replace with the design's through rebar_rates).");
         if (o.A4)
             a.Add(o.A4DistanceKm is { } km ? $"A4: {Carbon.F(km, 0)} km by {o.A4Mode} for every material, {Carbon.F(Carbon.ModeFactor(o.A4Mode, i.BuiltIn, i.Custom), 3)} kgCO2e/t·km."
-                : $"A4: RICS default distances (50 km for concrete, masonry and aggregates, 300 km for the rest) by {o.A4Mode}, {Carbon.F(Carbon.ModeFactor(o.A4Mode, i.BuiltIn, i.Custom), 3)} kgCO2e/t·km.");
+                : $"A4: RICS default distances (20 km for ready-mixed concrete, 50 km for aggregates, 80 km for masonry, plasterboard, insulation and glass, 120 km for the rest, precast concrete included) by {o.A4Mode}, {Carbon.F(Carbon.ModeFactor(o.A4Mode, i.BuiltIn, i.Custom), 3)} kgCO2e/t·km.");
         if (o.A5)
             a.Add(o.WastePercent is { } wp ? $"A5: site waste {Carbon.F(wp, 1)}% for every material (waste factor w/(1-w) × (A1-A3 + A4))."
                 : "A5: site waste at RICS default rates per material (concrete 5%, rebar 5%, steel 1%, timber 10%, masonry 20%, plasterboard 22.5%, others 5%), waste factor w/(1-w) × (A1-A3 + A4).");
@@ -347,10 +371,39 @@ internal static class CarbonRun
         return outcome;
     }
 
-    /// <summary>An element's materials with their volume (m³) and area (m²); its total volume under its main material when Revit gives none per material.</summary>
-    private static List<(string name, string revitClass, double vol, double area)> Parts(Document d, Element e)
+    /// <summary>
+    /// For floors, walls and roofs, the material ids of the structural layer that may carry assumed reinforcement: the
+    /// compound structure's structural material layer, else its Structure layers; every layer when the element is flagged
+    /// structural and has neither; none otherwise (finishes, screeds, toppings). Null for other categories: all their concrete counts.
+    /// </summary>
+    internal static HashSet<long>? StructuralMaterials(Document d, Element e, BuiltInCategory cat)
     {
-        var parts = new List<(string, string, double, double)>();
+        if (cat is not (BuiltInCategory.OST_Floors or BuiltInCategory.OST_Walls or BuiltInCategory.OST_Roofs)) return null;
+        var ids = new HashSet<long>();
+        var flagged = e switch
+        {
+            Floor => e.get_Parameter(BuiltInParameter.FLOOR_PARAM_IS_STRUCTURAL)?.AsInteger() == 1,
+            Wall => e.get_Parameter(BuiltInParameter.WALL_STRUCTURAL_SIGNIFICANT)?.AsInteger() == 1,
+            _ => false,
+        };
+        if ((d.GetElement(e.GetTypeId()) as HostObjAttributes)?.GetCompoundStructure() is { LayerCount: > 0 } cs)
+        {
+            if (cs.StructuralMaterialIndex >= 0) ids.Add(cs.GetMaterialId(cs.StructuralMaterialIndex).Value);
+            else
+                for (var k = 0; k < cs.LayerCount; k++)
+                    if (cs.GetLayerFunction(k) == MaterialFunctionAssignment.Structure) ids.Add(cs.GetMaterialId(k).Value);
+            if (ids.Count == 0 && flagged)
+                for (var k = 0; k < cs.LayerCount; k++) ids.Add(cs.GetMaterialId(k).Value);
+        }
+        // No compound structure (e.g. in-place or a single material): flagged structural means all of it.
+        else if (flagged) return null;
+        return ids;
+    }
+
+    /// <summary>An element's materials with their id, volume (m³) and area (m²); its total volume under its main material (id -1) when Revit gives none per material.</summary>
+    private static List<(long materialId, string name, string revitClass, double vol, double area)> Parts(Document d, Element e)
+    {
+        var parts = new List<(long, string, string, double, double)>();
         foreach (var id in e.GetMaterialIds(false))
         {
             double v, a;
@@ -358,14 +411,14 @@ internal static class CarbonRun
             catch (Autodesk.Revit.Exceptions.ApplicationException) { continue; }
             if (v <= 1e-9) continue;
             var m = d.GetElement(id) as Material;
-            parts.Add((m?.Name ?? "(material)", m?.MaterialClass ?? "", v, a));
+            parts.Add((id.Value, m?.Name ?? "(material)", m?.MaterialClass ?? "", v, a));
         }
         if (parts.Count > 0) return parts;
         var vol = Math.Max(e.get_Parameter(BuiltInParameter.HOST_VOLUME_COMPUTED)?.AsDouble() ?? 0, e.LookupParameter("Volume") is { StorageType: StorageType.Double } p ? p.AsDouble() : 0) * M3;
         if (vol > 1e-9)
         {
             var name = Measure.MaterialName(d, e);
-            parts.Add((name.Length > 0 ? name : "(no material)", "", vol, (e.get_Parameter(BuiltInParameter.HOST_AREA_COMPUTED)?.AsDouble() ?? 0) * M2));
+            parts.Add((-1, name.Length > 0 ? name : "(no material)", "", vol, (e.get_Parameter(BuiltInParameter.HOST_AREA_COMPUTED)?.AsDouble() ?? 0) * M2));
         }
         return parts;
     }
@@ -399,12 +452,12 @@ internal static class CarbonRun
 
     private static string Safe(string name) => new(name.Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '_' : c).ToArray());
 
-    /// <summary>Saves the result as "last" and, when named, under its name too. Returns the named file.</summary>
-    public static string? Save(Document doc, Carbon.Result r, string? name)
+    /// <summary>Saves the result as "last" (unless writeLast is false) and, when named, under its name too. Returns the named file.</summary>
+    public static string? Save(Document doc, Carbon.Result r, string? name, bool writeLast = true)
     {
         Directory.CreateDirectory(Store(doc));
         var json = JsonSerializer.Serialize(r, new JsonSerializerOptions { WriteIndented = true });
-        File.WriteAllText(Path.Combine(Store(doc), "last.json"), json);
+        if (writeLast) File.WriteAllText(Path.Combine(Store(doc), "last.json"), json);
         if (string.IsNullOrWhiteSpace(name)) return null;
         var file = Path.Combine(Store(doc), Safe(name!.Trim()) + ".json");
         File.WriteAllText(file, json);
@@ -632,7 +685,7 @@ public sealed class CarbonCompareTool : IRevitTool
         }
         var before = Get(baselineName, false);
         var after = Get(optionName, true);
-        if (args.OptString("save_as") is { } saveAs && optionName == "current") { after.Name = saveAs; CarbonRun.Save(doc, after, saveAs); }
+        if (args.OptString("save_as") is { } saveAs && optionName == "current") { after.Name = saveAs; CarbonRun.Save(doc, after, saveAs, writeLast: false); }
 
         var change = after.Total - before.Total;
         var pct = before.Total > 0 ? change / before.Total * 100 : (double?)null;

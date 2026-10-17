@@ -62,7 +62,7 @@ conc-c60-fa25,concrete,,C60/75,fa25,kg,0.187,2400,A1-A3,extrapolated from the C3
 conc-c60-ggbs50,concrete,,C60/75,ggbs50,kg,0.130,2400,A1-A3,extrapolated from the C35/45 to C40/50 step; not an ICE value,placeholder: check; outside ICE v3.0's range; use an EPD
 rebar,rebar,,,,kg,1.99,7850,A1-A3,ICE v3.0 via IStructE (TSE July 2020 Table 2: rebar worldwide average),placeholder: check; UK electric-arc-furnace rebar is much lower (IStructE: 0.684 from the BRC EPD): use the mill's EPD
 steel-stainless,steel,stainless,,,kg,6.15,7900,A1-A3,unverified – check before use,placeholder: check
-steel-sheet,steel,*galvan*|*deck*|*sheet*|*cladding*,,,kg,2.76,7850,A1-A3,ICE v3.0 via IStructE (1st ed. Table 2.3: galvanised profiled sheet worldwide),placeholder: check; UK decking EPD (Tata Comflor) is 2.74
+steel-sheet,steel,*galvan*|*deck*|*sheet*|*cladding*,,,kg,2.76,7850,A1-A3,ICE v3.0 via IStructE (1st ed. Table 2.3: galvanised profiled sheet worldwide),placeholder: check; a UK composite steel deck EPD is 2.74
 steel-hollow,steel,*hollow*|SHS|RHS|CHS|*tube*|*pipe*,,,kg,2.50,7850,A1-A3,IStructE 1st ed. Table 2.3 (UK hollow sections),placeholder: check; a UK value not an ICE worldwide value
 steel-section,steel,,,,kg,1.55,7850,A1-A3,ICE v3.0 via IStructE (TSE July 2020 Table 2: open sections worldwide average),placeholder: check; UK sections 2.45 and Europe 1.13 (IStructE): use the producer's EPD
 aluminium,aluminium,,,,kg,13.0,2700,A1-A3,ICE v3.0 via IStructE (1st ed. Table 2.3: sheet worldwide; extrusions 13.2),placeholder: check; strongly depends on recycled content (Europe sheet 6.58)

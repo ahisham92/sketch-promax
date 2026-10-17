@@ -130,7 +130,8 @@ internal static class FavouritesRibbon
     private static string? Change(Func<List<string>, string?> edit)
     {
         Refresh(force: true);
-        var list = _pinned!.ToList();
+        // Read the file again just before saving, so pins made meanwhile in another Revit are kept: the edit is applied to them.
+        var list = Favourites.Load();
         var problem = edit(list);
         if (problem is not null) return problem.Length == 0 ? null : problem;
         if (!Favourites.Save(list))

@@ -42,6 +42,10 @@ internal sealed class Conversation
 
     /// <summary>The file it was read from (not saved).</summary>
     [JsonIgnore] public string File { get; set; } = "";
+    /// <summary>The messages as last read or saved (not saved): a save moves <see cref="Updated"/> only when they changed.</summary>
+    [JsonIgnore] public string? SavedItems { get; set; }
+    /// <summary>The whole chat as last read or saved (not saved): an unchanged chat isn't written again.</summary>
+    [JsonIgnore] public string? SavedJson { get; set; }
 }
 
 /// <summary>A saved chat as the history drawer lists it, without its messages.</summary>
