@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using Autodesk.Revit.UI;
 using Autodesk.Revit.UI.Events;
+using SketchProMax.Tools;
 
 namespace SketchProMax.Revit;
 
@@ -25,6 +26,9 @@ public sealed class RevitDispatcher : IExternalEventHandler
     private readonly ConcurrentQueue<Action<UIApplication>> _queue = new();
     // Work that must run from ExternalEvent.Execute; the second action fails the caller when Revit lets go first.
     private readonly ConcurrentQueue<(Action<UIApplication> Run, Action Fail)> _eventOnly = new();
+    // Deferred UI work (pane content, the chat following a newly opened model): one item per Idling, so nothing of ours
+    // runs while Revit opens a model and each slice stays short.
+    private readonly ConcurrentQueue<Action> _later = new();
     private ExternalEvent? _event;
     private IntPtr _mainWindow;
     private Timer? _wake;
@@ -93,6 +97,7 @@ public sealed class RevitDispatcher : IExternalEventHandler
             try { application.Idling -= OnIdling; _idlingHooked = false; } catch (Exception) { }
         }
         Drain(application, fromEvent: false);
+        while (_later.TryDequeue(out _)) { }
         // Work that may only run from the external event can't run here (this may be an event handler): fail it.
         while (_eventOnly.TryDequeue(out var pending)) pending.Fail();
         _wake?.Dispose();
@@ -100,6 +105,19 @@ public sealed class RevitDispatcher : IExternalEventHandler
         var ev = _event;
         _event = null;
         try { ev?.Dispose(); } catch (Exception) { }
+    }
+
+    /// <summary>
+    /// Runs <paramref name="work"/> on Revit's UI thread at a later Idling, one item per Idling: never during a model open
+    /// or a tool call. Dropped when the core stops. For short UI work only (no Revit API transactions).
+    /// </summary>
+    public void Later(Action work)
+    {
+        if (_stopped) return;
+        _later.Enqueue(work);
+        // Started from inside Idling, the Idling hook waits for the external event: have it run.
+        if (!_idlingHooked) try { _event?.Raise(); } catch (Exception) { }
+        Nudge();
     }
 
     public Task<T> InvokeAsync<T>(Func<UIApplication, T> work) => InvokeAsync(work, CancellationToken.None);
@@ -190,7 +208,19 @@ public sealed class RevitDispatcher : IExternalEventHandler
     private void OnIdling(object? sender, IdlingEventArgs e)
     {
         if (_stopped) return;
-        if (_queue.IsEmpty && _eventOnly.IsEmpty) return;
+        if (StartupTimings.FirstIdle() is { } opened) ActivityLog.Note("model_open_timing", opened);
+        if (_queue.IsEmpty && _eventOnly.IsEmpty)
+        {
+            if (_later.IsEmpty || _running) return;
+            // Nothing else waiting: one slice of deferred UI work, and come back soon for the next.
+            if (_later.TryDequeue(out var slice))
+            {
+                try { slice(); }
+                catch (Exception) { /* deferred UI work is best effort */ }
+            }
+            if (!_later.IsEmpty) e.SetRaiseWithoutDelay();
+            return;
+        }
         if (!_queue.IsEmpty)
         {
             if (sender is UIApplication app) Drain(app, fromEvent: false);
@@ -236,7 +266,7 @@ public sealed class RevitDispatcher : IExternalEventHandler
     /// <summary>Wakes Revit's message loop so it notices the queued work, without needing a click or mouse move.</summary>
     private void Nudge()
     {
-        if ((_queue.IsEmpty && _eventOnly.IsEmpty && !_hookIdlingLater) || _running || _mainWindow == IntPtr.Zero) return;
+        if ((_queue.IsEmpty && _eventOnly.IsEmpty && _later.IsEmpty && !_hookIdlingLater) || _running || _mainWindow == IntPtr.Zero) return;
         try { PostMessage(_mainWindow, 0 /* WM_NULL */, IntPtr.Zero, IntPtr.Zero); }
         catch (Exception) { /* the window is gone: nothing to wake */ }
     }

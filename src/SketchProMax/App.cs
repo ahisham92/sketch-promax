@@ -107,10 +107,18 @@ public sealed class App : IExternalApplication
         return Result.Succeeded;
     }
 
-    /// <summary>Starts everything this core hooks into Revit. Call in a valid API context (Idling or a command).</summary>
+    /// <summary>
+    /// Starts everything this core hooks into Revit. Call in a valid API context (Idling or a command).
+    /// Revit is often opening a model meanwhile (bug #18), so only what must be in place before the first tool call runs
+    /// here: the dispatcher, the failure guard, the tool list and the pipe. File writes go to a background thread; pane
+    /// content waits for an idle moment (<see cref="UI.LazyPane"/>); the update check, bug-log download, install
+    /// settling and Claude registration wait <see cref="BackgroundDelay"/> and for no model to be opening. Each phase is
+    /// timed (<see cref="StartupTimings"/>) and logged at the first idle moment.
+    /// </summary>
     internal static void StartCore(UIApplication app)
     {
         if (_started) return;
+        var total = System.Diagnostics.Stopwatch.StartNew();
 #if NETFRAMEWORK
         DependencyResolver.Register();
 #endif
@@ -119,16 +127,29 @@ public sealed class App : IExternalApplication
         Ui = System.Windows.Threading.Dispatcher.CurrentDispatcher;
         try { MainWindow = app.MainWindowHandle; } catch (Exception) { MainWindow = IntPtr.Zero; }
         UI.FavouritesRibbon.Attach(app);
+        // The loader asks for the ribbon (favourites included) right after this returns: read the recipe and learned-tool
+        // folders on a background thread meanwhile, not on Revit's.
+        Commands.QuickTools.Warm();
 
         try
         {
-            Dispatcher = new RevitDispatcher();
-            Dispatcher.Initialize(app);
-            app.Application.FailuresProcessing += FailureGuard.Handle;
+            StartupTimings.Time("dispatcher", () =>
+            {
+                Dispatcher = new RevitDispatcher();
+                Dispatcher.Initialize(app);
+                app.Application.FailuresProcessing += FailureGuard.Handle;
+                app.Application.DocumentOpening += OnDocumentOpening;
+                app.Application.DocumentOpened += OnDocumentOpened;
+            });
+            ToolRegistry? registry = null;
+            StartupTimings.Time("tool registry", () => registry = ToolRegistry.CreateDefault());
             // A new server on the same pipe name: a connector that was talking to the previous core simply reconnects.
-            // Writing tools.json also makes the connector tell the Claude app that the tool list changed.
-            Bridge = new BridgeServer(ToolRegistry.CreateDefault(), Dispatcher, RevitYear);
-            Bridge.Start();
+            // Writing tools.json (in the background) also makes the connector tell the Claude app that the tool list changed.
+            StartupTimings.Time("bridge", () =>
+            {
+                Bridge = new BridgeServer(registry!, Dispatcher, RevitYear);
+                Bridge.Start();
+            });
         }
         catch (Exception)
         {
@@ -138,20 +159,54 @@ public sealed class App : IExternalApplication
             throw;
         }
         _started = true;
-        try { Chat.ChatPane.Start(app); } catch (Exception) { /* the chat tab says what is wrong when it is opened */ }
-        try { UI.RestartNote.AfterStart(Ui); } catch (Exception) { /* the chat and the Version button still say it */ }
+        try { StartupTimings.Time("chat hooks", () => Chat.ChatPane.Start(app)); } catch (Exception) { /* the chat tab says what is wrong when it is opened */ }
+        try { StartupTimings.Time("restart note", () => UI.RestartNote.AfterStart(Ui)); } catch (Exception) { /* the chat and the Version button still say it */ }
 
-        _ = Task.Run(() =>
+        var token = _life.Token;
+        _ = Task.Run(() => BackgroundStartAsync(token));
+        StartupTimings.StartDone(total.ElapsedMilliseconds);
+        // The loader's ribbon queries follow in this same Idling; the line goes to the log at the next one.
+        Dispatcher.Later(() => ActivityLog.Note("startup_timing",
+            $"Sketch ProMax {Updater.CurrentText} in Revit {RevitYear}: {StartupTimings.StartLine()}; first Idling {StartupTimings.SinceStart} ms after start"));
+    }
+
+    /// <summary>How long after start the network and install work waits, so it doesn't compete with Revit opening a model.</summary>
+    internal static readonly TimeSpan BackgroundDelay = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// Start work that isn't needed in the first seconds, on a background thread: Claude registration, settling the
+    /// install, then the update loop (or the bug-log download alone when automatic updates are off).
+    /// </summary>
+    private static async Task BackgroundStartAsync(CancellationToken stop)
+    {
+        try
         {
-            try { ClaudeRegistration.Ensure(); } catch (Exception) { }
-            // Moves a manifest from an older release onto the one fixed loader path, once; writes nothing when settled.
-            try { Updater.SettleInstall(); } catch (Exception) { }
-        });
+            await Task.Delay(BackgroundDelay, stop).ConfigureAwait(false);
+            // Still opening a model (a big one can take minutes): wait for it, up to ten minutes more.
+            for (var i = 0; i < 300 && StartupTimings.IsOpening; i++) await Task.Delay(2000, stop).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) { return; }
+        try { ClaudeRegistration.Ensure(); } catch (Exception) { }
+        // Moves a manifest from an older release onto the one fixed loader path, once; writes nothing when settled.
+        try { Updater.SettleInstall(); } catch (Exception) { }
+        if (stop.IsCancellationRequested) return;
         // Check at every start, then hourly while Revit stays open. The bug log is fetched with each check (or once, at
         // start, when automatic updates are off).
-        var token = _life.Token;
-        if (AgentSettings.Load().AutoUpdate) _ = Task.Run(() => UpdateLoopAsync(token));
-        else _ = Task.Run(() => SyncBugLogAsync(token));
+        bool auto;
+        try { auto = AgentSettings.Load().AutoUpdate; } catch (Exception) { auto = true; }
+        if (auto) await UpdateLoopAsync(stop).ConfigureAwait(false);
+        else await SyncBugLogAsync(stop).ConfigureAwait(false);
+    }
+
+    private static void OnDocumentOpening(object? sender, Autodesk.Revit.DB.Events.DocumentOpeningEventArgs e) => StartupTimings.Opening();
+
+    /// <summary>Only timing: nothing of ours runs on a model open (the chat follows the model at the next idle moment).</summary>
+    private static void OnDocumentOpened(object? sender, Autodesk.Revit.DB.Events.DocumentOpenedEventArgs e)
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        string title;
+        try { title = e.Document?.Title ?? ""; } catch (Exception) { title = ""; }
+        StartupTimings.Opened(title, sw.ElapsedMilliseconds);
     }
 
     /// <summary>
@@ -168,6 +223,9 @@ public sealed class App : IExternalApplication
         Bridge?.Stop(keepSession: true);
         Bridge = null;
         try { app.Application.FailuresProcessing -= FailureGuard.Handle; } catch (Exception) { }
+        try { app.Application.DocumentOpening -= OnDocumentOpening; } catch (Exception) { }
+        try { app.Application.DocumentOpened -= OnDocumentOpened; } catch (Exception) { }
+        UI.LazyPane.Forget();
         Dispatcher.Shutdown(app);
 #if NETFRAMEWORK
         DependencyResolver.Unregister();

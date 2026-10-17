@@ -1146,6 +1146,8 @@ internal static class FieldTest
             md.AppendLine("## Test project").AppendLine();
             foreach (var note in r.Sample) md.AppendLine($"- {note}");
             md.AppendLine();
+            // How long Sketch ProMax took to start, and what opening models cost while it ran (bug #18).
+            md.AppendLine(SketchProMax.Revit.StartupTimings.Describe());
             // Which copies of the shared libraries (System.Memory, Roslyn, System.Text.Json) this Revit really uses.
             try { md.AppendLine(SketchProMax.Revit.AssemblyReport.Describe()); }
             catch (Exception ex) { md.AppendLine("## Assemblies").AppendLine().AppendLine("Could not be read: " + ex.Message); }
@@ -1174,6 +1176,7 @@ internal static class FieldTest
                     tools = r.Rows.Where(x => x.Family == g.Key).Select(x => new { tool = x.Tool, status = x.Status, ms = x.Ms, detail = x.Message }),
                 }),
                 test_project = r.Sample,
+                startup = new { start = SketchProMax.Revit.StartupTimings.StartLine(), opens = SketchProMax.Revit.StartupTimings.OpenLines() },
             }, new JsonSerializerOptions { WriteIndented = true }));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)

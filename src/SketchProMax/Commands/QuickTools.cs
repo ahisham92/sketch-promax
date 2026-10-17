@@ -30,12 +30,25 @@ internal static class QuickTools
     /// <remarks>Asked by the ribbon every half minute on Revit's thread, so it rereads the files only when a folder changed.</remarks>
     public static string List(bool force = false)
     {
-        var signature = Signature(Recipes.Folder) + "|" + Signature(LearnedTools.Folder);
-        if (!force && signature == _signature) return _listed;
-        _listed = Read();
-        _signature = signature;
-        return _listed;
+        // The first read can run on a background thread (Warm); Revit's thread then waits for it rather than read twice.
+        lock (ListGate)
+        {
+            var signature = Signature(Recipes.Folder) + "|" + Signature(LearnedTools.Folder);
+            if (!force && signature == _signature) return _listed;
+            _listed = Read();
+            _signature = signature;
+            return _listed;
+        }
     }
+
+    private static readonly object ListGate = new();
+
+    /// <summary>Reads the recipe and learned-tool folders on a background thread, at core start (files only, no Revit API).</summary>
+    public static void Warm() => Task.Run(() =>
+    {
+        try { List(); }
+        catch (Exception) { /* read again when the ribbon asks */ }
+    });
 
     private static string Signature(string folder)
     {

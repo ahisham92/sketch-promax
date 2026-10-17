@@ -102,7 +102,9 @@ internal sealed class ChatPane : DockPanel
         if (string.Equals(key, _modelKey, StringComparison.OrdinalIgnoreCase)) return;
         _modelKey = key;
         _modelTitle = doc.Title;
-        _instance?.ModelChanged();
+        // Switching conversations reads and lays out the saved one: at the next idle moment, not inside Revit's model
+        // open or view activation (bug #18). It reads the current key then, so several switches collapse into one.
+        if (_instance is not null) SketchProMax.App.Dispatcher.Later(() => _instance?.ModelChanged());
     }
 
     // ---- State ----------------------------------------------------------------------------------------------------
