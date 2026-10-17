@@ -195,8 +195,10 @@ public sealed class CreatePilesTool : IRevitTool
         var made = new List<long>();
         using var t = RevitHelpers.StartTransaction(doc, "Piles");
         var n = 0;
+        var stopped = false;
         foreach (var (p, outward) in positions)
         {
+            if (stopped = CancelPoint.Stop("Piles", n, positions.Count)) break;
             var head = new XYZ(p.X, p.Y, top);
             var flatOut = new XYZ(outward.X, outward.Y, 0);
             var axis = rake > 0 && flatOut.GetLength() > 1e-9 ? (flatOut.Normalize() / rake - XYZ.BasisZ).Normalize() : -XYZ.BasisZ;
@@ -223,8 +225,9 @@ public sealed class CreatePilesTool : IRevitTool
                 shape, size * 304.8, UnitUtils.ConvertFromInternalUnits(length, UnitTypeId.Meters), RevitHelpers.FromInternal(doc, top), RevitHelpers.FromInternal(doc, toe), rake);
             made.Add(Shapes.Make(doc, BuiltInCategory.OST_StructuralFoundation, $"Pile {mark}", solids, comments, mark).Id.Value);
         }
+        if (stopped && made.Count == 0) { t.RollBack(); CancelPoint.ThrowIfRequested("No piles were made."); }
         if (t.Commit() != TransactionStatus.Committed) return ToolResult.Error("Revit refused the piles when saving them.");
-        return ToolResult.Ok(new { piles = made.Count, ids = made.Take(200), firstMark = $"{prefix}001", lengthEach = RevitHelpers.FromInternal(doc, (top - toe) / (rake > 0 ? Math.Abs((new XYZ(1 / rake, 0, -1)).Normalize().Z) : 1)) });
+        return ToolResult.Ok(new { piles = made.Count, ids = made.Take(200), firstMark = $"{prefix}001", lengthEach = RevitHelpers.FromInternal(doc, (top - toe) / (rake > 0 ? Math.Abs((new XYZ(1 / rake, 0, -1)).Normalize().Z) : 1)), stopped = CancelPoint.Note(stopped, n, positions.Count) });
     }
 }
 

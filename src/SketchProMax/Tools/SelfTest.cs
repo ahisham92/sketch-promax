@@ -131,6 +131,9 @@ internal static partial class SelfTest
 
         /// <summary>The case checks a refusal: it passes when the tool returns an error containing this text.</summary>
         public string? ExpectError { get; init; }
+
+        /// <summary>With <see cref="ExpectError"/>: the refusal is expected only when this says so for the model (else a normal run).</summary>
+        public Func<Ctx, bool>? ExpectErrorIf { get; init; }
     }
 
     public enum Mode { Safe, Full }
@@ -178,7 +181,7 @@ internal static partial class SelfTest
         var big = size > 5000;
 
         var steps = ReadOnlyCases().Concat(FileCases()).ToList();
-        if (mode == Mode.Full) steps.AddRange(ChangeCases().Concat(RegressionCases()));
+        if (mode == Mode.Full) steps.AddRange(ChangeCases().Concat(RegressionCases()).Concat(RealModelCases()));
 
         var run = new Run
         {
@@ -317,7 +320,7 @@ internal static partial class SelfTest
             }
             if (!result.IsError && result.Text.Length > 24000)
                 return new(step.Tool, "fail", watch.ElapsedMilliseconds, $"Output too large for a chat ({result.Text.Length:N0} characters).");
-            if (step.ExpectError is { } refusal)
+            if (step.ExpectError is { } refusal && (step.ExpectErrorIf?.Invoke(run.Ctx) ?? true))
                 return result.IsError && result.Text.IndexOf(refusal, StringComparison.OrdinalIgnoreCase) >= 0
                     ? new(step.Tool, "pass", watch.ElapsedMilliseconds, "Refused as expected: " + Short(result.Text, 500))
                     : new(step.Tool, "fail", watch.ElapsedMilliseconds, $"Expected an error mentioning '{refusal}'. Got: " + Short(result.Text, 500));
@@ -351,10 +354,19 @@ internal static partial class SelfTest
     {
         var raw = JsonSerializer.SerializeToElement(c.Args(ctx));
         var args = raw.EnumerateObject().ToDictionary(p => p.Name, p => p.Value.Clone());
+        // As the bridge does: run_learned_tool runs the learned tool itself, with its own inputs.
+        if (tool.Name == "run_learned_tool" && args.TryGetValue("name", out var inner) && inner.ValueKind == JsonValueKind.String
+            && LearnedTools.Load(inner.GetString()!) is { } learned && ctx.Registry.Find(learned.Name) is { } resolved)
+        {
+            tool = resolved;
+            args = args.TryGetValue("arguments", out var a) && a.ValueKind == JsonValueKind.Object
+                ? a.EnumerateObject().ToDictionary(p => p.Name, p => p.Value.Clone())
+                : new Dictionary<string, JsonElement>();
+        }
         return Revit.FailureGuard.Run(() => tool.Execute(app, new ToolArgs(args)));
     }
 
-    private static IEnumerable<Case> AllCases() => ReadOnlyCases().Concat(FileCases()).Concat(ChangeCases()).Concat(RegressionCases());
+    private static IEnumerable<Case> AllCases() => ReadOnlyCases().Concat(FileCases()).Concat(ChangeCases()).Concat(RegressionCases()).Concat(RealModelCases());
 
     private static void Finish(Run run, ToolRegistry registry)
     {
@@ -366,10 +378,7 @@ internal static partial class SelfTest
             var reason = tool.Name switch
             {
                 _ when run.StoppedBecause is not null => "not reached: " + run.StoppedBecause,
-                "batch_run_recipe" => "opens other model files; run it by hand on a folder of copies",
-                "load_steel_sections" => "depends on the content library installed on this PC",
-                "title_block_from_cad" => "needs a DWG title block on this PC",
-                "run_learned_tool" => "tested through save_as_tool",
+                "batch_run_recipe" => "opens other model files; the field test runs it on two copies of its project",
                 "run_self_test" or "self_test_status" => "this test",
                 "run_field_test" => "opens its own throwaway project; run it from the ribbon or on its own",
                 _ when run.Mode == Mode.Safe && tool.ModifiesModel => "changes the model; runs in the full self-test",
@@ -459,7 +468,8 @@ internal static partial class SelfTest
         new("read_schedule", c => new { schedule_id = c.Id(c.Schedule ?? throw new Skip("the model has no schedules")), max_rows = 20 }),
         new("select_elements", c => new { element_ids = new[] { c.Id(c.Wall ?? throw new Skip("the model has no walls")) }, zoom = false }),
         new("run_model_audit", _ => new { }),
-        new("export_project_pack", c => new { folder = c.Temp, include_chat = false, max_schedules = 3, max_schedule_rows = 50, max_elements = 20000 }),
+        new("export_project_pack", c => new { folder = c.Temp, include_chat = false, max_schedules = 3, max_schedule_rows = 50, max_elements = 20000 })
+            { Expect = r => Zip(r, "file", 10, "README.md") },
         new("capture_view_image", c => new { view_id = c.PlanId, pixel_width = 800 }) { Heavy = true },
         new("create_legend", c => new { name = "SPM Selftest Legend", scale = 50 }),
         new("save_legend_seed", c => new { path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "spm-legend-seed-test.rvt"), overwrite = true }) { Heavy = true },
@@ -504,13 +514,15 @@ internal static partial class SelfTest
             parameters = new { add = new { type = "integer" } }, required = new[] { "add" },
         }),
         new("self_test_count_walls", _ => new { add = 0 }),
+        // As Claude calls a learned tool its tool list doesn't show yet: run_learned_tool resolves to the tool save_as_tool made.
+        new("run_learned_tool", _ => new { name = "self_test_count_walls", arguments = new { add = 1 } }),
         new("delete_learned_tool", _ => new { name = "self_test_count_walls" }),
         // The bug tools write to the test's temporary folder, never the user's bug folder.
         new("report_bug", _ => new { description = "Self-test: report_bug writes its zip (a test, not a real bug)." })
         {
-            TempBugFolder = true, Expect = r => InTemp(r, "file"),
+            TempBugFolder = true, Expect = r => InTemp(r, "file") ?? Zip(r, "file", 10, "description.txt"),
         },
-        new("export_chats_and_bugs", _ => new { period = "day" }) { TempBugFolder = true, Expect = r => InTemp(r, "file") },
+        new("export_chats_and_bugs", _ => new { period = "day" }) { TempBugFolder = true, Expect = r => InTemp(r, "file") ?? Zip(r, "file", 50, "README.md") },
     ];
 
     /// <summary>The file a result names exists and is in the temporary folder.</summary>
@@ -519,6 +531,25 @@ internal static partial class SelfTest
         var file = result.GetProperty(property).GetString() ?? "";
         if (!System.IO.File.Exists(file)) return $"the file it names is not there ({file})";
         return file.StartsWith(Path.GetTempPath(), StringComparison.OrdinalIgnoreCase) ? null : $"it wrote outside the test's temporary folder ({file})";
+    }
+
+    /// <summary>The zip a result names opens, is under <paramref name="maxMb"/> MB and holds the named entries.</summary>
+    private static string? Zip(JsonElement result, string property, int maxMb, params string[] entries)
+    {
+        var file = result.GetProperty(property).GetString() ?? "";
+        try
+        {
+            var size = new FileInfo(file).Length;
+            if (size > maxMb * 1024L * 1024L) return $"the zip is {size / 1024 / 1024} MB, over {maxMb} MB";
+            using var zip = System.IO.Compression.ZipFile.OpenRead(file);
+            var names = zip.Entries.Select(e => e.FullName).ToList();
+            var missing = entries.Where(e => !names.Contains(e, StringComparer.OrdinalIgnoreCase)).ToList();
+            return missing.Count == 0 ? null : $"the zip ({names.Count} files) has no {string.Join(", ", missing)}";
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException)
+        {
+            return $"the zip {file} could not be read ({ex.Message})";
+        }
     }
 
     // The learned tool the test saves and runs. Its code is the test's own, so it is approved up front instead of asking.
@@ -663,6 +694,18 @@ internal static partial class SelfTest
                      ?? throw new Skip("needs another Revit file on this PC (it reads the model's first Revit link)");
             return new { path = ModelPathUtils.ConvertModelPathToUserVisiblePath(lt.GetExternalFileReference().GetAbsolutePath()), list_only = true };
         }),
+        new("load_steel_sections", c =>
+        {
+            Need(c.Throwaway, "needs steel families with type catalogs: runs in the field test, which makes a folder of them");
+            var (folder, type) = FieldTest.SteelSections(c.Temp) ?? throw new Skip("the field test made no steel section catalog (see the Test project notes)");
+            return new { sections = new[] { type }, use_as = "framing", folder };
+        }),
+        new("title_block_from_cad", c =>
+        {
+            Need(c.Throwaway, "needs a DWG on this PC: runs in the field test, which exports one from a drafting view");
+            var dwg = FieldTest.TitleBlockDwg(c.Temp) ?? throw new Skip("the field test could not export its DWG (see the Test project notes)");
+            return new { path = dwg, name = "FT Title Block " + Guid.NewGuid().ToString("N").Substring(0, 4), size = "A1", units = "mm" };
+        }) { Heavy = true },
         new("load_family", c =>
         {
             Need(c.Throwaway, "needs a family file on this PC: runs in the field test, which loads back a family it made");
@@ -877,13 +920,16 @@ internal static partial class SelfTest
             return new { source_view_id = c.PlanId, target_view_ids = new[] { target.Id.Value }, dimension_ids = new[] { dim.Id.Value }, list_only = true };
         }, Setup: ["create_grids", "dimension_grids"]),
         new("reflow_annotations", c => new { view_id = c.PlanId, dry_run = true }, Setup: ["tag_elements_in_view"]) { Heavy = true },
+        // The API can't create matchlines (Revit has no method for it): on a plan and its dependent view without one, the check
+        // is the clear refusal; where the plan has matchlines, their report. Trimming a real one is a checklist step.
         new("trim_matchlines", c =>
         {
-            // The API can't create matchlines (Revit has no method for it), so this only runs where the plan has one.
-            Need(new FilteredElementCollector(c.Doc, c.Plan?.Id ?? throw new Skip("the model has no floor plan")).OfCategory(BuiltInCategory.OST_Matchline)
-                .WhereElementIsNotElementType().GetElementCount() > 0, "the plan has no matchlines (the API can't add one)");
-            return new { view_ids = new[] { c.PlanId }, mode = "report" };
-        }),
+            var plan = c.PlanId;
+            var dependent = new FilteredElementCollector(c.Doc).OfClass(typeof(ViewPlan)).Cast<ViewPlan>()
+                .Where(v => v.GetPrimaryViewId().Value == plan).OrderByDescending(v => v.Id.Value).FirstOrDefault()
+                ?? throw new Skip("duplicate_views made no dependent view");
+            return new { view_ids = new[] { plan, dependent.Id.Value }, mode = "report" };
+        }, Setup: ["duplicate_views#2"]) { ExpectError = "No matchlines", ExpectErrorIf = PlanHasNoMatchline },
         new("place_void_cuts", c =>
         {
             var sym = c.Symbol(BuiltInCategory.OST_GenericModel, s => s.Family.FamilyPlacementType == FamilyPlacementType.WorkPlaneBased && s.Family.get_Parameter(BuiltInParameter.FAMILY_ALLOW_CUT_WITH_VOIDS)?.AsInteger() == 1) ?? throw new Skip("no face-based cutting void family loaded");
@@ -1032,6 +1078,75 @@ internal static partial class SelfTest
             return new { source = c.Doc.GetElement(link.GetTypeId()).Name, what = new[] { "columns", "floors" } };
         }) { Heavy = true, Expect = ArchLinkOutcome },
     ];
+
+    /// <summary>
+    /// Real-model checks (0.32, the full-coverage field test): hosting on faces of joined elements, the clash void rebuild,
+    /// ve_apply on a workshared model and on a copy, carbon with and without the mix in the material name, a dependent view.
+    /// </summary>
+    private static IEnumerable<Case> RealModelCases() =>
+    [
+        new("duplicate_views", c => new { view_ids = new[] { c.PlanId }, mode = "dependent", suffix = " - self-test dependent" }),
+        // The structural slab and a concrete beam under it, joined; then a void hosted on the joined slab's top face over the beam.
+        new("cut_geometry", c =>
+        {
+            Need(c.Throwaway, "joins the field test's own slab and beam");
+            var beam = JoinedBeam(c) ?? throw new Skip("no concrete beam under the slab (see the Test project notes)");
+            return new { action = "join", pairs = new[] { new { cutting = c.Id(c.Floor), cut = beam.Id.Value } }, only_overlapping = false };
+        }),
+        new("place_void_cuts", c =>
+        {
+            var sym = c.Symbol(BuiltInCategory.OST_GenericModel, s => s.Family.FamilyPlacementType == FamilyPlacementType.WorkPlaneBased && s.Family.get_Parameter(BuiltInParameter.FAMILY_ALLOW_CUT_WITH_VOIDS)?.AsInteger() == 1) ?? throw new Skip("no face-based cutting void family loaded");
+            var at = BeamMidpoint(c) ?? throw new Skip("no concrete beam under the slab");
+            return new { family = $"{sym.FamilyName}: {sym.Name}", voids = new[] { new { host_id = c.Id(c.Floor), face = "top", point = at } } };
+        }, Setup: ["cut_geometry#2"]) { Heavy = true },
+        new("find_clashes", c => new { set_a = new { categories = new[] { "Floors", "Structural Framing", "Generic Models" } }, limit = 50, folder = c.Temp, voids = "rebuild" },
+            Setup: ["cut_geometry#2", "place_void_cuts#2"]) { Heavy = true, Expect = VoidsRebuilt },
+        // Workshared: target copy is refused with the reason; not workshared: the copy is made, changed, saved and closed.
+        new("ve_apply", c => new
+        {
+            target = "copy", copy_path = Path.Combine(c.Temp, "ve-copy " + Guid.NewGuid().ToString("N").Substring(0, 4) + ".rvt"),
+            changes = new[] { new { kind = "change_type", element_ids = new[] { c.Id(c.Wall) }, to_type = c.Wall!.Name } },
+        }) { ExpectError = "workshared", ExpectErrorIf = x => x.Doc.IsWorkshared },
+        new("embodied_carbon", c =>
+        {
+            Need(c.Throwaway, "reads the field test's two slabs: one names its mix, one doesn't");
+            return new { folder = c.Temp, categories = new[] { "Floors" } };
+        }) { Heavy = true, Expect = MixAndNoMix },
+    ];
+
+    private static bool PlanHasNoMatchline(Ctx c) =>
+        new FilteredElementCollector(c.Doc, c.Plan!.Id).OfCategory(BuiltInCategory.OST_Matchline).WhereElementIsNotElementType().GetElementCount() == 0;
+
+    /// <summary>A beam whose top meets the structural slab (the field test puts concrete beams under it).</summary>
+    private static FamilyInstance? JoinedBeam(Ctx c)
+    {
+        if (c.Floor?.get_BoundingBox(null) is not { } slab) return null;
+        return new FilteredElementCollector(c.Doc).OfCategory(BuiltInCategory.OST_StructuralFraming).OfClass(typeof(FamilyInstance)).Cast<FamilyInstance>()
+            .Where(b => b.Symbol.Family.StructuralMaterialType == StructuralMaterialType.Concrete || b.Symbol.FamilyName.IndexOf("Concrete", StringComparison.OrdinalIgnoreCase) >= 0)
+            .FirstOrDefault(b => b.get_BoundingBox(null) is { } box && box.Max.Z >= slab.Min.Z - 0.01 && box.Max.Z <= slab.Max.Z + 0.01);
+    }
+
+    /// <summary>The midpoint of <see cref="JoinedBeam"/>'s line, in project units (x, y).</summary>
+    private static double[]? BeamMidpoint(Ctx c)
+    {
+        if (JoinedBeam(c)?.Location is not LocationCurve { Curve: { } line }) return null;
+        var mid = line.Evaluate(0.5, true);
+        return [Math.Round(UnitUtils.ConvertFromInternalUnits(mid.X, c.Unit), 4), Math.Round(UnitUtils.ConvertFromInternalUnits(mid.Y, c.Unit), 4)];
+    }
+
+    private static string? VoidsRebuilt(JsonElement r) =>
+        r.TryGetProperty("voids", out var v) && v.ValueKind == JsonValueKind.Object && v.TryGetProperty("rebuilt", out var n) && n.GetInt32() >= 1
+            ? null : "no void was rebuilt from the void cut";
+
+    /// <summary>The slab that names 50% GGBS used a GGBS factor, and the one that names no mix the CEM I one.</summary>
+    private static string? MixAndNoMix(JsonElement r)
+    {
+        var ids = r.GetProperty("factorsUsed").EnumerateArray().Select(f => f.GetProperty("Id").GetString() ?? "").Where(i => i.StartsWith("conc-", StringComparison.Ordinal)).ToList();
+        var wrong = new List<string>();
+        if (!ids.Any(i => i.EndsWith("-ggbs50", StringComparison.Ordinal))) wrong.Add("the slab whose material names 50% GGBS did not use a GGBS factor");
+        if (!ids.Any(i => i.EndsWith("-cem1", StringComparison.Ordinal))) wrong.Add("the slab whose material names no mix did not use the CEM I factor");
+        return wrong.Count == 0 ? null : string.Join("; ", wrong) + $" (concrete factors used: {string.Join(", ", ids)})";
+    }
 
     /// <summary>The structural column and floor were converted; the cladding column and the finish floor were left out.</summary>
     private static string? ArchLinkOutcome(JsonElement r)

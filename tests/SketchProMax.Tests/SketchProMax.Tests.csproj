@@ -44,6 +44,7 @@
     <Compile Include="../../src/SketchProMax/Tools/HelpGuides.cs" Link="HelpGuides.cs" />
     <Compile Include="../../src/SketchProMax/Tools/StaticDimensionText.cs" Link="StaticDimensionText.cs" />
     <EmbeddedResource Include="../../docs/guides/*.md" LogicalName="SketchProMax.guides.%(Filename).md" />
+    <Compile Include="../../src/SketchProMax/Tools/FieldTestCoverage.cs" Link="FieldTestCoverage.cs" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.8.0" />

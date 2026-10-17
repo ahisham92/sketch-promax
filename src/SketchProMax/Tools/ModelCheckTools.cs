@@ -98,7 +98,8 @@ public sealed class CheckModelTool : IRevitTool
     {
         var doc = app.ActiveUIDocument.Document;
         var wanted = args.StringList("checks");
-        bool On(string c) => wanted.Count == 0 || wanted.Contains(c);
+        // Read-only: a stop request (cancel_job) ends the run between checks, and every 200 findings within one.
+        bool On(string c) { CancelPoint.ThrowIfRequested("No report was written."); return wanted.Count == 0 || wanted.Contains(c); }
         var findings = new List<Checks.Finding>();
         var population = new Dictionary<string, int>();
         var tol = args.OptDouble("tolerance") is { } t ? RevitHelpers.ToInternal(doc, t) : (double?)null;
@@ -110,6 +111,7 @@ public sealed class CheckModelTool : IRevitTool
             if (e is not null && exceptions.Count > 0 && ModelRules.IsException(check, e.Id.Value, e.get_Parameter(BuiltInParameter.ALL_MODEL_MARK)?.AsString(),
                     e.get_Parameter(BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS)?.AsString(), exceptions)) { excepted++; return; }
             findings.Add(new Checks.Finding(check, e?.Id.Value ?? 0, e is null ? "" : Checks.Describe(e), issue));
+            if (findings.Count % 200 == 0) CancelPoint.ThrowIfRequested("No report was written.");
         }
 
         var walls = new FilteredElementCollector(doc).OfClass(typeof(Wall)).Cast<Wall>().Where(w => w.WallType.Kind == WallKind.Basic && w.Location is LocationCurve).ToList();

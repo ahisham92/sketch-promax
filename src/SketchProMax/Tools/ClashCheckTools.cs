@@ -387,7 +387,8 @@ public sealed class CheckDrawingsTool : IRevitTool
     {
         var doc = app.ActiveUIDocument.Document;
         var checks = args.StringList("checks");
-        bool On(string c) => checks.Count == 0 || checks.Contains(c);
+        // Read-only: a stop request (cancel_job) ends the run between checks.
+        bool On(string c) { CancelPoint.ThrowIfRequested(); return checks.Count == 0 || checks.Contains(c); }
         var tol = args.OptDouble("tolerance") is { } tv ? RevitHelpers.ToInternal(doc, tv) : 5 / 304.8;
         var findings = new List<(string check, string where, long? id, string issue)>();
         string L(double ft) => $"{Math.Round(RevitHelpers.FromInternal(doc, ft), 1)} {RevitHelpers.LengthUnitLabel(doc)}";

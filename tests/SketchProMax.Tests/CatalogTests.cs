@@ -13,7 +13,7 @@ internal static class CatalogTests
     private static readonly string[] SchemaTypes = ["string", "number", "integer", "boolean", "array", "object"];
 
     // Tools the self-test deliberately leaves to a person, with the reason SelfTest.Finish reports.
-    private static readonly string[] NotSelfTested = ["batch_run_recipe", "load_family", "copy_from_file", "title_block_from_cad", "load_steel_sections", "run_learned_tool", "run_self_test", "self_test_status", "run_field_test", "report_bug", "export_chats_and_bugs"];
+    private static readonly string[] NotSelfTested = ["batch_run_recipe", "load_family", "copy_from_file", "run_self_test", "self_test_status", "run_field_test", "report_bug", "export_chats_and_bugs"];
 
     public static void Run(string addinDir, string repoRoot, Action<string, bool, string> check)
     {
@@ -137,6 +137,15 @@ internal static class CatalogTests
         var mainTools = Regex.Matches(regressionStart < 0 ? caseSource : caseSource.Substring(0, regressionStart), @"^\s*new\(""([a-z0-9_]+)""", RegexOptions.Multiline).Select(m => m.Groups[1].Value).ToList();
         var caseDupes = mainTools.GroupBy(c => c).Where(g => g.Count() > 1).Select(g => g.Key).ToList();
         check("one self-test case per tool", caseDupes.Count == 0, string.Join(", ", caseDupes));
+
+        // Field-test coverage (standing rule): every registered tool, every ribbon command and every declared feature has a
+        // field-test case, a probe, or a "manual (checklist)" row with a reason. New tools or ribbon entries fail here until
+        // FieldTestCoverage (the one table) says how they are covered.
+        var probeSource = File.ReadAllText(Path.Combine(repoRoot, "src", "SketchProMax", "Tools", "FieldTest.Features.cs"));
+        var gaps = SketchProMax.Tools.FieldTestCoverage.Gaps(names, caseTools, SketchProMax.UI.CoreRibbonManifest.Text.Split('\n'), probeSource);
+        check("field test covers every tool, ribbon entry and feature", gaps.Count == 0, string.Join("; ", gaps));
+        var manualTools = SketchProMax.Tools.FieldTestCoverage.ManualTools.Keys.Where(t => !names.Contains(t)).ToList();
+        check("field-test manual rows name real tools", manualTools.Count == 0, string.Join(", ", manualTools));
 
         // Documentation counts (two connection tools live in the MCP connector)
         var total = tools.Count + 2;

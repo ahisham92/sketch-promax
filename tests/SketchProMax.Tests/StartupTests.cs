@@ -41,6 +41,13 @@ internal static class StartupTests
         check("startup: report section lists start and opens", StartupTimings.Describe().Contains("core start 57 ms") && StartupTimings.Describe().Contains("Model A"),
             StartupTimings.Describe());
         check("startup: unknown open time shows ?", StartupTimings.OpenLine("m", -1, 0, 5).Contains("took ? ms"), "");
+        check("startup: an ordinary open is not labelled as a test", !first!.Contains("(test running)"), first);
+        StartupTimings.TestRunning = true;
+        StartupTimings.Opening();
+        StartupTimings.Opened("Test project", 0);
+        StartupTimings.TestRunning = false;
+        var during = StartupTimings.FirstIdle();
+        check("startup: an open during a test says (test running)", during?.EndsWith("after open (test running)") == true, during ?? "null");
         StartupTimings.Reset();
 
         // ---- Nothing heavy inline on the start path. First, that the check itself sees the 0.30 shapes it guards against.

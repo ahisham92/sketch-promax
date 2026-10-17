@@ -23,6 +23,13 @@ internal static class StartupTimings
     private static long _openMs = -1;
     private static long _openedHandlersMs;
     private static string _openTitle = "";
+    private static bool _openDuringTest;
+
+    /// <summary>
+    /// Set by the field test and the self-test while they run: a model opened meanwhile (the field test's own project)
+    /// waits for the test's steps, so its "first Idling" time says "(test running)" and is not read as a slow open.
+    /// </summary>
+    public static volatile bool TestRunning;
 
     /// <summary>True from DocumentOpened until the first Idling after it.</summary>
     public static bool AwaitingIdle { get; private set; }
@@ -86,6 +93,7 @@ internal static class StartupTimings
             _openMs = _openingAt >= 0 ? _openedAt - _openingAt : -1;
             _openedHandlersMs = handlersMs;
             _openTitle = title;
+            _openDuringTest = TestRunning;
             AwaitingIdle = true;
         }
     }
@@ -102,16 +110,17 @@ internal static class StartupTimings
             if (!AwaitingIdle) return null;
             AwaitingIdle = false;
             var idle = Clock.ElapsedMilliseconds - _openedAt;
-            var line = OpenLine(_openTitle, _openMs, _openedHandlersMs, idle);
+            var line = OpenLine(_openTitle, _openMs, _openedHandlersMs, idle, _openDuringTest || TestRunning);
             Opens.Add(line);
             if (Opens.Count > MaxOpens) Opens.RemoveAt(0);
             return line;
         }
     }
 
-    internal static string OpenLine(string title, long openMs, long handlersMs, long idleMs) =>
+    internal static string OpenLine(string title, long openMs, long handlersMs, long idleMs, bool testRunning = false) =>
         $"model open '{title}': Revit took {(openMs < 0 ? "?" : openMs.ToString(System.Globalization.CultureInfo.InvariantCulture))} ms " +
-        $"(DocumentOpening to DocumentOpened), Sketch ProMax DocumentOpened handlers {handlersMs} ms, first Idling {idleMs} ms after open";
+        $"(DocumentOpening to DocumentOpened), Sketch ProMax DocumentOpened handlers {handlersMs} ms, first Idling {idleMs} ms after open" +
+        (testRunning ? " (test running)" : "");
 
     /// <summary>The model opens measured in this session, oldest first.</summary>
     public static List<string> OpenLines()
@@ -140,6 +149,8 @@ internal static class StartupTimings
             _startTotal = _startedAt = _openingAt = _openedAt = _openMs = -1;
             _openedHandlersMs = 0;
             _openTitle = "";
+            _openDuringTest = false;
+            TestRunning = false;
             AwaitingIdle = false;
         }
     }

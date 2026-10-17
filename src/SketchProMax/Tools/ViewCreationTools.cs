@@ -224,6 +224,7 @@ public sealed class CreateElevationsTool : IRevitTool
         var scale = args.OptLong("scale") ?? 100;
         var created = new List<object>();
         var skipped = new List<string>();
+        string? stopped = null;
 
         using var t = RevitHelpers.StartTransaction(doc, "Create elevations");
         if (args.String("mode") == "interior")
@@ -236,8 +237,10 @@ public sealed class CreateElevationsTool : IRevitTool
                     .Where(r => r.LevelId == level.Id && r.Area > 0).ToList();
             }
             var pattern = args.OptString("name_pattern") ?? "{number} {name} - {side}";
-            foreach (var room in rooms)
+            for (var i = 0; i < rooms.Count; i++)
             {
+                var room = rooms[i];
+                if (CancelPoint.Stop("Interior elevations", i, rooms.Count)) { stopped = CancelPoint.Note(true, i, rooms.Count); break; }
                 if (room.Location is not LocationPoint lp) { skipped.Add($"{room.Number}: not placed"); continue; }
                 var plan = HostPlan(doc, args.OptLong("plan_view_id"), room.LevelId);
                 var marker = ElevationMarker.CreateElevationMarker(doc, vft.Id, lp.Point, (int)scale);
@@ -283,7 +286,7 @@ public sealed class CreateElevationsTool : IRevitTool
             }
         }
         t.Commit();
-        return ToolResult.Ok(new { created = created.Count, views = created, skipped });
+        return ToolResult.Ok(new { created = created.Count, views = created, skipped, stopped });
     }
 
     /// <summary>

@@ -341,8 +341,10 @@ public sealed class PlaceManyTool : IRevitTool
         var created = new List<long>();
         var problems = new List<string>();
         var rowNumber = 0;
+        var stopped = false;
         foreach (var row in rows)
         {
+            if (stopped = CancelPoint.Stop("Placing", rowNumber, rows.Count)) break;
             rowNumber++;
             try
             {
@@ -396,7 +398,7 @@ public sealed class PlaceManyTool : IRevitTool
         }
         t.Commit();
         created.RemoveAll(id => swallow.Deleted.Contains(id));
-        return ToolResult.Ok(new { placed = created.Count, of = rows.Count, firstIds = created.Take(20), removedByRevit = swallow.Deleted.Take(50), problems });
+        return ToolResult.Ok(new { placed = created.Count, of = rows.Count, firstIds = created.Take(20), removedByRevit = swallow.Deleted.Take(50), problems, stopped = CancelPoint.Note(stopped, rowNumber, rows.Count) });
     }
 
     /// <summary>A number written either way: 1.5, in this computer's format, or 1,5 in a semicolon-separated file.</summary>
