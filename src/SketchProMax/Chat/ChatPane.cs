@@ -62,12 +62,21 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             app.ViewActivated += _viewActivated;
         }
         catch (Exception) { /* the chat still works, with one conversation */ }
+        // Started by a version switch while no model was known to Revit's API (ActiveUIDocument): the chat that was open
+        // tells which model it is, so the pane doesn't open the "no model" chat instead of it.
+        if (_modelKey.Length == 0 && _instance is null && _retired is null && ChatHandover.Peek() is { } left && left.Key != NoModelKey)
+        {
+            _modelKey = left.Key;
+            _modelTitle = left.Title;
+        }
         // Started again after a version switch that failed: the pane still shows this core's element, so revive it.
         if (_instance is null && _retired is { } pane)
         {
+            ChatHandover.Take(); // this pane still has the chat it left
             _instance = pane;
             _retired = null;
             pane._stopped = false;
+            pane._handedOver = false;
             UI.RestartNote.Changed -= pane.ShowRestartNote;
             UI.RestartNote.Changed += pane.ShowRestartNote;
             pane._idle.Start();
@@ -211,6 +220,10 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     private readonly DispatcherTimer _render = new(DispatcherPriority.Background) { Interval = TimeSpan.FromMilliseconds(40) };
     private readonly DispatcherTimer _poll = new() { Interval = TimeSpan.FromSeconds(4) };
     private readonly DispatcherTimer _idle = new() { Interval = TimeSpan.FromMinutes(1) };
+    // Saves the chat shortly after each message (and while an answer streams), so a crash or Revit closing loses nothing.
+    private readonly DispatcherTimer _saveSoon = new() { Interval = TimeSpan.FromSeconds(2) };
+    // Set once this pane saved and handed its chat to the next core (Retire): it writes nothing after that.
+    private bool _handedOver;
     private readonly Border _restartNote = new() { Visibility = Visibility.Collapsed };
     private readonly TextBlock _restartNoteText = Brand.Text("", Brand.K.Text, 12);
 
@@ -245,7 +258,9 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         // Tab order follows the reading order: header, notices, conversation, then the message box.
         KeyboardNavigation.SetTabNavigation(this, KeyboardNavigationMode.Local);
         LastChildFill = true;
-        _conv = sample ?? ChatStore.Load(ConversationKey, ConversationTitle);
+        // After an in-session update: the chat the previous version had open, with its unsent message (ChatHandover).
+        var handover = sample is null ? ChatHandover.Take() : null;
+        _conv = sample ?? ChatHandover.Open(handover, ConversationKey, ConversationTitle);
 
         // Top: the history menu, this chat's name with the Revit model as a muted caption, then New chat and Refresh.
         var top = new DockPanel { Margin = new Thickness(ChatUi.S2, ChatUi.S2, ChatUi.S2, ChatUi.S2) };
@@ -549,6 +564,11 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         _render.Tick += (_, _) => RenderDirty();
         _poll.Tick += (_, _) => Check(quiet: true);
         _idle.Tick += (_, _) => IdleCheck();
+        _saveSoon.Tick += (_, _) =>
+        {
+            _saveSoon.Stop();
+            if (!_stopped) Save();
+        };
         if (sample is not null) _setup = Setup.Ready;
         else _idle.Start();
 
@@ -556,6 +576,12 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         ShowSetup();
         ShowStatus();
         if (sample is not null) return;
+        if (handover is not null)
+        {
+            _input.Text = handover.Draft;
+            _input.CaretIndex = _input.Text.Length;
+            AddFiles(handover.Attachments.Where(File.Exists));
+        }
         Check(quiet: false);
         Task.Run(CleanAttachments);
     }
@@ -572,7 +598,9 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
     }
 
-    private static string ConversationKey => _modelKey.Length > 0 ? _modelKey : "(no model)";
+    private const string NoModelKey = "(no model)";
+
+    private static string ConversationKey => _modelKey.Length > 0 ? _modelKey : NoModelKey;
 
     private static string ConversationTitle => _modelTitle.Length > 0 ? _modelTitle : "no model open";
 
@@ -921,6 +949,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         if (item.Time == default) item.Time = DateTime.UtcNow;
         _empty.Visibility = Visibility.Collapsed;
         _conv.Items.Add(item);
+        SaveSoon();
         var element = Build(_conv.Items.Count - 1);
         _messages.Children.Add(element);
         ChatUi.Arrive(element); // eases in; settles at full opacity with no transform
@@ -1772,6 +1801,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         ShowChips();
         Add(new ChatItem { Kind = "user", Text = text, Name = string.Join(", ", attachments.Select(a => a.Name)), Files = attachments.Select(a => a.Path).ToList() });
         if (_conv.Name.Length == 0) _conv.Name = ChatHistory.AutoTitle(text.Length > 0 ? text : string.Join(", ", attachments.Select(a => a.Name)));
+        Save(); // the request is on disk before Claude Code starts on it
         ShowTitle();
         SupersedeBriefs();
         if (StartBrief(text, attachments)) return; // a brief card first; the choice on it runs the turn
@@ -1951,7 +1981,11 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         switch (e)
         {
             case InitEvent init:
-                if (init.SessionId.Length > 0) _conv.SessionId = init.SessionId;
+                if (init.SessionId.Length > 0 && init.SessionId != _conv.SessionId)
+                {
+                    _conv.SessionId = init.SessionId;
+                    SaveSoon();
+                }
                 var server = init.Servers.FirstOrDefault(s => s.Name == ClaudeCli.ServerName);
                 if (server.Name is null)
                     Note("The Revit tools didn't load in this chat. Run Install.cmd from the Sketch ProMax download again, then press New chat.");
@@ -1973,6 +2007,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
                 if (!_texts.TryGetValue(delta.Key, out var target)) break;
                 target.Item.Text += delta.Text;
                 _dirty.Add(delta.Key);
+                SaveSoon();
                 RequestRender();
                 break;
             case AssistantTextEvent text:
@@ -2382,9 +2417,17 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         }
     }
 
+    /// <summary>Saves in a moment (several changes in a row are one write).</summary>
+    private void SaveSoon()
+    {
+        if (_sample || _stopped) return;
+        if (!_saveSoon.IsEnabled) _saveSoon.Start();
+    }
+
     private void Save()
     {
-        if (_sample) return; // the DPI snapshot's and frame test's stand-alone pane keeps nothing
+        if (_sample || _handedOver) return; // the DPI snapshot's and frame test's stand-alone pane keeps nothing; nor a retired one
+        _saveSoon.Stop();
         var old = _conv.Items.ToList();
         ChatStore.Save(_conv);
         // The store keeps the latest items only: let go of the drawn ones it dropped too.
@@ -2397,7 +2440,10 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         ShowEarlierButton();
     }
 
-    /// <summary>This core is stopping: end the engine and keep the conversation for the next core.</summary>
+    /// <summary>
+    /// This core is stopping: save the open chat (an answer cut off mid-way included, marked so), hand it to the next
+    /// core (ChatHandover, which reopens this same chat with its unsent message and Claude Code session), end the engine.
+    /// </summary>
     private void Retire()
     {
         _stopped = true;
@@ -2405,19 +2451,34 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         // Nothing may keep a retired pane alive after a hot swap: timers (rooted by the dispatcher while running) and static events.
         _idle.Stop();
         _render.Stop();
+        _saveSoon.Stop();
         UI.RestartNote.Changed -= ShowRestartNote;
-        _turn?.KillTimer?.Stop();
-        _turn?.Cancel?.Cancel();
-        if (_turn is not null) MarkRunningTools("stopped");
-        try { if (_turn is not null) Revit.TimeLog.EndChat(); } catch (Exception) { }
-        if (_control is not null)
+        try
         {
-            _control.Apply(JobAction.Stop);
-            EndJob("stopped", null);
+            if (_turn is { } turn)
+            {
+                turn.KillTimer?.Stop();
+                turn.Cancel?.Cancel();
+                MarkRunningTools("stopped");
+                // What streamed so far is already in the chat's items; say where it stopped.
+                _conv.Items.Add(new ChatItem { Kind = "note", Text = CutOffNote, Time = DateTime.UtcNow });
+                try { Revit.TimeLog.EndChat(); } catch (Exception) { }
+            }
+            if (_control is not null)
+            {
+                _control.Apply(JobAction.Stop);
+                EndJob("stopped", null);
+            }
+            _undoTimer?.Stop();
         }
-        _undoTimer?.Stop();
-        _turn = null;
-        Save();
+        catch (Exception) { /* whatever failed above, the chat is saved and handed over below */ }
+        finally
+        {
+            _turn = null;
+            Save();
+            _handedOver = true;
+            ChatHandover.Leave(_conv, _input.Text, _pending.Select(p => p.Path));
+        }
         _engine?.Kill();
         _engine = null;
         ShowStatus();
@@ -2425,6 +2486,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         _instance = null;
         _retired = this;
     }
+
+    internal const string CutOffNote = "Sketch ProMax updated while Claude was answering, so the answer stopped here. Send a message to carry on; Claude keeps the conversation.";
 
     // ---- Attachments ----------------------------------------------------------------------------------------------
 

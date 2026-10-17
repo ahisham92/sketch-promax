@@ -18,7 +18,8 @@ internal static class ChatStore
     /// <summary>Used instead of the real folder while a test runs (reset it in a finally).</summary>
     internal static string? RootOverride;
 
-    private static string Folder => RootOverride ?? Path.Combine(ClaudeCli.Folder, "conversations");
+    // ClaudeCli.Folder's "conversations", spelled out so the store builds without the Claude Code code (unit tests).
+    private static string Folder => RootOverride ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SketchProMax", "chat", "conversations");
 
     private static string Hash(string key)
     {

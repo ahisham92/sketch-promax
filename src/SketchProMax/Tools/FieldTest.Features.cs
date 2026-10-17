@@ -456,6 +456,7 @@ internal static partial class FieldTest
         await Probe(s, "ribbon.dialogs", _ => Dialogs(s.Registry, s.Folder)).ConfigureAwait(false);
         await Probe(s, "favourites", _ => FavouriteRoundTrip()).ConfigureAwait(false);
         await Probe(s, "chat.history", _ => ChatHistoryRoundTrip(s.Folder)).ConfigureAwait(false);
+        await Probe(s, "chat.survives_update", _ => ChatSurvivesUpdate(s.Folder)).ConfigureAwait(false);
         await Probe(s, "chat.dpi", _ => ChatDpi(s)).ConfigureAwait(false);
         await ProbeCore(s, "chat.frames", () => ChatFrames()).ConfigureAwait(false);
         await Probe(s, "chat.composer", _ => ChatComposer()).ConfigureAwait(false);
@@ -707,6 +708,51 @@ internal static partial class FieldTest
             return Pass($"a chat was saved, listed as \"{summaries[0].Name}\" and deleted (in a temporary history folder)");
         }
         finally { Chat.ChatStore.RootOverride = null; }
+    }
+
+    /// <summary>
+    /// The open chat across a version switch, as ChatPane does it: saved and handed over (Retire), then taken and reopened
+    /// by the next pane. In a temporary history folder; a handover already waiting (none, normally) is put back after.
+    /// </summary>
+    private static (string, string) ChatSurvivesUpdate(string folder)
+    {
+        var root = Path.Combine(folder, "chats-update");
+        var waiting = AppDomain.CurrentDomain.GetData(Chat.ChatHandover.DataKey);
+        Chat.ChatStore.RootOverride = root;
+        try
+        {
+            const string key = "Field test model (update)";
+            var older = Chat.ChatStore.New(key, key);
+            older.Items.Add(new Chat.ChatItem { Kind = "user", Text = "Field test open chat", Time = DateTime.UtcNow });
+            older.SessionId = "field-test-session";
+            Chat.ChatStore.Save(older);
+            // A newer chat of the same model: the model's latest, which a fresh pane would open instead.
+            var newer = Chat.ChatStore.New(key, key);
+            newer.Items.Add(new Chat.ChatItem { Kind = "user", Text = "Field test newer chat", Time = DateTime.UtcNow });
+            Chat.ChatStore.Save(newer);
+            older.Updated = DateTime.UtcNow.AddDays(-1);
+            Chat.ChatStore.Save(older, touch: false);
+            older.Items.Add(new Chat.ChatItem { Kind = "assistant", Text = "Field test answer", Time = DateTime.UtcNow });
+            Chat.ChatStore.Save(older, touch: false);
+            Chat.ChatHandover.Leave(older, "Field test draft", []);
+            var left = Chat.ChatHandover.Take();
+            var back = Chat.ChatHandover.Open(left, key, key);
+            var problems = new List<string>();
+            if (!string.Equals(back.File, older.File, StringComparison.OrdinalIgnoreCase)) problems.Add($"reopened {Path.GetFileName(back.File)}, not the open chat {Path.GetFileName(older.File)}");
+            if (back.Items.Count != 2 || back.Items[1].Text != "Field test answer") problems.Add($"{back.Items.Count} messages came back, not 2");
+            if (back.SessionId != "field-test-session") problems.Add("the Claude Code session was not kept");
+            if (left?.Draft != "Field test draft") problems.Add("the unsent message was not kept");
+            if (Chat.ChatHandover.Take() is not null) problems.Add("the handover was not cleared after use");
+            if (Chat.ChatStore.All().Count != 2) problems.Add($"{Chat.ChatStore.All().Count} chats on disk, not 2");
+            return problems.Count == 0
+                ? Pass("a chat with its session and an unsent message was saved, handed over as an update does, and the same chat reopened (in a temporary history folder)")
+                : Fail(string.Join("; ", problems));
+        }
+        finally
+        {
+            Chat.ChatStore.RootOverride = null;
+            AppDomain.CurrentDomain.SetData(Chat.ChatHandover.DataKey, waiting);
+        }
     }
 
     private static (string, string) Prompts(string folder)

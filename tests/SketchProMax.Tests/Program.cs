@@ -54,6 +54,7 @@ ChatTests.Run((name, ok, detail) => Check(name, ok, detail));
 ChatViewTests.Run((name, ok, detail) => Check(name, ok, detail));
 ChatModelTests.Run((name, ok, detail) => Check(name, ok, detail));
 ChatHistoryTests.Run((name, ok, detail) => Check(name, ok, detail));
+ChatHandoverTests.Run((name, ok, detail) => Check(name, ok, detail));
 SavedPromptTests.Run((name, ok, detail) => Check(name, ok, detail));
 PromptBriefTests.Run((name, ok, detail) => Check(name, ok, detail));
 PromptLibraryTests.Run((name, ok, detail) => Check(name, ok, detail));
