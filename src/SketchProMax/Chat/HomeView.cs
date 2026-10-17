@@ -63,7 +63,7 @@ internal sealed class HomeView : StackPanel
         var discover = SectionLabel("Discover");
         discover.Margin = new Thickness(0, ChatUi.S6 + ChatUi.S2, 0, 0);
         _home.Children.Add(discover);
-        Card("explore", ChatUi.Paths.Grid, "Explore all features", "Everything Claude can do here, grouped like the ribbon.");
+        Card("explore", ChatUi.Paths.Grid, "Explore all features", "Everything Sketch ProMax can do here, grouped like the ribbon.");
         Card("saved", ChatUi.Paths.Bookmark, "Saved prompts", "Your prompts, saved from any message with ⋯ › Save prompt.");
         Card("tailored", ChatUi.Paths.Sparkle, "Tailored prompts", "Ideas for your project type and design phase.");
         _cards.SizeChanged += (_, e) => { if (e.WidthChanged) LayoutCards(); };
@@ -234,7 +234,7 @@ internal sealed class HomeView : StackPanel
             AutomationProperties.SetName(c.Card, title + ". " + line);
         }
         var features = _lib?.Capabilities.Count;
-        Set("explore", "Explore all features", features is { } n ? $"{n} things Claude can do here" : "Browse what Claude can do here");
+        Set("explore", "Explore all features", features is { } n ? $"{n} things Sketch ProMax can do" : "Browse what Sketch ProMax can do");
         var saved = _built ? _saved().Count : -1;
         Set("saved", "Saved prompts", saved switch { < 0 => "Your prompt library", 0 => "None yet: save one from any message", 1 => "1 saved prompt", _ => $"{saved} saved prompts" });
         Set("tailored", "Tailored prompts", "Ideas for your project type and phase");

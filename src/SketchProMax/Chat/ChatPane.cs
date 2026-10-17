@@ -308,7 +308,7 @@ internal sealed class ChatPane : DockPanel, IHistoryHost
         CommandManager.AddPreviewExecutedHandler(_input, OnPreviewPaste);
         CommandManager.AddPreviewCanExecuteHandler(_input, OnPreviewCanPaste);
         // A hint inside the empty box (the box's name and help text say the same for screen readers).
-        var hint = Brand.Text("Ask Claude about this model…", Brand.K.Muted, ChatUi.BodySize);
+        var hint = Brand.Text("Ask Sketch ProMax…", Brand.K.Muted, ChatUi.BodySize);
         hint.IsHitTestVisible = false;
         hint.Margin = new Thickness(ChatUi.S3 + 2, ChatUi.S3, ChatUi.S3, 0);
         _input.TextChanged += (_, _) => hint.Visibility = _input.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
