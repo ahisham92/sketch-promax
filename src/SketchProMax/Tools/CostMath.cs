@@ -539,5 +539,23 @@ internal static class Cost
         return sb.ToString().TrimEnd();
     }
 
+    /// <summary>
+    /// Why what_if won't try changes on a copy of the open model, or null when it can: the copy is a file copy of the saved
+    /// model, opened as a document of its own, so the model must be saved and not workshared. A workshared model (a local
+    /// file, a central, or a copy detached with its worksets kept) is refused: its copy could reach the central, and a
+    /// detached one with worksets not yet saved has no file to copy. Detach and discard worksets, then save, makes a plain model.
+    /// </summary>
+    public static string? CopyRefusal(bool workshared, bool detached, bool saved)
+    {
+        const string how = "Open the model with Detach from Central and choose Detach and discard worksets, save it under a new name " +
+                           "(e.g. a _detached file), and run what_if there; or use target design_option.";
+        if (workshared && detached)
+            return "This copy is detached but still has its worksets" + (saved ? "" : " and is not saved") + ", so what_if won't copy it. " + how;
+        if (workshared)
+            return "This model is workshared, so what_if won't copy or open it (that could act on the central file or on the model you have open). " + how;
+        if (!saved) return "Save the model first (File > Save As, under a new name for a detached copy): what_if makes its copy from the saved file.";
+        return null;
+    }
+
     public static string Short(string s, int n) => s.Length > n ? s.Substring(0, n - 1) + "…" : s;
 }

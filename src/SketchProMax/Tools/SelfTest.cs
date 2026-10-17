@@ -1159,12 +1159,13 @@ internal static partial class SelfTest
             target = "copy", copy_path = Path.Combine(c.Temp, "ve-copy " + Guid.NewGuid().ToString("N").Substring(0, 4) + ".rvt"),
             changes = new[] { new { kind = "change_type", element_ids = new[] { c.Id(c.Wall) }, to_type = c.Wall!.Name } },
         }) { ExpectError = "workshared", ExpectErrorIf = x => x.Doc.IsWorkshared },
-        // what_if follows ve_apply's rule: on a workshared model (not a detached copy) the run is refused; otherwise a copy is changed.
+        // what_if copies the saved model's file: a workshared model (detached with its worksets, too) is refused; a saved plain
+        // model (a _detached copy saved after Detach and discard worksets is one) gets a copy changed, saved and closed.
         new("what_if", c => new
         {
-            confirm = true, copy_path = Path.Combine(c.Temp, "what-if " + Guid.NewGuid().ToString("N").Substring(0, 4) + ".rvt"), folder = c.Temp, excel = false,
+            confirm = string.IsNullOrEmpty(c.Doc.PathName) && !c.Doc.IsWorkshared ? throw new Skip("the model is not saved, so there is no file to copy") : true, copy_path = Path.Combine(c.Temp, "what-if " + Guid.NewGuid().ToString("N").Substring(0, 4) + ".rvt"), folder = c.Temp, excel = false,
             changes = new[] { new { kind = "slab_thickness", element_ids = new[] { c.Id(c.Floor) }, thickness_mm = 300.0 } },
-        }) { ExpectError = "workshared", ExpectErrorIf = x => x.Doc.IsWorkshared && !x.Doc.IsDetached },
+        }) { ExpectError = "worksets", ExpectErrorIf = x => x.Doc.IsWorkshared },
         new("embodied_carbon", c =>
         {
             Need(c.Throwaway, "reads the field test's two slabs: one names its mix, one doesn't");

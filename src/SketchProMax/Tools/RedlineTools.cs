@@ -599,11 +599,12 @@ internal static class Redlines
     {
         if (TestApprove is { } hook) return hook(p);
         var m = p.Markup;
+        var also = m.Kind == "delete" && p.Element is { } struck ? AlsoDeleted(struck.Document, struck.Id) : null;
         var dialog = new TaskDialog("Sketch ProMax: redlines")
         {
             MainInstruction = $"Apply markup {m.Id}? ({index} of {count})",
             MainContent = $"{m.Describe()}\nWhere: {p.Where}" + (m.Text.Length > 0 ? $"\nThe markup reads: \"{Redline.Clip(m.Text, 200)}\"" : "") +
-                          (m.Kind == "delete" ? "\n\nThis DELETES the element (it was struck through)." : "") +
+                          (m.Kind == "delete" ? "\n\nThis DELETES the element (it was struck through)." + (also is null ? "" : " " + also) : "") +
                           "\n\nA revision cloud is drawn round it on the sheet. Ctrl+Z undoes the whole set.",
             AllowCancellation = true,
         };
@@ -617,6 +618,53 @@ internal static class Redlines
             TaskDialogResult.CommandLink2 => false,
             _ => null,
         };
+    }
+
+    /// <summary>
+    /// What else goes when <paramref name="id"/> is deleted (hosted elements, tags, dimensions...), e.g. "It also deletes
+    /// 2 Doors, 3 Door Tags.": found by deleting it in a transaction that is rolled back, so nothing changes. Null when
+    /// nothing else goes. Call with no transaction open.
+    /// </summary>
+    public static string? AlsoDeleted(Document doc, ElementId id)
+    {
+        List<ElementId> gone;
+        if (doc.IsModifiable || doc.IsReadOnly) return "What else it deletes could not be checked.";
+        using (var t = new Transaction(doc, "Sketch ProMax: what a delete takes with it"))
+        {
+            var options = t.GetFailureHandlingOptions();
+            options.SetFailuresPreprocessor(new Quiet());
+            options.SetClearAfterRollback(true);
+            options.SetForcedModalHandling(false);
+            t.SetFailureHandlingOptions(options);
+            FailureGuard.Muted++;
+            try
+            {
+                t.Start();
+                try { gone = doc.Delete(id).Where(x => x != id).ToList(); }
+                catch (Exception ex) when (ex is Autodesk.Revit.Exceptions.ApplicationException or ArgumentException) { return "What else it deletes could not be checked."; }
+            }
+            finally
+            {
+                if (t.HasStarted() && !t.HasEnded()) t.RollBack();
+                FailureGuard.Muted--;
+            }
+        }
+        // Rolled back: the elements are there again to name. Only what a user would see (model and annotation elements).
+        var named = gone.Select(doc.GetElement).Where(e => e is not null and not ElementType && e.Category is { } c
+                && c.CategoryType is CategoryType.Model or CategoryType.Annotation && !Never.Contains((BuiltInCategory)c.Id.Value))
+            .GroupBy(e => e!.Category!.Name).OrderByDescending(g => g.Count()).Select(g => $"{g.Count()} {g.Key}").ToList();
+        return named.Count == 0 ? null : "It also deletes " + string.Join(", ", named) + ".";
+    }
+
+    /// <summary>Lets the trial delete go through quietly; it is rolled back anyway.</summary>
+    private sealed class Quiet : IFailuresPreprocessor
+    {
+        public FailureProcessingResult PreprocessFailures(FailuresAccessor accessor)
+        {
+            foreach (var f in accessor.GetFailureMessages())
+                if (f.GetSeverity() == FailureSeverity.Warning) accessor.DeleteWarning(f);
+            return FailureProcessingResult.Continue;
+        }
     }
 
     /// <summary>Applies one approved change and clouds it on the sheet, inside the item's transaction. Returns the cloud's id (or why there is none).</summary>
@@ -788,14 +836,16 @@ public sealed class RedlineApplyTool : IRevitTool
         "each approved change is applied (text and notes, parameter values, dimension overrides or explicit moves, deletes " +
         "for strike-throughs) with a revision cloud round it on the sheet, under one new revision, and the revised sheets are " +
         "exported to PDF. Markups it can't interpret go to the user as manual steps. Writes a done / not done report to Excel " +
-        "and returns it for the chat. One Undo step.";
+        "and returns it for the chat. One Undo step. The same call again within 10 minutes of a run that applied changes returns " +
+        "that run's result instead of applying them twice (force true applies again).";
     public string PropertiesJson => "{" + Redlines.CommonJson + """
       ,
       "revision_description": {"type": "string", "description": "The new revision's description (default 'Redlines <file> <date>')."},
       "revision_id": {"type": "integer", "description": "Use this existing, not issued revision instead of a new one."},
       "export": {"type": "boolean", "description": "Export the revised sheets to PDF (default true)."},
       "folder": {"type": "string", "description": "Where the report and PDFs go (default Documents\\SketchProMax)."},
-      "dry_run": {"type": "boolean", "description": "Only list the planned changes, as redline_plan (default false)."}
+      "dry_run": {"type": "boolean", "description": "Only list the planned changes, as redline_plan (default false)."},
+      "force": {"type": "boolean", "description": "Apply even though the same markups were just applied to this model (a repeat within 10 minutes otherwise returns the first run's result)."}
     }
     """;
     public string[] Required => [];
@@ -804,6 +854,14 @@ public sealed class RedlineApplyTool : IRevitTool
     public ToolResult Execute(UIApplication app, ToolArgs args)
     {
         var doc = app.ActiveUIDocument.Document;
+        // A retry of markups that were just applied (same inputs, same model) gets that run's result: nothing is asked,
+        // clouded or revised twice.
+        var key = RecentRuns.Key(Name, Checks.ModelKey(doc), args.Raw);
+        if (!args.OptBool("dry_run"))
+        {
+            if (args.OptBool("force")) RecentRuns.Forget(key);
+            else if (RecentRuns.Repeat(Name, key, DateTime.Now) is { } again) return new ToolResult(again);
+        }
         var notes = new List<string>();
         var markups = Redlines.Load(doc, args, notes, out var source);
         var plan = markups.Count == 0 ? [] : Redlines.Plan(doc, markups, args.OptString("sheet_number"), args.OptString("file"));
@@ -936,6 +994,8 @@ public sealed class RedlineApplyTool : IRevitTool
             next = "Show the user chatReport (the done / not done table) and where the report and PDFs are. These PDFs are a redline export, " +
                    "not an issue: they were not through the issue check. Before issuing the revised sheets, run issue_check on them (or issue_drawings, which runs it).",
         });
-        return Handoff.Finish(Name, result, handoffs);
+        var finished = Handoff.Finish(Name, result, handoffs);
+        if (batch is { Done: > 0 } && !finished.IsError && !SelfTest.IsRunning && !StartupTimings.TestRunning) RecentRuns.Remember(key, finished.Text, DateTime.Now);
+        return finished;
     }
 }

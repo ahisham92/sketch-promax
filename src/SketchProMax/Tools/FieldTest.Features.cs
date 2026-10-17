@@ -222,6 +222,8 @@ internal static partial class FieldTest
             return rows;
         }
         var typeBefore = slab.GetTypeId();
+        var pathBefore = active.PathName;
+        var modifiedBefore = active.IsModified;
         var thick = Math.Round(slab.FloorType.GetCompoundStructure()!.GetWidth() * 304.8) + 100;
         var copy = Path.Combine(s.BatchFolder!, "FieldTest what if copy.rvt");
         try
@@ -250,6 +252,9 @@ internal static partial class FieldTest
                     if (!r.ReadToEnd().Contains("Drawings affected")) problems.Add("the Excel file has no Drawings affected sheet");
                 }
                 if (active.GetElement(slab.Id) is not Floor still || still.GetTypeId() != typeBefore) problems.Add("the open model's slab changed type");
+                // Never Save or SaveAs on the open model: its path and its saved state stay as they were.
+                if (active.PathName != pathBefore) problems.Add($"the open model's path changed to {active.PathName}");
+                if (active.IsModified != modifiedBefore) problems.Add("the open model's saved state changed");
                 rows.Add(new("ve", "whatif.copy", problems.Count == 0 ? "pass" : "fail", watch.ElapsedMilliseconds,
                     (problems.Count == 0 ? $"Slab {slab.Id.Value} to {thick} mm on {Path.GetFileName(copy)}: concrete {Ve.F(Change("Concrete"), 2)} m³, cost {Cost.Money(Change("Cost"))} USD, " +
                                            $"{Prop(j.RootElement, "drawingsAffected", "views")} view(s) and {Prop(j.RootElement, "drawingsAffected", "sheets")} sheet(s) affected; the open model kept its slab type. "
@@ -398,7 +403,7 @@ internal static partial class FieldTest
         if (doc.GetElement(slab.Id) is not Floor f || f.GetTypeId() != type) problems.Add("the slab changed type");
         return problems.Count == 0
             ? Pass($"Preview of slab {slab.Id.Value} at 275 mm: {Prop(j.RootElement, "drawingsAffected", "views")} view(s), {Prop(j.RootElement, "drawingsAffected", "sheets")} sheet(s) affected; " +
-                   $"current {Prop(j.RootElement, "current", "concreteM3")} m³, {Prop(j.RootElement, "current", "tCO2e")} tCO2e; {(Prop(j.RootElement, "refused").Length > 0 ? "the run would be refused here (workshared); " : "")}nothing changed")
+                   $"current {Prop(j.RootElement, "current", "concreteM3")} m³, {Prop(j.RootElement, "current", "tCO2e")} tCO2e; {(Prop(j.RootElement, "refused").Length > 0 ? $"the run would be refused here ({Short(Prop(j.RootElement, "refused"), 80)}); " : "")}nothing changed")
             : Fail(string.Join("; ", problems) + ". " + Short(r.Text, 300));
     }
 

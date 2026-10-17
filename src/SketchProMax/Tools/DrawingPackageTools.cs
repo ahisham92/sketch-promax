@@ -141,10 +141,12 @@ public sealed class DrawingPackageTool : IRevitTool
         "(views exist, every view placed, nothing overlaps on a sheet, no orphan tags; check_drawings at the end). Pause, Skip step " +
         "(skips the current stage) and Stop work on the job card; the package is one Undo step and never changes or deletes existing " +
         "views or sheets. What only the user can do (load a title block or a tag family, fit a view too big for the sheet) is handed " +
-        "to them. Plan first with get_drawing_package_plan and get the user's yes; without approved true Revit asks them with the counts.";
+        "to them. Plan first with get_drawing_package_plan and get the user's yes; without approved true Revit asks them with the counts. " +
+        "The same call again within 10 minutes of a finished run returns that run's result instead of a second package (force true makes another).";
     public string PropertiesJson => PackageInputs.PropertiesJson.TrimEnd().TrimEnd('}').TrimEnd() + """
       ,
       "approved": {"type": "boolean", "description": "True when the user has seen the plan and its counts and said yes. Otherwise Revit shows them the plan first."},
+      "force": {"type": "boolean", "description": "Make it even though the same package was just made on this model (a repeat within 10 minutes otherwise returns the first run's result)."},
       "folder": {"type": "string", "description": "Where the Excel register and the drawing check go (default Documents\\SketchProMax)."}
     }
     """;
@@ -157,6 +159,10 @@ public sealed class DrawingPackageTool : IRevitTool
     public ToolResult Execute(UIApplication app, ToolArgs args)
     {
         var doc = app.ActiveUIDocument.Document;
+        // A retry of a package that was just made (same inputs, same model) gets that run's result, not a second package.
+        var key = RecentRuns.Key(Name, Checks.ModelKey(doc), args.Raw);
+        if (args.OptBool("force")) RecentRuns.Forget(key);
+        else if (RecentRuns.Repeat(Name, key, DateTime.Now) is { } again) return new ToolResult(again);
         var rates = PackageInputs.Rates();
         var plan = PackageInputs.Plan(doc, args);
         if (!plan.Ok)
@@ -165,7 +171,10 @@ public sealed class DrawingPackageTool : IRevitTool
         if (doc.IsModifiable) return ToolResult.Error("A transaction is already open; run drawing_package on its own.");
         if (!args.OptBool("approved") && !Ask(plan, rates)) return ToolResult.Error("The user did not approve the package in Revit; nothing was changed. Ask them what to change.");
         var folder = OutputPaths.Checked(args.OptString("folder")) ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "SketchProMax");
-        return new PackageRun(app, doc, plan, folder, rates).Run(Name);
+        var run = new PackageRun(app, doc, plan, folder, rates);
+        var result = run.Run(Name);
+        if (run.Kept && !result.IsError && !SelfTest.IsRunning && !StartupTimings.TestRunning) RecentRuns.Remember(key, result.Text, DateTime.Now);
+        return result;
     }
 
     /// <summary>Shows the plan and its counts in Revit and asks to make it (when Claude didn't say the user approved it).</summary>
@@ -221,6 +230,9 @@ internal sealed class PackageRun(UIApplication app, Document doc, DrawingPackage
     private readonly List<string> _notes = [];
     private bool _stopped;
     private int _tags, _dimensions;
+
+    /// <summary>Whether the run kept anything in the model (views or sheets made).</summary>
+    public bool Kept { get; private set; }
     private List<(double X0, double Y0, double X1, double Y1, double Depth)>? _sectionLines;
     private List<long>? _wrap;
     private const double Ft = 304.8;
@@ -277,6 +289,7 @@ internal sealed class PackageRun(UIApplication app, Document doc, DrawingPackage
                 JobUndo.GroupClosed(kept);
             }
         }
+        Kept = kept;
         if (!kept)
         {
             _views.Clear();

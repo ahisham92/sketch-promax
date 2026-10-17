@@ -145,6 +145,30 @@ internal static class CostTests
             && OutputPaths.AlwaysAskReason("what_if", Args("""{"confirm":true,"target":"design_option"}"""))?.Contains("design option") == true
             && OutputPaths.AlwaysAskReason("what_if", Args("""{"confirm":false}""")) is null && OutputPaths.AlwaysAskReason("cost_estimate", Args("""{"confirm":true}""")) is null, "");
 
+        // ---- what_if on a copy: only a saved, non-workshared model (a copy detached with its worksets discarded, then saved)
+        check("what_if copy: a saved plain model (e.g. a saved _detached copy without worksets) is allowed", Cost.CopyRefusal(false, false, true) is null, "");
+        check("what_if copy: workshared, or detached with its worksets (saved or not), is refused and points to discarding worksets",
+            new[] { Cost.CopyRefusal(true, false, true), Cost.CopyRefusal(true, true, false), Cost.CopyRefusal(true, true, true) }.All(r => r?.Contains("Detach and discard worksets") == true), "");
+        check("what_if copy: an unsaved model is asked to be saved first", Cost.CopyRefusal(false, false, false)?.Contains("Save the model first") == true, "");
+
+        // ---- A retried drawing_package or redline_apply gets the first run's result
+        var a1 = Args("""{"request":"GA plans","levels":["1","2"],"approved":true,"sections":2}""");
+        var a2 = Args("""{"sections":2.0,"levels":["1","2"],"request":"GA plans","force":true}""");
+        var a3 = Args("""{"request":"GA plans","levels":["2","1"],"sections":2}""");
+        var key = RecentRuns.Key("drawing_package", "model-a", a1);
+        check("repeat guard: the key ignores order, approved and force; it changes with the inputs and the model",
+            key == RecentRuns.Key("drawing_package", "model-a", a2) && key != RecentRuns.Key("drawing_package", "model-a", a3)
+            && key != RecentRuns.Key("drawing_package", "model-b", a1) && key != RecentRuns.Key("redline_apply", "model-a", a1), "");
+        var t0 = new DateTime(2026, 10, 17, 9, 0, 0);
+        check("repeat guard: nothing remembered, nothing returned", RecentRuns.Repeat("drawing_package", key, t0) is null, "");
+        RecentRuns.Remember(key, """{"status":"done","counts":{"views":4}}""", t0);
+        var again = RecentRuns.Repeat("drawing_package", key, t0.AddMinutes(3));
+        check("repeat guard: within 10 minutes the first run's result comes back, said as such",
+            again is not null && again.Contains("alreadyDone") && again.Contains("3 minutes") && again.Contains("force true") && again.Contains("\"views\":4"), again ?? "");
+        check("repeat guard: after 10 minutes it runs again", RecentRuns.Repeat("drawing_package", key, t0.AddMinutes(11)) is null, "");
+        RecentRuns.Forget(key);
+        check("repeat guard: force forgets the earlier run", RecentRuns.Repeat("drawing_package", key, t0.AddMinutes(1)) is null, "");
+
         // ---- Text that looks like a formula stays text (model and table text in the Excel and CSV files)
         check("excel: formula-like text is spotted; plain numbers and text are not",
             Xlsx.FormulaLike("=HYPERLINK(\"x\")") && Xlsx.FormulaLike("+A1") && !Xlsx.FormulaLike("+1") && Xlsx.FormulaLike("@SUM(A1)") && Xlsx.FormulaLike("-2+3") && Xlsx.FormulaLike(" =1")

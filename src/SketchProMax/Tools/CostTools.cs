@@ -588,7 +588,8 @@ public sealed class WhatIfTool : IRevitTool
         "cost (the firm's rate table, as cost_estimate), embodied carbon (A1-A3), a rough frame programme, and the drawings " +
         "affected (the sheets and views that show the changed elements). Changes: slab thickness, column size, material " +
         "grade, grid spacing. Without confirm it only previews the plan, the current figures and the drawings; ask the user, " +
-        "then run it again with confirm true. Workshared models are refused unless the open model is a detached copy. " +
+        "then run it again with confirm true. On a copy, the model must be saved and not workshared: a copy made with Detach " +
+        "from Central > Detach and discard worksets, then saved, works; workshared models are refused. " +
         "The result is saved for cost_estimate's options ('what_if'); Excel and CSV. A screening aid; an engineer confirms it.";
     public string PropertiesJson => "{" + CostRun.RatesJson + "," + CostRun.OutputsJson + """
       ,
@@ -653,15 +654,12 @@ public sealed class WhatIfTool : IRevitTool
         var plan0 = rates is null ? null : CostRun.MeasurePlan(active, rates.Selection.Rows, threshold, "none", null, null, option, basis: false);
         var current = CostRun.Figures("Current model", "the open model", plan0, CostRun.Facts(active, inp, option), outputs);
 
-        // Safety: never the open model; a workshared model only when it is a detached copy.
-        var detached = active.IsWorkshared && active.IsDetached;
-        string? refusal = null;
-        if (target == "copy" && active.IsWorkshared && !active.IsDetached)
-            refusal = "This model is workshared, so what_if won't copy or open it (that could act on the central file or on the model you have open). " +
-                      "Open it with Detach from Central and choose Detach and discard worksets, save that copy under a new name (e.g. a _detached file), " +
-                      "and run what_if there; or use target design_option.";
-        else if (target == "copy" && string.IsNullOrEmpty(active.PathName))
-            refusal = "Save the model first: what_if makes its copy from the saved file.";
+        // Safety: never the open model; the copy is a file copy of the saved, non-workshared model (a _detached copy saved
+        // after Detach and discard worksets is one), opened, changed and saved on its own. Workshared models are refused.
+        var refusal = target == "copy" ? Cost.CopyRefusal(active.IsWorkshared, active.IsWorkshared && active.IsDetached, !string.IsNullOrEmpty(active.PathName)) : null;
+        var unsaved = target == "copy" && refusal is null && active.IsModified
+            ? "The open model has unsaved changes: the copy is made from its last saved file, so they are not in it (save first to include them)."
+            : null;
 
         if (!confirm)
             return ToolResult.Ok(new
@@ -671,7 +669,8 @@ public sealed class WhatIfTool : IRevitTool
                 current = Show(current, currency),
                 drawingsAffected = new { sheets = drawings.Where(d => d.Sheet.Length > 0).Select(d => d.Sheet).Distinct().Count(), views = drawings.Select(d => d.View).Distinct().Count(), viewsChecked, list = drawings.Take(40) },
                 refused = refusal,
-                ask = refusal ?? $"Ask the user: \"Try {string.Join("; ", described)} on {(target == "copy" ? "a copy of the saved model" : $"design option '{option}'")} and compare cost, carbon and drawings? The open model {(target == "copy" ? "is not changed" : "changes only inside that design option")}.\" Run what_if again with confirm true only if they agree.",
+                unsavedChanges = unsaved,
+                ask = refusal ?? $"Ask the user: \"Try {string.Join("; ", described)} on {(target == "copy" ? "a copy of the saved model" : $"design option '{option}'")} and compare cost, carbon and drawings? The open model {(target == "copy" ? "is not changed" : "changes only inside that design option")}.{(unsaved is null ? "" : " " + unsaved)}\" Run what_if again with confirm true only if they agree.",
                 caution = Ve.Caution,
             });
         if (refusal != null) throw new ArgumentException(refusal);
@@ -680,10 +679,9 @@ public sealed class WhatIfTool : IRevitTool
         Document doc = active;
         string? copyPath = null;
         var opened = false;
-        string? source = null;
         if (target == "copy")
         {
-            if (active.IsModified) warnings.Add("The open model has unsaved changes; the copy is made from the last saved file and does not have them.");
+            if (unsaved is not null) warnings.Add(unsaved);
             if (args.OptString("copy_path") is { } given && !Path.IsPathRooted(given.Trim().Trim('"')))
                 throw new ArgumentException("copy_path must be a full path (e.g. D:\\Models\\Tower - what if.rvt), not a relative name.");
             copyPath = args.OptString("copy_path") is { } cp ? OutputPaths.Checked(cp.Trim().Trim('"')) ?? cp : Path.Combine(Checks.Folder(args), $"{San(active.Title)} - What if {DateTime.Now:yyyy-MM-dd HHmm}.rvt");
@@ -692,31 +690,24 @@ public sealed class WhatIfTool : IRevitTool
             if (VeRun.SamePath(copyPath, active.PathName)) throw new ArgumentException("copy_path is the open model's own file; give another copy_path.");
             Directory.CreateDirectory(Path.GetDirectoryName(copyPath)!);
             if (File.Exists(copyPath)) throw new ArgumentException($"{copyPath} exists already; give another copy_path.");
-            // A detached workshared model's file is a central of its own: its copy is opened detached from a temporary
-            // source file and saved as copy_path, so nothing reaches the open model's file.
-            source = detached ? Path.Combine(Path.GetDirectoryName(copyPath)!, Path.GetFileNameWithoutExtension(copyPath) + " (source).rvt") : copyPath;
-            if (File.Exists(source)) throw new ArgumentException($"{source} exists already; give another copy_path.");
-            File.Copy(active.PathName, source);
+            File.Copy(active.PathName, copyPath);
             try
             {
-                var options = new OpenOptions();
-                if (detached) options.DetachFromCentralOption = DetachFromCentralOption.DetachAndPreserveWorksets;
-                doc = app.Application.OpenDocumentFile(ModelPathUtils.ConvertUserVisiblePathToModelPath(source), options);
-                // Revit hands back the open document when the file is already open: never change or close that one.
-                if (doc.Equals(active) || VeRun.SamePath(doc.PathName, active.PathName))
+                doc = app.Application.OpenDocumentFile(ModelPathUtils.ConvertUserVisiblePathToModelPath(copyPath), new OpenOptions());
+                // Revit hands back the open document when the file is already open: never change, save or close that one.
+                if (doc.Equals(active) || VeRun.SamePath(doc.PathName, active.PathName) || !VeRun.SamePath(doc.PathName, copyPath))
                 {
                     if (!doc.Equals(active)) try { doc.Close(false); } catch (Autodesk.Revit.Exceptions.ApplicationException) { }
                     doc = active;
-                    throw new InvalidOperationException("Revit returned the open model instead of the copy, so nothing was changed. Open the copy (" + copyPath + ") yourself and run what_if there.");
+                    throw new InvalidOperationException("Revit did not open the copy as a document of its own, so nothing was changed. Open " + copyPath + " yourself and run what_if there.");
                 }
                 opened = true;
             }
             finally
             {
-                // Not opened: the file copied for it is removed (from a detached model, that is the temporary source; else the
-                // copy itself, which nothing was done to), so a failed open leaves nothing behind.
+                // Not opened: the copied file, which nothing was done to, is removed, so a failed open leaves nothing behind.
                 if (!opened)
-                    try { File.Delete(source); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+                    try { File.Delete(copyPath); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
             }
         }
 
@@ -724,21 +715,13 @@ public sealed class WhatIfTool : IRevitTool
         {
             var dupes = new Dictionary<string, ElementId>(StringComparer.Ordinal);
             var batch = ItemBatch.Run(doc, "What if", ops, o => $"{o.Id}: {o.What}", o => [new ElementId(o.Id)], o => Apply(doc, o, dupes), borrow: target != "copy");
+            // Only the copy is ever saved, in place at copy_path; never the open model (Save or SaveAs on it would change its file
+            // or its path).
             if (opened && batch.Done > 0)
             {
-                // The copy is a document of its own (never the active one, checked above), so SaveAs moves only the copy's
-                // path. A copy opened detached from a temporary source is saved as copy_path (a central of its own when it
-                // kept its worksets); a plain copy was opened at copy_path and is saved in place.
-                if (source != copyPath)
-                {
-                    var o = new SaveAsOptions { OverwriteExistingFile = false, MaximumBackups = 1 };
-                    if (doc.IsWorkshared) o.SetWorksharingOptions(new WorksharingSaveAsOptions { SaveAsCentral = true });
-                    doc.SaveAs(copyPath!, o);
-                }
-                else doc.Save();
+                if (doc.Equals(active) || !VeRun.SamePath(doc.PathName, copyPath)) throw new InvalidOperationException("Not saved: the document is not the copy.");
+                doc.Save();
             }
-            else if (opened && source != copyPath)
-                warnings.Add($"No change was made, so no copy was saved at {copyPath}.");
             var plan1 = rates is null ? null : CostRun.MeasurePlan(doc, rates.Selection.Rows, threshold, "none", null, null, option, basis: false);
             var after = CostRun.Figures("What if", target == "copy" ? "copy " + copyPath : "design option " + option, plan1, CostRun.Facts(doc, inp, option), outputs);
             var delta = Cost.Delta(current, after, currency);
@@ -786,10 +769,8 @@ public sealed class WhatIfTool : IRevitTool
         }
         finally
         {
-            if (opened)
+            if (opened && !doc.Equals(active))
                 try { doc.Close(false); } catch (Autodesk.Revit.Exceptions.ApplicationException) { }
-            if (source != null && source != copyPath)
-                try { File.Delete(source); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
         }
     }
 
