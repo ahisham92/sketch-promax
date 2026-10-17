@@ -116,6 +116,8 @@ internal static class PromptBriefs
         var t = text.Trim();
         if (t.Length == 0 || Confirmation.IsMatch(t)) return false;
         if (mode == BriefMode.Always) return true;
+        // A word or two that asks for no change ("hi", "thanks a lot"): not worth a planning run of up to minutes.
+        if (!ChangeWord.IsMatch(t) && t.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length <= 2) return false;
         return LooksReadOnly(t) != true;
     }
 

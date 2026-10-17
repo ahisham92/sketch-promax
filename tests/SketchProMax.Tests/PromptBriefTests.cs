@@ -13,6 +13,8 @@ internal static class PromptBriefTests
         check("brief: a short reply to Claude skips it", !PromptBriefs.ShouldPlan(BriefMode.Always, "yes, go ahead") && !PromptBriefs.ShouldPlan(BriefMode.ModelChanges, "Continue."), "");
         check("brief: unsure counts as a change", PromptBriefs.ShouldPlan(BriefMode.ModelChanges, "the sheets for the east wing") && PromptBriefs.LooksReadOnly("the sheets for the east wing") is null, "");
         check("brief: a question that acts is planned", PromptBriefs.ShouldPlan(BriefMode.ModelChanges, "Can you tell me the levels and then add a grid?"), "");
+        check("brief: a greeting or two words skip it", !PromptBriefs.ShouldPlan(BriefMode.ModelChanges, "hi") && !PromptBriefs.ShouldPlan(BriefMode.ModelChanges, "thanks Claude")
+              && PromptBriefs.ShouldPlan(BriefMode.ModelChanges, "delete grids") && PromptBriefs.ShouldPlan(BriefMode.Always, "hi"), "");
         check("brief: multi-step question is planned", PromptBriefs.ShouldPlan(BriefMode.ModelChanges, "List the sheets, then the views on each"), "");
         var read = new PromptBrief { Kind = "read_only" };
         var change = new PromptBrief { Kind = "change" };

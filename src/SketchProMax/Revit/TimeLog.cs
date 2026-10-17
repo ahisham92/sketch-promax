@@ -139,11 +139,12 @@ internal static class TimeLog
             if (UpdaterRegistry.IsUpdaterRegistered(id)) UpdaterRegistry.UnregisterUpdater(id);
             // Optional: a model opened where Sketch ProMax isn't installed gives no warning.
             UpdaterRegistry.RegisterUpdater(updater, true);
+            // Kept at once, so Stop unregisters it even when a trigger below fails.
+            _updater = updater;
             var all = new LogicalOrFilter(new ElementIsElementTypeFilter(false), new ElementIsElementTypeFilter(true));
             UpdaterRegistry.AddTrigger(id, all, Element.GetChangeTypeAny());
             UpdaterRegistry.AddTrigger(id, all, Element.GetChangeTypeElementAddition());
             try { UpdaterRegistry.AddTrigger(id, all, Element.GetChangeTypeElementDeletion()); } catch (Exception) { }
-            _updater = updater;
         }
         catch (Exception) { /* no updater: item batches still write, and the PC log keeps everything */ }
     }
@@ -289,7 +290,8 @@ internal static class TimeLog
 
     private static void Active(Document? doc)
     {
-        if (!_on || doc is null || !Tracked(doc)) return;
+        // The field test's own changes and views are nobody's work (its time probes write their own records).
+        if (!_on || doc is null || StartupTimings.TestRunning || !Tracked(doc)) return;
         lock (Gate)
         {
             SetActive(doc);
@@ -395,13 +397,26 @@ internal static class TimeLog
             lock (Gate)
             {
                 SetActive(doc);
+                // A run that never ended (it can't happen through the bridge or the ribbon): its span would hold the clock.
+                if (_tool is { } stale) EndSpan(stale);
                 var run = new Run { Doc = _activeKey, Title = doc.Title, Tool = tool.Name, Modifies = tool.ModifiesModel, InChat = fromChat && _chat is not null };
                 if (!run.InChat) run.Span = Clock.TaskStart(run.Start);
                 _tool = run;
                 LedgerFor(run.Doc, run.Title);
             }
         }
-        catch (Exception) { _tool = null; }
+        catch (Exception)
+        {
+            if (_tool is { } run) lock (Gate) EndSpan(run);
+            _tool = null;
+        }
+    }
+
+    /// <summary>Ends a run's span on the activity clock, if it has one still open (a span left open stops by-hand counting).</summary>
+    private static void EndSpan(Run run)
+    {
+        try { if (run.Span is { } span) Clock.TaskEnd(span, run.Doc, DateTime.Now); }
+        catch (Exception) { }
     }
 
     /// <summary>
@@ -448,7 +463,11 @@ internal static class TimeLog
                 return LastLine;
             }
         }
-        catch (Exception) { return null; }
+        catch (Exception)
+        {
+            lock (Gate) EndSpan(run);
+            return null;
+        }
     }
 
     /// <summary>A chat task starts (the message is sent). Any thread; counted for the model last active in Revit. <paramref name="brief"/>: the approved brief, kept in the task log.</summary>
@@ -458,6 +477,8 @@ internal static class TimeLog
         lock (Gate)
         {
             if (_activeKey.Length == 0) return;
+            // A chat task that never ended (the pane was cleared mid-task): its span would stop by-hand counting for good.
+            if (_chat is { } stale) EndSpan(stale);
             var run = new Run { Doc = _activeKey, Title = _activeTitle, Tool = TimeMath.ChatTool, Brief = brief };
             run.Span = Clock.TaskStart(run.Start);
             _chat = run;
@@ -493,7 +514,11 @@ internal static class TimeLog
                 SaveAll(force: true);
                 return estimate > 0 ? TimeMath.Line(took, estimate) : null;
             }
-            catch (Exception) { return null; }
+            catch (Exception)
+            {
+                EndSpan(run);
+                return null;
+            }
         }
     }
 
@@ -521,7 +546,9 @@ internal static class TimeLog
         // Many small transactions (an item batch): once in a while is enough, the last write wins anyway.
         if (DateTime.Now - run.LastWrite < TimeSpan.FromSeconds(15)) return;
         run.LastWrite = DateTime.Now;
-        lock (Gate) Write(doc, borrow: false);
+        // No parameter bindings here: changing them is not something an updater may do (and it would swap the
+        // user's shared parameter file mid-transaction); they are made in an item batch's own transaction.
+        lock (Gate) Write(doc, borrow: false, bindings: false);
     }
 
     /// <summary>
@@ -547,7 +574,7 @@ internal static class TimeLog
             {
                 t.Start();
                 bool changed;
-                lock (Gate) changed = Write(doc, borrow: true);
+                lock (Gate) changed = Write(doc, borrow: true, bindings: true);
                 if (changed) t.Commit();
                 else t.RollBack();
                 run.LastWrite = DateTime.Now;
@@ -639,8 +666,9 @@ internal static class TimeLog
     /// <summary>
     /// Writes this PC's rows (and the running task's time so far) to the model, and all users' totals to the Project
     /// Information parameters. Needs an open transaction. Returns true when something in the model changed.
+    /// <paramref name="bindings"/>: the four parameters may be made here (never from the updater).
     /// </summary>
-    private static bool Write(Document doc, bool borrow)
+    private static bool Write(Document doc, bool borrow, bool bindings)
     {
         if (_writing || !doc.IsModifiable) return false;
         _writing = true;
@@ -687,20 +715,21 @@ internal static class TimeLog
             }
 
             var everyone = TimeSheet.Combine(holders.Where(h => !Mine(h.Sheet)).Select(h => h.Sheet).Append(mine));
-            changed |= SetTotals(doc, TimeTotals.Of(everyone.SelectMany(s => s.Rows.Values)), borrow, key);
+            changed |= SetTotals(doc, TimeTotals.Of(everyone.SelectMany(s => s.Rows.Values)), borrow, bindings, key);
             return changed;
         }
         finally { _writing = false; }
     }
 
-    private static bool SetTotals(Document doc, TimeTotals totals, bool borrow, string key)
+    private static bool SetTotals(Document doc, TimeTotals totals, bool borrow, bool bindings, string key)
     {
         var info = doc.ProjectInformation;
         if (info is null) return false;
         var changed = false;
-        // Made in an item batch's own transaction, or once per session in a model nobody shares (nothing to borrow).
-        if (Parameters.Any(p => info.get_Parameter(p.Guid) is null) && (borrow || !doc.IsWorkshared && ParametersTried.Add(key))
-            && Writable(doc, info.Id, borrow))
+        // Made outside the updater (an item batch's own transaction), at most once per model and session: a try that
+        // fails (bindings refused, or the transaction rolled back) isn't repeated with every batch.
+        if (bindings && Parameters.Any(p => info.get_Parameter(p.Guid) is null) && (borrow || !doc.IsWorkshared)
+            && Writable(doc, info.Id, borrow) && ParametersTried.Add(key))
             changed |= MakeParameters(doc);
         if (!Writable(doc, info.Id, borrow)) return changed;
         double[] values = [TimeMath.Hours(totals.Saved), TimeMath.Hours(totals.Working), TimeMath.Hours(totals.Ai), TimeMath.Hours(totals.ByHand)];
@@ -819,6 +848,22 @@ internal static class TimeLog
     /// </summary>
     internal static string? OwnedElsewhereForTest;
 
+    /// <summary>
+    /// For the field test, before it closes its test project: forgets this PC's rows for that model and deletes their
+    /// file, so the probes leave records only in the throwaway project (and the month's task log, marked simulated).
+    /// </summary>
+    internal static void ForgetForTest(Document doc)
+    {
+        lock (Gate)
+        {
+            var key = Key(doc);
+            var file = (Ledgers.TryGetValue(key, out var ledger) ? ledger : new Ledger { Key = key }).File;
+            Ledgers.Remove(key);
+            ParametersTried.Remove(key);
+            try { File.Delete(file); } catch (Exception) { }
+        }
+    }
+
     /// <summary>For the field test: this user's and PC's row for (day, tool) as stored in the model's Extensible Storage, or null.</summary>
     internal static TimeRow? StoredRowForTest(Document doc, string day, string tool)
     {
@@ -836,7 +881,7 @@ internal static class TimeLog
         using var t = new Transaction(doc, "Sketch ProMax: time log test");
         t.Start();
         bool changed;
-        lock (Gate) changed = Write(doc, borrow: true);
+        lock (Gate) changed = Write(doc, borrow: true, bindings: true);
         return t.Commit() == TransactionStatus.Committed ? changed ? "written" : "nothing to write" : "not written: the transaction was rolled back";
     }
 
@@ -887,14 +932,14 @@ internal static class TimeLog
         {
             if (doc.IsModifiable)
             {
-                lock (Gate) written = Write(doc, borrow: false) ? "written in the open transaction" : "nothing to write, or it waits (elements owned elsewhere)";
+                lock (Gate) written = Write(doc, borrow: false, bindings: true) ? "written in the open transaction" : "nothing to write, or it waits (elements owned elsewhere)";
             }
             else if (!doc.IsReadOnly)
             {
                 using var t = new Transaction(doc, "Sketch ProMax: time log test");
                 t.Start();
                 bool changed;
-                lock (Gate) changed = Write(doc, borrow: true);
+                lock (Gate) changed = Write(doc, borrow: true, bindings: true);
                 written = t.Commit() == TransactionStatus.Committed && changed ? "written in its own transaction" : "nothing written (it waits)";
             }
             else written = "the model is read-only";

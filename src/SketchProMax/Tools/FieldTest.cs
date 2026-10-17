@@ -475,6 +475,8 @@ internal static partial class FieldTest
         // The project being built is only open in the background; if building failed part-way, close it here.
         try { if (s.Built is { IsValidObject: true } built && (s.Test is null || !built.Equals(s.Test))) built.Close(false); }
         catch (Exception) { }
+        // The time probes' rows for the test project on this PC: the project is thrown away, so are they.
+        try { if (s.Test is { IsValidObject: true } tested) SketchProMax.Revit.TimeLog.ForgetForTest(tested); } catch (Exception) { }
         CloseTest(app, s.Test, s.Original, result, ref s.KeepFolder);
         if (!s.KeepFolder && !string.IsNullOrEmpty(s.Folder))
         {
@@ -1148,12 +1150,13 @@ internal static partial class FieldTest
     }
 
     /// <summary>
-    /// An empty metric project saved in the temp folder (made once and reused), to switch to when nothing saved is open.
-    /// Kept out of the test folder, which is deleted while it may still be open.
+    /// An empty metric project saved in the temp folder (made once per Revit version and reused), to switch to when
+    /// nothing saved is open. Kept out of the test folder, which is deleted while it may still be open. One file per
+    /// version: an older Revit can't open a newer one's file, and a newer one would upgrade an older one at every open.
     /// </summary>
     private static string BlankProject(Autodesk.Revit.ApplicationServices.Application a)
     {
-        var path = Path.Combine(Path.GetTempPath(), "Sketch ProMax blank.rvt");
+        var path = Path.Combine(Path.GetTempPath(), $"Sketch ProMax blank {a.VersionNumber}.rvt");
         if (File.Exists(path)) return path;
         var doc = a.NewProjectDocument(UnitSystem.Metric);
         try { doc.SaveAs(path, new SaveAsOptions { OverwriteExistingFile = true }); }

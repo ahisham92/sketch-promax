@@ -2000,6 +2000,10 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         // The chat shown stays in the history; a running answer is stopped (the chat resumes when reopened).
         if (_turn is not null) MarkRunningTools("stopped");
         _turn?.KillTimer?.Stop();
+        // A brief being planned: end its Claude Code run now, not when it finishes on its own.
+        _turn?.Cancel?.Cancel();
+        // The task's time ends here, or its open span would stop by-hand time being counted.
+        try { if (_turn is not null) Revit.TimeLog.EndChat(); } catch (Exception) { }
         _turn = null;
         _engine?.Kill();
         _engine = null;
@@ -2168,6 +2172,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         _turn?.KillTimer?.Stop();
         _turn?.Cancel?.Cancel();
         if (_turn is not null) MarkRunningTools("stopped");
+        try { if (_turn is not null) Revit.TimeLog.EndChat(); } catch (Exception) { }
         _turn = null;
         Save();
         _engine?.Kill();

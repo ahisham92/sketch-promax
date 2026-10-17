@@ -23,12 +23,19 @@ internal static class BriefRunner
         {
             var info = ClaudeCli.OneShotStart(install, instructions, readTools, model);
             process = Process.Start(info) ?? throw new InvalidOperationException("Claude Code didn't start.");
-            using var stop = cancel.Register(() => ClaudeCli.KillTree(process));
+            // Stop and closing the pane cancel on Revit's UI thread, and the kill can wait seconds (taskkill): not there.
+            var started = process;
+            using var stop = cancel.Register(() => Task.Run(() => ClaudeCli.KillTree(started)));
             var stdout = process.StandardOutput.ReadToEndAsync();
             var stderr = process.StandardError.ReadToEndAsync();
             // UTF-8 without a byte order mark on every framework (on .NET Framework StandardInput uses the console code page).
-            using (var input = new StreamWriter(process.StandardInput.BaseStream, new UTF8Encoding(false)))
+            // Fed in the background, inside the timeout: a Claude Code that never reads its input can't hold the brief.
+            var feed = Task.Run(async () =>
+            {
+                using var input = new StreamWriter(started.StandardInput.BaseStream, new UTF8Encoding(false));
                 await input.WriteAsync(message).ConfigureAwait(false);
+            });
+            _ = feed.ContinueWith(t => _ = t.Exception, TaskContinuationOptions.OnlyOnFaulted);
             var done = await Task.WhenAny(stdout, Task.Delay(timeoutMs, cancel)).ConfigureAwait(false);
             if (done != stdout)
             {

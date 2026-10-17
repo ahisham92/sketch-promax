@@ -313,11 +313,17 @@ internal sealed partial class ChatPane
         var install = _install;
         var model = _model;
         var task = _lastRemember = Task.Run(() => BriefRunner.RememberEdit(install, request, brief, edited, model));
+        // Back on the pane's dispatcher: a click may come with no synchronization context (the field test presses the
+        // button from Revit's API context), where TaskScheduler.FromCurrentSynchronizationContext throws.
         task.ContinueWith(t =>
         {
-            if (_stopped || t.Status != TaskStatus.RanToCompletion || t.Result.Length == 0) return;
-            Note("Remembered for later briefs: " + t.Result.Substring(PromptBriefs.NotePrefix.Length) + " (edit or delete it in the Notes tab).");
-        }, TaskScheduler.FromCurrentSynchronizationContext());
+            if (t.Status != TaskStatus.RanToCompletion || t.Result.Length == 0) return;
+            var note = t.Result.StartsWith(PromptBriefs.NotePrefix, StringComparison.Ordinal) ? t.Result.Substring(PromptBriefs.NotePrefix.Length) : t.Result;
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                if (!_stopped) Note("Remembered for later briefs: " + note + " (edit or delete it in the Notes tab).");
+            }));
+        }, TaskScheduler.Default);
     }
 
     private static Button? FindButton(DependencyObject root, string name)

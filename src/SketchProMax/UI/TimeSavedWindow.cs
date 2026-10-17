@@ -30,7 +30,7 @@ internal sealed class TimeSavedWindow : Window
         }
         TimeReport report;
         try { report = TimeLog.Report(doc); }
-        catch (Exception ex) when (ex is Autodesk.Revit.Exceptions.ApplicationException or InvalidOperationException or IOException)
+        catch (Exception ex) // whatever it is, a message here rather than Revit's error dialog
         {
             TaskDialog.Show("Sketch ProMax", "The time record of this model couldn't be read: " + ex.Message);
             return Result.Failed;
