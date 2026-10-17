@@ -153,7 +153,8 @@ internal static class Pane
         return result;
     }
 
-    private static void Collect(string text, List<long> ids)
+    /// <summary>Adds the element ids found in a tool's text or JSON result (also used by the chat's tool steps).</summary>
+    internal static void Collect(string text, List<long> ids)
     {
         if (ids.Count >= MaxIds * 2) return;
         foreach (Match m in TextIds.Matches(text))

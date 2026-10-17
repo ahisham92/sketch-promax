@@ -51,6 +51,7 @@ var bad = Run("var x = 1;\nreturn y;");
 Check("errors report the snippet's own line number", bad.Errors.StartsWith("line 2:"), bad.Errors);
 
 ChatTests.Run((name, ok, detail) => Check(name, ok, detail));
+ChatViewTests.Run((name, ok, detail) => Check(name, ok, detail));
 ModelRulesTests.Run((name, ok, detail) => Check(name, ok, detail));
 LoaderTests.Run((name, ok, detail) => Check(name, ok, detail));
 BugAndMemoryTests.Run((name, ok, detail) => Check(name, ok, detail));

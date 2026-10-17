@@ -33,18 +33,31 @@ internal static class Markdown
     private static readonly Regex RuleLine = new(@"^\s{0,3}([-*_])(\s*\1){2,}\s*$", RegexOptions.CultureInvariant);
     private static readonly Regex TableSeparator = new(@"^\s*\|?\s*:?-{1,}:?\s*(\|\s*:?-{1,}:?\s*)*\|?\s*$", RegexOptions.CultureInvariant);
 
-    public static List<Block> Parse(string? text)
+    /// <summary>A block with the source lines it was read from.</summary>
+    internal readonly record struct Sourced(Block Block, string Source);
+
+    public static List<Block> Parse(string? text) => ParseWithSource(text).Select(b => b.Block).ToList();
+
+    /// <summary>
+    /// The blocks, each with its source lines. While an answer streams, text is only added at the end, so every block
+    /// whose source is unchanged can stay drawn as it is (see <see cref="StreamRender.FirstChanged"/>).
+    /// </summary>
+    public static List<Sourced> ParseWithSource(string? text)
     {
-        var blocks = new List<Block>();
+        var blocks = new List<Sourced>();
         if (string.IsNullOrEmpty(text)) return blocks;
         var lines = text!.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
         var i = 0;
         var paragraph = new StringBuilder();
+        var paragraphFrom = 0;
+
+        void Add(Block block, int from, int to) =>
+            blocks.Add(new Sourced(block, string.Join("\n", lines, from, Math.Max(0, Math.Min(to, lines.Length) - from))));
 
         void Flush()
         {
             if (paragraph.Length == 0) return;
-            blocks.Add(new Paragraph(paragraph.ToString().TrimEnd()));
+            Add(new Paragraph(paragraph.ToString().TrimEnd()), paragraphFrom, i);
             paragraph.Clear();
         }
 
@@ -57,6 +70,7 @@ internal static class Markdown
             if (fence.Success)
             {
                 Flush();
+                var from = i;
                 var marker = fence.Groups[1].Value;
                 var code = new StringBuilder();
                 i++;
@@ -66,7 +80,7 @@ internal static class Markdown
                     i++;
                 }
                 i++; // the closing fence (or past the end while it is still streaming)
-                blocks.Add(new Code(fence.Groups[2].Value, code.ToString().TrimEnd('\n')));
+                Add(new Code(fence.Groups[2].Value, code.ToString().TrimEnd('\n')), from, i);
                 continue;
             }
 
@@ -74,14 +88,14 @@ internal static class Markdown
             if (heading.Success)
             {
                 Flush();
-                blocks.Add(new Heading(heading.Groups[1].Value.Length, heading.Groups[2].Value));
+                Add(new Heading(heading.Groups[1].Value.Length, heading.Groups[2].Value), i, i + 1);
                 i++;
                 continue;
             }
 
             if (RuleLine.IsMatch(line) && paragraph.Length == 0)
             {
-                blocks.Add(new Rule());
+                Add(new Rule(), i, i + 1);
                 i++;
                 continue;
             }
@@ -89,6 +103,7 @@ internal static class Markdown
             if (line.Contains("|") && i + 1 < lines.Length && TableSeparator.IsMatch(lines[i + 1]) && lines[i + 1].Contains("-"))
             {
                 Flush();
+                var from = i;
                 var header = Cells(line);
                 var align = Cells(lines[i + 1]).Select(c =>
                 {
@@ -102,13 +117,14 @@ internal static class Markdown
                     rows.Add(Cells(lines[i]));
                     i++;
                 }
-                blocks.Add(new Table(header, align, rows));
+                Add(new Table(header, align, rows), from, i);
                 continue;
             }
 
             if (line.TrimStart().StartsWith(">", StringComparison.Ordinal))
             {
                 Flush();
+                var from = i;
                 var quote = new StringBuilder();
                 while (i < lines.Length && lines[i].TrimStart().StartsWith(">", StringComparison.Ordinal))
                 {
@@ -117,13 +133,14 @@ internal static class Markdown
                     quote.Append(t).Append('\n');
                     i++;
                 }
-                blocks.Add(new Quote(quote.ToString().TrimEnd()));
+                Add(new Quote(quote.ToString().TrimEnd()), from, i);
                 continue;
             }
 
             if (Bullet.IsMatch(line) || Numbered.IsMatch(line))
             {
                 Flush();
+                var from = i;
                 var items = new List<ListItem>();
                 var indents = new List<int>();
                 while (i < lines.Length)
@@ -159,7 +176,7 @@ internal static class Markdown
                     }
                     break;
                 }
-                blocks.Add(new ListBlock(items));
+                Add(new ListBlock(items), from, i);
                 continue;
             }
 
@@ -167,6 +184,7 @@ internal static class Markdown
             var hard = line.EndsWith("  ", StringComparison.Ordinal) || line.EndsWith("\\", StringComparison.Ordinal);
             var trimmed = line.Trim();
             if (trimmed.EndsWith("\\", StringComparison.Ordinal)) trimmed = trimmed.Substring(0, trimmed.Length - 1);
+            if (paragraph.Length == 0) paragraphFrom = i;
             if (paragraph.Length > 0 && paragraph[paragraph.Length - 1] != '\n') paragraph.Append(' ');
             paragraph.Append(trimmed);
             if (hard) paragraph.Append('\n');

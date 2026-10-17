@@ -15,6 +15,14 @@ internal sealed class ChatItem
     public string Name { get; set; } = "";
     /// <summary>Tools: running, done or failed.</summary>
     public string State { get; set; } = "";
+    /// <summary>When it was added (UTC); default for items saved before 0.31, which then show no time.</summary>
+    public DateTime Time { get; set; }
+    /// <summary>Tools: the input, indented JSON (shortened), for the step's details.</summary>
+    public string Input { get; set; } = "";
+    /// <summary>Tools: the start of the result, for the step's details and its element ids.</summary>
+    public string Result { get; set; } = "";
+    /// <summary>User: the full paths of the attached files, for thumbnails.</summary>
+    public List<string> Files { get; set; } = [];
 }
 
 /// <summary>A saved conversation: the Claude Code session to resume and what the pane showed.</summary>

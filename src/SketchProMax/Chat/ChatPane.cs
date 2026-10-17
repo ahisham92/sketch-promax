@@ -6,6 +6,7 @@ using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
@@ -128,13 +129,14 @@ internal sealed class ChatPane : DockPanel
     {
         public ChatItem Item = new();
         public ContentControl Mark = new();
-        public TextBlock Line = new();
+        public ToggleButton Header = new();
+        public TextBlock Line = new(), Chevron = new();
         public TextBlock Detail = new();
-        public string Input = "";
+        public StackPanel Details = new();
     }
 
-    private const int MaxImages = 8;
-    private static readonly FontFamily Icons = new("Segoe Fluent Icons, Segoe MDL2 Assets");
+    private const int MaxImages = 8, MaxResult = 3000, MaxIdLinks = 20;
+    private static readonly FontFamily Icons = ChatUi.Icons;
 
     private Conversation _conv;
     private ChatEngine? _engine;
@@ -142,12 +144,17 @@ internal sealed class ChatPane : DockPanel
     private Setup _setup = Setup.Checking;
     private string _setupDetail = "";
     private Turn? _turn;
-    private bool _stopped, _checking, _stick = true;
+    private bool _stopped, _checking, _scrollQueued;
+    private int _firstShown; // the first conversation item drawn (see History)
+    private readonly ScrollFollow _follow = new();
+    private readonly Throttle _throttle = new(TimeSpan.FromMilliseconds(40));
     private (string Key, string Title)? _pendingModel;
     private DateTime _lastActivity = DateTime.UtcNow, _waitingSince;
     private readonly List<Attachment> _pending = [];
     private readonly Dictionary<string, (ChatItem Item, MarkdownView View)> _texts = new();
     private readonly Dictionary<string, ToolRow> _tools = new();
+    private readonly Dictionary<ChatItem, MarkdownView> _views = new();
+    private readonly Dictionary<ChatItem, ToolRow> _rows = new();
     private readonly HashSet<string> _dirty = [];
 
     // ---- Controls -------------------------------------------------------------------------------------------------
@@ -155,14 +162,20 @@ internal sealed class ChatPane : DockPanel
     private readonly TextBlock _modelLine;
     private readonly Button _newChat, _send, _stop, _attach, _view;
     private readonly Border _setupCard = new() { Visibility = Visibility.Collapsed };
-    private readonly StackPanel _messages = new() { Margin = new Thickness(10, 6, 10, 6) };
+    private readonly StackPanel _messages = new();
     private readonly ScrollViewer _scroll;
+    private readonly UIElement _empty;
+    private readonly Button _earlier, _jump;
+    private readonly TextBlock _earlierText = new() { FontSize = ChatUi.SmallSize + 0.5, VerticalAlignment = VerticalAlignment.Center };
+    private readonly TextBlock _jumpText = new() { FontSize = ChatUi.SmallSize + 0.5, VerticalAlignment = VerticalAlignment.Center };
+    private readonly Border _working = new() { Visibility = Visibility.Collapsed, Margin = new Thickness(0, ChatUi.S3, 0, ChatUi.S1) };
+    private readonly TextBlock _workingText = Brand.Text("", Brand.K.Muted, ChatUi.SmallSize + 0.5);
     private readonly TextBox _input;
     private readonly WrapPanel _chips = new();
     private readonly DockPanel _statusRow = new() { Margin = new Thickness(0, 0, 0, 4) };
     private readonly ContentControl _statusSpin = new() { Focusable = false, VerticalAlignment = VerticalAlignment.Center };
     private readonly TextBlock _status;
-    private readonly DispatcherTimer _render = new(DispatcherPriority.Background) { Interval = TimeSpan.FromMilliseconds(120) };
+    private readonly DispatcherTimer _render = new(DispatcherPriority.Background) { Interval = TimeSpan.FromMilliseconds(40) };
     private readonly DispatcherTimer _poll = new() { Interval = TimeSpan.FromSeconds(4) };
     private readonly DispatcherTimer _idle = new() { Interval = TimeSpan.FromMinutes(1) };
     private readonly Border _restartNote = new() { Visibility = Visibility.Collapsed };
@@ -179,9 +192,13 @@ internal sealed class ChatPane : DockPanel
     private ChatPane()
     {
         Brand.UseTheme(this);
+        Resources.MergedDictionaries.Add(ChatUi.Styles());
         SetResourceReference(BackgroundProperty, Brand.K.Bg);
         SetResourceReference(TextElement.ForegroundProperty, Brand.K.Text);
         TextElement.SetFontSize(this, 12);
+        TextElement.SetFontFamily(this, new FontFamily("Segoe UI"));
+        // Tab order follows the reading order: header, notices, conversation, then the message box.
+        KeyboardNavigation.SetTabNavigation(this, KeyboardNavigationMode.Local);
         LastChildFill = true;
         _conv = ChatStore.Load(ConversationKey, ConversationTitle);
 
@@ -201,14 +218,17 @@ internal sealed class ChatPane : DockPanel
         _modelLine.VerticalAlignment = VerticalAlignment.Center;
         top.Children.Add(_modelLine);
         SetDock(top, Dock.Top);
+        KeyboardNavigation.SetTabIndex(top, 0);
         Children.Add(top);
 
         SetDock(_setupCard, Dock.Top);
+        KeyboardNavigation.SetTabIndex(_setupCard, 1);
         _setupCard.Margin = new Thickness(10, 4, 10, 4);
         Children.Add(_setupCard);
 
         // "Restart Revit to see the new buttons and pane" after an in-session update that couldn't show everything.
         SetDock(_restartNote, Dock.Top);
+        KeyboardNavigation.SetTabIndex(_restartNote, 2);
         _restartNote.Margin = new Thickness(10, 0, 10, 4);
         _restartNote.Padding = new Thickness(8, 6, 8, 6);
         _restartNote.BorderThickness = new Thickness(1);
@@ -222,7 +242,8 @@ internal sealed class ChatPane : DockPanel
         UI.RestartNote.Changed += ShowRestartNote;
 
         // Bottom: status, attachments, the message box and its buttons.
-        var composer = new StackPanel { Margin = new Thickness(10, 4, 10, 10) };
+        var composer = new StackPanel { Margin = new Thickness(ChatUi.S3, ChatUi.S2, ChatUi.S3, ChatUi.S3) };
+        KeyboardNavigation.SetTabIndex(composer, 4);
         _status = Brand.Text("", Brand.K.Muted, 11);
         _status.VerticalAlignment = VerticalAlignment.Center;
         AutomationProperties.SetLiveSetting(_status, AutomationLiveSetting.Polite);
@@ -233,9 +254,9 @@ internal sealed class ChatPane : DockPanel
         composer.Children.Add(_chips);
         _input = new TextBox
         {
-            AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, MinHeight = 56, MaxHeight = 160,
+            AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, MinHeight = 60, MaxHeight = 160, Padding = new Thickness(ChatUi.S2, 6, ChatUi.S2, 6),
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-            SpellCheck = { IsEnabled = true },
+            SpellCheck = { IsEnabled = true }, FontSize = ChatUi.BodySize,
         };
         AutomationProperties.SetName(_input, "Message to Claude");
         AutomationProperties.SetHelpText(_input, "Enter sends, Shift+Enter starts a new line, Escape stops Claude. Paste a picture or a file to attach it.");
@@ -243,9 +264,17 @@ internal sealed class ChatPane : DockPanel
         _input.PreviewKeyDown += OnInputKey;
         CommandManager.AddPreviewExecutedHandler(_input, OnPreviewPaste);
         CommandManager.AddPreviewCanExecuteHandler(_input, OnPreviewCanPaste);
-        composer.Children.Add(_input);
+        // A hint inside the empty box (the box's name and help text say the same for screen readers).
+        var hint = Brand.Text("Ask Claude about this model…", Brand.K.Muted, ChatUi.BodySize);
+        hint.IsHitTestVisible = false;
+        hint.Margin = new Thickness(ChatUi.S2 + 3, 7, ChatUi.S2, 0);
+        _input.TextChanged += (_, _) => hint.Visibility = _input.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
+        var field = new Grid();
+        field.Children.Add(_input);
+        field.Children.Add(hint);
+        composer.Children.Add(field);
 
-        var buttons = new DockPanel { Margin = new Thickness(0, 6, 0, 0) };
+        var buttons = new DockPanel { Margin = new Thickness(0, ChatUi.S2, 0, 0) };
         _attach = IconButton("", "Attach files", "Attach pictures, PDFs or drawings (DWG, DXF). You can also paste or drop them here.");
         _attach.Click += (_, _) => PickFiles();
         _view = IconButton("", "Attach the current view", "Attaches a picture of the active Revit view, as Revit shows it now.");
@@ -283,17 +312,69 @@ internal sealed class ChatPane : DockPanel
         Children.Add(composer);
         Children.Add(line);
 
+        // The conversation: "Show earlier", the messages, the typing indicator; "Jump to latest" floats over its foot.
+        _earlier = ChatUi.Ghost(ChatUi.GlyphUp, null, "Show earlier messages", "Shows the earlier messages of this conversation.");
+        _earlier.Content = Row(ChatUi.Glyph(ChatUi.GlyphUp, Brand.K.Muted, 10), _earlierText);
+        _earlier.HorizontalAlignment = HorizontalAlignment.Center;
+        _earlier.Margin = new Thickness(0, ChatUi.S1, 0, 0);
+        _earlier.Click += (_, _) => ShowEarlier();
+        _empty = EmptyState();
+        var dots = ChatUi.Dots();
+        var working = new DockPanel();
+        DockPanel.SetDock(dots, Dock.Left);
+        working.Children.Add(dots);
+        working.Children.Add(_workingText);
+        _working.Child = working;
+        AutomationProperties.SetLiveSetting(_working, AutomationLiveSetting.Polite);
+        var conversation = new StackPanel { Margin = new Thickness(ChatUi.S3, ChatUi.S1, ChatUi.S3, ChatUi.S4) };
+        conversation.Children.Add(_earlier);
+        conversation.Children.Add(_empty);
+        conversation.Children.Add(_messages);
+        conversation.Children.Add(_working);
         _scroll = new ScrollViewer
         {
-            Content = _messages, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            Content = conversation, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Focusable = true, IsTabStop = true,
         };
         AutomationProperties.SetName(_scroll, "Conversation");
+        AutomationProperties.SetHelpText(_scroll, "Arrow keys and Page Up/Down scroll; End goes to the latest message.");
         _scroll.ScrollChanged += (_, e) =>
         {
-            if (e.ExtentHeightChange == 0) _stick = _scroll.VerticalOffset >= _scroll.ScrollableHeight - 30;
+            _follow.Scrolled(_scroll.VerticalOffset, _scroll.ScrollableHeight, e.ExtentHeightChange, e.ViewportHeightChange);
+            if (_follow.Following && (e.ExtentHeightChange != 0 || e.ViewportHeightChange != 0)) ScrollToEnd();
+            else UpdateJump();
         };
-        Children.Add(_scroll);
+        // Reading back while Claude writes: stop following at once, before the next streamed text pulls the list down.
+        _scroll.PreviewMouseWheel += (_, e) =>
+        {
+            if (e.Delta > 0 && _scroll.VerticalOffset > 0) _follow.ReaderScrolledUp();
+        };
+        _scroll.PreviewKeyDown += (_, e) =>
+        {
+            if (e.Key is Key.PageUp or Key.Up or Key.Home && _scroll.VerticalOffset > 0 && e.OriginalSource == _scroll) _follow.ReaderScrolledUp();
+        };
+        _jump = new Button { Content = Row(ChatUi.Glyph(ChatUi.GlyphArrowDown, Brand.K.Text, 10), _jumpText), Visibility = Visibility.Collapsed };
+        _jump.SetResourceReference(StyleProperty, "SpmChatPill");
+        _jump.HorizontalAlignment = HorizontalAlignment.Center;
+        _jump.VerticalAlignment = VerticalAlignment.Bottom;
+        _jump.Margin = new Thickness(0, 0, 0, ChatUi.S2);
+        _jump.ToolTip = "Scrolls to the newest message and follows Claude's answer again (End).";
+        _jump.Click += (_, _) => ScrollToEnd(force: true);
+        _jumpText.Text = "Jump to latest";
+        AutomationProperties.SetName(_jump, "Jump to latest");
+        var center = new Grid();
+        center.Children.Add(_scroll);
+        center.Children.Add(_jump);
+        KeyboardNavigation.SetTabIndex(center, 3);
+        Children.Add(center);
+
+        // Escape stops Claude from anywhere in the chat (the message box handles it itself first).
+        KeyDown += (_, e) =>
+        {
+            if (e.Key != Key.Escape || e.Handled || _turn is null) return;
+            e.Handled = true;
+            StopTurn();
+        };
 
         // Files dropped anywhere on the chat are attached.
         AllowDrop = true;
@@ -337,6 +418,17 @@ internal sealed class ChatPane : DockPanel
     private static string ConversationKey => _modelKey.Length > 0 ? _modelKey : "(no model)";
 
     private static string ConversationTitle => _modelTitle.Length > 0 ? _modelTitle : "no model open";
+
+    private static StackPanel Row(params UIElement[] children)
+    {
+        var row = new StackPanel { Orientation = Orientation.Horizontal };
+        foreach (var child in children)
+        {
+            if (row.Children.Count > 0 && child is FrameworkElement f) f.Margin = new Thickness(6, 0, 0, 0);
+            row.Children.Add(child);
+        }
+        return row;
+    }
 
     private static Button IconButton(string glyph, string name, string tip)
     {
@@ -526,26 +618,48 @@ internal sealed class ChatPane : DockPanel
         _messages.Children.Clear();
         _texts.Clear();
         _tools.Clear();
+        _views.Clear();
+        _rows.Clear();
         _dirty.Clear();
-        if (_conv.Items.Count == 0) _messages.Children.Add(EmptyState());
-        foreach (var item in _conv.Items) Show(item);
+        // Long conversations draw their latest page; "Show earlier" adds a page at a time.
+        _firstShown = History.FirstShown(_conv.Items.Count);
+        for (var k = _firstShown; k < _conv.Items.Count; k++) _messages.Children.Add(Build(k));
+        ShowEarlierButton();
+        _empty.Visibility = _conv.Items.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         ScrollToEnd(force: true);
     }
 
-    private static UIElement EmptyState()
+    private UIElement EmptyState()
     {
-        var panel = new StackPanel { Margin = new Thickness(0, 6, 0, 6) };
-        panel.Children.Add(Brand.Text("Ask Claude about this model", Brand.K.Text, 13, bold: true));
+        var panel = new StackPanel { Margin = new Thickness(0, ChatUi.S4, 0, ChatUi.S2) };
+        panel.Children.Add(Brand.Text("Ask Claude about this model", Brand.K.Text, 14, bold: true));
+        var intro = Brand.Text("Claude reads and changes the open model through the Sketch ProMax tools. Try one of these:", Brand.K.Muted);
+        intro.Margin = new Thickness(0, ChatUi.S1, 0, ChatUi.S2);
+        panel.Children.Add(intro);
+        var examples = new WrapPanel();
+        foreach (var example in new[] { "List the levels with their elevations", "Check the beams on level 2 for missing tags", "Put these columns on a sheet" })
+        {
+            var button = new Button { Content = new TextBlock { Text = example, TextWrapping = TextWrapping.Wrap }, Margin = new Thickness(0, 0, ChatUi.S2, ChatUi.S2) };
+            button.SetResourceReference(StyleProperty, "SpmChatPill");
+            button.ToolTip = "Puts this in the message box; edit it or press Enter to send.";
+            AutomationProperties.SetName(button, "Example: " + example);
+            button.Click += (_, _) =>
+            {
+                _input.Text = example;
+                _input.CaretIndex = example.Length;
+                _input.Focus();
+            };
+            examples.Children.Add(button);
+        }
+        panel.Children.Add(examples);
         foreach (var line in new[]
                  {
-                     "For example: \"List the levels with their elevations\", \"Check the beams on level 2 for missing tags\", " +
-                     "\"Put these columns on a sheet\".",
                      "Attach a sketch, PDF or DWG with the paperclip, paste a screenshot, or send the active view with the camera button.",
                      "When \"Ask me before Claude changes the model\" is on in Settings, Revit asks you before any change. Every change can be undone with Ctrl+Z.",
                  })
         {
-            var t = Brand.Text(line, Brand.K.Muted);
-            t.Margin = new Thickness(0, 4, 0, 0);
+            var t = Brand.Text(line, Brand.K.Muted, ChatUi.SmallSize + 0.5);
+            t.Margin = new Thickness(0, ChatUi.S1, 0, 0);
             panel.Children.Add(t);
         }
         return panel;
@@ -553,97 +667,238 @@ internal sealed class ChatPane : DockPanel
 
     private void Add(ChatItem item)
     {
-        if (_conv.Items.Count == 0) _messages.Children.Clear(); // the empty state
+        if (item.Time == default) item.Time = DateTime.UtcNow;
+        _empty.Visibility = Visibility.Collapsed;
         _conv.Items.Add(item);
-        Show(item);
+        _messages.Children.Add(Build(_conv.Items.Count - 1));
+        if (item.Kind == "user") _follow.Jump(); // sending shows the answer as it comes
+        else _follow.Added();
+        UpdateJump();
         ScrollToEnd();
     }
 
-    private void Show(ChatItem item)
+    /// <summary>The element for one conversation item; Claude's name and time head each run of Claude's messages and steps.</summary>
+    private UIElement Build(int index)
     {
-        switch (item.Kind)
+        var item = _conv.Items[index];
+        var first = index == 0 || _conv.Items[index - 1].Kind is not ("assistant" or "tool");
+        return item.Kind switch
         {
-            case "user":
-            {
-                var panel = new StackPanel();
-                panel.Children.Add(Brand.Text("You", Brand.K.Muted, 11, bold: true));
-                if (item.Text.Length > 0)
-                {
-                    var text = Brand.Text(item.Text);
-                    text.Margin = new Thickness(0, 2, 0, 0);
-                    panel.Children.Add(text);
-                }
-                if (item.Name.Length > 0)
-                {
-                    var files = Brand.Text("Attached: " + item.Name, Brand.K.Muted, 11);
-                    files.Margin = new Thickness(0, 2, 0, 0);
-                    panel.Children.Add(files);
-                }
-                var bubble = new Border { Child = panel, Padding = new Thickness(8, 5, 8, 6), CornerRadius = new CornerRadius(6), Margin = new Thickness(0, 8, 0, 6) };
-                bubble.SetResourceReference(Border.BackgroundProperty, Brand.K.Surface);
-                AutomationProperties.SetName(bubble, "You: " + item.Text);
-                _messages.Children.Add(bubble);
-                break;
-            }
-            case "assistant":
-            {
-                var view = new MarkdownView();
-                view.SetMarkdown(item.Text);
-                _messages.Children.Add(view);
-                break;
-            }
-            case "tool":
-                _messages.Children.Add(ToolLine(item, out _));
-                break;
-            case "error":
-            {
-                var text = Brand.Text(item.Text, Brand.K.DangerText);
-                var box = new Border { Child = text, Padding = new Thickness(8, 5, 8, 6), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(4), Margin = new Thickness(0, 6, 0, 6) };
-                box.SetResourceReference(Border.BackgroundProperty, Brand.K.NoticeBg);
-                box.SetResourceReference(Border.BorderBrushProperty, Brand.K.NoticeBorder);
-                AutomationProperties.SetLiveSetting(box, AutomationLiveSetting.Assertive);
-                _messages.Children.Add(box);
-                break;
-            }
-            default:
-            {
-                var note = Brand.Text(item.Text, Brand.K.Muted, 11);
-                note.FontStyle = FontStyles.Italic;
-                note.Margin = new Thickness(0, 4, 0, 4);
-                _messages.Children.Add(note);
-                break;
-            }
-        }
+            "user" => UserMessage(item),
+            "assistant" => AssistantMessage(item, first),
+            "tool" => ToolCard(item, first),
+            "error" => ErrorBox(item),
+            _ => NoteLine(item),
+        };
     }
 
-    private UIElement ToolLine(ChatItem item, out ToolRow row)
+    private static string When(ChatItem item)
     {
-        row = new ToolRow { Item = item };
-        var line = new DockPanel { Margin = new Thickness(0, 2, 0, 2), Background = Brushes.Transparent };
+        var stamp = StreamRender.Stamp(item.Time == default ? default : item.Time.ToLocalTime(), DateTime.Now);
+        return stamp.Length > 0 ? " · " + stamp : "";
+    }
+
+    private static string WhenLong(ChatItem item) =>
+        item.Time == default ? "" : item.Time.ToLocalTime().ToString("dddd d MMMM yyyy, HH:mm", CultureInfo.InvariantCulture);
+
+    private static UIElement ClaudeHeader(ChatItem item)
+    {
+        var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, ChatUi.S1) };
+        var dot = new System.Windows.Shapes.Ellipse { Width = 8, Height = 8, Margin = new Thickness(0, 0, 6, 0), VerticalAlignment = VerticalAlignment.Center };
+        dot.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, Brand.K.Accent);
+        row.Children.Add(dot);
+        row.Children.Add(ChatUi.Small("Claude", Brand.K.Text, bold: true));
+        var time = ChatUi.Small(When(item));
+        time.ToolTip = WhenLong(item);
+        row.Children.Add(time);
+        return row;
+    }
+
+    private UIElement UserMessage(ChatItem item)
+    {
+        var panel = new StackPanel { HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(32, ChatUi.S4, 0, ChatUi.S1) };
+        var head = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 0, 0, 2) };
+        if (item.Text.Length > 0)
+        {
+            var copy = ChatUi.CopyButton(() => item.Text, "your message", null);
+            copy.Margin = new Thickness(0, 0, ChatUi.S1, 0);
+            head.Children.Add(copy);
+        }
+        var who = ChatUi.Small("You" + When(item));
+        who.ToolTip = WhenLong(item);
+        head.Children.Add(who);
+        panel.Children.Add(head);
+
+        var body = new StackPanel();
+        if (item.Text.Length > 0) body.Children.Add(ChatUi.Selectable(item.Text, "Your message"));
+        if (item.Files.Count > 0)
+        {
+            var files = new WrapPanel { Margin = new Thickness(0, item.Text.Length > 0 ? ChatUi.S2 : 0, 0, 0) };
+            foreach (var path in item.Files)
+            {
+                FrameworkElement shown;
+                if (ImageType(path) is not null) shown = ChatUi.Thumbnail(path, 72);
+                else
+                {
+                    var chip = new StackPanel { Orientation = Orientation.Horizontal };
+                    chip.Children.Add(ChatUi.Glyph(ChatUi.GlyphFile, Brand.K.Muted));
+                    chip.Children.Add(ChatUi.Small(" " + System.IO.Path.GetFileName(path), Brand.K.Text));
+                    var open = new Button { Content = chip, ToolTip = path };
+                    open.SetResourceReference(StyleProperty, "SpmChatGhost");
+                    AutomationProperties.SetName(open, "Attached file " + System.IO.Path.GetFileName(path) + ", open it");
+                    var target = path;
+                    open.Click += (_, _) => ChatUi.Open(target);
+                    shown = open;
+                }
+                shown.Margin = new Thickness(0, 0, ChatUi.S1, ChatUi.S1);
+                files.Children.Add(shown);
+            }
+            body.Children.Add(files);
+        }
+        else if (item.Name.Length > 0)
+        {
+            var files = Brand.Text("Attached: " + item.Name, Brand.K.Muted, ChatUi.SmallSize);
+            files.Margin = new Thickness(0, 2, 0, 0);
+            body.Children.Add(files);
+        }
+        var bubble = new Border
+        {
+            Child = body, Padding = new Thickness(ChatUi.S3, ChatUi.S2, ChatUi.S3, ChatUi.S2), CornerRadius = new CornerRadius(10, 10, 2, 10),
+            BorderThickness = new Thickness(1), HorizontalAlignment = HorizontalAlignment.Right,
+        };
+        bubble.SetResourceReference(Border.BackgroundProperty, Brand.K.Surface);
+        bubble.SetResourceReference(Border.BorderBrushProperty, Brand.K.Border);
+        panel.Children.Add(bubble);
+        AutomationProperties.SetName(panel, "You" + When(item) + ": " + item.Text + (item.Name.Length > 0 ? ". Attached: " + item.Name : ""));
+        return panel;
+    }
+
+    private UIElement AssistantMessage(ChatItem item, bool header)
+    {
+        var panel = new StackPanel { Margin = new Thickness(0, header ? ChatUi.S4 : ChatUi.S1, 0, 0) };
+        if (header) panel.Children.Add(ClaudeHeader(item));
+        var view = new MarkdownView();
+        view.SetMarkdown(item.Text);
+        _views[item] = view;
+        // Copy sits over the top right corner, shown on hover or when it has keyboard focus, so it takes no room.
+        var grid = new Grid();
+        grid.Children.Add(view);
+        var copy = ChatUi.CopyButton(() => item.Text, "Claude's answer", null);
+        copy.HorizontalAlignment = HorizontalAlignment.Right;
+        copy.VerticalAlignment = VerticalAlignment.Top;
+        copy.Margin = new Thickness(0, -ChatUi.S1, 0, 0);
+        copy.SetResourceReference(BackgroundProperty, Brand.K.Bg);
+        copy.Opacity = 0;
+        void Shown() => copy.Opacity = grid.IsMouseOver || copy.IsKeyboardFocused ? 1 : 0;
+        grid.MouseEnter += (_, _) => Shown();
+        grid.MouseLeave += (_, _) => Shown();
+        copy.GotKeyboardFocus += (_, _) => Shown();
+        copy.LostKeyboardFocus += (_, _) => Shown();
+        grid.Children.Add(copy);
+        panel.Children.Add(grid);
+        return panel;
+    }
+
+    private UIElement ErrorBox(ChatItem item)
+    {
+        var row = new DockPanel();
+        var icon = ChatUi.Glyph(ChatUi.GlyphError, Brand.K.DangerText, 14);
+        icon.VerticalAlignment = VerticalAlignment.Top;
+        icon.Margin = new Thickness(0, 1, ChatUi.S2, 0);
+        DockPanel.SetDock(icon, Dock.Left);
+        row.Children.Add(icon);
+        row.Children.Add(Brand.Text(item.Text, Brand.K.Text));
+        var box = new Border
+        {
+            Child = row, Padding = new Thickness(ChatUi.S3, ChatUi.S2, ChatUi.S3, ChatUi.S2), BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(6), Margin = new Thickness(0, ChatUi.S3, 0, ChatUi.S1),
+        };
+        box.SetResourceReference(Border.BackgroundProperty, Brand.K.NoticeBg);
+        box.SetResourceReference(Border.BorderBrushProperty, Brand.K.NoticeBorder);
+        AutomationProperties.SetName(box, "Problem: " + item.Text);
+        AutomationProperties.SetLiveSetting(box, AutomationLiveSetting.Assertive);
+        return box;
+    }
+
+    private static UIElement NoteLine(ChatItem item)
+    {
+        var row = new DockPanel { Margin = new Thickness(0, ChatUi.S3, 0, ChatUi.S1) };
+        var icon = ChatUi.Glyph(ChatUi.GlyphInfo, Brand.K.Muted, 12);
+        icon.VerticalAlignment = VerticalAlignment.Top;
+        icon.Margin = new Thickness(0, 1, ChatUi.S2, 0);
+        DockPanel.SetDock(icon, Dock.Left);
+        row.Children.Add(icon);
+        var text = Brand.Text(item.Text, Brand.K.Muted, ChatUi.SmallSize + 0.5);
+        text.FontStyle = FontStyles.Italic;
+        row.Children.Add(text);
+        AutomationProperties.SetName(row, item.Text);
+        return row;
+    }
+
+    // ---- Tool steps -----------------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// A tool step: a one-line header (status, tool, short input) that opens to the input, the result and the element
+    /// ids found in it, which select and zoom to the elements in Revit.
+    /// </summary>
+    private UIElement ToolCard(ChatItem item, bool header)
+    {
+        var row = new ToolRow { Item = item };
+        _rows[item] = row;
+        var outer = new StackPanel { Margin = new Thickness(0, header ? ChatUi.S4 : 2, 0, 2) };
+        if (header) outer.Children.Add(ClaudeHeader(item));
+
+        var line = new DockPanel();
         row.Mark.Width = 18;
-        row.Mark.VerticalAlignment = VerticalAlignment.Top;
-        row.Mark.Margin = new Thickness(0, 1, 2, 0);
         row.Mark.Focusable = false;
+        row.Mark.VerticalAlignment = VerticalAlignment.Center;
         DockPanel.SetDock(row.Mark, Dock.Left);
         line.Children.Add(row.Mark);
-        var text = new StackPanel();
-        row.Line = new TextBlock { TextTrimming = TextTrimming.CharacterEllipsis, FontSize = 11.5 };
+        row.Chevron = ChatUi.Glyph(ChatUi.GlyphRight, Brand.K.Muted, 9);
+        row.Chevron.Margin = new Thickness(ChatUi.S2, 0, 0, 0);
+        DockPanel.SetDock(row.Chevron, Dock.Right);
+        line.Children.Add(row.Chevron);
+        row.Line = new TextBlock { TextTrimming = TextTrimming.CharacterEllipsis, FontSize = ChatUi.SmallSize + 0.5, VerticalAlignment = VerticalAlignment.Center };
         Brand.Fg(row.Line, Brand.K.Muted);
-        row.Detail = Brand.Text("", Brand.K.DangerText, 11);
+        line.Children.Add(row.Line);
+        row.Header = new ToggleButton { Content = line };
+        row.Header.SetResourceReference(StyleProperty, "SpmChatDisclosure");
+        row.Header.Checked += (_, _) => Expand(row, true);
+        row.Header.Unchecked += (_, _) => Expand(row, false);
+
+        row.Detail = Brand.Text("", Brand.K.DangerText, ChatUi.SmallSize);
+        row.Detail.Margin = new Thickness(26, 0, ChatUi.S2, ChatUi.S1 + 2);
         row.Detail.Visibility = Visibility.Collapsed;
-        text.Children.Add(row.Line);
-        text.Children.Add(row.Detail);
-        line.Children.Add(text);
+        row.Details = new StackPanel { Margin = new Thickness(26, 0, ChatUi.S2, ChatUi.S2), Visibility = Visibility.Collapsed };
+
+        var stack = new StackPanel();
+        stack.Children.Add(row.Header);
+        stack.Children.Add(row.Detail);
+        stack.Children.Add(row.Details);
+        var card = new Border { Child = stack, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(6) };
+        card.SetResourceReference(Border.BorderBrushProperty, Brand.K.Border);
+        card.SetResourceReference(Border.BackgroundProperty, Brand.K.Bg);
+        outer.Children.Add(card);
         SetTool(row, item.State, item.Text, "");
-        return line;
+        return outer;
+    }
+
+    private void Expand(ToolRow row, bool open)
+    {
+        row.Chevron.Text = open ? ChatUi.GlyphDown : ChatUi.GlyphRight;
+        row.Details.Visibility = open ? Visibility.Visible : Visibility.Collapsed;
+        AutomationProperties.SetItemStatus(row.Header, open ? "Expanded" : "Collapsed");
+        if (open) FillDetails(row);
     }
 
     private void SetTool(ToolRow row, string state, string summary, string result)
     {
         row.Item.State = state;
         row.Item.Text = summary;
+        if (result.Length > 0) row.Item.Result = result.Length > MaxResult ? result.Substring(0, MaxResult) + "…" : result;
         row.Line.Inlines.Clear();
         row.Line.Inlines.Add(new Run(row.Item.Name) { FontWeight = FontWeights.SemiBold });
+        Brand.Fg(row.Line, Brand.K.Muted);
         if (summary.Length > 0) row.Line.Inlines.Add(new Run("  " + summary));
         FrameworkElement mark;
         string said;
@@ -651,32 +906,113 @@ internal sealed class ChatPane : DockPanel
         {
             case "running":
                 mark = Brand.Spinner();
+                mark.SetResourceReference(TextElement.ForegroundProperty, Brand.K.Accent);
                 said = "running";
                 break;
             case "done":
-                mark = Brand.Text("✓", Brand.K.SuccessText, 12, bold: true);
-                said = "done";
+                mark = ChatUi.Glyph(ChatUi.GlyphCheck, Brand.K.SuccessText, 12);
+                said = "succeeded";
                 break;
             case "stopped":
-                mark = Brand.Text("■", Brand.K.Muted, 10);
+                mark = ChatUi.Glyph(ChatUi.GlyphStop, Brand.K.Muted, 11);
                 said = "stopped";
                 break;
             default:
-                mark = Brand.Text("✕", Brand.K.DangerText, 12, bold: true);
+                mark = ChatUi.Glyph(ChatUi.GlyphCross, Brand.K.DangerText, 11);
                 said = "failed";
                 break;
         }
-        mark.SetResourceReference(TextElement.ForegroundProperty, state == "done" ? Brand.K.SuccessText : state is "running" or "stopped" ? Brand.K.Muted : Brand.K.DangerText);
         row.Mark.Content = mark;
-        var tip = row.Item.Name + (row.Input.Length > 0 ? "\n" + row.Input : summary.Length > 0 ? "\n" + summary : "") +
-                  (result.Length > 0 ? "\n\n" + (result.Length > 800 ? result.Substring(0, 800) + "…" : result) : "");
-        row.Line.ToolTip = tip;
-        AutomationProperties.SetName(row.Line, $"Tool {row.Item.Name}, {said}. {summary}");
-        if (state == "failed" && result.Length > 0)
+        row.Header.ToolTip = row.Item.Name + " (" + said + ")" + (summary.Length > 0 ? "\n" + summary : "") + "\nClick for the input, the result and the elements.";
+        AutomationProperties.SetName(row.Header, $"Step {row.Item.Name}, {said}. {summary}");
+        AutomationProperties.SetHelpText(row.Header, "Press Space to show or hide the step's input, result and elements.");
+        if (state == "failed" && row.Item.Result.Length > 0)
         {
-            var first = result.Replace("\r", "").Split('\n').FirstOrDefault(l => l.Trim().Length > 0) ?? "";
+            var first = row.Item.Result.Replace("\r", "").Split('\n').FirstOrDefault(l => l.Trim().Length > 0) ?? "";
             row.Detail.Text = first.Length > 240 ? first.Substring(0, 240) + "…" : first;
             row.Detail.Visibility = Visibility.Visible;
+        }
+        if (row.Header.IsChecked == true) FillDetails(row);
+    }
+
+    private void FillDetails(ToolRow row)
+    {
+        var item = row.Item;
+        row.Details.Children.Clear();
+        void Label(string text)
+        {
+            var t = ChatUi.Small(text, Brand.K.Muted, bold: true);
+            t.Margin = new Thickness(0, ChatUi.S2, 0, 2);
+            row.Details.Children.Add(t);
+        }
+        void Mono(string text, string name)
+        {
+            var box = ChatUi.Selectable(text, name);
+            box.FontFamily = ChatUi.Mono;
+            box.FontSize = ChatUi.SmallSize;
+            box.Padding = new Thickness(ChatUi.S2, ChatUi.S1, ChatUi.S2, ChatUi.S1);
+            box.SetResourceReference(BackgroundProperty, Brand.K.Surface);
+            row.Details.Children.Add(box);
+        }
+        if (item.Input.Length > 0)
+        {
+            Label("Input");
+            Mono(item.Input, item.Name + " input");
+        }
+        if (item.Result.Length > 0)
+        {
+            Label(item.State == "failed" ? "Error" : "Result");
+            Mono(item.Result, item.Name + " result");
+        }
+        var ids = new List<long>();
+        if (item.Result.Length > 0) UI.Pane.Collect(item.Result, ids);
+        if (ids.Count > 0)
+        {
+            Label("Elements (click to select and zoom in Revit)");
+            var links = new TextBlock { TextWrapping = TextWrapping.Wrap, FontSize = ChatUi.SmallSize + 0.5 };
+            foreach (var id in ids.Take(MaxIdLinks))
+            {
+                if (links.Inlines.Count > 0) links.Inlines.Add(new Run("  "));
+                links.Inlines.Add(IdLink(id.ToString(CultureInfo.InvariantCulture), new[] { id }, $"Select element {id} in Revit"));
+            }
+            if (ids.Count > 1)
+            {
+                links.Inlines.Add(new Run("   "));
+                links.Inlines.Add(IdLink($"Select all {ids.Count}", ids, $"Select all {ids.Count} elements in Revit"));
+            }
+            row.Details.Children.Add(links);
+        }
+        if (row.Details.Children.Count == 0)
+        {
+            var none = ChatUi.Small(item.State == "running" ? "Running; the result shows here when it's done." : "No details were kept for this step.");
+            none.Margin = new Thickness(0, ChatUi.S1, 0, 0);
+            row.Details.Children.Add(none);
+        }
+        if (WhenLong(item) is { Length: > 0 } when)
+        {
+            var t = ChatUi.Small(when);
+            t.Margin = new Thickness(0, ChatUi.S2, 0, 0);
+            row.Details.Children.Add(t);
+        }
+    }
+
+    private Hyperlink IdLink(string text, IReadOnlyList<long> ids, string name)
+    {
+        var link = new Hyperlink(new Run(text)) { ToolTip = name };
+        link.SetResourceReference(TextElement.ForegroundProperty, Brand.K.Link);
+        AutomationProperties.SetName(link, name);
+        link.Click += (_, _) => SelectInRevit(ids);
+        return link;
+    }
+
+    /// <summary>Selects the elements in the active model and zooms to them (one view id opens that view), as the job pane does.</summary>
+    private async void SelectInRevit(IReadOnlyList<long> ids)
+    {
+        var list = string.Join(",", ids.Select(i => i.ToString(CultureInfo.InvariantCulture)));
+        try { await App.Dispatcher.InvokeAsync(app => UI.Pane.Select(app, list)); }
+        catch (Exception ex) when (ex is InvalidOperationException or OperationCanceledException or Autodesk.Revit.Exceptions.ApplicationException)
+        {
+            Status("Revit couldn't select the elements now: " + ex.Message, spin: false);
         }
     }
 
@@ -688,20 +1024,89 @@ internal sealed class ChatPane : DockPanel
 
     private void Error(string text) => Add(new ChatItem { Kind = "error", Text = text });
 
+    // ---- Scrolling and history ------------------------------------------------------------------------------------
+
+    /// <summary>Scrolls to the newest message once layout is done, when the list follows (or <paramref name="force"/>).</summary>
     private void ScrollToEnd(bool force = false)
     {
-        if (!force && !_stick) return;
-        _stick = true;
-        Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(_scroll.ScrollToEnd));
+        if (force) _follow.Jump();
+        UpdateJump();
+        if (!_follow.Following || _scrollQueued) return;
+        _scrollQueued = true;
+        Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() =>
+        {
+            _scrollQueued = false;
+            if (_follow.Following) _scroll.ScrollToEnd();
+            UpdateJump();
+        }));
+    }
+
+    private void UpdateJump()
+    {
+        var show = _follow.ShowJump && _scroll.ScrollableHeight - _scroll.VerticalOffset > ScrollFollow.Slack;
+        _jump.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+        var text = _follow.Unseen > 0 ? $"Jump to latest ({_follow.Unseen} new)" : "Jump to latest";
+        if (_jumpText.Text != text)
+        {
+            _jumpText.Text = text;
+            AutomationProperties.SetName(_jump, text);
+        }
+    }
+
+    private void ShowEarlierButton()
+    {
+        _earlier.Visibility = _firstShown > 0 ? Visibility.Visible : Visibility.Collapsed;
+        var text = _firstShown == 1 ? "Show 1 earlier message" : $"Show earlier messages ({_firstShown} more)";
+        _earlierText.Text = text;
+        AutomationProperties.SetName(_earlier, text);
+    }
+
+    /// <summary>Draws the page before the first message drawn, keeping what the reader sees in place.</summary>
+    private void ShowEarlier()
+    {
+        if (_firstShown == 0) return;
+        var from = History.Earlier(_firstShown);
+        var before = _scroll.ExtentHeight;
+        var offset = _scroll.VerticalOffset;
+        for (var k = _firstShown - 1; k >= from; k--) _messages.Children.Insert(0, Build(k));
+        _firstShown = from;
+        ShowEarlierButton();
+        _scroll.UpdateLayout();
+        _scroll.ScrollToVerticalOffset(offset + _scroll.ExtentHeight - before);
+        if (_firstShown == 0) _scroll.Focus(); // the button is gone: keep the keyboard in the list
+    }
+
+    /// <summary>After a turn, while the reader is at the bottom, the oldest drawn messages beyond two pages are let go.</summary>
+    private void TrimDrawn()
+    {
+        var drop = History.Trim(_messages.Children.Count, _follow.Following);
+        if (drop <= 0) return;
+        for (var k = 0; k < drop && _firstShown + k < _conv.Items.Count; k++)
+        {
+            _views.Remove(_conv.Items[_firstShown + k]);
+            _rows.Remove(_conv.Items[_firstShown + k]);
+        }
+        _messages.Children.RemoveRange(0, drop);
+        _firstShown += drop;
+        ShowEarlierButton();
     }
 
     private void RenderDirty()
     {
         _render.Stop();
+        _throttle.Drawn(DateTime.UtcNow);
         foreach (var key in _dirty)
             if (_texts.TryGetValue(key, out var t)) t.View.SetMarkdown(t.Item.Text);
         _dirty.Clear();
         ScrollToEnd();
+    }
+
+    /// <summary>Streamed text changed: draw it soon, at most every 40 ms, together with whatever else arrives meanwhile.</summary>
+    private void RequestRender()
+    {
+        if (_throttle.Request(DateTime.UtcNow) is not { } wait) return;
+        _render.Interval = wait > TimeSpan.FromMilliseconds(1) ? wait : TimeSpan.FromMilliseconds(1);
+        _render.Start();
     }
 
     // ---- Status and buttons ---------------------------------------------------------------------------------------
@@ -709,9 +1114,14 @@ internal sealed class ChatPane : DockPanel
     private void ShowStatus(string? text = null)
     {
         var busy = _turn is not null;
+        // While Claude works, Stop takes Send's place (Send isn't greyed out: the pane is working, not disabled).
+        var sendHadFocus = _send.IsKeyboardFocused;
+        var stopHadFocus = _stop.IsKeyboardFocused;
         _stop.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
+        _send.Visibility = busy ? Visibility.Collapsed : Visibility.Visible;
         if (!busy) Brand.SetBusy(_stop, false);
-        Brand.SetBusy(_send, busy, "Working…");
+        if (busy && sendHadFocus) _stop.Focus();
+        if (!busy && stopHadFocus) _input.Focus();
         _newChat.IsEnabled = !_stopped;
         _send.IsEnabled = _attach.IsEnabled = _view.IsEnabled = !_stopped;
         if (_stopped)
@@ -732,8 +1142,24 @@ internal sealed class ChatPane : DockPanel
         }, spin: false);
     }
 
+    /// <summary>
+    /// Shows a status line. While a turn runs, what Claude is doing shows at the end of the conversation with the typing
+    /// dots, and the line under the message box says how to stop it.
+    /// </summary>
     private void Status(string text, bool spin)
     {
+        var working = _turn is not null && !_stopped;
+        var wasWorking = _working.Visibility == Visibility.Visible;
+        _working.Visibility = working ? Visibility.Visible : Visibility.Collapsed;
+        if (working && !wasWorking) ScrollToEnd();
+        if (working && spin)
+        {
+            _workingText.Text = text;
+            AutomationProperties.SetName(_working, text);
+            _status.Text = _turn!.Stopping ? "Stopping Claude…" : "Claude is working. Esc or Stop ends it; you can type your next message meanwhile.";
+            _statusSpin.Content = null;
+            return;
+        }
         _status.Text = text;
         if (spin && _statusSpin.Content is null)
         {
@@ -786,7 +1212,7 @@ internal sealed class ChatPane : DockPanel
         _input.Clear();
         _pending.Clear();
         ShowChips();
-        Add(new ChatItem { Kind = "user", Text = text, Name = string.Join(", ", attachments.Select(a => a.Name)) });
+        Add(new ChatItem { Kind = "user", Text = text, Name = string.Join(", ", attachments.Select(a => a.Name)), Files = attachments.Select(a => a.Path).ToList() });
         var turn = _turn = new Turn();
         _lastActivity = DateTime.UtcNow;
         ShowStatus(attachments.Count > 0 ? "Preparing the attachments…" : null);
@@ -961,16 +1387,16 @@ internal sealed class ChatPane : DockPanel
             {
                 var item = new ChatItem { Kind = "assistant" };
                 Add(item);
-                var view = (MarkdownView)_messages.Children[_messages.Children.Count - 1];
-                _texts[start.Key] = (item, view);
+                _texts[start.Key] = (item, _views[item]);
                 if (turn is not null) turn.SawText = true;
+                if (turn is { Stopping: false }) ShowStatus("Claude is writing…");
                 break;
             }
             case TextDeltaEvent delta:
                 if (!_texts.TryGetValue(delta.Key, out var target)) break;
                 target.Item.Text += delta.Text;
                 _dirty.Add(delta.Key);
-                if (!_render.IsEnabled) _render.Start();
+                RequestRender();
                 break;
             case AssistantTextEvent text:
                 if (text.Text.Trim().Length == 0) break;
@@ -986,15 +1412,13 @@ internal sealed class ChatPane : DockPanel
                 if (!_tools.TryGetValue(tool.Id, out var row))
                 {
                     var item = new ChatItem { Kind = "tool", Name = StreamParser.ShortName(tool.Name), State = "running", Text = summary };
-                    if (_conv.Items.Count == 0) _messages.Children.Clear();
-                    _conv.Items.Add(item);
-                    _messages.Children.Add(ToolLine(item, out row));
+                    Add(item);
+                    row = _rows[item];
                     _tools[tool.Id] = row;
-                    ScrollToEnd();
                 }
                 if (tool.InputJson.Length > 0)
                 {
-                    row.Input = Pretty(tool.InputJson);
+                    row.Item.Input = Pretty(tool.InputJson);
                     SetTool(row, row.Item.State, summary, "");
                 }
                 if (turn is { Stopping: false })
@@ -1131,6 +1555,7 @@ internal sealed class ChatPane : DockPanel
         _lastActivity = DateTime.UtcNow;
         Save();
         ShowStatus();
+        TrimDrawn();
         if (_pendingModel is { } next)
         {
             _pendingModel = null;
@@ -1216,7 +1641,18 @@ internal sealed class ChatPane : DockPanel
         }
     }
 
-    private void Save() => ChatStore.Save(_conv);
+    private void Save()
+    {
+        var before = _conv.Items.Count;
+        ChatStore.Save(_conv);
+        // The store keeps the latest items only: let go of the drawn ones it dropped too.
+        var removed = before - _conv.Items.Count;
+        if (removed <= 0) return;
+        var drawnGone = Math.Min(Math.Max(0, removed - _firstShown), _messages.Children.Count);
+        if (drawnGone > 0) _messages.Children.RemoveRange(0, drawnGone);
+        _firstShown = Math.Max(0, _firstShown - removed);
+        ShowEarlierButton();
+    }
 
     /// <summary>This core is stopping: end the engine and keep the conversation for the next core.</summary>
     private void Retire()
@@ -1288,12 +1724,27 @@ internal sealed class ChatPane : DockPanel
             };
             DockPanel.SetDock(remove, Dock.Right);
             row.Children.Add(remove);
+            if (a.IsImage)
+            {
+                var thumb = ChatUi.Thumbnail(a.Path, 28);
+                thumb.Margin = new Thickness(0, 0, ChatUi.S1, 0);
+                DockPanel.SetDock(thumb, Dock.Left);
+                row.Children.Add(thumb);
+            }
+            else
+            {
+                var icon = ChatUi.Glyph(ChatUi.GlyphFile, Brand.K.Muted);
+                icon.Margin = new Thickness(2, 0, ChatUi.S1 + 2, 0);
+                DockPanel.SetDock(icon, Dock.Left);
+                row.Children.Add(icon);
+            }
             row.Children.Add(new TextBlock
             {
-                Text = (a.IsImage ? "Picture: " : "File: ") + a.Name, TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = 220,
+                Text = a.Name, TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = 200,
                 VerticalAlignment = VerticalAlignment.Center, ToolTip = a.Path, FontSize = 11.5,
             });
-            var chip = new Border { Child = row, Padding = new Thickness(6, 2, 2, 2), Margin = new Thickness(0, 0, 4, 4), CornerRadius = new CornerRadius(4), BorderThickness = new Thickness(1) };
+            var chip = new Border { Child = row, Padding = new Thickness(2), Margin = new Thickness(0, 0, ChatUi.S1, ChatUi.S1), CornerRadius = new CornerRadius(6), BorderThickness = new Thickness(1) };
+            AutomationProperties.SetName(chip, (a.IsImage ? "Picture " : "File ") + a.Name);
             chip.SetResourceReference(Border.BackgroundProperty, Brand.K.Surface);
             chip.SetResourceReference(Border.BorderBrushProperty, Brand.K.Border);
             _chips.Children.Add(chip);
