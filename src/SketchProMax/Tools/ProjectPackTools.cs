@@ -860,18 +860,19 @@ internal static class ProjectPack
 
     private static void Chat(Document doc, Pack pack)
     {
-        // Only this model's conversation, as the chat pane keeps it (same key), never other projects' chats.
-        Step("this model's chat");
-        var conv = SketchProMax.Chat.ChatStore.Load(SketchProMax.Chat.ChatPane.ModelKey(doc), doc.Title);
-        if (conv.Items.Count == 0) return;
-        pack.Text("chat/conversation.md", RenderChat(conv), "This model's in-Revit chat, oldest first.");
+        // Only this model's chats, as the chat pane keeps them (same key), never other projects' chats.
+        Step("this model's chats");
+        var chats = SketchProMax.Chat.ChatStore.ForModel(SketchProMax.Chat.ChatPane.ModelKey(doc)).Where(c => c.Items.Count > 0).ToList();
+        for (var i = 0; i < chats.Count; i++)
+            pack.Text(i == 0 ? "chat/conversation.md" : $"chat/conversation-{i + 1}.md", RenderChat(chats[i]),
+                i == 0 ? "This model's latest in-Revit chat, oldest message first." : "An earlier in-Revit chat of this model.");
     }
 
     /// <summary>A saved in-Revit chat as readable Markdown, tool calls and errors included; a long one keeps its end.</summary>
     internal static string RenderChat(SketchProMax.Chat.Conversation conv)
     {
         var sb = new StringBuilder();
-        sb.AppendLine($"# In-Revit chat: {conv.Title}");
+        sb.AppendLine(conv.Name.Length > 0 ? $"# In-Revit chat: {conv.Name} ({conv.Title})" : $"# In-Revit chat: {conv.Title}");
         if (conv.Updated != default) sb.AppendLine($"Last updated {conv.Updated.ToLocalTime():yyyy-MM-dd HH:mm}");
         foreach (var item in conv.Items)
         {

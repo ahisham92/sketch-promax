@@ -63,6 +63,8 @@
   <ItemGroup>
     <EmbeddedResource Include="..\..\assets\logo\sketch-promax-64.png" LogicalName="SketchProMax.logo-64.png" />
     <EmbeddedResource Include="..\..\assets\logo\sketch-promax.ico" LogicalName="SketchProMax.sketch-promax.ico" />
+    <!-- The chat home screen's prompt library (Chat/PromptLibrary). -->
+    <EmbeddedResource Include="Chat\chat-prompts.json" LogicalName="SketchProMax.chat-prompts.json" />
   </ItemGroup>
 
   <!-- The built-in embodied carbon factor table (generic placeholders, versioned inside the file). -->

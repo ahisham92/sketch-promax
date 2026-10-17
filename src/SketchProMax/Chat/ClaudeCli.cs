@@ -140,7 +140,7 @@ internal static class ClaudeCli
     /// Revit's own dialog asks before model changes (per the settings) and always before code, recipes and files written
     /// to a folder Claude chose.
     /// </summary>
-    public static ProcessStartInfo EngineStart(Install install, string? resumeSessionId)
+    public static ProcessStartInfo EngineStart(Install install, string? resumeSessionId, string? model = null)
     {
         Directory.CreateDirectory(WorkFolder);
         var engine = Path.Combine(Folder, "engine");
@@ -185,6 +185,7 @@ internal static class ClaudeCli
             args.Add(string.Join(",", SketchProMax.Tools.OutputPaths.CodeTools.Select(t => $"mcp__{ServerName}__{t}")));
         }
         if (!string.IsNullOrEmpty(resumeSessionId)) { args.Add("--resume"); args.Add(resumeSessionId!); }
+        if (!string.IsNullOrEmpty(model)) { args.Add("--model"); args.Add(model!); }
 
         var command = string.Join(" ", args.Select(Quote));
         var cmdShim = install.Path.EndsWith(".cmd", StringComparison.OrdinalIgnoreCase);
