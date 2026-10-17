@@ -821,7 +821,9 @@ public sealed class CopyDimensionsTool : IRevitTool
         "rebuilt on the matching elements of the target view (same category and type at the same place relative to the view, " +
         "e.g. a typical section copied from Berth 10 to Berth 9 piles). Dimensions the API cannot recreate are listed up front " +
         "under manualReAdd with where they were: ones on view-specific cut-edge references, and in Revit 2024 diameter and " +
-        "radius dimensions (Revit 2025+ recreates those). Use list_only to see the plan before changing anything.";
+        "radius dimensions (Revit 2025+ recreates those). Cut-edge ones are handed to the user to add by hand (Continue checks " +
+        "they are there), or, with static_fallback, drawn as a static stand-in: a detail line with ticks and the measured value " +
+        "in text notes, labelled static (not a live dimension). Use list_only to see the plan before changing anything.";
     public string PropertiesJson => """
     {
       "source_view_id": {"type": "integer"},
@@ -830,7 +832,8 @@ public sealed class CopyDimensionsTool : IRevitTool
       "method": {"type": "string", "enum": ["auto", "copy", "recreate"], "description": "auto (default): copy when the target shows the same elements, else recreate on matching elements."},
       "match_tolerance": {"type": "number", "description": "How far (project units, in the view plane) a matching element may be from the mapped position. Default 100 mm."},
       "offset": {"type": "array", "items": {"type": "number"}, "description": "Extra [right, up] shift in the target view, project units."},
-      "list_only": {"type": "boolean", "description": "Only report what would be copied, recreated or left for manual re-add."}
+      "list_only": {"type": "boolean", "description": "Only report what would be copied, recreated or left for manual re-add."},
+      "static_fallback": {"type": "boolean", "description": "Opt-in. For cut-edge dimensions Revit refuses: draw a detail line with ticks plus text notes with the measured value, labelled STATIC (not a live dimension; it never updates). Default false: the user adds them by hand."}
     }
     """;
     public string[] Required => ["source_view_id", "target_view_ids"];
@@ -843,6 +846,7 @@ public sealed class CopyDimensionsTool : IRevitTool
         public string How = "";
         public List<Reference>? Mapped;
         public string? Manual;
+        public bool CutEdge;
         public string Label => $"{Dim.Id.Value} -> '{Target.Name}'";
     }
 
@@ -890,7 +894,7 @@ public sealed class CopyDimensionsTool : IRevitTool
                 var refs = Refs(d);
                 var shape = d.DimensionShape;
                 if (refs.Any(r => r.ElementReferenceType == ElementReferenceType.REFERENCE_TYPE_CUT_EDGE))
-                { job.Manual = "it measures to a cut edge (a line Revit makes only where that view's cut plane slices the element), which exists only in its own view; the API can't point a dimension at another view's cut edge (Revit API limit). Re-add it by hand in the target view: Annotate > Aligned and pick the cut edges"; continue; }
+                { job.CutEdge = true; job.Manual = "it measures to a cut edge (a line Revit makes only where that view's cut plane slices the element), which exists only in its own view; the API can't point a dimension at another view's cut edge (Revit API limit). Re-add it by hand in the target view: Annotate > Aligned and pick the cut edges"; continue; }
                 var allVisible = refs.Count > 0 && refs.All(r => visible.Contains(r.ElementId));
                 if (method != "recreate" && allVisible) { job.How = "copy"; continue; }
                 if (method == "copy") { job.Manual = "the dimensioned elements don't show in the target view (use method auto or recreate)"; continue; }
@@ -965,17 +969,50 @@ public sealed class CopyDimensionsTool : IRevitTool
             return Recreate(doc, j.Dim, j.Target, j.Mapped!, map).Id.Value;
         }, borrow: false);
 
+        // Cut-edge dimensions: static stand-ins when asked for, else the user adds them (one hand-off per view).
+        var cutEdge = jobs.Where(j => j.CutEdge).ToList();
+        ItemBatch.Result? stand = null;
+        var handoffs = new List<HandoffItem>();
+        if (cutEdge.Count > 0 && args.OptBool("static_fallback"))
+            stand = ItemBatch.Run(doc, "Static dimension stand-ins", cutEdge, j => j.Label, _ => [], j =>
+            {
+                var map = Frame(j.Target).Multiply(Frame(source).Inverse);
+                if (shift.Count >= 2) map = Transform.CreateTranslation(j.Target.RightDirection * shift[0] + j.Target.UpDirection * shift[1]).Multiply(map);
+                return StaticDimension.Draw(doc, j.Dim, source, j.Target, map);
+            }, borrow: false);
+        else
+            foreach (var view in cutEdge.GroupBy(j => j.Target.Id))
+            {
+                var target = view.First().Target;
+                var wanted = view.Count();
+                int Count() => new FilteredElementCollector(doc, target.Id).OfClass(typeof(Dimension)).Count(d => d.OwnerViewId == target.Id);
+                var before = Count();
+                handoffs.Add(new HandoffItem(new HandoffStep
+                {
+                    Kind = "cut_edge_dimension", Item = $"'{target.Name}'",
+                    What = $"Add {wanted} dimension{(wanted == 1 ? "" : "s")} by hand in '{target.Name}', to the cut edges",
+                    Where = $"Open '{target.Name}', Annotate tab > Dimension > Aligned, and pick the cut edges. They copy dimension{(wanted == 1 ? "" : "s")} " +
+                            string.Join(", ", view.Select(j => $"{j.Dim.Id.Value} ({j.Dim.ValueString ?? string.Join(" / ", j.Dim.Segments.Cast<DimensionSegment>().Select(s => s.ValueString))})")) +
+                            $" in '{source.Name}'",
+                    Why = "They measure to cut edges, which exist only in their own view, and the API can't point a dimension at another view's cut edge (Revit API limit). " +
+                          "To have static stand-ins drawn instead (a line with the value as text, labelled static; it never updates), Stop and ask again with static_fallback.",
+                    Recheck = () => Count() >= before + wanted,
+                }, null));
+            }
+
         var ok = result.Items.Where(x => x.Ok && x.Value is long).Select(x => (long)x.Value!).ToList();
-        return ToolResult.Ok(new
+        return Handoff.Finish(Name, ToolResult.Ok(new
         {
             source = source.Name,
             created = ok.Count,
             ids = ok.Take(500),
-            failed = result.Failed.Select(f => new { item = f.Item, reason = f.Error }).Take(100),
+            failed = result.Failed.Concat(stand?.Failed ?? []).Select(f => new { item = f.Item, reason = f.Error }).Take(100),
             manualReAdd = manual,
-            note = manual.Count > 0 ? "Add the manualReAdd dimensions by hand in the target views (sourceViewPoint is right/up from the source view origin)." : null,
+            staticStandIns = stand is null ? null : stand.Items.Where(i => i.Ok).Select(i => i.Value).ToList(),
+            note = stand is { Done: > 0 } ? "staticStandIns are detail lines and text notes, not dimensions: they show the value measured now and never update." :
+                   manual.Count > 0 ? "Add the manualReAdd dimensions by hand in the target views (sourceViewPoint is right/up from the source view origin)." : null,
             units = RevitHelpers.LengthUnitLabel(doc),
-        });
+        }), handoffs);
     }
 
     private static List<Reference> Refs(Dimension d)

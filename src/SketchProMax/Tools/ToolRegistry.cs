@@ -249,6 +249,7 @@ public sealed class ToolRegistry
         // Guided workarounds for API limits
         new CreateLegendTool(),
         new SaveLegendSeedTool(),
+        new AddLegendComponentsTool(),
         new InPlaceGuideTool(),
         // Export for Claude: one small zip describing the project, to upload to a chat
         new ExportProjectPackTool(),

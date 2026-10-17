@@ -566,8 +566,7 @@ public sealed class PlaceLegendOnSheetsTool : IRevitTool
     {
         var doc = app.ActiveUIDocument.Document;
         var legends = new FilteredElementCollector(doc).OfClass(typeof(View)).Cast<View>().Where(v => !v.IsTemplate && v.ViewType == ViewType.Legend).ToList();
-        if (legends.Count == 0)
-            return ToolResult.Error("The model has no legends. Make one with create_legend (it copies one from another open model or a saved legend seed), copy one in with copy_from_file, or make one by hand once (View > Legends > Legend).");
+        if (legends.Count == 0) throw ManualSteps.NoLegend(doc, "this model (create_legend can also copy one from another open model or a legend seed)");
         var wanted = args.String("legend").Trim();
         var legend = legends.FirstOrDefault(v => string.Equals(v.Name, wanted, StringComparison.OrdinalIgnoreCase))
                      ?? (legends.Where(v => v.Name.IndexOf(wanted, StringComparison.OrdinalIgnoreCase) >= 0).Take(2).ToList() is { Count: 1 } one ? one[0] : null)
@@ -849,7 +848,7 @@ public sealed class ExportQuantitiesTool : IRevitTool
             inPlace = inPlaceNoQuantity.Count == 0 ? null : new
             {
                 count = inPlaceNoQuantity.Count, ids = inPlaceNoQuantity.Take(50),
-                note = "These in-place families are counted but carry no volume or area: Revit doesn't expose in-place geometry to add-ins. Measure them by hand or remodel them as system/loadable elements.",
+                note = "These in-place families are counted but carry no volume or area: Revit doesn't expose in-place geometry to add-ins. Measure them by hand or remodel them as system/loadable elements. " + InPlace.GuideHint,
             },
         });
     }

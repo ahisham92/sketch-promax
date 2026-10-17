@@ -71,7 +71,10 @@ internal static class InPlace
         $"{Geo.Describe(e)} is an in-place family. Revit does not expose an in-place family's geometry (solids, faces, " +
         "voids) to add-ins, so it can't be measured, clash-checked, hosted on or cut with through the API. Work on it " +
         "in Revit (select it > Edit In-Place, or Modify > Cut/Join Geometry), or remake it as a loadable family " +
-        "(for a void: a face-based void family with 'Cut with Voids When Loaded' on) and run this again.";
+        "(for a void: a face-based void family with 'Cut with Voids When Loaded' on) and run this again. " + GuideHint;
+
+    /// <summary>Where the step-by-step conversion guide is, for results that meet in-place families.</summary>
+    public const string GuideHint = "Step-by-step guide to make it loadable: in_place_guide with action 'convert'.";
 
     public const string Short = "in-place family: Revit does not expose its geometry to add-ins";
 }
@@ -590,10 +593,16 @@ public sealed class PlaceVoidCutsTool : IRevitTool
         var doc = app.ActiveUIDocument.Document;
         var symbol = TypeMatch.Find(new FilteredElementCollector(doc).OfClass(typeof(FamilySymbol)).Cast<FamilySymbol>(), args.String("family"), "family");
         var family = symbol.Family;
-        if (family.IsInPlace) return ToolResult.Error($"'{TypeMatch.Label(symbol)}' is an in-place family; in-place voids can't be placed or used to cut through the API. Use a loadable void family.");
+        if (family.IsInPlace)
+            throw ManualSteps.InPlace(TypeMatch.Label(symbol), "In-place voids can't be placed or used to cut through the Revit API (API limit); a loadable void family can.");
         if (family.get_Parameter(BuiltInParameter.FAMILY_ALLOW_CUT_WITH_VOIDS) is { } cutParam && cutParam.AsInteger() == 0)
-            return ToolResult.Error($"'{family.Name}' has 'Cut with Voids When Loaded' off, so its voids can't cut anything in the project. " +
-                                    "Open the family, turn it on in Family Category and Parameters, and reload it.");
+            throw new ManualStepException(new HandoffStep
+            {
+                Kind = "family_setting", What = $"Turn on 'Cut with Voids When Loaded' in the family '{family.Name}' and load it again",
+                Where = "Select an instance > Edit Family, then Create tab > Family Category and Parameters; tick it, then Load into Project (overwrite)",
+                Why = "With it off, the family's voids can't cut anything in the project, and the API can't change it from here.",
+                Recheck = () => doc.GetElement(family.Id) is Family f && f.get_Parameter(BuiltInParameter.FAMILY_ALLOW_CUT_WITH_VOIDS)?.AsInteger() != 0,
+            });
         var placement = family.FamilyPlacementType;
         var faceBased = placement == FamilyPlacementType.WorkPlaneBased;
         if (!faceBased && placement != FamilyPlacementType.OneLevelBased)

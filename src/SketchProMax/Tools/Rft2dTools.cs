@@ -104,7 +104,10 @@ internal static class Rft2d
     }
 
     public static FamilySymbol Find(Document doc, Role role, string? given, out string from) =>
-        TryFind(doc, role, given, out _, out from, out var problem) ?? throw new ArgumentException(problem);
+        TryFind(doc, role, given, out _, out from, out var problem)
+        ?? throw (problem.StartsWith("Family '", StringComparison.Ordinal) // loaded, but no such type: the caller fixes the name
+            ? new ArgumentException(problem)
+            : ManualSteps.MissingFamily(role.What, problem, () => TryFind(doc, role, given, out _, out _, out _) is not null));
 
     /// <summary>Outline rings of a slab's largest top face in plan (outer first, then holes), in model coordinates.</summary>
     public static List<IReadOnlyList<(double x, double y)>> SlabRings(Element slab)

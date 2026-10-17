@@ -118,9 +118,9 @@ public sealed class CreateLegendTool : IRevitTool
         "Create a new, empty legend view (or a copy of an existing legend with its contents). Revit's API can't make a legend " +
         "from nothing, only duplicate one, so this looks for a legend to start from, in order: this model; any other open " +
         "model; the firm seed file set in Settings (a .rvt/.rte with a legend, opened in the background and closed again); the " +
-        "seed saved by save_legend_seed. When none exists it says the one manual step needed (View > Legends > Legend once). " +
-        "Legend components themselves can't be placed through the API; add text, lines and filled regions with the other " +
-        "tools, or copy a legend that already has the components (with_contents).";
+        "seed saved by save_legend_seed. When none exists it hands the one manual step to the user (View > Legends > Legend " +
+        "once) and carries on when they press Continue. Legend components: add_legend_components copies them from an existing " +
+        "one; or copy a legend that already has them (with_contents).";
     public string PropertiesJson => """
     {
       "name": {"type": "string", "description": "New legend name (default 'Legend'; made unique)."},
@@ -186,10 +186,8 @@ public sealed class CreateLegendTool : IRevitTool
             finally { if (opened) seed.Close(false); }
         }
 
-        return ToolResult.Error(
-            "No legend to start from. Revit's API can't create a legend from nothing (API limit), only duplicate one. One manual step fixes it for good: " +
-            "in Revit click View > Legends > Legend once (any name and scale), then ask again; or open any project that has a legend and run " +
-            "save_legend_seed there, so every later project can start from it. Looked in: " + string.Join("; ", tried) + ".");
+        // The one manual step: the user makes a legend by hand, and Continue runs this call again.
+        throw ManualSteps.NoLegend(doc, string.Join("; ", tried));
     }
 
     private static View Duplicate(Document doc, View legend, bool withContents)
@@ -215,7 +213,7 @@ public sealed class CreateLegendTool : IRevitTool
         return ToolResult.Ok(new
         {
             id = view.Id.Value, name = finalName, scale = view.Scale, source = how,
-            next = "Place it with place_legend_on_sheets. Legend components can't be placed through the API; add them by hand (Annotate > Component > Legend Component) or fill it with text, detail lines and filled regions.",
+            next = "Place it with place_legend_on_sheets. Add legend components with add_legend_components (copied from an existing one), and text, detail lines and filled regions with the other tools.",
         });
     }
 
@@ -258,8 +256,7 @@ public sealed class SaveLegendSeedTool : IRevitTool
             ? candidates.FirstOrDefault()
             : candidates.FirstOrDefault(v => string.Equals(v.Name, wanted, StringComparison.OrdinalIgnoreCase))
               ?? throw new ArgumentException($"No legend named '{wanted}'. Legends: {string.Join(", ", candidates.Select(v => v.Name).Distinct().Take(50))}");
-        if (legend is null)
-            return ToolResult.Error("No open model has a legend. Make one by hand once (View > Legends > Legend), then run save_legend_seed again.");
+        if (legend is null) throw ManualSteps.NoLegend(doc);
 
         var given = args.OptString("path") is { } p ? OutputPaths.Checked(Environment.ExpandEnvironmentVariables(p.Trim().Trim('"'))) : null;
         var path = given ?? Environment.ExpandEnvironmentVariables(LegendSeeds.SavedSeedPath.Trim().Trim('"'));
@@ -314,7 +311,8 @@ public sealed class InPlaceGuideTool : IRevitTool
     public string Description =>
         "Find in-place elements (in-place families) by category and level, optionally select them or isolate them in a view, " +
         "and get step-by-step manual instructions for what the API can't do with them: cut, join, quantity (volumes/areas), " +
-        "or convert to a loadable family. Read-only unless select/isolate is asked for (a new 3D view asks for approval).";
+        "or convert to a loadable family (action convert returns the full guide, so the tools can then read the family). " +
+        "Read-only unless select/isolate is asked for (a new 3D view asks for approval).";
     public string PropertiesJson => """
     {
       "action": {"type": "string", "enum": ["list", "cut", "join", "quantity", "convert"], "description": "Which manual steps to return (default list: just the elements)."},
@@ -401,6 +399,8 @@ public sealed class InPlaceGuideTool : IRevitTool
             why = "In-place elements have no loadable family behind them: tools that read or rebuild family geometry, swap types, or " +
                   "copy families skip them, and their geometry can only be edited in Revit's in-place editor.",
             steps = Steps(action),
+            guide = action == "convert" ? HelpGuides.Read(HelpGuides.InPlaceToLoadable) : null,
+            guideOnline = action == "convert" ? HelpGuides.WebUrl(HelpGuides.InPlaceToLoadable) : null,
         });
     }
 
@@ -476,19 +476,194 @@ public sealed class InPlaceGuideTool : IRevitTool
             "If a solid has no material, it shows as <By Category>: Edit In-Place, select the solid, set its Material in Properties, Finish Model.",
             "Export the schedule (File > Export > Reports > Schedule) or ask me to read it with the schedule tools.",
         ],
-        "convert" =>
-        [
-            "Revit has no command (and no API) to turn an in-place family into a loadable one; it is rebuilt by copy and paste.",
-            "Select the in-place element > Edit In-Place. Select all its forms and voids, Ctrl+C, then Finish Model.",
-            "File > New > Family, choose a template of the same category (e.g. Metric Generic Model.rft); or set Create > Family Category and Parameters afterwards.",
-            "Modify > Paste > Aligned to Same Place. Add reference planes and parameters as needed, set materials, then Save As an .rfa.",
-            "Load into Project, place an instance where the in-place element is (use its id from the list above to find it), compare, then delete the in-place element.",
-            "Repeat for each in-place family; identical copies only need converting once, then swap the others to the new type.",
-        ],
+        // The steps of the shipped guide (docs/guides/in-place-to-loadable.md); the full guide is in the result too.
+        "convert" => HelpGuides.Steps(HelpGuides.Read(HelpGuides.InPlaceToLoadable) ?? "") is { Count: > 0 } steps ? steps.ToArray()
+            : ["Revit has no command (and no API) to turn an in-place family into a loadable one; it is rebuilt by copy and paste into a new family."],
         _ =>
         [
             "Ask again with action 'cut', 'join', 'quantity' or 'convert' for the manual steps.",
             "select: true highlights them in Revit; isolate 'temporary' shows only them in the active view; isolate 'new_3d_view' makes a 3D view boxed around them.",
         ],
     };
+}
+
+/// <summary>
+/// Legend components through the one route the API allows: copy an existing component (view to view, from any legend
+/// in this model, another open model or a legend seed file) and change its type with the LEGEND_COMPONENT parameter.
+/// With no component anywhere, the user places one by hand (a hand-off) and the call carries on.
+/// </summary>
+public sealed class AddLegendComponentsTool : IRevitTool
+{
+    public string Name => "add_legend_components";
+    public string Description =>
+        "Add legend components (the symbols of wall, floor, door and other types) to a legend view, one per type, stacked top " +
+        "to bottom with an optional text label. Revit's API can't create a legend component, so each one is copied from an " +
+        "existing component and then switched to the wanted type. The component to copy is looked for in: source_legend, the " +
+        "target legend, any legend in this model, other open models, then the legend seed files (Settings, then save_legend_seed's). " +
+        "When there is none, the user is asked to place one by hand once and the call carries on when they press Continue. " +
+        "Types Revit refuses for a legend are handed to the user the same way.";
+    public string PropertiesJson => """
+    {
+      "legend": {"type": "string", "description": "Target legend view (name or id). Default: the active view when it is a legend."},
+      "types": {"type": "array", "items": {"type": "string"}, "description": "Types to show, as 'Family: Type', a type name, or an element id."},
+      "source_legend": {"type": "string", "description": "Legend (name) whose component is copied. Default: found as described."},
+      "labels": {"type": "boolean", "description": "Write each type's name in a text note to the right of its component (default true)."},
+      "gap_mm": {"type": "number", "description": "Gap between components on paper, in mm (default 6)."}
+    }
+    """;
+    public string[] Required => ["types"];
+    public bool ModifiesModel => true;
+
+    public ToolResult Execute(UIApplication app, ToolArgs args)
+    {
+        var doc = app.ActiveUIDocument.Document;
+        if (doc.IsFamilyDocument) return ToolResult.Error("Legends live in projects; switch to a project model.");
+        var legends = LegendSeeds.Legends(doc);
+        if (legends.Count == 0) throw ManualSteps.NoLegend(doc, "this model (create_legend can also copy one from another open model or a legend seed)");
+        var target = Legend(doc, legends, args.OptString("legend"), app.ActiveUIDocument.ActiveView);
+        var types = args.StringList("types").Select(t => FindType(doc, t)).ToList();
+        if (types.Count == 0) throw new ArgumentException("Give at least one type in types.");
+        if (types.Count > 200) throw new ArgumentException($"{types.Count} types in one call; the limit is 200.");
+
+        // The component to copy: this model first (no foreign types come in), then other models and seed files.
+        var tried = new List<string>();
+        var wanted = args.OptString("source_legend")?.Trim();
+        var local = (string.IsNullOrEmpty(wanted) ? new[] { target }.Concat(legends.Where(l => l.Id != target.Id)) : legends.Where(l => string.Equals(l.Name, wanted, StringComparison.OrdinalIgnoreCase)))
+            .Select(l => (View: l, Seed: LegendComponents.In(doc, l).FirstOrDefault())).FirstOrDefault(x => x.Seed is not null);
+        if (local.Seed is null) tried.Add(string.IsNullOrEmpty(wanted) ? "legends in this model: no legend component" : $"legend '{wanted}' in this model: none or no component");
+
+        string? seedNote = null;
+        Element? copiedSeed = null;
+        if (local.Seed is null)
+        {
+            copiedSeed = SeedFromElsewhere(app, doc, target, wanted, tried, out seedNote);
+            if (copiedSeed is null) throw ManualSteps.NoLegendComponent(doc, string.Join("; ", tried));
+        }
+        var seedView = local.Seed is not null ? local.View : target;
+        var seedId = local.Seed?.Id ?? copiedSeed!.Id;
+
+        // Stack below whatever the legend already holds, left-aligned with it.
+        var right = target.RightDirection.Normalize();
+        var up = target.UpDirection.Normalize();
+        var gap = Math.Max(0, args.OptDouble("gap_mm") ?? 6) / 304.8 * Math.Max(1, target.Scale);
+        var existing = new FilteredElementCollector(doc, target.Id).WhereElementIsNotElementType()
+            .Where(e => e.OwnerViewId == target.Id && e.Category != null && (copiedSeed is null || e.Id != copiedSeed.Id))
+            .Select(e => e.get_BoundingBox(target)).Where(b => b != null).ToList();
+        var left = existing.Count > 0 ? existing.Min(b => Math.Min(b.Min.DotProduct(right), b.Max.DotProduct(right))) : 0;
+        var cursor = existing.Count > 0 ? existing.Min(b => Math.Min(b.Min.DotProduct(up), b.Max.DotProduct(up))) - gap : 0;
+        var labels = args.OptBool("labels", true);
+        var textType = doc.GetDefaultElementTypeId(ElementTypeGroup.TextNoteType);
+        var options = LegendSeeds.CopyOptions();
+
+        var batch = ItemBatch.Run(doc, "Add legend components", types, TypeMatch.Label, _ => [], type =>
+        {
+            var ids = seedView.Id == target.Id
+                ? ElementTransformUtils.CopyElement(doc, seedId, XYZ.Zero)
+                : ElementTransformUtils.CopyElements(seedView, [seedId], target, Transform.Identity, options);
+            var component = ids.Select(doc.GetElement).FirstOrDefault(e => e?.Category?.Id.Value == (long)BuiltInCategory.OST_LegendComponents)
+                            ?? throw new InvalidOperationException("Revit copied the legend component but returned no component.");
+            var p = component.get_Parameter(BuiltInParameter.LEGEND_COMPONENT);
+            if (p is null || p.IsReadOnly) throw new InvalidOperationException("this legend component's type can't be changed through the API");
+            if (!p.Set(type.Id) || p.AsElementId() != type.Id) throw new InvalidOperationException($"Revit did not accept '{TypeMatch.Label(type)}' as a legend component type");
+            doc.Regenerate();
+            var box = component.get_BoundingBox(target) ?? throw new InvalidOperationException("the component has no extent in the legend");
+            double Lo(XYZ dir) => Math.Min(box.Min.DotProduct(dir), box.Max.DotProduct(dir));
+            double Hi(XYZ dir) => Math.Max(box.Min.DotProduct(dir), box.Max.DotProduct(dir));
+            var move = right * (left - Lo(right)) + up * (cursor - Hi(up));
+            if (!move.IsZeroLength()) ElementTransformUtils.MoveElement(doc, component.Id, move);
+            long? labelId = null;
+            if (labels && textType != ElementId.InvalidElementId)
+            {
+                var at = right * (left + Hi(right) - Lo(right) + gap) + up * cursor + target.ViewDirection.Normalize() * box.Min.DotProduct(target.ViewDirection.Normalize());
+                labelId = TextNote.Create(doc, target.Id, at, TypeMatch.Label(type), textType).Id.Value;
+            }
+            cursor -= Hi(up) - Lo(up) + gap;
+            return new { id = component.Id.Value, type = TypeMatch.Label(type), label = labelId };
+        }, borrow: false, manual: (type, why) => new HandoffStep
+        {
+            Kind = "legend_component", RunAgain = false,
+            What = $"Place a legend component of '{TypeMatch.Label(type)}' in the legend '{target.Name}'",
+            Where = $"Open the legend '{target.Name}', Annotate tab > Detail panel > Component > Legend Component, pick '{TypeMatch.Label(type)}' under Family on the Options Bar, and click to place it",
+            Why = $"Revit refused it through the API ({why}).",
+            Recheck = () => LegendComponents.In(doc, target).Any(e => e.get_Parameter(BuiltInParameter.LEGEND_COMPONENT)?.AsElementId() == type.Id),
+        });
+
+        // A component brought in only to copy from goes again: the legend keeps the ones asked for.
+        if (copiedSeed is not null && doc.GetElement(copiedSeed.Id) is not null)
+        {
+            using var t = RevitHelpers.StartTransaction(doc, "Remove legend component seed");
+            doc.Delete(copiedSeed.Id);
+            t.Commit();
+        }
+
+        var payload = new
+        {
+            legend = target.Name, legendId = target.Id.Value,
+            added = batch.Items.Where(i => i.Ok).Select(i => i.Value).ToList(),
+            failed = batch.Failed.Select(f => new { type = f.Item, reason = f.Error }).ToList(),
+            copiedFrom = local.Seed is not null ? $"component {local.Seed.Id.Value} in '{local.View.Name}'" : seedNote,
+        };
+        var result = batch.Done == 0 && batch.Handoffs.Count == 0 ? new ToolResult("No legend component was added. " + System.Text.Json.JsonSerializer.Serialize(payload), IsError: true) : ToolResult.Ok(payload);
+        return Handoff.Finish(Name, result, batch.Handoffs);
+    }
+
+    private static View Legend(Document doc, List<View> legends, string? wanted, View active)
+    {
+        if (string.IsNullOrWhiteSpace(wanted))
+            return active.ViewType == ViewType.Legend ? active
+                : legends.Count == 1 ? legends[0]
+                : throw new ArgumentException($"Name the legend (legend). Legends: {string.Join(", ", legends.Select(l => l.Name).Take(50))}");
+        if (long.TryParse(wanted, out var id) && legends.FirstOrDefault(l => l.Id.Value == id) is { } byId) return byId;
+        return legends.FirstOrDefault(l => string.Equals(l.Name, wanted!.Trim(), StringComparison.OrdinalIgnoreCase))
+               ?? (legends.Where(l => l.Name.IndexOf(wanted!.Trim(), StringComparison.OrdinalIgnoreCase) >= 0).Take(2).ToList() is { Count: 1 } one ? one[0] : null)
+               ?? throw new ArgumentException($"No single legend matches '{wanted}'. Legends: {string.Join(", ", legends.Select(l => l.Name).Take(50))}");
+    }
+
+    /// <summary>The element types a legend component can show: model categories and detail components.</summary>
+    private static ElementType FindType(Document doc, string text)
+    {
+        if (long.TryParse(text.Trim(), out var id))
+            return doc.GetElement(new ElementId(id)) as ElementType ?? throw new ArgumentException($"{id} is not an element type.");
+        var candidates = new FilteredElementCollector(doc).WhereElementIsElementType().OfType<ElementType>()
+            .Where(t => t.Category is { } c && (c.CategoryType == CategoryType.Model || c.Id.Value == (long)BuiltInCategory.OST_DetailComponents));
+        return TypeMatch.Find(candidates, text, "type");
+    }
+
+    /// <summary>
+    /// Copies one legend component from another open model or a seed file into <paramref name="target"/>, in its own
+    /// transaction, to copy from. Null (with what was tried) when none has one.
+    /// </summary>
+    private static Element? SeedFromElsewhere(UIApplication app, Document doc, View target, string? wanted, List<string> tried, out string? note)
+    {
+        note = null;
+        bool Matches(View l) => string.IsNullOrEmpty(wanted) || string.Equals(l.Name, wanted, StringComparison.OrdinalIgnoreCase);
+        Element? CopyFrom(Document from, string label, out string? how)
+        {
+            how = null;
+            var found = LegendSeeds.Legends(from).Where(Matches).Select(l => (View: l, Seed: LegendComponents.In(from, l).FirstOrDefault())).FirstOrDefault(x => x.Seed is not null);
+            if (found.Seed is null) { tried.Add($"{label}: no legend component"); return null; }
+            using var t = RevitHelpers.StartTransaction(doc, "Copy a legend component to copy from");
+            var ids = ElementTransformUtils.CopyElements(found.View, [found.Seed.Id], target, Transform.Identity, LegendSeeds.CopyOptions());
+            var copy = ids.Select(doc.GetElement).FirstOrDefault(e => e?.Category?.Id.Value == (long)BuiltInCategory.OST_LegendComponents);
+            if (copy is null) { t.RollBack(); tried.Add($"{label}: Revit copied no component"); return null; }
+            t.Commit();
+            how = $"a component of '{found.View.Name}' in {label} (its type came in with it; Purge Unused removes it if not wanted)";
+            return copy;
+        }
+
+        foreach (var other in app.Application.Documents.Cast<Document>().Where(d => !d.Equals(doc) && !d.IsFamilyDocument && !d.IsLinked))
+            if (CopyFrom(other, $"the open model '{other.Title}'", out note) is { } copy) return copy;
+
+        var seeds = new List<(string Path, string Label)>();
+        if (AgentSettings.Load().LegendSeedPath is { Length: > 0 } firm) seeds.Add((Environment.ExpandEnvironmentVariables(firm.Trim().Trim('"')), "the firm seed"));
+        seeds.Add((LegendSeeds.SavedSeedPath, "the saved seed"));
+        foreach (var (path, label) in seeds)
+        {
+            var seed = LegendSeeds.Open(app.Application, path, out var opened, out var why);
+            if (seed is null) { tried.Add($"{label} {path}: {why}"); continue; }
+            try { if (CopyFrom(seed, $"{label} {path}", out note) is { } copy) return copy; }
+            finally { if (opened) seed.Close(false); }
+        }
+        return null;
+    }
 }

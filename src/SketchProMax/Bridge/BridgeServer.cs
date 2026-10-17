@@ -322,7 +322,7 @@ public sealed class BridgeServer
     /// <summary>How long a call waits for its result before returning "still running" (the connector gives up later than this).</summary>
     private const int InlineWaitMs = 45000;
 
-    private async Task<ToolResult> CallTool(string name, Dictionary<string, JsonElement> args, bool fromChat, CancellationToken ct)
+    private async Task<ToolResult> CallTool(string name, Dictionary<string, JsonElement> args, bool fromChat, CancellationToken ct, int handoffs = 0)
     {
         // Job questions are answered here, without Revit's thread, so they work while Revit is busy.
         if (name == "wait_for_job") return await WaitForJobTool.AnswerAsync(new ToolArgs(args), ct).ConfigureAwait(false);
@@ -369,6 +369,7 @@ public sealed class BridgeServer
                 var result = FailureGuard.Run(() =>
                 {
                     try { return tool.Execute(app, new ToolArgs(args)); }
+                    catch (ManualStepException manual) { return Handoff.FromException(tool, app, new ToolArgs(args), manual); }
                     catch (OperationCanceledException) when (job.CancelRequested) { return ToolResult.Error("Stopped on request (cancel_job). Steps this call had already finished are kept; check the model before continuing."); }
                     catch (Exception ex) { return ToolResult.Error(Describe(tool, ex)); }
                 });
@@ -393,7 +394,13 @@ public sealed class BridgeServer
         var pickedUp = Task.WhenAny(job.Task, job.StartedSignal.Task);
         var why = await _dispatcher.WaitForPickupAsync(pickedUp, $"{tool.Name} (job {job.Id})", StartWaitMs, DialogWaitMs, ct).ConfigureAwait(false);
         // Only "dropped" when the bridge, not Revit, won the race: otherwise the job is running and is waited for below.
-        if (why is not null && !ct.IsCancellationRequested && job.TryAbandon()) return ToolResult.Error(why);
+        if (why is not null && !ct.IsCancellationRequested && job.TryAbandon())
+        {
+            // Only the user can end an edit mode or answer a dialog: hand it over, and send the call again on Continue.
+            if (handoffs < 3 && await Handoff.AskBlocked(BlockedStep(tool.Name), ct).ConfigureAwait(false))
+                return await CallTool(name, args, fromChat, ct, handoffs + 1).ConfigureAwait(false);
+            return ToolResult.Error(why);
+        }
 
         await Task.WhenAny(job.Task, Task.Delay(InlineWaitMs, ct)).ConfigureAwait(false);
         if (job.Task.IsCompleted) return job.Task.Status == TaskStatus.RanToCompletion ? job.Task.Result : Jobs.Status(job);
@@ -404,6 +411,32 @@ public sealed class BridgeServer
             next = $"Call wait_for_job (a sketch-promax tool) with job_id {job.Id} to wait for the result; it is kept when it finishes. Don't send other model work meanwhile, " +
                    "and use cancel_job if it should stop.",
         }));
+    }
+
+    /// <summary>The hand-off for a call Revit didn't take: what is holding Revit, and how the user ends it.</summary>
+    private static HandoffStep BlockedStep(string tool)
+    {
+        var state = RevitBlock.Read(App.MainWindow);
+        var why = $"Revit runs no add-in work while {{0}}, so '{tool}' could not start. Nothing was changed; Continue sends it again.";
+        return state.Kind switch
+        {
+            RevitBlock.Kind.Dialog => new HandoffStep
+            {
+                Kind = "dialog", What = string.IsNullOrWhiteSpace(state.Title) ? "Answer or close the dialog open in Revit" : $"Answer or close the dialog '{state.Title!.Trim()}' in Revit",
+                Where = "Revit's window; the dialog may be behind another window (Alt+Tab to Revit)", Why = string.Format(why, "a dialog is open"),
+            },
+            RevitBlock.Kind.NotResponding => new HandoffStep
+            {
+                Kind = "busy", What = "Wait until Revit responds again, or cancel its long operation",
+                Where = "Revit's window (the status bar shows what it is doing)", Why = string.Format(why, "it is busy with a long operation of its own"),
+            },
+            _ => new HandoffStep
+            {
+                Kind = "edit_mode", What = "Finish or cancel the edit mode in Revit, or end the running command",
+                Where = "Modify tab: the green tick (Finish Edit Mode) or the red cross (Cancel Edit Mode); Esc ends a command",
+                Why = string.Format(why, "you edit a sketch, a group or an in-place family, or a command runs"),
+            },
+        };
     }
 
     /// <summary>Makes the named open model the active one, so tools act on it. Returns an error message or null.</summary>

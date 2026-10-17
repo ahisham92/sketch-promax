@@ -12,9 +12,13 @@ internal static class ScheduleKit
         if (args.OptLong("schedule_id") is { } id)
             return doc.GetElement(new ElementId(id)) as ViewSchedule ?? throw new ArgumentException($"{id} is not a schedule.");
         var name = args.String("schedule");
-        return new FilteredElementCollector(doc).OfClass(typeof(ViewSchedule)).Cast<ViewSchedule>()
-                   .FirstOrDefault(s => string.Equals(s.Name, name, StringComparison.OrdinalIgnoreCase))
-               ?? throw new ArgumentException($"No schedule named '{name}'.");
+        var all = new FilteredElementCollector(doc).OfClass(typeof(ViewSchedule)).Cast<ViewSchedule>().ToList();
+        if (all.FirstOrDefault(s => string.Equals(s.Name, name, StringComparison.OrdinalIgnoreCase)) is { } found) return found;
+        // A near name is most likely a typo the caller can fix; none at all is a schedule only the user can make.
+        var near = all.Where(s => s.Name.IndexOf(name.Trim(), StringComparison.OrdinalIgnoreCase) >= 0 || name.IndexOf(s.Name, StringComparison.OrdinalIgnoreCase) >= 0)
+            .Select(s => s.Name).Take(10).ToList();
+        if (near.Count > 0) throw new ArgumentException($"No schedule named '{name}'. Similar: {string.Join(", ", near)}.");
+        throw ManualSteps.MissingSchedule(doc, name);
     }
 
     public static ScheduleField? Field(ScheduleDefinition def, string name)

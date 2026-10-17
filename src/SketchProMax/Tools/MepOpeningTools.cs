@@ -64,7 +64,7 @@ public sealed class CreateMepOpeningsTool : IRevitTool
         var inPlaceNote = inPlaceHosts.Count == 0 ? null : new
         {
             ids = inPlaceHosts.Take(50),
-            note = $"{inPlaceHosts.Count} in-place host(s) not checked: {InPlace.Short}. Check services through them by hand, or remodel them as walls/floors/beams.",
+            note = $"{inPlaceHosts.Count} in-place host(s) not checked: {InPlace.Short}. Check services through them by hand, or remodel them as walls/floors/beams. " + InPlace.GuideHint,
         };
 
         var crossings = new List<Crossing>();

@@ -789,6 +789,13 @@ internal static partial class SelfTest
             var legend = c.First<View>(v => !v.IsTemplate && v.ViewType == ViewType.Legend) ?? throw new Skip("the model has no legends");
             return new { legend = legend.Name, sheet_numbers = new[] { "ST-999" } };
         }, Setup: ["create_sheets", "set_sheet_title_block"]),
+        new("add_legend_components", c =>
+        {
+            var legend = c.First<View>(v => !v.IsTemplate && v.ViewType == ViewType.Legend) ?? throw new Skip("the model has no legends");
+            if (!LegendComponents.Any(c.Doc)) throw new Skip("no legend component in the model to copy from (one placed by hand is enough)");
+            var wall = c.Wall ?? throw new Skip("the model has no walls");
+            return new { legend = legend.Name, types = new[] { wall.GetTypeId().Value.ToString() }, labels = true };
+        }),
         new("place_bracing", c =>
         {
             var type = c.Symbol(BuiltInCategory.OST_StructuralFraming) ?? throw new Skip("no structural framing family loaded");

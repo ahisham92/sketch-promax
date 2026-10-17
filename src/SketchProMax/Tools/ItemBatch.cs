@@ -22,6 +22,9 @@ internal static class ItemBatch
         public int Done => Items.Count(i => i.Ok);
         public List<Outcome> Failed => Items.Where(i => !i.Ok).ToList();
 
+        /// <summary>Failed items only the user can unblock (see the manual argument): pass to <see cref="Handoff.Finish"/>.</summary>
+        public List<HandoffItem> Handoffs { get; } = [];
+
         /// <summary>A compact summary for a tool's result: counts, then each failure with its reason.</summary>
         public object Summary(int maxFailures = 50) => new
         {
@@ -36,8 +39,11 @@ internal static class ItemBatch
     /// <param name="label">How the item is named in the result (an id, a name...).</param>
     /// <param name="elements">The existing elements the item edits, for the ownership check (may be empty).</param>
     /// <param name="apply">Does the edit inside the item's transaction; return a value to report, or throw to fail the item.</param>
+    /// <param name="manual">For a failed item and its reason: the step only the user can do to unblock it, or null.
+    /// Such items are listed in <see cref="Result.Handoffs"/>; Continue on one runs that item again.</param>
     public static Result Run<T>(Document doc, string name, IEnumerable<T> items, Func<T, string> label,
-        Func<T, IEnumerable<ElementId>> elements, Func<T, object?> apply, bool borrow = true, bool cancellable = true)
+        Func<T, IEnumerable<ElementId>> elements, Func<T, object?> apply, bool borrow = true, bool cancellable = true,
+        Func<T, string, HandoffStep?>? manual = null)
     {
         var list = items.ToList();
         var result = new Result();
@@ -95,6 +101,18 @@ internal static class ItemBatch
 
         if (result.Done > 0) group.Assimilate();
         else group.RollBack();
+        if (manual is not null)
+            for (var i = 0; i < list.Count; i++)
+            {
+                var item = list[i];
+                if (result.Items[i] is not { Ok: false, Error: { } why } || manual(item, why) is not { } step) continue;
+                step.Item ??= result.Items[i].Item;
+                result.Handoffs.Add(new HandoffItem(step, !step.RunAgain ? null : () =>
+                {
+                    var again = Run(doc, name, [item], label, elements, apply, borrow, cancellable: false);
+                    return again.Items[0].Ok ? again.Items[0].Value : throw new InvalidOperationException(again.Items[0].Error);
+                }));
+            }
         return result;
     }
 

@@ -207,6 +207,7 @@ internal sealed class ChatPane : DockPanel, IHistoryHost
     {
         Brand.UseTheme(this);
         Resources.MergedDictionaries.Add(ChatUi.Styles());
+        Tools.Handoff.ChatPresenter = r => _instance is { } pane && pane.ShowHandoff(r);
         SetResourceReference(BackgroundProperty, Brand.K.Bg);
         SetResourceReference(TextElement.ForegroundProperty, Brand.K.Text);
         TextElement.SetFontSize(this, ChatUi.BodySize);
@@ -852,8 +853,18 @@ internal sealed class ChatPane : DockPanel, IHistoryHost
             "assistant" => AssistantMessage(item, first),
             "tool" => ToolCard(item, first),
             "error" => ErrorBox(item),
+            "handoff" => HandoffCard.Build(item, Tools.Handoff.Find(item.Name)),
             _ => NoteLine(item),
         };
+    }
+
+    /// <summary>A step only the user can do, as a card, while a turn runs and the pane is on screen; false: the window shows it.</summary>
+    private bool ShowHandoff(Tools.HandoffRequest request)
+    {
+        if (_turn is null || !IsVisible) return false;
+        Add(HandoffCard.Item(request));
+        ShowStatus("Over to you: do the step in Revit, then press Continue on the card.");
+        return true;
     }
 
     private static string When(ChatItem item)

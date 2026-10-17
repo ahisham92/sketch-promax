@@ -2,7 +2,7 @@
 
 <p align="center"><img src="assets/logo/sketch-promax-wordmark.png" alt="Sketch ProMax" width="420"></p>
 
-An AI agent for Autodesk Revit 2024, 2025, 2026 and 2027, powered by Claude. Ask in plain language; it reads, documents, audits and edits the open model through 204 tools, and it learns new ones as you use it. It asks for your approval before every change, and every change can be undone with Ctrl+Z.
+An AI agent for Autodesk Revit 2024, 2025, 2026 and 2027, powered by Claude. Ask in plain language; it reads, documents, audits and edits the open model through 205 tools, and it learns new ones as you use it. It asks for your approval before every change, and every change can be undone with Ctrl+Z.
 
 See [docs/PLAN.md](docs/PLAN.md) for the comparison with SketchPro, the roadmap and the architecture.
 
@@ -109,6 +109,8 @@ To publish an update: bump `<Version>` in both project files and push to `main`.
 
 **Notes Claude remembers:** say "remember that ..." in the Revit chat and Claude keeps it in `%APPDATA%\SketchProMax\memory.md`, for every model or for this model only; every chat starts with them. See, edit and delete them in the pane's Notes tab, or say "forget ...".
 
+**Steps only you can do:** when a task hits something only you can do in Revit (a Revit API limit, a missing family or DWG, an edit mode, a legend component, a cut-edge dimension, a missing schedule), Sketch ProMax shows a window (or a card in the chat) saying what to do, where in Revit and why, with **Continue** (checks it is done and carries on where it stopped), **Skip this item** and **Stop**. Legend components are added by copying one that exists and changing its type (`add_legend_components`); cut-edge dimensions Revit refuses can be drawn as clearly labelled static stand-ins (`copy_dimensions` with `static_fallback`). Guides: [converting in-place families to loadable ones](docs/guides/in-place-to-loadable.md).
+
 **Self-test:** the Self-test button on the Sketch ProMax tab (or asking Claude "test every tool on this model") runs each tool once on the open model, one at a time in the background, and reports pass, fail or skip. The quick check runs read-only tools only. The full check, meant for a copy of a model, also runs the editing tools and undoes each change straight after. Slow tools are skipped on large models, and the test stops if you switch to another model. The report is saved in `%APPDATA%\SketchProMax\self-test`.
 
 **Learns new tools:** when you ask for something no tool covers, Claude writes the Revit API code, and once it works it saves it as a new named tool with its own inputs. Learned tools show up as ordinary tools in every later chat and every Revit window, run behind the same approval, and are kept in `%APPDATA%\SketchProMax\learned-tools` (copy the files to share them). Ask "what have you learned?" to list them, or ask Claude to change or delete one.
@@ -188,7 +190,7 @@ src/SketchProMax/            The Revit add-in core (net48 for Revit 2024, net8.0
   Agent/SystemPrompt         Instructions the desktop app receives from the connector
   Bridge/BridgeServer        Per-Revit-window named-pipe server the connector talks to
   Revit/                     Main-thread dispatcher (ExternalEvent), helpers, Revit 2024 dependency loader
-  Tools/                     The 202 IRevitTool implementations and the registry (CodeTools compiles C# with Roslyn)
+  Tools/                     The 203 IRevitTool implementations and the registry (CodeTools compiles C# with Roslyn)
   UI/                        Settings, update progress, quick-tool input and result windows
   Settings/                  Per-user settings (approval switch, auto-update, firm standards)
   Update/Updater             Self-update from GitHub Releases, with progress, switched to without restarting Revit

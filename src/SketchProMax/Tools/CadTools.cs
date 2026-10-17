@@ -146,7 +146,7 @@ public sealed class ImportCadTool : IRevitTool
     {
         var doc = app.ActiveUIDocument.Document;
         var path = args.String("path");
-        if (!File.Exists(path)) return ToolResult.Error($"File not found: {path}");
+        if (!File.Exists(path)) throw ManualSteps.MissingFile(path, "drawing (DWG/DXF)");
         var view = ViewKit.ViewOrActive(doc, args.OptLong("view_id"));
         var options = new DWGImportOptions
         {

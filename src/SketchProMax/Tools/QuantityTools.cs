@@ -482,7 +482,7 @@ public sealed class BoqItemBreakdownTool : IRevitTool
             sample = lines.Take(20).Select(l => new { id = l.E.Id.Value, level = Measure.LevelName(doc, l.E), type = Measure.TypeName(l.E), quantity = Math.Round(l.Qty, 4), working = l.Working }),
             selected = args.OptBool("select") ? lines.Count : (int?)null,
             inPlace = lines.Where(l => l.Qty == 0 && InPlace.Is(l.E)).Select(l => l.E.Id.Value).ToList() is { Count: > 0 } ip
-                ? new { ids = ip.Take(50), note = $"{ip.Count} in-place element(s) measured as 0: {InPlace.Short}. Measure them by hand." } : null,
+                ? new { ids = ip.Take(50), note = $"{ip.Count} in-place element(s) measured as 0: {InPlace.Short}. Measure them by hand. " + InPlace.GuideHint } : null,
         });
     }
 }
