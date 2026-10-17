@@ -49,6 +49,10 @@ internal static class CatalogTests
 
         // Names
         var names = tools.Select(t => Prop(t, "Name")).ToList();
+        // The prompt enhancer's planning run may call only tools that exist and change nothing.
+        var unsafePlanner = SketchProMax.Chat.PromptBriefs.PlannerTools
+            .Where(n => tools.FirstOrDefault(t => Prop(t, "Name") == n) is not { } t || Prop(t, "ModifiesModel") != "False" || SketchProMax.Tools.OutputPaths.CodeTools.Contains(n)).ToList();
+        check("brief planner: only existing read-only tools", unsafePlanner.Count == 0, string.Join(", ", unsafePlanner));
         var dupes = names.GroupBy(n => n).Where(g => g.Count() > 1).Select(g => g.Key).ToList();
         check("tool names are unique", dupes.Count == 0, string.Join(", ", dupes));
         var badNames = names.Where(n => !Regex.IsMatch(n, "^[a-z][a-z0-9_]{2,63}$")).ToList();

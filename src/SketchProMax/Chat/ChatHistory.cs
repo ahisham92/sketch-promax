@@ -7,12 +7,12 @@ namespace SketchProMax.Chat;
 /// <summary>One line of a saved conversation, as the pane shows it.</summary>
 internal sealed class ChatItem
 {
-    /// <summary>user, assistant, tool, note or error.</summary>
+    /// <summary>user, assistant, tool, note, error or brief.</summary>
     public string Kind { get; set; } = "";
     public string Text { get; set; } = "";
     /// <summary>Tools: the short tool name. User: attachment names.</summary>
     public string Name { get; set; } = "";
-    /// <summary>Tools: running, done or failed.</summary>
+    /// <summary>Tools: running, done or failed. Briefs: pending, run, edited, typed, stale or failed.</summary>
     public string State { get; set; } = "";
     /// <summary>When it was added (UTC); default for items saved before 0.31, which then show no time.</summary>
     public DateTime Time { get; set; }
@@ -22,6 +22,8 @@ internal sealed class ChatItem
     public string Result { get; set; } = "";
     /// <summary>User: the full paths of the attached files, for thumbnails.</summary>
     public List<string> Files { get; set; } = [];
+    /// <summary>Briefs: the PromptBrief as JSON, with the one-tap answers.</summary>
+    public string Brief { get; set; } = "";
 }
 
 /// <summary>A saved conversation: the Claude Code session to resume and what the pane showed.</summary>

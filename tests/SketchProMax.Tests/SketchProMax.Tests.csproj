@@ -17,6 +17,7 @@
     <Compile Include="../../src/SketchProMax/Chat/ChatModels.cs" Link="ChatModels.cs" />
     <Compile Include="../../src/SketchProMax/Chat/ChatHistory.cs" Link="ChatHistory.cs" />
     <Compile Include="../../src/SketchProMax/Chat/SavedPrompts.cs" Link="SavedPrompts.cs" />
+    <Compile Include="../../src/SketchProMax/Chat/PromptBrief.cs" Link="PromptBrief.cs" />
     <Compile Include="../../src/SketchProMax/Settings/SafeFile.cs" Link="SafeFile.cs" />
     <Compile Include="../../src/SketchProMax/Chat/PromptLibrary.cs" Link="PromptLibrary.cs" />
     <EmbeddedResource Include="../../src/SketchProMax/Chat/chat-prompts.json" LogicalName="SketchProMax.chat-prompts.json" />
