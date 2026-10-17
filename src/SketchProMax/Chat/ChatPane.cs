@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Runtime.InteropServices;
 using System.IO;
 using System.Text;
 using System.Text.Json;
@@ -9,6 +10,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Documents;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
@@ -200,6 +202,9 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     private readonly TextBlock _workingText = Brand.Text("", Brand.K.Muted, ChatUi.SmallSize);
     private readonly TextBox _input;
     private readonly WrapPanel _chips = new();
+    // The message box's frame (border and field colour) and its hint; built with the composer.
+    private Border _field = null!;
+    private TextBlock _hint = null!;
     private readonly DockPanel _statusRow = new() { Margin = new Thickness(0, 0, 0, 4) };
     private readonly ContentControl _statusSpin = new() { Focusable = false, VerticalAlignment = VerticalAlignment.Center };
     private readonly TextBlock _status;
@@ -314,28 +319,48 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         _statusRow.Children.Add(_status);
         _statusRow.Margin = new Thickness(ChatUi.S2, ChatUi.S2, ChatUi.S2, 0);
         composer.Children.Add(_promptPanel);
+        // The message box: a field a shade off the card with a visible border, about two lines tall at rest. The first
+        // line sits top-left, exactly where the hint is, and the box grows upward as lines are added (the composer is
+        // docked at the bottom), then scrolls.
         _input = new TextBox
         {
-            AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, MinHeight = 44, MaxHeight = 160, Padding = new Thickness(ChatUi.S3, ChatUi.S3, ChatUi.S3, ChatUi.S1),
-            VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-            SpellCheck = { IsEnabled = true }, FontSize = ChatUi.BodySize,
+            AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, MinHeight = ChatStyles.ComposerMinHeight, MaxHeight = ChatStyles.ComposerMaxHeight,
+            Padding = new Thickness(ChatStyles.ComposerPadX, ChatStyles.ComposerPadY, ChatStyles.ComposerPadX, ChatStyles.ComposerPadY),
+            VerticalContentAlignment = VerticalAlignment.Top, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, SpellCheck = { IsEnabled = true }, FontSize = ChatUi.BodySize,
         };
         _input.SetResourceReference(StyleProperty, "SpmChatBare");
         AutomationProperties.SetName(_input, "Message to Claude");
-        AutomationProperties.SetHelpText(_input, "Enter sends, Shift+Enter starts a new line, Escape stops Claude. Paste a picture or a file to attach it.");
-        _input.ToolTip = "Enter sends. Shift+Enter: new line. Paste or drop pictures, PDFs and drawings to attach them.";
+        AutomationProperties.SetHelpText(_input, "Type your question or request here. Enter sends, Shift+Enter starts a new line, Escape stops Claude. Paste a picture or a file to attach it.");
+        _input.ToolTip = "Type here. Enter sends. Shift+Enter: new line. Paste or drop pictures, PDFs and drawings to attach them.";
         _input.PreviewKeyDown += OnInputKey;
+        // A click in the box: once WPF has placed the caret, check Windows' keyboard focus followed (see TakeKeyboard).
+        _input.PreviewMouseLeftButtonDown += (_, _) => Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(TakeKeyboard));
         CommandManager.AddPreviewExecutedHandler(_input, OnPreviewPaste);
         CommandManager.AddPreviewCanExecuteHandler(_input, OnPreviewCanPaste);
-        // A hint inside the empty box (the box's name and help text say the same for screen readers).
-        var hint = Brand.Text("Ask Sketch ProMax…", Brand.K.Muted, ChatUi.BodySize);
-        hint.IsHitTestVisible = false;
-        hint.Margin = new Thickness(ChatUi.S3 + 2, ChatUi.S3, ChatUi.S3, 0);
-        _input.TextChanged += (_, _) => hint.Visibility = _input.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
+        // A hint inside the empty box (the box's name and help text say the same for screen readers), on the caret's
+        // spot: the box's padding plus the 2 px WPF leaves before the first character, in the box's own font.
+        _hint = Brand.Text(ChatStyles.ComposerHint, Brand.K.Muted, ChatUi.BodySize);
+        _hint.IsHitTestVisible = false;
+        _hint.TextWrapping = TextWrapping.Wrap;
+        _hint.VerticalAlignment = VerticalAlignment.Top;
+        _hint.Margin = new Thickness(ChatStyles.ComposerPadX + 2, ChatStyles.ComposerPadY, ChatStyles.ComposerPadX + 2, 0);
+        _hint.SetBinding(TextBlock.FontFamilyProperty, new System.Windows.Data.Binding(nameof(TextBox.FontFamily)) { Source = _input });
+        _input.TextChanged += (_, _) => _hint.Visibility = _input.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
         _input.TextChanged += (_, _) => { if (_turn is not null) ShowSteer(); };
         var field = new Grid();
         field.Children.Add(_input);
-        field.Children.Add(hint);
+        field.Children.Add(_hint);
+        _field = new Border
+        {
+            Child = field, CornerRadius = new CornerRadius(ChatUi.RadiusSmall), SnapsToDevicePixels = true,
+            Margin = new Thickness(ChatUi.S2, ChatUi.S2, ChatUi.S2, ChatUi.S1), Cursor = Cursors.IBeam,
+        };
+        _field.SetResourceReference(Border.BackgroundProperty, Brand.K.ComposerField);
+        ShowFieldState();
+        _field.MouseEnter += (_, _) => ShowFieldState();
+        _field.MouseLeave += (_, _) => ShowFieldState();
+        _input.IsKeyboardFocusedChanged += (_, _) => ShowFieldState();
 
         var buttons = new DockPanel { Margin = new Thickness(ChatUi.S1, 0, ChatUi.S2, ChatUi.S2) };
         _attach = ChatUi.IconButton(ChatUi.Paths.Plus, "Attach files", "Attach pictures, PDFs or drawings (DWG, DXF). You can also paste or drop them here.");
@@ -409,23 +434,17 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         var inside = new StackPanel();
         _chips.Margin = new Thickness(ChatUi.S3, ChatUi.S3, ChatUi.S3, 0);
         inside.Children.Add(_chips);
-        inside.Children.Add(field);
+        inside.Children.Add(_field);
         inside.Children.Add(buttons);
         var card = ChatUi.Elevated(inside, out var frame);
-        frame.Padding = new Thickness(1);
-        // The card shows the box's focus: a 2 px ring in the focus colour (the hairline alone is too faint to find).
-        _input.IsKeyboardFocusedChanged += (_, _) =>
+        // A click anywhere on the card that no button took (its empty parts, the space around the box, the attachments'
+        // gaps) puts the caret in the box, at the end of the text, as in a text field.
+        frame.AddHandler(MouseDownEvent, new MouseButtonEventHandler((_, e) =>
         {
-            var focused = _input.IsKeyboardFocused;
-            frame.BorderThickness = new Thickness(focused ? 2 : 1);
-            frame.Padding = new Thickness(focused ? 0 : 1);
-            frame.SetResourceReference(Border.BorderBrushProperty, focused ? Brand.K.Focus : Brand.K.BorderSubtle);
-        };
-        // A click on the card's empty parts goes to the box, as in a text field.
-        frame.MouseLeftButtonDown += (_, e) =>
-        {
-            if (e.OriginalSource == frame || e.OriginalSource == inside || e.OriginalSource is Border { Child: null }) _input.Focus();
-        };
+            if (e.Handled || e.ChangedButton != MouseButton.Left || _input.IsKeyboardFocused) return;
+            FocusInput();
+            e.Handled = true;
+        }));
         composer.Children.Add(card);
         composer.Children.Add(_statusRow);
         composer.Children.Add(_modelMenu);
@@ -1460,6 +1479,47 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             UpdateJump();
         }));
     }
+
+    /// <summary>The message box's border for its state: at rest, under the mouse, or with the caret in it.</summary>
+    private void ShowFieldState()
+    {
+        var (brush, thickness) = ChatStyles.ComposerBorder(_input.IsKeyboardFocused, _field.IsMouseOver);
+        _field.SetResourceReference(Border.BorderBrushProperty, brush);
+        _field.BorderThickness = new Thickness(thickness);
+        // The 2 px ring takes its extra pixel from the inside, so the text doesn't move when the box gets the caret.
+        var inset = 2 - thickness;
+        _field.Padding = new Thickness(inset);
+    }
+
+    /// <summary>Puts the caret in the message box, after the text, with the keyboard really going to it (see <see cref="TakeKeyboard"/>).</summary>
+    internal void FocusInput()
+    {
+        _input.Focus();
+        Keyboard.Focus(_input);
+        _input.CaretIndex = _input.Text.Length;
+        TakeKeyboard();
+    }
+
+    /// <summary>
+    /// Revit hosts the pane in a window of its own inside its main window. WPF can give the box its focus while
+    /// Windows' keyboard focus stays on Revit's view, and then letters go to Revit as keyboard shortcuts instead of
+    /// into the box. When the box has WPF's focus, make sure the pane's window has Windows' too.
+    /// </summary>
+    private void TakeKeyboard()
+    {
+        if (!_input.IsKeyboardFocusWithin && !_input.IsFocused) return;
+        if (PresentationSource.FromVisual(_input) is not HwndSource { Handle: var pane } || pane == IntPtr.Zero) return;
+        try
+        {
+            var focus = GetFocus();
+            if (focus != pane && !IsChild(pane, focus)) SetFocus(pane);
+        }
+        catch (Exception) { /* best effort: WPF's own focus handling still applies */ }
+    }
+
+    [DllImport("user32.dll")] private static extern IntPtr GetFocus();
+    [DllImport("user32.dll")] private static extern IntPtr SetFocus(IntPtr hwnd);
+    [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool IsChild(IntPtr parent, IntPtr hwnd);
 
     private void StartGlide()
     {

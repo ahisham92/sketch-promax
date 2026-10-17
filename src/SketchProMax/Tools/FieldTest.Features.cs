@@ -458,7 +458,9 @@ internal static partial class FieldTest
         await Probe(s, "chat.history", _ => ChatHistoryRoundTrip(s.Folder)).ConfigureAwait(false);
         await Probe(s, "chat.dpi", _ => ChatDpi(s)).ConfigureAwait(false);
         await ProbeCore(s, "chat.frames", () => ChatFrames()).ConfigureAwait(false);
+        await Probe(s, "chat.composer", _ => ChatComposer()).ConfigureAwait(false);
         await Probe(s, "update.loader", _ => Loader()).ConfigureAwait(false);
+        await ProbeCore(s, "revit.blocked", RevitBlockedCard).ConfigureAwait(false);
         // In the test project, each rolled back afterwards (time records excepted: they are what is checked).
         await Probe(s, "handoff.continue", app => HandoffContinue(app, s)).ConfigureAwait(false);
         await Probe(s, "handoff.skip_stop", app => HandoffSkipStop(app, s)).ConfigureAwait(false);
@@ -1653,6 +1655,39 @@ internal static partial class FieldTest
             return Fail($"{files.Count} of {expected} screenshots made" + (bad.Count > 0 ? "; empty: " + string.Join(", ", bad) : "") + $" (in {folder})");
         return Pass($"{files.Count} screenshots (light and dark at 100, 125, 150 and 175 %) saved in {folder}: " +
                     string.Join(", ", files.Select(Path.GetFileName)) + ". Compare them (checklist: \"Chat is sharp at every scale\")");
+    }
+
+    /// <summary>
+    /// A request to an idle Revit is picked up within a few seconds; the ribbon can be read for an edit mode's Finish
+    /// button (and shows none now); the "Revit is busy" card names the step in plain words, never by its tool id.
+    /// Off Revit's thread.
+    /// </summary>
+    private static async Task<(string, string)> RevitBlockedCard()
+    {
+        var problems = new List<string>();
+        var clock = Stopwatch.StartNew();
+        var work = App.Dispatcher.InvokeAsync(_ => true);
+        var why = await App.Dispatcher.WaitForPickupAsync(work, "The field test's empty request", 8000, 4000, CancellationToken.None).ConfigureAwait(false);
+        var pickup = clock.ElapsedMilliseconds;
+        if (why is not null) problems.Add("an empty request to an idle Revit wasn't picked up in 8 s: " + Short(why, 200));
+        var shown = await Revit.EditModeProbe.ShownAsync(3000).ConfigureAwait(false);
+        if (shown is null) problems.Add("Revit's ribbon couldn't be read, so an edit mode can't be told apart (the card then says \"Revit is busy\" and Esc)");
+        else if (shown == true) problems.Add("a Finish button is on the ribbon outside an edit mode, so the card would wrongly say edit mode");
+        var card = Revit.RevitBlock.Card(new Revit.RevitBlock.State(Revit.RevitBlock.Kind.Unknown, null), Revit.RevitBlock.Friendly("get_model_context", false));
+        if (card.Text.Contains("get_model_context") || !card.Where.Contains("Esc") || card.Text.Contains("edit mode")) problems.Add("the busy card reads: " + card.Text);
+        return problems.Count == 0
+            ? Pass($"An empty request was picked up in {pickup} ms; the ribbon was read and shows no Finish button; the busy card reads \"{card.What}. {card.Where}. {card.Why}\"")
+            : Fail(string.Join("; ", problems));
+    }
+
+    /// <summary>The message box in a hidden window: text where the hint was, growing upward, a visible caret, clicks reach it.</summary>
+    private static (string, string) ChatComposer()
+    {
+        var (problems, measured) = Chat.ChatPane.ComposerCheck();
+        return problems.Count == 0
+            ? Pass("Typed text starts top-left where the hint was, more lines grow the box with the first line in place, the caret is visible, " +
+                   "and a click on the card or in the box's padding puts the caret in the box" + (measured.Length > 0 ? $" ({measured})" : ""))
+            : Fail(string.Join("; ", problems));
     }
 
     /// <summary>

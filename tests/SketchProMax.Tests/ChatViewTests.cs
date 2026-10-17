@@ -109,6 +109,27 @@ internal static class ChatViewTests
         var plain = ChatStyles.Xaml(8, 12, animate: false, plain: true);
         check("styles: the plain fallback has the same keys, no press or shadow", System.Xml.Linq.XDocument.Parse(plain) is not null
             && !plain.Contains("ScaleTransform") && !plain.Contains("DropShadowEffect") && plain.Contains("x:Key=\"SpmChatCard\"") && plain.Contains("x:Key=\"SpmChatSend\""), "");
+        // The composer's message box: typed text starts top-left where the hint is, the whole box takes the click, the caret shows.
+        foreach (var (name, x) in new[] { ("normal", xaml), ("plain", plain) })
+        {
+            var bare = System.Xml.Linq.XDocument.Parse(x).Descendants()
+                .First(e => (string?)e.Attribute(System.Xml.Linq.XName.Get("Key", "http://schemas.microsoft.com/winfx/2006/xaml")) == "SpmChatBare");
+            string? Setter(string property) => bare.Elements().Where(e => e.Name.LocalName == "Setter" && (string?)e.Attribute("Property") == property)
+                .Select(e => (string?)e.Attribute("Value")).FirstOrDefault();
+            var host = bare.Descendants().FirstOrDefault(e => (string?)e.Attribute(System.Xml.Linq.XName.Get("Name", "http://schemas.microsoft.com/winfx/2006/xaml")) == "PART_ContentHost");
+            check($"composer ({name}): text top-aligned", Setter("VerticalContentAlignment") == "Top" && (string?)host?.Attribute("VerticalContentAlignment") == "Top"
+                && host?.Attribute("VerticalAlignment") is null or { Value: "Stretch" }, bare.ToString().Length.ToString());
+            check($"composer ({name}): the whole box, padding too, takes the click", host?.Parent is { Name.LocalName: "Border" } root && (string?)root.Attribute("Background") == "Transparent", "");
+            check($"composer ({name}): caret and selection follow the theme", Setter("CaretBrush") == "{DynamicResource SpmText}" && Setter("Foreground") == "{DynamicResource SpmText}"
+                && Setter("SelectionBrush") == "{DynamicResource SpmAccent}", "");
+            check($"composer ({name}): its own scroll template, scroll bar only when needed", host!.Descendants().Any(e => e.Name.LocalName == "ScrollContentPresenter")
+                && host.Descendants().Any(e => e.Name.LocalName == "ScrollBar" && ((string?)e.Attribute("Visibility") ?? "").Contains("ComputedVerticalScrollBarVisibility")), "");
+        }
+        check("composer: border at rest, hover and focus", ChatStyles.ComposerBorder(false, false) == ("SpmInputBorder", 1) && ChatStyles.ComposerBorder(false, true) == ("SpmText", 1)
+            && ChatStyles.ComposerBorder(true, false) == ("SpmFocus", 2) && ChatStyles.ComposerBorder(true, true) == ("SpmFocus", 2), "");
+        check("composer: plain hint that says what to do", ChatStyles.ComposerHint.StartsWith("Ask anything about your model", StringComparison.Ordinal) && !ChatStyles.ComposerHint.Contains("Sketch ProMax"), ChatStyles.ComposerHint);
+        check("composer: about two lines at rest, grows to a limit", ChatStyles.ComposerMinHeight >= 2 * ChatStyles.Body * 1.33 + 2 * ChatStyles.ComposerPadY - 1
+            && ChatStyles.ComposerMaxHeight >= 3 * ChatStyles.ComposerMinHeight, ChatStyles.ComposerMinHeight.ToString());
         check("styles: every template has a hover layer", System.Text.RegularExpressions.Regex.Matches(xaml, "x:Name=\"hv\"").Count >= 8, "");
 
         // The type scale.

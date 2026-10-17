@@ -26,6 +26,24 @@ internal static class ChatStyles
     /// <summary>Text from this size up is laid out with Ideal text (its shapes kept); smaller text uses Display (snapped to pixels).</summary>
     public const double IdealFrom = 15;
 
+    // ---- The composer's message box ------------------------------------------------------------------------------------
+
+    /// <summary>The hint in the empty message box: what to do, in plain words.</summary>
+    public const string ComposerHint = "Ask anything about your model, or tell me what to do…";
+
+    /// <summary>The box's inner padding: the text and the hint both start here, top-left.</summary>
+    public const double ComposerPadX = 10, ComposerPadY = 8;
+
+    /// <summary>About two lines of Body text at rest; it grows upward with the text to the most, then scrolls.</summary>
+    public const double ComposerMinHeight = 52, ComposerMaxHeight = 180;
+
+    /// <summary>
+    /// The box's border: InputBorder (3:1) at rest so it reads as a field, Text on hover, and a 2 px Focus ring while
+    /// the caret is in it.
+    /// </summary>
+    public static (string Brush, double Thickness) ComposerBorder(bool focused, bool hover) =>
+        focused ? ("SpmFocus", 2) : hover ? ("SpmText", 1) : ("SpmInputBorder", 1);
+
     /// <summary>How long hover, colour, opacity and size changes take (ease-out); 0 when Windows' animations are off.</summary>
     public const int MotionMs = 160;
 
@@ -279,13 +297,34 @@ internal static class ChatStyles
             <Setter Property="Foreground" Value="{DynamicResource SpmText}"/>
             <Setter Property="CaretBrush" Value="{DynamicResource SpmText}"/>
             <Setter Property="SelectionBrush" Value="{DynamicResource SpmAccent}"/>
+            <Setter Property="SelectionOpacity" Value="0.35"/>
             <Setter Property="BorderThickness" Value="0"/>
             <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            <Setter Property="VerticalContentAlignment" Value="Top"/>
+            <Setter Property="Cursor" Value="IBeam"/>
             <Setter Property="Template"><Setter.Value>
               <ControlTemplate TargetType="TextBox">
-                <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}" Focusable="False" Background="Transparent"
-                              HorizontalScrollBarVisibility="{TemplateBinding HorizontalScrollBarVisibility}"
-                              VerticalScrollBarVisibility="{TemplateBinding VerticalScrollBarVisibility}"/>
+                <!-- The whole box takes the click, its padding too; the first line sits at the top, where the hint is. -->
+                <Border x:Name="box" Background="Transparent">
+                  <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}" Focusable="False" Background="Transparent"
+                                VerticalAlignment="Stretch" VerticalContentAlignment="Top"
+                                HorizontalScrollBarVisibility="{TemplateBinding HorizontalScrollBarVisibility}"
+                                VerticalScrollBarVisibility="{TemplateBinding VerticalScrollBarVisibility}">
+                    <ScrollViewer.Template>
+                      <ControlTemplate TargetType="ScrollViewer">
+                        <Grid Background="{TemplateBinding Background}">
+                          <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                          <ScrollContentPresenter x:Name="PART_ScrollContentPresenter"
+                                                  CanContentScroll="{TemplateBinding CanContentScroll}"/>
+                          <ScrollBar x:Name="PART_VerticalScrollBar" Grid.Column="1" Orientation="Vertical"
+                                     Value="{Binding VerticalOffset, Mode=OneWay, RelativeSource={RelativeSource TemplatedParent}}"
+                                     Maximum="{TemplateBinding ScrollableHeight}" ViewportSize="{TemplateBinding ViewportHeight}"
+                                     Visibility="{TemplateBinding ComputedVerticalScrollBarVisibility}"/>
+                        </Grid>
+                      </ControlTemplate>
+                    </ScrollViewer.Template>
+                  </ScrollViewer>
+                </Border>
               </ControlTemplate>
             </Setter.Value></Setter>
           </Style>

@@ -39,6 +39,8 @@ internal static class Brand
         public const string HeaderText = "SpmHeaderText", HeaderSub = "SpmHeaderSub";
         // The chat's softer surfaces: raised cards and the composer, hairline borders, the accent tint of your messages.
         public const string Raised = "SpmRaised", BorderSubtle = "SpmBorderSubtle", AccentSoft = "SpmAccentSoft";
+        // The composer's message box: a field a shade off the card, so it reads as the place to type.
+        public const string ComposerField = "SpmComposerField";
     }
 
     /// <summary>
@@ -82,6 +84,8 @@ internal static class Brand
         (K.Raised, 0xFFFFFF, 0x32373F),
         (K.BorderSubtle, 0xE2E8F0, 0x434A54),
         (K.AccentSoft, 0xE8EFFD, 0x2C3B5A),
+        // Text 17:1 / 13:1, Muted (the hint) 7.2:1 / 7.8:1, InputBorder 4.5:1 / 4.8:1, Focus 6.4:1 / 7.3:1 on it.
+        (K.ComposerField, 0xF8FAFC, 0x23272D),
     ];
 
     public enum Weight { Secondary, Primary, Danger }

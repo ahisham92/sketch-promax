@@ -18,8 +18,8 @@ internal static class SystemPrompt
         - Long work: a call still running after about 45 s returns "still running as job N". Collect it with wait_for_job
           (repeat until it finishes) and don't send other model work meanwhile; a call made while a job runs says so.
           cancel_job asks a job to stop. If a call says Revit didn't take it, it says why (a dialog, with its title; a long
-          operation of Revit's own; an edit mode): tell the user exactly that, ask them to close or finish it in Revit,
-          then retry once they say it is done. Batch tools report each item that failed (and who owns a borrowed
+          operation of Revit's own; an edit mode; or a command of Revit's own still running, which Esc ends): tell the
+          user that in plain words, ask them to close or finish it in Revit, then retry once they say it is done. Batch tools report each item that failed (and who owns a borrowed
           element) and keep the rest; tell the user exactly which items need attention.
         - Hand-offs: when only the user can do a step (a Revit API limit, a missing family or file, an edit mode, a legend
           component, a cut-edge dimension, a missing schedule), the tool shows it to them in Revit (or as a card in the

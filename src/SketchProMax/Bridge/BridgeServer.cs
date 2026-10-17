@@ -309,6 +309,9 @@ public sealed class BridgeServer
     /// <summary>How long a call waits for Revit to pick it up before concluding Revit is in an edit mode or a dialog.</summary>
     private const int StartWaitMs = 20000;
 
+    /// <summary>A read Revit didn't take is tried this many more times, this long each, before the user is asked.</summary>
+    private const int ReadRetries = 2, ReadRetryMs = 8000;
+
     /// <summary>How long switching models may wait for Revit (the connector waits 20 s for the answer).</summary>
     private const int ActivateWaitMs = 12000;
 
@@ -320,6 +323,7 @@ public sealed class BridgeServer
     {
         RevitBlock.Kind.Dialog => string.IsNullOrWhiteSpace(state.Title) ? "a dialog is open in Revit" : $"a dialog is open in Revit: '{state.Title!.Trim()}'",
         RevitBlock.Kind.NotResponding => "Revit is busy with a long operation of its own",
+        RevitBlock.Kind.EditMode => "Revit is in an edit mode",
         _ => null,
     };
 
@@ -426,10 +430,15 @@ public sealed class BridgeServer
         job.Task = Jobs.Follow(job, firstCall);
 
         // Revit picks work up within a second when idle. If it doesn't, it is showing a dialog (said within a few seconds,
-        // with its title), busy with a long operation of its own, or in an edit mode (in-place family, sketch, group
-        // edit): say which rather than time out.
+        // with its title), busy with a long operation of its own, in an edit mode, or running a command of its own: say
+        // which rather than time out. The wait asks Revit again every second.
         var pickedUp = Task.WhenAny(job.Task, job.StartedSignal.Task);
         var why = await _dispatcher.WaitForPickupAsync(pickedUp, $"{tool.Name} (job {job.Id})", StartWaitMs, DialogWaitMs, ct).ConfigureAwait(false);
+        // A read changes nothing, so before asking the user it is tried again quietly (it stays queued and Revit is asked
+        // again), unless a dialog or a hung Revit says waiting can't help.
+        for (var retry = 0; why is not null && !tool.ModifiesModel && retry < ReadRetries && !ct.IsCancellationRequested
+                            && !pickedUp.IsCompleted && _dispatcher.Blocker().Kind is not (RevitBlock.Kind.Dialog or RevitBlock.Kind.NotResponding); retry++)
+            why = await _dispatcher.WaitForPickupAsync(pickedUp, $"{tool.Name} (job {job.Id}, try {retry + 2})", ReadRetryMs, DialogWaitMs, ct).ConfigureAwait(false);
         // Only "dropped" when the bridge, not Revit, won the race: otherwise the job is running and is waited for below.
         if (why is not null && !ct.IsCancellationRequested && job.TryAbandon())
         {
@@ -545,7 +554,8 @@ public sealed class BridgeServer
         ToolResult result;
         try
         {
-            result = await Handoff.AskBlocked(BlockedStep(tool), entry.Stop.Token).ConfigureAwait(false)
+            var step = await BlockedStep(tool).ConfigureAwait(false);
+            result = await Handoff.AskBlocked(step, entry.Stop.Token).ConfigureAwait(false)
                 ? await CallTool(name, args, fromChat, entry.Stop.Token, handoffs + 1).ConfigureAwait(false)
                 : ToolResult.Error(why);
         }
@@ -557,30 +567,14 @@ public sealed class BridgeServer
         entry.Result.TrySetResult(result);
     }
 
-    /// <summary>The hand-off for a call Revit didn't take: what is holding Revit, and how the user ends it.</summary>
-    private static HandoffStep BlockedStep(string tool)
+    /// <summary>
+    /// The hand-off for a call Revit didn't take: what is holding Revit and how the user frees it, in one short line each,
+    /// naming the step as the user would ("reading your model"), never by its tool id (RevitBlock.Card).
+    /// </summary>
+    private async Task<HandoffStep> BlockedStep(string tool)
     {
-        var state = RevitBlock.Read(App.MainWindow);
-        var why = $"Revit runs no add-in work while {{0}}, so '{tool}' could not start. Nothing was changed; Continue sends it again.";
-        return state.Kind switch
-        {
-            RevitBlock.Kind.Dialog => new HandoffStep
-            {
-                Kind = "dialog", What = string.IsNullOrWhiteSpace(state.Title) ? "Answer or close the dialog open in Revit" : $"Answer or close the dialog '{state.Title!.Trim()}' in Revit",
-                Where = "Revit's window; the dialog may be behind another window (Alt+Tab to Revit)", Why = string.Format(why, "a dialog is open"),
-            },
-            RevitBlock.Kind.NotResponding => new HandoffStep
-            {
-                Kind = "busy", What = "Wait until Revit responds again, or cancel its long operation",
-                Where = "Revit's window (the status bar shows what it is doing)", Why = string.Format(why, "it is busy with a long operation of its own"),
-            },
-            _ => new HandoffStep
-            {
-                Kind = "edit_mode", What = "Finish or cancel the edit mode in Revit, or end the running command",
-                Where = "Modify tab: the green tick (Finish Edit Mode) or the red cross (Cancel Edit Mode); Esc ends a command",
-                Why = string.Format(why, "you edit a sketch, a group or an in-place family, or a command runs"),
-            },
-        };
+        var state = await _dispatcher.BlockerAsync().ConfigureAwait(false);
+        return RevitBlock.Card(state, RevitBlock.Friendly(tool, _registry.Find(tool)?.ModifiesModel ?? true));
     }
 
     /// <summary>Makes the named open model the active one, so tools act on it. Returns an error message or null.</summary>

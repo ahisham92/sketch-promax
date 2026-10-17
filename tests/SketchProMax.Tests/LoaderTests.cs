@@ -65,6 +65,27 @@ internal static class LoaderTests
             && dialog.Contains("nothing was changed"), dialog);
         check("blocked: untitled dialog, busy Revit, edit mode", RevitBlock.Explain(new(RevitBlock.Kind.Dialog, null), "x", 4).Contains("dialog or message box")
             && RevitBlock.Explain(new(RevitBlock.Kind.NotResponding, null), "x", 20).Contains("isn't responding")
-            && RevitBlock.Explain(new(RevitBlock.Kind.None, null), "x", 20).Contains("edit mode"), "");
+            && RevitBlock.Explain(new(RevitBlock.Kind.EditMode, null), "x", 20).Contains("edit mode"), "");
+        // Nothing seen from outside: no guess at an edit mode, Esc instead.
+        var unknown = RevitBlock.Explain(new(RevitBlock.Kind.Unknown, null), "x", 20);
+        check("blocked: an unknown cause isn't called an edit mode", !unknown.Contains("edit mode") && unknown.Contains("Esc")
+            && !RevitBlock.Explain(new(RevitBlock.Kind.None, null), "x", 20).Contains("edit mode"), unknown);
+
+        // The card the user sees: short, plain, no tool ids.
+        var busy = RevitBlock.Card(new(RevitBlock.Kind.Unknown, null), RevitBlock.Friendly("get_model_context", false));
+        check("busy card: plain words", busy.What == "Revit is busy" && busy.Where == "Press Esc in Revit once or twice, then click Continue"
+            && busy.Why == "Revit didn't start reading your model yet. Nothing was changed.", busy.Text);
+        var cards = new[] { RevitBlock.Kind.Unknown, RevitBlock.Kind.None, RevitBlock.Kind.Dialog, RevitBlock.Kind.NotResponding, RevitBlock.Kind.EditMode }
+            .Select(k => RevitBlock.Card(new(k, k == RevitBlock.Kind.Dialog ? "Save changes?" : null), RevitBlock.Friendly("export_pdf", true))).ToList();
+        check("busy card: never a tool id, each line short", cards.All(c => !c.Text.Contains('_') && c.What.Length <= 60 && c.Where.Length <= 90 && c.Why.Length <= 90),
+            string.Join(" | ", cards.Select(c => c.Text)));
+        check("busy card: edit mode only when seen", cards.Count(c => c.Text.Contains("edit", StringComparison.OrdinalIgnoreCase)) == 1 && cards[4].Kind == "edit_mode"
+            && cards[2].What.Contains("'Save changes?'") && cards[3].Kind == "busy", "");
+        check("busy card: friendly names", RevitBlock.Friendly("get_model_context", false) == "reading your model" && RevitBlock.Friendly("some_new_read", false) == "reading your model"
+            && RevitBlock.Friendly("some_new_change", true) == "the change you asked for" && RevitBlock.Friendly("capture_view_image", false) == "taking a picture of the view", "");
+        check("edit mode: Finish buttons", RevitBlock.IsFinishButton("ID_FINISH_SKETCH", null) && RevitBlock.IsFinishButton(null, "Finish Edit\nMode")
+            && RevitBlock.IsFinishButton("x", "Finish Model") && RevitBlock.IsFinishButton("", "Finish"), "");
+        check("edit mode: not other buttons", !RevitBlock.IsFinishButton("ID_OBJECTS_WALL", "Wall") && !RevitBlock.IsFinishButton("ID_ROOM_FINISHES", "Finishes")
+            && !RevitBlock.IsFinishButton(null, "Floor finish") && !RevitBlock.IsFinishButton(null, null), "");
     }
 }

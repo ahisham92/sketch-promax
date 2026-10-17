@@ -198,6 +198,72 @@ internal sealed partial class ChatPane
         }
     }
 
+    /// <summary>
+    /// The message box, in a hidden window (off screen, never activated) holding a stand-alone pane (probe
+    /// chat.composer): typed text starts top-left where the hint was, more lines grow the box with the first line kept
+    /// in place, the caret has a visible colour, the box's padding takes clicks, and a click on the card's empty part
+    /// puts the caret in the box. Returns the problems found (none: it passed) and what was measured. On Revit's UI thread.
+    /// </summary>
+    internal static (List<string> Problems, string Measured) ComposerCheck()
+    {
+        var problems = new List<string>();
+        var measured = "";
+        var pane = new ChatPane(Snapshot.Sample());
+        var window = new Window
+        {
+            Width = 420, Height = 760, Left = -32000, Top = -32000, WindowStyle = WindowStyle.None, ShowInTaskbar = false,
+            ShowActivated = false, ResizeMode = ResizeMode.NoResize, Title = "Sketch ProMax composer test", Content = pane,
+        };
+        try
+        {
+            window.Show();
+            pane.UpdateLayout();
+            var box = pane._input;
+            var hint = pane._hint.TranslatePoint(new Point(0, 0), pane._field);
+            if (pane._hint.Visibility != Visibility.Visible) problems.Add("the hint isn't shown in the empty box");
+            if (pane._hint.Text != ChatStyles.ComposerHint) problems.Add("the hint says \"" + pane._hint.Text + "\"");
+            box.Text = "Now";
+            pane.UpdateLayout();
+            if (pane._hint.Visibility == Visibility.Visible) problems.Add("the hint stays when there is text");
+            var first = box.GetRectFromCharacterIndex(0);
+            if (first.IsEmpty) problems.Add("the first character's place couldn't be read");
+            else
+            {
+                var text = box.TranslatePoint(first.TopLeft, pane._field);
+                measured = $"hint at ({hint.X:0.#}, {hint.Y:0.#}), text at ({text.X:0.#}, {text.Y:0.#}), box {box.ActualHeight:0} px tall";
+                if (Math.Abs(text.Y - hint.Y) > 3 || Math.Abs(text.X - hint.X) > 3) problems.Add("typed text doesn't start where the hint is (" + measured + ")");
+                if (text.Y > ChatStyles.ComposerPadY + 6) problems.Add("typed text isn't at the top of the box (" + measured + ")");
+                var height = box.ActualHeight;
+                box.Text = "Now\nline 2\nline 3\nline 4";
+                pane.UpdateLayout();
+                var after = box.TranslatePoint(box.GetRectFromCharacterIndex(0).TopLeft, pane._field);
+                if (box.ActualHeight <= height) problems.Add($"the box didn't grow with four lines ({height:0} px, then {box.ActualHeight:0} px)");
+                if (Math.Abs(after.Y - text.Y) > 1) problems.Add($"the first line moved from {text.Y:0.#} to {after.Y:0.#} px as lines were added");
+                measured += $", {box.ActualHeight:0} px with four lines";
+            }
+            if (box.ActualHeight + 0.5 < ChatStyles.ComposerMinHeight) problems.Add($"the box is {box.ActualHeight:0} px tall, under its {ChatStyles.ComposerMinHeight} px");
+            if (box.CaretBrush is not SolidColorBrush { Color.A: > 0 } caret) problems.Add("the caret has no visible colour");
+            else if (pane._field.Background is SolidColorBrush field && field.Color == caret.Color) problems.Add("the caret is the colour of the box");
+            // The box's padding is part of the box: a click just inside its corner reaches the text box.
+            var corner = box.TranslatePoint(new Point(3, 3), pane);
+            if (pane.InputHitTest(corner) is not DependencyObject hit || !(ReferenceEquals(hit, box) || box.IsAncestorOf(hit)))
+                problems.Add("a click in the box's padding doesn't reach the text box");
+            // A click on the card's empty part (outside the box, not on a button) puts the caret in the box.
+            box.Text = "";
+            pane._scroll.Focus();
+            pane._field.RaiseEvent(new System.Windows.Input.MouseButtonEventArgs(System.Windows.Input.Mouse.PrimaryDevice, Environment.TickCount,
+                System.Windows.Input.MouseButton.Left) { RoutedEvent = UIElement.MouseDownEvent });
+            if (!box.IsFocused) problems.Add("a click on the card's empty part didn't put the caret in the box");
+        }
+        catch (Exception ex) { problems.Add($"{ex.GetType().Name}: {ex.Message}"); }
+        finally
+        {
+            try { window.Close(); } catch (InvalidOperationException) { }
+            Brand.ReleaseTheme(pane);
+        }
+        return (problems, measured);
+    }
+
     /// <summary>The snapshot's extras: a step opened, and the typing line with its shimmer as while Claude starts.</summary>
     private void ShowSampleState()
     {

@@ -166,9 +166,10 @@ public sealed class RevitDispatcher : IExternalEventHandler
             }));
         else _queue.Enqueue(Run);
 
-        // Pending (an earlier Raise() will drain this too), Denied or TimedOut are not final: the Idling handler and
-        // the wake timer still get the queue run, so the request is never failed here.
-        ev.Raise();
+        // Pending (an earlier Raise() will drain this too), Denied or TimedOut are not final: the Idling handler, the wake
+        // timer and the pickup wait (which raises it again each second, see Kick) still get the queue run, so the request
+        // is never failed here.
+        Raise(ev);
         Nudge();
 
         return tcs.Task;
@@ -176,6 +177,7 @@ public sealed class RevitDispatcher : IExternalEventHandler
 
     public void Execute(UIApplication app)
     {
+        Interlocked.Increment(ref _executes);
         if (_hookIdlingLater && !_stopped)
         {
             _hookIdlingLater = false;
@@ -221,6 +223,7 @@ public sealed class RevitDispatcher : IExternalEventHandler
 
     private void OnIdling(object? sender, IdlingEventArgs e)
     {
+        Interlocked.Increment(ref _idlings);
         if (_stopped) return;
         if (Idle is { } idle && sender is UIApplication idleApp)
         {
@@ -262,32 +265,76 @@ public sealed class RevitDispatcher : IExternalEventHandler
     /// <summary>What is keeping Revit from running queued work right now (a dialog, a busy UI thread, an edit mode).</summary>
     internal RevitBlock.State Blocker() => RevitBlock.Read(_mainWindow);
 
+    // Diagnostics for a request Revit didn't take: how often Revit gave us Idling and ran the external event, and what
+    // the last Raise() said (Accepted, Pending, Denied, TimedOut).
+    private int _idlings, _executes;
+    private volatile string _lastRaise = "";
+
+    private void Raise(ExternalEvent ev)
+    {
+        try { _lastRaise = ev.Raise().ToString(); }
+        catch (Exception ex) { _lastRaise = ex.GetType().Name; }
+    }
+
     /// <summary>
-    /// Waits until <paramref name="pickedUp"/> completes (Revit started the work), for at most <paramref name="maxMs"/>.
-    /// Returns null once it is picked up (or <paramref name="ct"/> ends the wait), else why Revit didn't take it, worded
-    /// for Claude (<see cref="RevitBlock.Explain"/>). A modal dialog that stays open for <paramref name="dialogMs"/> ends
-    /// the wait early: Revit runs no add-in work until it is closed, so waiting longer only delays the answer.
-    /// The caller drops the queued work when this returns a reason.
+    /// Asks Revit again for queued work: the external event raised once more (a Raise that Revit denied or that timed
+    /// out is otherwise never repeated until the next Idling, and Revit stops sending Idling while nothing of ours
+    /// waits and nobody touches Revit) and its message loop woken. Safe on any thread; harmless when nothing waits.
+    /// </summary>
+    internal void Kick()
+    {
+        if (_stopped || _running || (_queue.IsEmpty && _eventOnly.IsEmpty)) return;
+        if (_event is { } ev) Raise(ev);
+        Nudge();
+    }
+
+    /// <summary>
+    /// Waits until <paramref name="pickedUp"/> completes (Revit started the work), for at most <paramref name="maxMs"/>,
+    /// asking Revit again each second (<see cref="Kick"/>). Returns null once it is picked up (or <paramref name="ct"/>
+    /// ends the wait), else why Revit didn't take it, worded for Claude (<see cref="RevitBlock.Explain"/>). A modal dialog
+    /// that stays open for <paramref name="dialogMs"/> ends the wait early: Revit runs no add-in work until it is closed,
+    /// so waiting longer only delays the answer. The caller drops the queued work when this returns a reason.
     /// </summary>
     internal async Task<string?> WaitForPickupAsync(Task pickedUp, string what, int maxMs, int dialogMs, CancellationToken ct)
     {
         var started = Environment.TickCount;
         var dialogSince = -1;
+        int idlings = _idlings, executes = _executes;
         while (true)
         {
             var elapsed = unchecked(Environment.TickCount - started);
-            if (elapsed >= maxMs) return RevitBlock.Explain(Blocker(), what, (elapsed + 500) / 1000);
+            if (elapsed >= maxMs)
+            {
+                var state = await BlockerAsync().ConfigureAwait(false);
+                if (pickedUp.IsCompleted) return null;
+                ActivityLog.Note("pickup_wait", $"{what}: not started in {elapsed} ms; {state.Kind}; Revit idled {_idlings - idlings} " +
+                                                $"and ran the event {_executes - executes} times meanwhile; last raise {_lastRaise}; focus in {RevitBlock.FocusClass(_mainWindow)}");
+                return RevitBlock.Explain(state, what, (elapsed + 500) / 1000);
+            }
             var step = Task.Delay(Math.Min(1000, maxMs - elapsed), ct);
             if (await Task.WhenAny(pickedUp, step).ConfigureAwait(false) == pickedUp || ct.IsCancellationRequested) return null;
             // Our own work (a tool, its approval prompt) disables Revit's window too: only look while nothing of ours runs.
             if (_running) { dialogSince = -1; continue; }
-            var state = Blocker();
-            if (state.Kind != RevitBlock.Kind.Dialog) { dialogSince = -1; continue; }
+            Kick();
             var now = Environment.TickCount;
+            if (Blocker() is not { Kind: RevitBlock.Kind.Dialog } dialog) { dialogSince = -1; continue; }
             if (dialogSince < 0) dialogSince = now;
             else if (unchecked(now - dialogSince) >= dialogMs)
-                return RevitBlock.Explain(state, what, (unchecked(now - started) + 500) / 1000);
+                return RevitBlock.Explain(dialog, what, (unchecked(now - started) + 500) / 1000);
         }
+    }
+
+    /// <summary>
+    /// <see cref="Blocker"/>, and when that sees neither a dialog nor a hung Revit, whether Revit's ribbon shows an edit
+    /// mode's Finish button (<see cref="EditModeProbe"/>); Unknown otherwise, so nothing is guessed.
+    /// </summary>
+    internal async Task<RevitBlock.State> BlockerAsync()
+    {
+        var state = Blocker();
+        if (state.Kind is RevitBlock.Kind.Dialog or RevitBlock.Kind.NotResponding) return state;
+        return await EditModeProbe.ShownAsync().ConfigureAwait(false) == true
+            ? new RevitBlock.State(RevitBlock.Kind.EditMode, null)
+            : new RevitBlock.State(RevitBlock.Kind.Unknown, null);
     }
 
     /// <summary>Wakes Revit's message loop so it notices the queued work, without needing a click or mouse move.</summary>
