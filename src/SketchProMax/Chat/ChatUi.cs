@@ -85,6 +85,9 @@ internal static class ChatUi
 
     private static ResourceDictionary? _styles;
 
+    /// <summary>Why the chat's styles didn't load as designed (null when they did), for the field test and Diagnostics.</summary>
+    public static string? StylesError { get; private set; }
+
     /// <summary>The chat's own styles (<see cref="ChatStyles"/>), merged into the pane next to the Brand styles.</summary>
     public static ResourceDictionary Styles()
     {
@@ -92,8 +95,15 @@ internal static class ChatUi
         try { _styles = (ResourceDictionary)XamlReader.Parse(ChatStyles.Xaml(RadiusSmall, Radius, SystemParameters.ClientAreaAnimation)); }
         catch (Exception ex)
         {
+            StylesError = ex.Message;
             System.Diagnostics.Trace.WriteLine("Sketch ProMax chat styles: " + ex.Message);
-            _styles = new ResourceDictionary(); // the plain look, never a pane that doesn't open
+            // The same look without motion, press scaling or shadows; only if that fails too, plain Windows buttons.
+            try { _styles = (ResourceDictionary)XamlReader.Parse(ChatStyles.Xaml(RadiusSmall, Radius, animate: false, plain: true)); }
+            catch (Exception ex2)
+            {
+                StylesError += " | plain: " + ex2.Message;
+                _styles = new ResourceDictionary(); // never a pane that doesn't open
+            }
         }
         return _styles;
     }

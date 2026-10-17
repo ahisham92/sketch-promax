@@ -37,7 +37,7 @@ internal static class ChatStyles
     /// A fade of the hover layer <c>hv</c> in on hover and out after it, ease-out. The layer holds no text, so the
     /// label keeps ClearType while it fades.
     /// </summary>
-    private static string HoverFade(bool animate) => """
+    private static string HoverFade(bool animate) => Plain ? """<Setter TargetName="hv" Property="Opacity" Value="1"/>""" : """
         <Trigger.EnterActions><BeginStoryboard><Storyboard>
           <DoubleAnimation Storyboard.TargetName="hv" Storyboard.TargetProperty="Opacity" To="1" Duration="DUR"><DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction></DoubleAnimation>
         </Storyboard></BeginStoryboard></Trigger.EnterActions>
@@ -52,17 +52,17 @@ internal static class ChatStyles
     /// </summary>
     private static string Chrome(string radius, string fill, string hover) => """
         <Grid x:Name="chrome" RenderTransformOrigin="0.5,0.5">
-          <Grid.RenderTransform><ScaleTransform x:Name="sc" ScaleX="1" ScaleY="1"/></Grid.RenderTransform>
           <Border x:Name="fill" Background="FILL" CornerRadius="RADIUS" SnapsToDevicePixels="True"/>
           <Border x:Name="hv" Background="{DynamicResource HOVERFILL}" CornerRadius="RADIUS" Opacity="0" SnapsToDevicePixels="True"/>
           <Border x:Name="bd" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="RADIUS" SnapsToDevicePixels="True"/>
         </Grid>
         """.Replace("HOVERFILL", hover).Replace("FILL", fill).Replace("RADIUS", radius);
 
-    private const string Press = """
+    private static string Press => Plain ? "" : PressXaml;
+
+    private const string PressXaml = """
         <Trigger Property="IsPressed" Value="True">
-          <Setter TargetName="sc" Property="ScaleX" Value="0.98"/>
-          <Setter TargetName="sc" Property="ScaleY" Value="0.98"/>
+          <Setter TargetName="chrome" Property="RenderTransform"><Setter.Value><ScaleTransform ScaleX="0.98" ScaleY="0.98"/></Setter.Value></Setter>
         </Trigger>
         """;
 
@@ -73,7 +73,7 @@ internal static class ChatStyles
     private static string Template(double radius, bool animate, bool shadow = false, string hoverBg = "SpmSurfaceHover", string? hoverBorder = null)
     {
         var r = N(radius);
-        var behind = shadow
+        var behind = shadow && !Plain
             ? "<Border CornerRadius=\"" + r + "\" Background=\"{TemplateBinding Background}\" Margin=\"1\">" +
               "<Border.Effect><DropShadowEffect BlurRadius=\"10\" ShadowDepth=\"1\" Direction=\"270\" Opacity=\"0.08\" Color=\"#000000\"/></Border.Effect></Border>"
             : "";
@@ -139,8 +139,7 @@ internal static class ChatStyles
                 <Trigger Property="IsPressed" Value="True">
                   <Setter TargetName="fill" Property="Background" Value="{DynamicResource PRESSED}"/>
                   <Setter TargetName="hv" Property="Visibility" Value="Hidden"/>
-                  <Setter TargetName="sc" Property="ScaleX" Value="0.96"/>
-                  <Setter TargetName="sc" Property="ScaleY" Value="0.96"/>
+                  PRESSROUND
                 </Trigger>
                 <Trigger Property="IsEnabled" Value="False">
                   <Setter TargetName="fill" Property="Background" Value="{DynamicResource SpmSurfaceHover}"/>
@@ -151,13 +150,27 @@ internal static class ChatStyles
           </Setter.Value></Setter>
         </Style>
         """.Replace("CHROME", Chrome("16", "{TemplateBinding Background}", hover)).Replace("FADE", HoverFade(animate))
+        .Replace("PRESSROUND", Plain ? "" : "<Setter TargetName=\"chrome\" Property=\"RenderTransform\"><Setter.Value><ScaleTransform ScaleX=\"0.96\" ScaleY=\"0.96\"/></Setter.Value></Setter>")
         .Replace("KEY", key).Replace("BG", bg).Replace("FG", fg).Replace("PRESSED", pressed);
 
     /// <summary>
     /// The whole resource dictionary, with buttons and fields at <paramref name="small"/> corners and cards at
     /// <paramref name="card"/>; hover fades take <see cref="MotionMs"/> when <paramref name="animate"/>, else none.
     /// </summary>
-    public static string Xaml(double small, double card, bool animate = true) => """
+    public static string Xaml(double small, double card, bool animate = true, bool plain = false)
+    {
+        Plain = plain;
+        try { return Build(small, card, animate); }
+        finally { Plain = false; }
+    }
+
+    /// <summary>
+    /// The fallback look: the same rounded shapes and colours with no motion, press scaling or shadows, in case a
+    /// Windows or WPF version refuses one of those (the chat then still looks like itself, never like plain Windows buttons).
+    /// </summary>
+    [ThreadStatic] private static bool Plain;
+
+    private static string Build(double small, double card, bool animate) => """
         <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
           FOCUS

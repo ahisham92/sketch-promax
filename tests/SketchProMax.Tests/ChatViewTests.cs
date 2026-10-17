@@ -101,7 +101,14 @@ internal static class ChatViewTests
         var still = ChatStyles.Xaml(8, 12, animate: false);
         check("styles: hover fades in 160 ms, ease-out", xaml.Contains("Duration=\"0:0:0.160\"") && xaml.Contains("CubicEase EasingMode=\"EaseOut\"") && !xaml.Contains("Duration=\"0:0:0\""), "");
         check("styles: no fade with animations off", still.Contains("Duration=\"0:0:0\"") && !still.Contains("0:0:0.160"), "");
-        check("styles: press shrinks the chrome, not the text", xaml.Contains("ScaleX\" Value=\"0.98\"") && !System.Text.RegularExpressions.Regex.IsMatch(xaml, @"Property=""Opacity"" Value=""0\.\d"""), "");
+        check("styles: press shrinks the chrome, not the text", xaml.Contains("<Setter TargetName=\"chrome\" Property=\"RenderTransform\"><Setter.Value><ScaleTransform ScaleX=\"0.98\"") && !System.Text.RegularExpressions.Regex.IsMatch(xaml, @"Property=""Opacity"" Value=""0\.\d"""), "");
+        // A template Setter can only name a FrameworkElement: one naming a ScaleTransform made WPF refuse every chat style (0.32-0.33.1).
+        var named = System.Text.RegularExpressions.Regex.Matches(xaml, @"<(\w+)[^>]*x:Name=""(\w+)""").Cast<System.Text.RegularExpressions.Match>()
+            .Where(m => m.Groups[1].Value.EndsWith("Transform", StringComparison.Ordinal)).Select(m => m.Groups[2].Value).ToList();
+        check("styles: no template setter targets a named transform", named.All(n => !xaml.Contains("TargetName=\"" + n + "\"")), string.Join(",", named));
+        var plain = ChatStyles.Xaml(8, 12, animate: false, plain: true);
+        check("styles: the plain fallback has the same keys, no press or shadow", System.Xml.Linq.XDocument.Parse(plain) is not null
+            && !plain.Contains("ScaleTransform") && !plain.Contains("DropShadowEffect") && plain.Contains("x:Key=\"SpmChatCard\"") && plain.Contains("x:Key=\"SpmChatSend\""), "");
         check("styles: every template has a hover layer", System.Text.RegularExpressions.Regex.Matches(xaml, "x:Name=\"hv\"").Count >= 8, "");
 
         // The type scale.

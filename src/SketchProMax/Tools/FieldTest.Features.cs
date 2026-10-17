@@ -1601,6 +1601,9 @@ internal static partial class FieldTest
     {
         var folder = Path.Combine(s.O.ReportFolder ?? DefaultReportFolder, $"{s.Result.Started:yyyyMMdd-HHmmss} chat-dpi");
         var files = Chat.ChatPane.Snapshot.Render(folder);
+        // The chat's rounded styles must load as designed; if WPF refused them the pane falls back to a plainer look.
+        if (Chat.ChatUi.StylesError is { } styles)
+            return Fail("The chat's styles didn't load as designed, so it shows a plainer look: " + styles + $" (screenshots in {folder})");
         var bad = files.Where(f => !File.Exists(f) || new FileInfo(f).Length < 1000).Select(Path.GetFileName).ToList();
         var expected = Chat.ChatPane.Snapshot.Scales.Length * 2;
         if (files.Count != expected || bad.Count > 0)
