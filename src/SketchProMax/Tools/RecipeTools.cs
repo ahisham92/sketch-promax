@@ -470,4 +470,30 @@ internal static class ActivityLog
         }
         catch (Exception) { /* logging must never break a tool call */ }
     }
+
+    /// <summary>
+    /// A line that is not a tool call (startup and model-open timings), in the same shape so get_activity_log and the
+    /// bug reports read it like any other. Written off Revit's thread.
+    /// </summary>
+    public static void Note(string what, string text)
+    {
+        var time = DateTime.Now;
+        Task.Run(() =>
+        {
+            try
+            {
+                var line = JsonSerializer.Serialize(new
+                {
+                    time = time.ToString("s"), model = "", tool = what, changes = false, ok = true, arguments = "", result = text,
+                });
+                var file = FileFor(time.ToString("yyyy-MM-dd"));
+                lock (Gate)
+                {
+                    Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+                    File.AppendAllText(file, line + Environment.NewLine);
+                }
+            }
+            catch (Exception) { /* logging is best effort */ }
+        });
+    }
 }

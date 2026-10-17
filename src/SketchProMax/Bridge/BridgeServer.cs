@@ -58,17 +58,25 @@ public sealed class BridgeServer
 
     public void Start()
     {
-        WriteToolCatalogue();
-        try
+        var ct = _cts.Token;
+        Task.Run(() => AcceptLoop(ct));
+        // The catalogue (every tool's schema, serialised) and the session file are written off Revit's thread: the core
+        // starts while Revit may be opening a model. A connector asking before they land sees the previous ones.
+        var started = DateTime.UtcNow;
+        Task.Run(() =>
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(SessionFile)!);
-            File.WriteAllText(SessionFile, JsonSerializer.Serialize(new
+            WriteToolCatalogue();
+            if (ct.IsCancellationRequested) return; // stopped already: Stop may have removed the session file
+            try
             {
-                pid = SessionId, pipe = PipeName, revitVersion = _revitVersion, started = DateTime.UtcNow,
-            }));
-        }
-        catch (IOException) { }
-        Task.Run(() => AcceptLoop(_cts.Token));
+                Directory.CreateDirectory(Path.GetDirectoryName(SessionFile)!);
+                File.WriteAllText(SessionFile, JsonSerializer.Serialize(new
+                {
+                    pid = SessionId, pipe = PipeName, revitVersion = _revitVersion, started,
+                }));
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        });
     }
 
     /// <summary>

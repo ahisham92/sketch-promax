@@ -356,6 +356,7 @@ internal static partial class SelfTest
             {
                 report.Model, report.RevitVersion, report.AddinVersion, report.Mode, report.LargeModel, report.Ran,
                 report.Passed, report.Failed, report.Skipped, stoppedEarly = run.StoppedBecause,
+                startup = new { start = SketchProMax.Revit.StartupTimings.StartLine(), opens = SketchProMax.Revit.StartupTimings.OpenLines() },
                 results = results.OrderBy(r => r.Status == "fail" ? 0 : r.Status == "skip" ? 2 : 1).ThenBy(r => r.Tool),
             }, new JsonSerializerOptions { WriteIndented = true }));
         }

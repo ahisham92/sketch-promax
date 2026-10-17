@@ -36,11 +36,13 @@ public static class CoreEntry
     /// Content the core puts into the loader's dockable pane: "chat" is the Claude chat, "notes" its memory notes. Returns a WPF FrameworkElement
     /// (typed object so the signature stays primitive), or null for a name this core doesn't provide. Called on Revit's
     /// UI thread, after Start.
+    /// The real element is made at Revit's next idle moment (<see cref="LazyPane"/>): the loader asks while Revit starts,
+    /// often while a model is opening, and the chat reads and lays out its saved conversation.
     /// </summary>
     public static object? PaneContent(string name) => name switch
     {
-        "chat" => Chat.ChatPane.Get(),
-        "notes" => Chat.NotesView.Get(),
+        "chat" => LazyPane.For(name, Chat.ChatPane.Get),
+        "notes" => LazyPane.For(name, Chat.NotesView.Get),
         _ => null,
     };
 
@@ -88,6 +90,7 @@ public static class CoreEntry
     {
         // The loader has shown the pane with its Chat tab; on the first Send view of a session the chat may not be made
         // yet: make it now (the pane adopts this same element), so the view is attached instead of refused.
+        LazyPane.FillNow("chat");
         Chat.ChatPane.Get();
         if (Chat.ChatPane.AttachCurrentView()) return Result.Succeeded;
         TaskDialog.Show("Sketch ProMax", "The chat isn't open in this Revit session. Click Chat first, then Send view.");
@@ -120,13 +123,21 @@ public static class CoreEntry
             case "quick": return QuickTools.List();
             case "quick-reload": return QuickTools.List(force: true);
             case "pane": return Pane.Snapshot(); // the dockable pane's content, see UI/Pane.cs for the format
-            case "ribbon": return RibbonText();
+            case "ribbon":
+            {
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                var text = RibbonText();
+                Revit.StartupTimings.Phase("ribbon manifest", sw.ElapsedMilliseconds);
+                return text;
+            }
             case "live": return LiveLabel(arg);
             case "restartnote":
                 // From a 0.30+ loader once it added this core's buttons: what can only appear after a restart ("" = nothing).
                 RestartNote.FromLoader(arg);
                 // It follows every manifest the loader applies: the favourite slots it made or showed are put right.
+                var synced = System.Diagnostics.Stopwatch.StartNew();
                 try { FavouritesRibbon.AfterSync(); } catch (Exception) { /* the live labels still say "Empty" */ }
+                Revit.StartupTimings.Phase("favourite slots", synced.ElapsedMilliseconds);
                 return "ok";
             case "swapnote":
                 // Sent to the outgoing core just before "swapped": the new version's restart note, for its update window.
