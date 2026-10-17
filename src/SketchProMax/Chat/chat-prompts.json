@@ -1,0 +1,725 @@
+{
+ "groups": [
+  {
+   "name": "Structure",
+   "blurb": "Columns, beams, slabs, walls, foundations and analytical checks"
+  },
+  {
+   "name": "Steel",
+   "blurb": "Sections, bracing, connections and takeoffs"
+  },
+  {
+   "name": "Rebar",
+   "blurb": "Reinforcement, bending schedules and post-tensioning"
+  },
+  {
+   "name": "Marine",
+   "blurb": "Ports, quays, vessels and infrastructure"
+  },
+  {
+   "name": "Model",
+   "blurb": "Levels, grids, architecture, MEP, families and imports"
+  },
+  {
+   "name": "Documents",
+   "blurb": "Views, sheets, tags, dimensions, schedules and title blocks"
+  },
+  {
+   "name": "Check",
+   "blurb": "Model checks, clashes, quantities and progress"
+  },
+  {
+   "name": "Issue",
+   "blurb": "Revisions, PDFs, drawing lists and exchange files"
+  },
+  {
+   "name": "Carbon",
+   "blurb": "Embodied carbon and material comparisons"
+  },
+  {
+   "name": "Data",
+   "blurb": "Finding elements, parameters, coordinates and exports"
+  },
+  {
+   "name": "Workflow",
+   "blurb": "Recipes, learned tools, code, worksharing and memory"
+  }
+ ],
+ "toolGroups": {
+  "arch_to_structure": "Structure",
+  "construction_sequence": "Check",
+  "cost_estimate": "Check",
+  "export_quantities": "Check",
+  "boq_check": "Check",
+  "boq_item_breakdown": "Check",
+  "sleeve_schedule": "Model",
+  "create_mep_openings": "Model",
+  "create_mep_runs": "Model",
+  "general_notes": "Documents",
+  "typical_details": "Documents",
+  "equipment_pads": "Structure",
+  "export_bcf": "Issue",
+  "export_project_pack": "Issue",
+  "model_snapshot": "Check",
+  "hollow_core_layout": "Structure",
+  "progressive_collapse_check": "Structure",
+  "analytical_check": "Structure",
+  "export_analytical": "Structure",
+  "place_column_section_details": "Rebar",
+  "report_bug": "Workflow",
+  "export_chats_and_bugs": "Workflow"
+ },
+ "capabilities": [
+  {
+   "group": "Structure",
+   "title": "Frame a floor from the grids",
+   "prompt": "Place columns at every grid intersection on Level 1 and beams along all grid lines, using the default types. Show me the plan before you change the model."
+  },
+  {
+   "group": "Structure",
+   "title": "Size check overview",
+   "prompt": "List every structural framing type in this model with its count and total length, and point out members that look unusually long for their section."
+  },
+  {
+   "group": "Structure",
+   "title": "Slab from the architecture",
+   "prompt": "Create structural slabs on Level 2 that follow the architectural floor outlines, 200 mm thick, and tell me where the outlines don't close."
+  },
+  {
+   "group": "Structure",
+   "title": "Pile layout",
+   "prompt": "Lay out piles under the raft on the foundation level as a grid at 3 m centres, keeping 1 m from the edge. Ask for the pile type first."
+  },
+  {
+   "group": "Structure",
+   "title": "Transfer structure review",
+   "prompt": "Find columns that don't continue to the level below and list where they land, so I can review the transfer structure."
+  },
+  {
+   "group": "Steel",
+   "title": "Bracing bays",
+   "prompt": "Add X-bracing in the end bays along grid A on all levels, using a hollow section I choose. Ask me for the section first."
+  },
+  {
+   "group": "Steel",
+   "title": "Connection schedule",
+   "prompt": "List the steel connection types available and propose a connection for each beam-to-column joint on Level 3."
+  },
+  {
+   "group": "Steel",
+   "title": "Steel tonnage",
+   "prompt": "Give me the steel takeoff by section and level, with total tonnage, as a table."
+  },
+  {
+   "group": "Rebar",
+   "title": "Beam reinforcement",
+   "prompt": "Reinforce the selected beams with 4 bottom bars, 2 top bars and links at 150 mm centres, using the project's bar types. Confirm before modelling."
+  },
+  {
+   "group": "Rebar",
+   "title": "Bar bending schedule",
+   "prompt": "Export the bar bending schedule for the reinforcement in the active view to Excel."
+  },
+  {
+   "group": "Rebar",
+   "title": "Slab reinforcement plan",
+   "prompt": "Make a 2D reinforcement plan for the selected slab with the office's detail families: top and bottom mesh, and extra bars at openings."
+  },
+  {
+   "group": "Marine",
+   "title": "Quay layout",
+   "prompt": "Model a quay structure along the selected alignment: deck, beams and piles at the spacing I give. Ask me for the cross-section first."
+  },
+  {
+   "group": "Marine",
+   "title": "Fender and bollard check",
+   "prompt": "List the port furniture on the quay with spacing between items, and flag gaps larger than 20 m."
+  },
+  {
+   "group": "Marine",
+   "title": "Design vessel",
+   "prompt": "Set up the design vessel for the berth and check its clearance along the quay line."
+  },
+  {
+   "group": "Model",
+   "title": "Levels and grids from a sketch",
+   "prompt": "I'll attach a sketch: read it and create the levels and grids it shows, then list what you made."
+  },
+  {
+   "group": "Model",
+   "title": "Import a CAD plan",
+   "prompt": "Import the attached DWG on Level 1, list its layers, and tell me which ones look like structure."
+  },
+  {
+   "group": "Model",
+   "title": "Doors and windows",
+   "prompt": "Place the doors and windows from the attached schedule in the walls on Level 1, matching marks to types."
+  },
+  {
+   "group": "Documents",
+   "title": "Sheets for every level",
+   "prompt": "Create a plan view for every level, put each on a new A1 sheet with our title block, and number the sheets S-100 upwards."
+  },
+  {
+   "group": "Documents",
+   "title": "Tag everything in view",
+   "prompt": "Tag all structural columns and beams in the active view that have no tag, and arrange the tags so they don't overlap."
+  },
+  {
+   "group": "Documents",
+   "title": "Dimension the grids",
+   "prompt": "Dimension all grids in the active plan, with an overall string on two sides."
+  },
+  {
+   "group": "Documents",
+   "title": "General notes",
+   "prompt": "Put the general notes on the cover sheet from the attached text, keeping our text style."
+  },
+  {
+   "group": "Check",
+   "title": "Model health check",
+   "prompt": "Run a model audit and list the top 10 problems with element ids I can click, most important first."
+  },
+  {
+   "group": "Check",
+   "title": "Clash check",
+   "prompt": "Find clashes between structural framing and ducts in the linked MEP model, grouped by level."
+  },
+  {
+   "group": "Check",
+   "title": "Missing items",
+   "prompt": "Check the structural model against the architectural one and list columns or walls that seem to be missing."
+  },
+  {
+   "group": "Check",
+   "title": "Quantities by level",
+   "prompt": "Export concrete volumes by level and element category as a table I can paste into Excel."
+  },
+  {
+   "group": "Issue",
+   "title": "Issue a drawing set",
+   "prompt": "Make a new revision for this issue, add it to sheets S-100 to S-120, and export them to PDF in one file."
+  },
+  {
+   "group": "Issue",
+   "title": "Drawing list",
+   "prompt": "Export the drawing list with sheet numbers, names and current revisions."
+  },
+  {
+   "group": "Issue",
+   "title": "BCF for the coordinator",
+   "prompt": "Export the open clashes as a BCF file for the coordination meeting."
+  },
+  {
+   "group": "Carbon",
+   "title": "Embodied carbon now",
+   "prompt": "Estimate the embodied carbon of the structure by material and level, with the factors you used."
+  },
+  {
+   "group": "Carbon",
+   "title": "Compare two options",
+   "prompt": "Compare the embodied carbon of the current concrete slabs with a hollow-core alternative, as a short table."
+  },
+  {
+   "group": "Carbon",
+   "title": "Carbon view",
+   "prompt": "Colour the 3D view by embodied carbon per element so the heavy parts stand out."
+  },
+  {
+   "group": "Data",
+   "title": "Find by parameter",
+   "prompt": "Find all elements whose Mark is empty, grouped by category, with ids I can click."
+  },
+  {
+   "group": "Data",
+   "title": "Bulk parameter update",
+   "prompt": "Set the Comments parameter of the selected elements to the value I give, and tell me how many changed."
+  },
+  {
+   "group": "Data",
+   "title": "Coordinates",
+   "prompt": "Report the survey point, project base point and the shared coordinates of the selected element."
+  },
+  {
+   "group": "Workflow",
+   "title": "Save as a recipe",
+   "prompt": "Save the steps you just did as a recipe I can run again on other models."
+  },
+  {
+   "group": "Workflow",
+   "title": "Remember a standard",
+   "prompt": "Remember that our beams are always tagged with type mark and size, in every model."
+  },
+  {
+   "group": "Workflow",
+   "title": "Worksets I hold",
+   "prompt": "List the worksets and elements I own and relinquish them."
+  }
+ ],
+ "projectTypes": [
+  {
+   "id": "building",
+   "name": "Building"
+  },
+  {
+   "id": "marine",
+   "name": "Port and marine"
+  },
+  {
+   "id": "infrastructure",
+   "name": "Infrastructure"
+  }
+ ],
+ "phases": [
+  {
+   "id": "concept",
+   "name": "Concept"
+  },
+  {
+   "id": "schematic",
+   "name": "Schematic"
+  },
+  {
+   "id": "detailed",
+   "name": "Detailed design"
+  },
+  {
+   "id": "ifc",
+   "name": "Issued for construction"
+  }
+ ],
+ "tailored": [
+  {
+   "type": "building",
+   "phase": "concept",
+   "title": "Structural grid options",
+   "prompt": "Propose two column grid options for this building from the architectural plans, with spans and a short pros and cons table."
+  },
+  {
+   "type": "building",
+   "phase": "concept",
+   "title": "Floor system comparison",
+   "prompt": "Compare flat slab, beam and slab, and post-tensioned options for the typical floor: depth, self-weight and embodied carbon."
+  },
+  {
+   "type": "building",
+   "phase": "concept",
+   "title": "Stability strategy",
+   "prompt": "Look at the cores and walls in the model and suggest a lateral stability strategy, marking walls that could act as shear walls."
+  },
+  {
+   "type": "building",
+   "phase": "concept",
+   "title": "Quick scheme model",
+   "prompt": "Create levels from the architectural model and place indicative columns at grid intersections so we can see the scheme."
+  },
+  {
+   "type": "building",
+   "phase": "concept",
+   "title": "Early quantities",
+   "prompt": "Give rough concrete and steel quantities for the scheme, by level, with assumptions stated."
+  },
+  {
+   "type": "building",
+   "phase": "concept",
+   "title": "Concept carbon",
+   "prompt": "Estimate embodied carbon for the concept structure and name the three biggest contributors."
+  },
+  {
+   "type": "building",
+   "phase": "schematic",
+   "title": "Column schedule set-up",
+   "prompt": "Create a column schedule with mark, type, base and top level, and put it on a new sheet."
+  },
+  {
+   "type": "building",
+   "phase": "schematic",
+   "title": "Transfer review",
+   "prompt": "List columns and walls that don't continue down, with the elements they land on."
+  },
+  {
+   "type": "building",
+   "phase": "schematic",
+   "title": "Slab openings",
+   "prompt": "Find slab openings over 1 m and list them with level and size, for review with the architect."
+  },
+  {
+   "type": "building",
+   "phase": "schematic",
+   "title": "Coordination with MEP",
+   "prompt": "Check the linked MEP model for ducts crossing beams and list the clashes by level."
+  },
+  {
+   "type": "building",
+   "phase": "schematic",
+   "title": "Schematic sheets",
+   "prompt": "Make general arrangement plans for each level on sheets, with grids dimensioned."
+  },
+  {
+   "type": "building",
+   "phase": "schematic",
+   "title": "Foundation scheme",
+   "prompt": "Propose a pad or raft foundation layout under the columns, using the column loads I give."
+  },
+  {
+   "type": "building",
+   "phase": "detailed",
+   "title": "Beam reinforcement",
+   "prompt": "Reinforce the beams on the selected level from the attached design output and report any beam you couldn't match."
+  },
+  {
+   "type": "building",
+   "phase": "detailed",
+   "title": "Tags and dimensions",
+   "prompt": "Tag every structural element in the active views and dimension openings in walls and slabs."
+  },
+  {
+   "type": "building",
+   "phase": "detailed",
+   "title": "Sections at cores",
+   "prompt": "Create sections through each core and place them on a sheet with a key plan."
+  },
+  {
+   "type": "building",
+   "phase": "detailed",
+   "title": "Penetrations",
+   "prompt": "Create MEP openings in beams and walls where linked ducts and pipes cross them, with sleeves scheduled."
+  },
+  {
+   "type": "building",
+   "phase": "detailed",
+   "title": "Typical details",
+   "prompt": "Place the typical details sheet with our standard detail components."
+  },
+  {
+   "type": "building",
+   "phase": "detailed",
+   "title": "Model check before review",
+   "prompt": "Run the model check and the drawing check and give me a list of fixes before the design review."
+  },
+  {
+   "type": "building",
+   "phase": "ifc",
+   "title": "IFC revision",
+   "prompt": "Create the IFC revision, add it to all structural sheets, and update the revision schedule on each title block."
+  },
+  {
+   "type": "building",
+   "phase": "ifc",
+   "title": "Export the IFC set",
+   "prompt": "Export all S- sheets to PDF and the drawing list to Excel, in one folder named with today's date."
+  },
+  {
+   "type": "building",
+   "phase": "ifc",
+   "title": "Bar schedules",
+   "prompt": "Export the bar bending schedules for every reinforced element, one sheet per level."
+  },
+  {
+   "type": "building",
+   "phase": "ifc",
+   "title": "Final drawing check",
+   "prompt": "Check every sheet for untagged elements, missing dimensions and views not on sheets."
+  },
+  {
+   "type": "building",
+   "phase": "ifc",
+   "title": "Clouds for changes",
+   "prompt": "Cloud the elements changed since the last issue and tag the clouds with the revision."
+  },
+  {
+   "type": "building",
+   "phase": "ifc",
+   "title": "Handover pack",
+   "prompt": "Export the project pack for handover, with chats left out."
+  },
+  {
+   "type": "marine",
+   "phase": "concept",
+   "title": "Berth layout",
+   "prompt": "Set up the berth for the design vessel and show the clear water along the quay line."
+  },
+  {
+   "type": "marine",
+   "phase": "concept",
+   "title": "Quay structure options",
+   "prompt": "Compare an open piled deck with a gravity quay wall for this site: rough quantities and carbon."
+  },
+  {
+   "type": "marine",
+   "phase": "concept",
+   "title": "Pile grid study",
+   "prompt": "Lay out an indicative pile grid under the deck at two spacings and compare pile counts."
+  },
+  {
+   "type": "marine",
+   "phase": "concept",
+   "title": "Mooring layout",
+   "prompt": "Propose bollard and fender positions along the quay for the design vessel."
+  },
+  {
+   "type": "marine",
+   "phase": "concept",
+   "title": "Concept levels",
+   "prompt": "Create the deck, cope and seabed levels from the values I give, with grids along the quay."
+  },
+  {
+   "type": "marine",
+   "phase": "concept",
+   "title": "Early carbon",
+   "prompt": "Estimate embodied carbon of the quay concept and the share from piles, deck and furniture."
+  },
+  {
+   "type": "marine",
+   "phase": "schematic",
+   "title": "Deck framing",
+   "prompt": "Model the deck beams and slab between the pile caps, using the cross-section I give."
+  },
+  {
+   "type": "marine",
+   "phase": "schematic",
+   "title": "Pile schedule",
+   "prompt": "Create a pile schedule with mark, type, toe level and rake, and put it on a sheet."
+  },
+  {
+   "type": "marine",
+   "phase": "schematic",
+   "title": "Furniture spacing",
+   "prompt": "Check the spacing of fenders and bollards and flag anything outside the range I give."
+  },
+  {
+   "type": "marine",
+   "phase": "schematic",
+   "title": "Vessel clearance",
+   "prompt": "Check the design vessel against the quay structure and fenders for clashes."
+  },
+  {
+   "type": "marine",
+   "phase": "schematic",
+   "title": "Expansion joints",
+   "prompt": "Suggest expansion joint positions along the deck for the given length and show them in plan."
+  },
+  {
+   "type": "marine",
+   "phase": "schematic",
+   "title": "Schematic sheets",
+   "prompt": "Make plan and section sheets for the quay with grids and levels dimensioned."
+  },
+  {
+   "type": "marine",
+   "phase": "detailed",
+   "title": "Pile cap reinforcement",
+   "prompt": "Reinforce the pile caps with the bar layout I give and export the bar schedule."
+  },
+  {
+   "type": "marine",
+   "phase": "detailed",
+   "title": "Deck sections",
+   "prompt": "Create sections every 20 m along the quay and place them on sheets in order."
+  },
+  {
+   "type": "marine",
+   "phase": "detailed",
+   "title": "Embedded items",
+   "prompt": "Place the embedded plates and sleeves for services along the deck and schedule them."
+  },
+  {
+   "type": "marine",
+   "phase": "detailed",
+   "title": "Tag and dimension the quay",
+   "prompt": "Tag piles, beams and furniture in the plans and dimension pile positions from the grids."
+  },
+  {
+   "type": "marine",
+   "phase": "detailed",
+   "title": "Durability notes",
+   "prompt": "Add general notes for cover and concrete grade for the marine exposure I give."
+  },
+  {
+   "type": "marine",
+   "phase": "detailed",
+   "title": "Detailed model check",
+   "prompt": "Run the model audit and list missing marks, unjoined elements and piles without a toe level."
+  },
+  {
+   "type": "marine",
+   "phase": "ifc",
+   "title": "IFC revision",
+   "prompt": "Create the IFC revision and add it to the quay drawings, then export them to PDF."
+  },
+  {
+   "type": "marine",
+   "phase": "ifc",
+   "title": "Pile setting-out",
+   "prompt": "Export pile coordinates in site coordinates to Excel for the setting-out engineer."
+  },
+  {
+   "type": "marine",
+   "phase": "ifc",
+   "title": "Final schedules",
+   "prompt": "Export the pile, bar and embedded item schedules for construction."
+  },
+  {
+   "type": "marine",
+   "phase": "ifc",
+   "title": "Construction sequence",
+   "prompt": "Set up the construction sequence phases for piling, deck and furniture and colour a 3D view by phase."
+  },
+  {
+   "type": "marine",
+   "phase": "ifc",
+   "title": "Drawing list",
+   "prompt": "Export the drawing list with revisions for the transmittal."
+  },
+  {
+   "type": "marine",
+   "phase": "ifc",
+   "title": "Handover pack",
+   "prompt": "Export the project pack for handover, with the issued sheets listed."
+  },
+  {
+   "type": "infrastructure",
+   "phase": "concept",
+   "title": "Alignment and levels",
+   "prompt": "Create levels and reference grids along the alignment from the coordinates I give."
+  },
+  {
+   "type": "infrastructure",
+   "phase": "concept",
+   "title": "Structure type study",
+   "prompt": "Compare a culvert, a short-span bridge and a retaining wall option for this crossing: rough quantities and carbon."
+  },
+  {
+   "type": "infrastructure",
+   "phase": "concept",
+   "title": "Retaining wall scheme",
+   "prompt": "Model an indicative retaining wall along the selected line with the height I give."
+  },
+  {
+   "type": "infrastructure",
+   "phase": "concept",
+   "title": "Site coordinates",
+   "prompt": "Set the shared coordinates from the survey point I give and report the project base point."
+  },
+  {
+   "type": "infrastructure",
+   "phase": "concept",
+   "title": "Concept quantities",
+   "prompt": "Give rough concrete and steel quantities for the concept, with assumptions stated."
+  },
+  {
+   "type": "infrastructure",
+   "phase": "concept",
+   "title": "Concept carbon",
+   "prompt": "Estimate the embodied carbon of the concept and the biggest contributors."
+  },
+  {
+   "type": "infrastructure",
+   "phase": "schematic",
+   "title": "Abutments and piers",
+   "prompt": "Model abutments and piers at the stations I give, with indicative pile groups."
+  },
+  {
+   "type": "infrastructure",
+   "phase": "schematic",
+   "title": "Deck framing",
+   "prompt": "Place girders between the supports at the spacing I give and a deck slab over them."
+  },
+  {
+   "type": "infrastructure",
+   "phase": "schematic",
+   "title": "Drainage openings",
+   "prompt": "Find where the linked drainage crosses the structure and create openings with sleeves."
+  },
+  {
+   "type": "infrastructure",
+   "phase": "schematic",
+   "title": "Sections along the alignment",
+   "prompt": "Create sections at each support and place them on sheets in chainage order."
+  },
+  {
+   "type": "infrastructure",
+   "phase": "schematic",
+   "title": "Schematic schedule",
+   "prompt": "Create a schedule of structural elements by support with volumes."
+  },
+  {
+   "type": "infrastructure",
+   "phase": "schematic",
+   "title": "Coordination check",
+   "prompt": "Check the structure against the linked utilities and list the clashes by support."
+  },
+  {
+   "type": "infrastructure",
+   "phase": "detailed",
+   "title": "Wall and footing reinforcement",
+   "prompt": "Reinforce the retaining wall and its footing with the bar layout I give."
+  },
+  {
+   "type": "infrastructure",
+   "phase": "detailed",
+   "title": "Bearing plinths",
+   "prompt": "Model bearing plinths on the piers at the girder positions and dimension them."
+  },
+  {
+   "type": "infrastructure",
+   "phase": "detailed",
+   "title": "Construction joints",
+   "prompt": "Propose construction joint positions for the wall and show them in elevation."
+  },
+  {
+   "type": "infrastructure",
+   "phase": "detailed",
+   "title": "Tag and dimension",
+   "prompt": "Tag all structural elements and dimension supports from the reference grids."
+  },
+  {
+   "type": "infrastructure",
+   "phase": "detailed",
+   "title": "Bar schedules",
+   "prompt": "Export bar bending schedules by element for review."
+  },
+  {
+   "type": "infrastructure",
+   "phase": "detailed",
+   "title": "Detailed model check",
+   "prompt": "Run the model audit and list unjoined elements, missing marks and elements without materials."
+  },
+  {
+   "type": "infrastructure",
+   "phase": "ifc",
+   "title": "IFC revision",
+   "prompt": "Create the IFC revision, add it to all sheets and export them to PDF."
+  },
+  {
+   "type": "infrastructure",
+   "phase": "ifc",
+   "title": "Setting-out data",
+   "prompt": "Export the coordinates of supports and pile centres in site coordinates to Excel."
+  },
+  {
+   "type": "infrastructure",
+   "phase": "ifc",
+   "title": "Final quantities",
+   "prompt": "Export final concrete, reinforcement and steel quantities by element for the bill of quantities."
+  },
+  {
+   "type": "infrastructure",
+   "phase": "ifc",
+   "title": "Sequence for construction",
+   "prompt": "Set up construction phases and colour a 3D view by phase for the method statement."
+  },
+  {
+   "type": "infrastructure",
+   "phase": "ifc",
+   "title": "Transmittal list",
+   "prompt": "Export the drawing list with current revisions for the transmittal."
+  },
+  {
+   "type": "infrastructure",
+   "phase": "ifc",
+   "title": "Handover pack",
+   "prompt": "Export the project pack for handover."
+  }
+ ]
+}

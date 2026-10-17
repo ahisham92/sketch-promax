@@ -42,6 +42,11 @@ internal static class CatalogTests
         string Prop(object o, string p) => o.GetType().GetProperty(p)!.GetValue(o)?.ToString() ?? "";
         check($"registry builds ({tools.Count} tools)", tools.Count > 50, "");
 
+        // The chat home screen's library: every tool plus the hand-written prompts.
+        var library = SketchProMax.Chat.PromptLibrary.Load(tools.Select(t => (Prop(t, "Name"), Prop(t, "Description"))).ToList());
+        var emptyGroups = library.Counts().Where(c => c.Count == 0).Select(c => c.Group).ToList();
+        check($"chat library: more than 190 capabilities ({library.Capabilities.Count}), every group used", library.Capabilities.Count > 190 && emptyGroups.Count == 0, string.Join(", ", emptyGroups));
+
         // Names
         var names = tools.Select(t => Prop(t, "Name")).ToList();
         var dupes = names.GroupBy(n => n).Where(g => g.Count() > 1).Select(g => g.Key).ToList();

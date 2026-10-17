@@ -70,3 +70,34 @@ internal static class SavedPromptTests
         finally { try { Directory.Delete(Path.GetDirectoryName(file)!, true); } catch (IOException) { } }
     }
 }
+
+/// <summary>The home screen's prompt library: groups, tool grouping, search, tailored prompts.</summary>
+internal static class PromptLibraryTests
+{
+    public static void Run(Action<string, bool, string> check)
+    {
+        var tools = new[] { ("place_columns", "Places structural columns at points or grid intersections. More text."), ("reinforce_beam", "Adds bars to beams."), ("embodied_carbon", "Estimates embodied carbon.") };
+        var lib = PromptLibrary.Load(tools);
+        var groups = lib.Groups.Select(g => g.Name).ToList();
+        check("library: ribbon-like groups", new[] { "Model", "Documents", "Check", "Issue", "Structure", "Steel", "Rebar", "Marine", "Carbon" }.All(groups.Contains), string.Join(",", groups));
+        check("library: hand-written capabilities in known groups", lib.Capabilities.Count(c => c.Tool == "") >= 30 && lib.Capabilities.All(c => groups.Contains(c.Group)), "");
+        check("library: a tool becomes a capability", lib.Capabilities.Any(c => c.Tool == "place_columns" && c.Group == "Structure" && c.Title == "Place columns" &&
+                                                                               c.Summary == "Places structural columns at points or grid intersections." && c.Prompt.Contains("place_columns")), "");
+        check("library: counts per group add up", lib.Counts().Sum(c => c.Count) == lib.Capabilities.Count, "");
+        check("library: search every word", lib.Find(null, "carbon embodied").Any() && lib.Find("Rebar", "beam").Any(c => c.Tool == "reinforce_beam") && !lib.Find(null, "zzqx").Any(), "");
+
+        check("library: three project types, four phases", lib.ProjectTypes.Count == 3 && lib.Phases.Count == 4, "");
+        check("library: more than 64 tailored prompts", lib.TailoredPrompts.Count > 64, lib.TailoredPrompts.Count.ToString());
+        var thin = lib.ProjectTypes.SelectMany(t => lib.Phases.Select(p => (t.Id, p.Id, n: lib.For(t.Id, p.Id).Count()))).Where(x => x.n < 5).ToList();
+        check("library: every type and phase has ideas", thin.Count == 0, string.Join(", ", thin));
+
+        check("library: tool groups by name", PromptLibrary.GroupForTool("export_bar_schedule") == "Rebar" && PromptLibrary.GroupForTool("place_bracing") == "Steel" &&
+                                               PromptLibrary.GroupForTool("vessel_collision_check") == "Marine" && PromptLibrary.GroupForTool("issue_drawings") == "Issue" &&
+                                               PromptLibrary.GroupForTool("find_clashes") == "Check" && PromptLibrary.GroupForTool("create_sheets") == "Documents" &&
+                                               PromptLibrary.GroupForTool("carbon_view") == "Carbon" && PromptLibrary.GroupForTool("query_elements") == "Data" &&
+                                               PromptLibrary.GroupForTool("place_beams") == "Structure" && PromptLibrary.GroupForTool("import_image") == "Model", "");
+        check("library: humanize", PromptLibrary.Humanize("create_3d_view") == "Create 3D view" && PromptLibrary.Humanize("export_pdf") == "Export PDF", PromptLibrary.Humanize("create_3d_view"));
+        check("library: first sentence", PromptLibrary.FirstSentence("One. Two.") == "One." && PromptLibrary.FirstSentence("v1.2 is fine") == "v1.2 is fine", "");
+        check("library: damaged data is empty, not an error", PromptLibrary.Parse("{ nope", tools).Groups.Count == 0, "");
+    }
+}

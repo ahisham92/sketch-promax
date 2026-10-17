@@ -360,7 +360,9 @@ internal sealed class ChatPane : DockPanel, IHistoryHost
         _earlier.HorizontalAlignment = HorizontalAlignment.Center;
         _earlier.Margin = new Thickness(0, ChatUi.S1, 0, 0);
         _earlier.Click += (_, _) => ShowEarlier();
-        _empty = EmptyState();
+        var home = new HomeView(UsePrompt, () => Saved);
+        PromptsChanged += home.SavedChanged;
+        _empty = home;
         var dots = ChatUi.Dots();
         var working = new DockPanel();
         DockPanel.SetDock(dots, Dock.Left);
@@ -689,37 +691,6 @@ internal sealed class ChatPane : DockPanel, IHistoryHost
         ShowEarlierButton();
         _empty.Visibility = _conv.Items.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         ScrollToEnd(force: true);
-    }
-
-    private UIElement EmptyState()
-    {
-        var panel = new StackPanel { Margin = new Thickness(0, ChatUi.S4, 0, ChatUi.S2) };
-        panel.Children.Add(Brand.Text("Ask Claude about this model", Brand.K.Text, 14, bold: true));
-        var intro = Brand.Text("Claude reads and changes the open model through the Sketch ProMax tools. Try one of these:", Brand.K.Muted);
-        intro.Margin = new Thickness(0, ChatUi.S1, 0, ChatUi.S2);
-        panel.Children.Add(intro);
-        var examples = new WrapPanel();
-        foreach (var example in new[] { "List the levels with their elevations", "Check the beams on level 2 for missing tags", "Put these columns on a sheet" })
-        {
-            var button = new Button { Content = new TextBlock { Text = example, TextWrapping = TextWrapping.Wrap }, Margin = new Thickness(0, 0, ChatUi.S2, ChatUi.S2) };
-            button.SetResourceReference(StyleProperty, "SpmChatPill");
-            button.ToolTip = "Puts this in the message box; edit it or press Enter to send.";
-            AutomationProperties.SetName(button, "Example: " + example);
-            button.Click += (_, _) => UsePrompt(example);
-            examples.Children.Add(button);
-        }
-        panel.Children.Add(examples);
-        foreach (var line in new[]
-                 {
-                     "Attach a sketch, PDF or DWG with the paperclip, paste a screenshot, or send the active view with the camera button.",
-                     "When \"Ask me before Claude changes the model\" is on in Settings, Revit asks you before any change. Every change can be undone with Ctrl+Z.",
-                 })
-        {
-            var t = Brand.Text(line, Brand.K.Muted, ChatUi.SmallSize + 0.5);
-            t.Margin = new Thickness(0, ChatUi.S1, 0, 0);
-            panel.Children.Add(t);
-        }
-        return panel;
     }
 
     private void Add(ChatItem item)
