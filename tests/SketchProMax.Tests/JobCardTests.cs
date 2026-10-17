@@ -145,6 +145,18 @@ internal static class JobCardTests
         stopping.Apply(JobAction.Stop);
         var stopped = JobControl.AfterStep(stopping, "create_sheets", "ok", false, out var stopState);
         check("job: a stopped step says so first", stopState == "stopped" && stopped == JobControl.StoppedText + "\n\nok", stopped);
+        var scan = new JobControl();
+        scan.Apply(JobAction.Stop);
+        var scanText = JobControl.AfterStep(scan, "check_model", JobControl.EndedEarly("Stopped on request (cancel_job). No report was written."), true, out var scanState);
+        check("job: a step that can only finish whole says it kept nothing, never 'finished items are kept'",
+            scanState == "stopped" && scanText.StartsWith(JobControl.StoppedNothingKeptText) && !scanText.Contains("finished items are kept") && scanText.Contains("No report was written."), scanText);
+        var scanSkip = new JobControl();
+        scanSkip.Apply(JobAction.Skip);
+        var skipScan = JobControl.AfterStep(scanSkip, "check_model", JobControl.EndedEarly(""), true, out _);
+        check("card: whole-or-nothing steps show as rolled back / nothing kept",
+            JobCardModel.Outcome(scanText, true) is ("stopped", var r1) && r1.Contains("nothing of it kept")
+            && JobCardModel.Outcome(skipScan, false) is ("skipped", var r2) && r2.Contains("nothing of it was kept")
+            && JobCardModel.Outcome(JobText.Add("{}", JobControl.SkippedText, null), false) == ("skipped", "skipped by you (Skip step)"), skipScan);
         var list = JobText.Add("[{\"id\":1}]", JobControl.StoppedText, "[Message from the user]\n- \"quoted\" and \\ slash");
         using (var parsed = System.Text.Json.JsonDocument.Parse(list))
             check("job: an array result is wrapped and stays JSON, the note readable", parsed.RootElement.GetProperty("result")[0].GetProperty("id").GetInt32() == 1

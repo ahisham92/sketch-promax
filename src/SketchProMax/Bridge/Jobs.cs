@@ -45,6 +45,12 @@ public sealed class Job
     /// </summary>
     internal Task<ToolResult>? Continuation;
 
+    /// <summary>
+    /// Set with <see cref="Continuation"/> for a chat call: ends the chat step when the continuation does (says Skip or
+    /// Stop, uses up a skip), so a Skip pressed during it never carries over to the next chat tool.
+    /// </summary>
+    internal Func<ToolResult, ToolResult>? AfterContinuation;
+
     // 0 queued, 1 running, 2 abandoned. Revit's thread and the bridge race to move it out of "queued"; whoever wins
     // decides whether the job runs, so a caller is never told "dropped" for a job that then runs.
     private int _state;
@@ -130,7 +136,15 @@ public static class Jobs
     internal static async Task<ToolResult> Follow(Job job, Task<ToolResult> first)
     {
         var result = await first.ConfigureAwait(false);
-        return job.Continuation is { } rest ? await rest.ConfigureAwait(false) : result;
+        if (job.Continuation is not { } rest) return result;
+        ToolResult end;
+        try { end = await rest.ConfigureAwait(false); }
+        catch (Exception)
+        {
+            try { job.AfterContinuation?.Invoke(ToolResult.Error("The step ended with an error.")); } catch (Exception) { }
+            throw;
+        }
+        return job.AfterContinuation is { } after ? after(end) : end;
     }
 
     /// <summary>Sets the running job's progress line, shown by wait_for_job.</summary>

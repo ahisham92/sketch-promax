@@ -399,7 +399,7 @@ public sealed class BridgeServer
                 {
                     try { return tool.Execute(app, new ToolArgs(args)); }
                     catch (ManualStepException manual) { return Handoff.FromException(tool, app, new ToolArgs(args), manual); }
-                    catch (OperationCanceledException) when (job.CancelRequested || chat?.Halting == true) { return ToolResult.Error("Stopped on request (cancel_job). Steps this call had already finished are kept; check the model before continuing."); }
+                    catch (OperationCanceledException ex) when (job.CancelRequested || chat?.Halting == true) { return ToolResult.Error(JobControl.EndedEarly(ex.Message)); }
                     catch (Exception ex) { return ToolResult.Error(Describe(tool, ex)); }
                 });
                 ActivityLog.Write(app.ActiveUIDocument?.Document?.Title ?? "", tool, args, result);
@@ -411,6 +411,8 @@ public sealed class BridgeServer
                 TimeLog.EndTool(null); // rejected or no model: only the wait is counted (no-op once ended above)
                 if (fromChat) JobUndo.EndTool();
                 JobControl.Tool = null;
+                // The chat step of a call that handed on ends with its continuation (Jobs.Follow).
+                if (fromChat && job.Continuation is not null) job.AfterContinuation = r => AfterStep(chat, tool.Name, r);
                 // A tool that handed on to a continuation (the field test) is still running: the continuation ends the job.
                 if (job.Continuation is null)
                 {

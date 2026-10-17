@@ -83,6 +83,9 @@ internal sealed class JobCardModel
     {
         if (result.Contains("\"status\":\"still running in Revit\"")) return ("running", "");
         if (result.Contains(JobControl.PausedText)) return ("running", "");
+        // A step that can only finish whole says it kept nothing: the card says so, not "finished items kept".
+        if (result.Contains(JobControl.SkippedNothingKeptText.Substring(0, 60))) return ("skipped", "skipped by you; this step can only finish whole, so nothing of it was kept");
+        if (result.Contains(JobControl.StoppedNothingKeptText.Substring(0, 60))) return ("stopped", "stopped by you; this step can only finish whole, so it was rolled back and nothing of it kept");
         if (result.Contains(JobControl.SkippedText.Substring(0, 30))) return ("skipped", "skipped by you (Skip step)");
         if (result.Contains(JobControl.StoppedText.Substring(0, 30))) return ("stopped", "stopped by you; the item in progress was rolled back, finished items kept");
         if (!isError) return ("done", "");

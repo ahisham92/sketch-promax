@@ -1,8 +1,10 @@
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Markup;
 using System.Windows.Threading;
 using SketchProMax.Bridge;
@@ -16,6 +18,11 @@ namespace SketchProMax.Chat;
 /// window) and shows the step's progress with Pause/Resume, Skip step, Stop and a message box. Nothing here touches the
 /// Revit API: it only reads the job feed and sets the task's <see cref="JobControl"/>. It opens when a step has run a
 /// moment (<see cref="JobFeed.LongStep"/>) and closes when the task ends.
+///
+/// It is not owned by Revit's main window: a cross-thread owner attaches the two threads' input queues, so while Revit's
+/// thread is busy (exactly when this window is needed) its clicks and keys could stall. Instead it floats above other
+/// windows only while Revit (this process) is the foreground app, drops behind the app the user switches to, and opens
+/// on the monitor Revit is on.
 ///
 /// <see cref="WaitPaused"/> is the other half: on Revit's thread, at an item boundary, a small modal Paused window. Revit
 /// keeps painting but takes no edits while the batch's transaction group is open; no transaction is open meanwhile, and
@@ -40,7 +47,8 @@ internal static class JobWindow
             _for = control;
             _closeRequested = false;
         }
-        var thread = new Thread(() => Run(control, dark, sent)) { IsBackground = true, Name = "Sketch ProMax job window" };
+        var revit = App.MainWindow; // a handle, read here: the window's thread never touches Revit
+        var thread = new Thread(() => Run(control, dark, sent, revit)) { IsBackground = true, Name = "Sketch ProMax job window" };
         thread.SetApartmentState(ApartmentState.STA);
         thread.Start();
     }
@@ -59,7 +67,7 @@ internal static class JobWindow
         try { dispatcher?.BeginInvokeShutdown(DispatcherPriority.Normal); } catch (Exception) { }
     }
 
-    private static void Run(JobControl control, bool dark, Action<string, string> sent)
+    private static void Run(JobControl control, bool dark, Action<string, string> sent, IntPtr revit)
     {
         try
         {
@@ -77,7 +85,7 @@ internal static class JobWindow
                 e.Handled = true;
                 try { dispatcher.BeginInvokeShutdown(DispatcherPriority.Normal); } catch (Exception) { }
             };
-            var window = Build(control, dark, sent);
+            var window = Build(control, dark, sent, revit);
             window.Closed += (_, _) => dispatcher.BeginInvokeShutdown(DispatcherPriority.Background);
             window.Show();
             Dispatcher.Run();
@@ -86,12 +94,12 @@ internal static class JobWindow
         catch (Exception) { /* the window is a convenience: the task goes on without it */ }
     }
 
-    private static Window Build(JobControl control, bool dark, Action<string, string> sent)
+    private static Window Build(JobControl control, bool dark, Action<string, string> sent, IntPtr revit)
     {
         var window = new Window
         {
             Title = "Sketch ProMax task", Width = 380, SizeToContent = SizeToContent.Height, ResizeMode = ResizeMode.NoResize,
-            WindowStyle = WindowStyle.ToolWindow, Topmost = true, ShowInTaskbar = false, ShowActivated = false,
+            WindowStyle = WindowStyle.ToolWindow, ShowInTaskbar = false, ShowActivated = false,
             WindowStartupLocation = WindowStartupLocation.Manual,
         };
         // The palette and the chat's styles, made on this thread (the pane's own can't be shared across threads).
@@ -103,6 +111,9 @@ internal static class JobWindow
         var area = SystemParameters.WorkArea;
         window.Left = area.Right - window.Width - 24;
         window.Top = area.Bottom - 300;
+        // Bottom right of the monitor Revit is on, once its height is known.
+        window.Loaded += (_, _) => PlaceOnRevitMonitor(window, revit);
+        bool? above = null;
 
         var panel = new StackPanel { Margin = new Thickness(ChatUi.S4) };
         var head = Brand.Text("Task running in Revit", Brand.K.Text, ChatUi.TitleSize, bold: true);
@@ -138,8 +149,8 @@ internal static class JobWindow
             return b;
         }
         var pause = Pill("Pause", "SpmChatPill", "Pauses at the next item boundary; Resume carries on.");
-        var skip = Pill("Skip step", "SpmChatPill", "Ends this step at the next item (what it finished is kept); Claude moves on.");
-        var stop = Pill("Stop", "SpmChatDanger", "Stops the task: the item in progress is rolled back, finished items are kept.");
+        var skip = Pill("Skip step", "SpmChatPill", "Ends this step at the next item; Claude moves on. What it finished is kept; a step that can only finish whole keeps nothing.");
+        var stop = Pill("Stop", "SpmChatDanger", "Stops the task: the item in progress is rolled back and finished items are kept (a step that can only finish whole keeps nothing).");
         pause.Click += (_, _) => control.Apply(control.State is JobState.PauseRequested or JobState.Paused ? JobAction.Resume : JobAction.Pause);
         skip.Click += (_, _) => control.Apply(JobAction.Skip);
         stop.Click += (_, _) => control.Apply(JobAction.Stop);
@@ -193,6 +204,12 @@ internal static class JobWindow
         {
             var state = control.State;
             if (control.Over) { window.Close(); return; }
+            var front = RevitInFront();
+            if (front != above)
+            {
+                above = front;
+                FloatAbove(window, front);
+            }
             var snap = JobFeed.Now;
             var title = JobMath.Title(snap.Tool);
             var text = title.Length == 0 ? "Working…" : title + (snap.Label.Length > 0 ? " · " + snap.Label : "");
@@ -221,6 +238,76 @@ internal static class JobWindow
         window.Closed += (_, _) => timer.Stop();
         return window;
     }
+
+    // ---- Placement and z-order (Win32 calls that send nothing to Revit's thread) ---------------------------------------
+
+    /// <summary>True when the foreground window is this process's (Revit's, or this window).</summary>
+    private static bool RevitInFront()
+    {
+        try
+        {
+            var fg = GetForegroundWindow();
+            if (fg == IntPtr.Zero) return false;
+            GetWindowThreadProcessId(fg, out var pid);
+            return pid == OwnProcess;
+        }
+        catch (Exception) { return false; }
+    }
+
+    /// <summary>Above every window while Revit is in front; otherwise an ordinary window just behind the app in front.</summary>
+    private static void FloatAbove(Window window, bool above)
+    {
+        try
+        {
+            var hwnd = new WindowInteropHelper(window).Handle;
+            if (hwnd == IntPtr.Zero) return;
+            const uint flags = SwpNoMove | SwpNoSize | SwpNoActivate;
+            if (above)
+            {
+                SetWindowPos(hwnd, HwndTopmost, 0, 0, 0, 0, flags);
+                return;
+            }
+            SetWindowPos(hwnd, HwndNoTopmost, 0, 0, 0, 0, flags);
+            // No longer topmost it would still sit over the app the user switched to: put it behind that app.
+            if (GetForegroundWindow() is var fg && fg != IntPtr.Zero && fg != hwnd) SetWindowPos(hwnd, fg, 0, 0, 0, 0, flags);
+        }
+        catch (Exception) { /* z-order is a nicety */ }
+    }
+
+    private static void PlaceOnRevitMonitor(Window window, IntPtr revit)
+    {
+        try
+        {
+            var hwnd = new WindowInteropHelper(window).Handle;
+            if (revit == IntPtr.Zero || hwnd == IntPtr.Zero) return;
+            var monitor = MonitorFromWindow(revit, MonitorDefaultToNearest);
+            var info = new MonitorInfo { Size = Marshal.SizeOf<MonitorInfo>() };
+            if (monitor == IntPtr.Zero || !GetMonitorInfo(monitor, ref info) || !GetWindowRect(hwnd, out var rect)) return;
+            var margin = (int)Math.Round(24 * System.Windows.Media.VisualTreeHelper.GetDpi(window).PixelsPerDip);
+            var x = info.Work.Right - (rect.Right - rect.Left) - margin;
+            var y = info.Work.Bottom - (rect.Bottom - rect.Top) - margin;
+            SetWindowPos(hwnd, IntPtr.Zero, Math.Max(info.Work.Left, x), Math.Max(info.Work.Top, y), 0, 0, SwpNoSize | SwpNoZOrder | SwpNoActivate);
+        }
+        catch (Exception) { /* stays where it opened */ }
+    }
+
+    private static readonly uint OwnProcess = (uint)System.Diagnostics.Process.GetCurrentProcess().Id;
+    private static readonly IntPtr HwndTopmost = new(-1), HwndNoTopmost = new(-2);
+    private const uint SwpNoSize = 0x0001, SwpNoMove = 0x0002, SwpNoZOrder = 0x0004, SwpNoActivate = 0x0010;
+    private const uint MonitorDefaultToNearest = 2;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct Win32Rect { public int Left, Top, Right, Bottom; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MonitorInfo { public int Size; public Win32Rect Monitor, Work; public uint Flags; }
+
+    [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint processId);
+    [DllImport("user32.dll", SetLastError = true)] private static extern bool SetWindowPos(IntPtr hwnd, IntPtr after, int x, int y, int cx, int cy, uint flags);
+    [DllImport("user32.dll")] private static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint flags);
+    [DllImport("user32.dll")] private static extern bool GetMonitorInfo(IntPtr monitor, ref MonitorInfo info);
+    [DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr hwnd, out Win32Rect rect);
 
     // ---- Paused at an item boundary (Revit's thread) ------------------------------------------------------------------
 

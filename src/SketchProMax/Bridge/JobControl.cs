@@ -209,6 +209,8 @@ internal sealed class JobControl
     /// What Claude gets back from a chat tool call that just ended: Skip and Stop say so first (a skip is then used up),
     /// and (with <paramref name="notes"/>) the user's messages sent meanwhile are added at the end, so Claude sees them
     /// before its next step. A JSON result stays JSON (see <see cref="JobText"/>).
+    /// A step that couldn't stop part-way (its result says <see cref="KeptNothing"/>) is told as kept nothing, never as
+    /// "finished items are kept".
     /// <paramref name="state"/>: done, failed, skipped or stopped (for the card).
     /// </summary>
     public static string AfterStep(JobControl? control, string tool, string text, bool isError, out string state, bool notes = true)
@@ -216,20 +218,40 @@ internal sealed class JobControl
         state = isError ? "failed" : "done";
         if (control is not null)
         {
+            var whole = text.Contains(KeptNothing);
             switch (control.StepEnded())
             {
                 case JobState.Skipping:
                     state = "skipped";
-                    text = JobText.Add(text, SkippedText, null);
+                    text = JobText.Add(text, whole ? SkippedNothingKeptText : SkippedText, null);
                     break;
                 case JobState.Stopping:
                     state = "stopped";
-                    text = JobText.Add(text, StoppedText, null);
+                    text = JobText.Add(text, whole ? StoppedNothingKeptText : StoppedText, null);
                     break;
             }
         }
         return notes ? JobNotes.Attach(tool, text) : text;
     }
+
+    /// <summary>
+    /// The result of a call that ended on a stop request before it finished (it threw at a cancel point): whatever it
+    /// had open was rolled back and no report or file was written. The bridge says it, the card and Claude read it.
+    /// </summary>
+    public const string KeptNothing =
+        "This call ended before it finished and kept nothing of its own: the change it had open was rolled back, and a report or file it was making was not written.";
+
+    /// <summary>What the bridge returns for such a call (<paramref name="detail"/>: the tool's own line, "No report was written.").</summary>
+    public static string EndedEarly(string detail) =>
+        (detail.Trim().Length > 0 ? detail.Trim() + " " : "") + KeptNothing + " Check the model before continuing.";
+
+    public const string SkippedNothingKeptText =
+        "Skipped by the user (Skip step): this step can only finish whole, so it ended and nothing of it was kept (rolled " +
+        "back, or no report written). Move on to the next step of the plan and don't run this step again unless the user asks.";
+
+    public const string StoppedNothingKeptText =
+        "Stopped by the user (Stop): the step in progress can only finish whole, so it was rolled back and nothing of it " +
+        "was kept (earlier steps are kept). Don't start more steps: say briefly what was done and what wasn't.";
 
     public const string SkippedText =
         "Skipped by the user (Skip step): this step ended early; what it finished is kept. Move on to the next step of the " +

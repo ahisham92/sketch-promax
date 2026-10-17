@@ -60,8 +60,8 @@ internal sealed class JobCardView : ContentControl
         Margin = new Thickness(0, ChatUi.S3, 0, ChatUi.S1);
 
         _pause = Pill("Pause", "SpmChatPill", "Pauses at the next item or step boundary; Resume carries on. Finished items stay as they are.");
-        _skip = Pill("Skip step", "SpmChatPill", "Ends the current step now (what it finished is kept) and moves on to the next one.");
-        _stop = Pill("Stop", "SpmChatDanger", "Stops the task: the item in progress is rolled back, finished items are kept, no more steps run.");
+        _skip = Pill("Skip step", "SpmChatPill", "Ends the current step at its next item and moves on. What it finished is kept; a step that can only finish whole (a check or a report) keeps nothing.");
+        _stop = Pill("Stop", "SpmChatDanger", "Stops the task: the item in progress is rolled back and finished items are kept (a step that can only finish whole keeps nothing); no more steps run.");
         _undo = Pill("Undo all", "SpmChatPill", "Undoes everything this task changed in one step (Revit's Undo). Offered only when nothing else changed since.");
         _showSteps = ChatUi.Ghost(ChatUi.GlyphRight, "Show steps", "Show the steps", "Shows each step and how it ended.");
         _pause.Click += (_, _) => Pressed?.Invoke(_control is JobState.PauseRequested or JobState.Paused ? JobAction.Resume : JobAction.Pause);
