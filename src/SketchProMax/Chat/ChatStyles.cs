@@ -5,17 +5,72 @@ namespace SketchProMax.Chat;
 /// <summary>
 /// The XAML of the chat's control styles (see <see cref="ChatUi.Styles"/>): rounded quiet buttons, icon buttons, pills,
 /// cards with a soft shadow, the round Send and Stop buttons, the rounded search field, the composer's bare text box and the disclosure toggle, each
-/// with a rounded focus ring. Plain text, so a test checks it is well formed without WPF. Colours are palette tokens only.
+/// with a rounded focus ring, a hover that fades in and a press that shrinks the chrome a little (never the label).
+/// Also the chat's type scale. Plain text, so a test checks it is well formed without WPF. Colours are palette tokens only.
 /// </summary>
 internal static class ChatStyles
 {
+    // ---- The type scale: every size of text in the chat is one of these (Segoe UI Variable, else Segoe UI) -------------
+
+    /// <summary>Captions: names, times, labels, the status line, code and table cells.</summary>
+    public const double Caption = 12;
+    /// <summary>Messages, fields and buttons.</summary>
+    public const double Body = 13;
+    /// <summary>Card titles and level-3 headings.</summary>
+    public const double Subtitle = 14;
+    /// <summary>Level-1 and level-2 headings in an answer (laid out with Ideal text, being large).</summary>
+    public const double Title = 16;
+    /// <summary>The home screen's greeting (Ideal text).</summary>
+    public const double Display = 20;
+
+    /// <summary>Text from this size up is laid out with Ideal text (its shapes kept); smaller text uses Display (snapped to pixels).</summary>
+    public const double IdealFrom = 15;
+
+    /// <summary>How long hover, colour, opacity and size changes take (ease-out); 0 when Windows' animations are off.</summary>
+    public const int MotionMs = 160;
+
     private static string N(double v) => v.ToString(CultureInfo.InvariantCulture);
 
+    private static string Duration(bool animate) => animate ? "0:0:0." + MotionMs.ToString("000", CultureInfo.InvariantCulture) : "0:0:0";
+
     /// <summary>
-    /// A button template: a rounded border, and with <paramref name="shadow"/> a soft shadow on a layer behind it (never
-    /// on the layer holding the text, which would lose ClearType).
+    /// A fade of the hover layer <c>hv</c> in on hover and out after it, ease-out. The layer holds no text, so the
+    /// label keeps ClearType while it fades.
     /// </summary>
-    private static string Template(double radius, bool shadow = false, string hoverBg = "SpmSurfaceHover", string? hoverBorder = null)
+    private static string HoverFade(bool animate) => """
+        <Trigger.EnterActions><BeginStoryboard><Storyboard>
+          <DoubleAnimation Storyboard.TargetName="hv" Storyboard.TargetProperty="Opacity" To="1" Duration="DUR"><DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction></DoubleAnimation>
+        </Storyboard></BeginStoryboard></Trigger.EnterActions>
+        <Trigger.ExitActions><BeginStoryboard><Storyboard>
+          <DoubleAnimation Storyboard.TargetName="hv" Storyboard.TargetProperty="Opacity" To="0" Duration="DUR"><DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction></DoubleAnimation>
+        </Storyboard></BeginStoryboard></Trigger.ExitActions>
+        """.Replace("DUR", Duration(animate));
+
+    /// <summary>
+    /// The chrome of a button, drawn apart from its label: the fill, the hover layer (faded in), the border on top; a
+    /// press shrinks the chrome to 98 % (never the label, which stays on whole pixels).
+    /// </summary>
+    private static string Chrome(string radius, string fill, string hover) => """
+        <Grid x:Name="chrome" RenderTransformOrigin="0.5,0.5">
+          <Grid.RenderTransform><ScaleTransform x:Name="sc" ScaleX="1" ScaleY="1"/></Grid.RenderTransform>
+          <Border x:Name="fill" Background="FILL" CornerRadius="RADIUS" SnapsToDevicePixels="True"/>
+          <Border x:Name="hv" Background="{DynamicResource HOVERFILL}" CornerRadius="RADIUS" Opacity="0" SnapsToDevicePixels="True"/>
+          <Border x:Name="bd" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="RADIUS" SnapsToDevicePixels="True"/>
+        </Grid>
+        """.Replace("HOVERFILL", hover).Replace("FILL", fill).Replace("RADIUS", radius);
+
+    private const string Press = """
+        <Trigger Property="IsPressed" Value="True">
+          <Setter TargetName="sc" Property="ScaleX" Value="0.98"/>
+          <Setter TargetName="sc" Property="ScaleY" Value="0.98"/>
+        </Trigger>
+        """;
+
+    /// <summary>
+    /// A button template: a rounded chrome (see <see cref="Chrome"/>), and with <paramref name="shadow"/> a soft shadow
+    /// on a layer behind it (never on the layer holding the text, which would lose ClearType).
+    /// </summary>
+    private static string Template(double radius, bool animate, bool shadow = false, string hoverBg = "SpmSurfaceHover", string? hoverBorder = null)
     {
         var r = N(radius);
         var behind = shadow
@@ -28,23 +83,29 @@ internal static class ChatStyles
               <ControlTemplate TargetType="Button">
                 <Grid>
                   BEHIND
-                  <Border x:Name="bd" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
-                          BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="RADIUS" SnapsToDevicePixels="True">
-                    <ContentPresenter Margin="{TemplateBinding Padding}" RecognizesAccessKey="True"
+                  CHROME
+                  <Border BorderThickness="{TemplateBinding BorderThickness}" Padding="{TemplateBinding Padding}">
+                    <ContentPresenter RecognizesAccessKey="True"
                                       HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
                                       VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
                   </Border>
                 </Grid>
                 <ControlTemplate.Triggers>
                   <Trigger Property="IsMouseOver" Value="True">
-                    <Setter TargetName="bd" Property="Background" Value="{DynamicResource HOVERBG}"/>
+                    FADE
                     HOVERBORDER
                   </Trigger>
-                  <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.6"/></Trigger>
+                  PRESS
+                  <Trigger Property="IsEnabled" Value="False">
+                    <Setter TargetName="fill" Property="Background" Value="{DynamicResource SpmSurface}"/>
+                    <Setter Property="Foreground" Value="{DynamicResource SpmMuted}"/>
+                    <Setter Property="Cursor" Value="Arrow"/>
+                  </Trigger>
                 </ControlTemplate.Triggers>
               </ControlTemplate>
             </Setter.Value></Setter>
-            """.Replace("BEHIND", behind).Replace("RADIUS", r).Replace("HOVERBG", hoverBg).Replace("HOVERBORDER", border);
+            """.Replace("BEHIND", behind).Replace("CHROME", Chrome(r, "{TemplateBinding Background}", hoverBg))
+            .Replace("FADE", HoverFade(animate)).Replace("PRESS", Press).Replace("HOVERBORDER", border);
     }
 
     /// <summary>A 2 px focus ring in the Focus colour that follows a control's rounded corners, just outside it.</summary>
@@ -57,7 +118,7 @@ internal static class ChatStyles
         """.Replace("KEY", key).Replace("R\"", N(radius + 2) + "\"");
 
     /// <summary>A 32 px round button in one palette colour family (Send in the accent, Stop in the danger red).</summary>
-    private static string Round(string key, string bg, string hover, string pressed, string fg) => """
+    private static string Round(string key, string bg, string hover, string pressed, string fg, bool animate) => """
         <Style x:Key="KEY" TargetType="Button">
           <Setter Property="FocusVisualStyle" Value="{StaticResource SpmChatFocusRound}"/>
           <Setter Property="Width" Value="32"/>
@@ -66,26 +127,37 @@ internal static class ChatStyles
           <Setter Property="Cursor" Value="Hand"/>
           <Setter Property="Background" Value="{DynamicResource BG}"/>
           <Setter Property="Foreground" Value="{DynamicResource FG}"/>
+          <Setter Property="BorderThickness" Value="0"/>
           <Setter Property="Template"><Setter.Value>
             <ControlTemplate TargetType="Button">
-              <Border x:Name="bd" Background="{TemplateBinding Background}" CornerRadius="16" SnapsToDevicePixels="True">
+              <Grid>
+                CHROME
                 <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-              </Border>
+              </Grid>
               <ControlTemplate.Triggers>
-                <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="bd" Property="Background" Value="{DynamicResource HOVER}"/></Trigger>
-                <Trigger Property="IsPressed" Value="True"><Setter TargetName="bd" Property="Background" Value="{DynamicResource PRESSED}"/></Trigger>
+                <Trigger Property="IsMouseOver" Value="True">FADE</Trigger>
+                <Trigger Property="IsPressed" Value="True">
+                  <Setter TargetName="fill" Property="Background" Value="{DynamicResource PRESSED}"/>
+                  <Setter TargetName="hv" Property="Visibility" Value="Hidden"/>
+                  <Setter TargetName="sc" Property="ScaleX" Value="0.96"/>
+                  <Setter TargetName="sc" Property="ScaleY" Value="0.96"/>
+                </Trigger>
                 <Trigger Property="IsEnabled" Value="False">
-                  <Setter TargetName="bd" Property="Background" Value="{DynamicResource SpmSurfaceHover}"/>
+                  <Setter TargetName="fill" Property="Background" Value="{DynamicResource SpmSurfaceHover}"/>
                   <Setter Property="Foreground" Value="{DynamicResource SpmMuted}"/>
                 </Trigger>
               </ControlTemplate.Triggers>
             </ControlTemplate>
           </Setter.Value></Setter>
         </Style>
-        """.Replace("KEY", key).Replace("BG", bg).Replace("FG", fg).Replace("HOVER", hover).Replace("PRESSED", pressed);
+        """.Replace("CHROME", Chrome("16", "{TemplateBinding Background}", hover)).Replace("FADE", HoverFade(animate))
+        .Replace("KEY", key).Replace("BG", bg).Replace("FG", fg).Replace("PRESSED", pressed);
 
-    /// <summary>The whole resource dictionary, with buttons and fields at <paramref name="small"/> corners and cards at <paramref name="card"/>.</summary>
-    public static string Xaml(double small, double card) => """
+    /// <summary>
+    /// The whole resource dictionary, with buttons and fields at <paramref name="small"/> corners and cards at
+    /// <paramref name="card"/>; hover fades take <see cref="MotionMs"/> when <paramref name="animate"/>, else none.
+    /// </summary>
+    public static string Xaml(double small, double card, bool animate = true) => """
         <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
           FOCUS
@@ -201,16 +273,19 @@ internal static class ChatStyles
             <Setter Property="Foreground" Value="{DynamicResource SpmText}"/>
             <Setter Property="MinHeight" Value="32"/>
             <Setter Property="Padding" Value="8,6"/>
+            <Setter Property="BorderThickness" Value="0"/>
             <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
             <Setter Property="Template"><Setter.Value>
               <ControlTemplate TargetType="ToggleButton">
-                <Border x:Name="bd" Background="{TemplateBinding Background}" CornerRadius="SMALL" SnapsToDevicePixels="True">
+                <Grid>
+                  DISCLOSURECHROME
                   <ContentPresenter Margin="{TemplateBinding Padding}" HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
                                     VerticalAlignment="Center"/>
-                </Border>
+                </Grid>
                 <ControlTemplate.Triggers>
-                  <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="bd" Property="Background" Value="{DynamicResource SpmSurfaceHover}"/></Trigger>
+                  <Trigger Property="IsMouseOver" Value="True">DISCLOSUREFADE</Trigger>
+                  DISCLOSUREPRESS
                 </ControlTemplate.Triggers>
               </ControlTemplate>
             </Setter.Value></Setter>
@@ -218,12 +293,15 @@ internal static class ChatStyles
         </ResourceDictionary>
         """
         .Replace("FOCUS", Focus("SpmChatFocus", small) + Focus("SpmChatFocusCard", card) + Focus("SpmChatFocusRound", 16))
-        .Replace("GHOST", Template(small))
-        .Replace("PILL", Template(14, hoverBorder: "SpmBorder"))
-        .Replace("PRIMARY", Template(14, hoverBg: "SpmAccentHover", hoverBorder: "SpmAccentHover"))
-        .Replace("FLOAT", Template(14, shadow: true, hoverBorder: "SpmBorder"))
-        .Replace("CARD", Template(card, shadow: true, hoverBg: "SpmRaised", hoverBorder: "SpmBorder"))
-        .Replace("SEND", Round("SpmChatSend", "SpmAccent", "SpmAccentHover", "SpmAccentPressed", "SpmOnAccent"))
-        .Replace("STOP", Round("SpmChatStop", "SpmDanger", "SpmDangerHover", "SpmDangerPressed", "SpmOnDanger"))
+        .Replace("DISCLOSURECHROME", Chrome("SMALL", "{TemplateBinding Background}", "SpmSurfaceHover"))
+        .Replace("DISCLOSUREFADE", HoverFade(animate))
+        .Replace("DISCLOSUREPRESS", Press)
+        .Replace("GHOST", Template(small, animate))
+        .Replace("PILL", Template(14, animate, hoverBorder: "SpmBorder"))
+        .Replace("PRIMARY", Template(14, animate, hoverBg: "SpmAccentHover", hoverBorder: "SpmAccentHover"))
+        .Replace("FLOAT", Template(14, animate, shadow: true, hoverBorder: "SpmBorder"))
+        .Replace("CARD", Template(card, animate, shadow: true, hoverBg: "SpmSurface", hoverBorder: "SpmBorder"))
+        .Replace("SEND", Round("SpmChatSend", "SpmAccent", "SpmAccentHover", "SpmAccentPressed", "SpmOnAccent", animate))
+        .Replace("STOP", Round("SpmChatStop", "SpmDanger", "SpmDangerHover", "SpmDangerPressed", "SpmOnDanger", animate))
         .Replace("SMALL", N(small));
 }

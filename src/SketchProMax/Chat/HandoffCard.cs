@@ -35,8 +35,8 @@ internal static class HandoffCard
         {
             // Saved earlier, or the request has gone: what it asked and how it ended, without buttons.
             body.Children.Add(Brand.Text(item.Text, Brand.K.Text, ChatUi.BodySize, bold: true));
-            if (item.Input.Length > 0) body.Children.Add(Brand.Text("Where: " + item.Input, Brand.K.Text, ChatUi.SmallSize + 0.5));
-            if (item.Result.Length > 0) body.Children.Add(Brand.Text("Why: " + item.Result, Brand.K.Muted, ChatUi.SmallSize + 0.5));
+            if (item.Input.Length > 0) body.Children.Add(Brand.Text("Where: " + item.Input, Brand.K.Text, ChatUi.SmallSize));
+            if (item.Result.Length > 0) body.Children.Add(Brand.Text("Why: " + item.Result, Brand.K.Muted, ChatUi.SmallSize));
             var ended = Brand.Text(item.State switch
             {
                 "Done" => "Done; the task carried on.",
@@ -44,7 +44,7 @@ internal static class HandoffCard
                 "Stopped" => "Stopped here.",
                 { Length: > 0 } other => other,
                 _ => "No longer waiting (the task ended or Revit restarted).",
-            }, item.State == "Done" ? Brand.K.Text : Brand.K.Muted, ChatUi.SmallSize + 0.5);
+            }, item.State == "Done" ? Brand.K.Text : Brand.K.Muted, ChatUi.SmallSize);
             ended.Margin = new Thickness(0, ChatUi.S2, 0, 0);
             body.Children.Add(ended);
         }

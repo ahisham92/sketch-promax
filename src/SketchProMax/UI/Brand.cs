@@ -158,6 +158,9 @@ internal static class Brand
         if (Themed.Count == 0) _poll?.Stop();
     }
 
+    /// <summary>Shows a root in the given theme now, whatever Revit's is (the chat's DPI snapshot draws both).</summary>
+    public static void ShowTheme(FrameworkElement root, bool dark) => Apply(root, dark);
+
     private static void Recheck()
     {
         var dark = IsDark;

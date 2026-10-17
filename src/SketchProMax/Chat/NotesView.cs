@@ -80,7 +80,7 @@ internal sealed class NotesView : DockPanel
         row.Children.Add(_scope);
         body.Children.Add(row);
 
-        _status = Brand.Text("", Brand.K.Muted, 11);
+        _status = Brand.Text("", Brand.K.Muted, ChatUi.SmallSize);
         _status.Margin = new Thickness(0, 8, 0, 0);
         AutomationProperties.SetLiveSetting(_status, AutomationLiveSetting.Polite);
         body.Children.Add(_status);
@@ -111,7 +111,7 @@ internal sealed class NotesView : DockPanel
 
     private static TextBlock Heading(string text)
     {
-        var heading = Brand.Text(text.ToUpperInvariant(), Brand.K.Muted, 10.5, bold: true);
+        var heading = Brand.Text(text.ToUpperInvariant(), Brand.K.Muted, ChatUi.SmallSize, bold: true);
         heading.Margin = new Thickness(0, 12, 0, 4);
         return heading;
     }

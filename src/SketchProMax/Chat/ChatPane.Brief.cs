@@ -149,7 +149,7 @@ internal sealed partial class ChatPane
                 "failed" => "No brief this time: " + item.Text.TrimEnd('.') + ". Nothing in the model changed.",
                 _ => "Not run: a newer message replaced it.",
             };
-            var sub = Brand.Text(line, Brand.K.Muted, ChatUi.SmallSize + 0.5);
+            var sub = Brand.Text(line, Brand.K.Muted, ChatUi.SmallSize);
             sub.Margin = new Thickness(0, 0, 0, ChatUi.S2);
             panel.Children.Add(sub);
 
@@ -157,7 +157,7 @@ internal sealed partial class ChatPane
             {
                 var view = new MarkdownView();
                 view.SetMarkdown(item.Text);
-                view.Opacity = item.State is "typed" or "stale" ? 0.7 : 1;
+                view.SetMuted(item.State is "typed" or "stale");
                 panel.Children.Add(view);
             }
 
@@ -166,7 +166,7 @@ internal sealed partial class ChatPane
             {
                 foreach (var q in brief.Questions)
                 {
-                    var ask = Brand.Text(q.Text, Brand.K.Text, ChatUi.SmallSize + 0.5, bold: true);
+                    var ask = Brand.Text(q.Text, Brand.K.Text, ChatUi.SmallSize, bold: true);
                     ask.Margin = new Thickness(0, ChatUi.S3, 0, ChatUi.S1);
                     panel.Children.Add(ask);
                     var options = new WrapPanel();
@@ -335,7 +335,7 @@ internal sealed partial class ChatPane
     /// <summary>Adds "Brief before running: Always / Model changes only / Off" under the models in the model menu.</summary>
     private void AddBriefMenu()
     {
-        var heading = Brand.Text("Brief before running", Brand.K.Muted, 11, bold: true);
+        var heading = Brand.Text("Brief before running", Brand.K.Muted, ChatUi.SmallSize, bold: true);
         heading.Margin = new Thickness(10, ChatUi.S3, 10, 4);
         _modelList.Children.Add(heading);
         foreach (var mode in new[] { BriefMode.Always, BriefMode.ModelChanges, BriefMode.Off })
@@ -363,6 +363,7 @@ internal sealed partial class ChatPane
                 CloseModelMenu(focusPill: true);
                 _briefMode = chosen;
                 PromptBriefs.SaveMode(ClaudeCli.Folder, chosen);
+                ShowBriefChoice();
                 Status("Brief before running: " + PromptBriefs.Label(chosen) + ". " + PromptBriefs.Hint(chosen) + ".", spin: false);
             };
             _modelList.Children.Add(item);

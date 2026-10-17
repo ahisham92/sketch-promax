@@ -55,6 +55,12 @@ internal sealed class MarkdownView : RichTextBox
         };
     }
 
+    /// <summary>
+    /// Shows the text in the muted colour (a brief that wasn't used) instead of fading it: opacity would draw the text
+    /// through a layer and lose ClearType.
+    /// </summary>
+    public void SetMuted(bool muted) => Document.SetResourceReference(TextElement.ForegroundProperty, muted ? Brand.K.Muted : Brand.K.Text);
+
     /// <summary>Shows <paramref name="markdown"/>, drawing again only the blocks that changed.</summary>
     public void SetMarkdown(string markdown)
     {
@@ -106,7 +112,7 @@ internal sealed class MarkdownView : RichTextBox
     {
         var doc = new FlowDocument
         {
-            PagePadding = new Thickness(0), FontFamily = new FontFamily("Segoe UI"), FontSize = ChatUi.BodySize, TextAlignment = TextAlignment.Left,
+            PagePadding = new Thickness(0), FontFamily = ChatUi.Text, FontSize = ChatUi.BodySize, TextAlignment = TextAlignment.Left,
             LineHeight = double.NaN,
         };
         doc.SetResourceReference(TextElement.ForegroundProperty, Brand.K.Text);
@@ -121,13 +127,15 @@ internal sealed class MarkdownView : RichTextBox
             {
                 var p = Para(h.Text);
                 p.FontWeight = FontWeights.SemiBold;
-                p.FontSize = h.Level switch { 1 => 17, 2 => 15, 3 => 13.5, _ => ChatUi.BodySize };
-                p.Margin = new Thickness(0, h.Level <= 2 ? ChatUi.S3 : ChatUi.S2, 0, ChatUi.S1);
-                if (h.Level <= 2)
+                // The type scale: 16 for the top two levels (Ideal text, being large), 14, then body size.
+                p.FontSize = h.Level switch { 1 or 2 => ChatUi.HeadingSize, 3 => ChatUi.TitleSize, _ => ChatUi.BodySize };
+                if (p.FontSize >= ChatStyles.IdealFrom) ChatUi.Large(p);
+                p.Margin = new Thickness(0, h.Level <= 2 ? ChatUi.S4 : ChatUi.S3, 0, ChatUi.S2);
+                if (h.Level == 1)
                 {
                     p.BorderThickness = new Thickness(0, 0, 0, 1);
-                    p.Padding = new Thickness(0, 0, 0, 2);
-                    p.SetResourceReference(Block.BorderBrushProperty, Brand.K.Border);
+                    p.Padding = new Thickness(0, 0, 0, ChatUi.S1);
+                    p.SetResourceReference(Block.BorderBrushProperty, Brand.K.BorderSubtle);
                 }
                 return p;
             }
@@ -160,7 +168,7 @@ internal sealed class MarkdownView : RichTextBox
 
     private static Paragraph Para(string text)
     {
-        var p = new Paragraph { Margin = new Thickness(0, 0, 0, ChatUi.S2) };
+        var p = new Paragraph { Margin = new Thickness(0, 0, 0, ChatUi.S3) };
         AddInlines(p.Inlines, text);
         return p;
     }
@@ -212,6 +220,7 @@ internal sealed class MarkdownView : RichTextBox
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
         };
         text.SetResourceReference(Control.ForegroundProperty, Brand.K.Text);
+        text.SetResourceReference(FocusVisualStyleProperty, "SpmChatFocus");
         var label = code.Language.Length > 0 ? code.Language : "code";
         AutomationProperties.SetName(text, $"Code ({label})");
         var scroll = new ScrollViewer
@@ -234,7 +243,7 @@ internal sealed class MarkdownView : RichTextBox
         DockPanel.SetDock(bar, Dock.Top);
         panel.Children.Add(bar);
         panel.Children.Add(scroll);
-        var box = new Border { Child = panel, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(ChatUi.RadiusSmall) };
+        var box = ChatUi.Opaque(new Border { Child = panel, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(ChatUi.RadiusSmall), SnapsToDevicePixels = true });
         box.SetResourceReference(Border.BackgroundProperty, Brand.K.Surface);
         box.SetResourceReference(Border.BorderBrushProperty, Brand.K.BorderSubtle);
         if (drawn is not null)
@@ -242,7 +251,7 @@ internal sealed class MarkdownView : RichTextBox
             drawn.Code = text;
             drawn.Language = code.Language;
         }
-        return new BlockUIContainer(box) { Margin = new Thickness(0, ChatUi.S1, 0, ChatUi.S2) };
+        return new BlockUIContainer(box) { Margin = new Thickness(0, ChatUi.S1, 0, ChatUi.S3) };
     }
 
     /// <summary>The wheel scrolls the message list; Shift+wheel or the scroll bar moves a wide box sideways.</summary>
@@ -291,23 +300,30 @@ internal sealed class MarkdownView : RichTextBox
     {
         var grid = new Grid();
         var columns = Math.Max(table.Header.Count, table.Rows.Count == 0 ? 0 : table.Rows.Max(r => r.Count));
+        var rows = table.Rows.Count + 1;
+        const double inner = ChatUi.RadiusSmall - 1; // the frame's corner, inside its 1 px border
         for (var c = 0; c < columns; c++) grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         void Row(IReadOnlyList<string> cells, int row, bool header)
         {
             grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            var last = row == rows - 1;
             for (var c = 0; c < columns; c++)
             {
-                var text = new TextBlock { TextWrapping = TextWrapping.Wrap, MaxWidth = 260, FontSize = 12 };
+                var text = new TextBlock { TextWrapping = TextWrapping.Wrap, MaxWidth = 260, FontSize = ChatUi.SmallSize };
                 AddInlines(text.Inlines, c < cells.Count ? cells[c] : "");
                 if (header) text.FontWeight = FontWeights.SemiBold;
                 var align = c < table.Align.Count ? table.Align[c] : 'l';
                 text.TextAlignment = align == 'r' ? TextAlignment.Right : align == 'c' ? TextAlignment.Center : TextAlignment.Left;
+                // The frame draws the outer edge; the cells draw only the lines between them. Tinted cells in a corner
+                // follow the frame's rounding, so no square tint pokes out of it.
                 var cell = new Border
                 {
-                    Child = text, Padding = new Thickness(ChatUi.S2, ChatUi.S1, ChatUi.S2, ChatUi.S1),
-                    BorderThickness = new Thickness(0, 0, c == columns - 1 ? 0 : 1, 1),
+                    Child = text, Padding = new Thickness(ChatUi.S2 + 2, ChatUi.S1 + 2, ChatUi.S2 + 2, ChatUi.S1 + 2),
+                    BorderThickness = new Thickness(0, 0, c == columns - 1 ? 0 : 1, last ? 0 : 1),
+                    CornerRadius = new CornerRadius(row == 0 && c == 0 ? inner : 0, row == 0 && c == columns - 1 ? inner : 0,
+                        last && c == columns - 1 ? inner : 0, last && c == 0 ? inner : 0),
                 };
-                cell.SetResourceReference(Border.BorderBrushProperty, Brand.K.Border);
+                cell.SetResourceReference(Border.BorderBrushProperty, Brand.K.BorderSubtle);
                 if (header) cell.SetResourceReference(Border.BackgroundProperty, Brand.K.Surface);
                 Grid.SetRow(cell, row);
                 Grid.SetColumn(cell, c);
@@ -321,11 +337,15 @@ internal sealed class MarkdownView : RichTextBox
             Content = grid, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto, VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
             Focusable = true, IsTabStop = true,
         };
+        scroll.SetResourceReference(FocusVisualStyleProperty, "SpmChatFocus");
         AutomationProperties.SetName(scroll, $"Table, {columns} columns, {table.Rows.Count} rows. Scroll sideways if it is wider than the pane.");
         SideScroll(scroll);
-        // The outer frame draws the top and side edges; the cells draw the lines between them and the bottom edge.
-        var frame = new Border { Child = scroll, BorderThickness = new Thickness(1, 1, 1, 0), CornerRadius = new CornerRadius(4), HorizontalAlignment = HorizontalAlignment.Left };
+        var frame = new Border
+        {
+            Child = scroll, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(ChatUi.RadiusSmall),
+            HorizontalAlignment = HorizontalAlignment.Left, SnapsToDevicePixels = true,
+        };
         frame.SetResourceReference(Border.BorderBrushProperty, Brand.K.Border);
-        return new BlockUIContainer(frame) { Margin = new Thickness(0, ChatUi.S1, 0, ChatUi.S2) };
+        return new BlockUIContainer(frame) { Margin = new Thickness(0, ChatUi.S1, 0, ChatUi.S3) };
     }
 }

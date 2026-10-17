@@ -17,13 +17,20 @@ namespace SketchProMax.Chat;
 /// <summary>
 /// Small building blocks of the chat view: quiet icon buttons (copy, show earlier), the tool-step disclosure toggle,
 /// rounded cards with a soft shadow, vector icons, picture thumbnails and the typing dots. Colours come from the Brand
-/// tokens only, so both Revit themes work. Spacing follows a 4 px scale (<see cref="S1"/>..<see cref="S6"/>); corners
-/// are <see cref="RadiusSmall"/> on buttons and fields and <see cref="Radius"/> on cards and the composer.
+/// tokens only, so both Revit themes work. Spacing follows an 8 px grid with 4 px half steps (<see cref="S1"/>..<see cref="S6"/>);
+/// corners are <see cref="RadiusSmall"/> on buttons and fields and <see cref="Radius"/> on cards and the composer. Text
+/// sizes come from the type scale in <see cref="ChatStyles"/>.
+///
+/// Crispness: nothing in the chat is drawn to a bitmap and scaled (no RenderTargetBitmap outside the DPI snapshot, no
+/// BitmapCache, no Viewbox or ScaleTransform on text, no effect on an element holding text); icons are vector paths or
+/// icon-font glyphs; borders are whole pixels. Motion (<see cref="Animate"/>) moves wrappers and layers without text, and
+/// takes its transform off again when it ends.
 /// </summary>
 internal static class ChatUi
 {
-    public const double S1 = 4, S2 = 8, S3 = 12, S4 = 16, S5 = 20, S6 = 24;
-    public const double BodySize = 13, SmallSize = 11.5, CodeSize = 12, TitleSize = 14, GreetingSize = 22;
+    public const double S1 = 4, S2 = 8, S3 = 12, S4 = 16, S5 = 20, S6 = 24, S8 = 32;
+    public const double BodySize = ChatStyles.Body, SmallSize = ChatStyles.Caption, CodeSize = ChatStyles.Caption, TitleSize = ChatStyles.Subtitle;
+    public const double HeadingSize = ChatStyles.Title, GreetingSize = ChatStyles.Display;
     public const double RadiusSmall = 8, Radius = 12;
 
     public static readonly FontFamily Icons = new("Segoe Fluent Icons, Segoe MDL2 Assets");
@@ -31,6 +38,25 @@ internal static class ChatUi
 
     /// <summary>Windows 11's text face where it is installed, Segoe UI elsewhere (WPF falls back along the list).</summary>
     public static readonly FontFamily Text = new("Segoe UI Variable Text, Segoe UI");
+
+    /// <summary>The same face cut for large sizes (headings, the greeting).</summary>
+    public static readonly FontFamily Display = new("Segoe UI Variable Display, Segoe UI");
+
+    /// <summary>
+    /// False when Windows' "Show animations" is off (or in the DPI snapshot): every transition then jumps to its end.
+    /// Read each time, so changing the Windows setting applies without restarting Revit.
+    /// </summary>
+    public static bool Animate => !NoMotion && SystemParameters.ClientAreaAnimation;
+
+    /// <summary>Set while the DPI snapshot draws, so it captures the settled state.</summary>
+    internal static bool NoMotion;
+
+    /// <summary>Large text keeps its shapes (Ideal); smaller text is snapped to the pixel grid (Display), see ChatStyles.IdealFrom.</summary>
+    public static T Large<T>(T element) where T : DependencyObject
+    {
+        TextOptions.SetTextFormattingMode(element, TextFormattingMode.Ideal);
+        return element;
+    }
 
     // Segoe MDL2 / Fluent glyphs.
     public const string GlyphCopy = "\uE8C8", GlyphCheck = "\uE73E", GlyphCross = "\uE711", GlyphStop = "\uE71A";
@@ -63,7 +89,7 @@ internal static class ChatUi
     public static ResourceDictionary Styles()
     {
         if (_styles is not null) return _styles;
-        try { _styles = (ResourceDictionary)XamlReader.Parse(ChatStyles.Xaml(RadiusSmall, Radius)); }
+        try { _styles = (ResourceDictionary)XamlReader.Parse(ChatStyles.Xaml(RadiusSmall, Radius, SystemParameters.ClientAreaAnimation)); }
         catch (Exception ex)
         {
             System.Diagnostics.Trace.WriteLine("Sketch ProMax chat styles: " + ex.Message);
@@ -119,6 +145,7 @@ internal static class ChatUi
         shadow.Effect = new System.Windows.Media.Effects.DropShadowEffect { BlurRadius = 14, ShadowDepth = 2, Direction = 270, Opacity = 0.09, Color = Colors.Black };
         frame = new Border { Child = content, CornerRadius = new CornerRadius(radius), BorderThickness = new Thickness(1), SnapsToDevicePixels = true };
         frame.SetResourceReference(Border.BackgroundProperty, Brand.K.Raised);
+        Opaque(frame);
         frame.SetResourceReference(Border.BorderBrushProperty, Brand.K.BorderSubtle);
         var grid = new Grid();
         grid.Children.Add(shadow);
@@ -127,31 +154,41 @@ internal static class ChatUi
     }
 
     /// <summary>
-    /// The chat's own mark: a rounded tile in the brand blues with a white isometric block, drawn as vectors so it is
-    /// sharp at any scale (the bitmap logo blurs at small sizes).
+    /// The chat's own mark: a rounded tile in the brand blues with a white isometric block, drawn as vectors at the size
+    /// asked for (the geometry is scaled, not the drawing, so strokes stay at least a pixel wide and nothing is a bitmap).
     /// </summary>
     public static FrameworkElement Mark(double size = 28)
     {
+        var k = size / 28;
+        var scale = new ScaleTransform(k, k);
+        scale.Freeze();
+        Geometry Scaled(string data)
+        {
+            if (k == 1) return Geometry(data);
+            var g = System.Windows.Media.Geometry.Parse(data);
+            g.Transform = scale;
+            g.Freeze();
+            return g;
+        }
         var tile = new Border
         {
-            Width = 28, Height = 28, CornerRadius = new CornerRadius(8),
+            Width = size, Height = size, CornerRadius = new CornerRadius(Math.Round(8 * k)),
             Background = Frozen(new LinearGradientBrush(Brand.Blue, Brand.Navy, new Point(0, 0), new Point(1, 1))),
         };
         var block = new System.Windows.Shapes.Path
         {
-            Data = Geometry("M14,6.5 L20.5,10 L20.5,17.5 L14,21 L7.5,17.5 L7.5,10 Z M7.5,10 L14,13.5 L20.5,10 M14,13.5 L14,21"),
-            Stroke = Brushes.White, StrokeThickness = 1.4, StrokeLineJoin = PenLineJoin.Round, Stretch = Stretch.None,
+            Data = Scaled("M14,6.5 L20.5,10 L20.5,17.5 L14,21 L7.5,17.5 L7.5,10 Z M7.5,10 L14,13.5 L20.5,10 M14,13.5 L14,21"),
+            Stroke = Brushes.White, StrokeThickness = Math.Max(1, 1.4 * k), StrokeLineJoin = PenLineJoin.Round, Stretch = Stretch.None,
         };
         var spark = new System.Windows.Shapes.Path
         {
-            Data = Geometry("M22,3 L22.7,5.3 L25,6 L22.7,6.7 L22,9 L21.3,6.7 L19,6 L21.3,5.3 Z"), Fill = Frozen(new SolidColorBrush(Color.FromRgb(0xFD, 0xE0, 0x47))),
+            Data = Scaled("M22,3 L22.7,5.3 L25,6 L22.7,6.7 L22,9 L21.3,6.7 L19,6 L21.3,5.3 Z"), Fill = Frozen(new SolidColorBrush(Color.FromRgb(0xFD, 0xE0, 0x47))),
             Stretch = Stretch.None,
         };
-        var canvas = new Grid { Width = 28, Height = 28 };
-        canvas.Children.Add(tile);
-        canvas.Children.Add(block);
-        canvas.Children.Add(spark);
-        FrameworkElement mark = size == 28 ? canvas : new Viewbox { Child = canvas, Width = size, Height = size };
+        var mark = new Grid { Width = size, Height = size, SnapsToDevicePixels = true };
+        mark.Children.Add(tile);
+        mark.Children.Add(block);
+        mark.Children.Add(spark);
         AutomationProperties.SetName(mark, "Sketch ProMax");
         return mark;
     }
@@ -182,10 +219,10 @@ internal static class ChatUi
     private static object GhostContent(string glyph, string? text)
     {
         var row = new StackPanel { Orientation = Orientation.Horizontal };
-        var icon = new TextBlock { Text = glyph, FontFamily = Icons, FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
+        var icon = new TextBlock { Text = glyph, FontFamily = Icons, FontSize = ChatUi.SmallSize, VerticalAlignment = VerticalAlignment.Center };
         row.Children.Add(icon);
         if (!string.IsNullOrEmpty(text))
-            row.Children.Add(new TextBlock { Text = text, FontSize = SmallSize, Margin = new Thickness(S1 + 1, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center });
+            row.Children.Add(new TextBlock { Text = text, FontSize = SmallSize, Margin = new Thickness(S1, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center });
         return row;
     }
 
@@ -307,6 +344,153 @@ internal static class ChatUi
             pulse.KeyFrames.Add(new LinearDoubleKeyFrame(0.35, KeyTime.FromTimeSpan(TimeSpan.FromSeconds(1.2))));
             dot.BeginAnimation(UIElement.OpacityProperty, pulse);
             panel.Children.Add(dot);
+        }
+        return panel;
+    }
+
+    // ---- Crispness and motion ------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// Marks an opaque container: its text keeps ClearType even inside a layered window (the model menu's popup) or
+    /// while a parent fades.
+    /// </summary>
+    public static T Opaque<T>(T element) where T : DependencyObject
+    {
+        RenderOptions.SetClearTypeHint(element, ClearTypeHint.Enabled);
+        return element;
+    }
+
+    private static DoubleAnimation Ease(double? from, double to, Action? done = null, double ms = ChatStyles.MotionMs)
+    {
+        var a = new DoubleAnimation { From = from, To = to, Duration = TimeSpan.FromMilliseconds(ms), EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } };
+        if (done is not null) a.Completed += (_, _) => done();
+        return a;
+    }
+
+    /// <summary>
+    /// A new message eases in: the element fades from 0 and rises 8 px over 200 ms. When it ends the animation and the
+    /// transform are taken off, so the text settles at full opacity on whole pixels.
+    /// </summary>
+    public static void Arrive(UIElement element)
+    {
+        if (!Animate) return;
+        var lift = new TranslateTransform(0, S2);
+        element.RenderTransform = lift;
+        void Settle()
+        {
+            element.BeginAnimation(UIElement.OpacityProperty, null);
+            element.ClearValue(UIElement.OpacityProperty);
+            lift.BeginAnimation(TranslateTransform.YProperty, null);
+            if (element.RenderTransform == lift) element.ClearValue(UIElement.RenderTransformProperty);
+        }
+        element.BeginAnimation(UIElement.OpacityProperty, Ease(0, 1, Settle, 200));
+        lift.BeginAnimation(TranslateTransform.YProperty, Ease(S2, 0, null, 200));
+    }
+
+    /// <summary>
+    /// Opens or closes a small element (a tool step's details, the typing line) by animating its height, clipped, then
+    /// hands the height back to layout. Only for small elements: a large tree would lay out again on every frame.
+    /// </summary>
+    public static void Reveal(FrameworkElement element, bool open, Action? closed = null)
+    {
+        element.BeginAnimation(FrameworkElement.HeightProperty, null);
+        var shown = element.Visibility == Visibility.Visible;
+        if (!Animate || (open && shown && double.IsNaN(element.Height)) || (!open && !shown))
+        {
+            element.Visibility = open ? Visibility.Visible : Visibility.Collapsed;
+            element.Height = double.NaN;
+            if (!open) closed?.Invoke();
+            return;
+        }
+        element.ClipToBounds = true;
+        if (open)
+        {
+            var from = shown ? element.ActualHeight : 0;
+            element.Visibility = Visibility.Visible;
+            var width = element.ActualWidth > 0 ? element.ActualWidth : (element.Parent as FrameworkElement)?.ActualWidth ?? double.PositiveInfinity;
+            element.Height = double.NaN;
+            element.Measure(new Size(width > 0 ? width : double.PositiveInfinity, double.PositiveInfinity));
+            var to = element.DesiredSize.Height - element.Margin.Top - element.Margin.Bottom;
+            if (to <= 0) return;
+            element.Height = from;
+            element.BeginAnimation(FrameworkElement.HeightProperty, Ease(from, to, () =>
+            {
+                element.BeginAnimation(FrameworkElement.HeightProperty, null);
+                element.Height = double.NaN;
+            }));
+        }
+        else
+        {
+            element.BeginAnimation(FrameworkElement.HeightProperty, Ease(element.ActualHeight, 0, () =>
+            {
+                element.BeginAnimation(FrameworkElement.HeightProperty, null);
+                element.Visibility = Visibility.Collapsed;
+                element.Height = double.NaN;
+                closed?.Invoke();
+            }));
+        }
+    }
+
+    /// <summary>Slides an element in from <paramref name="dx"/> px to the side (or back out), ease-out; no transform once settled.</summary>
+    public static void Slide(UIElement element, double dx, bool open, Action? done = null)
+    {
+        if (!Animate)
+        {
+            element.RenderTransform = null;
+            done?.Invoke();
+            return;
+        }
+        var move = new TranslateTransform(open ? dx : 0, 0);
+        element.RenderTransform = move;
+        move.BeginAnimation(TranslateTransform.XProperty, Ease(open ? dx : 0, open ? 0 : dx, () =>
+        {
+            move.BeginAnimation(TranslateTransform.XProperty, null);
+            if (element.RenderTransform == move) element.ClearValue(UIElement.RenderTransformProperty);
+            done?.Invoke();
+        }, 200));
+    }
+
+    /// <summary>Fades a layer without text (the drawer's scrim) in or out.</summary>
+    public static void Fade(UIElement element, bool show, Action? done = null)
+    {
+        if (!Animate)
+        {
+            element.BeginAnimation(UIElement.OpacityProperty, null);
+            element.Opacity = 1;
+            done?.Invoke();
+            return;
+        }
+        element.BeginAnimation(UIElement.OpacityProperty, Ease(show ? 0 : element.Opacity, show ? 1 : 0, done));
+    }
+
+    /// <summary>
+    /// A placeholder while Claude starts its answer: three rounded bars with a soft light sweeping across them. The
+    /// sweep moves a brush, never text; with animations off the bars just stand still.
+    /// </summary>
+    public static FrameworkElement Shimmer()
+    {
+        var panel = new StackPanel { Margin = new Thickness(0, S2, 0, 0), IsHitTestVisible = false, Focusable = false };
+        AutomationProperties.SetName(panel, "Loading");
+        foreach (var width in new[] { 0.92, 0.78, 0.55 })
+        {
+            var bar = new Grid { Height = S2 + 2, Margin = new Thickness(0, 0, 0, S2) };
+            var fill = new Border { CornerRadius = new CornerRadius(5) };
+            fill.SetResourceReference(Border.BackgroundProperty, Brand.K.SurfaceHover);
+            bar.Children.Add(fill);
+            var shift = new TranslateTransform(-1, 0);
+            var sweep = new LinearGradientBrush { StartPoint = new Point(0, 0), EndPoint = new Point(1, 0), RelativeTransform = shift };
+            sweep.GradientStops.Add(new GradientStop(Color.FromArgb(0, 255, 255, 255), 0.2));
+            sweep.GradientStops.Add(new GradientStop(Color.FromArgb(0x48, 255, 255, 255), 0.5));
+            sweep.GradientStops.Add(new GradientStop(Color.FromArgb(0, 255, 255, 255), 0.8));
+            bar.Children.Add(new Border { CornerRadius = new CornerRadius(5), Background = sweep });
+            if (Animate)
+                shift.BeginAnimation(TranslateTransform.XProperty, new DoubleAnimation(-1, 1, TimeSpan.FromSeconds(1.4)) { RepeatBehavior = RepeatBehavior.Forever });
+            // A share of the width, so the bars read as lines of text at any pane width.
+            var row = new Grid();
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(width, GridUnitType.Star) });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1 - width, GridUnitType.Star) });
+            row.Children.Add(bar);
+            panel.Children.Add(row);
         }
         return panel;
     }
