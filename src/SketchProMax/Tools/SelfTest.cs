@@ -667,7 +667,11 @@ internal static partial class SelfTest
         new("coordination_progress", c => new { action = "record", test = "Self-test walls/floors", clash_args = new { set_a = new { categories = new[] { "Walls", "Floors" } }, level = c.LevelName, folder = c.Temp } }) { Heavy = true },
         new("boq_check", c => new { items = new[] { new { @ref = "1", description = "Concrete in suspended slabs", unit = "m3", quantity = 100.0 } }, folder = c.Temp }, Setup: ["create_floors"]) { Heavy = true },
         new("boq_item_breakdown", c => new { item = new { @ref = "1", description = "Concrete in suspended slabs", unit = "m3" }, method = "NRM2", folder = c.Temp }, Setup: ["create_floors"]),
-        new("cost_estimate", c => new { rates = new[] { new { description = "Concrete in slabs", unit = "m3", rate = 150.0 } }, folder = c.Temp }, Setup: ["create_floors"]),
+        new("cost_estimate", c => new { rates = new[] { new { description = "Concrete in slabs", unit = "m3", rate = 150.0 } }, prelims_percent = 10.0, contingency_percent = 5.0, vat_percent = 5.0, folder = c.Temp, excel = false }, Setup: ["create_floors"])
+            { Expect = r => r.GetProperty("total").GetDouble() > 0 && r.GetProperty("summaryCard").GetString()!.Contains("prelims 10%") ? null : "no total with the add-ons" },
+        // A preview only: nothing is copied or changed (the run itself is in RealModelCases and the field test's batch copy).
+        new("what_if", c => new { changes = new[] { new { kind = "slab_thickness", element_ids = new[] { Newest<Floor>(c) }, thickness_mm = 250.0 } }, folder = c.Temp }, Setup: ["create_floors"])
+            { Expect = r => r.GetProperty("preview").GetBoolean() && r.TryGetProperty("drawingsAffected", out _) ? null : "not a preview with the drawings affected" },
         new("carbon_view", c => new { name = "Self-test carbon view", categories = new[] { "Walls", "Floors" }, open = false }, Setup: ["create_floors"]) { Heavy = true },
         new("ve_view", c => new { name = "Self-test VE view", rescan = true, span_m = 4.0, open = false }, Setup: ["create_floors"]) { Heavy = true },
         new("ve_apply", c => new { target = "main", confirm_main_model = true, changes = new[] { new { kind = "change_type", element_ids = new[] { c.Id(c.Wall) }, to_type = c.Wall!.Name } }, folder = c.Temp }),
@@ -1107,6 +1111,12 @@ internal static partial class SelfTest
             target = "copy", copy_path = Path.Combine(c.Temp, "ve-copy " + Guid.NewGuid().ToString("N").Substring(0, 4) + ".rvt"),
             changes = new[] { new { kind = "change_type", element_ids = new[] { c.Id(c.Wall) }, to_type = c.Wall!.Name } },
         }) { ExpectError = "workshared", ExpectErrorIf = x => x.Doc.IsWorkshared },
+        // what_if follows ve_apply's rule: on a workshared model (not a detached copy) the run is refused; otherwise a copy is changed.
+        new("what_if", c => new
+        {
+            confirm = true, copy_path = Path.Combine(c.Temp, "what-if " + Guid.NewGuid().ToString("N").Substring(0, 4) + ".rvt"), folder = c.Temp, excel = false,
+            changes = new[] { new { kind = "slab_thickness", element_ids = new[] { c.Id(c.Floor) }, thickness_mm = 300.0 } },
+        }) { ExpectError = "workshared", ExpectErrorIf = x => x.Doc.IsWorkshared && !x.Doc.IsDetached },
         new("embodied_carbon", c =>
         {
             Need(c.Throwaway, "reads the field test's two slabs: one names its mix, one doesn't");

@@ -94,6 +94,8 @@ internal static partial class FieldTest
         {
             rows.Add(new(family, "batch_run_recipe", "fail", 0, "the two copies of the test project could not be made (see the Test project notes)"));
             rows.Add(new("ve", "ve.apply_copy", "fail", 0, "no copy to run it in (see the Test project notes)"));
+            rows.Add(new("ve", "whatif.copy", "fail", 0, "no copy to run it in (see the Test project notes)"));
+            rows.Add(new("ve", "whatif.link", "fail", 0, "no copy to run it in (see the Test project notes)"));
             return rows;
         }
         const string recipe = "sketch-promax-field-batch";
@@ -133,6 +135,7 @@ internal static partial class FieldTest
                     rows.Add(new("ve", "ve.apply_copy", ok ? "pass" : "fail", ve.ElapsedMilliseconds,
                         (ok || result.IsError ? "" : $"Ran, but the copy {copy} is not there. ") + Short(result.Text, 600)));
                 }
+                rows.AddRange(WhatIfOnCopy(app, s, active));
             }
         }
         finally
@@ -176,6 +179,227 @@ internal static partial class FieldTest
         }
         if (app.ActiveUIDocument?.Document.Equals(test) != true)
             s.Result.StoppedBecause ??= "Revit could not switch back to the test project after batch_run_recipe";
+    }
+
+    // ---- Cost plan and what if: what_if on a copy of the batch copy, then the cost plan's options read it
+
+    /// <summary>The small rate table the cost probes use, written here as .xlsx in the test folder (two regions, a row in EUR).</summary>
+    private static string FieldRates(string folder)
+    {
+        var file = Path.Combine(folder, "Field test rates.xlsx");
+        if (!File.Exists(file)) Xlsx.Write(file, [("Rates", Cost.SampleTable())]);
+        return file;
+    }
+
+    private static readonly Dictionary<string, double> FieldExchange = new() { ["EUR"] = 1.1 };
+
+    private static Floor? FirstSlab(Document doc) =>
+        new FilteredElementCollector(doc).OfClass(typeof(Floor)).Cast<Floor>().Where(f => !f.FloorType.IsFoundationSlab && f.FloorType.GetCompoundStructure() is not null)
+            .OrderBy(f => f.Id.Value).FirstOrDefault();
+
+    /// <summary>A plain value of a result, for the probes' checks ("" when missing).</summary>
+    private static string Prop(JsonElement e, params string[] path)
+    {
+        foreach (var p in path)
+            if (e.ValueKind != JsonValueKind.Object || !e.TryGetProperty(p, out e)) return "";
+        return e.ValueKind == JsonValueKind.String ? e.GetString() ?? "" : e.ToString();
+    }
+
+    private static double Num(JsonElement e, params string[] path) =>
+        double.TryParse(Prop(e, path), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : double.NaN;
+
+    /// <summary>what_if confirmed on a copy of the open batch copy (not workshared), then cost_estimate options [model, what_if].</summary>
+    private static List<Row> WhatIfOnCopy(UIApplication app, State s, Document active)
+    {
+        var rows = new List<Row>();
+        var watch = Stopwatch.StartNew();
+        var rates = FieldRates(s.Folder);
+        var slab = FirstSlab(active);
+        if (slab is null)
+        {
+            rows.Add(new("ve", "whatif.copy", "fail", 0, "the copy has no slab with layers to make thicker"));
+            rows.Add(new("ve", "whatif.link", "fail", 0, "no what-if to compare (see whatif.copy)"));
+            return rows;
+        }
+        var typeBefore = slab.GetTypeId();
+        var thick = Math.Round(slab.FloorType.GetCompoundStructure()!.GetWidth() * 304.8) + 100;
+        var copy = Path.Combine(s.BatchFolder!, "FieldTest what if copy.rvt");
+        try
+        {
+            var res = Call(app, s.Registry, "what_if", new
+            {
+                confirm = true, copy_path = copy, name = "field test", rates_file = rates, region = "North", currency = "USD", exchange_rates = FieldExchange, folder = s.Folder,
+                changes = new[] { new { kind = "slab_thickness", element_ids = new[] { slab.Id.Value }, thickness_mm = thick } },
+            });
+            if (res.IsError) rows.Add(new("ve", "whatif.copy", "fail", watch.ElapsedMilliseconds, Short(res.Text, 600)));
+            else
+            {
+                using var j = JsonDocument.Parse(res.Text);
+                var side = j.RootElement.GetProperty("sideBySide").EnumerateArray().ToList();
+                double Change(string metric) => side.Where(x => Prop(x, "Metric").StartsWith(metric, StringComparison.Ordinal)).Select(x => Num(x, "change")).DefaultIfEmpty(double.NaN).First();
+                var xlsx = Prop(j.RootElement, "files", "xlsx");
+                var problems = new List<string>();
+                if (!File.Exists(copy)) problems.Add($"the copy {copy} is not there");
+                if (!(Change("Concrete") > 0)) problems.Add($"concrete change {Change("Concrete")} m³, expected more");
+                if (!(Change("Cost") > 0)) problems.Add($"cost change {Change("Cost")}, expected more");
+                if (xlsx.Length == 0 || !File.Exists(xlsx)) problems.Add("no Excel file");
+                else
+                {
+                    using var zip = ZipFile.OpenRead(xlsx);
+                    using var r = new StreamReader(zip.GetEntry("xl/workbook.xml")!.Open());
+                    if (!r.ReadToEnd().Contains("Drawings affected")) problems.Add("the Excel file has no Drawings affected sheet");
+                }
+                if (active.GetElement(slab.Id) is not Floor still || still.GetTypeId() != typeBefore) problems.Add("the open model's slab changed type");
+                rows.Add(new("ve", "whatif.copy", problems.Count == 0 ? "pass" : "fail", watch.ElapsedMilliseconds,
+                    (problems.Count == 0 ? $"Slab {slab.Id.Value} to {thick} mm on {Path.GetFileName(copy)}: concrete {Ve.F(Change("Concrete"), 2)} m³, cost {Cost.Money(Change("Cost"))} USD, " +
+                                           $"{Prop(j.RootElement, "drawingsAffected", "views")} view(s) and {Prop(j.RootElement, "drawingsAffected", "sheets")} sheet(s) affected; the open model kept its slab type. "
+                        : string.Join("; ", problems) + ". ") + Short(Prop(j.RootElement, "summaryCard"), 300)));
+            }
+
+            var link = Stopwatch.StartNew();
+            var cost = Call(app, s.Registry, "cost_estimate", new { rates_file = rates, region = "North", currency = "USD", exchange_rates = FieldExchange, options = new[] { "model", "what_if:field test" }, folder = s.Folder, excel = false });
+            if (cost.IsError) rows.Add(new("ve", "whatif.link", "fail", link.ElapsedMilliseconds, Short(cost.Text, 600)));
+            else
+            {
+                using var j = JsonDocument.Parse(cost.Text);
+                var opts = j.RootElement.TryGetProperty("options", out var o) && o.ValueKind == JsonValueKind.Array ? o.EnumerateArray().ToList() : [];
+                var ok = opts.Count == 2 && Prop(opts[1], "option").StartsWith("What if", StringComparison.Ordinal) && Num(opts[1], "costChange") > 0;
+                rows.Add(new("ve", "whatif.link", ok ? "pass" : "fail", link.ElapsedMilliseconds,
+                    ok ? $"cost_estimate options: {Prop(opts[0], "option")} {Prop(opts[0], "total")} vs {Prop(opts[1], "option")} {Prop(opts[1], "total")} ({Prop(opts[1], "costPercent")}%), {Prop(opts[1], "tCO2e")} tCO2e, {Prop(opts[1], "frameWeeks")} weeks"
+                       : "the options don't set the what-if against the model with a higher cost: " + Short(cost.Text, 500)));
+            }
+        }
+        finally
+        {
+            try { Directory.Delete(CostRun.Store(active), true); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        }
+        return rows;
+    }
+
+    /// <summary>The documented template: written by cost_estimate, read back, its rows chosen by region.</summary>
+    private static (string, string) CostTemplate(UIApplication app, State s)
+    {
+        if (TestDoc(app, s, out var why) is null) return Fail(why);
+        var path = Path.Combine(s.Folder, "Rate table template.xlsx");
+        var r = Call(app, s.Registry, "cost_estimate", new { template = true, template_path = path });
+        if (r.IsError) return Fail(Short(r.Text, 500));
+        if (!File.Exists(path)) return Fail($"cost_estimate said it wrote the template, but {path} is not there");
+        var sel = Cost.SelectRates(Table.Read(path, out var sep), "Region B", null, null, sep);
+        using var zip = ZipFile.OpenRead(path);
+        var sheets = zip.Entries.Count(e => e.FullName.StartsWith("xl/worksheets/sheet", StringComparison.Ordinal));
+        var c01 = sel.Rows.FirstOrDefault(x => x.Ref == "C-01");
+        return sheets == 2 && c01?.Rate == 175
+            ? Pass($"{Path.GetFileName(path)}: Rates and Read me sheets; read back, {sel.Rows.Count} rates for Region B in {sel.Currency} (C-01 at its own rate {c01.Rate})")
+            : Fail($"{sheets} sheet(s); C-01 for Region B is {c01?.Rate.ToString() ?? "missing"}, expected 175");
+    }
+
+    /// <summary>A cost plan of the test project from the small rate-table xlsx, with every add-on.</summary>
+    private static (string, string) CostPlan(UIApplication app, State s)
+    {
+        if (TestDoc(app, s, out var why) is null) return Fail(why);
+        var rates = FieldRates(s.Folder);
+        var r = Call(app, s.Registry, "cost_estimate", new
+        {
+            rates_file = rates, region = "North", currency = "USD", exchange_rates = FieldExchange, prelims_percent = 10.0, contingency_percent = 5.0,
+            escalation_percent_per_year = 4.0, escalation_from = "2026-01-01", escalation_to = "2028-01-01", vat_percent = 5.0, quay_length_m = 120.0, folder = s.Folder,
+        });
+        if (r.IsError) return Fail(Short(r.Text, 600));
+        using var j = JsonDocument.Parse(r.Text);
+        var root = j.RootElement;
+        var problems = new List<string>();
+        var addOns = root.GetProperty("addOns").EnumerateArray().ToList();
+        var works = Num(addOns[0], "amount");
+        var expected = Cost.Apply(works, new Cost.AddOns { PrelimsPct = 10, ContingencyPct = 5, EscalationPctPerYear = 4, BaseDate = new DateTime(2026, 1, 1), TargetDate = new DateTime(2028, 1, 1), VatPct = 5 }).Total;
+        var total = Num(root, "total");
+        if (!(works > 0)) problems.Add("nothing was measured (measured works 0)");
+        if (Math.Abs(total - expected) > 1) problems.Add($"total {total} is not works {works} with the add-ons ({expected:0.##})");
+        var items = root.GetProperty("items").EnumerateArray().ToList();
+        double Rate(string reference) => items.Where(i => Prop(i, "Ref") == reference).Select(i => Num(i, "Rate")).DefaultIfEmpty(double.NaN).First();
+        if (Rate("T-01") != 120) problems.Add($"slab concrete at {Rate("T-01")}, not North's 120");
+        if (Math.Abs(Rate("T-02") - 220) > 1e-6) problems.Add($"walls at {Rate("T-02")}, not 200 EUR × 1.1");
+        var sections = root.GetProperty("perUnit").EnumerateArray().Select(u => Prop(u, "Section")).ToList();
+        foreach (var want in new[] { "Per m² GFA", "Per m³ of concrete", "Per linear m" })
+            if (!sections.Contains(want)) problems.Add($"no '{want}' rate");
+        var card = Prop(root, "summaryCard");
+        if (card.Length == 0 || card.Split('\n').Length > 10 || !card.Contains("Total")) problems.Add("the summary card is missing or long");
+        if (!Prop(root, "ratesFrom").Contains("remembered")) problems.Add("the rate table was not remembered");
+        var xlsx = Prop(root, "files", "xlsx");
+        if (xlsx.Length == 0 || !File.Exists(xlsx)) problems.Add("no Excel cost plan");
+        else
+        {
+            using var zip = ZipFile.OpenRead(xlsx);
+            string Text(string e) { using var sr = new StreamReader(zip.GetEntry(e)!.Open()); return sr.ReadToEnd(); }
+            var book = Text("xl/workbook.xml");
+            var plan = Text("xl/worksheets/sheet1.xml");
+            if (!book.Contains("\"Basis\"") || !book.Contains("\"Cost plan\"")) problems.Add("the workbook has no Cost plan or Basis sheet");
+            if (!plan.Contains("SUM(Basis!H") || !plan.Contains("HYPERLINK")) problems.Add("the cost plan's lines don't link to their Basis rows");
+        }
+        return problems.Count == 0
+            ? Pass($"Total {Cost.Money(total, "USD")} = works {Cost.Money(works)} with prelims 10%, contingency 5%, escalation 4%/yr 2026-01 to 2028-01, VAT 5%; GFA {Prop(root, "gfa", "m2")} m² from {Prop(root, "gfa", "source")}; " +
+                   $"zones {Prop(root, "zones")}; {sections.Count} rates per unit; Excel {Path.GetFileName(xlsx)} links lines to Basis rows. Card: {Short(card.Replace('\n', ' '), 200)}")
+            : Fail(string.Join("; ", problems) + ". " + Short(r.Text, 300));
+    }
+
+    /// <summary>A second run with no table: the one remembered for the test project, its region, currency and add-ons.</summary>
+    private static (string, string) CostRemembered(UIApplication app, State s)
+    {
+        if (TestDoc(app, s, out var why) is null) return Fail(why);
+        var r = Call(app, s.Registry, "cost_estimate", new { folder = s.Folder, excel = false });
+        if (r.IsError) return Fail(Short(r.Text, 500));
+        using var j = JsonDocument.Parse(r.Text);
+        var from = Prop(j.RootElement, "ratesFrom");
+        var prelims = j.RootElement.GetProperty("addOns").EnumerateArray().Select(a => Prop(a, "Label")).FirstOrDefault(l => l.StartsWith("Preliminaries", StringComparison.Ordinal)) ?? "";
+        var slab = j.RootElement.GetProperty("items").EnumerateArray().Where(i => Prop(i, "Ref") == "T-01").Select(i => Num(i, "Rate")).DefaultIfEmpty(double.NaN).First();
+        return from.Contains("remembered for this model") && Prop(j.RootElement, "region") == "North" && slab == 120 && prelims == "Preliminaries 10%"
+            ? Pass($"Used {from}, region North, {Prop(j.RootElement, "currency")}, {prelims}")
+            : Fail($"rates from '{from}', region '{Prop(j.RootElement, "region")}', slab rate {slab}, '{prelims}'");
+    }
+
+    /// <summary>The model against a flat slab and a steel frame swapped in for its floors: cost, carbon and frame weeks side by side.</summary>
+    private static (string, string) CostOptions(UIApplication app, State s)
+    {
+        if (TestDoc(app, s, out var why) is not { } doc) return Fail(why);
+        try
+        {
+            var r = Call(app, s.Registry, "cost_estimate", new { options = new[] { "model", "flat_slab", "steel_composite" }, folder = s.Folder, excel = false });
+            if (r.IsError) return Fail(Short(r.Text, 500));
+            using var j = JsonDocument.Parse(r.Text);
+            var opts = j.RootElement.TryGetProperty("options", out var o) && o.ValueKind == JsonValueKind.Array ? o.EnumerateArray().ToList() : [];
+            var ok = opts.Count == 3 && Num(opts[0], "costChange") == 0 && opts.All(x => !double.IsNaN(Num(x, "tCO2e")) && Num(x, "frameWeeks") >= 0)
+                     && opts.Any(x => Prop(x, "best").Contains("cheapest"));
+            return ok
+                ? Pass(string.Join("; ", opts.Select(x => $"{Prop(x, "option")}: {Prop(x, "total")} ({Prop(x, "costPercent")}%), {Prop(x, "tCO2e")} tCO2e, {Prop(x, "frameWeeks")} wk{(Prop(x, "best").Length > 0 ? ", " + Prop(x, "best") : "")}")))
+                : Fail("expected 3 options against the first with carbon, weeks and a cheapest: " + Short(r.Text, 500));
+        }
+        finally
+        {
+            // The table and add-ons remembered for the throwaway test project go with it.
+            try { Directory.Delete(CostRun.Store(doc), true); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        }
+    }
+
+    /// <summary>what_if without confirm: a preview with the plan, the figures and the drawings; nothing in the model changes.</summary>
+    private static (string, string) WhatIfPreview(UIApplication app, State s)
+    {
+        if (TestDoc(app, s, out var why) is not { } doc) return Fail(why);
+        var slab = FirstSlab(doc);
+        if (slab is null) return Fail("the test project has no slab with layers");
+        var type = slab.GetTypeId();
+        var count = new FilteredElementCollector(doc).WhereElementIsNotElementType().GetElementCount();
+        var r = Call(app, s.Registry, "what_if", new { changes = new[] { new { kind = "slab_thickness", element_ids = new[] { slab.Id.Value }, thickness_mm = 275.0 } }, folder = s.Folder });
+        if (r.IsError) return Fail(Short(r.Text, 500));
+        using var j = JsonDocument.Parse(r.Text);
+        var after = new FilteredElementCollector(doc).WhereElementIsNotElementType().GetElementCount();
+        var problems = new List<string>();
+        if (Prop(j.RootElement, "preview") != "True" && Prop(j.RootElement, "preview") != "true") problems.Add("not a preview");
+        if (Prop(j.RootElement, "ask").Length == 0) problems.Add("no question for the user");
+        if (!j.RootElement.TryGetProperty("drawingsAffected", out _)) problems.Add("no drawings affected");
+        if (after != count) problems.Add($"the model's element count went from {count} to {after}");
+        if (doc.GetElement(slab.Id) is not Floor f || f.GetTypeId() != type) problems.Add("the slab changed type");
+        return problems.Count == 0
+            ? Pass($"Preview of slab {slab.Id.Value} at 275 mm: {Prop(j.RootElement, "drawingsAffected", "views")} view(s), {Prop(j.RootElement, "drawingsAffected", "sheets")} sheet(s) affected; " +
+                   $"current {Prop(j.RootElement, "current", "concreteM3")} m³, {Prop(j.RootElement, "current", "tCO2e")} tCO2e; {(Prop(j.RootElement, "refused").Length > 0 ? "the run would be refused here (workshared); " : "")}nothing changed")
+            : Fail(string.Join("; ", problems) + ". " + Short(r.Text, 300));
     }
 
     // ---- The self-test, safe mode, on the test project ------------------------------------------------------------------
@@ -244,6 +468,11 @@ internal static partial class FieldTest
         await Probe(s, "time.tracking", app => TimeTracking(app, s)).ConfigureAwait(false);
         await Probe(s, "time.export", app => TimeExport(app, s)).ConfigureAwait(false);
         await Probe(s, "time.queue", app => TimeQueue(app, s)).ConfigureAwait(false);
+        await Probe(s, "cost.template", app => CostTemplate(app, s)).ConfigureAwait(false);
+        await Probe(s, "cost.plan", app => CostPlan(app, s)).ConfigureAwait(false);
+        await Probe(s, "cost.remembered", app => CostRemembered(app, s)).ConfigureAwait(false);
+        await Probe(s, "cost.options", app => CostOptions(app, s)).ConfigureAwait(false);
+        await Probe(s, "whatif.preview", app => WhatIfPreview(app, s)).ConfigureAwait(false);
         // Off Revit's thread: processes, files and the network.
         await Probe(s, "chat.cli", () => { cli = new ClaudeCliInstall(Chat.ClaudeCli.Find()); return cli.Row(); }).ConfigureAwait(false);
         await Probe(s, "chat.signin", () => SignIn(cli)).ConfigureAwait(false);

@@ -191,6 +191,7 @@ public sealed class ToolRegistry
         new VeApplyTool(),
         new VeRegisterTool(),
         new VeViewTool(),
+        new WhatIfTool(),
         new SpecCheckTool(),
         new AnalyticalCheckTool(),
         new ExportAnalyticalTool(),

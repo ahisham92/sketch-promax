@@ -364,6 +364,8 @@ public sealed class BridgeServer
         // From the in-Revit chat, code, recipes and files written where Claude chose are always asked about: Claude Code
         // runs there without its own permission prompts, so this dialog is the only place the user sees them.
         var chatReason = fromChat ? OutputPaths.ChatApprovalReason(tool.Name, args) : null;
+        // A few calls are always asked about, from the chat or the Claude app (what_if with confirm).
+        if (OutputPaths.AlwaysAskReason(tool.Name, args) is { } always) chatReason = chatReason is null ? always : always + " " + chatReason;
         var confirm = tool.ModifiesModel && AgentSettings.Load().RequireApprovalForChanges
                       || tool is LearnedTool unapproved && !LearnedTools.IsApproved(unapproved.Code)
                       || chatReason is not null;

@@ -54,7 +54,7 @@ internal static class OutputPaths
     /// <summary>Arguments that name a file or folder a tool writes to (or, for some, reads from).</summary>
     private static readonly HashSet<string> PathKeys = new(StringComparer.Ordinal)
     {
-        "folder", "output_folder", "report_folder", "file_name", "copy_path",
+        "folder", "output_folder", "report_folder", "file_name", "copy_path", "template_path",
     };
 
     /// <summary>Tools whose "path" argument is where they write.</summary>
@@ -79,6 +79,19 @@ internal static class OutputPaths
             .Select(a => FullPath(a.Value.GetString()!)).ToList();
         if (paths.Count > 0) reasons.Add("The Sketch ProMax chat asks to write files at a location it chose: " + string.Join(", ", paths) + ".");
         return reasons.Count > 0 ? string.Join(" ", reasons) : null;
+    }
+
+    /// <summary>
+    /// Calls that are asked about in Revit whatever the settings say and wherever they come from (the chat or the
+    /// Claude app), and why: what_if with confirm, which copies the saved model and changes the copy (or a design option).
+    /// </summary>
+    public static string? AlwaysAskReason(string tool, IReadOnlyDictionary<string, JsonElement> args)
+    {
+        if (tool != "what_if" || !(args.TryGetValue("confirm", out var c) && c.ValueKind == JsonValueKind.True)) return null;
+        var option = args.TryGetValue("target", out var t) && t.ValueKind == JsonValueKind.String && t.GetString() == "design_option";
+        return option
+            ? "Claude asks to try a what-if in a design option of the open model: only the elements in that option change (Ctrl+Z undoes it)."
+            : "Claude asks to try a what-if on a copy of the saved model: the copy is changed, measured, saved and closed; the open model is not changed.";
     }
 
     /// <summary>The path as Windows will resolve it, so the dialog shows where a relative name really lands; unchanged when it can't be resolved.</summary>

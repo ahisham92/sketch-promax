@@ -35,7 +35,8 @@ internal static class FieldTestCoverage
 
     public const string Chat = "Chat", RibbonArea = "Ribbon and favourites", Carbon = "Embodied carbon", Ve = "Value engineering",
         Rebar2D = "2D rebar", Bugs = "Report bug and exports", Updates = "Updates and the Claude app", Model = "Real-model checks",
-        Limits = "Revit limits", BugFixes = "Bug fixes", Tasks = "Hand-off and Cancel", Job = "Live job card", Time = "Time saved";
+        Limits = "Revit limits", BugFixes = "Bug fixes", Tasks = "Hand-off and Cancel", Job = "Live job card", Time = "Time saved",
+        Costing = "Cost plan and what if";
 
     public static readonly Feature[] Features =
     [
@@ -113,6 +114,22 @@ internal static class FieldTestCoverage
         new("rebar2d", Rebar2D, "2D rebar with detail families", How.Case, "place_additional_reinforcement", "additional bars, mesh symbols and column section details are placed with families the field test makes"),
         new("rebar2d.real", Rebar2D, "2D rebar with your office families", How.Manual, "", "needs the office's own detail families from your template",
             "On a _detached copy with your template's detail families: Reinforcement > 2D rebar families, then Additional bars (2D) on a slab plan, Mesh symbols (2D) and Column sections (2D). Check the drawings look right."),
+
+        // ---- Cost plan and what if
+        new("cost.template", Costing, "Rate table template", How.Probe, "", "cost_estimate template true writes the documented template (Rates first, Read me); it is read back and its rows chosen by region"),
+        new("cost.plan", Costing, "Cost plan from a rate-table xlsx with add-ons", How.Probe, "", "a small rate table (two regions, a row in EUR) made as .xlsx by the field test costs the test project with region, currency, exchange rate, prelims, contingency, escalation by date and VAT; the total matches the add-on arithmetic, the rates per m² GFA and per m³ are there, the Excel cost plan links each line to its Basis rows, and the summary card is short"),
+        new("cost.remembered", Costing, "The rate table is remembered per model", How.Probe, "", "a second run with no rates_file uses the table, region, currency and add-ons remembered for the test project"),
+        new("cost.options", Costing, "Options side by side on cost, carbon and programme", How.Probe, "", "the model, a flat slab and a steel frame swapped in for its floors are compared on total cost with the add-ons, carbon and frame weeks, against the first"),
+        new("whatif.preview", Costing, "What if: preview first, nothing changes", How.Probe, "", "what_if without confirm on the test project lists the plan, the current figures and the drawings affected; the model's element count and the slab's type are the same after"),
+        new("whatif.workshared", Costing, "What if refuses a workshared model", How.Case, "what_if", "on the workshared test project, the run with confirm is refused with a clear message (detach a copy, or use a design option)"),
+        new("whatif.copy", Costing, "What if on a copy, side by side", How.Probe, "", "in a plain copy of the test project: a slab made 100 mm thicker on a saved copy; the side-by-side shows more concrete and cost, the Excel file has the drawings affected, and the open model's slab keeps its type"),
+        new("whatif.link", Costing, "What if in the cost plan's options", How.Probe, "", "cost_estimate options [model, what_if] in the same copy reads the saved what-if and sets it against the model"),
+        new("cost.real", Costing, "Cost plan with the firm's rate table on a real model", How.Manual, "", "the rates, the region and the quantities need a cost consultant's eye on a real project",
+            "On a _detached copy: Check > Value engineering > Cost plan with the firm's rate table, its region and currency, and the usual prelims, contingency, escalation dates and VAT. Open the Excel cost plan: click a line's BOQ basis link and check the Basis rows; check the rates per m² GFA (and its source), per level and zone, per m of walls, beams, piles and railings, per m³ and per tonne. For a marine model, draw model lines in a line style named Quay and check the per m of quay rate. Run it again without the table: it is remembered."),
+        new("whatif.design_option", Costing, "What if in a design option", How.Manual, "", "the Revit API can't create design options, so the test project has none",
+            "On a _detached copy: Manage > Design Options, make an option set with an option and copy a slab into it. Ask Claude for a what-if on that slab's thickness with target design_option: a preview comes first; agree, and check only the option's slab changed and the side-by-side and drawings list make sense."),
+        new("whatif.ask", Costing, "What if asks before it runs", How.Manual, "", "the approval dialog and the chat's question are what a person sees",
+            "In the chat, ask \"what if the slabs were 250 mm?\" on a _detached copy: Claude shows the preview and asks; say yes: Revit asks to try it on a copy (even with change approvals off in Settings). Say no once and check nothing was copied."),
 
         // ---- Report bug and exports
         new("bugs.report", Bugs, "Report bug zip size and contents", How.Case, "report_bug", "the zip is written to a temporary Bugs folder, is small and holds the description, activity and versions"),
@@ -222,7 +239,7 @@ internal static class FieldTestCoverage
     {
         var items = Features.Where(f => f.How == How.Manual).Select(f => new CheckItem(f.Key, f.Area, f.Title, f.Steps, f.Reason)).ToList();
         items.AddRange(ManualTools.OrderBy(t => t.Key).Select(t => new CheckItem("tool:" + t.Key, Limits, t.Key, t.Value.Steps, t.Value.Reason)));
-        string[] order = [Chat, RibbonArea, Tasks, Job, Time, Carbon, Ve, Rebar2D, Bugs, Updates, Model, Limits];
+        string[] order = [Chat, RibbonArea, Tasks, Job, Time, Carbon, Ve, Costing, Rebar2D, Bugs, Updates, Model, Limits];
         items = items.OrderBy(i => Array.IndexOf(order, i.Area) is var x && x < 0 ? order.Length : x).ToList();
         items.AddRange(fixedBugs.Select(b => new CheckItem("bug:" + b.Number, BugFixes, $"#{b.Number}: {b.What}",
             "Do what the row describes on a _detached copy and check it no longer happens.", b.Status)));

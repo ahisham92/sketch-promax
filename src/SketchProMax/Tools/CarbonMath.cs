@@ -711,9 +711,15 @@ internal static class Carbon
     }
 }
 
-/// <summary>A minimal .xlsx writer: sheets of text and numbers, header row in bold and frozen. Pure, so the tests run it.</summary>
+/// <summary>A minimal .xlsx writer: sheets of text, numbers and formulas, header row in bold and frozen. Pure, so the tests run it.</summary>
 internal static class Xlsx
 {
+    /// <summary>
+    /// A formula cell (without the leading =), with the value it gives now so readers that don't calculate (and the
+    /// CSV) still see it; Excel recalculates on open. Cached is a number or text.
+    /// </summary>
+    public sealed record Formula(string Expression, object? Cached);
+
     public static void Write(string path, IEnumerable<(string Name, IList<object?[]> Rows)> sheets)
     {
         var list = sheets.ToList();
@@ -747,7 +753,8 @@ internal static class Xlsx
         Entry("xl/workbook.xml",
             "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" " +
             "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><sheets>" +
-            string.Concat(names.Select((n, i) => $"<sheet name=\"{Esc(n)}\" sheetId=\"{i + 1}\" r:id=\"rId{i + 1}\"/>")) + "</sheets></workbook>");
+            string.Concat(names.Select((n, i) => $"<sheet name=\"{Esc(n)}\" sheetId=\"{i + 1}\" r:id=\"rId{i + 1}\"/>")) + "</sheets>" +
+            (list.Any(x => x.Rows.Any(r => r.Any(c => c is Formula))) ? "<calcPr fullCalcOnLoad=\"1\"/>" : "") + "</workbook>");
         Entry("xl/_rels/workbook.xml.rels",
             "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">" +
             string.Concat(names.Select((_, i) => $"<Relationship Id=\"rId{i + 1}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet{i + 1}.xml\"/>")) +
@@ -777,7 +784,14 @@ internal static class Xlsx
                     if (cell is null) continue;
                     var at = Column(c) + (r + 1);
                     var style = r == 0 ? " s=\"1\"" : "";
-                    if (cell is double or float or int or long or decimal)
+                    if (cell is Formula fm)
+                    {
+                        var expr = Esc(fm.Expression.TrimStart('='));
+                        if (fm.Cached is double or float or int or long or decimal && Convert.ToDouble(fm.Cached, CultureInfo.InvariantCulture) is var fv && !double.IsNaN(fv) && !double.IsInfinity(fv))
+                            sb.Append($"<c r=\"{at}\"{style}><f>{expr}</f><v>{fv.ToString("R", CultureInfo.InvariantCulture)}</v></c>");
+                        else sb.Append($"<c r=\"{at}\"{style} t=\"str\"><f>{expr}</f><v>{Esc(Convert.ToString(fm.Cached, CultureInfo.InvariantCulture) ?? "")}</v></c>");
+                    }
+                    else if (cell is double or float or int or long or decimal)
                     {
                         var d = Convert.ToDouble(cell, CultureInfo.InvariantCulture);
                         if (double.IsNaN(d) || double.IsInfinity(d)) continue;
@@ -790,6 +804,38 @@ internal static class Xlsx
             sb.Append("</sheetData></worksheet>");
             Entry($"xl/worksheets/sheet{i + 1}.xml", sb.ToString());
         }
+    }
+
+    /// <summary>
+    /// The cells of one sheet (default the first) as text, row by row: shared strings, inline strings, numbers and the
+    /// cached value of formulas. Gaps are filled with empty cells.
+    /// </summary>
+    public static List<List<string>> Read(string path, int sheet = 1)
+    {
+        using var zip = System.IO.Compression.ZipFile.OpenRead(path);
+        System.Xml.Linq.XNamespace ns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+        var shared = new List<string>();
+        if (zip.GetEntry("xl/sharedStrings.xml") is { } ss)
+            using (var st = ss.Open())
+                shared = System.Xml.Linq.XDocument.Load(st).Root!.Elements(ns + "si").Select(si => string.Concat(si.Descendants(ns + "t").Select(x => x.Value))).ToList();
+        var entry = zip.GetEntry($"xl/worksheets/sheet{sheet}.xml") ?? throw new InvalidDataException($"The workbook has no sheet {sheet}.");
+        using var stream = entry.Open();
+        var rows = new List<List<string>>();
+        foreach (var row in System.Xml.Linq.XDocument.Load(stream).Descendants(ns + "row"))
+        {
+            var cells = new List<string>();
+            foreach (var c in row.Elements(ns + "c"))
+            {
+                var col = 0;
+                foreach (var ch in ((string?)c.Attribute("r") ?? "A").TakeWhile(char.IsLetter)) col = col * 26 + (ch - 'A' + 1);
+                while (cells.Count < col - 1) cells.Add("");
+                var value = c.Element(ns + "v")?.Value ?? string.Concat(c.Descendants(ns + "t").Select(x => x.Value));
+                if ((string?)c.Attribute("t") == "s" && int.TryParse(value, out var idx) && idx < shared.Count) value = shared[idx];
+                cells.Add(value);
+            }
+            rows.Add(cells);
+        }
+        return rows;
     }
 
     /// <summary>A, B, ... Z, AA, AB ... for a 0-based column.</summary>

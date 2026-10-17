@@ -44,11 +44,12 @@ internal static class Measure
         (@"\bwalls?\b|\bcores?\b|\bblockwork\b|\bmasonry\b", [BuiltInCategory.OST_Walls], null),
         (@"\bslabs?\b|\bfloors?\b|\btopping\b|\bdecks?\b|\bscreed\b", [BuiltInCategory.OST_Floors], e => e is not Floor f || !f.FloorType.IsFoundationSlab),
         (@"\bstairs?\b|\bflights?\b|\blandings?\b", [BuiltInCategory.OST_Stairs], null),
+        (@"\brailings?\b|\bbalustrades?\b|\bhandrails?\b|\bguard ?rails?\b", [BuiltInCategory.OST_StairsRailing], null),
         (@"\bdoors?\b", [BuiltInCategory.OST_Doors], null),
         (@"\bwindows?\b", [BuiltInCategory.OST_Windows], null),
     ];
 
-    private static bool IsPile(Element e) => TypeName(e).IndexOf("pile", StringComparison.OrdinalIgnoreCase) >= 0
+    internal static bool IsPile(Element e) => TypeName(e).IndexOf("pile", StringComparison.OrdinalIgnoreCase) >= 0
                                              || (e.get_Parameter(BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS)?.AsString() ?? "").StartsWith("pile", StringComparison.OrdinalIgnoreCase);
 
     public static string Unit(Item item)
@@ -152,7 +153,8 @@ internal static class Measure
         // Framing: the cut length (between supports) so beams don't run into columns; others: their curve length.
         double len = D(e, BuiltInParameter.INSTANCE_LENGTH_PARAM) is > 0 and var cut && e.Category?.Id.Value == (long)BuiltInCategory.OST_StructuralFraming
             ? cut : Math.Max(D(e, BuiltInParameter.CURVE_ELEM_LENGTH), D(e, BuiltInParameter.INSTANCE_LENGTH_PARAM));
-        if (len == 0 && e.Category?.Id.Value == (long)BuiltInCategory.OST_StructuralColumns && e.get_BoundingBox(null) is { } cb) len = cb.Max.Z - cb.Min.Z;
+        if (len == 0 && (e.Category?.Id.Value == (long)BuiltInCategory.OST_StructuralColumns || IsPile(e)) && e.get_BoundingBox(null) is { } cb) len = cb.Max.Z - cb.Min.Z;
+        if (len == 0 && e is Autodesk.Revit.DB.Architecture.Railing rail) len = rail.GetPath().Sum(c => c.Length);
         switch (unit)
         {
             case "nr":
@@ -491,81 +493,273 @@ public sealed class CostEstimateTool : IRevitTool
 {
     public string Name => "cost_estimate";
     public string Description =>
-        "Cost estimate from the model: a rate table (CSV/Excel or rows) of items with category/type/level/material or " +
-        "description words, unit and rate; each is measured in the model (as boq_check does), times the rate, totalled " +
-        "by item, level and category, to CSV. compare_to an earlier estimate CSV to show the cost change between versions.";
-    public string PropertiesJson => """
-    {
-      "rates_file": {"type": "string", "description": "CSV or .xlsx with Description, Unit, Rate (optional Ref, Category, Type, Level, Material)."},
-      "rates": {"type": "array", "items": {"type": "object", "properties": {"ref": {"type": "string"}, "description": {"type": "string"}, "unit": {"type": "string"}, "rate": {"type": "number"}, "category": {"type": "string"}, "type": {"type": "string"}, "level": {"type": "string"}, "material": {"type": "string"}}}},
-      "currency": {"type": "string", "description": "Label only (default blank)."},
-      "method": {"type": "string", "enum": ["NRM2", "POMI", "CESMM4", "net"]},
-      "compare_to": {"type": "string", "description": "An earlier cost_estimate CSV."},
+        "Cost plan from the model and the firm's Excel rate table (region and currency chosen; template true writes a " +
+        "documented template). Each rate is measured in the model as boq_check measures a BOQ item, times the rate; then " +
+        "editable add-ons: preliminaries %, contingency %, escalation at an annual % from a base date to a target date, " +
+        "VAT %. Reports the total; rates per m² GFA, by level and by zone (rooms, areas or scope boxes, said which); per " +
+        "linear m of walls, beams, piles, railings and quay or berth length; per m³ of concrete, per tonne of steel and " +
+        "rebar, and per item. options compares 2 or 3 options side by side on cost, carbon and a rough programme: the " +
+        "model, a design option, a what_if result, or a floor system from ve_compare_options swapped in. Excel cost plan " +
+        "with the basis of every line linked to its rows on the Basis sheet (the BOQ basis of calculation), CSV, and a " +
+        "short summaryCard for the chat. The table, region, currency and add-ons are remembered for the model. " +
+        "compare_to an earlier estimate shows the change.";
+    public string PropertiesJson => "{" + CostRun.RatesJson + "," + CostRun.AddOnsJson + "," + CostRun.OutputsJson + """
+      ,
+      "template": {"type": "boolean", "description": "Write the documented rate table template (.xlsx: Rates and Read me sheets) and stop; fill it in and pass it as rates_file."},
+      "template_path": {"type": "string", "description": "Where to write the template (default 'Rate table template.xlsx' in the output folder)."},
+      "method": {"type": "string", "enum": ["NRM2", "POMI", "CESMM4", "net"], "description": "Void rule for volumes (default net: Revit's net volume)."},
+      "gfa_m2": {"type": "number", "description": "Gross floor area in m² (default: gross building areas, else rooms, else slab areas; the source is reported)."},
+      "zone_source": {"type": "string", "enum": ["auto", "areas", "rooms", "scope_boxes", "none"], "description": "Zones for the rates by zone (default auto: areas, else rooms by department or name, else scope boxes)."},
+      "quay_length_m": {"type": "number", "description": "Quay or berth length in m (default: model lines in a quay/berth/wharf line style, else elements so named, else the 'Quay Length' project parameter)."},
+      "design_option": {"type": "string", "description": "Cost the building with this design option (by name or part of it) instead of the primary ones."},
+      "options": {"type": "array", "items": {"type": "string"}, "description": "2 or 3 options side by side (cost with the add-ons, carbon, frame weeks), the first is the baseline: model, option:<design option>, what_if (the last what_if result) or what_if:<name>, or a floor system swapped in for the model's slabs and beams: flat_slab, beam_and_slab, pt_flat_slab, hollow_core, steel_composite (raft, piles for foundations)."},
+      "span_x": {"type": "number", "description": "For floor-system options: grid span in m (default from the column grid, else 8)."},
+      "span_y": {"type": "number", "description": "For floor-system options: the other span in m (default from the column grid, else span_x)."},
+      "cement_replacement": {"type": "string", "enum": ["none", "fa25", "ggbs50"], "description": "For the options' carbon: concrete whose name gives no replacement (default none)."},
+      "compare_to": {"type": "string", "description": "An earlier cost_estimate CSV or Excel file: each line's change is shown."},
+      "excel": {"type": "boolean", "description": "Also write the Excel cost plan (default true)."},
       "folder": {"type": "string"}
     }
     """;
     public string[] Required => [];
     public bool ModifiesModel => false;
 
+    private static string Inv(double v) => v.ToString(CultureInfo.InvariantCulture);
+
     public ToolResult Execute(UIApplication app, ToolArgs args)
     {
         var doc = app.ActiveUIDocument.Document;
-        var rates = args.OptString("rates_file") is { } path ? Measure.ReadBoq(path) : args.Array("rates").Select(Measure.FromJson).ToList();
-        rates = rates.Where(r => r.Rate is not null).ToList();
-        if (rates.Count == 0) throw new ArgumentException("No rates: give rates_file (with a Rate column) or rates.");
-        var threshold = Measure.VoidThreshold.TryGetValue(args.OptString("method") ?? "net", out var th) ? th : 0;
-        var currency = args.OptString("currency") ?? "";
-        var rows = new List<(Measure.Item item, string unit, double qty, double cost, Dictionary<string, double> byLevel, string? error)>();
-        var byCategory = new Dictionary<string, double>();
-        foreach (var r in rates)
+        var folder = Checks.Folder(args);
+        if (args.OptBool("template"))
         {
-            var unit = Measure.Unit(r);
-            try
+            var path = args.OptString("template_path") is { } tp ? OutputPaths.Checked(tp.Trim().Trim('"'))! : Path.Combine(folder, "Rate table template.xlsx");
+            if (!path.EndsWith(".xlsx", StringComparison.OrdinalIgnoreCase)) path += ".xlsx";
+            Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
+            var sheets = Cost.Template();
+            Xlsx.Write(path, sheets);
+            return ToolResult.Ok(new
             {
-                var lines = Measure.Elements(doc, r).Select(e => Measure.Of(doc, e, unit, threshold)).ToList();
-                var qty = lines.Sum(l => l.Qty);
-                var byLevel = lines.GroupBy(l => Measure.LevelName(doc, l.E)).ToDictionary(g => g.Key, g => g.Sum(l => l.Qty) * r.Rate!.Value);
-                foreach (var g in lines.GroupBy(l => l.E.Category?.Name ?? "Other")) byCategory[g.Key] = (byCategory.TryGetValue(g.Key, out var c) ? c : 0) + g.Sum(l => l.Qty) * r.Rate!.Value;
-                rows.Add((r, unit, qty, qty * r.Rate!.Value, byLevel, null));
-            }
-            catch (ArgumentException ex) { rows.Add((r, unit, 0, 0, new Dictionary<string, double>(), ex.Message)); }
+                template = Path.GetFullPath(path), columns = Cost.Columns, exampleRows = sheets[0].Rows.Count - 1,
+                howTo = "Fill the Rates sheet with the firm's rates (keep it the first sheet), then run cost_estimate with rates_file set to it, and region and currency if the table has several.",
+            });
         }
-        var total = rows.Sum(x => x.cost);
 
+        var saved = CostRun.Load(doc);
+        var rates = CostRun.ReadRates(doc, args, saved, required: true)!;
+        var addOns = CostRun.ReadAddOns(doc, args, saved);
+        var method = args.OptString("method") ?? "net";
+        var threshold = Measure.VoidThreshold.TryGetValue(method, out var th) ? th : 0;
+        var zoneSource = args.OptString("zone_source") ?? "auto";
+        if (zoneSource is not ("auto" or "areas" or "rooms" or "scope_boxes" or "none")) throw new ArgumentException("zone_source is auto, areas, rooms, scope_boxes or none.");
+        var option = args.OptString("design_option");
+        var plan = CostRun.MeasurePlan(doc, rates.Selection.Rows, threshold, zoneSource, args.OptDouble("gfa_m2"), args.OptDouble("quay_length_m"), option);
+        var lines = plan.Lines;
+        var measured = lines.Where(l => l.Error is null).Sum(l => l.Cost);
+        var b = Cost.Apply(measured, addOns);
+        var perUnit = Cost.UnitRates(lines, b, plan.Measures);
+        var cur = rates.Selection.Currency;
+        var notes = new List<string>(rates.Selection.Notes);
+        notes.AddRange(plan.Notes);
+
+        // ---- Options side by side
+        List<Cost.OptionRow>? compared = null;
+        var keys = args.StringList("options");
+        if (keys.Count > 0)
+        {
+            if (keys.Count is < 2 or > 3) throw new ArgumentException("options takes 2 or 3 options (the first is the baseline).");
+            compared = Cost.Compare(Options(doc, args, keys, rates, plan, threshold, option, notes), addOns);
+        }
+
+        // ---- Earlier estimate
         Dictionary<string, double>? before = null;
         if (args.OptString("compare_to") is { } prev)
         {
             if (!File.Exists(prev)) throw new ArgumentException($"File not found: {prev}");
             before = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
             foreach (var r in Table.Read(prev, out _))
-                if (r.TryGetValue("description", out var d) && !d.StartsWith("Total", StringComparison.OrdinalIgnoreCase) && r.TryGetValue("cost", out var c) && double.TryParse(c, NumberStyles.Float, CultureInfo.InvariantCulture, out var v))
+                if (r.TryGetValue("description", out var d) && !d.StartsWith("Total", StringComparison.OrdinalIgnoreCase) && d != "Measured works"
+                    && (r.TryGetValue("cost", out var c) || r.TryGetValue("amount", out c)) && double.TryParse(c, NumberStyles.Float, CultureInfo.InvariantCulture, out var v))
                     before[(r.TryGetValue("ref", out var rf) ? rf : "") + "|" + d] = v;
         }
-        var folder = Checks.Folder(args);
+
         Directory.CreateDirectory(folder);
-        var file = Path.Combine(folder, $"{doc.Title} - Cost estimate {DateTime.Now:yyyy-MM-dd HHmm}.csv");
-        var sb = new StringBuilder("Ref,Description,Unit,Quantity,Rate,Cost,Previous cost,Change,Note\n");
-        foreach (var x in rows)
+        var stem = Path.Combine(folder, $"{new string(doc.Title.Select(ch => Path.GetInvalidFileNameChars().Contains(ch) ? '_' : ch).ToArray())} - Cost plan {DateTime.Now:yyyy-MM-dd HHmm}");
+
+        // ---- CSV (the earlier format, so compare_to reads it): lines, then the add-ons, levels and rates per unit.
+        var sb = new StringBuilder("Ref,Description,Unit,Quantity,Rate,Cost,Previous cost,Change,Note,Rate basis,Basis rows\n");
+        foreach (var l in lines)
         {
-            var key = x.item.Ref + "|" + x.item.Description;
-            var old = before != null && before.TryGetValue(key, out var o) ? o : (double?)null;
-            sb.AppendLine(string.Join(",", Measure.Csv(x.item.Ref), Measure.Csv(x.item.Description), x.unit, Math.Round(x.qty, 3).ToString(CultureInfo.InvariantCulture),
-                x.item.Rate!.Value.ToString(CultureInfo.InvariantCulture), Math.Round(x.cost, 2).ToString(CultureInfo.InvariantCulture),
-                old?.ToString(CultureInfo.InvariantCulture) ?? "", old is { } ov ? Math.Round(x.cost - ov, 2).ToString(CultureInfo.InvariantCulture) : "", Measure.Csv(x.error ?? "")));
+            var old = before != null && before.TryGetValue(l.Ref + "|" + l.Description, out var o) ? o : (double?)null;
+            sb.AppendLine(string.Join(",", Measure.Csv(l.Ref), Measure.Csv(l.Description), l.Unit, Inv(Math.Round(l.Qty, 3)), Inv(l.Rate), Inv(Math.Round(l.Cost, 2)),
+                old is { } ov ? Inv(ov) : "", old is { } ov2 ? Inv(Math.Round(l.Cost - ov2, 2)) : "", Measure.Csv(l.Error ?? l.Notes), Measure.Csv(l.RateSource),
+                l.BasisFirst > 0 ? $"Basis {l.BasisFirst}-{l.BasisLast}" : ""));
         }
-        sb.AppendLine($",Total {currency},,,,{Math.Round(total, 2).ToString(CultureInfo.InvariantCulture)},{(before is null ? "" : Math.Round(before.Values.Sum(), 2).ToString(CultureInfo.InvariantCulture))},,");
-        sb.AppendLine().AppendLine("Level,Cost");
-        foreach (var g in rows.SelectMany(x => x.byLevel).GroupBy(kv => kv.Key).OrderBy(g => g.Key)) sb.AppendLine($"{Measure.Csv(g.Key)},{Math.Round(g.Sum(kv => kv.Value), 2).ToString(CultureInfo.InvariantCulture)}");
-        sb.AppendLine().AppendLine("Category,Cost");
-        foreach (var kv in byCategory.OrderByDescending(kv => kv.Value)) sb.AppendLine($"{Measure.Csv(kv.Key)},{Math.Round(kv.Value, 2).ToString(CultureInfo.InvariantCulture)}");
-        File.WriteAllText(file, sb.ToString(), new UTF8Encoding(true));
+        sb.AppendLine($",Total measured works {cur},,,,{Inv(Math.Round(measured, 2))},{(before is null ? "" : Inv(Math.Round(before.Values.Sum(), 2)))},,");
+        sb.AppendLine().AppendLine("Add-on,Amount");
+        foreach (var (label, amount, _) in Cost.AddOnRows(b, addOns, cur)) sb.AppendLine($"{Measure.Csv(label)},{Inv(Math.Round(amount, 2))}");
+        sb.AppendLine().AppendLine("Rate per unit,Rate");
+        foreach (var u in perUnit) sb.AppendLine($"{Measure.Csv($"{u.Section}: {u.What} per {u.Per}")},{Inv(Math.Round(u.Rate, 2))}");
+        File.WriteAllText(stem + ".csv", sb.ToString(), new UTF8Encoding(true));
+
+        // ---- Excel cost plan: each line's quantity sums its rows on the Basis sheet; the add-ons' % are editable cells.
+        string? xlsx = null;
+        if (args.OptBool("excel", true))
+        {
+            var planRows = new List<object?[]> { new object?[] { "Ref", "Description", "Unit", "Quantity", "Rate", "Amount", "Share %", "Elements", "Rate basis", "BOQ basis (link)", "Basis rows", "Note" } };
+            foreach (var l in lines)
+            {
+                var r = planRows.Count + 1;
+                var hasBasis = l.BasisFirst > 0;
+                object? qty = hasBasis ? new Xlsx.Formula($"SUM(Basis!H{l.BasisFirst}:H{l.BasisLast})", Math.Round(l.Qty, 4)) : Math.Round(l.Qty, 4);
+                planRows.Add([l.Ref, l.Description, l.Unit, qty, l.Rate, new Xlsx.Formula($"D{r}*E{r}", Math.Round(l.Cost, 2)), measured > 0 ? Math.Round(l.Cost / measured * 100, 2) : null, l.Elements,
+                    l.RateSource, hasBasis ? new Xlsx.Formula($"HYPERLINK(\"#'Basis'!A{l.BasisFirst}\",\"Basis rows {l.BasisFirst}-{l.BasisLast}\")", $"Basis rows {l.BasisFirst}-{l.BasisLast}") : "",
+                    hasBasis ? $"Basis!H{l.BasisFirst}:H{l.BasisLast}" : "", l.Error ?? l.Notes]);
+            }
+            var last = planRows.Count;
+            planRows.Add([]);
+            int w = planRows.Count + 1, p = w + 1, c = w + 2, e = w + 3, bv = w + 4, v = w + 5, t = w + 6;
+            planRows.Add(["", "Measured works", "", "", "", new Xlsx.Formula($"SUM(F2:F{last})", Math.Round(b.Measured, 2)), "", "", "the lines above"]);
+            planRows.Add(["", "Preliminaries", "%", "", addOns.PrelimsPct, new Xlsx.Formula($"F{w}*E{p}/100", Math.Round(b.Prelims, 2)), "", "", "% of the measured works (edit the % in column E)"]);
+            planRows.Add(["", "Contingency", "%", "", addOns.ContingencyPct, new Xlsx.Formula($"(F{w}+F{p})*E{c}/100", Math.Round(b.Contingency, 2)), "", "", "% of works and preliminaries"]);
+            planRows.Add(["", "Escalation", "% a year; D = years", Math.Round(b.Years, 4), addOns.EscalationPctPerYear, new Xlsx.Formula($"(F{w}+F{p}+F{c})*((1+E{e}/100)^D{e}-1)", Math.Round(b.Escalation, 2)), "", "",
+                addOns.TargetDate is { } td ? $"compounded from {addOns.BaseDate:yyyy-MM-dd} to {td:yyyy-MM-dd}" : "no target date"]);
+            planRows.Add(["", "Total before VAT", "", "", "", new Xlsx.Formula($"F{w}+F{p}+F{c}+F{e}", Math.Round(b.BeforeVat, 2))]);
+            planRows.Add(["", "VAT", "%", "", addOns.VatPct, new Xlsx.Formula($"F{bv}*E{v}/100", Math.Round(b.Vat, 2)), "", "", "% of the total before VAT"]);
+            planRows.Add(["", $"Total {cur}".Trim(), "", "", "", new Xlsx.Formula($"F{bv}+F{v}", Math.Round(b.Total, 2))]);
+
+            var summary = new List<object?[]>
+            {
+                new object?[] { "Cost plan", doc.Title }, new object?[] { "Date", Checks.Now }, new object?[] { "Currency", cur }, new object?[] { "Region", rates.Selection.Region.Length > 0 ? rates.Selection.Region : "general rates" },
+                new object?[] { "Rates", rates.From }, new object?[] { "Method", method }, new object?[] { "Scope", option is null ? "main model and primary design options" : $"design option '{option}'" }, new object?[] { "" },
+            };
+            summary.AddRange(Cost.AddOnRows(b, addOns, cur).Select(x => new object?[] { x.Label, Math.Round(x.Amount, 2), x.Basis }));
+            summary.Add([""]);
+            summary.Add(["GFA m²", Math.Round(plan.Measures.GfaM2, 1), plan.Measures.GfaSource]);
+            summary.Add(["Zones", plan.Measures.ZoneAreaM2.Count, plan.Measures.ZoneSource]);
+            summary.Add(["Quay or berth m", Math.Round(plan.Measures.QuayM, 1), plan.Measures.QuaySource]);
+            var unitSheet = new List<object?[]> { new object?[] { "Section", "What", "Per", $"Cost {cur}".Trim(), "Quantity", "Rate", "Basis" } };
+            unitSheet.AddRange(perUnit.Select(u => new object?[] { u.Section, u.What, u.Per, Math.Round(u.Cost, 2), Math.Round(u.Quantity, 3), Math.Round(u.Rate, 2), u.Basis }));
+            var sheets = new List<(string, IList<object?[]>)> { ("Cost plan", planRows), ("Summary", summary), ("Rates per unit", unitSheet) };
+            if (compared is not null) sheets.Add(("Options", OptionSheet(compared, cur)));
+            sheets.Add(("Basis", plan.BasisRows));
+            var assumptions = new List<object?[]> { new object?[] { "Assumptions" },
+                new object?[] { "Quantities are measured from the model as boq_check measures a BOQ item; items not modelled (finishes, services, external works) are not included unless the table has a measurable line for them." },
+                new object?[] { "Rates per unit use the measured works (before add-ons) unless marked all-in; per linear m divides each kind's lines by the length of the elements they measured." },
+                new object?[] { CostRun.OutputsText(CostRun.Outputs(args)) } };
+            assumptions.AddRange(notes.Select(n => new object?[] { n }));
+            sheets.Add(("Assumptions", assumptions));
+            try { Xlsx.Write(stem + ".xlsx", sheets); xlsx = stem + ".xlsx"; }
+            catch (IOException ex) { notes.Add($"The Excel file could not be written ({ex.Message}); the CSV has the cost plan."); }
+        }
+
+        var optionLine = compared is null ? null : "- Options: " + string.Join(" · ", compared.Select(o =>
+            $"{Cost.Short(o.Option.Name, 28)} {Cost.Money(o.Total)}" + (o.CostPercent is { } cp && o != compared[0] ? $" ({(cp > 0 ? "+" : "")}{Cost.F(cp, 1)}%)" : "") + $", {Cost.F(o.Option.CarbonKg / 1000, 0)} tCO2e, {Cost.F(o.Option.Weeks, 0)} wk"));
         return ToolResult.Ok(new
         {
-            total = Math.Round(total, 2), currency, file, previousTotal = before is null ? (double?)null : Math.Round(before.Values.Sum(), 2),
-            items = rows.Select(x => new { x.item.Ref, x.item.Description, x.unit, quantity = Math.Round(x.qty, 3), rate = x.item.Rate, cost = Math.Round(x.cost, 2), error = x.error }).Take(100),
-            byCategory = byCategory.OrderByDescending(kv => kv.Value).Select(kv => new { category = kv.Key, cost = Math.Round(kv.Value, 2) }),
-            note = "An estimate from modelled quantities and your rates; items not modelled (preliminaries, finishes not in the model) are not included.",
+            total = Math.Round(b.Total, 2), currency = cur, region = rates.Selection.Region.Length > 0 ? rates.Selection.Region : null, ratesFrom = rates.From,
+            addOns = Cost.AddOnRows(b, addOns, cur).Select(x => new { x.Label, amount = Math.Round(x.Amount, 2), basis = x.Basis.Length > 0 ? x.Basis : null }),
+            gfa = new { m2 = Math.Round(plan.Measures.GfaM2, 1), source = plan.Measures.GfaSource }, zones = plan.Measures.ZoneSource, quay = new { m = Math.Round(plan.Measures.QuayM, 1), source = plan.Measures.QuaySource },
+            perUnit = perUnit.Take(60).Select(u => new { u.Section, u.What, u.Per, rate = Math.Round(u.Rate, 2), cost = Math.Round(u.Cost, 0), quantity = Math.Round(u.Quantity, 2) }),
+            items = lines.Take(100).Select(l => new
+            {
+                l.Ref, l.Description, l.Unit, quantity = Math.Round(l.Qty, 3), l.Rate, cost = Math.Round(l.Cost, 2), elements = l.Elements, rateBasis = l.RateSource,
+                basisRows = l.BasisFirst > 0 ? $"Basis {l.BasisFirst}-{l.BasisLast}" : null, error = l.Error, note = l.Error is null && l.Notes.Length > 0 ? l.Notes : null,
+            }),
+            options = compared?.Select(o => new
+            {
+                option = o.Option.Name, o.Option.Source, works = Math.Round(o.Option.Cost, 0), total = Math.Round(o.Total, 0), costChange = Math.Round(o.CostChange, 0), costPercent = o.CostPercent is { } cp ? Math.Round(cp, 1) : (double?)null,
+                tCO2e = Math.Round(o.Option.CarbonKg / 1000, 1), carbonChangeT = Math.Round(o.CarbonChangeKg / 1000, 1), frameWeeks = Math.Round(o.Option.Weeks, 1), weeksChange = Math.Round(o.WeeksChange, 1),
+                best = string.Join(", ", new[] { o.Cheapest ? "cheapest" : null, o.LowestCarbon ? "lowest carbon" : null, o.Fastest ? "fastest" : null }.Where(x => x != null)), notes = o.Option.Notes,
+            }),
+            previousTotal = before is null ? (double?)null : Math.Round(before.Values.Sum(), 2),
+            files = new { csv = stem + ".csv", xlsx }, notes,
+            summaryCard = Cost.Card($"Cost plan: {doc.Title}", cur, b, addOns, perUnit, lines, optionLine),
+            note = "An estimate from modelled quantities and your rates; check the Basis sheet for each line's elements. Try a change with what_if, then compare it here with options [\"model\", \"what_if\"].",
         });
+    }
+
+    private static List<object?[]> OptionSheet(List<Cost.OptionRow> rows, string cur)
+    {
+        var sheet = new List<object?[]> { new object?[] { "Option", "Source", $"Measured works {cur}".Trim(), "Total with add-ons", "Cost change", "Cost change %", "tCO2e (A1-A3)", "Carbon change t", "Carbon change %",
+            "Frame weeks (rough)", "Weeks change", "Concrete m3", "Rebar t", "Steel t", "Best", "Notes" } };
+        sheet.AddRange(rows.Select(o => new object?[]
+        {
+            o.Option.Name, o.Option.Source, Math.Round(o.Option.Cost, 0), Math.Round(o.Total, 0), Math.Round(o.CostChange, 0), o.CostPercent is { } cp ? Math.Round(cp, 1) : null,
+            Math.Round(o.Option.CarbonKg / 1000, 2), Math.Round(o.CarbonChangeKg / 1000, 2), o.CarbonPercent is { } kp ? Math.Round(kp, 1) : null, Math.Round(o.Option.Weeks, 1), Math.Round(o.WeeksChange, 1),
+            Math.Round(o.Option.ConcreteM3, 1), Math.Round(o.Option.RebarT, 2), Math.Round(o.Option.SteelT, 2),
+            string.Join(", ", new[] { o.Cheapest ? "cheapest" : null, o.LowestCarbon ? "lowest carbon" : null, o.Fastest ? "fastest" : null }.Where(x => x != null)), o.Option.Notes,
+        }));
+        return sheet;
+    }
+
+    /// <summary>
+    /// The options' figures: the model (this plan), a design option (measured again in its scope), a saved what-if, or a
+    /// ve_compare_options floor system (or foundation) sized by rule of thumb and swapped in for the model's own.
+    /// </summary>
+    private static List<Cost.Figures> Options(Document doc, ToolArgs args, List<string> keys, CostRun.Rates rates, CostRun.Plan plan, double threshold, string? option, List<string> notes)
+    {
+        var inp = CostRun.VeInputs(doc, args, rates);
+        var outputs = CostRun.Outputs(args);
+        List<VeRun.Fact>? facts = null;
+        Cost.Figures? model = null;
+        Cost.Figures Model()
+        {
+            facts ??= CostRun.Facts(doc, inp, option);
+            return model ??= CostRun.Figures(option is null ? "This model" : $"This model with option {option}", "model", plan, facts, outputs);
+        }
+        var list = new List<Cost.Figures>();
+        foreach (var raw in keys)
+        {
+            var k = raw.Trim();
+            if (k.Equals("model", StringComparison.OrdinalIgnoreCase)) { list.Add(Model()); continue; }
+            if (k.StartsWith("option:", StringComparison.OrdinalIgnoreCase))
+            {
+                var name = k.Substring(7).Trim();
+                var p = CostRun.MeasurePlan(doc, rates.Selection.Rows, threshold, "none", null, null, name, basis: false);
+                list.Add(CostRun.Figures($"Design option {name}", "design option", p, CostRun.Facts(doc, inp, name), outputs));
+                continue;
+            }
+            if (k.StartsWith("what_if", StringComparison.OrdinalIgnoreCase))
+            {
+                var name = k.Contains(':') ? k.Substring(k.IndexOf(':') + 1).Trim() : null;
+                var w = CostRun.LoadWhatIf(doc, name);
+                var f = w.WhatIf;
+                f.Name = "What if: " + Cost.Short(string.Join("; ", w.Changes), 60);
+                f.Source = $"what_if {w.Name} ({w.Date})";
+                if (w.Currency.Length > 0 && w.Currency != rates.Selection.Currency) notes.Add($"The what-if '{w.Name}' was costed in {w.Currency}, this plan in {rates.Selection.Currency}: run what_if again with the same currency.");
+                list.Add(f);
+                continue;
+            }
+            // A ve_compare_options system swapped in for the model's floors (slabs and beams) or foundations.
+            var m = Model();
+            var grid = Ve.GridSpans(VeRun.ColumnPoints(doc));
+            var g = new Ve.Grid { SpanX = args.OptDouble("span_x") ?? grid?.Long ?? 8 };
+            g.SpanY = args.OptDouble("span_y") ?? (args.Has("span_x") ? g.SpanX : grid?.Short ?? g.SpanX);
+            var sys = Ve.SizeOption(k, g);
+            var slabs = facts!.Where(x => x.Class == "slab").ToList();
+            var levels = Math.Max(1, slabs.Select(x => x.Level).Distinct().Count());
+            g.Floors = levels;
+            if (sys.Foundation) sys = Ve.SizeOption(k, g);
+            var replaced = facts!.Where(x => sys.Foundation ? x.Class == "foundation" : x.Class is "slab" or "beam").ToList();
+            var area = sys.Foundation ? slabs.Sum(x => x.AreaM2) / levels : slabs.Sum(x => x.AreaM2);
+            if (area <= 0) { notes.Add($"{k}: the model has no slabs to size it over, so it was left out."); continue; }
+            var kinds = sys.Foundation ? new[] { "foundation", "pile" } : ["slab", "beam"];
+            var removedCost = plan.Lines.Where(l => l.Error is null).Sum(l => kinds.Sum(kd => l.ByKind.TryGetValue(kd, out var v) ? v : 0));
+            var conc = m.ConcreteM3 - replaced.Sum(x => x.ConcreteM3) + (sys.ConcreteM3 + sys.PrecastM3) * area;
+            var rebar = m.RebarT - replaced.Sum(x => x.RebarKg) / 1000 + (sys.RebarKg + sys.StrandKg) * area / 1000;
+            var steel = m.SteelT - replaced.Sum(x => x.SteelKg) / 1000 + (sys.SteelKg + sys.DeckKg) * area / 1000;
+            list.Add(new Cost.Figures
+            {
+                Name = sys.Name + (sys.Foundation ? " (foundations swapped)" : " (floors swapped)"), Source = "ve_compare_options rule of thumb",
+                Cost = m.Cost - removedCost + Ve.Cost(sys, inp.Rates) * area,
+                CarbonKg = m.CarbonKg - replaced.Sum(x => x.CarbonKg) + Ve.CarbonKg(sys, inp.Factors, inp.CarbonOptions, inp.Custom) * area,
+                ConcreteM3 = conc, RebarT = rebar, SteelT = steel,
+                Weeks = Cost.FrameWeeks(conc - sys.PrecastM3 * area, rebar, steel, sys.PrecastM3 * area, outputs),
+                Notes = $"{sys.Sizes} over {Ve.F(area, 0)} m² (grid {Ve.F(g.SpanX)} x {Ve.F(g.SpanY)} m) in place of the model's {(sys.Foundation ? "foundations" : "slabs and beams")}; rates {(inp.Rates.AnyPlaceholder ? "partly placeholders (the table lacks some)" : "from the rate table")}",
+            });
+        }
+        if (list.Count < 2) throw new ArgumentException("Fewer than 2 options could be costed: " + string.Join(" ", notes));
+        return list;
     }
 }
 
