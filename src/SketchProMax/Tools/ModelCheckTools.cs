@@ -94,6 +94,9 @@ public sealed class CheckModelTool : IRevitTool
     public string[] Required => [];
     public bool ModifiesModel => false;
 
+    /// <summary>Every finding of the last run (the result shows a sample), for the issue gate.</summary>
+    internal List<IssueGateMath.Finding>? Found { get; private set; }
+
     public ToolResult Execute(UIApplication app, ToolArgs args)
     {
         var doc = app.ActiveUIDocument.Document;
@@ -277,6 +280,7 @@ public sealed class CheckModelTool : IRevitTool
         }
 
         var file = Checks.Write(args, $"{doc.Title} - Model check", findings);
+        Found = findings.Select(f => new IssueGateMath.Finding(Name, f.Check, f.Id, f.What, f.Issue)).ToList();
         var scores = population.Select(kv =>
         {
             var n = findings.Count(f => f.Check == kv.Key);
@@ -333,6 +337,9 @@ public sealed class FindMissingItemsTool : IRevitTool
     """;
     public string[] Required => [];
     public bool ModifiesModel => false;
+
+    /// <summary>Every finding of the last run (the result shows a sample), for the issue gate.</summary>
+    internal List<IssueGateMath.Finding>? Found { get; private set; }
 
     public ToolResult Execute(UIApplication app, ToolArgs args)
     {

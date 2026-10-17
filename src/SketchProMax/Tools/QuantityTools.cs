@@ -310,9 +310,14 @@ public sealed class BoqCheckTool : IRevitTool
     public string[] Required => [];
     public bool ModifiesModel => false;
 
+    /// <summary>Each flagged item and overlap of the last run, for the issue gate.</summary>
+    internal List<IssueGateMath.Finding>? Found { get; private set; }
+
     public ToolResult Execute(UIApplication app, ToolArgs args)
     {
         var doc = app.ActiveUIDocument.Document;
+        var found = new List<IssueGateMath.Finding>();
+        string Item(Measure.Item i) => (i.Ref.Length > 0 ? i.Ref + " " : "") + i.Description;
         var items = args.OptString("boq_file") is { } path ? Measure.ReadBoq(path) : args.Array("items").Select(Measure.FromJson).ToList();
         var tol = args.OptDouble("tolerance_percent") ?? 5;
         var method = args.OptString("method") ?? "net";
@@ -336,12 +341,14 @@ public sealed class BoqCheckTool : IRevitTool
                 var pct = item.Quantity is { } q2 && Math.Abs(q2) > 1e-9 ? diff!.Value / q2 * 100 : (double?)null;
                 flag = count == 0 ? "no matching elements" : item.Quantity is null ? "no BOQ quantity" : pct is { } p && Math.Abs(p) > tol ? (p > 0 ? "model more than BOQ" : "BOQ more than model") : "ok";
                 if (inPlace > 0) flag += $"; {inPlace} in-place element(s) measured as 0 ({InPlace.Short})";
+                if (flag != "ok") found.Add(new(Name, "boq_item", 0, Item(item), $"{flag}: BOQ {item.Quantity?.ToString(CultureInfo.InvariantCulture) ?? "-"} {unit}, model {Math.Round(model.Value, 3).ToString(CultureInfo.InvariantCulture)} {unit}"));
                 compared.Add(new { item.Ref, item.Description, unit, boq = item.Quantity, model = Math.Round(model.Value, 3), difference = diff is { } d ? Math.Round(d, 3) : (double?)null, percent = pct is { } pp ? Math.Round(pp, 1) : (double?)null, elements = count, flag });
                 sb.AppendLine(string.Join(",", Measure.Csv(item.Ref), Measure.Csv(item.Description), unit, item.Quantity?.ToString(CultureInfo.InvariantCulture), Math.Round(model.Value, 3).ToString(CultureInfo.InvariantCulture),
                     diff is { } d2 ? Math.Round(d2, 3).ToString(CultureInfo.InvariantCulture) : "", pct is { } p2 ? Math.Round(p2, 1).ToString(CultureInfo.InvariantCulture) : "", count, Measure.Csv(flag)));
             }
             catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or Autodesk.Revit.Exceptions.ApplicationException)
             {
+                found.Add(new(Name, "boq_item", 0, Item(item), ex.Message));
                 compared.Add(new { item.Ref, item.Description, unit, boq = item.Quantity, flag = ex.Message });
                 sb.AppendLine(string.Join(",", Measure.Csv(item.Ref), Measure.Csv(item.Description), unit, item.Quantity?.ToString(CultureInfo.InvariantCulture), "", "", "", 0, Measure.Csv(ex.Message)));
             }
@@ -400,6 +407,10 @@ public sealed class BoqCheckTool : IRevitTool
             foreach (var d in doubles) sb.AppendLine(string.Join(",", d.a, Measure.Csv(d.aType), d.b, Measure.Csv(d.bType), d.m3.ToString(CultureInfo.InvariantCulture)));
         }
         File.WriteAllText(file, sb.ToString(), new UTF8Encoding(true));
+        found.AddRange(doubles.Select(d => new IssueGateMath.Finding(Name, "double_counting", d.a, $"{d.aType} / {d.bType}",
+            $"overlaps element {d.b} by {d.m3.ToString(CultureInfo.InvariantCulture)} m3 without being joined, so the overlap is counted twice")));
+        if (pairsCapped) found.Add(new(Name, "double_counting", 0, "overlap search", "stopped at 200,000 pairs; the rest of the model was not checked for double counting"));
+        Found = found;
         return ToolResult.Ok(new
         {
             items = compared.Count, method, file, compared = compared.Take(150),
@@ -595,6 +606,9 @@ public sealed class SpecCheckTool : IRevitTool
     public string[] Required => [];
     public bool ModifiesModel => false;
 
+    /// <summary>Each requirement not met (or not checked) in the last run, on the view that shows it when there is one, for the issue gate.</summary>
+    internal List<IssueGateMath.Finding>? Found { get; private set; }
+
     public ToolResult Execute(UIApplication app, ToolArgs args)
     {
         var doc = app.ActiveUIDocument.Document;
@@ -617,14 +631,15 @@ public sealed class SpecCheckTool : IRevitTool
         var placed = new HashSet<long>(new FilteredElementCollector(doc).OfClass(typeof(ViewSheet)).Cast<ViewSheet>().SelectMany(s => s.GetAllPlacedViews().Append(s.Id)).Select(id => id.Value));
         var notes = new FilteredElementCollector(doc).OfClass(typeof(TextNote)).Cast<TextNote>()
             .Where(t => placed.Contains(t.OwnerViewId.Value) || doc.GetElement(t.OwnerViewId) is ViewDrafting)
-            .Select(t => (text: Regex.Replace(t.Text, @"\s+", " "), view: (doc.GetElement(t.OwnerViewId) as View)?.Name ?? "")).ToList();
+            .Select(t => (text: Regex.Replace(t.Text, @"\s+", " "), view: (doc.GetElement(t.OwnerViewId) as View)?.Name ?? "", viewId: t.OwnerViewId.Value)).ToList();
+        long hitView = 0;
         (bool found, string where) Find(string s)
         {
             var hit = notes.FirstOrDefault(n => n.text.IndexOf(s, StringComparison.OrdinalIgnoreCase) >= 0);
             return (hit.text != null, hit.text != null ? $"'{(hit.text.Length > 80 ? hit.text.Substring(0, 80) + "..." : hit.text)}' in {hit.view}" : "");
         }
 
-        var results = new List<(string id, string source, string text, string status, string evidence)>();
+        var results = new List<(string id, string source, string text, string status, string evidence, long view)>();
         var n = 0;
         foreach (var r in list.EnumerateArray())
         {
@@ -632,6 +647,7 @@ public sealed class SpecCheckTool : IRevitTool
             string S(string k) => r.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? "" : "";
             var id = S("id").Length > 0 ? S("id") : $"R{n}";
             var evidence = new List<string>(); var failed = false; var checkedAny = false; var continue_ = false;
+            hitView = 0;
             if (r.TryGetProperty("expect_text", out var et))
                 foreach (var s in et.EnumerateArray().Select(x => x.GetString() ?? "").Where(x => x.Length > 0))
                 {
@@ -645,7 +661,7 @@ public sealed class SpecCheckTool : IRevitTool
                 {
                     checkedAny = true;
                     var (found, where) = Find(s);
-                    if (found) failed = true;
+                    if (found) { failed = true; hitView = notes.First(x => x.text.IndexOf(s, StringComparison.OrdinalIgnoreCase) >= 0).viewId; }
                     evidence.Add(found ? $"still shows '{s}': {where}" : $"no '{s}'");
                 }
             if (r.TryGetProperty("rule", out var rule) && rule.ValueKind == JsonValueKind.Object)
@@ -666,7 +682,7 @@ public sealed class SpecCheckTool : IRevitTool
                     if (!continue_) evidence.Add(fails is { } f ? $"model: {f} element(s) fail" : $"model: {(text.Length > 200 ? text.Substring(0, 200) : text)}");
                 }
             }
-            results.Add((id, S("source"), S("text"), !checkedAny ? "not checked (no rule or text given)" : failed ? "NOT MET" : "met", string.Join("; ", evidence)));
+            results.Add((id, S("source"), S("text"), !checkedAny ? "not checked (no rule or text given)" : failed ? "NOT MET" : "met", string.Join("; ", evidence), hitView));
         }
 
         var folder = Checks.Folder(args);
@@ -675,6 +691,8 @@ public sealed class SpecCheckTool : IRevitTool
         var sb = new StringBuilder("Id,Source,Requirement,Status,Evidence\n");
         foreach (var x in results) sb.AppendLine(string.Join(",", Checks.Csv(x.id), Checks.Csv(x.source), Checks.Csv(x.text), Checks.Csv(x.status), Checks.Csv(x.evidence)));
         File.WriteAllText(file, sb.ToString(), new UTF8Encoding(true));
+        Found = results.Where(x => x.status != "met").Select(x => new IssueGateMath.Finding(Name, x.status == "NOT MET" ? "requirement" : "not_checked", x.view,
+            $"{x.id} {x.source}".Trim(), $"{x.text}: {(x.evidence.Length > 0 ? x.evidence : x.status)}")).ToList();
         return ToolResult.Ok(new
         {
             requirements = results.Count, met = results.Count(x => x.status == "met"), notMet = results.Count(x => x.status == "NOT MET"), notChecked = results.Count(x => x.status.StartsWith("not checked", StringComparison.Ordinal)),

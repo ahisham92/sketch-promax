@@ -174,6 +174,7 @@ public sealed class ToolRegistry
         new SleeveScheduleTool(),
         new GeneralNotesTool(),
         new TypicalDetailsTool(),
+        new IssueCheckTool(),
         new IssueDrawingsTool(),
         new LinkModelTool(),
         new CheckModelTool(),

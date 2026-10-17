@@ -383,6 +383,9 @@ public sealed class CheckDrawingsTool : IRevitTool
     public string[] Required => [];
     public bool ModifiesModel => false;
 
+    /// <summary>Every finding of the last run (the list in the result is cut short), for the issue gate.</summary>
+    internal List<IssueGateMath.Finding>? Found { get; private set; }
+
     public ToolResult Execute(UIApplication app, ToolArgs args)
     {
         var doc = app.ActiveUIDocument.Document;
@@ -514,6 +517,7 @@ public sealed class CheckDrawingsTool : IRevitTool
         var file = Path.Combine(folder, $"{doc.Title} - Drawing check {DateTime.Now:yyyy-MM-dd HHmm}.csv");
         string Csv(string s) => s.IndexOfAny([',', '"', '\n']) >= 0 ? "\"" + s.Replace("\"", "\"\"") + "\"" : s;
         File.WriteAllText(file, "Check,Where,Element id,Issue\n" + string.Join("\n", findings.Select(f => $"{f.check},{Csv(f.where)},{f.id},{Csv(f.issue)}")), new UTF8Encoding(true));
+        Found = findings.Select(f => new IssueGateMath.Finding(Name, f.check, f.id ?? 0, f.where, f.issue)).ToList();
         return ToolResult.Ok(new
         {
             findings = findings.Count, file,

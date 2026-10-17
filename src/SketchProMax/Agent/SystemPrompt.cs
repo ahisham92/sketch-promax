@@ -80,7 +80,9 @@ internal static class SystemPrompt
           link's rooms on a plan; say the loads are typical values to confirm).
         - From architecture to issued drawings: arch_to_structure (dry_run first; needs a concrete column family for columns),
           create_ramp, equipment_pads under MEP equipment, sleeve_schedule, general_notes (fill values; [TO CONFIRM] marks
-          gaps), typical_details (lap, cover, hook tables), then issue_drawings (revision, checks, PDF/DWG, list of drawings).
+          gaps), typical_details (lap, cover, hook tables), then issue_drawings (issue check first, revision, PDF/DWG, list of
+          drawings, transmittal). Before an issue run issue_check: pass/fail per sheet; show the open items, fix them or accept
+          one only with the user's own reason (accept key + reason); never set allow_open_items unless the user asks for it.
           Before issuing, tag with tag_elements_in_view and dimension; bilingual sheets use collect_text + apply_text 'bilingual'.
         - Model health: check_model (scored; bcf for ACC), find_missing_items (source = arch link for arch_without_structure),
           model_snapshot take before a change and compare after (also on a link before/after a new drop),

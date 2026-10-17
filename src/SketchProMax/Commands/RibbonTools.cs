@@ -86,6 +86,8 @@ internal static class RibbonTools
         if (tool is LearnedTool learned && !LearnedTools.IsApproved(learned.Code)
             && !BridgeServer.Approve(tool, args, "You started it from the ribbon."))
             return Result.Cancelled;
+        // Issuing or exporting sheets runs the issue check first; open items stop it until fixed or accepted.
+        if (IssueGateWindow.Gated(tool.Name) && !IssueGateWindow.Before(app, tool.Name, args)) return Result.Cancelled;
 
         ToolResult result;
         using (PackProgress.Show(title, $"{title} on '{doc.Title}'"))

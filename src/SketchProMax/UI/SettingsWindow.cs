@@ -12,6 +12,10 @@ public sealed class SettingsWindow : Window
     private readonly AgentSettings _settings = AgentSettings.Load();
     private readonly CheckBox _approval = new() { Content = "Ask me in Revit before Claude changes the model" };
     private readonly CheckBox _autoUpdate = new() { Content = "Update Sketch ProMax automatically", Margin = new Thickness(0, 6, 0, 0) };
+    private readonly CheckBox _openItems = new()
+    {
+        Content = "Allow issue with open items (each such issue says so, with the reason, in its issue record)", Margin = new Thickness(0, 6, 0, 0),
+    };
     private readonly TextBox _standards = new()
     {
         AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, Height = 220, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
@@ -35,6 +39,7 @@ public sealed class SettingsWindow : Window
 
         _approval.IsChecked = _settings.RequireApprovalForChanges;
         _autoUpdate.IsChecked = _settings.AutoUpdate;
+        _openItems.IsChecked = _settings.AllowIssueWithOpenItems;
         _standards.Text = _settings.FirmStandards;
         _legendSeed.Text = _settings.LegendSeedPath ?? "";
         _timeOn.IsChecked = _settings.TimeTracking;
@@ -51,6 +56,8 @@ public sealed class SettingsWindow : Window
         var stack = new StackPanel { Margin = new Thickness(18, 14, 18, 14) };
         stack.Children.Add(_approval);
         stack.Children.Add(_autoUpdate);
+        AutomationProperties.SetHelpText(_openItems, "Off: an issue waits until every item of the issue check is fixed or accepted with a reason.");
+        stack.Children.Add(_openItems);
         var standardsLabel = Brand.Text(
             "Firm standards (plain English). Claude follows these in every conversation, e.g. " +
             "'Sheet numbers are A-xxx. View names: LEVEL - PURPOSE. Door tags use the Mark parameter.'");
@@ -148,6 +155,7 @@ public sealed class SettingsWindow : Window
     {
         _settings.RequireApprovalForChanges = _approval.IsChecked == true;
         _settings.AutoUpdate = _autoUpdate.IsChecked == true;
+        _settings.AllowIssueWithOpenItems = _openItems.IsChecked == true;
         _settings.FirmStandards = _standards.Text;
         _settings.LegendSeedPath = _legendSeed.Text.Trim().Trim('"');
         if (!double.TryParse(_idle.Text.Trim(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.CurrentCulture, out var idle) || idle < 1 || idle > 60)

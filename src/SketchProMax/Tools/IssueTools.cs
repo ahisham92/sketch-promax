@@ -236,10 +236,12 @@ public sealed class IssueDrawingsTool : IRevitTool
 {
     public string Name => "issue_drawings";
     public string Description =>
-        "Issue a set of drawings end to end: pick the sheets, add a new (or existing) revision to them and mark it issued, " +
-        "set the sheet issue date, run the drawing checks on them, export a PDF per sheet (and DWG if asked) named by your " +
-        "pattern, then write the list of drawings and check every expected file exists with the right name. Stops before " +
-        "exporting when checks fail and stop_on_findings is set.";
+        "Issue a set of drawings end to end: first the issue check (issue_check: check_drawings, spec_check, boq_check and " +
+        "check_model, pass/fail per sheet), and nothing is issued while it has open items, unless the user turned on " +
+        "'Allow issue with open items' in Settings and asks for it with a reason (recorded). Then pick the sheets, add a " +
+        "new (or existing) revision and mark it issued, set the sheet issue date, export a PDF per sheet (and DWG if asked) " +
+        "named by your pattern, write the list of drawings and check every expected file, and write the transmittal (Excel: " +
+        "drawings, the issue record and the pass/fail report).";
     public string PropertiesJson => """
     {
       "sheet_numbers": {"type": "array", "items": {"type": "string"}, "description": "Default: every sheet."},
@@ -253,7 +255,10 @@ public sealed class IssueDrawingsTool : IRevitTool
       "coordinates": {"type": "string", "enum": ["internal", "shared"], "description": "DWG coordinates."},
       "units": {"type": "string", "enum": ["mm", "m"], "description": "DWG units."},
       "folder": {"type": "string", "description": "Issue folder (default Documents\\SketchProMax\\Issue <date>)."},
-      "stop_on_findings": {"type": "boolean", "description": "Don't export when the sheet checks find problems (default false)."}
+      "spec_checklist": {"type": "string", "description": "For the issue check: spec_check's saved checklist (remembered per model)."},
+      "boq_file": {"type": "string", "description": "For the issue check: the BOQ to compare (remembered per model)."},
+      "allow_open_items": {"type": "boolean", "description": "Issue even though the issue check has open items. Only when the user asks and 'Allow issue with open items' is on in Settings (off by default); recorded in the issue record."},
+      "open_items_reason": {"type": "string", "description": "With allow_open_items: the user's reason, recorded."}
     }
     """;
     public string[] Required => [];
@@ -263,10 +268,7 @@ public sealed class IssueDrawingsTool : IRevitTool
     {
         var doc = app.ActiveUIDocument.Document;
         var numbers = args.StringList("sheet_numbers");
-        var prefix = args.OptString("number_starts_with");
-        var sheets = new FilteredElementCollector(doc).OfClass(typeof(ViewSheet)).Cast<ViewSheet>().Where(s => !s.IsPlaceholder)
-            .Where(s => (numbers.Count == 0 || numbers.Contains(s.SheetNumber)) && (prefix is null || s.SheetNumber.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)))
-            .OrderBy(s => s.SheetNumber).ToList();
+        var sheets = IssueGate.Sheets(doc, numbers, args.OptString("number_starts_with"));
         if (sheets.Count == 0) return ToolResult.Error("No sheets match.");
         var missing = numbers.Where(n => sheets.All(s => s.SheetNumber != n)).ToList();
         var date = args.OptString("date") ?? DateTime.Now.ToString("yyyy-MM-dd");
@@ -276,32 +278,24 @@ public sealed class IssueDrawingsTool : IRevitTool
         string Short(ToolResult r) => (r.IsError ? "ERROR: " : "") + (r.Text.Length > 600 ? r.Text.Substring(0, 600) + "..." : r.Text);
         var sheetNumbers = sheets.Select(s => s.SheetNumber).ToArray();
 
-        // 1. Checks first, so stopping leaves the model untouched. Sheet checks and dimension checks run separately
-        // so one doesn't crowd the other out of the list; dimensions count only in views placed on these sheets.
-        var placed = new HashSet<string>(sheets.SelectMany(s => s.GetAllPlacedViews()).Select(id => doc.GetElement(id)?.Name ?? ""));
-        var relevant = 0;
-        foreach (var (checks, onSheet) in new (string[], Func<string, bool>)[]
-                 {
-                     (["sheet_fields", "empty_sheets"], w => sheetNumbers.Any(n => w.StartsWith(n + " ", StringComparison.Ordinal))),
-                     (["dimension_overrides"], w => placed.Contains(w)),
-                 })
+        // 1. The issue check first, so a block leaves the model untouched. A run the ribbon window just cleared for these
+        // sheets is used as it is (with its override reason, if the user let open items through there).
+        string? overrideReason = null;
+        var cleared = IssueGate.TakeCleared(doc, sheetNumbers);
+        var gate = cleared?.Run ?? IssueGate.Check(app, sheets, args.OptString("spec_checklist"), args.OptString("boq_file"), System.IO.Path.Combine(folder, "Issue check"));
+        if (gate.Blocked)
         {
-            var check = Drafting.Call(app, new CheckDrawingsTool(), new { checks, folder });
-            var count = 0;
-            if (!check.IsError)
-            {
-                using var parsed = JsonDocument.Parse(check.Text);
-                if (parsed.RootElement.TryGetProperty("list", out var found))
-                    count = found.EnumerateArray().Count(f => onSheet(f.GetProperty("where").GetString() ?? ""));
-            }
-            relevant += count;
-            steps.Add(new { step = $"checks: {string.Join(", ", checks)}", findingsOnTheseSheets = count, result = Short(check) });
+            var asked = cleared?.OverrideReason is not null || args.OptBool("allow_open_items");
+            var (allowed, used, why) = IssueGateMath.CanIssue(gate.Groups, IssueGate.OverrideAllowed, asked, cleared?.OverrideReason ?? args.OptString("open_items_reason"));
+            if (!allowed)
+                return ToolResult.Ok(new { stopped = $"Not issued: {why} Nothing in the model was changed.", sheets = sheets.Count, issueCheck = IssueGate.Chat(gate) });
+            if (used) overrideReason = cleared?.OverrideReason ?? args.OptString("open_items_reason");
         }
-        if (relevant > 0 && args.OptBool("stop_on_findings"))
-            return ToolResult.Ok(new { stopped = "Checks found problems; nothing was issued or exported. Fix them or run without stop_on_findings.", sheets = sheets.Count, steps });
+        steps.Add(new { step = "issue check", result = IssueGateMath.Verdict(gate.Groups), overrideUsed = overrideReason is not null, report = gate.Report });
 
         // 2. Revision on the sheets, and the issue date.
         string? revision = args.OptString("revision");
+        var revisionText = "";
         using (var t = RevitHelpers.StartTransaction(doc, "Issue: revision and dates"))
         {
             Revision? rev = null;
@@ -321,6 +315,7 @@ public sealed class IssueDrawingsTool : IRevitTool
                 if (args.OptString("issued_by") is { } by) rev.IssuedBy = by;
                 if (args.OptString("issued_to") is { } to) rev.IssuedTo = to;
             }
+            if (rev is not null) revisionText = $"{rev.RevisionNumber} {rev.Description}".Trim();
             foreach (var s in sheets)
                 if (s.get_Parameter(BuiltInParameter.SHEET_ISSUE_DATE) is { IsReadOnly: false } p) p.Set(date);
             if (t.Commit() != TransactionStatus.Committed) return ToolResult.Error("Revit refused the revision and issue dates.");
@@ -355,8 +350,34 @@ public sealed class IssueDrawingsTool : IRevitTool
             fields = new[] { "Sheet Issue Date", "Current Revision", "Current Revision Description" },
         });
         steps.Add(new { step = "list of drawings", result = Short(list) });
+
+        // 5. The issue record and the transmittal (drawings, the record and the pass/fail report), kept with the model too.
+        var record = new IssueGateMath.IssueRecord
+        {
+            Date = date, Model = doc.Title, Revision = revisionText, Sheets = sheets.Count, Gate = IssueGateMath.Verdict(gate.Groups),
+            OpenItems = gate.Groups.Sum(g => g.Open), AcceptedItems = gate.Groups.Sum(g => g.AcceptedCount),
+            OverrideUsed = overrideReason is not null, OverrideReason = overrideReason ?? "", IssuedBy = Environment.UserName, Folder = folder,
+        };
+        string? transmittal = null;
+        try
+        {
+            var files = System.IO.Directory.Exists(folder) ? System.IO.Directory.GetFiles(folder).Select(System.IO.Path.GetFileName).ToList() : [];
+            var drawings = sheets.Select(s => (s.SheetNumber, s.Name,
+                s.get_Parameter(BuiltInParameter.SHEET_CURRENT_REVISION)?.AsString() ?? "",
+                string.Join(", ", files.Where(f => f!.IndexOf(s.SheetNumber, StringComparison.OrdinalIgnoreCase) >= 0 && extensions.Any(e => f.EndsWith("." + e, StringComparison.OrdinalIgnoreCase))))));
+            transmittal = System.IO.Path.Combine(folder, $"Transmittal {date}{(revisionText.Length > 0 ? " rev " + string.Concat(revisionText.Split(System.IO.Path.GetInvalidFileNameChars())) : "")}.xlsx");
+            Xlsx.Write(transmittal, IssueGateMath.TransmittalSheets(record, drawings, gate.Groups, gate.Checks));
+        }
+        catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException)
+        {
+            steps.Add(new { step = "transmittal", result = "ERROR: not written: " + ex.Message });
+            transmittal = null;
+        }
+        IssueGate.Record(doc, record);
+        steps.Add(new { step = "transmittal", result = transmittal ?? "not written", issueRecord = record });
+
         if (failed.Count > 0)
             return ToolResult.Error($"The {string.Join(" and ", failed)} export failed, so the issue is incomplete (the revision is already on the sheets). Steps: {JsonSerializer.Serialize(steps)}");
-        return ToolResult.Ok(new { sheets = sheets.Count, folder, missingSheetNumbers = missing, steps });
+        return ToolResult.Ok(new { sheets = sheets.Count, folder, transmittal, issuedWithOpenItems = overrideReason is not null ? record.OpenItems : (int?)null, missingSheetNumbers = missing, steps });
     }
 }

@@ -33,6 +33,12 @@ public sealed class AgentSettings
     /// <summary>By-hand rates the user set (minutes per run and per item); tools not listed use the built-in estimates.</summary>
     public List<Tools.TimeRate>? TimeRates { get; set; }
 
+    /// <summary>
+    /// Let an issue go ahead while the issue check still has open items (each issue that does says so, with the reason,
+    /// in its issue record). Off: every item must be fixed or accepted first.
+    /// </summary>
+    public bool AllowIssueWithOpenItems { get; set; }
+
     public static string FilePath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "SketchProMax", "settings.json");
 

@@ -129,6 +129,9 @@ internal static partial class SelfTest
         /// <summary>The bug tools write to a "Bugs" folder in the test's temporary folder instead of the user's Documents.</summary>
         public bool TempBugFolder { get; init; }
 
+        /// <summary>The issue check may let open items through (as "Allow issue with open items" in Settings would).</summary>
+        public bool GateOverride { get; init; }
+
         /// <summary>The case checks a refusal: it passes when the tool returns an error containing this text.</summary>
         public string? ExpectError { get; init; }
 
@@ -363,7 +366,12 @@ internal static partial class SelfTest
                 ? a.EnumerateObject().ToDictionary(p => p.Name, p => p.Value.Clone())
                 : new Dictionary<string, JsonElement>();
         }
-        return Revit.FailureGuard.Run(() => tool.Execute(app, new ToolArgs(args)));
+        // The issue gate keeps its per-model file (acceptances, issue history) in the test's folder, not the user's.
+        var gateFolder = IssueGate.FolderOverride;
+        IssueGate.TestOverride = c.GateOverride;
+        IssueGate.FolderOverride ??= Path.Combine(ctx.Temp, "issue-gate");
+        try { return Revit.FailureGuard.Run(() => tool.Execute(app, new ToolArgs(args))); }
+        finally { IssueGate.TestOverride = false; IssueGate.FolderOverride = gateFolder; }
     }
 
     private static IEnumerable<Case> AllCases() => ReadOnlyCases().Concat(FileCases()).Concat(ChangeCases()).Concat(RegressionCases()).Concat(RealModelCases());
@@ -660,7 +668,13 @@ internal static partial class SelfTest
         }),
         new("general_notes", _ => new { values = new { codes = "Self-test code" } }),
         new("typical_details", _ => new { kinds = new[] { "lap_schedule", "cover_schedule" } }),
-        new("issue_drawings", c => new { sheet_numbers = new[] { "ST-999" }, revision_description = "Self-test issue", folder = Path.Combine(c.Temp, "issue") }, Setup: ["create_sheets"]) { Heavy = true },
+        new("issue_check", c => new { folder = Path.Combine(c.Temp, "issue check") }) { Heavy = true, Expect = r => r.TryGetProperty("gate", out var g) && g.TryGetProperty("verdict", out _) ? null : "no pass/fail verdict" },
+        // The throwaway sheet has empty title block fields, so the issue check blocks it: let it through (as the setting would) to run the exports.
+        new("issue_drawings", c => new { sheet_numbers = new[] { "ST-999" }, revision_description = "Self-test issue", folder = Path.Combine(c.Temp, "issue"), allow_open_items = true, open_items_reason = "Self-test" }, Setup: ["create_sheets"])
+        {
+            Heavy = true, GateOverride = true,
+            Expect = r => r.TryGetProperty("transmittal", out var t) && t.ValueKind == JsonValueKind.String ? null : "no transmittal written: " + r.ToString().Substring(0, Math.Min(300, r.ToString().Length)),
+        },
         new("check_model", c => new { folder = c.Temp }) { Heavy = true },
         new("find_missing_items", c => new { checks = new[] { "rooms_without_door", "columns_without_footing", "untagged_structure", "sheets_without_views" }, folder = c.Temp }),
         new("model_snapshot", c => new { action = "take", name = "self-test" }) { Heavy = true },

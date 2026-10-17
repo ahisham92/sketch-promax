@@ -70,7 +70,7 @@ internal static class TimeMath
         ["check_code_rules"] = (60, 0), ["spec_check"] = (60, 0), ["boq_check"] = (60, 0), ["cost_estimate"] = (90, 0),
         ["embodied_carbon"] = (120, 0), ["carbon_compare"] = (60, 0), ["ve_opportunities"] = (120, 0), ["ve_compare_options"] = (240, 0),
         ["export_bar_schedule"] = (60, 0), ["export_steel_takeoff"] = (45, 0), ["export_project_pack"] = (60, 0),
-        ["find_missing_items"] = (30, 0), ["coordination_progress"] = (30, 0), ["check_schedule"] = (15, 0),
+        ["find_missing_items"] = (30, 0), ["issue_check"] = (120, 0), ["coordination_progress"] = (30, 0), ["check_schedule"] = (15, 0),
         [OtherChanges] = (1, 0.5),
         [OtherReads] = (0, 0),
     };

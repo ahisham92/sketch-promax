@@ -127,7 +127,13 @@ internal static class CoreRibbonManifest
         T("ValueEng", "ve_apply", "Apply to a copy", "bolt", "Applies chosen VE changes to a saved copy or a design option, with before and after cost and carbon."),
         T("ValueEng", "ve_register", "VE register", "list", "Exports the VE register and sets each item's status (proposed, accepted, rejected) and owner."),
 
-        // ---- Issue
+        // ---- Issue (0.33: the issue check gates Issue drawings and Export PDF of sheets, see UI/IssueGateWindow)
+        L(Button("Issue", "IssueCheck", "Issue\ncheck", "issue-check", "check",
+            "The zero-mistake check before an issue: drawing, spec, BOQ and model checks together, pass or fail per sheet.",
+            "Runs check_drawings, spec_check, boq_check and check_model on the issue set and lists each finding under its sheet " +
+            "(model-wide ones under Model). Fix an item (it takes you there) or accept it with a reason; Issue stays off until " +
+            "nothing is open. Reads the model only.", needsModel: true)),
+        B("Issue", "issue_drawings", "Issue\ndrawings", "pdf", "Issues sheets end to end after the issue check: revision, PDF/DWG, list of drawings and the transmittal."),
         B("Issue", "export_pdf", "Export\nPDF", "pdf", "Prints sheets or views to PDF, as one combined file by default."),
         B("Issue", "export_drawing_list", "List of\ndrawings", "list", "Writes the list of drawings (sheet numbers, names, current revisions) to a CSV that opens in Excel."),
         B("Issue", "export_quantities", "Quantities\n/ BOQ", "boq", "Writes quantities per category and type (count, length, area, volume) to a CSV that opens in Excel."),

@@ -35,7 +35,8 @@ internal static class FieldTestCoverage
 
     public const string Chat = "Chat", RibbonArea = "Ribbon and favourites", Carbon = "Embodied carbon", Ve = "Value engineering",
         Rebar2D = "2D rebar", Bugs = "Report bug and exports", Updates = "Updates and the Claude app", Model = "Real-model checks",
-        Limits = "Revit limits", BugFixes = "Bug fixes", Tasks = "Hand-off and Cancel", Job = "Live job card", Time = "Time saved";
+        Limits = "Revit limits", BugFixes = "Bug fixes", Tasks = "Hand-off and Cancel", Job = "Live job card", Time = "Time saved",
+        Issue = "Issue check";
 
     public static readonly Feature[] Features =
     [
@@ -100,6 +101,12 @@ internal static class FieldTestCoverage
         new("time.ui", Time, "Time saved window and rates", How.Manual, "", "the window, the rates and a colleague's real ownership need a person (and a second user)",
             "Run a tool from the ribbon (e.g. Tag elements) and read the \"Done in…, By hand: about…, Saved:…\" line. Click Time saved: check the cards, the per tool, per day and per user tables, and Export to Excel. In Settings change one time rate, save and reopen it. In a workshared copy where you don't own Project Information, run a tool: nothing is borrowed (no new borrowed elements), and the Time saved window shows the full totals and says the Project Information parameters catch up once you own it."),
 
+        // ---- Issue check (the zero-mistake gate)
+        new("issue.gate", Issue, "Issue check blocks, then clears after fix or accept", How.Probe, "", "on the test project, a sheet seeded with known faults (no views, empty title block fields) and a section on no sheet: the gate lists them under the sheet and Model and blocks, and issue_drawings refuses without changing the model; filling the fields and placing a view clears the sheet on re-check, accepting the rest with a reason clears the gate, the acceptance is kept for the model, and a finding whose text changes comes back open"),
+        new("issue.report", Issue, "Transmittal with the issue record and pass/fail report", How.Case, "issue_drawings", "issue_drawings with open items let through writes the transmittal workbook (drawings, the issue record saying it was overridden, the pass/fail report)"),
+        new("issue.ui", Issue, "The issue check window", How.Manual, "", "the window, Fix taking you to the element and the ribbon flow are what a person sees and does",
+            "On a _detached copy: Issue > Issue check. The list shows each sheet PASS or FAIL with its items, and Model. Press Fix on an item: the window closes and the element is selected and shown; fix it and click Issue check again: it is gone. Tick two items, type a reason, Accept: they show as accepted and Issue stays off while anything is open. Accept the rest: Issue turns on; press it and the Issue drawings options open. Run Issue drawings from the ribbon on a sheet with an open item: the window opens first. Run Export PDF on that sheet: the same. In Settings tick \"Allow issue with open items\": the window offers it in red, needs a reason, and the transmittal's Issue record says YES with the reason. Ask Claude in the chat to check the issue: it lists pass/fail per sheet and accepts only with your reason."),
+
         // ---- Carbon, VE, 2D rebar
         new("carbon.mix", Carbon, "Carbon with and without the mix in the material name", How.Case, "embodied_carbon", "a slab whose material names the mix and one whose doesn't (assumed CEM I) are both assessed"),
         new("carbon.real", Carbon, "Carbon on a real model", How.Manual, "", "the factors and mapping need an engineer's eye on a real project",
@@ -153,7 +160,7 @@ internal static class FieldTestCoverage
         ["open-claude"] = "claude.open", ["pane"] = "ribbon.status", ["export-pack"] = "pack.export", ["job-button"] = "ribbon.job",
         ["update-button"] = "ribbon.job", ["report-bug"] = "bugs.ui", ["bug-folder"] = "bugs.ui", ["export-chats-bugs"] = "bugs.export",
         ["settings"] = "ribbon.ui", ["help"] = "help", ["self-test"] = "diagnostics", ["field-test"] = "diagnostics",
-        ["test-checklist"] = "diagnostics", ["time-saved"] = "time.ui", ["favourites"] = "favourites", ["fav:*"] = "favourites", ["tab:notes"] = "chat.notes",
+        ["test-checklist"] = "diagnostics", ["time-saved"] = "time.ui", ["issue-check"] = "issue.ui", ["favourites"] = "favourites", ["fav:*"] = "favourites", ["tab:notes"] = "chat.notes",
     };
 
     /// <summary>The coverage key of a manifest line, or null when it runs nothing (drop-downs, hidden items, tool entries).</summary>
@@ -222,7 +229,7 @@ internal static class FieldTestCoverage
     {
         var items = Features.Where(f => f.How == How.Manual).Select(f => new CheckItem(f.Key, f.Area, f.Title, f.Steps, f.Reason)).ToList();
         items.AddRange(ManualTools.OrderBy(t => t.Key).Select(t => new CheckItem("tool:" + t.Key, Limits, t.Key, t.Value.Steps, t.Value.Reason)));
-        string[] order = [Chat, RibbonArea, Tasks, Job, Time, Carbon, Ve, Rebar2D, Bugs, Updates, Model, Limits];
+        string[] order = [Chat, RibbonArea, Tasks, Job, Time, Issue, Carbon, Ve, Rebar2D, Bugs, Updates, Model, Limits];
         items = items.OrderBy(i => Array.IndexOf(order, i.Area) is var x && x < 0 ? order.Length : x).ToList();
         items.AddRange(fixedBugs.Select(b => new CheckItem("bug:" + b.Number, BugFixes, $"#{b.Number}: {b.What}",
             "Do what the row describes on a _detached copy and check it no longer happens.", b.Status)));

@@ -158,7 +158,7 @@ internal static partial class FieldTest
         ["clashes"] = ["find_clashes", "create_mep_openings", "sleeve_schedule", "place_void_cuts", "verify_void_cut", "cut_openings_in_joined", "export_bcf", "coordination_progress"],
         ["arch_to_structure"] = ["arch_to_structure", "create_ramp", "equipment_pads", "create_floors_from_faces", "copy_monitor", "link_model"],
         ["marine"] = ["create_piles", "marine_structure", "port_furniture", "design_vessel", "vessel_collision_check", "progressive_collapse_check", "create_toposolid", "create_raft"],
-        ["checkers"] = ["check_drawings", "check_code_rules", "check_model", "find_missing_items", "run_model_audit", "model_snapshot", "check_schedule", "spec_check"],
+        ["checkers"] = ["check_drawings", "check_code_rules", "check_model", "find_missing_items", "run_model_audit", "model_snapshot", "check_schedule", "spec_check", "issue_check"],
         ["boq"] = ["boq_check", "boq_item_breakdown", "cost_estimate", "export_quantities", "work_progress", "construction_sequence", "embodied_carbon", "carbon_compare", "carbon_view"],
         ["ve"] = ["ve_opportunities", "ve_compare_options", "ve_register", "ve_view", "ve_apply"],
         ["analytical"] = ["analytical_check", "export_analytical", "loading_plan"],

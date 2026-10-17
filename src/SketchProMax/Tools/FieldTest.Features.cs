@@ -244,6 +244,7 @@ internal static partial class FieldTest
         await Probe(s, "time.tracking", app => TimeTracking(app, s)).ConfigureAwait(false);
         await Probe(s, "time.export", app => TimeExport(app, s)).ConfigureAwait(false);
         await Probe(s, "time.queue", app => TimeQueue(app, s)).ConfigureAwait(false);
+        await Probe(s, "issue.gate", app => IssueGateProbe(app, s)).ConfigureAwait(false);
         // Off Revit's thread: processes, files and the network.
         await Probe(s, "chat.cli", () => { cli = new ClaudeCliInstall(Chat.ClaudeCli.Find()); return cli.Row(); }).ConfigureAwait(false);
         await Probe(s, "chat.signin", () => SignIn(cli)).ConfigureAwait(false);
@@ -1197,6 +1198,99 @@ internal static partial class FieldTest
             catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException) { }
         }
         return false;
+    }
+
+    // ---- The issue check (in the test project, rolled back) ---------------------------------------------------------------
+
+    /// <summary>
+    /// The zero-mistake gate end to end on known faults: a new sheet with no views and placeholder title block fields.
+    /// The gate must block and list them under that sheet, and issue_drawings must refuse without changing the model;
+    /// an accepted item must come back when its finding changes; filling the fields and placing a view must clear the
+    /// sheet on re-check; accepting the rest with a reason must clear the gate, and stay accepted on the next check.
+    /// The gate's per-model file goes to the test folder.
+    /// </summary>
+    private static (string, string) IssueGateProbe(UIApplication app, State s)
+    {
+        if (TestDoc(app, s, out var why) is not { } doc) return Fail(why);
+        var gateFolder = Path.Combine(s.Folder, "issue-gate");
+        var reports = Path.Combine(s.Folder, "issue-check");
+        if (Directory.Exists(gateFolder)) foreach (var f in Directory.GetFiles(gateFolder)) File.Delete(f);
+        IssueGate.FolderOverride = gateFolder;
+        using var group = new TransactionGroup(doc, "Field test: issue check");
+        group.Start();
+        var problems = new List<string>();
+        try
+        {
+            const string number = "FT-ISSUE";
+            ViewSheet sheet;
+            using (var t = new Transaction(doc, "Field test: a sheet with known faults"))
+            {
+                t.Start();
+                sheet = ViewSheet.Create(doc, ElementId.InvalidElementId);
+                sheet.SheetNumber = number;
+                sheet.Name = "Issue check probe";
+                t.Commit();
+            }
+            IssueGateMath.GroupResult Mine(IssueGate.Run r) => r.Groups.First(g => g.Group == number);
+            bool Has(IssueGate.Run r, string check, IssueGateMath.Status status) => Mine(r).Items.Any(i => i.Finding.Check == check && i.Status == status);
+
+            // 1. Blocked, with the seeded faults on the sheet.
+            var run = IssueGate.Check(app, [sheet], null, null, reports);
+            if (!run.Blocked) problems.Add("the gate did not block a sheet with no views and empty title block fields");
+            if (!Has(run, "empty_sheets", IssueGateMath.Status.Open) || !Has(run, "sheet_fields", IssueGateMath.Status.Open))
+                problems.Add($"the sheet's group lists {string.Join(", ", Mine(run).Items.Select(i => i.Finding.Check))}, not empty_sheets and sheet_fields");
+            if (run.Report is null || !File.Exists(run.Report)) problems.Add("no Excel report");
+
+            // 2. issue_drawings refuses and changes nothing.
+            var revisions = new FilteredElementCollector(doc).OfClass(typeof(Revision)).GetElementCount();
+            var refused = Call(app, s.Registry, "issue_drawings", new { sheet_numbers = new[] { number }, revision_description = "Field test issue", folder = Path.Combine(s.Folder, "issue") });
+            if (refused.IsError || !refused.Text.Contains("\"stopped\"")) problems.Add("issue_drawings was not stopped: " + Short(refused.Text, 200));
+            if (new FilteredElementCollector(doc).OfClass(typeof(Revision)).GetElementCount() != revisions) problems.Add("issue_drawings made a revision while blocked");
+
+            // 3. Accept the title block item, then change the finding (one field filled): it must come back open.
+            IssueGate.Accept(doc, run, Mine(run).Items.Where(i => i.Finding.Check == "sheet_fields"), "Field test: filled at issue");
+            if (!Has(run, "sheet_fields", IssueGateMath.Status.Accepted)) problems.Add("the accepted item did not show as accepted");
+            void Set(Action<ViewSheet> edit)
+            {
+                using var t = new Transaction(doc, "Field test: fix the sheet");
+                t.Start();
+                edit(sheet);
+                t.Commit();
+            }
+            Set(x => x.get_Parameter(BuiltInParameter.SHEET_DRAWN_BY)?.Set("FT"));
+            run = IssueGate.Check(app, [sheet], null, null, reports);
+            if (!Has(run, "sheet_fields", IssueGateMath.Status.Open)) problems.Add("a changed finding did not come back open after it was accepted");
+
+            // 4. Fix the sheet: the fields filled and a view placed, then re-check: the sheet passes.
+            Set(x =>
+            {
+                x.get_Parameter(BuiltInParameter.SHEET_CHECKED_BY)?.Set("FT");
+                x.get_Parameter(BuiltInParameter.SHEET_APPROVED_BY)?.Set("FT");
+                x.get_Parameter(BuiltInParameter.SHEET_ISSUE_DATE)?.Set("2026-01-01");
+                var view = Drafting.Create(doc, "Issue check probe view " + Guid.NewGuid().ToString("N").Substring(0, 6), 50);
+                Drafting.Place(doc, x, view, 0);
+            });
+            run = IssueGate.Check(app, [sheet], null, null, reports);
+            if (!Mine(run).Pass) problems.Add("after the fix the sheet still has: " + string.Join("; ", Mine(run).Items.Where(i => i.Status == IssueGateMath.Status.Open).Select(i => i.Finding.Issue).Take(3)));
+
+            // 5. Accept the rest with a reason: clear, and still clear on the next check.
+            var rest = run.Open.ToList();
+            if (rest.Count > 0) IssueGate.Accept(doc, run, rest, "Field test: known in the test project");
+            if (run.Blocked) problems.Add("still blocked after accepting every open item");
+            var again = IssueGate.Check(app, [sheet], null, null, reports);
+            if (again.Blocked) problems.Add($"the acceptances were not kept: {again.Open.Count()} open on the next check");
+            if (!File.Exists(IssueGate.StorePath(doc))) problems.Add("no per-model file with the acceptances");
+
+            return problems.Count == 0
+                ? Pass($"blocked on the seeded sheet ({string.Join(", ", new[] { "empty_sheets", "sheet_fields" })}) and issue_drawings refused with no revision; an accepted item came back when its text changed; " +
+                       $"the fixed sheet passed on re-check; {rest.Count} other item(s) accepted with a reason cleared the gate and stayed accepted; report {Path.GetFileName(again.Report ?? "")}")
+                : Fail(string.Join("; ", problems));
+        }
+        finally
+        {
+            IssueGate.FolderOverride = null;
+            RollBack(group);
+        }
     }
 
     /// <summary>The summary written as the Time saved window's Excel file (in the test folder) and read back.</summary>
