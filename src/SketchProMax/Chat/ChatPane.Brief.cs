@@ -304,7 +304,8 @@ internal sealed partial class ChatPane
         Save();
         if (choice == BriefChoice.RunEdited && learn && PromptBriefs.IsEdit(shown, text)) Remember(brief.Request, shown, text);
         var attachments = item.Files.Where(System.IO.File.Exists).Select(p => new Attachment { Path = p, Name = System.IO.Path.GetFileName(p) }).ToList();
-        _ = RunTurn(text, attachments, choice == BriefChoice.RunAsTyped ? "" : text);
+        // The approved brief's planned tools seed the job card's steps.
+        _ = RunTurn(text, attachments, choice == BriefChoice.RunAsTyped ? "" : text, choice == BriefChoice.RunAsTyped ? null : brief);
     }
 
     /// <summary>Distils the edit into a Global memory note in the background, and says what was kept.</summary>

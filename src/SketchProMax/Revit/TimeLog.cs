@@ -304,6 +304,8 @@ internal static class TimeLog
 
     private static void OnDocumentChanged(object? sender, DocumentChangedEventArgs e)
     {
+        // The chat's "Undo all" needs to know every change (this handler is the one DocumentChanged subscription).
+        JobUndo.Changed(e);
         try
         {
             var doc = e.GetDocument();

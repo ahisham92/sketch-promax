@@ -64,8 +64,24 @@ internal sealed partial class ChatPane
                     new ChatItem { Kind = "assistant", Text = Reply, Time = t },
                     new ChatItem { Kind = "user", Text = "Make the thick walls 200 mm", Time = t.AddMinutes(1) },
                     new ChatItem { Kind = "brief", State = "pending", Brief = PromptBriefs.ToJson(brief), Text = PromptBriefs.Compose(brief), Time = t.AddMinutes(1) },
+                    new ChatItem { Kind = "job", Job = SampleJob(t.AddMinutes(2)).ToJson(), Time = t.AddMinutes(2) },
                 ],
             };
+        }
+
+        /// <summary>A finished job card: a step done, one skipped, one failed with its reason.</summary>
+        private static JobCardModel SampleJob(DateTime started)
+        {
+            var job = JobCardModel.FromPlan(["change_type", "tag_elements_in_view", "create_schedule"], started);
+            job.Steps[0].State = "done";
+            job.Steps[0].Done = job.Steps[0].Total = 3;
+            job.Steps[1].State = "skipped";
+            job.Steps[1].Reason = "skipped by you (Skip step)";
+            job.Steps[2].State = "failed";
+            job.Steps[2].Reason = "A schedule with this name already exists.";
+            job.Think("The three walls share one type, so one change covers them.", newBlock: true);
+            job.Finish("done", started.AddSeconds(95), "Done in 1 min 35 s. By hand: about 12 min. Saved: 10 min.", 3);
+            return job;
         }
 
         /// <summary>

@@ -113,8 +113,11 @@ public static class Jobs
     /// <summary>The job Revit is running right now, if any.</summary>
     public static Job? Running { get; internal set; }
 
-    /// <summary>True when the user (through cancel_job) asked the running job to stop. Long loops should check it.</summary>
-    public static bool CancelRequested => Running is { } job && (job.CancelRequested || job.Limit?.Hit == true);
+    /// <summary>
+    /// True when the user (through cancel_job, or Skip step or Stop on the chat's job card) asked the running job to stop.
+    /// Long loops should check it.
+    /// </summary>
+    public static bool CancelRequested => Running is { } job && (job.CancelRequested || job.Limit?.Hit == true || JobControl.Current?.Halting == true);
 
     /// <summary>
     /// From a tool's Execute: the running job when the tool may hand it on by setting <see cref="Job.Continuation"/> (each

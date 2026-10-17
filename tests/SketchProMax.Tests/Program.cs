@@ -68,6 +68,7 @@ CarbonTests.Run((name, ok, detail) => Check(name, ok, detail));
 VeTests.Run((name, ok, detail) => Check(name, ok, detail));
 HandoffTests.Run((name, ok, detail) => Check(name, ok, detail));
 TimeTests.Run((name, ok, detail) => Check(name, ok, detail));
+JobCardTests.Run((name, ok, detail) => Check(name, ok, detail));
 {
     var root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../.."));
     InstallTests.Run(File.Exists(Path.Combine(root, "README.md")) ? root : Directory.GetCurrentDirectory(), (name, ok, detail) => Check(name, ok, detail));

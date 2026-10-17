@@ -4,7 +4,7 @@ namespace SketchProMax.Chat;
 
 /// <summary>
 /// The XAML of the chat's control styles (see <see cref="ChatUi.Styles"/>): rounded quiet buttons, icon buttons, pills,
-/// cards with a soft shadow, the round Send and Stop buttons, the rounded search field, the composer's bare text box and the disclosure toggle, each
+/// cards with a soft shadow, the red pill for a task's Stop, the round Send and Stop buttons, the rounded search field, the composer's bare text box and the disclosure toggle, each
 /// with a rounded focus ring, a hover that fades in and a press that shrinks the chrome a little (never the label).
 /// Also the chat's type scale. Plain text, so a test checks it is well formed without WPF. Colours are palette tokens only.
 /// </summary>
@@ -202,6 +202,15 @@ internal static class ChatStyles
               <Trigger Property="IsMouseOver" Value="True"><Setter Property="Foreground" Value="{DynamicResource SpmOnAccent}"/></Trigger>
             </Style.Triggers>
           </Style>
+          <Style x:Key="SpmChatDanger" TargetType="Button" BasedOn="{StaticResource SpmChatPill}">
+            <Setter Property="Background" Value="{DynamicResource SpmDanger}"/>
+            <Setter Property="Foreground" Value="{DynamicResource SpmOnDanger}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource SpmDanger}"/>
+            DANGERTPL
+            <Style.Triggers>
+              <Trigger Property="IsMouseOver" Value="True"><Setter Property="Foreground" Value="{DynamicResource SpmOnDanger}"/></Trigger>
+            </Style.Triggers>
+          </Style>
           <Style x:Key="SpmChatFloat" TargetType="Button" BasedOn="{StaticResource SpmChatPill}">
             FLOAT
           </Style>
@@ -300,6 +309,7 @@ internal static class ChatStyles
         .Replace("PILL", Template(14, animate, hoverBorder: "SpmBorder"))
         .Replace("PRIMARY", Template(14, animate, hoverBg: "SpmAccentHover", hoverBorder: "SpmAccentHover"))
         .Replace("FLOAT", Template(14, animate, shadow: true, hoverBorder: "SpmBorder"))
+        .Replace("DANGERTPL", Template(14, animate, hoverBg: "SpmDangerHover", hoverBorder: "SpmDangerHover"))
         .Replace("CARD", Template(card, animate, shadow: true, hoverBg: "SpmSurface", hoverBorder: "SpmBorder"))
         .Replace("SEND", Round("SpmChatSend", "SpmAccent", "SpmAccentHover", "SpmAccentPressed", "SpmOnAccent", animate))
         .Replace("STOP", Round("SpmChatStop", "SpmDanger", "SpmDangerHover", "SpmDangerPressed", "SpmOnDanger", animate))

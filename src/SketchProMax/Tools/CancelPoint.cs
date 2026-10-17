@@ -12,12 +12,14 @@ namespace SketchProMax.Tools;
 /// commits what it did (still one Undo step) and puts <see cref="Note"/> in its result, so nothing finished is lost.</item>
 /// </list>
 /// Checking is cheap (two volatile reads), so it is done every item; progress goes to the job every tenth item.
+/// Skip step and Stop on the chat's job card stop here too. Pause doesn't: these loops run inside one open
+/// transaction, so a pause waits at the next step boundary instead (the bridge, before the next tool call).
 /// </summary>
 internal static class CancelPoint
 {
     public const string Stopped = "Stopped on request (cancel_job)";
 
-    public static bool Requested => Jobs.CancelRequested;
+    public static bool Requested => Jobs.CancelRequested || JobControl.Current?.Halting == true;
 
     /// <summary>The field test's hook: told each item <see cref="Stop"/> checks (what, index), so it can ask for a stop part-way. Null otherwise.</summary>
     internal static Action<string, int>? TestItem;
@@ -25,7 +27,7 @@ internal static class CancelPoint
     /// <summary>Throws the bridge's cancel exception when a stop was asked for.</summary>
     public static void ThrowIfRequested(string? more = null)
     {
-        if (Jobs.CancelRequested) throw new OperationCanceledException(more is null ? Stopped + "." : $"{Stopped}. {more}");
+        if (Requested) throw new OperationCanceledException(more is null ? Stopped + "." : $"{Stopped}. {more}");
     }
 
     /// <summary>
@@ -35,8 +37,10 @@ internal static class CancelPoint
     public static bool Stop(string what, int index, int count)
     {
         if (count > 20 && index > 0 && index % 10 == 0) Jobs.Report($"{what}: {index} of {count}");
+        JobFeed.Item(what, index, count, "");
         TestItem?.Invoke(what, index);
-        return Jobs.CancelRequested;
+        JobControl.TestBoundary?.Invoke(what, index);
+        return Requested;
     }
 
     /// <summary>The result's note after a loop stopped early (null when it ran to the end).</summary>

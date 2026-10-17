@@ -35,7 +35,7 @@ internal static class FieldTestCoverage
 
     public const string Chat = "Chat", RibbonArea = "Ribbon and favourites", Carbon = "Embodied carbon", Ve = "Value engineering",
         Rebar2D = "2D rebar", Bugs = "Report bug and exports", Updates = "Updates and the Claude app", Model = "Real-model checks",
-        Limits = "Revit limits", BugFixes = "Bug fixes", Tasks = "Hand-off and Cancel", Time = "Time saved";
+        Limits = "Revit limits", BugFixes = "Bug fixes", Tasks = "Hand-off and Cancel", Job = "Live job card", Time = "Time saved";
 
     public static readonly Feature[] Features =
     [
@@ -51,7 +51,7 @@ internal static class FieldTestCoverage
         new("brief.choose", Chat, "Prompt enhancer: Run as I typed and a remembered edit", How.Probe, "", "on a brief card in the pane, Run as I typed sends exactly the typed text; an edited brief is remembered as a Global note, which is then removed; with chat_round_trip only"),
         new("brief.ui", Chat, "The brief card in the chat", How.Manual, "", "the card's look and its one-tap questions are judged on screen, and planning uses your Claude plan",
             "Open Chat and turn briefs on in the model menu. Send \"make the walls thicker\": a brief card lists the scope, assumptions and one-tap questions, and nothing in the model changes before you choose. Tap an answer, then Run this. Send it again and press Run as I typed: your words are sent unchanged. Send it once more, press Edit, change a line and run it: \"Remembered for later briefs\" appears; delete that note in the Notes tab."),
-        new("chat.dpi", Chat, "Chat screenshots at 100 to 175 % scale", How.Probe, "", "the pane with a table, code, steps and a brief is drawn at 100, 125, 150 and 175 % in both themes and saved as PNGs next to the report; a person compares them"),
+        new("chat.dpi", Chat, "Chat screenshots at 100 to 175 % scale", How.Probe, "", "the pane with a table, code, steps, a brief and a finished job card is drawn at 100, 125, 150 and 175 % in both themes and saved as PNGs next to the report; a person compares them"),
         new("chat.frames", Chat, "Chat frame times", How.Probe, "", "in a hidden window, the history drawer opens and closes and a sample reply streams in; the average and worst frame times are reported (under 25 ms on average, no frame over 200 ms)"),
         new("chat.sharp", Chat, "Chat is sharp at every scale", How.Manual, "", "sharpness is judged by eye, and moving between monitors needs two screens",
             "Open the chat-dpi folder next to the field test report and compare the screenshots: text, borders and icons are sharp at 100, 125, 150 and 175 %, in light and dark, with nothing cut off. Then move the Chat pane between monitors with different scaling (for example 100 % and 150 %) and check the text stays sharp on both, with no blur after the move."),
@@ -82,6 +82,16 @@ internal static class FieldTestCoverage
         new("handoff.ui", Tasks, "The hand-off window and chat card", How.Manual, "", "the window, the chat card and doing the step by hand are what a person sees and does",
             "On a _detached copy with no legend component in any legend (and no legend seed in Settings): ask Claude in the chat to add legend components for two wall types. A card shows what to do, where in Revit and why, with Continue, Skip this item and Stop. Press Continue first: it says not done yet. Place one legend component by hand (Annotate > Component > Legend Component), press Continue: the task carries on. Run Add legend components from the ribbon too: the same step opens in a window. Press Stop there and check the result says you stopped."),
         new("cancel.fast", Tasks, "Cancel stops a heavy tool part-way", How.Probe, "", "place_many on 60 placements is asked to stop after the first chunk; it stops early, keeps what it did and says so in its result"),
+
+        // ---- The live job card
+        new("job.progress", Job, "Job card: progress reaches 100% and matches the items", How.Probe, "", "rename_elements on 24 drafting views made for the test, as a chat task: the job feed reports item n of 24 at every boundary, ends at 24 of 24 (100%), and all 24 are renamed"),
+        new("job.pause_resume", Job, "Job card: Pause and Resume", How.Probe, "", "Pause pressed at item 8 of rename_elements on 24 views: the batch pauses at the next boundary with no transaction open, Resume carries on and all 24 are renamed"),
+        new("job.stop", Job, "Job card: Stop rolls back the item in progress", How.Probe, "", "Stop pressed while item 9 of 24 runs: that item is rolled back (its name unchanged), the 8 before it are kept, the rest are not done, and Claude is told the user stopped"),
+        new("job.skip", Job, "Job card: Skip step", How.Probe, "", "Skip step at item 6 of 24: the step ends with 5 done (kept), its result says skipped by the user so Claude moves on, and the next step runs normally"),
+        new("job.message", Job, "Job card: a message sent mid-task reaches Claude at the boundary", How.Probe, "", "a message queued while item 4 of 24 runs is added once to that step's result (what Claude reads next) and reported as delivered; the batch is not interrupted. A test hook stands in for the chat, so no Claude plan is used"),
+        new("job.thinking", Job, "Job card: the Thinking block", How.Probe, "", "a sample stream-json transcript with a streamed thinking block builds a card whose one-line \"Thinking…\" shows the latest thought and opens to the whole of it; a complete message without streaming shows it too"),
+        new("job.ui", Job, "The live job card in the chat", How.Manual, "", "the card's look, the job window over a busy Revit, Undo all and a real conversation need a person (and your Claude plan)",
+            "On a _detached copy with briefs on: ask Claude to \"renumber all sheets and fill their title blocks\" and press Run this. A card lists the planned steps; each updates in place with a spinner, then a check, with \"37% (148 of 400 items)\", the time and the time left, a thin bar and \"Now: …\". Open Thinking… to read the thought. While a long step runs, a small task window appears: press Pause (a Paused window appears between items), then Resume; type a message there and check the chat says \"Got it, will apply after this item\" and later \"Applied\". Press Skip step on the next step, then Stop on another run: the item in progress is rolled back and finished items stay. When a one-step task ends, the card collapses to \"Done in…, N elements changed\" with Undo all; change something in the model and check Undo all disappears. Close and reopen the chat: the card shows the same summary."),
 
         // ---- Time saved
         new("time.tracking", Time, "Working time, AI time and time saved are counted", How.Probe, "", "a scripted session (activity, idle beyond the threshold, AI minutes) counts what is expected, AI plus by hand equals working time with nothing counted twice, and it is in the Done in line, the four Project Information parameters, Extensible Storage and the PC log"),
@@ -212,7 +222,7 @@ internal static class FieldTestCoverage
     {
         var items = Features.Where(f => f.How == How.Manual).Select(f => new CheckItem(f.Key, f.Area, f.Title, f.Steps, f.Reason)).ToList();
         items.AddRange(ManualTools.OrderBy(t => t.Key).Select(t => new CheckItem("tool:" + t.Key, Limits, t.Key, t.Value.Steps, t.Value.Reason)));
-        string[] order = [Chat, RibbonArea, Tasks, Time, Carbon, Ve, Rebar2D, Bugs, Updates, Model, Limits];
+        string[] order = [Chat, RibbonArea, Tasks, Job, Time, Carbon, Ve, Rebar2D, Bugs, Updates, Model, Limits];
         items = items.OrderBy(i => Array.IndexOf(order, i.Area) is var x && x < 0 ? order.Length : x).ToList();
         items.AddRange(fixedBugs.Select(b => new CheckItem("bug:" + b.Number, BugFixes, $"#{b.Number}: {b.What}",
             "Do what the row describes on a _detached copy and check it no longer happens.", b.Status)));

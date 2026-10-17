@@ -26,6 +26,12 @@ internal sealed record ToolResultEvent(string ToolUseId, bool IsError, string Te
 /// <summary>The model is thinking (a thinking block started).</summary>
 internal sealed record ThinkingEvent : ChatEvent;
 
+/// <summary>Text of the thinking block being streamed (its reasoning, or the summary of it, as Claude Code passes it on).</summary>
+internal sealed record ThinkingDeltaEvent(string Text) : ChatEvent;
+
+/// <summary>A whole thinking block from a complete assistant message whose thinking was not streamed.</summary>
+internal sealed record ThinkingTextEvent(string MessageId, string Text) : ChatEvent;
+
 /// <summary>The end of a turn: success, or an error subtype (error_max_turns, error_during_execution, ...).</summary>
 internal sealed record ResultEvent(string Subtype, bool IsError, string Text, string SessionId, long InputTokens, long OutputTokens, IReadOnlyList<string> Errors) : ChatEvent;
 
@@ -47,6 +53,7 @@ internal sealed class StreamParser
 {
     private readonly StringBuilder _pending = new();
     private readonly HashSet<string> _streamed = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _thoughtStreamed = new(StringComparer.Ordinal);
     private readonly Dictionary<int, string> _blockTool = new();
     private string _messageId = "";
     private int _anonymous;
@@ -186,10 +193,17 @@ internal sealed class StreamParser
             case "content_block_delta":
             {
                 if (!ev.TryGetProperty("delta", out var delta) || delta.ValueKind != JsonValueKind.Object) break;
-                if (Str(delta, "type") == "text_delta")
+                switch (Str(delta, "type"))
                 {
-                    _streamed.Add(_messageId);
-                    events.Add(new TextDeltaEvent(Key(Int(ev, "index")), Str(delta, "text")));
+                    case "text_delta":
+                        _streamed.Add(_messageId);
+                        events.Add(new TextDeltaEvent(Key(Int(ev, "index")), Str(delta, "text")));
+                        break;
+                    case "thinking_delta":
+                        var thought = Str(delta, "thinking");
+                        _thoughtStreamed.Add(_messageId);
+                        if (thought.Length > 0) events.Add(new ThinkingDeltaEvent(thought));
+                        break;
                 }
                 break;
             }
@@ -223,6 +237,11 @@ internal sealed class StreamParser
                 case "mcp_tool_use":
                     events.Add(new ToolUseEvent(Str(block, "id"), Str(block, "name"),
                         block.TryGetProperty("input", out var input) ? input.GetRawText() : "{}"));
+                    break;
+                case "thinking":
+                    // Already shown from the stream when partial messages are on; empty when the reasoning isn't shown.
+                    var thought = Str(block, "thinking");
+                    if (!_thoughtStreamed.Contains(id) && thought.Trim().Length > 0) events.Add(new ThinkingTextEvent(id, thought));
                     break;
             }
         }

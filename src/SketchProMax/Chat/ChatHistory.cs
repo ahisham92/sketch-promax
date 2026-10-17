@@ -7,7 +7,7 @@ namespace SketchProMax.Chat;
 /// <summary>One line of a saved conversation, as the pane shows it.</summary>
 internal sealed class ChatItem
 {
-    /// <summary>user, assistant, tool, note, error or brief.</summary>
+    /// <summary>user, assistant, tool, note, error, brief or job.</summary>
     public string Kind { get; set; } = "";
     public string Text { get; set; } = "";
     /// <summary>Tools: the short tool name. User: attachment names.</summary>
@@ -24,6 +24,8 @@ internal sealed class ChatItem
     public List<string> Files { get; set; } = [];
     /// <summary>Briefs: the PromptBrief as JSON, with the one-tap answers.</summary>
     public string Brief { get; set; } = "";
+    /// <summary>Jobs: the live job card (JobCardModel) as JSON: its steps, how each ended, and the summary.</summary>
+    public string Job { get; set; } = "";
 }
 
 /// <summary>A saved conversation: the Claude Code session to resume and what the pane showed.</summary>

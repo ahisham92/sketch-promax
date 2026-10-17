@@ -175,6 +175,17 @@ internal static class Brand
         foreach (var (key, light, darkValue) in Tokens) root.Resources[key] = Brush(Rgb(dark ? darkValue : light));
     }
 
+    /// <summary>
+    /// The palette as a new dictionary of frozen brushes, for a window on a thread of its own (the chat's job window),
+    /// which can't share this thread's resources. Read <see cref="IsDark"/> on Revit's thread and pass it in.
+    /// </summary>
+    public static ResourceDictionary Palette(bool dark)
+    {
+        var dictionary = new ResourceDictionary();
+        foreach (var (key, light, darkValue) in Tokens) dictionary[key] = Brush(Rgb(dark ? darkValue : light));
+        return dictionary;
+    }
+
     /// <summary>Points an element's text colour at a palette token.</summary>
     public static T Fg<T>(T element, string key) where T : FrameworkElement
     {

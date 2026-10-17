@@ -1,4 +1,5 @@
 using Autodesk.Revit.DB;
+using SketchProMax.Bridge;
 using SketchProMax.Revit;
 
 namespace SketchProMax.Tools;
@@ -62,13 +63,24 @@ internal static class ItemBatch
 
         using var group = new TransactionGroup(doc, $"Sketch ProMax: {name}");
         group.Start();
+        Revit.JobUndo.GroupOpened();
         var index = 0;
+        // Skip step or Stop from the chat's job card ends the batch at an item boundary, like cancel_job.
+        var halted = JobState.Running;
         foreach (var item in list)
         {
             var what = label(item);
             index++;
-            if (cancellable && Bridge.Jobs.CancelRequested) { result.Items.Add(new(what, false, "not done: stopped on request (cancel_job)", null)); continue; }
-            if (list.Count > 20 && index % 10 == 0) Bridge.Jobs.Report($"{name}: {index} of {list.Count}");
+            if (cancellable && halted == JobState.Running)
+            {
+                // A boundary with no transaction open: a pause waits here (the group stays open, so still one Undo step).
+                JobFeed.Item(name, index - 1, list.Count, what);
+                var state = JobControl.AtBoundary(name, index - 1);
+                if (state is JobState.Skipping or JobState.Stopping) halted = state;
+            }
+            if (halted != JobState.Running) { result.Items.Add(new(what, false, JobControl.NotDone(halted), null)); continue; }
+            if (cancellable && Jobs.CancelRequested) { result.Items.Add(new(what, false, "not done: stopped on request (cancel_job)", null)); continue; }
+            if (list.Count > 20 && index % 10 == 0) Jobs.Report($"{name}: {index} of {list.Count}");
             var locked = doc.IsWorkshared ? Locked(doc, elements(item)) : null;
             if (locked is not null) { result.Items.Add(new(what, false, locked, null)); continue; }
 
@@ -91,6 +103,14 @@ internal static class ItemBatch
                     result.Items.Add(new(what, false, Message(ex), null));
                     continue;
                 }
+                if (cancellable && JobControl.StopNow(name, index - 1))
+                {
+                    // Stop pressed while this item ran: undo just this item; the finished ones are kept.
+                    if (t.HasStarted() && !t.HasEnded()) t.RollBack();
+                    result.Items.Add(new(what, false, JobControl.RolledBack, null));
+                    halted = JobState.Stopping;
+                    continue;
+                }
                 var status = t.Commit();
                 result.Items.Add(status == TransactionStatus.Committed
                     ? new(what, true, errors.Count > 0 ? "warnings: " + string.Join("; ", errors) : null, value)
@@ -99,10 +119,13 @@ internal static class ItemBatch
             finally { FailureGuard.Muted--; }
         }
 
+        if (cancellable && list.Count > 0) JobFeed.Item(name, result.Items.Count(i => !IsNotDone(i)), list.Count, "");
+
         // The time log writes in one more transaction of the group, so the batch stays one undo step.
         if (result.Done > 0) TimeLog.InBatch(doc, name, result.Done);
         if (result.Done > 0) group.Assimilate();
         else group.RollBack();
+        Revit.JobUndo.GroupClosed(result.Done > 0);
         if (manual is not null)
             for (var i = 0; i < list.Count; i++)
             {
@@ -117,6 +140,9 @@ internal static class ItemBatch
             }
         return result;
     }
+
+    /// <summary>An item a stop or skip ended the batch before (it never ran): not counted as finished in the progress.</summary>
+    private static bool IsNotDone(Outcome o) => !o.Ok && o.Error is { } e && e.StartsWith("not done:", StringComparison.Ordinal);
 
     /// <summary>Why the user can't edit one of these elements right now, or null when all are editable.</summary>
     public static string? Locked(Document doc, IEnumerable<ElementId> ids)

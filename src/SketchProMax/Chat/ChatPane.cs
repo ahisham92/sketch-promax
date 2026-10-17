@@ -17,6 +17,7 @@ using TaskDialog = Autodesk.Revit.UI.TaskDialog;
 using TaskDialogCommonButtons = Autodesk.Revit.UI.TaskDialogCommonButtons;
 using TaskDialogResult = Autodesk.Revit.UI.TaskDialogResult;
 using UIApplication = Autodesk.Revit.UI.UIApplication;
+using SketchProMax.Bridge;
 using SketchProMax.Tools;
 using SketchProMax.UI;
 
@@ -123,6 +124,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         /// <summary>True while the prompt enhancer reads the model to make a brief (nothing is sent to the chat yet).</summary>
         public bool Planning;
         public CancellationTokenSource? Cancel;
+        /// <summary>How the turn ended for the job card: done, or failed when Claude Code reported an error.</summary>
+        public string Outcome = "done";
         /// <summary>The brief this task runs ("" when it runs as typed or had none): see ChatPane.ActiveBrief.</summary>
         public string Brief = "";
     }
@@ -327,6 +330,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         hint.IsHitTestVisible = false;
         hint.Margin = new Thickness(ChatUi.S3 + 2, ChatUi.S3, ChatUi.S3, 0);
         _input.TextChanged += (_, _) => hint.Visibility = _input.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
+        _input.TextChanged += (_, _) => { if (_turn is not null) ShowSteer(); };
         var field = new Grid();
         field.Children.Add(_input);
         field.Children.Add(hint);
@@ -881,6 +885,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         _rows.Clear();
         _dirty.Clear();
         _briefCards.Clear();
+        _acks.Clear();
         // Long conversations draw their latest page; "Show earlier" adds a page at a time.
         _firstShown = History.FirstShown(_conv.Items.Count);
         for (var k = _firstShown; k < _conv.Items.Count; k++) _messages.Children.Add(Build(k));
@@ -917,6 +922,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             "error" => ErrorBox(item),
             "handoff" => HandoffCard.Build(item, Tools.Handoff.Find(item.Name)),
             "brief" => BriefCard(item),
+            "job" => JobCard(item),
+            "note" when item.Name.StartsWith("ack:", StringComparison.Ordinal) => AckLine(item),
             _ => NoteLine(item),
         };
     }
@@ -1569,6 +1576,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         var stopHadFocus = _stop.IsKeyboardFocused;
         _stop.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
         _send.Visibility = busy ? Visibility.Collapsed : Visibility.Visible;
+        ShowSteer();
         if (!busy) Brand.SetBusy(_stop, false);
         if (busy && sendHadFocus) _stop.Focus();
         if (!busy && stopHadFocus) _input.Focus();
@@ -1618,7 +1626,9 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         {
             _workingText.Text = text;
             AutomationProperties.SetName(_working, text);
-            _status.Text = _turn!.Stopping ? "Stopping Claude…" : "Claude is working. Esc or Stop ends it; you can type your next message meanwhile.";
+            _status.Text = _turn!.Stopping ? "Stopping Claude…" : _control is not null
+                ? "Claude is working. Send a message to steer it: it is applied after the current item. Esc or Stop ends it."
+                : "Claude is working. Esc or Stop ends it; you can type your next message meanwhile.";
             _statusRow.Visibility = Visibility.Visible;
             _statusSpin.Content = null;
             return;
@@ -1655,7 +1665,16 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         if (_stopped) return;
         if (_turn is not null)
         {
-            Status("Claude is still answering. Wait for it, or press Stop.", spin: true);
+            // While a task runs the box stays open: the message reaches Claude at the next step boundary.
+            var note = _input.Text.Trim();
+            if (_turn.Planning || _control is null || note.Length == 0)
+            {
+                Status(note.Length == 0 && !_turn.Planning ? "Type a message first; Claude gets it after the current item." : "Claude is still answering. Wait for it, or press Stop.", spin: true);
+                return;
+            }
+            _input.Clear();
+            QueueNote(note);
+            if (_pending.Count > 0) Status("Got it. Attachments go with your next message, after this task.", spin: true);
             return;
         }
         if (_setup != Setup.Ready)
@@ -1685,7 +1704,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     }
 
     /// <summary>Sends a message to Claude Code as a new turn (from Send, or from a choice on a brief card).</summary>
-    private async Task RunTurn(string text, List<Attachment> attachments, string brief)
+    private async Task RunTurn(string text, List<Attachment> attachments, string brief, PromptBrief? plan = null)
     {
         if (DeliveryCapture is { } capture)
         {
@@ -1694,6 +1713,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         }
         var turn = _turn = new Turn { Brief = brief };
         Revit.TimeLog.BeginChat(brief);
+        BeginJob(plan);
         _lastActivity = DateTime.UtcNow;
         ShowStatus(attachments.Count > 0 ? "Preparing the attachments…" : null);
         try
@@ -1866,6 +1886,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
                 break;
             case TextStartEvent start:
             {
+                JobWriting();
                 var item = new ChatItem { Kind = "assistant" };
                 Add(item);
                 _texts[start.Key] = (item, _views[item]);
@@ -1881,11 +1902,19 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
                 break;
             case AssistantTextEvent text:
                 if (text.Text.Trim().Length == 0) break;
+                JobWriting();
                 if (turn is not null) turn.SawText = true;
                 Add(new ChatItem { Kind = "assistant", Text = text.Text });
                 break;
             case ThinkingEvent:
+                JobThinking("", newBlock: true);
                 if (turn is { Stopping: false }) ShowStatus("Claude is thinking…");
+                break;
+            case ThinkingDeltaEvent thought:
+                JobThinking(thought.Text, newBlock: false);
+                break;
+            case ThinkingTextEvent whole:
+                JobThinking(whole.Text, newBlock: true);
                 break;
             case ToolUseEvent tool:
             {
@@ -1896,12 +1925,14 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
                     Add(item);
                     row = _rows[item];
                     _tools[tool.Id] = row;
+                    JobToolStarted(tool.Id, item.Name, summary);
                 }
                 if (turn is not null) turn.SawTool = true;
                 if (tool.InputJson.Length > 0)
                 {
                     row.Item.Input = Pretty(tool.InputJson);
                     SetTool(row, row.Item.State, summary, "");
+                    if (summary.Length > 0) _jobInputs[tool.Id] = summary;
                 }
                 if (turn is { Stopping: false })
                     ShowStatus($"Running {row.Item.Name}… If Revit asks to approve a change, answer it in Revit.");
@@ -1910,6 +1941,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             case ToolResultEvent result:
                 if (_tools.TryGetValue(result.ToolUseId, out var done))
                     SetTool(done, result.IsError ? "failed" : "done", done.Item.Text, result.Text);
+                JobToolEnded(result.ToolUseId, result.Text, result.IsError);
                 if (turn is { Stopping: false }) ShowStatus("Claude is thinking…");
                 break;
             case RetryEvent retry:
@@ -1948,6 +1980,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         }
         if (end.IsError && !turn.Stopping && ChatModels.IsRejection(message) && _engine is { } refused && FallBack(turn, refused.Model, message)) return;
         if (!end.IsError && _engine is { } worked) _lastWorkingModel = worked.Model;
+        if (end.IsError) turn.Outcome = "failed";
         if (turn.Stopping)
             Note("Stopped. Ask again, or tell Claude what to do instead.");
         else if (end.IsError)
@@ -2055,8 +2088,13 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     private void EndTurn()
     {
         if (_turn?.KillTimer is { } timer) timer.Stop();
-        // "Done in X. By hand: about Y. Saved: Z." when the task's tools saved any time.
-        try { if (_turn is not null && Revit.TimeLog.EndChat() is { } time) Note(time); } catch (Exception) { }
+        // "Done in X. By hand: about Y. Saved: Z." when the task's tools saved any time: on the job card when it has one.
+        string? time = null;
+        try { if (_turn is not null) time = Revit.TimeLog.EndChat(); } catch (Exception) { }
+        var stopped = _turn?.Stopping == true || _control?.State == JobState.Stopping;
+        var left = new List<(string Id, string Text)>();
+        if (_control is not null) left = EndJob(stopped ? "stopped" : _turn?.Outcome ?? "done", time);
+        else if (time is not null) Note(time);
         MarkRunningTools("stopped");
         _turn = null;
         // Idle now: the streaming keys and tool ids of the turn are no longer needed (the drawn items stay in _views/_rows).
@@ -2067,6 +2105,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         Save();
         ShowStatus();
         TrimDrawn();
+        // Messages sent during the task that no step picked up: sent now (or back in the box after a stop or a switch).
+        SendLeftover(left, stopped || _pendingModel is not null);
         if (_pendingModel is { } next)
         {
             _pendingModel = null;
@@ -2084,6 +2124,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             return;
         }
         turn.Stopping = true;
+        // The running Revit tool stops at its next item too: the item in progress is rolled back, finished ones kept.
+        _control?.Apply(JobAction.Stop);
         Brand.SetBusy(_stop, true, ""); // a spinner in the round button; the status line says "Stopping…"
         if (_stop.Content is StackPanel { Children.Count: > 0 } busy && busy.Children[0] is FrameworkElement spinner) spinner.Margin = new Thickness(0);
         ShowStatus("Stopping…");
@@ -2115,10 +2157,13 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         _turn?.Cancel?.Cancel();
         // The task's time ends here, or its open span would stop by-hand time being counted.
         try { if (_turn is not null) Revit.TimeLog.EndChat(); } catch (Exception) { }
+        _control?.Apply(JobAction.Stop);
+        var left = _control is not null ? EndJob("stopped", null) : new List<(string Id, string Text)>();
         _turn = null;
         _engine?.Kill();
         _engine = null;
         Save();
+        if (left.Count > 0 && _input.Text.Trim().Length == 0) _input.Text = string.Join("\n\n", left.Select(n => n.Text));
         _conv = ChatStore.New(ConversationKey, ConversationTitle);
         ShowConversation();
         ShowStatus();
@@ -2290,6 +2335,12 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         _turn?.Cancel?.Cancel();
         if (_turn is not null) MarkRunningTools("stopped");
         try { if (_turn is not null) Revit.TimeLog.EndChat(); } catch (Exception) { }
+        if (_control is not null)
+        {
+            _control.Apply(JobAction.Stop);
+            EndJob("stopped", null);
+        }
+        _undoTimer?.Stop();
         _turn = null;
         Save();
         _engine?.Kill();

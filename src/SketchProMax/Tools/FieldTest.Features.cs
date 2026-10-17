@@ -9,6 +9,7 @@ using System.Windows.Controls;
 using Autodesk.Revit.DB;
 using Autodesk.Revit.UI;
 using SketchProMax.Bridge;
+using SketchProMax.Chat;
 using SketchProMax.UI;
 
 namespace SketchProMax.Tools;
@@ -234,6 +235,12 @@ internal static partial class FieldTest
         await Probe(s, "handoff.skip_stop", app => HandoffSkipStop(app, s)).ConfigureAwait(false);
         await Probe(s, "handoff.static", app => HandoffStatic(app, s)).ConfigureAwait(false);
         await Probe(s, "cancel.fast", app => CancelFast(app, s)).ConfigureAwait(false);
+        await Probe(s, "job.progress", app => JobProgress(app, s)).ConfigureAwait(false);
+        await Probe(s, "job.pause_resume", app => JobPauseResume(app, s)).ConfigureAwait(false);
+        await Probe(s, "job.stop", app => JobStop(app, s)).ConfigureAwait(false);
+        await Probe(s, "job.skip", app => JobSkip(app, s)).ConfigureAwait(false);
+        await Probe(s, "job.message", app => JobMessage(app, s)).ConfigureAwait(false);
+        await Probe(s, "job.thinking", _ => JobThinking()).ConfigureAwait(false);
         await Probe(s, "time.tracking", app => TimeTracking(app, s)).ConfigureAwait(false);
         await Probe(s, "time.export", app => TimeExport(app, s)).ConfigureAwait(false);
         await Probe(s, "time.queue", app => TimeQueue(app, s)).ConfigureAwait(false);
@@ -842,6 +849,233 @@ internal static partial class FieldTest
             s.Job.Limit = null;
             RollBack(group);
         }
+    }
+
+    // ---- The live job card: rename_elements on drafting views made for the probe, as a chat task (rolled back after)
+
+    private const int JobItems = 24;
+    private const string JobBatch = "Rename elements";
+
+    /// <summary>What one run of the job probes' batch did: each item's status, Claude's text after the step, and the step's state.</summary>
+    private sealed record JobRun(ToolResult Result, List<string> Statuses, string Text, string State)
+    {
+        public int Ok => Statuses.Count(st => st == "ok");
+    }
+
+    /// <summary>
+    /// Makes <see cref="JobItems"/> drafting views in the test project and runs <paramref name="body"/> with a chat task's
+    /// control in place (the field test is not a chat task, so it stands in for one); everything is rolled back after and
+    /// the hooks cleared.
+    /// </summary>
+    private static (string, string) WithJob(UIApplication app, State s, string title, Func<Document, List<ViewDrafting>, JobControl, (string, string)> body)
+    {
+        if (TestDoc(app, s, out var why) is not { } doc) return Fail(why);
+        var type = new FilteredElementCollector(doc).OfClass(typeof(ViewFamilyType)).Cast<ViewFamilyType>().FirstOrDefault(t => t.ViewFamily == ViewFamily.Drafting);
+        if (type is null) return Fail("the test project has no drafting view type");
+        var keepControl = JobControl.Current;
+        var keepLong = JobFeed.LongStep;
+        using var group = new TransactionGroup(doc, "Field test: " + title);
+        group.Start();
+        try
+        {
+            var views = new List<ViewDrafting>();
+            var stamp = Guid.NewGuid().ToString("N").Substring(0, 6);
+            using (var t = new Transaction(doc, "Field test: drafting views for the job card"))
+            {
+                t.Start();
+                for (var i = 0; i < JobItems; i++)
+                {
+                    var view = ViewDrafting.Create(doc, type.Id);
+                    view.Name = $"SPM job {stamp} {i:00}";
+                    views.Add(view);
+                }
+                t.Commit();
+            }
+            var control = new JobControl();
+            JobControl.Current = control;
+            JobFeed.LongStep = null; // no job window during the test
+            JobFeed.Reset();
+            JobNotes.Take();
+            return body(doc, views, control);
+        }
+        finally
+        {
+            JobControl.TestBoundary = null;
+            JobControl.TestAfterItem = null;
+            JobControl.TestWait = null;
+            JobControl.Current = keepControl;
+            JobFeed.LongStep = keepLong;
+            JobNotes.Take();
+            RollBack(group);
+        }
+    }
+
+    /// <summary>rename_elements on the views, then what the bridge does when a chat step ends (Skip/Stop text, messages).</summary>
+    private static JobRun RenameViews(UIApplication app, State s, List<ViewDrafting> views, JobControl control)
+    {
+        var stamp = Guid.NewGuid().ToString("N").Substring(0, 6);
+        var result = Call(app, s.Registry, "rename_elements",
+            new { items = views.Select((v, i) => new { element_id = v.Id.Value, name = $"SPM renamed {stamp} {i:00}" }).ToArray() });
+        var statuses = new List<string>();
+        if (!result.IsError)
+        {
+            using var json = JsonDocument.Parse(result.Text);
+            foreach (var row in json.RootElement.EnumerateArray()) statuses.Add(row.GetProperty("status").GetString() ?? "");
+        }
+        var text = JobControl.AfterStep(control, "rename_elements", result.Text, result.IsError, out var state);
+        return new JobRun(result, statuses, text, state);
+    }
+
+    private static bool Renamed(ViewDrafting view) => view.Name.StartsWith("SPM renamed", StringComparison.Ordinal);
+
+    /// <summary>The feed says item n of 24 at each boundary and ends at 24 of 24 (100%), matching the items renamed.</summary>
+    private static (string, string) JobProgress(UIApplication app, State s) => WithJob(app, s, "job card progress", (_, views, control) =>
+    {
+        var seen = new List<(int Done, int Total)>();
+        JobControl.TestBoundary = (what, _) => { if (what == JobBatch) seen.Add((JobFeed.Now.Done, JobFeed.Now.Total)); };
+        var run = RenameViews(app, s, views, control);
+        var end = JobFeed.Now;
+        var model = JobCardModel.FromPlan(["rename_elements"], DateTime.UtcNow);
+        var step = model.Begin("rename_elements")!;
+        (step.Done, step.Total) = (end.Done, end.Total);
+        model.End(step, run.State, "");
+        var problems = new List<string>();
+        if (run.Result.IsError) problems.Add("rename_elements failed: " + Short(run.Result.Text, 300));
+        if (run.Ok != JobItems || views.Count(Renamed) != JobItems) problems.Add($"{run.Ok} of {JobItems} renamed ({views.Count(Renamed)} by name)");
+        if (seen.Count != JobItems || seen.Where((p, i) => p.Done != i || p.Total != JobItems).Any())
+            problems.Add($"the boundaries reported {string.Join(", ", seen.Take(6).Select(p => $"{p.Done}/{p.Total}"))}… ({seen.Count} of them), not 0/24 to 23/24");
+        if (end.What != JobBatch || end.Done != JobItems || end.Total != JobItems || JobMath.Percent(end.Done, end.Total) != 100)
+            problems.Add($"the feed ended at {end.What}: {end.Done} of {end.Total} ({JobMath.Percent(end.Done, end.Total)}%)");
+        if (run.State != "done" || model.Headline() != "1 of 1 step done") problems.Add($"the step ended {run.State}; the card says {model.Headline()}");
+        return problems.Count == 0
+            ? Pass($"rename_elements on {JobItems} views: the feed went 0/{JobItems} to {JobItems}/{JobItems}, ended at {JobMath.Count(end.Done, end.Total)} and all {run.Ok} were renamed; the card says {model.Headline()}")
+            : Fail(string.Join("; ", problems));
+    });
+
+    /// <summary>Pause at item 8: the batch waits at the next boundary with no transaction open; Resume renames the rest.</summary>
+    private static (string, string) JobPauseResume(UIApplication app, State s) => WithJob(app, s, "job card pause", (doc, views, control) =>
+    {
+        var last = -1;
+        int? pausedAt = null;
+        var modifiable = true;
+        var pausedState = JobState.Running;
+        var feedPaused = false;
+        JobControl.TestBoundary = (what, i) =>
+        {
+            if (what != JobBatch) return;
+            last = i;
+            if (i == 8) control.Apply(JobAction.Pause);
+        };
+        JobControl.TestWait = (c, _) =>
+        {
+            pausedAt = last;
+            modifiable = doc.IsModifiable;
+            pausedState = c.State;
+            feedPaused = JobFeed.Now.Paused;
+            c.Apply(JobAction.Resume);
+        };
+        var run = RenameViews(app, s, views, control);
+        var problems = new List<string>();
+        if (pausedAt != 8) problems.Add(pausedAt is null ? "it never paused" : $"it paused at item {pausedAt}, not 8");
+        if (modifiable) problems.Add("a transaction was open while paused");
+        if (pausedState != JobState.Paused || !feedPaused) problems.Add($"while waiting the state was {pausedState} and the feed {(feedPaused ? "" : "not ")}paused");
+        if (run.Ok != JobItems || views.Count(Renamed) != JobItems) problems.Add($"after Resume {run.Ok} of {JobItems} were renamed");
+        if (control.State != JobState.Running || run.State != "done") problems.Add($"after Resume the task is {control.State} and the step {run.State}");
+        return problems.Count == 0
+            ? Pass($"Pause at item 8 waited at the boundary before item 9 with no transaction open (the feed said paused); Resume renamed all {JobItems}")
+            : Fail(string.Join("; ", problems));
+    });
+
+    /// <summary>Stop while item 9 runs: that item is rolled back, the 8 before it kept, the rest not done, and Claude is told.</summary>
+    private static (string, string) JobStop(UIApplication app, State s) => WithJob(app, s, "job card stop", (_, views, control) =>
+    {
+        var before = views.Select(v => v.Name).ToList();
+        JobControl.TestAfterItem = (what, i) => { if (what == JobBatch && i == 8) control.Apply(JobAction.Stop); };
+        var run = RenameViews(app, s, views, control);
+        var problems = new List<string>();
+        if (run.Statuses.Count != JobItems) problems.Add("rename_elements gave no per-item result: " + Short(run.Result.Text, 300));
+        else
+        {
+            if (run.Statuses.Take(8).Any(st => st != "ok") || !views.Take(8).All(Renamed)) problems.Add("the 8 finished items were not all kept");
+            if (run.Statuses[8] != JobControl.RolledBack || views[8].Name != before[8]) problems.Add($"item 9 was not rolled back: \"{run.Statuses[8]}\", named {views[8].Name}");
+            if (run.Statuses.Skip(9).Any(st => !st.StartsWith("not done: the user stopped", StringComparison.Ordinal)) || views.Skip(9).Any(Renamed))
+                problems.Add("items after the stop were not all left undone");
+        }
+        if (run.State != "stopped" || !run.Text.StartsWith(JobControl.StoppedText, StringComparison.Ordinal)) problems.Add($"the step ended {run.State} and Claude's text starts \"{Short(run.Text, 80)}\"");
+        return problems.Count == 0
+            ? Pass("Stop while item 9 of 24 ran: it was rolled back (name unchanged), items 1-8 kept, 10-24 not done; Claude is told the user stopped")
+            : Fail(string.Join("; ", problems));
+    });
+
+    /// <summary>Skip step at item 6: the step ends with 5 kept and says skipped; the task carries on with the next step.</summary>
+    private static (string, string) JobSkip(UIApplication app, State s) => WithJob(app, s, "job card skip", (_, views, control) =>
+    {
+        JobControl.TestBoundary = (what, i) => { if (what == JobBatch && i == 5) control.Apply(JobAction.Skip); };
+        var run = RenameViews(app, s, views, control);
+        var problems = new List<string>();
+        if (run.Ok != 5 || views.Count(Renamed) != 5) problems.Add($"{run.Ok} renamed ({views.Count(Renamed)} by name), not 5");
+        if (run.Statuses.Skip(5).Any(st => !st.StartsWith("not done: the user skipped", StringComparison.Ordinal))) problems.Add("the items after the skip don't say skipped");
+        if (run.State != "skipped" || !run.Text.StartsWith(JobControl.SkippedText, StringComparison.Ordinal)) problems.Add($"the step ended {run.State}");
+        if (control.State != JobState.Running) problems.Add($"after the step the task is {control.State}, not running (the skip was not used up)");
+        // The next step runs normally.
+        JobControl.TestBoundary = null;
+        var next = RenameViews(app, s, views.Skip(5).ToList(), control);
+        if (next.Ok != JobItems - 5 || next.State != "done") problems.Add($"the next step renamed {next.Ok} of {JobItems - 5} and ended {next.State}");
+        return problems.Count == 0
+            ? Pass($"Skip step at item 6: 5 kept, the rest skipped, Claude is told to move on; the next step then renamed the other {JobItems - 5}")
+            : Fail(string.Join("; ", problems));
+    });
+
+    /// <summary>A message queued mid-batch is added once to that step's result (what Claude reads next) and reported delivered.</summary>
+    private static (string, string) JobMessage(UIApplication app, State s) => WithJob(app, s, "job card message", (_, views, control) =>
+    {
+        const string note = "Field test: use the prefix B- for the next sheets.";
+        string? id = null;
+        var delivered = new List<(string Tool, IReadOnlyList<string> Ids)>();
+        void Got(string tool, IReadOnlyList<string> ids) => delivered.Add((tool, ids));
+        JobControl.TestBoundary = (what, i) => { if (what == JobBatch && i == 3) id = JobNotes.Add(note); };
+        JobNotes.Delivered += Got;
+        try
+        {
+            var run = RenameViews(app, s, views, control);
+            var problems = new List<string>();
+            var times = Regex.Matches(run.Text, Regex.Escape(note)).Count;
+            if (id is null) problems.Add("the hook never queued the message");
+            if (times != 1 || !run.Text.Contains("[Message from the user")) problems.Add($"the step's result carries the message {times} time(s)");
+            if (JobNotes.Count != 0) problems.Add($"{JobNotes.Count} message(s) still waiting");
+            if (delivered.Count != 1 || delivered[0].Tool != "rename_elements" || !delivered[0].Ids.SequenceEqual([id!])) problems.Add($"delivered {delivered.Count} time(s)");
+            if (run.Ok != JobItems) problems.Add($"the batch was interrupted: {run.Ok} of {JobItems} renamed");
+            return problems.Count == 0
+                ? Pass($"a message queued during item 4 reached the end of rename_elements' result once (what Claude reads next) and was reported delivered; all {JobItems} items ran. The chat's live round trip is the checklist's \"job.ui\" step")
+                : Fail(string.Join("; ", problems));
+        }
+        finally { JobNotes.Delivered -= Got; }
+    });
+
+    /// <summary>A sample stream with a streamed thinking block, and one without streaming, build the card's Thinking line.</summary>
+    private static (string, string) JobThinking()
+    {
+        string[] streamed =
+        [
+            """{"type":"stream_event","event":{"type":"message_start","message":{"id":"msg_ft1"}}}""",
+            """{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}}""",
+            """{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"The sheets need title blocks.\n"}}}""",
+            """{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Fill the sheet numbers first, then the dates."}}}""",
+            """{"type":"assistant","message":{"id":"msg_ft1","content":[{"type":"thinking","thinking":"The sheets need title blocks.\nFill the sheet numbers first, then the dates."}]}}""",
+        ];
+        var (card, events) = Chat.ChatPane.CardFromSample(streamed);
+        var problems = new List<string>();
+        var line = card.ThinkingShown;
+        if (events != 3) problems.Add($"{events} thinking events from the streamed sample, not 3 (start and two deltas; the complete message repeats them)");
+        if (!line.StartsWith("Thinking…", StringComparison.Ordinal) || !line.Contains("Fill the sheet numbers first")) problems.Add($"the one-line Thinking says \"{line}\"");
+        if (card.ThinkingToggle.Visibility != System.Windows.Visibility.Visible) problems.Add("the Thinking line is hidden");
+        card.ThinkingToggle.IsChecked = true;
+        if (!card.ThinkingFull.Contains("The sheets need title blocks.") || !card.ThinkingFull.Contains("then the dates.")) problems.Add($"opened, it shows \"{Short(card.ThinkingFull, 120)}\"");
+        var (whole, wholeEvents) = Chat.ChatPane.CardFromSample([streamed[4]]);
+        if (wholeEvents != 1 || !whole.ThinkingShown.Contains("then the dates.")) problems.Add($"without streaming: {wholeEvents} event(s), \"{whole.ThinkingShown}\"");
+        return problems.Count == 0
+            ? Pass($"streamed: \"{line}\", opening it shows both lines; a complete message without streaming shows it too")
+            : Fail(string.Join("; ", problems));
     }
 
     private static double Seconds(JsonElement e, string part, string field) => e.GetProperty(part).GetProperty(field).GetDouble();
