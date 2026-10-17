@@ -33,6 +33,9 @@ public sealed class Job
     /// </summary>
     internal volatile StepLimit? Limit;
 
+    /// <summary>The call's identity (tool and arguments, HandoffKeys.Call): a retry of a call held for the user attaches to it.</summary>
+    internal string Key = "";
+
     /// <summary>Set by the caller that runs the tool when it can hand the job on to <see cref="Continuation"/>.</summary>
     internal bool CanContinue;
 

@@ -869,11 +869,12 @@ internal static partial class FieldTest
     {
         if (TestDoc(app, s, out var why) is not { } doc) return Fail(why);
         const string tool = "create_sheets";
+        var problems = new List<string>();
+        var ownership = NoBorrow(doc, problems);
         var before = Revit.TimeLog.Report(doc).Totals;
         var sim = JsonSerializer.SerializeToElement(Revit.TimeLog.SimulateForTest(doc, activeMinutes: 6, idleMinutes: 8, aiMinutes: 3, units: 4, tool: tool));
         var report = Revit.TimeLog.Report(doc);
         var after = report.Totals;
-        var problems = new List<string>();
 
         var (expHand, expAi) = (Seconds(sim, "expected", "byHandSeconds"), Seconds(sim, "expected", "aiSeconds"));
         var (hand, ai, estimate) = (Seconds(sim, "counted", "byHandSeconds"), Seconds(sim, "counted", "aiSeconds"), Seconds(sim, "counted", "estimateSeconds"));
@@ -897,11 +898,40 @@ internal static partial class FieldTest
             $"Scripted session in the test project ({(doc.IsWorkshared ? "workshared" : "not workshared")}): 6 min active, 8 min idle (beyond the threshold, not counted), " +
             $"3 min AI. Counted {TimeMath.Duration(hand)} by hand and {TimeMath.Duration(ai)} AI. Line: \"{line}\". The test project's totals now: working " +
             $"{TimeMath.Duration(t.Working)}, AI {TimeMath.Duration(t.Ai)}, by hand {TimeMath.Duration(t.ByHand)}, saved {TimeMath.Duration(t.Saved)}. " +
-            $"Model write: {written}. PC log: {Revit.TimeLog.LogFile}.";
+            $"Model write: {written}. PC log: {Revit.TimeLog.LogFile}." + (ownership.Length > 0 ? " " + ownership : "");
         return problems.Count == 0
-            ? Pass($"counted {TimeMath.Duration(hand)} by hand and {TimeMath.Duration(ai)} AI as expected (8 idle minutes not counted, input during the task not counted twice); " +
+            ? Pass((ownership.Length > 0 ? ownership + " Then: " : "") + $"counted {TimeMath.Duration(hand)} by hand and {TimeMath.Duration(ai)} AI as expected (8 idle minutes not counted, input during the task not counted twice); " +
                    $"working time grew by exactly AI + by hand; \"{line}\"; the four Project Information parameters match the totals; the row is in Extensible Storage ({written}) and in the PC log")
             : Fail(string.Join("; ", problems));
+    }
+
+    /// <summary>
+    /// In a workshared test project: a write while this user doesn't own Project Information must borrow nothing (neither
+    /// Project Information nor any time record) and leave the parameters alone. Then Project Information is checked out
+    /// in the test project, as a user who edits it would own it, so the probes after this can check the parameters.
+    /// Returns what was checked ("" when the project isn't workshared).
+    /// </summary>
+    private static string NoBorrow(Document doc, List<string> problems)
+    {
+        if (!doc.IsWorkshared || doc.ProjectInformation is not { } info) return "";
+        CheckoutStatus Status(ElementId id) => WorksharingUtils.GetCheckoutStatus(doc, id);
+        var storage = new FilteredElementCollector(doc).OfClass(typeof(Autodesk.Revit.DB.ExtensibleStorage.DataStorage)).ToElementIds()
+            .Where(id => Status(id) != CheckoutStatus.OwnedByCurrentUser).ToList();
+        var infoBefore = Status(info.Id);
+        var parameters = TimeParameters(doc);
+        var write = Revit.TimeLog.WriteForTest(doc);
+        var checkedNow = infoBefore != CheckoutStatus.OwnedByCurrentUser;
+        if (checkedNow)
+        {
+            if (Status(info.Id) == CheckoutStatus.OwnedByCurrentUser) problems.Add("a time write borrowed Project Information");
+            if (!TimeParameters(doc).SequenceEqual(parameters)) problems.Add("the parameters changed although this user doesn't own Project Information");
+        }
+        var borrowed = storage.Count(id => doc.GetElement(id) is not null && Status(id) == CheckoutStatus.OwnedByCurrentUser);
+        if (borrowed > 0) problems.Add($"a time write borrowed {borrowed} time record element(s) nobody owned");
+        if (Status(info.Id) != CheckoutStatus.OwnedByCurrentUser) WorksharingUtils.CheckoutElements(doc, new List<ElementId> { info.Id });
+        return checkedNow
+            ? $"Without owning Project Information, a write ({write}) borrowed nothing and left the parameters alone; then Project Information was checked out in the test project, as a user who edits it would own it."
+            : $"Project Information was already this user's in the test project, so the no-borrow check covered only the {storage.Count} unowned time record(s) ({write}).";
     }
 
     /// <summary>True when the PC log has the simulated session for this model.</summary>
@@ -945,8 +975,8 @@ internal static partial class FieldTest
 
     /// <summary>
     /// The workshared queue path: with Project Information and the time records owned by someone else (a test hook: one
-    /// Revit session has only one user), the parameters must wait and the time stay on the PC; once free, the next write
-    /// brings the parameters up to the totals.
+    /// Revit session has only one user), the parameters must wait while the totals stay complete (this user's own new
+    /// record and the PC log); once this user owns Project Information again, the next write brings the parameters up.
     /// </summary>
     private static (string, string) TimeQueue(UIApplication app, State s)
     {
@@ -968,13 +998,15 @@ internal static partial class FieldTest
         var problems = new List<string>();
         if (!held.SequenceEqual(before)) problems.Add("the parameters changed while someone else held Project Information");
         if (totalsHeld.Ai < totalsBefore.Ai + Seconds(sim, "counted", "aiSeconds") - 1) problems.Add("the session's AI time was not kept while the model was held");
+        if (doc.IsWorkshared && doc.ProjectInformation is { } info && WorksharingUtils.GetCheckoutStatus(doc, info.Id) != CheckoutStatus.OwnedByCurrentUser)
+            WorksharingUtils.CheckoutElements(doc, new List<ElementId> { info.Id }); // owned, as by a user who edits it (test project only)
         var write = Revit.TimeLog.WriteForTest(doc);
         var after = TimeParameters(doc);
         var totals = Revit.TimeLog.Report(doc).Totals;
         problems.AddRange(ParameterProblems(after, totals).Select(p => "after release: " + p));
         return problems.Count == 0
-            ? Pass($"on {where}, with every element owned by someone else (test hook): the session was kept on this PC (model write: {sim.GetProperty("written").GetString()}) and the " +
-                   $"parameters waited; once free, the next write ({write}) brought them to the totals (working {TimeMath.Hours(totals.Working):0.##} h, AI {TimeMath.Hours(totals.Ai):0.##} h)")
+            ? Pass($"on {where}, with every element owned by someone else (test hook): the session's time stayed in the totals (model write: {sim.GetProperty("written").GetString()}) and the " +
+                   $"parameters waited, nothing borrowed; once this user owned Project Information, the next write ({write}) brought them to the totals (working {TimeMath.Hours(totals.Working):0.##} h, AI {TimeMath.Hours(totals.Ai):0.##} h)")
             : Fail($"on {where}: " + string.Join("; ", problems));
     }
 

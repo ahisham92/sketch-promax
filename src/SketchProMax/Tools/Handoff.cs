@@ -80,10 +80,26 @@ public static class Handoff
             return Final(result, items, outcomes);
         }
 
+        // The same step for the same tool and item already open (a ribbon run, or a call that got here twice): don't open
+        // a second card or window; the open one carries on, and its Continue runs the work once.
+        var keys = items.Select(i => HandoffKeys.Step(tool, i.Step)).Distinct().ToList();
+        lock (Gate)
+        {
+            if (keys.Any(Holding.Contains))
+                return With(result, new
+                {
+                    status = "already with the user",
+                    steps = items.Select(i => i.Step.Text).Take(20).ToList(),
+                    next = "The same step is already open in Revit (a window or a card in the chat) from an earlier run; it carries on there when the user answers. " +
+                           "Don't ask again; tell the user to finish it there.",
+                });
+            foreach (var key in keys) Holding.Add(key);
+        }
+
         if (Jobs.CanContinue(tool) is { } job)
         {
             // The call stays open until the user answers; Revit is free meanwhile. The result comes through wait_for_job.
-            job.Continuation = Hold(job, result, items);
+            job.Continuation = Hold(job, result, items, keys);
             Jobs.Report($"waiting for the user: {items[0].Step.What}");
             return With(result, new
             {
@@ -95,7 +111,7 @@ public static class Handoff
         }
 
         // From the ribbon, a quick tool or a recipe step: there is no call to hold, but the user still gets the steps.
-        _ = Detached(tool, result, items);
+        _ = Detached(tool, result, items, keys);
         return With(result, new
         {
             status = "handed to the user",
@@ -148,7 +164,7 @@ public static class Handoff
 
     // ---- The loop ----------------------------------------------------------------------------------------------------
 
-    private static async Task<ToolResult> Hold(Job job, ToolResult result, IReadOnlyList<HandoffItem> items)
+    private static async Task<ToolResult> Hold(Job job, ToolResult result, IReadOnlyList<HandoffItem> items, List<string> keys)
     {
         ToolResult? final = null;
         try
@@ -163,13 +179,14 @@ public static class Handoff
         }
         finally
         {
+            Release(keys);
             job.Finished = DateTime.UtcNow;
             if (Jobs.Running == job) Jobs.Running = null;
         }
         return final!;
     }
 
-    private static async Task Detached(string tool, ToolResult result, IReadOnlyList<HandoffItem> items)
+    private static async Task Detached(string tool, ToolResult result, IReadOnlyList<HandoffItem> items, List<string> keys)
     {
         try
         {
@@ -183,6 +200,15 @@ public static class Handoff
             }));
         }
         catch (Exception) { /* nothing is waiting for this result */ }
+        finally { Release(keys); }
+    }
+
+    /// <summary>Hand-offs open now, by tool, step and item (see <see cref="HandoffKeys.Step"/>).</summary>
+    private static readonly HashSet<string> Holding = new(StringComparer.OrdinalIgnoreCase);
+
+    private static void Release(IEnumerable<string> keys)
+    {
+        lock (Gate) foreach (var key in keys) Holding.Remove(key);
     }
 
     private static Task<object?> OnRevit(Func<object?> work) =>

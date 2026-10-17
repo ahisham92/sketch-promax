@@ -24,10 +24,11 @@ namespace SketchProMax.Revit;
 ///
 /// Storage: each user and PC keeps cumulative rows in Extensible Storage on a DataStorage element of their own, and the
 /// totals of all users go to four Project Information parameters (made the first time). Everything is written inside
-/// the task's own transactions, through a dynamic updater that is quiet outside tasks, so there is no extra undo step;
-/// an item batch also writes in a last transaction of its group, which is the one place an element may be borrowed or
-/// the parameters made in a workshared model (its failure rolls back only that transaction). Elsewhere, in a
-/// workshared model, only elements this user already owns (or just made) are written: anything else waits.
+/// the task's own transactions, through a dynamic updater that is enabled only while a Sketch ProMax tool runs, so
+/// there is no extra undo step; an item batch also writes in a last transaction of its group, the one place the
+/// parameters are made (its failure rolls back only that transaction). In a workshared model nothing is ever borrowed:
+/// only elements this user already owns (or just made) are written. The totals then live in this user's own
+/// DataStorage elements (a new one when none is owned), and the parameters wait until this user owns Project Information.
 ///
 /// The PC keeps the same rows per model under %APPDATA%\SketchProMax\TimeLog: the backup, and the queue of what the
 /// model doesn't have yet. Rows only grow, so each write simply takes the larger value of every field (TimeSheet):
@@ -145,6 +146,8 @@ internal static class TimeLog
             UpdaterRegistry.AddTrigger(id, all, Element.GetChangeTypeAny());
             UpdaterRegistry.AddTrigger(id, all, Element.GetChangeTypeElementAddition());
             try { UpdaterRegistry.AddTrigger(id, all, Element.GetChangeTypeElementDeletion()); } catch (Exception) { }
+            // Off until a Sketch ProMax tool runs (BeginTool / EndTool): the user's own edits pay nothing for it.
+            UpdaterRegistry.DisableUpdater(id);
         }
         catch (Exception) { /* no updater: item batches still write, and the PC log keeps everything */ }
     }
@@ -403,13 +406,32 @@ internal static class TimeLog
                 if (!run.InChat) run.Span = Clock.TaskStart(run.Start);
                 _tool = run;
                 LedgerFor(run.Doc, run.Title);
+                // Other users' rows, read here (outside the tool's transactions) so the updater reads only this user's row.
+                RefreshOthers(doc, run.Doc);
             }
+            SetUpdater(true);
         }
         catch (Exception)
         {
             if (_tool is { } run) lock (Gate) EndSpan(run);
             _tool = null;
+            SetUpdater(false);
         }
+    }
+
+    /// <summary>
+    /// Turns the updater on for a tool run, or off after it. EnableUpdater and DisableUpdater have no add-in or
+    /// updater-execution restriction (unlike Register/Unregister), and are called on Revit's thread outside Execute.
+    /// </summary>
+    private static void SetUpdater(bool on)
+    {
+        if (_updater is not { } updater) return;
+        try
+        {
+            if (on) UpdaterRegistry.EnableUpdater(updater.GetUpdaterId());
+            else UpdaterRegistry.DisableUpdater(updater.GetUpdaterId());
+        }
+        catch (Exception) { /* not registered any more: nothing to switch */ }
     }
 
     /// <summary>Ends a run's span on the activity clock, if it has one still open (a span left open stops by-hand counting).</summary>
@@ -428,6 +450,7 @@ internal static class TimeLog
         var run = _tool;
         _tool = null;
         if (run is null) return null;
+        SetUpdater(false);
         try
         {
             lock (Gate)
@@ -546,15 +569,15 @@ internal static class TimeLog
         // Many small transactions (an item batch): once in a while is enough, the last write wins anyway.
         if (DateTime.Now - run.LastWrite < TimeSpan.FromSeconds(15)) return;
         run.LastWrite = DateTime.Now;
-        // No parameter bindings here: changing them is not something an updater may do (and it would swap the
-        // user's shared parameter file mid-transaction); they are made in an item batch's own transaction.
-        lock (Gate) Write(doc, borrow: false, bindings: false);
+        // Not full: only this user's newest row is read, and no parameter bindings are made (changing them is not
+        // something an updater may do, and it would swap the user's shared parameter file mid-transaction).
+        lock (Gate) Write(doc, full: false);
     }
 
     /// <summary>
     /// An item batch finished its items (ItemBatch, inside its transaction group): count them for the by-hand estimate,
-    /// and write in one more transaction of the group, so it stays one undo step. Here elements nobody owns may be
-    /// borrowed and the parameters made; a failure rolls back only this transaction.
+    /// and write in one more transaction of the group, so it stays one undo step. Here the parameters may be made (where
+    /// this user owns Project Information) and spare copies tidied; a failure rolls back only this transaction.
     /// </summary>
     public static void InBatch(Document doc, string name, int done)
     {
@@ -572,12 +595,13 @@ internal static class TimeLog
             FailureGuard.Muted++;
             try
             {
+                // Set first: this commit triggers the updater, which then has nothing more to write.
+                run.LastWrite = DateTime.Now;
                 t.Start();
                 bool changed;
-                lock (Gate) changed = Write(doc, borrow: true, bindings: true);
+                lock (Gate) changed = Write(doc, full: true);
                 if (changed) t.Commit();
                 else t.RollBack();
-                run.LastWrite = DateTime.Now;
             }
             finally
             {
@@ -621,44 +645,74 @@ internal static class TimeLog
 
     private sealed record Holder(DataStorage Element, TimeSheet Sheet, string Text);
 
-    /// <summary>Every user's and PC's rows stored in the model.</summary>
-    private static List<Holder> Holders(Document doc)
+    /// <summary>
+    /// The rows stored in the model: every user's and PC's, or with <paramref name="newestMine"/> only this user's and
+    /// PC's newest element (the last one made holds everything the earlier ones had: each write merges them in), so a
+    /// write inside a tool's transaction parses one row set however many users and days the model holds.
+    /// </summary>
+    private static List<Holder> Holders(Document doc, bool newestMine = false)
     {
         var list = new List<Holder>();
         if (Schema.Lookup(SchemaGuid) is not { } schema) return list;
+        var found = new List<(DataStorage Ds, Entity Entity, string User, string Pc)>();
         foreach (var ds in new FilteredElementCollector(doc).OfClass(typeof(DataStorage)).Cast<DataStorage>())
         {
             try
             {
                 var entity = ds.GetEntity(schema);
                 if (!entity.IsValid()) continue;
+                var user = entity.Get<string>(FUser) ?? "";
+                var pc = entity.Get<string>(FPc) ?? "";
+                if (newestMine && !(string.Equals(user, _user, StringComparison.OrdinalIgnoreCase) && string.Equals(pc, Pc, StringComparison.OrdinalIgnoreCase))) continue;
+                found.Add((ds, entity, user, pc));
+            }
+            catch (Exception) { }
+        }
+        if (newestMine && found.Count > 1) found = [found.OrderByDescending(f => f.Ds.Id.Value).First()];
+        foreach (var (ds, entity, user, pc) in found)
+        {
+            try
+            {
                 var text = entity.Get<string>(FRows) ?? "";
-                list.Add(new Holder(ds, TimeSheet.Parse(entity.Get<string>(FUser) ?? "", entity.Get<string>(FPc) ?? "", text), text));
+                list.Add(new Holder(ds, TimeSheet.Parse(user, pc, text), text));
             }
             catch (Exception) { }
         }
         return list;
     }
 
+    /// <summary>Other users' and PCs' rows per model, from the last full read (they change only when the model is reloaded or synced).</summary>
+    private static readonly Dictionary<string, (DateTime Read, List<TimeSheet> Sheets)> Others = new(StringComparer.OrdinalIgnoreCase);
+
+    private static void KeepOthers(string key, IEnumerable<Holder> holders)
+    {
+        if (Others.Count > 50) Others.Clear();
+        Others[key] = (DateTime.Now, holders.Where(h => !Mine(h.Sheet)).Select(h => h.Sheet).ToList());
+    }
+
+    /// <summary>Reads other users' rows when not read in the last ten minutes. Outside any transaction.</summary>
+    private static void RefreshOthers(Document doc, string key)
+    {
+        if (Others.TryGetValue(key, out var known) && DateTime.Now - known.Read < TimeSpan.FromMinutes(10)) return;
+        try { KeepOthers(key, Holders(doc)); } catch (Exception) { }
+    }
+
     private static bool Mine(TimeSheet s) =>
         string.Equals(s.User, _user, StringComparison.OrdinalIgnoreCase) && string.Equals(s.Pc, Pc, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
-    /// Whether this element can be written now without asking anyone. In the tool's own transactions (borrow false)
-    /// only an element this user owns, or one just made: borrowing could fail and roll the tool's work back. In an item
-    /// batch's last transaction (borrow true) also one nobody owns and that is current with the central model.
+    /// Whether this element can be written without asking anyone: in a workshared model only one this user already
+    /// owns, or one made since the last sync. Ownership is never requested: an element nobody owns is not borrowed
+    /// (borrowing reaches the central model, can fail, and would hold the element from colleagues until a sync).
     /// </summary>
-    private static bool Writable(Document doc, ElementId id, bool borrow)
+    private static bool Writable(Document doc, ElementId id)
     {
         if (OwnedElsewhereForTest is not null) return false;
         if (!doc.IsWorkshared) return true;
         try
         {
-            var status = WorksharingUtils.GetCheckoutStatus(doc, id);
-            var updates = WorksharingUtils.GetModelUpdatesStatus(doc, id);
-            if (status == CheckoutStatus.OwnedByOtherUser || updates is ModelUpdatesStatus.UpdatedInCentral or ModelUpdatesStatus.DeletedInCentral) return false;
-            if (status == CheckoutStatus.OwnedByCurrentUser || updates == ModelUpdatesStatus.NotYetInCentral) return true;
-            return borrow && updates == ModelUpdatesStatus.CurrentWithCentral;
+            if (WorksharingUtils.GetCheckoutStatus(doc, id) == CheckoutStatus.OwnedByCurrentUser) return true;
+            return WorksharingUtils.GetModelUpdatesStatus(doc, id) == ModelUpdatesStatus.NotYetInCentral;
         }
         catch (Exception) { return false; }
     }
@@ -666,9 +720,10 @@ internal static class TimeLog
     /// <summary>
     /// Writes this PC's rows (and the running task's time so far) to the model, and all users' totals to the Project
     /// Information parameters. Needs an open transaction. Returns true when something in the model changed.
-    /// <paramref name="bindings"/>: the four parameters may be made here (never from the updater).
+    /// <paramref name="full"/> false (the updater, inside the tool's transaction): only this user's newest stored row is
+    /// read, the other users' rows come from the last full read, and no parameters are made or copies tidied.
     /// </summary>
-    private static bool Write(Document doc, bool borrow, bool bindings)
+    private static bool Write(Document doc, bool full)
     {
         if (_writing || !doc.IsModifiable) return false;
         _writing = true;
@@ -676,7 +731,8 @@ internal static class TimeLog
         {
             var key = Key(doc);
             var ledger = LedgerFor(key, doc.Title);
-            var holders = Holders(doc);
+            var holders = Holders(doc, newestMine: !full);
+            if (full) KeepOthers(key, holders);
             var ours = holders.Where(h => Mine(h.Sheet)).ToList();
             var stored = TimeSheet.Combine(ours.Select(h => h.Sheet)).FirstOrDefault();
             // The model may know more than this PC (its file was lost): take it back, but only between tasks: during one
@@ -692,9 +748,9 @@ internal static class TimeLog
             var target = ours.FirstOrDefault(h => h.Text == text);
             if (target is null && (stored is null || stored.IsBehind(mine)))
             {
-                // Into one of ours that can be written now; else (borrowed elsewhere, or not owned while inside the tool's
-                // own transaction) a new element of our own. Readers take the larger value of each field over all of them.
-                var element = ours.FirstOrDefault(h => Writable(doc, h.Element.Id, borrow))?.Element ?? DataStorage.Create(doc);
+                // Into one of ours this user owns; else (a workshared model after a sync) a new element of our own, never
+                // a borrowed one. Readers take the larger value of each field over all of them.
+                var element = ours.FirstOrDefault(h => Writable(doc, h.Element.Id))?.Element ?? DataStorage.Create(doc);
                 var entity = new Entity(schema);
                 entity.Set(FUser, _user);
                 entity.Set(FPc, Pc);
@@ -703,10 +759,10 @@ internal static class TimeLog
                 changed = true;
                 target = new Holder(element, mine, text);
             }
-            if (borrow && target is not null)
+            if (full && target is not null)
             {
-                // Copies left by earlier waits go when they can, now that one element holds everything.
-                var extra = ours.Where(h => h.Element.Id != target.Element.Id && Writable(doc, h.Element.Id, true)).Select(h => h.Element.Id).ToList();
+                // Earlier copies this user still owns go, now that one element holds everything (unowned ones stay).
+                var extra = ours.Where(h => h.Element.Id != target.Element.Id && Writable(doc, h.Element.Id)).Select(h => h.Element.Id).ToList();
                 if (extra.Count > 0)
                 {
                     try { doc.Delete(extra); changed = true; }
@@ -714,24 +770,28 @@ internal static class TimeLog
                 }
             }
 
-            var everyone = TimeSheet.Combine(holders.Where(h => !Mine(h.Sheet)).Select(h => h.Sheet).Append(mine));
-            changed |= SetTotals(doc, TimeTotals.Of(everyone.SelectMany(s => s.Rows.Values)), borrow, bindings, key);
+            // Without a full read of the other users yet (the updater before any), the parameters wait for the next write.
+            var others = full ? holders.Where(h => !Mine(h.Sheet)).Select(h => h.Sheet).ToList()
+                : Others.TryGetValue(key, out var known) ? known.Sheets : null;
+            if (others is null) return changed;
+            var everyone = TimeSheet.Combine(others.Append(mine));
+            changed |= SetTotals(doc, TimeTotals.Of(everyone.SelectMany(s => s.Rows.Values)), full, key);
             return changed;
         }
         finally { _writing = false; }
     }
 
-    private static bool SetTotals(Document doc, TimeTotals totals, bool borrow, bool bindings, string key)
+    private static bool SetTotals(Document doc, TimeTotals totals, bool bindings, string key)
     {
         var info = doc.ProjectInformation;
         if (info is null) return false;
+        // In a workshared model only while this user owns Project Information: it is never borrowed for this.
+        if (!Writable(doc, info.Id)) return false;
         var changed = false;
         // Made outside the updater (an item batch's own transaction), at most once per model and session: a try that
         // fails (bindings refused, or the transaction rolled back) isn't repeated with every batch.
-        if (bindings && Parameters.Any(p => info.get_Parameter(p.Guid) is null) && (borrow || !doc.IsWorkshared)
-            && Writable(doc, info.Id, borrow) && ParametersTried.Add(key))
+        if (bindings && Parameters.Any(p => info.get_Parameter(p.Guid) is null) && ParametersTried.Add(key))
             changed |= MakeParameters(doc);
-        if (!Writable(doc, info.Id, borrow)) return changed;
         double[] values = [TimeMath.Hours(totals.Saved), TimeMath.Hours(totals.Working), TimeMath.Hours(totals.Ai), TimeMath.Hours(totals.ByHand)];
         for (var i = 0; i < Parameters.Length; i++)
         {
@@ -810,21 +870,40 @@ internal static class TimeLog
         lock (Gate)
         {
             var holders = Holders(doc);
+            KeepOthers(key, holders);
             var ledger = LedgerFor(key, doc.Title);
             var mine = ledger.Sheet.Copy();
             AddRunning(mine, key);
             var stored = TimeSheet.Combine(holders.Where(h => Mine(h.Sheet)).Select(h => h.Sheet)).FirstOrDefault() ?? new TimeSheet(_user, Pc);
-            string? queued = null;
+            var sheets = TimeSheet.Combine(holders.Select(h => h.Sheet).Append(mine));
+            var notes = new List<string>();
             if (stored.IsBehind(mine))
-                queued = "Some of your time from this PC isn't in the model yet. It is kept on this PC and added to the model with one of your next " +
-                         "Sketch ProMax tasks" + (ProjectInfoHolder(doc) is { } who ? $" (the time record is borrowed by {who})." : ".");
+                notes.Add("Some of your time from this PC isn't in the model yet. It is kept on this PC and added to the model with one of your next Sketch ProMax tasks.");
+            if (ParametersBehind(doc, TimeTotals.Of(sheets.SelectMany(s => s.Rows.Values))))
+                notes.Add("The Project Information time parameters are behind the totals shown here. Sketch ProMax never borrows Project Information: they " +
+                          "catch up with your next Sketch ProMax task while you own it (for example after you edit it)" +
+                          (ProjectInfoHolder(doc) is { } who ? $"; {who} holds it now." : "."));
             return new TimeReport
             {
                 Model = ProjectPack.ModelName(doc),
-                Sheets = TimeSheet.Combine(holders.Select(h => h.Sheet).Append(mine)),
-                Queued = queued,
+                Sheets = sheets,
+                Queued = notes.Count == 0 ? null : string.Join(" ", notes),
             };
         }
+    }
+
+    /// <summary>True when the four parameters exist and differ from <paramref name="totals"/> by more than a rounding step.</summary>
+    private static bool ParametersBehind(Document doc, TimeTotals totals)
+    {
+        try
+        {
+            if (doc.ProjectInformation is not { } info) return false;
+            double[] want = [TimeMath.Hours(totals.Saved), TimeMath.Hours(totals.Working), TimeMath.Hours(totals.Ai), TimeMath.Hours(totals.ByHand)];
+            for (var i = 0; i < Parameters.Length; i++)
+                if (info.get_Parameter(Parameters[i].Guid) is { StorageType: StorageType.Double } p && Math.Abs(p.AsDouble() - want[i]) > 0.011) return true;
+            return false;
+        }
+        catch (Exception) { return false; }
     }
 
     /// <summary>Who else holds Project Information in a workshared model, or null.</summary>
@@ -881,7 +960,7 @@ internal static class TimeLog
         using var t = new Transaction(doc, "Sketch ProMax: time log test");
         t.Start();
         bool changed;
-        lock (Gate) changed = Write(doc, borrow: true, bindings: true);
+        lock (Gate) changed = Write(doc, full: true);
         return t.Commit() == TransactionStatus.Committed ? changed ? "written" : "nothing to write" : "not written: the transaction was rolled back";
     }
 
@@ -932,14 +1011,14 @@ internal static class TimeLog
         {
             if (doc.IsModifiable)
             {
-                lock (Gate) written = Write(doc, borrow: false, bindings: true) ? "written in the open transaction" : "nothing to write, or it waits (elements owned elsewhere)";
+                lock (Gate) written = Write(doc, full: true) ? "written in the open transaction" : "nothing to write, or it waits (elements owned elsewhere)";
             }
             else if (!doc.IsReadOnly)
             {
                 using var t = new Transaction(doc, "Sketch ProMax: time log test");
                 t.Start();
                 bool changed;
-                lock (Gate) changed = Write(doc, borrow: true, bindings: true);
+                lock (Gate) changed = Write(doc, full: true);
                 written = t.Commit() == TransactionStatus.Committed && changed ? "written in its own transaction" : "nothing written (it waits)";
             }
             else written = "the model is read-only";

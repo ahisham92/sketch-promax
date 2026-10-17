@@ -340,6 +340,15 @@ public sealed class BridgeServer
         var tool = _registry.Find(name);
         if (tool is null) return ToolResult.Error($"Unknown tool '{name}'.");
 
+        var key = HandoffKeys.Call(name, args);
+        if (Jobs.Running is { Continuation: { } rest } held && held.Key == key)
+        {
+            // The same call again (Claude retried it) while its hand-off waits for the user: wait for that one, so the
+            // user sees one card or window and Continue runs the work once.
+            await Task.WhenAny(rest, Task.Delay(InlineWaitMs, ct)).ConfigureAwait(false);
+            if (rest.IsCompleted) return rest.Status == TaskStatus.RanToCompletion ? rest.Result : Jobs.Status(held);
+            return StillRunning(held);
+        }
         // One job at a time: say what is running (or queued) instead of waiting behind it until the call times out.
         if (Jobs.Running is { } running) return Jobs.Busy(running);
         if (_dispatcher.IsRunning) return Jobs.Busy(null);
@@ -354,6 +363,7 @@ public sealed class BridgeServer
 
         var job = Jobs.TryCreate(tool.Name, out var inTheWay);
         if (job is null) return Jobs.Busy(inTheWay);
+        job.Key = key;
         // Dropped while still queued if the caller goes away or cancel_job asks; once started it runs to the end.
         var queued = CancellationTokenSource.CreateLinkedTokenSource(ct, job.Abandon.Token);
         job.CanContinue = true;
@@ -401,20 +411,85 @@ public sealed class BridgeServer
         if (why is not null && !ct.IsCancellationRequested && job.TryAbandon())
         {
             // Only the user can end an edit mode or answer a dialog: hand it over, and send the call again on Continue.
-            if (handoffs < 3 && await Handoff.AskBlocked(BlockedStep(tool.Name), ct).ConfigureAwait(false))
-                return await CallTool(name, args, fromChat, ct, handoffs + 1).ConfigureAwait(false);
-            return ToolResult.Error(why);
+            if (handoffs >= 3) return ToolResult.Error(why);
+            return await HandOverBlocked(key + "\n#" + handoffs, name, args, fromChat, tool.Name, why, handoffs, ct).ConfigureAwait(false);
         }
 
         await Task.WhenAny(job.Task, Task.Delay(InlineWaitMs, ct)).ConfigureAwait(false);
         if (job.Task.IsCompleted) return job.Task.Status == TaskStatus.RanToCompletion ? job.Task.Result : Jobs.Status(job);
-        return new ToolResult(JsonSerializer.Serialize(new
+        return StillRunning(job);
+    }
+
+    private static ToolResult StillRunning(Job job) => new(JsonSerializer.Serialize(new
+    {
+        status = "still running in Revit",
+        job = job.Id, tool = job.Tool, elapsed = Jobs.Duration(job.Elapsed), progress = job.Progress(),
+        next = $"Call wait_for_job (a sketch-promax tool) with job_id {job.Id} to wait for the result; it is kept when it finishes. Don't send other model work meanwhile, " +
+               "and use cancel_job if it should stop.",
+    }));
+
+    /// <summary>One hand-off for a call Revit didn't take, shared by every identical call while it is open.</summary>
+    private sealed class BlockedCall
+    {
+        public readonly CancellationTokenSource Stop = new();
+        public readonly TaskCompletionSource<ToolResult> Result = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public int Waiters;
+    }
+
+    private readonly Dictionary<string, BlockedCall> _blocked = new();
+
+    /// <summary>
+    /// Hands a call Revit didn't take to the user, once per identical call: a retry while the step is open waits for the
+    /// same answer (one card or window), and Continue sends the call again once; every waiter gets that one result.
+    /// The step closes as Stop only when every caller has gone.
+    /// </summary>
+    private async Task<ToolResult> HandOverBlocked(string key, string name, Dictionary<string, JsonElement> args, bool fromChat, string tool, string why,
+        int handoffs, CancellationToken ct)
+    {
+        BlockedCall entry;
+        bool first;
+        lock (_blocked)
         {
-            status = "still running in Revit",
-            job = job.Id, tool = job.Tool, elapsed = Jobs.Duration(job.Elapsed), progress = job.Progress(),
-            next = $"Call wait_for_job (a sketch-promax tool) with job_id {job.Id} to wait for the result; it is kept when it finishes. Don't send other model work meanwhile, " +
-                   "and use cancel_job if it should stop.",
-        }));
+            first = !_blocked.TryGetValue(key, out entry!);
+            if (first) _blocked[key] = entry = new BlockedCall();
+            entry.Waiters++;
+        }
+        if (first) _ = Task.Run(() => RunBlocked(entry, key, name, args, fromChat, tool, why, handoffs));
+        try
+        {
+            var gone = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            using (ct.Register(() => gone.TrySetResult(true)))
+            {
+                if (await Task.WhenAny(entry.Result.Task, gone.Task).ConfigureAwait(false) != entry.Result.Task)
+                    return ToolResult.Error("The call was cancelled while the user was asked to free Revit.");
+            }
+            return await entry.Result.Task.ConfigureAwait(false);
+        }
+        finally
+        {
+            lock (_blocked)
+            {
+                if (--entry.Waiters == 0 && !entry.Result.Task.IsCompleted)
+                    try { entry.Stop.Cancel(); } catch (ObjectDisposedException) { }
+            }
+        }
+    }
+
+    private async Task RunBlocked(BlockedCall entry, string key, string name, Dictionary<string, JsonElement> args, bool fromChat, string tool, string why, int handoffs)
+    {
+        ToolResult result;
+        try
+        {
+            result = await Handoff.AskBlocked(BlockedStep(tool), entry.Stop.Token).ConfigureAwait(false)
+                ? await CallTool(name, args, fromChat, entry.Stop.Token, handoffs + 1).ConfigureAwait(false)
+                : ToolResult.Error(why);
+        }
+        catch (Exception ex) { result = ToolResult.Error($"{ex.GetType().Name}: {ex.Message}"); }
+        finally
+        {
+            lock (_blocked) { if (_blocked.TryGetValue(key, out var open) && open == entry) _blocked.Remove(key); }
+        }
+        entry.Result.TrySetResult(result);
     }
 
     /// <summary>The hand-off for a call Revit didn't take: what is holding Revit, and how the user ends it.</summary>

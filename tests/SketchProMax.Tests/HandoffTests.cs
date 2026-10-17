@@ -11,6 +11,16 @@ internal static class HandoffTests
         List<HandoffOutcome> Loop(IReadOnlyList<HandoffItem> items, Func<HandoffStep, string?, HandoffChoice> respond, Func<bool>? stop = null) =>
             HandoffLoop.RunAsync(items, null, respond, Inline, stop ?? (() => false), v => v as string == "error" ? "it failed" : null).GetAwaiter().GetResult();
 
+        // ---- Hand-off identity: a retried call is the same call whatever the argument order; another target is not
+        static Dictionary<string, System.Text.Json.JsonElement> Args(string json) =>
+            System.Text.Json.JsonDocument.Parse(json).RootElement.EnumerateObject().ToDictionary(p => p.Name, p => p.Value.Clone());
+        check("handoff: same call, any argument order, same key",
+            HandoffKeys.Call("import_cad", Args("{\"path\":\"a.dwg\",\"view_id\":5}")) == HandoffKeys.Call("import_cad", Args("{\"view_id\":5,\"path\":\"a.dwg\"}")), "");
+        check("handoff: another target, another key",
+            HandoffKeys.Call("import_cad", Args("{\"path\":\"a.dwg\"}")) != HandoffKeys.Call("import_cad", Args("{\"path\":\"b.dwg\"}")), "");
+        check("handoff: step key has tool, kind, what and item",
+            HandoffKeys.Step("t", new HandoffStep { Kind = "k", What = "w", Item = "1" }) != HandoffKeys.Step("t", new HandoffStep { Kind = "k", What = "w", Item = "2" }), "");
+
         // ---- Continue re-checks, and asks again with what is missing until it passes
         var done = false;
         var notes = new List<string?>();

@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace SketchProMax.Tools;
 
 /// <summary>What the user chose on a hand-off: re-check and resume, skip this item, or stop the task.</summary>
@@ -235,4 +237,18 @@ public static class HandoffLoop
     }
 
     private sealed record NotYet(string Why);
+}
+
+/// <summary>
+/// What makes two hand-offs the same, so a retried call attaches to the one already open instead of opening a second
+/// card or window (and Continue runs the work once).
+/// </summary>
+public static class HandoffKeys
+{
+    /// <summary>A call: the tool and its arguments (the target), in a fixed order.</summary>
+    public static string Call(string tool, IReadOnlyDictionary<string, JsonElement> args) =>
+        tool + "\n" + string.Join("\n", args.OrderBy(p => p.Key, StringComparer.Ordinal).Select(p => p.Key + "=" + p.Value.GetRawText()));
+
+    /// <summary>A step a tool hands over: the tool, the kind of step, what to do and the item.</summary>
+    public static string Step(string tool, HandoffStep step) => string.Join("\n", tool, step.Kind, step.What, step.Item ?? "");
 }
