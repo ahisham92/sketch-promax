@@ -247,12 +247,15 @@ internal static partial class FieldTest
         await Probe(s, "issue.gate", app => IssueGateProbe(app, s)).ConfigureAwait(false);
         await Probe(s, "package.sentence", app => PackageSentence(app, s)).ConfigureAwait(false);
         await Probe(s, "package.skip", app => PackageSkip(app, s)).ConfigureAwait(false);
+        await Probe(s, "redlines.pdf", app => RedlinePdf(app, s)).ConfigureAwait(false);
+        await Probe(s, "redlines.pipeline", app => RedlinePipeline(app, s)).ConfigureAwait(false);
         // Off Revit's thread: processes, files and the network.
         await Probe(s, "chat.cli", () => { cli = new ClaudeCliInstall(Chat.ClaudeCli.Find()); return cli.Row(); }).ConfigureAwait(false);
         await Probe(s, "chat.signin", () => SignIn(cli)).ConfigureAwait(false);
         await Probe(s, "chat.roundtrip", () => RoundTrip(cli, s.O.ChatRoundTrip)).ConfigureAwait(false);
         await ProbeCore(s, "brief.plan", () => BriefPlan(s)).ConfigureAwait(false);
         await ProbeCore(s, "brief.choose", () => BriefChoose(s)).ConfigureAwait(false);
+        await Probe(s, "redlines.vision", () => RedlineVision(s, cli)).ConfigureAwait(false);
         await Probe(s, "checklist.build", () => ChecklistBuild(s.Folder)).ConfigureAwait(false);
         await Probe(s, "chat.models", () => Models(s.Folder)).ConfigureAwait(false);
         await Probe(s, "chat.prompts", () => Prompts(s.Folder)).ConfigureAwait(false);

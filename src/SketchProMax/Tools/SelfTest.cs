@@ -501,7 +501,26 @@ internal static partial class SelfTest
         },
         new("run_revit_query_code", _ => new { code = "Level.Create(doc, 1234.5);\nreturn new { walls = new FilteredElementCollector(doc).OfClass(typeof(Wall)).GetElementCount(), title = doc.Title };", description = "self-test query that makes a level (rolled back)" }),
         new("create_mep_openings", _ => new { method = "report", limit = 50 }) { Heavy = true },
+        new("redline_plan", c => new { sheet_number = c.Sheet?.SheetNumber ?? throw new Skip("the model has no sheets"), markups = SelfTestMarkups })
+            { Expect = r => r.GetProperty("markups").GetInt32() == 1 && r.GetProperty("plan").GetArrayLength() == 1 ? null : "the markup was not read and planned" },
     ];
+
+    /// <summary>One markup asking for a note in the middle of the sheet, as Claude would read it from a page.</summary>
+    private static readonly object[] SelfTestMarkups =
+        [new { id = "M1", type = "text", text = "Self-test redline", bbox = new[] { 0.4, 0.4, 0.6, 0.45 }, change = new { kind = "add_note", to = "Self-test redline" } }];
+
+    /// <summary>A small marked-up page image (a white square) in the test's folder, for redline_read.</summary>
+    private static string SelfTestPage(string folder)
+    {
+        var path = Path.Combine(folder, "redline-page.png");
+        var pixels = Enumerable.Repeat((byte)255, 64 * 64 * 3).ToArray();
+        var image = System.Windows.Media.Imaging.BitmapSource.Create(64, 64, 96, 96, System.Windows.Media.PixelFormats.Rgb24, null, pixels, 64 * 3);
+        var encoder = new System.Windows.Media.Imaging.PngBitmapEncoder();
+        encoder.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(image));
+        using var file = File.Create(path);
+        encoder.Save(file);
+        return path;
+    }
 
     /// <summary>Exports: they write files to the temporary folder and cannot run inside a transaction group.</summary>
     private static IEnumerable<Case> FileCases() =>
@@ -516,6 +535,7 @@ internal static partial class SelfTest
         new("ve_compare_options", c => new { folder = c.Temp, span_x = 8.0, span_y = 6.0, floors = 5, options = new[] { "flat_slab", "beam_and_slab", "pt_flat_slab", "hollow_core", "steel_composite", "raft", "piles", "model" }, excel = false }),
         new("ve_register", c => new { folder = c.Temp, excel = false }),
         new("export_pdf", c => new { view_ids = new[] { c.Sheet?.Id.Value ?? c.PlanId }, folder = c.Temp, file_name = "sheets" }) { Heavy = true },
+        new("redline_read", c => new { file = SelfTestPage(c.Temp), pixel_width = 800 }) { Expect = r => r.GetProperty("page").GetInt32() == 1 ? null : "it did not read page 1" },
         new("export_files", c => new { format = "dwg", view_ids = new[] { c.PlanId }, folder = c.Temp, file_name = "plan" }) { Heavy = true },
         new("export_bcf", c => new { issues = new[] { new { title = "Self-test issue", element_ids = c.Wall is null ? Array.Empty<long>() : [c.Wall.Id.Value] } }, folder = c.Temp, file_name = "issues" }),
         new("save_recipe", _ => new { name = "sketch-promax-self-test", description = "Self-test", steps = new[] { new { tool = "get_model_context", arguments = new { } } } }),
@@ -782,6 +802,8 @@ internal static partial class SelfTest
         new("format_schedule", _ => new { schedule = "Self-test wall schedule", grand_totals = true }, Setup: ["create_schedule"]),
         new("create_sheet_list", _ => new { name = "Self-test drawing list" }),
         new("create_revision", _ => new { description = "Self-test revision" }),
+        new("redline_apply", _ => new { sheet_number = "ST-999", markups = SelfTestMarkups, dry_run = true, export = false }, Setup: ["create_sheets"])
+            { Expect = r => r.GetProperty("plan").GetArrayLength() == 1 ? null : "the markup was not planned" },
         new("cloud_elements", c =>
         {
             var revision = c.First<Revision>() ?? throw new Skip("no revision");
