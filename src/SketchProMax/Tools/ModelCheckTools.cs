@@ -29,7 +29,7 @@ internal static class Checks
 
     public static string Now => DateTime.Now.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
 
-    public static string Csv(string s) => s.IndexOfAny([',', '"', '\n']) >= 0 ? "\"" + s.Replace("\"", "\"\"") + "\"" : s;
+    public static string Csv(string s) => Carbon.Csv(s); // quoted when needed; formula-like text kept as text
 
     public static string Describe(Element e) =>
         $"{e.Category?.Name} {(e.Document.GetElement(e.GetTypeId()) as ElementType)?.Name ?? e.Name}".Trim();

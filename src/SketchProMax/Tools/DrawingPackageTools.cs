@@ -584,6 +584,8 @@ internal sealed class PackageRun(UIApplication app, Document doc, DrawingPackage
             var made = new List<string>();
             foreach (var s in sheets.Concat(plan.Register is { } r ? [r] : []))
             {
+                // Continue again after a part-way failure: the sheets made the first time are kept, not made twice.
+                if (_sheets.TryGetValue(s.Number, out var made0) && doc.GetElement(new ElementId(made0)) is ViewSheet) { made.Add(s.Number); continue; }
                 if (s.Register) MakeRegisterWith(s, tb);
                 else CreateSheet(s, tb);
                 made.Add(s.Number);

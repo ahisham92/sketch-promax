@@ -65,8 +65,8 @@ internal static class IssueGate
     {
         var doc = app.ActiveUIDocument.Document;
         var path = StorePath(doc);
-        var store = IssueGateStore.Load(path);
-        if ((spec is not null && spec != store.SpecChecklist) || (boq is not null && boq != store.BoqFile))
+        var store = IssueGateStore.Load(path, out var unreadable);
+        if (!unreadable && ((spec is not null && spec != store.SpecChecklist) || (boq is not null && boq != store.BoqFile)))
         {
             store.SpecChecklist = spec ?? store.SpecChecklist;
             store.BoqFile = boq ?? store.BoqFile;
@@ -77,6 +77,7 @@ internal static class IssueGate
         Directory.CreateDirectory(folder);
 
         var run = new Run { ModelKey = Checks.ModelKey(doc), Model = doc.Title, Sheets = sheets.Select(s => new IssueGateMath.Sheet(s.SheetNumber, s.Name, s.Id.Value)).ToList() };
+        if (unreadable) run.Notes.Add($"The issue check's file {path} can't be read, so earlier acceptances are not applied (every item shows open) and nothing is saved to it.");
         var findings = new List<IssueGateMath.Finding>();
         void Ran(string tool, ToolResult r, List<IssueGateMath.Finding>? found, string? note = null)
         {
@@ -136,7 +137,7 @@ internal static class IssueGate
     public static int Accept(Document doc, Run run, IEnumerable<IssueGateMath.Item> items, string reason)
     {
         var path = StorePath(doc);
-        var store = IssueGateStore.Load(path);
+        var store = IssueGateStore.ForUpdate(path);
         var n = IssueGateMath.Accept(store.Accepted, items, reason, Environment.UserName, DateTime.Now);
         store.Save(path);
         run.Groups = IssueGateMath.Regroup(run.Groups, store.Accepted);
@@ -147,7 +148,7 @@ internal static class IssueGate
     public static int Unaccept(Document doc, Run run, IEnumerable<string> keys)
     {
         var path = StorePath(doc);
-        var store = IssueGateStore.Load(path);
+        var store = IssueGateStore.ForUpdate(path);
         var n = IssueGateMath.Unaccept(store.Accepted, keys);
         if (n > 0) store.Save(path);
         run.Groups = IssueGateMath.Regroup(run.Groups, store.Accepted);
@@ -158,7 +159,8 @@ internal static class IssueGate
     public static void Record(Document doc, IssueGateMath.IssueRecord record)
     {
         var path = StorePath(doc);
-        var store = IssueGateStore.Load(path);
+        var store = IssueGateStore.Load(path, out var unreadable);
+        if (unreadable) return; // never save over a file that couldn't be read (the transmittal still has the record)
         store.Issues.Add(record);
         TrySave(store, path);
     }
@@ -175,6 +177,9 @@ internal static class IssueGate
 
     /// <summary>The ribbon window cleared this run (or let it through with a reason): the next issue_drawings on the same sheets uses it.</summary>
     public static void Clear(Run run, string? overrideReason) => _cleared = (run, overrideReason, DateTime.Now);
+
+    /// <summary>Drops a cleared run the ribbon flow did not use (its form was cancelled, or the tool didn't start), so a later call can't pick it up.</summary>
+    public static void Discard() => _cleared = null;
 
     /// <summary>The cleared run for these sheets of this model, once, when it is less than ten minutes old.</summary>
     public static (Run Run, string? OverrideReason)? TakeCleared(Document doc, IEnumerable<string> numbers)
@@ -283,14 +288,17 @@ public sealed class IssueCheckTool : IRevitTool
         var accepted = 0;
         if (args.StringList("unaccept") is { Count: > 0 } reopen) IssueGate.Unaccept(doc, run, reopen);
         var byKey = run.Groups.SelectMany(g => g.Items).GroupBy(i => i.Key).ToDictionary(g => g.Key, g => g.First());
+        // Every reason is checked before any is saved, so a missing one really leaves nothing accepted.
+        var wanted = new List<(IssueGateMath.Item Item, string Reason)>();
         foreach (var a in args.Array("accept"))
         {
-            var key = a.TryGetProperty("key", out var k) ? k.GetString() ?? "" : "";
-            var reason = a.TryGetProperty("reason", out var r) ? r.GetString() ?? "" : "";
+            var key = a.ValueKind == JsonValueKind.Object && a.TryGetProperty("key", out var k) && k.ValueKind == JsonValueKind.String ? k.GetString() ?? "" : "";
+            var reason = a.ValueKind == JsonValueKind.Object && a.TryGetProperty("reason", out var r) && r.ValueKind == JsonValueKind.String ? r.GetString() ?? "" : "";
             if (!byKey.TryGetValue(key, out var item)) { unknown.Add(key); continue; }
             if (string.IsNullOrWhiteSpace(reason)) return ToolResult.Error($"Item {key} needs the user's reason to be accepted. Nothing was accepted.");
-            accepted += IssueGate.Accept(doc, run, [item], reason);
+            wanted.Add((item, reason.Trim()));
         }
+        foreach (var w in wanted) accepted += IssueGate.Accept(doc, run, [w.Item], w.Reason);
         if (accepted > 0 && run.Report is { } report)
         {
             try { Xlsx.Write(report, IssueGateMath.ReportSheets(run.Groups, run.Checks)); }

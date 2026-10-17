@@ -588,7 +588,10 @@ public sealed class CostEstimateTool : IRevitTool
             if (!File.Exists(prev)) throw new ArgumentException($"File not found: {prev}");
             before = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
             foreach (var r in Table.Read(prev, out _))
+                // Lines only: not the totals, nor the Excel cost plan's add-on rows (no ref, a % unit), so the previous total
+                // is the measured works whichever file it came from.
                 if (r.TryGetValue("description", out var d) && !d.StartsWith("Total", StringComparison.OrdinalIgnoreCase) && d != "Measured works"
+                    && !((!r.TryGetValue("ref", out var rf0) || rf0.Length == 0) && r.TryGetValue("unit", out var u0) && u0.StartsWith("%", StringComparison.Ordinal))
                     && (r.TryGetValue("cost", out var c) || r.TryGetValue("amount", out c)) && double.TryParse(c, NumberStyles.Float, CultureInfo.InvariantCulture, out var v))
                     before[(r.TryGetValue("ref", out var rf) ? rf : "") + "|" + d] = v;
         }

@@ -23,8 +23,11 @@ internal static class CostRun
 
     // ---------------------------------------------------------------- per-model store
 
+    /// <summary>The self-test's folder for what is remembered per model (null: %APPDATA%\SketchProMax\cost), so its runs never change the user's.</summary>
+    internal static string? StoreOverride;
+
     public static string Store(Document doc) =>
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "SketchProMax", "cost", Checks.ModelKey(doc));
+        Path.Combine(StoreOverride ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "SketchProMax", "cost"), Checks.ModelKey(doc));
 
     /// <summary>What is remembered for a model: the rate table with its region and currency, the exchange rates and the add-ons.</summary>
     public sealed class Saved
@@ -162,7 +165,10 @@ internal static class CostRun
         if (new[] { "prelims_percent", "contingency_percent", "vat_percent", "escalation_percent_per_year", "escalation_from", "escalation_to" }.Any(args.Has))
         {
             saved.Prelims = a.PrelimsPct; saved.Contingency = a.ContingencyPct; saved.Vat = a.VatPct; saved.Escalation = a.EscalationPctPerYear;
-            saved.EscalationFrom = args.OptString("escalation_from") ?? saved.EscalationFrom; saved.EscalationTo = a.TargetDate?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+            // The base date actually used is remembered (not left to default to today), so a later run escalates from the
+            // same date instead of a little less each day.
+            saved.EscalationFrom = a.EscalationPctPerYear != 0 ? a.BaseDate?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) : args.OptString("escalation_from") ?? saved.EscalationFrom;
+            saved.EscalationTo = a.TargetDate?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
             Remember(doc, saved);
         }
         return a;
@@ -652,7 +658,8 @@ public sealed class WhatIfTool : IRevitTool
         string? refusal = null;
         if (target == "copy" && active.IsWorkshared && !active.IsDetached)
             refusal = "This model is workshared, so what_if won't copy or open it (that could act on the central file or on the model you have open). " +
-                      "Detach a copy (Open > Detach from Central, e.g. as a _detached file), save it, open it and run what_if there, or use target design_option.";
+                      "Open it with Detach from Central and choose Detach and discard worksets, save that copy under a new name (e.g. a _detached file), " +
+                      "and run what_if there; or use target design_option.";
         else if (target == "copy" && string.IsNullOrEmpty(active.PathName))
             refusal = "Save the model first: what_if makes its copy from the saved file.";
 
@@ -690,16 +697,27 @@ public sealed class WhatIfTool : IRevitTool
             source = detached ? Path.Combine(Path.GetDirectoryName(copyPath)!, Path.GetFileNameWithoutExtension(copyPath) + " (source).rvt") : copyPath;
             if (File.Exists(source)) throw new ArgumentException($"{source} exists already; give another copy_path.");
             File.Copy(active.PathName, source);
-            var options = new OpenOptions();
-            if (detached) options.DetachFromCentralOption = DetachFromCentralOption.DetachAndPreserveWorksets;
-            doc = app.Application.OpenDocumentFile(ModelPathUtils.ConvertUserVisiblePathToModelPath(source), options);
-            // Revit hands back the open document when the file is already open: never change or close that one.
-            if (doc.Equals(active) || VeRun.SamePath(doc.PathName, active.PathName))
+            try
             {
-                if (!doc.Equals(active)) try { doc.Close(false); } catch (Autodesk.Revit.Exceptions.ApplicationException) { }
-                throw new InvalidOperationException("Revit returned the open model instead of the copy, so nothing was changed. The copy file is at " + copyPath + "; open it and run what_if there.");
+                var options = new OpenOptions();
+                if (detached) options.DetachFromCentralOption = DetachFromCentralOption.DetachAndPreserveWorksets;
+                doc = app.Application.OpenDocumentFile(ModelPathUtils.ConvertUserVisiblePathToModelPath(source), options);
+                // Revit hands back the open document when the file is already open: never change or close that one.
+                if (doc.Equals(active) || VeRun.SamePath(doc.PathName, active.PathName))
+                {
+                    if (!doc.Equals(active)) try { doc.Close(false); } catch (Autodesk.Revit.Exceptions.ApplicationException) { }
+                    doc = active;
+                    throw new InvalidOperationException("Revit returned the open model instead of the copy, so nothing was changed. Open the copy (" + copyPath + ") yourself and run what_if there.");
+                }
+                opened = true;
             }
-            opened = true;
+            finally
+            {
+                // Not opened: the file copied for it is removed (from a detached model, that is the temporary source; else the
+                // copy itself, which nothing was done to), so a failed open leaves nothing behind.
+                if (!opened)
+                    try { File.Delete(source); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            }
         }
 
         try
@@ -708,15 +726,19 @@ public sealed class WhatIfTool : IRevitTool
             var batch = ItemBatch.Run(doc, "What if", ops, o => $"{o.Id}: {o.What}", o => [new ElementId(o.Id)], o => Apply(doc, o, dupes), borrow: target != "copy");
             if (opened && batch.Done > 0)
             {
-                // A detached copy with worksets is saved as a central of its own at copy_path (never the original's).
-                if (doc.IsWorkshared)
+                // The copy is a document of its own (never the active one, checked above), so SaveAs moves only the copy's
+                // path. A copy opened detached from a temporary source is saved as copy_path (a central of its own when it
+                // kept its worksets); a plain copy was opened at copy_path and is saved in place.
+                if (source != copyPath)
                 {
-                    var o = new SaveAsOptions { OverwriteExistingFile = true, MaximumBackups = 1 };
-                    o.SetWorksharingOptions(new WorksharingSaveAsOptions { SaveAsCentral = true });
+                    var o = new SaveAsOptions { OverwriteExistingFile = false, MaximumBackups = 1 };
+                    if (doc.IsWorkshared) o.SetWorksharingOptions(new WorksharingSaveAsOptions { SaveAsCentral = true });
                     doc.SaveAs(copyPath!, o);
                 }
                 else doc.Save();
             }
+            else if (opened && source != copyPath)
+                warnings.Add($"No change was made, so no copy was saved at {copyPath}.");
             var plan1 = rates is null ? null : CostRun.MeasurePlan(doc, rates.Selection.Rows, threshold, "none", null, null, option, basis: false);
             var after = CostRun.Figures("What if", target == "copy" ? "copy " + copyPath : "design option " + option, plan1, CostRun.Facts(doc, inp, option), outputs);
             var delta = Cost.Delta(current, after, currency);

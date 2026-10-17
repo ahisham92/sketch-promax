@@ -338,7 +338,9 @@ internal sealed class IssueGateWindow : Window
             case Choice.Fix: return Fix(app, window.FixId);
             case Choice.Issue:
                 IssueGate.Clear(window._run, window.OverrideReason);
-                return RibbonTools.Run(app, "issue_drawings");
+                // Cancelling the Issue drawings form must not leave the cleared check for a later call to pick up.
+                try { return RibbonTools.Run(app, "issue_drawings"); }
+                finally { IssueGate.Discard(); }
             default: return Autodesk.Revit.UI.Result.Cancelled;
         }
     }

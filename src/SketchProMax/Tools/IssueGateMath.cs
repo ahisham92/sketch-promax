@@ -284,24 +284,36 @@ internal sealed class IssueGateStore
     public string? BoqFile { get; set; }
     public List<IssueGateMath.IssueRecord> Issues { get; set; } = [];
 
-    public static IssueGateStore Load(string path)
+    public static IssueGateStore Load(string path) => Load(path, out _);
+
+    /// <summary>
+    /// The store; empty when there is none yet. <paramref name="unreadable"/>: a file is there but can't be read (locked,
+    /// or damaged), so a writer must not save over it and lose the acceptances and the issue history in it.
+    /// </summary>
+    public static IssueGateStore Load(string path, out bool unreadable)
     {
+        unreadable = false;
         try
         {
-            if (File.Exists(path)) return JsonSerializer.Deserialize<IssueGateStore>(File.ReadAllText(path)) ?? new();
+            if (SafeFile.Read(path) is { } text) return JsonSerializer.Deserialize<IssueGateStore>(text) ?? new();
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or NotSupportedException) { }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or NotSupportedException) { unreadable = true; }
         return new();
     }
 
-    /// <summary>Writes through a temporary file, so a crash never leaves half of it.</summary>
+    /// <summary>The store to change and save back: throws when the file is there but can't be read, rather than overwrite it.</summary>
+    public static IssueGateStore ForUpdate(string path)
+    {
+        var store = Load(path, out var unreadable);
+        if (unreadable)
+            throw new IOException($"The issue check's file {path} can't be read (open elsewhere, or damaged), so it was not changed. Close other Revit sessions, or move the file away, and try again.");
+        return store;
+    }
+
+    /// <summary>Writes through a temporary file (<see cref="SafeFile"/>), so a crash never leaves half of it.</summary>
     public void Save(string path)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         if (Issues.Count > 200) Issues.RemoveRange(0, Issues.Count - 200);
-        var temp = path + ".tmp";
-        File.WriteAllText(temp, JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true }));
-        if (File.Exists(path)) File.Delete(path);
-        File.Move(temp, path);
+        SafeFile.Write(path, JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true }));
     }
 }

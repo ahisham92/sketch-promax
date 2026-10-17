@@ -156,6 +156,13 @@ public sealed class RunRecipeTool : IRevitTool
             if (tool is null) { results.Add(new { step = index, tool = name, error = "unknown tool" }); if (!keepGoing) break; continue; }
             // Placeholders take the type the tool's schema asks for: "{view_id}" becomes 5285027, not "5285027".
             stepArgs = Placeholders.Fill(stepArgs, tool.PropertiesJson, fill);
+            // Calls the bridge always asks about (what_if with confirm...) are asked about here too, whatever the settings say.
+            if (OutputPaths.AlwaysAskReason(name, stepArgs) is { } ask && !Bridge.BridgeServer.Approve(tool, stepArgs, ask))
+            {
+                results.Add(new { step = index, tool = name, error = "the user said no in Revit; nothing was run" });
+                if (!keepGoing) break;
+                continue;
+            }
             ToolResult result;
             try { result = tool.Execute(app, new ToolArgs(stepArgs)); }
             catch (Exception ex) { result = ToolResult.Error($"{ex.GetType().Name}: {ex.Message}"); }

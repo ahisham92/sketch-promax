@@ -184,6 +184,9 @@ internal static partial class FieldTest
             if (read.IsError) return Fail(Short(read.Text, 400));
             if (read.PngImage is not { Length: > 1000 } png) return Fail("redline_read returned no image of the PDF page");
             using var json = JsonDocument.Parse(read.Text);
+            // redline_read keeps its image for the chat; the probe's goes now (it is outside the test folder).
+            if (json.RootElement.TryGetProperty("image", out var image) && image.GetString() is { } shown && Path.GetDirectoryName(shown) is { } dir)
+                Redlines.Remove(dir);
             var pages = json.RootElement.GetProperty("pagesFound").GetInt32();
             return Pass($"export_pdf wrote the test sheet; redline_read rasterised page 1 of {pages} through Revit into a {png.Length / 1024} KB PNG, ready for Claude to read");
         }
@@ -206,6 +209,8 @@ internal static partial class FieldTest
         {
             if (RedlineSetup(doc, out why) is not { } r) return Fail(why);
             var markups = RedlineMarkups(r, out _);
+            // Ids now: the struck-through note is deleted by the run, and a deleted element can't be read.
+            long oldId = r.Old.Id.Value, wallId = r.Wall.Id.Value, struckId = r.Struck.Id.Value;
             var page = RedlinePageImage(doc, r, markups, folder);
             _redlinePage = page;
             var json = JsonSerializer.Serialize(new { sheet_number = r.Sheet.SheetNumber, markups });
@@ -224,17 +229,17 @@ internal static partial class FieldTest
             var problems = new List<string>();
 
             // Mapping: the right viewport's view and element for each markup.
-            foreach (var (id, element) in new[] { ("M1", r.Old.Id.Value), ("M2", r.Wall.Id.Value), ("M3", r.Struck.Id.Value) })
+            foreach (var (id, element) in new[] { ("M1", oldId), ("M2", wallId), ("M3", struckId) })
                 if (!Where(id).Contains($"'{r.Plan.Name}'") || !Where(id).Contains(element.ToString()))
                     problems.Add($"{id} was placed at \"{Where(id)}\", not on element {element} in '{r.Plan.Name}'");
             if (!asked.SequenceEqual(["M1", "M2", "M3", "M4"])) problems.Add("approval was asked for " + (asked.Count == 0 ? "nothing" : string.Join(", ", asked)) + ", not M1 to M4 one by one");
 
             // The changes.
-            var oldNote = doc.GetElement(r.Old.Id) as TextNote;
+            var oldNote = doc.GetElement(new ElementId(oldId)) as TextNote;
             if (oldNote?.Text.Contains("NEW NOTE") != true) problems.Add($"the note still reads \"{oldNote?.Text.Trim()}\"");
-            var comments = r.Wall.get_Parameter(BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS)?.AsString();
+            var comments = doc.GetElement(new ElementId(wallId))?.get_Parameter(BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS)?.AsString();
             if (comments != "REDLINE TEST") problems.Add($"the wall's Comments are \"{comments}\"");
-            if (doc.GetElement(r.Struck.Id) is not null) problems.Add("the struck-through note was not deleted");
+            if (doc.GetElement(new ElementId(struckId)) is not null) problems.Add("the struck-through note was not deleted");
             if (!new FilteredElementCollector(doc, r.Plan.Id).OfClass(typeof(TextNote)).Cast<TextNote>().Any(n => n.Text.Contains("ADDED BY REDLINE")))
                 problems.Add("the new note was not added to the plan");
             foreach (var id in new[] { "M1", "M2", "M3", "M4" }) if (!Done(id)) problems.Add($"{id} is not reported done");

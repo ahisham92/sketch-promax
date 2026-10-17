@@ -96,7 +96,25 @@ internal static class IssueGateTests
             check("issue gate: the per-model file round-trips", back.Accepted.Count == store.Count && back.Accepted[0].Key == store[0].Key && back.SpecChecklist == "spec.json" && back.Issues.Single().OverrideUsed, "");
             File.WriteAllText(path, "{ not json");
             check("issue gate: a broken file reads as empty", IssueGateStore.Load(path).Accepted.Count == 0, "");
+            check("issue gate: a broken file is never saved over (acceptances and history kept)",
+                IssueGateStore.Load(path, out var bad).Accepted.Count == 0 && bad && Throws(() => IssueGateStore.ForUpdate(path)) && File.ReadAllText(path) == "{ not json", "");
+            File.Delete(path);
+            check("issue gate: no file yet is an empty store to write", IssueGateStore.ForUpdate(path).Accepted.Count == 0, "");
         }
         finally { try { Directory.Delete(Path.GetDirectoryName(path)!, true); } catch (IOException) { } }
+
+        // ---- Only the user clears the gate: accepting items and issuing with open items are always asked about
+        static IReadOnlyDictionary<string, JsonElement> Args(string json) => JsonDocument.Parse(json).RootElement.EnumerateObject().ToDictionary(p => p.Name, p => p.Value.Clone());
+        check("issue gate: accepting items or issuing with open items is always asked; a plain check or issue is not",
+            OutputPaths.AlwaysAskReason("issue_check", Args("""{"accept":[{"key":"k","reason":"r"}]}""")) is not null
+            && OutputPaths.AlwaysAskReason("issue_drawings", Args("""{"allow_open_items":true,"open_items_reason":"r"}""")) is not null
+            && OutputPaths.AlwaysAskReason("issue_check", Args("""{"accept":[]}""")) is null
+            && OutputPaths.AlwaysAskReason("issue_drawings", Args("""{"sheet_numbers":["A-101"]}""")) is null, "");
+    }
+
+    private static bool Throws(Action a)
+    {
+        try { a(); return false; }
+        catch (IOException) { return true; }
     }
 }

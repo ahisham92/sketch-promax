@@ -477,6 +477,8 @@ internal static partial class FieldTest
         catch (Exception) { }
         // The time probes' rows for the test project on this PC: the project is thrown away, so are they.
         try { if (s.Test is { IsValidObject: true } tested) SketchProMax.Revit.TimeLog.ForgetForTest(tested); } catch (Exception) { }
+        // The cost probes' remembered rate table and add-ons for the test project live in %APPDATA%: they go with it too.
+        try { if (s.Test is { IsValidObject: true } costed && Directory.Exists(CostRun.Store(costed))) Directory.Delete(CostRun.Store(costed), true); } catch (Exception) { }
         CloseTest(app, s.Test, s.Original, result, ref s.KeepFolder);
         if (!s.KeepFolder && !string.IsNullOrEmpty(s.Folder))
         {

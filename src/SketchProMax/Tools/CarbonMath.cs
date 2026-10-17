@@ -694,7 +694,12 @@ internal static class Carbon
 
     public static string F(double v, int dp = 1) => Math.Round(v, dp).ToString("0." + new string('#', Math.Max(1, dp)), CultureInfo.InvariantCulture);
 
-    public static string Csv(string s) => s.IndexOfAny([',', '"', '\n']) >= 0 ? "\"" + s.Replace("\"", "\"\"") + "\"" : s;
+    /// <summary>A CSV field: quoted when needed; text that a spreadsheet would read as a formula gets a leading ' (shown as text).</summary>
+    public static string Csv(string s)
+    {
+        if (Xlsx.FormulaLike(s)) s = "'" + s;
+        return s.IndexOfAny([',', '"', '\n', '\r']) >= 0 ? "\"" + s.Replace("\"", "\"\"") + "\"" : s;
+    }
 
     /// <summary>What is outside the modules counted, for the assumptions section.</summary>
     public static List<string> NotIncluded(Options o)
@@ -765,7 +770,9 @@ internal static class Xlsx
             "<fills count=\"2\"><fill><patternFill patternType=\"none\"/></fill><fill><patternFill patternType=\"gray125\"/></fill></fills>" +
             "<borders count=\"1\"><border><left/><right/><top/><bottom/><diagonal/></border></borders>" +
             "<cellStyleXfs count=\"1\"><xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\"/></cellStyleXfs>" +
-            "<cellXfs count=\"2\"><xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\"/><xf numFmtId=\"0\" fontId=\"1\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyFont=\"1\"/></cellXfs>" +
+            "<cellXfs count=\"4\"><xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\"/><xf numFmtId=\"0\" fontId=\"1\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyFont=\"1\"/>" +
+            // 2 and 3: text that looks like a formula (=, +, -, @), kept as text even when the cell is edited (Excel's ' prefix).
+            "<xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\" quotePrefix=\"1\"/><xf numFmtId=\"0\" fontId=\"1\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyFont=\"1\" quotePrefix=\"1\"/></cellXfs>" +
             "</styleSheet>");
         for (var i = 0; i < list.Count; i++)
         {
@@ -797,7 +804,14 @@ internal static class Xlsx
                         if (double.IsNaN(d) || double.IsInfinity(d)) continue;
                         sb.Append($"<c r=\"{at}\"{style}><v>{d.ToString("R", CultureInfo.InvariantCulture)}</v></c>");
                     }
-                    else sb.Append($"<c r=\"{at}\"{style} t=\"inlineStr\"><is><t xml:space=\"preserve\">{Esc(Convert.ToString(cell, CultureInfo.InvariantCulture) ?? "")}</t></is></c>");
+                    else
+                    {
+                        // Text from the model or a file is never a formula: an inline string is not calculated, and one that
+                        // starts like a formula also gets the quote-prefix style, so editing the cell doesn't turn it into one.
+                        var text = Convert.ToString(cell, CultureInfo.InvariantCulture) ?? "";
+                        if (FormulaLike(text)) style = r == 0 ? " s=\"3\"" : " s=\"2\"";
+                        sb.Append($"<c r=\"{at}\"{style} t=\"inlineStr\"><is><t xml:space=\"preserve\">{Esc(text)}</t></is></c>");
+                    }
                 }
                 sb.Append("</row>");
             }
@@ -807,35 +821,95 @@ internal static class Xlsx
     }
 
     /// <summary>
-    /// The cells of one sheet (default the first) as text, row by row: shared strings, inline strings, numbers and the
-    /// cached value of formulas. Gaps are filled with empty cells.
+    /// The cells of one sheet (default the first, in the workbook's tab order) as text, row by row: shared strings, inline
+    /// strings, numbers and the cached value of formulas. Gaps are filled with empty cells (rows Excel left out as empty
+    /// are not returned). Throws InvalidDataException when the file is not a workbook that can be read.
     /// </summary>
     public static List<List<string>> Read(string path, int sheet = 1)
     {
-        using var zip = System.IO.Compression.ZipFile.OpenRead(path);
-        System.Xml.Linq.XNamespace ns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
-        var shared = new List<string>();
-        if (zip.GetEntry("xl/sharedStrings.xml") is { } ss)
-            using (var st = ss.Open())
-                shared = System.Xml.Linq.XDocument.Load(st).Root!.Elements(ns + "si").Select(si => string.Concat(si.Descendants(ns + "t").Select(x => x.Value))).ToList();
-        var entry = zip.GetEntry($"xl/worksheets/sheet{sheet}.xml") ?? throw new InvalidDataException($"The workbook has no sheet {sheet}.");
-        using var stream = entry.Open();
-        var rows = new List<List<string>>();
-        foreach (var row in System.Xml.Linq.XDocument.Load(stream).Descendants(ns + "row"))
+        try
         {
-            var cells = new List<string>();
-            foreach (var c in row.Elements(ns + "c"))
+            using var zip = System.IO.Compression.ZipFile.OpenRead(path);
+            System.Xml.Linq.XNamespace ns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+            var shared = new List<string>();
+            if (Entry(zip, "xl/sharedStrings.xml") is { } ss)
+                using (var st = ss.Open())
+                    shared = System.Xml.Linq.XDocument.Load(st).Root!.Elements(ns + "si")
+                        .Select(si => string.Concat(si.Descendants(ns + "t").Where(x => !x.Ancestors(ns + "rPh").Any()).Select(x => x.Value))).ToList();
+            var entry = SheetEntry(zip, sheet) ?? throw new InvalidDataException($"The workbook has no sheet {sheet}.");
+            using var stream = entry.Open();
+            var rows = new List<List<string>>();
+            foreach (var row in System.Xml.Linq.XDocument.Load(stream).Descendants(ns + "row"))
             {
-                var col = 0;
-                foreach (var ch in ((string?)c.Attribute("r") ?? "A").TakeWhile(char.IsLetter)) col = col * 26 + (ch - 'A' + 1);
-                while (cells.Count < col - 1) cells.Add("");
-                var value = c.Element(ns + "v")?.Value ?? string.Concat(c.Descendants(ns + "t").Select(x => x.Value));
-                if ((string?)c.Attribute("t") == "s" && int.TryParse(value, out var idx) && idx < shared.Count) value = shared[idx];
-                cells.Add(value);
+                var cells = new List<string>();
+                foreach (var c in row.Elements(ns + "c"))
+                {
+                    var col = 0;
+                    foreach (var ch in ((string?)c.Attribute("r") ?? "").ToUpperInvariant().TakeWhile(ch => ch is >= 'A' and <= 'Z'))
+                        col = Math.Min(MaxColumns + 1, col * 26 + (ch - 'A' + 1));
+                    if (col > MaxColumns) continue; // past Excel's last column: not a real cell
+                    while (col > 0 && cells.Count < col - 1) cells.Add("");
+                    var value = c.Element(ns + "v")?.Value ?? string.Concat(c.Descendants(ns + "t").Where(x => !x.Ancestors(ns + "rPh").Any()).Select(x => x.Value));
+                    if ((string?)c.Attribute("t") == "s")
+                        value = int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var idx) && idx >= 0 && idx < shared.Count ? shared[idx] : "";
+                    if (col > 0 && cells.Count >= col) cells[col - 1] = value; // a repeated reference: the last one wins
+                    else cells.Add(value);
+                }
+                rows.Add(cells);
             }
-            rows.Add(cells);
+            return rows;
         }
-        return rows;
+        catch (Exception ex) when (ex is System.Xml.XmlException or InvalidOperationException or NullReferenceException or NotSupportedException)
+        {
+            throw new InvalidDataException($"{Path.GetFileName(path)} can't be read as an Excel workbook ({ex.Message}). Save it again from Excel as .xlsx, or as CSV.", ex);
+        }
+    }
+
+    private const int MaxColumns = 16384;
+
+    private static System.IO.Compression.ZipArchiveEntry? Entry(System.IO.Compression.ZipArchive zip, string name) =>
+        zip.GetEntry(name) ?? zip.Entries.FirstOrDefault(e => e.FullName.TrimStart('/').Replace('\\', '/').Equals(name, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>The worksheet part of the nth sheet in tab order (workbook.xml and its relationships), else sheetN.xml.</summary>
+    private static System.IO.Compression.ZipArchiveEntry? SheetEntry(System.IO.Compression.ZipArchive zip, int sheet)
+    {
+        try
+        {
+            System.Xml.Linq.XNamespace ns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+            System.Xml.Linq.XNamespace rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+            System.Xml.Linq.XNamespace pkg = "http://schemas.openxmlformats.org/package/2006/relationships";
+            if (Entry(zip, "xl/workbook.xml") is { } wb && Entry(zip, "xl/_rels/workbook.xml.rels") is { } rels)
+            {
+                string? id;
+                using (var st = wb.Open())
+                    id = (string?)System.Xml.Linq.XDocument.Load(st).Descendants(ns + "sheet").Skip(sheet - 1).FirstOrDefault()?.Attribute(rel + "id");
+                if (id is not null)
+                {
+                    string? target;
+                    using (var st = rels.Open())
+                        target = (string?)System.Xml.Linq.XDocument.Load(st).Root?.Elements(pkg + "Relationship").FirstOrDefault(r => (string?)r.Attribute("Id") == id)?.Attribute("Target");
+                    if (target is not null)
+                    {
+                        var name = target.StartsWith("/", StringComparison.Ordinal) ? target.TrimStart('/') : "xl/" + target;
+                        if (Entry(zip, name.Replace("/./", "/")) is { } found) return found;
+                    }
+                }
+            }
+        }
+        catch (System.Xml.XmlException) { /* fall back to the usual part name */ }
+        return Entry(zip, $"xl/worksheets/sheet{sheet}.xml");
+    }
+
+    /// <summary>
+    /// Text a spreadsheet would read as a formula: it starts with =, +, -, @ (or a tab or return before one). A plain
+    /// number such as -12.5 is not.
+    /// </summary>
+    public static bool FormulaLike(string? s)
+    {
+        if (string.IsNullOrEmpty(s)) return false;
+        var t = s!.TrimStart('\t', '\r', '\n', ' ');
+        if (t.Length == 0 || "=+-@".IndexOf(t[0]) < 0) return false;
+        return !(t.Length == s.Length && double.TryParse(t, NumberStyles.Float, CultureInfo.InvariantCulture, out _));
     }
 
     /// <summary>A, B, ... Z, AA, AB ... for a 0-based column.</summary>

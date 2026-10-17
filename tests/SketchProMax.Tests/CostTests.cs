@@ -144,6 +144,44 @@ internal static class CostTests
         check("approval: what_if with confirm is always asked; its preview is not", OutputPaths.AlwaysAskReason("what_if", Args("""{"confirm":true}"""))?.Contains("copy") == true
             && OutputPaths.AlwaysAskReason("what_if", Args("""{"confirm":true,"target":"design_option"}"""))?.Contains("design option") == true
             && OutputPaths.AlwaysAskReason("what_if", Args("""{"confirm":false}""")) is null && OutputPaths.AlwaysAskReason("cost_estimate", Args("""{"confirm":true}""")) is null, "");
+
+        // ---- Text that looks like a formula stays text (model and table text in the Excel and CSV files)
+        check("excel: formula-like text is spotted; plain numbers and text are not",
+            Xlsx.FormulaLike("=HYPERLINK(\"x\")") && Xlsx.FormulaLike("+A1") && !Xlsx.FormulaLike("+1") && Xlsx.FormulaLike("@SUM(A1)") && Xlsx.FormulaLike("-2+3") && Xlsx.FormulaLike(" =1")
+            && !Xlsx.FormulaLike("-12.5") && !Xlsx.FormulaLike("Concrete") && !Xlsx.FormulaLike("") && !Xlsx.FormulaLike("a=b"), "");
+        check("csv: formula-like text gets a leading quote; numbers don't", Carbon.Csv("=1+1") == "'=1+1" && Carbon.Csv("-5") == "-5" && Carbon.Csv("=A1,B1") == "\"'=A1,B1\"", Carbon.Csv("=A1,B1"));
+        var fdir = Path.Combine(Path.GetTempPath(), "spm-xlsx-" + Guid.NewGuid().ToString("N").Substring(0, 8));
+        Directory.CreateDirectory(fdir);
+        try
+        {
+            var fx = Path.Combine(fdir, "f.xlsx");
+            Xlsx.Write(fx, [("S", new List<object?[]> { new object?[] { "Name", "Qty" }, new object?[] { "=cmd|' /C calc'!A0", new Xlsx.Formula("1+1", 2.0) } })]);
+            string sheetXml;
+            using (var z = ZipFile.OpenRead(fx))
+            using (var sr = new StreamReader(z.GetEntry("xl/worksheets/sheet1.xml")!.Open())) sheetXml = sr.ReadToEnd();
+            check("excel: formula-like text is an inline string with the quote-prefix style; real formulas stay formulas",
+                sheetXml.Contains("<c r=\"A2\" s=\"2\" t=\"inlineStr\">") && !sheetXml.Contains("<f>=cmd") && sheetXml.Contains("<f>1+1</f>")
+                && Xlsx.Read(fx)[1][0] == "=cmd|' /C calc'!A0", sheetXml.Length > 400 ? sheetXml.Substring(sheetXml.Length - 400) : sheetXml);
+
+            // A workbook whose first tab is not sheet1.xml (sheets moved in Excel), with a column far out and a phonetic run.
+            var odd = Path.Combine(fdir, "odd.xlsx");
+            using (var z = ZipFile.Open(odd, ZipArchiveMode.Create))
+            {
+                void E(string n, string t) { using var w = new StreamWriter(z.CreateEntry(n).Open()); w.Write(t); }
+                const string ns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+                E("xl/workbook.xml", $"<workbook xmlns=\"{ns}\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><sheets><sheet name=\"Rates\" sheetId=\"2\" r:id=\"rId7\"/><sheet name=\"Old\" sheetId=\"1\" r:id=\"rId1\"/></sheets></workbook>");
+                E("xl/_rels/workbook.xml.rels", "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Target=\"worksheets/sheet1.xml\"/><Relationship Id=\"rId7\" Target=\"/xl/worksheets/sheet2.xml\"/></Relationships>");
+                E("xl/worksheets/sheet1.xml", $"<worksheet xmlns=\"{ns}\"><sheetData><row r=\"1\"><c r=\"A1\" t=\"inlineStr\"><is><t>wrong sheet</t></is></c></row></sheetData></worksheet>");
+                E("xl/worksheets/sheet2.xml", $"<worksheet xmlns=\"{ns}\"><sheetData><row r=\"1\"><c r=\"A1\" t=\"s\"><v>0</v></c><c r=\"C1\"><v>5</v></c><c r=\"ZZZZZ1\"><v>9</v></c><c r=\"B1\" t=\"s\"><v>99</v></c></row></sheetData></worksheet>");
+                E("xl/sharedStrings.xml", $"<sst xmlns=\"{ns}\"><si><t>Rate</t><rPh><t>reto</t></rPh></si></sst>");
+            }
+            var oddRows = Xlsx.Read(odd);
+            check("excel: reads the first tab (from the workbook), skips an impossible column and phonetic text",
+                oddRows.Count == 1 && oddRows[0].SequenceEqual(["Rate", "", "5"]), string.Join("|", oddRows.SelectMany(r => r)));
+            File.WriteAllText(Path.Combine(fdir, "not.xlsx"), "Description,Rate");
+            check("excel: a file that isn't a workbook is refused with a readable error", Throws(() => Xlsx.Read(Path.Combine(fdir, "not.xlsx"))) is { Length: > 0 }, "");
+        }
+        finally { try { Directory.Delete(fdir, true); } catch (IOException) { } }
     }
 
     private static Cost.Line Line(string description, string unit, double qty, double cost, string group, (string, double) level, (string, double)? level2 = null,

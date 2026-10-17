@@ -41,7 +41,11 @@ internal static class Redlines
         public ViewSheet? Sheet { get; set; }
         /// <summary>The view the change happens in: a viewport's view, or the sheet itself.</summary>
         public View? View { get; set; }
-        public Element? Element { get; set; }
+        /// <summary>The element the markup means, as planned. Applying works from <see cref="ElementKey"/>: an earlier change in
+        /// the set may have deleted it (a strike-through, or a host taking its tags with it), and a deleted element can't be read.</summary>
+        public Element? Element { get => _element; set { _element = value; ElementKey = value?.Id; } }
+        private Element? _element;
+        public ElementId? ElementKey { get; private set; }
         /// <summary>add_note: where the note goes, in <see cref="View"/>.</summary>
         public XYZ? At { get; set; }
         /// <summary>Where the revision cloud goes, on the sheet.</summary>
@@ -52,16 +56,19 @@ internal static class Redlines
         /// <summary>Why it can't be applied; null when it is ready.</summary>
         public string? Problem { get; set; }
 
-        public string Where
+        /// <summary>Where it is, as text; fixed by <see cref="Freeze"/> once planned, so it can still be reported after a delete.</summary>
+        public string Where => _where ?? Describe();
+        private string? _where;
+
+        public void Freeze() => _where = Describe();
+
+        private string Describe()
         {
-            get
-            {
-                var parts = new List<string>();
-                if (Sheet is not null) parts.Add("sheet " + Sheet.SheetNumber);
-                if (View is not null && View is not ViewSheet) parts.Add($"view '{View.Name}'");
-                if (Element is not null) parts.Add($"{Element.Category?.Name ?? Element.GetType().Name} {Element.Id.Value}");
-                return string.Join(", ", parts);
-            }
+            var parts = new List<string>();
+            if (Sheet is not null) parts.Add("sheet " + Sheet.SheetNumber);
+            if (View is not null && View is not ViewSheet) parts.Add($"view '{View.Name}'");
+            if (Element is not null) parts.Add($"{Element.Category?.Name ?? Element.GetType().Name} {Element.Id.Value}");
+            return string.Join(", ", parts);
         }
     }
 
@@ -70,9 +77,34 @@ internal static class Redlines
     /// <summary>A folder for this run's page images, where the one-shot Claude Code run may read them.</summary>
     public static string WorkFolder()
     {
-        var folder = Path.Combine(ClaudeCli.WorkFolder, "redlines", DateTime.Now.ToString("yyyyMMdd-HHmmss") + "-" + Guid.NewGuid().ToString("N").Substring(0, 6));
+        var root = Path.Combine(ClaudeCli.WorkFolder, "redlines");
+        Prune(root);
+        var folder = Path.Combine(root, DateTime.Now.ToString("yyyyMMdd-HHmmss") + "-" + Guid.NewGuid().ToString("N").Substring(0, 6));
         Directory.CreateDirectory(folder);
         return folder;
+    }
+
+    /// <summary>Removes a run's page images (best effort).</summary>
+    public static void Remove(string folder)
+    {
+        try { if (Directory.Exists(folder)) Directory.Delete(folder, true); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+    }
+
+    /// <summary>
+    /// Page folders older than a day: redline_read leaves its image for Claude to read in the chat, so it is removed on
+    /// a later run instead (only folders this code names, under its own root).
+    /// </summary>
+    private static void Prune(string root)
+    {
+        try
+        {
+            if (!Directory.Exists(root)) return;
+            foreach (var dir in Directory.GetDirectories(root))
+                if (Regex.IsMatch(Path.GetFileName(dir), @"^\d{8}-\d{6}-[0-9a-f]{6}$") && Directory.GetLastWriteTimeUtc(dir) < DateTime.UtcNow.AddDays(-1))
+                    Remove(dir);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
     }
 
     public static bool IsPdf(string file) => Path.GetExtension(file).Equals(".pdf", StringComparison.OrdinalIgnoreCase);
@@ -186,20 +218,25 @@ internal static class Redlines
             if (pages.Count > MaxPages) throw new ArgumentException($"At most {MaxPages} pages at a time; give pages.");
             var folder = WorkFolder();
             markups = [];
-            for (var i = 0; i < pages.Count; i++)
+            // The page images are only for this reading: removed afterwards, whatever happens.
+            try
             {
-                if (CancelPoint.Stop("Reading redlines", i, pages.Count)) { notes.Add(CancelPoint.Note(true, i, pages.Count)!); break; }
-                var page = pages[i];
-                string png;
-                try { png = PageImage(doc, file, page, folder); }
-                catch (ArgumentException ex) when (i > 0 && IsPdf(file)) { notes.Add($"page {page}: {ex.Message}"); break; } // past the last page
-                var answer = Extract(png, page, out var error);
-                if (answer is null) { notes.Add($"page {page}: the markups could not be read ({error})"); continue; }
-                var found = Redline.Parse(answer, out var pageProblems);
-                foreach (var m in found) m.Page = page;
-                problems.AddRange(pageProblems.Select(p => $"page {page}: {p}"));
-                markups.AddRange(found);
+                for (var i = 0; i < pages.Count; i++)
+                {
+                    if (CancelPoint.Stop("Reading redlines", i, pages.Count)) { notes.Add(CancelPoint.Note(true, i, pages.Count)!); break; }
+                    var page = pages[i];
+                    string png;
+                    try { png = PageImage(doc, file, page, folder); }
+                    catch (ArgumentException ex) when (i > 0 && IsPdf(file)) { notes.Add($"page {page}: {ex.Message}"); break; } // past the last page
+                    var answer = Extract(png, page, out var error);
+                    if (answer is null) { notes.Add($"page {page}: the markups could not be read ({error})"); continue; }
+                    var found = Redline.Parse(answer, out var pageProblems);
+                    foreach (var m in found) m.Page = page;
+                    problems.AddRange(pageProblems.Select(p => $"page {page}: {p}"));
+                    markups.AddRange(found);
+                }
             }
+            finally { Remove(folder); }
             // Ids unique across pages.
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var m in markups) if (!seen.Add(m.Id)) { m.Id = $"P{m.Page}-{m.Id}"; seen.Add(m.Id); }
@@ -510,6 +547,7 @@ internal static class Redlines
                     break;
             }
         }
+        foreach (var p in plans) p.Freeze();
         return plans;
     }
 
@@ -585,10 +623,13 @@ internal static class Redlines
     public static object? Apply(Document doc, Planned p, ElementId revision)
     {
         var m = p.Markup;
+        // The element as it is now, by id: gone when an earlier change in this set deleted it.
+        Element Target() => (p.ElementKey is { } id ? doc.GetElement(id) : null)
+                            ?? throw new InvalidOperationException("its element is no longer in the model (an earlier change in this set removed it)");
         switch (m.Kind)
         {
             case "edit_text":
-                var note = (TextNote)p.Element!;
+                var note = (TextNote)Target();
                 note.Text = Redline.EditText(note.Text.TrimEnd('\r'), m.From, m.To!);
                 break;
             case "add_note":
@@ -596,7 +637,7 @@ internal static class Redlines
                 TextNote.Create(doc, p.View!.Id, p.At!, m.To ?? m.Text, typeId);
                 break;
             case "set_parameter":
-                var param = p.Element!.LookupParameter(m.Parameter!) ?? throw new InvalidOperationException($"no parameter '{m.Parameter}'");
+                var param = Target().LookupParameter(m.Parameter!) ?? throw new InvalidOperationException($"no parameter '{m.Parameter}'");
                 if (!SetParametersTool.Write(param, m.To!)) throw new InvalidOperationException($"Revit did not take '{m.To}' for {m.Parameter}");
                 break;
             case "set_dimension":
@@ -604,13 +645,13 @@ internal static class Redlines
                 else
                 {
                     var text = m.To is { Length: > 0 } t ? t : Redline.F(m.ValueMm ?? 0);
-                    var dim = (Dimension)p.Element!;
+                    var dim = (Dimension)Target();
                     if (p.Segment >= 0) dim.Segments.get_Item(p.Segment).ValueOverride = text;
                     else dim.ValueOverride = text;
                 }
                 break;
             case "delete":
-                doc.Delete(p.Element!.Id);
+                doc.Delete(Target().Id);
                 break;
             default:
                 throw new InvalidOperationException("nothing to apply");
@@ -816,7 +857,7 @@ public sealed class RedlineApplyTool : IRevitTool
                 }
                 var revId = revision.Id;
                 batch = ItemBatch.Run(doc, "Redlines", approved, p => $"{p.Markup.Id}: {p.Markup.Describe()}",
-                    p => p.Element is null ? [] : [p.Element.Id], p => Redlines.Apply(doc, p, revId),
+                    p => p.ElementKey is null ? [] : [p.ElementKey], p => Redlines.Apply(doc, p, revId),
                     manual: (p, why) => Redlines.Step(p, "Revit did not take the change: " + why));
             }
             finally
@@ -892,7 +933,8 @@ public sealed class RedlineApplyTool : IRevitTool
             markups = lines.Select(l => new { id = l.Id, sheet = l.Sheet, change = l.Change, where = l.Where, done = l.Done, status = l.Status, note = l.Note }).ToList(),
             notes = notes.Count > 0 ? notes : null,
             chatReport = Redline.Markdown(lines),
-            next = "Show the user chatReport (the done / not done table) and where the report and PDFs are.",
+            next = "Show the user chatReport (the done / not done table) and where the report and PDFs are. These PDFs are a redline export, " +
+                   "not an issue: they were not through the issue check. Before issuing the revised sheets, run issue_check on them (or issue_drawings, which runs it).",
         });
         return Handoff.Finish(Name, result, handoffs);
     }

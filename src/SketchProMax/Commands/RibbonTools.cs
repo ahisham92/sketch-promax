@@ -90,8 +90,13 @@ internal static class RibbonTools
         if (IssueGateWindow.Gated(tool.Name) && !IssueGateWindow.Before(app, tool.Name, args)) return Result.Cancelled;
 
         ToolResult result;
-        using (PackProgress.Show(title, $"{title} on '{doc.Title}'"))
-            result = QuickTools.Execute(app, tool.Name, args);
+        try
+        {
+            using (PackProgress.Show(title, $"{title} on '{doc.Title}'"))
+                result = QuickTools.Execute(app, tool.Name, args);
+        }
+        // A check cleared for this run is for this run only, used or not (the tool takes it when it starts).
+        finally { if (IssueGateWindow.Gated(tool.Name)) Tools.IssueGate.Discard(); }
         var headline = result.IsError
             ? result.Text.StartsWith("Stopped on request", StringComparison.Ordinal) ? "Stopped; what it finished is kept" : "It did not work"
             : Revit.TimeLog.LastLine ?? "Done"; // "Done in X. By hand: about Y. Saved: Z."

@@ -370,8 +370,11 @@ internal static partial class SelfTest
         var gateFolder = IssueGate.FolderOverride;
         IssueGate.TestOverride = c.GateOverride;
         IssueGate.FolderOverride ??= Path.Combine(ctx.Temp, "issue-gate");
+        // So do the cost tools' remembered rate table, add-ons and what-if results (the cases run on the user's model).
+        var costFolder = CostRun.StoreOverride;
+        CostRun.StoreOverride ??= Path.Combine(ctx.Temp, "cost");
         try { return Revit.FailureGuard.Run(() => tool.Execute(app, new ToolArgs(args))); }
-        finally { IssueGate.TestOverride = false; IssueGate.FolderOverride = gateFolder; }
+        finally { IssueGate.TestOverride = false; IssueGate.FolderOverride = gateFolder; CostRun.StoreOverride = costFolder; }
     }
 
     private static IEnumerable<Case> AllCases() => ReadOnlyCases().Concat(FileCases()).Concat(ChangeCases()).Concat(RegressionCases()).Concat(RealModelCases());

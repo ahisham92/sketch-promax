@@ -82,11 +82,17 @@ internal static class OutputPaths
     }
 
     /// <summary>
-    /// Calls that are asked about in Revit whatever the settings say and wherever they come from (the chat or the
-    /// Claude app), and why: what_if with confirm, which copies the saved model and changes the copy (or a design option).
+    /// Calls that are asked about in Revit whatever the settings say and wherever they come from (the chat, the Claude app
+    /// or a recipe), and why: what_if with confirm, which copies the saved model and changes the copy (or a design option);
+    /// accepting issue check items, and issuing with open items.
     /// </summary>
     public static string? AlwaysAskReason(string tool, IReadOnlyDictionary<string, JsonElement> args)
     {
+        // The issue gate's ways past an open item: only the user decides them, so Claude can't clear the gate on its own.
+        if (tool == "issue_check" && args.TryGetValue("accept", out var acc) && acc.ValueKind == JsonValueKind.Array && acc.GetArrayLength() > 0)
+            return $"Claude asks to accept {acc.GetArrayLength()} open item(s) of the issue check with the reasons below; accepted items no longer block the issue.";
+        if (tool == "issue_drawings" && args.TryGetValue("allow_open_items", out var allow) && allow.ValueKind == JsonValueKind.True)
+            return "Claude asks to issue these drawings even though the issue check has open items (the reason below goes into the issue record).";
         if (tool != "what_if" || !(args.TryGetValue("confirm", out var c) && c.ValueKind == JsonValueKind.True)) return null;
         var option = args.TryGetValue("target", out var t) && t.ValueKind == JsonValueKind.String && t.GetString() == "design_option";
         return option
