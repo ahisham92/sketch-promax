@@ -78,6 +78,8 @@ internal static partial class FieldTest
         public bool IncludeHeavy = true;
         public bool KeepProject;
         public bool Workshared = true;
+        /// <summary>Also send one short chat message through Claude Code (it uses the user's Claude plan).</summary>
+        public bool ChatRoundTrip;
         public string? ReportFolder;
         public int ToolCapSeconds = 120;
     }
@@ -99,6 +101,9 @@ internal static partial class FieldTest
         public string? StillOpen;
         public string? ReportPath, JsonPath;
         public HashSet<string>? Families;
+        /// <summary>The registry's tools and the tools with a self-test case, for the coverage section.</summary>
+        public List<string> Tools = [];
+        public HashSet<string> CaseTools = [];
 
         public int Count(string status) => Rows.Count(r => r.Status == status);
 
@@ -107,12 +112,14 @@ internal static partial class FieldTest
             var sb = new StringBuilder();
             if (Fatal is not null) sb.Append($"The field test could not run: {Fatal}\n");
             sb.Append($"Field test in Revit {RevitVersion} ({RevitBuild}), Sketch ProMax {AddinVersion}: {Count("pass")} passed, " +
-                      $"{Count("fail")} failed, {Count("skip")} skipped in {Jobs.Duration(Took)}.");
+                      $"{Count("fail")} failed, {Count("manual")} manual (checklist), {Count("skip")} not run in {Jobs.Duration(Took)}.");
             if (StoppedBecause is not null) sb.Append($" Stopped early: {StoppedBecause}.");
             foreach (var g in Groups.Where(g => Rows.Any(r => r.Family == g.Key)))
             {
                 var rows = Rows.Where(r => r.Family == g.Key).ToList();
-                sb.Append($"\n{g.Title}: {rows.Count(r => r.Status == "pass")} pass, {rows.Count(r => r.Status == "fail")} fail, {rows.Count(r => r.Status == "skip")} skip");
+                sb.Append($"\n{g.Title}: {rows.Count(r => r.Status == "pass")} pass, {rows.Count(r => r.Status == "fail")} fail" +
+                          (rows.Any(r => r.Status == "manual") ? $", {rows.Count(r => r.Status == "manual")} manual" : "") +
+                          (rows.Any(r => r.Status == "skip") ? $", {rows.Count(r => r.Status == "skip")} not run" : ""));
             }
             var failures = Rows.Where(r => r.Status == "fail").ToList();
             foreach (var f in failures.Take(15)) sb.Append($"\n• {f.Tool}: {Short(f.Message, 200)}");
@@ -138,6 +145,7 @@ internal static partial class FieldTest
         ("views_sheets", "Views, sheets and annotation", ["views", "sheets", "annotation", "documentation", "drawings", "viewssheets", "viewssheetsannotation", "viewssheetsandannotation"]),
         ("worksharing", "Worksharing", ["worksets", "workset"]),
         ("other", "Everything else", ["everythingelse", "rest", "modelling", "modeling", "general"]),
+        ("features", "Non-tool features", ["feature", "nontool", "nontoolfeatures", "ribbon", "chat", "updates", "bugs"]),
     ];
 
     private static readonly Dictionary<string, string[]> Explicit = new()
@@ -186,22 +194,8 @@ internal static partial class FieldTest
         return keys.Count == 0 ? null : keys;
     }
 
-    // Tools that must not run inside the field test, with the reason the report gives.
-    private static string? NeverRun(string tool) => tool switch
-    {
-        "run_field_test" => "this test",
-        "run_self_test" or "self_test_status" => "the self-test runs on the open model; the field test reuses its cases instead",
-        "batch_run_recipe" => "opens other model files; run it by hand on a folder of copies",
-        _ => null,
-    };
-
-    private static string NoCaseReason(string tool) => tool switch
-    {
-        "load_steel_sections" => "depends on the content library installed on this PC",
-        "title_block_from_cad" => "needs a DWG title block on this PC",
-        "run_learned_tool" => "tested through save_as_tool",
-        _ => "no test case written yet",
-    };
+    /// <summary>A tool with no self-test case, no field-test step and no ManualTools row: a gap the unit tests also catch.</summary>
+    private const string NoCase = "no field-test coverage: add a self-test case (SelfTest.cs) or a ManualTools row (FieldTestCoverage.cs)";
 
     internal const string Estimate = "about 5 to 15 minutes";
 
@@ -216,6 +210,8 @@ internal static partial class FieldTest
         public string Folder = "";
         public Document? Original, Built, Test;
         public string? LinkPath, ProjectFile, NoView;
+        /// <summary>Two closed copies of the test project for batch_run_recipe (and ve_apply on a copy).</summary>
+        public string? BatchFolder;
         public Library? Lib;
         public FamilyTemplates? Templates;
         public SelfTest.IFieldSession? Session;
@@ -238,6 +234,8 @@ internal static partial class FieldTest
         {
             RunReport? report = null;
             ToolResult? final = null;
+            // The test project's open is timed like any other; its first-Idling time includes the test's own steps.
+            SketchProMax.Revit.StartupTimings.TestRunning = true;
             try
             {
                 report = await RunSteps(new State(job, registry, o)).ConfigureAwait(false);
@@ -249,6 +247,7 @@ internal static partial class FieldTest
             }
             finally
             {
+                SketchProMax.Revit.StartupTimings.TestRunning = false;
                 job.Finished = DateTime.UtcNow;
                 if (Jobs.Running == job) Jobs.Running = null;
                 done.TrySetResult(final ?? ToolResult.Error("The field test stopped unexpectedly. The test project may still be open: close it without saving."));
@@ -305,11 +304,14 @@ internal static partial class FieldTest
                     Jobs.Report("Field test: saving the test project");
                     s.ProjectFile = SaveForTest(s.Built!, s.Folder, s.O.Workshared, result);
                     result.ProjectPath = s.ProjectFile;
+                    MakeCopies(s, result);
                 }).ConfigureAwait(false);
             if (!Cancelled())
                 await OnRevit(app => OpenTest(app, s)).ConfigureAwait(false);
             if (!Cancelled())
                 await RunCases(s).ConfigureAwait(false);
+            if (!Cancelled())
+                await RunExtras(s).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -401,7 +403,6 @@ internal static partial class FieldTest
             var label = counts[step.Tool] == 1 ? step.Tool : $"{step.Tool} #{counts[step.Tool]}";
             if (result.StoppedBecause is null && s.Job.CancelRequested) result.StoppedBecause = "stopped on request (cancel_job or Cancel in Revit)";
             if (result.StoppedBecause is not null) { result.Rows.Add(new(family, label, "skip", 0, "not reached: " + result.StoppedBecause)); continue; }
-            if (NeverRun(step.Tool) is { } never) { result.Rows.Add(new(family, label, "skip", 0, never)); continue; }
             if (step.Heavy && !o.IncludeHeavy) { result.Rows.Add(new(family, label, "skip", 0, "slow tool; run with include_heavy to test it")); continue; }
 
             Jobs.Report($"Field test {done} of {toRun.Count}: {label} ({Title(family)})");
@@ -441,11 +442,19 @@ internal static partial class FieldTest
         {
             if (hasRow.Contains(tool.Name)) continue;
             var family = FamilyOf(tool.Name);
-            if (NeverRun(tool.Name) is { } never) { result.Rows.Add(new(family, tool.Name, "skip", 0, never)); continue; }
+            if (FieldTestCoverage.ManualTools.TryGetValue(tool.Name, out var manual))
+            {
+                result.Rows.Add(new(family, tool.Name, "manual", 0, "manual (checklist): " + manual.Reason));
+                continue;
+            }
+            if (!covered.Contains(tool.Name) && !FieldTestCoverage.FieldSteps.Contains(tool.Name))
+            {
+                result.Rows.Add(new(family, tool.Name, "fail", 0, NoCase));
+                continue;
+            }
             var why = s.NoView is not null ? $"needs an open view: {s.NoView}"
                 : s.Session is null ? result.StoppedBecause is { } stop ? "not reached: " + stop : "the test project could not be built (see the error above)"
-                : covered.Contains(tool.Name) ? "not reached: " + (result.StoppedBecause ?? result.Fatal ?? "the run ended early")
-                : NoCaseReason(tool.Name);
+                : "not reached: " + (result.StoppedBecause ?? result.Fatal ?? "the run ended early");
             result.Rows.Add(new(family, tool.Name, "skip", 0, why));
         }
     }
@@ -456,6 +465,8 @@ internal static partial class FieldTest
         var result = s.Result;
         Jobs.Report("Field test: closing the test project and writing the report");
         AddUncovered(s);
+        result.Tools = s.Registry.All.Select(t => t.Name).ToList();
+        result.CaseTools = new HashSet<string>((s.Session?.Steps ?? []).Select(st => st.Tool));
         try { s.Session?.Cleanup(); } catch (Exception) { }
         // The project being built is only open in the background; if building failed part-way, close it here.
         try { if (s.Built is { IsValidObject: true } built && (s.Test is null || !built.Equals(s.Test))) built.Close(false); }
@@ -477,7 +488,7 @@ internal static partial class FieldTest
         var payload = new
         {
             summary = result.Summary(),
-            passed = result.Count("pass"), failed = result.Count("fail"), skipped = result.Count("skip"),
+            passed = result.Count("pass"), failed = result.Count("fail"), manual = result.Count("manual"), skipped = result.Count("skip"),
             report = result.ReportPath, report_json = result.JsonPath,
             kept_project = o.KeepProject ? result.ProjectPath : null,
             still_open = result.StillOpen,
@@ -1062,7 +1073,8 @@ internal static partial class FieldTest
     /// <summary>
     /// Switches Revit back to the model the user was in (or any other saved model that is open) and closes the test
     /// project without saving. Call from the external event (OpenAndActivateDocument is refused in event handlers).
-    /// The API cannot close the active model, so with nothing to switch to it stays open. A transaction left open in it
+    /// The API cannot close the active model, so with nothing saved to switch to, a blank project is opened first (it then
+    /// stays open, and the report says so); only if that fails too does the test project stay open. A transaction left open in it
     /// by a tool blocks both switching and closing, and the API gives no handle to roll back a transaction someone else
     /// started (Document.IsModifiable only says one is open), so then it is left open and the report says what to do.
     /// </summary>
@@ -1096,20 +1108,53 @@ internal static partial class FieldTest
                 catch (Exception ex) when (ex is Autodesk.Revit.Exceptions.ApplicationException or InvalidOperationException) { }
             }
         }
+        // Nothing saved to switch to (Revit was on its Home screen, or only unsaved models are open): open a small blank
+        // project instead, since the API can't close the model you are in. It stays open; the report says so.
+        string? blank = null, blankProblem = null;
+        if (app.ActiveUIDocument?.Document.Equals(test) == true)
+        {
+            try
+            {
+                blank = BlankProject(app.Application);
+                app.OpenAndActivateDocument(blank);
+            }
+            catch (Exception ex) when (ex is Autodesk.Revit.Exceptions.ApplicationException or InvalidOperationException or IOException or UnauthorizedAccessException)
+            {
+                blankProblem = ex.Message;
+            }
+        }
         if (app.ActiveUIDocument?.Document.Equals(test) == true)
         {
             keepFolder = true;
-            result.StillOpen = $"The test project '{test.Title}' is still open because Revit can't close the active model through the API " +
-                               "and there was no saved model to switch back to. Close its window; there is nothing to save. Its files are in " +
-                               Path.GetDirectoryName(test.PathName) + ".";
+            result.StillOpen = $"The test project '{test.Title}' is still open: Revit can't close the active model through the API, there was no " +
+                               "saved model to switch back to" + (blankProblem is null ? "" : $", and a blank project could not be opened instead ({blankProblem})") +
+                               ". Close its window (File > Close, or the x on its view tab); there is nothing to save. Its files are in " +
+                               Path.GetDirectoryName(test.PathName) + ". Next time, open any saved model before starting the field test.";
             return;
         }
+        if (blank is not null && app.ActiveUIDocument?.Document is { } shown && SamePath(shown.PathName, blank))
+            result.Sample.Add($"Revit now shows '{Path.GetFileNameWithoutExtension(blank)}', an empty project the field test opened so it could close " +
+                              "the test project (there was no saved model to switch back to). Close it; there is nothing to save.");
         try { test.Close(false); }
         catch (Exception ex)
         {
             keepFolder = true;
             result.StillOpen = $"The test project '{test.Title}' could not be closed ({ex.Message}). Close its window; there is nothing to save.";
         }
+    }
+
+    /// <summary>
+    /// An empty metric project saved in the temp folder (made once and reused), to switch to when nothing saved is open.
+    /// Kept out of the test folder, which is deleted while it may still be open.
+    /// </summary>
+    private static string BlankProject(Autodesk.Revit.ApplicationServices.Application a)
+    {
+        var path = Path.Combine(Path.GetTempPath(), "Sketch ProMax blank.rvt");
+        if (File.Exists(path)) return path;
+        var doc = a.NewProjectDocument(UnitSystem.Metric);
+        try { doc.SaveAs(path, new SaveAsOptions { OverwriteExistingFile = true }); }
+        finally { try { doc.Close(false); } catch (Exception) { } }
+        return path;
     }
 
     private static void TryDeleteFolder(string folder)
@@ -1141,24 +1186,24 @@ internal static partial class FieldTest
             md.AppendLine($"- Template: {r.Template}");
             md.AppendLine($"- Test project workshared: {(r.Workshared ? "yes (central + local in a temp folder)" : "no")}");
             if (r.Families is not null) md.AppendLine($"- Families tested: {string.Join(", ", r.Families.Select(Title))}");
-            md.AppendLine($"- Result: **{r.Count("pass")} passed, {r.Count("fail")} failed, {r.Count("skip")} skipped**");
+            md.AppendLine($"- Result: **{r.Count("pass")} passed, {r.Count("fail")} failed, {r.Count("manual")} manual (checklist), {r.Count("skip")} not run**");
             if (r.StoppedBecause is not null) md.AppendLine($"- Stopped early: {r.StoppedBecause}");
             if (r.Fatal is not null) md.AppendLine($"- Could not run: {r.Fatal}");
             if (r.StillOpen is not null) md.AppendLine($"- {r.StillOpen}");
             md.AppendLine();
 
-            md.AppendLine("## By family").AppendLine().AppendLine("| Family | Pass | Fail | Skip |").AppendLine("|---|---:|---:|---:|");
+            md.AppendLine("## By family").AppendLine().AppendLine("| Family | Pass | Fail | Manual | Not run |").AppendLine("|---|---:|---:|---:|---:|");
             foreach (var g in Groups.Where(g => r.Rows.Any(x => x.Family == g.Key)))
             {
                 var rows = r.Rows.Where(x => x.Family == g.Key).ToList();
-                md.AppendLine($"| {g.Title} | {rows.Count(x => x.Status == "pass")} | {rows.Count(x => x.Status == "fail")} | {rows.Count(x => x.Status == "skip")} |");
+                md.AppendLine($"| {g.Title} | {rows.Count(x => x.Status == "pass")} | {rows.Count(x => x.Status == "fail")} | {rows.Count(x => x.Status == "manual")} | {rows.Count(x => x.Status == "skip")} |");
             }
             md.AppendLine();
 
             foreach (var g in Groups.Where(g => r.Rows.Any(x => x.Family == g.Key)))
             {
                 md.AppendLine($"## {g.Title}").AppendLine().AppendLine("| Tool | Status | Time | Detail |").AppendLine("|---|---|---:|---|");
-                foreach (var row in r.Rows.Where(x => x.Family == g.Key).OrderBy(x => x.Status == "fail" ? 0 : x.Status == "pass" ? 1 : 2).ThenBy(x => x.Tool))
+                foreach (var row in r.Rows.Where(x => x.Family == g.Key).OrderBy(x => x.Status == "fail" ? 0 : x.Status == "pass" ? 1 : x.Status == "manual" ? 2 : 3).ThenBy(x => x.Tool))
                     md.AppendLine($"| {row.Tool} | {(row.Status == "fail" ? "**fail**" : row.Status)} | {(row.Ms > 0 ? $"{row.Ms / 1000.0:0.0} s" : "")} | {Cell(row.Message)} |");
                 md.AppendLine();
             }
@@ -1171,6 +1216,10 @@ internal static partial class FieldTest
             // Which copies of the shared libraries (System.Memory, Roslyn, System.Text.Json) this Revit really uses.
             try { md.AppendLine(SketchProMax.Revit.AssemblyReport.Describe()); }
             catch (Exception ex) { md.AppendLine("## Assemblies").AppendLine().AppendLine("Could not be read: " + ex.Message); }
+            // TODO(time-tracking): a "Time saved" section from the time log goes here once that worker's code is merged.
+            // Last, so it is easy to find: every tool and feature, tested or manual (the checklist's source).
+            var coverage = Coverage(r);
+            md.AppendLine(CoverageMarkdown(coverage));
             File.WriteAllText(r.ReportPath, md.ToString());
 
             File.WriteAllText(r.JsonPath, JsonSerializer.Serialize(new
@@ -1182,7 +1231,7 @@ internal static partial class FieldTest
                 template = r.Template,
                 workshared = r.Workshared,
                 families_tested = r.Families,
-                passed = r.Count("pass"), failed = r.Count("fail"), skipped = r.Count("skip"),
+                passed = r.Count("pass"), failed = r.Count("fail"), manual = r.Count("manual"), skipped = r.Count("skip"),
                 stopped_early = r.StoppedBecause,
                 could_not_run = r.Fatal,
                 still_open = r.StillOpen,
@@ -1192,11 +1241,13 @@ internal static partial class FieldTest
                     family = g.Key, title = g.Title,
                     pass = r.Rows.Count(x => x.Family == g.Key && x.Status == "pass"),
                     fail = r.Rows.Count(x => x.Family == g.Key && x.Status == "fail"),
+                    manual = r.Rows.Count(x => x.Family == g.Key && x.Status == "manual"),
                     skip = r.Rows.Count(x => x.Family == g.Key && x.Status == "skip"),
                     tools = r.Rows.Where(x => x.Family == g.Key).Select(x => new { tool = x.Tool, status = x.Status, ms = x.Ms, detail = x.Message }),
                 }),
                 test_project = r.Sample,
                 startup = new { start = SketchProMax.Revit.StartupTimings.StartLine(), opens = SketchProMax.Revit.StartupTimings.OpenLines() },
+                coverage = coverage.Select(c => new { name = c.Name, kind = c.Kind, coverage = c.Status, detail = c.Detail }),
             }, new JsonSerializerOptions { WriteIndented = true }));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
@@ -1308,8 +1359,10 @@ public sealed class RunFieldTestTool : IRevitTool
         "Test every Sketch ProMax tool family in real Revit without touching the user's models: creates a throwaway project " +
         "(levels, grids, concrete and steel columns and beams, walls, a floor with a slab edge, foundations, a linked " +
         "architectural model, plan, section, 3D view, schedule and sheet), opens it in its own window, runs every self-test " +
-        "case against it, closes it without saving and switches back to the user's model. Writes a Markdown + JSON report " +
-        "(per-family pass/fail counts, per-tool status, error and time) and returns a summary and the report path. Takes " +
+        "case against it, then batch_run_recipe on two copies, the self-test in safe mode and the non-tool features (ribbon, " +
+        "option windows, favourites, chat, bug log, exports, updates), closes it without saving and switches back to the user's " +
+        "model. Writes a Markdown + JSON report (per-family pass/fail counts, per-tool status, error and time, and a coverage " +
+        "section listing every tool and feature as tested or manual) and returns a summary and the report path. Takes " +
         "several minutes: the call returns a job id; use wait_for_job for progress and the result, cancel_job to stop between tools.";
     public string PropertiesJson => """
     {
@@ -1317,6 +1370,7 @@ public sealed class RunFieldTestTool : IRevitTool
       "include_heavy": {"type": "boolean", "description": "Also run the slow tools (exports, whole-model checks, image capture). Default true; the test project is small."},
       "keep_project": {"type": "boolean", "description": "Keep the test project files in a temp folder and return the path. Default false: closed without saving and deleted."},
       "workshared": {"type": "boolean", "description": "Make the test project workshared (central + local) so worksharing tools run. Default true."},
+      "chat_round_trip": {"type": "boolean", "description": "Also send one short message through the in-Revit chat's Claude Code (uses the user's Claude plan). Default false: the checklist covers it."},
       "report_folder": {"type": "string", "description": "Folder for the report. Default %LOCALAPPDATA%\\SketchProMax\\field-tests."},
       "tool_time_cap_seconds": {"type": "integer", "description": "Ask a tool to stop after this long (tools that support cancel stop; others run to the end). Default 120."}
     }
@@ -1337,6 +1391,7 @@ public sealed class RunFieldTestTool : IRevitTool
             IncludeHeavy = args.OptBool("include_heavy", true),
             KeepProject = args.OptBool("keep_project"),
             Workshared = args.OptBool("workshared", true),
+            ChatRoundTrip = args.OptBool("chat_round_trip"),
             ReportFolder = OutputPaths.Checked(args.OptString("report_folder")),
             ToolCapSeconds = (int)Math.Max(10, Math.Min(1800, args.OptLong("tool_time_cap_seconds") ?? 120)),
         };

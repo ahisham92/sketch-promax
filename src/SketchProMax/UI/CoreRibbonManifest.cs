@@ -161,12 +161,17 @@ internal static class CoreRibbonManifest
         L(Entry("HelpMenu", "FieldTest", "Diagnostics: field test", "field-test", "field",
             "Builds a throwaway test project, runs every tool family on it and writes one report. Your open models are not changed.",
             needsModel: true)),
+        L(Entry("HelpMenu", "TestChecklist", "Test checklist", "test-checklist", "check",
+            "Walks you through what the field test can't check by itself (chat, ribbon, carbon, VE, 2D rebar, Report bug, " +
+            "exports and the fixed bugs), on a _detached copy. Mark each pass or fail; the result is saved in the Bugs folder.")),
 
         // ---- The pane
         L(Pane("Bugs", "ReportBug", "Report bug", "report-bug", "Writes a bug report for Sketch ProMax with what just happened, ready to send.")),
         L(Pane("Bugs", "BugFolder", "Open bug folder", "bug-folder", "Opens the folder with the bug reports written so far.")),
         L(Pane("Bugs", "ExportChatsBugs", "Export chats & bugs", "export-chats-bugs",
             "Writes one zip with the chats of every model, all bug reports, the tool-call log and the versions, to send to the developer. Asks for the period first; nothing is sent.")),
+        L(Pane("Bugs", "TestChecklist", "Test checklist", "test-checklist",
+            "Walks you through the checks only you can do, on a _detached copy, and saves pass or fail for each in the Bugs folder.")),
         L(Tab("notes", "Notes", "Notes for this model")),
     ];
 

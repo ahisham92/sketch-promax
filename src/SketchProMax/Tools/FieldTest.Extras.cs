@@ -16,6 +16,29 @@ internal static partial class FieldTest
     /// <summary>The subfolder of the test folder the made families are saved in (load_family's case loads one back).</summary>
     internal const string FamiliesFolder = "families";
 
+    /// <summary>Subfolders of the test folder: steel section families with a type catalog, and the DWG exported for title_block_from_cad.</summary>
+    internal const string SteelFolder = "steel", CadFolder = "cad";
+
+    /// <summary>The steel catalog folder and a type in it that isn't loaded yet (its second type when it has two), from the cases' output folder.</summary>
+    internal static (string Folder, string Type)? SteelSections(string outputFolder)
+    {
+        var folder = Path.Combine(Path.GetDirectoryName(outputFolder) ?? outputFolder, SteelFolder);
+        if (!Directory.Exists(folder)) return null;
+        foreach (var catalog in Directory.GetFiles(folder, "*.txt", SearchOption.AllDirectories))
+        {
+            var types = File.ReadLines(catalog).Skip(1).Select(l => l.Split(',')[0].Trim().Trim('"')).Where(n => n.Length > 0).ToList();
+            if (types.Count > 0) return (folder, types[Math.Min(1, types.Count - 1)]);
+        }
+        return null;
+    }
+
+    /// <summary>The DWG the field test exported from a drafting view, from the cases' output folder.</summary>
+    internal static string? TitleBlockDwg(string outputFolder)
+    {
+        var folder = Path.Combine(Path.GetDirectoryName(outputFolder) ?? outputFolder, CadFolder);
+        return Directory.Exists(folder) ? Directory.GetFiles(folder, "*.dwg").FirstOrDefault() : null;
+    }
+
     /// <summary>The families the field test saved, from the cases' output folder (a sibling of the families folder).</summary>
     internal static IEnumerable<string> FamilyFiles(string outputFolder)
     {
@@ -335,5 +358,90 @@ internal static partial class FieldTest
         if (Loaded(BuiltInCategory.OST_GenericModel, x => x.Family.FamilyPlacementType == FamilyPlacementType.WorkPlaneBased
                                                         && x.Family.get_Parameter(BuiltInParameter.FAMILY_ALLOW_CUT_WITH_VOIDS)?.AsInteger() == 1) is null)
             MakeFamily(a, doc, s, result, "face-based cutting void", "FT Void Cut", ["Generic Model face based"], null, VoidBody);
+
+        // A slab whose material names its mix, next to the structural slab whose material doesn't: embodied_carbon's case
+        // checks one gets a GGBS factor and the other the CEM I one.
+        Step(doc, result, "slab naming its mix", () =>
+        {
+            const string name = "FT Slab C32/40 50% GGBS";
+            var material = new FilteredElementCollector(doc).OfClass(typeof(Material)).Cast<Material>().FirstOrDefault(m => m.Name == "FT Concrete C32/40 50% GGBS")
+                           ?? (Material)doc.GetElement(Material.Create(doc, "FT Concrete C32/40 50% GGBS"));
+            material.MaterialClass = "Concrete";
+            var source = new FilteredElementCollector(doc).OfClass(typeof(FloorType)).Cast<FloorType>().First(t => t.Id == FloorTypeId(doc));
+            var type = (FloorType)source.Duplicate(name);
+            var cs = type.GetCompoundStructure();
+            cs.SetLayers(new List<CompoundStructureLayer> { new(200 * Mm, MaterialFunctionAssignment.Structure, material.Id) });
+            cs.StructuralMaterialIndex = 0;
+            type.SetCompoundStructure(cs);
+            var floor = Floor.Create(doc, [Rectangle(-1000, 20000, 3000, 24000)], type.Id, shell.Base.Id);
+            floor.get_Parameter(BuiltInParameter.FLOOR_PARAM_IS_STRUCTURAL)?.Set(1);
+            return floor;
+        });
+
+        SteelCatalog(a, doc, s, result);
+        ExportDwg(doc, s, result);
+    }
+
+    /// <summary>
+    /// A folder of steel framing families with type catalogs for load_steel_sections: a copy of the content library's
+    /// first one when it is installed, else a family made here with a two-type catalog written beside it.
+    /// </summary>
+    private static void SteelCatalog(RevitApp a, Document doc, State s, RunReport result)
+    {
+        var folder = Path.Combine(s.Folder, SteelFolder, "Structural Framing");
+        try
+        {
+            Directory.CreateDirectory(folder);
+            if ((s.Lib ??= new Library(a)).Find(BuiltInCategory.OST_StructuralFraming, StructuralMaterialType.Steel, null) is { } library
+                && File.Exists(Path.ChangeExtension(library, ".txt")))
+            {
+                File.Copy(library, Path.Combine(folder, Path.GetFileName(library)), true);
+                File.Copy(Path.ChangeExtension(library, ".txt"), Path.Combine(folder, Path.GetFileNameWithoutExtension(library) + ".txt"), true);
+                result.Sample.Add($"steel sections: copied {Path.GetFileName(library)} and its type catalog from the content library");
+                return;
+            }
+            if (MakeFamily(a, doc, s, result, "steel section family", "FT Steel Beam", ["Structural Framing - Beams and Braces"], null, ColumnBody) is null) return;
+            File.Copy(Path.Combine(s.Folder, FamiliesFolder, "FT Steel Beam.rfa"), Path.Combine(folder, "FT Steel Beam.rfa"), true);
+            File.WriteAllText(Path.Combine(folder, "FT Steel Beam.txt"), ",\r\nFT 200x100,\r\nFT 300x150,\r\n");
+            result.Sample.Add("steel sections: no steel catalog in the content library, so the field test made FT Steel Beam with a two-type catalog");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            result.Sample.Add($"steel sections: the catalog folder could not be made ({ex.Message}), so load_steel_sections has nothing to load");
+        }
+    }
+
+    /// <summary>A tiny DWG title block for title_block_from_cad: an A1 border and a title box drawn in a drafting view, exported.</summary>
+    private static void ExportDwg(Document doc, State s, RunReport result)
+    {
+        var view = Step(doc, result, "drafting view for the DWG", () =>
+        {
+            var type = new FilteredElementCollector(doc).OfClass(typeof(ViewFamilyType)).Cast<ViewFamilyType>().FirstOrDefault(v => v.ViewFamily == ViewFamily.Drafting)
+                       ?? throw new InvalidOperationException("the template has no drafting view type");
+            var drafting = ViewDrafting.Create(doc, type.Id);
+            try { drafting.Name = "FT Title Block DWG"; } catch (Autodesk.Revit.Exceptions.ArgumentException) { }
+            drafting.Scale = 1;
+            void Box(double x0, double y0, double x1, double y1)
+            {
+                var c = new[] { P(x0, y0), P(x1, y0), P(x1, y1), P(x0, y1) };
+                for (var i = 0; i < 4; i++) doc.Create.NewDetailCurve(drafting, Line.CreateBound(c[i], c[(i + 1) % 4]));
+            }
+            Box(0, 0, 841, 594);
+            Box(661, 10, 831, 80);
+            return drafting;
+        });
+        if (view is null) return;
+        try
+        {
+            var folder = Path.Combine(s.Folder, CadFolder);
+            Directory.CreateDirectory(folder);
+            if (!doc.Export(folder, "FT Title Block", new List<ElementId> { view.Id }, new DWGExportOptions()))
+                result.Sample.Add("DWG for title_block_from_cad: Revit did not export it");
+            else result.Sample.Add("DWG for title_block_from_cad: exported an A1 border from a drafting view");
+        }
+        catch (Exception ex)
+        {
+            result.Sample.Add($"DWG for title_block_from_cad: not exported ({ex.Message})");
+        }
     }
 }

@@ -72,6 +72,11 @@
     <EmbeddedResource Include="Data\carbon-factors.csv" LogicalName="SketchProMax.carbon-factors.csv" />
   </ItemGroup>
 
+  <!-- The bug log as released, for the test checklist's "bug fixes" steps when the downloaded copy isn't there yet. -->
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\docs\bug-log.md" LogicalName="SketchProMax.bug-log.md" />
+  </ItemGroup>
+
   <!-- On Windows, copy the build into the per-user Revit add-ins folder so Revit picks it up. -->
   <Target Name="DeployToRevit" AfterTargets="Build" Condition="'$(OS)' == 'Windows_NT' AND '$(Configuration)' == 'Debug'">
     <PropertyGroup>
