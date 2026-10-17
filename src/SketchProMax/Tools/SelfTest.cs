@@ -451,6 +451,9 @@ internal static partial class SelfTest
         new("export_quantities", c => new { folder = c.Temp, categories = new[] { "Walls", "Floors" }, group_by = new[] { "level" } }) { Heavy = true },
         new("embodied_carbon", c => new { folder = c.Temp, stages = new[] { "A1-A3", "A4", "A5" }, categories = new[] { "Walls", "Floors", "Structural Columns", "Structural Framing" } }) { Heavy = true },
         new("carbon_compare", c => new { folder = c.Temp, cement_replacement = "ggbs50", cement_replacement_all = true, categories = new[] { "Walls", "Floors" }, excel = false }) { Heavy = true },
+        new("ve_opportunities", c => new { folder = c.Temp, span_m = 7.5, update_register = false, excel = false }) { Heavy = true },
+        new("ve_compare_options", c => new { folder = c.Temp, span_x = 8.0, span_y = 6.0, floors = 5, options = new[] { "flat_slab", "beam_and_slab", "pt_flat_slab", "hollow_core", "steel_composite", "raft", "piles", "model" }, excel = false }),
+        new("ve_register", c => new { folder = c.Temp, excel = false }),
         new("export_pdf", c => new { view_ids = new[] { c.Sheet?.Id.Value ?? c.PlanId }, folder = c.Temp, file_name = "sheets" }) { Heavy = true },
         new("export_files", c => new { format = "dwg", view_ids = new[] { c.PlanId }, folder = c.Temp, file_name = "plan" }) { Heavy = true },
         new("export_bcf", c => new { issues = new[] { new { title = "Self-test issue", element_ids = c.Wall is null ? Array.Empty<long>() : [c.Wall.Id.Value] } }, folder = c.Temp, file_name = "issues" }),
@@ -577,6 +580,8 @@ internal static partial class SelfTest
         new("boq_item_breakdown", c => new { item = new { @ref = "1", description = "Concrete in suspended slabs", unit = "m3" }, method = "NRM2", folder = c.Temp }, Setup: ["create_floors"]),
         new("cost_estimate", c => new { rates = new[] { new { description = "Concrete in slabs", unit = "m3", rate = 150.0 } }, folder = c.Temp }, Setup: ["create_floors"]),
         new("carbon_view", c => new { name = "Self-test carbon view", categories = new[] { "Walls", "Floors" }, open = false }, Setup: ["create_floors"]) { Heavy = true },
+        new("ve_view", c => new { name = "Self-test VE view", rescan = true, span_m = 4.0, open = false }, Setup: ["create_floors"]) { Heavy = true },
+        new("ve_apply", c => new { target = "main", confirm_main_model = true, changes = new[] { new { kind = "change_type", element_ids = new[] { c.Id(c.Wall) }, to_type = c.Wall!.Name } }, folder = c.Temp }),
         new("spec_check", c => new { requirements = new[] { new { id = "S1", text = "Notes state the concrete grade", expect_text = new[] { "C" } } }, folder = c.Temp }),
         new("analytical_check", c =>
         {

@@ -77,6 +77,8 @@ internal static class ProjectPack
         ("Cost estimate", [".csv"]),
         ("Embodied carbon", [".csv"]),
         ("Carbon comparison", [".csv"]),
+        ("VE opportunities", [".csv"]),
+        ("VE register", [".csv"]),
         ("Quantities", [".csv"]),
         ("Steel takeoff", [".csv"]),
         ("Bar schedule", [".csv"]),

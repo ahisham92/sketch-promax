@@ -120,6 +120,12 @@ internal static class CoreRibbonManifest
         T("Carbon", "embodied_carbon", "Embodied carbon", "boq", "Total tCO2e and kgCO2e/m² with breakdowns, top contributors and assumptions, to Excel and CSV. Reads the model only."),
         T("Carbon", "carbon_compare", "Compare options", "boq", "Compares two options or snapshots (e.g. cement replacement or a grade swap) and shows the saving."),
         T("Carbon", "carbon_view", "Carbon 3D view", "boq", "Makes a new 3D view coloured green to red by carbon intensity. Existing views are not changed."),
+        L(Pulldown("Check", "ValueEng", "Value\nengineering", "boq", "Value engineering screening: where cost and carbon could be saved, structural options compared, changes tried on a copy, and the VE register. An engineer confirms every item.")),
+        T("ValueEng", "ve_opportunities", "VE opportunities", "check", "Ranks where cost or material could be saved (depths, sizes, grades, rebar, steel, formwork, spec), to Excel. Reads the model only."),
+        T("ValueEng", "ve_compare_options", "Compare systems", "structure", "Flat slab, beam and slab, PT, hollow-core, steel; raft or piles: quantities, cost, carbon, programme and risks side by side."),
+        T("ValueEng", "ve_view", "VE 3D view", "view", "Makes a new 3D view coloured by the ranked VE items. Existing views are not changed."),
+        T("ValueEng", "ve_apply", "Apply to a copy", "bolt", "Applies chosen VE changes to a saved copy or a design option, with before and after cost and carbon."),
+        T("ValueEng", "ve_register", "VE register", "list", "Exports the VE register and sets each item's status (proposed, accepted, rejected) and owner."),
 
         // ---- Issue
         B("Issue", "export_pdf", "Export\nPDF", "pdf", "Prints sheets or views to PDF, as one combined file by default."),
