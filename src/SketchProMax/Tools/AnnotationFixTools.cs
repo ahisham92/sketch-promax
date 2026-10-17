@@ -839,6 +839,12 @@ public sealed class CopyDimensionsTool : IRevitTool
     public string[] Required => ["source_view_id", "target_view_ids"];
     public bool ModifiesModel => true;
 
+    /// <summary>
+    /// The field test's hook: true for a dimension to treat as measuring to cut edges. The API can't make a dimension on
+    /// cut edges (they come only from picking in a view), so the field test marks an ordinary one. Null otherwise.
+    /// </summary>
+    internal static Func<Dimension, bool>? CutEdgeForTest;
+
     private sealed class Job
     {
         public Dimension Dim = null!;
@@ -893,7 +899,7 @@ public sealed class CopyDimensionsTool : IRevitTool
                 jobs.Add(job);
                 var refs = Refs(d);
                 var shape = d.DimensionShape;
-                if (refs.Any(r => r.ElementReferenceType == ElementReferenceType.REFERENCE_TYPE_CUT_EDGE))
+                if (refs.Any(r => r.ElementReferenceType == ElementReferenceType.REFERENCE_TYPE_CUT_EDGE) || CutEdgeForTest?.Invoke(d) == true)
                 { job.CutEdge = true; job.Manual = "it measures to a cut edge (a line Revit makes only where that view's cut plane slices the element), which exists only in its own view; the API can't point a dimension at another view's cut edge (Revit API limit). Re-add it by hand in the target view: Annotate > Aligned and pick the cut edges"; continue; }
                 var allVisible = refs.Count > 0 && refs.All(r => visible.Contains(r.ElementId));
                 if (method != "recreate" && allVisible) { job.How = "copy"; continue; }

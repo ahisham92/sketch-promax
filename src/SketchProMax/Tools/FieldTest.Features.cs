@@ -57,9 +57,6 @@ internal static partial class FieldTest
             if (Wanted(o, "batch_run_recipe") && !StoppedOrCancelled(s)) await BatchAndCopy(s).ConfigureAwait(false);
             if (Wanted(o, "run_self_test") && !StoppedOrCancelled(s)) await SelfTestRun(s).ConfigureAwait(false);
         }
-        // TODO(hand-off): when the manual-step hand-off window is merged, add a probe here that opens it on a sample step
-        // (Continue / Skip this item / Stop) and closes it again, with its FieldTestCoverage feature row and ribbon mapping.
-        // TODO(time-tracking): add a probe that writes and reads back one time-log entry in the test project, likewise.
         if ((o.Families is null || o.Families.Contains("features")) && !StoppedOrCancelled(s)) await Features(s).ConfigureAwait(false);
         if (Wanted(o, "run_field_test"))
             s.Result.Rows.Add(new(FamilyOf("run_field_test"), "run_field_test", "pass", 0, "this report is the test"));
@@ -230,10 +227,21 @@ internal static partial class FieldTest
         await Probe(s, "favourites", _ => FavouriteRoundTrip()).ConfigureAwait(false);
         await Probe(s, "chat.history", _ => ChatHistoryRoundTrip(s.Folder)).ConfigureAwait(false);
         await Probe(s, "update.loader", _ => Loader()).ConfigureAwait(false);
+        // In the test project, each rolled back afterwards (time records excepted: they are what is checked).
+        await Probe(s, "handoff.continue", app => HandoffContinue(app, s)).ConfigureAwait(false);
+        await Probe(s, "handoff.skip_stop", app => HandoffSkipStop(app, s)).ConfigureAwait(false);
+        await Probe(s, "handoff.static", app => HandoffStatic(app, s)).ConfigureAwait(false);
+        await Probe(s, "cancel.fast", app => CancelFast(app, s)).ConfigureAwait(false);
+        await Probe(s, "time.tracking", app => TimeTracking(app, s)).ConfigureAwait(false);
+        await Probe(s, "time.export", app => TimeExport(app, s)).ConfigureAwait(false);
+        await Probe(s, "time.queue", app => TimeQueue(app, s)).ConfigureAwait(false);
         // Off Revit's thread: processes, files and the network.
         await Probe(s, "chat.cli", () => { cli = new ClaudeCliInstall(Chat.ClaudeCli.Find()); return cli.Row(); }).ConfigureAwait(false);
         await Probe(s, "chat.signin", () => SignIn(cli)).ConfigureAwait(false);
         await Probe(s, "chat.roundtrip", () => RoundTrip(cli, s.O.ChatRoundTrip)).ConfigureAwait(false);
+        await ProbeCore(s, "brief.plan", () => BriefPlan(s)).ConfigureAwait(false);
+        await ProbeCore(s, "brief.choose", () => BriefChoose(s)).ConfigureAwait(false);
+        await Probe(s, "checklist.build", () => ChecklistBuild(s.Folder)).ConfigureAwait(false);
         await Probe(s, "chat.models", () => Models(s.Folder)).ConfigureAwait(false);
         await Probe(s, "chat.prompts", () => Prompts(s.Folder)).ConfigureAwait(false);
         await Probe(s, "chat.notes", Notes).ConfigureAwait(false);
@@ -558,6 +566,511 @@ internal static partial class FieldTest
         var missing = new[] { "self-test", "field-test", "test-checklist" }.Where(c => !manifest.Contains("\t" + c + "\t")).ToList();
         if (missing.Count > 0) return Fail("the ribbon doesn't declare " + string.Join(", ", missing));
         return Pass($"self-test: {(self is null ? "not run in this report" : self.Status)}; field test: this report; the test checklist has {items} manual steps plus the fixed bugs");
+    }
+
+    // ---- Hand-off, Cancel and time tracking (in the test project) --------------------------------------------------------
+
+    /// <summary>The test project when it is open and the active model; else null and why.</summary>
+    private static Document? TestDoc(UIApplication app, State s, out string why)
+    {
+        why = "";
+        if (s.Test is not { IsValidObject: true } test) { why = "the test project is not open (see the Test project notes)"; return null; }
+        if (app.ActiveUIDocument?.Document.Equals(test) != true) { why = "the test project is not the active model"; return null; }
+        return test;
+    }
+
+    /// <summary>A tool called as the bridge calls it: a step only the user can do becomes a hand-off (answered by Handoff.TestResponder).</summary>
+    private static ToolResult CallHandingOff(UIApplication app, ToolRegistry registry, string name, object args)
+    {
+        var tool = registry.Find(name) ?? throw new InvalidOperationException($"{name} is not in the registry");
+        var dict = JsonSerializer.SerializeToElement(args).EnumerateObject().ToDictionary(p => p.Name, p => p.Value.Clone());
+        return Revit.FailureGuard.Run(() =>
+        {
+            try { return tool.Execute(app, new ToolArgs(dict)); }
+            catch (ManualStepException manual) { return Handoff.FromException(tool, app, new ToolArgs(dict), manual); }
+        });
+    }
+
+    /// <summary>The result's "handoff" section, one (choice, done) per step; null when it has none.</summary>
+    private static List<(string Choice, bool Done)>? HandoffSteps(string text)
+    {
+        JsonElement? section = null;
+        try
+        {
+            using var whole = JsonDocument.Parse(text);
+            if (whole.RootElement.ValueKind == JsonValueKind.Object && whole.RootElement.TryGetProperty("handoff", out var h)) section = h.Clone();
+        }
+        catch (JsonException) { }
+        if (section is null)
+        {
+            // A plain-text result carries it on its last line.
+            var at = text.LastIndexOf("\nhandoff: ", StringComparison.Ordinal);
+            if (at < 0) return null;
+            try { using var tail = JsonDocument.Parse(text.Substring(at + "\nhandoff: ".Length)); section = tail.RootElement.Clone(); }
+            catch (JsonException) { return null; }
+        }
+        if (!section.Value.TryGetProperty("steps", out var steps) || steps.ValueKind != JsonValueKind.Array) return null;
+        return steps.EnumerateArray().Select(x => (x.GetProperty("choice").GetString() ?? "", x.GetProperty("done").GetBoolean())).ToList();
+    }
+
+    private static string Steps(List<(string Choice, bool Done)>? steps) =>
+        steps is null ? "no handoff section" : string.Join(", ", steps.Select(x => x.Choice + (x.Done ? " (done)" : "")));
+
+    private sealed record DimSetup(ViewPlan Plan, List<ViewPlan> Targets, Autodesk.Revit.DB.Grid A, Autodesk.Revit.DB.Grid B, Dimension Dim);
+
+    /// <summary>Inside the probe's transaction group: two grids, a dimension between them in a floor plan, and copies of that plan.</summary>
+    private static DimSetup? DimensionSetup(Document doc, int copies, out string why)
+    {
+        why = "";
+        var plan = new FilteredElementCollector(doc).OfClass(typeof(ViewPlan)).Cast<ViewPlan>()
+            .FirstOrDefault(v => !v.IsTemplate && v.ViewType == ViewType.FloorPlan && v.GenLevel is not null && v.CanViewBeDuplicated(ViewDuplicateOption.Duplicate));
+        if (plan is null) { why = "the test project has no floor plan to dimension in"; return null; }
+        using var t = new Transaction(doc, "Field test: grids and a dimension");
+        t.Start();
+        var a = Autodesk.Revit.DB.Grid.Create(doc, Line.CreateBound(new XYZ(-6, -10, 0), new XYZ(-6, 30, 0)));
+        var b = Autodesk.Revit.DB.Grid.Create(doc, Line.CreateBound(new XYZ(4, -10, 0), new XYZ(4, 30, 0)));
+        var dim = Dimension(doc, plan, a, b);
+        var targets = Enumerable.Range(0, copies).Select(_ => (ViewPlan)doc.GetElement(plan.Duplicate(ViewDuplicateOption.Duplicate))).ToList();
+        t.Commit();
+        return new DimSetup(plan, targets, a, b, dim);
+    }
+
+    private static Dimension Dimension(Document doc, View view, Autodesk.Revit.DB.Grid a, Autodesk.Revit.DB.Grid b)
+    {
+        var refs = new ReferenceArray();
+        refs.Append(new Reference(a));
+        refs.Append(new Reference(b));
+        var z = (view as ViewPlan)?.GenLevel?.ProjectElevation ?? 0;
+        return doc.Create.NewDimension(view, Line.CreateBound(new XYZ(-10, 20, z), new XYZ(8, 20, z)), refs)
+               ?? throw new InvalidOperationException($"Revit made no dimension between the grids in '{view.Name}'");
+    }
+
+    /// <summary>The step the user would do for a cut-edge hand-off: a dimension added by hand in the target view.</summary>
+    private static void AddDimensionByHand(Document doc, View view, DimSetup d)
+    {
+        using var t = new Transaction(doc, "Field test: the user's step");
+        t.Start();
+        Dimension(doc, view, d.A, d.B);
+        t.Commit();
+    }
+
+    private static void RollBack(TransactionGroup group)
+    {
+        if (group.HasStarted() && !group.HasEnded()) group.RollBack();
+    }
+
+    /// <summary>
+    /// A real hand-off answered by the test responder: copy_dimensions on a dimension it treats as cut-edge hands the step
+    /// over; the first Continue comes before the step is done (the re-check must refuse it), the second after.
+    /// </summary>
+    private static (string, string) HandoffContinue(UIApplication app, State s)
+    {
+        if (TestDoc(app, s, out var why) is not { } doc) return Fail(why);
+        using var group = new TransactionGroup(doc, "Field test: hand-off Continue");
+        group.Start();
+        var asked = new List<string?>();
+        try
+        {
+            if (DimensionSetup(doc, 1, out why) is not { } d) return Fail(why);
+            var target = d.Targets[0];
+            CopyDimensionsTool.CutEdgeForTest = dim => dim.Id == d.Dim.Id;
+            Handoff.TestResponder = (step, note) =>
+            {
+                asked.Add(note);
+                if (note is not null) AddDimensionByHand(doc, target, d);
+                return HandoffChoice.Continue;
+            };
+            var result = CallHandingOff(app, s.Registry, "copy_dimensions",
+                new { source_view_id = d.Plan.Id.Value, target_view_ids = new[] { target.Id.Value }, dimension_ids = new[] { d.Dim.Id.Value } });
+            var steps = HandoffSteps(result.Text);
+            var last = Handoff.Recent.LastOrDefault();
+            var problems = new List<string>();
+            if (steps is not [("continued", true)]) problems.Add($"the result's handoff section says {Steps(steps)}: {Short(result.Text, 300)}");
+            if (asked.Count != 2 || asked[0] is not null || asked[1]?.StartsWith("Not done yet", StringComparison.Ordinal) != true)
+                problems.Add($"expected a Continue the re-check refused, then one it passed; it asked {asked.Count} time(s)" + (asked.Count > 1 ? $" ({asked[1]})" : ""));
+            if (last is not { Done: true, Choice: "continued" }) problems.Add($"the recent hand-offs end with {last?.Choice ?? "nothing"}");
+            return problems.Count == 0
+                ? Pass($"copy_dimensions on a cut-edge dimension handed over \"{last!.What}\"; Continue before the step was asked again (\"{Short(asked[1]!, 80)}\"), Continue after it passed the re-check; the result and the recent hand-offs say done")
+                : Fail(string.Join("; ", problems));
+        }
+        finally
+        {
+            Handoff.TestResponder = null;
+            CopyDimensionsTool.CutEdgeForTest = null;
+            RollBack(group);
+        }
+    }
+
+    /// <summary>Skip on add_legend_components with no component to copy; Skip, Stop and the step after a Stop on copy_dimensions.</summary>
+    private static (string, string) HandoffSkipStop(UIApplication app, State s)
+    {
+        if (TestDoc(app, s, out var why) is not { } doc) return Fail(why);
+        using var group = new TransactionGroup(doc, "Field test: hand-off Skip and Stop");
+        group.Start();
+        try
+        {
+            var problems = new List<string>();
+            var notes = new List<string>();
+
+            // Skip: no legend component in the test project (and, normally, none in other open models or a seed file).
+            var legendAsked = new List<HandoffStep>();
+            Handoff.TestResponder = (step, _) => { legendAsked.Add(step); return HandoffChoice.Skip; };
+            var legend = LegendSeeds.Legends(doc).FirstOrDefault();
+            var wallType = new FilteredElementCollector(doc).OfClass(typeof(WallType)).FirstElementId().Value.ToString();
+            object legendArgs = legend is null ? new { types = new[] { wallType }, labels = false } : new { legend = legend.Name, types = new[] { wallType }, labels = false };
+            ToolResult legendResult;
+            try { legendResult = CallHandingOff(app, s.Registry, "add_legend_components", legendArgs); }
+            catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or Autodesk.Revit.Exceptions.ApplicationException)
+            {
+                legendResult = ToolResult.Error(ex.Message);
+            }
+            if (legendAsked.Count == 0 && legendResult.IsError)
+                problems.Add($"add_legend_components failed without handing anything over: {Short(legendResult.Text, 200)}");
+            else if (legendAsked.Count == 0)
+                notes.Add("add_legend_components found a component to copy (another open model or a legend seed), so it had nothing to hand over; Skip is checked on copy_dimensions only");
+            else
+            {
+                var steps = HandoffSteps(legendResult.Text);
+                if (steps is not [("skipped", false)]) problems.Add($"add_legend_components: the handoff section says {Steps(steps)}");
+                if (Handoff.Recent.LastOrDefault() is not { Choice: "skipped" }) problems.Add("add_legend_components: the recent hand-offs don't end with skipped");
+                notes.Add($"add_legend_components handed over \"{legendAsked[0].What}\" ({legendAsked[0].Kind}) and Skip was reported");
+            }
+
+            // Skip, Stop, and a third step that is never asked: one cut-edge hand-off per target view.
+            if (DimensionSetup(doc, 3, out why) is not { } d) return Fail(why);
+            CopyDimensionsTool.CutEdgeForTest = dim => dim.Id == d.Dim.Id;
+            var asked = 0;
+            Handoff.TestResponder = (_, _) => ++asked switch { 1 => HandoffChoice.Skip, 2 => HandoffChoice.Stop, _ => HandoffChoice.Continue };
+            var result = CallHandingOff(app, s.Registry, "copy_dimensions",
+                new { source_view_id = d.Plan.Id.Value, target_view_ids = d.Targets.Select(v => v.Id.Value).ToArray(), dimension_ids = new[] { d.Dim.Id.Value } });
+            var three = HandoffSteps(result.Text);
+            if (three is not [("skipped", false), ("stopped", false), ("stopped", false)]) problems.Add($"copy_dimensions: the handoff section says {Steps(three)}");
+            if (asked != 2) problems.Add($"copy_dimensions: {asked} steps were asked, not 2 (the one after Stop must not be)");
+            if (!result.Text.Contains("The user stopped here")) problems.Add("copy_dimensions: the result doesn't tell Claude the user stopped");
+            var recent = Handoff.Recent.Skip(Math.Max(0, Handoff.Recent.Count - 3)).Select(o => o.Choice).ToList();
+            if (!recent.SequenceEqual(["skipped", "stopped", "stopped"])) problems.Add($"copy_dimensions: the recent hand-offs end with {string.Join(", ", recent)}");
+            notes.Add("copy_dimensions to three views: Skip, then Stop; the third step was not asked and counts as stopped, and Claude is told the user stopped");
+            return problems.Count == 0 ? Pass(string.Join(". ", notes) + ".") : Fail(string.Join("; ", problems) + ". " + string.Join(". ", notes));
+        }
+        finally
+        {
+            Handoff.TestResponder = null;
+            CopyDimensionsTool.CutEdgeForTest = null;
+            RollBack(group);
+        }
+    }
+
+    /// <summary>copy_dimensions static_fallback: a cut-edge dimension becomes a detail line with ticks and "(static)" value notes.</summary>
+    private static (string, string) HandoffStatic(UIApplication app, State s)
+    {
+        if (TestDoc(app, s, out var why) is not { } doc) return Fail(why);
+        using var group = new TransactionGroup(doc, "Field test: static stand-ins");
+        group.Start();
+        try
+        {
+            if (DimensionSetup(doc, 1, out why) is not { } d) return Fail(why);
+            var target = d.Targets[0];
+            CopyDimensionsTool.CutEdgeForTest = dim => dim.Id == d.Dim.Id;
+            var asked = 0;
+            Handoff.TestResponder = (_, _) => { asked++; return HandoffChoice.Stop; };
+            var result = Call(app, s.Registry, "copy_dimensions",
+                new { source_view_id = d.Plan.Id.Value, target_view_ids = new[] { target.Id.Value }, dimension_ids = new[] { d.Dim.Id.Value }, static_fallback = true });
+            var lines = new FilteredElementCollector(doc, target.Id).OfClass(typeof(CurveElement)).OfType<DetailCurve>()
+                .Count(c => c.get_Parameter(BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS)?.AsString() == StaticDimensionText.Comment);
+            var texts = new FilteredElementCollector(doc, target.Id).OfClass(typeof(TextNote)).Cast<TextNote>().Select(n => n.Text ?? "").ToList();
+            var values = texts.Count(t => t.Contains("(static)"));
+            var labelled = texts.Any(t => t.Contains("not a live dimension"));
+            var problems = new List<string>();
+            if (result.IsError) problems.Add("copy_dimensions failed: " + Short(result.Text, 300));
+            if (lines == 0) problems.Add("no detail line marked as a static stand-in in the target view");
+            if (values == 0) problems.Add("no \"(static)\" value note in the target view");
+            if (!labelled) problems.Add("no note saying it is not a live dimension");
+            if (asked > 0) problems.Add("it handed the dimension over instead of drawing a stand-in");
+            return problems.Count == 0
+                ? Pass($"with static_fallback the cut-edge dimension became {lines} detail line(s) (the line and its ticks) and {values} \"(static)\" value note(s), labelled not live; nothing was handed over")
+                : Fail(string.Join("; ", problems));
+        }
+        finally
+        {
+            Handoff.TestResponder = null;
+            CopyDimensionsTool.CutEdgeForTest = null;
+            RollBack(group);
+        }
+    }
+
+    /// <summary>place_many on 60 placements, with a stop asked for after the first ten (the field test's own job, as cancel_job would).</summary>
+    private static (string, string) CancelFast(UIApplication app, State s)
+    {
+        if (TestDoc(app, s, out var why) is not { } doc) return Fail(why);
+        if (Jobs.Running != s.Job) return Fail("the field test is not the running job, so no stop can be asked for");
+        var symbol = new FilteredElementCollector(doc).OfClass(typeof(FamilySymbol)).Cast<FamilySymbol>()
+            .Where(f => f.Family?.FamilyPlacementType == FamilyPlacementType.OneLevelBased && f.Category?.CategoryType == CategoryType.Model)
+            .OrderBy(f => f.Category.Id.Value == (long)BuiltInCategory.OST_Furniture || f.Category.Id.Value == (long)BuiltInCategory.OST_GenericModel ? 0 : 1)
+            .FirstOrDefault();
+        if (symbol is null) return Fail("the test project has no level-based model family to place");
+        var level = new FilteredElementCollector(doc).OfClass(typeof(Level)).Cast<Level>().OrderBy(l => l.ProjectElevation).First();
+        const int count = 60, chunk = 10;
+        var placements = Enumerable.Range(0, count).Select(i => new
+        {
+            x = Revit.RevitHelpers.FromInternal(doc, -40 - i % 10 * 3.0),
+            y = Revit.RevitHelpers.FromInternal(doc, -40 - i / 10 * 3.0),
+        }).ToArray();
+        var limit = new StepLimit();
+        s.Job.Limit = limit;
+        CancelPoint.TestItem = (_, index) => { if (index >= chunk) limit.TryHit(); };
+        using var group = new TransactionGroup(doc, "Field test: Cancel");
+        group.Start();
+        try
+        {
+            var watch = Stopwatch.StartNew();
+            var result = Call(app, s.Registry, "place_many", new { kind = "family", source = $"{symbol.FamilyName}: {symbol.Name}", default_level = level.Name, placements });
+            if (result.IsError) return Fail("place_many failed: " + Short(result.Text, 400));
+            using var json = JsonDocument.Parse(result.Text);
+            var placed = json.RootElement.GetProperty("placed").GetInt32();
+            var stopped = json.RootElement.TryGetProperty("stopped", out var st) && st.ValueKind == JsonValueKind.String ? st.GetString() ?? "" : "";
+            var expected = $"after {chunk} of {count}";
+            return stopped.StartsWith(CancelPoint.Stopped, StringComparison.Ordinal) && stopped.Contains(expected) && placed is > 0 and <= chunk
+                ? Pass($"place_many on {count} x {symbol.FamilyName}: {symbol.Name} stopped {expected} in {watch.ElapsedMilliseconds} ms with {placed} placed and kept; it said: {stopped}")
+                : Fail($"place_many did not stop {expected} with a partial result: placed {placed}, stopped \"{stopped}\". {Short(result.Text, 300)}");
+        }
+        finally
+        {
+            CancelPoint.TestItem = null;
+            limit.Finish();
+            s.Job.Limit = null;
+            RollBack(group);
+        }
+    }
+
+    private static double Seconds(JsonElement e, string part, string field) => e.GetProperty(part).GetProperty(field).GetDouble();
+
+    private static double?[] TimeParameters(Document doc) =>
+        Revit.TimeLog.Parameters.Select(p => doc.ProjectInformation?.get_Parameter(p.Guid)?.AsDouble()).ToArray();
+
+    /// <summary>Where the four parameters differ from the totals (Saved, Working, AI, By hand, in hours); empty when they match.</summary>
+    private static List<string> ParameterProblems(double?[] values, TimeTotals totals)
+    {
+        double[] want = [TimeMath.Hours(totals.Saved), TimeMath.Hours(totals.Working), TimeMath.Hours(totals.Ai), TimeMath.Hours(totals.ByHand)];
+        var problems = new List<string>();
+        for (var i = 0; i < want.Length; i++)
+        {
+            var name = Revit.TimeLog.Parameters[i].Name;
+            if (values[i] is not { } v) problems.Add($"{name} is missing");
+            else if (Math.Abs(v - want[i]) > 0.011) problems.Add($"{name} is {v:0.##}, the totals say {want[i]:0.##}");
+        }
+        return problems;
+    }
+
+    /// <summary>
+    /// A scripted session (6 min active, 8 min idle, beyond the threshold, 3 min AI) replayed on a private clock and
+    /// written to the test project: counts, no double count, the Done in line, parameters, Extensible Storage, PC log.
+    /// </summary>
+    private static (string, string) TimeTracking(UIApplication app, State s)
+    {
+        if (TestDoc(app, s, out var why) is not { } doc) return Fail(why);
+        const string tool = "create_sheets";
+        var before = Revit.TimeLog.Report(doc).Totals;
+        var sim = JsonSerializer.SerializeToElement(Revit.TimeLog.SimulateForTest(doc, activeMinutes: 6, idleMinutes: 8, aiMinutes: 3, units: 4, tool: tool));
+        var report = Revit.TimeLog.Report(doc);
+        var after = report.Totals;
+        var problems = new List<string>();
+
+        var (expHand, expAi) = (Seconds(sim, "expected", "byHandSeconds"), Seconds(sim, "expected", "aiSeconds"));
+        var (hand, ai, estimate) = (Seconds(sim, "counted", "byHandSeconds"), Seconds(sim, "counted", "aiSeconds"), Seconds(sim, "counted", "estimateSeconds"));
+        if (!sim.GetProperty("ok").GetBoolean() || Math.Abs(expHand - hand) > 0.5 || Math.Abs(expAi - ai) > 0.5)
+            problems.Add($"expected {TimeMath.Duration(expHand)} by hand and {TimeMath.Duration(expAi)} AI, counted {TimeMath.Duration(hand)} and {TimeMath.Duration(ai)}");
+        var (dWork, dAi, dHand) = (after.Working - before.Working, after.Ai - before.Ai, after.ByHand - before.ByHand);
+        if (Math.Abs(dAi - ai) > 1 || Math.Abs(dHand - hand) > 1 || Math.Abs(dWork - (ai + hand)) > 1)
+            problems.Add($"the model's totals grew by working {dWork:0} s, AI {dAi:0} s and by hand {dHand:0} s; expected AI {ai:0} s + by hand {hand:0} s = {ai + hand:0} s (more is a double count)");
+        var line = sim.GetProperty("line").GetString() ?? "";
+        if (!line.StartsWith("Done in ", StringComparison.Ordinal) || line != TimeMath.Line(ai, estimate)) problems.Add($"the line reads \"{line}\"");
+        var written = sim.GetProperty("written").GetString() ?? "";
+        if (!written.StartsWith("written", StringComparison.Ordinal)) problems.Add($"the model write: {written}");
+        problems.AddRange(ParameterProblems(TimeParameters(doc), after).Select(p => "Project Information: " + p));
+        var row = Revit.TimeLog.StoredRowForTest(doc, TimeMath.Day(DateTime.Now), tool);
+        if (row is null || row.Ai + 0.1 < ai) problems.Add($"Extensible Storage has {(row is null ? "no row" : $"{row.Ai:0} s AI")} for {tool} today");
+        var logged = LoggedSimulation(Revit.TimeLog.LogFile, Revit.TimeLog.Key(doc), ai);
+        if (!logged) problems.Add($"the PC log {Revit.TimeLog.LogFile} has no line for this session");
+
+        var t = report.Totals;
+        s.Result.TimeSaved =
+            $"Scripted session in the test project ({(doc.IsWorkshared ? "workshared" : "not workshared")}): 6 min active, 8 min idle (beyond the threshold, not counted), " +
+            $"3 min AI. Counted {TimeMath.Duration(hand)} by hand and {TimeMath.Duration(ai)} AI. Line: \"{line}\". The test project's totals now: working " +
+            $"{TimeMath.Duration(t.Working)}, AI {TimeMath.Duration(t.Ai)}, by hand {TimeMath.Duration(t.ByHand)}, saved {TimeMath.Duration(t.Saved)}. " +
+            $"Model write: {written}. PC log: {Revit.TimeLog.LogFile}.";
+        return problems.Count == 0
+            ? Pass($"counted {TimeMath.Duration(hand)} by hand and {TimeMath.Duration(ai)} AI as expected (8 idle minutes not counted, input during the task not counted twice); " +
+                   $"working time grew by exactly AI + by hand; \"{line}\"; the four Project Information parameters match the totals; the row is in Extensible Storage ({written}) and in the PC log")
+            : Fail(string.Join("; ", problems));
+    }
+
+    /// <summary>True when the PC log has the simulated session for this model.</summary>
+    private static bool LoggedSimulation(string file, string key, double aiSeconds)
+    {
+        if (!File.Exists(file)) return false;
+        foreach (var text in Enumerable.Reverse(File.ReadAllLines(file)).Take(200))
+        {
+            try
+            {
+                using var line = JsonDocument.Parse(text);
+                var r = line.RootElement;
+                if (r.TryGetProperty("simulated", out var sim) && sim.ValueKind == JsonValueKind.True && r.GetProperty("key").GetString() == key &&
+                    Math.Abs(r.GetProperty("tookSeconds").GetDouble() - aiSeconds) < 0.5) return true;
+            }
+            catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException) { }
+        }
+        return false;
+    }
+
+    /// <summary>The summary written as the Time saved window's Excel file (in the test folder) and read back.</summary>
+    private static (string, string) TimeExport(UIApplication app, State s)
+    {
+        if (TestDoc(app, s, out var why) is not { } doc) return Fail(why);
+        var report = Revit.TimeLog.Report(doc);
+        var file = Path.Combine(s.Folder, "Time saved field test.xlsx");
+        var sheets = report.ExcelSheets();
+        Xlsx.Write(file, sheets);
+        using var zip = ZipFile.OpenRead(file);
+        var worksheets = zip.Entries.Count(e => e.FullName.StartsWith("xl/worksheets/sheet", StringComparison.Ordinal));
+        var text = string.Concat(zip.Entries.Where(e => e.FullName.EndsWith(".xml", StringComparison.Ordinal)).Select(e =>
+        {
+            using var r = new StreamReader(e.Open());
+            return r.ReadToEnd();
+        }));
+        var missing = new[] { "Working time", "AI time", "By-hand time", "Time saved", "create_sheets" }.Where(w => !text.Contains(w)).ToList();
+        return worksheets == sheets.Count && missing.Count == 0
+            ? Pass($"{Path.GetFileName(file)} has {worksheets} sheets ({string.Join(", ", sheets.Select(x => x.Name))}) with the summary and the test session's rows ({new FileInfo(file).Length / 1024.0:0.#} KB)")
+            : Fail($"{file}: {worksheets} of {sheets.Count} sheets" + (missing.Count > 0 ? "; missing " + string.Join(", ", missing) : ""));
+    }
+
+    /// <summary>
+    /// The workshared queue path: with Project Information and the time records owned by someone else (a test hook: one
+    /// Revit session has only one user), the parameters must wait and the time stay on the PC; once free, the next write
+    /// brings the parameters up to the totals.
+    /// </summary>
+    private static (string, string) TimeQueue(UIApplication app, State s)
+    {
+        if (TestDoc(app, s, out var why) is not { } doc) return Fail(why);
+        var where = doc.IsWorkshared ? "the workshared test project (central and local)" : "the test project (not workshared; the hook stands in for worksharing)";
+        var before = TimeParameters(doc);
+        var totalsBefore = Revit.TimeLog.Report(doc).Totals;
+        JsonElement sim;
+        double?[] held;
+        TimeTotals totalsHeld;
+        Revit.TimeLog.OwnedElsewhereForTest = "Field test colleague";
+        try
+        {
+            sim = JsonSerializer.SerializeToElement(Revit.TimeLog.SimulateForTest(doc, activeMinutes: 2, idleMinutes: 8, aiMinutes: 1, units: 2));
+            held = TimeParameters(doc);
+            totalsHeld = Revit.TimeLog.Report(doc).Totals;
+        }
+        finally { Revit.TimeLog.OwnedElsewhereForTest = null; }
+        var problems = new List<string>();
+        if (!held.SequenceEqual(before)) problems.Add("the parameters changed while someone else held Project Information");
+        if (totalsHeld.Ai < totalsBefore.Ai + Seconds(sim, "counted", "aiSeconds") - 1) problems.Add("the session's AI time was not kept while the model was held");
+        var write = Revit.TimeLog.WriteForTest(doc);
+        var after = TimeParameters(doc);
+        var totals = Revit.TimeLog.Report(doc).Totals;
+        problems.AddRange(ParameterProblems(after, totals).Select(p => "after release: " + p));
+        return problems.Count == 0
+            ? Pass($"on {where}, with every element owned by someone else (test hook): the session was kept on this PC (model write: {sim.GetProperty("written").GetString()}) and the " +
+                   $"parameters waited; once free, the next write ({write}) brought them to the totals (working {TimeMath.Hours(totals.Working):0.##} h, AI {TimeMath.Hours(totals.Ai):0.##} h)")
+            : Fail($"on {where}: " + string.Join("; ", problems));
+    }
+
+    // ---- Prompt enhancer (with chat_round_trip) and the guided checklist ------------------------------------------------
+
+    private const string Ambiguous = "Make the walls thicker";
+
+    private static (string, string) BriefManual() =>
+        ("manual", "manual (checklist): off by default because planning uses your Claude plan; the checklist's \"The brief card in the chat\" step covers it. Run with chat_round_trip true to test it here.");
+
+    private static int ElementCount(UIApplication app, State s) =>
+        TestDoc(app, s, out _) is { } doc ? new FilteredElementCollector(doc).WhereElementIsNotElementType().GetElementCount() : -1;
+
+    /// <summary>The real planning run on an ambiguous request: assumptions and questions, and nothing in the model changes.</summary>
+    private static async Task<(string, string)> BriefPlan(State s)
+    {
+        if (!s.O.ChatRoundTrip) return BriefManual();
+        var before = await App.Dispatcher.InvokeAsync(app => ElementCount(app, s)).ConfigureAwait(false);
+        var (brief, error) = await Chat.ChatPane.BriefTest.Plan(Ambiguous).ConfigureAwait(false);
+        var after = await App.Dispatcher.InvokeAsync(app => ElementCount(app, s)).ConfigureAwait(false);
+        if (brief is null) return Fail("no brief: " + Short(error, 300));
+        s.Brief = brief;
+        var problems = new List<string>();
+        if (brief.Assumptions.Count == 0) problems.Add("the brief has no assumptions");
+        if (brief.Questions.Count == 0) problems.Add("the brief asks no questions");
+        if (before < 0 || before != after) problems.Add($"the test project's element count went from {before} to {after} before anything was approved");
+        return problems.Count == 0
+            ? Pass($"\"{Ambiguous}\" became a {brief.Kind} brief with {brief.Assumptions.Count} assumption(s) and {brief.Questions.Count} question(s) " +
+                   $"(e.g. \"{Short(brief.Questions[0].Text, 80)}\"); the test project still has {after} elements. While the field test runs, the planner's model reads are answered busy, so it plans from the request alone")
+            : Fail(string.Join("; ", problems));
+    }
+
+    /// <summary>On a brief card in the pane: Run as I typed sends the typed text unchanged; an edit is remembered as a note, then forgotten.</summary>
+    private static async Task<(string, string)> BriefChoose(State s)
+    {
+        if (!s.O.ChatRoundTrip) return BriefManual();
+        var brief = s.Brief ?? new Chat.PromptBrief
+        {
+            Kind = "change", Request = Ambiguous, Prompt = "Change every basic wall on Level 1 to the type 50 mm thicker than its own.",
+            Assumptions = ["Only basic walls on Level 1"],
+        };
+        var typed = await App.Dispatcher.InvokeAsync(_ =>
+        {
+            Chat.ChatPane.Get(); // the pane's content, as the dockable pane makes it; nothing is shown or sent
+            return Chat.ChatPane.BriefTest.Choose(brief, Chat.BriefChoice.RunAsTyped);
+        }).ConfigureAwait(false);
+        if (typed.Problem.Length > 0) return Fail("Run as I typed: " + typed.Problem);
+        var problems = new List<string>();
+        if (typed.Sent != brief.Request) problems.Add($"Run as I typed would send \"{Short(typed.Sent ?? "nothing", 120)}\", not \"{brief.Request}\"");
+
+        var edited = Chat.PromptBriefs.Compose(brief) + "\nAlways give wall thicknesses in millimetres.";
+        var edit = await App.Dispatcher.InvokeAsync(_ => Chat.ChatPane.BriefTest.Choose(brief, Chat.BriefChoice.RunEdited, edited)).ConfigureAwait(false);
+        if (edit.Problem.Length > 0) return Fail(string.Join("; ", problems.Append("Edit: " + edit.Problem)));
+        if (edit.Sent is null) problems.Add("the edited brief would not be sent");
+        var note = "";
+        if (edit.Remembered is null) problems.Add("the edit was not remembered");
+        else if (await Task.WhenAny(edit.Remembered, Task.Delay(TimeSpan.FromMinutes(2))).ConfigureAwait(false) != edit.Remembered) problems.Add("remembering the edit took over 2 minutes");
+        else
+        {
+            note = await edit.Remembered.ConfigureAwait(false);
+            if (note.Length == 0) problems.Add("the edit was remembered as nothing");
+            else
+            {
+                bool Kept() => Chat.MemoryNotes.For(Chat.MemoryNotes.Load(), null).Global.Contains(note);
+                if (!Kept()) problems.Add("the note is not in the Global notes");
+                if (!Chat.ChatPane.BriefTest.Forget(note) || Kept()) problems.Add("the note could not be removed again; delete it in the Notes tab: " + note);
+            }
+        }
+        return problems.Count == 0
+            ? Pass($"Run as I typed sends \"{Ambiguous}\" unchanged; the edited brief was sent and remembered as \"{Short(note, 120)}\", then removed from your notes")
+            : Fail(string.Join("; ", problems));
+    }
+
+    /// <summary>The guided checklist's items (manual items plus the fixed bug rows) and its result file, saved to the test folder.</summary>
+    private static (string, string) ChecklistBuild(string folder)
+    {
+        var items = TestChecklistWindow.Items();
+        var manual = FieldTestCoverage.Features.Count(f => f.How == FieldTestCoverage.How.Manual) + FieldTestCoverage.ManualTools.Count;
+        var bugs = items.Count(i => i.Area == FieldTestCoverage.BugFixes);
+        var problems = new List<string>();
+        if (items.Count - bugs != manual) problems.Add($"{items.Count - bugs} manual items, the coverage table has {manual}");
+        if (bugs == 0) problems.Add("no fixed bug rows (the bug log built into this version was not read)");
+        if (items.Select(i => i.Id).Distinct().Count() != items.Count) problems.Add("an item is listed twice");
+        if (items.FirstOrDefault(i => i.Steps.Trim().Length == 0) is { } bare) problems.Add($"{bare.Id} has no steps");
+        if (items.Count < 2) return Fail(string.Join("; ", problems.Append("too few items to mark")));
+        var marks = new Dictionary<string, FieldTestCoverage.Mark>
+        {
+            [items[0].Id] = new(items[0].Id, "pass", "field test"),
+            [items[^1].Id] = new(items[^1].Id, "fail", "field test | note"),
+        };
+        var path = TestChecklistWindow.SaveTo(Path.Combine(folder, "checklist"), items, marks, Update.Updater.CurrentText, "field test", "Field test project", DateTime.Now);
+        var text = File.Exists(path) ? File.ReadAllText(path) : "";
+        if (!text.Contains($"1 pass, 1 fail, {items.Count - 2} not checked") || !text.Contains("field test / note")) problems.Add($"the saved file {path} doesn't hold the marks");
+        return problems.Count == 0
+            ? Pass($"{items.Count} items: {manual} manual steps and {bugs} fixed bug rows; a result with one pass and one fail was saved to {path}")
+            : Fail(string.Join("; ", problems));
     }
 
     // ---- Coverage --------------------------------------------------------------------------------------------------------

@@ -27,6 +27,13 @@ internal static class FieldTestCoverageTests
         check("checklist: only fixed rows", bugs.Select(b => b.Number).SequenceEqual([1]), string.Join(",", bugs.Select(b => b.Number)));
         var items = FieldTestCoverage.Checklist(bugs);
         check("checklist: manual features and the fixed bug", items.Any(i => i.Id == "chat.ui") && items[^1].Id == "bug:1" && items[^1].Title.Contains("Chat froze"), "");
+        // 0.32: hand-off, time saved and the prompt enhancer each have a manual step, after Chat and the ribbon.
+        check("checklist: 0.32 manual steps", new[] { "handoff.ui", "time.ui", "brief.ui" }.All(k => items.Any(i => i.Id == k && i.Steps.Length > 0)), "");
+        var areas = items.Select(i => i.Area).Distinct().ToList();
+        check("checklist: hand-off and time areas come after the ribbon", areas.IndexOf(FieldTestCoverage.Tasks) > areas.IndexOf(FieldTestCoverage.RibbonArea)
+            && areas.IndexOf(FieldTestCoverage.Time) > areas.IndexOf(FieldTestCoverage.Tasks), string.Join(", ", areas));
+        check("coverage: the time-saved button maps to a feature", FieldTestCoverage.Ribbon.TryGetValue("time-saved", out var timeKey)
+            && FieldTestCoverage.Features.Any(f => f.Key == timeKey), "");
         var md = FieldTestCoverage.ResultMarkdown(items, new Dictionary<string, FieldTestCoverage.Mark>
         {
             ["bug:1"] = new("bug:1", "fail", "still | freezes\nafter send"),

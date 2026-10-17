@@ -19,6 +19,9 @@ internal static class CancelPoint
 
     public static bool Requested => Jobs.CancelRequested;
 
+    /// <summary>The field test's hook: told each item <see cref="Stop"/> checks (what, index), so it can ask for a stop part-way. Null otherwise.</summary>
+    internal static Action<string, int>? TestItem;
+
     /// <summary>Throws the bridge's cancel exception when a stop was asked for.</summary>
     public static void ThrowIfRequested(string? more = null)
     {
@@ -32,6 +35,7 @@ internal static class CancelPoint
     public static bool Stop(string what, int index, int count)
     {
         if (count > 20 && index > 0 && index % 10 == 0) Jobs.Report($"{what}: {index} of {count}");
+        TestItem?.Invoke(what, index);
         return Jobs.CancelRequested;
     }
 

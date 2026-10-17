@@ -104,6 +104,8 @@ internal static partial class FieldTest
         /// <summary>The registry's tools and the tools with a self-test case, for the coverage section.</summary>
         public List<string> Tools = [];
         public HashSet<string> CaseTools = [];
+        /// <summary>What the time-tracking probe counted in the test project, for the report's "Time saved" section.</summary>
+        public string? TimeSaved;
 
         public int Count(string status) => Rows.Count(r => r.Status == status);
 
@@ -215,6 +217,8 @@ internal static partial class FieldTest
         public Library? Lib;
         public FamilyTemplates? Templates;
         public SelfTest.IFieldSession? Session;
+        /// <summary>The brief brief.plan made, for brief.choose.</summary>
+        public Chat.PromptBrief? Brief;
         public bool KeepFolder = o.KeepProject;
     }
 
@@ -1216,7 +1220,7 @@ internal static partial class FieldTest
             // Which copies of the shared libraries (System.Memory, Roslyn, System.Text.Json) this Revit really uses.
             try { md.AppendLine(SketchProMax.Revit.AssemblyReport.Describe()); }
             catch (Exception ex) { md.AppendLine("## Assemblies").AppendLine().AppendLine("Could not be read: " + ex.Message); }
-            // TODO(time-tracking): a "Time saved" section from the time log goes here once that worker's code is merged.
+            if (r.TimeSaved is not null) md.AppendLine("## Time saved").AppendLine().AppendLine(r.TimeSaved).AppendLine();
             // Last, so it is easy to find: every tool and feature, tested or manual (the checklist's source).
             var coverage = Coverage(r);
             md.AppendLine(CoverageMarkdown(coverage));

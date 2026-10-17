@@ -623,6 +623,7 @@ internal static class TimeLog
     /// </summary>
     private static bool Writable(Document doc, ElementId id, bool borrow)
     {
+        if (OwnedElsewhereForTest is not null) return false;
         if (!doc.IsWorkshared) return true;
         try
         {
@@ -800,6 +801,7 @@ internal static class TimeLog
     /// <summary>Who else holds Project Information in a workshared model, or null.</summary>
     private static string? ProjectInfoHolder(Document doc)
     {
+        if (OwnedElsewhereForTest is { } test) return test;
         if (!doc.IsWorkshared || doc.ProjectInformation is not { } info) return null;
         try
         {
@@ -809,6 +811,34 @@ internal static class TimeLog
     }
 
     // ---- For the field test ------------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// For the field test: while set (to a user name), every element counts as owned by that user, as when a colleague
+    /// has borrowed Project Information and the time records in a workshared model. One Revit session has only one
+    /// user, so the field test can't make that state for real. Always null outside the field test.
+    /// </summary>
+    internal static string? OwnedElsewhereForTest;
+
+    /// <summary>For the field test: this user's and PC's row for (day, tool) as stored in the model's Extensible Storage, or null.</summary>
+    internal static TimeRow? StoredRowForTest(Document doc, string day, string tool)
+    {
+        lock (Gate)
+        {
+            var stored = TimeSheet.Combine(Holders(doc).Where(h => Mine(h.Sheet)).Select(h => h.Sheet)).FirstOrDefault();
+            return stored is not null && stored.Rows.TryGetValue(day + "\t" + tool, out var row) ? row : null;
+        }
+    }
+
+    /// <summary>For the field test: what an item batch's last transaction does, on its own (writes what waited). Returns what happened.</summary>
+    internal static string WriteForTest(Document doc)
+    {
+        if (doc.IsModifiable || doc.IsReadOnly) return "not written: a transaction is open or the model is read-only";
+        using var t = new Transaction(doc, "Sketch ProMax: time log test");
+        t.Start();
+        bool changed;
+        lock (Gate) changed = Write(doc, borrow: true);
+        return t.Commit() == TransactionStatus.Committed ? changed ? "written" : "nothing to write" : "not written: the transaction was rolled back";
+    }
 
     /// <summary>
     /// For the field test: replays a scripted session on a private clock (no real time passes) for this model, records

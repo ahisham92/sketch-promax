@@ -54,7 +54,7 @@ internal sealed class TestChecklistWindow : Window
         _version = version;
         _revit = revit;
         _model = model;
-        _items = FieldTestCoverage.Checklist(FieldTestCoverage.FixedBugs(BugLogText()));
+        _items = Items();
 
         Title = "Sketch ProMax test checklist";
         Width = 640;
@@ -203,7 +203,7 @@ internal sealed class TestChecklistWindow : Window
     // ---- Files ----------------------------------------------------------------------------------------------------------
 
     /// <summary>The downloaded bug log in the Bugs folder when there is one, merged over the copy built into this version.</summary>
-    private static string BugLogText()
+    internal static string BugLogText()
     {
         string? local = null, builtIn = null;
         try { if (File.Exists(Bugs.BugLog.LocalLog)) local = File.ReadAllText(Bugs.BugLog.LocalLog); }
@@ -267,10 +267,7 @@ internal sealed class TestChecklistWindow : Window
         Brand.SetBusy(_save, true, "Saving…");
         try
         {
-            Directory.CreateDirectory(Bugs.BugLog.Root);
-            var when = DateTime.Now;
-            var path = Path.Combine(Bugs.BugLog.Root, $"Test checklist {when:yyyy-MM-dd HHmm}.md");
-            File.WriteAllText(path, FieldTestCoverage.ResultMarkdown(_items, Marks(), _version, _revit, _model, when));
+            var path = SaveTo(Bugs.BugLog.Root, _items, Marks(), _version, _revit, _model, DateTime.Now);
             _saved.SetResourceReference(TextBlock.ForegroundProperty, Brand.K.SuccessText);
             _saved.Text = $"Saved {Path.GetFileName(path)} in the Bugs folder. Send it with your bug reports, or attach it to a Claude chat.";
             _folder.Visibility = Visibility.Visible;
@@ -287,6 +284,19 @@ internal sealed class TestChecklistWindow : Window
             _saved.Visibility = Visibility.Visible;
             Brand.SetBusy(_save, false);
         }
+    }
+
+    /// <summary>The checklist's items as the window lists them: the manual features and tools, then the fixed bug rows.</summary>
+    internal static List<FieldTestCoverage.CheckItem> Items() => FieldTestCoverage.Checklist(FieldTestCoverage.FixedBugs(BugLogText()));
+
+    /// <summary>Writes the result file into <paramref name="folder"/> (Save results; the field test, in a temporary folder). Returns its path.</summary>
+    internal static string SaveTo(string folder, IReadOnlyList<FieldTestCoverage.CheckItem> items, IReadOnlyDictionary<string, FieldTestCoverage.Mark> marks,
+        string version, string revit, string model, DateTime when)
+    {
+        Directory.CreateDirectory(folder);
+        var path = Path.Combine(folder, $"Test checklist {when:yyyy-MM-dd HHmm}.md");
+        File.WriteAllText(path, FieldTestCoverage.ResultMarkdown(items, marks, version, revit, model, when));
+        return path;
     }
 
     private void OpenFolder()
