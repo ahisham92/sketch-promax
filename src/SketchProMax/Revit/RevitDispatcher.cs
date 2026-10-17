@@ -210,9 +210,17 @@ public sealed class RevitDispatcher : IExternalEventHandler
         finally { _running = false; }
     }
 
+    /// <summary>Raised at each Idling this dispatcher gets, on Revit's thread (the time log looks for input here).</summary>
+    internal static event Action<UIApplication>? Idle;
+
     private void OnIdling(object? sender, IdlingEventArgs e)
     {
         if (_stopped) return;
+        if (Idle is { } idle && sender is UIApplication idleApp)
+        {
+            try { idle(idleApp); }
+            catch (Exception) { /* listeners are best effort */ }
+        }
         if (StartupTimings.FirstIdle() is { } opened) ActivityLog.Note("model_open_timing", opened);
         if (_queue.IsEmpty && _eventOnly.IsEmpty)
         {

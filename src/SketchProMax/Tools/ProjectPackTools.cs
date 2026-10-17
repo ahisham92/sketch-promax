@@ -193,6 +193,8 @@ internal static class ProjectPack
             if (checkRun is not null) pack.Notes.Add(checkRun);
             Step("change tracking");
             Changes(doc, modelName, pack);
+            Step("time saved");
+            TimeSaved(doc, pack);
             if (args.OptBool("include_chat", true)) Chat(doc, pack);
             if (args.OptBool("include_bug_reports", true)) BugReports(pack);
             if (args.OptBool("include_images")) Images(doc, app, pack, temp, (int)Math.Max(0, Math.Min(12, args.OptLong("max_images") ?? 4)));
@@ -765,6 +767,21 @@ internal static class ProjectPack
     }
 
     // ---------------------------------------------------------------- changes.json
+
+    /// <summary>Working time and time saved in this model, all users (Revit/TimeLog), when anything was recorded.</summary>
+    private static void TimeSaved(Document doc, Pack pack)
+    {
+        try
+        {
+            var report = TimeLog.Report(doc);
+            if (report.Sheets.All(s => s.Rows.Count == 0)) return;
+            var t = report.Totals;
+            pack.Text("time_saved.csv", report.Csv(),
+                $"Working time {TimeMath.Duration(t.Working)} (AI {TimeMath.Duration(t.Ai)}, by hand {TimeMath.Duration(t.ByHand)}), time saved {TimeMath.Duration(t.Saved)}: " +
+                "summary, per tool and per day with a user column, and every stored row. By-hand rates are estimates unless set in Settings.", bom: true);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException) { pack.Notes.Add("Time saved could not be read: " + ex.Message); }
+    }
 
     private static void Changes(Document doc, string modelName, Pack pack)
     {

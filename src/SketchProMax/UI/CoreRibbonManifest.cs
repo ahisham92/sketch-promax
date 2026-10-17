@@ -137,7 +137,7 @@ internal static class CoreRibbonManifest
             "Read-only: nothing in the model changes. Runs here without the AI; usually a few MB at most. The folder opens " +
             "with the zip selected when it is done.", needsModel: true)),
 
-        // ---- Sketch ProMax: Job and Update large and labelled, then two stacks of short labels (three, then two). A
+        // ---- Sketch ProMax: Job and Update large and labelled, then two stacks of three short labels. A
         // stack's widest label is the first Revit hides when the ribbon is narrow, so the labels are short and of a
         // length; RibbonLabels then asks Revit to keep them (it shrinks the panel by other means).
         L(Button("Sketch ProMax", "JobLive", "No job", "job-button", "job",
@@ -161,6 +161,11 @@ internal static class CoreRibbonManifest
         L(Entry("HelpMenu", "FieldTest", "Diagnostics: field test", "field-test", "field",
             "Builds a throwaway test project, runs every tool family on it and writes one report. Your open models are not changed.",
             needsModel: true)),
+        // Time saved (0.32): CoreEntry.Command "time-saved" opens the summary for the active model (UI/TimeSavedWindow).
+        L(Button("Sketch ProMax", "TimeSaved", "Time saved", "time-saved", "job",
+            "Working time in this model (AI and by hand) and the time Sketch ProMax saved, per tool and per day. Exports to Excel.",
+            "All users' totals are kept in the model (Project Information shows them too). Rates and the idle threshold are in Settings.",
+            needsModel: true, small: true)),
 
         // ---- The pane
         L(Pane("Bugs", "ReportBug", "Report bug", "report-bug", "Writes a bug report for Sketch ProMax with what just happened, ready to send.")),

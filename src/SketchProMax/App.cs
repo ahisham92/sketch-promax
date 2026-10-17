@@ -162,6 +162,7 @@ public sealed class App : IExternalApplication
         _started = true;
         try { StartupTimings.Time("chat hooks", () => Chat.ChatPane.Start(app)); } catch (Exception) { /* the chat tab says what is wrong when it is opened */ }
         try { StartupTimings.Time("restart note", () => UI.RestartNote.AfterStart(Ui)); } catch (Exception) { /* the chat and the Version button still say it */ }
+        try { StartupTimings.Time("time log", () => TimeLog.Start(app)); } catch (Exception) { /* tasks still run; time is not counted */ }
 
         var token = _life.Token;
         _ = Task.Run(() => BackgroundStartAsync(token));
@@ -218,6 +219,7 @@ public sealed class App : IExternalApplication
         _life?.Cancel();
         try { Chat.ChatPane.Stop(app); } catch (Exception) { }
         try { Chat.NotesView.Stop(); } catch (Exception) { }
+        try { TimeLog.Stop(app); } catch (Exception) { }
         Bridge?.Stop(keepSession: true);
         Bridge = null;
         try { app.Application.FailuresProcessing -= FailureGuard.Handle; } catch (Exception) { }
@@ -236,6 +238,7 @@ public sealed class App : IExternalApplication
     {
         _life?.Cancel();
         try { Chat.ChatPane.Shutdown(); } catch (Exception) { }
+        try { TimeLog.Shutdown(); } catch (Exception) { }
         Bridge?.Stop();
 #if NETFRAMEWORK
         DependencyResolver.Unregister();

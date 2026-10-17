@@ -24,6 +24,15 @@ public sealed class AgentSettings
     /// </summary>
     public string LegendSeedPath { get; set; } = "";
 
+    /// <summary>Count working time (AI and by hand) and time saved, and keep them in each model (Revit/TimeLog).</summary>
+    public bool TimeTracking { get; set; } = true;
+
+    /// <summary>Minutes without activity after which working time stops counting.</summary>
+    public double IdleMinutes { get; set; } = 5;
+
+    /// <summary>By-hand rates the user set (minutes per run and per item); tools not listed use the built-in estimates.</summary>
+    public List<Tools.TimeRate>? TimeRates { get; set; }
+
     public static string FilePath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "SketchProMax", "settings.json");
 

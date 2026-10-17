@@ -1550,6 +1550,7 @@ internal sealed class ChatPane : DockPanel, IHistoryHost
         if (_conv.Name.Length == 0) _conv.Name = ChatHistory.AutoTitle(text.Length > 0 ? text : string.Join(", ", attachments.Select(a => a.Name)));
         ShowTitle();
         var turn = _turn = new Turn();
+        Revit.TimeLog.BeginChat();
         _lastActivity = DateTime.UtcNow;
         ShowStatus(attachments.Count > 0 ? "Preparing the attachments…" : null);
         try
@@ -1911,6 +1912,8 @@ internal sealed class ChatPane : DockPanel, IHistoryHost
     private void EndTurn()
     {
         if (_turn?.KillTimer is { } timer) timer.Stop();
+        // "Done in X. By hand: about Y. Saved: Z." when the task's tools saved any time.
+        try { if (_turn is not null && Revit.TimeLog.EndChat() is { } time) Note(time); } catch (Exception) { }
         MarkRunningTools("stopped");
         _turn = null;
         // Idle now: the streaming keys and tool ids of the turn are no longer needed (the drawn items stay in _views/_rows).
