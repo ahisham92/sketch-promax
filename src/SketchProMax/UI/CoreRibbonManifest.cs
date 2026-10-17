@@ -74,6 +74,7 @@ internal static class CoreRibbonManifest
 
         // ---- Documents
         L(Pulldown("Documents", "SheetsViews", "Sheets &\nviews", "sheet", "Create views and sheets and put views on sheets.")),
+        T("SheetsViews", "drawing_package", "Drawing package", "sheet", "From one sentence, makes the views, grid dimensions, tags, sheets with title blocks and a drawing register, checked after each stage. Shows the plan with its counts first."),
         T("SheetsViews", "create_plan_views", "Plan views", "sheet", "Creates floor or structural plans for levels."),
         T("SheetsViews", "create_section", "Section", "sheet", "Creates a section view along a line drawn in plan."),
         T("SheetsViews", "create_elevations", "Elevations", "sheet", "Creates elevation views."),

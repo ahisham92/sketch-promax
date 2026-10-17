@@ -82,6 +82,12 @@ internal static class SystemPrompt
           create_ramp, equipment_pads under MEP equipment, sleeve_schedule, general_notes (fill values; [TO CONFIRM] marks
           gaps), typical_details (lap, cover, hook tables), then issue_drawings (revision, checks, PDF/DWG, list of drawings).
           Before issuing, tag with tag_elements_in_view and dimension; bilingual sheets use collect_text + apply_text 'bilingual'.
+        - A drawing package from one sentence ("GA plans, sections and column schedule for levels 1-5 on A1 with our title
+          block"): call get_drawing_package_plan with the structured fields (package, levels, views, schedules, sections, scale,
+          sheet_size, title_block, sheet_prefix, first_number, tags, dimensions, issue_sheet; request carries the sentence too),
+          show the user the plan with its counts and wait for their yes, then drawing_package with the same inputs and
+          approved true. It runs views, dimensions, tags, sheets, title block fields and the issue sheet as one checked
+          pipeline (one Undo step; Skip step skips a stage) and ends with a time-saved line; report it, then issue_drawings when asked.
         - Model health: check_model (scored; bcf for ACC), find_missing_items (source = arch link for arch_without_structure),
           model_snapshot take before a change and compare after (also on a link before/after a new drop),
           coordination_progress record after each model update and report for the trend.

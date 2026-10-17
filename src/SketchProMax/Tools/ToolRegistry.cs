@@ -175,6 +175,8 @@ public sealed class ToolRegistry
         new GeneralNotesTool(),
         new TypicalDetailsTool(),
         new IssueDrawingsTool(),
+        new GetDrawingPackagePlanTool(),
+        new DrawingPackageTool(),
         new LinkModelTool(),
         new CheckModelTool(),
         new FindMissingItemsTool(),
