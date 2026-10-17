@@ -103,8 +103,12 @@ public sealed class TagElementsInViewTool : IRevitTool
         var reasons = new Dictionary<string, int>();
         void Skip(string why) => reasons[why] = reasons.TryGetValue(why, out var n) ? n + 1 : 1;
         using var t = RevitHelpers.StartTransaction(doc, $"Tag {bic.ToString().Replace("OST_", "")}");
+        var reached = 0;
+        var stopped = false;
         foreach (var e in targets)
         {
+            if (stopped = CancelPoint.Stop("Tagging", reached, targets.Count)) break;
+            reached++;
             try
             {
                 if (e is Room room)
@@ -131,6 +135,7 @@ public sealed class TagElementsInViewTool : IRevitTool
             catch (Autodesk.Revit.Exceptions.ApplicationException ex) { Skip(ex.Message.Trim()); }
         }
         var skipped = reasons.Values.Sum();
+        if (stopped && tagged == 0) { t.RollBack(); CancelPoint.ThrowIfRequested("Nothing was tagged."); }
         if (tagged == 0 && skipped > 0)
         {
             t.RollBack();
@@ -150,6 +155,7 @@ public sealed class TagElementsInViewTool : IRevitTool
             skippedBecause = reasons.Select(r => $"{r.Value}: {r.Key}"),
             dependentView = guard.Report(),
             note = targets.Count == 0 ? $"No untagged {args.String("category")} are visible in this view." : null,
+            stopped = CancelPoint.Note(stopped, reached, targets.Count),
         });
     }
 

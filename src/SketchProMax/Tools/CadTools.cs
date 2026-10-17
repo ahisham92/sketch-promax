@@ -242,8 +242,11 @@ public sealed class ConvertCadTool : IRevitTool
         failure.SetFailuresPreprocessor(swallow);
         t.SetFailureHandlingOptions(failure);
 
+        // Cancel stops between created elements; what was made is committed (one Undo step).
+        var stopped = false;
         foreach (var spec in args.Array("conversions"))
         {
+            if (stopped) break;
             var pattern = spec.GetProperty("layer").GetString() ?? "";
             var regex = new System.Text.RegularExpressions.Regex("^" + System.Text.RegularExpressions.Regex.Escape(pattern).Replace("\\*", ".*") + "$",
                 System.Text.RegularExpressions.RegexOptions.IgnoreCase);
@@ -259,6 +262,7 @@ public sealed class ConvertCadTool : IRevitTool
             // One bad item is noted and skipped instead of stopping the whole conversion.
             void Make(Action create)
             {
+                if (stopped || (stopped = CancelPoint.Requested)) return;
                 try { create(); created++; }
                 catch (Exception ex) when (ex is Autodesk.Revit.Exceptions.ApplicationException or ArgumentException or InvalidOperationException)
                 {
@@ -354,7 +358,11 @@ public sealed class ConvertCadTool : IRevitTool
             report.Add(new { layer = pattern, @as = kind, curves = layerCurves.Count, created, notes });
         }
         t.Commit();
-        return ToolResult.Ok(new { level = level.Name, conversions = report, removedByRevit = swallow.Deleted.Take(50) });
+        return ToolResult.Ok(new
+        {
+            level = level.Name, conversions = report, removedByRevit = swallow.Deleted.Take(50),
+            stopped = stopped ? $"{CancelPoint.Stopped}: the rest was not converted; what is counted above is kept (one Undo step)." : null,
+        });
     }
 
     private static double DefaultHeight(Document doc, Level level)

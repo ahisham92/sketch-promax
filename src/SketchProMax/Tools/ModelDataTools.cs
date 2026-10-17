@@ -34,8 +34,11 @@ public sealed class PlaceRoomsTool : IRevitTool
         int alreadyHadRoom = 0, tooSmall = 0;
         var failed = new List<string>();
         var minArea = 0.1 * 0.1 / (0.3048 * 0.3048); // 0.01 m2 in square feet
+        int reached = 0;
+        var stopped = false;
         foreach (var circuit in circuits)
         {
+            if (stopped = CancelPoint.Stop("Placing rooms", reached++, circuits.Count)) { reached--; break; }
             if (circuit.IsRoomLocated) { alreadyHadRoom++; continue; }
             if (circuit.Area < minArea) { tooSmall++; continue; }
             Room? room = null;
@@ -68,6 +71,7 @@ public sealed class PlaceRoomsTool : IRevitTool
             skippedAlreadyHaveRoom = alreadyHadRoom,
             skippedTooSmall = tooSmall,
             failed = failed.Count > 0 ? failed.Distinct().Take(10) : null,
+            stopped = CancelPoint.Note(stopped, reached, circuits.Count),
         });
     }
 }

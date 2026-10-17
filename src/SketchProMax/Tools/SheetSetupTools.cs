@@ -794,10 +794,12 @@ public sealed class ExportQuantitiesTool : IRevitTool
 
         var rows = new Dictionary<string, (string cat, string fam, string type, string[] keys, int count, double len, double area, double vol)>();
         var inPlaceNoQuantity = new List<long>();
+        var seen = 0;
         foreach (var bic in cats)
         {
             foreach (var e in new FilteredElementCollector(doc).OfCategory(bic).WhereElementIsNotElementType())
             {
+                if (++seen % 500 == 0) CancelPoint.ThrowIfRequested("No file was written.");
                 if (e is Wall { IsStackedWallMember: true }) continue; // the stacked wall itself carries the totals
                 var type = doc.GetElement(e.GetTypeId()) as ElementType;
                 var keys = groupBy.Select(g => g.ToLowerInvariant() switch

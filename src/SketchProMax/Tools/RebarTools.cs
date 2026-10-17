@@ -209,11 +209,17 @@ internal static class Rebars
 
     public static JsonElement? Opt(ToolArgs args, string key) => args.Has(key) ? args.Raw[key] : null;
 
-    /// <summary>Runs one host's work in a sub-transaction, so a host Revit refuses leaves nothing half made.</summary>
+    /// <summary>
+    /// Runs one host's work in a sub-transaction, so a host Revit refuses leaves nothing half made. A stop request
+    /// (cancel_job) takes effect between hosts: the rest are listed as not done and the finished ones are kept.
+    /// </summary>
     public static void PerHost(Document doc, IEnumerable<long> ids, Action<Element, List<long>> work, List<object> done, List<object> errors, bool assumed = false)
     {
-        foreach (var id in ids)
+        var list = ids.ToList();
+        for (var i = 0; i < list.Count; i++)
         {
+            var id = list[i];
+            if (CancelPoint.Stop("Placing rebar", i, list.Count)) { errors.Add(new { host = id, error = "not done: stopped on request (cancel_job)" }); continue; }
             using var sub = new SubTransaction(doc);
             sub.Start();
             try

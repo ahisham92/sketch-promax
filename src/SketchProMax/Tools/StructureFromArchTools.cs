@@ -216,9 +216,13 @@ public sealed class ArchToStructureTool : IRevitTool
         var swallow = dry ? null : new TypeKit.SwallowWarnings(doc);
         if (t != null) { var fo = t.GetFailureHandlingOptions(); fo.SetFailuresPreprocessor(swallow); t.SetFailureHandlingOptions(fo); }
         var sloped = 0;
+        // Cancel stops between elements; what was made is committed (a rerun skips it as "already made").
+        var stopped = false;
+        bool Stop() => stopped = stopped || CancelPoint.Requested;
         if (what.Contains("walls"))
             foreach (var w in new FilteredElementCollector(src).OfClass(typeof(Wall)).Cast<Wall>().Where(OnLevel))
             {
+                if (Stop()) break;
                 if (w.WallType.Kind != WallKind.Basic || (w.Location as LocationCurve)?.Curve is not { } curve) continue;
                 found["walls"]++;
                 var bearing = w.get_Parameter(BuiltInParameter.WALL_STRUCTURAL_SIGNIFICANT)?.AsInteger() == 1
@@ -270,7 +274,7 @@ public sealed class ArchToStructureTool : IRevitTool
                 }
                 catch (Exception ex) when (ex is Autodesk.Revit.Exceptions.ApplicationException or ArgumentException or InvalidOperationException) { errors.Add($"wall {w.Id.Value}: {ex.Message.Trim()}"); }
             }
-        if (what.Contains("columns"))
+        if (what.Contains("columns") && !stopped)
         {
             var sourceColumns = new List<FamilyInstance>();
             string TypeOf(FamilyInstance f) => $"{f.Symbol?.FamilyName}: {f.Symbol?.Name}";
@@ -290,6 +294,7 @@ public sealed class ArchToStructureTool : IRevitTool
             }
             foreach (var c in sourceColumns)
             {
+                if (Stop()) break;
                 if (done.Contains(c.UniqueId)) { skipped["already made"]++; continue; }
                 if (c.Location is not LocationPoint lp) { Skip("columns", "no point location (slanted or in-place)", TypeOf(c)); continue; }
                 if (dry) { made["columns"]++; continue; }
@@ -322,9 +327,10 @@ public sealed class ArchToStructureTool : IRevitTool
                 }
             }
         }
-        if (what.Contains("floors"))
+        if (what.Contains("floors") && !stopped)
             foreach (var fl in new FilteredElementCollector(src).OfClass(typeof(Floor)).Cast<Floor>().Where(OnLevel))
             {
+                if (Stop()) break;
                 found["floors"]++;
                 var flagged = fl.get_Parameter(BuiltInParameter.FLOOR_PARAM_IS_STRUCTURAL)?.AsInteger() == 1;
                 if (flagged && src == doc) { Skip("floors", "already structural in this model", fl.FloorType.Name); continue; }
@@ -354,6 +360,7 @@ public sealed class ArchToStructureTool : IRevitTool
             if (made.Values.Sum() == 0)
             {
                 t.RollBack();
+                CancelPoint.ThrowIfRequested("Nothing was made.");
                 return ToolResult.Error(ModelRules.NothingMadeMessage(sourceName, levelFilter, what, found, skips, errors, skipped["already made"]));
             }
             if (t.Commit() != TransactionStatus.Committed) return ToolResult.Error("Revit refused the structure when saving it.");
@@ -367,6 +374,7 @@ public sealed class ArchToStructureTool : IRevitTool
             deletedAtSave = swallow?.Deleted.Count ?? 0, wallOpenings = openingsMade,
             slopedFloors = sloped > 0 ? $"{sloped} architectural floor(s) are sloped or shape-edited; their slabs were made flat. Re-slope them (create_ramp or shape editing)." : null,
             note = "Check wall joins and slab edges; beams over openings and transfer structure still need adding (place_beams).",
+            stopped = stopped ? $"{CancelPoint.Stopped}: the rest was not done; what is counted above is kept (one Undo step). Run it again to continue." : null,
         });
     }
 }
