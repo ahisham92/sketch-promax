@@ -27,3 +27,8 @@ doesn't cover yet: a report counts as sent once a row below names it by the date
 | 15 | 2026-10-17 | check_model flags every column "off grid" even when small offsets are intentional; needs a tolerance and exceptions list | 0.28.1 | Fixed in 0.30 (please check) |
 | 16 | 2026-10-17 | Missing: 2D reinforcement drawing with the company's detail families (rebar tools only make 3D rebar) | 0.28.1 | Fixed in 0.30 (please check) |
 | 17 | 2026-10-17 | Revit asks about the unsigned add-in on every start even after "Always Load" (the loader's location and bytes changed with each update) | 0.29.0 | Fixed in 0.30 (please check) |
+| 18 | 2026-10-17 | Opening a model feels slow while Sketch ProMax loads; startup work should not delay model opening | 0.30.0 | Fixed in 0.31 (please check) |
+| 19 | 2026-10-17 | Chat panel looks basic; needs a more polished, smoother chat (rendering, typing, scrolling) | 0.30.0 | Fixed in 0.31 (please check) |
+| 20 | 2026-10-17 | arch_to_structure returns "Nothing was made." with no reason; likely the new cladding filter skips everything in the test model | 0.30.0 | Fixed in 0.31 (please check) |
+| 21 | 2026-10-17 | Chat panel needs: chat history sidebar with search, model picker (Opus/Sonnet/Haiku/Fable), home screen with feature library, saved prompts and tailored prompts | 0.30.0 | Fixed in 0.31 (please check) |
+| 22 | 2026-10-17 | New: value engineering tools (find savings, compare alternatives, apply an option, VE register) | 0.30.0 | Fixed in 0.31 (please check) |
