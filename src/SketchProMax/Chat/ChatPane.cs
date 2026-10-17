@@ -32,7 +32,7 @@ namespace SketchProMax.Chat;
 /// as the Claude desktop app. Everything slow (finding Claude Code, starting it, reading its output, encoding pictures)
 /// runs off Revit's UI thread.
 /// </summary>
-internal sealed class ChatPane : DockPanel, IHistoryHost
+internal sealed partial class ChatPane : DockPanel, IHistoryHost
 {
     // ---- Lifecycle (called by App and CoreEntry on Revit's UI thread) ---------------------------------------------
 
@@ -120,6 +120,11 @@ internal sealed class ChatPane : DockPanel, IHistoryHost
         public string Line = "";
         public bool Stopping, Retried, SawText, SawTool, ModelRetried;
         public DispatcherTimer? KillTimer;
+        /// <summary>True while the prompt enhancer reads the model to make a brief (nothing is sent to the chat yet).</summary>
+        public bool Planning;
+        public CancellationTokenSource? Cancel;
+        /// <summary>The brief this task runs ("" when it runs as typed or had none): see ChatPane.ActiveBrief.</summary>
+        public string Brief = "";
     }
 
     private sealed class Attachment
@@ -585,6 +590,7 @@ internal sealed class ChatPane : DockPanel, IHistoryHost
             _modelList.Children.Add(item);
             if (selected) chosen = item;
         }
+        AddBriefMenu();
         _modelMenu.IsOpen = true;
         AutomationProperties.SetItemStatus(_modelPill, "Expanded");
         var first = chosen ?? _modelList.Children.OfType<Button>().FirstOrDefault();
@@ -822,6 +828,7 @@ internal sealed class ChatPane : DockPanel, IHistoryHost
         _views.Clear();
         _rows.Clear();
         _dirty.Clear();
+        _briefCards.Clear();
         // Long conversations draw their latest page; "Show earlier" adds a page at a time.
         _firstShown = History.FirstShown(_conv.Items.Count);
         for (var k = _firstShown; k < _conv.Items.Count; k++) _messages.Children.Add(Build(k));
@@ -854,6 +861,7 @@ internal sealed class ChatPane : DockPanel, IHistoryHost
             "tool" => ToolCard(item, first),
             "error" => ErrorBox(item),
             "handoff" => HandoffCard.Build(item, Tools.Handoff.Find(item.Name)),
+            "brief" => BriefCard(item),
             _ => NoteLine(item),
         };
     }
@@ -1560,7 +1568,20 @@ internal sealed class ChatPane : DockPanel, IHistoryHost
         Add(new ChatItem { Kind = "user", Text = text, Name = string.Join(", ", attachments.Select(a => a.Name)), Files = attachments.Select(a => a.Path).ToList() });
         if (_conv.Name.Length == 0) _conv.Name = ChatHistory.AutoTitle(text.Length > 0 ? text : string.Join(", ", attachments.Select(a => a.Name)));
         ShowTitle();
-        var turn = _turn = new Turn();
+        SupersedeBriefs();
+        if (StartBrief(text, attachments)) return; // a brief card first; the choice on it runs the turn
+        await RunTurn(text, attachments, "");
+    }
+
+    /// <summary>Sends a message to Claude Code as a new turn (from Send, or from a choice on a brief card).</summary>
+    private async Task RunTurn(string text, List<Attachment> attachments, string brief)
+    {
+        if (DeliveryCapture is { } capture)
+        {
+            capture(text); // the field test's hook: what would be sent, never sent
+            return;
+        }
+        var turn = _turn = new Turn { Brief = brief };
         _lastActivity = DateTime.UtcNow;
         ShowStatus(attachments.Count > 0 ? "Preparing the attachments…" : null);
         try
@@ -1943,6 +1964,11 @@ internal sealed class ChatPane : DockPanel, IHistoryHost
     {
         var turn = _turn;
         if (turn is null || turn.Stopping) return;
+        if (turn.Planning)
+        {
+            StopBrief(turn);
+            return;
+        }
         turn.Stopping = true;
         Brand.SetBusy(_stop, true, ""); // a spinner in the round button; the status line says "Stopping…"
         if (_stop.Content is StackPanel { Children.Count: > 0 } busy && busy.Children[0] is FrameworkElement spinner) spinner.Margin = new Thickness(0);
@@ -2137,6 +2163,7 @@ internal sealed class ChatPane : DockPanel, IHistoryHost
         _render.Stop();
         UI.RestartNote.Changed -= ShowRestartNote;
         _turn?.KillTimer?.Stop();
+        _turn?.Cancel?.Cancel();
         if (_turn is not null) MarkRunningTools("stopped");
         _turn = null;
         Save();

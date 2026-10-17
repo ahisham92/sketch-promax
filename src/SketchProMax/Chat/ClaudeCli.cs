@@ -147,23 +147,7 @@ internal static class ClaudeCli
         Directory.CreateDirectory(engine);
         var pid = Process.GetCurrentProcess().Id.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
-        // The MCP config: the connector the installer and ClaudeRegistration register for the desktop app.
-        var mcp = new JsonObject
-        {
-            ["mcpServers"] = new JsonObject
-            {
-                [ServerName] = new JsonObject
-                {
-                    ["type"] = "stdio",
-                    ["command"] = ClaudeRegistration.ConnectorPath,
-                    ["args"] = new JsonArray(),
-                    // SKETCHPROMAX_CHAT: the bridge then asks in Revit before code, recipes and files written where Claude chose.
-                    ["env"] = new JsonObject { ["SKETCHPROMAX_REVIT_PID"] = pid, ["SKETCHPROMAX_CHAT"] = "1" },
-                },
-            },
-        };
-        var mcpFile = Path.Combine(engine, "mcp-" + pid + ".json");
-        File.WriteAllText(mcpFile, mcp.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
+        var mcpFile = WriteMcpConfig(engine, pid);
 
         var promptFile = Path.Combine(engine, "prompt-" + pid + ".md");
         File.WriteAllText(promptFile, Prompt(), new UTF8Encoding(false));
@@ -201,6 +185,71 @@ internal static class ClaudeCli
         info.StandardErrorEncoding = Encoding.UTF8;
         info.WorkingDirectory = WorkFolder;
         // The chat runs on the user's Claude plan: an API key in the environment would bill the API instead.
+        info.EnvironmentVariables.Remove("ANTHROPIC_API_KEY");
+        info.EnvironmentVariables["SKETCHPROMAX_REVIT_PID"] = pid;
+        return info;
+    }
+
+    /// <summary>Writes the MCP config: the connector the installer and ClaudeRegistration register for the desktop app.</summary>
+    private static string WriteMcpConfig(string engine, string pid, string name = "mcp-")
+    {
+        var mcp = new JsonObject
+        {
+            ["mcpServers"] = new JsonObject
+            {
+                [ServerName] = new JsonObject
+                {
+                    ["type"] = "stdio",
+                    ["command"] = ClaudeRegistration.ConnectorPath,
+                    ["args"] = new JsonArray(),
+                    // SKETCHPROMAX_CHAT: the bridge then asks in Revit before code, recipes and files written where Claude chose.
+                    ["env"] = new JsonObject { ["SKETCHPROMAX_REVIT_PID"] = pid, ["SKETCHPROMAX_CHAT"] = "1" },
+                },
+            },
+        };
+        var mcpFile = Path.Combine(engine, name + pid + ".json");
+        File.WriteAllText(mcpFile, mcp.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
+        return mcpFile;
+    }
+
+    /// <summary>
+    /// A one-shot run for the prompt enhancer (PromptBriefs): print mode, the message read from stdin, one JSON result
+    /// out. No built-in tools at all; with <paramref name="readTools"/> only the planner's read-only Revit tools
+    /// (PromptBriefs.PlannerTools) are allowed, and everything else is denied without asking (dontAsk), so it cannot
+    /// change the model. Without them it gets no MCP server.
+    /// </summary>
+    public static ProcessStartInfo OneShotStart(Install install, string instructions, bool readTools, string? model)
+    {
+        Directory.CreateDirectory(WorkFolder);
+        var engine = Path.Combine(Folder, "engine");
+        Directory.CreateDirectory(engine);
+        var pid = Process.GetCurrentProcess().Id.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var promptFile = Path.Combine(engine, (readTools ? "brief-" : "distil-") + pid + ".md");
+        File.WriteAllText(promptFile, instructions + Notes(), new UTF8Encoding(false));
+        var args = new List<string> { "-p", "--output-format", "json", "--append-system-prompt-file", promptFile, "--tools", "", "--permission-mode", "dontAsk" };
+        if (readTools)
+        {
+            args.AddRange(new[] { "--mcp-config", WriteMcpConfig(engine, pid, "mcp-brief-"), "--strict-mcp-config", "--max-turns", "12" });
+            args.Add("--allowedTools");
+            args.Add(string.Join(",", PromptBriefs.PlannerTools.Select(t => $"mcp__{ServerName}__{t}")));
+        }
+        else
+        {
+            args.AddRange(new[] { "--strict-mcp-config", "--max-turns", "1" });
+        }
+        if (!string.IsNullOrEmpty(model)) { args.Add("--model"); args.Add(model!); }
+        var command = string.Join(" ", args.Select(Quote));
+        var info = install.Path.EndsWith(".cmd", StringComparison.OrdinalIgnoreCase)
+            ? new ProcessStartInfo("cmd.exe", "/d /s /c \"" + Quote(install.Path) + " " + command + "\"")
+            : new ProcessStartInfo(install.Path, command);
+        info.UseShellExecute = false;
+        info.CreateNoWindow = true;
+        info.RedirectStandardInput = true;
+        info.RedirectStandardOutput = true;
+        info.RedirectStandardError = true;
+        info.StandardOutputEncoding = Encoding.UTF8;
+        info.StandardErrorEncoding = Encoding.UTF8;
+        info.WorkingDirectory = WorkFolder;
         info.EnvironmentVariables.Remove("ANTHROPIC_API_KEY");
         info.EnvironmentVariables["SKETCHPROMAX_REVIT_PID"] = pid;
         return info;
