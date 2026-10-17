@@ -221,23 +221,22 @@ internal sealed class MarkdownView : RichTextBox
         };
         SideScroll(scroll);
 
+        // A header bar (language and Copy) in a slightly deeper tint over the code, inside one rounded box.
         var header = new DockPanel { Margin = new Thickness(ChatUi.S3, 2, ChatUi.S1, 2) };
         var copy = ChatUi.CopyButton(() => text.Text, "code");
         DockPanel.SetDock(copy, Dock.Right);
         header.Children.Add(copy);
         header.Children.Add(ChatUi.Small(label));
-        var rule = new Border { Height = 1 };
-        rule.SetResourceReference(Border.BackgroundProperty, Brand.K.Border);
+        var bar = new Border { Child = header, CornerRadius = new CornerRadius(ChatUi.RadiusSmall - 1, ChatUi.RadiusSmall - 1, 0, 0) };
+        bar.SetResourceReference(Border.BackgroundProperty, Brand.K.SurfaceHover);
 
         var panel = new DockPanel();
-        DockPanel.SetDock(header, Dock.Top);
-        DockPanel.SetDock(rule, Dock.Top);
-        panel.Children.Add(header);
-        panel.Children.Add(rule);
+        DockPanel.SetDock(bar, Dock.Top);
+        panel.Children.Add(bar);
         panel.Children.Add(scroll);
-        var box = new Border { Child = panel, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(6) };
+        var box = new Border { Child = panel, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(ChatUi.RadiusSmall) };
         box.SetResourceReference(Border.BackgroundProperty, Brand.K.Surface);
-        box.SetResourceReference(Border.BorderBrushProperty, Brand.K.Border);
+        box.SetResourceReference(Border.BorderBrushProperty, Brand.K.BorderSubtle);
         if (drawn is not null)
         {
             drawn.Code = text;

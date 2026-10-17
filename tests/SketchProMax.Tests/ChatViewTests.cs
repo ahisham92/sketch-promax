@@ -63,5 +63,38 @@ internal static class ChatViewTests
         check("time: this year", StreamRender.Stamp(new DateTime(2026, 3, 2, 8, 0, 0), now) == "2 Mar 08:00", "");
         check("time: older", StreamRender.Stamp(new DateTime(2025, 3, 2, 8, 0, 0), now) == "2 Mar 2025", "");
         check("time: none for old saves", StreamRender.Stamp(default, now) == "", "");
+
+        // "Jump to latest": only over messages that continue below the viewport.
+        check("jump: never on the empty home screen", !ScrollFollow.JumpVisible(false, false, 900, 0), "");
+        check("jump: shows when reading back", ScrollFollow.JumpVisible(true, false, 900, 100), "");
+        check("jump: hidden while following", !ScrollFollow.JumpVisible(true, true, 900, 100), "");
+        check("jump: hidden within the slack of the bottom", !ScrollFollow.JumpVisible(true, false, 900, 900 - ScrollFollow.Slack + 1), "");
+
+        // The home screen's greeting.
+        check("greeting: display name", Greeting.FirstName("Ahmed Mitwally") == "Ahmed", Greeting.FirstName("Ahmed Mitwally") ?? "null");
+        check("greeting: last, first", Greeting.FirstName("Mitwally, Ahmed") == "Ahmed", Greeting.FirstName("Mitwally, Ahmed") ?? "null");
+        check("greeting: capitals and a note in brackets", Greeting.FirstName("AHMED MITWALLY (Structures)") == "Ahmed", Greeting.FirstName("AHMED MITWALLY (Structures)") ?? "null");
+        check("greeting: title skipped", Greeting.FirstName("Eng. Sara Ali") == "Sara" && Greeting.FirstName("Dr Omar Hassan") == "Omar", "");
+        check("greeting: sign-in name", Greeting.FirstName("ahmed.mitwally") == "Ahmed" && Greeting.FirstName("CORP\\sara_ali") == "Sara", "");
+        check("greeting: e-mail", Greeting.FirstName("jean-luc.picard@example.com") == "Jean", Greeting.FirstName("jean-luc.picard@example.com") ?? "null");
+        check("greeting: hyphenated display name kept", Greeting.FirstName("jean-luc picard") == "Jean-Luc", Greeting.FirstName("jean-luc picard") ?? "null");
+        check("greeting: mixed case kept", Greeting.FirstName("McKay Smith") == "McKay", "");
+        check("greeting: not a name", Greeting.FirstName("a.mitwally") is null && Greeting.FirstName("user123") is null && Greeting.FirstName("  ") is null && Greeting.FirstName(null) is null, "");
+        check("greeting: non-Latin name", Greeting.FirstName("أحمد متولي") == "أحمد", Greeting.FirstName("أحمد متولي") ?? "null");
+        check("greeting: first usable candidate", Greeting.Pick(null, "", "x1", "ahmed") == "Ahmed" && Greeting.Pick("user1") is null, "");
+        // The chat's styles are parsed at run time with a plain fallback, so a slip would quietly lose the whole look.
+        var xaml = ChatStyles.Xaml(8, 12);
+        System.Xml.Linq.XDocument? styles = null;
+        try { styles = System.Xml.Linq.XDocument.Parse(xaml); } catch (System.Xml.XmlException ex) { check("styles: well formed", false, ex.Message); }
+        if (styles is not null)
+        {
+            var keys = styles.Descendants().Select(e => (string?)e.Attribute(System.Xml.Linq.XName.Get("Key", "http://schemas.microsoft.com/winfx/2006/xaml"))).Where(k => k is not null).ToList();
+            var wanted = new[] { "SpmChatFocus", "SpmChatFocusCard", "SpmChatFocusRound", "SpmChatGhost", "SpmChatIcon", "SpmChatPill", "SpmChatPrimary", "SpmChatFloat", "SpmChatCard", "SpmChatMenuItem", "SpmChatSend", "SpmChatStop", "SpmChatField", "SpmChatBare", "SpmChatDisclosure" };
+            check("styles: well formed with every key", wanted.All(keys.Contains) && keys.Count == keys.Distinct().Count(), string.Join(",", keys));
+            var left = System.Text.RegularExpressions.Regex.Matches(xaml, @"\b(FOCUS|GHOST|PILL|PRIMARY|FLOAT|CARD|SEND|STOP|SMALL|KEY|BEHIND|RADIUS|HOVERBG|HOVERBORDER|BG|FG|HOVER|PRESSED)\b").Cast<System.Text.RegularExpressions.Match>().Select(m => m.Value).ToList();
+            check("styles: no placeholder left", left.Count == 0, string.Join(",", left));
+            check("styles: corners from the spacing scale", xaml.Contains("CornerRadius=\"8\"") && xaml.Contains("CornerRadius=\"12\"") && xaml.Contains("RadiusX=\"10\""), "");
+        }
+        check("greeting: line", Greeting.Line("Ahmed") == "Hey Ahmed!" && Greeting.Line(null) == "Hey there!", "");
     }
 }

@@ -132,33 +132,41 @@ internal static partial class UpdateNotice
     /// </summary>
     public static FrameworkElement Banner()
     {
+        // A rounded card in the accent tint, in the chat's look: title and close X on top, a line, then the actions.
         var band = new Border
         {
-            Visibility = Visibility.Collapsed, Margin = new Thickness(10, 0, 10, 4), Padding = new Thickness(8, 6, 8, 6),
-            BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(4),
+            Visibility = Visibility.Collapsed, Margin = new Thickness(12, 4, 12, 4), Padding = new Thickness(14, 10, 6, 10),
+            CornerRadius = new CornerRadius(Chat.ChatUi.Radius),
         };
-        band.SetResourceReference(Border.BackgroundProperty, Brand.K.NoticeBg);
-        band.SetResourceReference(Border.BorderBrushProperty, Brand.K.NoticeBorder);
+        band.SetResourceReference(Border.BackgroundProperty, Brand.K.AccentSoft);
         AutomationProperties.SetLiveSetting(band, AutomationLiveSetting.Polite);
-        var title = Brand.Text("", Brand.K.Text, 12, bold: true);
+        var title = Brand.Text("", Brand.K.Text, 13, bold: true);
+        title.VerticalAlignment = VerticalAlignment.Center;
         var line = Brand.Text("", Brand.K.Text, 12);
         var next = Brand.Text("", Brand.K.Muted, 11);
         var update = BandButton("Update now", primary: true);
         var notes = BandButton("What's new", primary: false);
-        var close = BandButton("Dismiss", primary: false);
-        AutomationProperties.SetHelpText(close, "Hides this message. The Update button on the ribbon still shows the version.");
+        var close = Chat.ChatUi.Ghost(Chat.ChatUi.GlyphCross, null, "Dismiss the update message",
+            "Hides this message. The Update button on the ribbon still shows the version.");
+        close.MinWidth = close.MinHeight = 28;
+        close.VerticalAlignment = VerticalAlignment.Top;
         update.Click += (_, _) => UpdateNow();
         notes.Click += (_, _) => WhatsNew();
         close.Click += (_, _) => Dismiss();
-        var buttons = new WrapPanel { Margin = new Thickness(0, 4, 0, 0) };
+        var head = new DockPanel();
+        DockPanel.SetDock(close, Dock.Right);
+        head.Children.Add(close);
+        head.Children.Add(title);
+        var buttons = new WrapPanel { Margin = new Thickness(0, 8, 0, 0) };
         buttons.Children.Add(update);
         buttons.Children.Add(notes);
-        buttons.Children.Add(close);
+        var body = new StackPanel { Margin = new Thickness(0, 0, 8, 0) };
+        body.Children.Add(line);
+        body.Children.Add(next);
+        body.Children.Add(buttons);
         var stack = new StackPanel();
-        stack.Children.Add(title);
-        stack.Children.Add(line);
-        stack.Children.Add(next);
-        stack.Children.Add(buttons);
+        stack.Children.Add(head);
+        stack.Children.Add(body);
         band.Child = stack;
 
         void Render()
@@ -190,11 +198,12 @@ internal static partial class UpdateNotice
 
     private static Button BandButton(string text, bool primary)
     {
-        var button = Brand.Button(text, primary ? Brand.Weight.Primary : Brand.Weight.Secondary);
+        var button = new Button { Content = text };
+        button.SetResourceReference(FrameworkElement.StyleProperty, primary ? "SpmChatPrimary" : "SpmChatPill"); // the chat's rounded pills
         button.MinWidth = 0;
-        button.MinHeight = 24;
-        button.Padding = new Thickness(10, 2, 10, 2);
-        button.Margin = new Thickness(0, 0, 6, 2);
+        button.MinHeight = 28;
+        button.Padding = new Thickness(12, 3, 12, 3);
+        button.Margin = new Thickness(0, 0, 8, 2);
         return button;
     }
 }

@@ -87,6 +87,13 @@ internal sealed class ScrollFollow
     public bool ShowJump => !Following;
 
     /// <summary>
+    /// "Jump to latest" shows only over a conversation with messages below what the reader sees: never on the empty
+    /// home screen (its own list scrolls too), and not while the list follows the latest message.
+    /// </summary>
+    public static bool JumpVisible(bool hasMessages, bool following, double scrollable, double offset) =>
+        hasMessages && !following && scrollable - offset > Slack;
+
+    /// <summary>
     /// The list scrolled. A change of content or pane size moves the offset without the reader doing anything, so it
     /// keeps the current mode; otherwise the reader moved it, and the list follows when they are at the bottom.
     /// </summary>

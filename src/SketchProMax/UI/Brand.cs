@@ -37,6 +37,8 @@ internal static class Brand
         public const string Focus = "SpmFocus", NoticeBg = "SpmNoticeBg", NoticeBorder = "SpmNoticeBorder";
         public const string BadgeOk = "SpmBadgeOk", BadgeWarn = "SpmBadgeWarn", BadgeMuted = "SpmBadgeMuted", BadgeError = "SpmBadgeError";
         public const string HeaderText = "SpmHeaderText", HeaderSub = "SpmHeaderSub";
+        // The chat's softer surfaces: raised cards and the composer, hairline borders, the accent tint of your messages.
+        public const string Raised = "SpmRaised", BorderSubtle = "SpmBorderSubtle", AccentSoft = "SpmAccentSoft";
     }
 
     /// <summary>
@@ -75,6 +77,11 @@ internal static class Brand
         (K.BadgeError, 0xB91C1C, 0xB91C1C),
         (K.HeaderText, 0xFFFFFF, 0xFFFFFF),
         (K.HeaderSub, 0xE0E7FF, 0xE0E7FF),
+        // Core only (the loader's pane doesn't use them). Text and Muted on Raised and AccentSoft stay above 5.8:1 in
+        // both themes; BorderSubtle is decorative (a focused field turns to Focus).
+        (K.Raised, 0xFFFFFF, 0x32373F),
+        (K.BorderSubtle, 0xE2E8F0, 0x434A54),
+        (K.AccentSoft, 0xE8EFFD, 0x2C3B5A),
     ];
 
     public enum Weight { Secondary, Primary, Danger }
