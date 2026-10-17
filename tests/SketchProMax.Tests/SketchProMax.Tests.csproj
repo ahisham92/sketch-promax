@@ -13,6 +13,7 @@
     <Compile Include="../../src/SketchProMax/Chat/Markdown.cs" Link="Markdown.cs" />
     <Compile Include="../../src/SketchProMax/Chat/StreamRender.cs" Link="StreamRender.cs" />
     <Compile Include="../../src/SketchProMax/Chat/ChatModels.cs" Link="ChatModels.cs" />
+    <Compile Include="../../src/SketchProMax/Chat/ChatHistory.cs" Link="ChatHistory.cs" />
     <Compile Include="../../src/SketchProMax/Tools/OutputPaths.cs" Link="OutputPaths.cs" />
     <Compile Include="../../src/SketchProMax/Tools/ModelRules.cs" Link="ModelRules.cs" />
     <Compile Include="../../src/SketchProMax.Loader/RibbonManifest.cs" Link="RibbonManifest.cs" />

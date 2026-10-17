@@ -32,7 +32,7 @@ namespace SketchProMax.Chat;
 /// as the Claude desktop app. Everything slow (finding Claude Code, starting it, reading its output, encoding pictures)
 /// runs off Revit's UI thread.
 /// </summary>
-internal sealed class ChatPane : DockPanel
+internal sealed class ChatPane : DockPanel, IHistoryHost
 {
     // ---- Lifecycle (called by App and CoreEntry on Revit's UI thread) ---------------------------------------------
 
@@ -159,8 +159,11 @@ internal sealed class ChatPane : DockPanel
 
     // ---- Controls -------------------------------------------------------------------------------------------------
 
-    private readonly TextBlock _modelLine;
-    private readonly Button _newChat, _send, _stop, _attach, _view;
+    private readonly TextBlock _modelLine, _chatName;
+    private readonly Button _newChat, _send, _stop, _attach, _view, _menu;
+    private HistoryDrawer? _drawer;
+    private readonly Border _scrim = new() { Visibility = Visibility.Collapsed };
+    private readonly Grid _center = new();
     private readonly ComboBox _modelPick = new() { MinWidth = 96, MinHeight = 28, VerticalAlignment = VerticalAlignment.Center };
     private string _model = ChatModels.Load(ClaudeCli.Folder), _lastWorkingModel = "";
     private readonly Border _setupCard = new() { Visibility = Visibility.Collapsed };
@@ -204,21 +207,28 @@ internal sealed class ChatPane : DockPanel
         LastChildFill = true;
         _conv = ChatStore.Load(ConversationKey, ConversationTitle);
 
-        // Top: whose conversation this is, and New chat.
-        var top = new DockPanel { Margin = new Thickness(10, 6, 10, 4) };
-        _newChat = Brand.Button("New chat", Brand.Weight.Danger);
-        _newChat.Margin = new Thickness(8, 0, 0, 0);
-        _newChat.MinWidth = 0;
-        _newChat.ToolTip = "Clears this conversation and starts a new one. Claude won't remember the messages shown here.";
-        AutomationProperties.SetName(_newChat, "New chat (clears this conversation)");
+        // Top: the history menu, this chat's name and model, and New chat.
+        var top = new DockPanel { Margin = new Thickness(ChatUi.S2, 6, ChatUi.S3, ChatUi.S1) };
+        _menu = ChatUi.Ghost(ChatUi.GlyphMenu, null, "Chat history", "Your chats: search, open, rename, pin, export or delete them.");
+        ((StackPanel)_menu.Content).Children.OfType<TextBlock>().First().FontSize = 15;
+        _menu.MinWidth = 32;
+        _menu.MinHeight = 32;
+        _menu.Margin = new Thickness(0, 0, ChatUi.S1, 0);
+        _menu.Click += (_, _) => ToggleDrawer();
+        DockPanel.SetDock(_menu, Dock.Left);
+        top.Children.Add(_menu);
+        _newChat = ChatUi.Ghost(ChatUi.GlyphAdd, "New chat", "New chat", "Starts a new chat. This one stays in the history (the menu at the top left).");
+        _newChat.Margin = new Thickness(ChatUi.S2, 0, 0, 0);
         _newChat.Click += (_, _) => NewChat();
         DockPanel.SetDock(_newChat, Dock.Right);
         top.Children.Add(_newChat);
-        _modelLine = Brand.Text("", Brand.K.Muted, 11);
-        _modelLine.TextWrapping = TextWrapping.NoWrap;
-        _modelLine.TextTrimming = TextTrimming.CharacterEllipsis;
-        _modelLine.VerticalAlignment = VerticalAlignment.Center;
-        top.Children.Add(_modelLine);
+        var names = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+        _chatName = ChatUi.Small("", Brand.K.Text, bold: true);
+        _chatName.FontSize = 12.5;
+        names.Children.Add(_chatName);
+        _modelLine = ChatUi.Small("");
+        names.Children.Add(_modelLine);
+        top.Children.Add(names);
         SetDock(top, Dock.Top);
         KeyboardNavigation.SetTabIndex(top, 0);
         Children.Add(top);
@@ -386,11 +396,14 @@ internal sealed class ChatPane : DockPanel
         _jump.Click += (_, _) => ScrollToEnd(force: true);
         _jumpText.Text = "Jump to latest";
         AutomationProperties.SetName(_jump, "Jump to latest");
-        var center = new Grid();
-        center.Children.Add(_scroll);
-        center.Children.Add(_jump);
-        KeyboardNavigation.SetTabIndex(center, 3);
-        Children.Add(center);
+        _center.Children.Add(_scroll);
+        _center.Children.Add(_jump);
+        // The history drawer slides over the conversation; the dimmed rest closes it when clicked.
+        _scrim.Background = new SolidColorBrush(Color.FromArgb(0x55, 0, 0, 0));
+        _scrim.MouseDown += (_, _) => CloseDrawer();
+        _center.Children.Add(_scrim);
+        KeyboardNavigation.SetTabIndex(_center, 3);
+        Children.Add(_center);
 
         // Escape stops Claude from anywhere in the chat (the message box handles it itself first).
         KeyDown += (_, e) =>
@@ -644,10 +657,18 @@ internal sealed class ChatPane : DockPanel
 
     // ---- Conversation view ----------------------------------------------------------------------------------------
 
+    private void ShowTitle()
+    {
+        _chatName.Text = _conv.Name.Length > 0 ? _conv.Name : _conv.Items.Count == 0 ? "New chat" : ChatHistory.AutoTitle(_conv.Items.FirstOrDefault(i => i.Kind == "user")?.Text);
+        _chatName.ToolTip = _chatName.Text;
+        _modelLine.Text = (_conv.Pinned ? "\u2605 Pinned · " : "") + "Model: " + _conv.Title;
+        _modelLine.ToolTip = "Each Revit model keeps its own chats, also after Revit restarts; open the others from the menu at the top left. " + _conv.Key;
+        AutomationProperties.SetName(_chatName, "Chat: " + _chatName.Text);
+    }
+
     private void ShowConversation()
     {
-        _modelLine.Text = "Chat for " + _conv.Title;
-        _modelLine.ToolTip = "Each Revit model keeps its own conversation, also after Revit restarts. " + _conv.Key;
+        ShowTitle();
         _messages.Children.Clear();
         _texts.Clear();
         _tools.Clear();
@@ -1246,6 +1267,8 @@ internal sealed class ChatPane : DockPanel
         _pending.Clear();
         ShowChips();
         Add(new ChatItem { Kind = "user", Text = text, Name = string.Join(", ", attachments.Select(a => a.Name)), Files = attachments.Select(a => a.Path).ToList() });
+        if (_conv.Name.Length == 0) _conv.Name = ChatHistory.AutoTitle(text.Length > 0 ? text : string.Join(", ", attachments.Select(a => a.Name)));
+        ShowTitle();
         var turn = _turn = new Turn();
         _lastActivity = DateTime.UtcNow;
         ShowStatus(attachments.Count > 0 ? "Preparing the attachments…" : null);
@@ -1647,26 +1670,121 @@ internal sealed class ChatPane : DockPanel
     private void NewChat()
     {
         if (_stopped) return;
-        if (_conv.Items.Count > 0)
-        {
-            var dialog = new TaskDialog("Sketch ProMax")
-            {
-                MainInstruction = "Start a new chat?",
-                MainContent = "The messages here are cleared and Claude starts without them. Your model is not changed.",
-                CommonButtons = TaskDialogCommonButtons.Yes | TaskDialogCommonButtons.No,
-                DefaultButton = TaskDialogResult.No,
-            };
-            if (dialog.Show() != TaskDialogResult.Yes) return;
-        }
+        // The chat shown stays in the history; a running answer is stopped (the chat resumes when reopened).
+        if (_turn is not null) MarkRunningTools("stopped");
         _turn?.KillTimer?.Stop();
         _turn = null;
         _engine?.Kill();
         _engine = null;
-        _conv = new Conversation { Key = ConversationKey, Title = ConversationTitle };
         Save();
+        _conv = ChatStore.New(ConversationKey, ConversationTitle);
         ShowConversation();
         ShowStatus();
+        CloseDrawer();
         _input.Focus();
+    }
+
+    // ---- History drawer (IHistoryHost) ----------------------------------------------------------------------------
+
+    private void ToggleDrawer()
+    {
+        if (_drawer is { Visibility: Visibility.Visible }) CloseDrawer();
+        else OpenDrawer();
+    }
+
+    private void OpenDrawer()
+    {
+        if (_stopped) return;
+        if (_drawer is null)
+        {
+            _drawer = new HistoryDrawer(this) { HorizontalAlignment = HorizontalAlignment.Left };
+            _center.Children.Add(_drawer);
+            _center.SizeChanged += (_, _) => SizeDrawer();
+        }
+        SizeDrawer();
+        _scrim.Visibility = Visibility.Visible;
+        _drawer.Visibility = Visibility.Visible;
+        AutomationProperties.SetItemStatus(_menu, "Expanded");
+        _drawer.Refresh();
+        _drawer.FocusSearch();
+    }
+
+    private void SizeDrawer()
+    {
+        if (_drawer is not null) _drawer.Width = Math.Max(200, Math.Min(340, _center.ActualWidth - 40));
+    }
+
+    public void CloseDrawer()
+    {
+        if (_drawer is not { Visibility: Visibility.Visible }) return;
+        _drawer.Visibility = Visibility.Collapsed;
+        _scrim.Visibility = Visibility.Collapsed;
+        AutomationProperties.SetItemStatus(_menu, "Collapsed");
+        _menu.Focus();
+    }
+
+    string IHistoryHost.ModelKey => ConversationKey;
+
+    string IHistoryHost.CurrentFile => _conv.File;
+
+    void IHistoryHost.NewChat() => NewChat();
+
+    void IHistoryHost.OpenChat(ChatSummary chat)
+    {
+        if (string.Equals(chat.File, _conv.File, StringComparison.OrdinalIgnoreCase))
+        {
+            CloseDrawer();
+            return;
+        }
+        if (_turn is not null)
+        {
+            Status("Claude is still answering. Wait for it, or press Stop, then open the other chat.", spin: false);
+            CloseDrawer();
+            return;
+        }
+        if (ChatStore.Read(chat.File) is not { } conv)
+        {
+            Status("That chat couldn't be read. Open the history again and press Refresh.", spin: false);
+            return;
+        }
+        Save();
+        _engine?.Dispose();
+        _engine = null;
+        _conv = conv;
+        ShowConversation();
+        ShowStatus();
+        CloseDrawer();
+        _input.Focus();
+    }
+
+    void IHistoryHost.ChangeChat(string file, Action<Conversation> change)
+    {
+        if (string.Equals(file, _conv.File, StringComparison.OrdinalIgnoreCase))
+        {
+            change(_conv);
+            ChatStore.Save(_conv, touch: false);
+            ShowTitle();
+            return;
+        }
+        if (ChatStore.Read(file) is not { } conv) return;
+        change(conv);
+        ChatStore.Save(conv, touch: false);
+    }
+
+    bool IHistoryHost.DeleteChat(string file)
+    {
+        var current = string.Equals(file, _conv.File, StringComparison.OrdinalIgnoreCase);
+        if (current && _turn is not null) return false;
+        if (!ChatStore.Delete(file)) return false;
+        if (current)
+        {
+            _engine?.Dispose();
+            _engine = null;
+            _conv = ChatStore.New(ConversationKey, ConversationTitle);
+            ShowConversation();
+            ShowStatus();
+        }
+        return true;
     }
 
     private void ModelChanged()

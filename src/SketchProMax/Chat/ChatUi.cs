@@ -31,6 +31,8 @@ internal static class ChatUi
     public const string GlyphCopy = "\uE8C8", GlyphCheck = "\uE73E", GlyphCross = "\uE711", GlyphStop = "\uE71A";
     public const string GlyphRight = "\uE76C", GlyphDown = "\uE70D", GlyphArrowDown = "\uE74B", GlyphError = "\uE783";
     public const string GlyphInfo = "\uE946", GlyphPicture = "\uEB9F", GlyphUp = "\uE70E", GlyphFile = "\uE8A5";
+    public const string GlyphMenu = "\uE700", GlyphAdd = "\uE710", GlyphRefresh = "\uE72C", GlyphMore = "\uE712";
+    public const string GlyphRename = "\uE8AC", GlyphPin = "\uE718", GlyphSave = "\uE74E", GlyphDelete = "\uE74D";
 
     private static ResourceDictionary? _styles;
 

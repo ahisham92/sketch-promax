@@ -5,40 +5,11 @@ using System.Text.Json;
 
 namespace SketchProMax.Chat;
 
-/// <summary>One line of a saved conversation, as the pane shows it.</summary>
-internal sealed class ChatItem
-{
-    /// <summary>user, assistant, tool, note or error.</summary>
-    public string Kind { get; set; } = "";
-    public string Text { get; set; } = "";
-    /// <summary>Tools: the short tool name. User: attachment names.</summary>
-    public string Name { get; set; } = "";
-    /// <summary>Tools: running, done or failed.</summary>
-    public string State { get; set; } = "";
-    /// <summary>When it was added (UTC); default for items saved before 0.31, which then show no time.</summary>
-    public DateTime Time { get; set; }
-    /// <summary>Tools: the input, indented JSON (shortened), for the step's details.</summary>
-    public string Input { get; set; } = "";
-    /// <summary>Tools: the start of the result, for the step's details and its element ids.</summary>
-    public string Result { get; set; } = "";
-    /// <summary>User: the full paths of the attached files, for thumbnails.</summary>
-    public List<string> Files { get; set; } = [];
-}
-
-/// <summary>A saved conversation: the Claude Code session to resume and what the pane showed.</summary>
-internal sealed class Conversation
-{
-    public string Key { get; set; } = "";
-    public string Title { get; set; } = "";
-    public string SessionId { get; set; } = "";
-    public DateTime Updated { get; set; }
-    public List<ChatItem> Items { get; set; } = [];
-}
-
 /// <summary>
-/// Conversations are kept per Revit model, in %LOCALAPPDATA%\SketchProMax\chat\conversations (local to this PC and
-/// user): reopening a model in a later Revit session shows its conversation again and resumes the same Claude Code
-/// session with --resume.
+/// Chats are kept per Revit model, several per model, in %LOCALAPPDATA%\SketchProMax\chat\conversations (local to this
+/// PC and user), one file each: "&lt;model hash&gt;-&lt;chat id&gt;.json". Reopening a model shows its latest chat again and
+/// resumes the same Claude Code session with --resume; the history drawer lists the others. A file saved before 0.31
+/// ("&lt;model hash&gt;.json", one chat per model) is read as that model's chat and renamed the next time it is saved.
 /// </summary>
 internal static class ChatStore
 {
@@ -46,29 +17,57 @@ internal static class ChatStore
 
     private static string Folder => Path.Combine(ClaudeCli.Folder, "conversations");
 
-    private static string FileFor(string key)
+    private static string Hash(string key)
     {
         using var sha = SHA256.Create();
         var hash = sha.ComputeHash(Encoding.UTF8.GetBytes(key.ToLowerInvariant()));
-        return Path.Combine(Folder, string.Concat(hash.Take(10).Select(b => b.ToString("x2"))) + ".json");
+        return string.Concat(hash.Take(10).Select(b => b.ToString("x2")));
     }
 
+    private static string FileFor(Conversation conv) =>
+        Path.Combine(Folder, Hash(conv.Key) + (conv.Id.Length > 0 ? "-" + conv.Id : "") + ".json");
+
+    /// <summary>A new, empty chat for a model.</summary>
+    public static Conversation New(string key, string title) => new() { Key = key, Title = title, Id = NewId() };
+
+    private static string NewId() => Guid.NewGuid().ToString("N").Substring(0, 12);
+
+    /// <summary>The model's latest chat (a new one when it has none).</summary>
     public static Conversation Load(string key, string title)
     {
         try
         {
-            var file = FileFor(key);
-            if (File.Exists(file) && JsonSerializer.Deserialize<Conversation>(File.ReadAllText(file)) is { } saved)
+            if (Directory.Exists(Folder))
             {
-                saved.Title = title;
-                return saved;
+                var hash = Hash(key);
+                var latest = Directory.GetFiles(Folder, hash + "*.json")
+                    .Where(f => Path.GetFileNameWithoutExtension(f) is var n && (n == hash || n.StartsWith(hash + "-", StringComparison.Ordinal)))
+                    .OrderByDescending(File.GetLastWriteTimeUtc);
+                foreach (var file in latest)
+                    if (Read(file) is { } saved)
+                    {
+                        saved.Title = title;
+                        return saved;
+                    }
             }
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or NotSupportedException) { }
-        return new Conversation { Key = key, Title = title };
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        return New(key, title);
     }
 
-    /// <summary>Every saved conversation (all models), unreadable files skipped.</summary>
+    /// <summary>The chat saved in <paramref name="file"/>, or null when it can't be read.</summary>
+    public static Conversation? Read(string file)
+    {
+        try
+        {
+            if (!File.Exists(file) || JsonSerializer.Deserialize<Conversation>(File.ReadAllText(file)) is not { } conv) return null;
+            conv.File = file;
+            return conv;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or NotSupportedException) { return null; }
+    }
+
+    /// <summary>Every saved chat (all models), unreadable files skipped.</summary>
     public static List<Conversation> All()
     {
         var list = new List<Conversation>();
@@ -76,31 +75,54 @@ internal static class ChatStore
         {
             if (!Directory.Exists(Folder)) return list;
             foreach (var file in Directory.GetFiles(Folder, "*.json"))
-            {
-                try
-                {
-                    if (JsonSerializer.Deserialize<Conversation>(File.ReadAllText(file)) is { } conv) list.Add(conv);
-                }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or NotSupportedException) { }
-            }
+                if (Read(file) is { } conv) list.Add(conv);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
         return list;
     }
 
-    public static void Save(Conversation conversation)
+    /// <summary>Every chat of one model, newest first.</summary>
+    public static List<Conversation> ForModel(string key) =>
+        All().Where(c => string.Equals(c.Key, key, StringComparison.OrdinalIgnoreCase)).OrderByDescending(c => c.Updated).ToList();
+
+    /// <summary>Every saved chat as the history drawer lists it. Reads every file: call it off the UI thread.</summary>
+    public static List<ChatSummary> Summaries() => All().Where(c => c.Items.Count > 0).Select(ChatHistory.Summarize).ToList();
+
+    /// <summary>
+    /// Saves a chat; a chat with nothing in it yet is not written. <paramref name="touch"/> off (rename, pin) keeps its
+    /// date, so it keeps its place in the history.
+    /// </summary>
+    public static void Save(Conversation conversation, bool touch = true)
     {
+        if (conversation.Items.Count == 0 && conversation.SessionId.Length == 0) return;
         try
         {
             Directory.CreateDirectory(Folder);
             if (conversation.Items.Count > MaxItems) conversation.Items.RemoveRange(0, conversation.Items.Count - MaxItems);
-            conversation.Updated = DateTime.UtcNow;
-            var file = FileFor(conversation.Key);
+            if (touch || conversation.Updated == default) conversation.Updated = DateTime.UtcNow;
+            var legacy = conversation.Id.Length == 0 ? FileFor(conversation) : null;
+            if (conversation.Id.Length == 0) conversation.Id = NewId();
+            if (conversation.Name.Length == 0)
+                conversation.Name = ChatHistory.AutoTitle(conversation.Items.FirstOrDefault(i => i.Kind == "user")?.Text);
+            var file = FileFor(conversation);
             var temp = file + ".tmp";
             File.WriteAllText(temp, JsonSerializer.Serialize(conversation), new UTF8Encoding(false));
             if (File.Exists(file)) File.Delete(file);
             File.Move(temp, file);
+            conversation.File = file;
+            if (legacy is not null && File.Exists(legacy)) File.Delete(legacy);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException) { /* not saved: the chat still works */ }
+    }
+
+    /// <summary>Deletes a saved chat; false when the file couldn't be deleted.</summary>
+    public static bool Delete(string file)
+    {
+        try
+        {
+            if (File.Exists(file)) File.Delete(file);
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return false; }
     }
 }
