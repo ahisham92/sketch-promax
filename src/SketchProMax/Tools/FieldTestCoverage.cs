@@ -35,7 +35,8 @@ internal static class FieldTestCoverage
 
     public const string Chat = "Chat", RibbonArea = "Ribbon and favourites", Carbon = "Embodied carbon", Ve = "Value engineering",
         Rebar2D = "2D rebar", Bugs = "Report bug and exports", Updates = "Updates and the Claude app", Model = "Real-model checks",
-        Limits = "Revit limits", BugFixes = "Bug fixes", Tasks = "Hand-off and Cancel", Job = "Live job card", Time = "Time saved";
+        Limits = "Revit limits", BugFixes = "Bug fixes", Tasks = "Hand-off and Cancel", Job = "Live job card", Time = "Time saved",
+        Redlines = "Redlines";
 
     public static readonly Feature[] Features =
     [
@@ -132,6 +133,19 @@ internal static class FieldTestCoverage
         new("claude.open", Updates, "Open Claude launches the app", How.Manual, "", "starting the desktop app is visible only to you",
             "Close the Claude desktop app, then More > Open Claude. The app starts (also for the Microsoft Store version)."),
 
+        // ---- Redlines in, revised sheets out
+        new("redlines.pdf", Redlines, "A marked-up PDF page read as an image", How.Probe, "", "a test sheet exported to PDF is rasterised by Revit (no PDF library) and redline_read returns the page as an image for Claude to read"),
+        new("redlines.pipeline", Redlines, "Redlines applied, clouded, revised and exported", How.Probe, "",
+            "a test sheet's image gets five markups drawn on it (new text, a parameter note with an arrow, a strike-through, a new note, a cloud with no instruction); " +
+            "redline_apply, with the known markup JSON standing in for Claude's reading, matches each to the right viewport and element, asks to approve each change, " +
+            "applies them, clouds them under a new revision, exports the revised sheet to PDF, hands the cloud over, and the Excel and chat report say 4 done, 1 not done"),
+        new("redlines.vision", Redlines, "Claude reads the drawn markups", How.Probe, "", "with chat_round_trip only (it uses your Claude plan): Claude Code reads the marked-up test page and finds the markups, the strike-through among them"),
+        new("redlines.real", Redlines, "Redlines from a real PDF or photo", How.Manual, "", "handwriting, real drawings and phone photos vary more than a drawn test page, and the approval dialogs are judged on screen",
+            "On a _detached copy: print a sheet, mark it up by hand (change a note, cross something out, write a new dimension, cloud a question), photograph it with a phone. " +
+            "In Chat, attach the photo and ask \"apply these redlines\": Claude reads it (redline_read), lists the planned changes (redline_plan) and, when you agree, Revit asks " +
+            "about each change one by one (Skip is the default; try Skip and Stop asking). Check the clouds, the new revision on the sheet, the exported PDF, the manual steps " +
+            "for what it couldn't read, and the done / not done table in the chat and in Excel. Then Issue > Redlines to sheets on the ribbon with a marked-up PDF: the same, with Claude Code reading the pages."),
+
         // ---- Real-model checks
         new("model.joined_faces", Model, "Hosting on faces of joined elements", How.Case, "place_void_cuts", "a void is hosted on the top face of a slab joined to a beam"),
         new("model.void_rebuild", Model, "Clash check void rebuild", How.Case, "find_clashes", "a cutting void family is rebuilt as a solid in a clash run"),
@@ -222,7 +236,7 @@ internal static class FieldTestCoverage
     {
         var items = Features.Where(f => f.How == How.Manual).Select(f => new CheckItem(f.Key, f.Area, f.Title, f.Steps, f.Reason)).ToList();
         items.AddRange(ManualTools.OrderBy(t => t.Key).Select(t => new CheckItem("tool:" + t.Key, Limits, t.Key, t.Value.Steps, t.Value.Reason)));
-        string[] order = [Chat, RibbonArea, Tasks, Job, Time, Carbon, Ve, Rebar2D, Bugs, Updates, Model, Limits];
+        string[] order = [Chat, RibbonArea, Tasks, Job, Time, Carbon, Ve, Redlines, Rebar2D, Bugs, Updates, Model, Limits];
         items = items.OrderBy(i => Array.IndexOf(order, i.Area) is var x && x < 0 ? order.Length : x).ToList();
         items.AddRange(fixedBugs.Select(b => new CheckItem("bug:" + b.Number, BugFixes, $"#{b.Number}: {b.What}",
             "Do what the row describes on a _detached copy and check it no longer happens.", b.Status)));

@@ -128,6 +128,7 @@ internal static class CoreRibbonManifest
         T("ValueEng", "ve_register", "VE register", "list", "Exports the VE register and sets each item's status (proposed, accepted, rejected) and owner."),
 
         // ---- Issue
+        B("Issue", "redline_apply", "Redlines\nto sheets", "titleblock", "Applies a marked-up PDF or photo: each markup matched to its sheet and element, approved one by one, applied, clouded under a new revision, the revised sheets exported, and a done / not done report."),
         B("Issue", "export_pdf", "Export\nPDF", "pdf", "Prints sheets or views to PDF, as one combined file by default."),
         B("Issue", "export_drawing_list", "List of\ndrawings", "list", "Writes the list of drawings (sheet numbers, names, current revisions) to a CSV that opens in Excel."),
         B("Issue", "export_quantities", "Quantities\n/ BOQ", "boq", "Writes quantities per category and type (count, length, area, volume) to a CSV that opens in Excel."),

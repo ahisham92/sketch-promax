@@ -59,6 +59,9 @@
   "typical_details": "Documents",
   "equipment_pads": "Structure",
   "export_bcf": "Issue",
+  "redline_read": "Issue",
+  "redline_plan": "Issue",
+  "redline_apply": "Issue",
   "export_project_pack": "Issue",
   "model_snapshot": "Check",
   "hollow_core_layout": "Structure",
@@ -194,6 +197,11 @@
    "group": "Check",
    "title": "Quantities by level",
    "prompt": "Export concrete volumes by level and element category as a table I can paste into Excel."
+  },
+  {
+   "group": "Issue",
+   "title": "Apply redlines",
+   "prompt": "Here is a marked-up PDF of our sheets. Read the redlines, list the changes for me to approve one by one, apply them with clouds and a new revision, export the revised sheets and tell me what was done and what wasn't."
   },
   {
    "group": "Issue",

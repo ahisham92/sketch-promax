@@ -69,6 +69,7 @@ internal static class TimeMath
         ["run_model_audit"] = (30, 0), ["check_model"] = (45, 0), ["find_clashes"] = (30, 0), ["check_drawings"] = (45, 0),
         ["check_code_rules"] = (60, 0), ["spec_check"] = (60, 0), ["boq_check"] = (60, 0), ["cost_estimate"] = (90, 0),
         ["embodied_carbon"] = (120, 0), ["carbon_compare"] = (60, 0), ["ve_opportunities"] = (120, 0), ["ve_compare_options"] = (240, 0),
+        ["redline_plan"] = (10, 0), ["redline_apply"] = (20, 5),
         ["export_bar_schedule"] = (60, 0), ["export_steel_takeoff"] = (45, 0), ["export_project_pack"] = (60, 0),
         ["find_missing_items"] = (30, 0), ["coordination_progress"] = (30, 0), ["check_schedule"] = (15, 0),
         [OtherChanges] = (1, 0.5),
