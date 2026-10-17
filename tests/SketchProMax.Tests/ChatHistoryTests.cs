@@ -43,3 +43,30 @@ internal static class ChatHistoryTests
         check("history: a renamed chat keeps its name", ChatHistory.Summarize(conv).Name == "Columns", "");
     }
 }
+
+/// <summary>Saved prompts: newest first, no repeats, kept in a file.</summary>
+internal static class SavedPromptTests
+{
+    public static void Run(Action<string, bool, string> check)
+    {
+        var now = new DateTime(2026, 10, 16, 12, 0, 0, DateTimeKind.Utc);
+        var list = SavedPrompts.Add([], "List the levels", now);
+        list = SavedPrompts.Add(list, "Check the beams", now);
+        list = SavedPrompts.Add(list, "  list   the LEVELS ", now);
+        check("prompts: newest first, a repeat moves up", list.Count == 2 && list[0].Text == "list   the LEVELS" && list[1].Text == "Check the beams", string.Join("|", list.Select(p => p.Text)));
+        check("prompts: titled", list[1].Title == "Check the beams", "");
+        check("prompts: blank not saved", SavedPrompts.Add(list, "  ", now).Count == 2, "");
+        check("prompts: remove", SavedPrompts.Remove(list, "check the beams").Single().Text == "list   the LEVELS", "");
+        var many = Enumerable.Range(0, SavedPrompts.Max + 5).Aggregate(new List<SavedPrompt>(), (l, i) => SavedPrompts.Add(l, "prompt " + i, now));
+        check("prompts: capped", many.Count == SavedPrompts.Max && many[0].Text == "prompt " + (SavedPrompts.Max + 4), "");
+        var file = Path.Combine(Path.GetTempPath(), "spm-prompts-" + Guid.NewGuid().ToString("N"), "prompts.json");
+        try
+        {
+            check("prompts: none before saving", SavedPrompts.Load(file).Count == 0, "");
+            check("prompts: saved and read back", SavedPrompts.Save(file, list) && SavedPrompts.Load(file).Select(p => p.Text).SequenceEqual(list.Select(p => p.Text)), "");
+            File.WriteAllText(file, "{ not json");
+            check("prompts: damaged file reads as none", SavedPrompts.Load(file).Count == 0, "");
+        }
+        finally { try { Directory.Delete(Path.GetDirectoryName(file)!, true); } catch (IOException) { } }
+    }
+}

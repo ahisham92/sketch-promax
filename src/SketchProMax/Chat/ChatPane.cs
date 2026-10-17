@@ -160,7 +160,9 @@ internal sealed class ChatPane : DockPanel, IHistoryHost
     // ---- Controls -------------------------------------------------------------------------------------------------
 
     private readonly TextBlock _modelLine, _chatName;
-    private readonly Button _newChat, _send, _stop, _attach, _view, _menu;
+    private readonly Button _newChat, _send, _stop, _attach, _view, _menu, _prompts;
+    private readonly Border _promptPanel = new() { Visibility = Visibility.Collapsed, Margin = new Thickness(0, 0, 0, ChatUi.S2) };
+    private List<SavedPrompt>? _saved;
     private HistoryDrawer? _drawer;
     private readonly Border _scrim = new() { Visibility = Visibility.Collapsed };
     private readonly Grid _center = new();
@@ -263,6 +265,7 @@ internal sealed class ChatPane : DockPanel, IHistoryHost
         _statusRow.Children.Add(_statusSpin);
         _statusRow.Children.Add(_status);
         composer.Children.Add(_statusRow);
+        composer.Children.Add(_promptPanel);
         composer.Children.Add(_chips);
         _input = new TextBox
         {
@@ -287,10 +290,13 @@ internal sealed class ChatPane : DockPanel, IHistoryHost
         composer.Children.Add(field);
 
         var buttons = new DockPanel { Margin = new Thickness(0, ChatUi.S2, 0, 0) };
-        _attach = IconButton("", "Attach files", "Attach pictures, PDFs or drawings (DWG, DXF). You can also paste or drop them here.");
+        _attach = IconButton(ChatUi.GlyphAdd, "Attach files", "Attach pictures, PDFs or drawings (DWG, DXF). You can also paste or drop them here.");
         _attach.Click += (_, _) => PickFiles();
-        _view = IconButton("", "Attach the current view", "Attaches a picture of the active Revit view, as Revit shows it now.");
+        _view = IconButton("\uE722", "Attach the current view", "Attaches a picture of the active Revit view, as Revit shows it now.");
         _view.Click += (_, _) => AttachView();
+        _prompts = IconButton(ChatUi.GlyphPrompts, "Saved prompts", "Your saved prompts: pick one to put it in the message box. Save one from any message with ⋯ › Save prompt.");
+        _prompts.Click += (_, _) => TogglePrompts();
+        _prompts.Margin = new Thickness(0, 0, 6, 0);
         _send = Brand.Button("Send", Brand.Weight.Primary);
         _send.MinWidth = 72;
         _send.ToolTip = "Send (Enter)";
@@ -329,14 +335,16 @@ internal sealed class ChatPane : DockPanel, IHistoryHost
         buttons.Children.Add(_stop);
         buttons.Children.Add(_modelPick);
         buttons.Children.Add(_attach);
+        buttons.Children.Add(_prompts);
         buttons.Children.Add(_view);
         // Keyboard order follows the reading order (left to right), not the docking order.
         KeyboardNavigation.SetTabNavigation(buttons, KeyboardNavigationMode.Local);
         KeyboardNavigation.SetTabIndex(_attach, 1);
-        KeyboardNavigation.SetTabIndex(_view, 2);
-        KeyboardNavigation.SetTabIndex(_modelPick, 3);
-        KeyboardNavigation.SetTabIndex(_stop, 4);
-        KeyboardNavigation.SetTabIndex(_send, 5);
+        KeyboardNavigation.SetTabIndex(_prompts, 2);
+        KeyboardNavigation.SetTabIndex(_view, 3);
+        KeyboardNavigation.SetTabIndex(_modelPick, 4);
+        KeyboardNavigation.SetTabIndex(_stop, 5);
+        KeyboardNavigation.SetTabIndex(_send, 6);
         buttons.Children.Add(new Border()); // fills the middle
         composer.Children.Add(buttons);
         SetDock(composer, Dock.Bottom);
@@ -697,12 +705,7 @@ internal sealed class ChatPane : DockPanel, IHistoryHost
             button.SetResourceReference(StyleProperty, "SpmChatPill");
             button.ToolTip = "Puts this in the message box; edit it or press Enter to send.";
             AutomationProperties.SetName(button, "Example: " + example);
-            button.Click += (_, _) =>
-            {
-                _input.Text = example;
-                _input.CaretIndex = example.Length;
-                _input.Focus();
-            };
+            button.Click += (_, _) => UsePrompt(example);
             examples.Children.Add(button);
         }
         panel.Children.Add(examples);
@@ -772,16 +775,19 @@ internal sealed class ChatPane : DockPanel, IHistoryHost
     {
         var panel = new StackPanel { HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(32, ChatUi.S4, 0, ChatUi.S1) };
         var head = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 0, 0, 2) };
+        var more = new WrapPanel { HorizontalAlignment = HorizontalAlignment.Right, Visibility = Visibility.Collapsed };
         if (item.Text.Length > 0)
         {
             var copy = ChatUi.CopyButton(() => item.Text, "your message", null);
-            copy.Margin = new Thickness(0, 0, ChatUi.S1, 0);
             head.Children.Add(copy);
+            head.Children.Add(MoreButton(item, more));
         }
         var who = ChatUi.Small("You" + When(item));
         who.ToolTip = WhenLong(item);
+        who.Margin = new Thickness(ChatUi.S1, 0, 0, 0);
         head.Children.Add(who);
         panel.Children.Add(head);
+        panel.Children.Add(more);
 
         var body = new StackPanel();
         if (item.Text.Length > 0) body.Children.Add(ChatUi.Selectable(item.Text, "Your message"));
@@ -842,15 +848,152 @@ internal sealed class ChatPane : DockPanel, IHistoryHost
         copy.VerticalAlignment = VerticalAlignment.Top;
         copy.Margin = new Thickness(0, -ChatUi.S1, 0, 0);
         copy.SetResourceReference(BackgroundProperty, Brand.K.Bg);
-        copy.Opacity = 0;
-        void Shown() => copy.Opacity = grid.IsMouseOver || copy.IsKeyboardFocused ? 1 : 0;
-        grid.MouseEnter += (_, _) => Shown();
-        grid.MouseLeave += (_, _) => Shown();
-        copy.GotKeyboardFocus += (_, _) => Shown();
-        copy.LostKeyboardFocus += (_, _) => Shown();
-        grid.Children.Add(copy);
+        var more = new WrapPanel { Visibility = Visibility.Collapsed };
+        var moreButton = MoreButton(item, more);
+        var tools = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top, Margin = copy.Margin };
+        copy.Margin = new Thickness(0);
+        tools.SetResourceReference(BackgroundProperty, Brand.K.Bg);
+        tools.Children.Add(copy);
+        tools.Children.Add(moreButton);
+        tools.Opacity = 0;
+        void ToolsShown() => tools.Opacity = grid.IsMouseOver || tools.IsKeyboardFocusWithin || more.Visibility == Visibility.Visible ? 1 : 0;
+        grid.MouseEnter += (_, _) => ToolsShown();
+        grid.MouseLeave += (_, _) => ToolsShown();
+        tools.IsKeyboardFocusWithinChanged += (_, _) => ToolsShown();
+        grid.Children.Add(tools);
         panel.Children.Add(grid);
+        panel.Children.Add(more);
         return panel;
+    }
+
+    /// <summary>A message's ⋯: shows (or hides) its extra actions under it: Save prompt.</summary>
+    private Button MoreButton(ChatItem item, WrapPanel more)
+    {
+        var button = ChatUi.Ghost(ChatUi.GlyphMore, null, "More actions for this message", "More: save it as a prompt");
+        AutomationProperties.SetItemStatus(button, "Collapsed");
+        var save = ChatUi.Ghost(ChatUi.GlyphPrompts, "Save prompt", "Save this message as a prompt",
+            "Keeps this text in your saved prompts, to use again from the bookmark button by the message box or the home screen.");
+        save.Click += (_, _) =>
+        {
+            SavePrompt(item.Text);
+            more.Visibility = Visibility.Collapsed;
+            AutomationProperties.SetItemStatus(button, "Collapsed");
+            button.Focus();
+        };
+        more.Children.Add(save);
+        button.Click += (_, _) =>
+        {
+            var open = more.Visibility != Visibility.Visible;
+            more.Visibility = open ? Visibility.Visible : Visibility.Collapsed;
+            AutomationProperties.SetItemStatus(button, open ? "Expanded" : "Collapsed");
+            if (open) save.Focus();
+        };
+        return button;
+    }
+
+    // ---- Saved prompts --------------------------------------------------------------------------------------------
+
+    private List<SavedPrompt> Saved => _saved ??= SavedPrompts.Load(SavedPrompts.DefaultFile);
+
+    private void SavePrompt(string text)
+    {
+        if (text.Trim().Length == 0) return;
+        _saved = SavedPrompts.Add(Saved, text, DateTime.UtcNow);
+        Status(SavedPrompts.Save(SavedPrompts.DefaultFile, _saved)
+            ? "Saved to your prompts. Use it again from the bookmark button below."
+            : "The prompt couldn't be saved (the prompts file is in use or read-only).", spin: false);
+        if (_promptPanel.Visibility == Visibility.Visible) ShowPrompts();
+        PromptsChanged?.Invoke();
+    }
+
+    /// <summary>Raised when the saved prompts change (the home screen lists them).</summary>
+    private event Action? PromptsChanged;
+
+    private void TogglePrompts()
+    {
+        if (_promptPanel.Visibility == Visibility.Visible)
+        {
+            _promptPanel.Visibility = Visibility.Collapsed;
+            AutomationProperties.SetItemStatus(_prompts, "Collapsed");
+            return;
+        }
+        ShowPrompts();
+        _promptPanel.Visibility = Visibility.Visible;
+        AutomationProperties.SetItemStatus(_prompts, "Expanded");
+        _promptPanel.MoveFocus(new TraversalRequest(FocusNavigationDirection.First));
+    }
+
+    /// <summary>The saved prompts above the message box: pick one to put it in the box, or delete it.</summary>
+    private void ShowPrompts()
+    {
+        var panel = new DockPanel();
+        var head = new DockPanel { Margin = new Thickness(ChatUi.S2, ChatUi.S1, ChatUi.S1, ChatUi.S1) };
+        var close = ChatUi.Ghost(ChatUi.GlyphCross, null, "Close saved prompts", "Close");
+        close.Click += (_, _) => TogglePrompts();
+        DockPanel.SetDock(close, Dock.Right);
+        head.Children.Add(close);
+        head.Children.Add(ChatUi.Small("Saved prompts", Brand.K.Text, bold: true));
+        DockPanel.SetDock(head, Dock.Top);
+        panel.Children.Add(head);
+        var list = new StackPanel { Margin = new Thickness(ChatUi.S1, 0, ChatUi.S1, ChatUi.S1) };
+        if (Saved.Count == 0)
+        {
+            var none = Brand.Text("No saved prompts yet. Save one from any message: ⋯ › Save prompt.", Brand.K.Muted, ChatUi.SmallSize + 0.5);
+            none.Margin = new Thickness(ChatUi.S1, 0, 0, ChatUi.S1);
+            list.Children.Add(none);
+        }
+        foreach (var prompt in Saved)
+        {
+            var row = new DockPanel();
+            var delete = ChatUi.Ghost(ChatUi.GlyphDelete, null, "Delete saved prompt " + prompt.Title, "Delete this saved prompt");
+            delete.Click += (_, _) =>
+            {
+                _saved = SavedPrompts.Remove(Saved, prompt.Text);
+                SavedPrompts.Save(SavedPrompts.DefaultFile, _saved);
+                ShowPrompts();
+                PromptsChanged?.Invoke();
+                _prompts.Focus();
+            };
+            DockPanel.SetDock(delete, Dock.Right);
+            row.Children.Add(delete);
+            var use = new Button { Content = ChatUi.Small(prompt.Title, Brand.K.Text), HorizontalContentAlignment = HorizontalAlignment.Left, ToolTip = prompt.Text };
+            use.SetResourceReference(StyleProperty, "SpmChatGhost");
+            AutomationProperties.SetName(use, "Use prompt: " + prompt.Title);
+            AutomationProperties.SetHelpText(use, "Puts it in the message box to edit or send.");
+            use.Click += (_, _) =>
+            {
+                UsePrompt(prompt.Text);
+                TogglePrompts();
+            };
+            row.Children.Add(use);
+            list.Children.Add(row);
+        }
+        var scroll = new ScrollViewer { Content = list, MaxHeight = 200, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Focusable = false };
+        panel.Children.Add(scroll);
+        _promptPanel.Child = panel;
+        _promptPanel.BorderThickness = new Thickness(1);
+        _promptPanel.CornerRadius = new CornerRadius(6);
+        _promptPanel.SetResourceReference(Border.BackgroundProperty, Brand.K.Surface);
+        _promptPanel.SetResourceReference(Border.BorderBrushProperty, Brand.K.Border);
+        AutomationProperties.SetName(_promptPanel, "Saved prompts");
+        _promptPanel.PreviewKeyDown -= OnPromptPanelKey;
+        _promptPanel.PreviewKeyDown += OnPromptPanelKey;
+    }
+
+    private void OnPromptPanelKey(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Escape) return;
+        e.Handled = true;
+        TogglePrompts();
+        _prompts.Focus();
+    }
+
+    /// <summary>Puts a prompt in the message box, to edit before sending.</summary>
+    private void UsePrompt(string text)
+    {
+        _input.Text = text;
+        _input.CaretIndex = text.Length;
+        _input.Focus();
     }
 
     private UIElement ErrorBox(ChatItem item)
@@ -1177,7 +1320,7 @@ internal sealed class ChatPane : DockPanel, IHistoryHost
         if (busy && sendHadFocus) _stop.Focus();
         if (!busy && stopHadFocus) _input.Focus();
         _newChat.IsEnabled = !_stopped;
-        _send.IsEnabled = _attach.IsEnabled = _view.IsEnabled = !_stopped;
+        _send.IsEnabled = _attach.IsEnabled = _view.IsEnabled = _prompts.IsEnabled = !_stopped;
         if (_stopped)
         {
             Status("Sketch ProMax is switching to its new version. The chat continues in a moment.", spin: true);
