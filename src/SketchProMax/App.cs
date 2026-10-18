@@ -164,6 +164,7 @@ public sealed class App : IExternalApplication
         try { StartupTimings.Time("chat hooks", () => Chat.ChatPane.Start(app)); } catch (Exception) { /* the chat tab says what is wrong when it is opened */ }
         try { StartupTimings.Time("restart note", () => UI.RestartNote.AfterStart(Ui)); } catch (Exception) { /* the chat and the Version button still say it */ }
         try { StartupTimings.Time("time log", () => TimeLog.Start(app)); } catch (Exception) { /* tasks still run; time is not counted */ }
+        CentralAccess.Watch(app);
 
         var token = _life.Token;
         _ = Task.Run(() => BackgroundStartAsync(token));
@@ -221,6 +222,7 @@ public sealed class App : IExternalApplication
         try { Chat.ChatPane.Stop(app); } catch (Exception) { }
         try { Chat.NotesView.Stop(); } catch (Exception) { }
         try { TimeLog.Stop(app); } catch (Exception) { }
+        CentralAccess.Unwatch(app);
         Bridge?.Stop(keepSession: true);
         Bridge = null;
         try { app.Application.FailuresProcessing -= FailureGuard.Handle; } catch (Exception) { }

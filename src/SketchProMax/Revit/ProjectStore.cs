@@ -57,7 +57,13 @@ internal static class ProjectStore
         if (changed.Count == 0) return null;
         if (doc.IsReadOnly) return "the model is read-only";
         if (doc.IsModifiable) return "a transaction is still open";
-        if (Holder(doc) is { } holder && Blocked(doc, holder.Id) is { } why) return why;
+        if (Holder(doc) is { } holder)
+        {
+            if (Blocked(doc, holder.Id) is { } why) return why;
+            // Borrowed before the transaction, in one request that respects a pause (CentralAccess): left to the commit,
+            // Revit would borrow it on its own and show "Unable to Access the Model" whenever the central model is busy.
+            if (CentralAccess.Borrow(doc, [holder.Id]) is { } central) return "Sketch ProMax " + central;
+        }
         var errors = new List<string>();
         try
         {

@@ -43,7 +43,7 @@ internal static class FieldTestCoverage
         Rebar2D = "2D rebar", Bugs = "Report bug and exports", Updates = "Updates and the Claude app", Model = "Real-model checks",
         Limits = "Revit limits", BugFixes = "Bug fixes", Tasks = "Hand-off and Cancel", Job = "Live job card", Time = "Time saved",
         Issue = "Issue check", Package = "Drawing package", Redlines = "Redlines", Costing = "Cost plan and what if",
-        Cleanup = "Purge and cleanup";
+        Cleanup = "Purge and cleanup", Central = "Shared models";
 
     public static readonly Feature[] Features =
     [
@@ -217,6 +217,12 @@ internal static class FieldTestCoverage
         new("cleanup.ui", Cleanup, "Purge & cleanup from the ribbon on a real model", How.Manual, "", "what is safe to delete on a real project, the file size after saving and the Revit dialogs need a person",
             "On a _detached copy: Check > Purge & cleanup, pick Purge unused, leave the options and Run. Read the preview (counts by kind, what is left alone and why, the file size): nothing has changed yet. Press Close without deleting and check nothing went. Run it again and press Delete them: the counts drop; press Ctrl+Z once and everything is back. Run Delete unused views with keep set to your working views' prefix, Clean up imports and Model health clean the same way. Save the copy with Compact ticked and compare the file size. In the chat, ask \"purge this model\": the chat shows the preview first and asks before deleting."),
 
+        // ---- Shared models: the central model
+        new("central.once", Central, "One request to the central model, then a pause when it doesn't answer", How.Probe, "",
+            "in the test project, with four new types made to look in central and free (a test hook) and the request made to fail as if the central model were busy and then unreachable: a batch asks once and once more, every item says why it wasn't done, a second batch asks nothing during the pause, and a batch stops after an item fails while \"Unable to Access the Model\" shows, keeping the item done before it"),
+        new("central.real", Central, "Fewer \"Unable to Access the Model\" dialogs on a shared model", How.Manual, "", "needs a real central model and a colleague (or a second Revit) synchronizing at the same moment",
+            "On a workshared test model (not the live project): open a local copy in two Revit sessions. In the first, start Synchronize with Central; while it runs, ask the chat in the second to rename a few doors (or run any batch edit on elements nobody owns). Revit shows \"Unable to Access the Model\" at most once: press Cancel. The result says the central model didn't answer and when Sketch ProMax will ask again, and no more dialogs follow. Run the same edit again before that time: it stops at once with the same message and no dialog. After that time it runs normally."),
+
         // ---- Bug fixes checked by a person (the rest are field-test cases named "tool bug#N", see BugChecks)
         new("bug.titleblock_params", BugFixes, "Bug #7: a copied title block fills its fields", How.Manual, "", "needs the office's own title block family, whose labels use shared parameters",
             "On a _detached copy of a model without your title block: ask in the chat to copy the title block from your template (copy_from_file). Put it on a new sheet and fill the sheet's drawn by, checked by and other fields: the title block shows them (the shared parameters were added to Sheets)."),
@@ -314,7 +320,7 @@ internal static class FieldTestCoverage
     {
         var items = Features.Where(f => f.How == How.Manual).Select(f => new CheckItem(f.Key, f.Area, f.Title, f.Steps, f.Reason)).ToList();
         items.AddRange(ManualTools.OrderBy(t => t.Key).Select(t => new CheckItem("tool:" + t.Key, Limits, t.Key, t.Value.Steps, t.Value.Reason)));
-        string[] order = [Chat, RibbonArea, Tasks, Job, Time, Issue, Package, Cleanup, Carbon, Ve, Costing, Redlines, Rebar2D, Bugs, Updates, Model, Limits, BugFixes];
+        string[] order = [Chat, RibbonArea, Tasks, Job, Time, Issue, Package, Cleanup, Central, Carbon, Ve, Costing, Redlines, Rebar2D, Bugs, Updates, Model, Limits, BugFixes];
         items = items.OrderBy(i => Array.IndexOf(order, i.Area) is var x && x < 0 ? order.Length : x).ToList();
         items.AddRange(fixedBugs.Select(b => new CheckItem("bug:" + b.Number, BugFixes, $"#{b.Number}: {b.What}",
             "Do what the row describes on a _detached copy and check it no longer happens." +

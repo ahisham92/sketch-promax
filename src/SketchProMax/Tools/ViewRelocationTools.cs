@@ -430,8 +430,7 @@ internal static class ViewRelocation
     {
         if (!doc.IsWorkshared) return;
         var list = ids.Where(i => i != ElementId.InvalidElementId).Distinct().ToList();
-        try { WorksharingUtils.CheckoutElements(doc, list); }
-        catch (Autodesk.Revit.Exceptions.ApplicationException) { /* reported below */ }
+        if (CentralAccess.Borrow(doc, list) is { } central) throw new InvalidOperationException("Can't move this view: Sketch ProMax " + central);
         if (ItemBatch.Locked(doc, list) is { } why) throw new InvalidOperationException("Can't move this view: " + why);
     }
 }

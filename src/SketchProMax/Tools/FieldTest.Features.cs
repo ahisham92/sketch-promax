@@ -493,6 +493,7 @@ internal static partial class FieldTest
         await Probe(s, "whatif.preview", app => WhatIfPreview(app, s)).ConfigureAwait(false);
         await Probe(s, "cleanup.passes", app => CleanupPasses(app, s)).ConfigureAwait(false);
         await Probe(s, "cleanup.workshared", app => CleanupWorkshared(app, s)).ConfigureAwait(false);
+        await Probe(s, "central.once", app => CentralOnce(app, s)).ConfigureAwait(false);
         // Off Revit's thread: processes, files and the network.
         await Probe(s, "chat.cli", () => { cli = new ClaudeCliInstall(Chat.ClaudeCli.Find()); return cli.Row(); }).ConfigureAwait(false);
         await Probe(s, "chat.signin", () => SignIn(cli)).ConfigureAwait(false);

@@ -11,7 +11,9 @@ namespace SketchProMax.Tools;
 /// transaction group, so the batch is still a single Undo step. Call it with no transaction open.
 ///
 /// In a workshared model, elements another user owns are skipped up front (and named with their owner); with
-/// borrow set, the batch first tries to borrow the elements it needs.
+/// borrow set, the batch first borrows the elements it needs in one request (<see cref="CentralAccess"/>). When the
+/// central model doesn't answer, the items that needed it, or the rest of the batch once an item fails while Revit
+/// shows "Unable to Access the Model", are reported as not done instead of each waiting on the central model again.
 /// </summary>
 internal static class ItemBatch
 {
@@ -51,15 +53,22 @@ internal static class ItemBatch
         if (doc.IsModifiable)
             throw new InvalidOperationException("ItemBatch needs to start its own transactions; a transaction is already open.");
 
-        if (doc.IsWorkshared)
+        // One request to the central model for the whole batch (none when nothing needs borrowing). When it can't be
+        // asked, the items that need it stop here with the reason: committing them would make Revit borrow each one
+        // on its own, and show "Unable to Access the Model" once per item.
+        HashSet<ElementId>? unborrowed = null;
+        string? central = null;
+        if (borrow)
         {
             var wanted = list.SelectMany(elements).Where(id => id != ElementId.InvalidElementId).Distinct().ToList();
-            if (borrow && wanted.Count > 0)
+            if (wanted.Count > 0 && CentralAccess.Borrow(doc, wanted) is { } why)
             {
-                try { WorksharingUtils.CheckoutElements(doc, wanted); }
-                catch (Autodesk.Revit.Exceptions.ApplicationException) { /* what can't be borrowed is reported per item below */ }
+                central = why;
+                unborrowed = new HashSet<ElementId>(CentralAccess.NeedsBorrow(doc, wanted));
             }
         }
+        var seen = CentralAccess.Seen;
+        string? stopped = null;
 
         using var group = new TransactionGroup(doc, $"Sketch ProMax: {name}");
         group.Start();
@@ -79,8 +88,11 @@ internal static class ItemBatch
                 if (state is JobState.Skipping or JobState.Stopping) halted = state;
             }
             if (halted != JobState.Running) { result.Items.Add(new(what, false, JobControl.NotDone(halted), null)); continue; }
+            if (stopped is not null) { result.Items.Add(new(what, false, "not done: " + stopped, null)); continue; }
             if (cancellable && Jobs.CancelRequested) { result.Items.Add(new(what, false, "not done: stopped on request (cancel_job)", null)); continue; }
             if (list.Count > 20 && index % 10 == 0) Jobs.Report($"{name}: {index} of {list.Count}");
+            if (central is not null && unborrowed is { Count: > 0 } && elements(item).Any(unborrowed.Contains))
+            { result.Items.Add(new(what, false, "not done: " + central, null)); continue; }
             var locked = doc.IsWorkshared ? Locked(doc, elements(item)) : null;
             if (locked is not null) { result.Items.Add(new(what, false, locked, null)); continue; }
 
@@ -101,6 +113,7 @@ internal static class ItemBatch
                 {
                     if (t.HasStarted() && !t.HasEnded()) t.RollBack();
                     result.Items.Add(new(what, false, Message(ex), null));
+                    if (StopForCentral(doc, false, ref seen) is { } lost) stopped = lost;
                     continue;
                 }
                 if (cancellable && JobControl.StopNow(name, index - 1))
@@ -115,6 +128,7 @@ internal static class ItemBatch
                 result.Items.Add(status == TransactionStatus.Committed
                     ? new(what, true, errors.Count > 0 ? "warnings: " + string.Join("; ", errors) : null, value)
                     : new(what, false, errors.Count > 0 ? string.Join("; ", errors) : $"Revit did not accept it ({status}).", null));
+                if (StopForCentral(doc, status == TransactionStatus.Committed, ref seen) is { } gone) stopped = gone;
             }
             finally { FailureGuard.Muted--; }
         }
@@ -163,6 +177,8 @@ internal static class ItemBatch
         {
             var index = 0;
             var halted = JobState.Running;
+            var seen = CentralAccess.Seen;
+            string? stopped = null;
             foreach (var item in list)
             {
                 var what = label(item);
@@ -174,6 +190,7 @@ internal static class ItemBatch
                     if (state is JobState.Skipping or JobState.Stopping) halted = state;
                 }
                 if (halted != JobState.Running) { result.Items.Add(new(what, false, JobControl.NotDone(halted), null)); continue; }
+                if (stopped is not null) { result.Items.Add(new(what, false, "not done: " + stopped, null)); continue; }
                 if (cancellable && Jobs.CancelRequested) { result.Items.Add(new(what, false, "not done: stopped on request (cancel_job)", null)); continue; }
                 if (list.Count > 20 && index % 10 == 0) Jobs.Report($"{name}: {index} of {list.Count}");
 
@@ -185,6 +202,7 @@ internal static class ItemBatch
                 {
                     if (one.HasStarted() && !one.HasEnded()) one.RollBack();
                     result.Items.Add(new(what, false, Message(ex), null));
+                    if (StopForCentral(doc, false, ref seen) is { } gone) stopped = gone;
                     continue;
                 }
                 if (cancellable && JobControl.StopNow(name, index - 1))
@@ -197,6 +215,7 @@ internal static class ItemBatch
                 }
                 one.Assimilate();
                 result.Items.Add(new(what, true, null, value));
+                StopForCentral(doc, true, ref seen);
             }
             if (cancellable && list.Count > 0) JobFeed.Item(name, result.Items.Count(i => !IsNotDone(i)), list.Count, "");
             kept = result.Done > 0;
@@ -209,6 +228,20 @@ internal static class ItemBatch
             Revit.JobUndo.GroupClosed(kept);
         }
         return result;
+    }
+
+    /// <summary>
+    /// After an item: when Revit showed "Unable to Access the Model" while it ran and the item failed, the reason to stop
+    /// the rest of the batch (each would wait on the central model again); the items done so far are kept. When the item
+    /// went through all the same, the central model came back and the batch carries on.
+    /// </summary>
+    private static string? StopForCentral(Document doc, bool ok, ref int seen)
+    {
+        if (CentralAccess.Seen == seen) return null;
+        seen = CentralAccess.Seen;
+        if (ok) return null;
+        return "the central model stopped answering during this batch (Revit showed \"Unable to Access the Model\"), so the rest " +
+               "was not tried; the items done so far are kept. " + (CentralAccess.Waiting(doc) ?? "Run it again when the model is back.");
     }
 
     /// <summary>An item a stop or skip ended the batch before (it never ran): not counted as finished in the progress.</summary>

@@ -109,6 +109,84 @@ internal static partial class FieldTest
         }
     }
 
+    // ---- The central model (in the test project, rolled back) -------------------------------------------------------------
+
+    /// <summary>
+    /// A batch asks the central model once, a busy one once more, then nothing for a while; and a batch stops once an item
+    /// fails while Revit shows "Unable to Access the Model". Test hooks stand in for a real central model: four new types
+    /// look in central and free, and the request fails as if the central model were busy and then didn't answer.
+    /// </summary>
+    private static (string, string) CentralOnce(UIApplication app, State s)
+    {
+        if (TestDoc(app, s, out var why) is not { } doc) return Fail(why);
+        var basic = BasicWallType(doc);
+        if (basic is null) return Fail("the test project has no basic wall type with layers");
+        var problems = new List<string>();
+        if (!Revit.CentralAccess.IsUnavailable("The requested operation cannot be completed because the model N25185.rvt is not currently available."))
+            problems.Add("Revit's dialog text isn't recognised");
+        var tag = Guid.NewGuid().ToString("N").Substring(0, 6);
+        using var group = new TransactionGroup(doc, "Field test: central model");
+        group.Start();
+        try
+        {
+            var ids = new List<ElementId>();
+            using (var t = new Transaction(doc, "Field test: four types"))
+            {
+                t.Start();
+                for (var i = 1; i <= 4; i++) ids.Add(basic.Duplicate($"SPM central {tag} {i}").Id);
+                t.Commit();
+            }
+            object? Rename(ElementId id) { doc.GetElement(id).Name += " x"; return null; }
+            ItemBatch.Result Batch(Func<ElementId, object?> apply) =>
+                ItemBatch.Run(doc, "Field test: central model", ids, id => id.Value.ToString(), id => [id], apply, cancellable: false);
+
+            Revit.CentralAccess.Reset();
+            Revit.CentralAccess.NeedsBorrowForTest = ids.Contains;
+            var calls = 0;
+            Revit.CentralAccess.FailForTest = () => ++calls == 1 ? ("The central model is busy (field test).", true) : ("it didn't answer (field test).", false);
+            var before = Revit.CentralAccess.Requests;
+            var first = Batch(Rename);
+            var asked = Revit.CentralAccess.Requests - before;
+            if (asked != 2) problems.Add($"the first batch asked the central model {asked} times (want 2: once, and once more because it was busy)");
+            if (first.Done != 0 || first.Items.Any(i => i.Error is not { } e || !e.StartsWith("not done:") || !e.Contains("Unable to Access the Model")))
+                problems.Add("the first batch's items aren't all not done with the reason: " + Short(first.Items.FirstOrDefault()?.Error ?? "", 200));
+
+            before = Revit.CentralAccess.Requests;
+            var second = Batch(Rename);
+            if (Revit.CentralAccess.Requests != before) problems.Add("a second batch asked the central model again during the pause");
+            if (second.Done != 0 || second.Items.Any(i => i.Error?.Contains("waits until") != true))
+                problems.Add("the second batch's items don't say when Sketch ProMax asks again: " + Short(second.Items.FirstOrDefault()?.Error ?? "", 200));
+
+            // Nothing needs borrowing now; the dialog shows while the second item runs and the item fails.
+            Revit.CentralAccess.Reset();
+            Revit.CentralAccess.FailForTest = null;
+            Revit.CentralAccess.NeedsBorrowForTest = _ => false;
+            before = Revit.CentralAccess.Requests;
+            var third = Batch(id =>
+            {
+                if (id != ids[1]) return Rename(id);
+                Revit.CentralAccess.Noticed(doc, "field test");
+                throw new InvalidOperationException("the central model is not currently available (field test)");
+            });
+            if (Revit.CentralAccess.Requests != before) problems.Add("a batch that needed nothing borrowed asked the central model");
+            var stoppedRest = third.Items.Skip(2).All(i => i.Error?.Contains("stopped answering") == true);
+            if (!third.Items[0].Ok || third.Items[1].Ok || !stoppedRest)
+                problems.Add("the third batch didn't keep the first item and stop after the second: " +
+                             string.Join(" | ", third.Items.Select(i => i.Ok ? "done" : Short(i.Error ?? "", 80))));
+            return problems.Count == 0
+                ? Pass($"one request for the batch and one retry while busy, then none during the {Revit.CentralAccess.Pause.TotalSeconds:0} s pause, " +
+                       $"each item saying why; a batch stops once an item fails while the dialog shows, keeping what was done; rolled back")
+                : Fail(string.Join("; ", problems));
+        }
+        finally
+        {
+            Revit.CentralAccess.FailForTest = null;
+            Revit.CentralAccess.NeedsBorrowForTest = null;
+            Revit.CentralAccess.Reset();
+            if (group.HasStarted() && !group.HasEnded()) group.RollBack();
+        }
+    }
+
     private static WallType? BasicWallType(Document doc) =>
         new FilteredElementCollector(doc).OfClass(typeof(WallType)).Cast<WallType>()
             .FirstOrDefault(t => t.Kind == WallKind.Basic && t.GetCompoundStructure() is { LayerCount: > 0 });
