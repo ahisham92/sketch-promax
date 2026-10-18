@@ -91,7 +91,7 @@ internal static class BugLog
         sb.AppendLine();
         if (unsent.Count == 0)
         {
-            sb.AppendLine("No reports waiting. Use Report bug on the Sketch ProMax tab or in the pane, or tell Claude in the Revit chat \"that's a bug\".");
+            sb.AppendLine("No reports waiting. Use Report bug on the Sketch ProMax tab or in the pane, or tell Sketch ProMax in the Revit chat \"that's a bug\".");
             return sb.ToString();
         }
         sb.AppendLine("Bug reports on this PC that the log above doesn't list yet. Send the zips in the Reports folder (newest first):");

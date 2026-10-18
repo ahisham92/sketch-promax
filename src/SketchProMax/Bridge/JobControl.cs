@@ -460,12 +460,8 @@ internal static class JobMath
         return string.Join(" · ", parts);
     }
 
-    /// <summary>"tag_elements_in_view" → "Tag elements in view".</summary>
-    public static string Title(string tool)
-    {
-        var words = tool.Replace('_', ' ').Trim();
-        return words.Length == 0 ? "" : char.ToUpper(words[0], CultureInfo.InvariantCulture) + words.Substring(1);
-    }
+    /// <summary>"tag_elements_in_view" → "Tag elements in view", "run_revit_code" → "Change the model" (see <see cref="Chat.StepNames"/>).</summary>
+    public static string Title(string tool) => SketchProMax.Chat.StepNames.Title(tool);
 }
 
 /// <summary>

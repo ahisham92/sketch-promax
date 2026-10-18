@@ -119,7 +119,7 @@ internal sealed class JobCardView : ContentControl
         _thinkToggle.Visibility = Visibility.Collapsed;
         _thinkToggle.Checked += (_, _) => OpenThinking(true);
         _thinkToggle.Unchecked += (_, _) => OpenThinking(false);
-        AutomationProperties.SetHelpText(_thinkToggle, "Press Space to show or hide what Claude is thinking.");
+        AutomationProperties.SetHelpText(_thinkToggle, "Press Space to show or hide what Sketch ProMax is thinking.");
         panel.Children.Add(_thinkToggle);
         _thinkText.FontStyle = FontStyles.Italic;
         _thinkDetail.Child = _thinkText;
@@ -228,7 +228,7 @@ internal sealed class JobCardView : ContentControl
         var label = running && _thinking ? "Thinking…" + (line.Length > 0 ? " " + line : "") : line.Length > 0 ? "Thought: " + line : "";
         Set(_thinkLine, label);
         _thinkToggle.Visibility = label.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
-        AutomationProperties.SetName(_thinkToggle, running && _thinking ? "Claude is thinking" : "What Claude thought");
+        AutomationProperties.SetName(_thinkToggle, running && _thinking ? "Sketch ProMax is thinking" : "What Sketch ProMax thought");
         if (_thinkToggle.IsChecked == true) Set(_thinkText, Model.Thinking.Trim());
 
         ShowSteps();

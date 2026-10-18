@@ -29,7 +29,7 @@ internal sealed partial class ChatPane
     private Button ShrinkButton()
     {
         var button = ChatUi.IconButton(ChatUi.Paths.Shrink, "Shrink chat",
-            "Shrink this chat: Claude replaces the earlier messages with a short summary and carries on, so each new message uses less of your plan. " +
+            "Shrink this chat: Sketch ProMax replaces the earlier messages with a short summary and carries on, so each new message uses less of your plan. " +
             "It also happens by itself once a chat gets long.");
         button.Margin = new Thickness(ChatUi.S1, 0, 0, 0);
         button.Click += (_, _) => _ = Shrink(auto: false);
@@ -41,7 +41,7 @@ internal sealed partial class ChatPane
     {
         var can = !_stopped && _turn is null && _setup == Setup.Ready && _conv.SessionId.Length > 0;
         _shrink.IsEnabled = can;
-        AutomationProperties.SetHelpText(_shrink, can ? (string)_shrink.ToolTip : "Shrink chat works once the chat has a conversation and Claude isn't answering.");
+        AutomationProperties.SetHelpText(_shrink, can ? (string)_shrink.ToolTip : "Shrink chat works once the chat has a conversation and Sketch ProMax isn't answering.");
     }
 
     /// <summary>
@@ -54,12 +54,12 @@ internal sealed partial class ChatPane
         if (_stopped || _sample) return;
         if (_turn is not null)
         {
-            if (!auto) Status("Claude is still answering. Shrink the chat when it is done.", spin: false);
+            if (!auto) Status("Sketch ProMax is still answering. Shrink the chat when it is done.", spin: false);
             return;
         }
         if (_setup != Setup.Ready || _conv.SessionId.Length == 0)
         {
-            if (!auto) Status(_conv.SessionId.Length == 0 ? "There is nothing to shrink yet: this chat has no conversation with Claude." : "Finish the step above first.", spin: false);
+            if (!auto) Status(_conv.SessionId.Length == 0 ? "There is nothing to shrink yet: this chat has no conversation yet." : "Finish the step above first.", spin: false);
             return;
         }
         var turn = _turn = new Turn { Shrinking = true, AutoShrink = auto, Line = StreamInput.Compact(ChatRecall.CompactInstructions) };
@@ -116,11 +116,11 @@ internal sealed partial class ChatPane
         }
         var before = e.PreTokens > 0 ? $" (it was about {Math.Round(e.PreTokens / 1000.0):0}k tokens per message)" : "";
         if (turn is { Shrinking: true, AutoShrink: true })
-            Note("This chat got long, so it was shrunk to save usage" + before + ". Claude keeps a summary of the earlier messages; they stay on screen.");
+            Note("This chat got long, so it was shrunk to save usage" + before + ". Sketch ProMax keeps a summary of the earlier messages; they stay on screen.");
         else if (turn is { Shrinking: true })
-            Note("Chat shrunk" + before + ". Claude keeps a summary of the earlier messages, so each new message uses less; they stay on screen.");
+            Note("Chat shrunk" + before + ". Sketch ProMax keeps a summary of the earlier messages, so each new message uses less; they stay on screen.");
         else
-            Note("The conversation was long, so Claude summarized the earlier part to keep going.");
+            Note("The conversation was long, so Sketch ProMax summarized the earlier part to keep going.");
     }
 
     /// <summary>After a finished turn: shrink by itself when the chat now sends ChatRecall.AutoShrinkTokens more than its floor.</summary>

@@ -61,7 +61,7 @@ public sealed class SettingsWindow : Window
         AutomationProperties.SetHelpText(_openItems, "Off: an issue waits until every item of the issue check is fixed or accepted with a reason.");
         stack.Children.Add(_openItems);
         var standardsLabel = Brand.Text(
-            "Firm standards (plain English). Claude follows these in every conversation, e.g. " +
+            "Firm standards (plain English). Sketch ProMax follows these in every conversation, e.g. " +
             "'Sheet numbers are A-xxx. View names: LEVEL - PURPOSE. Door tags use the Mark parameter.'");
         standardsLabel.Margin = new Thickness(0, 12, 0, 4);
         stack.Children.Add(standardsLabel);
@@ -79,7 +79,7 @@ public sealed class SettingsWindow : Window
         _legendSeed.TextChanged += (_, _) => CheckSeed();
         CheckSeed();
         stack.Children.Add(TimeSection());
-        var note = Brand.Text("Changes apply to new chats in the Claude app.", Brand.K.Muted);
+        var note = Brand.Text("Changes apply to new chats.", Brand.K.Muted);
         note.Margin = new Thickness(0, 8, 0, 0);
         stack.Children.Add(note);
         _error.Margin = new Thickness(0, 8, 0, 0);
@@ -89,7 +89,7 @@ public sealed class SettingsWindow : Window
         stack.Children.Add(Brand.ButtonRow(cancel, save));
 
         var root = new DockPanel();
-        var header = Brand.Header("Settings", "How Claude works in this Revit.");
+        var header = Brand.Header("Settings", "How Sketch ProMax works in this Revit.");
         DockPanel.SetDock(header, Dock.Top);
         root.Children.Add(header);
         root.Children.Add(stack);
@@ -131,7 +131,7 @@ public sealed class SettingsWindow : Window
             section.Children.Add(radio);
         }
         var always = Brand.Text(
-            "Asked at the first three levels, whatever you choose: code Claude wrote, deletes that take other elements with them, " +
+            "Asked at the first three levels, whatever you choose: code Sketch ProMax wrote, deletes that take other elements with them, " +
             "overwriting a file outside Documents\\SketchProMax, what-ifs, and value engineering on the open model. Always allow " +
             "runs those too, without asking. Accepting or issuing past open issue check items asks at every level. A brief you " +
             "run counts as approving its task.", Brand.K.Muted, size: 11);

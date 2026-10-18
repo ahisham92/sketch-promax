@@ -48,7 +48,7 @@ internal sealed class NotesView : DockPanel
         TextElement.SetFontSize(this, 12);
 
         var body = new StackPanel { Margin = new Thickness(10, 8, 10, 10) };
-        body.Children.Add(Brand.Text("What you asked Claude to remember in the chat (\"remember that …\"). Claude gets these at the start " +
+        body.Children.Add(Brand.Text("What you asked Sketch ProMax to remember in the chat (\"remember that …\"). It gets these at the start " +
                                      "of each chat: the ones for all models, and the ones for the model it is about.", Brand.K.Muted, 11));
         body.Children.Add(Heading("For all models"));
         body.Children.Add(_global);
@@ -58,7 +58,7 @@ internal sealed class NotesView : DockPanel
         _recallHeading = Heading("From earlier chats about this model");
         body.Children.Add(_recallHeading);
         body.Children.Add(Brand.Text("What each chat remembered of itself. A new chat about this model starts with the latest three, and " +
-                                     "Claude can search all of them, for every model, when you say \"the same way as in …\".", Brand.K.Muted, 11));
+                                     "Sketch ProMax can search all of them, for every model, when you say \"the same way as in …\".", Brand.K.Muted, 11));
         body.Children.Add(_recall);
 
         // Add a note by hand.
@@ -231,7 +231,7 @@ internal sealed class NotesView : DockPanel
             delete.MinWidth = 0;
             delete.MinHeight = 28;
             delete.VerticalAlignment = VerticalAlignment.Top;
-            delete.ToolTip = "Deletes this note. Claude stops getting it from its next chat.";
+            delete.ToolTip = "Deletes this note. Sketch ProMax stops getting it from its next chat.";
             AutomationProperties.SetName(delete, $"Delete note {n}: {note}");
             var text = new TextBox { Text = note, TextWrapping = TextWrapping.Wrap, MinHeight = 28, AcceptsReturn = false, VerticalContentAlignment = VerticalAlignment.Center };
             AutomationProperties.SetName(text, $"Note {n}");

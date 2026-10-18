@@ -275,11 +275,11 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         _menu.Click += (_, _) => ToggleDrawer();
         DockPanel.SetDock(_menu, Dock.Left);
         top.Children.Add(_menu);
-        _refresh = ChatUi.IconButton(ChatUi.Paths.Refresh, "Check Claude Code again", "Checks again that Claude Code is installed and signed in.");
+        _refresh = ChatUi.IconButton(ChatUi.Paths.Refresh, "Check the setup again", "Checks again that the chat is installed and signed in.");
         _refresh.Click += (_, _) =>
         {
             _refreshAsked = true;
-            Status("Checking Claude Code…", spin: true);
+            Status("Checking the chat setup…", spin: true);
             Check(quiet: false);
         };
         DockPanel.SetDock(_refresh, Dock.Right);
@@ -354,8 +354,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, SpellCheck = { IsEnabled = true }, FontSize = ChatUi.BodySize,
         };
         _input.SetResourceReference(StyleProperty, "SpmChatBare");
-        AutomationProperties.SetName(_input, "Message to Claude");
-        AutomationProperties.SetHelpText(_input, "Type your question or request here. Enter sends, Shift+Enter starts a new line, Escape stops Claude. Paste a picture or a file to attach it.");
+        AutomationProperties.SetName(_input, "Message to Sketch ProMax");
+        AutomationProperties.SetHelpText(_input, "Type your question or request here. Enter sends, Shift+Enter starts a new line, Escape stops the answer. Paste a picture or a file to attach it.");
         _input.ToolTip = "Type here. Enter sends. Shift+Enter: new line. Paste or drop pictures, PDFs and drawings to attach them.";
         _input.PreviewKeyDown += OnInputKey;
         // A click in the box: once WPF has placed the caret, check Windows' keyboard focus followed (see TakeKeyboard).
@@ -398,12 +398,12 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         _send = new Button { Content = ChatUi.Icon(ChatUi.Paths.Send, stroke: 2), ToolTip = "Send (Enter)" };
         _send.SetResourceReference(StyleProperty, "SpmChatSend");
         AutomationProperties.SetName(_send, "Send message");
-        AutomationProperties.SetHelpText(_send, "Sends your message to Claude (Enter).");
+        AutomationProperties.SetHelpText(_send, "Sends your message to Sketch ProMax (Enter).");
         _send.Click += (_, _) => Send();
         _stop = new Button { Content = ChatUi.Icon(ChatUi.Paths.Square, fill: true), Visibility = Visibility.Collapsed };
         _stop.SetResourceReference(StyleProperty, "SpmChatStop");
-        _stop.ToolTip = "Stops Claude's answer (Escape). A Revit change already made stays; undo it with Ctrl+Z.";
-        AutomationProperties.SetName(_stop, "Stop Claude's answer");
+        _stop.ToolTip = "Stops Sketch ProMax's answer (Escape). A Revit change already made stays; undo it with Ctrl+Z.";
+        AutomationProperties.SetName(_stop, "Stop Sketch ProMax's answer");
         AutomationProperties.SetHelpText(_stop, _stop.ToolTip as string ?? "");
         _stop.Click += (_, _) => StopTurn();
         DockPanel.SetDock(_send, Dock.Right);
@@ -440,7 +440,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         {
             Content = ChatUi.Small("Always allow"), Margin = new Thickness(0, 0, ChatUi.S1, 0), VerticalAlignment = VerticalAlignment.Center,
             Padding = new Thickness(ChatUi.S2, ChatUi.S1, ChatUi.S2, ChatUi.S1),
-            ToolTip = "Ask before changes: Always allow. Nothing asks in Revit before Claude changes the model, risky changes included. Click to change.",
+            ToolTip = "Ask before changes: Always allow. Nothing asks in Revit before Sketch ProMax changes the model, risky changes included. Click to change.",
         };
         _allowPill.SetResourceReference(StyleProperty, "SpmChatGhost");
         _allowPill.Click += (_, _) => ToggleModelMenu(brief: true);
@@ -549,7 +549,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         _jump.HorizontalAlignment = HorizontalAlignment.Center;
         _jump.VerticalAlignment = VerticalAlignment.Bottom;
         _jump.Margin = new Thickness(0, 0, 0, ChatUi.S3);
-        _jump.ToolTip = "Scrolls to the newest message and follows Claude's answer again (End).";
+        _jump.ToolTip = "Scrolls to the newest message and follows the answer again (End).";
         _jump.Click += (_, _) => ScrollToEnd(force: true);
         _jumpText.Text = "Jump to latest";
         AutomationProperties.SetName(_jump, "Jump to latest");
@@ -647,7 +647,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         ];
         KeyboardNavigation.SetTabNavigation(_modelList, KeyboardNavigationMode.Cycle);
         KeyboardNavigation.SetDirectionalNavigation(_modelList, KeyboardNavigationMode.Cycle);
-        AutomationProperties.SetName(_modelList, "Claude model");
+        AutomationProperties.SetName(_modelList, "Model");
         _modelList.PreviewKeyDown += (_, e) =>
         {
             if (e.Key != Key.Escape) return;
@@ -736,8 +736,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     {
         var choice = ChatModels.Find(_model);
         _modelLabel.Text = choice.Label;
-        _modelPill.ToolTip = $"Claude model: {choice.Label}. {choice.Hint}. Used from the next message on; click to change.";
-        AutomationProperties.SetName(_modelPill, "Claude model: " + choice.Label);
+        _modelPill.ToolTip = $"Model: {choice.Label}. {choice.Hint}. Used from the next message on; click to change.";
+        AutomationProperties.SetName(_modelPill, "Model: " + choice.Label);
         AutomationProperties.SetHelpText(_modelPill, _modelPill.ToolTip as string ?? "");
     }
 
@@ -758,6 +758,14 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         try { level = Bridge.Approvals.Level; }
         catch (Exception) { level = Tools.ApprovalLevel.RiskyOnly; }
         _allowPill.Visibility = level == Tools.ApprovalLevel.AlwaysAllow ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    /// <summary>True when Revit may ask before this step runs: a step that can change the model, unless the level is Always allow.</summary>
+    private static bool MayAsk(string tool)
+    {
+        if (StepNames.ReadOnly(tool)) return false;
+        try { return Bridge.Approvals.Level != Tools.ApprovalLevel.AlwaysAllow; }
+        catch (Exception) { return true; }
     }
 
     private static StackPanel Row(params UIElement[] children)
@@ -810,7 +818,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
                 {
                     if (_setup != Setup.Ready) RememberLeftOver();
                     _setup = Setup.Ready;
-                    if (waiting) Note($"Claude Code {install.Version} is ready. Ask your first question below.");
+                    if (waiting) Note("Sketch ProMax is ready. Ask your first question below.");
                 }
                 // Give up waiting after a quarter of an hour; the card then offers to try again.
                 if (_setup is Setup.Installing or Setup.SigningIn && DateTime.UtcNow - _waitingSince > TimeSpan.FromMinutes(15))
@@ -823,7 +831,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             if (_refreshAsked)
             {
                 _refreshAsked = false;
-                if (_setup == Setup.Ready && _turn is null && !_stopped) Status($"Claude Code {_install?.Version} is ready and signed in.", spin: false);
+                if (_setup == Setup.Ready && _turn is null && !_stopped) Status("Sketch ProMax is ready and signed in.", spin: false);
             }
         }
     }
@@ -868,7 +876,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         switch (_setup)
         {
             case Setup.Checking:
-                Waiting("Looking for Claude Code on this PC…");
+                Waiting("Checking the chat setup on this PC…");
                 break;
             case Setup.Missing:
                 Title("Install Claude Code to chat here");
@@ -891,7 +899,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
                 Add("Install again", Brand.Weight.Secondary, () => Launch(Setup.Installing));
                 break;
             case Setup.SignedOut:
-                Title("Sign in to Claude");
+                Title("Sign in to your Claude account");
                 Para($"Claude Code {_install?.Version} is installed but not signed in. Sign in opens a window and your browser: " +
                      "sign in with the Claude account that has your plan, then come back here.");
                 Add("Sign in", Brand.Weight.Primary, () => Launch(Setup.SigningIn));
@@ -905,7 +913,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
                 Add("Open sign-in again", Brand.Weight.Secondary, () => Launch(Setup.SigningIn));
                 break;
             case Setup.Failed:
-                Title("Claude Code couldn't be checked");
+                Title("The chat setup couldn't be checked");
                 Para(_setupDetail, Brand.K.DangerText);
                 Para("Press Check again. If it keeps failing, restart Revit.", Brand.K.Muted);
                 Add("Check again", Brand.Weight.Secondary, () => Check(quiet: false));
@@ -1039,7 +1047,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         mark.VerticalAlignment = VerticalAlignment.Center;
         AutomationProperties.SetName(mark, "");
         row.Children.Add(mark);
-        row.Children.Add(ChatUi.Small("Claude", Brand.K.Text, bold: true));
+        row.Children.Add(ChatUi.Small("Sketch ProMax", Brand.K.Text, bold: true));
         var time = ChatUi.Small(When(item));
         time.ToolTip = WhenLong(item);
         row.Children.Add(time);
@@ -1119,7 +1127,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         // Copy sits over the top right corner, shown on hover or when it has keyboard focus, so it takes no room.
         var grid = new Grid();
         grid.Children.Add(view);
-        var copy = ChatUi.CopyButton(() => item.Text, "Claude's answer", null);
+        var copy = ChatUi.CopyButton(() => item.Text, "the answer", null);
         copy.HorizontalAlignment = HorizontalAlignment.Right;
         copy.VerticalAlignment = VerticalAlignment.Top;
         copy.Margin = new Thickness(0, -ChatUi.S1, 0, 0);
@@ -1387,10 +1395,12 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         row.Item.State = state;
         row.Item.Text = summary;
         if (result.Length > 0) row.Item.Result = result.Length > MaxResult ? result.Substring(0, MaxResult) + "…" : result;
+        // The friendly step name and the call's own description, never the tool id or its arguments (those are in the details).
+        var title = StepNames.Title(row.Item.Name);
+        var line = StepNames.Line(row.Item.Name, summary);
         row.Line.Inlines.Clear();
-        row.Line.Inlines.Add(new Run(row.Item.Name) { FontWeight = FontWeights.SemiBold });
+        row.Line.Inlines.Add(new Run(line));
         Brand.Fg(row.Line, Brand.K.Muted);
-        if (summary.Length > 0) row.Line.Inlines.Add(new Run("  " + summary));
         FrameworkElement mark;
         string said;
         switch (state)
@@ -1414,8 +1424,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
                 break;
         }
         row.Mark.Content = mark;
-        row.Header.ToolTip = row.Item.Name + " (" + said + ")" + (summary.Length > 0 ? "\n" + summary : "") + "\nClick for the input, the result and the elements.";
-        AutomationProperties.SetName(row.Header, $"Step {row.Item.Name}, {said}. {summary}");
+        row.Header.ToolTip = title + " (" + said + ")" + (line != title ? "\n" + line : "") + "\nClick for the input, the result and the elements.";
+        AutomationProperties.SetName(row.Header, $"Step {title}, {said}." + (line != title ? " " + line : ""));
         AutomationProperties.SetHelpText(row.Header, "Press Space to show or hide the step's input, result and elements.");
         if (state == "failed" && row.Item.Result.Length > 0)
         {
@@ -1448,12 +1458,12 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         if (item.Input.Length > 0)
         {
             Label("Input");
-            Mono(item.Input, item.Name + " input");
+            Mono(item.Input, StepNames.Title(item.Name) + " input");
         }
         if (item.Result.Length > 0)
         {
             Label(item.State == "failed" ? "Error" : "Result");
-            Mono(item.Result, item.Name + " result");
+            Mono(item.Result, StepNames.Title(item.Name) + " result");
         }
         var ids = new List<long>();
         if (item.Result.Length > 0) UI.Pane.Collect(item.Result, ids);
@@ -1728,13 +1738,13 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         }
         if (busy)
         {
-            Status(text ?? (_turn!.Stopping ? "Stopping…" : "Claude is thinking…"), spin: true);
+            Status(text ?? (_turn!.Stopping ? "Stopping…" : "Sketch ProMax is thinking…"), spin: true);
             return;
         }
         Status(_setup switch
         {
             Setup.Ready => "", // the box's hint and tooltip say how to send; the model pill says where it goes
-            Setup.Checking => "Looking for Claude Code…",
+            Setup.Checking => "Checking the chat setup…",
             _ => "Finish the step above to start chatting.",
         }, spin: false);
     }
@@ -1765,9 +1775,9 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         {
             _workingText.Text = text;
             AutomationProperties.SetName(_working, text);
-            _status.Text = _turn!.Stopping ? "Stopping Claude…" : _control is not null
-                ? "Claude is working. Send a message to steer it: it is applied after the current item. Esc or Stop ends it."
-                : "Claude is working. Esc or Stop ends it; you can type your next message meanwhile.";
+            _status.Text = _turn!.Stopping ? "Stopping…" : _control is not null
+                ? "Sketch ProMax is working. Send a message to steer it: it is applied after the current item. Esc or Stop ends it."
+                : "Sketch ProMax is working. Esc or Stop ends it; you can type your next message meanwhile.";
             _statusRow.Visibility = Visibility.Visible;
             _statusSpin.Content = null;
             return;
@@ -1808,7 +1818,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             var note = _input.Text.Trim();
             if (_turn.Planning || _control is null || note.Length == 0)
             {
-                Status(note.Length == 0 && !_turn.Planning ? "Type a message first; Claude gets it after the current item." : "Claude is still answering. Wait for it, or press Stop.", spin: true);
+                Status(note.Length == 0 && !_turn.Planning ? "Type a message first; Sketch ProMax gets it after the current item." : "Sketch ProMax is still answering. Wait for it, or press Stop.", spin: true);
                 return;
             }
             _input.Clear();
@@ -1819,7 +1829,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         if (_setup != Setup.Ready)
         {
             ShowSetup();
-            Status(_setup == Setup.Checking ? "Still looking for Claude Code; try again in a moment." : "Finish the step above first, then send.", spin: false);
+            Status(_setup == Setup.Checking ? "Still checking the chat setup; try again in a moment." : "Finish the step above first, then send.", spin: false);
             if (_setup is Setup.Missing or Setup.SignedOut or Setup.Failed) Check(quiet: true);
             return;
         }
@@ -1875,7 +1885,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         catch (Exception ex)
         {
             if (_turn == turn) EndTurn();
-            Error($"The message could not be sent to Claude Code ({ex.Message}). Send it again.");
+            Error($"The message could not be sent ({ex.Message}). Send it again.");
         }
     }
 
@@ -1902,7 +1912,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             fresh.Event += e => { if (_engine == fresh) OnEvent(e); };
             fresh.Exited += tail => { if (_engine == fresh) OnExited(fresh, tail); };
             _engine = fresh;
-            ShowStatus(resume is null ? "Starting Claude Code…" : "Reopening this conversation…");
+            ShowStatus(resume is null ? "Starting…" : "Reopening this conversation…");
             await fresh.StartAsync(turn.Line);
         }
         catch (Exception ex)
@@ -1917,8 +1927,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             _engine = null;
             EndTurn();
             Error(ex is System.ComponentModel.Win32Exception or FileNotFoundException
-                ? $"Claude Code could not be started ({ex.Message}). Press Check again above, or reinstall Claude Code."
-                : $"The message could not be sent to Claude Code ({ex.Message}). Send it again.");
+                ? $"The chat could not be started ({ex.Message}). Press Check again above; if it keeps happening, reinstall Claude Code."
+                : $"The message could not be sent ({ex.Message}). Send it again.");
             if (ex is System.ComponentModel.Win32Exception or FileNotFoundException) Check(quiet: false);
         }
     }
@@ -2041,7 +2051,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
                 Add(item);
                 _texts[start.Key] = (item, _views[item]);
                 if (turn is not null) turn.SawText = true;
-                if (turn is { Stopping: false }) ShowStatus("Claude is writing…");
+                if (turn is { Stopping: false }) ShowStatus("Sketch ProMax is writing…");
                 break;
             }
             case TextDeltaEvent delta:
@@ -2059,7 +2069,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
                 break;
             case ThinkingEvent:
                 JobThinking("", newBlock: true);
-                if (turn is { Stopping: false }) ShowStatus("Claude is thinking…");
+                if (turn is { Stopping: false }) ShowStatus("Sketch ProMax is thinking…");
                 break;
             case ThinkingDeltaEvent thought:
                 JobThinking(thought.Text, newBlock: false);
@@ -2069,7 +2079,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
                 break;
             case ToolUseEvent tool:
             {
-                var summary = Summary(tool.InputJson);
+                var summary = StepNames.Describe(StreamParser.ShortName(tool.Name), tool.InputJson);
                 if (!_tools.TryGetValue(tool.Id, out var row))
                 {
                     var item = new ChatItem { Kind = "tool", Name = StreamParser.ShortName(tool.Name), State = "running", Text = summary };
@@ -2086,20 +2096,20 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
                     if (summary.Length > 0) _jobInputs[tool.Id] = summary;
                 }
                 if (turn is { Stopping: false })
-                    ShowStatus($"Running {row.Item.Name}… If Revit asks to approve a change, answer it in Revit.");
+                    ShowStatus(StepNames.Running(row.Item.Name, row.Item.Text, MayAsk(row.Item.Name)));
                 break;
             }
             case ToolResultEvent result:
                 if (_tools.TryGetValue(result.ToolUseId, out var done))
                     SetTool(done, result.IsError ? "failed" : "done", done.Item.Text, result.Text);
                 JobToolEnded(result.ToolUseId, result.Text, result.IsError);
-                if (turn is { Stopping: false }) ShowStatus("Claude is thinking…");
+                if (turn is { Stopping: false }) ShowStatus("Sketch ProMax is thinking…");
                 break;
             case RetryEvent retry:
                 if (turn is { Stopping: false })
                     ShowStatus(retry.Error is "rate_limit" or "overloaded"
-                        ? $"Claude is busy right now; trying again (attempt {retry.Attempt} of {retry.MaxRetries})…"
-                        : $"Couldn't reach Claude ({retry.Error}); trying again (attempt {retry.Attempt} of {retry.MaxRetries})…");
+                        ? $"The service is busy right now; trying again (attempt {retry.Attempt} of {retry.MaxRetries})…"
+                        : $"Couldn't reach the service ({retry.Error}); trying again (attempt {retry.Attempt} of {retry.MaxRetries})…");
                 break;
             case NoticeEvent notice:
                 Note(notice.Text);
@@ -2137,7 +2147,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             _conv.SessionId = "";
             _engine?.Kill();
             _engine = null;
-            Note("The earlier conversation couldn't be reopened, so Claude starts fresh (it doesn't remember the messages above).");
+            Note("The earlier conversation couldn't be reopened, so Sketch ProMax starts fresh (it doesn't remember the messages above).");
             _ = Deliver(turn);
             return;
         }
@@ -2145,7 +2155,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         if (!end.IsError && _engine is { } worked) _lastWorkingModel = worked.Model;
         if (end.IsError) turn.Outcome = "failed";
         if (turn.Stopping)
-            Note("Stopped. Ask again, or tell Claude what to do instead.");
+            Note("Stopped. Ask again, or say what to do instead.");
         else if (end.IsError)
             Failure(message, end.Subtype);
         else if (!turn.SawText && message.Length > 0)
@@ -2159,20 +2169,20 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         {
             _setup = Setup.SignedOut;
             ShowSetup();
-            Error("Claude Code isn't signed in. Press Sign in above, then send your message again.");
+            Error("You're not signed in. Press Sign in above, then send your message again.");
             return;
         }
         if (subtype == "error_max_turns")
         {
-            Error("Claude stopped after many steps. Say \"continue\" to let it carry on.");
+            Error("Sketch ProMax stopped after many steps. Say \"continue\" to let it carry on.");
             return;
         }
         if (Regex.IsMatch(message, @"usage limit|rate limit|limit reached|out of (extra )?usage", RegexOptions.IgnoreCase))
         {
-            Error($"Your Claude plan's usage limit is reached: {message}. The conversation is kept; send again when the limit resets.");
+            Error($"Your plan's usage limit is reached: {message}. The conversation is kept; send again when the limit resets.");
             return;
         }
-        Error((message.Length > 0 ? message : "Claude Code reported an error.") + " Send your message again; if it keeps happening, press New chat.");
+        Error((message.Length > 0 ? message : "The chat reported an error.") + " Send your message again; if it keeps happening, press New chat.");
     }
 
     /// <summary>
@@ -2189,8 +2199,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         _model = back;
         ChatModels.Save(ClaudeCli.Folder, back);
         ShowModelChoice();
-        Error($"{ChatModels.Find(refused).Label} isn't available with your Claude plan, so the chat went back to {ChatModels.Find(back).Label} " +
-              $"and sent your message again. Claude Code said: {said.Trim()}");
+        Error($"{ChatModels.Find(refused).Label} isn't available with your plan, so the chat went back to {ChatModels.Find(back).Label} " +
+              $"and sent your message again. The reply was: {said.Trim()}");
         _ = Deliver(turn);
         return true;
     }
@@ -2207,7 +2217,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         RenderDirty();
         if (turn.Stopping)
         {
-            Note("Stopped. Ask again, or tell Claude what to do instead.");
+            Note("Stopped. Ask again, or say what to do instead.");
             EndTurn();
             return;
         }
@@ -2216,7 +2226,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             // The saved session couldn't be reopened (deleted, or from another PC): start fresh with the same message.
             turn.Retried = true;
             _conv.SessionId = "";
-            Note("The earlier conversation couldn't be reopened, so Claude starts fresh (it doesn't remember the messages above).");
+            Note("The earlier conversation couldn't be reopened, so Sketch ProMax starts fresh (it doesn't remember the messages above).");
             _ = Deliver(turn);
             return;
         }
@@ -2228,13 +2238,13 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         {
             _setup = Setup.SignedOut;
             ShowSetup();
-            Error("Claude Code isn't signed in. Press Sign in above, then send your message again.");
+            Error("You're not signed in. Press Sign in above, then send your message again.");
         }
         else if (Regex.IsMatch(tail, @"unknown option|unrecognized|invalid value", RegexOptions.IgnoreCase))
-            Error("This Claude Code is too old for the Revit chat. Update it (open a Command Prompt and run: claude update), then send again." +
+            Error("The chat engine (Claude Code) is too old for the Revit chat. Update it (open a Command Prompt and run: claude update), then send again." +
                   (detail.Length > 0 ? "\n\n" + detail : ""));
         else
-            Error("Claude Code stopped unexpectedly. Send your message again; the conversation is kept." + (detail.Length > 0 ? "\n\n" + detail : ""));
+            Error("The chat stopped unexpectedly. Send your message again; the conversation is kept." + (detail.Length > 0 ? "\n\n" + detail : ""));
     }
 
     private static string Last(string text, int max)
@@ -2306,7 +2316,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             _engine?.Kill();
             _engine = null;
             RenderDirty();
-            Note("Stopped. Ask again, or tell Claude what to do instead. (A Revit tool that was already running finishes on its own.)");
+            Note("Stopped. Ask again, or say what to do instead. (A Revit tool that was already running finishes on its own.)");
             EndTurn();
         };
         turn.KillTimer.Start();
@@ -2397,7 +2407,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         }
         if (_turn is not null)
         {
-            Status("Claude is still answering. Wait for it, or press Stop, then open the other chat.", spin: false);
+            Status("Sketch ProMax is still answering. Wait for it, or press Stop, then open the other chat.", spin: false);
             CloseDrawer();
             return;
         }
@@ -2552,7 +2562,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         _retired = this;
     }
 
-    internal const string CutOffNote = "Sketch ProMax updated while Claude was answering, so the answer stopped here. Send a message to carry on; Claude keeps the conversation.";
+    internal const string CutOffNote = "Sketch ProMax updated while it was answering, so the answer stopped here. Send a message to carry on; the conversation is kept.";
 
     // ---- Attachments ----------------------------------------------------------------------------------------------
 
@@ -2560,7 +2570,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     {
         var dialog = new Microsoft.Win32.OpenFileDialog
         {
-            Title = "Attach files for Claude",
+            Title = "Attach files for Sketch ProMax",
             Multiselect = true,
             Filter = "Pictures, PDFs and drawings|*.png;*.jpg;*.jpeg;*.gif;*.webp;*.bmp;*.tif;*.tiff;*.pdf;*.dwg;*.dxf|All files|*.*",
         };
@@ -2730,34 +2740,6 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     }
 
     // ---- Helpers --------------------------------------------------------------------------------------------------
-
-    /// <summary>A tool call's input in one short line: key=value, key=value…</summary>
-    internal static string Summary(string json)
-    {
-        if (json.Length == 0) return "";
-        try
-        {
-            using var doc = JsonDocument.Parse(json);
-            if (doc.RootElement.ValueKind != JsonValueKind.Object) return "";
-            var parts = new List<string>();
-            foreach (var p in doc.RootElement.EnumerateObject())
-            {
-                var v = p.Value.ValueKind switch
-                {
-                    JsonValueKind.String => p.Value.GetString() ?? "",
-                    JsonValueKind.Array => $"[{p.Value.GetArrayLength()}]",
-                    JsonValueKind.Object => "{…}",
-                    _ => p.Value.GetRawText(),
-                };
-                v = v.Replace('\n', ' ');
-                if (v.Length > 32) v = v.Substring(0, 31) + "…";
-                parts.Add($"{p.Name}={v}");
-            }
-            var line = string.Join(", ", parts);
-            return line.Length > 120 ? line.Substring(0, 119) + "…" : line;
-        }
-        catch (JsonException) { return ""; }
-    }
 
     private static string Pretty(string json)
     {

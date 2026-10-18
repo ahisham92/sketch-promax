@@ -113,7 +113,7 @@ internal static class ClaudeCli
     /// <summary>Opens a PowerShell window running Anthropic's official installer. The user watches it run.</summary>
     public static void StartInstall()
     {
-        var script = InstallCommand + "; Write-Host ''; Write-Host 'Finished. Close this window and go back to Revit: the Sketch ProMax chat finds Claude Code by itself.'";
+        var script = InstallCommand + "; Write-Host ''; Write-Host 'Finished. Close this window and go back to Revit: the Sketch ProMax chat finds it by itself.'";
         Process.Start(new ProcessStartInfo("powershell.exe", "-NoProfile -NoExit -Command \"" + script + "\"")
         {
             UseShellExecute = true,

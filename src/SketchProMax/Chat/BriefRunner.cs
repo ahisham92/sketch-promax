@@ -22,7 +22,7 @@ internal static class BriefRunner
         try
         {
             var info = ClaudeCli.OneShotStart(install, instructions, readTools, model);
-            process = Process.Start(info) ?? throw new InvalidOperationException("Claude Code didn't start.");
+            process = Process.Start(info) ?? throw new InvalidOperationException("The chat didn't start.");
             // Stop and closing the pane cancel on Revit's UI thread, and the kill can wait seconds (taskkill): not there.
             var started = process;
             using var stop = cancel.Register(() => Task.Run(() => ClaudeCli.KillTree(started)));
@@ -40,7 +40,7 @@ internal static class BriefRunner
             if (done != stdout)
             {
                 ClaudeCli.KillTree(process);
-                return ("", cancel.IsCancellationRequested ? "Stopped." : "Claude took too long to answer.");
+                return ("", cancel.IsCancellationRequested ? "Stopped." : "The answer took too long.");
             }
             var output = await stdout.ConfigureAwait(false);
             var errors = stderr.Wait(2000) ? stderr.Result : "";
@@ -48,7 +48,7 @@ internal static class BriefRunner
             if (isError || text.Length == 0)
             {
                 var why = (text.Length > 0 ? text : errors).Trim();
-                return ("", why.Length > 0 ? (why.Length > 300 ? why.Substring(0, 300) + "…" : why) : "Claude Code gave no answer.");
+                return ("", why.Length > 0 ? (why.Length > 300 ? why.Substring(0, 300) + "…" : why) : "No answer came back.");
             }
             return (text, "");
         }
@@ -76,7 +76,7 @@ internal static class BriefRunner
         var (text, error) = await Run(install, instructions, planMessage, readTools: true, model, PlanTimeoutMs, cancel).ConfigureAwait(false);
         if (error.Length > 0) return (null, error);
         var brief = PromptBriefs.Parse(text, request);
-        return brief is null ? (null, "Claude's answer had no brief in it.") : (brief, "");
+        return brief is null ? (null, "The answer had no brief in it.") : (brief, "");
     }
 
     /// <summary>

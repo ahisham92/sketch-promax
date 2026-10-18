@@ -14,6 +14,9 @@ namespace SketchProMax.Commands;
 /// </summary>
 internal sealed class PackProgress : IDisposable
 {
+    /// <summary>How the project pack prefixes its progress lines (the window shows them without it).</summary>
+    public const string ProjectPackProgress = "Project pack: ";
+
     private Dispatcher? _dispatcher;
     private Window? _window;
 
@@ -68,7 +71,7 @@ internal sealed class PackProgress : IDisposable
                 timer.Tick += (_, _) =>
                 {
                     if (stop.IsEnabled && Jobs.Running?.Progress() is { } p)
-                        line.Text = p.StartsWith("Export for Claude: ", StringComparison.Ordinal) ? p.Substring(19) : p;
+                        line.Text = p.StartsWith(ProjectPackProgress, StringComparison.Ordinal) ? p.Substring(ProjectPackProgress.Length) : p;
                 };
                 timer.Start();
                 window.Closed += (_, _) => { timer.Stop(); Dispatcher.CurrentDispatcher.BeginInvokeShutdown(DispatcherPriority.Background); };

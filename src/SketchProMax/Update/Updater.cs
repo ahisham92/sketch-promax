@@ -89,7 +89,7 @@ public static class Updater
         if (Staged is { } staged)
             return CanSwitchLive
                 ? $"Sketch ProMax {staged} is downloaded and is switched to as soon as Revit is idle with no job running. No restart needed."
-                : $"Sketch ProMax {staged} is downloaded. Close and reopen Revit, and restart the Claude desktop app, to start using it.";
+                : $"Sketch ProMax {staged} is downloaded. Close and reopen Revit (and restart the Claude desktop app if you use it) to start using it.";
         if (state.LastError is { } error)
             return $"Sketch ProMax {CurrentText}. The last update check failed: {error}";
         return state.LastCheck is { } last

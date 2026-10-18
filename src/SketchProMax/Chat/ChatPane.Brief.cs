@@ -286,7 +286,7 @@ internal sealed partial class ChatPane
         if (_stopped || item.State is not ("pending" or "failed")) return;
         if (_turn is not null)
         {
-            Status("Claude is still answering. Wait for it, or press Stop.", spin: true);
+            Status("Sketch ProMax is still answering. Wait for it, or press Stop.", spin: true);
             return;
         }
         if (_setup != Setup.Ready && DeliveryCapture is null)
@@ -440,7 +440,7 @@ internal sealed partial class ChatPane
         public static async Task<(PromptBrief? Brief, string Error)> Plan(string request)
         {
             var install = await Task.Run(ClaudeCli.Find);
-            if (install is null) return (null, "Claude Code isn't installed.");
+            if (install is null) return (null, "The chat isn't set up on this PC yet: follow the setup steps above.");
             var message = PromptBriefs.PlanMessage(request, [], []);
             return await Task.Run(() => BriefRunner.Plan(install, request, message, null, CancellationToken.None));
         }

@@ -149,7 +149,7 @@ internal static class Pane
         }
         var lines = shown.Replace("\r", "").Split('\n').Where(l => l.Trim().Length > 0).ToList();
         var result = lines.Take(MaxResult).Select(Short).ToList();
-        if (lines.Count > MaxResult) result.Add($"… {lines.Count - MaxResult} more line(s); ask Claude for the full result.");
+        if (lines.Count > MaxResult) result.Add($"… {lines.Count - MaxResult} more line(s); ask in the chat for the full result.");
         return result;
     }
 
