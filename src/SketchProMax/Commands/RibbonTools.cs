@@ -97,11 +97,77 @@ internal static class RibbonTools
         }
         // A check cleared for this run is for this run only, used or not (the tool takes it when it starts).
         finally { if (IssueGateWindow.Gated(tool.Name)) Tools.IssueGate.Discard(); }
+        // Purge and cleanup: the preview comes first; deleting what it lists is asked here, with Close as the default.
+        if (!result.IsError && ApprovalPolicy.IsPreview(tool.Name, args) && AskApply(title, result))
+        {
+            args["apply"] = System.Text.Json.JsonSerializer.SerializeToElement(true);
+            using (PackProgress.Show(title, $"{title} on '{doc.Title}'"))
+                result = QuickTools.Execute(app, tool.Name, args);
+        }
         var headline = result.IsError
             ? result.Text.StartsWith("Stopped on request", StringComparison.Ordinal) ? "Stopped; what it finished is kept" : "It did not work"
             : Revit.TimeLog.LastLine ?? "Done"; // "Done in X. By hand: about Y. Saved: Z."
         QuickTools.Show(title, result, headline);
         return result.IsError ? Result.Failed : Result.Succeeded;
+    }
+
+    /// <summary>
+    /// The ribbon's Purge &amp; cleanup button: which of the four cleanup tools to run. The chosen one runs as any ribbon
+    /// tool (its options, then the preview, then <see cref="AskApply"/>). Close is the default; nothing is deleted here.
+    /// </summary>
+    public static Result Cleanup(UIApplication app)
+    {
+        var dialog = new TaskDialog("Sketch ProMax")
+        {
+            MainInstruction = "Purge and cleanup",
+            MainContent = "Pick what to clean up. Each shows a preview first: nothing changes until you press Delete them, and Ctrl+Z undoes it in one step.",
+            CommonButtons = TaskDialogCommonButtons.Close,
+            DefaultButton = TaskDialogResult.Close,
+            AllowCancellation = true,
+        };
+        dialog.AddCommandLink(TaskDialogCommandLinkId.CommandLink1, "Purge unused", "Families, types, materials, patterns, unused view templates and filters, repeated until nothing new is unused.");
+        dialog.AddCommandLink(TaskDialogCommandLinkId.CommandLink2, "Delete unused views", "Views on no sheet. Keeps WORKING and _keep views, open views and views others depend on.");
+        dialog.AddCommandLink(TaskDialogCommandLinkId.CommandLink3, "Clean up imports", "Imported CAD (or CAD links when asked), their leftover types and unused IMPORT- line styles.");
+        dialog.AddCommandLink(TaskDialogCommandLinkId.CommandLink4, "Model health clean", "Unused view templates, unplaced rooms and areas, unused groups and filters, and the warnings by type.");
+        var tool = dialog.Show() switch
+        {
+            TaskDialogResult.CommandLink1 => "purge_unused",
+            TaskDialogResult.CommandLink2 => "delete_unused_views",
+            TaskDialogResult.CommandLink3 => "cleanup_imports",
+            TaskDialogResult.CommandLink4 => "cleanup_model",
+            _ => null,
+        };
+        return tool is null ? Result.Cancelled : Run(app, tool);
+    }
+
+    /// <summary>After a cleanup preview that found something: shows its summary and asks whether to delete. True: delete.</summary>
+    private static bool AskApply(string title, ToolResult preview)
+    {
+        string summary;
+        int total;
+        string? also = null;
+        try
+        {
+            using var json = System.Text.Json.JsonDocument.Parse(preview.Text);
+            var root = json.RootElement;
+            summary = root.GetProperty("summary").GetString() ?? "";
+            total = root.GetProperty("total").GetInt32();
+            if (root.TryGetProperty("alsoDeletes", out var a) && a.ValueKind == System.Text.Json.JsonValueKind.Object)
+                also = "It also deletes " + string.Join(", ", a.EnumerateObject().Select(p => $"{p.Value.GetInt32()} {p.Name}")) + ".";
+        }
+        catch (Exception ex) when (ex is System.Text.Json.JsonException or KeyNotFoundException or InvalidOperationException) { return false; }
+        if (total == 0) return false;
+        var dialog = new TaskDialog("Sketch ProMax")
+        {
+            MainInstruction = $"{title}: delete {total} item(s)?",
+            MainContent = summary + (also is null ? "" : "\n\n" + also),
+            ExpandedContent = preview.Text.Length > 6000 ? preview.Text.Substring(0, 6000) + "\n…" : preview.Text,
+            AllowCancellation = true,
+        };
+        dialog.AddCommandLink(TaskDialogCommandLinkId.CommandLink1, "Delete them", "One Undo step: Ctrl+Z brings everything back.");
+        dialog.AddCommandLink(TaskDialogCommandLinkId.CommandLink2, "Close without deleting", "Nothing changes. The preview's list is in the result window.");
+        dialog.DefaultButton = TaskDialogResult.CommandLink2;
+        return dialog.Show() == TaskDialogResult.CommandLink1;
     }
 
     /// <summary>The first paragraph of a tool's description, cut at a sentence end near 400 characters.</summary>

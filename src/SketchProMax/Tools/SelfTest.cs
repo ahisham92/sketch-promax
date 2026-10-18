@@ -78,6 +78,8 @@ internal static partial class SelfTest
         public ViewSheet? Sheet;
         public FamilySymbol? Door;
         public double OriginX, OriginY; // internal feet, clear of the model
+        /// <summary>What a case's arguments made or found, for its <see cref="Case.Verify"/> (keys are the case's own).</summary>
+        public readonly Dictionary<string, object> Bag = new(StringComparer.Ordinal);
 
         /// <summary>Millimetres to project units.</summary>
         public double P(double mm) => Math.Round(UnitUtils.ConvertFromInternalUnits(mm / 304.8, Unit), 4);
@@ -137,6 +139,18 @@ internal static partial class SelfTest
 
         /// <summary>With <see cref="ExpectError"/>: the refusal is expected only when this says so for the model (else a normal run).</summary>
         public Func<Ctx, bool>? ExpectErrorIf { get; init; }
+
+        /// <summary>
+        /// Checks a successful run against the model itself (still changed: the rollback comes after), and the result's
+        /// image: null when it is as expected, else what is wrong.
+        /// </summary>
+        public Func<Ctx, ToolResult, string?>? Verify { get; init; }
+
+        /// <summary>Runs after the step whatever happened (closes a file the case held open, clears a hook).</summary>
+        public Action<Ctx>? After { get; init; }
+
+        /// <summary>The bug log row this case guards (docs/bug-log.md): the field test names its row "tool bug#N" and lists it under Bug log.</summary>
+        public int Bug { get; init; }
     }
 
     public enum Mode { Safe, Full }
@@ -342,12 +356,21 @@ internal static partial class SelfTest
                 if (wrong is not null)
                     return new(step.Tool, "fail", watch.ElapsedMilliseconds, $"Ran, but {wrong}. {Short(result.Text, 500)}");
             }
+            if (!result.IsError && step.Verify is not null)
+            {
+                string? wrong;
+                try { wrong = step.Verify(run.Ctx, result); }
+                catch (Exception ex) when (ex is not OutOfMemoryException and not Skip) { wrong = $"the check could not run ({ex.GetType().Name}: {ex.Message})"; }
+                if (wrong is not null)
+                    return new(step.Tool, "fail", watch.ElapsedMilliseconds, $"Ran, but {wrong}. {Short(result.Text, 500)}");
+            }
             return new(step.Tool, result.IsError ? "fail" : "pass", watch.ElapsedMilliseconds, Short(result.Text, 600));
         }
         catch (Skip s) { return new(step.Tool, "skip", 0, s.Message); }
         catch (Exception ex) { return new(step.Tool, "fail", watch.ElapsedMilliseconds, Bridge.BridgeServer.Describe(tool, ex)); }
         finally
         {
+            try { step.After?.Invoke(run.Ctx); } catch (Exception) { /* a cleanup that fails must not fail the next step */ }
             if (group is not null)
             {
                 if (group.HasStarted() && !group.HasEnded()) group.RollBack();
@@ -511,7 +534,13 @@ internal static partial class SelfTest
         {
             Expect = r => r.GetProperty("counts").GetProperty("sheets").GetInt32() > 0 ? null : "the plan has no sheets: " + r.GetRawText(),
         },
-        new("run_revit_query_code", _ => new { code = "Level.Create(doc, 1234.5);\nreturn new { walls = new FilteredElementCollector(doc).OfClass(typeof(Wall)).GetElementCount(), title = doc.Title };", description = "self-test query that makes a level (rolled back)" }),
+        // Bug log #10: a query that makes something runs, and what it made is rolled back.
+        new("run_revit_query_code", _ => new { code = "Level.Create(doc, 1234.5);\nreturn new { walls = new FilteredElementCollector(doc).OfClass(typeof(Wall)).GetElementCount(), title = doc.Title };", description = "self-test query that makes a level (rolled back)" })
+        {
+            Bug = 10,
+            Verify = (c, _) => new FilteredElementCollector(c.Doc).OfClass(typeof(Level)).Cast<Level>().Any(l => Math.Abs(l.Elevation - 1234.5) < 1e-6)
+                ? "the level the query made was kept, not rolled back" : null,
+        },
         new("create_mep_openings", _ => new { method = "report", limit = 50 }) { Heavy = true },
         new("redline_plan", c => new { sheet_number = c.Sheet?.SheetNumber ?? throw new Skip("the model has no sheets"), markups = SelfTestMarkups })
             { Expect = r => r.GetProperty("markups").GetInt32() == 1 && r.GetProperty("plan").GetArrayLength() == 1 ? null : "the markup was not read and planned" },
@@ -684,7 +713,7 @@ internal static partial class SelfTest
             link = FirstLink(c, d => new FilteredElementCollector(d).OfCategory(BuiltInCategory.OST_Rooms).OfType<Room>()
                 .Any(r => r.Area > 0 && r.Level is { } rl && Math.Abs(rl.ProjectElevation - (c.Plan?.GenLevel?.ProjectElevation ?? double.NaN)) < 1)),
             view_id = c.PlanId, folder = c.Temp,
-        }) { Heavy = true },
+        }) { Heavy = true, Bug = 8, Verify = LoadingLegendIsTable },
         // The floor create_floors just made, with its own type name as the structural word: converted whatever the template calls it.
         new("arch_to_structure", c => new
         {
@@ -764,7 +793,7 @@ internal static partial class SelfTest
             Need(c.Throwaway, "needs a DWG on this PC: runs in the field test, which exports one from a drafting view");
             var dwg = FieldTest.TitleBlockDwg(c.Temp) ?? throw new Skip("the field test could not export its DWG (see the Test project notes)");
             return new { path = dwg, name = "FT Title Block " + Guid.NewGuid().ToString("N").Substring(0, 4), size = "A1", units = "mm" };
-        }) { Heavy = true },
+        }) { Heavy = true, Bug = 26 },
         new("load_family", c =>
         {
             Need(c.Throwaway, "needs a family file on this PC: runs in the field test, which loads back a family it made");
@@ -953,7 +982,7 @@ internal static partial class SelfTest
         {
             var s = c.Symbol(BuiltInCategory.OST_DetailComponents, x => x.Family.FamilyPlacementType == FamilyPlacementType.CurveBasedDetail) ?? throw new Skip("no line-based detail item family loaded");
             return new { view_id = c.PlanId, family = $"{s.FamilyName}: {s.Name}", bars = new[] { new { start = c.At(0, -7000), end = c.At(3000, -7000), group = "Self-test RFT" } } };
-        }),
+        }) { Bug = 16 },
         new("place_mesh_symbols", c =>
         {
             var s = c.Symbol(BuiltInCategory.OST_DetailComponents, x => x.Family.FamilyPlacementType != FamilyPlacementType.CurveBasedDetail) ?? throw new Skip("no point-based detail item family loaded");
@@ -1002,6 +1031,12 @@ internal static partial class SelfTest
         new("cut_geometry", c => new { action = "join", pairs = new[] { new { cutting = c.Id(c.Wall ?? throw new Skip("the model has no walls")), cut = Newest<Floor>(c) } }, only_overlapping = false }, Setup: ["create_floors"]),
 
         new("delete_elements", c => new { element_ids = new[] { c.Id(c.Wall ?? throw new Skip("the model has no walls")) } }),
+        // Purge and cleanup (0.34): previews, nothing deleted (the apply runs are in RegressionCases).
+        new("purge_unused", _ => new { limit = 20 }) { Expect = Preview },
+        new("delete_unused_views", _ => new { include_drafting = true, include_legends = true, limit = 20 }) { Expect = Preview },
+        new("cleanup_imports", _ => new { scope = "all", limit = 20 }) { Expect = Preview },
+        new("cleanup_model", _ => new { limit = 20 })
+            { Expect = r => Preview(r) ?? (r.GetProperty("details").TryGetProperty("byType", out _) ? null : "no warnings list") },
     ];
 
 
@@ -1137,7 +1172,115 @@ internal static partial class SelfTest
             Need(Has(d, BuiltInCategory.OST_StructuralColumns), "the link has no structural column (no concrete column family; see the Test project notes)");
             Need(Has(d, BuiltInCategory.OST_Columns), "the link has no cladding column (no Column or Generic Model family template; see the Test project notes)");
             return new { source = c.Doc.GetElement(link.GetTypeId()).Name, what = new[] { "columns", "floors" } };
-        }) { Heavy = true, Expect = ArchLinkOutcome },
+        }) { Heavy = true, Expect = ArchLinkOutcome, Bug = 2 },
+        // Bug log #20: a run that makes nothing says what it found and why each group was left out.
+        new("arch_to_structure", c =>
+        {
+            Need(c.Throwaway, "converts the field test's own architectural link; runs in the field test");
+            var link = new FilteredElementCollector(c.Doc).OfClass(typeof(RevitLinkInstance)).Cast<RevitLinkInstance>().FirstOrDefault(l => l.GetLinkDocument() is not null)
+                       ?? throw new Skip("the architectural link is not loaded");
+            Need(new FilteredElementCollector(link.GetLinkDocument()).OfCategory(BuiltInCategory.OST_Columns).WhereElementIsNotElementType().Any(), "the link has no cladding column");
+            return new { source = c.Doc.GetElement(link.GetTypeId()).Name, what = new[] { "columns" }, structural_columns = false };
+        }) { Heavy = true, Bug = 20, ExpectError = "Skipped: columns" },
+
+        // ---- Bug log rows (docs/bug-log.md): each case fails if its bug comes back; the report's Bug log section lists them.
+        // #3: the raft is hosted on the level nearest its top (not the slab's level with a big negative offset) and takes type_name.
+        new("create_raft", c =>
+        {
+            Need(c.Upper is not null && c.First<Floor>(f => f.LevelId == c.Upper.Id && !f.FloorType.IsFoundationSlab) is not null, "no slab on the upper level to put a raft under");
+            return new { level = c.UpperName, depth_below = c.P(3600), thickness = c.P(800), projection = c.P(300), type_name = "SPM Raft {thickness}" };
+        }) { Bug = 3, Verify = RaftOnNearestLevel },
+        // #4: views go inside the title block's drawing area found from the title block, not over the whole sheet.
+        new("place_views_on_sheet", c =>
+        {
+            var sheet = c.First<ViewSheet>(s => s.SheetNumber == "ST-998") ?? throw new Skip("create_sheets did not create the sheet with a title block");
+            Need(new FilteredElementCollector(c.Doc, sheet.Id).OfCategory(BuiltInCategory.OST_TitleBlocks).Any(), "the test sheet has no title block");
+            var view = c.First<ViewDrafting>(v => v.Name.StartsWith("Self-test drafting", StringComparison.Ordinal)) ?? throw new Skip("create_drafting_view did not create the test view");
+            return new { sheet_id = sheet.Id.Value, view_ids = new[] { view.Id.Value } };
+        }, Setup: ["create_sheets#2", "create_drafting_view"])
+        {
+            Bug = 4,
+            Expect = r => r.GetProperty("drawingArea").GetProperty("source").GetString() is "whole sheet" or "sheet extents" or null
+                ? "the title block's drawing area was not found, so views were laid out over the whole sheet" : null,
+        },
+        // #5: structural plans are engineering plans looking down, with the view range set.
+        new("create_plan_views", c =>
+        {
+            Need(new FilteredElementCollector(c.Doc).OfClass(typeof(ViewFamilyType)).Cast<ViewFamilyType>().Any(t => t.ViewFamily == ViewFamily.StructuralPlan), "the model has no structural plan view type");
+            return new { levels = new[] { c.LevelName }, kind = "structural", name_pattern = "{level} - self-test structural" };
+        }) { Bug = 5, Verify = StructuralPlansLookDown },
+        // #6: one tag per column stack (a column below and the one above), with the head outside the column.
+        new("tag_elements_in_view", c => new { category = "Structural Columns", view_id = ColumnsAbove(c) }) { Heavy = true, Bug = 6, Verify = OneTagPerColumn },
+        // #9: a PDF that is open elsewhere is named as the reason; wait_for_job is a tool Claude has (its own case).
+        new("export_pdf", c =>
+        {
+            var folder = Path.Combine(c.Temp, "locked-pdf");
+            Directory.CreateDirectory(folder);
+            var file = Path.Combine(folder, "locked.pdf");
+            File.WriteAllBytes(file, [37, 80, 68, 70, 45]);
+            c.Bag["locked-pdf"] = new FileStream(file, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+            return new { view_ids = new[] { c.PlanId }, folder, file_name = "locked" };
+        })
+        {
+            Heavy = true, Bug = 9, ExpectError = "open in another program",
+            After = c => { if (c.Bag.TryGetValue("locked-pdf", out var f) && f is IDisposable d) d.Dispose(); c.Bag.Remove("locked-pdf"); },
+        },
+        // #12: editing a family's text and reloading it succeeds without "referenced object is not valid".
+        new("edit_family_text", c =>
+        {
+            var tb = c.Symbol(BuiltInCategory.OST_TitleBlocks) ?? throw new Skip("no title block family loaded");
+            return new { family = tb.FamilyName, add = new[] { new { text = "Self-test text", at = new[] { 10.0, 10.0 } } } };
+        }) { Heavy = true, Bug = 12, Expect = r => r.GetRawText().IndexOf("not valid", StringComparison.OrdinalIgnoreCase) >= 0 ? "it reported an invalid object after the reload" : null },
+        // #13: a file Revit can't link is refused with the reason (the newer-version message itself is a checklist step).
+        new("link_model", c =>
+        {
+            var path = Path.Combine(c.Temp, "not a model.rvt");
+            File.WriteAllText(path, "This is not a Revit model.");
+            return new { path };
+        }) { Bug = 13, ExpectError = "header" },
+        // #14: a sheet region exported at full resolution, readable.
+        new("capture_view_image", c =>
+        {
+            var sheet = c.First<ViewSheet>(s => s.SheetNumber == "ST-999") ?? throw new Skip("create_sheets did not create the test sheet");
+            return new { view_id = sheet.Id.Value, region = new[] { 0.0, 0.0, c.P(200), c.P(150) }, pixel_width = 2000 };
+        }, Setup: ["create_sheets"]) { Heavy = true, Bug = 14, Verify = (_, r) => PngWidth(r.PngImage) is int w && w >= 1500 ? null : $"the region image is {PngWidth(r.PngImage)?.ToString() ?? "missing"} px wide, not about 2000" },
+        // #15: small intentional offsets within the tolerance, and excepted columns, are not "off grid"; a real one is.
+        new("check_model", c => OffGridSetup(c)) { Bug = 15, Verify = OffGridOutcome },
+        // #24: a family whose type catalog Revit can't parse is refused with the reason, before Revit's modal dialog.
+        new("load_family", c =>
+        {
+            Need(c.Throwaway, "needs a family file on this PC: runs in the field test, which makes one");
+            var file = FieldTest.FamilyFiles(c.Temp).FirstOrDefault() ?? throw new Skip("the field test made no family to load back");
+            var folder = Path.Combine(c.Temp, "bad catalog");
+            Directory.CreateDirectory(folder);
+            var copy = Path.Combine(folder, Path.GetFileName(file));
+            File.Copy(file, copy, true);
+            File.WriteAllLines(Path.ChangeExtension(copy, ".txt"), [",Width,Depth", "Type A,100,200"]);
+            return new { path = copy, overwrite = true };
+        }) { Bug = 24, ExpectError = "type catalog" },
+
+        // ---- Purge and cleanup applied (0.34): each deletes only what its setup step made, then the model is checked.
+        new("purge_unused", _ => new { apply = true, kinds = new[] { "types" }, only = new[] { "Self-test type*" } }, Setup: ["duplicate_type"])
+        {
+            Verify = (c, r) => Total(r) < 1 ? "nothing was purged"
+                : new FilteredElementCollector(c.Doc).OfClass(typeof(WallType)).Any(t => t.Name.StartsWith("Self-test type", StringComparison.Ordinal)) ? "the unused test wall type is still there" : null,
+        },
+        new("delete_unused_views", _ => new { apply = true, include_model_views = false, include_drafting = true, only = new[] { "Self-test drafting*" } }, Setup: ["create_drafting_view"])
+        {
+            Verify = (c, r) => Total(r) < 1 ? "nothing was deleted"
+                : new FilteredElementCollector(c.Doc).OfClass(typeof(ViewDrafting)).Any(v => v.Name.StartsWith("Self-test drafting", StringComparison.Ordinal)) ? "the test drafting view (on no sheet) is still there" : null,
+        },
+        new("cleanup_imports", _ => new { apply = true, scope = "imported" }, Setup: ["import_cad"])
+        {
+            Heavy = true,
+            Verify = (c, r) => Total(r) < 1 ? "nothing was removed"
+                : new FilteredElementCollector(c.Doc).OfClass(typeof(ImportInstance)).Cast<ImportInstance>().Any(i => !i.IsLinked && !Owned(c.Doc, i.Id)) ? "an imported CAD instance is still there" : null,
+        },
+        new("cleanup_model", _ => new { apply = true, steps = new[] { "unused_filters" }, only = new[] { "Self-test filter" }, warnings = false }, Setup: ["create_view_filter"])
+        {
+            Verify = (c, r) => Total(r) < 1 ? "nothing was cleaned"
+                : new FilteredElementCollector(c.Doc).OfClass(typeof(ParameterFilterElement)).Any(f => f.Name == "Self-test filter") ? "the unused test filter is still there" : null,
+        },
     ];
 
     /// <summary>
@@ -1161,7 +1304,7 @@ internal static partial class SelfTest
             return new { family = $"{sym.FamilyName}: {sym.Name}", voids = new[] { new { host_id = c.Id(c.Floor), face = "top", point = at } } };
         }, Setup: ["cut_geometry#2"]) { Heavy = true },
         new("find_clashes", c => new { set_a = new { categories = new[] { "Floors", "Structural Framing", "Generic Models" } }, limit = 50, folder = c.Temp, voids = "rebuild" },
-            Setup: ["cut_geometry#2", "place_void_cuts#2"]) { Heavy = true, Expect = VoidsRebuilt },
+            Setup: ["cut_geometry#2", "place_void_cuts#2"]) { Heavy = true, Expect = VoidsRebuilt, Bug = 27 },
         // Workshared: target copy is refused with the reason; not workshared: the copy is made, changed, saved and closed.
         new("ve_apply", c => new
         {
@@ -1217,6 +1360,157 @@ internal static partial class SelfTest
         if (!ids.Any(i => i.EndsWith("-ggbs50", StringComparison.Ordinal))) wrong.Add("the slab whose material names 50% GGBS did not use a GGBS factor");
         if (!ids.Any(i => i.EndsWith("-cem1", StringComparison.Ordinal))) wrong.Add("the slab whose material names no mix did not use the CEM I factor");
         return wrong.Count == 0 ? null : string.Join("; ", wrong) + $" (concrete factors used: {string.Join(", ", ids)})";
+    }
+
+    // ---- Checks for the purge cases and the bug log cases ------------------------------------------------------------------
+
+    private static string? Preview(JsonElement r) =>
+        r.GetProperty("preview").GetBoolean() && r.TryGetProperty("summary", out var s) && s.GetString()!.Length > 0 && r.TryGetProperty("elements", out _)
+            ? null : "not a preview with a summary and before/after counts";
+
+    private static int Total(ToolResult r)
+    {
+        using var json = JsonDocument.Parse(r.Text);
+        return json.RootElement.GetProperty("total").GetInt32();
+    }
+
+    /// <summary>Another user owns it (then a cleanup leaves it, rightly).</summary>
+    private static bool Owned(Document doc, ElementId id) => doc.IsWorkshared && ItemBatch.Locked(doc, [id]) is not null;
+
+    /// <summary>The width of a PNG from its header, or null.</summary>
+    private static int? PngWidth(byte[]? png) =>
+        png is { Length: > 24 } && png[1] == (byte)'P' && png[2] == (byte)'N' && png[3] == (byte)'G' ? png[16] << 24 | png[17] << 16 | png[18] << 8 | png[19] : null;
+
+    private static long Id(ToolResult r, string property)
+    {
+        using var json = JsonDocument.Parse(r.Text);
+        return json.RootElement.GetProperty(property).GetInt64();
+    }
+
+    /// <summary>#3: the raft's level is the one nearest its top, and its type is named from type_name.</summary>
+    private static string? RaftOnNearestLevel(Ctx c, ToolResult r)
+    {
+        if (c.Doc.GetElement(new ElementId(Id(r, "id"))) is not Floor raft) return "no raft was made";
+        var host = c.Doc.GetElement(raft.LevelId) as Level;
+        var top = (host?.ProjectElevation ?? 0) + (raft.get_Parameter(BuiltInParameter.FLOOR_HEIGHTABOVELEVEL_PARAM)?.AsDouble() ?? 0);
+        var nearest = new FilteredElementCollector(c.Doc).OfClass(typeof(Level)).Cast<Level>().OrderBy(l => Math.Abs(l.ProjectElevation - top)).First();
+        var wrong = new List<string>();
+        if (host is null || nearest.Id != host.Id) wrong.Add($"it is hosted on '{host?.Name}' with an offset, not on '{nearest.Name}', the level nearest its top");
+        if (!raft.FloorType.Name.StartsWith("SPM Raft 800", StringComparison.Ordinal)) wrong.Add($"its type is '{raft.FloorType.Name}', not the type_name 'SPM Raft 800'");
+        return wrong.Count == 0 ? null : string.Join("; ", wrong);
+    }
+
+    /// <summary>#5: every new structural plan is an engineering plan looking down, with its view range set.</summary>
+    private static string? StructuralPlansLookDown(Ctx c, ToolResult r)
+    {
+        using var json = JsonDocument.Parse(r.Text);
+        var wrong = new List<string>();
+        foreach (var made in json.RootElement.GetProperty("created").EnumerateArray())
+        {
+            if (c.Doc.GetElement(new ElementId(made.GetProperty("id").GetInt64())) is not ViewPlan view) { wrong.Add("a created view is missing"); continue; }
+            if (view.ViewType != ViewType.EngineeringPlan) wrong.Add($"'{view.Name}' is a {view.ViewType}, not a structural (engineering) plan");
+            if (view.get_Parameter(BuiltInParameter.PLAN_VIEW_VIEW_DIR) is { } dir && dir.AsInteger() != (int)PlanViewDirection.Down) wrong.Add($"'{view.Name}' looks up");
+            if (made.TryGetProperty("viewRange", out var range) && range.GetString() is { } text && text.Contains("not set") && !text.Contains("template")) wrong.Add($"'{view.Name}': {text}");
+        }
+        return wrong.Count == 0 ? null : string.Join("; ", wrong);
+    }
+
+    /// <summary>
+    /// #6: puts a column on top of each of the first three columns of the lower level (the plan of the upper level then
+    /// shows the column it cuts and the one below), and returns that plan.
+    /// </summary>
+    private static long ColumnsAbove(Ctx c)
+    {
+        Need(c.Throwaway, "adds columns above the test project's columns; runs in the field test");
+        var upper = c.Upper ?? throw new Skip("the model needs two levels");
+        var plan = c.First<ViewPlan>(v => !v.IsTemplate && v.ViewType == ViewType.FloorPlan && v.GenLevel?.Id == upper.Id) ?? throw new Skip("no floor plan of the upper level");
+        var below = new FilteredElementCollector(c.Doc).OfCategory(BuiltInCategory.OST_StructuralColumns).OfClass(typeof(FamilyInstance)).Cast<FamilyInstance>()
+            .Where(f => f.Location is LocationPoint && f.get_Parameter(BuiltInParameter.FAMILY_TOP_LEVEL_PARAM)?.AsElementId() == upper.Id).Take(3).ToList();
+        Need(below.Count > 0, "no column runs up to the upper level");
+        using var t = new Transaction(c.Doc, "Self-test: columns above");
+        t.Start();
+        foreach (var col in below)
+        {
+            var p = ((LocationPoint)col.Location).Point;
+            var above = c.Doc.Create.NewFamilyInstance(new XYZ(p.X, p.Y, upper.Elevation), col.Symbol, upper, StructuralType.Column);
+            above.get_Parameter(BuiltInParameter.FAMILY_TOP_LEVEL_PARAM)?.Set(upper.Id);
+            above.get_Parameter(BuiltInParameter.FAMILY_TOP_LEVEL_OFFSET_PARAM)?.Set(3000 / 304.8);
+        }
+        t.Commit();
+        c.Bag["columns-plan"] = plan.Id;
+        return plan.Id.Value;
+    }
+
+    /// <summary>#6: no column position carries two tags, and no tag head sits inside its column.</summary>
+    private static string? OneTagPerColumn(Ctx c, ToolResult r)
+    {
+        if (!c.Bag.TryGetValue("columns-plan", out var p) || p is not ElementId planId || c.Doc.GetElement(planId) is not View plan) return "the plan is gone";
+        var spots = new Dictionary<(long, long), int>();
+        var wrong = new List<string>();
+        var tags = 0;
+        foreach (var tag in new FilteredElementCollector(c.Doc, plan.Id).OfClass(typeof(IndependentTag)).Cast<IndependentTag>())
+            foreach (var id in tag.GetTaggedLocalElementIds())
+            {
+                if (c.Doc.GetElement(id) is not FamilyInstance { Location: LocationPoint lp } col || col.Category?.Id.Value != (long)BuiltInCategory.OST_StructuralColumns) continue;
+                tags++;
+                var key = ((long)Math.Round(lp.Point.X * 304.8 / 50), (long)Math.Round(lp.Point.Y * 304.8 / 50));
+                spots[key] = spots.TryGetValue(key, out var n) ? n + 1 : 1;
+                if (col.get_BoundingBox(plan) is { } box && tag.TagHeadPosition is { } head
+                    && head.X > box.Min.X && head.X < box.Max.X && head.Y > box.Min.Y && head.Y < box.Max.Y)
+                    wrong.Add($"the tag of column {id.Value} sits inside the column");
+            }
+        if (tags == 0) return "no column was tagged";
+        var doubled = spots.Count(s => s.Value > 1);
+        if (doubled > 0) wrong.Insert(0, $"{doubled} column position(s) have two tags (the column below and the one above)");
+        return wrong.Count == 0 ? null : string.Join("; ", wrong.Distinct().Take(5));
+    }
+
+    /// <summary>#8: the loading legend is a table in its own view (several cells), not one long text note.</summary>
+    private static string? LoadingLegendIsTable(Ctx c, ToolResult r)
+    {
+        using var json = JsonDocument.Parse(r.Text);
+        if (!json.RootElement.TryGetProperty("legendViewId", out var id) || id.ValueKind != JsonValueKind.Number) return "no legend view was made";
+        var notes = new FilteredElementCollector(c.Doc, new ElementId(id.GetInt64())).OfClass(typeof(TextNote)).GetElementCount();
+        return notes >= 3 ? null : $"the legend has {notes} text note(s), not a table";
+    }
+
+    /// <summary>
+    /// #15: three columns on grid intersections moved: 30 mm (inside the 50 mm tolerance), 120 mm with an excepted
+    /// Comments value, and 300 mm (a real off-grid column). Returns check_model's arguments.
+    /// </summary>
+    private static object OffGridSetup(Ctx c)
+    {
+        Need(c.Throwaway, "moves columns in the test project; runs in the field test");
+        var grids = new FilteredElementCollector(c.Doc).OfClass(typeof(Grid)).Cast<Grid>().Select(g => g.Curve).OfType<Line>()
+            .Select(l => Line.CreateUnbound(new XYZ(l.Origin.X, l.Origin.Y, 0), new XYZ(l.Direction.X, l.Direction.Y, 0))).ToList();
+        bool OnGrid(XYZ p) => grids.Count(g => g.Distance(new XYZ(p.X, p.Y, 0)) < 5 / 304.8) >= 2;
+        var columns = new FilteredElementCollector(c.Doc).OfCategory(BuiltInCategory.OST_StructuralColumns).OfClass(typeof(FamilyInstance)).Cast<FamilyInstance>()
+            .Where(f => f.Location is LocationPoint lp && OnGrid(lp.Point)).Take(3).ToList();
+        Need(columns.Count == 3, "needs three columns on grid intersections");
+        using (var t = new Transaction(c.Doc, "Self-test: columns off grid"))
+        {
+            t.Start();
+            ElementTransformUtils.MoveElement(c.Doc, columns[0].Id, new XYZ(30 / 304.8, 0, 0));
+            ElementTransformUtils.MoveElement(c.Doc, columns[1].Id, new XYZ(120 / 304.8, 0, 0));
+            columns[1].get_Parameter(BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS)?.Set("SPM-OFFSET-OK");
+            ElementTransformUtils.MoveElement(c.Doc, columns[2].Id, new XYZ(300 / 304.8, 0, 0));
+            t.Commit();
+        }
+        c.Bag["off-grid"] = columns.Select(f => f.Id.Value).ToArray();
+        return new { checks = new[] { "columns_off_grid" }, tolerance = c.P(50), exceptions = new[] { "SPM-OFFSET-OK" }, folder = c.Temp };
+    }
+
+    private static string? OffGridOutcome(Ctx c, ToolResult r)
+    {
+        var ids = (long[])c.Bag["off-grid"];
+        using var json = JsonDocument.Parse(r.Text);
+        var flagged = json.RootElement.GetProperty("sample").EnumerateArray()
+            .Where(f => f.GetProperty("Check").GetString() == "columns_off_grid").Select(f => f.GetProperty("Id").GetInt64()).ToHashSet();
+        var wrong = new List<string>();
+        if (flagged.Contains(ids[0])) wrong.Add("a column 30 mm off (inside the 50 mm tolerance) was flagged");
+        if (flagged.Contains(ids[1])) wrong.Add("a column whose Comments are in the exceptions was flagged");
+        if (!flagged.Contains(ids[2])) wrong.Add("a column 300 mm off grid was not flagged");
+        return wrong.Count == 0 ? null : string.Join("; ", wrong);
     }
 
     /// <summary>The structural column and floor were converted; the cladding column and the finish floor were left out.</summary>

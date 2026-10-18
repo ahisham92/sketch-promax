@@ -45,6 +45,13 @@ internal static class StartupTests
         var gone = StartupTimings.FirstIdle(_ => false);
         check("startup: a model closed before the first idle says so", gone?.Contains("closed again before Revit was idle") == true && !gone.Contains("first Idling"), gone ?? "null");
         check("startup: unknown open time shows ?", StartupTimings.OpenLine("m", -1, 0, 5).Contains("took ? ms"), "");
+        // Bug #18's field-test probe reads these.
+        StartupTimings.Opening();
+        StartupTimings.Opened("Slow handlers", 640);
+        StartupTimings.Opened("Quick handlers", 12);
+        check("startup: start time and the slowest handlers", StartupTimings.StartMs == 57 && StartupTimings.WorstHandlersMs == 640, $"{StartupTimings.StartMs} {StartupTimings.WorstHandlersMs}");
+        StartupTimings.Reset();
+        check("startup: reset forgets them", StartupTimings.StartMs == -1 && StartupTimings.WorstHandlersMs == -1, "");
         check("startup: an ordinary open is not labelled as a test", !first!.Contains("(test running)"), first);
         StartupTimings.TestRunning = true;
         StartupTimings.Opening();

@@ -134,6 +134,14 @@ internal static class CoreRibbonManifest
         T("ValueEng", "what_if", "What if", "bolt", "Tries a slab thickness, column size, grade or grid spacing on a copy and compares quantities, cost, carbon and the drawings affected. Previews first."),
         T("ValueEng", "ve_register", "VE register", "list", "Exports the VE register and sets each item's status (proposed, accepted, rejected) and owner."),
 
+        // Purge and cleanup (0.34): one button (the loader's command slots are nearly all used) that asks which cleanup to
+        // run; each shows its preview first and asks before deleting (RibbonTools.Cleanup, RibbonTools.AskApply).
+        L(Button("Check", "Cleanup", "Purge &\ncleanup", "cleanup", "refresh",
+            "Purge unused families, types and materials, delete views on no sheet, remove imported CAD, or a model health clean. Each shows a preview first and asks before it deletes.",
+            "Pick one of the four: Purge unused (repeated until nothing new is unused), Delete unused views (keeps WORKING and _keep views, open views and views others depend on), " +
+            "Clean up imports (imported CAD and IMPORT- line styles), Model health clean (unused view templates, unplaced rooms, unused groups and filters, warnings by type). " +
+            "Its options open, then the preview: nothing changes until you press Delete them, and Ctrl+Z undoes it in one step.", needsModel: true)),
+
         // ---- Issue (0.33: the issue check gates Issue drawings and Export PDF of sheets, see UI/IssueGateWindow)
         L(Button("Issue", "IssueCheck", "Issue\ncheck", "issue-check", "check",
             "The zero-mistake check before an issue: drawing, spec, BOQ and model checks together, pass or fail per sheet.",

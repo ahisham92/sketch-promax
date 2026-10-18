@@ -108,7 +108,8 @@ internal static class Approvals
         {
             NewCode = tool is LearnedTool learned ? !LearnedTools.IsApproved(learned.Code)
                 : RecipeText(tool, args) is { } recipe ? !LearnedTools.IsApproved(recipe) : false,
-            DeleteTakes = tool.Name == "delete_elements" && app.ActiveUIDocument?.Document is { } doc ? DeleteTakes(doc, args) : null,
+            DeleteTakes = tool.Name == "delete_elements" && app.ActiveUIDocument?.Document is { } doc ? DeleteTakes(doc, args)
+                : CleanupMath.Tools.Contains(tool.Name) ? Cleanup.Takes(app, tool.Name, args) : null,
             Overwrites = tool.Name == "save_recipe" && fromChat && Str(args, "name") is { Length: > 0 } name && Exists(Recipes.PathFor(name))
                 ? $"the saved recipe '{name}'" : null,
         };

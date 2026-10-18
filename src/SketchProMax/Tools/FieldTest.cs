@@ -15,7 +15,8 @@ namespace SketchProMax.Tools;
 /// </summary>
 internal static partial class SelfTest
 {
-    internal sealed record FieldStep(int Index, string Tool, bool Heavy);
+    /// <param name="Bug">The bug log row the case guards (0: none).</param>
+    internal sealed record FieldStep(int Index, string Tool, bool Heavy, int Bug = 0);
 
     internal interface IFieldSession
     {
@@ -51,7 +52,7 @@ internal static partial class SelfTest
 
     private sealed class FieldSession(Run run, ToolRegistry registry) : IFieldSession
     {
-        public IReadOnlyList<FieldStep> Steps { get; } = run.Steps.Select((c, i) => new FieldStep(i, c.Tool, c.Heavy)).ToList();
+        public IReadOnlyList<FieldStep> Steps { get; } = run.Steps.Select((c, i) => new FieldStep(i, c.Tool, c.Heavy, c.Bug)).ToList();
 
         public Outcome RunCase(UIApplication app, FieldStep step) => RunStep(app, run, registry, run.Steps[step.Index]);
 
@@ -405,6 +406,8 @@ internal static partial class FieldTest
             var family = FamilyOf(step.Tool);
             counts[step.Tool] = counts.TryGetValue(step.Tool, out var n) ? n + 1 : 1;
             var label = counts[step.Tool] == 1 ? step.Tool : $"{step.Tool} #{counts[step.Tool]}";
+            // A case that guards a bug log row says so, for the report's Bug log section.
+            if (step.Bug > 0) label += $" {FieldTestCoverage.BugTag(step.Bug)}";
             if (result.StoppedBecause is null && s.Job.CancelRequested) result.StoppedBecause = "stopped on request (cancel_job or Cancel in Revit)";
             if (result.StoppedBecause is not null) { result.Rows.Add(new(family, label, "skip", 0, "not reached: " + result.StoppedBecause)); continue; }
             if (step.Heavy && !o.IncludeHeavy) { result.Rows.Add(new(family, label, "skip", 0, "slow tool; run with include_heavy to test it")); continue; }
@@ -1235,6 +1238,8 @@ internal static partial class FieldTest
             catch (Exception ex) { md.AppendLine("## Assemblies").AppendLine().AppendLine("Could not be read: " + ex.Message); }
             if (r.TimeSaved is not null) md.AppendLine("## Time saved").AppendLine().AppendLine(r.TimeSaved).AppendLine();
             // Last, so it is easy to find: every tool and feature, tested or manual (the checklist's source).
+            // Each fixed bug log row with the check that fails if it comes back: which rows can be marked Confirmed.
+            md.AppendLine(BugLogSection(r));
             var coverage = Coverage(r);
             md.AppendLine(CoverageMarkdown(coverage));
             File.WriteAllText(r.ReportPath, md.ToString());
@@ -1264,6 +1269,7 @@ internal static partial class FieldTest
                 }),
                 test_project = r.Sample,
                 startup = new { start = SketchProMax.Revit.StartupTimings.StartLine(), opens = SketchProMax.Revit.StartupTimings.OpenLines() },
+                bug_log = BugLogJson(r),
                 coverage = coverage.Select(c => new { name = c.Name, kind = c.Kind, coverage = c.Status, detail = c.Detail }),
             }, new JsonSerializerOptions { WriteIndented = true }));
         }

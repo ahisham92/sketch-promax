@@ -2,7 +2,7 @@
 
 <p align="center"><img src="assets/logo/sketch-promax-wordmark.png" alt="Sketch ProMax" width="420"></p>
 
-An AI agent for Autodesk Revit 2024, 2025, 2026 and 2027, powered by Claude. Ask in plain language; it reads, documents, audits and edits the open model through 213 tools, and it learns new ones as you use it. Every change can be undone with Ctrl+Z, and it asks for your approval before anything risky (or before every change, if you prefer).
+An AI agent for Autodesk Revit 2024, 2025, 2026 and 2027, powered by Claude. Ask in plain language; it reads, documents, audits and edits the open model through 217 tools, and it learns new ones as you use it. Every change can be undone with Ctrl+Z, and it asks for your approval before anything risky (or before every change, if you prefer).
 
 See [docs/PLAN.md](docs/PLAN.md) for the comparison with SketchPro, the roadmap and the architecture.
 
@@ -109,6 +109,8 @@ To publish an update: bump `<Version>` in both project files and push to `main`.
 
 **Linked models and families:** list links and query elements inside them; load families from a file or by searching Revit's content library.
 
+**Purge and cleanup** (Check > Purge & cleanup, or ask "purge this model"): every cleanup shows a preview first (counts by kind, the list, what else would go with it, the element count before and after) and deletes only when you agree, as one Undo step. **Purge unused** is Revit's Purge Unused repeated until nothing new is unused (families, types, materials, appearance assets, line and fill patterns, group types, view templates and view filters no view uses), never the active view's template, anything a sheet uses or your title blocks, with a keep list for names never to purge. **Delete unused views** removes views on no sheet (legends, schedules and drafting views when asked) and keeps WORKING and _keep views, open views, the starting view, the last legend and views others depend on. **Clean up imports** removes imported CAD (or CAD links when asked), the types left behind and unused IMPORT- line styles and patterns. **Model health clean** removes unused view templates, unplaced rooms, areas and spaces, unplaced group types and unused filters, and lists Revit's warnings by type with a quick-fix hint. In a workshared model, elements another user has borrowed are left and named. Deleting views that hold annotation, or imports something is dimensioned to, asks first like any delete that takes other elements with it.
+
 **Recipes and activity log:** save a workflow that worked as a recipe and rerun it later without the AI (with blanks like {level} filled in each time), on the open model or on a whole folder of models. Every tool call is logged per day in `%APPDATA%\SketchProMax\logs`, so Claude can report what it changed.
 
 **Export for Claude:** the Export for Claude button (Issue panel), or asking Claude to "export a project pack", writes one small zip to `Documents\SketchProMax\packs` named `<model> - Claude pack <date time>.zip` and opens the folder with it selected. Upload it to any Claude chat to prepare a report without Revit. It holds a README for Claude, project information, coordinates, levels and grids, element counts and quantities by category, type, material and level, Revit warnings, the sheet list with current revisions and issue status, views, revisions, up to 30 schedules (very large ones are skipped and listed), the newest saved check results (model check, clashes, drawing, rules, spec and BOQ checks, steel, rebar and precast schedules), change tracking, worksets, links, this model's in-Revit chat and any bug reports not sent yet. It is read-only, a few MB at most even on large models, has no images unless asked, and can be stopped from its progress window.
@@ -208,7 +210,7 @@ src/SketchProMax/            The Revit add-in core (net48 for Revit 2024, net8.0
   Agent/SystemPrompt         Instructions the desktop app receives from the connector
   Bridge/BridgeServer        Per-Revit-window named-pipe server the connector talks to
   Revit/                     Main-thread dispatcher (ExternalEvent), helpers, Revit 2024 dependency loader
-  Tools/                     The 211 IRevitTool implementations and the registry (CodeTools compiles C# with Roslyn)
+  Tools/                     The 215 IRevitTool implementations and the registry (CodeTools compiles C# with Roslyn)
   UI/                        Settings, update progress, quick-tool input and result windows
   Settings/                  Per-user settings (approval level, auto-update, firm standards)
   Update/Updater             Self-update from GitHub Releases, with progress, switched to without restarting Revit

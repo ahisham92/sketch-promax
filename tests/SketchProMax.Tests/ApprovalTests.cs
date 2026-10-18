@@ -76,6 +76,17 @@ internal static class ApprovalTests
         check("approval: a delete that takes other elements is risky, a plain delete is not",
             Risky(R("delete_elements", true, """{"element_ids":[1]}""", new ApprovalFacts { DeleteTakes = "It also deletes 2 Doors." }))
             && !R("delete_elements", true, """{"element_ids":[1]}""").Ask, "");
+        // ---- Purge and cleanup: a preview is a read at every level; applying is a normal change, risky when it takes other elements
+        var previewAsks = ApprovalPolicy.Levels.Where(l => CleanupMath.Tools.Any(t => D(t, true, "{}", l).Ask || D(t, true, """{"apply":false}""", l).Ask)).ToList();
+        check("approval: a cleanup preview never asks", previewAsks.Count == 0, string.Join(", ", previewAsks));
+        check("approval: applying a cleanup is a normal change (Ctrl+Z undoes it)",
+            !D("purge_unused", true, """{"apply":true}""").Ask && D("purge_unused", true, """{"apply":true}""", ApprovalLevel.EveryChange).Ask
+            && !D("purge_unused", true, """{"apply":true}""", ApprovalLevel.EveryChange, task: true).Ask, "");
+        check("approval: a cleanup that takes other elements along is risky",
+            Risky(R("delete_unused_views", true, """{"apply":true}""", new ApprovalFacts { DeleteTakes = "It also deletes 4 Dimensions." })), "");
+        check("approval: IsPreview", ApprovalPolicy.IsPreview("cleanup_model", Args("{}")) && !ApprovalPolicy.IsPreview("cleanup_model", Args("""{"apply":true}"""))
+            && !ApprovalPolicy.IsPreview("delete_elements", Args("{}")), "");
+
         var ve = R("ve_apply", true, """{"target":"main","confirm_main_model":true}""");
         check("approval: ve_apply on the open model is risky, from anywhere", Risky(ve) && Risky(R("ve_apply", true, """{"target":"main"}""", chat: false)), ve.Reason);
         check("approval: ve_apply on a design option or a copy is a normal change",

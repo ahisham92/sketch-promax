@@ -62,6 +62,8 @@ internal static class TimeMath
         ["place_rooms"] = (1, 0.5), ["delete_elements"] = (1, 0.1), ["create_stairs"] = (10, 0), ["create_railings"] = (3, 1),
         ["create_mep_runs"] = (2, 1), ["create_mep_openings"] = (2, 3), ["place_void_cuts"] = (2, 3), ["cut_openings_in_joined"] = (2, 3),
         ["cut_slab"] = (3, 0), ["add_slab_edges"] = (2, 0.5), ["create_raft"] = (15, 0), ["create_piles"] = (2, 0.5),
+        // Purge and cleanup: reviewing Revit's purge dialog or the project browser by hand, then per item deleted (estimates).
+        ["purge_unused"] = (5, 0.05), ["delete_unused_views"] = (5, 0.3), ["cleanup_imports"] = (3, 0.5), ["cleanup_model"] = (10, 0.2),
         ["create_floors_from_faces"] = (2, 3), ["arch_to_structure"] = (10, 1), ["convert_cad"] = (10, 0.5),
         ["reinforce_beam"] = (10, 0.5), ["reinforce_column"] = (10, 0.5), ["reinforce_footing"] = (10, 0.5), ["reinforce_slab_wall"] = (10, 0.5),
         ["place_additional_reinforcement"] = (3, 1), ["place_mesh_symbols"] = (2, 0.5), ["place_column_section_details"] = (3, 2),

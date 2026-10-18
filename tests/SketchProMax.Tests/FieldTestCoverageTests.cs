@@ -51,7 +51,47 @@ internal static class FieldTestCoverageTests
         if (File.Exists(file))
         {
             var fixedRows = FieldTestCoverage.FixedBugs(File.ReadAllText(file));
-            check($"checklist: the bug log's fixed rows are read ({fixedRows.Count})", fixedRows.Count >= 20, "");
+            check($"checklist: the bug log's fixed rows are read ({fixedRows.Count})", fixedRows.Count >= 33, "");
+            check("bug log: every fixed row has a BugChecks row", fixedRows.All(b => FieldTestCoverage.BugChecks.Any(c => c.Row == b.Number)),
+                string.Join(", ", fixedRows.Where(b => !FieldTestCoverage.BugChecks.Any(c => c.Row == b.Number)).Select(b => b.Number)));
+            var text = File.ReadAllText(file);
+            check("bug log: no rows numbered twice", text.Split('\n').Select(l => System.Text.RegularExpressions.Regex.Match(l, @"^\|\s*(\d+)\s*\|")).Where(m => m.Success)
+                .GroupBy(m => m.Groups[1].Value).All(g => g.Count() == 1), "");
         }
+
+        // ---- The report's Bug log section
+        check("bug log: the case tag", FieldTestCoverage.BugTag(6) == "bug#6", "");
+        (string, string)[] rows =
+        [
+            ("create_raft bug#3", "pass"), ("place_views_on_sheet bug#4", "fail"), ("arch_to_structure #2 bug#2", "pass"), ("arch_to_structure #3 bug#20", "skip"),
+            ("ribbon.registered", "pass"), ("startup.timings", "pass"), ("update.loader_fixed", "pass"), ("ve_opportunities", "pass"), ("ve_apply #2", "pass"),
+        ];
+        check("bug log: a tagged case is found by its tag only", FieldTestCoverage.RefStatus("bug#2", rows) == "pass" && FieldTestCoverage.RefStatus("bug#20", rows) == "not run"
+            && FieldTestCoverage.RefStatus("bug#4", rows) == "fail" && FieldTestCoverage.RefStatus("bug#5", rows) == "not run", "");
+        check("bug log: tools and features", FieldTestCoverage.RefStatus("tool:ve_apply", rows) == "pass" && FieldTestCoverage.RefStatus("chat.update_reopen", rows) == "manual"
+            && FieldTestCoverage.RefStatus("ribbon.registered", rows) == "pass" && FieldTestCoverage.RefStatus("no.such", rows) == "not run", "");
+        var section = FieldTestCoverage.BugLogMarkdown(
+        [
+            new(1, "Chat button missing", "Fixed in 0.30"), new(3, "Raft on GF", "Fixed in 0.30"), new(4, "Views over the title", "Fixed in 0.30"),
+            new(17, "Always Load", "Fixed in 0.30"), new(18, "Slow open", "Fixed in 0.31"), new(20, "Nothing made", "Fixed in 0.31"), new(99, "New | thing", "Fixed in 0.40"),
+        ], rows);
+        string Line(int n) => section.Split('\n').First(l => l.StartsWith($"| {n} |", StringComparison.Ordinal));
+        check("bug log: passed rows can be confirmed", Line(3).Contains("| pass | mark Confirmed |") && Line(18).Contains("| pass | mark Confirmed |"), section);
+        check("bug log: a failing case keeps the row open", Line(4).Contains("**fail**") && Line(4).Contains("keep open"), Line(4));
+        check("bug log: passed with a checklist step waits for it", Line(1).Contains("once the checklist step passes") && Line(17).Contains("once the checklist step passes"), Line(1));
+        check("bug log: a case not run says so", Line(20).Contains("| not run |"), Line(20));
+        check("bug log: a row with no check is listed as not checked, on one table row", Line(99).Contains("**not checked**") && Line(99).Contains("New / thing"), Line(99));
+
+        // Gaps: a fixed row without a check, a tag no case has, a feature that isn't one.
+        var bugGaps = FieldTestCoverage.BugGaps([new(99, "x", "Fixed in 1"), new(3, "y", "Fixed in 1")], [3], ["ve_apply"]);
+        check("bug log gaps: a row without a check", bugGaps.Any(g => g.StartsWith("bug #99")), string.Join("; ", bugGaps));
+        check("bug log gaps: a tag no case carries", bugGaps.Any(g => g.Contains("Bug = 2")) && !bugGaps.Any(g => g.Contains("Bug = 3")), string.Join("; ", bugGaps));
+        check("bug log gaps: a tool with no case", bugGaps.Any(g => g.Contains("tool:ve_register")) && !bugGaps.Any(g => g.Contains("tool:ve_apply")), "");
+        check("bug log gaps: every feature reference is a feature", !bugGaps.Any(g => g.Contains("is not a feature")), string.Join("; ", bugGaps.Where(g => g.Contains("is not a feature"))));
+
+        // The checklist: the cleanup and bug-fix steps a person does, with the field test's check named on a bug row.
+        var withBugs = FieldTestCoverage.Checklist([new(3, "Raft on GF", "Fixed in 0.30")]);
+        check("checklist: cleanup and bug manual steps", new[] { "cleanup.ui", "bug.titleblock_params", "bug.newer_link", "bug.always_load" }.All(k => withBugs.Any(i => i.Id == k && i.Steps.Length > 0)), "");
+        check("checklist: a bug row names its field-test check", withBugs[^1].Id == "bug:3" && withBugs[^1].Steps.Contains("field test checks it too"), withBugs[^1].Steps);
     }
 }

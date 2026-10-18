@@ -42,7 +42,8 @@ internal static class FieldTestCoverage
     public const string Chat = "Chat", RibbonArea = "Ribbon and favourites", Carbon = "Embodied carbon", Ve = "Value engineering",
         Rebar2D = "2D rebar", Bugs = "Report bug and exports", Updates = "Updates and the Claude app", Model = "Real-model checks",
         Limits = "Revit limits", BugFixes = "Bug fixes", Tasks = "Hand-off and Cancel", Job = "Live job card", Time = "Time saved",
-        Issue = "Issue check", Package = "Drawing package", Redlines = "Redlines", Costing = "Cost plan and what if";
+        Issue = "Issue check", Package = "Drawing package", Redlines = "Redlines", Costing = "Cost plan and what if",
+        Cleanup = "Purge and cleanup";
 
     public static readonly Feature[] Features =
     [
@@ -54,7 +55,8 @@ internal static class FieldTestCoverage
         new("chat.history", Chat, "Chat history save and load", How.Probe, "", "a chat saved to a temporary history folder is listed, summarised and deleted"),
         new("chat.survives_update", Chat, "The open chat survives an update", How.Probe, "", "a chat with a Claude Code session and an unsent message is saved and handed over as a version switch does, then reopened as the next version's pane opens it: same chat, messages, session and draft (in a temporary history folder)"),
         new("chat.update_reopen", Chat, "The open chat after a real update", How.Manual, "", "a real in-session update needs a newer published version and Revit",
-            "With a model open, open an older chat from the history menu and type a message without sending it. Install an update while Revit runs (Updates panel, or wait for the automatic one). When the update is done, the Chat tab shows that same chat scrolled to the end with your unsent message in the box. Send it: Sketch ProMax answers knowing the earlier messages. The history menu still lists every chat."),
+            "With a model open, open an older chat from the history menu and type a message without sending it. Install an update while Revit runs (Updates panel, or wait for the automatic one). When the update is done, the Chat tab shows that same chat scrolled to the end with your unsent message in the box. Send it: Sketch ProMax answers knowing the earlier messages. The history menu still lists every chat. " +
+            "Also check bug #1: right after the update, without restarting Revit, the Chat button, the Chat tab and the tab's position are all there."),
         new("chat.shrink", Chat, "Shrink chat: the /compact message and the automatic shrink", How.Probe, "", "the Shrink message is Claude Code's /compact, the compaction and each request's size are read from the stream, and a chat shrinks by itself once it grew by the set size over an empty chat; no plan use"),
         new("chat.recall", Chat, "Chats remember each other", How.Probe, "", "in a temporary history folder: a new chat gets its model's earlier summaries only, a search finds another model's chat by its project's name, open gives its steps, and a chat is summarised again only with new messages"),
         new("chat.recall_run", Chat, "A chat's summary is written", How.Probe, "", "the real summary run on a short sample chat keeps what it decided; it uses your Claude plan, so it runs only with chat_round_trip and the checklist covers it otherwise"),
@@ -209,6 +211,23 @@ internal static class FieldTestCoverage
         new("model.real_hosting", Model, "Hosting and voids on your model", How.Manual, "", "joined geometry on real projects varies more than a test project can show",
             "On a _detached copy: place a void cut on a slab joined to beams (Clashes > Void cuts) and run a clash check with voids on. Check the void cuts and is reported."),
 
+        // ---- Purge and cleanup
+        new("cleanup.passes", Cleanup, "Purge finds what only unused things used, previews, then deletes", How.Probe, "", "in the test project, a new material used only by a new unused wall type: purge_unused previews both (the material in a later pass) and changes nothing; with apply both are deleted; rolled back after"),
+        new("cleanup.workshared", Cleanup, "Purge leaves what someone else owns", How.Probe, "", "in the workshared test project, with an unused type made to look owned by another user (a test hook), purge_unused lists it under left alone, owned by someone else, and does not delete it"),
+        new("cleanup.ui", Cleanup, "Purge & cleanup from the ribbon on a real model", How.Manual, "", "what is safe to delete on a real project, the file size after saving and the Revit dialogs need a person",
+            "On a _detached copy: Check > Purge & cleanup, pick Purge unused, leave the options and Run. Read the preview (counts by kind, what is left alone and why, the file size): nothing has changed yet. Press Close without deleting and check nothing went. Run it again and press Delete them: the counts drop; press Ctrl+Z once and everything is back. Run Delete unused views with keep set to your working views' prefix, Clean up imports and Model health clean the same way. Save the copy with Compact ticked and compare the file size. In the chat, ask \"purge this model\": the chat shows the preview first and asks before deleting."),
+
+        // ---- Bug fixes checked by a person (the rest are field-test cases named "tool bug#N", see BugChecks)
+        new("bug.titleblock_params", BugFixes, "Bug #7: a copied title block fills its fields", How.Manual, "", "needs the office's own title block family, whose labels use shared parameters",
+            "On a _detached copy of a model without your title block: ask in the chat to copy the title block from your template (copy_from_file). Put it on a new sheet and fill the sheet's drawn by, checked by and other fields: the title block shows them (the shared parameters were added to Sheets)."),
+        new("bug.newer_link", BugFixes, "Bug #13: linking a model from a newer Revit", How.Manual, "", "needs a model saved in a newer Revit than this one",
+            "In Revit 2024 or 2025, ask in the chat to link a model saved in a newer Revit (link_model): the answer says the model is from a newer Revit and must be linked in that version (or saved back), not an internal error."),
+        new("bug.always_load", BugFixes, "Bug #17: Always Load is remembered across updates", How.Manual, "", "Revit's security dialog only shows at Revit start",
+            "Start Revit; if it asks about the Sketch ProMax add-in, pick Always Load. Install an update (Updates panel), close Revit and start it again: it does not ask again."),
+        new("update.loader_fixed", Updates, "The loader stays at one place (bug #17)", How.Probe, "", "the loader that started this core is the fixed one in the add-in folder (not inside a version folder), and the .addin file points at it"),
+        new("startup.timings", Updates, "Startup stays out of the way (bug #18)", How.Probe, "", "the time Sketch ProMax took at Revit start, and what it added to opening models, are under the limits (3 s, 1 s)"),
+        new("update.fallback", Updates, "The update check falls back to github.com (bug #23)", How.Probe, "", "with GitHub's API made to fail, the check still finds the latest version from the github.com releases page"),
+
         // ---- Revit limits
         new("legend.components", Limits, "Legend components copied from one placed by hand", How.Manual, "", "the Revit API can't place a legend component from scratch, and the test project's template has none to copy (the field test looks in the Revit templates first)",
             "On a _detached copy, open a legend and place one legend component by hand (Annotate > Component > Legend Component). Then run Add legend components for two wall types: both appear in the legend, each with its type name as a label."),
@@ -226,7 +245,7 @@ internal static class FieldTestCoverage
         ["open-claude"] = "claude.open", ["pane"] = "ribbon.status", ["export-pack"] = "pack.export", ["job-button"] = "ribbon.job",
         ["update-button"] = "ribbon.job", ["report-bug"] = "bugs.ui", ["bug-folder"] = "bugs.ui", ["export-chats-bugs"] = "bugs.export",
         ["settings"] = "ribbon.ui", ["help"] = "help", ["self-test"] = "diagnostics", ["field-test"] = "diagnostics",
-        ["test-checklist"] = "diagnostics", ["time-saved"] = "time.ui", ["issue-check"] = "issue.ui", ["favourites"] = "favourites", ["fav:*"] = "favourites", ["tab:notes"] = "chat.notes",
+        ["test-checklist"] = "diagnostics", ["time-saved"] = "time.ui", ["issue-check"] = "issue.ui", ["cleanup"] = "cleanup.ui", ["favourites"] = "favourites", ["fav:*"] = "favourites", ["tab:notes"] = "chat.notes",
     };
 
     /// <summary>The coverage key of a manifest line, or null when it runs nothing (drop-downs, hidden items, tool entries).</summary>
@@ -295,11 +314,149 @@ internal static class FieldTestCoverage
     {
         var items = Features.Where(f => f.How == How.Manual).Select(f => new CheckItem(f.Key, f.Area, f.Title, f.Steps, f.Reason)).ToList();
         items.AddRange(ManualTools.OrderBy(t => t.Key).Select(t => new CheckItem("tool:" + t.Key, Limits, t.Key, t.Value.Steps, t.Value.Reason)));
-        string[] order = [Chat, RibbonArea, Tasks, Job, Time, Issue, Package, Carbon, Ve, Costing, Redlines, Rebar2D, Bugs, Updates, Model, Limits];
+        string[] order = [Chat, RibbonArea, Tasks, Job, Time, Issue, Package, Cleanup, Carbon, Ve, Costing, Redlines, Rebar2D, Bugs, Updates, Model, Limits, BugFixes];
         items = items.OrderBy(i => Array.IndexOf(order, i.Area) is var x && x < 0 ? order.Length : x).ToList();
         items.AddRange(fixedBugs.Select(b => new CheckItem("bug:" + b.Number, BugFixes, $"#{b.Number}: {b.What}",
-            "Do what the row describes on a _detached copy and check it no longer happens.", b.Status)));
+            "Do what the row describes on a _detached copy and check it no longer happens." +
+            (BugChecks.FirstOrDefault(c => c.Row == b.Number) is { } check ? $" The field test checks it too ({check.What}): see its Bug log section." : ""), b.Status)));
         return items;
+    }
+
+    // ---- The bug log rows, each with what proves its fix still holds ---------------------------------------------------------
+
+    /// <summary>The field-test row name of a self-test case that guards bug log row <paramref name="row"/>: "tool bug#N".</summary>
+    internal static string BugTag(int row) => "bug#" + row.ToString(CultureInfo.InvariantCulture);
+
+    /// <param name="Row">The bug log row (docs/bug-log.md).</param>
+    /// <param name="Refs">What checks it: "bug#N" (a self-test case with Bug = N), "tool:name" (that tool's cases) or a <see cref="Features"/> key.</param>
+    /// <param name="What">In a few words, what the check does.</param>
+    internal sealed record BugCheck(int Row, string[] Refs, string What);
+
+    /// <summary>
+    /// Every bug log row and what fails if it comes back. A new row in docs/bug-log.md with "Fixed in" needs a row here
+    /// (the unit test fails otherwise); the field test report's Bug log section is built from it.
+    /// </summary>
+    public static readonly BugCheck[] BugChecks =
+    [
+        new(1, ["ribbon.registered", "chat.update_reopen"], "every ribbon entry is there; after a real update, the checklist"),
+        new(2, ["bug#2"], "arch_to_structure on a link with cladding columns and finish floors"),
+        new(3, ["bug#3"], "create_raft: hosted on the nearest level, named by type_name"),
+        new(4, ["bug#4"], "place_views_on_sheet finds the title block's drawing area"),
+        new(5, ["bug#5"], "create_plan_views structural: engineering plans looking down"),
+        new(6, ["bug#6"], "tag_elements_in_view: one tag per column stack, outside the column"),
+        new(7, ["bug.titleblock_params"], "checklist: the office title block's shared parameters"),
+        new(8, ["bug#8"], "loading_plan: the legend is a table"),
+        new(9, ["bug#9", "tool:wait_for_job"], "export_pdf to a locked file names the reason; wait_for_job runs"),
+        new(10, ["bug#10"], "run_revit_query_code makes a level and it is rolled back"),
+        new(11, ["revit.blocked", "revit.blocked_ui"], "a request Revit didn't start is picked up or explained"),
+        new(12, ["bug#12"], "edit_family_text adds text and reloads without an invalid object"),
+        new(13, ["bug#13", "bug.newer_link"], "link_model refuses a file it can't read with the reason"),
+        new(14, ["bug#14"], "capture_view_image: a sheet region at full resolution"),
+        new(15, ["bug#15"], "check_model: tolerance and exceptions for off-grid columns"),
+        new(16, ["bug#16", "rebar2d"], "2D rebar with detail families"),
+        new(17, ["update.loader_fixed", "bug.always_load"], "the loader stays in one place"),
+        new(18, ["startup.timings"], "startup time and model opening"),
+        new(19, ["chat.frames", "chat.dpi", "chat.smooth"], "chat frame times and screenshots"),
+        new(20, ["bug#20"], "arch_to_structure says why nothing was made"),
+        new(21, ["chat.history", "chat.models", "chat.prompts"], "chat history, model picker and saved prompts"),
+        new(22, ["tool:ve_opportunities", "tool:ve_compare_options", "tool:ve_apply", "tool:ve_register"], "the value engineering tools"),
+        new(23, ["update.fallback", "update.endpoint"], "the update check with GitHub's API failing"),
+        new(24, ["bug#24", "tool:load_steel_sections"], "load_family refuses a bad type catalog with the reason"),
+        new(25, ["chat.frames", "chat.dpi"], "the chat draws replies with the reply-header mark"),
+        new(26, ["bug#26"], "title_block_from_cad on the field test's DWG"),
+        new(27, ["bug#27"], "find_clashes with a void-only cutting family"),
+        new(28, ["issue.gate"], "the issue check on seeded faults"),
+        new(29, ["redlines.pipeline"], "redlines matched to the right viewport and element"),
+        new(30, ["chat.composer", "chat.typing"], "the message box: text starts where the hint was"),
+        new(31, ["revit.blocked", "revit.blocked_ui"], "the busy card names no edit mode when there is none"),
+        new(32, ["approvals.flow"], "approvals at each level"),
+        new(33, ["chat.survives_update", "chat.update_reopen"], "the open chat survives an update"),
+    ];
+
+    /// <summary>
+    /// What the unit test checks for the bug log: every fixed row has a <see cref="BugChecks"/> row, and every reference
+    /// resolves (a self-test case tagged with that bug, a tool with a case, a feature).
+    /// </summary>
+    internal static List<string> BugGaps(IEnumerable<BugRow> fixedRows, ICollection<int> caseBugs, ICollection<string> caseTools)
+    {
+        var gaps = new List<string>();
+        var keys = new HashSet<string>(Features.Select(f => f.Key), StringComparer.Ordinal);
+        foreach (var row in fixedRows)
+            if (!BugChecks.Any(c => c.Row == row.Number)) gaps.Add($"bug #{row.Number}: no BugChecks row");
+        foreach (var c in BugChecks)
+            foreach (var r in c.Refs)
+            {
+                if (r.StartsWith("bug#", StringComparison.Ordinal))
+                {
+                    if (!int.TryParse(r.Substring(4), NumberStyles.Integer, CultureInfo.InvariantCulture, out var n) || n != c.Row) gaps.Add($"bug #{c.Row}: {r} is not its own tag");
+                    else if (!caseBugs.Contains(n)) gaps.Add($"bug #{c.Row}: no self-test case has Bug = {n}");
+                }
+                else if (r.StartsWith("tool:", StringComparison.Ordinal))
+                {
+                    if (!caseTools.Contains(r.Substring(5))) gaps.Add($"bug #{c.Row}: {r} has no self-test case");
+                }
+                else if (!keys.Contains(r)) gaps.Add($"bug #{c.Row}: {r} is not a feature");
+            }
+        return gaps;
+    }
+
+    /// <summary>
+    /// What one reference proved in a run: "pass", "fail", "manual" (a checklist step) or "not run". Rows are (name, status)
+    /// of the report: "tool bug#N" for a tagged case, "tool" or "tool #2" for a tool's cases, the feature key for a probe.
+    /// </summary>
+    internal static string RefStatus(string reference, IReadOnlyCollection<(string Name, string Status)> rows)
+    {
+        IEnumerable<(string Name, string Status)> mine;
+        if (reference.StartsWith("bug#", StringComparison.Ordinal))
+            mine = rows.Where(r => r.Name.EndsWith(" " + reference, StringComparison.Ordinal));
+        else if (reference.StartsWith("tool:", StringComparison.Ordinal))
+        {
+            var tool = reference.Substring(5);
+            mine = rows.Where(r => r.Name == tool || r.Name.StartsWith(tool + " ", StringComparison.Ordinal));
+        }
+        else if (Features.FirstOrDefault(f => f.Key == reference) is { } feature)
+        {
+            if (feature.How == How.Manual) return "manual";
+            mine = feature.How == How.Case ? rows.Where(r => r.Name == feature.By || r.Name.StartsWith(feature.By + " ", StringComparison.Ordinal)) : rows.Where(r => r.Name == reference);
+        }
+        else return "not run";
+        var list = mine.ToList();
+        if (list.Any(r => r.Status == "fail")) return "fail";
+        if (list.Any(r => r.Status == "pass")) return "pass";
+        if (list.Any(r => r.Status == "manual")) return "manual";
+        return "not run";
+    }
+
+    /// <summary>
+    /// The report's Bug log section: each row of the bug log, what checks it, how that went, and what to do with the row
+    /// (mark it Confirmed, keep it open, or finish the checklist step).
+    /// </summary>
+    internal static string BugLogMarkdown(IEnumerable<BugRow> fixedRows, IReadOnlyCollection<(string Name, string Status)> rows)
+    {
+        var sb = new StringBuilder("## Bug log\n\n");
+        sb.Append("Each fixed row of the bug log with the check that fails if the bug comes back. Passed: the row can be marked Confirmed. " +
+                  "A checklist step is in Sketch ProMax tab > Help > Test checklist.\n\n");
+        sb.Append("| # | What happened | Checked by | Result | The row |\n|---|---|---|---|---|\n");
+        foreach (var bug in fixedRows)
+        {
+            var check = BugChecks.FirstOrDefault(c => c.Row == bug.Number);
+            if (check is null) { sb.Append($"| {bug.Number} | {Cell(bug.What)} | nothing yet | **not checked** | {Cell(bug.Status)} |\n"); continue; }
+            var results = check.Refs.Select(r => (Ref: r, Status: RefStatus(r, rows))).ToList();
+            var auto = results.Where(r => r.Status != "manual").ToList();
+            string result, verdict;
+            if (results.Any(r => r.Status == "fail")) { result = "**fail**"; verdict = "keep open: the fix has regressed"; }
+            else if (auto.Count > 0 && auto.All(r => r.Status == "pass"))
+            {
+                result = "pass";
+                verdict = results.Any(r => r.Status == "manual") ? "mark Confirmed once the checklist step passes too" : "mark Confirmed";
+            }
+            else if (auto.Any(r => r.Status == "pass")) { result = "partly run"; verdict = "not all checks ran: run the rest, then mark Confirmed"; }
+            else if (results.Any(r => r.Status == "manual")) { result = "checklist"; verdict = "mark Confirmed when the checklist step passes"; }
+            else { result = "not run"; verdict = "not checked in this run"; }
+            var by = string.Join(", ", results.Select(r => $"{r.Ref} ({r.Status})"));
+            sb.Append($"| {bug.Number} | {Cell(bug.What)} | {Cell(check.What)}: {Cell(by)} | {result} | {verdict} |\n");
+        }
+        return sb.ToString();
     }
 
     internal sealed record Mark(string Id, string Result, string Note);

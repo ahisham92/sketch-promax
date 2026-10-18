@@ -107,11 +107,15 @@ internal static class ApprovalPolicy
         }
         if (risks.Count > 0) return new(true, AskKind.Risky, string.Join(" ", risks));
 
-        // Reads never ask. Normal changes are one Undo away.
-        if (!modifiesModel) return ApprovalDecision.No;
+        // Reads never ask, and neither does a cleanup tool's preview (it changes nothing). Normal changes are one Undo away.
+        if (!modifiesModel || IsPreview(tool, args)) return ApprovalDecision.No;
         if (level == ApprovalLevel.RiskyOnly || remembered.Contains(tool) || fromChat && taskApproved) return ApprovalDecision.No;
         return new(true, AskKind.Change, "It changes the model. Ctrl+Z undoes it.");
     }
+
+    /// <summary>A purge or cleanup tool run without apply true: a preview made in a rolled-back transaction.</summary>
+    public static bool IsPreview(string tool, IReadOnlyDictionary<string, JsonElement> args) =>
+        CleanupMath.Tools.Contains(tool) && !(args.TryGetValue("apply", out var a) && a.ValueKind == JsonValueKind.True);
 
     /// <summary>The issue check's ways past an open item, which ask at every level (see OutputPaths.AlwaysAskReason).</summary>
     public static bool IsIssueGate(string tool) => tool is "issue_check" or "issue_drawings";
