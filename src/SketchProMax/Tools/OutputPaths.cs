@@ -60,14 +60,14 @@ internal static class OutputPaths
     {
         // The issue gate's ways past an open item: only the user decides them, so Claude can't clear the gate on its own.
         if (tool == "issue_check" && args.TryGetValue("accept", out var acc) && acc.ValueKind == JsonValueKind.Array && acc.GetArrayLength() > 0)
-            return $"Claude asks to accept {acc.GetArrayLength()} open item(s) of the issue check with the reasons in the details; accepted items no longer block the issue.";
+            return $"Sketch ProMax asks to accept {acc.GetArrayLength()} open item(s) of the issue check with the reasons in the details; accepted items no longer block the issue.";
         if (tool == "issue_drawings" && args.TryGetValue("allow_open_items", out var allow) && allow.ValueKind == JsonValueKind.True)
-            return "Claude asks to issue these drawings even though the issue check has open items (the reason in the details goes into the issue record).";
+            return "Sketch ProMax asks to issue these drawings even though the issue check has open items (the reason in the details goes into the issue record).";
         if (tool != "what_if" || !(args.TryGetValue("confirm", out var c) && c.ValueKind == JsonValueKind.True)) return null;
         var option = args.TryGetValue("target", out var t) && t.ValueKind == JsonValueKind.String && t.GetString() == "design_option";
         return option
-            ? "Claude asks to try a what-if in a design option of the open model: only the elements in that option change (Ctrl+Z undoes it)."
-            : "Claude asks to try a what-if on a copy of the saved model: the copy is changed, measured, saved and closed; the open model is not changed.";
+            ? "Sketch ProMax asks to try a what-if in a design option of the open model: only the elements in that option change (Ctrl+Z undoes it)."
+            : "Sketch ProMax asks to try a what-if on a copy of the saved model: the copy is changed, measured, saved and closed; the open model is not changed.";
     }
 
     /// <summary>The path as Windows will resolve it, so the dialog shows where a relative name really lands; unchanged when it can't be resolved.</summary>

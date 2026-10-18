@@ -394,7 +394,7 @@ internal sealed class HomeView : StackPanel
         }
         if (!any)
         {
-            var none = Brand.Text("Nothing matches. Try another word, or just ask Claude in the box below.", Brand.K.Muted, ChatUi.SmallSize);
+            var none = Brand.Text("Nothing matches. Try another word, or just ask in the box below.", Brand.K.Muted, ChatUi.SmallSize);
             _results.Children.Add(none);
         }
     }

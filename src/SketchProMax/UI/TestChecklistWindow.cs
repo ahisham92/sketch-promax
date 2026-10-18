@@ -269,7 +269,7 @@ internal sealed class TestChecklistWindow : Window
         {
             var path = SaveTo(Bugs.BugLog.Root, _items, Marks(), _version, _revit, _model, DateTime.Now);
             _saved.SetResourceReference(TextBlock.ForegroundProperty, Brand.K.SuccessText);
-            _saved.Text = $"Saved {Path.GetFileName(path)} in the Bugs folder. Send it with your bug reports, or attach it to a Claude chat.";
+            _saved.Text = $"Saved {Path.GetFileName(path)} in the Bugs folder. Send it with your bug reports, or attach it in the chat.";
             _folder.Visibility = Visibility.Visible;
             _folder.Tag = path;
             _folder.Focus();

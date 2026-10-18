@@ -196,7 +196,7 @@ internal static class Approvals
             if (silence)
                 dialog.AddCommandLink(TaskDialogCommandLinkId.CommandLink3, $"Allow, and don't ask again for {friendly}",
                     "Remembered for you. Settings lists it, to clear.");
-            dialog.AddCommandLink(TaskDialogCommandLinkId.CommandLink4, "Don't allow", "Nothing changes. Claude is told, and asks you what to do.");
+            dialog.AddCommandLink(TaskDialogCommandLinkId.CommandLink4, "Don't allow", "Nothing changes. Sketch ProMax is told, and asks you what to do.");
             dialog.DefaultButton = silence ? TaskDialogResult.CommandLink1 : TaskDialogResult.CommandLink4;
             // One click to stop being asked at all (the dialog has room for four links, so it is the tick box under them).
             var gate = decision.Kind == AskKind.Always && ApprovalPolicy.IsIssueGate(tool);

@@ -28,25 +28,25 @@ internal static class CoreRibbonManifest
     [
         // ---- Claude
         L(Button("Claude", "Chat", "Chat", "chat", "chat",
-            "Chat with Claude about this model, inside Revit, using your Claude plan.",
+            "Chat with Sketch ProMax about this model, inside Revit.",
             "Opens the Sketch ProMax pane on its Chat tab. Replies stream in with every Sketch ProMax tool; attach images, PDFs " +
             "and drawings, or send the current view. The first time, it helps you install Claude Code and sign in.")),
         // Update (0.33.1): also in the first panel, which Revit never folds away on a narrow ribbon, so updating is always one click.
         L(Button("Claude", "UpdateClaude", "Update", "update-button", "version",
             "The installed version and updates: Update ready (click to install now), Updated – What's new (release notes), Up to date " +
             "with the time of the last check (click to check now), Couldn't check (why, in this tooltip).", live: "update-first")),
-        L(Button("Claude", "ClaudeStatus", "Claude", "status", "logo:gray",
-            "Whether Claude is connected to this Revit window: green connected, amber ready, gray not running, red no link. Click for details.",
-            "Green: Claude has talked to this Revit window in the last few minutes. Amber: ready, waiting for Claude. Gray: the " +
-            "Claude desktop app is not running or can't reach Revit.\n\nClick for details, the models Claude can see, and how to fix a missing connection.",
+        L(Button("Claude", "ClaudeStatus", "Status", "status", "logo:gray",
+            "Whether the Claude desktop app is connected to this Revit window: green connected, amber ready, gray not running, red no link. Click for details.",
+            "Green: the desktop app has talked to this Revit window in the last few minutes. Amber: ready, waiting for the app. Gray: the " +
+            "Claude desktop app is not running or can't reach Revit.\n\nClick for details, the models the app can see, and how to fix a missing connection.",
             small: true, live: "status")),
         L(Button("Claude", "SendView", "Send view", "send-view", "view",
             "Attaches a picture of the active view to the chat, as Revit shows it now, ready to ask about.", needsModel: true, small: true)),
         L(Button("Claude", "CopyPrompt", "Copy prompt", "copy-prompt", "copy",
-            "Copies a good first message for Claude to the clipboard, to paste into a new chat in the Claude desktop app.",
-            "The prompt names the open model and asks Claude to look at it and suggest what it can do for you.", small: true, breakBefore: true)),
+            "Copies a good first message to the clipboard, to paste into a new chat in the Claude desktop app.",
+            "The prompt names the open model and asks for a look at it and suggestions of what Sketch ProMax can do for you.", small: true, breakBefore: true)),
         L(Pulldown("Claude", "ClaudeMore", "More", "more", "Open the Claude desktop app, or show or hide the Sketch ProMax pane.", small: true)),
-        L(Entry("ClaudeMore", "OpenClaude", "Open Claude", "open-claude", "open",
+        L(Entry("ClaudeMore", "OpenClaude", "Open Claude app", "open-claude", "open",
             "Starts the Claude desktop app, or brings it to the front. Works with the normal installer and the Microsoft Store version.")),
         L(Entry("ClaudeMore", "TogglePane", "Show or hide pane", "pane", "pane",
             "Shows or hides the Sketch ProMax pane: chat, the running job with its steps and a Cancel button, the last result " +
@@ -145,9 +145,9 @@ internal static class CoreRibbonManifest
         B("Issue", "export_pdf", "Export\nPDF", "pdf", "Prints sheets or views to PDF, as one combined file by default."),
         B("Issue", "export_drawing_list", "List of\ndrawings", "list", "Writes the list of drawings (sheet numbers, names, current revisions) to a CSV that opens in Excel."),
         B("Issue", "export_quantities", "Quantities\n/ BOQ", "boq", "Writes quantities per category and type (count, length, area, volume) to a CSV that opens in Excel."),
-        L(Button("Issue", "ExportPack", "Export for\nClaude", "export-pack", "pack",
+        L(Button("Issue", "ExportPack", "Export\nproject pack", "export-pack", "pack",
             "Writes one small zip describing this project (data, quantities, sheets, revisions, schedules, the latest check " +
-            "results) to upload to a Claude chat to prepare a report.",
+            "results) to upload to an AI chat to prepare a report.",
             "Read-only: nothing in the model changes. Runs here without the AI; usually a few MB at most. The folder opens " +
             "with the zip selected when it is done.", needsModel: true)),
 
@@ -167,7 +167,7 @@ internal static class CoreRibbonManifest
         L(Button("Sketch ProMax", "ExportChatsBugs", "Export chats", "export-chats-bugs", "pack",
             "Writes one zip with the chats of every model, all bug reports, the tool-call log and the versions, to send to the developer.", small: true)),
         L(Button("Sketch ProMax", "SettingsButton", "Settings", "settings", "settings",
-            "Firm standards, whether Revit asks before Claude changes the model, and automatic updates.", small: true, breakBefore: true)),
+            "Firm standards, whether Revit asks before Sketch ProMax changes the model, and automatic updates.", small: true, breakBefore: true)),
         L(Pulldown("Sketch ProMax", "HelpMenu", "Help", "help", "How to use Sketch ProMax, and diagnostics that test its tools.", small: true)),
         L(Entry("HelpMenu", "HelpPage", "Help and getting started", "help", "help", "Opens the guide: how to use Sketch ProMax, what it can do and what to try first.")),
         L(Entry("HelpMenu", "SelfTest", "Diagnostics: self-test", "self-test", "test",

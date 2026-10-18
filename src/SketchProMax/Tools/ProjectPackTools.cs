@@ -102,7 +102,7 @@ internal static class ProjectPack
     private static void Step(string text)
     {
         if (Jobs.CancelRequested) throw new OperationCanceledException("Stopped on request (cancel_job). No pack was written.");
-        Jobs.Report("Export for Claude: " + text);
+        Jobs.Report(SketchProMax.Commands.PackProgress.ProjectPackProgress + text);
     }
 
     private static string Csv(string? s)

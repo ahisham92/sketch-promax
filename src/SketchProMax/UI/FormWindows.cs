@@ -232,7 +232,7 @@ internal sealed class ResultWindow : Window
         status.Children.Add(Brand.Text((ok ? "✓  " : "✕  ") + headline, ok ? Brand.K.SuccessText : Brand.K.DangerText, 14, bold: true));
         if (!ok)
         {
-            var next = Brand.Text("Read the details below. To get it fixed, press Copy and paste them into a chat in the Claude app; " +
+            var next = Brand.Text("Read the details below. To get it fixed, press Copy and paste them into the chat; " +
                                   "Ctrl+Z in Revit undoes anything it changed.", Brand.K.Muted);
             next.Margin = new Thickness(0, 4, 0, 0);
             status.Children.Add(next);

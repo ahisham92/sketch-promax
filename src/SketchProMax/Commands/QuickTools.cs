@@ -180,7 +180,7 @@ internal static class QuickTools
         }
         catch (JsonException) { }
 
-        var window = new InputsWindow($"Run tool: {Pretty(tool.Name)}", "A tool Claude learned, run here without the AI.",
+        var window = new InputsWindow($"Run tool: {Pretty(tool.Name)}", "A tool Sketch ProMax learned, run here without the AI.",
             tool.Summary + "\n\n" + (tool.ModifiesModel
                 ? $"It changes '{app.ActiveUIDocument!.Document.Title}'. Ctrl+Z undoes it."
                 : "It only reads the model."),
@@ -231,11 +231,11 @@ internal static class QuickTools
             return Result.Cancelled;
         }
         ToolResult result;
-        using (PackProgress.Show("Export for Claude", $"Packing '{ProjectPack.ModelName(app.ActiveUIDocument.Document)}' for Claude"))
+        using (PackProgress.Show("Export project pack", $"Packing '{ProjectPack.ModelName(app.ActiveUIDocument.Document)}'"))
             result = Execute(app, "export_project_pack", new Dictionary<string, JsonElement>());
         if (result.IsError)
         {
-            Show("Export for Claude", result, result.Text.StartsWith("Stopped on request", StringComparison.Ordinal) ? "Stopped; no pack was written" : "The pack was not written");
+            Show("Export project pack", result, result.Text.StartsWith("Stopped on request", StringComparison.Ordinal) ? "Stopped; no pack was written" : "The pack was not written");
             return Result.Failed;
         }
         string? file = null;
@@ -247,13 +247,13 @@ internal static class QuickTools
         catch (JsonException) { }
         if (file is null || !File.Exists(file))
         {
-            Show("Export for Claude", result, "Pack written");
+            Show("Export project pack", result, "Pack written");
             return Result.Succeeded;
         }
         try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("explorer.exe", $"/select,\"{file}\"") { UseShellExecute = true })?.Dispose(); }
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
         {
-            Show("Export for Claude", result, "Pack written");
+            Show("Export project pack", result, "Pack written");
         }
         return Result.Succeeded;
     }
@@ -266,7 +266,7 @@ internal static class QuickTools
     {
         string[] choices = ["Last day", "Last week", "Everything"];
         var window = new InputsWindow("Export chats & bugs", "One zip to send to the Sketch ProMax developer.",
-            "Puts the in-Revit chats of every model, all your bug reports, the log of the tools Claude ran and the versions into one " +
+            "Puts the in-Revit chats of every model, all your bug reports, the log of the tools Sketch ProMax ran and the versions into one " +
             "zip in Documents\\Sketch ProMax\\Bugs\\Exports. Nothing is sent and the model is not changed.",
             [], [new InputsWindow.Field("period", "Chats and activity from", "Bug reports are always all included.", "string", true, choices, "Last week")],
             "Export");

@@ -29,6 +29,7 @@ internal sealed class LazyPane : ContentControl
         AutomationProperties.SetLiveSetting(text, AutomationLiveSetting.Polite);
         Content = row;
         Focusable = false;
+        LoaderBrand.Watch(this);
         PreviewMouseDown += (_, _) => Fill();
         IsKeyboardFocusWithinChanged += (_, _) => Fill();
     }

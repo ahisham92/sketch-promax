@@ -192,7 +192,7 @@ internal static partial class FieldTest
             if (json.RootElement.TryGetProperty("image", out var image) && image.GetString() is { } shown && Path.GetDirectoryName(shown) is { } dir)
                 Redlines.Remove(dir);
             var pages = json.RootElement.GetProperty("pagesFound").GetInt32();
-            return Pass($"export_pdf wrote the test sheet; redline_read rasterised page 1 of {pages} through Revit into a {png.Length / 1024} KB PNG, ready for Claude to read");
+            return Pass($"export_pdf wrote the test sheet; redline_read rasterised page 1 of {pages} through Revit into a {png.Length / 1024} KB PNG, ready to be read");
         }
         finally { RollBack(group); }
     }
@@ -292,15 +292,15 @@ internal static partial class FieldTest
     private static (string, string) RedlineVision(State s, ClaudeCliInstall? cli)
     {
         if (!s.O.ChatRoundTrip)
-            return ("manual", "manual (checklist): off by default because reading the page uses your Claude plan; the checklist's \"Redlines from a real PDF or photo\" step covers it. Run with chat_round_trip true to test it here.");
+            return ("manual", "manual (checklist): off by default because reading the page uses your plan; the checklist's \"Redlines from a real PDF or photo\" step covers it. Run with chat_round_trip true to test it here.");
         if (_redlinePage is not { } page || !File.Exists(page)) return Fail("redlines.pipeline made no marked-up page to read");
         if (cli?.Install is not { } install) return Fail("Claude Code is not installed (see chat.cli)");
         var text = Redlines.RunVision(install, page, 1, 240_000, out var error);
-        if (text is null) return Fail("Claude did not read the page: " + Short(error, 300));
+        if (text is null) return Fail("The page was not read: " + Short(error, 300));
         var found = Redline.Parse(text, out var problems);
         var kinds = string.Join(", ", found.Select(m => $"{m.Id} {m.Type}/{m.Kind}"));
         return found.Count >= 3 && found.Any(m => m.Kind == "delete")
-            ? Pass($"Claude read {found.Count} markups from the page: {kinds}" + (problems.Count > 0 ? $" ({problems.Count} note(s): {Short(problems[0], 100)})" : ""))
-            : Fail($"Claude read {found.Count} markup(s) ({kinds}), expected the 5 drawn, including the strike-through" + (problems.Count > 0 ? ": " + Short(string.Join("; ", problems), 200) : ""));
+            ? Pass($"Read {found.Count} markups from the page: {kinds}" + (problems.Count > 0 ? $" ({problems.Count} note(s): {Short(problems[0], 100)})" : ""))
+            : Fail($"Read {found.Count} markup(s) ({kinds}), expected the 5 drawn, including the strike-through" + (problems.Count > 0 ? ": " + Short(string.Join("; ", problems), 200) : ""));
     }
 }

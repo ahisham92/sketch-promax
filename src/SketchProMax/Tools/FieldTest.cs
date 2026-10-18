@@ -1346,7 +1346,7 @@ internal static partial class FieldTest
             MainInstruction = result.Fatal is not null ? "The field test could not run"
                 : result.Count("fail") == 0 ? "No tool failed" : $"{result.Count("fail")} tool(s) failed",
             MainContent = Short(result.Summary(), 1800),
-            FooterText = result.ReportPath is null ? "" : "Attach the report to a Claude chat to get the failures fixed.",
+            FooterText = result.ReportPath is null ? "" : "Attach the report to a chat to get the failures fixed.",
             CommonButtons = TaskDialogCommonButtons.Close,
         };
         if (result.ReportPath is not null)

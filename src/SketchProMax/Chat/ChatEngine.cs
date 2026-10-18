@@ -98,7 +98,7 @@ internal sealed class ChatEngine : IDisposable
         // A big picture can fill the pipe until Claude Code reads it: write outside _gate, so IsAlive never waits on it.
         StreamWriter? stdin;
         lock (_gate) stdin = _stdin;
-        if (stdin is null) throw new InvalidOperationException("Claude Code is not running.");
+        if (stdin is null) throw new InvalidOperationException("The chat is not running.");
         lock (_writeLock) stdin.WriteLine(line);
     }
 

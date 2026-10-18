@@ -149,7 +149,7 @@ internal static class JobWindow
             return b;
         }
         var pause = Pill("Pause", "SpmChatPill", "Pauses at the next item boundary; Resume carries on.");
-        var skip = Pill("Skip step", "SpmChatPill", "Ends this step at the next item; Claude moves on. What it finished is kept; a step that can only finish whole keeps nothing.");
+        var skip = Pill("Skip step", "SpmChatPill", "Ends this step at the next item; Sketch ProMax moves on. What it finished is kept; a step that can only finish whole keeps nothing.");
         var stop = Pill("Stop", "SpmChatDanger", "Stops the task: the item in progress is rolled back and finished items are kept (a step that can only finish whole keeps nothing).");
         pause.Click += (_, _) => control.Apply(control.State is JobState.PauseRequested or JobState.Paused ? JobAction.Resume : JobAction.Pause);
         skip.Click += (_, _) => control.Apply(JobAction.Skip);
@@ -161,14 +161,14 @@ internal static class JobWindow
         panel.Children.Add(buttons);
 
         // A message for Claude, applied when this step ends (the chat shows it once Revit is free).
-        var label = Brand.Text("Message for Claude", Brand.K.Text, ChatUi.SmallSize, bold: true);
+        var label = Brand.Text("Message for Sketch ProMax", Brand.K.Text, ChatUi.SmallSize, bold: true);
         label.Margin = new Thickness(0, ChatUi.S4, 0, ChatUi.S1);
         panel.Children.Add(label);
         var box = new TextBox { AcceptsReturn = false, TextWrapping = TextWrapping.Wrap, MaxHeight = 96, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
         box.SetResourceReference(FrameworkElement.StyleProperty, "SpmChatField");
-        AutomationProperties.SetName(box, "Message for Claude");
-        AutomationProperties.SetHelpText(box, "Type a message and press Enter: Claude gets it when this step ends.");
-        var send = Pill("Send", "SpmChatPrimary", "Sends the message; Claude gets it when this step ends.");
+        AutomationProperties.SetName(box, "Message for Sketch ProMax");
+        AutomationProperties.SetHelpText(box, "Type a message and press Enter: Sketch ProMax gets it when this step ends.");
+        var send = Pill("Send", "SpmChatPrimary", "Sends the message; Sketch ProMax gets it when this step ends.");
         send.Margin = new Thickness(ChatUi.S2, 0, 0, 0);
         var row = new DockPanel();
         DockPanel.SetDock(send, Dock.Right);
@@ -335,7 +335,7 @@ internal static class JobWindow
         var skip = Brand.Button("Skip step");
         var stop = Brand.Button("Stop", Brand.Weight.Danger);
         AutomationProperties.SetHelpText(resume, "Carries on with the next item.");
-        AutomationProperties.SetHelpText(skip, "Ends this step here; Claude moves on to the next one.");
+        AutomationProperties.SetHelpText(skip, "Ends this step here; Sketch ProMax moves on to the next one.");
         AutomationProperties.SetHelpText(stop, "Stops the task here; finished items are kept.");
         resume.Click += (_, _) => { control.Apply(JobAction.Resume); window.Close(); };
         skip.Click += (_, _) => { control.Apply(JobAction.Skip); window.Close(); };

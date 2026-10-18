@@ -114,7 +114,7 @@ internal sealed class JobCardModel
         foreach (var s in Steps)
         {
             if (s.State == "running") { s.State = state == "done" ? "done" : "stopped"; if (state != "done") s.Reason = "stopped when the task ended"; }
-            else if (s.State == "waiting") { s.State = "notrun"; s.Reason = state == "done" ? "not needed: Claude finished without it" : "not reached"; }
+            else if (s.State == "waiting") { s.State = "notrun"; s.Reason = state == "done" ? "not needed: finished without it" : "not reached"; }
         }
     }
 

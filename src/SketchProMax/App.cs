@@ -90,7 +90,7 @@ public sealed class App : IExternalApplication
         });
         panel.AddItem(new PushButtonData("SketchProMaxSettings", "Settings", assembly, typeof(SettingsCommand).FullName)
         {
-            ToolTip = "Firm standards and whether Revit asks before Claude changes the model.",
+            ToolTip = "Firm standards and whether Revit asks before Sketch ProMax changes the model.",
             AvailabilityClassName = typeof(AlwaysAvailable).FullName,
         });
         panel.AddItem(new PushButtonData("SketchProMaxSelfTest", "Self-test", assembly, typeof(SelfTestCommand).FullName)
@@ -128,6 +128,7 @@ public sealed class App : IExternalApplication
         try { MainWindow = app.MainWindowHandle; } catch (Exception) { MainWindow = IntPtr.Zero; }
         UI.FavouritesRibbon.Attach(app);
         UI.RibbonLabels.Attach(app);
+        UI.LoaderBrand.Attach(app);
         // The loader asks for the ribbon (favourites included) right after this returns: read the recipe and learned-tool
         // folders on a background thread meanwhile, not on Revit's.
         Commands.QuickTools.Warm();
@@ -226,6 +227,7 @@ public sealed class App : IExternalApplication
         try { app.Application.DocumentOpening -= OnDocumentOpening; } catch (Exception) { }
         try { app.Application.DocumentOpened -= OnDocumentOpened; } catch (Exception) { }
         try { UI.UpdateNotice.Stop(); } catch (Exception) { }
+        UI.LoaderBrand.Stop();
         UI.LazyPane.Forget();
         Dispatcher.Shutdown(app);
 #if NETFRAMEWORK

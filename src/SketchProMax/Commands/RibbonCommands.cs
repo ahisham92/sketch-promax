@@ -60,15 +60,15 @@ internal static class CoreCommands
         {
             MainInstruction = state switch
             {
-                "connected" => "Claude is connected to this Revit window",
-                "ready" => "Ready: waiting for Claude",
+                "connected" => "Connected to this Revit window",
+                "ready" => "Ready: waiting for the Claude desktop app",
                 "error" => "Sketch ProMax can't accept connections",
                 _ => "The Claude desktop app is not connected",
             },
             MainContent = detail + "\n\n" +
                 (doc is null ? "Open a model, then " : $"Active model: {doc.Title}\n\n") +
                 "chat in the Claude desktop app, for example: \"What's in my Revit model?\"\n\n" +
-                "If the Revit tools don't appear in Claude, quit Claude completely (system tray > Quit) and start it again.",
+                "If the Revit tools don't appear there, quit the Claude app completely (system tray > Quit) and start it again.",
             FooterText = Updater.Describe(),
             ExpandedContent = $"Revit {app.Application.VersionNumber}, session {BridgeServer.SessionId}, Sketch ProMax {Updater.CurrentText}" +
                               (Updater.CanSwitchLive ? " (updates without restarting)" : "") + "\n" +
@@ -77,8 +77,8 @@ internal static class CoreCommands
                               (registered.Count > 0 ? string.Join("\n", registered) : "(nowhere yet - is the Claude desktop app installed?)"),
             CommonButtons = TaskDialogCommonButtons.Close,
         };
-        dialog.AddCommandLink(TaskDialogCommandLinkId.CommandLink1, "Copy a starter prompt", "A good first message for Claude, on the clipboard.");
-        dialog.AddCommandLink(TaskDialogCommandLinkId.CommandLink2, "Open Claude");
+        dialog.AddCommandLink(TaskDialogCommandLinkId.CommandLink1, "Copy a starter prompt", "A good first message, on the clipboard.");
+        dialog.AddCommandLink(TaskDialogCommandLinkId.CommandLink2, "Open the Claude app");
         dialog.AddCommandLink(TaskDialogCommandLinkId.CommandLink3, "Check for updates now");
         switch (dialog.Show())
         {
@@ -112,7 +112,7 @@ internal static class CoreCommands
                 : "Another program is holding the clipboard. Try again in a moment.",
             CommonButtons = TaskDialogCommonButtons.Close,
         };
-        if (copied) dialog.AddCommandLink(TaskDialogCommandLinkId.CommandLink1, "Open Claude now");
+        if (copied) dialog.AddCommandLink(TaskDialogCommandLinkId.CommandLink1, "Open the Claude app now");
         if (dialog.Show() == TaskDialogResult.CommandLink1) return OpenClaude();
         return copied ? Result.Succeeded : Result.Failed;
     }
@@ -121,7 +121,7 @@ internal static class CoreCommands
     {
         if (ClaudeLauncher.Start(out var how)) return Result.Succeeded;
         TaskDialog.Show("Sketch ProMax", "The Claude desktop app wasn't found on this PC. Install it from claude.ai/download " +
-                                          $"(or the Microsoft Store), sign in, then click Open Claude again.\n\n{how}");
+                                          $"(or the Microsoft Store), sign in, then click Open Claude app again.\n\n{how}");
         return Result.Failed;
     }
 
@@ -132,7 +132,7 @@ internal static class CoreCommands
         var job = running ?? Jobs.Find(null);
         if (job is null)
         {
-            TaskDialog.Show("Sketch ProMax", "No job has run in this Revit window yet. When Claude runs a tool, it shows here with its progress.");
+            TaskDialog.Show("Sketch ProMax", "No job has run in this Revit window yet. When Sketch ProMax runs a tool, it shows here with its progress.");
             return Result.Succeeded;
         }
         var dialog = new TaskDialog("Sketch ProMax job")
@@ -357,7 +357,7 @@ internal static class CoreCommands
         {
             MainInstruction = report.Failed == 0 ? "Every tested tool works" : $"{report.Failed} tool(s) failed",
             MainContent = Tools.SelfTest.Progress(),
-            FooterText = report.File is null ? "" : "Send the report file to Claude (attach it in the chat) to get any failures fixed.",
+            FooterText = report.File is null ? "" : "Attach the report file in the chat to get any failures fixed.",
         }.Show());
         return Result.Succeeded;
     }
@@ -425,11 +425,11 @@ internal static class Connection
         var lastJob = Jobs.Find(null);
         var jobText = lastJob is null ? "" : $" Last tool call: {lastJob.Tool} at {lastJob.Queued.ToLocalTime():HH:mm}.";
         if (last is { } t && DateTime.UtcNow - t < TimeSpan.FromMinutes(10))
-            return ("connected", "connected", $"Claude last talked to this Revit window at {t.ToLocalTime():HH:mm} ({Ago(t)}).{jobText}");
+            return ("connected", "connected", $"Last contact with this Revit window at {t.ToLocalTime():HH:mm} ({Ago(t)}).{jobText}");
         if (_claudeRunning)
             return ("ready", "ready", "The Claude desktop app is running and can reach this Revit window. Ask it something about the model." +
                                       (last is { } older ? $" Last contact {Ago(older)}." : "") + jobText);
-        return ("offline", "not running", "The Claude desktop app is not running. Click Open Claude, or start it from the Start menu.");
+        return ("offline", "not running", "The Claude desktop app is not running. Click Open Claude app, or start it from the Start menu.");
     }
 
     private static string Ago(DateTime utc)

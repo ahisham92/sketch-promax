@@ -146,6 +146,8 @@ public static class CoreEntry
                 Revit.StartupTimings.Phase("favourite slots", synced.ElapsedMilliseconds);
                 // Small buttons keep their labels on a narrow ribbon.
                 try { RibbonLabels.Keep(); } catch (Exception) { /* cosmetic */ }
+                // The loader's own words on the tab: the first panel's title and its tooltips (see LoaderBrand).
+                LoaderBrand.Ribbon();
                 return "ok";
             case "swapnote":
                 // Sent to the outgoing core just before "swapped": the new version's restart note, for its update window.
@@ -215,7 +217,8 @@ public static class CoreEntry
                 var (state, text, detail) = Connection.Describe();
                 var dot = state switch { "connected" => "green", "ready" => "amber", "error" => "red", _ => "gray" };
                 // A small button: one line, the coloured dot on the logo says the rest.
-                var label = text.Length == 0 ? "Claude" : char.ToUpperInvariant(text[0]) + text.Substring(1);
+                var label = text.Length == 0 ? "Status" : char.ToUpperInvariant(text[0]) + text.Substring(1);
+                LoaderBrand.Pulse();
                 return CoreRibbonManifest.LiveLine(label, detail, "logo:" + dot);
             }
             case "job":
@@ -256,9 +259,10 @@ public static class CoreEntry
         if (Jobs.Running is { } job)
         {
             var progress = job.Progress();
-            var name = job.Tool.Length > 16 ? job.Tool.Substring(0, 15) + "…" : job.Tool;
+            var title = JobMath.Title(job.Tool);
+            var name = title.Length > 16 ? title.Substring(0, 15) + "…" : title;
             return $"running\t{name}\n{Jobs.Duration(job.Elapsed)}\t" +
-                   $"Running {job.Tool} for {Jobs.Duration(job.Elapsed)}." + (progress is null ? "" : $" Progress: {progress}") +
+                   $"Running {title} for {Jobs.Duration(job.Elapsed)}." + (progress is null ? "" : $" Progress: {progress}") +
                    " Cancel job asks it to stop at its next check.";
         }
         if (Tools.SelfTest.IsRunning) return $"selftest\tSelf-test\nrunning\t{Tools.SelfTest.Progress()}";
@@ -266,10 +270,10 @@ public static class CoreEntry
         {
             var ok = last.Task is { IsCompleted: true } t && t.Status == TaskStatus.RanToCompletion && !t.Result.IsError;
             var finished = last.Finished?.ToLocalTime().ToString("HH:mm") ?? "";
-            return $"idle\tNo job\tNothing is running. Last: {last.Tool}" + (finished.Length > 0 ? $" at {finished}" : "") +
+            return $"idle\tNo job\tNothing is running. Last: {JobMath.Title(last.Tool)}" + (finished.Length > 0 ? $" at {finished}" : "") +
                    (last.Task is { IsCompleted: true } ? ok ? ", worked." : ", did not work." : ".");
         }
-        return "idle\tNo job\tNothing has run in this Revit window yet. Tools Claude runs show here with their progress.";
+        return "idle\tNo job\tNothing has run in this Revit window yet. Tools Sketch ProMax runs show here with their progress.";
     }
 
     private static string UpdateLine()

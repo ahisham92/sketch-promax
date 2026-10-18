@@ -304,11 +304,11 @@ internal sealed partial class ChatPane
     {
         var steer = _turn is { Planning: false, Stopping: false } && _control is not null && _input.Text.Trim().Length > 0;
         if (_turn is not null) _send.Visibility = steer ? Visibility.Visible : Visibility.Collapsed;
-        var tip = steer ? "Send to Claude now: it is applied after the current item (Enter)." : "Send (Enter)";
+        var tip = steer ? "Send to Sketch ProMax now: it is applied after the current item (Enter)." : "Send (Enter)";
         if (_send.ToolTip as string != tip)
         {
             _send.ToolTip = tip;
-            AutomationProperties.SetHelpText(_send, steer ? tip : "Sends your message to Claude (Enter).");
+            AutomationProperties.SetHelpText(_send, steer ? tip : "Sends your message to Sketch ProMax (Enter).");
         }
     }
 
@@ -338,7 +338,7 @@ internal sealed partial class ChatPane
     private void OnNotesDelivered(string tool, IReadOnlyList<string> ids) =>
         Dispatcher.BeginInvoke(new Action(() =>
         {
-            foreach (var id in ids) SetAck(id, $"Applied: Claude got it with the result of {JobMath.Title(tool)}.");
+            foreach (var id in ids) SetAck(id, $"Applied: Sketch ProMax got it with the result of {JobMath.Title(tool)}.");
             Save();
         }));
 
@@ -363,7 +363,7 @@ internal sealed partial class ChatPane
             _input.CaretIndex = _input.Text.Length;
             return;
         }
-        foreach (var (id, _) in left) SetAck(id, "Claude finished before another step, so this was sent as your next message.");
+        foreach (var (id, _) in left) SetAck(id, "Sketch ProMax finished before another step, so this was sent as your next message.");
         _ = RunTurn(text, [], "");
     }
 

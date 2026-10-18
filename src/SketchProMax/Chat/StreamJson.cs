@@ -143,14 +143,14 @@ internal sealed class StreamParser
                 events.Add(new RetryEvent(Int(root, "attempt"), Int(root, "max_retries"), Str(root, "error"), Int(root, "retry_delay_ms")));
                 break;
             case "compact_boundary":
-                events.Add(new NoticeEvent("The conversation was long, so Claude summarized the earlier part to keep going."));
+                events.Add(new NoticeEvent("The conversation was long, so the earlier part was summarized to keep going."));
                 break;
             case "permission_denied":
             {
                 var tool = Str(root, "tool_name");
                 events.Add(new NoticeEvent(tool.Length > 0
-                    ? $"Claude tried to use {ShortName(tool)}, which the Revit chat doesn't allow. It carries on without it."
-                    : "Claude tried to use a tool the Revit chat doesn't allow. It carries on without it."));
+                    ? $"Sketch ProMax tried a step the Revit chat doesn't allow ({StepNames.Title(tool)}). It carries on without it."
+                    : "Sketch ProMax tried a step the Revit chat doesn't allow. It carries on without it."));
                 break;
             }
         }

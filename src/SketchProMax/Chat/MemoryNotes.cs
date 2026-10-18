@@ -65,7 +65,7 @@ internal static class MemoryNotes
         var sb = new StringBuilder();
         sb.AppendLine("# Sketch ProMax memory");
         sb.AppendLine();
-        sb.AppendLine("What you asked Claude to remember in the Revit chat. Global notes go to every chat; a model's notes only to that model's chat.");
+        sb.AppendLine("What you asked Sketch ProMax to remember in the Revit chat. Global notes go to every chat; a model's notes only to that model's chat.");
         sb.AppendLine("Edit or delete them in the Notes tab of the Sketch ProMax pane, or here (one \"- \" line per note).");
         var list = sections.Where(s => s.Notes.Count > 0 || s.Key is null).OrderBy(s => s.Key is null ? 0 : 1).ToList();
         if (!list.Any(s => s.Key is null)) list.Insert(0, new Section(null));

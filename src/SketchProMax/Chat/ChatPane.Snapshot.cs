@@ -268,7 +268,7 @@ internal sealed partial class ChatPane
     private void ShowSampleState()
     {
         if (_rows.Values.FirstOrDefault(r => r.Item.State == "done") is { } row) row.Header.IsChecked = true;
-        _workingText.Text = "Claude is thinking…";
+        _workingText.Text = "Sketch ProMax is thinking…";
         _working.Visibility = Visibility.Visible;
         _shimmer.Visibility = Visibility.Visible;
     }

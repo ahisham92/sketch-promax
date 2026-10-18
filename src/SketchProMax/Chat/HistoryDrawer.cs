@@ -160,7 +160,7 @@ internal sealed class HistoryDrawer : Border
         open.SetResourceReference(StyleProperty, "SpmChatGhost");
         open.ToolTip = chat.Name + "\n" + chat.ModelTitle + "\n" + $"{chat.Count} messages and steps";
         AutomationProperties.SetName(open, $"{chat.Name}, {sub}{(current ? ", open now" : "")}{(chat.Pinned ? ", pinned" : "")}");
-        AutomationProperties.SetHelpText(open, "Opens this chat; Claude resumes it with what was said.");
+        AutomationProperties.SetHelpText(open, "Opens this chat; Sketch ProMax resumes it with what was said.");
         open.Click += (_, _) => _host.OpenChat(chat);
 
         var more = ChatUi.Ghost(ChatUi.GlyphMore, null, "More actions for " + chat.Name, "Rename, pin, export or delete");

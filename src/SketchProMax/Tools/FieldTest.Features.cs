@@ -453,6 +453,7 @@ internal static partial class FieldTest
         ClaudeCliInstall? cli = null;
         // On Revit's thread: the ribbon, WPF windows, favourites (they reach the ribbon), the chat history (the pane saves there).
         await Probe(s, "ribbon.registered", app => RibbonRegistered(app, s.Registry)).ConfigureAwait(false);
+        await Probe(s, "brand.ribbon", app => BrandRibbon(app)).ConfigureAwait(false);
         await Probe(s, "ribbon.dialogs", _ => Dialogs(s.Registry, s.Folder)).ConfigureAwait(false);
         await Probe(s, "favourites", _ => FavouriteRoundTrip()).ConfigureAwait(false);
         await Probe(s, "chat.history", _ => ChatHistoryRoundTrip(s.Folder)).ConfigureAwait(false);
@@ -556,6 +557,36 @@ internal static partial class FieldTest
         return Fail(summary + "." + (missing.Count > 0 ? $" Missing: {string.Join(", ", missing.Take(20))}." : "") +
                     (disabled.Count > 0 ? $" Disabled: {string.Join(", ", disabled.Take(20))}." : "") +
                     (UpdateWindowsOld() ? " The loader is older than 0.30, so new buttons need a Revit restart." : ""));
+    }
+
+    /// <summary>
+    /// The tab names the assistant Sketch ProMax: the first panel's title, and every button's text, tooltip and long
+    /// description (the loader's own included, after LoaderBrand has put them right) name the model only as a product to act on.
+    /// </summary>
+    private static (string, string) BrandRibbon(UIApplication app)
+    {
+        LoaderBrand.Attach(app);
+        LoaderBrand.Ribbon();
+        var bad = new List<string>();
+        var title = "";
+        void Look(Autodesk.Revit.UI.RibbonItem item)
+        {
+            var more = item is Autodesk.Revit.UI.RibbonButton b ? b.LongDescription : item is PulldownButton p ? p.LongDescription : "";
+            foreach (var text in new[] { item.ItemText, item.ToolTip, more })
+                if (!string.IsNullOrEmpty(text) && !BrandText.Clean(text)) bad.Add($"{item.Name}: {Short(text.Replace('\n', ' '), 80)}");
+            if (item is PulldownButton drop) foreach (var sub in drop.GetItems()) if (sub is not null) Look(sub);
+        }
+        foreach (var panel in app.GetRibbonPanels("Sketch ProMax"))
+        {
+            if (panel is null) continue;
+            if (panel.Name == "Claude") title = panel.Title;
+            foreach (var item in panel.GetItems())
+                if (item is not null) Look(item);
+        }
+        if (title != BrandText.PanelTitle) bad.Insert(0, $"the first panel's title is \"{title}\", not \"{BrandText.PanelTitle}\"");
+        return bad.Count == 0
+            ? Pass($"the first panel is titled {BrandText.PanelTitle}; no button text or tooltip on the tab names the model except as a product to act on")
+            : Fail(string.Join("; ", bad.Take(10)) + (bad.Count > 10 ? $" (+{bad.Count - 10} more)" : ""));
     }
 
     private static bool UpdateWindowsOld() => LoaderCompat.RibbonOutdated(AppDomain.CurrentDomain.GetData(LoaderCompat.ReleaseKey) as string);
@@ -671,7 +702,7 @@ internal static partial class FieldTest
     private static (string, string) RoundTrip(ClaudeCliInstall? cli, bool wanted)
     {
         if (!wanted)
-            return ("manual", "manual (checklist): off by default because it uses your Claude plan; the checklist's \"Chat in the pane\" step covers it. Run with chat_round_trip true to test it here.");
+            return ("manual", "manual (checklist): off by default because it uses your plan; the checklist's \"Chat in the pane\" step covers it. Run with chat_round_trip true to test it here.");
         if (cli?.Install is not { } install) return Fail("Claude Code is not installed (see chat.cli)");
         var (code, output) = Chat.ClaudeCli.Run(install.Path, "-p \"Reply with the single word OK.\"", 90000);
         return code == 0 && output.IndexOf("OK", StringComparison.OrdinalIgnoreCase) >= 0
@@ -851,7 +882,7 @@ internal static partial class FieldTest
         var installer = new[] { Path.Combine(local, "AnthropicClaude", "claude.exe"), Path.Combine(local, "Programs", "Claude", "Claude.exe") }.FirstOrDefault(File.Exists);
         var registered = Update.ClaudeRegistration.Registered();
         var found = store.Count > 0 ? $"Microsoft Store Claude app found ({string.Join(", ", store)})" : "no Microsoft Store Claude app";
-        return Pass($"{found}; normal installer: {installer ?? "not found"}; the connector is listed in {registered.Count} Claude config file(s)" +
+        return Pass($"{found}; normal installer: {installer ?? "not found"}; the connector is listed in {registered.Count} Claude app config file(s)" +
                     (store.Count > 0 && !Update.ClaudeRegistration.ConfigFolders().Any(f => f.IndexOf("Packages", StringComparison.OrdinalIgnoreCase) >= 0)
                         ? "; but the Store app's config folder was not found" : ""));
     }
@@ -1062,10 +1093,10 @@ internal static partial class FieldTest
             var three = HandoffSteps(result.Text);
             if (three is not [("skipped", false), ("stopped", false), ("stopped", false)]) problems.Add($"copy_dimensions: the handoff section says {Steps(three)}");
             if (asked != 2) problems.Add($"copy_dimensions: {asked} steps were asked, not 2 (the one after Stop must not be)");
-            if (!result.Text.Contains("The user stopped here")) problems.Add("copy_dimensions: the result doesn't tell Claude the user stopped");
+            if (!result.Text.Contains("The user stopped here")) problems.Add("copy_dimensions: the result doesn't tell the assistant the user stopped");
             var recent = Handoff.Recent.Skip(Math.Max(0, Handoff.Recent.Count - 3)).Select(o => o.Choice).ToList();
             if (!recent.SequenceEqual(["skipped", "stopped", "stopped"])) problems.Add($"copy_dimensions: the recent hand-offs end with {string.Join(", ", recent)}");
-            notes.Add("copy_dimensions to three views: Skip, then Stop; the third step was not asked and counts as stopped, and Claude is told the user stopped");
+            notes.Add("copy_dimensions to three views: Skip, then Stop; the third step was not asked and counts as stopped, and the assistant is told the user stopped");
             return problems.Count == 0 ? Pass(string.Join(". ", notes) + ".") : Fail(string.Join("; ", problems) + ". " + string.Join(". ", notes));
         }
         finally
@@ -1318,9 +1349,9 @@ internal static partial class FieldTest
             if (run.Statuses.Skip(9).Any(st => !st.StartsWith("not done: the user stopped", StringComparison.Ordinal)) || views.Skip(9).Any(Renamed))
                 problems.Add("items after the stop were not all left undone");
         }
-        if (run.State != "stopped" || !run.Text.Contains(JobControl.StoppedText) || !Json(run.Text)) problems.Add($"the step ended {run.State} and Claude's text starts \"{Short(run.Text, 80)}\"");
+        if (run.State != "stopped" || !run.Text.Contains(JobControl.StoppedText) || !Json(run.Text)) problems.Add($"the step ended {run.State} and the text the assistant gets starts \"{Short(run.Text, 80)}\"");
         return problems.Count == 0
-            ? Pass("Stop while item 9 of 24 ran: it was rolled back (name unchanged), items 1-8 kept, 10-24 not done; Claude is told the user stopped")
+            ? Pass("Stop while item 9 of 24 ran: it was rolled back (name unchanged), items 1-8 kept, 10-24 not done; the assistant is told the user stopped")
             : Fail(string.Join("; ", problems));
     });
 
@@ -1339,7 +1370,7 @@ internal static partial class FieldTest
         var next = RenameViews(app, s, views.Skip(5).ToList(), control);
         if (next.Ok != JobItems - 5 || next.State != "done") problems.Add($"the next step renamed {next.Ok} of {JobItems - 5} and ended {next.State}");
         return problems.Count == 0
-            ? Pass($"Skip step at item 6: 5 kept, the rest skipped, Claude is told to move on; the next step then renamed the other {JobItems - 5}")
+            ? Pass($"Skip step at item 6: 5 kept, the rest skipped, the assistant is told to move on; the next step then renamed the other {JobItems - 5}")
             : Fail(string.Join("; ", problems));
     });
 
@@ -1364,7 +1395,7 @@ internal static partial class FieldTest
             if (delivered.Count != 1 || delivered[0].Tool != "rename_elements" || !delivered[0].Ids.SequenceEqual([id!])) problems.Add($"delivered {delivered.Count} time(s)");
             if (run.Ok != JobItems) problems.Add($"the batch was interrupted: {run.Ok} of {JobItems} renamed");
             return problems.Count == 0
-                ? Pass($"a message queued during item 4 reached the end of rename_elements' result once (what Claude reads next) and was reported delivered; all {JobItems} items ran. The chat's live round trip is the checklist's \"job.ui\" step")
+                ? Pass($"a message queued during item 4 reached the end of rename_elements' result once (what the assistant reads next) and was reported delivered; all {JobItems} items ran. The chat's live round trip is the checklist's \"job.ui\" step")
                 : Fail(string.Join("; ", problems));
         }
         finally { JobNotes.Delivered -= Got; }
@@ -1837,7 +1868,7 @@ internal static partial class FieldTest
     private const string Ambiguous = "Make the walls thicker";
 
     private static (string, string) BriefManual() =>
-        ("manual", "manual (checklist): off by default because planning uses your Claude plan; the checklist's \"The brief card in the chat\" step covers it. Run with chat_round_trip true to test it here.");
+        ("manual", "manual (checklist): off by default because planning uses your plan; the checklist's \"The brief card in the chat\" step covers it. Run with chat_round_trip true to test it here.");
 
     private static int ElementCount(UIApplication app, State s) =>
         TestDoc(app, s, out _) is { } doc ? new FilteredElementCollector(doc).WhereElementIsNotElementType().GetElementCount() : -1;
