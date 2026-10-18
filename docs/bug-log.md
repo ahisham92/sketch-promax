@@ -32,3 +32,14 @@ doesn't cover yet: a report counts as sent once a row below names it by the date
 | 20 | 2026-10-17 | arch_to_structure returns "Nothing was made." with no reason; likely the new cladding filter skips everything in the test model | 0.30.0 | Fixed in 0.31 (please check) |
 | 21 | 2026-10-17 | Chat panel needs: chat history sidebar with search, model picker (Opus/Sonnet/Haiku/Fable), home screen with feature library, saved prompts and tailored prompts | 0.30.0 | Fixed in 0.31 (please check) |
 | 22 | 2026-10-17 | New: value engineering tools (find savings, compare alternatives, apply an option, VE register) | 0.30.0 | Fixed in 0.31 (please check) |
+| 23 | 2026-10-17 | The update check fails when GitHub's API times out or refuses, instead of falling back to the github.com releases page | 0.33.0 | Fixed in 0.33.3 (please check) |
+| 24 | 2026-10-17 | Loading a family with a bad type catalog stops Revit on a "Could not parse column header" dialog | 0.33.0 | Fixed in 0.33.3 (please check) |
+| 25 | 2026-10-17 | Chat crashes drawing the Claude mark on every reply header (frozen geometry transformed in place) | 0.33.0 | Fixed in 0.33.3 (please check) |
+| 26 | 2026-10-17 | title_block_from_cad fails trying to delete template lines Revit doesn't allow to be deleted | 0.33.0 | Fixed in 0.33.3 (please check) |
+| 27 | 2026-10-17 | find_clashes ignores void-only cutting families (they have no bounding box of their own) | 0.33.0 | Fixed in 0.33.3 (please check) |
+| 28 | 2026-10-17 | The issue check stops with an error when one of its checks crashes, instead of naming the step and carrying on | 0.33.0 | Fixed in 0.33.3 (please check) |
+| 29 | 2026-10-17 | Redlines are matched to the wrong place on the sheet (markups worked out before the sheet was drawn, viewport mapping off) | 0.33.0 | Fixed in 0.33.3 (please check) |
+| 30 | 2026-10-17 | The chat message box looks like two boxes and typed text starts at the bottom, not where the hint was | 0.33.3 | Fixed in 0.33.4 (please check) |
+| 31 | 2026-10-17 | The chat shows a "finish your edit mode" card when Revit is only busy, not in an edit mode | 0.33.3 | Fixed in 0.33.4 (please check) |
+| 32 | 2026-10-17 | Too many approval dialogs: Revit asks before every small change | 0.33.4 | Fixed in 0.33.5 (please check) |
+| 33 | 2026-10-17 | After an in-Revit update the chat opens empty instead of the chat that was open | 0.33.5 | Fixed in 0.33.6 (please check) |

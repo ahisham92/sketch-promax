@@ -22,6 +22,7 @@ internal static class StartupTimings
     private static long _openedAt = -1;
     private static long _openMs = -1;
     private static long _openedHandlersMs;
+    private static long _worstHandlersMs = -1;
     private static string _openTitle = "";
     private static bool _openDuringTest;
 
@@ -68,6 +69,18 @@ internal static class StartupTimings
     /// <summary>Milliseconds from the end of StartCore to now (the first Idling after start), or -1.</summary>
     public static long SinceStart => _startedAt < 0 ? -1 : Clock.ElapsedMilliseconds - _startedAt;
 
+    /// <summary>What StartCore took, in ms, or -1 when not measured.</summary>
+    public static long StartMs
+    {
+        get { lock (Gate) return _startTotal; }
+    }
+
+    /// <summary>The longest our DocumentOpened handlers took on one model open in this session, in ms, or -1 when none opened.</summary>
+    public static long WorstHandlersMs
+    {
+        get { lock (Gate) return _worstHandlersMs; }
+    }
+
     /// <summary>One line: "core start 412 ms (dispatcher 3, tool registry 40, ...)".</summary>
     public static string StartLine()
     {
@@ -92,6 +105,7 @@ internal static class StartupTimings
             _openedAt = Clock.ElapsedMilliseconds;
             _openMs = _openingAt >= 0 ? _openedAt - _openingAt : -1;
             _openedHandlersMs = handlersMs;
+            _worstHandlersMs = Math.Max(_worstHandlersMs, handlersMs);
             _openTitle = title;
             _openDuringTest = TestRunning;
             AwaitingIdle = true;
@@ -152,6 +166,7 @@ internal static class StartupTimings
             Opens.Clear();
             _startTotal = _startedAt = _openingAt = _openedAt = _openMs = -1;
             _openedHandlersMs = 0;
+            _worstHandlersMs = -1;
             _openTitle = "";
             _openDuringTest = false;
             TestRunning = false;

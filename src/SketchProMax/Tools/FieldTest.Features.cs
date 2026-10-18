@@ -461,6 +461,8 @@ internal static partial class FieldTest
         await ProbeCore(s, "chat.frames", () => ChatFrames()).ConfigureAwait(false);
         await Probe(s, "chat.composer", _ => ChatComposer()).ConfigureAwait(false);
         await Probe(s, "update.loader", _ => Loader()).ConfigureAwait(false);
+        await Probe(s, "update.loader_fixed", _ => LoaderFixed()).ConfigureAwait(false);
+        await Probe(s, "startup.timings", _ => StartupTimes()).ConfigureAwait(false);
         await ProbeCore(s, "revit.blocked", RevitBlockedCard).ConfigureAwait(false);
         // In the test project, each rolled back afterwards (time records excepted: they are what is checked).
         await Probe(s, "handoff.continue", app => HandoffContinue(app, s)).ConfigureAwait(false);
@@ -487,6 +489,8 @@ internal static partial class FieldTest
         await Probe(s, "cost.remembered", app => CostRemembered(app, s)).ConfigureAwait(false);
         await Probe(s, "cost.options", app => CostOptions(app, s)).ConfigureAwait(false);
         await Probe(s, "whatif.preview", app => WhatIfPreview(app, s)).ConfigureAwait(false);
+        await Probe(s, "cleanup.passes", app => CleanupPasses(app, s)).ConfigureAwait(false);
+        await Probe(s, "cleanup.workshared", app => CleanupWorkshared(app, s)).ConfigureAwait(false);
         // Off Revit's thread: processes, files and the network.
         await Probe(s, "chat.cli", () => { cli = new ClaudeCliInstall(Chat.ClaudeCli.Find()); return cli.Row(); }).ConfigureAwait(false);
         await Probe(s, "chat.signin", () => SignIn(cli)).ConfigureAwait(false);
@@ -502,6 +506,7 @@ internal static partial class FieldTest
         string? latest = null;
         await Probe(s, "update.endpoint", () => { var (row, tag) = Endpoint(); latest = tag; return row; }).ConfigureAwait(false);
         await Probe(s, "update.version", () => VersionCompare(latest)).ConfigureAwait(false);
+        await Probe(s, "update.fallback", UpdateFallback).ConfigureAwait(false);
         await Probe(s, "claude.msix", Msix).ConfigureAwait(false);
         await Probe(s, "diagnostics", () => Diagnostics(s.Result)).ConfigureAwait(false);
     }
@@ -1946,7 +1951,7 @@ internal static partial class FieldTest
         }
         foreach (var tool in r.Tools.OrderBy(t => t))
         {
-            var rows = r.Rows.Where(x => x.Tool == tool || x.Tool.StartsWith(tool + " #", StringComparison.Ordinal)).ToList();
+            var rows = r.Rows.Where(x => x.Tool == tool || x.Tool.StartsWith(tool + " ", StringComparison.Ordinal)).ToList();
             var status = Of(rows, FieldTestCoverage.ManualTools.ContainsKey(tool) ? "manual (checklist)" : "not run");
             var detail = FieldTestCoverage.ManualTools.TryGetValue(tool, out var m) ? m.Reason
                 : rows.Count == 0 ? "no row in this run" : $"{rows.Count} case(s)" + (rows.FirstOrDefault(x => x.Status != "pass") is { } odd ? ": " + Short(odd.Message, 160) : "");
@@ -1957,7 +1962,7 @@ internal static partial class FieldTest
             var rows = f.How switch
             {
                 FieldTestCoverage.How.Probe => r.Rows.Where(x => x.Tool == f.Key),
-                FieldTestCoverage.How.Case => r.Rows.Where(x => x.Tool == f.By || x.Tool.StartsWith(f.By + " #", StringComparison.Ordinal)),
+                FieldTestCoverage.How.Case => r.Rows.Where(x => x.Tool == f.By || x.Tool.StartsWith(f.By + " ", StringComparison.Ordinal)),
                 _ => [],
             };
             var status = f.How == FieldTestCoverage.How.Manual ? "manual (checklist)" : Of(rows, "not run");

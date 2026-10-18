@@ -82,6 +82,11 @@ public sealed class ToolRegistry
         new ChangeTypeTool(),
         new WorksetsTool(),
         new DeleteElementsTool(),
+        // Purge and cleanup: previewed first, one Undo step to apply
+        new PurgeUnusedTool(),
+        new DeleteUnusedViewsTool(),
+        new CleanupImportsTool(),
+        new CleanupModelTool(),
 
         // Views, graphics, annotation, schedules, exports, links, families
         new CreateSectionTool(),

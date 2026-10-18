@@ -144,6 +144,11 @@ internal static class CatalogTests
         var probeSource = File.ReadAllText(Path.Combine(repoRoot, "src", "SketchProMax", "Tools", "FieldTest.Features.cs"));
         var gaps = SketchProMax.Tools.FieldTestCoverage.Gaps(names, caseTools, SketchProMax.UI.CoreRibbonManifest.Text.Split('\n'), probeSource);
         check("field test covers every tool, ribbon entry and feature", gaps.Count == 0, string.Join("; ", gaps));
+        // Bug log: every fixed row has a check that fails if the bug returns, and each "bug#N" is a case tagged Bug = N.
+        var caseBugs = Regex.Matches(caseSource, @"\bBug = (\d+)").Select(m => int.Parse(m.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture)).ToHashSet();
+        var bugLog = SketchProMax.Tools.FieldTestCoverage.FixedBugs(File.ReadAllText(Path.Combine(repoRoot, "docs", "bug-log.md")));
+        var bugGaps = SketchProMax.Tools.FieldTestCoverage.BugGaps(bugLog, caseBugs, caseTools);
+        check($"every fixed bug log row has a field-test check ({bugLog.Count} rows)", bugGaps.Count == 0 && bugLog.Count >= 33, string.Join("; ", bugGaps));
         var manualTools = SketchProMax.Tools.FieldTestCoverage.ManualTools.Keys.Where(t => !names.Contains(t)).ToList();
         check("field-test manual rows name real tools", manualTools.Count == 0, string.Join(", ", manualTools));
 

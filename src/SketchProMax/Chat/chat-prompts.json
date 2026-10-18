@@ -70,7 +70,11 @@
   "export_analytical": "Structure",
   "place_column_section_details": "Rebar",
   "report_bug": "Workflow",
-  "export_chats_and_bugs": "Workflow"
+  "export_chats_and_bugs": "Workflow",
+  "purge_unused": "Check",
+  "delete_unused_views": "Check",
+  "cleanup_imports": "Check",
+  "cleanup_model": "Check"
  },
  "capabilities": [
   {
@@ -262,6 +266,21 @@
    "group": "Workflow",
    "title": "Worksets I hold",
    "prompt": "List the worksets and elements I own and relinquish them."
+  },
+  {
+   "group": "Check",
+   "title": "Purge unused content",
+   "prompt": "Preview a purge of everything unused in this model (families, types, materials, patterns, view templates and filters), keeping our title blocks. Show me the counts by kind before you delete anything."
+  },
+  {
+   "group": "Check",
+   "title": "Tidy views and imports",
+   "prompt": "List the views that are on no sheet and the imported CAD in this model, keeping anything named WORKING or _keep. Show me the preview first, then delete them when I say so."
+  },
+  {
+   "group": "Check",
+   "title": "Model health clean",
+   "prompt": "Run a model health clean preview: unused view templates, unplaced rooms and areas, unplaced groups and unused filters, and list the Revit warnings by type with how to fix the top ones."
   }
  ],
  "projectTypes": [
