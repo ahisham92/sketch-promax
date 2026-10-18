@@ -741,8 +741,13 @@ internal static partial class FieldTest
         const long floor = 50_000; // an empty chat: the instructions and the Revit tools
         if (!Chat.ChatRecall.ShouldAutoShrink(floor + Chat.ChatRecall.AutoShrinkTokens, floor) || Chat.ChatRecall.ShouldAutoShrink(floor + Chat.ChatRecall.AutoShrinkTokens - 1, floor))
             problems.Add("the automatic shrink doesn't start " + Chat.ChatRecall.AutoShrinkTokens + " tokens above an empty chat");
+        // After a shrink the chat must not reread its old transcript (bug: rows named "<id>.jsonl", and the cost of it).
+        var engine = Chat.ClaudeCli.EngineStart(new Chat.ClaudeCli.Install("claude.exe", "0.0.0"), null);
+        if (engine.Arguments.IndexOf(Chat.ClaudeCli.TranscriptRule, StringComparison.Ordinal) < 0) problems.Add("the chat may still reread its old transcript");
+        if (Chat.StepNames.Describe("Read", """{"file_path":"C:\\Users\\a\\.claude\\projects\\x\\5474e2d4-10c8-4f92-9391-6323656e34f9.jsonl"}""") != Chat.StepNames.EarlierMessages)
+            problems.Add("a step on the old transcript would show the file's id");
         return problems.Count == 0
-            ? Pass($"Shrink sends Claude Code's /compact; the compaction and each request's size are read from the stream; a chat shrinks by itself once a message sends {Chat.ChatRecall.AutoShrinkTokens / 1000}k tokens more than the chat did empty (or {Chat.ChatRecall.AutoShrinkMaxTokens / 1000}k in all). Pressing Shrink in a real chat is in the checklist")
+            ? Pass($"Shrink sends Claude Code's /compact; the compaction and each request's size are read from the stream; a chat shrinks by itself once a message sends {Chat.ChatRecall.AutoShrinkTokens / 1000}k tokens more than the chat did empty (or {Chat.ChatRecall.AutoShrinkMaxTokens / 1000}k in all); the chat can't reread its old transcript, and such a step reads \"{Chat.StepNames.EarlierMessages}\". Pressing Shrink in a real chat is in the checklist")
             : Fail(string.Join("; ", problems));
     }
 

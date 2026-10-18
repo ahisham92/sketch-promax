@@ -97,7 +97,7 @@ internal static class StepNames
             // File steps of the chat engine: the file's name says enough.
             foreach (var key in new[] { "file_path", "path" })
                 if (root.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.String && OneLine(v.GetString()) is { Length: > 0 } path)
-                    return Cut(FileName(path), max);
+                    return Cut(EngineFile(path) ?? FileName(path), max);
             if (root.TryGetProperty("pattern", out var p) && p.ValueKind == JsonValueKind.String && OneLine(p.GetString()) is { Length: > 0 } pattern)
                 return Cut(pattern, max);
         }
@@ -112,6 +112,7 @@ internal static class StepNames
     public static string Line(string tool, string text)
     {
         text = OneLine(text);
+        if (EngineFile(text) is { } engine) return engine; // a row saved before 0.34.2 shows the file's name
         if (Legacy.IsMatch(text))
         {
             const string lead = "description=";
@@ -154,6 +155,23 @@ internal static class StepNames
     private static string OneLine(string? text) => Regex.Replace(text ?? "", @"\s+", " ").Trim();
 
     private static string Cut(string text, int max) => text.Length <= max ? text : text.Substring(0, max - 1).TrimEnd() + "…";
+
+    /// <summary>The chat engine's own conversation files (Claude Code's .jsonl transcripts) in plain words.</summary>
+    public const string EarlierMessages = "Look back at earlier messages";
+
+    /// <summary>A large step result the engine saved to a file (Claude Code's tool-results folder).</summary>
+    public const string SavedResult = "Read the full result of an earlier step";
+
+    /// <summary>
+    /// What a file of the chat engine itself is, in words: its conversation transcript ("…/&lt;id&gt;.jsonl") or a step
+    /// result it saved aside; null for the user's own files.
+    /// </summary>
+    private static string? EngineFile(string path)
+    {
+        if (path.EndsWith(".jsonl", StringComparison.OrdinalIgnoreCase)) return EarlierMessages;
+        var p = path.Replace('\\', '/');
+        return p.IndexOf("/tool-results/", StringComparison.OrdinalIgnoreCase) >= 0 || p.IndexOf("/.claude/projects/", StringComparison.OrdinalIgnoreCase) >= 0 ? SavedResult : null;
+    }
 
     private static string FileName(string path)
     {
