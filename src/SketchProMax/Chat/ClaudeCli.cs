@@ -19,6 +19,9 @@ internal static class ClaudeCli
     /// <summary>The official native installer for Windows (code.claude.com/docs/en/setup).</summary>
     public const string InstallCommand = "irm https://claude.ai/install.ps1 | iex";
 
+    /// <summary>The permission rule that keeps the chat from reading Claude Code's transcripts of earlier conversations.</summary>
+    public const string TranscriptRule = "Read(~/.claude/projects/**/*.jsonl)";
+
     /// <summary>The name the chat registers our MCP server under: its tools are mcp__sketch-promax__&lt;tool&gt;.</summary>
     public const string ServerName = "sketch-promax";
 
@@ -163,11 +166,13 @@ internal static class ClaudeCli
         };
         // A connector older than this add-in may not pass SKETCHPROMAX_CHAT on, so Revit would not know to ask: then the
         // code and recipe tools are left out of the chat altogether.
-        if (ConnectorIsOlder())
-        {
-            args.Add("--disallowedTools");
-            args.Add(string.Join(",", SketchProMax.Tools.OutputPaths.CodeTools.Select(t => $"mcp__{ServerName}__{t}")));
-        }
+        // Claude Code's own transcripts of earlier conversations (…\.claude\projects\…\<session>.jsonl): after a shrink
+        // it is told it may read the full transcript, which would send the long conversation again and fill the chat with
+        // file steps. The summary is what a shrink keeps; anything else is asked for or found with recall_chats.
+        var denied = new List<string> { TranscriptRule };
+        if (ConnectorIsOlder()) denied.AddRange(SketchProMax.Tools.OutputPaths.CodeTools.Select(t => $"mcp__{ServerName}__{t}"));
+        args.Add("--disallowedTools");
+        args.Add(string.Join(",", denied));
         if (!string.IsNullOrEmpty(resumeSessionId)) { args.Add("--resume"); args.Add(resumeSessionId!); }
         if (!string.IsNullOrEmpty(model)) { args.Add("--model"); args.Add(model!); }
 
@@ -301,6 +306,9 @@ internal static class ClaudeCli
           in another chat or project ("the same way as in the Tower project", "like last time"), call recall_chats with the words
           that name it, then action=open on the best match and follow its steps and settings here (checking this model
           first). Say in one line which chat you followed. If nothing matches, ask the user which project they mean.
+        - When the chat was shrunk, the summary you have is what it keeps. Don't try to open the earlier conversation's
+          file (the .jsonl transcript): it isn't allowed here, and it would cost far more than it saves. If a detail is
+          missing, read it from the model or ask the user in one line.
         """ + Notes() + Recall();
 
     /// <summary>The memory notes for this chat (global and the open model's), as a block at the end of the prompt.</summary>

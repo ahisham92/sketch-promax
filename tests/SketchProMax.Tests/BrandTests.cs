@@ -62,6 +62,11 @@ internal static class BrandTests
         check("steps: the call's own description", StepNames.Describe("run_revit_query_code", json) == "Read 79 selected piles: current base and top"
             && StepNames.Describe("get_elements", """{"category":"Walls"}""") == "" && StepNames.Describe("x", "not json") == ""
             && StepNames.Describe("Read", """{"file_path":"C:\\a\\b\\notes.md"}""") == "notes.md", StepNames.Describe("run_revit_query_code", json));
+        var transcript = """{"file_path":"C:\\Users\\a\\.claude\\projects\\C--Users-a-AppData\\5474e2d4-10c8-4f92-9391-6323656e34f9.jsonl"}""";
+        check("steps: the engine's own files in plain words", StepNames.Describe("Read", transcript) == StepNames.EarlierMessages
+            && StepNames.Describe("Read", """{"file_path":"C:\\Users\\a\\.claude\\projects\\x\\tool-results\\toolu_1.txt"}""") == StepNames.SavedResult
+            && StepNames.Line("Read", "5474e2d4-10c8-4f92-9391-6323656e34f9.jsonl") == StepNames.EarlierMessages
+            && StepNames.Describe("Read", """{"file_path":"C:\\Jobs\\piles.csv"}""") == "piles.csv", StepNames.Describe("Read", transcript));
         check("steps: the row line", StepNames.Line("run_revit_query_code", "Read 79 selected piles") == "Read 79 selected piles"
             && StepNames.Line("run_revit_code", "") == "Change the model"
             && StepNames.Line("run_revit_code", "description=Set 79 selected pile tops to hi…, code=Fu…") == "Set 79 selected pile tops to hi…"
