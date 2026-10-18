@@ -377,6 +377,8 @@ internal static class FieldTestCoverage
         new(31, ["revit.blocked", "revit.blocked_ui"], "the busy card names no edit mode when there is none"),
         new(32, ["approvals.flow"], "approvals at each level"),
         new(33, ["chat.survives_update", "chat.update_reopen"], "the open chat survives an update"),
+        new(34, ["central.once", "central.real"], "one borrow request per batch, then a pause, on a shared model"),
+        new(35, ["chat.shrink"], "after a shrink the chat relies on the summary and never rereads the old transcript"),
     ];
 
     /// <summary>

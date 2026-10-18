@@ -43,3 +43,5 @@ doesn't cover yet: a report counts as sent once a row below names it by the date
 | 31 | 2026-10-17 | The chat shows a "finish your edit mode" card when Revit is only busy, not in an edit mode | 0.33.3 | Fixed in 0.33.4 (please check) |
 | 32 | 2026-10-17 | Too many approval dialogs: Revit asks before every small change | 0.33.4 | Fixed in 0.33.5 (please check) |
 | 33 | 2026-10-17 | After an in-Revit update the chat opens empty instead of the chat that was open | 0.33.5 | Fixed in 0.33.6 (please check) |
+| 34 | 2026-10-18 | Shared models: Revit shows "Unable to Access the Model … is not currently available" again and again while Sketch ProMax works | 0.34.1 | Fixed in 0.34.2 (please check) |
+| 35 | 2026-10-18 | After Shrink chat, the chat rereads the old conversation file (steps named like a long code ".jsonl") and loses the saving | 0.34.0 | Fixed in 0.34.2 (please check) |
