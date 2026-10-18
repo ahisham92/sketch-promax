@@ -155,15 +155,11 @@ internal sealed class StreamParser
                 events.Add(new RetryEvent(Int(root, "attempt"), Int(root, "max_retries"), Str(root, "error"), Int(root, "retry_delay_ms")));
                 break;
             case "compact_boundary":
-<<<<<<< HEAD
             {
                 var meta = root.TryGetProperty("compact_metadata", out var m) && m.ValueKind == JsonValueKind.Object ? m : default;
                 events.Add(meta.ValueKind == JsonValueKind.Object
                     ? new CompactedEvent(Str(meta, "trigger"), Long(meta, "pre_tokens"))
                     : new CompactedEvent("", 0));
-=======
-                events.Add(new NoticeEvent("The conversation was long, so the earlier part was summarized to keep going."));
->>>>>>> w340-brand
                 break;
             }
             case "permission_denied":

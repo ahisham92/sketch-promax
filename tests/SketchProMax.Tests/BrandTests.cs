@@ -22,7 +22,9 @@ internal static class BrandTests
     ];
 
     // Files that name the model on purpose: the rewriting itself.
-    private static readonly string[] SkippedFiles = ["src/SketchProMax/UI/BrandText.cs", "src/SketchProMax/UI/LoaderBrand.cs"];
+    private static readonly string[] SkippedFiles = ["src/SketchProMax/UI/BrandText.cs", "src/SketchProMax/UI/LoaderBrand.cs",
+        // The summary run's instructions and transcript labels: read by the model only, never shown.
+        "src/SketchProMax/Chat/ChatRecall.cs"];
 
     /// <summary>Literals that may still say Claude, each with its reason. A literal passes when it contains one of them.</summary>
     public static readonly (string Text, string Why)[] Allowed =
