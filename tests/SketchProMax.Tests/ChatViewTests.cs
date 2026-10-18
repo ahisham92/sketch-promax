@@ -21,6 +21,12 @@ internal static class ChatViewTests
         check("stream: a paragraph that turns into a table is drawn again", StreamRender.FirstChanged(para, table) == 0 && table.Count == 2, string.Join("|", table));
         check("stream: Parse matches ParseWithSource", Markdown.Parse("a\n\n- b").Count == 2, "");
 
+        // The chat animation setting.
+        check("motion: every level stores and reads back", MotionLevels.All.All(l => MotionLevels.Parse(MotionLevels.Store(l)) == l), "");
+        check("motion: settings without the setting read as Full", MotionLevels.Parse(null) == Motion.Full && MotionLevels.Parse("") == Motion.Full && MotionLevels.Parse("odd") == Motion.Full, "");
+        check("motion: each level has a label and a hint without the model's name",
+            MotionLevels.All.All(l => MotionLevels.Label(l).Length > 0 && MotionLevels.Hint(l).Length > 0 && !MotionLevels.Hint(l).Contains("Claude")), "");
+
         // Throttle.
         var t0 = new DateTime(2026, 1, 1, 12, 0, 0);
         var throttle = new Throttle(TimeSpan.FromMilliseconds(40));

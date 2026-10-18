@@ -60,6 +60,7 @@
     <Compile Include="../../src/SketchProMax/Bridge/JobControl.cs" Link="JobControl.cs" />
     <Compile Include="../../src/SketchProMax/Chat/JobCardModel.cs" Link="JobCardModel.cs" />
     <Compile Include="../../src/SketchProMax/Chat/StepNames.cs" Link="StepNames.cs" />
+    <Compile Include="../../src/SketchProMax/Chat/MotionLevels.cs" Link="MotionLevels.cs" />
     <Compile Include="../../src/SketchProMax/UI/BrandText.cs" Link="BrandText.cs" />
   </ItemGroup>
   <ItemGroup>

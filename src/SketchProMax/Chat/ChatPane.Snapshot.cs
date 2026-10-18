@@ -199,6 +199,110 @@ internal sealed partial class ChatPane
     }
 
     /// <summary>
+    /// The chat animations (probe chat.motion): the setting's three levels are stored and read back and map to what
+    /// moves; then, in a hidden window at Full, a streamed reply's new text settles to the text colour, a finished step's
+    /// check pops in and settles with no transform, Send and Stop swap with a pop that settles, the thinking mark
+    /// breathes while shown, and the finished glow appears and goes. Your setting is put back afterwards. On Revit's UI
+    /// thread; the task ends on it after about three seconds. Returns the problems found (none: it passed) and what ran.
+    /// </summary>
+    internal static Task<(List<string> Problems, string Ran)> MotionCheck()
+    {
+        var done = new TaskCompletionSource<(List<string>, string)>();
+        var problems = new List<string>();
+        foreach (var level in MotionLevels.All)
+            if (MotionLevels.Parse(MotionLevels.Store(level)) != level) problems.Add($"the level {level} isn't read back as stored");
+        if (MotionLevels.Parse(null) != Motion.Full || MotionLevels.Parse("") != Motion.Full) problems.Add("a settings file without the setting doesn't read as Full");
+        var saved = ChatUi.Setting;
+        var windows = SystemParameters.ClientAreaAnimation;
+        ChatUi.SetMotion(Motion.Off);
+        if (ChatUi.Animate || ChatUi.Lively) problems.Add("at Off something still moves");
+        ChatUi.SetMotion(Motion.Reduced);
+        if (windows && (!ChatUi.Animate || ChatUi.Lively)) problems.Add("Reduced should keep the quick opens and closes only");
+        ChatUi.SetMotion(Motion.Full);
+        if (windows && !ChatUi.Lively) problems.Add("Full doesn't turn the lively motion on");
+        if (!windows && ChatUi.Animate) problems.Add("with Windows' animations off the chat still animates");
+        if (!windows)
+        {
+            ChatUi.SetMotion(saved);
+            done.TrySetResult((problems, "the levels were checked; Windows' animations are off, so nothing moves and the live part was skipped"));
+            return done.Task;
+        }
+
+        var pane = new ChatPane(Snapshot.Sample());
+        var window = new Window
+        {
+            Width = 420, Height = 760, Left = -32000, Top = -32000, WindowStyle = WindowStyle.None, ShowInTaskbar = false,
+            ShowActivated = false, ResizeMode = ResizeMode.NoResize, Title = "Sketch ProMax animation test", Content = pane,
+        };
+        var thinking = ChatUi.Thinking();
+        var reply = new ChatItem { Kind = "assistant" };
+        var step = new ChatItem { Kind = "tool", Name = "get_elements", State = "running", Text = "Walls on Level 1" };
+        FrameworkElement? mark = null;
+        void Finish(Exception? error)
+        {
+            if (error is not null) problems.Add($"{error.GetType().Name}: {error.Message}");
+            pane.StopGlide();
+            try { window.Close(); } catch (InvalidOperationException) { }
+            Brand.ReleaseTheme(pane);
+            ChatUi.SetMotion(saved);
+            done.TrySetResult((problems, "levels stored and read back; at Full a reply streamed, a step finished, Send and Stop swapped, the thinking mark and the glow ran"));
+        }
+        try
+        {
+            window.Show();
+            pane._messages.Children.Add(thinking);
+            // A reply streams in: two paragraphs, drawn through the same throttled path as a real answer.
+            pane.Add(reply);
+            pane._texts["motion"] = (reply, pane._views[reply]);
+            reply.Text = "Found **12 walls** on Level 1.";
+            pane._dirty.Add("motion");
+            pane.RenderDirty();
+            reply.Text += "\n\nThree are thicker than 200 mm.";
+            pane._dirty.Add("motion");
+            pane.RenderDirty();
+            if (!pane._views[reply].Fading) problems.Add("new text in a streamed reply doesn't fade in");
+            // A step runs, then finishes: its check pops in.
+            pane.Add(step);
+            pane.SetTool(pane._rows[step], "done", step.Text, "12 walls");
+            mark = pane._rows[step].Mark.Content as FrameworkElement;
+            if (mark?.RenderTransform is not ScaleTransform) problems.Add("a finished step's check doesn't pop in");
+            // Send turns into Stop and back.
+            pane._turn = new Turn();
+            pane.ShowStatus();
+            if (pane._stop.RenderTransform is not ScaleTransform) problems.Add("Stop doesn't pop in when it takes Send's place");
+            pane._turn = null;
+            pane.ShowStatus();
+            pane.UpdateLayout();
+            if (thinking is not { RenderTransform: ScaleTransform swell } || !swell.HasAnimatedProperties) problems.Add("the thinking mark doesn't breathe while shown");
+            ChatUi.Glow((FrameworkElement)pane._messages.Children[pane._messages.Children.Count - 1]);
+            var layer = System.Windows.Documents.AdornerLayer.GetAdornerLayer(pane._messages);
+            int Glows() => layer?.GetAdorners((UIElement)pane._messages.Children[pane._messages.Children.Count - 1])?.Length ?? 0;
+            if (Glows() == 0) problems.Add("the finished glow doesn't show");
+            // Everything settles: no fade, transform or glow left behind.
+            var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(2400) };
+            timer.Tick += (_, _) =>
+            {
+                timer.Stop();
+                try
+                {
+                    if (pane._views[reply].Fading) problems.Add("the streamed text didn't settle to the text colour");
+                    if (mark is not null && mark.RenderTransform is ScaleTransform) problems.Add("the step's check kept its pop transform");
+                    if (pane._send.RenderTransform is ScaleTransform || pane._stop.RenderTransform is ScaleTransform) problems.Add("Send or Stop kept its pop transform");
+                    if (Glows() > 0) problems.Add("the finished glow didn't go");
+                    pane._messages.Children.Remove(thinking);
+                    pane.UpdateLayout();
+                    if (thinking.RenderTransform is ScaleTransform s2 && s2.HasAnimatedProperties) problems.Add("the thinking mark keeps breathing once hidden");
+                    Finish(null);
+                }
+                catch (Exception ex) { Finish(ex); }
+            };
+            timer.Start();
+        }
+        catch (Exception ex) { Finish(ex); }
+        return done.Task;
+    }
+
+    /// <summary>
     /// The message box, in a hidden window (off screen, never activated) holding a stand-alone pane (probe
     /// chat.composer): typed text starts top-left where the hint was, more lines grow the box with the first line kept
     /// in place, the caret has a visible colour, the box's padding takes clicks, and a click on the card's empty part

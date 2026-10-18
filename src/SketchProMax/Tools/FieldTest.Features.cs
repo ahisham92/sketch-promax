@@ -461,6 +461,7 @@ internal static partial class FieldTest
         await Probe(s, "chat.recall", _ => ChatRecallProbe(s.Folder)).ConfigureAwait(false);
         await Probe(s, "chat.dpi", _ => ChatDpi(s)).ConfigureAwait(false);
         await ProbeCore(s, "chat.frames", () => ChatFrames()).ConfigureAwait(false);
+        await ProbeCore(s, "chat.motion", () => ChatMotion()).ConfigureAwait(false);
         await Probe(s, "chat.composer", _ => ChatComposer()).ConfigureAwait(false);
         await Probe(s, "update.loader", _ => Loader()).ConfigureAwait(false);
         await Probe(s, "update.loader_fixed", _ => LoaderFixed()).ConfigureAwait(false);
@@ -1965,6 +1966,14 @@ internal static partial class FieldTest
                    $"({(average > 0 ? 1000 / average : 0):0} fps), worst {worst:0} ms, {hitches} over {Chat.FrameTimes.HitchMs:0} ms" +
                    (animated ? "" : ". Windows' animations are off, so the pane doesn't animate");
         return Chat.FrameTimes.Smooth(average, worst) ? Pass(line) : Fail(line + ". Expected under 25 ms on average and no frame over 200 ms");
+    }
+
+    /// <summary>The chat animation levels, and at Full each new animation running and settling, in a hidden window.</summary>
+    private static async Task<(string, string)> ChatMotion()
+    {
+        var run = await App.Dispatcher.InvokeAsync(_ => Chat.ChatPane.MotionCheck()).ConfigureAwait(false);
+        var (problems, ran) = await run.ConfigureAwait(false);
+        return problems.Count == 0 ? Pass(char.ToUpperInvariant(ran[0]) + ran.Substring(1)) : Fail(string.Join("; ", problems));
     }
 
     // ---- Prompt enhancer (with chat_round_trip) and the guided checklist ------------------------------------------------

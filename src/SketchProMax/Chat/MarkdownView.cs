@@ -25,6 +25,8 @@ internal sealed class MarkdownView : RichTextBox
         public Block Element = null!;
         public TextBox? Code;
         public string Language = "";
+        /// <summary>The fade this block is part of while its text settles in (see <see cref="FadeIn"/>); null once settled.</summary>
+        public SolidColorBrush? Fade;
     }
 
     private string _shown = "\u0001";
@@ -61,8 +63,12 @@ internal sealed class MarkdownView : RichTextBox
     /// </summary>
     public void SetMuted(bool muted) => Document.SetResourceReference(TextElement.ForegroundProperty, muted ? Brand.K.Muted : Brand.K.Text);
 
-    /// <summary>Shows <paramref name="markdown"/>, drawing again only the blocks that changed.</summary>
-    public void SetMarkdown(string markdown)
+    /// <summary>
+    /// Shows <paramref name="markdown"/>, drawing again only the blocks that changed. With <paramref name="fade"/> (an
+    /// answer streaming in, at the Full animation level), each new block's text eases in from a faint ink to the text
+    /// colour; a block drawn again while it settles keeps its fade going.
+    /// </summary>
+    public void SetMarkdown(string markdown, bool fade = false)
     {
         if (markdown == _shown) return;
         _shown = markdown;
@@ -84,8 +90,12 @@ internal sealed class MarkdownView : RichTextBox
                 _drawn[from].Source = parsed[from].Source;
                 from++;
             }
+            // Blocks before this were there already: new ones fade in (when asked), redrawn ones keep their fade.
+            var known = _drawn.Count;
+            var fading = new Dictionary<int, SolidColorBrush>();
             for (var k = _drawn.Count - 1; k >= from; k--)
             {
+                if (_drawn[k].Fade is { } running) fading[k] = running;
                 doc.Blocks.Remove(_drawn[k].Element);
                 _drawn.RemoveAt(k);
             }
@@ -95,6 +105,8 @@ internal sealed class MarkdownView : RichTextBox
                 drawn.Element = Render(parsed[k].Block, drawn);
                 doc.Blocks.Add(drawn.Element);
                 _drawn.Add(drawn);
+                if (fading.TryGetValue(k, out var brush)) Ink(drawn, brush);
+                else if (fade && k >= known) FadeIn(drawn);
             }
         }
         catch (Exception)
@@ -106,6 +118,49 @@ internal sealed class MarkdownView : RichTextBox
             _plain = true;
         }
         AutomationProperties.SetName(this, markdown.Length > 400 ? markdown.Substring(0, 400) + "…" : markdown);
+    }
+
+    /// <summary>How long a new block's text takes to settle from a faint ink to the text colour.</summary>
+    public const int FadeMs = 320;
+
+    /// <summary>True while any block's text is still settling in (the field test waits for this to end).</summary>
+    public bool Fading => _drawn.Any(d => d.Fade is not null);
+
+    /// <summary>
+    /// Fades a new block's text in by its colour, never its opacity: an opaque brush going from the text colour mixed
+    /// into the page to the text colour itself, so the text keeps ClearType the whole way. Afterwards the block takes
+    /// the document's colour again (theme switches and the muted look keep working).
+    /// </summary>
+    private void FadeIn(Drawn drawn)
+    {
+        if (drawn.Element.ReadLocalValue(TextElement.ForegroundProperty) != DependencyProperty.UnsetValue) return; // a block with its own colour
+        if (TryFindResource(Brand.K.Text) is not SolidColorBrush text || TryFindResource(Brand.K.Bg) is not SolidColorBrush page) return;
+        var to = text.Color;
+        var start = Color.FromRgb(Mix(page.Color.R, to.R), Mix(page.Color.G, to.G), Mix(page.Color.B, to.B));
+        var brush = new SolidColorBrush(start);
+        var settle = new System.Windows.Media.Animation.ColorAnimation(start, to, TimeSpan.FromMilliseconds(FadeMs))
+        {
+            EasingFunction = new System.Windows.Media.Animation.QuadraticEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut },
+        };
+        settle.Completed += (_, _) =>
+        {
+            foreach (var d in _drawn.Where(d => d.Fade == brush))
+            {
+                d.Element.ClearValue(TextElement.ForegroundProperty);
+                d.Fade = null;
+            }
+        };
+        Ink(drawn, brush);
+        brush.BeginAnimation(SolidColorBrush.ColorProperty, settle);
+
+        static byte Mix(byte page, byte text) => (byte)(page + (text - page) * 0.2);
+    }
+
+    private static void Ink(Drawn drawn, SolidColorBrush brush)
+    {
+        if (drawn.Element.ReadLocalValue(TextElement.ForegroundProperty) != DependencyProperty.UnsetValue) return;
+        drawn.Element.Foreground = brush;
+        drawn.Fade = brush;
     }
 
     private static FlowDocument NewDocument()

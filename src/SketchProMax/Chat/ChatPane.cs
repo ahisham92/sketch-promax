@@ -143,7 +143,12 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         public string Outcome = "done";
         /// <summary>The brief this task runs ("" when it runs as typed or had none): see ChatPane.ActiveBrief.</summary>
         public string Brief = "";
+        /// <summary>When the turn started: a long one that finishes glows and flashes Revit's taskbar button (<see cref="Finished"/>).</summary>
+        public DateTime Started = DateTime.UtcNow;
     }
+
+    /// <summary>A task at least this long that finishes gets the finished glow and, when you are in another program, the taskbar flash.</summary>
+    internal static readonly TimeSpan LongTask = TimeSpan.FromSeconds(20);
 
     private sealed class Attachment
     {
@@ -248,6 +253,15 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     {
         Brand.UseTheme(this);
         Resources.MergedDictionaries.Add(ChatUi.Styles());
+        // The animation setting (or Windows' Show animations) changed: hover fades follow at once, no restart needed.
+        ChatUi.WatchWindows();
+        Loaded += (_, _) =>
+        {
+            ChatUi.MotionChanged -= MotionChanged;
+            ChatUi.MotionChanged += MotionChanged;
+            MotionChanged();
+        };
+        Unloaded += (_, _) => ChatUi.MotionChanged -= MotionChanged;
         _sample = sample is not null;
         if (sample is null) Tools.Handoff.ChatPresenter = r => _instance is { } pane && pane.ShowHandoff(r);
         SetResourceReference(BackgroundProperty, Brand.K.Bg);
@@ -499,8 +513,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         var home = new HomeView(UsePrompt, () => Saved);
         PromptsChanged += home.SavedChanged;
         _empty = home;
-        // What Claude is doing: the typing dots and a line, and until the first words a shimmering placeholder.
-        var dots = ChatUi.Dots();
+        // What Claude is doing: the breathing mark and a line, and until the first words a shimmering placeholder.
+        var dots = ChatUi.Thinking();
         var working = new DockPanel();
         DockPanel.SetDock(dots, Dock.Left);
         working.Children.Add(dots);
@@ -994,7 +1008,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         SaveSoon();
         var element = Build(_conv.Items.Count - 1);
         _messages.Children.Add(element);
-        ChatUi.Arrive(element); // eases in; settles at full opacity with no transform
+        // Eases in and settles at full opacity with no transform; your own message rises a little further, from the box.
+        ChatUi.Arrive(element, item.Kind == "user" && ChatUi.Lively ? ChatUi.S6 : ChatUi.S2);
         if (_shimmerShown && item.Kind is "assistant" or "tool") ChatUi.Reveal(_shimmer, _shimmerShown = false);
         if (item.Kind == "user") _follow.Jump(); // sending shows the answer as it comes
         else _follow.Added();
@@ -1392,6 +1407,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
 
     private void SetTool(ToolRow row, string state, string summary, string result)
     {
+        var was = row.Mark.Content is null ? "" : row.Item.State;
         row.Item.State = state;
         row.Item.Text = summary;
         if (result.Length > 0) row.Item.Result = result.Length > MaxResult ? result.Substring(0, MaxResult) + "…" : result;
@@ -1406,12 +1422,11 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         switch (state)
         {
             case "running":
-                mark = Brand.Spinner();
-                mark.SetResourceReference(TextElement.ForegroundProperty, Brand.K.Accent);
+                mark = ChatUi.StepRing();
                 said = "running";
                 break;
             case "done":
-                mark = ChatUi.Glyph(ChatUi.GlyphCheck, Brand.K.SuccessText, 12);
+                mark = ChatUi.StepMark(done: true);
                 said = "succeeded";
                 break;
             case "stopped":
@@ -1419,11 +1434,13 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
                 said = "stopped";
                 break;
             default:
-                mark = ChatUi.Glyph(ChatUi.GlyphCross, Brand.K.DangerText, 11);
+                mark = ChatUi.StepMark(done: false);
                 said = "failed";
                 break;
         }
         row.Mark.Content = mark;
+        // A step that just finished ticks off: its check or cross pops in where the ring was.
+        if (was == "running" && state is "done" or "failed") ChatUi.Pop(mark);
         row.Header.ToolTip = title + " (" + said + ")" + (line != title ? "\n" + line : "") + "\nClick for the input, the result and the elements.";
         AutomationProperties.SetName(row.Header, $"Step {title}, {said}." + (line != title ? " " + line : ""));
         AutomationProperties.SetHelpText(row.Header, "Press Space to show or hide the step's input, result and elements.");
@@ -1431,7 +1448,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         {
             var first = row.Item.Result.Replace("\r", "").Split('\n').FirstOrDefault(l => l.Trim().Length > 0) ?? "";
             row.Detail.Text = first.Length > 240 ? first.Substring(0, 240) + "…" : first;
-            row.Detail.Visibility = Visibility.Visible;
+            if (was == "running") ChatUi.Reveal(row.Detail, true);
+            else row.Detail.Visibility = Visibility.Visible;
         }
         if (row.Header.IsChecked == true) FillDetails(row);
     }
@@ -1701,7 +1719,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         _render.Stop();
         _throttle.Drawn(DateTime.UtcNow);
         foreach (var key in _dirty)
-            if (_texts.TryGetValue(key, out var t)) t.View.SetMarkdown(t.Item.Text);
+            if (_texts.TryGetValue(key, out var t)) t.View.SetMarkdown(t.Item.Text, fade: ChatUi.Lively);
         _dirty.Clear();
         ScrollToEnd();
     }
@@ -1722,8 +1740,11 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         // While Claude works, Stop takes Send's place (Send isn't greyed out: the pane is working, not disabled).
         var sendHadFocus = _send.IsKeyboardFocused;
         var stopHadFocus = _stop.IsKeyboardFocused;
+        var swapped = (_stop.Visibility == Visibility.Visible) != busy;
         _stop.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
         _send.Visibility = busy ? Visibility.Collapsed : Visibility.Visible;
+        // Send turns into Stop and back: the button taking the place pops in (Full animations only).
+        if (swapped && IsVisible) ChatUi.Pop(busy ? _stop : _send, 0.6, 200);
         ShowSteer();
         if (!busy) Brand.SetBusy(_stop, false);
         if (busy && sendHadFocus) _stop.Focus();
@@ -2282,11 +2303,40 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         // Messages sent during the task that no step picked up: sent now (or back in the box after a stop or a switch).
         SendLeftover(left, stopped || _pendingModel is not null);
         ShrinkIfLong(ended, stopped || left.Count > 0);
+        if (ended is { Planning: false, Shrinking: false } && !stopped && ended.Outcome == "done") Finished(ended);
         if (_pendingModel is { } next)
         {
             _pendingModel = null;
             SwitchTo(next.Key, next.Title);
         }
+    }
+
+    /// <summary>Swaps the chat styles for the ones with (or without) hover fades when the animation level changed.</summary>
+    private void MotionChanged()
+    {
+        var want = ChatUi.Styles();
+        var styles = Resources.MergedDictionaries;
+        if (styles.Contains(want)) return;
+        var at = styles.IndexOf(ChatUi.Styles(!ChatUi.Animate));
+        if (at >= 0) styles[at] = want;
+    }
+
+    /// <summary>
+    /// A long task just finished: the last answer or job card glows once in the accent colour (Full animations), and
+    /// Revit's taskbar button flashes when another program is in front (Full and Reduced).
+    /// </summary>
+    private void Finished(Turn turn)
+    {
+        if (DateTime.UtcNow - turn.Started < LongTask || _messages.Children.Count == 0) return;
+        // The answer or job card, not the "Done in…" note after it (each drawn child is item _firstShown + its index).
+        var index = _conv.Items.FindLastIndex(i => i.Kind is "assistant" or "job") - _firstShown;
+        var last = (index >= 0 && index < _messages.Children.Count ? _messages.Children[index] : _messages.Children[_messages.Children.Count - 1]) as FrameworkElement;
+        // After the list has laid out the last message (and glided to it), so the glow sits around what you see.
+        Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() =>
+        {
+            if (last is not null && IsVisible) ChatUi.Glow(last);
+            ChatUi.FlashIfAway(this);
+        }));
     }
 
     private void StopTurn()

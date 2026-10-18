@@ -64,6 +64,9 @@ public sealed class AgentSettings
     /// </summary>
     public bool AllowIssueWithOpenItems { get; set; }
 
+    /// <summary>How much the chat pane moves: full (the default), reduced or off (Chat.MotionLevels). Empty in older files: full.</summary>
+    public string? ChatAnimations { get; set; }
+
     public static string FilePath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "SketchProMax", "settings.json");
 

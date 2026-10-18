@@ -49,6 +49,11 @@ Revit must be running with a model open for the tools to work.
 
 At the first three levels Revit always asks before code Claude wrote (run_revit_code, run_revit_query_code), a recipe or learned tool whose steps are new on this PC, a delete that takes other elements with it, writing over an existing file outside `Documents\SketchProMax` and Sketch ProMax's own folders (new files never ask), value engineering applied to the open model, what-ifs, and accepting or issuing past open issue check items (the last of these at every level). Reads never ask. A brief you run (Brief before running) counts as approving its task, so its steps don't ask again except the risky ones. Each approval dialog says in one line what will change, with the details folded away, and offers **Allow the rest of this task** and **Don't ask again for** that tool (listed in Settings, where **Ask again** clears it).
 
+**Chat animations** (Settings > Chat animations, applied straight away):
+- **Full** (the default): the Sketch ProMax mark breathes while it works, new words of an answer fade in, each step shows a spinning ring and then a check or cross that pops in, Send and Stop morph into each other, your message rises from the box, and when a task of 20 seconds or more ends the answer glows once and Revit's taskbar button flashes if you are in another program.
+- **Reduced**: only quick opens and closes (step details, the history drawer, hover fades) and the small progress spinners; the taskbar still flashes.
+- **Off**: every change shows at once and the taskbar never flashes. With Windows' Show animations off, the chat behaves as Off whatever you pick.
+
 ## Updates
 
 Install once; after that Sketch ProMax updates itself, without restarting Revit. Each time Revit starts, and hourly while it is open, it checks this repository's latest GitHub Release. When there is a newer version a small window shows it downloading (percent and MB), verifying, unpacking and applying; you can hide it and keep working, or cancel the download. As soon as Revit is idle and no job is running, Sketch ProMax switches to the new version in place and says "Updated to X". The Claude app sees the new tool list straight away. Your settings are kept. Turn this off from **Settings**, or check right away with **Check now**.

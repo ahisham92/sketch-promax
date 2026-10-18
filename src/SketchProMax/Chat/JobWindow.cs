@@ -104,7 +104,7 @@ internal static class JobWindow
         };
         // The palette and the chat's styles, made on this thread (the pane's own can't be shared across threads).
         window.Resources.MergedDictionaries.Add(Brand.Palette(dark));
-        try { window.Resources.MergedDictionaries.Add((ResourceDictionary)XamlReader.Parse(ChatStyles.Xaml(ChatUi.RadiusSmall, ChatUi.Radius, SystemParameters.ClientAreaAnimation))); }
+        try { window.Resources.MergedDictionaries.Add((ResourceDictionary)XamlReader.Parse(ChatStyles.Xaml(ChatUi.RadiusSmall, ChatUi.Radius, ChatUi.Animate))); }
         catch (Exception) { /* plain buttons */ }
         window.SetResourceReference(Control.BackgroundProperty, Brand.K.Bg);
         window.SetResourceReference(Control.ForegroundProperty, Brand.K.Text);

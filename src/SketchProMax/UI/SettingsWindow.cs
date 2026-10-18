@@ -11,6 +11,7 @@ public sealed class SettingsWindow : Window
 {
     private readonly AgentSettings _settings = AgentSettings.Load();
     private readonly List<(RadioButton Button, Tools.ApprovalLevel Level)> _levels = [];
+    private readonly List<(RadioButton Button, Chat.Motion Level)> _motion = [];
     private readonly List<string> _noAsk;
     private readonly StackPanel _noAskList = new();
     private readonly CheckBox _autoUpdate = new() { Content = "Update Sketch ProMax automatically", Margin = new Thickness(0, 6, 0, 0) };
@@ -79,7 +80,8 @@ public sealed class SettingsWindow : Window
         _legendSeed.TextChanged += (_, _) => CheckSeed();
         CheckSeed();
         stack.Children.Add(TimeSection());
-        var note = Brand.Text("Changes apply to new chats.", Brand.K.Muted);
+        stack.Children.Add(MotionSection());
+        var note = Brand.Text("Changes apply to new chats; chat animations change straight away.", Brand.K.Muted);
         note.Margin = new Thickness(0, 8, 0, 0);
         stack.Children.Add(note);
         _error.Margin = new Thickness(0, 8, 0, 0);
@@ -226,6 +228,42 @@ public sealed class SettingsWindow : Window
         return section;
     }
 
+    /// <summary>How much the chat pane moves: Full, Reduced or Off, each with what it means.</summary>
+    private StackPanel MotionSection()
+    {
+        var section = new StackPanel { Margin = new Thickness(0, 12, 0, 0) };
+        var heading = Brand.Text("Chat animations", bold: true);
+#if !NETFRAMEWORK
+        AutomationProperties.SetHeadingLevel(heading, AutomationHeadingLevel.Level2);
+#endif
+        section.Children.Add(heading);
+        var current = Chat.MotionLevels.Parse(_settings.ChatAnimations);
+        foreach (var level in Chat.MotionLevels.All)
+        {
+            var radio = new RadioButton
+            {
+                GroupName = "motion", IsChecked = level == current, Margin = new Thickness(0, 6, 0, 0), MinHeight = 24,
+                Content = new StackPanel
+                {
+                    Children =
+                    {
+                        Brand.Text(Chat.MotionLevels.Label(level) + (level == Chat.Motion.Full ? " (recommended)" : "")),
+                        Brand.Text(Chat.MotionLevels.Hint(level) + ".", Brand.K.Muted, size: 11),
+                    },
+                },
+            };
+            AutomationProperties.SetName(radio, "Chat animations: " + Chat.MotionLevels.Label(level));
+            AutomationProperties.SetHelpText(radio, Chat.MotionLevels.Hint(level));
+            _motion.Add((radio, level));
+            section.Children.Add(radio);
+        }
+        var windows = Brand.Text("When Windows' Show animations is off (Settings > Accessibility > Visual effects), the chat doesn't animate whatever you pick.",
+            Brand.K.Muted, size: 11);
+        windows.Margin = new Thickness(0, 6, 0, 0);
+        section.Children.Add(windows);
+        return section;
+    }
+
     /// <summary>Says straight away when the legend seed path points nowhere (saving still works; the tool then ignores it).</summary>
     private void CheckSeed()
     {
@@ -256,6 +294,8 @@ public sealed class SettingsWindow : Window
             return;
         }
         _settings.TimeTracking = _timeOn.IsChecked == true;
+        var motion = _motion.FirstOrDefault(m => m.Button.IsChecked == true).Level;
+        _settings.ChatAnimations = Chat.MotionLevels.Store(motion);
         _settings.IdleMinutes = idle;
         _settings.TimeRates = _rates is { Count: > 0 } ? _rates : null;
         try { _settings.Save(); }
@@ -268,6 +308,7 @@ public sealed class SettingsWindow : Window
         }
         Revit.TimeLog.ReadSettings();
         Bridge.Approvals.RaiseLevelChanged();
+        Chat.ChatUi.SetMotion(motion);
         DialogResult = true;
     }
 }
