@@ -455,6 +455,7 @@ internal static partial class FieldTest
         await Probe(s, "ribbon.registered", app => RibbonRegistered(app, s.Registry)).ConfigureAwait(false);
         await Probe(s, "brand.ribbon", app => BrandRibbon(app)).ConfigureAwait(false);
         await Probe(s, "ribbon.dialogs", _ => Dialogs(s.Registry, s.Folder)).ConfigureAwait(false);
+        await Probe(s, "settings.tabs", _ => SettingsTabs()).ConfigureAwait(false);
         await Probe(s, "favourites", _ => FavouriteRoundTrip()).ConfigureAwait(false);
         await Probe(s, "chat.history", _ => ChatHistoryRoundTrip(s.Folder)).ConfigureAwait(false);
         await Probe(s, "chat.survives_update", _ => ChatSurvivesUpdate(s.Folder)).ConfigureAwait(false);
@@ -635,6 +636,70 @@ internal static partial class FieldTest
         return problems.Count == 0
             ? Pass($"{tools.Count} option windows built; {saved}.")
             : Fail($"{tools.Count - problems.Count} of {tools.Count} option windows built. " + string.Join("; ", problems.Take(10)));
+    }
+
+    /// <summary>
+    /// The Settings window builds with its tabs in order; every setting it saves sits on the tab SettingsLayout names and
+    /// no tab is empty; the long check box label wraps; the header and the Save / Cancel bar leave the page room at the
+    /// smallest size; and the size fits this monitor and a 1080p screen at 100 % and 150 %. Nothing is saved.
+    /// </summary>
+    private static (string, string) SettingsTabs()
+    {
+        var problems = new List<string>();
+        var window = new SettingsWindow();
+        try
+        {
+            static TabItem? TabOf(System.Windows.DependencyObject? node)
+            {
+                while (node is not null and not TabItem) node = System.Windows.LogicalTreeHelper.GetParent(node);
+                return node as TabItem;
+            }
+            var tabs = window.Tabs.Items.OfType<TabItem>().ToList();
+            if (!tabs.Select(t => t.Tag as string).SequenceEqual(SettingsLayout.Tabs.Select(t => t.Key)))
+                problems.Add("tabs are " + string.Join(", ", tabs.Select(t => t.Header)));
+            foreach (var (setting, control) in window.Placed)
+            {
+                var tab = TabOf(control);
+                if (!SettingsLayout.Settings.TryGetValue(setting, out var expected)) problems.Add($"{setting} has no tab in the layout");
+                else if (tab?.Tag as string != expected) problems.Add($"{setting} is on {tab?.Header ?? "no tab"}, not {expected}");
+            }
+            var missing = SettingsLayout.Settings.Keys.Except(window.Placed.Select(p => p.Setting)).ToList();
+            if (missing.Count > 0) problems.Add("no control for " + string.Join(", ", missing));
+            var empty = tabs.Where(t => !window.Placed.Any(p => TabOf(p.Control) == t)).Select(t => t.Header).ToList();
+            if (empty.Count > 0) problems.Add("empty tabs: " + string.Join(", ", empty));
+
+            // At the smallest size: header and foot within the room set aside for them, and the long label wraps on its page.
+            var root = (System.Windows.FrameworkElement)window.Content;
+            root.Measure(new System.Windows.Size(window.MinWidth, window.MinHeight));
+            root.Arrange(new System.Windows.Rect(0, 0, window.MinWidth, window.MinHeight));
+            var chrome = ((System.Windows.Controls.Panel)root).Children.OfType<System.Windows.FrameworkElement>()
+                .Where(c => c is not TabControl).Sum(c => c.DesiredSize.Height);
+            if (chrome > SettingsLayout.Chrome) problems.Add($"header and Save bar take {chrome:0} px, more than the {SettingsLayout.Chrome:0} set aside");
+            if (window.Placed.FirstOrDefault(p => p.Setting == "AllowIssueWithOpenItems").Control is { } openItems)
+            {
+                openItems.Measure(new System.Windows.Size(double.PositiveInfinity, double.PositiveInfinity));
+                var oneLine = openItems.DesiredSize;
+                var page = window.MinWidth - 170 - 40 - 16;
+                openItems.Measure(new System.Windows.Size(page, double.PositiveInfinity));
+                if (oneLine.Width > page && !(openItems.DesiredSize.Height > oneLine.Height + 4)) problems.Add("the open items check box label doesn't wrap");
+            }
+
+            var here = SettingsWindow.RevitWorkArea();
+            if (here.Height > 0 && (window.Height > Math.Floor(here.Height * SettingsLayout.MaxShare) || window.Width > Math.Floor(here.Width * SettingsLayout.MaxShare)))
+                problems.Add($"window {window.Width:0}x{window.Height:0} is over 85 % of this monitor's {here.Width:0}x{here.Height:0}");
+            foreach (var (name, w, h) in new[] { ("this monitor", here.Width, here.Height), ("1080p at 100 %", 1920.0, 1040.0), ("1080p at 150 %", 1280.0, 688.0) })
+            {
+                if (!(h > 0)) continue;
+                var fit = SettingsLayout.Fit(w, h);
+                if (fit.Height > h * SettingsLayout.MaxShare || fit.Width > w * SettingsLayout.MaxShare || fit.MinHeight > fit.Height
+                    || fit.MinHeight - SettingsLayout.Chrome < SettingsLayout.MinPage)
+                    problems.Add($"{name}: {fit.Width:0}x{fit.Height:0} (smallest {fit.MinWidth:0}x{fit.MinHeight:0}) doesn't fit {w:0}x{h:0}");
+            }
+            return problems.Count == 0
+                ? Pass($"{tabs.Count} tabs, {window.Placed.Select(p => p.Setting).Distinct().Count()} settings each on its tab; {window.Width:0}x{window.Height:0} on a {here.Width:0}x{here.Height:0} work area.")
+                : Fail(string.Join("; ", problems.Take(10)));
+        }
+        finally { window.Close(); }
     }
 
     private static InputsWindow Window(IRevitTool tool, IReadOnlyDictionary<string, string>? remembered)

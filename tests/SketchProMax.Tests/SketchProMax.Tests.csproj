@@ -62,6 +62,7 @@
     <Compile Include="../../src/SketchProMax/Chat/StepNames.cs" Link="StepNames.cs" />
     <Compile Include="../../src/SketchProMax/Chat/MotionLevels.cs" Link="MotionLevels.cs" />
     <Compile Include="../../src/SketchProMax/UI/BrandText.cs" Link="BrandText.cs" />
+    <Compile Include="../../src/SketchProMax/UI/SettingsLayout.cs" Link="SettingsLayout.cs" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.8.0" />

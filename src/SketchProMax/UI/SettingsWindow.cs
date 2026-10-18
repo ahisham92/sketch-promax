@@ -1,12 +1,21 @@
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
+using System.Windows.Input;
+using System.Windows.Interop;
+using System.Windows.Markup;
+using System.Windows.Threading;
 using SketchProMax.Settings;
 
 namespace SketchProMax.UI;
 
-/// <summary>Settings dialog opened from the ribbon: when to ask before changes, firm standards, time saved.</summary>
+/// <summary>
+/// Settings dialog opened from the ribbon, in tabs (<see cref="SettingsLayout"/>): Approvals, Chat, Firm standards, Time
+/// tracking, Issue &amp; drawings and Updates. The window fits the monitor Revit is on, each tab's page scrolls on its own
+/// and the Save / Cancel bar stays pinned at the bottom. The tab opened last is opened again.
+/// </summary>
 public sealed class SettingsWindow : Window
 {
     private readonly AgentSettings _settings = AgentSettings.Load();
@@ -14,30 +23,29 @@ public sealed class SettingsWindow : Window
     private readonly List<(RadioButton Button, Chat.Motion Level)> _motion = [];
     private readonly List<string> _noAsk;
     private readonly StackPanel _noAskList = new();
-    private readonly CheckBox _autoUpdate = new() { Content = "Update Sketch ProMax automatically", Margin = new Thickness(0, 6, 0, 0) };
-    private readonly CheckBox _openItems = new()
-    {
-        Content = "Allow issue with open items (each such issue says so, with the reason, in its issue record)", Margin = new Thickness(0, 6, 0, 0),
-    };
+    private readonly CheckBox _autoUpdate = Check("Update Sketch ProMax automatically");
+    private readonly CheckBox _openItems = Check("Allow issue with open items (each such issue says so, with the reason, in its issue record)");
     private readonly TextBox _standards = new()
     {
-        AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, Height = 160, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+        AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, Height = 200, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
     };
 
     private readonly TextBox _legendSeed = new();
     private readonly TextBlock _seedHint = Brand.Text("", Brand.K.WarningText, size: 11);
     private readonly TextBlock _error = Brand.Text("", Brand.K.DangerText);
-    private readonly CheckBox _timeOn = new() { Content = "Count working time and time saved in each model", Margin = new Thickness(0, 4, 0, 0) };
+    private readonly CheckBox _timeOn = Check("Count working time and time saved in each model");
     private readonly TextBox _idle = new() { Width = 56, MinHeight = 26, Margin = new Thickness(6, 0, 6, 0) };
+    private readonly TabControl _tabs = new();
+    private readonly List<(string Setting, FrameworkElement Control)> _placed = [];
     private List<Tools.TimeRate>? _rates;
 
     public SettingsWindow()
     {
         Title = "Sketch ProMax settings";
-        Width = 520;
-        SizeToContent = SizeToContent.Height;
-        WindowStartupLocation = WindowStartupLocation.CenterScreen;
-        ResizeMode = ResizeMode.NoResize;
+        var area = RevitWorkArea();
+        (Width, Height, MinWidth, MinHeight) = SettingsLayout.Fit(area.Width, area.Height);
+        WindowStartupLocation = WindowStartupLocation.CenterOwner;
+        ResizeMode = ResizeMode.CanResize;
         Brand.UseTheme(this);
 
         _noAsk = [.. _settings.NoAskTools ?? []];
@@ -56,62 +64,126 @@ public sealed class SettingsWindow : Window
         var cancel = Brand.Button("Cancel");
         cancel.IsCancel = true;
 
-        var stack = new StackPanel { Margin = new Thickness(18, 14, 18, 14) };
-        stack.Children.Add(ApprovalSection());
-        stack.Children.Add(_autoUpdate);
-        AutomationProperties.SetHelpText(_openItems, "Off: an issue waits until every item of the issue check is fixed or accepted with a reason.");
-        stack.Children.Add(_openItems);
-        var standardsLabel = Brand.Text(
-            "Firm standards (plain English). Sketch ProMax follows these in every conversation, e.g. " +
-            "'Sheet numbers are A-xxx. View names: LEVEL - PURPOSE. Door tags use the Mark parameter.'");
-        standardsLabel.Margin = new Thickness(0, 12, 0, 4);
-        stack.Children.Add(standardsLabel);
-        AutomationProperties.SetName(_standards, "Firm standards");
-        AutomationProperties.SetHelpText(_standards, standardsLabel.Text);
-        stack.Children.Add(_standards);
-        var seedLabel = Brand.Text(
-            "Legend seed file (optional): a firm template or project (.rvt/.rte) with a legend. create_legend copies from it when a model has no legend.");
-        seedLabel.Margin = new Thickness(0, 12, 0, 4);
-        stack.Children.Add(seedLabel);
-        AutomationProperties.SetName(_legendSeed, "Legend seed file");
-        stack.Children.Add(_legendSeed);
-        _seedHint.Margin = new Thickness(0, 2, 0, 0);
-        stack.Children.Add(_seedHint);
-        _legendSeed.TextChanged += (_, _) => CheckSeed();
-        CheckSeed();
-        stack.Children.Add(TimeSection());
-        stack.Children.Add(MotionSection());
-        var note = Brand.Text("Changes apply to new chats; chat animations change straight away.", Brand.K.Muted);
-        note.Margin = new Thickness(0, 8, 0, 0);
-        stack.Children.Add(note);
-        _error.Margin = new Thickness(0, 8, 0, 0);
+        TabStyles(_tabs);
+        AutomationProperties.SetName(_tabs, "Settings sections");
+        foreach (var tab in SettingsLayout.Tabs)
+        {
+            var page = tab.Key switch
+            {
+                SettingsLayout.Approvals => ApprovalPage(),
+                SettingsLayout.Chat => ChatPage(),
+                SettingsLayout.Standards => StandardsPage(),
+                SettingsLayout.Time => TimePage(),
+                SettingsLayout.Issue => IssuePage(),
+                _ => UpdatesPage(),
+            };
+            page.Children.Insert(0, Heading(tab.Name));
+            var intro = Brand.Text(tab.Intro, Brand.K.Muted);
+            intro.Margin = new Thickness(0, 2, 0, 4);
+            page.Children.Insert(1, intro);
+            page.Margin = new Thickness(20, 14, 20, 16);
+            var item = new TabItem
+            {
+                Header = tab.Name, Tag = tab.Key,
+                // Each page scrolls on its own; long lines wrap instead of scrolling sideways.
+                Content = new ScrollViewer
+                {
+                    Content = page, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                    HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Focusable = false,
+                },
+            };
+            AutomationProperties.SetName(item, tab.Name);
+            AutomationProperties.SetHelpText(item, tab.Intro);
+            _tabs.Items.Add(item);
+        }
+        _tabs.SelectedIndex = SettingsLayout.StartIndex(ReadLastTab());
+        Closed += (_, _) => WriteLastTab((_tabs.SelectedItem as TabItem)?.Tag as string);
+
+        // The bar at the foot: always visible, whatever the size of the window or the page.
+        var note = Brand.Text("Changes apply to new chats; chat animations change straight away.", Brand.K.Muted, size: 11);
+        _error.Margin = new Thickness(0, 6, 0, 0);
         _error.Visibility = Visibility.Collapsed;
         AutomationProperties.SetLiveSetting(_error, AutomationLiveSetting.Assertive);
-        stack.Children.Add(_error);
-        stack.Children.Add(Brand.ButtonRow(cancel, save));
+        var buttons = Brand.ButtonRow(cancel, save);
+        buttons.Margin = new Thickness(0, 10, 0, 0);
+        var foot = new Border
+        {
+            BorderThickness = new Thickness(0, 1, 0, 0), Padding = new Thickness(18, 10, 18, 12),
+            Child = new StackPanel { Children = { note, _error, buttons } },
+        };
+        foot.SetResourceReference(Border.BorderBrushProperty, Brand.K.Border);
 
         var root = new DockPanel();
         var header = Brand.Header("Settings", "How Sketch ProMax works in this Revit.");
         DockPanel.SetDock(header, Dock.Top);
         root.Children.Add(header);
-        root.Children.Add(stack);
+        DockPanel.SetDock(foot, Dock.Bottom);
+        root.Children.Add(foot);
+        root.Children.Add(_tabs);
         Content = root;
-        Loaded += (_, _) => _levels.FirstOrDefault(l => l.Button.IsChecked == true).Button?.Focus();
+
+        PreviewKeyDown += OnKey;
+        SourceInitialized += (_, _) => KeepOnScreen();
+        Loaded += (_, _) => FocusPage();
     }
 
-    /// <summary>
-    /// When Revit asks before Claude changes something: the three levels, and the tools the user said not to ask about
-    /// again, each with "Ask again". What is always asked (code, deletes that take other elements, overwriting files,
-    /// what-ifs, the issue gate) is said under the levels.
-    /// </summary>
-    private StackPanel ApprovalSection()
+    /// <summary>Every setting control with the AgentSettings property it edits, for the field test's check that each is on its tab.</summary>
+    internal IReadOnlyList<(string Setting, FrameworkElement Control)> Placed => _placed;
+
+    /// <summary>The tab list, for the field test.</summary>
+    internal TabControl Tabs => _tabs;
+
+    private T Place<T>(string setting, T control) where T : FrameworkElement
     {
-        var section = new StackPanel();
-        var heading = Brand.Text("Ask before changes", bold: true);
+        _placed.Add((setting, control));
+        return control;
+    }
+
+    private static CheckBox Check(string label)
+    {
+        // A wrapping text block, so a long label wraps inside the page instead of being cut off on the right.
+        var box = new CheckBox { Content = Brand.Text(label), Margin = new Thickness(0, 6, 0, 0) };
+        AutomationProperties.SetName(box, label);
+        return box;
+    }
+
+    private static TextBlock Heading(string text)
+    {
+        var heading = Brand.Text(text, size: 15, bold: true);
 #if !NETFRAMEWORK
         AutomationProperties.SetHeadingLevel(heading, AutomationHeadingLevel.Level2);
 #endif
-        section.Children.Add(heading);
+        return heading;
+    }
+
+    private static TextBlock SubHeading(string text)
+    {
+        var heading = Brand.Text(text, bold: true);
+        heading.Margin = new Thickness(0, 14, 0, 2);
+#if !NETFRAMEWORK
+        AutomationProperties.SetHeadingLevel(heading, AutomationHeadingLevel.Level3);
+#endif
+        return heading;
+    }
+
+    private static TextBlock Hint(string text, double top = 6)
+    {
+        var hint = Brand.Text(text, Brand.K.Muted, size: 11);
+        hint.Margin = new Thickness(0, top, 0, 0);
+        return hint;
+    }
+
+    // ---- Pages ---------------------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// When Revit asks before Sketch ProMax changes something: the levels, what is always asked (code, deletes that take
+    /// other elements, overwriting files, what-ifs, the issue gate), and the tools the user said not to ask about again,
+    /// each with "Ask again".
+    /// </summary>
+    private StackPanel ApprovalPage()
+    {
+        var page = new StackPanel();
+        page.Children.Add(SubHeading("Ask before changes"));
         var current = _settings.Approvals;
         foreach (var level in Tools.ApprovalPolicy.Levels)
         {
@@ -130,21 +202,17 @@ public sealed class SettingsWindow : Window
             AutomationProperties.SetName(radio, Tools.ApprovalPolicy.Label(level));
             AutomationProperties.SetHelpText(radio, Tools.ApprovalPolicy.Hint(level));
             _levels.Add((radio, level));
-            section.Children.Add(radio);
+            page.Children.Add(Place("ApprovalLevel", radio));
         }
-        var always = Brand.Text(
+        page.Children.Add(Hint(
             "Asked at the first three levels, whatever you choose: code Sketch ProMax wrote, deletes that take other elements with them, " +
             "overwriting a file outside Documents\\SketchProMax, what-ifs, and value engineering on the open model. Always allow " +
             "runs those too, without asking. Accepting or issuing past open issue check items asks at every level. A brief you " +
-            "run counts as approving its task.", Brand.K.Muted, size: 11);
-        always.Margin = new Thickness(0, 6, 0, 0);
-        section.Children.Add(always);
-        var noAskHeading = Brand.Text("Not asked again", bold: true);
-        noAskHeading.Margin = new Thickness(0, 10, 0, 2);
-        section.Children.Add(noAskHeading);
-        section.Children.Add(_noAskList);
+            "run counts as approving its task."));
+        page.Children.Add(SubHeading("Not asked again"));
+        page.Children.Add(Place("NoAskTools", _noAskList));
         FillNoAsk();
-        return section;
+        return page;
     }
 
     /// <summary>The tools picked with "Don't ask again", each with Ask again, or a line saying there are none.</summary>
@@ -186,57 +254,11 @@ public sealed class SettingsWindow : Window
         }
     }
 
-    /// <summary>Time saved and working time (Revit/TimeLog): on or off, the idle threshold, the by-hand rates, who sees the totals.</summary>
-    private StackPanel TimeSection()
-    {
-        var section = new StackPanel { Margin = new Thickness(0, 12, 0, 0) };
-        var heading = Brand.Text("Time saved and working time", bold: true);
-#if !NETFRAMEWORK
-        AutomationProperties.SetHeadingLevel(heading, AutomationHeadingLevel.Level2);
-#endif
-        section.Children.Add(heading);
-        section.Children.Add(_timeOn);
-        var idleRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 6, 0, 0) };
-        var before = Brand.Text("Stop counting after");
-        before.VerticalAlignment = VerticalAlignment.Center;
-        idleRow.Children.Add(before);
-        AutomationProperties.SetName(_idle, "Minutes without activity before working time stops counting");
-        idleRow.Children.Add(_idle);
-        var after = Brand.Text("minutes without activity");
-        after.VerticalAlignment = VerticalAlignment.Center;
-        idleRow.Children.Add(after);
-        section.Children.Add(idleRow);
-        var ratesRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 6, 0, 0) };
-        var rates = Brand.Button("Edit by-hand rates…");
-        rates.Margin = new Thickness(0);
-        AutomationProperties.SetHelpText(rates, "Minutes per run and per item for each tool. The built-in ones are estimates.");
-        rates.Click += (_, _) =>
-        {
-            var window = new TimeRatesWindow(_rates) { Owner = this };
-            if (window.ShowDialog() == true) _rates = window.Result;
-        };
-        ratesRow.Children.Add(rates);
-        var estimate = Brand.Text("Built-in rates are estimates.", Brand.K.Muted, size: 11);
-        estimate.VerticalAlignment = VerticalAlignment.Center;
-        estimate.Margin = new Thickness(8, 0, 0, 0);
-        ratesRow.Children.Add(estimate);
-        section.Children.Add(ratesRow);
-        var shared = Brand.Text("The totals are kept in the model and in Project Information, per user: in a shared model, anyone who opens it can see them.",
-            Brand.K.Muted, size: 11);
-        shared.Margin = new Thickness(0, 6, 0, 0);
-        section.Children.Add(shared);
-        return section;
-    }
-
     /// <summary>How much the chat pane moves: Full, Reduced or Off, each with what it means.</summary>
-    private StackPanel MotionSection()
+    private StackPanel ChatPage()
     {
-        var section = new StackPanel { Margin = new Thickness(0, 12, 0, 0) };
-        var heading = Brand.Text("Chat animations", bold: true);
-#if !NETFRAMEWORK
-        AutomationProperties.SetHeadingLevel(heading, AutomationHeadingLevel.Level2);
-#endif
-        section.Children.Add(heading);
+        var page = new StackPanel();
+        page.Children.Add(SubHeading("Chat animations"));
         var current = Chat.MotionLevels.Parse(_settings.ChatAnimations);
         foreach (var level in Chat.MotionLevels.All)
         {
@@ -255,14 +277,298 @@ public sealed class SettingsWindow : Window
             AutomationProperties.SetName(radio, "Chat animations: " + Chat.MotionLevels.Label(level));
             AutomationProperties.SetHelpText(radio, Chat.MotionLevels.Hint(level));
             _motion.Add((radio, level));
-            section.Children.Add(radio);
+            page.Children.Add(Place("ChatAnimations", radio));
         }
-        var windows = Brand.Text("When Windows' Show animations is off (Settings > Accessibility > Visual effects), the chat doesn't animate whatever you pick.",
-            Brand.K.Muted, size: 11);
-        windows.Margin = new Thickness(0, 6, 0, 0);
-        section.Children.Add(windows);
-        return section;
+        page.Children.Add(Hint("When Windows' Show animations is off (Settings > Accessibility > Visual effects), the chat doesn't animate whatever you pick."));
+        page.Children.Add(Hint("The model and Brief before running are chosen in the Chat pane, next to the message box.", 12));
+        return page;
     }
+
+    /// <summary>Firm standards in plain English, and the legend seed file with Browse.</summary>
+    private StackPanel StandardsPage()
+    {
+        var page = new StackPanel();
+        var standardsLabel = Brand.Text(
+            "Firm standards (plain English). Sketch ProMax follows these in every conversation, e.g. " +
+            "'Sheet numbers are A-xxx. View names: LEVEL - PURPOSE. Door tags use the Mark parameter.'");
+        standardsLabel.Margin = new Thickness(0, 10, 0, 4);
+        page.Children.Add(standardsLabel);
+        AutomationProperties.SetName(_standards, "Firm standards");
+        AutomationProperties.SetHelpText(_standards, standardsLabel.Text);
+        page.Children.Add(Place("FirmStandards", _standards));
+        page.Children.Add(Hint("Enter starts a new line here; Ctrl+Enter saves."));
+
+        var seedLabel = Brand.Text(
+            "Legend seed file (optional): a firm template or project (.rvt/.rte) with a legend. create_legend copies from it when a model has no legend.");
+        seedLabel.Margin = new Thickness(0, 16, 0, 4);
+        page.Children.Add(seedLabel);
+        var seedRow = new DockPanel();
+        var browse = Brand.Button("Browse…");
+        AutomationProperties.SetName(browse, "Browse for the legend seed file");
+        browse.Click += (_, _) => BrowseSeed();
+        DockPanel.SetDock(browse, Dock.Right);
+        seedRow.Children.Add(browse);
+        AutomationProperties.SetName(_legendSeed, "Legend seed file");
+        seedRow.Children.Add(Place("LegendSeedPath", _legendSeed));
+        page.Children.Add(seedRow);
+        _seedHint.Margin = new Thickness(0, 2, 0, 0);
+        page.Children.Add(_seedHint);
+        _legendSeed.TextChanged += (_, _) => CheckSeed();
+        CheckSeed();
+        return page;
+    }
+
+    private void BrowseSeed()
+    {
+        var dialog = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "Pick the legend seed file",
+            Filter = "Revit projects and templates|*.rvt;*.rte|All files|*.*",
+        };
+        try
+        {
+            var current = _legendSeed.Text.Trim().Trim('"');
+            if (current.Length > 0 && Path.GetDirectoryName(current) is { Length: > 0 } dir && Directory.Exists(dir)) dialog.InitialDirectory = dir;
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException) { }
+        if (dialog.ShowDialog(this) == true) _legendSeed.Text = dialog.FileName;
+        _legendSeed.Focus();
+    }
+
+    /// <summary>Time saved and working time (Revit/TimeLog): on or off, the idle threshold, the by-hand rates, who sees the totals.</summary>
+    private StackPanel TimePage()
+    {
+        var page = new StackPanel();
+        page.Children.Add(Place("TimeTracking", _timeOn));
+        var idleRow = new WrapPanel { Margin = new Thickness(0, 8, 0, 0) };
+        var before = Brand.Text("Stop counting after");
+        before.VerticalAlignment = VerticalAlignment.Center;
+        idleRow.Children.Add(before);
+        AutomationProperties.SetName(_idle, "Minutes without activity before working time stops counting");
+        idleRow.Children.Add(Place("IdleMinutes", _idle));
+        var after = Brand.Text("minutes without activity");
+        after.VerticalAlignment = VerticalAlignment.Center;
+        idleRow.Children.Add(after);
+        page.Children.Add(idleRow);
+        var ratesRow = new WrapPanel { Margin = new Thickness(0, 8, 0, 0) };
+        var rates = Brand.Button("Edit by-hand rates…");
+        rates.Margin = new Thickness(0);
+        AutomationProperties.SetHelpText(rates, "Minutes per run and per item for each tool. The built-in ones are estimates.");
+        rates.Click += (_, _) =>
+        {
+            var window = new TimeRatesWindow(_rates) { Owner = this };
+            if (window.ShowDialog() == true) _rates = window.Result;
+        };
+        ratesRow.Children.Add(Place("TimeRates", rates));
+        var estimate = Brand.Text("Built-in rates are estimates.", Brand.K.Muted, size: 11);
+        estimate.VerticalAlignment = VerticalAlignment.Center;
+        estimate.Margin = new Thickness(8, 0, 0, 0);
+        ratesRow.Children.Add(estimate);
+        page.Children.Add(ratesRow);
+        page.Children.Add(Hint("The totals are kept in the model and in Project Information, per user: in a shared model, anyone who opens it can see them.", 10));
+        return page;
+    }
+
+    /// <summary>What the issue check lets through.</summary>
+    private StackPanel IssuePage()
+    {
+        var page = new StackPanel();
+        const string off = "Off: an issue waits until every item of the issue check is fixed or accepted with a reason.";
+        AutomationProperties.SetHelpText(_openItems, off);
+        page.Children.Add(Place("AllowIssueWithOpenItems", _openItems));
+        page.Children.Add(Hint(off));
+        return page;
+    }
+
+    /// <summary>Automatic updates, the version installed and the last check, and Check now.</summary>
+    private StackPanel UpdatesPage()
+    {
+        var page = new StackPanel();
+        page.Children.Add(Place("AutoUpdate", _autoUpdate));
+        page.Children.Add(Hint("New versions install while Revit stays open and switch over when no job is running."));
+        page.Children.Add(SubHeading("This version"));
+        string state;
+        try { state = Update.Updater.Describe(); }
+        catch (Exception) { state = "Sketch ProMax " + Update.Updater.CurrentText + "."; }
+        page.Children.Add(Brand.Text(state));
+        var check = Brand.Button("Check for updates now");
+        check.HorizontalAlignment = HorizontalAlignment.Left;
+        check.Margin = new Thickness(0, 10, 0, 0);
+        AutomationProperties.SetHelpText(check, "Looks for a newer version now; the update window shows what it finds. It doesn't save the settings here.");
+        check.Click += (_, _) => Commands.CoreCommands.CheckForUpdates();
+        page.Children.Add(check);
+        return page;
+    }
+
+    // ---- Tabs, keys and size ---------------------------------------------------------------------------------------
+
+    /// <summary>The tab list on the left in palette colours (the stock tab look paints fixed light colours, wrong in the dark theme).</summary>
+    private static void TabStyles(TabControl tabs)
+    {
+        const string xaml = """
+            <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                                xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+              <Style x:Key="SpmSettingsTabs" TargetType="TabControl">
+                <Setter Property="Background" Value="Transparent"/>
+                <Setter Property="BorderThickness" Value="0"/>
+                <Setter Property="Padding" Value="0"/>
+                <Setter Property="TabStripPlacement" Value="Left"/>
+                <Setter Property="Template"><Setter.Value>
+                  <ControlTemplate TargetType="TabControl">
+                    <Grid KeyboardNavigation.TabNavigation="Local">
+                      <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                      <Border Background="{DynamicResource SpmSurface}" BorderBrush="{DynamicResource SpmBorder}" BorderThickness="0,0,1,0">
+                        <StackPanel IsItemsHost="True" MinWidth="170" Margin="0,10,0,10" KeyboardNavigation.TabIndex="1"
+                                    KeyboardNavigation.TabNavigation="Once" KeyboardNavigation.DirectionalNavigation="Cycle"/>
+                      </Border>
+                      <ContentPresenter Grid.Column="1" x:Name="PART_SelectedContentHost" ContentSource="SelectedContent"
+                                        KeyboardNavigation.TabIndex="2" KeyboardNavigation.TabNavigation="Local"/>
+                    </Grid>
+                  </ControlTemplate>
+                </Setter.Value></Setter>
+              </Style>
+              <Style TargetType="TabItem">
+                <Setter Property="Foreground" Value="{DynamicResource SpmText}"/>
+                <Setter Property="FocusVisualStyle" Value="{DynamicResource SpmFocusVisual}"/>
+                <Setter Property="FontSize" Value="13"/>
+                <Setter Property="MinHeight" Value="34"/>
+                <Setter Property="Template"><Setter.Value>
+                  <ControlTemplate TargetType="TabItem">
+                    <Grid Background="Transparent" SnapsToDevicePixels="True">
+                      <Border x:Name="bg" Background="Transparent" Margin="6,1,8,1" CornerRadius="4"/>
+                      <Rectangle x:Name="bar" Width="3" HorizontalAlignment="Left" Margin="6,7,0,7" RadiusX="1.5" RadiusY="1.5"
+                                 Fill="{DynamicResource SpmAccent}" Visibility="Collapsed"/>
+                      <ContentPresenter ContentSource="Header" Margin="18,8,16,8" VerticalAlignment="Center" RecognizesAccessKey="True"/>
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                      <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="bg" Property="Background" Value="{DynamicResource SpmSurfaceHover}"/></Trigger>
+                      <Trigger Property="IsSelected" Value="True">
+                        <Setter TargetName="bg" Property="Background" Value="{DynamicResource SpmAccentSoft}"/>
+                        <Setter TargetName="bar" Property="Visibility" Value="Visible"/>
+                        <Setter Property="FontWeight" Value="SemiBold"/>
+                      </Trigger>
+                    </ControlTemplate.Triggers>
+                  </ControlTemplate>
+                </Setter.Value></Setter>
+              </Style>
+            </ResourceDictionary>
+            """;
+        // A styling problem never stops Settings from opening: it falls back to the stock tabs (still on the left).
+        try
+        {
+            var dictionary = (ResourceDictionary)XamlReader.Parse(xaml);
+            tabs.Resources.MergedDictionaries.Add(dictionary);
+            tabs.Style = (Style)dictionary["SpmSettingsTabs"];
+        }
+        catch (Exception) { tabs.TabStripPlacement = Dock.Left; }
+    }
+
+    /// <summary>
+    /// Ctrl+Tab / Ctrl+Shift+Tab (and Ctrl+Page Down / Up) switch tabs from anywhere in the window; Ctrl+Enter saves
+    /// from the standards box, where Enter is a new line. Enter elsewhere is Save (IsDefault), Esc is Cancel (IsCancel).
+    /// </summary>
+    private void OnKey(object sender, KeyEventArgs e)
+    {
+        if ((Keyboard.Modifiers & ModifierKeys.Control) == 0) return;
+        if (e.Key is Key.Tab or Key.PageDown or Key.PageUp)
+        {
+            var back = e.Key == Key.PageUp || (e.Key == Key.Tab && (Keyboard.Modifiers & ModifierKeys.Shift) != 0);
+            _tabs.SelectedIndex = SettingsLayout.Next(Math.Max(0, _tabs.SelectedIndex), back);
+            (_tabs.SelectedItem as TabItem)?.Focus();
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Enter && Keyboard.FocusedElement is TextBox { AcceptsReturn: true })
+        {
+            Save();
+            e.Handled = true;
+        }
+    }
+
+    /// <summary>Focus on opening: the picked approval level on the Approvals tab, else the tab itself.</summary>
+    private void FocusPage()
+    {
+        if ((_tabs.SelectedItem as TabItem)?.Tag as string == SettingsLayout.Approvals
+            && _levels.FirstOrDefault(l => l.Button.IsChecked == true).Button is { } picked)
+            picked.Focus();
+        else (_tabs.SelectedItem as TabItem)?.Focus();
+    }
+
+    /// <summary>Shows the tab holding <paramref name="control"/> and focuses it once its page is on screen.</summary>
+    private void ShowOnTab(string tab, UIElement control)
+    {
+        if (_tabs.Items.OfType<TabItem>().FirstOrDefault(t => t.Tag as string == tab) is { } item) _tabs.SelectedItem = item;
+        Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() => control.Focus()));
+    }
+
+    private static string LastTabFile => Path.Combine(Path.GetDirectoryName(AgentSettings.FilePath)!, "settings-tab.txt");
+
+    private static string? ReadLastTab()
+    {
+        try { return File.Exists(LastTabFile) ? File.ReadAllText(LastTabFile) : null; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException) { return null; }
+    }
+
+    private static void WriteLastTab(string? key)
+    {
+        if (key is null) return;
+        try { SafeFile.Write(LastTabFile, key); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException) { /* opens on the first tab next time */ }
+    }
+
+    /// <summary>
+    /// The work area (taskbar left out) of the monitor Revit is on, in device-independent pixels at that monitor's
+    /// scale; (0, 0) when it can't be read (<see cref="SettingsLayout.Fit"/> then assumes a small laptop screen).
+    /// </summary>
+    internal static (double Width, double Height) RevitWorkArea()
+    {
+        try
+        {
+            var revit = App.MainWindow;
+            if (revit == IntPtr.Zero) return (0, 0);
+            var monitor = MonitorFromWindow(revit, MonitorDefaultToNearest);
+            var info = new MonitorInfo { Size = Marshal.SizeOf<MonitorInfo>() };
+            if (monitor == IntPtr.Zero || !GetMonitorInfo(monitor, ref info)) return (0, 0);
+            uint dpi;
+            try { dpi = GetDpiForWindow(revit); }
+            catch (EntryPointNotFoundException) { dpi = 0; } // before Windows 10 1607
+            return SettingsLayout.ToDips(info.Work.Right - info.Work.Left, info.Work.Bottom - info.Work.Top, dpi > 0 ? dpi / 96.0 : 1);
+        }
+        catch (Exception) { return (0, 0); }
+    }
+
+    /// <summary>Moves the window fully into the work area of Revit's monitor when centring on Revit left part of it outside.</summary>
+    private void KeepOnScreen()
+    {
+        try
+        {
+            var hwnd = new WindowInteropHelper(this).Handle;
+            if (hwnd == IntPtr.Zero || !GetWindowRect(hwnd, out var rect)) return;
+            var monitor = MonitorFromWindow(App.MainWindow != IntPtr.Zero ? App.MainWindow : hwnd, MonitorDefaultToNearest);
+            var info = new MonitorInfo { Size = Marshal.SizeOf<MonitorInfo>() };
+            if (monitor == IntPtr.Zero || !GetMonitorInfo(monitor, ref info)) return;
+            int w = rect.Right - rect.Left, h = rect.Bottom - rect.Top;
+            var x = Math.Max(info.Work.Left, Math.Min(rect.Left, info.Work.Right - w));
+            var y = Math.Max(info.Work.Top, Math.Min(rect.Top, info.Work.Bottom - h));
+            if (x != rect.Left || y != rect.Top) SetWindowPos(hwnd, IntPtr.Zero, x, y, 0, 0, SwpNoSize | SwpNoZOrder | SwpNoActivate);
+        }
+        catch (Exception) { /* stays where it opened */ }
+    }
+
+    private const uint SwpNoSize = 0x0001, SwpNoZOrder = 0x0004, SwpNoActivate = 0x0010, MonitorDefaultToNearest = 2;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct Win32Rect { public int Left, Top, Right, Bottom; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MonitorInfo { public int Size; public Win32Rect Monitor, Work; public uint Flags; }
+
+    [DllImport("user32.dll")] private static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint flags);
+    [DllImport("user32.dll")] private static extern bool GetMonitorInfo(IntPtr monitor, ref MonitorInfo info);
+    [DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr hwnd, out Win32Rect rect);
+    [DllImport("user32.dll", SetLastError = true)] private static extern bool SetWindowPos(IntPtr hwnd, IntPtr after, int x, int y, int cx, int cy, uint flags);
+    [DllImport("user32.dll")] private static extern uint GetDpiForWindow(IntPtr hwnd);
+
+    // ---- Saving --------------------------------------------------------------------------------------------------
 
     /// <summary>Says straight away when the legend seed path points nowhere (saving still works; the tool then ignores it).</summary>
     private void CheckSeed()
@@ -288,9 +594,9 @@ public sealed class SettingsWindow : Window
         _settings.LegendSeedPath = _legendSeed.Text.Trim().Trim('"');
         if (!double.TryParse(_idle.Text.Trim(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.CurrentCulture, out var idle) || idle < 1 || idle > 60)
         {
-            _error.Text = "Type the idle time as a number of minutes from 1 to 60 (5 is usual), then press Save again.";
+            _error.Text = "Type the idle time (Time tracking tab) as a number of minutes from 1 to 60 (5 is usual), then press Save again.";
             _error.Visibility = Visibility.Visible;
-            _idle.Focus();
+            ShowOnTab(SettingsLayout.Time, _idle);
             return;
         }
         _settings.TimeTracking = _timeOn.IsChecked == true;

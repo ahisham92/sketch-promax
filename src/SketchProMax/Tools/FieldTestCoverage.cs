@@ -94,7 +94,10 @@ internal static class FieldTestCoverage
         new("ribbon.dialogs", RibbonArea, "Tool option windows open with saved values", How.Probe, "", "every ribbon tool's options window builds, and a value typed last time is filled in again"),
         new("favourites", RibbonArea, "A favourite added and removed", How.Probe, "", "a ribbon tool is pinned to My tools, found there, and unpinned again"),
         new("ribbon.ui", RibbonArea, "Ribbon look and favourites in use", How.Manual, "", "button labels, icons and the My tools slots are judged by eye",
-            "On the Sketch ProMax tab, check every panel shows its labels and icons (narrow the Revit window too). Open Favourites, pin two tools, reorder them and run one from My tools. Unpin them. Open Settings, change nothing, and close it."),
+            "On the Sketch ProMax tab, check every panel shows its labels and icons (narrow the Revit window too). Open Favourites, pin two tools, reorder them and run one from My tools. Unpin them."),
+        new("settings.tabs", RibbonArea, "Settings: every setting on its tab, and the window fits the screen", How.Probe, "", "the Settings window builds with its six tabs, every setting it saves sits on the tab the layout names (and no tab is empty), and its size stays within 85 % of this monitor's work area and of a 1080p screen at 100 % and 150 % scale; nothing is saved"),
+        new("settings.ui", RibbonArea, "Settings: tabs, size and keys", How.Manual, "", "whether the window fits and reads well is judged on screen",
+            "Click Settings. The window opens over Revit, fully on screen with Save and Cancel visible at the bottom, and the tabs on the left: Approvals, Chat, Firm standards, Time tracking, Issue & drawings, Updates. Make the window as small as it goes: each page scrolls on its own and Save and Cancel stay visible. On Issue & drawings the long check box label wraps instead of being cut off. Press Ctrl+Tab and Ctrl+Shift+Tab: the tabs change. On Firm standards, Enter in the box starts a new line; Browse picks a legend seed file. Open Time tracking, type 0 as the idle minutes and press Enter: Settings stays open on that tab with the message at the bottom; put 5 back. Press Esc: it closes without saving. Open it again: it opens on the tab you left. Switch Revit to the dark theme (and on a 150 % scale monitor if you have one) and check the tabs and text are readable."),
         new("ribbon.status", RibbonArea, "Connection status, Copy prompt, Send view, pane", How.Manual, "", "these show dialogs, use the clipboard or depend on the Claude app running",
             "Click the connection status button (first panel) and read the dialog. Click Copy prompt and paste into Notepad. Open a plan, click Send view and check the picture is attached in the chat. Use More > Show or hide pane twice."),
         new("ribbon.job", RibbonArea, "Job and Update buttons", How.Manual, "", "they show live state that only exists while a job or update runs",
@@ -253,7 +256,7 @@ internal static class FieldTestCoverage
         ["chat"] = "chat.ui", ["status"] = "ribbon.status", ["send-view"] = "ribbon.status", ["copy-prompt"] = "ribbon.status",
         ["open-claude"] = "claude.open", ["pane"] = "ribbon.status", ["export-pack"] = "pack.export", ["job-button"] = "ribbon.job",
         ["update-button"] = "ribbon.job", ["report-bug"] = "bugs.ui", ["bug-folder"] = "bugs.ui", ["export-chats-bugs"] = "bugs.export",
-        ["settings"] = "ribbon.ui", ["help"] = "help", ["self-test"] = "diagnostics", ["field-test"] = "diagnostics",
+        ["settings"] = "settings.ui", ["help"] = "help", ["self-test"] = "diagnostics", ["field-test"] = "diagnostics",
         ["test-checklist"] = "diagnostics", ["time-saved"] = "time.ui", ["issue-check"] = "issue.ui", ["cleanup"] = "cleanup.ui", ["favourites"] = "favourites", ["fav:*"] = "favourites", ["tab:notes"] = "chat.notes",
     };
 
