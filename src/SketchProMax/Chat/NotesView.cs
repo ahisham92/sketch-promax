@@ -27,13 +27,15 @@ internal sealed class NotesView : DockPanel
     {
         if (_instance is not { } view) return;
         view._timer.Stop();
+        ChatPane.RecallChanged -= view.OnRecallChanged;
         Brand.ReleaseTheme(view);
         _instance = null;
     }
 
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromSeconds(2) };
-    private readonly StackPanel _global = new(), _model = new();
-    private readonly TextBlock _modelHeading, _status;
+    private readonly StackPanel _global = new(), _model = new(), _recall = new();
+    private readonly TextBlock _modelHeading, _recallHeading, _status;
+    private int _recallVersion;
     private readonly TextBox _new;
     private readonly ComboBox _scope;
     private string _shown = "";
@@ -53,6 +55,11 @@ internal sealed class NotesView : DockPanel
         _modelHeading = Heading("For this model");
         body.Children.Add(_modelHeading);
         body.Children.Add(_model);
+        _recallHeading = Heading("From earlier chats about this model");
+        body.Children.Add(_recallHeading);
+        body.Children.Add(Brand.Text("What each chat remembered of itself. A new chat about this model starts with the latest three, and " +
+                                     "Claude can search all of them, for every model, when you say \"the same way as in …\".", Brand.K.Muted, 11));
+        body.Children.Add(_recall);
 
         // Add a note by hand.
         body.Children.Add(Heading("Add a note"));
@@ -100,6 +107,7 @@ internal sealed class NotesView : DockPanel
         });
 
         _timer.Tick += (_, _) => Refresh();
+        ChatPane.RecallChanged += OnRecallChanged;
         IsVisibleChanged += (_, e) =>
         {
             if (e.NewValue is true) { Refresh(force: true); _timer.Start(); }
@@ -123,7 +131,7 @@ internal sealed class NotesView : DockPanel
         DateTime stamp;
         try { stamp = File.Exists(MemoryNotes.File) ? File.GetLastWriteTimeUtc(MemoryNotes.File) : default; }
         catch (Exception) { stamp = default; }
-        var key = ModelKey + "\u0001" + stamp.Ticks;
+        var key = ModelKey + "\u0001" + stamp.Ticks + "\u0001" + _recallVersion;
         if (!force && key == _shown) return;
         _shown = key;
         var (global, model) = MemoryNotes.For(MemoryNotes.Load(), ModelKey);
@@ -132,6 +140,77 @@ internal sealed class NotesView : DockPanel
         _modelHeading.Text = (hasModel ? "For this model: " + ChatPane.CurrentModelTitle : "For this model (none open)").ToUpperInvariant();
         Fill(_model, hasModel ? ModelKey : null, hasModel ? model : [], hasModel ? "Nothing for this model yet." : "Open a model to see its notes.", hasModel);
         if (!hasModel) _scope.SelectedIndex = 1;
+        FillRecall();
+    }
+
+    private void OnRecallChanged()
+    {
+        _recallVersion++;
+        if (IsVisible) Refresh();
+    }
+
+    /// <summary>The open model's chats that remembered something, newest first, to read, edit or delete.</summary>
+    private void FillRecall()
+    {
+        _recall.Children.Clear();
+        List<Conversation> chats;
+        try { chats = ChatStore.ForModel(ChatPane.CurrentChatKey).Where(c => c.Recall.Length > 0).Take(10).ToList(); }
+        catch (Exception) { chats = []; }
+        if (chats.Count == 0)
+        {
+            _recall.Children.Add(Brand.Text("Nothing yet. A chat writes its summary when you shrink it, leave it for another chat, or leave it idle.", Brand.K.Muted));
+            return;
+        }
+        foreach (var chat in chats)
+        {
+            var file = chat.File;
+            var title = Brand.Text(chat.Name + " · " + chat.Updated.ToLocalTime().ToString("d MMM yyyy"), Brand.K.Text, ChatUi.SmallSize, bold: true);
+            title.Margin = new Thickness(0, 4, 0, 2);
+            _recall.Children.Add(title);
+            var row = new DockPanel { Margin = new Thickness(0, 0, 0, 6) };
+            var delete = Brand.Button("Delete", Brand.Weight.Danger);
+            delete.MinWidth = 0;
+            delete.MinHeight = 28;
+            delete.VerticalAlignment = VerticalAlignment.Top;
+            delete.ToolTip = "Deletes what this chat remembered. New chats stop getting it; the chat itself stays in the history.";
+            AutomationProperties.SetName(delete, $"Delete what the chat {chat.Name} remembered");
+            var text = new TextBox { Text = chat.Recall, TextWrapping = TextWrapping.Wrap, MinHeight = 28, AcceptsReturn = true, VerticalContentAlignment = VerticalAlignment.Top };
+            AutomationProperties.SetName(text, $"What the chat {chat.Name} remembered");
+            AutomationProperties.SetHelpText(text, "Edit it; it is saved when you leave the box.");
+            var original = chat.Recall;
+            text.LostKeyboardFocus += (_, _) =>
+            {
+                var now = text.Text.Replace("\r", "").Trim();
+                if (now == original) return;
+                SaveRecall(file, now, now.Length == 0 ? "Deleted." : "Saved.");
+                original = now;
+            };
+            text.KeyDown += (_, e) =>
+            {
+                if (e.Key != Key.Escape) return;
+                e.Handled = true;
+                text.Text = original;
+            };
+            delete.Click += (_, _) => SaveRecall(file, "", "Deleted.");
+            DockPanel.SetDock(delete, Dock.Right);
+            row.Children.Add(delete);
+            row.Children.Add(text);
+            _recall.Children.Add(row);
+        }
+    }
+
+    private void SaveRecall(string file, string recall, string done)
+    {
+        try
+        {
+            _status.Text = ChatPane.ChangeSaved(file, c => c.Recall = recall) ? done : "That chat couldn't be found any more.";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _status.Text = $"It could not be saved: {ex.Message}";
+        }
+        _recallVersion++;
+        Refresh(force: true);
     }
 
     private void Fill(StackPanel panel, string? key, List<string> notes, string empty, bool enabled = true)

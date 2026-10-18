@@ -43,6 +43,12 @@ internal sealed class Conversation
     public string SessionId { get; set; } = "";
     public DateTime Updated { get; set; }
     public List<ChatItem> Items { get; set; } = [];
+    /// <summary>What this chat remembered (ChatRecall): a few Markdown bullets that later chats start with; "" until written.</summary>
+    public string Recall { get; set; } = "";
+    /// <summary>How many items the chat had when <see cref="Recall"/> was written, so only a chat with new messages is summarised again.</summary>
+    public int RecallCount { get; set; }
+    /// <summary>The least any request of this chat sent to Claude (tokens): what the chat costs empty, so it shrinks on growth.</summary>
+    public long ContextFloor { get; set; }
 
     /// <summary>The file it was read from (not saved).</summary>
     [JsonIgnore] public string File { get; set; } = "";
@@ -118,7 +124,7 @@ internal static class ChatHistory
     /// <summary>The summary of a conversation: its name (made from the first request when it has none) and searchable text.</summary>
     public static ChatSummary Summarize(Conversation conv)
     {
-        var search = new StringBuilder();
+        var search = new StringBuilder(conv.Recall).Append('\n');
         foreach (var item in conv.Items)
         {
             if (search.Length > 4000) break;

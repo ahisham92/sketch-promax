@@ -113,7 +113,12 @@ internal static class ChatStore
         if (conversation.Items.Count == 0 && conversation.SessionId.Length == 0) return;
         try
         {
-            if (conversation.Items.Count > MaxItems) conversation.Items.RemoveRange(0, conversation.Items.Count - MaxItems);
+            if (conversation.Items.Count > MaxItems)
+            {
+                var removed = conversation.Items.Count - MaxItems;
+                conversation.Items.RemoveRange(0, removed);
+                conversation.RecallCount = Math.Max(0, conversation.RecallCount - removed);
+            }
             var items = JsonSerializer.Serialize(conversation.Items);
             var dirty = items != conversation.SavedItems;
             if (touch && dirty) conversation.Updated = DateTime.UtcNow;

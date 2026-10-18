@@ -81,6 +81,7 @@ internal static class ChatUi
         public const string ChevronRight = "M6,3.5 L10.5,8 L6,12.5";
         public const string ArrowDown = "M8,3 L8,12.5 M4,8.5 L8,12.5 L12,8.5";
         public const string Square = "M5,5 L11,5 L11,11 L5,11 Z";
+        public const string Shrink = "M8,1.5 L8,6 M5.5,3.5 L8,6 L10.5,3.5 M8,14.5 L8,10 M5.5,12.5 L8,10 L10.5,12.5 M3,8 L13,8";
     }
 
     private static ResourceDictionary? _styles;

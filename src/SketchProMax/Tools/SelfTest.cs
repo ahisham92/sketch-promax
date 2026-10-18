@@ -501,6 +501,8 @@ internal static partial class SelfTest
         new("convert_coordinates", _ => new { points = new[] { new[] { 0.0, 0.0, 0.0 } }, from = "internal" }),
         new("get_activity_log", _ => new { limit = 5 }),
         new("memory_note", _ => new { action = "list" }),
+        new("recall_chats", _ => new { action = "search", query = "walls levels" })
+            { Expect = r => r.TryGetProperty("chats", out var c) && c.ValueKind == System.Text.Json.JsonValueKind.Array ? null : "no list of chats: " + r.GetRawText() },
         new("list_recipes", _ => new { }),
         new("list_learned_tools", _ => new { }),
         new("list_steel_connection_types", _ => new { }),

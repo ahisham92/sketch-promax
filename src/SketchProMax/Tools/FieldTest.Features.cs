@@ -457,6 +457,7 @@ internal static partial class FieldTest
         await Probe(s, "favourites", _ => FavouriteRoundTrip()).ConfigureAwait(false);
         await Probe(s, "chat.history", _ => ChatHistoryRoundTrip(s.Folder)).ConfigureAwait(false);
         await Probe(s, "chat.survives_update", _ => ChatSurvivesUpdate(s.Folder)).ConfigureAwait(false);
+        await Probe(s, "chat.recall", _ => ChatRecallProbe(s.Folder)).ConfigureAwait(false);
         await Probe(s, "chat.dpi", _ => ChatDpi(s)).ConfigureAwait(false);
         await ProbeCore(s, "chat.frames", () => ChatFrames()).ConfigureAwait(false);
         await Probe(s, "chat.composer", _ => ChatComposer()).ConfigureAwait(false);
@@ -491,6 +492,8 @@ internal static partial class FieldTest
         await Probe(s, "chat.cli", () => { cli = new ClaudeCliInstall(Chat.ClaudeCli.Find()); return cli.Row(); }).ConfigureAwait(false);
         await Probe(s, "chat.signin", () => SignIn(cli)).ConfigureAwait(false);
         await Probe(s, "chat.roundtrip", () => RoundTrip(cli, s.O.ChatRoundTrip)).ConfigureAwait(false);
+        await Probe(s, "chat.shrink", ShrinkProbe).ConfigureAwait(false);
+        await ProbeCore(s, "chat.recall_run", () => RecallRun(cli, s.O.ChatRoundTrip)).ConfigureAwait(false);
         await ProbeCore(s, "brief.plan", () => BriefPlan(s)).ConfigureAwait(false);
         await ProbeCore(s, "brief.choose", () => BriefChoose(s)).ConfigureAwait(false);
         await Probe(s, "redlines.vision", () => RedlineVision(s, cli)).ConfigureAwait(false);
@@ -677,6 +680,96 @@ internal static partial class FieldTest
         return code == 0 && output.IndexOf("OK", StringComparison.OrdinalIgnoreCase) >= 0
             ? Pass("one short message answered: " + Short(output.Trim(), 120))
             : Fail($"no answer (exit {code}): {Short(output.Trim(), 300)}");
+    }
+
+    /// <summary>
+    /// Shrink chat without using the plan: the /compact line the pane sends, Claude Code's compaction and context-size
+    /// lines read as the pane needs them, and when a chat shrinks by itself.
+    /// </summary>
+    private static (string, string) ShrinkProbe()
+    {
+        var problems = new List<string>();
+        var line = Chat.StreamInput.Compact(Chat.ChatRecall.CompactInstructions);
+        using (var doc = System.Text.Json.JsonDocument.Parse(line))
+        {
+            var content = doc.RootElement.GetProperty("message").GetProperty("content");
+            if (content.ValueKind != System.Text.Json.JsonValueKind.String || !content.GetString()!.StartsWith("/compact ", StringComparison.Ordinal))
+                problems.Add("the shrink message is not a plain /compact command: " + Short(line, 120));
+        }
+        var parser = new Chat.StreamParser();
+        var events = parser.ParseLine("""{"type":"stream_event","event":{"type":"message_start","message":{"id":"m1","usage":{"input_tokens":12,"cache_read_input_tokens":70000,"cache_creation_input_tokens":500}}}}""");
+        events.AddRange(parser.ParseLine("""{"type":"system","subtype":"compact_boundary","compact_metadata":{"trigger":"manual","pre_tokens":70512}}"""));
+        if (events.OfType<Chat.ContextEvent>().SingleOrDefault() is not { Tokens: 70512 }) problems.Add("the size of a request was not read from its usage");
+        if (events.OfType<Chat.CompactedEvent>().SingleOrDefault() is not { Trigger: "manual", PreTokens: 70512 }) problems.Add("the compaction line was not read");
+        const long floor = 50_000; // an empty chat: the instructions and the Revit tools
+        if (!Chat.ChatRecall.ShouldAutoShrink(floor + Chat.ChatRecall.AutoShrinkTokens, floor) || Chat.ChatRecall.ShouldAutoShrink(floor + Chat.ChatRecall.AutoShrinkTokens - 1, floor))
+            problems.Add("the automatic shrink doesn't start " + Chat.ChatRecall.AutoShrinkTokens + " tokens above an empty chat");
+        return problems.Count == 0
+            ? Pass($"Shrink sends Claude Code's /compact; the compaction and each request's size are read from the stream; a chat shrinks by itself once a message sends {Chat.ChatRecall.AutoShrinkTokens / 1000}k tokens more than the chat did empty (or {Chat.ChatRecall.AutoShrinkMaxTokens / 1000}k in all). Pressing Shrink in a real chat is in the checklist")
+            : Fail(string.Join("; ", problems));
+    }
+
+    /// <summary>
+    /// Chats that recall each other, in a temporary history folder: a new chat gets the summaries of the same model's
+    /// other chats (not its own, not another model's), a search finds a chat of another model by its project's name,
+    /// open gives its steps, and a chat is summarised again only when it has new messages.
+    /// </summary>
+    private static (string, string) ChatRecallProbe(string folder)
+    {
+        var root = Path.Combine(folder, "chats-recall");
+        Chat.ChatStore.RootOverride = root;
+        try
+        {
+            Chat.Conversation Make(string key, string request, string recall)
+            {
+                var c = Chat.ChatStore.New(key, key);
+                c.Items.Add(new Chat.ChatItem { Kind = "user", Text = request, Time = DateTime.UtcNow });
+                c.Items.Add(new Chat.ChatItem { Kind = "tool", Name = "create_columns", Text = "600x600 at grid crossings", Input = "{\"size\": \"600x600\"}", State = "done" });
+                c.Items.Add(new Chat.ChatItem { Kind = "assistant", Text = "Done.", Time = DateTime.UtcNow });
+                c.Recall = recall;
+                c.RecallCount = recall.Length > 0 ? c.Items.Count : 0;
+                Chat.ChatStore.Save(c);
+                return c;
+            }
+            var a1 = Make("Field test Tin Can", "Columns on every grid", "- Columns are 600x600 C40 at every grid crossing");
+            var a2 = Make("Field test Tin Can", "Now the beams", "");
+            var b1 = Make("Field test Tower", "Pile caps for the Tower", "- Pile caps 1.5 m deep, 4 piles each");
+            var problems = new List<string>();
+            var block = Chat.ChatRecall.PromptBlock(Chat.ChatStore.ForModel(a2.Key), a2.Key, a2.Id);
+            if (!block.Contains("600x600")) problems.Add("a new chat didn't get its model's earlier summary");
+            if (block.Contains("Pile caps")) problems.Add("a new chat got another model's summary");
+            if (Chat.ChatRecall.PromptBlock(Chat.ChatStore.ForModel(a1.Key), a1.Key, a1.Id).Contains("600x600")) problems.Add("a chat got its own summary back");
+            var hits = Chat.ChatRecall.Search(Chat.ChatStore.All(), "the same way as in the Tower project");
+            if (hits.FirstOrDefault()?.Chat.Id != b1.Id) problems.Add("searching \"the same way as in the Tower project\" didn't find the Tower chat first");
+            var (summary, requests, steps) = Chat.ChatRecall.Details(b1);
+            if (summary.Length == 0 || requests.Count != 1 || steps.Count != 1 || !steps[0].Contains("600x600")) problems.Add("opening a chat didn't give its summary, request and steps");
+            if (Chat.ChatRecall.NeedsSummary(a1)) problems.Add("a chat with nothing new would be summarised again");
+            if (!Chat.ChatRecall.NeedsSummary(a2)) problems.Add("a chat with no summary yet wouldn't be summarised");
+            if (Chat.ChatRecall.CleanSummary("NOTHING").Length != 0 || Chat.ChatRecall.CleanSummary("Summary:\n* one\n- two") != "- one\n- two") problems.Add("a summary answer isn't kept as bullets");
+            return problems.Count == 0
+                ? Pass($"a new chat starts with its model's earlier summaries only; a search finds another model's chat by its project's name ({hits.Count} match(es)); open gives its summary, requests and steps; a chat is summarised again only with new messages (in a temporary history folder)")
+                : Fail(string.Join("; ", problems));
+        }
+        finally { Chat.ChatStore.RootOverride = null; }
+    }
+
+    /// <summary>The real summary run on a short sample chat (uses the plan, so only with chat_round_trip).</summary>
+    private static async Task<(string, string)> RecallRun(ClaudeCliInstall? cli, bool wanted)
+    {
+        if (!wanted)
+            return ("manual", "manual (checklist): off by default because writing a summary uses your Claude plan; the checklist's \"Chats remember each other in the pane\" step covers it. Run with chat_round_trip true to test it here.");
+        if (cli?.Install is not { } install) return Fail("Claude Code is not installed (see chat.cli)");
+        var conv = new Chat.Conversation { Key = "Field test", Title = "Field test", Id = "fieldtest", Name = "Columns" };
+        conv.Items.Add(new Chat.ChatItem { Kind = "user", Text = "Put 600x600 C40 columns at every grid crossing on Levels 1 to 4. We always use C40 for columns on this job." });
+        conv.Items.Add(new Chat.ChatItem { Kind = "tool", Name = "create_columns", Text = "600x600 C40, Levels 1-4, 36 grid crossings", State = "done" });
+        conv.Items.Add(new Chat.ChatItem { Kind = "assistant", Text = "Placed 144 columns, 600x600 C40, at the 36 grid crossings on Levels 1 to 4." });
+        var (text, error) = await Chat.BriefRunner.Run(install, Chat.ChatRecall.SummaryInstructions, Chat.ChatRecall.Transcript(conv), readTools: false,
+            Chat.ChatRecall.SummaryModel, Chat.BriefRunner.DistilTimeoutMs, CancellationToken.None).ConfigureAwait(false);
+        if (error.Length > 0) return Fail("no summary: " + Short(error, 300));
+        var summary = Chat.ChatRecall.CleanSummary(text);
+        return summary.Length > 0 && summary.Contains("C40")
+            ? Pass("a sample chat was summarised: " + Short(summary.Replace("\n", " "), 200))
+            : Fail("the summary misses what the chat decided: " + Short(text, 300));
     }
 
     private static (string, string) Models(string folder)

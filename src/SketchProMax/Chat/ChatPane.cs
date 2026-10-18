@@ -133,6 +133,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     {
         public string Line = "";
         public bool Stopping, Retried, SawText, SawTool, ModelRetried;
+        /// <summary>A Shrink chat turn (/compact); AutoShrink when the pane started it; Compacted once Claude Code did it.</summary>
+        public bool Shrinking, AutoShrink, Compacted;
         public DispatcherTimer? KillTimer;
         /// <summary>True while the prompt enhancer reads the model to make a brief (nothing is sent to the chat yet).</summary>
         public bool Planning;
@@ -287,6 +289,9 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         _newChat.Click += (_, _) => NewChat();
         DockPanel.SetDock(_newChat, Dock.Right);
         top.Children.Add(_newChat);
+        _shrink = ShrinkButton();
+        DockPanel.SetDock(_shrink, Dock.Right);
+        top.Children.Add(_shrink);
         var names = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(ChatUi.S1, 0, 0, 0) };
         _chatName = ChatUi.Small("", Brand.K.Text, bold: true);
         _chatName.FontSize = ChatUi.BodySize;
@@ -803,6 +808,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
                 else if (signIn == ClaudeCli.SignIn.SignedOut) _setup = _setup == Setup.SigningIn ? Setup.SigningIn : Setup.SignedOut;
                 else
                 {
+                    if (_setup != Setup.Ready) RememberLeftOver();
                     _setup = Setup.Ready;
                     if (waiting) Note($"Claude Code {install.Version} is ready. Ask your first question below.");
                 }
@@ -1713,6 +1719,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         if (busy && sendHadFocus) _stop.Focus();
         if (!busy && stopHadFocus) _input.Focus();
         _newChat.IsEnabled = !_stopped;
+        ShowShrink();
         _send.IsEnabled = _attach.IsEnabled = _view.IsEnabled = _prompts.IsEnabled = !_stopped;
         if (_stopped)
         {
@@ -1884,6 +1891,12 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             }
             _engine?.Dispose();
             var resume = _conv.SessionId.Length > 0 && !turn.Retried ? _conv.SessionId : null;
+            if (resume is null)
+            {
+                // A new conversation starts with what earlier chats remembered: the one just left may still be writing it.
+                await WaitForMemory(turn);
+                if (_turn != turn) return;
+            }
             // A new model needs a new Claude Code process; it resumes the same conversation.
             var fresh = new ChatEngine(Dispatcher, _install!, resume, _model);
             fresh.Event += e => { if (_engine == fresh) OnEvent(e); };
@@ -2019,7 +2032,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
                     Note("The Revit tools didn't load in this chat. Run Install.cmd from the Sketch ProMax download again, then press New chat.");
                 else if (server.Status is not ("connected" or "pending" or ""))
                     Note($"The Revit tools didn't connect ({server.Status}). Check that Sketch ProMax is installed (Install.cmd), then press New chat.");
-                if (turn is not null && !turn.Stopping) ShowStatus();
+                if (turn is not null && !turn.Stopping) ShowStatus(turn.Shrinking ? "Shrinking this chat…" : null);
                 break;
             case TextStartEvent start:
             {
@@ -2091,6 +2104,17 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             case NoticeEvent notice:
                 Note(notice.Text);
                 break;
+            case CompactedEvent compacted:
+                Compacted(compacted, turn);
+                break;
+            case ContextEvent context:
+                // The summarising request of a shrink is not what later messages send.
+                if (turn is not { Shrinking: true })
+                {
+                    _contextTokens = context.Tokens;
+                    _conv.ContextFloor = ChatRecall.Floor(_conv.ContextFloor, context.Tokens);
+                }
+                break;
             case ResultEvent end:
                 OnResult(end);
                 break;
@@ -2103,6 +2127,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         if (end.SessionId.Length > 0) _conv.SessionId = end.SessionId;
         RenderDirty();
         if (turn is null) return;
+        if (ShrinkEnded(turn, end)) return;
         var message = end.Text.Trim().Length > 0 ? end.Text.Trim() : string.Join(" ", end.Errors);
         if (end.IsError && !turn.Stopping && !turn.Retried && _engine?.ResumedFrom is not null &&
             message.IndexOf("No conversation found", StringComparison.OrdinalIgnoreCase) >= 0)
@@ -2225,6 +2250,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
 
     private void EndTurn()
     {
+        var ended = _turn;
         if (_turn?.KillTimer is { } timer) timer.Stop();
         // "Done in X. By hand: about Y. Saved: Z." when the task's tools saved any time: on the job card when it has one.
         string? time = null;
@@ -2245,6 +2271,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         TrimDrawn();
         // Messages sent during the task that no step picked up: sent now (or back in the box after a stop or a switch).
         SendLeftover(left, stopped || _pendingModel is not null);
+        ShrinkIfLong(ended, stopped || left.Count > 0);
         if (_pendingModel is { } next)
         {
             _pendingModel = null;
@@ -2301,6 +2328,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         _engine?.Kill();
         _engine = null;
         Save();
+        Remember(_conv);
+        _contextTokens = 0;
         if (left.Count > 0 && _input.Text.Trim().Length == 0) _input.Text = string.Join("\n\n", left.Select(n => n.Text));
         _conv = ChatStore.New(ConversationKey, ConversationTitle);
         ShowConversation();
@@ -2378,6 +2407,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             return;
         }
         Save();
+        Remember(_conv);
+        _contextTokens = 0;
         _engine?.Dispose();
         _engine = null;
         _conv = conv;
@@ -2410,6 +2441,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         {
             _engine?.Dispose();
             _engine = null;
+            _contextTokens = 0;
             _conv = ChatStore.New(ConversationKey, ConversationTitle);
             ShowConversation();
             ShowStatus();
@@ -2428,11 +2460,14 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     {
         if (string.Equals(key, _conv.Key, StringComparison.OrdinalIgnoreCase)) return;
         Save();
+        Remember(_conv);
+        _contextTokens = 0;
         _engine?.Dispose();
         _engine = null;
         _conv = ChatStore.Load(key, title);
         ShowConversation();
         ShowStatus();
+        if (_setup == Setup.Ready) RememberLeftOver();
     }
 
     private void IdleCheck()
@@ -2442,6 +2477,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         {
             _engine.Dispose();
             _engine = null;
+            Remember(_conv);
         }
     }
 
