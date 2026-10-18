@@ -38,8 +38,20 @@ internal sealed record ResultEvent(string Subtype, bool IsError, string Text, st
 /// <summary>system/api_retry: a request failed and is retried.</summary>
 internal sealed record RetryEvent(int Attempt, int MaxRetries, string Error, int DelayMs) : ChatEvent;
 
-/// <summary>A system message the user should see (compaction, a denied permission, a warning).</summary>
+/// <summary>A system message the user should see (a denied permission, a warning).</summary>
 internal sealed record NoticeEvent(string Text) : ChatEvent;
+
+/// <summary>
+/// system/compact_boundary: Claude Code summarised the earlier conversation (Trigger "manual" for /compact, "auto" when
+/// it was nearly full). PreTokens: how big the conversation was before.
+/// </summary>
+internal sealed record CompactedEvent(string Trigger, long PreTokens) : ChatEvent;
+
+/// <summary>
+/// How much of the context a request of the main conversation used (input, cache read and cache write tokens at
+/// message_start): what the next message costs to send again, so the pane knows when to shrink the chat.
+/// </summary>
+internal sealed record ContextEvent(long Tokens) : ChatEvent;
 
 internal sealed record ControlResponseEvent(string RequestId, bool Ok, string Error) : ChatEvent;
 
@@ -143,8 +155,13 @@ internal sealed class StreamParser
                 events.Add(new RetryEvent(Int(root, "attempt"), Int(root, "max_retries"), Str(root, "error"), Int(root, "retry_delay_ms")));
                 break;
             case "compact_boundary":
-                events.Add(new NoticeEvent("The conversation was long, so Claude summarized the earlier part to keep going."));
+            {
+                var meta = root.TryGetProperty("compact_metadata", out var m) && m.ValueKind == JsonValueKind.Object ? m : default;
+                events.Add(meta.ValueKind == JsonValueKind.Object
+                    ? new CompactedEvent(Str(meta, "trigger"), Long(meta, "pre_tokens"))
+                    : new CompactedEvent("", 0));
                 break;
+            }
             case "permission_denied":
             {
                 var tool = Str(root, "tool_name");
@@ -164,6 +181,11 @@ internal sealed class StreamParser
                 _messageId = ev.TryGetProperty("message", out var m) && m.ValueKind == JsonValueKind.Object ? Str(m, "id") : "";
                 if (_messageId.Length == 0) _messageId = "anon-" + ++_anonymous;
                 _blockTool.Clear();
+                if (m.ValueKind == JsonValueKind.Object && m.TryGetProperty("usage", out var usage) && usage.ValueKind == JsonValueKind.Object)
+                {
+                    var used = Long(usage, "input_tokens") + Long(usage, "cache_read_input_tokens") + Long(usage, "cache_creation_input_tokens");
+                    if (used > 0) events.Add(new ContextEvent(used));
+                }
                 break;
             case "content_block_start":
             {
@@ -349,6 +371,14 @@ internal static class StreamInput
         }
         return Encoding.UTF8.GetString(stream.ToArray());
     }
+
+    /// <summary>
+    /// Claude Code's /compact as a user turn: the earlier conversation is replaced by a summary that keeps what the
+    /// instructions name. The content is a plain string, which is how Claude Code recognises a slash command.
+    /// </summary>
+    public static string Compact(string instructions) =>
+        "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":" + JsonSerializer.Serialize(("/compact " + instructions).Trim()) +
+        "},\"parent_tool_use_id\":null}";
 
     /// <summary>Asks Claude Code to stop the current turn (the Agent SDK's interrupt()).</summary>
     public static string Interrupt(string requestId) =>

@@ -297,13 +297,29 @@ internal static class ClaudeCli
         - When the user says something is a bug ("that's a bug", "report this"), call report_bug with one plain line you
           write from the conversation: what they did, what happened, what they expected, and the tool involved. Then say
           the report is saved in Documents\Sketch ProMax\Bugs\Reports.
-        """ + Notes();
+        - Earlier chats: below is what recent chats about this model remembered. When the user refers to something done
+          in another chat or project ("the same way as in the Tower project", "like last time"), call recall_chats with the words
+          that name it, then action=open on the best match and follow its steps and settings here (checking this model
+          first). Say in one line which chat you followed. If nothing matches, ask the user which project they mean.
+        """ + Notes() + Recall();
 
     /// <summary>The memory notes for this chat (global and the open model's), as a block at the end of the prompt.</summary>
     private static string Notes()
     {
         var block = MemoryNotes.PromptFor(ChatPane.CurrentModelKey);
         return block.Length == 0 ? "" : "\n\n" + block;
+    }
+
+    /// <summary>What this model's other chats remembered (ChatRecall), as a block at the end of the prompt.</summary>
+    private static string Recall()
+    {
+        try
+        {
+            var key = ChatPane.CurrentChatKey;
+            var block = ChatRecall.PromptBlock(ChatStore.ForModel(key), key, ChatPane.CurrentChatId);
+            return block.Length == 0 ? "" : "\n\n" + block;
+        }
+        catch (Exception) { return ""; }
     }
 
     /// <summary>Runs a short command hidden and returns its exit code and output (stdout then stderr); -1 on timeout or failure.</summary>

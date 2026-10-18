@@ -264,6 +264,7 @@ public sealed class ToolRegistry
         new SketchProMax.Bugs.ReportBugTool(),
         new SketchProMax.Bugs.ExportChatsAndBugsTool(),
         new MemoryNoteTool(),
+        new RecallChatsTool(),
     ]);
         // Recipes replay other tools, so they need the registry itself.
         registry.Add(new SaveRecipeTool(registry));
