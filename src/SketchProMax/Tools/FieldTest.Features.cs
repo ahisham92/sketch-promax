@@ -507,6 +507,7 @@ internal static partial class FieldTest
         await ProbeCore(s, "brief.choose", () => BriefChoose(s)).ConfigureAwait(false);
         await Probe(s, "redlines.vision", () => RedlineVision(s, cli)).ConfigureAwait(false);
         await Probe(s, "checklist.build", () => ChecklistBuild(s.Folder)).ConfigureAwait(false);
+        await Probe(s, "checklist.pdf", () => ChecklistPdfProbe(s.Folder)).ConfigureAwait(false);
         await Probe(s, "chat.models", () => Models(s.Folder)).ConfigureAwait(false);
         await Probe(s, "chat.prompts", () => Prompts(s.Folder)).ConfigureAwait(false);
         await Probe(s, "chat.notes", Notes).ConfigureAwait(false);
@@ -1844,6 +1845,34 @@ internal static partial class FieldTest
         return problems.Count == 0
             ? Pass($"hints: {string.Join("; ", new[] { "grids", "warnings", "imports" }.Select(k => facts.Hints[k].Text))} Word files written, signed only when ready")
             : Fail(string.Join("; ", problems));
+    }
+
+    /// <summary>A small ready checklist written as Word, then turned into a PDF through Word (off Revit's thread, as the window does).</summary>
+    private static (string, string) ChecklistPdfProbe(string testFolder)
+    {
+        if (Type.GetTypeFromProgID("Word.Application") is null) return ("skip", "Microsoft Word isn't installed on this PC, so Create PDF saves the Word file instead");
+        var def = new ChecklistMath.Definition
+        {
+            Title = "Field test checklist",
+            Fields = [new("Date", "", "date")],
+            Sections = [new("A. Model", [new("1", "1", "Grids are in the model.", "", "", "", "", "", "")])],
+            Signatories = ["Trade BIM coordinator"],
+        };
+        var state = new ChecklistMath.State();
+        state.For("1").Done = ChecklistMath.Yes;
+        var folder = Path.Combine(testFolder, "checklist");
+        Directory.CreateDirectory(folder);
+        var docx = Path.Combine(folder, "pdf-source.docx");
+        var pdf = Path.Combine(folder, "ready.pdf");
+        if (File.Exists(pdf)) File.Delete(pdf);
+        ChecklistDocx.Write(docx, def, state, new ChecklistDocx.Info("Field test", Update.Updater.CurrentText, DateTime.Now), new Dictionary<string, ChecklistDocx.Image>());
+        var watch = Stopwatch.StartNew();
+        ChecklistPdf.Convert(docx, pdf).GetAwaiter().GetResult();
+        var head = new byte[5];
+        using (var f = File.OpenRead(pdf)) _ = f.Read(head, 0, head.Length);
+        return System.Text.Encoding.ASCII.GetString(head) == "%PDF-"
+            ? Pass($"Word made a {new FileInfo(pdf).Length / 1024} KB PDF in {watch.Elapsed.TotalSeconds:0.0} s")
+            : Fail("Word wrote a file that isn't a PDF");
     }
 
     private static (string, string) IssueGateProbe(UIApplication app, State s)

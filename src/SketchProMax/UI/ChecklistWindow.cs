@@ -27,7 +27,7 @@ namespace SketchProMax.UI;
 /// The pre-submission checklist (Issue > Pre-submission checklist): the office's checklist Excel (ChecklistMath) walked
 /// through in stages, one per section, between Project details and Review and sign. Each check is a card with what to
 /// do, how to check it, where it came from, a hint read from the model (ChecklistFacts), Yes / No / N/A and a comment.
-/// Review and sign lists what is still open, takes the signatures and writes the Word file (ChecklistDocx), ready to open
+/// Review and sign lists what is still open, takes the signatures and writes the Word file (ChecklistDocx) or a PDF of it (ChecklistPdf), ready to open
 /// or print. Answers are kept per model between openings. The window doesn't block Revit (go and look, then come back);
 /// it reads the model only, never changes it.
 /// Keys: Y, N, A answer the check in focus and move on; Ctrl+Tab / Ctrl+Shift+Tab change stage; Esc closes.
@@ -49,6 +49,7 @@ internal sealed class ChecklistWindow : Window
     private readonly ProgressBar _bar = new() { Height = 6, Minimum = 0, Maximum = 1, Margin = new Thickness(0, 6, 0, 0) };
     private readonly Button _back = Brand.Button("Back");
     private readonly Button _next = Brand.Button("Next", Brand.Weight.Primary);
+    private readonly Button _pdf = Brand.Button("Create PDF");
     private readonly DispatcherTimer _saveSoon = new() { Interval = TimeSpan.FromMilliseconds(600) };
 
     private readonly Dictionary<string, Card> _cards = new(StringComparer.Ordinal);
@@ -127,20 +128,61 @@ internal sealed class ChecklistWindow : Window
         catch (Exception) { return doc.Title; }
     }
 
-    private static (ChecklistMath.Definition? Def, string Error) LoadDefinition(string? path)
+    /// <summary>
+    /// The add-in's own copy of the office checklist, made the first time it is picked, so the Excel file isn't needed
+    /// after that (moved, renamed, on a drive that isn't there). Kept on this PC only: the checklist is internal.
+    /// </summary>
+    internal static string KeptCopy => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "SketchProMax", "pre-submission checklist.xlsx");
+
+    /// <summary>
+    /// The checklist from the picked Excel file when it is there (a newer revision saved over it is picked up and kept),
+    /// else from the kept copy. An error only when neither can be read.
+    /// </summary>
+    private static (ChecklistMath.Definition? Def, string Error) LoadDefinition(string? path, bool orKept = true)
     {
         path = (path ?? "").Trim().Trim('"');
-        if (path.Length == 0) return (null, "");
+        var error = "";
+        if (path.Length > 0)
+        {
+            try
+            {
+                if (File.Exists(path))
+                {
+                    var def = ChecklistMath.ReadXlsx(path);
+                    Keep(path);
+                    return (def, "");
+                }
+                error = $"The checklist file isn't there any more ({path}). Pick it again.";
+            }
+            catch (InvalidDataException ex) { error = $"Couldn't read the checklist: {ex.Message}"; }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                error = $"Couldn't open the checklist ({ex.Message}). If it is open in Excel, that is fine; check the file is on a drive you can reach, then try again.";
+            }
+        }
+        if (!orKept) return (null, error);
         try
         {
-            if (!File.Exists(path)) return (null, $"The checklist file isn't there any more ({path}). Pick it again.");
-            return (ChecklistMath.ReadXlsx(path), "");
+            if (File.Exists(KeptCopy)) return (ChecklistMath.ReadXlsx(KeptCopy), "");
         }
-        catch (InvalidDataException ex) { return (null, $"Couldn't read the checklist: {ex.Message}"); }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException) { }
+        return (null, error);
+    }
+
+    /// <summary>Copies the picked checklist into the add-in's folder (read shared, as Excel may have it open). Best effort.</summary>
+    private static void Keep(string path)
+    {
+        try
         {
-            return (null, $"Couldn't open the checklist ({ex.Message}). If it is open in Excel, that is fine; check the file is on a drive you can reach, then try again.");
+            if (string.Equals(Path.GetFullPath(path), Path.GetFullPath(KeptCopy), StringComparison.OrdinalIgnoreCase)) return;
+            Directory.CreateDirectory(Path.GetDirectoryName(KeptCopy)!);
+            using var from = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            var temp = KeptCopy + ".new";
+            using (var to = File.Create(temp)) from.CopyTo(to);
+            if (File.Exists(KeptCopy)) File.Delete(KeptCopy);
+            File.Move(temp, KeptCopy);
         }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) { }
     }
 
     private ChecklistWindow(string docKey, ChecklistMath.Definition? def, string error, ChecklistFacts.Result facts)
@@ -165,7 +207,9 @@ internal sealed class ChecklistWindow : Window
 
         _saveSoon.Tick += (_, _) => { _saveSoon.Stop(); SaveDraft(); };
         _back.Click += (_, _) => Move(-1);
-        _next.Click += (_, _) => { if (_stages.SelectedIndex == _stages.Items.Count - 1) CreateFile(); else Move(1); };
+        _next.Click += async (_, _) => { if (_stages.SelectedIndex == _stages.Items.Count - 1) await CreateFile(pdf: false); else Move(1); };
+        _pdf.Click += async (_, _) => await CreateFile(pdf: true);
+        AutomationProperties.SetHelpText(_pdf, "Makes the same checklist as a PDF, through Microsoft Word on this PC.");
         _stages.SelectionChanged += (_, e) => { if (e.Source == _stages) StageChanged(); };
         PreviewKeyDown += OnKey;
         Closed += (_, _) => { _saveSoon.Stop(); SaveDraft(); };
@@ -187,7 +231,7 @@ internal sealed class ChecklistWindow : Window
         _review = null;
         _stages.Items.Clear();
         // The stage list, the progress and the footer buttons are kept between builds: take them out of the old layout first.
-        foreach (var reused in new FrameworkElement[] { _stages, _status, _bar, _back, _next })
+        foreach (var reused in new FrameworkElement[] { _stages, _status, _bar, _back, _pdf, _next })
             if (reused.Parent is System.Windows.Controls.Panel old) old.Children.Remove(reused);
         Content = null;
         LoadDraft();
@@ -196,7 +240,7 @@ internal sealed class ChecklistWindow : Window
         var header = Brand.Header("Pre-submission checklist", subtitle);
         DockPanel.SetDock(header, Dock.Top);
 
-        // The footer: progress on the left, Back / Next (or Create Word file) on the right. Always on screen.
+        // The footer: progress on the left, Back / Next (or Create PDF and Create Word file) on the right. Always on screen.
         var close = Brand.Button("Close");
         close.IsCancel = true;
         close.Click += (_, _) => Close();
@@ -204,7 +248,7 @@ internal sealed class ChecklistWindow : Window
         _status.TextWrapping = TextWrapping.Wrap;
         AutomationProperties.SetName(_bar, "Checks answered");
         var left = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 16, 0), Children = { _status, _bar } };
-        var buttons = Brand.ButtonRow(close, _back, _next);
+        var buttons = Brand.ButtonRow(close, _back, _pdf, _next);
         buttons.Margin = new Thickness(0);
         buttons.VerticalAlignment = VerticalAlignment.Center;
         var footGrid = new Grid();
@@ -312,8 +356,9 @@ internal sealed class ChecklistWindow : Window
         if (_def is null)
         {
             source.Children.Add(Brand.Text("Pick your office's checklist", size: 14, bold: true));
-            source.Children.Add(Para("Choose the pre-submission checklist Excel file (.xlsx) once. Sketch ProMax reads its stages, checks, examples and sign-off from it, " +
-                                     "and picks up a new revision saved over the same file. It is kept on your PC, nowhere else."));
+            source.Children.Add(Para("Choose the pre-submission checklist Excel file (.xlsx) once. Sketch ProMax takes its stages, checks, examples and sign-off into Revit " +
+                                     "and keeps its own copy, so you won't need the Excel file again. A new revision saved over the same file is picked up. " +
+                                     "The checklist stays on your PC, nowhere else."));
             if (_loadError.Length > 0) source.Children.Add(Para(_loadError, Brand.K.DangerText));
             var pick = Brand.Button("Choose the checklist…", Brand.Weight.Primary);
             pick.HorizontalAlignment = HorizontalAlignment.Left;
@@ -326,7 +371,8 @@ internal sealed class ChecklistWindow : Window
         var checks = _def.Items.Count();
         source.Children.Add(Brand.Text(_def.Title, size: 14, bold: true));
         source.Children.Add(Para($"{checks} checks in {_def.Sections.Count} stages · signed by {string.Join(" and ", _def.Signatories)}", Brand.K.Muted));
-        var file = Para(_def.SourcePath, Brand.K.Muted, 11);
+        var kept = string.Equals(_def.SourcePath, KeptCopy, StringComparison.OrdinalIgnoreCase);
+        var file = Para(kept ? "Kept in Sketch ProMax on this PC (the Excel file isn't needed)" : _def.SourcePath, Brand.K.Muted, 11);
         file.TextTrimming = TextTrimming.CharacterEllipsis;
         file.TextWrapping = TextWrapping.NoWrap;
         file.ToolTip = _def.SourcePath;
@@ -413,7 +459,7 @@ internal sealed class ChecklistWindow : Window
         if (dialog.ShowDialog(this) != true) return;
         _saveSoon.Stop();
         SaveDraft();
-        var (def, error) = LoadDefinition(dialog.FileName);
+        var (def, error) = LoadDefinition(dialog.FileName, orKept: false);
         if (def is null)
         {
             _loadError = error;
@@ -685,7 +731,7 @@ internal sealed class ChecklistWindow : Window
         var r = _review = new Review();
         var page = new StackPanel();
         page.Children.Add(Heading("Review and sign"));
-        page.Children.Add(Para("Check the totals, clear anything still open, then create the Word file to print and sign.", Brand.K.Muted));
+        page.Children.Add(Para("Check the totals, clear anything still open, then create the Word file or PDF to print and sign.", Brand.K.Muted));
 
         // Four tiles: Yes, No, N/A, not answered.
         var tiles = new UniformGrid { Columns = 4, Margin = new Thickness(0, 12, 0, 0) };
@@ -718,24 +764,24 @@ internal sealed class ChecklistWindow : Window
         var signOff = Heading("Sign-off", 15);
         signOff.Margin = new Thickness(0, 18, 0, 0);
         page.Children.Add(signOff);
-        page.Children.Add(Para("Signatures go in only when the checklist is ready (nothing No, nothing unanswered). Until then the Word file says NOT READY in red, " +
+        page.Children.Add(Para("Signatures go in only when the checklist is ready (nothing No, nothing unanswered). Until then the file says NOT READY in red, " +
                                "without signatures, so it can be printed for review but can't pass for a signed copy.", Brand.K.Muted));
         foreach (var role in _def!.Signatories) page.Children.Add(SignCard(role));
 
-        // After the file is made: what was written, Open, Print, Show in folder.
+        // After the file is made (Word or PDF): what was written, Open, Print, Show in folder.
         r.Error = Para("", Brand.K.DangerText, 12, 12);
         r.Error.Visibility = Visibility.Collapsed;
         AutomationProperties.SetLiveSetting(r.Error, AutomationLiveSetting.Assertive);
         page.Children.Add(r.Error);
         r.DoneText = Para("", Brand.K.Text, 13, 0);
-        r.OpenFile = Brand.Button("Open in Word", Brand.Weight.Primary);
+        r.OpenFile = Brand.Button("Open", Brand.Weight.Primary);
         r.Print = Brand.Button("Print");
         r.Folder = Brand.Button("Show in folder");
         r.OpenFile.Margin = new Thickness(0, 0, 8, 0);
         r.OpenFile.Click += (_, _) => Shell(r.LastFile, null);
         r.Print.Click += (_, _) => Shell(r.LastFile, "print");
         r.Folder.Click += (_, _) => Shell("explorer.exe", null, $"/select,\"{r.LastFile}\"");
-        AutomationProperties.SetHelpText(r.Print, "Sends the Word file to your default printer through Word.");
+        AutomationProperties.SetHelpText(r.Print, "Sends the file to your default printer.");
         var buttons = new WrapPanel { Margin = new Thickness(0, 10, 0, 0), Children = { r.OpenFile, r.Print, r.Folder } };
         r.Done = new StackPanel { Children = { r.DoneText, buttons } };
         var done = CardBox(r.Done, Brand.K.Raised, Brand.K.Border, 14);
@@ -747,7 +793,7 @@ internal sealed class ChecklistWindow : Window
         var startAgain = Brand.Button("Start again", Brand.Weight.Danger);
         startAgain.HorizontalAlignment = HorizontalAlignment.Left;
         startAgain.Margin = new Thickness(0, 24, 0, 0);
-        AutomationProperties.SetHelpText(startAgain, "Clears every answer, comment and signature for this model. Word files already made are kept.");
+        AutomationProperties.SetHelpText(startAgain, "Clears every answer, comment and signature for this model. Word files and PDFs already made are kept.");
         startAgain.Click += (_, _) => StartAgain();
         page.Children.Add(startAgain);
         return Scroll(page);
@@ -860,8 +906,8 @@ internal sealed class ChecklistWindow : Window
         r.Na.Text = p.NotApplicable.ToString(CultureInfo.CurrentCulture);
         r.Open.Text = p.Open.ToString(CultureInfo.CurrentCulture);
         r.BannerText.Text = p.Ready
-            ? $"Ready for submission: all {p.Total} checks are Yes or N/A. The Word file will carry the signatures."
-            : $"Not ready yet: {p.Open} not answered and {p.No} marked No. You can still make the Word file for review; it says NOT READY and has no signatures.";
+            ? $"Ready for submission: all {p.Total} checks are Yes or N/A. The Word file or PDF will carry the signatures."
+            : $"Not ready yet: {p.Open} not answered and {p.No} marked No. You can still make the Word file or PDF for review; it says NOT READY and has no signatures.";
         r.BannerText.SetResourceReference(TextBlock.ForegroundProperty, p.Ready ? Brand.K.SuccessText : Brand.K.DangerText);
         r.Banner.SetResourceReference(Border.BorderBrushProperty, p.Ready ? Brand.K.SuccessText : Brand.K.DangerText);
 
@@ -878,13 +924,16 @@ internal sealed class ChecklistWindow : Window
         if (problems.Count > 12) r.Problems.Children.Add(Para($"…and {problems.Count - 12} more. Go through the stages on the left: a red ! marks a stage with a No.", Brand.K.Muted, 12, 2));
     }
 
-    // ---- The Word file --------------------------------------------------------------------------------------------
+    // ---- The Word file or PDF-----------------------------------------------------------------------------------------
 
-    private void CreateFile()
+    private async Task CreateFile(bool pdf)
     {
         if (_def is null || _review is not { } r) return;
-        if (Brand.IsBusy(_next)) return;
-        Brand.SetBusy(_next, true, "Creating…");
+        var button = pdf ? _pdf : _next;
+        if (Brand.IsBusy(_next) || Brand.IsBusy(_pdf)) return;
+        Brand.SetBusy(button, true, pdf ? "Creating PDF…" : "Creating…");
+        _pdf.IsEnabled = _next.IsEnabled = false;
+        string? temp = null;
         try
         {
             SaveDraft();
@@ -893,23 +942,55 @@ internal sealed class ChecklistWindow : Window
                 if (Signature.ForWord(SignaturePath(sig)) is { } img) images[sig.Role] = img;
             var folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Sketch ProMax", "Checklists");
             var model = Path.GetFileNameWithoutExtension(ChecklistMath.WorkingName(_facts.Model));
-            var path = Path.Combine(folder, $"{ChecklistMath.SafeName(model)} pre-submission checklist {DateTime.Now:yyyy-MM-dd HHmm}.docx");
-            ChecklistDocx.Write(path, _def, _state, new ChecklistDocx.Info(_facts.Model, Update.Updater.CurrentText, DateTime.Now), images);
+            var name = $"{ChecklistMath.SafeName(model)} pre-submission checklist {DateTime.Now:yyyy-MM-dd HHmm}";
+            var docx = Path.Combine(folder, name + ".docx");
+            var info = new ChecklistDocx.Info(_facts.Model, Update.Updater.CurrentText, DateTime.Now);
+            var path = docx;
+            var note = "";
+            if (pdf)
+            {
+                // The PDF is the Word file laid out by Word, so both look the same. The Word file is only a step on the way.
+                temp = Path.Combine(Path.GetTempPath(), "SketchProMax-checklist-" + Guid.NewGuid().ToString("N") + ".docx");
+                ChecklistDocx.Write(temp, _def, _state, info, images);
+                path = Path.Combine(folder, name + ".pdf");
+                Directory.CreateDirectory(folder);
+                try { await ChecklistPdf.Convert(temp, path); }
+                catch (Exception ex) when (ex is not OutOfMemoryException) // any Word trouble (missing, blocked, an old version): never lose the file
+                {
+                    // No Word to make the PDF with: keep the Word file instead, so the work isn't lost.
+                    File.Copy(temp, docx, overwrite: true);
+                    path = docx;
+                    note = (ex is ChecklistPdf.NoWordException ? ex.Message : "Word couldn't make the PDF (" + ex.Message + ").") +
+                           " The PDF is made through Word, so the Word file was saved instead. Open it and use File > Save As > PDF if you need one.";
+                }
+            }
+            else ChecklistDocx.Write(docx, _def, _state, info, images);
+
             var p = ChecklistMath.Count(_def.Items, _state);
+            var kind = path.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase) ? "PDF" : "Word file";
             r.LastFile = path;
-            r.Error.Visibility = Visibility.Collapsed;
-            r.DoneText.Text = (p.Ready ? "Signed checklist created: " : "Checklist created for review (NOT READY, no signatures): ") + Path.GetFileName(path) +
+            r.Error.Text = note;
+            r.Error.Visibility = note.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+            r.DoneText.Text = (p.Ready ? $"Signed checklist created ({kind}): " : $"Checklist created for review ({kind}, NOT READY, no signatures): ") + Path.GetFileName(path) +
                               "\nIn Documents\\Sketch ProMax\\Checklists.";
+            r.OpenFile.Content = kind == "PDF" ? "Open PDF" : "Open in Word";
             ((Border)r.Done.Tag).Visibility = Visibility.Visible;
             r.OpenFile.Focus();
-            ActivityLog.Note("checklist_word", $"{p.Yes} yes, {p.No} no, {p.NotApplicable} n/a, {p.Open} open, ready {p.Ready}");
+            ActivityLog.Note(kind == "PDF" ? "checklist_pdf" : "checklist_word", $"{p.Yes} yes, {p.No} no, {p.NotApplicable} n/a, {p.Open} open, ready {p.Ready}");
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
         {
-            r.Error.Text = $"Couldn't write the Word file ({ex.Message}). Check that Documents\\Sketch ProMax\\Checklists can be written to and isn't full, then try again.";
+            r.Error.Text = $"Couldn't write the {(pdf ? "PDF" : "Word file")} ({ex.Message}). Check that Documents\\Sketch ProMax\\Checklists can be written to, isn't full, " +
+                           "and that an older copy isn't open in another program, then try again.";
             r.Error.Visibility = Visibility.Visible;
         }
-        finally { Brand.SetBusy(_next, false); }
+        finally
+        {
+            if (temp is not null) { try { File.Delete(temp); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { } }
+            Brand.SetBusy(button, false);
+            _pdf.IsEnabled = _next.IsEnabled = true;
+            StageButtonText();
+        }
     }
 
     private void Shell(string file, string? verb, string? args = null)
@@ -924,7 +1005,7 @@ internal sealed class ChecklistWindow : Window
         {
             if (_review is null) return;
             _review.Error.Text = verb == "print"
-                ? $"Couldn't print it ({ex.Message}). Open it in Word and print from there."
+                ? $"Couldn't print it ({ex.Message}). Open it and print from there."
                 : $"Couldn't open it ({ex.Message}). The file is {_review.LastFile}.";
             _review.Error.Visibility = Visibility.Visible;
         }
@@ -950,6 +1031,7 @@ internal sealed class ChecklistWindow : Window
         if (last) RefreshReview();
         StageButtonText();
         _next.IsEnabled = _def is not null && _stages.Items.Count > 1;
+        _pdf.Visibility = last ? Visibility.Visible : Visibility.Collapsed;
         Changed(refresh: false);
     }
 
@@ -1043,7 +1125,7 @@ internal sealed class ChecklistWindow : Window
         RefreshReview();
     }
 
-    /// <summary>The primary button: "Next: (stage)", or Create Word file on the last stage.</summary>
+    /// <summary>The primary button: "Next: (stage)", or Create Word file on the last stage (Create PDF sits beside it).</summary>
     private void StageButtonText()
     {
         if (Brand.IsBusy(_next)) return;
@@ -1110,7 +1192,7 @@ internal sealed class ChecklistWindow : Window
     private void StartAgain()
     {
         // A plain message box: this window is modeless, outside a Revit API call, where Revit's own dialogs aren't allowed.
-        if (MessageBox.Show(this, "Clear every answer, comment and signature for this model? Word files you made are kept.", "Sketch ProMax pre-submission checklist",
+        if (MessageBox.Show(this, "Clear every answer, comment and signature for this model? Word files and PDFs you made are kept.", "Sketch ProMax pre-submission checklist",
                 MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No) != MessageBoxResult.Yes) return;
         try { if (File.Exists(_draftPath)) File.Delete(_draftPath); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }

@@ -434,7 +434,7 @@ public sealed class SettingsWindow : Window
         ShowSignature();
 
         page.Children.Add(SubHeading("Checklist"));
-        page.Children.Add(Brand.Text("The office's pre-submission checklist (.xlsx). The checklist window reads it each time and picks up a new revision saved over it."));
+        page.Children.Add(Brand.Text("The office's pre-submission checklist (.xlsx). Sketch ProMax keeps a copy on this PC, so after the first time the Excel file isn't needed; a new revision saved over it is picked up."));
         var pathRow = new DockPanel { Margin = new Thickness(0, 4, 0, 0) };
         var browse = Brand.Button("Browse…");
         AutomationProperties.SetName(browse, "Browse for the checklist Excel file");
