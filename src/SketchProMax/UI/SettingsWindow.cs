@@ -13,7 +13,7 @@ namespace SketchProMax.UI;
 
 /// <summary>
 /// Settings dialog opened from the ribbon, in tabs (<see cref="SettingsLayout"/>): Approvals, Chat, Firm standards, Time
-/// tracking, Issue &amp; drawings and Updates. The window fits the monitor Revit is on, each tab's page scrolls on its own
+/// tracking, Issue &amp; drawings, Sign-off and Updates. The window fits the monitor Revit is on, each tab's page scrolls on its own
 /// and the Save / Cancel bar stays pinned at the bottom. The tab opened last is opened again.
 /// </summary>
 public sealed class SettingsWindow : Window
@@ -35,6 +35,12 @@ public sealed class SettingsWindow : Window
     private readonly TextBlock _error = Brand.Text("", Brand.K.DangerText);
     private readonly CheckBox _timeOn = Check("Count working time and time saved in each model");
     private readonly TextBox _idle = new() { Width = 56, MinHeight = 26, Margin = new Thickness(6, 0, 6, 0) };
+    private readonly TextBox _sigName = new() { MinHeight = 26 };
+    private readonly ComboBox _sigRole = new() { IsEditable = true, MinHeight = 26 };
+    private readonly System.Windows.Controls.Image _sigPreview = new() { MaxHeight = 70, MaxWidth = 260, Stretch = System.Windows.Media.Stretch.Uniform, HorizontalAlignment = HorizontalAlignment.Left };
+    private readonly TextBlock _sigHint = Brand.Text("", Brand.K.Muted, size: 11);
+    private readonly TextBox _checklistPath = new();
+    private string _sigImage = "";
     private readonly TabControl _tabs = new();
     private readonly List<(string Setting, FrameworkElement Control)> _placed = [];
     private List<Tools.TimeRate>? _rates;
@@ -56,6 +62,10 @@ public sealed class SettingsWindow : Window
         _timeOn.IsChecked = _settings.TimeTracking;
         _idle.Text = _settings.IdleMinutes.ToString("0.#", System.Globalization.CultureInfo.CurrentCulture);
         _rates = _settings.TimeRates;
+        _sigName.Text = _settings.SignatureName ?? "";
+        _sigRole.Text = _settings.SignatureRole ?? "";
+        _sigImage = _settings.SignatureImage ?? "";
+        _checklistPath.Text = _settings.ChecklistPath ?? "";
 
         // One primary action: Save (Enter, except inside the standards box where Enter starts a new line). Esc cancels.
         var save = Brand.Button("Save", Brand.Weight.Primary);
@@ -75,6 +85,7 @@ public sealed class SettingsWindow : Window
                 SettingsLayout.Standards => StandardsPage(),
                 SettingsLayout.Time => TimePage(),
                 SettingsLayout.Issue => IssuePage(),
+                SettingsLayout.SignOff => SignOffPage(),
                 _ => UpdatesPage(),
             };
             page.Children.Insert(0, Heading(tab.Name));
@@ -380,6 +391,107 @@ public sealed class SettingsWindow : Window
         return page;
     }
 
+    /// <summary>
+    /// The pre-submission checklist's sign-off: your name, the role you sign as, your signature picture (kept as a copy
+    /// next to the settings, so moving the original doesn't lose it) and the office's checklist Excel file.
+    /// </summary>
+    private StackPanel SignOffPage()
+    {
+        var page = new StackPanel();
+        page.Children.Add(Label("Your name, as it goes on the signed checklist"));
+        AutomationProperties.SetName(_sigName, "Your name on the signed checklist");
+        page.Children.Add(Place("SignatureName", _sigName));
+
+        page.Children.Add(Label("You sign as"));
+        foreach (var role in new[] { "Trade BIM coordinator", "Trade group leader" }) _sigRole.Items.Add(role);
+        AutomationProperties.SetName(_sigRole, "The sign-off role you sign as");
+        AutomationProperties.SetHelpText(_sigRole, "Pick one or type the role as the checklist names it. Your signature goes in that row.");
+        page.Children.Add(Place("SignatureRole", _sigRole));
+        page.Children.Add(Hint("Pick one, or type the role as your checklist names it. Your signature goes in that row; the other signs by hand or with a picture you pick in the checklist."));
+
+        page.Children.Add(Label("Your signature picture (PNG or JPG, on a white or clear background)"));
+        var frame = new Border { BorderThickness = new Thickness(1), Padding = new Thickness(8), MinHeight = 60, CornerRadius = new CornerRadius(4), Child = _sigPreview };
+        frame.SetResourceReference(Border.BorderBrushProperty, Brand.K.Border);
+        // White under the picture in both themes: signatures are dark ink on white paper.
+        frame.Background = Brand.Brush(System.Windows.Media.Colors.White);
+        frame.HorizontalAlignment = HorizontalAlignment.Left;
+        frame.MinWidth = 280;
+        AutomationProperties.SetName(_sigPreview, "Your signature");
+        page.Children.Add(frame);
+        var row = new WrapPanel { Margin = new Thickness(0, 8, 0, 0) };
+        var choose = Brand.Button("Choose picture…");
+        choose.Margin = new Thickness(0);
+        AutomationProperties.SetHelpText(choose, "Pick a scan or photo of your signature. A copy is kept with your settings.");
+        choose.Click += (_, _) => ChooseSignature();
+        row.Children.Add(Place("SignatureImage", choose));
+        var remove = Brand.Button("Remove picture", Brand.Weight.Danger);
+        AutomationProperties.SetHelpText(remove, "Removes your signature picture from Sketch ProMax when you press Save. Checklists already made keep theirs.");
+        remove.Click += (_, _) => { _sigImage = ""; ShowSignature(); };
+        row.Children.Add(remove);
+        page.Children.Add(row);
+        _sigHint.Margin = new Thickness(0, 4, 0, 0);
+        page.Children.Add(_sigHint);
+        ShowSignature();
+
+        page.Children.Add(SubHeading("Checklist"));
+        page.Children.Add(Brand.Text("The office's pre-submission checklist (.xlsx). The checklist window reads it each time and picks up a new revision saved over it."));
+        var pathRow = new DockPanel { Margin = new Thickness(0, 4, 0, 0) };
+        var browse = Brand.Button("Browse…");
+        AutomationProperties.SetName(browse, "Browse for the checklist Excel file");
+        browse.Click += (_, _) =>
+        {
+            var dialog = new Microsoft.Win32.OpenFileDialog { Title = "Pick the pre-submission checklist", Filter = "Excel workbooks|*.xlsx|All files|*.*" };
+            if (dialog.ShowDialog(this) == true) _checklistPath.Text = dialog.FileName;
+            _checklistPath.Focus();
+        };
+        DockPanel.SetDock(browse, Dock.Right);
+        pathRow.Children.Add(browse);
+        AutomationProperties.SetName(_checklistPath, "Checklist Excel file");
+        pathRow.Children.Add(Place("ChecklistPath", _checklistPath));
+        page.Children.Add(pathRow);
+        page.Children.Add(Hint("Empty: the checklist window asks for it the first time."));
+        return page;
+    }
+
+    private static TextBlock Label(string text)
+    {
+        var label = Brand.Text(text);
+        label.Margin = new Thickness(0, 12, 0, 4);
+        return label;
+    }
+
+    private void ChooseSignature()
+    {
+        var dialog = new Microsoft.Win32.OpenFileDialog { Title = "Pick your signature picture", Filter = "Pictures|*.png;*.jpg;*.jpeg|All files|*.*" };
+        if (dialog.ShowDialog(this) != true) return;
+        try
+        {
+            var bytes = File.ReadAllBytes(dialog.FileName);
+            if (Tools.ChecklistDocx.ImageKind(bytes) is null || Tools.ChecklistDocx.ImageSize(bytes) is null)
+            {
+                _sigHint.Text = "That file isn't a PNG or JPG picture. Save the signature as PNG or JPG and pick it again.";
+                _sigHint.SetResourceReference(TextBlock.ForegroundProperty, Brand.K.DangerText);
+                return;
+            }
+            _sigImage = dialog.FileName;
+            ShowSignature();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _sigHint.Text = $"Couldn't read the picture ({ex.Message}). Copy it to your PC and pick it again.";
+            _sigHint.SetResourceReference(TextBlock.ForegroundProperty, Brand.K.DangerText);
+        }
+    }
+
+    private void ShowSignature()
+    {
+        _sigPreview.Source = Signature.Load(_sigImage);
+        _sigHint.SetResourceReference(TextBlock.ForegroundProperty, Brand.K.Muted);
+        _sigHint.Text = _sigPreview.Source is null
+            ? (_sigImage.Length > 0 ? "The picture can't be read any more. Choose it again." : "No signature picture: checklists leave your box empty to sign by hand.")
+            : "This picture goes on checklists that are ready to submit (nothing No, nothing unanswered).";
+    }
+
     /// <summary>Automatic updates, the version installed and the last check, and Check now.</summary>
     private StackPanel UpdatesPage()
     {
@@ -604,6 +716,17 @@ public sealed class SettingsWindow : Window
         _settings.ChatAnimations = Chat.MotionLevels.Store(motion);
         _settings.IdleMinutes = idle;
         _settings.TimeRates = _rates is { Count: > 0 } ? _rates : null;
+        _settings.SignatureName = _sigName.Text.Trim();
+        _settings.SignatureRole = _sigRole.Text.Trim();
+        _settings.ChecklistPath = _checklistPath.Text.Trim().Trim('"');
+        try { _settings.SignatureImage = Signature.Keep(_sigImage); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _error.Text = $"Couldn't keep a copy of the signature picture: {ex.Message}\nPick it again from a folder on your PC, then press Save again.";
+            _error.Visibility = Visibility.Visible;
+            ShowOnTab(SettingsLayout.SignOff, _sigName);
+            return;
+        }
         try { _settings.Save(); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
         {

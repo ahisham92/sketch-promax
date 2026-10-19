@@ -484,6 +484,7 @@ internal static partial class FieldTest
         await Probe(s, "time.export", app => TimeExport(app, s)).ConfigureAwait(false);
         await Probe(s, "time.queue", app => TimeQueue(app, s)).ConfigureAwait(false);
         await Probe(s, "issue.gate", app => IssueGateProbe(app, s)).ConfigureAwait(false);
+        await Probe(s, "checklist.word", app => ChecklistProbe(app, s)).ConfigureAwait(false);
         await Probe(s, "package.sentence", app => PackageSentence(app, s)).ConfigureAwait(false);
         await Probe(s, "package.skip", app => PackageSkip(app, s)).ConfigureAwait(false);
         await Probe(s, "redlines.pdf", app => RedlinePdf(app, s)).ConfigureAwait(false);
@@ -1797,6 +1798,54 @@ internal static partial class FieldTest
     /// sheet on re-check; accepting the rest with a reason must clear the gate, and stay accepted on the next check.
     /// The gate's per-model file goes to the test folder.
     /// </summary>
+    /// <summary>
+    /// The pre-submission checklist on the test project: the hints for three checks the model can answer, then the Word
+    /// file signed (everything Y or NA) and not ready (one N), opened again as a package to check what is in it.
+    /// </summary>
+    private static (string, string) ChecklistProbe(UIApplication app, State s)
+    {
+        if (TestDoc(app, s, out var why) is not { } doc) return Fail(why);
+        var problems = new List<string>();
+        ChecklistMath.Item Check(string id, string text) => new(id, id, text, "", "", "", id == "1" ? "High" : "", "", ChecklistMath.AutoKey(text));
+        var def = new ChecklistMath.Definition
+        {
+            Title = "Field test checklist",
+            Fields = [new("Model file name", "", "model_file"), new("Date", "", "date")],
+            Sections = [new("A. Model", [Check("1", "Grids are in the model and visible in plans."), Check("2", "Warnings are fixed."), Check("3", "No imported CAD. Typical details are drawn in Revit.")])],
+            Signatories = ["Trade BIM coordinator", "Trade group leader"],
+        };
+        var facts = ChecklistFacts.Read(doc, def);
+        foreach (var key in new[] { "grids", "warnings", "imports" })
+            if (!facts.Hints.TryGetValue(key, out var hint) || hint.Text.StartsWith("Couldn't", StringComparison.Ordinal)) problems.Add($"no {key} hint{(hint is null ? "" : ": " + hint.Text)}");
+        if (!facts.Fields.TryGetValue("model_file", out var model) || model.Length == 0) problems.Add("the model file name wasn't read");
+
+        var state = new ChecklistMath.State();
+        foreach (var item in def.Items) state.For(item.Id).Done = item.Id == "3" ? ChecklistMath.NotApplicable : ChecklistMath.Yes;
+        state.Signatures.Add(new ChecklistMath.Signature { Role = "Trade BIM coordinator", Name = "Field Test", Mode = ChecklistMath.SignMode.Image, Date = "01-Jan-2026" });
+        var png = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==");
+        var images = new Dictionary<string, ChecklistDocx.Image> { ["Trade BIM coordinator"] = new(png, "png") };
+        var folder = Path.Combine(s.Folder, "checklist");
+        string Read(string path, out int pictures)
+        {
+            using var zip = System.IO.Compression.ZipFile.OpenRead(path);
+            pictures = zip.Entries.Count(e => e.FullName.StartsWith("word/media/", StringComparison.Ordinal));
+            using var reader = new StreamReader(zip.GetEntry("word/document.xml")!.Open());
+            return reader.ReadToEnd();
+        }
+        var ready = Path.Combine(folder, "ready.docx");
+        ChecklistDocx.Write(ready, def, state, new ChecklistDocx.Info(model ?? "", Update.Updater.CurrentText, DateTime.Now), images);
+        var text = Read(ready, out var pics);
+        if (!text.Contains("READY FOR SUBMISSION") || pics != 1) problems.Add($"the ready file has {pics} pictures and {(text.Contains("READY FOR SUBMISSION") ? "says" : "doesn't say")} READY");
+        state.For("2").Done = ChecklistMath.No;
+        var notReady = Path.Combine(folder, "not-ready.docx");
+        ChecklistDocx.Write(notReady, def, state, new ChecklistDocx.Info(model ?? "", Update.Updater.CurrentText, DateTime.Now), images);
+        text = Read(notReady, out pics);
+        if (!text.Contains("NOT READY") || pics != 0) problems.Add($"the not-ready file has {pics} pictures and {(text.Contains("NOT READY") ? "says" : "doesn't say")} NOT READY");
+        return problems.Count == 0
+            ? Pass($"hints: {string.Join("; ", new[] { "grids", "warnings", "imports" }.Select(k => facts.Hints[k].Text))} Word files written, signed only when ready")
+            : Fail(string.Join("; ", problems));
+    }
+
     private static (string, string) IssueGateProbe(UIApplication app, State s)
     {
         if (TestDoc(app, s, out var why) is not { } doc) return Fail(why);

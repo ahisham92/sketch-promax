@@ -67,6 +67,18 @@ public sealed class AgentSettings
     /// <summary>How much the chat pane moves: full (the default), reduced or off (Chat.MotionLevels). Empty in older files: full.</summary>
     public string? ChatAnimations { get; set; }
 
+    /// <summary>Your name as it goes on a signed checklist (Issue > Pre-submission checklist).</summary>
+    public string SignatureName { get; set; } = "";
+
+    /// <summary>The sign-off role you sign as, e.g. "Trade BIM coordinator"; the checklist puts your signature there.</summary>
+    public string SignatureRole { get; set; } = "";
+
+    /// <summary>Your signature picture (PNG or JPEG), kept as a copy in %APPDATA%\SketchProMax. Empty: none.</summary>
+    public string SignatureImage { get; set; } = "";
+
+    /// <summary>The office's pre-submission checklist (.xlsx) the checklist window reads. Empty: asked the first time.</summary>
+    public string ChecklistPath { get; set; } = "";
+
     public static string FilePath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "SketchProMax", "settings.json");
 

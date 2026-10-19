@@ -75,6 +75,7 @@ CostTests.Run((name, ok, detail) => Check(name, ok, detail));
 HandoffTests.Run((name, ok, detail) => Check(name, ok, detail));
 TimeTests.Run((name, ok, detail) => Check(name, ok, detail));
 IssueGateTests.Run((name, ok, detail) => Check(name, ok, detail));
+ChecklistTests.Run((name, ok, detail) => Check(name, ok, detail));
 JobCardTests.Run((name, ok, detail) => Check(name, ok, detail));
 PackageTests.Run((name, ok, detail) => Check(name, ok, detail));
 ApprovalTests.Run((name, ok, detail) => Check(name, ok, detail));

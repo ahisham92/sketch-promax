@@ -9,7 +9,7 @@ internal static class SettingsLayout
     /// <summary>A tab: its key (remembered between openings), the name in the tab list and the line at the top of its page.</summary>
     public sealed record Tab(string Key, string Name, string Intro);
 
-    public const string Approvals = "approvals", Chat = "chat", Standards = "standards", Time = "time", Issue = "issue", Updates = "updates";
+    public const string Approvals = "approvals", Chat = "chat", Standards = "standards", Time = "time", Issue = "issue", SignOff = "signoff", Updates = "updates";
 
     public static readonly Tab[] Tabs =
     [
@@ -18,6 +18,7 @@ internal static class SettingsLayout
         new(Standards, "Firm standards", "Your office's rules, followed in every conversation."),
         new(Time, "Time tracking", "Working time and time saved, kept in each model."),
         new(Issue, "Issue & drawings", "What the issue check lets through."),
+        new(SignOff, "Sign-off", "Your signature and the checklist used by Issue > Pre-submission checklist."),
         new(Updates, "Updates", "Keeping Sketch ProMax up to date."),
     ];
 
@@ -36,6 +37,10 @@ internal static class SettingsLayout
         ["IdleMinutes"] = Time,
         ["TimeRates"] = Time,
         ["AllowIssueWithOpenItems"] = Issue,
+        ["SignatureName"] = SignOff,
+        ["SignatureRole"] = SignOff,
+        ["SignatureImage"] = SignOff,
+        ["ChecklistPath"] = SignOff,
         ["AutoUpdate"] = Updates,
     };
 

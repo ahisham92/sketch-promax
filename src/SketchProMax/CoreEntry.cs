@@ -78,6 +78,8 @@ public static class CoreEntry
             "time-saved" => TimeSavedWindow.Command(app),
             // The zero-mistake issue check (0.33+): the pass/fail window for the issue set.
             "issue-check" => IssueGateWindow.Command(app),
+            // The pre-submission checklist (0.35+): the office's checklist in stages, ending in a signed Word file.
+            "pre-submission" => ChecklistWindow.Command(app),
             // Purge and cleanup (0.34+): pick one of the four cleanup tools; each previews, then asks before deleting.
             "cleanup" => RibbonTools.Cleanup(app),
             // The guided test checklist (0.32+): the manual items of the field test's coverage, saved to the Bugs folder.

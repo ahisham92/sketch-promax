@@ -1,0 +1,189 @@
+using System.IO.Compression;
+using System.Text;
+using System.Xml.Linq;
+using SketchProMax.Tools;
+using static SketchProMax.Tools.ChecklistMath;
+
+/// <summary>
+/// The pre-submission checklist (Tools/ChecklistMath, Tools/ChecklistDocx): reading the office's Excel layout, the
+/// answers and readiness, the file names, and the Word file signed only when ready. The workbook here is made in the
+/// test in the same layout (the office's own copy is restricted and isn't in the repository).
+/// </summary>
+internal static class ChecklistTests
+{
+    public static void Run(Action<string, bool, string> check)
+    {
+        // ---- Reading the workbook
+        var xlsx = Workbook(
+            ("Read me", [[(0, "Demo pre-submission checklist, Rev 02 (19-Oct-2026, comments added)")]]),
+            ("Checklist", [
+                [(0, "Demo pre-submission checklist (one per model, per submission)")],
+                [(0, "Model file name"), (2, "e.g. D01C-070-00-ABC-002-STR-3DM-0010.rvt")],
+                [(0, "Building / discipline")],
+                [(0, "Trade BIM coordinator")],
+                [(0, "Progress"), (2, "=COUNTIF(G15:G78,\"Y\")")],
+                [(0, "#"), (1, "Check (what to do)"), (2, "Example / how to check"), (3, "Where it came from"), (4, "ABCC/Khaled found it on"), (5, "Priority"), (6, "Done (Y/N/NA)"), (9, "Notes")],
+                [(0, "A. File names and size")],
+                [(0, "1"), (1, "The working model name has 002 after ABC."), (2, "D01C-070-00-ABC-002-STR-3DM-0010.rvt"), (3, "ABCC BIM-02"), (4, "BLDG-07, 08"), (5, "High")],
+                [(0, "2"), (1, "Level field: a model that covers many levels uses 00."), (5, "High"), (9, "Waiting: Khaled, 00 or MM")],
+                [(0, "B. Coordinates, levels, grids, worksets")],
+                [(0, "3"), (1, "Grids are in the model and visible in plans."), (2, "ABCC rejected BLDG-07 because the STR file had no grids")],
+                [(0, "4"), (1, "Every element is on its STD-0003 workset. Nothing on Workset1."), (2, "Link worksets: Z_Link_URS, Z_Link_AR")],
+                [(0, "Sign-off")],
+                [(0, "Trade BIM coordinator: ____________________     Trade group leader: ____________________     Date: __________")],
+                [(0, "Yellow rows wait on an answer.")],
+            ]));
+        var path = Path.Combine(Path.GetTempPath(), "spm-checklist-" + Guid.NewGuid().ToString("N") + ".xlsx");
+        File.WriteAllBytes(path, xlsx);
+        Definition def;
+        try { def = ReadXlsx(path); }
+        finally { File.Delete(path); }
+        check("checklist: the title, with the revision from the read-me sheet", def.Title == "Demo pre-submission checklist, Rev 02", def.Title);
+        check("checklist: header fields above the table, Progress left out, e.g. dropped",
+            def.Fields.Select(f => f.Label).SequenceEqual(["Model file name", "Building / discipline", "Trade BIM coordinator"]) && def.Fields[0].Example == "D01C-070-00-ABC-002-STR-3DM-0010.rvt",
+            string.Join(" | ", def.Fields.Select(f => f.Label + "=" + f.Example)));
+        check("checklist: header fields know where they are filled from", def.Fields.Select(f => f.Source).SequenceEqual(["model_file", "building", "coordinator"]), string.Join(",", def.Fields.Select(f => f.Source)));
+        check("checklist: sections become stages, with their checks", def.Sections.Count == 2 && def.Sections[0].Items.Count == 2 && def.Sections[1].Items.Count == 2,
+            string.Join(" | ", def.Sections.Select(s => s.Title + ":" + s.Items.Count)));
+        check("checklist: stages are details, sections, review", Stages(def).SequenceEqual(["Project details", "File names and size", "Coordinates, levels, grids, worksets", "Review and sign"]), string.Join(",", Stages(def)));
+        var one = def.Items.First();
+        check("checklist: a check keeps its columns", one is { Number: "1", Example: "D01C-070-00-ABC-002-STR-3DM-0010.rvt", From: "ABCC BIM-02", FoundOn: "BLDG-07, 08", High: true }, one.ToString());
+        check("checklist: a Waiting note marks an open point", def.Items.ElementAt(1).Waiting == "Khaled, 00 or MM" && one.Waiting == "", def.Items.ElementAt(1).Waiting);
+        check("checklist: checks get their model hint by wording", def.Items.Select(i => i.Auto).SequenceEqual(["name002", "levelfield", "grids", "worksets"]), string.Join(",", def.Items.Select(i => i.Auto)));
+        check("checklist: the sign-off line names who signs", def.Signatories.SequenceEqual(["Trade BIM coordinator", "Trade group leader"]), string.Join(",", def.Signatories));
+        check("checklist: a workbook without the table is refused in plain words", Refused(Workbook(("Sheet1", [[(0, "Hello")]]))).Contains("header row"), "");
+        check("checklist: a file that isn't a workbook is refused", Refused(Encoding.UTF8.GetBytes("not a zip")).Contains(".xlsx"), "");
+        check("checklist: column letters", Column("A1") == 0 && Column("J14") == 9 && Column("AA3") == 26 && Column("12") == -1, "");
+
+        // ---- Answers and readiness
+        check("checklist: Y/N/NA in usual spellings", Normal(" yes ") == Yes && Normal("n") == No && Normal("N/A") == NotApplicable && Normal("na") == NotApplicable && Normal("maybe") == "", "");
+        var state = new State();
+        var p = Count(def.Items, state);
+        check("checklist: nothing answered is not ready", p is { Total: 4, Open: 4, Ready: false }, p.ToString());
+        foreach (var item in def.Items) state.For(item.Id).Done = Yes;
+        p = Count(def.Items, state);
+        check("checklist: an open point answered without a comment is counted", p.WaitingWithoutNote == 1 && p.Ready, p.ToString());
+        check("checklist: the open point asks for a comment", Problems(def, state).Single().Text.Contains("waits on an answer"), string.Join(" / ", Problems(def, state).Select(x => x.Text)));
+        state.For("2").Note = "Used 00 as Khaled said.";
+        state.For("3").Done = No;
+        p = Count(def.Items, state);
+        check("checklist: a No is never ready, and asks why", !p.Ready && p.No == 1 && p.NoWithoutNote == 1 && Problems(def, state).Single().Text.Contains("say why"), p.ToString());
+        state.For("3").Done = NotApplicable;
+        check("checklist: all Y or NA is ready", Count(def.Items, state).Ready && Problems(def, state).Count == 0, "");
+
+        // ---- A new revision of the checklist
+        var revised = new State();
+        revised.For("1").Done = Yes; revised.For("1").Check = "The working model name has 002 after ABC.";
+        revised.For("3").Done = Yes; revised.For("3").Check = "Scope boxes are named per the cutsheets.";
+        revised.For("4").Done = No;
+        revised.For("99").Done = Yes;
+        var dropped = Reconcile(def, revised);
+        check("checklist: a reworded or removed check loses its answer, the rest keep theirs",
+            dropped == 2 && revised.Answers.ContainsKey("1") && revised.Answers.ContainsKey("4") && !revised.Answers.ContainsKey("3") && !revised.Answers.ContainsKey("99")
+            && revised.Answers["4"].Check == def.Items.Single(i => i.Id == "4").Check, $"{dropped} dropped: {string.Join(",", revised.Answers.Keys)}");
+
+        // ---- File names
+        var parts = NameParts("D01C-070-00-ABC-002-STR-3DM-0010_detached.rvt");
+        check("checklist: file name parts", parts == ("070", "00", "STR", "3DM", true), parts.ToString());
+        check("checklist: a name without 002 says so", !NameParts("D01C-070-00-ABC-STR-3DM-0010.rvt").Has002 && NameParts("D01C-070-00-ABC-STR-3DM-0010.rvt").DocType == "3DM", "");
+        check("checklist: building code to name", BuildingName("070") == "BLDG-07" && BuildingName("150") == "BLDG-15" && BuildingName("7") == "", "");
+        check("checklist: working name drops _detached", WorkingName("D01C-070-00-ABC-002-STR-3DM-0010_detached") == "D01C-070-00-ABC-002-STR-3DM-0010.rvt", WorkingName("D01C-070-00-ABC-002-STR-3DM-0010_detached"));
+        check("checklist: first submission adds _S03_R00", SubmissionName("D01C-070-00-ABC-002-STR-3DM-0010.rvt") == "D01C-070-00-ABC-002-STR-3DM-0010_S03_R00.rvt", "");
+        check("checklist: a resubmission moves the revision on", SubmissionName("D01C-070-00-ABC-002-STR-3DM-0010_S03_R01.rvt") == "D01C-070-00-ABC-002-STR-3DM-0010_S03_R02.rvt", "");
+        check("checklist: safe file names", SafeName("a/b:c*?") == "a_b_c__" && SafeName("  ") == "Untitled", SafeName("a/b:c*?"));
+
+        // ---- The Word file
+        var png = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==");
+        check("checklist: picture kind and size from the header", ChecklistDocx.ImageKind(png) == "png" && ChecklistDocx.ImageSize(png) == (1, 1) && ChecklistDocx.ImageKind([1, 2, 3, 4]) is null, "");
+        state.Fields["Model file name"] = "D01C <070> & \"co\"";
+        state.Signatures.Add(new Signature { Role = "Trade BIM coordinator", Name = "A. Engineer", Mode = SignMode.Mine, Date = "19-Oct-2026" });
+        state.Signatures.Add(new Signature { Role = "Trade group leader", Name = "G. Leader", Mode = SignMode.Hand, Date = "19-Oct-2026" });
+        var images = new Dictionary<string, ChecklistDocx.Image> { ["Trade BIM coordinator"] = new(png, "png"), ["Trade group leader"] = new(png, "png") };
+        var (ok, text, pictures, error) = Docx(def, state, images);
+        check("checklist: the Word file is a valid package", ok, error);
+        check("checklist: ready file says READY and keeps the text escaped", text.Contains("READY FOR SUBMISSION") && text.Contains("D01C <070> & \"co\""), "");
+        check("checklist: signed only where a picture is used (by hand stays empty)", pictures == 1, pictures.ToString());
+        state.For("1").Done = No;
+        (ok, text, pictures, error) = Docx(def, state, images);
+        check("checklist: not ready says so and has no signatures", ok && text.Contains("NOT READY") && pictures == 0, $"{pictures} pictures {error}");
+        check("checklist: XML escaping drops control characters", ChecklistDocx.Esc("a\u0001<b>&\t") == "a&lt;b&gt;&amp;\t", ChecklistDocx.Esc("a\u0001<b>&\t"));
+    }
+
+    private static string Refused(byte[] bytes)
+    {
+        var path = Path.Combine(Path.GetTempPath(), "spm-checklist-" + Guid.NewGuid().ToString("N") + ".xlsx");
+        File.WriteAllBytes(path, bytes);
+        try { ReadXlsx(path); return ""; }
+        catch (InvalidDataException ex) { return ex.Message; }
+        finally { File.Delete(path); }
+    }
+
+    /// <summary>Writes the file and opens it again: every XML part parses, the body text, how many pictures.</summary>
+    private static (bool Ok, string Text, int Pictures, string Error) Docx(Definition def, State state, Dictionary<string, ChecklistDocx.Image> images)
+    {
+        using var stream = new MemoryStream();
+        ChecklistDocx.Write(stream, def, state, new ChecklistDocx.Info("model.rvt", "0.0.0", new DateTime(2026, 10, 19, 12, 0, 0)), images);
+        stream.Position = 0;
+        try
+        {
+            using var zip = new ZipArchive(stream, ZipArchiveMode.Read);
+            foreach (var entry in zip.Entries.Where(e => e.FullName.EndsWith(".xml") || e.FullName.EndsWith(".rels")))
+                using (var s = entry.Open()) XDocument.Load(s);
+            XNamespace w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+            XDocument doc;
+            using (var s = zip.GetEntry("word/document.xml")!.Open()) doc = XDocument.Load(s);
+            var text = string.Concat(doc.Descendants(w + "t").Select(t => t.Value));
+            var required = new[] { "[Content_Types].xml", "_rels/.rels", "word/_rels/document.xml.rels", "word/styles.xml", "word/footer1.xml" };
+            var missing = required.Where(r => zip.GetEntry(r) is null).ToList();
+            return (missing.Count == 0, text, zip.Entries.Count(e => e.FullName.StartsWith("word/media/")), missing.Count == 0 ? "" : "missing " + string.Join(", ", missing));
+        }
+        catch (Exception ex) { return (false, "", 0, ex.Message); }
+    }
+
+    /// <summary>A minimal .xlsx in the office's layout: shared strings for text, numbers as numbers, one row per list.</summary>
+    private static byte[] Workbook(params (string Name, List<(int Col, string Text)>[] Rows)[] sheets)
+    {
+        var shared = new List<string>();
+        using var stream = new MemoryStream();
+        using (var zip = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: true))
+        {
+            void Add(string name, string xml)
+            {
+                using var w = new StreamWriter(zip.CreateEntry(name).Open(), new UTF8Encoding(false));
+                w.Write(xml);
+            }
+            const string main = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+            var book = new StringBuilder($"<workbook xmlns=\"{main}\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><sheets>");
+            var rels = new StringBuilder("<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">");
+            for (var i = 0; i < sheets.Length; i++)
+            {
+                book.Append($"<sheet name=\"{sheets[i].Name}\" sheetId=\"{i + 1}\" r:id=\"rId{i + 1}\"/>");
+                rels.Append($"<Relationship Id=\"rId{i + 1}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet{i + 1}.xml\"/>");
+                var data = new StringBuilder($"<worksheet xmlns=\"{main}\"><sheetData>");
+                for (var r = 0; r < sheets[i].Rows.Length; r++)
+                {
+                    data.Append($"<row r=\"{r + 1}\">");
+                    foreach (var (col, text) in sheets[i].Rows[r])
+                    {
+                        var at = $"{(char)('A' + col)}{r + 1}";
+                        if (double.TryParse(text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out _))
+                            data.Append($"<c r=\"{at}\"><v>{text}</v></c>");
+                        else if (text.StartsWith('='))
+                            data.Append($"<c r=\"{at}\" t=\"str\"><f>{System.Security.SecurityElement.Escape(text[1..])}</f><v></v></c>");
+                        else
+                        {
+                            shared.Add(text);
+                            data.Append($"<c r=\"{at}\" t=\"s\"><v>{shared.Count - 1}</v></c>");
+                        }
+                    }
+                    data.Append("</row>");
+                }
+                Add($"xl/worksheets/sheet{i + 1}.xml", data.Append("</sheetData></worksheet>").ToString());
+            }
+            Add("xl/workbook.xml", book.Append("</sheets></workbook>").ToString());
+            Add("xl/_rels/workbook.xml.rels", rels.Append("</Relationships>").ToString());
+            Add("xl/sharedStrings.xml", $"<sst xmlns=\"{main}\">" + string.Concat(shared.Select(s => $"<si><t xml:space=\"preserve\">{System.Security.SecurityElement.Escape(s)}</t></si>")) + "</sst>");
+        }
+        return stream.ToArray();
+    }
+}

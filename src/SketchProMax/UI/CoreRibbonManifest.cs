@@ -143,6 +143,12 @@ internal static class CoreRibbonManifest
             "Its options open, then the preview: nothing changes until you press Delete them, and Ctrl+Z undoes it in one step.", needsModel: true)),
 
         // ---- Issue (0.33: the issue check gates Issue drawings and Export PDF of sheets, see UI/IssueGateWindow)
+        // Pre-submission checklist: the office's checklist Excel in stages, ending in a signed Word file (UI/ChecklistWindow).
+        L(Button("Issue", "PreSubmission", "Pre-submission\nchecklist", "pre-submission", "list",
+            "Goes through the office's pre-submission checklist stage by stage, with hints from the model, and makes the signed Word file to print.",
+            "Stages from your checklist Excel: project details, one per section, then review and sign. Each check has how to check it, " +
+            "where it came from and what the model shows; answer Yes, No or N/A with a comment. The Word file carries the signatures " +
+            "only when nothing is No or unanswered. Reads the model only; answers are kept per model.", needsModel: true)),
         L(Button("Issue", "IssueCheck", "Issue\ncheck", "issue-check", "check",
             "The zero-mistake check before an issue: drawing, spec, BOQ and model checks together, pass or fail per sheet.",
             "Runs check_drawings, spec_check, boq_check and check_model on the issue set and lists each finding under its sheet " +

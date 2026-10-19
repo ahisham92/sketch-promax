@@ -47,6 +47,8 @@
     <Compile Include="../../src/SketchProMax/Tools/CostMath.cs" Link="CostMath.cs" />
     <Compile Include="../../src/SketchProMax/Tools/TimeMath.cs" Link="TimeMath.cs" />
     <Compile Include="../../src/SketchProMax/Tools/IssueGateMath.cs" Link="IssueGateMath.cs" />
+    <Compile Include="../../src/SketchProMax/Tools/ChecklistMath.cs" Link="ChecklistMath.cs" />
+    <Compile Include="../../src/SketchProMax/Tools/ChecklistDocx.cs" Link="ChecklistDocx.cs" />
     <Compile Include="../../src/SketchProMax/Tools/DrawingPackageMath.cs" Link="DrawingPackageMath.cs" />
     <Compile Include="../../src/SketchProMax/Tools/RedlineMath.cs" Link="RedlineMath.cs" />
     <Compile Include="../../src/SketchProMax/Tools/RecentRuns.cs" Link="RecentRuns.cs" />

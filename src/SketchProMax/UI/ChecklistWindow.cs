@@ -1,0 +1,1235 @@
+using System.Diagnostics;
+using System.Globalization;
+using System.IO;
+using System.Windows;
+using System.Windows.Automation;
+using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Input;
+using System.Windows.Markup;
+using System.Windows.Media;
+using System.Windows.Threading;
+using Autodesk.Revit.UI;
+using SketchProMax.Settings;
+using SketchProMax.Tools;
+using Button = System.Windows.Controls.Button;
+using ComboBox = System.Windows.Controls.ComboBox;
+using Grid = System.Windows.Controls.Grid;
+using Image = System.Windows.Controls.Image;
+using RadioButton = System.Windows.Controls.RadioButton;
+using Rectangle = System.Windows.Shapes.Rectangle;
+using TextBox = System.Windows.Controls.TextBox;
+using Visibility = System.Windows.Visibility;
+
+namespace SketchProMax.UI;
+
+/// <summary>
+/// The pre-submission checklist (Issue > Pre-submission checklist): the office's checklist Excel (ChecklistMath) walked
+/// through in stages, one per section, between Project details and Review and sign. Each check is a card with what to
+/// do, how to check it, where it came from, a hint read from the model (ChecklistFacts), Yes / No / N/A and a comment.
+/// Review and sign lists what is still open, takes the signatures and writes the Word file (ChecklistDocx), ready to open
+/// or print. Answers are kept per model between openings. The window doesn't block Revit (go and look, then come back);
+/// it reads the model only, never changes it.
+/// Keys: Y, N, A answer the check in focus and move on; Ctrl+Tab / Ctrl+Shift+Tab change stage; Esc closes.
+/// </summary>
+internal sealed class ChecklistWindow : Window
+{
+    private static ChecklistWindow? _open;
+
+    private readonly string _docKey;
+    private readonly string _draftPath;
+    private ChecklistMath.Definition? _def;
+    private string _loadError = "";
+    private ChecklistFacts.Result _facts;
+    private ChecklistMath.State _state = new();
+    private readonly AgentSettings _settings = AgentSettings.Load();
+
+    private readonly TabControl _stages = new();
+    private readonly TextBlock _status = Brand.Text("");
+    private readonly ProgressBar _bar = new() { Height = 6, Minimum = 0, Maximum = 1, Margin = new Thickness(0, 6, 0, 0) };
+    private readonly Button _back = Brand.Button("Back");
+    private readonly Button _next = Brand.Button("Next", Brand.Weight.Primary);
+    private readonly DispatcherTimer _saveSoon = new() { Interval = TimeSpan.FromMilliseconds(600) };
+
+    private readonly Dictionary<string, Card> _cards = new(StringComparer.Ordinal);
+    private readonly List<StageHeader> _headers = [];
+    private readonly Dictionary<string, TextBox> _fieldBoxes = new(StringComparer.Ordinal);
+    private readonly List<(ChecklistMath.Signature Sig, ComboBox Mode, Image Preview, TextBlock Hint)> _signs = [];
+    private Review? _review;
+    private bool _loading;
+
+    private sealed class Card
+    {
+        public ChecklistMath.Item Item = null!;
+        public int Stage;
+        public Border Root = null!;
+        public Rectangle Strip = null!;
+        public RadioButton Yes = null!, No = null!, Na = null!;
+        public TextBox Note = null!;
+        public TextBlock Meta = null!, NoteHint = null!;
+    }
+
+    private sealed class StageHeader
+    {
+        public Border Circle = null!;
+        public TextBlock Glyph = null!, Sub = null!;
+        public List<ChecklistMath.Item> Items = [];
+        public string Name = "";
+    }
+
+    private sealed class Review
+    {
+        public TextBlock Yes = null!, No = null!, Na = null!, Open = null!;
+        public Border Banner = null!;
+        public TextBlock BannerText = null!;
+        public StackPanel Problems = null!;
+        public StackPanel Done = null!;
+        public TextBlock DoneText = null!, Error = null!;
+        public Button OpenFile = null!, Print = null!, Folder = null!;
+        public string LastFile = "";
+    }
+
+    // ---- Opening --------------------------------------------------------------------------------------------------
+
+    /// <summary>The ribbon command: shows the window for the active model (or brings the open one to the front).</summary>
+    public static Autodesk.Revit.UI.Result Command(UIApplication app)
+    {
+        var doc = app.ActiveUIDocument?.Document;
+        if (doc is null || doc.IsFamilyDocument)
+        {
+            TaskDialog.Show("Sketch ProMax", "Open the project model to check first: the pre-submission checklist is filled in per model.");
+            return Autodesk.Revit.UI.Result.Cancelled;
+        }
+        if (_open is { IsLoaded: true })
+        {
+            if (_open._docKey == DocKey(doc)) { _open.Activate(); return Autodesk.Revit.UI.Result.Succeeded; }
+            _open.Close();
+        }
+        var settings = AgentSettings.Load();
+        var (def, error) = LoadDefinition(settings.ChecklistPath);
+        ChecklistFacts.Result facts;
+        try { facts = ChecklistFacts.Read(doc, def); }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            facts = new ChecklistFacts.Result { Model = doc.Title, Title = doc.Title };
+            error = error.Length > 0 ? error : "Couldn't read the model for the hints (" + ex.Message + "). The checklist still works without them.";
+        }
+        var window = new ChecklistWindow(DocKey(doc), def, error, facts);
+        _open = window;
+        window.Closed += (_, _) => { if (_open == window) _open = null; };
+        window.Show();
+        return Autodesk.Revit.UI.Result.Succeeded;
+    }
+
+    private static string DocKey(Autodesk.Revit.DB.Document doc)
+    {
+        try { return string.IsNullOrEmpty(doc.PathName) ? doc.Title : doc.PathName; }
+        catch (Exception) { return doc.Title; }
+    }
+
+    private static (ChecklistMath.Definition? Def, string Error) LoadDefinition(string? path)
+    {
+        path = (path ?? "").Trim().Trim('"');
+        if (path.Length == 0) return (null, "");
+        try
+        {
+            if (!File.Exists(path)) return (null, $"The checklist file isn't there any more ({path}). Pick it again.");
+            return (ChecklistMath.ReadXlsx(path), "");
+        }
+        catch (InvalidDataException ex) { return (null, $"Couldn't read the checklist: {ex.Message}"); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return (null, $"Couldn't open the checklist ({ex.Message}). If it is open in Excel, that is fine; check the file is on a drive you can reach, then try again.");
+        }
+    }
+
+    private ChecklistWindow(string docKey, ChecklistMath.Definition? def, string error, ChecklistFacts.Result facts)
+    {
+        _docKey = docKey;
+        _def = def;
+        _loadError = error;
+        _facts = facts;
+        _draftPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SketchProMax", "checklists",
+            ChecklistMath.SafeName(Path.GetFileNameWithoutExtension(ChecklistMath.WorkingName(facts.Model))) + ".json");
+
+        Title = "Sketch ProMax pre-submission checklist";
+        var area = SystemParameters.WorkArea;
+        Width = Math.Min(1120, Math.Floor(area.Width * 0.9));
+        Height = Math.Min(780, Math.Floor(area.Height * 0.9));
+        MinWidth = Math.Min(760, Width);
+        MinHeight = Math.Min(480, Height);
+        WindowStartupLocation = WindowStartupLocation.CenterScreen;
+        ResizeMode = ResizeMode.CanResize;
+        Brand.Prepare(this);
+        Styles();
+
+        _saveSoon.Tick += (_, _) => { _saveSoon.Stop(); SaveDraft(); };
+        _back.Click += (_, _) => Move(-1);
+        _next.Click += (_, _) => { if (_stages.SelectedIndex == _stages.Items.Count - 1) CreateFile(); else Move(1); };
+        _stages.SelectionChanged += (_, e) => { if (e.Source == _stages) StageChanged(); };
+        PreviewKeyDown += OnKey;
+        Closed += (_, _) => { _saveSoon.Stop(); SaveDraft(); };
+
+        Build();
+        Loaded += (_, _) => FocusStage();
+    }
+
+    // ---- Layout ---------------------------------------------------------------------------------------------------
+
+    /// <summary>Builds (or rebuilds, after a checklist is picked) the whole window from the definition and the draft.</summary>
+    private void Build()
+    {
+        _loading = true;
+        _cards.Clear();
+        _headers.Clear();
+        _fieldBoxes.Clear();
+        _signs.Clear();
+        _review = null;
+        _stages.Items.Clear();
+        // The stage list, the progress and the footer buttons are kept between builds: take them out of the old layout first.
+        foreach (var reused in new FrameworkElement[] { _stages, _status, _bar, _back, _next })
+            if (reused.Parent is System.Windows.Controls.Panel old) old.Children.Remove(reused);
+        Content = null;
+        LoadDraft();
+
+        var subtitle = _def is null ? "Pick your office's checklist to start" : $"{_def.Title} · {Shown(_facts.Model)}";
+        var header = Brand.Header("Pre-submission checklist", subtitle);
+        DockPanel.SetDock(header, Dock.Top);
+
+        // The footer: progress on the left, Back / Next (or Create Word file) on the right. Always on screen.
+        var close = Brand.Button("Close");
+        close.IsCancel = true;
+        close.Click += (_, _) => Close();
+        AutomationProperties.SetLiveSetting(_status, AutomationLiveSetting.Polite);
+        _status.TextWrapping = TextWrapping.Wrap;
+        AutomationProperties.SetName(_bar, "Checks answered");
+        var left = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 16, 0), Children = { _status, _bar } };
+        var buttons = Brand.ButtonRow(close, _back, _next);
+        buttons.Margin = new Thickness(0);
+        buttons.VerticalAlignment = VerticalAlignment.Center;
+        var footGrid = new Grid();
+        footGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        footGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        footGrid.Children.Add(left);
+        Grid.SetColumn(buttons, 1);
+        footGrid.Children.Add(buttons);
+        var foot = new Border { BorderThickness = new Thickness(0, 1, 0, 0), Padding = new Thickness(18, 10, 18, 12), Child = footGrid };
+        foot.SetResourceReference(Border.BorderBrushProperty, Brand.K.Border);
+        DockPanel.SetDock(foot, Dock.Bottom);
+
+        AutomationProperties.SetName(_stages, "Checklist stages");
+        var names = _def is null ? ["Project details"] : ChecklistMath.Stages(_def);
+        for (var i = 0; i < names.Count; i++)
+        {
+            FrameworkElement page;
+            List<ChecklistMath.Item> items = [];
+            if (i == 0) page = DetailsPage();
+            else if (_def is not null && i == names.Count - 1) page = ReviewPage();
+            else
+            {
+                var section = _def!.Sections[i - 1];
+                items = section.Items.ToList();
+                page = SectionPage(i, section);
+            }
+            var tab = new TabItem { Content = page, Header = StageHeaderFor(i, names[i], items) };
+            AutomationProperties.SetName(tab, $"Stage {i + 1}: {names[i]}");
+            _stages.Items.Add(tab);
+        }
+
+        var root = new DockPanel();
+        root.Children.Add(header);
+        root.Children.Add(foot);
+        root.Children.Add(_stages);
+        Content = root;
+
+        _loading = false;
+        _stages.SelectedIndex = _def is null ? 0 : Math.Max(0, Math.Min(_state.Stage, _stages.Items.Count - 1));
+        Refresh();
+        StageChanged();
+    }
+
+    private static string Shown(string model) => string.IsNullOrWhiteSpace(model) ? "model not saved" : model;
+
+    /// <summary>A stage in the list on the left: a numbered circle (a tick when done, ! when a check is No), the name and its count.</summary>
+    private FrameworkElement StageHeaderFor(int index, string name, List<ChecklistMath.Item> items)
+    {
+        var h = new StageHeader { Items = items, Name = name };
+        h.Glyph = Brand.Text((index + 1).ToString(CultureInfo.InvariantCulture), size: 12, bold: true);
+        h.Glyph.HorizontalAlignment = HorizontalAlignment.Center;
+        h.Glyph.VerticalAlignment = VerticalAlignment.Center;
+        h.Circle = new Border { Width = 26, Height = 26, CornerRadius = new CornerRadius(13), BorderThickness = new Thickness(1.5), Child = h.Glyph, VerticalAlignment = VerticalAlignment.Center };
+        var title = Brand.Text(name, size: 13);
+        title.TextWrapping = TextWrapping.Wrap;
+        title.MaxWidth = 190;
+        h.Sub = Brand.Text("", Brand.K.Muted, size: 11);
+        var texts = new StackPanel { Margin = new Thickness(10, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center, Children = { title, h.Sub } };
+        _headers.Add(h);
+        return new StackPanel { Orientation = Orientation.Horizontal, Children = { h.Circle, texts } };
+    }
+
+    private static TextBlock Heading(string text, double size = 17)
+    {
+        var heading = Brand.Text(text, size: size, bold: true);
+        heading.TextWrapping = TextWrapping.Wrap;
+#if !NETFRAMEWORK
+        AutomationProperties.SetHeadingLevel(heading, AutomationHeadingLevel.Level2);
+#endif
+        return heading;
+    }
+
+    private static TextBlock Para(string text, string key = Brand.K.Text, double size = 12, double top = 4)
+    {
+        var t = Brand.Text(text, key, size);
+        t.TextWrapping = TextWrapping.Wrap;
+        t.Margin = new Thickness(0, top, 0, 0);
+        return t;
+    }
+
+    private static Border CardBox(UIElement child, string bg = Brand.K.Raised, string border = Brand.K.BorderSubtle, double top = 12)
+    {
+        var b = new Border { Padding = new Thickness(14, 12, 14, 12), Margin = new Thickness(0, top, 0, 0), CornerRadius = new CornerRadius(8), BorderThickness = new Thickness(1), Child = child };
+        b.SetResourceReference(Border.BackgroundProperty, bg);
+        b.SetResourceReference(Border.BorderBrushProperty, border);
+        return b;
+    }
+
+    private static ScrollViewer Scroll(UIElement content) => new()
+    {
+        Content = content, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Focusable = false,
+        Padding = new Thickness(22, 16, 22, 20),
+    };
+
+    // ---- Stage 1: project details ---------------------------------------------------------------------------------
+
+    private FrameworkElement DetailsPage()
+    {
+        var page = new StackPanel();
+        page.Children.Add(Heading("Project details"));
+        page.Children.Add(Para("Fill in once per model and submission. What Sketch ProMax could read from the model is filled in already; check it.", Brand.K.Muted));
+
+        // The checklist file: pick it (first time), or which one is in use, with Change.
+        var source = new StackPanel();
+        if (_def is null)
+        {
+            source.Children.Add(Brand.Text("Pick your office's checklist", size: 14, bold: true));
+            source.Children.Add(Para("Choose the pre-submission checklist Excel file (.xlsx) once. Sketch ProMax reads its stages, checks, examples and sign-off from it, " +
+                                     "and picks up a new revision saved over the same file. It is kept on your PC, nowhere else."));
+            if (_loadError.Length > 0) source.Children.Add(Para(_loadError, Brand.K.DangerText));
+            var pick = Brand.Button("Choose the checklist…", Brand.Weight.Primary);
+            pick.HorizontalAlignment = HorizontalAlignment.Left;
+            pick.Margin = new Thickness(0, 10, 0, 0);
+            pick.Click += (_, _) => PickChecklist();
+            source.Children.Add(pick);
+            page.Children.Add(CardBox(source, Brand.K.AccentSoft, Brand.K.Border, 16));
+            return Scroll(page);
+        }
+        var checks = _def.Items.Count();
+        source.Children.Add(Brand.Text(_def.Title, size: 14, bold: true));
+        source.Children.Add(Para($"{checks} checks in {_def.Sections.Count} stages · signed by {string.Join(" and ", _def.Signatories)}", Brand.K.Muted));
+        var file = Para(_def.SourcePath, Brand.K.Muted, 11);
+        file.TextTrimming = TextTrimming.CharacterEllipsis;
+        file.TextWrapping = TextWrapping.NoWrap;
+        file.ToolTip = _def.SourcePath;
+        source.Children.Add(file);
+        if (_loadError.Length > 0) source.Children.Add(Para(_loadError, Brand.K.WarningText));
+        var row = new WrapPanel { Margin = new Thickness(0, 10, 0, 0) };
+        var change = Brand.Button("Use another checklist…");
+        change.Margin = new Thickness(0, 0, 8, 0);
+        change.Click += (_, _) => PickChecklist();
+        var reread = Brand.Button("Read the model again");
+        reread.Margin = new Thickness(0);
+        AutomationProperties.SetHelpText(reread, "Reads the file names and the hints under each check from the model again, after you have fixed something.");
+        reread.Click += async (_, _) => await ReadModelAgain(reread);
+        row.Children.Add(change);
+        row.Children.Add(reread);
+        source.Children.Add(row);
+        page.Children.Add(CardBox(source, top: 16));
+
+        // The header fields, two columns: label above its box, the example as the box's hint.
+        var grid = new Grid { Margin = new Thickness(0, 6, 0, 0) };
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(18) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        var r = 0;
+        for (var i = 0; i < _def.Fields.Count; i++)
+        {
+            var f = _def.Fields[i];
+            if (i % 2 == 0) grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            var cell = new StackPanel { Margin = new Thickness(0, 10, 0, 0) };
+            var label = Brand.Text(f.Label, bold: true);
+            cell.Children.Add(label);
+            var box = new TextBox { MinHeight = 28, Margin = new Thickness(0, 4, 0, 0), VerticalContentAlignment = VerticalAlignment.Center };
+            box.Text = _state.Fields.TryGetValue(f.Label, out var v) ? v : "";
+            AutomationProperties.SetName(box, f.Label);
+            var from = Brand.Text("", Brand.K.Muted, size: 11);
+            var auto = FieldFromModel(f);
+            void ShowFrom() => from.Text = auto.Length > 0 && box.Text.Trim() == auto ? "From the model" : f.Example.Length > 0 ? "e.g. " + f.Example : "";
+            box.TextChanged += (_, _) =>
+            {
+                if (_loading) return;
+                _state.Fields[f.Label] = box.Text;
+                ShowFrom();
+                Changed();
+            };
+            ShowFrom();
+            from.TextTrimming = TextTrimming.CharacterEllipsis;
+            cell.Children.Add(Placeholder(box, f.Example.Length > 0 ? "e.g. " + f.Example : ""));
+            cell.Children.Add(from);
+            _fieldBoxes[f.Label] = box;
+            Grid.SetRow(cell, r);
+            Grid.SetColumn(cell, i % 2 == 0 ? 0 : 2);
+            grid.Children.Add(cell);
+            if (i % 2 == 1) r++;
+        }
+        page.Children.Add(CardBox(grid));
+        page.Children.Add(Para("Keys: Y yes, N no, A not applicable on the check in focus (it moves on to the next); Ctrl+Tab next stage. " +
+                               "Your answers are kept for this model until you start again, and Revit stays usable while this window is open.", Brand.K.Muted, 11, 14));
+        return Scroll(page);
+    }
+
+    /// <summary>The value a header field gets from the model or Settings, or "".</summary>
+    private string FieldFromModel(ChecklistMath.Field f)
+    {
+        if (f.Source.Length == 0) return "";
+        if (_facts.Fields.TryGetValue(f.Source, out var v) && v.Length > 0) return v;
+        var role = (_settings.SignatureRole ?? "").Trim();
+        if (f.Source is "coordinator" or "leader" && role.Length > 0 && Matches(role, f.Label)) return (_settings.SignatureName ?? "").Trim();
+        return "";
+    }
+
+    /// <summary>"BIM coordinator" matches the label "Trade BIM coordinator" (either contains the other, case ignored).</summary>
+    private static bool Matches(string role, string label) =>
+        role.Length > 0 && (label.IndexOf(role, StringComparison.OrdinalIgnoreCase) >= 0 || role.IndexOf(label, StringComparison.OrdinalIgnoreCase) >= 0);
+
+    private void PickChecklist()
+    {
+        var dialog = new Microsoft.Win32.OpenFileDialog { Title = "Pick the pre-submission checklist", Filter = "Excel workbooks|*.xlsx|All files|*.*" };
+        try
+        {
+            var current = (_settings.ChecklistPath ?? "").Trim();
+            if (current.Length > 0 && Path.GetDirectoryName(current) is { Length: > 0 } dir && Directory.Exists(dir)) dialog.InitialDirectory = dir;
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException) { }
+        if (dialog.ShowDialog(this) != true) return;
+        _saveSoon.Stop();
+        SaveDraft();
+        var (def, error) = LoadDefinition(dialog.FileName);
+        if (def is null)
+        {
+            _loadError = error;
+            Build();
+            return;
+        }
+        _def = def;
+        _loadError = "";
+        _settings.ChecklistPath = dialog.FileName;
+        try { _settings.Save(); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+        {
+            _loadError = $"The checklist is in use, but Sketch ProMax couldn't remember it for next time ({ex.Message}).";
+        }
+        Build();
+        _ = ReadModelAgain(null);
+    }
+
+    /// <summary>Reads the hints and file names from the model again, through Revit (the window itself runs outside a Revit call).</summary>
+    private async Task ReadModelAgain(Button? button)
+    {
+        if (button is not null) { if (Brand.IsBusy(button)) return; Brand.SetBusy(button, true, "Reading…"); }
+        try
+        {
+            var def = _def;
+            var key = _docKey;
+            var facts = await App.Dispatcher.InvokeAsync(app =>
+            {
+                foreach (Autodesk.Revit.DB.Document d in app.Application.Documents)
+                    if (!d.IsFamilyDocument && !d.IsLinked && DocKey(d) == key) return ChecklistFacts.Read(d, def);
+                return null;
+            });
+            if (facts is null) { _status.Text = "The model this checklist is for isn't open any more, so it can't be read again."; return; }
+            _facts = facts;
+            SaveDraft();
+            var stage = _stages.SelectedIndex;
+            Build();
+            _stages.SelectedIndex = stage;
+            _status.Text = "Read the model again. " + _status.Text;
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _status.Text = $"Couldn't read the model ({ex.Message}). Finish what Revit is doing (an edit mode or a dialog), then try again.";
+        }
+        finally { if (button is not null) Brand.SetBusy(button, false); }
+    }
+
+    // ---- Section stages -------------------------------------------------------------------------------------------
+
+    private FrameworkElement SectionPage(int stage, ChecklistMath.Section section)
+    {
+        var page = new StackPanel();
+        page.Children.Add(Heading(section.Title));
+        var high = section.Items.Count(i => i.High);
+        var waiting = section.Items.Count(i => i.Waiting.Length > 0);
+        page.Children.Add(Para($"{section.Items.Count} checks" + (high > 0 ? $", {high} high priority" : "") + (waiting > 0 ? $", {waiting} waiting on an answer" : "") +
+                               ". Answer each one; a No needs a comment saying why.", Brand.K.Muted));
+        foreach (var item in section.Items) page.Children.Add(ItemCard(stage, item));
+        return Scroll(page);
+    }
+
+    private Border ItemCard(int stage, ChecklistMath.Item item)
+    {
+        var card = new Card { Item = item, Stage = stage };
+        var body = new StackPanel();
+
+        // Number and the check, then the badges.
+        var top = new DockPanel();
+        var number = new Border { CornerRadius = new CornerRadius(4), Padding = new Thickness(7, 2, 7, 2), Margin = new Thickness(0, 1, 10, 0), VerticalAlignment = VerticalAlignment.Top };
+        number.SetResourceReference(Border.BackgroundProperty, Brand.K.Surface);
+        number.Child = Brand.Text("#" + item.Number, Brand.K.Muted, 12, bold: true);
+        DockPanel.SetDock(number, Dock.Left);
+        top.Children.Add(number);
+        var check = Brand.Text(item.Check, size: 13.5, bold: true);
+        check.TextWrapping = TextWrapping.Wrap;
+        top.Children.Add(check);
+        body.Children.Add(top);
+
+        var badges = new WrapPanel { Margin = new Thickness(0, 6, 0, 0) };
+        if (item.High) badges.Children.Add(Badge("High priority", Brand.K.BadgeError, Brand.K.OnDanger));
+        if (item.FoundOn.Length > 0) badges.Children.Add(Badge("Found on " + item.FoundOn, Brand.K.Surface, Brand.K.Muted));
+        if (item.Waiting.Length > 0) badges.Children.Add(Badge("Waiting on an answer", Brand.K.NoticeBg, Brand.K.WarningText));
+        if (badges.Children.Count > 0) body.Children.Add(badges);
+
+        if (item.Example.Length > 0)
+        {
+            var how = new TextBlock { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 0), FontSize = 12 };
+            how.SetResourceReference(TextBlock.ForegroundProperty, Brand.K.Text);
+            how.Inlines.Add(new System.Windows.Documents.Run("How to check: ") { FontWeight = FontWeights.SemiBold });
+            how.Inlines.Add(new System.Windows.Documents.Run(item.Example));
+            body.Children.Add(how);
+        }
+        if (item.From.Length > 0) body.Children.Add(Para("From: " + item.From, Brand.K.Muted, 11, 3));
+        if (item.Waiting.Length > 0)
+        {
+            var open = Para($"Open point: {item.Waiting}. Follow the example until the answer comes, and write what you did in the comment.", Brand.K.Text, 12, 0);
+            body.Children.Add(CardBox(open, Brand.K.NoticeBg, Brand.K.NoticeBorder, 8));
+        }
+        if (_facts.Hints.TryGetValue(item.Auto, out var hint) && item.Auto.Length > 0) body.Children.Add(HintRow(hint));
+
+        // Yes / No / N/A, then the comment.
+        var answer = new DockPanel { Margin = new Thickness(0, 10, 0, 0) };
+        var group = "q" + item.Id;
+        card.Yes = Segment("Yes", "SpmSegYes", group, $"Yes, #{item.Number} is done");
+        card.No = Segment("No", "SpmSegNo", group, $"No, #{item.Number} is not done");
+        card.Na = Segment("N/A", "SpmSegNa", group, $"Not applicable: #{item.Number}");
+        var segs = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 12, 0), VerticalAlignment = VerticalAlignment.Top, Children = { card.Yes, card.No, card.Na } };
+        DockPanel.SetDock(segs, Dock.Left);
+        answer.Children.Add(segs);
+        card.Note = new TextBox { MinHeight = 30, TextWrapping = TextWrapping.Wrap, AcceptsReturn = false, VerticalContentAlignment = VerticalAlignment.Center, MaxLength = 1000 };
+        AutomationProperties.SetName(card.Note, $"Comment on #{item.Number}");
+        answer.Children.Add(Placeholder(card.Note, item.Waiting.Length > 0 ? "What you did while this waits (needed)" : "Comment (optional; needed for No)"));
+        body.Children.Add(answer);
+        card.NoteHint = Para("", Brand.K.DangerText, 11, 3);
+        card.NoteHint.Visibility = Visibility.Collapsed;
+        body.Children.Add(card.NoteHint);
+        card.Meta = Para("", Brand.K.Muted, 11, 4);
+        body.Children.Add(card.Meta);
+
+        var a = _state.Answers.TryGetValue(item.Id, out var found) ? found : null;
+        switch (ChecklistMath.Normal(a?.Done))
+        {
+            case ChecklistMath.Yes: card.Yes.IsChecked = true; break;
+            case ChecklistMath.No: card.No.IsChecked = true; break;
+            case ChecklistMath.NotApplicable: card.Na.IsChecked = true; break;
+        }
+        card.Note.Text = a?.Note ?? "";
+        foreach (var (button, value) in new[] { (card.Yes, ChecklistMath.Yes), (card.No, ChecklistMath.No), (card.Na, ChecklistMath.NotApplicable) })
+            button.Checked += (_, _) => { if (!_loading) Answer(card, value, move: false); };
+        card.Note.TextChanged += (_, _) =>
+        {
+            if (_loading) return;
+            _state.For(item.Id).Note = card.Note.Text;
+            ShowCard(card);
+            Changed();
+        };
+
+        // A coloured strip on the left says the answer at a glance (green yes, red no, grey N/A).
+        card.Strip = new Rectangle { Width = 4, RadiusX = 2, RadiusY = 2, Margin = new Thickness(0, 0, 12, 0) };
+        var grid = new Grid();
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.Children.Add(card.Strip);
+        Grid.SetColumn(body, 1);
+        grid.Children.Add(body);
+        card.Root = CardBox(grid);
+        card.Root.Tag = card;
+        AutomationProperties.SetName(card.Root, $"Check #{item.Number}: {item.Check}");
+        _cards[item.Id] = card;
+        ShowCard(card);
+        return card.Root;
+    }
+
+    private static Border Badge(string text, string bg, string fg)
+    {
+        var b = new Border { CornerRadius = new CornerRadius(10), Padding = new Thickness(8, 2, 8, 3), Margin = new Thickness(0, 0, 6, 4), Child = Brand.Text(text, fg, 11, bold: true) };
+        b.SetResourceReference(Border.BackgroundProperty, bg);
+        return b;
+    }
+
+    private static FrameworkElement HintRow(ChecklistFacts.Hint hint)
+    {
+        var (key, mark) = hint.Level switch
+        {
+            ChecklistFacts.Level.Ok => (Brand.K.SuccessText, "✓"),
+            ChecklistFacts.Level.Warn => (Brand.K.WarningText, "!"),
+            _ => (Brand.K.Muted, "i"),
+        };
+        var row = new DockPanel { Margin = new Thickness(0, 8, 0, 0) };
+        var icon = new Border { Width = 18, Height = 18, CornerRadius = new CornerRadius(9), BorderThickness = new Thickness(1.5), Margin = new Thickness(0, 0, 8, 0), VerticalAlignment = VerticalAlignment.Top };
+        icon.SetResourceReference(Border.BorderBrushProperty, key);
+        var glyph = Brand.Text(mark, key, 11, bold: true);
+        glyph.HorizontalAlignment = HorizontalAlignment.Center;
+        glyph.VerticalAlignment = VerticalAlignment.Center;
+        icon.Child = glyph;
+        DockPanel.SetDock(icon, Dock.Left);
+        row.Children.Add(icon);
+        var text = new TextBlock { TextWrapping = TextWrapping.Wrap, FontSize = 12 };
+        text.SetResourceReference(TextBlock.ForegroundProperty, Brand.K.Text);
+        text.Inlines.Add(new System.Windows.Documents.Run("The model: ") { FontWeight = FontWeights.SemiBold });
+        text.Inlines.Add(new System.Windows.Documents.Run(hint.Text));
+        row.Children.Add(text);
+        AutomationProperties.SetName(row, "The model: " + hint.Text);
+        return row;
+    }
+
+    private static RadioButton Segment(string text, string style, string group, string name)
+    {
+        var b = new RadioButton { Content = text, GroupName = group, MinWidth = 58, MinHeight = 30, Margin = new Thickness(0, 0, 6, 0) };
+        b.SetResourceReference(StyleProperty, style);
+        AutomationProperties.SetName(b, name);
+        return b;
+    }
+
+    /// <summary>A text box with a hint shown while it is empty.</summary>
+    private static Grid Placeholder(TextBox box, string hint)
+    {
+        var grid = new Grid();
+        grid.Children.Add(box);
+        if (hint.Length == 0) return grid;
+        var text = Brand.Text(hint, Brand.K.Muted, 12);
+        text.IsHitTestVisible = false;
+        text.Margin = new Thickness(9, 0, 9, 0);
+        text.VerticalAlignment = VerticalAlignment.Center;
+        text.TextTrimming = TextTrimming.CharacterEllipsis;
+        void Show() => text.Visibility = box.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
+        box.TextChanged += (_, _) => Show();
+        Show();
+        AutomationProperties.SetHelpText(box, hint);
+        grid.Children.Add(text);
+        return grid;
+    }
+
+    private void Answer(Card card, string value, bool move)
+    {
+        var a = _state.For(card.Item.Id);
+        a.Check = card.Item.Check;
+        a.Done = value;
+        a.By = Signer();
+        a.Date = Today();
+        _loading = true;
+        (value switch { ChecklistMath.Yes => card.Yes, ChecklistMath.No => card.No, _ => card.Na }).IsChecked = true;
+        _loading = false;
+        ShowCard(card);
+        Changed();
+        if (!move) return;
+        // A No asks why: the comment box. Otherwise on to the next check (or the next stage when this was the last).
+        if (value == ChecklistMath.No || card.Item.Waiting.Length > 0 && card.Note.Text.Trim().Length == 0) { card.Note.Focus(); return; }
+        var stageCards = _cards.Values.Where(c => c.Stage == card.Stage).ToList();
+        var at = stageCards.IndexOf(card);
+        if (at >= 0 && at + 1 < stageCards.Count) FocusCard(stageCards[at + 1]);
+        else _next.Focus();
+    }
+
+    private string Signer()
+    {
+        var name = (_settings.SignatureName ?? "").Trim();
+        return name.Length > 0 ? name : Environment.UserName;
+    }
+
+    private static string Today() => DateTime.Now.ToString("dd-MMM-yyyy", CultureInfo.InvariantCulture);
+
+    private void ShowCard(Card card)
+    {
+        var a = _state.Answers.TryGetValue(card.Item.Id, out var found) ? found : null;
+        var done = ChecklistMath.Normal(a?.Done);
+        card.Strip.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, done switch
+        {
+            ChecklistMath.Yes => Brand.K.BadgeOk,
+            ChecklistMath.No => Brand.K.BadgeError,
+            ChecklistMath.NotApplicable => Brand.K.BadgeMuted,
+            _ => Brand.K.BorderSubtle,
+        });
+        card.Meta.Text = done.Length == 0 ? "Not answered yet." : $"Marked {Word(done)} by {a!.By}, {a.Date}.";
+        var note = card.Note.Text.Trim();
+        var need = done == ChecklistMath.No && note.Length == 0 ? "Say why it isn't done, and what happens next."
+                 : card.Item.Waiting.Length > 0 && done.Length > 0 && note.Length == 0 ? "This check waits on an answer: write what you did meanwhile."
+                 : "";
+        card.NoteHint.Text = need;
+        card.NoteHint.Visibility = need.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private static string Word(string done) => done switch { ChecklistMath.Yes => "Yes", ChecklistMath.No => "No", _ => "N/A" };
+
+    // ---- Last stage: review and sign ------------------------------------------------------------------------------
+
+    private FrameworkElement ReviewPage()
+    {
+        var r = _review = new Review();
+        var page = new StackPanel();
+        page.Children.Add(Heading("Review and sign"));
+        page.Children.Add(Para("Check the totals, clear anything still open, then create the Word file to print and sign.", Brand.K.Muted));
+
+        // Four tiles: Yes, No, N/A, not answered.
+        var tiles = new UniformGrid { Columns = 4, Margin = new Thickness(0, 12, 0, 0) };
+        TextBlock Tile(string label, string key)
+        {
+            var number = Brand.Text("0", key, 26, bold: true);
+            var stack = new StackPanel { Children = { number, Brand.Text(label, Brand.K.Muted, 12) } };
+            var b = CardBox(stack, top: 0);
+            b.Margin = new Thickness(0, 0, 10, 0);
+            AutomationProperties.SetName(b, label);
+            tiles.Children.Add(b);
+            return number;
+        }
+        r.Yes = Tile("Yes", Brand.K.SuccessText);
+        r.No = Tile("No", Brand.K.DangerText);
+        r.Na = Tile("Not applicable", Brand.K.Text);
+        r.Open = Tile("Not answered", Brand.K.WarningText);
+        page.Children.Add(tiles);
+
+        r.BannerText = Para("", Brand.K.Text, 13, 0);
+        r.BannerText.FontWeight = FontWeights.SemiBold;
+        AutomationProperties.SetLiveSetting(r.BannerText, AutomationLiveSetting.Polite);
+        r.Banner = CardBox(r.BannerText, top: 14);
+        page.Children.Add(r.Banner);
+        r.Problems = new StackPanel { Margin = new Thickness(0, 6, 0, 0) };
+        AutomationProperties.SetName(r.Problems, "Still open");
+        page.Children.Add(r.Problems);
+
+        // Sign-off: one card per signatory.
+        var signOff = Heading("Sign-off", 15);
+        signOff.Margin = new Thickness(0, 18, 0, 0);
+        page.Children.Add(signOff);
+        page.Children.Add(Para("Signatures go in only when the checklist is ready (nothing No, nothing unanswered). Until then the Word file says NOT READY in red, " +
+                               "without signatures, so it can be printed for review but can't pass for a signed copy.", Brand.K.Muted));
+        foreach (var role in _def!.Signatories) page.Children.Add(SignCard(role));
+
+        // After the file is made: what was written, Open, Print, Show in folder.
+        r.Error = Para("", Brand.K.DangerText, 12, 12);
+        r.Error.Visibility = Visibility.Collapsed;
+        AutomationProperties.SetLiveSetting(r.Error, AutomationLiveSetting.Assertive);
+        page.Children.Add(r.Error);
+        r.DoneText = Para("", Brand.K.Text, 13, 0);
+        r.OpenFile = Brand.Button("Open in Word", Brand.Weight.Primary);
+        r.Print = Brand.Button("Print");
+        r.Folder = Brand.Button("Show in folder");
+        r.OpenFile.Margin = new Thickness(0, 0, 8, 0);
+        r.OpenFile.Click += (_, _) => Shell(r.LastFile, null);
+        r.Print.Click += (_, _) => Shell(r.LastFile, "print");
+        r.Folder.Click += (_, _) => Shell("explorer.exe", null, $"/select,\"{r.LastFile}\"");
+        AutomationProperties.SetHelpText(r.Print, "Sends the Word file to your default printer through Word.");
+        var buttons = new WrapPanel { Margin = new Thickness(0, 10, 0, 0), Children = { r.OpenFile, r.Print, r.Folder } };
+        r.Done = new StackPanel { Children = { r.DoneText, buttons } };
+        var done = CardBox(r.Done, Brand.K.Raised, Brand.K.Border, 14);
+        done.Visibility = Visibility.Collapsed;
+        done.Name = "DonePanel";
+        r.Done.Tag = done;
+        page.Children.Add(done);
+
+        var startAgain = Brand.Button("Start again", Brand.Weight.Danger);
+        startAgain.HorizontalAlignment = HorizontalAlignment.Left;
+        startAgain.Margin = new Thickness(0, 24, 0, 0);
+        AutomationProperties.SetHelpText(startAgain, "Clears every answer, comment and signature for this model. Word files already made are kept.");
+        startAgain.Click += (_, _) => StartAgain();
+        page.Children.Add(startAgain);
+        return Scroll(page);
+    }
+
+    private Border SignCard(string role)
+    {
+        var sig = _state.Signatures.FirstOrDefault(s => s.Role == role);
+        var mine = Matches((_settings.SignatureRole ?? "").Trim(), role);
+        if (sig is null)
+        {
+            sig = new ChecklistMath.Signature { Role = role, Date = Today() };
+            var field = _def!.Fields.FirstOrDefault(f => Matches(role, f.Label) || Matches(f.Label, role));
+            sig.Name = field is not null && _state.Fields.TryGetValue(field.Label, out var n) && n.Trim().Length > 0 ? n.Trim() : mine ? (_settings.SignatureName ?? "").Trim() : "";
+            sig.Mode = mine && Signature.ForWord(_settings.SignatureImage) is not null ? ChecklistMath.SignMode.Mine : ChecklistMath.SignMode.Hand;
+            _state.Signatures.Add(sig);
+        }
+
+        var grid = new Grid();
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(16) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        var left = new StackPanel();
+        left.Children.Add(Brand.Text(role, size: 14, bold: true));
+        left.Children.Add(Para("Name", Brand.K.Text, 12, 8));
+        var name = new TextBox { MinHeight = 28, Text = sig.Name, VerticalContentAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 4, 0, 0) };
+        AutomationProperties.SetName(name, $"{role}: name");
+        name.TextChanged += (_, _) => { sig.Name = name.Text; Changed(); };
+        left.Children.Add(name);
+        left.Children.Add(Para("Date", Brand.K.Text, 12, 8));
+        var date = new TextBox { MinHeight = 28, Text = sig.Date, VerticalContentAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 4, 0, 0), MaxWidth = 200, HorizontalAlignment = HorizontalAlignment.Left, MinWidth = 140 };
+        AutomationProperties.SetName(date, $"{role}: date");
+        date.TextChanged += (_, _) => { sig.Date = date.Text; Changed(); };
+        left.Children.Add(date);
+        grid.Children.Add(left);
+
+        var right = new StackPanel();
+        right.Children.Add(Para("Signed with", Brand.K.Text, 12, 0));
+        var mode = new ComboBox { MinHeight = 28, Margin = new Thickness(0, 4, 0, 0) };
+        mode.Items.Add(new ComboBoxItem { Content = "My signature (Settings > Sign-off)", Tag = ChecklistMath.SignMode.Mine });
+        mode.Items.Add(new ComboBoxItem { Content = "A picture…", Tag = ChecklistMath.SignMode.Image });
+        mode.Items.Add(new ComboBoxItem { Content = "By hand on the printout", Tag = ChecklistMath.SignMode.Hand });
+        AutomationProperties.SetName(mode, $"{role}: how it is signed");
+        right.Children.Add(mode);
+        var frame = new Border { BorderThickness = new Thickness(1), Height = 76, Margin = new Thickness(0, 8, 0, 0), CornerRadius = new CornerRadius(4), Padding = new Thickness(6) };
+        frame.SetResourceReference(Border.BorderBrushProperty, Brand.K.Border);
+        frame.Background = Brand.Brush(Colors.White); // signatures are dark ink on white paper, in both themes
+        var preview = new Image { Stretch = Stretch.Uniform, HorizontalAlignment = HorizontalAlignment.Left };
+        AutomationProperties.SetName(preview, $"{role}: signature");
+        frame.Child = preview;
+        right.Children.Add(frame);
+        var hint = Para("", Brand.K.Muted, 11, 4);
+        right.Children.Add(hint);
+        Grid.SetColumn(right, 2);
+        grid.Children.Add(right);
+
+        _signs.Add((sig, mode, preview, hint));
+        mode.SelectedIndex = sig.Mode switch { ChecklistMath.SignMode.Mine => 0, ChecklistMath.SignMode.Image => 1, _ => 2 };
+        ShowSign(sig, preview, hint);
+        mode.SelectionChanged += (_, _) =>
+        {
+            if ((mode.SelectedItem as ComboBoxItem)?.Tag is not string m) return;
+            if (m == ChecklistMath.SignMode.Image)
+            {
+                var dialog = new Microsoft.Win32.OpenFileDialog { Title = $"Pick the signature picture for {role}", Filter = "Pictures|*.png;*.jpg;*.jpeg" };
+                if (dialog.ShowDialog(this) == true && Signature.ForWord(dialog.FileName) is not null) sig.ImagePath = dialog.FileName;
+                else if (Signature.ForWord(sig.ImagePath) is null)
+                {
+                    hint.Text = "That isn't a PNG or JPG picture. Pick another, or sign by hand.";
+                    hint.SetResourceReference(TextBlock.ForegroundProperty, Brand.K.DangerText);
+                    mode.SelectedIndex = 2;
+                    return;
+                }
+            }
+            sig.Mode = m;
+            ShowSign(sig, preview, hint);
+            Changed();
+        };
+        return CardBox(grid);
+    }
+
+    private void ShowSign(ChecklistMath.Signature sig, Image preview, TextBlock hint)
+    {
+        var path = SignaturePath(sig);
+        preview.Source = path.Length > 0 ? Signature.Load(path) : null;
+        hint.SetResourceReference(TextBlock.ForegroundProperty, Brand.K.Muted);
+        hint.Text = sig.Mode switch
+        {
+            ChecklistMath.SignMode.Hand => "The box stays empty to sign on the printout.",
+            ChecklistMath.SignMode.Mine when preview.Source is null => "No signature picture in Settings > Sign-off yet: add one there, or pick a picture here.",
+            ChecklistMath.SignMode.Mine => "Your signature from Settings > Sign-off.",
+            _ => preview.Source is null ? "The picture can't be read any more. Pick it again." : Path.GetFileName(sig.ImagePath),
+        };
+        if (sig.Mode == ChecklistMath.SignMode.Mine && preview.Source is null) hint.SetResourceReference(TextBlock.ForegroundProperty, Brand.K.WarningText);
+    }
+
+    private string SignaturePath(ChecklistMath.Signature sig) => sig.Mode switch
+    {
+        ChecklistMath.SignMode.Mine => _settings.SignatureImage ?? "",
+        ChecklistMath.SignMode.Image => sig.ImagePath,
+        _ => "",
+    };
+
+    private void RefreshReview()
+    {
+        if (_review is not { } r || _def is null) return;
+        var p = ChecklistMath.Count(_def.Items, _state);
+        r.Yes.Text = p.Yes.ToString(CultureInfo.CurrentCulture);
+        r.No.Text = p.No.ToString(CultureInfo.CurrentCulture);
+        r.Na.Text = p.NotApplicable.ToString(CultureInfo.CurrentCulture);
+        r.Open.Text = p.Open.ToString(CultureInfo.CurrentCulture);
+        r.BannerText.Text = p.Ready
+            ? $"Ready for submission: all {p.Total} checks are Yes or N/A. The Word file will carry the signatures."
+            : $"Not ready yet: {p.Open} not answered and {p.No} marked No. You can still make the Word file for review; it says NOT READY and has no signatures.";
+        r.BannerText.SetResourceReference(TextBlock.ForegroundProperty, p.Ready ? Brand.K.SuccessText : Brand.K.DangerText);
+        r.Banner.SetResourceReference(Border.BorderBrushProperty, p.Ready ? Brand.K.SuccessText : Brand.K.DangerText);
+
+        r.Problems.Children.Clear();
+        var problems = ChecklistMath.Problems(_def, _state);
+        foreach (var (id, text) in problems.Take(12))
+        {
+            var link = new Button { Content = Brand.Text(text, Brand.K.Link, 12), Cursor = Cursors.Hand, HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(0, 2, 0, 0), Padding = new Thickness(4, 2, 4, 2) };
+            link.SetResourceReference(StyleProperty, "SpmLinkButton");
+            AutomationProperties.SetName(link, "Go to " + text);
+            link.Click += (_, _) => { if (_cards.TryGetValue(id, out var c)) { _stages.SelectedIndex = c.Stage; FocusCard(c); } };
+            r.Problems.Children.Add(link);
+        }
+        if (problems.Count > 12) r.Problems.Children.Add(Para($"…and {problems.Count - 12} more. Go through the stages on the left: a red ! marks a stage with a No.", Brand.K.Muted, 12, 2));
+    }
+
+    // ---- The Word file --------------------------------------------------------------------------------------------
+
+    private void CreateFile()
+    {
+        if (_def is null || _review is not { } r) return;
+        if (Brand.IsBusy(_next)) return;
+        Brand.SetBusy(_next, true, "Creating…");
+        try
+        {
+            SaveDraft();
+            var images = new Dictionary<string, ChecklistDocx.Image>(StringComparer.Ordinal);
+            foreach (var (sig, _, _, _) in _signs)
+                if (Signature.ForWord(SignaturePath(sig)) is { } img) images[sig.Role] = img;
+            var folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Sketch ProMax", "Checklists");
+            var model = Path.GetFileNameWithoutExtension(ChecklistMath.WorkingName(_facts.Model));
+            var path = Path.Combine(folder, $"{ChecklistMath.SafeName(model)} pre-submission checklist {DateTime.Now:yyyy-MM-dd HHmm}.docx");
+            ChecklistDocx.Write(path, _def, _state, new ChecklistDocx.Info(_facts.Model, Update.Updater.CurrentText, DateTime.Now), images);
+            var p = ChecklistMath.Count(_def.Items, _state);
+            r.LastFile = path;
+            r.Error.Visibility = Visibility.Collapsed;
+            r.DoneText.Text = (p.Ready ? "Signed checklist created: " : "Checklist created for review (NOT READY, no signatures): ") + Path.GetFileName(path) +
+                              "\nIn Documents\\Sketch ProMax\\Checklists.";
+            ((Border)r.Done.Tag).Visibility = Visibility.Visible;
+            r.OpenFile.Focus();
+            ActivityLog.Note("checklist_word", $"{p.Yes} yes, {p.No} no, {p.NotApplicable} n/a, {p.Open} open, ready {p.Ready}");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+        {
+            r.Error.Text = $"Couldn't write the Word file ({ex.Message}). Check that Documents\\Sketch ProMax\\Checklists can be written to and isn't full, then try again.";
+            r.Error.Visibility = Visibility.Visible;
+        }
+        finally { Brand.SetBusy(_next, false); }
+    }
+
+    private void Shell(string file, string? verb, string? args = null)
+    {
+        try
+        {
+            var info = args is null ? new ProcessStartInfo(file) { UseShellExecute = true } : new ProcessStartInfo(file, args) { UseShellExecute = true };
+            if (verb is not null) info.Verb = verb;
+            Process.Start(info)?.Dispose();
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or FileNotFoundException)
+        {
+            if (_review is null) return;
+            _review.Error.Text = verb == "print"
+                ? $"Couldn't print it ({ex.Message}). Open it in Word and print from there."
+                : $"Couldn't open it ({ex.Message}). The file is {_review.LastFile}.";
+            _review.Error.Visibility = Visibility.Visible;
+        }
+    }
+
+    // ---- Moving around --------------------------------------------------------------------------------------------
+
+    private void Move(int by)
+    {
+        var to = _stages.SelectedIndex + by;
+        if (to < 0 || to >= _stages.Items.Count) return;
+        _stages.SelectedIndex = to;
+        FocusStage();
+    }
+
+    private void StageChanged()
+    {
+        if (_loading) return;
+        var i = Math.Max(0, _stages.SelectedIndex);
+        _state.Stage = i;
+        var last = i == _stages.Items.Count - 1 && _def is not null;
+        _back.IsEnabled = i > 0;
+        if (last) RefreshReview();
+        StageButtonText();
+        _next.IsEnabled = _def is not null && _stages.Items.Count > 1;
+        Changed(refresh: false);
+    }
+
+    /// <summary>On a stage change: the first unanswered check there (else its first), or the stage's first control.</summary>
+    private void FocusStage()
+    {
+        var stage = _stages.SelectedIndex;
+        var cards = _cards.Values.Where(c => c.Stage == stage).ToList();
+        var target = cards.FirstOrDefault(c => ChecklistMath.Normal(_state.Answers.TryGetValue(c.Item.Id, out var a) ? a.Done : "").Length == 0) ?? cards.FirstOrDefault();
+        if (target is not null) { FocusCard(target); return; }
+        Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() =>
+        {
+            if (_fieldBoxes.Count > 0 && stage == 0) _fieldBoxes.Values.First().Focus();
+            else _next.Focus();
+        }));
+    }
+
+    private void FocusCard(Card card) =>
+        Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() =>
+        {
+            card.Root.BringIntoView();
+            var target = card.Yes.IsChecked == true ? card.Yes : card.No.IsChecked == true ? card.No : card.Na.IsChecked == true ? card.Na : card.Yes;
+            target.Focus();
+        }));
+
+    private void OnKey(object sender, KeyEventArgs e)
+    {
+        if ((Keyboard.Modifiers & ModifierKeys.Control) != 0 && e.Key is Key.Tab or Key.PageDown or Key.PageUp)
+        {
+            var back = e.Key == Key.PageUp || (e.Key == Key.Tab && (Keyboard.Modifiers & ModifierKeys.Shift) != 0);
+            Move(back ? -1 : 1);
+            e.Handled = true;
+            return;
+        }
+        if (Keyboard.Modifiers != ModifierKeys.None || Keyboard.FocusedElement is TextBox or ComboBox) return;
+        var value = e.Key switch { Key.Y => ChecklistMath.Yes, Key.N => ChecklistMath.No, Key.A => ChecklistMath.NotApplicable, _ => "" };
+        if (value.Length == 0) return;
+        for (DependencyObject? node = Keyboard.FocusedElement as DependencyObject; node is not null; node = VisualTreeHelper.GetParent(node))
+            if (node is Border { Tag: Card card })
+            {
+                Answer(card, value, move: true);
+                e.Handled = true;
+                return;
+            }
+    }
+
+    // ---- Progress, draft ------------------------------------------------------------------------------------------
+
+    private void Changed(bool refresh = true)
+    {
+        if (_loading) return;
+        if (refresh) Refresh();
+        _saveSoon.Stop();
+        _saveSoon.Start();
+    }
+
+    private void Refresh()
+    {
+        if (_def is null)
+        {
+            _status.Text = "Pick your office's checklist to start.";
+            _bar.Value = 0;
+            foreach (var h in _headers) Paint(h, done: false, bad: false, active: true, 0);
+            return;
+        }
+        var p = ChecklistMath.Count(_def.Items, _state);
+        _bar.Value = p.Total == 0 ? 0 : (double)p.Answered / p.Total;
+        _status.Text = $"{p.Answered} of {p.Total} answered" + (p.No > 0 ? $" · {p.No} No" : "") + (p.WaitingWithoutNote > 0 ? $" · {p.WaitingWithoutNote} open points without a comment" : "") +
+                       (p.Ready ? " · ready to sign" : "");
+        for (var i = 0; i < _headers.Count; i++)
+        {
+            var h = _headers[i];
+            if (i == 0)
+            {
+                var filled = _def.Fields.Count(f => _state.Fields.TryGetValue(f.Label, out var v) && v.Trim().Length > 0);
+                h.Sub.Text = $"{filled} of {_def.Fields.Count} filled";
+                Paint(h, filled == _def.Fields.Count, false, filled > 0, i);
+            }
+            else if (i == _headers.Count - 1)
+            {
+                h.Sub.Text = p.Ready ? "Ready to sign" : $"{p.Open + p.No} still open";
+                Paint(h, false, false, p.Answered > 0, i);
+            }
+            else
+            {
+                var s = ChecklistMath.Count(h.Items, _state);
+                h.Sub.Text = $"{s.Answered} of {s.Total}" + (s.No > 0 ? $" · {s.No} No" : "");
+                Paint(h, s.Open == 0 && s.No == 0, s.No > 0, s.Answered > 0, i);
+            }
+        }
+        RefreshReview();
+    }
+
+    /// <summary>The primary button: "Next: (stage)", or Create Word file on the last stage.</summary>
+    private void StageButtonText()
+    {
+        if (Brand.IsBusy(_next)) return;
+        var i = Math.Max(0, _stages.SelectedIndex);
+        var names = _def is null ? ["Project details"] : ChecklistMath.Stages(_def);
+        _next.Content = _def is not null && i == names.Count - 1 ? "Create Word file" : i + 1 < names.Count ? "Next: " + names[i + 1] : "Next";
+    }
+
+    /// <summary>A stage's circle: green with a tick when done, red with ! when a check is No, accent outline once started, grey before.</summary>
+    private static void Paint(StageHeader h, bool done, bool bad, bool active, int index)
+    {
+        h.Glyph.Text = done ? "✓" : bad ? "!" : (index + 1).ToString(CultureInfo.InvariantCulture);
+        if (done || bad)
+        {
+            var key = done ? Brand.K.BadgeOk : Brand.K.BadgeError;
+            h.Circle.SetResourceReference(Border.BackgroundProperty, key);
+            h.Circle.SetResourceReference(Border.BorderBrushProperty, key);
+            h.Glyph.SetResourceReference(TextBlock.ForegroundProperty, Brand.K.OnAccent);
+        }
+        else
+        {
+            h.Circle.SetResourceReference(Border.BackgroundProperty, Brand.K.Bg);
+            h.Circle.SetResourceReference(Border.BorderBrushProperty, active ? Brand.K.Accent : Brand.K.InputBorder);
+            h.Glyph.SetResourceReference(TextBlock.ForegroundProperty, active ? Brand.K.Link : Brand.K.Muted);
+        }
+        AutomationProperties.SetItemStatus(h.Circle, done ? "Done" : bad ? "Has a No" : active ? "Started" : "Not started");
+    }
+
+    private void LoadDraft()
+    {
+        var keepStage = _state.Stage;
+        _state = new ChecklistMath.State();
+        try
+        {
+            if (File.Exists(_draftPath) && ChecklistMath.FromJson<ChecklistMath.State>(File.ReadAllText(_draftPath)) is { } saved) _state = saved;
+            else _state.Stage = keepStage;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        _state.Fields ??= new(StringComparer.Ordinal);
+        _state.Answers ??= new(StringComparer.Ordinal);
+        _state.Signatures ??= [];
+        if (_def is null) return;
+        _state.Checklist = _def.Title;
+        var dropped = ChecklistMath.Reconcile(_def, _state);
+        if (dropped > 0 && _loadError.Length == 0)
+            _loadError = $"The checklist changed since this model was last checked: {dropped} answers whose check was reworded, renumbered or removed were cleared. Answer them again.";
+        // Empty header fields get what the model (or Settings) says.
+        foreach (var f in _def.Fields)
+            if (!(_state.Fields.TryGetValue(f.Label, out var v) && v.Trim().Length > 0) && FieldFromModel(f) is { Length: > 0 } auto)
+                _state.Fields[f.Label] = auto;
+    }
+
+    private void SaveDraft()
+    {
+        if (_def is null) return;
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(_draftPath)!);
+            SafeFile.Write(_draftPath, ChecklistMath.ToJson(_state));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* the draft is a convenience; the window still works */ }
+    }
+
+    private void StartAgain()
+    {
+        // A plain message box: this window is modeless, outside a Revit API call, where Revit's own dialogs aren't allowed.
+        if (MessageBox.Show(this, "Clear every answer, comment and signature for this model? Word files you made are kept.", "Sketch ProMax pre-submission checklist",
+                MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No) != MessageBoxResult.Yes) return;
+        try { if (File.Exists(_draftPath)) File.Delete(_draftPath); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        _state = new ChecklistMath.State();
+        Build();
+        _stages.SelectedIndex = 0;
+        FocusStage();
+    }
+
+    // ---- Styles ---------------------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// The stage list on the left (as in Settings) and the Yes / No / N/A buttons, in palette colours so they follow
+    /// Revit's theme. White on the filled answer colours is at least 5:1 in both themes.
+    /// </summary>
+    private void Styles()
+    {
+        static string Seg(string key, string on) => $$"""
+              <Style x:Key="{{key}}" TargetType="RadioButton">
+                <Setter Property="Foreground" Value="{DynamicResource SpmText}"/>
+                <Setter Property="FontSize" Value="12.5"/>
+                <Setter Property="FontWeight" Value="SemiBold"/>
+                <Setter Property="Cursor" Value="Hand"/>
+                <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+                <Setter Property="Template"><Setter.Value>
+                  <ControlTemplate TargetType="RadioButton">
+                    <Border x:Name="b" Background="{DynamicResource SpmField}" BorderBrush="{DynamicResource SpmInputBorder}" BorderThickness="1" CornerRadius="5" Padding="12,4,12,5">
+                      <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                      <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="b" Property="Background" Value="{DynamicResource SpmSurfaceHover}"/></Trigger>
+                      <Trigger Property="IsChecked" Value="True">
+                        <Setter TargetName="b" Property="Background" Value="{DynamicResource {{on}}}"/>
+                        <Setter TargetName="b" Property="BorderBrush" Value="{DynamicResource {{on}}}"/>
+                        <Setter Property="Foreground" Value="{DynamicResource SpmOnAccent}"/>
+                      </Trigger>
+                      <Trigger Property="IsKeyboardFocused" Value="True">
+                        <Setter TargetName="b" Property="BorderBrush" Value="{DynamicResource SpmFocus}"/>
+                        <Setter TargetName="b" Property="BorderThickness" Value="2"/>
+                      </Trigger>
+                    </ControlTemplate.Triggers>
+                  </ControlTemplate>
+                </Setter.Value></Setter>
+              </Style>
+            """;
+        var xaml = $$"""
+            <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                                xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+              {{Seg("SpmSegYes", Brand.K.BadgeOk)}}
+              {{Seg("SpmSegNo", Brand.K.BadgeError)}}
+              {{Seg("SpmSegNa", Brand.K.BadgeMuted)}}
+              <Style x:Key="SpmLinkButton" TargetType="Button">
+                <Setter Property="Cursor" Value="Hand"/>
+                <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+                <Setter Property="Template"><Setter.Value>
+                  <ControlTemplate TargetType="Button">
+                    <Border x:Name="b" Background="Transparent" BorderBrush="Transparent" BorderThickness="1" CornerRadius="3" Padding="{TemplateBinding Padding}">
+                      <ContentPresenter/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                      <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="b" Property="Background" Value="{DynamicResource SpmSurfaceHover}"/></Trigger>
+                      <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="b" Property="BorderBrush" Value="{DynamicResource SpmFocus}"/></Trigger>
+                    </ControlTemplate.Triggers>
+                  </ControlTemplate>
+                </Setter.Value></Setter>
+              </Style>
+              <Style x:Key="SpmStages" TargetType="TabControl">
+                <Setter Property="Background" Value="Transparent"/>
+                <Setter Property="BorderThickness" Value="0"/>
+                <Setter Property="Padding" Value="0"/>
+                <Setter Property="TabStripPlacement" Value="Left"/>
+                <Setter Property="Template"><Setter.Value>
+                  <ControlTemplate TargetType="TabControl">
+                    <Grid KeyboardNavigation.TabNavigation="Local">
+                      <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                      <Border Background="{DynamicResource SpmSurface}" BorderBrush="{DynamicResource SpmBorder}" BorderThickness="0,0,1,0">
+                        <ScrollViewer VerticalScrollBarVisibility="Auto" Focusable="False">
+                          <StackPanel IsItemsHost="True" Width="260" Margin="0,12,0,12" KeyboardNavigation.TabIndex="1"
+                                      KeyboardNavigation.TabNavigation="Once" KeyboardNavigation.DirectionalNavigation="Cycle"/>
+                        </ScrollViewer>
+                      </Border>
+                      <ContentPresenter Grid.Column="1" x:Name="PART_SelectedContentHost" ContentSource="SelectedContent"
+                                        KeyboardNavigation.TabIndex="2" KeyboardNavigation.TabNavigation="Local"/>
+                    </Grid>
+                  </ControlTemplate>
+                </Setter.Value></Setter>
+              </Style>
+              <Style TargetType="TabItem">
+                <Setter Property="Foreground" Value="{DynamicResource SpmText}"/>
+                <Setter Property="FocusVisualStyle" Value="{DynamicResource SpmFocusVisual}"/>
+                <Setter Property="MinHeight" Value="48"/>
+                <Setter Property="Template"><Setter.Value>
+                  <ControlTemplate TargetType="TabItem">
+                    <Grid Background="Transparent" SnapsToDevicePixels="True">
+                      <Border x:Name="bg" Background="Transparent" Margin="8,2,10,2" CornerRadius="6"/>
+                      <Rectangle x:Name="bar" Width="3" HorizontalAlignment="Left" Margin="8,9,0,9" RadiusX="1.5" RadiusY="1.5"
+                                 Fill="{DynamicResource SpmAccent}" Visibility="Collapsed"/>
+                      <ContentPresenter ContentSource="Header" Margin="20,8,14,8" VerticalAlignment="Center"/>
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                      <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="bg" Property="Background" Value="{DynamicResource SpmSurfaceHover}"/></Trigger>
+                      <Trigger Property="IsSelected" Value="True">
+                        <Setter TargetName="bg" Property="Background" Value="{DynamicResource SpmAccentSoft}"/>
+                        <Setter TargetName="bar" Property="Visibility" Value="Visible"/>
+                        <Setter Property="FontWeight" Value="SemiBold"/>
+                      </Trigger>
+                    </ControlTemplate.Triggers>
+                  </ControlTemplate>
+                </Setter.Value></Setter>
+              </Style>
+            </ResourceDictionary>
+            """;
+        // A styling problem never stops the checklist: it falls back to stock controls (stages still on the left).
+        try
+        {
+            var dictionary = (ResourceDictionary)XamlReader.Parse(xaml);
+            Resources.MergedDictionaries.Add(dictionary);
+            _stages.Style = (Style)dictionary["SpmStages"];
+        }
+        catch (Exception) { _stages.TabStripPlacement = Dock.Left; }
+    }
+}

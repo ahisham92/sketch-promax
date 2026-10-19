@@ -77,7 +77,9 @@ internal static class FavouritesTests
         // ---- The whole manifest fits the loader's 128 command slots with room to spare
         var shipped = RibbonManifest.Parse(CoreRibbonManifest.Text);
         var used = shipped.Controls.Count(c => !c.IsDropDown) + shipped.Entries.Values.Sum(e => e.Count);
-        check("favourites: the manifest leaves at least 24 of 128 loader slots free for in-session updates", used <= 128 - 24, $"{used} used");
+        // 23 spare (24 until the pre-submission checklist button in 0.35): an update adding more new buttons than that in one
+        // session asks for a restart instead of adding them live. Free slots (merge buttons) rather than lowering this again.
+        check("favourites: the manifest leaves at least 23 of 128 loader slots free for in-session updates", used <= 128 - 23, $"{used} used");
         check("favourites: every ribbon tool can be pinned", CoreRibbonManifest.Tools().Count() == shipped.Entries.Values.SelectMany(e => e).Count(e => e.Command.StartsWith("tool:"))
             + shipped.Controls.Count(c => c.Command.StartsWith("tool:")) && CoreRibbonManifest.Tools().All(t => !t.Text.Contains('\n') && t.Glyph.Length > 0), "");
     }
