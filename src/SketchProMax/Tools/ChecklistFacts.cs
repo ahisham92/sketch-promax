@@ -43,11 +43,60 @@ internal static class ChecklistFacts
 
     /// <summary>
     /// Reads the model. Must run in a Revit API context (a command, or the dispatcher). With <paramref name="slow"/> the
-    /// slow checks run too (the model must be the active one); without it they are marked not run yet.
+    /// slow checks run too (the model must be the active one); without it they are marked not run yet. Everything runs in
+    /// this one call: the checklist window reads in steps instead (<see cref="Plan"/>), so Revit never freezes on a big model.
     /// </summary>
     public static Result Read(Document doc, ChecklistMath.Definition? def, UIApplication? slow = null)
     {
+        var reading = Plan(doc, def, slow);
+        while (reading.Next()) { }
+        return reading.Result;
+    }
+
+    /// <summary>
+    /// A model reading cut into steps, one hint each: <see cref="Next"/> reads the next hint. Each step is a short Revit
+    /// API call of its own, so the caller can give Revit back between steps (it repaints and stays responsive).
+    /// </summary>
+    public sealed class Reading
+    {
+        private readonly Document _doc;
+        private readonly Queue<Action> _steps = new();
+        internal Reading(Document doc, Result result) { _doc = doc; Result = result; }
+
+        /// <summary>The header fields at once; the hints as the steps run.</summary>
+        public Result Result { get; }
+
+        /// <summary>Steps left.</summary>
+        public int Left => _steps.Count;
+
+        internal void Add(Action step) => _steps.Enqueue(step);
+
+        /// <summary>Reads the next hint (Revit API context). False when none is left, or the model was closed.</summary>
+        public bool Next()
+        {
+            if (_steps.Count == 0) return false;
+            if (!_doc.IsValidObject) { _steps.Clear(); return false; }
+            _steps.Dequeue()();
+            return true;
+        }
+
+        /// <summary>Reads hints for about <paramref name="budget"/>, at least one (Revit API context). False when done.</summary>
+        public bool RunFor(TimeSpan budget)
+        {
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            do { if (!Next()) return false; } while (clock.Elapsed < budget);
+            return _steps.Count > 0;
+        }
+    }
+
+    /// <summary>
+    /// The header fields now (quick), and the hints as steps to run with <see cref="Reading.Next"/>. Revit API context for
+    /// this call and for each step; the model must stay open between them (a closed model ends the reading).
+    /// </summary>
+    public static Reading Plan(Document doc, ChecklistMath.Definition? def, UIApplication? slow = null)
+    {
         var r = new Result { Title = doc.Title };
+        var reading = new Reading(doc, r);
         var file = "";
         try { file = Path.GetFileName(doc.PathName ?? ""); } catch (ArgumentException) { }
         if (file.Length == 0) file = doc.Title;
@@ -108,8 +157,11 @@ internal static class ChecklistFacts
                 if (!SlowOff(key)) r.Hints[key] = new Hint("A slower automatic check, not run yet: press Run the slow checks.", Level.Info) { Pending = true };
                 return;
             }
-            try { if (read() is { } h) r.Hints[key] = h; }
-            catch (Exception ex) when (ex is not OutOfMemoryException) { r.Hints[key] = new Hint("Couldn't read this from the model (" + ex.Message + ").", Level.Info); }
+            reading.Add(() =>
+            {
+                try { if (read() is { } h) r.Hints[key] = h; }
+                catch (Exception ex) when (ex is not OutOfMemoryException) { r.Hints[key] = new Hint("Couldn't read this from the model (" + ex.Message + ").", Level.Info); }
+            });
         }
 
         Add("name002", () =>
@@ -596,7 +648,7 @@ internal static class ChecklistFacts
             return missing.Count == 0 ? new Hint($"Every view template, filter and the browser organisation of {Path.GetFileName(path)} are in the model." + stamp, Level.Ok)
                 : new Hint($"{missing.Count} differences from {Path.GetFileName(path)}." + stamp, Level.Warn, missing);
         });
-        return r;
+        return reading;
     }
 
     private static string Folder(Document doc)
