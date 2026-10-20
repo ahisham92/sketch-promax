@@ -2052,6 +2052,16 @@ internal static partial class FieldTest
             if (refused.IsError || !refused.Text.Contains("\"stopped\"")) problems.Add("issue_drawings was not stopped: " + Short(refused.Text, 200));
             if (new FilteredElementCollector(doc).OfClass(typeof(Revision)).GetElementCount() != revisions) problems.Add("issue_drawings made a revision while blocked");
 
+            // 2b. export_pdf of the sheet as Claude calls it (a bridge call) refuses too and writes no PDF.
+            step = "2b. export_pdf from the chat while blocked";
+            var exportFolder = Path.Combine(s.Folder, "issue-export");
+            ToolResult export;
+            Bridge.Approvals.Call = new Bridge.Approvals.CallState(ApprovalDecision.No, null, Asked: false);
+            try { export = Call(app, s.Registry, "export_pdf", new { view_ids = new[] { sheet.Id.Value }, folder = exportFolder, file_name = "gated" }); }
+            finally { Bridge.Approvals.Call = null; }
+            if (export.IsError || !export.Text.Contains("Not exported")) problems.Add("export_pdf from the chat was not stopped: " + Short(export.Text, 200));
+            if (File.Exists(Path.Combine(exportFolder, "gated.pdf"))) problems.Add("export_pdf from the chat wrote the PDF while blocked");
+
             // 3. Accept the title block item, then change the finding (one field filled): it must come back open.
             step = "3. accept, then change the finding";
             IssueGate.Accept(doc, run, Mine(run).Items.Where(i => i.Finding.Check == "sheet_fields"), "Field test: filled at issue");
@@ -2095,7 +2105,7 @@ internal static partial class FieldTest
             if (!File.Exists(IssueGate.StorePath(doc))) problems.Add("no per-model file with the acceptances");
 
             return problems.Count == 0
-                ? Pass($"blocked on the seeded sheet ({string.Join(", ", new[] { "empty_sheets", "sheet_fields" })}) and issue_drawings refused with no revision; an accepted item came back when its text changed; " +
+                ? Pass($"blocked on the seeded sheet ({string.Join(", ", new[] { "empty_sheets", "sheet_fields" })}) and issue_drawings refused with no revision, as did export_pdf from the chat with no PDF; an accepted item came back when its text changed; " +
                        $"the fixed sheet passed on re-check; {rest.Count} other item(s) accepted with a reason cleared the gate and stayed accepted; report {Path.GetFileName(again.Report ?? "")}")
                 : Fail(string.Join("; ", problems));
         }

@@ -29,7 +29,7 @@ internal static class Redlines
     public static readonly string[] ImageExtensions = [".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".gif"];
 
     /// <summary>Pages read from one PDF at most (each is a Claude reading when nothing else gives the markups).</summary>
-    public const int MaxPages = 20;
+    public const int MaxPages = Redline.MaxPages;
 
     /// <summary>How far from a markup (on paper) an element can be and still be the one it means.</summary>
     public const double RadiusMm = 20;
@@ -212,34 +212,35 @@ internal static class Redlines
         {
             if (file is null) throw new ArgumentException("Give file (the marked-up PDF or image), or markups read from it (see redline_read).");
             source = Path.GetFileName(file);
-            var pages = args.Has("pages") ? args.Array("pages").Select(p => p.GetInt32()).Where(p => p >= 1).Distinct().ToList()
-                : Enumerable.Range(1, IsPdf(file) ? Math.Min(MaxPages, PdfPages(file)) : 1).ToList();
-            if (pages.Count == 0) throw new ArgumentException("pages lists no page (pages count from 1).");
-            if (pages.Count > MaxPages) throw new ArgumentException($"At most {MaxPages} pages at a time; give pages.");
-            var folder = WorkFolder();
-            markups = [];
-            // The page images are only for this reading: removed afterwards, whatever happens.
-            try
+            var pages = Pages(args, file);
+            // Read already, off Revit's thread (the ribbon's Redlines to sheets, see Commands/RibbonRedlines).
+            if (Redline.TakeRead(file, pages) is { } read)
             {
-                for (var i = 0; i < pages.Count; i++)
-                {
-                    if (CancelPoint.Stop("Reading redlines", i, pages.Count)) { notes.Add(CancelPoint.Note(true, i, pages.Count)!); break; }
-                    var page = pages[i];
-                    string png;
-                    try { png = PageImage(doc, file, page, folder); }
-                    catch (ArgumentException ex) when (i > 0 && IsPdf(file)) { notes.Add($"page {page}: {ex.Message}"); break; } // past the last page
-                    var answer = Extract(png, page, out var error);
-                    if (answer is null) { notes.Add($"page {page}: the markups could not be read ({error})"); continue; }
-                    var found = Redline.Parse(answer, out var pageProblems);
-                    foreach (var m in found) m.Page = page;
-                    problems.AddRange(pageProblems.Select(p => $"page {page}: {p}"));
-                    markups.AddRange(found);
-                }
+                markups = read.Markups;
+                notes.AddRange(read.Notes);
             }
-            finally { Remove(folder); }
-            // Ids unique across pages.
-            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var m in markups) if (!seen.Add(m.Id)) { m.Id = $"P{m.Page}-{m.Id}"; seen.Add(m.Id); }
+            else
+            {
+                var folder = WorkFolder();
+                markups = [];
+                // The page images are only for this reading: removed afterwards, whatever happens.
+                try
+                {
+                    for (var i = 0; i < pages.Count; i++)
+                    {
+                        if (CancelPoint.Stop("Reading redlines", i, pages.Count)) { notes.Add(CancelPoint.Note(true, i, pages.Count)!); break; }
+                        var page = pages[i];
+                        string png;
+                        try { png = PageImage(doc, file, page, folder); }
+                        catch (ArgumentException ex) when (i > 0 && IsPdf(file)) { notes.Add($"page {page}: {ex.Message}"); break; } // past the last page
+                        var answer = Extract(png, page, out var error);
+                        if (answer is null) { notes.Add($"page {page}: the markups could not be read ({error})"); continue; }
+                        Redline.AddPage(markups, problems, answer, page);
+                    }
+                }
+                finally { Remove(folder); }
+                Redline.UniqueIds(markups);
+            }
         }
         notes.AddRange(problems);
         if (args.StringList("markup_ids") is { Count: > 0 } only)
@@ -249,6 +250,10 @@ internal static class Redlines
         }
         return markups;
     }
+
+    /// <summary>The pages to read from <paramref name="file"/>: the "pages" argument, else every page (at most <see cref="MaxPages"/>).</summary>
+    public static List<int> Pages(ToolArgs args, string file) =>
+        Redline.Pages(args.Has("pages") ? args.Array("pages").Select(p => p.GetInt32()).ToList() : null, () => IsPdf(file) ? PdfPages(file) : 1);
 
     /// <summary>The markup JSON for one page image: the field test's hook, else a one-shot Claude Code run. Null with the error when it can't.</summary>
     public static string? Extract(string png, int page, out string error)
@@ -271,7 +276,8 @@ internal static class Redlines
 
     /// <summary>
     /// One Claude Code run that reads the page image: print mode, Read only (for the image), no MCP server, nothing that
-    /// could act on the PC or the model. Blocks until it answers, Cancel is pressed or the timeout passes.
+    /// could act on the PC or the model. Blocks the calling thread (off Revit's, from the ribbon: Commands/RibbonRedlines) until it
+    /// answers, a stop is asked for or the timeout passes.
     /// </summary>
     internal static string? RunVision(ClaudeCli.Install install, string png, int page, int timeoutMs, out string error)
     {
@@ -972,7 +978,7 @@ public sealed class RedlineApplyTool : IRevitTool
             var raw = JsonSerializer.SerializeToElement(new { view_ids = doneSheets.Select(s => s.Id.Value).ToArray(), folder, name_pattern = "{number} - {name} - {revision}" });
             try
             {
-                var r = new ExportPdfTool().Execute(app, new ToolArgs(raw.EnumerateObject().ToDictionary(x => x.Name, x => x.Value.Clone())));
+                var r = ExportPdfTool.Export(app, new ToolArgs(raw.EnumerateObject().ToDictionary(x => x.Name, x => x.Value.Clone())));
                 if (r.IsError) exportProblem = r.Text;
             }
             catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or Autodesk.Revit.Exceptions.ApplicationException) { exportProblem = ex.Message; }

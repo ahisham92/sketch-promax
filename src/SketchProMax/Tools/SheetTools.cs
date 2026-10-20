@@ -263,7 +263,9 @@ public sealed class ExportPdfTool : IRevitTool
 {
     public string Name => "export_pdf";
     public string Description =>
-        "Print sheets or views to PDF (a print/issue set). Defaults to one combined file in Documents\\SketchProMax.";
+        "Print sheets or views to PDF (a print/issue set). Defaults to one combined file in Documents\\SketchProMax. Sheets " +
+        "go through the issue check first (issue_check), as issue_drawings does: while it has open items for them nothing is " +
+        "exported and the result lists them. Views that are not sheets are exported straight away.";
     public string PropertiesJson => """
     {
       "view_ids": {"type": "array", "items": {"type": "integer"}, "description": "Sheets or views, in order."},
@@ -278,9 +280,89 @@ public sealed class ExportPdfTool : IRevitTool
 
     public ToolResult Execute(UIApplication app, ToolArgs args)
     {
+        // From Claude (a bridge call), sheets go through the issue check first, as Issue drawings does and as the ribbon's
+        // Export PDF does (UI/IssueGateWindow.Before; Approvals.Call is null there, so it isn't checked twice). Views that
+        // are not sheets are not an issue set. Other tools' own exports (redline_apply's revised sheets) call Export.
+        if (Bridge.Approvals.Call is { } call && Sheets(app.ActiveUIDocument.Document, args) is { Count: > 0 } sheets)
+        {
+            var checkFolder = Path.Combine(Folder(args), "Issue check");
+            if (Bridge.Jobs.CanContinue(Name) is { } job)
+            {
+                // Each check, and then the export, is its own Revit API call, so Revit stays responsive between them.
+                job.Continuation = CheckThenExport(job, call.Chat, sheets.Select(s => s.Id).ToList(), args, checkFolder);
+                Bridge.Jobs.Report($"Issue check before the export ({sheets.Count} sheet(s))");
+                return ToolResult.Ok(new
+                {
+                    status = "issue check first", job = job.Id, sheets = sheets.Count,
+                    next = $"The issue check runs on these sheets before they are exported. Call wait_for_job (job_id {job.Id}) for the result.",
+                });
+            }
+            // Called from a recipe step: the checks run here, as issue_drawings runs them.
+            var run = IssueGate.Check(app, sheets, null, null, checkFolder);
+            if (run.Blocked) return Refused(run, sheets.Count);
+        }
+        return Export(app, args);
+    }
+
+    /// <summary>The sheets among view_ids (placeholders left out): what the issue check gates.</summary>
+    private static List<ViewSheet> Sheets(Document doc, ToolArgs args) =>
+        args.LongList("view_ids").Select(id => doc.GetElement(new ElementId(id))).OfType<ViewSheet>().Where(s => !s.IsPlaceholder).ToList();
+
+    private static string Folder(ToolArgs args) => OutputPaths.Checked(args.OptString("folder"))
+        ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "SketchProMax");
+
+    private static ToolResult Refused(IssueGate.Run run, int sheets) =>
+        ToolResult.Ok(new { stopped = IssueGateMath.ExportRefusal(run.Groups), sheets, issueCheck = IssueGate.Chat(run) });
+
+    /// <summary>
+    /// The chat's export of sheets, after the call returned: the four checks and then the export, each its own Revit API
+    /// call. A stop (cancel_job, the Job button, the chat's Stop) ends it between checks with nothing exported. Ends the job.
+    /// </summary>
+    private async Task<ToolResult> CheckThenExport(Bridge.Job job, Bridge.JobControl? chat, List<ElementId> ids, ToolArgs args, string checkFolder)
+    {
+        bool Stopping() => job.CancelRequested || chat?.Halting == true;
+        try
+        {
+            var checking = await App.Dispatcher.InvokeAsync(app =>
+            {
+                var doc = app.ActiveUIDocument?.Document ?? throw new InvalidOperationException("No model is open in Revit any more.");
+                var sheets = ids.Select(id => doc.GetElement(id)).OfType<ViewSheet>().ToList();
+                if (sheets.Count != ids.Count) throw new InvalidOperationException("A sheet to export was deleted, or another model is active now.");
+                return IssueGate.Begin(app, sheets, null, null, checkFolder);
+            }).ConfigureAwait(false);
+            for (var i = 0; i < checking.Count; i++)
+            {
+                CancelPoint.Stop("Issue check", i, checking.Count);
+                if (Stopping()) return ToolResult.Error($"{CancelPoint.Stopped}. The issue check did not finish; nothing was exported.");
+                var step = i;
+                await App.Dispatcher.InvokeAsync(app => { checking.Step(app, step); return true; }).ConfigureAwait(false);
+            }
+            var run = await App.Dispatcher.InvokeAsync(app => checking.Finish(app)).ConfigureAwait(false);
+            if (run.Blocked) return Refused(run, ids.Count);
+            if (Stopping()) return ToolResult.Error($"{CancelPoint.Stopped}. The issue check was clear, but nothing was exported.");
+            Bridge.Jobs.Report($"Exporting {ids.Count} sheet(s) to PDF");
+            return await App.Dispatcher.InvokeAsync(app => FailureGuard.Run(() =>
+            {
+                try { return Export(app, args); }
+                catch (Exception ex) { return ToolResult.Error(Bridge.BridgeServer.Describe(this, ex)); }
+            })).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            return ToolResult.Error($"The issue check before the export stopped ({ex.GetType().Name}: {ex.Message}). Nothing was exported.");
+        }
+        finally
+        {
+            job.Finished = DateTime.UtcNow;
+            if (Bridge.Jobs.Running == job) Bridge.Jobs.Running = null;
+        }
+    }
+
+    /// <summary>The export itself, with no issue check: the ribbon (after its own check), the tests and other tools' exports.</summary>
+    internal static ToolResult Export(UIApplication app, ToolArgs args)
+    {
         var doc = app.ActiveUIDocument.Document;
-        var folder = OutputPaths.Checked(args.OptString("folder"))
-            ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "SketchProMax");
+        var folder = Folder(args);
         Directory.CreateDirectory(folder);
         var options = new PDFExportOptions
         {

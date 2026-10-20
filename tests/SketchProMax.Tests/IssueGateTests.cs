@@ -70,6 +70,12 @@ internal static class IssueGateTests
         var verdict = Verdict(blocked);
         check("issue gate: verdict names the open items per sheet", verdict.StartsWith("Blocked: 1 open") && verdict.Contains("A-101: 1"), verdict);
         check("issue gate: clear verdict", Verdict(all).StartsWith("Clear to issue"), Verdict(all));
+        var refusal = ExportRefusal(blocked);
+        check("issue gate: a chat export refused names the open item by sheet and says nothing was exported",
+            refusal.StartsWith("Not exported: the issue check has 1 open item(s)") && refusal.Contains("A-101 Plan: Dimension shows '500'") && refusal.Contains("issue_check accept")
+            && refusal.EndsWith("Nothing was exported."), refusal);
+        var many = ExportRefusal(Group([onA, legend, model, dup], set, []), maxNamed: 2);
+        check("issue gate: a long refusal names a few and counts the rest", many.Contains("has 5 open item(s)") && many.Contains("; and 3 more)"), many);
 
         // ---- Report, transmittal, chat
         var rows = SheetRows(blocked);

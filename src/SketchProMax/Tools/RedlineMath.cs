@@ -62,6 +62,68 @@ internal static class Redline
     /// <summary>The confidence below which a markup is not applied but handed over.</summary>
     public const double MinConfidence = 0.5;
 
+    // ---- Reading the pages ---------------------------------------------------------------------------------------------------
+
+    /// <summary>Pages read from one PDF at most (each is a Claude reading when nothing else gives the markups).</summary>
+    public const int MaxPages = 20;
+
+    /// <summary>
+    /// The pages to read: those given (from 1, each once), else every page of the file up to <see cref="MaxPages"/>
+    /// (<paramref name="pagesInFile"/> is asked only then). Throws when none is left or too many are given.
+    /// </summary>
+    public static List<int> Pages(IReadOnlyList<int>? given, Func<int> pagesInFile)
+    {
+        var pages = given is not null ? given.Where(p => p >= 1).Distinct().ToList() : Enumerable.Range(1, Math.Max(1, Math.Min(MaxPages, pagesInFile()))).ToList();
+        if (pages.Count == 0) throw new ArgumentException("pages lists no page (pages count from 1).");
+        if (pages.Count > MaxPages) throw new ArgumentException($"At most {MaxPages} pages at a time; give pages.");
+        return pages;
+    }
+
+    /// <summary>One page's answer added to <paramref name="into"/>: its markups marked with the page, its problems named by page.</summary>
+    public static void AddPage(List<Markup> into, List<string> problems, string answer, int page)
+    {
+        var found = Parse(answer, out var pageProblems);
+        foreach (var m in found) m.Page = page;
+        problems.AddRange(pageProblems.Select(p => $"page {page}: {p}"));
+        into.AddRange(found);
+    }
+
+    /// <summary>Ids unique across pages: a repeat gets its page in front ("P2-M1").</summary>
+    public static void UniqueIds(IEnumerable<Markup> markups)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var m in markups) if (!seen.Add(m.Id)) { m.Id = $"P{m.Page}-{m.Id}"; seen.Add(m.Id); }
+    }
+
+    /// <summary>Pages read ahead off Revit's thread (the ribbon's Redlines to sheets), for the redline_apply call that follows.</summary>
+    internal sealed record ReadAhead(string File, IReadOnlyList<int> Pages, List<Markup> Markups, List<string> Notes);
+
+    private static ReadAhead? _readAhead;
+
+    /// <summary>Hands pages read ahead to the next redline_apply on the same file and pages, so it doesn't read them again.</summary>
+    public static void HandOver(ReadAhead read) => _readAhead = read;
+
+    /// <summary>Drops pages read ahead that the apply did not take (it failed before reading), so a later call can't pick them up.</summary>
+    public static void Discard() => _readAhead = null;
+
+    /// <summary>The pages read ahead for this file and these pages, once; null otherwise (they are then read as usual).</summary>
+    public static ReadAhead? TakeRead(string file, IReadOnlyList<int> pages)
+    {
+        var r = _readAhead;
+        _readAhead = null;
+        return r is not null && SamePath(r.File, file) && r.Pages.SequenceEqual(pages) ? r : null;
+    }
+
+    private static bool SamePath(string a, string b)
+    {
+        static string Full(string p)
+        {
+            try { return System.IO.Path.GetFullPath(p.Trim().Trim('"')); }
+            catch (Exception ex) when (ex is ArgumentException or NotSupportedException or System.IO.PathTooLongException) { return p; }
+        }
+        return string.Equals(Full(a), Full(b), StringComparison.OrdinalIgnoreCase);
+    }
+
     // ---- Reading the markup list ------------------------------------------------------------------------------------------
 
     /// <summary>

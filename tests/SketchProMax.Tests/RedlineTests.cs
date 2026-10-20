@@ -47,6 +47,35 @@ internal static class RedlineTests
                                                   && new Markup { Kind = "set_dimension", Mode = "move", ValueMm = 3000 }.Describe().Contains("3000 mm")
                                                   && new Markup { Kind = "delete" }.Describe().StartsWith("Delete"), new Markup { Kind = "edit_text", From = "A", To = "B" }.Describe());
 
+        // ---- The pages to read, page by page, and the pages read ahead off Revit's thread (the ribbon)
+        static bool ThrowsArg(Action a) { try { a(); return false; } catch (ArgumentException) { return true; } }
+        var asked = 0;
+        check("redlines: pages given are kept from 1, each once, and the file is not counted",
+            Pages([0, 2, 2, 3], () => { asked++; return 9; }).SequenceEqual([2, 3]) && asked == 0, "");
+        check("redlines: no pages given reads every page, at most the limit",
+            Pages(null, () => 3).SequenceEqual([1, 2, 3]) && Pages(null, () => 50).Count == MaxPages && Pages(null, () => 0).SequenceEqual([1]), "");
+        check("redlines: no page left, or too many, is refused",
+            ThrowsArg(() => Pages([0, -1], () => 1)) && ThrowsArg(() => Pages(Enumerable.Range(1, MaxPages + 1).ToList(), () => 1)), "");
+        var read = new List<Markup>();
+        var readProblems = new List<string>();
+        AddPage(read, readProblems, """[{"id": "M1", "type": "text", "bbox": [0, 0, 0.1, 0.1]}, {"id": "M2", "type": "text"}]""", 1);
+        AddPage(read, readProblems, """[{"id": "M1", "type": "strike", "bbox": [0, 0, 0.1, 0.1]}]""", 2);
+        UniqueIds(read);
+        check("redlines: each page's markups carry their page; a page's problems are named by page",
+            read.Select(m => m.Page).SequenceEqual([1, 1, 2]) && readProblems.Count == 1 && readProblems[0].StartsWith("page 1: M2"), string.Join("; ", readProblems));
+        check("redlines: an id repeated on a later page gets its page in front", read.Select(m => m.Id).SequenceEqual(["M1", "M2", "P2-M1"]), string.Join(",", read.Select(m => m.Id)));
+        var marked = Path.Combine(Path.GetTempPath(), "Marked up.pdf");
+        HandOver(new ReadAhead(marked, [1, 2], read, ["page 2: note"]));
+        var taken = TakeRead(marked.ToUpperInvariant(), [1, 2]);
+        check("redlines: pages read ahead are taken once, for the same file and pages",
+            taken is { Markups.Count: 3 } && taken.Notes.Single() == "page 2: note" && TakeRead(marked, [1, 2]) is null, "");
+        HandOver(new ReadAhead(marked, [1, 2], read, []));
+        check("redlines: pages read ahead for other pages or another file are not used, and dropped",
+            TakeRead(marked, [1]) is null && TakeRead(marked, [1, 2]) is null, "");
+        HandOver(new ReadAhead(marked, [1], read, []));
+        Discard();
+        check("redlines: pages read ahead and discarded can't be picked up later", TakeRead(marked, [1]) is null, "");
+
         // ---- Coordinates: page fractions (top-left origin) to the sheet (feet, bottom-left origin) and back
         var frame = new LayoutMath.Rect(0.1, 0.2, 2.9, 2.2);
         check("redlines: page top-left is the frame's top-left on the sheet", PageToSheet(0, 0, frame) is var tl && Near(tl.X, 0.1) && Near(tl.Y, 2.2) && PageToSheet(1, 1, frame) is var br && Near(br.X, 2.9) && Near(br.Y, 0.2), PageToSheet(0, 0, frame).ToString());

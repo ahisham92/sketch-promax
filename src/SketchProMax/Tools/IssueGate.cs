@@ -12,9 +12,9 @@ namespace SketchProMax.Tools;
 /// (<see cref="CancelPoint"/>), maps each finding to the sheets of the issue set through the views on them, and keeps
 /// acceptances per model. The rules (grouping, keys, blocking) are in <see cref="IssueGateMath"/>.
 ///
-/// Used by issue_check (the chat), issue_drawings (it runs the gate first) and the ribbon (UI/IssueGateWindow), which
-/// hands a run it cleared to the issue_drawings call that follows (<see cref="Clear"/> / <see cref="TakeCleared"/>),
-/// so the checks don't run twice.
+/// Used by issue_check (the chat), issue_drawings (it runs the gate first), export_pdf of sheets from the chat (it runs
+/// the gate first, see <see cref="ExportPdfTool"/>) and the ribbon (UI/IssueGateWindow), which hands a run it cleared
+/// to the issue_drawings call that follows (<see cref="Clear"/> / <see cref="TakeCleared"/>), so the checks don't run twice.
 /// </summary>
 internal static class IssueGate
 {
@@ -63,6 +63,23 @@ internal static class IssueGate
     /// </summary>
     public static Run Check(UIApplication app, IReadOnlyList<ViewSheet> sheets, string? spec, string? boq, string folder)
     {
+        var checking = Begin(app, sheets, spec, boq, folder);
+        for (var i = 0; i < checking.Count; i++)
+        {
+            // Read-only: progress per check on the job card; a stop ends the run between checks (nothing to undo).
+            if (CancelPoint.Stop("Issue check", i, checking.Count)) CancelPoint.ThrowIfRequested("The issue check did not finish; nothing was issued.");
+            checking.Step(app, i);
+        }
+        return checking.Finish(app);
+    }
+
+    /// <summary>
+    /// The same run as <see cref="Check"/>, one check at a time: <see cref="Checking.Step"/> for each, then
+    /// <see cref="Checking.Finish"/>. A caller that gives each its own Revit API call (export_pdf from the chat) keeps
+    /// Revit responsive between the checks.
+    /// </summary>
+    public static Checking Begin(UIApplication app, IReadOnlyList<ViewSheet> sheets, string? spec, string? boq, string folder)
+    {
         var doc = app.ActiveUIDocument.Document;
         var path = StorePath(doc);
         var store = IssueGateStore.Load(path, out var unreadable);
@@ -72,70 +89,85 @@ internal static class IssueGate
             store.BoqFile = boq ?? store.BoqFile;
             TrySave(store, path);
         }
-        spec ??= store.SpecChecklist;
-        boq ??= store.BoqFile;
         Directory.CreateDirectory(folder);
-
         var run = new Run { ModelKey = Checks.ModelKey(doc), Model = doc.Title, Sheets = sheets.Select(s => new IssueGateMath.Sheet(s.SheetNumber, s.Name, s.Id.Value)).ToList() };
         if (unreadable) run.Notes.Add($"The issue check's file {path} can't be read, so earlier acceptances are not applied (every item shows open) and nothing is saved to it.");
-        var findings = new List<IssueGateMath.Finding>();
-        void Ran(string tool, ToolResult r, List<IssueGateMath.Finding>? found, string? note = null)
+        return new Checking(run, store, spec ?? store.SpecChecklist, boq ?? store.BoqFile, folder);
+    }
+
+    /// <summary>One run of the four checks in progress: what each found so far.</summary>
+    internal sealed class Checking(Run run, IssueGateStore store, string? spec, string? boq, string folder)
+    {
+        public readonly Run Run = run;
+        private readonly List<IssueGateMath.Finding> _findings = [];
+
+        public int Count => IssueGateMath.Tools.Length;
+
+        private void Ran(string tool, ToolResult r, List<IssueGateMath.Finding>? found, string? note = null)
         {
             if (r.IsError)
             {
-                run.Checks.Add((tool, "could not run: " + r.Text));
-                findings.Add(new(tool, "not_run", 0, tool, "Could not run: " + r.Text));
+                Run.Checks.Add((tool, "could not run: " + r.Text));
+                _findings.Add(new(tool, "not_run", 0, tool, "Could not run: " + r.Text));
                 return;
             }
-            findings.AddRange(found ?? []);
-            run.Checks.Add((tool, $"ran: {found?.Count ?? 0} finding(s)" + (note is null ? "" : "; " + note)));
+            _findings.AddRange(found ?? []);
+            Run.Checks.Add((tool, $"ran: {found?.Count ?? 0} finding(s)" + (note is null ? "" : "; " + note)));
         }
 
-        var steps = new Action[]
+        /// <summary>Runs check <paramref name="i"/> (0-based, in <see cref="IssueGateMath.Tools"/> order). On Revit's thread.</summary>
+        public void Step(UIApplication app, int i)
         {
-            () => { var t = new CheckDrawingsTool(); Ran(t.Name, Drafting.Call(app, t, new { folder }), t.Found); },
-            () =>
-            {
-                var t = new SpecCheckTool();
-                if (string.IsNullOrWhiteSpace(spec) || !File.Exists(spec))
-                {
-                    var why = string.IsNullOrWhiteSpace(spec) ? "no spec checklist is set for this model" : $"the spec checklist {spec} is not there";
-                    run.Checks.Add((t.Name, "not run: " + why));
-                    findings.Add(new(t.Name, "not_run", 0, "spec checklist",
-                        $"Not run: {why}. Give spec_checklist (a JSON checklist saved by spec_check save_as), or accept this item with a reason."));
-                }
-                else Ran(t.Name, Drafting.Call(app, t, new { checklist_file = spec, folder }), t.Found);
-            },
-            () =>
-            {
-                var t = new BoqCheckTool();
-                var file = !string.IsNullOrWhiteSpace(boq) && File.Exists(boq) ? boq : null;
-                if (file is null) run.Notes.Add("BOQ items not compared: no BOQ file is set for this model (boq_file); double counting was checked.");
-                Ran(t.Name, Drafting.Call(app, t, file is null ? new { folder } : (object)new { boq_file = file, folder }), t.Found,
-                    file is null ? "double counting only (no BOQ file)" : null);
-            },
-            () => { var t = new CheckModelTool(); Ran(t.Name, Drafting.Call(app, t, new { folder }), t.Found); },
-        };
-        for (var i = 0; i < steps.Length; i++)
-        {
-            // Read-only: progress per check on the job card; a stop ends the run between checks (nothing to undo).
-            if (CancelPoint.Stop("Issue check", i, steps.Length)) CancelPoint.ThrowIfRequested("The issue check did not finish; nothing was issued.");
-            Bridge.Jobs.Report($"Issue check: {IssueGateMath.Tools[i]} ({i + 1} of {steps.Length})");
+            Bridge.Jobs.Report($"Issue check: {IssueGateMath.Tools[i]} ({i + 1} of {Count})");
             // One check crashing must not take the gate down: it shows as a check that could not run, which blocks.
-            try { steps[i](); }
+            try
+            {
+                switch (i)
+                {
+                    case 0: { var t = new CheckDrawingsTool(); Ran(t.Name, Drafting.Call(app, t, new { folder }), t.Found); break; }
+                    case 1:
+                    {
+                        var t = new SpecCheckTool();
+                        if (string.IsNullOrWhiteSpace(spec) || !File.Exists(spec))
+                        {
+                            var why = string.IsNullOrWhiteSpace(spec) ? "no spec checklist is set for this model" : $"the spec checklist {spec} is not there";
+                            Run.Checks.Add((t.Name, "not run: " + why));
+                            _findings.Add(new(t.Name, "not_run", 0, "spec checklist",
+                                $"Not run: {why}. Give spec_checklist (a JSON checklist saved by spec_check save_as), or accept this item with a reason."));
+                        }
+                        else Ran(t.Name, Drafting.Call(app, t, new { checklist_file = spec, folder }), t.Found);
+                        break;
+                    }
+                    case 2:
+                    {
+                        var t = new BoqCheckTool();
+                        var file = !string.IsNullOrWhiteSpace(boq) && File.Exists(boq) ? boq : null;
+                        if (file is null) Run.Notes.Add("BOQ items not compared: no BOQ file is set for this model (boq_file); double counting was checked.");
+                        Ran(t.Name, Drafting.Call(app, t, file is null ? new { folder } : (object)new { boq_file = file, folder }), t.Found,
+                            file is null ? "double counting only (no BOQ file)" : null);
+                        break;
+                    }
+                    default: { var t = new CheckModelTool(); Ran(t.Name, Drafting.Call(app, t, new { folder }), t.Found); break; }
+                }
+            }
             catch (Exception ex) when (ex is not OperationCanceledException && !Fatal(ex))
             {
                 Ran(IssueGateMath.Tools[i], ToolResult.Error($"{ex.GetType().Name}: {ex.Message}{Where(ex)}"), null);
             }
         }
-        Bridge.JobFeed.Item("Issue check", steps.Length, steps.Length, "");
 
-        var where = SheetsByView(doc);
-        var mapped = findings.Select(f => f with { Sheets = SheetsOf(doc, where, f.ElementId) }).ToList();
-        run.Groups = IssueGateMath.Group(mapped, run.Sheets, store.Accepted);
-        run.Report = WriteReport(run, folder);
-        Last = run;
-        return run;
+        /// <summary>Maps the findings to the sheets, groups them with the acceptances and writes the report. On Revit's thread.</summary>
+        public Run Finish(UIApplication app)
+        {
+            var doc = app.ActiveUIDocument.Document;
+            Bridge.JobFeed.Item("Issue check", Count, Count, "");
+            var where = SheetsByView(doc);
+            var mapped = _findings.Select(f => f with { Sheets = SheetsOf(doc, where, f.ElementId) }).ToList();
+            Run.Groups = IssueGateMath.Group(mapped, Run.Sheets, store.Accepted);
+            Run.Report = WriteReport(Run, folder);
+            Last = Run;
+            return Run;
+        }
     }
 
     private static bool Fatal(Exception ex) => ex is OutOfMemoryException or StackOverflowException or AccessViolationException;
@@ -261,8 +293,8 @@ internal static class IssueGate
         extra,
         next = run.Blocked
             ? "Show the user the open items per sheet. For each: fix it in the model and run issue_check again, or (only when the user gives a reason) " +
-              "accept it with issue_check accept [{key, reason}]. issue_drawings stays blocked until none is open."
-            : "Clear: issue_drawings can go ahead.",
+              "accept it with issue_check accept [{key, reason}]. issue_drawings, and export_pdf of these sheets, stay blocked until none is open."
+            : "Clear: issue_drawings (or export_pdf of these sheets) can go ahead.",
     };
 }
 

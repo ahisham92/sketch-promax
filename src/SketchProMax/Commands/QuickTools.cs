@@ -316,10 +316,26 @@ internal static class QuickTools
         Jobs.Running = job;
         job.StartedSignal.TrySetResult(true);
         ToolResult result;
+        try { result = RunForJob(app, tool, args, job); }
+        finally
+        {
+            job.Finished = DateTime.UtcNow;
+            Jobs.Running = null;
+        }
+        done.TrySetResult(result);
+        return result;
+    }
+
+    /// <summary>
+    /// The tool's run for a ribbon job that is already <see cref="Jobs.Running"/> (under the failure guard, into the
+    /// activity log and time saved). The caller ends the job. On Revit's thread.
+    /// </summary>
+    internal static ToolResult RunForJob(UIApplication app, IRevitTool tool, Dictionary<string, JsonElement> args, Job job)
+    {
         try
         {
             TimeLog.BeginTool(app, tool, fromChat: false);
-            result = FailureGuard.Run(() =>
+            var result = FailureGuard.Run(() =>
             {
                 try { return tool.Execute(app, new ToolArgs(args)); }
                 catch (ManualStepException manual) { return Handoff.FromException(tool, app, new ToolArgs(args), manual); }
@@ -328,15 +344,9 @@ internal static class QuickTools
             });
             ActivityLog.Write(app.ActiveUIDocument?.Document?.Title ?? "", tool, args, result);
             TimeLog.EndTool(result);
+            return result;
         }
-        finally
-        {
-            TimeLog.EndTool(null);
-            job.Finished = DateTime.UtcNow;
-            Jobs.Running = null;
-        }
-        done.TrySetResult(result);
-        return result;
+        finally { TimeLog.EndTool(null); }
     }
 
     internal static void Show(string title, ToolResult result, string headline)

@@ -118,6 +118,19 @@ internal static class IssueGateMath
     public static bool Blocked(IEnumerable<GroupResult> groups) => groups.Any(g => g.Open > 0);
 
     /// <summary>
+    /// Why export_pdf of sheets from the chat exported nothing: how many items are open, the first few by sheet, and what
+    /// to do. The chat has no way past the gate for an export; the ribbon's window offers one when Settings allows it.
+    /// </summary>
+    public static string ExportRefusal(IReadOnlyList<GroupResult> groups, int maxNamed = 5)
+    {
+        var open = groups.SelectMany(g => g.Items.Where(i => i.Status == Status.Open).Select(i => $"{g.Title}: {i.Finding.Issue}")).ToList();
+        var named = string.Join("; ", open.Take(maxNamed)) + (open.Count > maxNamed ? $"; and {open.Count - maxNamed} more" : "");
+        return $"Not exported: the issue check has {open.Count} open item(s) for these sheets ({named}). Fix each one in the model, or accept it " +
+               "with the user's reason (issue_check accept), then call export_pdf again. The user can also open Issue > Issue check on the " +
+               "ribbon to see them with Fix and Accept. Nothing was exported.";
+    }
+
+    /// <summary>
     /// Whether the issue may go ahead: when nothing is open; or, with open items, only when the setting "allow issue with
     /// open items" is on, the user asked for it and gave a reason. Why not, otherwise.
     /// </summary>

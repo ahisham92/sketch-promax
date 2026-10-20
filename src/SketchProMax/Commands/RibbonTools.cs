@@ -88,6 +88,8 @@ internal static class RibbonTools
             return Result.Cancelled;
         // Issuing or exporting sheets runs the issue check first; open items stop it until fixed or accepted.
         if (IssueGateWindow.Gated(tool.Name) && !IssueGateWindow.Before(app, tool.Name, args)) return Result.Cancelled;
+        // Redlines whose pages Claude Code reads: the reading runs off Revit's thread as a job; only the apply comes back here.
+        if (RibbonRedlines.ReadsPages(tool.Name, args, doc)) return RibbonRedlines.Start(app, tool, args, title);
 
         ToolResult result;
         try
@@ -104,11 +106,17 @@ internal static class RibbonTools
             using (PackProgress.Show(title, $"{title} on '{doc.Title}'"))
                 result = QuickTools.Execute(app, tool.Name, args);
         }
+        ShowResult(title, result);
+        return result.IsError ? Result.Failed : Result.Succeeded;
+    }
+
+    /// <summary>A ribbon tool's result in the result window, with its one-line headline.</summary>
+    internal static void ShowResult(string title, ToolResult result)
+    {
         var headline = result.IsError
             ? result.Text.StartsWith("Stopped on request", StringComparison.Ordinal) ? "Stopped; what it finished is kept" : "It did not work"
             : Revit.TimeLog.LastLine ?? "Done"; // "Done in X. By hand: about Y. Saved: Z."
         QuickTools.Show(title, result, headline);
-        return result.IsError ? Result.Failed : Result.Succeeded;
     }
 
     /// <summary>
