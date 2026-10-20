@@ -511,6 +511,7 @@ internal static partial class FieldTest
         await Probe(s, "redlines.vision", () => RedlineVision(s, cli)).ConfigureAwait(false);
         await Probe(s, "checklist.build", () => ChecklistBuild(s.Folder)).ConfigureAwait(false);
         await Probe(s, "checklist.pdf", () => ChecklistPdfProbe(s.Folder)).ConfigureAwait(false);
+        await Probe(s, "share.pack", () => SharePackProbe(s.Folder)).ConfigureAwait(false);
         await Probe(s, "chat.models", () => Models(s.Folder)).ConfigureAwait(false);
         await Probe(s, "chat.prompts", () => Prompts(s.Folder)).ConfigureAwait(false);
         await Probe(s, "chat.notes", Notes).ConfigureAwait(false);
@@ -1931,6 +1932,48 @@ internal static partial class FieldTest
     }
 
     /// <summary>A small ready checklist written as Word, then turned into a PDF through Word (off Revit's thread, as the window does).</summary>
+    /// <summary>
+    /// Share tools end to end, in a temporary folder standing in for %APPDATA% (SharedPacks.TestRoot): export, publish,
+    /// install from the zip, share again, and the installed copy following the update folder.
+    /// </summary>
+    private static (string, string) SharePackProbe(string testFolder)
+    {
+        var temp = Path.Combine(testFolder, "share-test");
+        Sharing.SharedPacks.TestRoot = Path.Combine(temp, "appdata");
+        try
+        {
+            var update = Path.Combine(temp, "update");
+            var request = new Sharing.SharedPacks.Request("Field test pack", ["command:issue-check", "tool:check_model", "tool:redline_apply"],
+                update, "", Path.Combine(temp, "zips"), true);
+            var first = Sharing.SharedPacks.Export(request, Sharing.SharedTools.RibbonTool, Update.Updater.CurrentText);
+            var problems = new List<string>();
+            if (first.Pack.Tools.Count != 2 || first.Pack.Tools.Any(t => t.Name == "tool:redline_apply")) problems.Add($"{first.Pack.Tools.Count} tools, the AI one should be left out");
+            using (var zip = System.IO.Compression.ZipFile.OpenRead(first.Zip))
+            {
+                var names = zip.Entries.Select(e => e.FullName).ToList();
+                foreach (var need in new[] { "Install TritoRevit.cmd", "install-tritorevit.ps1", "README.txt", "pack/pack.json", "pack/buttons.txt" })
+                    if (!names.Contains(need)) problems.Add("the zip has no " + need);
+            }
+            if (first.Published is null || Sharing.SharedPacks.Read(first.Published, out _)?.Revision != 1) problems.Add("not published as revision 1");
+            var installed = Sharing.SharedPacks.InstallZip(first.Zip, out var why);
+            if (installed is null) problems.Add("not installed from the zip: " + why);
+            var second = Sharing.SharedPacks.Export(request with { Note = "Changed for the field test" }, Sharing.SharedTools.RibbonTool, Update.Updater.CurrentText);
+            if (second.Pack.Revision != 2) problems.Add($"shared again as revision {second.Pack.Revision}, not 2");
+            var followed = Sharing.SharedPacks.Sync();
+            var now = Sharing.SharedPacks.List().FirstOrDefault(p => p.Pack.Id == first.Pack.Id);
+            if (now is null || now.Pack.Revision != 2 || followed.Count != 1) problems.Add($"the installed copy is at revision {now?.Pack.Revision.ToString() ?? "none"} after the update check");
+            if (Sharing.SharedPacks.AutoPublish(Sharing.SharedTools.RibbonTool, Update.Updater.CurrentText).Count != 0) problems.Add("published again with nothing changed");
+            return problems.Count == 0
+                ? Pass($"zip with installer and {first.Pack.Tools.Count} tools, published, installed, revision 2 followed by itself")
+                : Fail(string.Join("; ", problems));
+        }
+        finally
+        {
+            Sharing.SharedPacks.TestRoot = null;
+            try { Directory.Delete(temp, true); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        }
+    }
+
     private static (string, string) ChecklistPdfProbe(string testFolder)
     {
         if (Type.GetTypeFromProgID("Word.Application") is null) return ("skip", "Microsoft Word isn't installed on this PC, so Create PDF saves the Word file instead");

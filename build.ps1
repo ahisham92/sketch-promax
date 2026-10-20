@@ -2,6 +2,8 @@
 # Output goes to .\dist\ :
 #   dist\Revit2024\ ... dist\Revit2027\   add-in builds: SketchProMax.Loader.dll (what Revit loads, named by
 #                                       SketchProMax.addin) next to the core SketchProMax.dll and its dependencies
+#                                       and TritoRevit\ (TritoRevit.dll and TritoRevit.addin: the add-in for shared tools,
+#                                       which the zips Share tools makes install for people without Sketch ProMax)
 #   dist\mcp\SketchProMax.Mcp.exe                       self-contained MCP server (no .NET install needed)
 # Usage: .\build.ps1 [-Configuration Release] [-Versions 2024,2025,2026,2027]
 param(
@@ -12,6 +14,7 @@ $ErrorActionPreference = "Stop"
 $dist = Join-Path $PSScriptRoot "dist"
 $addin = Join-Path $PSScriptRoot "src\SketchProMax\SketchProMax.csproj"
 $mcp = Join-Path $PSScriptRoot "src\SketchProMax.Mcp\SketchProMax.Mcp.csproj"
+$trito = Join-Path $PSScriptRoot "src\TritoRevit\TritoRevit.csproj"
 
 foreach ($v in $Versions) {
     Write-Host "== Revit $v" -ForegroundColor Cyan
@@ -25,6 +28,15 @@ foreach ($v in $Versions) {
     $target = Join-Path $dist "Revit$v"
     if (Test-Path $target) { Remove-Item $target -Recurse -Force }
     Copy-Item $out $target -Recurse
+    dotnet build $trito -c $Configuration -p:RevitVersion=$v
+    if ($LASTEXITCODE -ne 0) { throw "TritoRevit build failed for Revit $v" }
+    $tritoOut = Join-Path $PSScriptRoot "src\TritoRevit\bin\$Configuration\Revit$v"
+    $tritoTarget = Join-Path $target "TritoRevit"
+    New-Item -ItemType Directory -Force $tritoTarget | Out-Null
+    foreach ($f in "TritoRevit.dll", "TritoRevit.addin") {
+        if (-not (Test-Path (Join-Path $tritoOut $f))) { throw "TritoRevit build for Revit $v is missing $f" }
+        Copy-Item (Join-Path $tritoOut $f) $tritoTarget
+    }
 }
 
 Write-Host "== MCP server" -ForegroundColor Cyan

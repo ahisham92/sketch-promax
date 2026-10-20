@@ -41,6 +41,13 @@ internal static class CoreRibbonManifest
             "Stages from your checklist Excel: project details, one per section, then review and sign. Each check has how to check it, " +
             "where it came from and what the model shows; answer Yes, No or N/A with a comment. The Word file carries the signatures " +
             "only when nothing is No or unanswered. Reads the model only; answers are kept per model.", needsModel: true)),
+        // Share tools (0.35): large, after the checklist. Makes a zip that installs the chosen tools on the TritoRevit tab for
+        // colleagues with or without Sketch ProMax (Sharing/ShareWindow).
+        L(Button("Claude", "ShareTools", "Share\ntools", "share-tools", "pack",
+            "Share any of your tools with colleagues, with or without Sketch ProMax: one zip installs them on the TritoRevit tab, and they update by themselves.",
+            "Pick tools (the pre-submission checklist, ribbon tools, learned tools, recipes), name the pack and, optionally, a folder everyone can reach. " +
+            "Colleagues extract the zip and double-click Install TritoRevit.cmd; it installs the TritoRevit add-in when they don't have it. Only the first " +
+            "install needs a Revit restart: later changes reach them from that folder while Revit is open.")),
         L(Button("Claude", "ClaudeStatus", "Status", "status", "logo:gray",
             "Whether the Claude desktop app is connected to this Revit window: green connected, amber ready, gray not running, red no link. Click for details.",
             "Green: the desktop app has talked to this Revit window in the last few minutes. Amber: ready, waiting for the app. Gray: the " +
@@ -165,7 +172,7 @@ internal static class CoreRibbonManifest
             "Read-only: nothing in the model changes. Runs here without the AI; usually a few MB at most. The folder opens " +
             "with the zip selected when it is done.", needsModel: true)),
 
-        // ---- Sketch ProMax: Job and Update large and labelled, then two stacks of three short labels. A
+        // ---- Sketch ProMax: Job and Update large and labelled, then stacks of two and three short labels. A
         // stack's widest label is the first Revit hides when the ribbon is narrow, so the labels are short and of a
         // length; RibbonLabels then asks Revit to keep them (it shrinks the panel by other means).
         L(Button("Sketch ProMax", "JobLive", "No job", "job-button", "job",
@@ -176,8 +183,7 @@ internal static class CoreRibbonManifest
         // Bug reports (0.30): CoreEntry.Command "report-bug" / "bug-folder" / "export-chats-bugs"; the notes tab by PaneContent("notes").
         L(Button("Sketch ProMax", "ReportBug", "Report bug", "report-bug", "bug",
             "Writes a bug report for Sketch ProMax with what just happened, ready to send.", small: true, breakBefore: true)),
-        L(Button("Sketch ProMax", "BugFolder", "Bug folder", "bug-folder", "folder",
-            "Opens the folder with the bug reports written so far.", small: true)),
+        // Bug folder left the ribbon in 0.35 (still on the pane's Bugs section) to free a loader slot for Share tools.
         L(Button("Sketch ProMax", "ExportChatsBugs", "Export chats", "export-chats-bugs", "pack",
             "Writes one zip with the chats of every model, all bug reports, the tool-call log and the versions, to send to the developer.", small: true)),
         L(Button("Sketch ProMax", "SettingsButton", "Settings", "settings", "settings",
@@ -207,6 +213,7 @@ internal static class CoreRibbonManifest
             "Walks you through the checks only you can do, on a _detached copy, and saves pass or fail for each in the Bugs folder.")),
         L(Tab("notes", "Notes", "Notes for this model")),
     ];
+
 
     /// <summary>Every line, whether or not this core has the tools (for the tests).</summary>
     public static string Text => Build(_ => "");

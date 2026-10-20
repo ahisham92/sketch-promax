@@ -116,9 +116,9 @@ internal static class RibbonFormTests
         check("ribbon: every control has a tooltip", all.Controls.Concat(all.Entries.Values.SelectMany(e => e)).All(c => c.Tip.Length > 20),
             string.Join(",", all.Controls.Concat(all.Entries.Values.SelectMany(e => e)).Where(c => c.Tip.Length <= 20).Select(c => c.Id)));
         var units = RibbonManifest.Units(all.Controls.Where(c => c.Group == "Sketch ProMax")).Select(u => u.Count).ToList();
-        check("ribbon: Sketch ProMax panel is Job and Update large, then two stacks of 3", units.SequenceEqual([1, 1, 3, 3]), string.Join(",", units));
+        check("ribbon: Sketch ProMax panel is Job and Update large, then stacks of 2 and 3 (Bug folder moved to the pane in 0.35)", units.SequenceEqual([1, 1, 2, 3]), string.Join(",", units));
         var claudeUnits = RibbonManifest.Units(all.Controls.Where(c => c.Group == "Claude")).Select(u => u.Count).ToList();
-        check("ribbon: Claude panel is Chat, Update and Pre-submission checklist large, then two stacks of two", claudeUnits.SequenceEqual([1, 1, 1, 2, 2]), string.Join(",", claudeUnits));
+        check("ribbon: Claude panel is Chat, Update, Pre-submission checklist and Share tools large, then two stacks of two", claudeUnits.SequenceEqual([1, 1, 1, 1, 2, 2]), string.Join(",", claudeUnits));
         var steelGone = RibbonManifest.Parse(CoreRibbonManifest.Build(t => t.Contains("steel") || t == "place_bracing" ? null : "Summary of " + t));
         check("ribbon: missing tools are left out, an emptied drop-down goes too", !steelGone.Controls.Any(c => c.Id == "Steel")
             && !steelGone.Entries.ContainsKey("Steel") && steelGone.Unknown.Count == 0

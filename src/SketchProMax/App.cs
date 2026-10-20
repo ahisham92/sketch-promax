@@ -42,6 +42,12 @@ public sealed class App : IExternalApplication
     private static bool _started;
     private static bool _viaLoader;
 
+    /// <summary>
+    /// True when the TritoRevit add-in runs this core for shared tools (CoreEntry.StartShared): no connection to the
+    /// Claude app, no chat, no Sketch ProMax ribbon, and updates go to TritoRevit's own folder (Sharing/TritoRuntime).
+    /// </summary>
+    internal static bool Shared { get; private set; }
+
     /// <summary>True while anything is running or queued, so switching to a new core must wait.</summary>
     internal static bool IsBusy => Jobs.Running is not null || Dispatcher.HasWork || SelfTest.IsRunning || Chat.ChatPane.IsBusy;
 
@@ -115,9 +121,10 @@ public sealed class App : IExternalApplication
     /// settling and Claude registration wait <see cref="BackgroundDelay"/> and for no model to be opening. Each phase is
     /// timed (<see cref="StartupTimings"/>) and logged at the first idle moment.
     /// </summary>
-    internal static void StartCore(UIApplication app)
+    internal static void StartCore(UIApplication app, bool shared = false)
     {
         if (_started) return;
+        Shared = shared;
         var total = System.Diagnostics.Stopwatch.StartNew();
 #if NETFRAMEWORK
         DependencyResolver.Register();
@@ -126,9 +133,14 @@ public sealed class App : IExternalApplication
         RevitYear = app.Application.VersionNumber;
         Ui = System.Windows.Threading.Dispatcher.CurrentDispatcher;
         try { MainWindow = app.MainWindowHandle; } catch (Exception) { MainWindow = IntPtr.Zero; }
-        UI.FavouritesRibbon.Attach(app);
-        UI.RibbonLabels.Attach(app);
-        UI.LoaderBrand.Attach(app);
+        // The Sketch ProMax tab's own parts; TritoRevit has its own tab and no favourites.
+        if (!shared)
+        {
+            UI.FavouritesRibbon.Attach(app);
+            UI.RibbonLabels.Attach(app);
+            UI.LoaderBrand.Attach(app);
+        }
+        else TimeLog.Off = true; // nothing is written into the models for TritoRevit's tools
         // The loader asks for the ribbon (favourites included) right after this returns: read the recipe and learned-tool
         // folders on a background thread meanwhile, not on Revit's.
         Commands.QuickTools.Warm();
@@ -150,7 +162,8 @@ public sealed class App : IExternalApplication
             StartupTimings.Time("bridge", () =>
             {
                 Bridge = new BridgeServer(registry!, Dispatcher, RevitYear);
-                Bridge.Start();
+                // TritoRevit's tools run from its ribbon only: no connection point for the Claude app.
+                if (!shared) Bridge.Start();
             });
         }
         catch (Exception)
@@ -161,13 +174,16 @@ public sealed class App : IExternalApplication
             throw;
         }
         _started = true;
-        try { StartupTimings.Time("chat hooks", () => Chat.ChatPane.Start(app)); } catch (Exception) { /* the chat tab says what is wrong when it is opened */ }
-        try { StartupTimings.Time("restart note", () => UI.RestartNote.AfterStart(Ui)); } catch (Exception) { /* the chat and the Version button still say it */ }
-        try { StartupTimings.Time("time log", () => TimeLog.Start(app)); } catch (Exception) { /* tasks still run; time is not counted */ }
+        if (!shared)
+        {
+            try { StartupTimings.Time("chat hooks", () => Chat.ChatPane.Start(app)); } catch (Exception) { /* the chat tab says what is wrong when it is opened */ }
+            try { StartupTimings.Time("restart note", () => UI.RestartNote.AfterStart(Ui)); } catch (Exception) { /* the chat and the Version button still say it */ }
+            try { StartupTimings.Time("time log", () => TimeLog.Start(app)); } catch (Exception) { /* tasks still run; time is not counted */ }
+        }
         CentralAccess.Watch(app);
 
         var token = _life.Token;
-        _ = Task.Run(() => BackgroundStartAsync(token));
+        _ = Task.Run(() => shared ? SharedBackgroundAsync(token) : BackgroundStartAsync(token));
         StartupTimings.StartDone(total.ElapsedMilliseconds);
         // The loader's ribbon queries follow in this same Idling; the line goes to the log at the next one.
         Dispatcher.Later(() => ActivityLog.Note("startup_timing",
@@ -194,6 +210,8 @@ public sealed class App : IExternalApplication
         // Moves a manifest from an older release onto the one fixed loader path, once; writes nothing when settled.
         try { Updater.SettleInstall(); } catch (Exception) { }
         if (stop.IsCancellationRequested) return;
+        // Shared tools: packs this PC shared are republished when they change, packs it received follow their updates.
+        _ = Task.Run(() => SharedLoopAsync(stop));
         // Check at every start, then hourly while Revit stays open; the bug log is fetched with each check. With
         // automatic updates off a newer version is only announced (UI/UpdateNotice), never downloaded.
         await UpdateLoopAsync(stop).ConfigureAwait(false);
@@ -210,6 +228,64 @@ public sealed class App : IExternalApplication
         StartupTimings.Opened(title, sw.ElapsedMilliseconds);
     }
 
+    /// <summary>How often shared packs are compared with their update folders (and this PC's own packs with what it published).</summary>
+    internal static readonly TimeSpan SharedEvery = TimeSpan.FromMinutes(2);
+
+    /// <summary>
+    /// Sketch ProMax's side of shared tools, every <see cref="SharedEvery"/>: republishes the packs this PC shared when a
+    /// tool in them changed, and, when the TritoRevit tab runs through this core, updates the packs installed here and
+    /// TritoRevit.dll. Only file work; nothing runs when nothing was shared or installed.
+    /// </summary>
+    private static async Task SharedLoopAsync(CancellationToken stop)
+    {
+        var settled = false;
+        while (!stop.IsCancellationRequested)
+        {
+            try
+            {
+                Sharing.SharedTools.AutoPublish();
+                if (Sharing.SharedPacks.Any()) Sharing.SharedPacks.Sync(stop);
+                if (!settled && Sharing.TritoRuntime.Installed()) { Sharing.TritoRuntime.SettleFromRunning(); settled = true; }
+            }
+            catch (Exception) { /* tried again at the next round */ }
+            try { await Task.Delay(SharedEvery, stop).ConfigureAwait(false); }
+            catch (OperationCanceledException) { return; }
+        }
+    }
+
+    /// <summary>
+    /// TritoRevit's background work: the installed packs applied and followed every <see cref="SharedEvery"/>, and this
+    /// core's own updates (at start, then hourly), switched to while Revit runs. Silent: a failure is retried later.
+    /// </summary>
+    private static async Task SharedBackgroundAsync(CancellationToken stop)
+    {
+        // Applied straight away, so a pack the installer just put here has its learned tools before a button is clicked.
+        try { Sharing.SharedPacks.Sync(stop); } catch (Exception) { }
+        try
+        {
+            await Task.Delay(BackgroundDelay, stop).ConfigureAwait(false);
+            for (var i = 0; i < 300 && StartupTimings.IsOpening; i++) await Task.Delay(2000, stop).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) { return; }
+        var lastCheck = DateTime.MinValue;
+        while (!stop.IsCancellationRequested)
+        {
+            try { Sharing.SharedPacks.Sync(stop); } catch (Exception) { }
+            if (DateTime.UtcNow - lastCheck > CheckEvery)
+            {
+                try
+                {
+                    await Sharing.TritoRuntime.CheckAsync(stop).ConfigureAwait(false);
+                    lastCheck = DateTime.UtcNow;
+                }
+                catch (OperationCanceledException) when (stop.IsCancellationRequested) { return; }
+                catch (Exception) { lastCheck = DateTime.UtcNow - CheckEvery + TimeSpan.FromMinutes(10); /* again in ten minutes */ }
+            }
+            try { await Task.Delay(SharedEvery, stop).ConfigureAwait(false); }
+            catch (OperationCanceledException) { return; }
+        }
+    }
+
     /// <summary>
     /// Lets go of Revit so a newer core can take over: stops the bridge (keeping the session file the new core takes
     /// over), the update loop, the dispatcher and the failure handler. Deletes nothing. Call in a valid API context.
@@ -223,7 +299,8 @@ public sealed class App : IExternalApplication
         try { Chat.NotesView.Stop(); } catch (Exception) { }
         try { TimeLog.Stop(app); } catch (Exception) { }
         CentralAccess.Unwatch(app);
-        Bridge?.Stop(keepSession: true);
+        // A shared-mode core never opened the connection point, and the session file named after this Revit is Sketch ProMax's.
+        if (!Shared) Bridge?.Stop(keepSession: true);
         Bridge = null;
         try { app.Application.FailuresProcessing -= FailureGuard.Handle; } catch (Exception) { }
         try { app.Application.DocumentOpening -= OnDocumentOpening; } catch (Exception) { }
@@ -241,6 +318,7 @@ public sealed class App : IExternalApplication
     internal static void ShutdownCore()
     {
         _life?.Cancel();
+        if (Shared) return;
         try { Chat.ChatPane.Shutdown(); } catch (Exception) { }
         try { TimeLog.Shutdown(); } catch (Exception) { }
         Bridge?.Stop();

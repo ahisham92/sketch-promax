@@ -193,6 +193,17 @@ internal static class FieldTestCoverage
             "Edit again > Use the built-in checklist: back to 57 checks. Try Save with an empty check or a stage with no checks: it says which and selects it."),
         new("checklist.pdf", Issue, "Pre-submission checklist: the PDF is made through Word", How.Probe, "",
             "a ready checklist's Word file is turned into a PDF by Microsoft Word on this PC and the result is a PDF; skipped when Word isn't installed"),
+        new("share.pack", Issue, "Share tools: the TritoRevit zip, publishing and live updates", How.Probe, "",
+            "a pack of two ribbon tools (and one that needs the AI, left out) is exported to a temporary folder: the zip holds the installer, the readme and the pack; " +
+            "it is published to a temporary update folder, installed from the zip, shared again as revision 2 and the installed copy follows it by itself; nothing real on the PC is touched"),
+        new("share.ui", Issue, "Share tools and TritoRevit on a PC without Sketch ProMax", How.Manual, "",
+            "installing on another Windows user or PC, restarting Revit, the TritoRevit tab and an update arriving with Revit open are judged by a person",
+            "On your PC: My tools > Share tools. Name the pack QA tools, keep Pre-submission checklist ticked, tick Model check and one learned tool, pick a folder everyone can reach as the update folder, and Make zip. " +
+            "On a PC (or Windows user) without Sketch ProMax and with Revit closed: extract the zip, double-click Install TritoRevit.cmd; it downloads TritoRevit and lists the tools. Open Revit and a _detached copy: " +
+            "the TritoRevit tab has a QA tools panel with the three buttons; each runs (the learned tool asks once to approve its code) and the checklist is yours, not the built-in one. " +
+            "Leave Revit open. On your PC edit the checklist (add a check) and wait a few minutes: Revit on the other PC shows the new check the next time the checklist opens, with no restart, " +
+            "and Shared tools on the TritoRevit tab shows revision 2. Click Update on the TritoRevit tab: a small window checks and says everything is up to date (or updates), and no Explorer window opens. Share again with Model check unticked: its button goes from the tab within a few minutes. " +
+            "On your own PC (Sketch ProMax installed) install the zip too: the TritoRevit tab works through Sketch ProMax. Shared tools > Remove: the panel goes."),
         new("issue.report", Issue, "Transmittal with the issue record and pass/fail report", How.Case, "issue_drawings", "issue_drawings with open items let through writes the transmittal workbook (drawings, the issue record saying it was overridden, the pass/fail report)"),
         new("issue.ui", Issue, "The issue check window", How.Manual, "", "the window, Fix taking you to the element and the ribbon flow are what a person sees and does",
             "On a _detached copy: Issue > Issue check. The list shows each sheet PASS or FAIL with its items, and Model. Press Fix on an item: the window closes and the element is selected and shown; fix it and click Issue check again: it is gone. Tick two items, type a reason, Accept: they show as accepted and Issue stays off while anything is open. Accept the rest: Issue turns on; press it and the Issue drawings options open. Run Issue drawings from the ribbon on a sheet with an open item: the window opens first. Run Export PDF on that sheet: the same. In Settings tick \"Allow issue with open items\": the window offers it in red, needs a reason, and the transmittal's Issue record says YES with the reason. Ask in the chat to check the issue: it lists pass/fail per sheet and accepts only with your reason."),
@@ -310,7 +321,7 @@ internal static class FieldTestCoverage
         ["open-claude"] = "claude.open", ["pane"] = "ribbon.status", ["export-pack"] = "pack.export", ["job-button"] = "ribbon.job",
         ["update-button"] = "ribbon.job", ["report-bug"] = "bugs.ui", ["bug-folder"] = "bugs.ui", ["export-chats-bugs"] = "bugs.export",
         ["settings"] = "settings.ui", ["help"] = "help", ["self-test"] = "diagnostics", ["field-test"] = "diagnostics",
-        ["test-checklist"] = "diagnostics", ["time-saved"] = "time.ui", ["issue-check"] = "issue.ui", ["pre-submission"] = "checklist.ui", ["cleanup"] = "cleanup.ui", ["favourites"] = "favourites", ["fav:*"] = "favourites", ["tab:notes"] = "chat.notes",
+        ["test-checklist"] = "diagnostics", ["time-saved"] = "time.ui", ["issue-check"] = "issue.ui", ["pre-submission"] = "checklist.ui", ["cleanup"] = "cleanup.ui", ["share-tools"] = "share.ui", ["favourites"] = "favourites", ["fav:*"] = "favourites", ["tab:notes"] = "chat.notes",
     };
 
     /// <summary>The coverage key of a manifest line, or null when it runs nothing (drop-downs, hidden items, tool entries).</summary>

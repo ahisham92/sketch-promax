@@ -40,7 +40,7 @@ internal sealed class UpdateWindow : Window
     private UpdateWindow(UpdateProgress? progress, TimeSpan? autoClose)
     {
         _progress = progress;
-        Title = "Sketch ProMax update";
+        Title = Product + " update";
         Width = 460;
         SizeToContent = SizeToContent.Height;
         ResizeMode = ResizeMode.NoResize;
@@ -77,7 +77,9 @@ internal sealed class UpdateWindow : Window
         _retry.Click += (_, _) =>
         {
             Brand.SetBusy(_retry, true, "Starting…");
-            App.CheckForUpdatesInteractive(); // opens a fresh run in this window's place
+            // Opens a fresh run in this window's place.
+            if (App.Shared) Sharing.SharedTools.CheckForUpdates(null);
+            else App.CheckForUpdatesInteractive();
         };
         _retry.Visibility = Visibility.Collapsed;
         // Hide (Esc / Enter) never stops the update; it keeps running and the Version button brings this back.
@@ -87,7 +89,7 @@ internal sealed class UpdateWindow : Window
         body.Children.Add(Brand.ButtonRow(_cancel, _hide, _retry));
 
         var root = new DockPanel();
-        var header = Brand.Header("Sketch ProMax update", $"Installed: {Updater.CurrentText}. Revit stays usable while this runs.");
+        var header = Brand.Header(Product + " update", $"Installed: {Updater.CurrentText}. Revit stays usable while this runs.");
         DockPanel.SetDock(header, Dock.Top);
         root.Children.Add(header);
         root.Children.Add(body);
@@ -106,6 +108,9 @@ internal sealed class UpdateWindow : Window
             _autoClose.Tick += (_, _) => { _autoClose.Stop(); Close(); };
         }
     }
+
+    /// <summary>The add-in the user sees: TritoRevit's core updates through this window too.</summary>
+    private static string Product => Sharing.SharedTools.Product;
 
     /// <summary>True while the window is on screen (not hidden or closed).</summary>
     public static bool IsShowing => _open is { IsVisible: true };
@@ -189,11 +194,11 @@ internal sealed class UpdateWindow : Window
         {
             // A detail on "updated" is the restart note: what of the new version shows only after Revit restarts.
             UpdateStage.Updated => s.Detail is { } note ? $"Updated to {s.Version}. {note}" : $"Updated to {s.Version}. You can keep working; no restart needed.",
-            UpdateStage.UpToDate => s.Detail ?? $"Sketch ProMax {Updater.CurrentText} is up to date.",
+            UpdateStage.UpToDate => s.Detail ?? $"{Product} {Updater.CurrentText} is up to date.",
             UpdateStage.RestartNeeded => s.Detail ?? "Restart Revit to finish (your work is not interrupted until then).",
             UpdateStage.Failed => s.Detail ?? "The update didn't finish. Nothing changed; it is tried again later.",
             UpdateStage.Cancelled => s.Detail ?? "The update was cancelled.",
-            UpdateStage.Available => $"Sketch ProMax {s.Version} is available. Use Update on the ribbon to install it now.",
+            UpdateStage.Available => $"{Product} {s.Version} is available. Use Update on the ribbon to install it now.",
             _ => "",
         };
         Brand.Fg(_final, s.Stage switch
@@ -210,6 +215,7 @@ internal sealed class UpdateWindow : Window
         var canRetry = _progress is not null && s.Stage is UpdateStage.Failed or UpdateStage.Cancelled;
         _next.Text = s.Stage switch
         {
+            UpdateStage.Failed when App.Shared => "Check the internet connection, then press Try again. TritoRevit also tries again by itself every hour.",
             UpdateStage.Failed => canRetry
                 ? "Check the internet connection, then press Try again. If it keeps failing, open What's new in the Updates panel " +
                   "and install the release by hand."
@@ -218,7 +224,9 @@ internal sealed class UpdateWindow : Window
             UpdateStage.RestartNeeded => "Save your work, then close and reopen Revit when it suits you.",
             UpdateStage.Updated when s.Detail is not null => "You can keep working now. Save your work and restart Revit when it suits you.",
             UpdateStage.Downloading or UpdateStage.Checking when _progress is not null =>
-                "You can keep working. Hide keeps the update running; the Version button brings this window back.",
+                App.Shared
+                ? "You can keep working. Hide keeps the update running; the Update button brings this window back."
+                : "You can keep working. Hide keeps the update running; the Version button brings this window back.",
             _ => "",
         };
         _next.Visibility = _next.Text.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
