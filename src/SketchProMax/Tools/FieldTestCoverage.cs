@@ -43,7 +43,7 @@ internal static class FieldTestCoverage
         Rebar2D = "2D rebar", Bugs = "Report bug and exports", Updates = "Updates and the Claude app", Model = "Real-model checks",
         Limits = "Revit limits", BugFixes = "Bug fixes", Tasks = "Hand-off and Cancel", Job = "Live job card", Time = "Time saved",
         Issue = "Issue check", Package = "Drawing package", Redlines = "Redlines", Costing = "Cost plan and what if",
-        Cleanup = "Purge and cleanup", Central = "Shared models";
+        Cleanup = "Purge and cleanup", Central = "Shared models", BeforeSharing = "Test before sharing";
 
     public static readonly Feature[] Features =
     [
@@ -226,6 +226,34 @@ internal static class FieldTestCoverage
             "Leave Revit open. On your PC change the learned tool and wait a few minutes: Revit on the other PC runs the new version, with no restart, " +
             "and Shared tools on the TritoRevit tab shows revision 2. Click Update on the TritoRevit tab: a small window checks and says everything is up to date (or updates), and no Explorer window opens. Share again with Model check unticked: its button goes from the tab within a few minutes. " +
             "On your own PC (Sketch ProMax installed) install the zip too: the TritoRevit tab works through Sketch ProMax. Shared tools > Remove: the panel goes."),
+        new("pretest.default", BeforeSharing, "The Default checklist that ships", How.Probe, "",
+            "every check has wording, unique id and number, a known automatic test its wording still picks; every stage has checks; rules and fields known; signatories set; JSON and renumbering keep it the same; no e-mail addresses (it is public)"),
+        new("pretest.in_use", BeforeSharing, "The checklist this PC uses now", How.Probe, "",
+            "read only: whether this PC uses the Default (so updates reach it), an edited copy, a shared pack's or an Excel file; your own checking rules; every project checklist readable; the next Default saved for publishing; whether the password is still 0000"),
+        new("pretest.password", BeforeSharing, "The Default's password", How.Probe, "",
+            "in a test folder: 0000 works on a new PC, four wrong ones are refused, a new password replaces it and 0000 stops working, and it isn't saved as typed"),
+        new("pretest.projects", BeforeSharing, "Checklists per project", How.Probe, "",
+            "in a test folder: the project code from the file name; a new checklist is a full copy of the Default; PRJ1 uses it while PRJ2 keeps the Default; deleting a check, adding one, renaming a stage and changing a rule change it only; exported to Excel and imported for PRJ3 the same; deleting it puts PRJ1 back on the Default; names Windows refuses are cleaned"),
+        new("pretest.own_rules", BeforeSharing, "Your own checking rules on the Default", How.Probe, "",
+            "in a test folder: your rules are saved apart (the Default isn't copied), read back on it, a newer Default with an extra check arrives with your rules on it, and a rule set back is dropped"),
+        new("pretest.excel", BeforeSharing, "Excel export and import of the whole Default", How.Probe, "",
+            "every check's wording, short title, how to fix, priority, number and automatic test, the stages, fields, signatories and every rule survive Excel, and an edited copy comes back edited"),
+        new("pretest.next_default", BeforeSharing, "Make this the Default for everyone", How.Probe, "",
+            "in a test folder: the file saved for publishing is in Documents\\Sketch ProMax, reads back whole, carries nothing of this PC and only known tests"),
+        new("pretest.answers", BeforeSharing, "Answers, the score and what is still open", How.Probe, "",
+            "all Yes or N/A is 100% with nothing listed; a No and a gap are both listed and lower the score; answers follow their checks when one is deleted and the rest renumbered"),
+        new("pretest.word", BeforeSharing, "The whole Default as the Word file and PDF", How.Probe, "",
+            "every check of the Default is in the Word file, READY with a signature per signatory when all answered; NOT READY and unsigned with one No; the PDF through Word when it is installed"),
+        new("pretest.reading", BeforeSharing, "Run checks on a model", How.Probe, "",
+            "on the throwaway project: the whole Default read in the window's short steps with no test failing, no step holding Revit over 2 s, the check names for the progress bar, Final file size filled, the slowest tests, then the slow checks"),
+        new("pretest.windows", BeforeSharing, "The checklist's windows", How.Probe, "",
+            "on the throwaway project, built without showing: the checklist (Default and own), its settings (Default and own), the editor (Default and own) and checking rules"),
+        new("pretest.share_rules", BeforeSharing, "When a shared pack replaces a colleague's checklist", How.Probe, "",
+            "a colleague with none gets the pack's, the pack's own copy is updated, and one they edited, one from another pack or their own Excel file is kept"),
+        new("pretest.share_export", BeforeSharing, "Share tools with everything on this PC", How.Probe, "",
+            "in a test folder: every window, ribbon tool, learned tool and recipe on this PC goes in the pack (learned tools and recipes exactly as saved), button texts fit, the zip has the installer, readme, pack and buttons, and lists every tool"),
+        new("pretest.share_install", BeforeSharing, "A colleague installs and follows the pack", How.Probe, "",
+            "in a test folder standing for a colleague's PC: the zip installs, the pack's checklist arrives, the next revision follows from the update folder, a checklist they edited and their project checklists are kept, a problem report reaches the update folder, the Documents folder is named after the pack, Remove takes it away"),
         new("share.bugs", Issue, "TritoRevit problem reports on a colleague's PC", How.Manual, "",
             "the folder in Documents, the report window and the copy reaching the update folder are seen on another PC",
             "On the PC with TritoRevit (no Sketch ProMax), with the pack named Pre Submission Checklist: after Revit starts, Documents has a folder TritoRevit - Pre Submission Checklist " +

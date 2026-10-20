@@ -13,8 +13,8 @@ namespace SketchProMax.Tools;
 /// </summary>
 internal static class ChecklistProjects
 {
-    /// <summary>The tests point this at a temporary folder.</summary>
-    internal static string? FolderForTests;
+    /// <summary>The tests point this at a temporary folder (per thread, so a test run never moves the user's own files).</summary>
+    [ThreadStatic] internal static string? FolderForTests;
 
     private static string Folder => FolderForTests ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "SketchProMax", "project checklists");
     private static string MapPath => Path.Combine(Folder, "projects.json");
@@ -145,8 +145,8 @@ internal static class ChecklistProjects
     /// <summary>Where Make this the Default for everyone saves the next Default, for the next update to carry.</summary>
     public static string NextDefaultPath => Path.Combine(DocumentsForTests ?? Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Sketch ProMax", "Default checklist for the next update.json");
 
-    /// <summary>The tests point this at a temporary folder.</summary>
-    internal static string? DocumentsForTests;
+    /// <summary>The tests point this at a temporary folder (per thread).</summary>
+    [ThreadStatic] internal static string? DocumentsForTests;
 
     /// <summary>Saves <paramref name="def"/> as the next Default (the built-in checklist's layout); returns where.</summary>
     public static string SaveNextDefault(ChecklistMath.Definition def)

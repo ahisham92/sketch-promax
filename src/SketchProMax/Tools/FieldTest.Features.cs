@@ -59,6 +59,7 @@ internal static partial class FieldTest
             if (Wanted(o, "run_self_test") && !StoppedOrCancelled(s)) await SelfTestRun(s).ConfigureAwait(false);
         }
         if ((o.Families is null || o.Families.Contains("features")) && !StoppedOrCancelled(s)) await Features(s).ConfigureAwait(false);
+        if ((o.Families is null || o.Families.Contains(SharingFamily)) && !StoppedOrCancelled(s)) await BeforeSharing(s).ConfigureAwait(false);
         if (Wanted(o, "run_field_test"))
             s.Result.Rows.Add(new(FamilyOf("run_field_test"), "run_field_test", "pass", 0, "this report is the test"));
     }
@@ -525,22 +526,22 @@ internal static partial class FieldTest
     }
 
     /// <summary>One probe on Revit's thread.</summary>
-    private static Task Probe(State s, string key, Func<UIApplication, (string Status, string Message)> body) =>
-        ProbeCore(s, key, () => App.Dispatcher.InvokeAsync(body));
+    private static Task Probe(State s, string key, Func<UIApplication, (string Status, string Message)> body, string family = "features") =>
+        ProbeCore(s, key, () => App.Dispatcher.InvokeAsync(body), family);
 
     /// <summary>One probe off Revit's thread.</summary>
-    private static Task Probe(State s, string key, Func<(string Status, string Message)> body) =>
-        ProbeCore(s, key, () => Task.Run(body));
+    private static Task Probe(State s, string key, Func<(string Status, string Message)> body, string family = "features") =>
+        ProbeCore(s, key, () => Task.Run(body), family);
 
-    private static async Task ProbeCore(State s, string key, Func<Task<(string Status, string Message)>> run)
+    private static async Task ProbeCore(State s, string key, Func<Task<(string Status, string Message)>> run, string family = "features")
     {
-        if (StoppedOrCancelled(s)) { s.Result.Rows.Add(new("features", key, "skip", 0, "not reached: " + s.Result.StoppedBecause)); return; }
+        if (StoppedOrCancelled(s)) { s.Result.Rows.Add(new(family, key, "skip", 0, "not reached: " + s.Result.StoppedBecause)); return; }
         Jobs.Report($"Field test: feature {key}");
         var watch = Stopwatch.StartNew();
         (string Status, string Message) outcome;
         try { outcome = await run().ConfigureAwait(false); }
         catch (Exception ex) { outcome = ("fail", $"{ex.GetType().Name}: {ex.Message}"); }
-        s.Result.Rows.Add(new("features", key, outcome.Status, watch.ElapsedMilliseconds, outcome.Message));
+        s.Result.Rows.Add(new(family, key, outcome.Status, watch.ElapsedMilliseconds, outcome.Message));
     }
 
     private static (string, string) Pass(string message) => ("pass", message);

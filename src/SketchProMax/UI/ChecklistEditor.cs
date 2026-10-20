@@ -77,6 +77,9 @@ internal sealed class ChecklistEditor : Window
         return editor.Saved;
     }
 
+    /// <summary>The editor on <paramref name="current"/>, not shown (Test before sharing builds it).</summary>
+    internal static Window ForTest(ChecklistMath.Definition current) => new ChecklistEditor(current, new AgentSettings());
+
     private ChecklistEditor(ChecklistMath.Definition current, AgentSettings settings)
     {
         _settings = settings;

@@ -158,6 +158,13 @@ internal sealed class ChecklistWindow : Window
         return Autodesk.Revit.UI.Result.Succeeded;
     }
 
+    /// <summary>The window as the button opens it on <paramref name="doc"/>, not shown (Test before sharing builds it), and its draft file.</summary>
+    internal static (Window Window, string Draft) ForTest(Autodesk.Revit.DB.Document doc, ChecklistMath.Definition def)
+    {
+        var window = new ChecklistWindow(DocKey(doc), def, "", ChecklistFacts.Plan(doc, def).Result);
+        return (window, window._draftPath);
+    }
+
     private static string DocKey(Autodesk.Revit.DB.Document doc)
     {
         try { return string.IsNullOrEmpty(doc.PathName) ? doc.Title : doc.PathName; }
@@ -579,7 +586,8 @@ internal sealed class ChecklistWindow : Window
             ExportChecklist,
             DeleteProjectChecklist,
             () => { ChecklistProjectWindows.ChangePassword(this, _unlocked); },
-            MakeDefault);
+            MakeDefault,
+            TestBeforeSharing);
         var project = new ChecklistSettingsWindow.Project(_project, ChecklistProjects.NameOf(_def.SourcePath) ?? "", ChecklistProjects.Names());
         if (!ChecklistSettingsWindow.Edit(this, actions, automatic, pending, project)) return;
         var stage = _stages.SelectedIndex;
@@ -693,6 +701,25 @@ internal sealed class ChecklistWindow : Window
                 "Sketch ProMax", MessageBoxButton.OK, MessageBoxImage.Information);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { Problem($"Couldn't save it ({ex.Message})."); }
+    }
+
+    /// <summary>
+    /// Test before sharing, for whoever looks after the Default (password): the checklist and Share tools tested in depth
+    /// on the field test's throwaway project; the report goes to Documents\Sketch ProMax\Test reports to upload.
+    /// </summary>
+    private void TestBeforeSharing()
+    {
+        if (!Unlock("run the test before sharing")) return;
+        if (MessageBox.Show(this, "Test the checklist and Share tools before sharing them?\n\nSketch ProMax builds a throwaway project, opens it in its own window, " +
+                                  "tests the checklist (reading the model, the windows, the Default, project checklists, Excel, Word and PDF, the password) and Share tools " +
+                                  "(the zip, installing on a colleague's PC, updates, problem reports), then closes it without saving. Your models, checklists and shared tools aren't changed. " +
+                                  "Save your open models first: Revit switches windows while it runs. It takes a few minutes.\n\n" +
+                                  "The report is saved in Documents\\Sketch ProMax\\Test reports. Upload it in the Sketch ProMax project to share the results.",
+                "Sketch ProMax", MessageBoxButton.OKCancel, MessageBoxImage.Question, MessageBoxResult.OK) != MessageBoxResult.OK) return;
+        if (FieldTest.StartBeforeSharing() is { } why) { Problem(why); return; }
+        ActivityLog.Note("test_before_sharing", "started");
+        // The test opens and closes its own project: this window would only show a model that isn't active any more.
+        Close();
     }
 
     /// <summary>A checklist exported to Excel (from another project, say) becomes a project checklist used here.</summary>

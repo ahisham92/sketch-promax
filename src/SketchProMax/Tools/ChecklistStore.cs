@@ -12,7 +12,10 @@ namespace SketchProMax.Tools;
 /// </summary>
 internal static class ChecklistStore
 {
-    private static string Folder => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "SketchProMax");
+    /// <summary>The tests point this at a temporary folder (per thread, so a test run never touches the user's checklist).</summary>
+    [ThreadStatic] internal static string? FolderForTests;
+
+    private static string Folder => FolderForTests ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "SketchProMax");
 
     /// <summary>The checklist as imported or edited.</summary>
     public static string SavedPath => Path.Combine(Folder, "pre-submission checklist.json");

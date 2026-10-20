@@ -141,7 +141,8 @@ internal static class CatalogTests
         // Field-test coverage (standing rule): every registered tool, every ribbon command and every declared feature has a
         // field-test case, a probe, or a "manual (checklist)" row with a reason. New tools or ribbon entries fail here until
         // FieldTestCoverage (the one table) says how they are covered.
-        var probeSource = File.ReadAllText(Path.Combine(repoRoot, "src", "SketchProMax", "Tools", "FieldTest.Features.cs"));
+        var probeSource = File.ReadAllText(Path.Combine(repoRoot, "src", "SketchProMax", "Tools", "FieldTest.Features.cs")) +
+                          File.ReadAllText(Path.Combine(repoRoot, "src", "SketchProMax", "Tools", "FieldTest.Sharing.cs"));
         var gaps = SketchProMax.Tools.FieldTestCoverage.Gaps(names, caseTools, SketchProMax.UI.CoreRibbonManifest.Text.Split('\n'), probeSource);
         check("field test covers every tool, ribbon entry and feature", gaps.Count == 0, string.Join("; ", gaps));
         // Bug log: every fixed row has a check that fails if the bug returns, and each "bug#N" is a case tagged Bug = N.
