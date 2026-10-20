@@ -396,9 +396,15 @@ internal sealed class ChecklistWindow : Window
         rules.Margin = new Thickness(0, 0, 8, 0);
         AutomationProperties.SetHelpText(rules, "What the automatic check compares the model with: name patterns, approved scales and worksets, the classification and IFC parameters.");
         rules.Click += (_, _) => EditRules();
+        reread.Margin = new Thickness(0, 0, 8, 0);
+        var slowRun = RichUi.Button(RichUi.Icon.Refresh, "Run the slow checks");
+        slowRun.Margin = new Thickness(0);
+        AutomationProperties.SetHelpText(slowRun, "Runs the slower automatic checks: duplicates, floating elements, clashes inside your trade, the model check score and the standard template. It can take a few minutes on a big model.");
+        slowRun.Click += async (_, _) => await ReadModelAgain(slowRun, slow: true);
         row.Children.Add(change);
         row.Children.Add(rules);
         row.Children.Add(reread);
+        row.Children.Add(slowRun);
         source.Children.Add(row);
         page.Children.Add(CardBox(source, top: 16));
 
@@ -408,6 +414,9 @@ internal sealed class ChecklistWindow : Window
         how.Children.Add(Brand.Text("How this checklist is checked", size: 14, bold: true));
         how.Children.Add(Para($"{autoCount} of {checks} checks are tested automatically from the model (marked Automatic). The other {checks - autoCount} you check yourself (marked You check this), " +
                               "or ask the helper; Review and sign lists them. Checking rules… sets what the automatic test compares with, and can make more checks automatic.", Brand.K.Text));
+        var pending = _def.Items.Count(i => i.Auto.Length > 0 && Pending(i.Auto));
+        if (pending > 0)
+            how.Children.Add(Para($"{pending} of them are slower (a full model check, clashes, the standard template): they run when you press Run the slow checks, not each time the model is read.", Brand.K.Text));
         page.Children.Add(CardBox(how, Brand.K.AccentSoft, Brand.K.Border));
 
         // The header fields, two columns: label above its box, the example as the box's hint.
@@ -511,7 +520,10 @@ internal sealed class ChecklistWindow : Window
     }
 
     /// <summary>Whether the model test settles this check (it gives a pass or a fail); else the user checks it.</summary>
-    private bool Automatic(ChecklistMath.Item item) => item.Auto.Length > 0 && Verdict(item.Auto) is not null;
+    private bool Automatic(ChecklistMath.Item item) => item.Auto.Length > 0 && (Verdict(item.Auto) is not null || Pending(item.Auto));
+
+    /// <summary>A slow automatic check not run yet (Run the slow checks runs it).</summary>
+    private bool Pending(string key) => _facts.Hints.TryGetValue(key, out var h) && h.Pending;
 
     /// <summary>Whether a checking rule could make this check automatic (it has one, turned off or not readable now).</summary>
     private static bool RuleCould(ChecklistMath.Item item) => item.Auto.Length > 0 && ChecklistMath.RuleDefs.Any(r => r.Check == item.Auto);
@@ -530,9 +542,9 @@ internal sealed class ChecklistWindow : Window
     }
 
     /// <summary>Reads the hints and file names from the model again, through Revit (the window itself runs outside a Revit call).</summary>
-    private async Task ReadModelAgain(Button? button)
+    private async Task ReadModelAgain(Button? button, bool slow = false)
     {
-        if (button is not null) { if (Brand.IsBusy(button)) return; Brand.SetBusy(button, true, "Reading…"); }
+        if (button is not null) { if (Brand.IsBusy(button)) return; Brand.SetBusy(button, true, slow ? "Running the slow checks…" : "Reading…"); }
         try
         {
             var def = _def;
@@ -540,16 +552,19 @@ internal sealed class ChecklistWindow : Window
             var facts = await App.Dispatcher.InvokeAsync(app =>
             {
                 foreach (Autodesk.Revit.DB.Document d in app.Application.Documents)
-                    if (!d.IsFamilyDocument && !d.IsLinked && DocKey(d) == key) return ChecklistFacts.Read(d, def);
+                    if (!d.IsFamilyDocument && !d.IsLinked && DocKey(d) == key) return ChecklistFacts.Read(d, def, slow ? app : null);
                 return null;
             });
             if (facts is null) { _status.Text = "The model this checklist is for isn't open any more, so it can't be read again."; return; }
+            // A quick read keeps the slow checks' last results (they say when they ran).
+            foreach (var old in _facts.Hints)
+                if (facts.Hints.TryGetValue(old.Key, out var now) && now.Pending && !old.Value.Pending) facts.Hints[old.Key] = old.Value;
             _facts = facts;
             SaveDraft();
             var stage = _stages.SelectedIndex;
             Build();
             _stages.SelectedIndex = stage;
-            _status.Text = "Read the model again. " + _status.Text;
+            _status.Text = (slow ? "Ran the slow checks. " : "Read the model again. ") + _status.Text;
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
@@ -719,6 +734,7 @@ internal sealed class ChecklistWindow : Window
         {
             ChecklistFacts.Level.Ok => (Brand.K.SuccessText, "✓ The model check passes", Brand.K.Raised, Brand.K.SuccessText),
             ChecklistFacts.Level.Warn => (Brand.K.WarningText, "! The model check found something to fix", Brand.K.NoticeBg, Brand.K.NoticeBorder),
+            ChecklistFacts.Level.Info when hint.Pending => (Brand.K.Text, "Slow automatic check: not run yet", Brand.K.Raised, Brand.K.BorderSubtle),
             ChecklistFacts.Level.Info => (Brand.K.Text, "i What the model says", Brand.K.Raised, Brand.K.BorderSubtle),
             _ => (Brand.K.Muted, RuleCould(item) ? "You check this one (set its checking rule to make it automatic)" : "You check this one: the model test can't", Brand.K.Raised, Brand.K.BorderSubtle),
         };
@@ -762,10 +778,13 @@ internal sealed class ChecklistWindow : Window
         }
         if (item.Auto.Length > 0)
         {
-            var again = RichUi.Button(RichUi.Icon.Refresh, "Check the model again");
+            var slow = ChecklistFacts.Slow.Contains(item.Auto);
+            var again = RichUi.Button(RichUi.Icon.Refresh, slow ? "Run the slow checks" : "Check the model again", slow && hint?.Pending == true ? Brand.Weight.Primary : Brand.Weight.Secondary);
             again.Margin = new Thickness(0, 0, 8, 6);
-            AutomationProperties.SetHelpText(again, "After you fix something in Revit, reads the model again to update this check and the automatic score.");
-            again.Click += async (_, _) => await ReadModelAgain(again);
+            AutomationProperties.SetHelpText(again, slow
+                ? "Runs the slower checks (model check, clashes inside your trade, the standard template). It can take a few minutes on a big model; Revit is busy meanwhile."
+                : "After you fix something in Revit, reads the model again to update this check and the automatic score.");
+            again.Click += async (_, _) => await ReadModelAgain(again, slow);
             actions.Children.Add(again);
         }
         var helper = ChecklistHelper.Parse(AgentSettings.Load().ChecklistHelper);
@@ -777,7 +796,7 @@ internal sealed class ChecklistWindow : Window
                 ? "Hands this check to the Sketch ProMax chat, which looks at the model and says pass or fail. It changes nothing; you still answer."
                 : "Copies the question so you can paste it into SketchPro's chat. You still answer.");
             var it = item;
-            var said = hint?.Text;
+            var said = hint?.Pending == true ? null : hint?.Text;
             ask.Click += async (_, _) => await AskHelper(ask, result, it, said, helper);
             actions.Children.Add(ask);
         }
@@ -1038,6 +1057,7 @@ internal sealed class ChecklistWindow : Window
             var ok = hint.Level == ChecklistFacts.Level.Ok;
             badges.Children.Add(Badge(ok ? "✓ Automatic: passes" : "! Automatic: needs fixing", ok ? Brand.K.Surface : Brand.K.NoticeBg, ok ? Brand.K.SuccessText : Brand.K.WarningText));
         }
+        else if (item.Auto.Length > 0 && Pending(item.Auto)) badges.Children.Add(Badge("Automatic (slow check): not run yet", Brand.K.Surface, Brand.K.Muted));
         else badges.Children.Add(Badge(RuleCould(item) ? "You check this (a checking rule can make it automatic)" : "You check this", Brand.K.Surface, Brand.K.Muted));
         if (item.High) badges.Children.Add(Badge("High priority", Brand.K.BadgeError, Brand.K.OnDanger));
         if (item.Waiting.Length > 0) badges.Children.Add(Badge("Waiting on an answer", Brand.K.NoticeBg, Brand.K.WarningText));

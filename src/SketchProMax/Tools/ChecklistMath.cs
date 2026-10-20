@@ -96,6 +96,18 @@ internal static class ChecklistMath
         new("viewfolders", "View folder parameters", "", "The view parameters the Project Browser sorts by, e.g. Discipline, Sub-Discipline; a view with one empty lands in ??? (empty: not tested).", "viewfolders"),
         new("navisview", "Navisworks view name", "*Navisworks Export*", "The 3D view exported to NWC.", "navisview"),
         new("landing", "Landing page family", "LandingPage", "The family placed on the starting view.", "landing"),
+        new("submission", "Submitted copy ending", "_S03_R##", "The submitted copy is the model's name with this added; Sketch ProMax looks for it next to the model.", "submission"),
+        new("exportfolder", "Folder of the NWC and IFC files", "", "Where the NWC and IFC exports are saved (empty: the model's folder and the folders in it).", "exportnames"),
+        new("typenames", "Type name pattern", "*_*_*", "Every model type in use is named like one of these, e.g. FN_SC_40MPa_Raft_600 (empty: not tested).", "familynames"),
+        new("othertrades", "Categories that don't belong in this model", "auto", "Other trades' categories, comma separated. auto: picked from the discipline in the file name " +
+            "(STR: doors, windows, furniture, ceilings, pipes, ducts, cable trays, MEP equipment and fixtures, and walls that aren't structural). Empty: not tested.", "othertrades"),
+        new("detaillines", "Detail lines and filled regions per plan or section", "20", "A plan, section or elevation on a sheet with more than this many is listed for a look (empty: not tested).", "detaillines"),
+        new("legendcategories", "Categories whose types need a legend entry", "Walls, Floors, Structural Foundations", "Every type in use in these categories must be shown in a legend (empty: not tested).", "legend"),
+        new("standardtemplate", "The trade's standard template file", "", "The trade's standard .rte or .rvt; its view templates, filters and browser organisation must all be in the model (empty: not tested).", "standards"),
+        new("schedules", "Schedules that must be in the model", "", "Name patterns of the schedules you use, e.g. *Foundation*. Schedules on no sheet are always listed: tick Schedules in e-Transmit or place them.", "schedules"),
+        new("clashcategories", "Categories clashed against each other", "auto", "auto: picked from the discipline in the file name (STR: structural columns, framing, foundations, floors and walls). Empty: not tested.", "selfclash"),
+        new("modelscore", "Lowest model check score (%)", "90", "Sketch ProMax's model check (warnings, duplicates, beams on nothing, columns off grid and more) must score at least this. " +
+            "It stands in for the Model Checker template; keep that score in the QA/QC record too (empty: not tested).", "modelscore"),
     ];
 
     /// <summary>The rule's value for this checklist: set, else the default ("" turns that test off).</summary>
@@ -377,6 +389,18 @@ internal static class ChecklistMath
         ("ifc", Rx(@"^IFC entity")),
         ("tbmodelname", Rx(@"model name shown in the title block")),
         ("viewfolders", Rx(@"^Every view is in a folder")),
+        ("submission", Rx(@"^The submitted copy adds")),
+        ("exportnames", Rx(@"^NWC and IFC files have")),
+        ("familynames", Rx(@"^Family and type names follow")),
+        ("duplicates", Rx(@"^No duplicate, overlapping")),
+        ("floating", Rx(@"^No floating elements")),
+        ("othertrades", Rx(@"Other trades' elements are removed")),
+        ("detaillines", Rx(@"^No detail lines or filled regions")),
+        ("legend", Rx(@"own hatch, shown in the legend")),
+        ("standards", Rx(@"^Browser organisation, view templates")),
+        ("schedules", Rx(@"^Schedules you use stay")),
+        ("selfclash", Rx(@"no clashes inside your own trade")),
+        ("modelscore", Rx(@"^Model Checker template is run")),
     ];
 
     private static Regex Rx(string pattern) => new(pattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);

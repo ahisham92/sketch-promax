@@ -162,6 +162,13 @@ internal static class ChecklistTests
         check("checklist: every checking rule drives a model test", orphan.Count == 0, string.Join(", ", orphan));
         var newlyAuto = new[] { "12", "17", "25", "26", "27", "31", "39" }.Where(n => built.Items.First(i => i.Number == n).Auto.Length == 0).ToList();
         check("checklist: checks 12, 17, 25, 26, 27, 31 and 39 have model tests", newlyAuto.Count == 0, "no test on " + string.Join(", ", newlyAuto));
+        var moreAuto = new[] { "2", "5", "15", "18", "19", "22", "34", "37", "38", "42", "43", "45" }.Where(n => built.Items.First(i => i.Number == n).Auto.Length == 0).ToList();
+        check("checklist: checks 2, 5, 15, 18, 19, 22, 34, 37, 38, 42, 43 and 45 have model tests", moreAuto.Count == 0, "no test on " + string.Join(", ", moreAuto));
+        var keyed = built.Items.Where(i => i.Auto.Length > 0 && AutoKey(i.Check) != i.Auto).Select(i => $"#{i.Number} {i.Auto} vs {AutoKey(i.Check)}").ToList();
+        check("checklist: each built-in check's model test is the one its wording finds (so an imported Excel gets the same)", keyed.Count == 0, string.Join("; ", keyed));
+        var manualLeft = built.Items.Where(i => i.Auto.Length == 0).Select(i => i.Number).ToList();
+        check("checklist: only checks needing data from outside the model or a person's judgement stay manual",
+            manualLeft.SequenceEqual(["4", "16", "20", "21", "33", "36", "44", "46", "49", "50", "51", "53", "54", "55", "56", "57"]), string.Join(", ", manualLeft));
         var rulesPath = Path.Combine(Path.GetTempPath(), $"spm-checklist-{Guid.NewGuid():N}.xlsx");
         try
         {

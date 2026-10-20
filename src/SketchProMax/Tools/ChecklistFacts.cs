@@ -1,7 +1,9 @@
 using System.Globalization;
 using System.IO;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Autodesk.Revit.DB;
+using Autodesk.Revit.UI;
 
 namespace SketchProMax.Tools;
 
@@ -20,7 +22,16 @@ internal static class ChecklistFacts
     public sealed record Hint(string Text, Level Level, IReadOnlyList<string>? Found = null)
     {
         public IReadOnlyList<string> Items => Found ?? [];
+
+        /// <summary>A slow check not run yet: automatic, but it waits for Run the slow checks.</summary>
+        public bool Pending { get; init; }
     }
+
+    /// <summary>
+    /// The checks that take longer (a full model check, a clash run, opening the trade's standard template): they run only
+    /// when the user asks (Run the slow checks), not each time the window reads the model.
+    /// </summary>
+    public static readonly HashSet<string> Slow = new(StringComparer.Ordinal) { "duplicates", "floating", "selfclash", "modelscore", "standards" };
 
     public sealed class Result
     {
@@ -30,8 +41,11 @@ internal static class ChecklistFacts
         public string Title { get; set; } = "";
     }
 
-    /// <summary>Reads the model. Must run in a Revit API context (a command, or the dispatcher).</summary>
-    public static Result Read(Document doc, ChecklistMath.Definition? def)
+    /// <summary>
+    /// Reads the model. Must run in a Revit API context (a command, or the dispatcher). With <paramref name="slow"/> the
+    /// slow checks run too (the model must be the active one); without it they are marked not run yet.
+    /// </summary>
+    public static Result Read(Document doc, ChecklistMath.Definition? def, UIApplication? slow = null)
     {
         var r = new Result { Title = doc.Title };
         var file = "";
@@ -64,10 +78,36 @@ internal static class ChecklistFacts
         Views V() => views ??= new Views(doc);
         string Rule(string key) => ChecklistMath.Rule(def, key);
         const string Rules = " (set in Checking rules)";
+        bool SlowOff(string key) => key switch
+        {
+            "selfclash" => Rule("clashcategories").Length == 0,
+            "modelscore" => Rule("modelscore").Length == 0,
+            "standards" => Rule("standardtemplate").Length == 0,
+            _ => false,
+        };
+        // The slow checks that run a Sketch ProMax tool need the model in front (the tools work on the active model).
+        var inFront = slow?.ActiveUIDocument?.Document.Equals(doc) == true;
+        Hint NotInFront() => new("Bring this model to the front in Revit, then run the slow checks.", Level.Info) { Pending = true };
+        (ToolResult Result, List<IssueGateMath.Finding> Found)? modelCheck = null;
+        (ToolResult Result, List<IssueGateMath.Finding> Found) ModelCheck()
+        {
+            if (modelCheck is { } done) return done;
+            var tool = new CheckModelTool();
+            var res = Drafting.Call(slow!, tool, new { });
+            if (res.IsError) throw new InvalidOperationException(res.Text);
+            modelCheck = (res, tool.Found ?? []);
+            return modelCheck.Value;
+        }
+        var stamp = " Checked at " + DateTime.Now.ToString("HH:mm", CultureInfo.InvariantCulture) + ".";
 
         void Add(string key, Func<Hint?> read)
         {
             if (!wanted.Contains(key)) return;
+            if (slow is null && Slow.Contains(key))
+            {
+                if (!SlowOff(key)) r.Hints[key] = new Hint("A slower automatic check, not run yet: press Run the slow checks.", Level.Info) { Pending = true };
+                return;
+            }
             try { if (read() is { } h) r.Hints[key] = h; }
             catch (Exception ex) when (ex is not OutOfMemoryException) { r.Hints[key] = new Hint("Couldn't read this from the model (" + ex.Message + ").", Level.Info); }
         }
@@ -347,7 +387,330 @@ internal static class ChecklistFacts
             return off.Count == 0 ? new Hint($"Every view has {string.Join(" and ", names)} filled.", Level.Ok)
                 : new Hint($"{off.Count} views have {string.Join(" or ", names)} empty, so they land in ???.", Level.Warn, off);
         });
+
+        // The submitted copy and the exports, found next to the model.
+        Add("submission", () =>
+        {
+            var suffix = Rule("submission");
+            if (suffix.Length == 0) return null;
+            var name = Path.GetFileNameWithoutExtension(ChecklistMath.WorkingName(file));
+            var endings = ChecklistMath.RuleList(suffix);
+            if (endings.Any(e => ChecklistMath.Like(name, "*" + e))) return new Hint($"This model is the submitted copy {name}.", Level.Ok);
+            var folder = Folder(doc);
+            if (folder.Length == 0) return new Hint("The model isn't saved on this PC, so the submitted copy can't be looked for.", Level.Info);
+            var copies = Directory.EnumerateFiles(folder, name + "*.rvt").Select(f => Path.GetFileNameWithoutExtension(f) ?? "")
+                .Where(n => !n.Equals(name, StringComparison.OrdinalIgnoreCase) && n.StartsWith(name + "_", StringComparison.OrdinalIgnoreCase)).ToList();
+            var right = copies.Where(n => endings.Any(e => ChecklistMath.Like(n, name + e))).OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
+            var wrong = copies.Except(right).Where(n => !Regex.IsMatch(n, @"\.\d{4}$")).ToList();
+            if (right.Count == 0)
+                return new Hint($"No copy named {name}{endings[0]} next to the model. Save the submitted copy as {ChecklistMath.SubmissionName(file)}.", Level.Warn,
+                    wrong.Select(n => n + " (not named " + name + endings[0] + ")").ToList());
+            return wrong.Count == 0 ? new Hint($"Submitted copy found: {List(right)}.", Level.Ok, right)
+                : new Hint($"Submitted copy found ({List(right)}), but {wrong.Count} other copies aren't named {name}{endings[0]}.", Level.Warn, wrong);
+        });
+        Add("exportnames", () =>
+        {
+            var name = Path.GetFileNameWithoutExtension(ChecklistMath.WorkingName(file));
+            var stem = Regex.Replace(name, @"_S\d{2}_R\d{2}$", "", RegexOptions.IgnoreCase);
+            var folders = ChecklistMath.RuleList(Rule("exportfolder"));
+            var home = Folder(doc);
+            if (folders.Count == 0)
+            {
+                if (home.Length == 0) return new Hint("The model isn't saved on this PC, so its NWC and IFC files can't be looked for.", Level.Info);
+                folders = [home, .. Directory.EnumerateDirectories(home).Take(40)];
+            }
+            var models = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { name };
+            foreach (var f in folders.Append(home).Where(f => f.Length > 0 && Directory.Exists(f)).Distinct(StringComparer.OrdinalIgnoreCase))
+                foreach (var rvt in Directory.EnumerateFiles(f, stem + "*.rvt")) models.Add(Path.GetFileNameWithoutExtension(rvt));
+            var exports = folders.Where(Directory.Exists).SelectMany(f => Directory.EnumerateFiles(f, stem + "*.nwc").Concat(Directory.EnumerateFiles(f, stem + "*.ifc"))).ToList();
+            if (exports.Count == 0) return new Hint($"No NWC or IFC file named {stem}… in {List(folders)}" + (Rule("exportfolder").Length == 0 ? " (set their folder in Checking rules)" : "") + ".", Level.Warn);
+            var off = exports.Where(e => !models.Contains(Path.GetFileNameWithoutExtension(e))).Select(e => Path.GetFileName(e) + " (no model with this name)").ToList();
+            foreach (var ext in new[] { ".nwc", ".ifc" })
+                if (!exports.Any(e => e.EndsWith(ext, StringComparison.OrdinalIgnoreCase))) off.Add($"no {ext.Substring(1).ToUpperInvariant()} file found");
+            return off.Count == 0 ? new Hint($"{exports.Count} NWC and IFC files, each named exactly like its model.", Level.Ok, exports.Select(Path.GetFileName).Select(n => n ?? "").ToList())
+                : new Hint($"{off.Count} problems with the NWC and IFC names.", Level.Warn, off);
+        });
+
+        // Model content.
+        Add("familynames", () =>
+        {
+            var pattern = Rule("typenames");
+            if (pattern.Length == 0) return null;
+            var types = TypesInUse(doc);
+            var off = types.Where(t => !ChecklistMath.LikeAny(t.Name, pattern)).Select(TypeLabel).OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
+            return off.Count == 0 ? new Hint($"All {types.Count} model types in use are named {pattern}.", Level.Ok)
+                : new Hint($"{off.Count} of {types.Count} model types in use aren't named {pattern}.", Level.Warn, off);
+        });
+        Add("othertrades", () =>
+        {
+            var rule = Rule("othertrades");
+            if (rule.Length == 0) return null;
+            var found = new List<string>();
+            var total = 0;
+            void Count(string? label, IEnumerable<Element> elements)
+            {
+                var n = elements.Count();
+                if (n == 0 || label is null) return;
+                total += n;
+                found.Add($"{label} (×{n})");
+            }
+            string what;
+            if (rule.Equals("auto", StringComparison.OrdinalIgnoreCase))
+            {
+                var trade = Trade(parts.Discipline);
+                if (trade.Length == 0) return null; // the discipline isn't known: you check it (or list the categories)
+                foreach (var bic in OtherTrades(trade))
+                    Count(Category.GetCategory(doc, bic)?.Name, new FilteredElementCollector(doc).OfCategory(bic).WhereElementIsNotElementType().ToElements());
+                if (trade == "STR")
+                    Count((Category.GetCategory(doc, BuiltInCategory.OST_Walls)?.Name ?? "Walls") + " not marked Structural", new FilteredElementCollector(doc).OfClass(typeof(Wall)).Cast<Wall>()
+                        .Where(w => w.get_Parameter(BuiltInParameter.WALL_STRUCTURAL_SIGNIFICANT)?.AsInteger() == 0));
+                what = $"other trades' categories for a {parts.Discipline} model";
+            }
+            else
+            {
+                foreach (Category c in doc.Settings.Categories)
+                    if (c.CategoryType == CategoryType.Model && ChecklistMath.LikeAny(c.Name, rule))
+                        Count(c.Name, new FilteredElementCollector(doc).OfCategory((BuiltInCategory)c.Id.Value).WhereElementIsNotElementType().ToElements());
+                what = rule;
+            }
+            return total == 0 ? new Hint($"No elements of {what}.", Level.Ok) : new Hint($"{total} elements of {what}.", Level.Warn, found);
+        });
+
+        // Drawings.
+        Add("detaillines", () =>
+        {
+            if (!int.TryParse(Rule("detaillines"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var limit) || limit < 0) return null;
+            var views = V().OnSheets.Where(v => v.ViewType is ViewType.FloorPlan or ViewType.CeilingPlan or ViewType.EngineeringPlan or ViewType.Section or ViewType.Elevation).ToList();
+            if (views.Count == 0) return new Hint("No plans, sections or elevations on sheets.", Level.Info);
+            var busy = new List<string>();
+            foreach (var v in views)
+            {
+                var lines = new FilteredElementCollector(doc).OwnedByView(v.Id).OfClass(typeof(CurveElement)).Count(e => e is DetailCurve);
+                var regions = new FilteredElementCollector(doc).OwnedByView(v.Id).OfClass(typeof(FilledRegion)).GetElementCount();
+                if (lines + regions > limit) busy.Add($"{v.Name}: {lines} detail lines, {regions} filled regions");
+            }
+            return busy.Count == 0 ? new Hint($"None of the {views.Count} plans, sections and elevations on sheets has more than {limit} detail lines and filled regions.", Level.Ok)
+                : new Hint($"{busy.Count} views on sheets have more than {limit} detail lines and filled regions: look that none stands in for a real element.", Level.Warn, busy);
+        });
+        Add("legend", () =>
+        {
+            var rule = Rule("legendcategories");
+            if (rule.Length == 0) return null;
+            var cats = new HashSet<long>();
+            foreach (Category c in doc.Settings.Categories) if (c.CategoryType == CategoryType.Model && ChecklistMath.LikeAny(c.Name, rule)) cats.Add(c.Id.Value);
+            var types = TypesInUse(doc).Where(t => t.Category is { } c && cats.Contains(c.Id.Value)).ToList();
+            if (types.Count == 0) return new Hint($"No types in use in {rule}.", Level.Info);
+            var legends = new FilteredElementCollector(doc).OfClass(typeof(View)).Cast<View>().Count(v => v.ViewType == ViewType.Legend && !v.IsTemplate);
+            var shown = new HashSet<long>(new FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_LegendComponents).WhereElementIsNotElementType()
+                .Select(e => e.get_Parameter(BuiltInParameter.LEGEND_COMPONENT)?.AsElementId()?.Value ?? -1));
+            var missing = types.Where(t => !shown.Contains(t.Id.Value)).Select(TypeLabel).OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
+            if (legends == 0) return new Hint($"The model has no legend; {types.Count} types in use need one.", Level.Warn, missing);
+            return missing.Count == 0 ? new Hint($"All {types.Count} types in use in {rule} are shown in a legend.", Level.Ok)
+                : new Hint($"{missing.Count} of {types.Count} types in use aren't shown in any legend.", Level.Warn, missing);
+        });
+        Add("schedules", () =>
+        {
+            var all = new FilteredElementCollector(doc).OfClass(typeof(ViewSchedule)).Cast<ViewSchedule>()
+                .Where(v => !v.IsTemplate && !v.IsTitleblockRevisionSchedule && !v.IsInternalKeynoteSchedule && !v.Name.StartsWith("<", StringComparison.Ordinal)).ToList();
+            var required = ChecklistMath.RuleList(Rule("schedules"));
+            var problems = required.Where(p => !all.Any(v => ChecklistMath.Like(v.Name, p))).Select(p => $"no schedule named {p}").ToList();
+            if (all.Count == 0) return new Hint("The model has no schedules.", Level.Warn, problems);
+            var placed = new HashSet<long>(V().SchedulesOnSheets.Select(v => v.Id.Value));
+            var loose = all.Where(v => !placed.Contains(v.Id.Value)).Select(v => v.Name + " (on no sheet)").OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
+            problems.AddRange(loose);
+            return problems.Count == 0 ? new Hint($"All {all.Count} schedules are on sheets" + (required.Count > 0 ? ", and the ones you use are there." : "."), Level.Ok)
+                : new Hint((required.Count > 0 && problems.Count > loose.Count ? "A schedule you use is missing. " : "") +
+                           (loose.Count > 0 ? $"{loose.Count} of {all.Count} schedules are on no sheet: tick Schedules in e-Transmit so they stay, or place them on a sheet." : ""), Level.Warn, problems);
+        });
+
+        // The slow checks: run on request (Run the slow checks).
+        Add("duplicates", () =>
+        {
+            if (!inFront) return NotInFront();
+            var (res, found) = ModelCheck();
+            var dupes = found.Where(f => f.Check == "duplicates").Select(f => $"{f.What} (id {f.ElementId}): {f.Issue}").ToList();
+            var overlaps = Counted(doc.GetWarnings().Select(w => w.GetDescriptionText())
+                .Where(t => t.IndexOf("identical instances", StringComparison.OrdinalIgnoreCase) >= 0 || t.IndexOf("overlap", StringComparison.OrdinalIgnoreCase) >= 0));
+            var all = dupes.Concat(overlaps).ToList();
+            return all.Count == 0 ? new Hint("No duplicate elements and no overlap warnings." + stamp, Level.Ok)
+                : new Hint($"{dupes.Count} duplicate elements; {overlaps.Count} kinds of overlap warning." + stamp + ReportOf(res), Level.Warn, all);
+        });
+        Add("floating", () =>
+        {
+            if (!inFront) return NotInFront();
+            var (res, found) = ModelCheck();
+            var beams = found.Where(f => f.Check == "unsupported_beams").Select(f => $"{f.What} (id {f.ElementId}): {f.Issue}").ToList();
+            var columns = FloatingColumns(doc);
+            var all = beams.Concat(columns).ToList();
+            return all.Count == 0 ? new Hint("Every beam end and column base sits on something." + stamp, Level.Ok)
+                : new Hint($"{beams.Count} beam ends and {columns.Count} column bases sit on nothing in this model (supports in linked models aren't seen)." + stamp, Level.Warn, all);
+        });
+        Add("modelscore", () =>
+        {
+            if (!double.TryParse(Rule("modelscore").TrimEnd('%'), NumberStyles.Float, CultureInfo.InvariantCulture, out var least)) return null;
+            if (!inFront) return NotInFront();
+            var (res, _) = ModelCheck();
+            using var json = JsonDocument.Parse(res.Text);
+            var score = json.RootElement.GetProperty("overallScore").GetInt32();
+            var low = json.RootElement.GetProperty("scores").EnumerateArray().Where(x => x.GetProperty("score").GetInt32() < 100)
+                .Select(x => $"{x.GetProperty("check").GetString()}: {x.GetProperty("score").GetInt32()}% ({x.GetProperty("findings").GetInt32()} found)").ToList();
+            return new Hint($"Sketch ProMax's model check scores {score}% (at least {least:0}% needed). Keep the Model Checker template's score in the QA/QC record too." + stamp + ReportOf(res),
+                score >= least ? Level.Ok : Level.Warn, low);
+        });
+        Add("selfclash", () =>
+        {
+            var rule = Rule("clashcategories");
+            List<string> cats;
+            if (rule.Equals("auto", StringComparison.OrdinalIgnoreCase))
+            {
+                var trade = Trade(parts.Discipline);
+                if (trade.Length == 0) return null;
+                cats = ClashCategories(trade);
+            }
+            else cats = ChecklistMath.RuleList(rule);
+            if (cats.Count == 0) return null;
+            if (!inFront) return NotInFront();
+            var res = Drafting.Call(slow!, new FindClashesTool(), new { set_a = new { source = "model", categories = cats }, limit = 500 });
+            if (res.IsError) throw new InvalidOperationException(res.Text);
+            using var json = JsonDocument.Parse(res.Text);
+            var root = json.RootElement;
+            var count = root.GetProperty("clashes").GetInt32();
+            var note = root.TryGetProperty("note", out var n) && n.ValueKind == JsonValueKind.String ? " " + n.GetString() : "";
+            var pairs = root.GetProperty("byCategories").EnumerateArray().Select(x => $"{x.GetProperty("pair").GetString()}: {x.GetProperty("count").GetInt32()}").ToList();
+            var sample = root.GetProperty("sample").EnumerateArray().Select(x => $"{x.GetProperty("a").GetString()} / {x.GetProperty("b").GetString()} ({x.GetProperty("kind").GetString()})").ToList();
+            return count == 0 ? new Hint($"No clashes between {string.Join(", ", cats.Select(Pretty))}." + note + stamp, Level.Ok)
+                : new Hint($"{count} clashes inside your trade." + note + stamp + ReportOf(res), Level.Warn, pairs.Concat(sample).ToList());
+        });
+        Add("standards", () =>
+        {
+            var path = Rule("standardtemplate").Trim('"');
+            if (path.Length == 0) return null;
+            if (!File.Exists(path)) return new Hint($"The standard template {path} can't be found" + Rules + ".", Level.Warn);
+            var std = Standard(doc.Application, path);
+            var templates = new HashSet<string>(new FilteredElementCollector(doc).OfClass(typeof(View)).Cast<View>().Where(v => v.IsTemplate).Select(v => v.Name), StringComparer.OrdinalIgnoreCase);
+            var filters = new HashSet<string>(new FilteredElementCollector(doc).OfClass(typeof(ParameterFilterElement)).Select(f => f.Name), StringComparer.OrdinalIgnoreCase);
+            var missing = std.Templates.Where(t => !templates.Contains(t)).Select(t => "view template " + t + " is missing")
+                .Concat(std.Filters.Where(f => !filters.Contains(f)).Select(f => "filter " + f + " is missing")).ToList();
+            var browser = BrowserOrganization.GetCurrentBrowserOrganizationForViews(doc)?.Name ?? "";
+            if (std.Browser.Length > 0 && !browser.Equals(std.Browser, StringComparison.OrdinalIgnoreCase)) missing.Insert(0, $"views are organised by {browser}, the standard uses {std.Browser}");
+            return missing.Count == 0 ? new Hint($"Every view template, filter and the browser organisation of {Path.GetFileName(path)} are in the model." + stamp, Level.Ok)
+                : new Hint($"{missing.Count} differences from {Path.GetFileName(path)}." + stamp, Level.Warn, missing);
+        });
         return r;
+    }
+
+    private static string Folder(Document doc)
+    {
+        try { return string.IsNullOrEmpty(doc.PathName) ? "" : Path.GetDirectoryName(doc.PathName) ?? ""; }
+        catch (ArgumentException) { return ""; }
+    }
+
+    private static string ReportOf(ToolResult res)
+    {
+        try
+        {
+            using var json = JsonDocument.Parse(res.Text);
+            return json.RootElement.TryGetProperty("file", out var f) && f.ValueKind == JsonValueKind.String ? " Full list: " + f.GetString() : "";
+        }
+        catch (JsonException) { return ""; }
+    }
+
+    /// <summary>The trade a file name's discipline code belongs to: STR, ARC, MEP, or "" when it isn't known.</summary>
+    internal static string Trade(string discipline) => (discipline ?? "").Trim().ToUpperInvariant() switch
+    {
+        "STR" or "ST" or "SS" or "SC" or "STRU" or "S" => "STR",
+        "ARC" or "AR" or "ARCH" or "A" or "ID" => "ARC",
+        "MEP" or "ME" or "MECH" or "M" or "EL" or "ELE" or "ELEC" or "E" or "PL" or "PLU" or "P" or "FP" or "FF" or "HVAC" => "MEP",
+        _ => "",
+    };
+
+    private static readonly BuiltInCategory[] Arch =
+    [
+        BuiltInCategory.OST_Doors, BuiltInCategory.OST_Windows, BuiltInCategory.OST_Furniture, BuiltInCategory.OST_FurnitureSystems, BuiltInCategory.OST_Casework,
+        BuiltInCategory.OST_Ceilings, BuiltInCategory.OST_CurtainWallPanels, BuiltInCategory.OST_CurtainWallMullions,
+    ];
+    private static readonly BuiltInCategory[] Mep =
+    [
+        BuiltInCategory.OST_PipeCurves, BuiltInCategory.OST_PipeFitting, BuiltInCategory.OST_PipeAccessory, BuiltInCategory.OST_FlexPipeCurves,
+        BuiltInCategory.OST_DuctCurves, BuiltInCategory.OST_DuctFitting, BuiltInCategory.OST_DuctAccessory, BuiltInCategory.OST_DuctTerminal, BuiltInCategory.OST_FlexDuctCurves,
+        BuiltInCategory.OST_CableTray, BuiltInCategory.OST_CableTrayFitting, BuiltInCategory.OST_Conduit, BuiltInCategory.OST_ConduitFitting,
+        BuiltInCategory.OST_MechanicalEquipment, BuiltInCategory.OST_ElectricalEquipment, BuiltInCategory.OST_ElectricalFixtures, BuiltInCategory.OST_LightingFixtures,
+        BuiltInCategory.OST_LightingDevices, BuiltInCategory.OST_PlumbingFixtures, BuiltInCategory.OST_Sprinklers,
+    ];
+    private static readonly BuiltInCategory[] Str =
+        [BuiltInCategory.OST_StructuralFraming, BuiltInCategory.OST_StructuralColumns, BuiltInCategory.OST_StructuralFoundation, BuiltInCategory.OST_Rebar];
+
+    /// <summary>The categories that belong to other trades in a model of this trade (an STR model's non-structural walls are added by the hint).</summary>
+    internal static IEnumerable<BuiltInCategory> OtherTrades(string trade) => trade switch
+    {
+        "STR" => Arch.Concat(Mep),
+        "ARC" => Mep.Concat(Str),
+        "MEP" => Arch.Concat(Str).Concat([BuiltInCategory.OST_Walls, BuiltInCategory.OST_Floors, BuiltInCategory.OST_Roofs]),
+        _ => [],
+    };
+
+    /// <summary>The categories a trade's self-clash test runs between.</summary>
+    internal static List<string> ClashCategories(string trade) => trade switch
+    {
+        "STR" => ["OST_StructuralColumns", "OST_StructuralFraming", "OST_StructuralFoundation", "OST_Floors", "OST_Walls"],
+        "ARC" => ["OST_Walls", "OST_Floors", "OST_Roofs", "OST_Ceilings", "OST_Stairs"],
+        "MEP" => ["OST_DuctCurves", "OST_PipeCurves", "OST_CableTray", "OST_Conduit", "OST_MechanicalEquipment"],
+        _ => [],
+    };
+
+    private static string Pretty(string category) => Regex.Replace(category.StartsWith("OST_", StringComparison.Ordinal) ? category.Substring(4) : category, "(?<=[a-z])(?=[A-Z])", " ");
+
+    /// <summary>Structural columns whose base sits on nothing in this model: no foundation, floor, beam, wall or column under it.</summary>
+    private static List<string> FloatingColumns(Document doc)
+    {
+        var reach = 50 / 304.8;
+        var supports = new BoxIndex<Element>(10);
+        var cats = new List<BuiltInCategory> { BuiltInCategory.OST_StructuralFoundation, BuiltInCategory.OST_Floors, BuiltInCategory.OST_StructuralFraming, BuiltInCategory.OST_Walls, BuiltInCategory.OST_StructuralColumns };
+        foreach (var e in new FilteredElementCollector(doc).WherePasses(new ElementMulticategoryFilter(cats)).WhereElementIsNotElementType())
+            if (e.get_BoundingBox(null) is { } b) supports.Add(e, b.Min, b.Max);
+        var off = new List<string>();
+        foreach (var c in new FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_StructuralColumns).WhereElementIsNotElementType().OfType<FamilyInstance>())
+        {
+            if (c.get_BoundingBox(null) is not { } b) continue;
+            var at = c.Location switch
+            {
+                LocationPoint lp => new XYZ(lp.Point.X, lp.Point.Y, b.Min.Z),
+                LocationCurve lc => lc.Curve.GetEndPoint(0).Z <= lc.Curve.GetEndPoint(1).Z ? lc.Curve.GetEndPoint(0) : lc.Curve.GetEndPoint(1),
+                _ => new XYZ((b.Min.X + b.Max.X) / 2, (b.Min.Y + b.Max.Y) / 2, b.Min.Z),
+            };
+            if (!supports.Overlapping(at, at, reach).Any(s => s.Id != c.Id)) off.Add($"{TypeName(c)} (id {c.Id.Value}): its base sits on nothing");
+        }
+        return off;
+    }
+
+    private sealed record StandardParts(List<string> Templates, List<string> Filters, string Browser);
+    private static readonly Dictionary<string, (DateTime Stamp, StandardParts Parts)> Standards = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>The view templates, filters and browser organisation of the trade's standard file, opened in the background once per change of the file.</summary>
+    private static StandardParts Standard(Autodesk.Revit.ApplicationServices.Application app, string path)
+    {
+        var stamp = File.GetLastWriteTimeUtc(path);
+        if (Standards.TryGetValue(path, out var cached) && cached.Stamp == stamp) return cached.Parts;
+        var open = app.Documents.Cast<Document>().FirstOrDefault(d => string.Equals(d.PathName, path, StringComparison.OrdinalIgnoreCase));
+        var std = open;
+        if (std is null)
+        {
+            var shared = false;
+            try { shared = BasicFileInfo.Extract(path).IsWorkshared; } catch (Autodesk.Revit.Exceptions.ApplicationException) { }
+            std = shared
+                ? app.OpenDocumentFile(ModelPathUtils.ConvertUserVisiblePathToModelPath(path), new OpenOptions { DetachFromCentralOption = DetachFromCentralOption.DetachAndDiscardWorksets })
+                : app.OpenDocumentFile(path);
+        }
+        try
+        {
+            var parts = new StandardParts(
+                new FilteredElementCollector(std).OfClass(typeof(View)).Cast<View>().Where(v => v.IsTemplate).Select(v => v.Name).OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList(),
+                new FilteredElementCollector(std).OfClass(typeof(ParameterFilterElement)).Select(f => f.Name).OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList(),
+                BrowserOrganization.GetCurrentBrowserOrganizationForViews(std)?.Name ?? "");
+            Standards[path] = (stamp, parts);
+            return parts;
+        }
+        finally { if (open is null) std.Close(false); }
     }
 
     /// <summary>Elements of model categories that have material quantities (the physical model), not in links.</summary>

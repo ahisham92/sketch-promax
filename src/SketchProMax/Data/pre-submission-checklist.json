@@ -73,7 +73,7 @@
           "FoundOn": "BLDG-01, 08",
           "Priority": "High",
           "Waiting": "",
-          "Auto": "",
+          "Auto": "submission",
           "Short": "Submitted copy ends _S03_Rxx",
           "Fix": "Save the submitted copy as <model>_S03_R00 the first time; add 1 to Rxx for each resubmission."
         },
@@ -112,7 +112,7 @@
           "FoundOn": "",
           "Priority": "",
           "Waiting": "",
-          "Auto": "",
+          "Auto": "exportnames",
           "Short": "NWC and IFC named like the model",
           "Fix": "Export the NWC and IFC again, or rename them, so only the extension differs from the model's name."
         },
@@ -252,7 +252,7 @@
           "FoundOn": "BLDG-01, 08",
           "Priority": "High",
           "Waiting": "CamelCase or UPPERCASE (BIM lead, BIM team)",
-          "Auto": "",
+          "Auto": "familynames",
           "Short": "Family and type names are standard",
           "Fix": "Rename families and types to the standard pattern, e.g. FN_SC_40MPa_Raft_600, or ask Sketch ProMax in the chat to rename them."
         },
@@ -291,7 +291,7 @@
           "FoundOn": "BLDG-01, 08",
           "Priority": "High",
           "Waiting": "",
-          "Auto": "",
+          "Auto": "duplicates",
           "Short": "No duplicates or overlaps",
           "Fix": "Fix Revit's 'identical instances' and overlap warnings; join or cut overlapping concrete so it isn't counted twice."
         },
@@ -304,7 +304,7 @@
           "FoundOn": "BLDG-01, 08",
           "Priority": "High",
           "Waiting": "",
-          "Auto": "",
+          "Auto": "floating",
           "Short": "No floating elements",
           "Fix": "Look at each column and beam in 3D for a support under it, and add or move what's missing."
         },
@@ -343,7 +343,7 @@
           "FoundOn": "",
           "Priority": "",
           "Waiting": "",
-          "Auto": "",
+          "Auto": "othertrades",
           "Short": "No other trades' elements",
           "Fix": "Delete ARC walls, MEP pipes and other trades' elements from your model; they come from their own links."
         },
@@ -504,7 +504,7 @@
           "FoundOn": "BLDG-01",
           "Priority": "",
           "Waiting": "",
-          "Auto": "",
+          "Auto": "detaillines",
           "Short": "No detail lines faking elements",
           "Fix": "Model the real element (beam, wall, slab) and delete the detail lines or filled regions standing in for it."
         },
@@ -543,7 +543,7 @@
           "FoundOn": "BLDG-01, 08",
           "Priority": "High",
           "Waiting": "",
-          "Auto": "",
+          "Auto": "legend",
           "Short": "Every type has a hatch in the legend",
           "Fix": "Give every type and thickness its own hatch through filters, and show each one in the legend."
         },
@@ -556,7 +556,7 @@
           "FoundOn": "BLDG-01, 08",
           "Priority": "High",
           "Waiting": "standard template / filter list",
-          "Auto": "",
+          "Auto": "standards",
           "Short": "Browser and templates match the trade",
           "Fix": "Compare with the trade's standard template and copy its browser organisation, view templates and filters (Transfer Project Standards)."
         },
@@ -608,7 +608,7 @@
           "FoundOn": "BLDG-01, 08",
           "Priority": "High",
           "Waiting": "tick Schedules in e-Transmit or put them on sheets",
-          "Auto": "",
+          "Auto": "schedules",
           "Short": "Used schedules kept",
           "Fix": "Keep the schedules you use, such as the foundation schedule, in the submitted model."
         }
@@ -626,7 +626,7 @@
           "FoundOn": "",
           "Priority": "",
           "Waiting": "",
-          "Auto": "",
+          "Auto": "selfclash",
           "Short": "No clashes inside your trade",
           "Fix": "Run the self-clash tests (e.g. STR beams vs columns) in Navisworks and fix them."
         },
@@ -652,7 +652,7 @@
           "FoundOn": "BLDG-01, 08",
           "Priority": "High",
           "Waiting": "",
-          "Auto": "",
+          "Auto": "modelscore",
           "Short": "Model Checker score 90% or more",
           "Fix": "Run the Model Checker template, fix until it scores 90% or more and keep the score in the QA/QC record."
         },

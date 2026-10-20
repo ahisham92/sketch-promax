@@ -171,7 +171,13 @@ internal static class FieldTestCoverage
             "On check 15 click Ask Sketch ProMax to check: the Chat pane shows the question and the answer starts with PASS, FAIL or CAN'T TELL, and nothing in the model changes. " +
             "Settings > Sign-off > Helper = SketchPro: the button copies the question (paste it into Notepad to see it); None: the button is gone."),
         new("checklist.rules", Issue, "Pre-submission checklist: checking rules and the automatic tests they drive", How.Probe, "",
-            "every model test of the built-in checklist, with all checking rules on, reads the test project without an error (the window's rules dialog and the SketchPro paste are in checklist.sketchpro)"),
+            "every model test of the built-in checklist, the slow ones included, with all checking rules on, reads the test project without an error (the window's rules dialog and the SketchPro paste are in checklist.sketchpro)"),
+        new("checklist.slow", Issue, "Pre-submission checklist: the slow automatic checks and the new model tests", How.Manual, "",
+            "whether the new tests' findings are right on a real model (names, legends, clashes, the standard template) is judged by a person",
+            "On a _detached copy: Issue > Pre-submission checklist. Checks 18, 19, 38, 43 and 45 say Automatic (slow check): not run yet. Project details > Run the slow checks: " +
+            "the button says it is running, then those checks pass or list what they found with the time they ran (43 and 45 name the report file). Read the model again: they keep their results. " +
+            "Checking rules…: set The trade's standard template file to your .rte and run the slow checks: 38 lists missing view templates or filters. " +
+            "Check 15 lists type names not like *_*_*, 37 the types missing from the legends, 42 the schedules on no sheet, 2 and 5 look for the _S03_R copy, NWC and IFC next to the model."),
         new("checklist.sketchpro", Issue, "Pre-submission checklist: checking rules dialog, manual checks and pasting into SketchPro", How.Manual, "",
             "the rules dialog, the Automatic / You check this labels and pasting into another company's add-in are judged by a person",
             "On a _detached copy: Issue > Pre-submission checklist > Project details: the How this checklist is checked card says how many checks are automatic. " +

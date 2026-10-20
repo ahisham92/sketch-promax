@@ -1885,10 +1885,14 @@ internal static partial class FieldTest
         def.Rules["badparameters"] = "OTHERFIRM*";
         def.Rules["tbmodelname"] = "Sheet Name";
         def.Rules["viewfolders"] = "Discipline";
-        var facts = ChecklistFacts.Read(doc, def);
+        def.Rules["othertrades"] = "Doors, Windows";
+        def.Rules["clashcategories"] = "OST_StructuralColumns, OST_StructuralFraming";
+        def.Rules["schedules"] = "*Schedule*";
+        var facts = ChecklistFacts.Read(doc, def, app); // the slow checks too
         var broken = facts.Hints.Where(h => h.Value.Text.StartsWith("Couldn't read", StringComparison.Ordinal)).Select(h => h.Key + ": " + h.Value.Text).ToList();
+        broken.AddRange(facts.Hints.Where(h => h.Value.Pending).Select(h => h.Key + ": still not run"));
         var tested = def.Items.Count(i => i.Auto.Length > 0 && facts.Hints.TryGetValue(i.Auto, out var h) && h.Level != ChecklistFacts.Level.Info);
-        return broken.Count == 0 ? Pass($"{facts.Hints.Count} model tests read, {tested} of {def.Items.Count()} checks settled automatically") : Fail(string.Join("; ", broken));
+        return broken.Count == 0 ? Pass($"{facts.Hints.Count} model tests read (slow ones included), {tested} of {def.Items.Count()} checks settled automatically") : Fail(string.Join("; ", broken));
     }
 
     /// <summary>The checklist's Fix buttons that can be rolled back (not unloading links), run on the test project and rolled back.</summary>
