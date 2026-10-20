@@ -101,10 +101,11 @@ internal static class ChecklistFacts
     }
 
     /// <summary>
-    /// The header fields now (quick), and the hints as steps to run with <see cref="Reading.Next"/>. Revit API context for
+    /// The header fields now (quick), and the hints as steps to run with <see cref="Reading.Next"/> (with
+    /// <paramref name="only"/>, just that check's hint: Run this check). Revit API context for
     /// this call and for each step; the model must stay open between them (a closed model ends the reading).
     /// </summary>
-    public static Reading Plan(Document doc, ChecklistMath.Definition? def, UIApplication? slow = null)
+    public static Reading Plan(Document doc, ChecklistMath.Definition? def, UIApplication? slow = null, string? only = null)
     {
         var r = new Result { Title = doc.Title };
         var reading = new Reading(doc, r);
@@ -180,7 +181,7 @@ internal static class ChecklistFacts
 
         void Add(string key, Func<Hint?> read)
         {
-            if (!wanted.Contains(key)) return;
+            if (!wanted.Contains(key) || only is not null && key != only) return;
             if (slow is null && Slow.Contains(key))
             {
                 if (!SlowOff(key)) r.Hints[key] = new Hint("A slower automatic check, not run yet: press Run the slow checks.", Level.Info) { Pending = true };
@@ -231,12 +232,17 @@ internal static class ChecklistFacts
         Add("levels", () =>
         {
             var names = new FilteredElementCollector(doc).OfClass(typeof(Autodesk.Revit.DB.Level)).Select(l => l.Name).OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
+            var unused = UnusedLevels(doc).Select(l => l.Name).OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
+            var unusedText = unused.Count == 0 ? " Every level has something on it." : $" Unused levels (nothing is on them): {List(unused)}.";
+            var unusedItems = unused.Select(n => n + ": unused (nothing is on it)").ToList();
             var pattern = Rule("levels");
-            if (pattern.Length == 0) return new Hint($"{names.Count} levels. No level name pattern is set" + Rules + ".", Level.Info, names);
+            if (pattern.Length == 0)
+                return new Hint($"{names.Count} levels. No level name pattern is set" + Rules + "." + unusedText, unused.Count > 0 ? Level.Warn : Level.Info, unused.Count > 0 ? unusedItems : names);
             var off = names.Where(n => !ChecklistMath.LikeAny(n, pattern)).ToList();
-            return off.Count == 0
-                ? new Hint($"{names.Count} levels, all named {pattern}.", Level.Ok)
-                : new Hint($"{names.Count} levels; {off.Count} not named {pattern}: {List(off)}.", Level.Warn, off);
+            return off.Count == 0 && unused.Count == 0
+                ? new Hint($"{names.Count} levels, all named {pattern}." + unusedText, Level.Ok)
+                : new Hint($"{names.Count} levels" + (off.Count > 0 ? $"; {off.Count} not named {pattern}: {List(off)}." : $", all named {pattern}.") + unusedText,
+                    Level.Warn, unusedItems.Concat(off.Select(n => n + $": not named {pattern}")).ToList());
         });
         Add("worksets", () =>
         {
@@ -308,10 +314,9 @@ internal static class ChecklistFacts
         });
         Add("titleblock", () =>
         {
-            var expected = Rule("titleblock").Length > 0 ? Rule("titleblock") : Regex.Match(Ex("titleblock"), @"([\w\-.]+)\.rfa", RegexOptions.IgnoreCase) is { Success: true } m ? m.Groups[1].Value : "";
+            var expected = TitleBlockWanted(def);
             // The landing page family is a title block family too: it isn't a sheet's title block, so it is left out.
-            var landing = Rule("landing").Length > 0 ? Rule("landing") : "LandingPage";
-            bool IsLanding(string family) => family.IndexOf(landing, StringComparison.OrdinalIgnoreCase) >= 0 || ChecklistMath.Like(family, landing);
+            bool IsLanding(string family) => ChecklistFacts.IsLanding(family, def);
             var blocks = new FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_TitleBlocks).WhereElementIsNotElementType().OfType<FamilyInstance>().ToList();
             var used = blocks.Select(f => f.Symbol?.FamilyName ?? "").Where(n => n.Length > 0 && !IsLanding(n)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
             var withBlock = new HashSet<long>(blocks.Select(b => b.OwnerViewId.Value));
@@ -468,8 +473,8 @@ internal static class ChecklistFacts
         }
         Add("tbmodelname", () =>
         {
-            var param = Rule("tbmodelname");
-            if (param.Length == 0) return null;
+            var param = ModelNameParameter(doc, def);
+            if (param.Length == 0) return new Hint("No sheet or title block parameter looks like it shows the model name: name it in Checking rules (Sheet parameter with the model name).", Level.Warn);
             var name = Path.GetFileNameWithoutExtension(ChecklistMath.WorkingName(file));
             var blocks = new FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_TitleBlocks).WhereElementIsNotElementType().ToList();
             var off = new List<string>();
@@ -489,8 +494,8 @@ internal static class ChecklistFacts
         });
         Add("viewfolders", () =>
         {
-            var names = ChecklistMath.RuleList(Rule("viewfolders"));
-            if (names.Count == 0) return null;
+            var names = ViewFolderParameters(doc, def);
+            if (names.Count == 0) return new Hint("The Project Browser doesn't sort views by a parameter of yours, so no view lands in ???.", Level.Ok);
             var views = new FilteredElementCollector(doc).OfClass(typeof(View)).Cast<View>()
                 .Where(v => !v.IsTemplate && v.ViewType is not (ViewType.ProjectBrowser or ViewType.SystemBrowser or ViewType.Internal or ViewType.Undefined or ViewType.DrawingSheet)).ToList();
             if (!views.Any(v => names.Any(n => v.LookupParameter(n) is not null))) return new Hint($"No view has a parameter named {string.Join(" or ", names)}" + Rules + ".", Level.Warn);
@@ -731,15 +736,16 @@ internal static class ChecklistFacts
         });
         Add("nwcsettings", () =>
         {
-            if (NewestExport(".nwc") is not { } nwc) return new Hint($"No NWC named {stem}… yet. Use Export the NWC and IFC below.", Level.Warn);
+            if (NewestExport(".nwc") is not { } nwc) return new Hint($"No NWC named {stem}… yet. Use the Export button below.", Level.Warn);
             return ChecklistExports.MadeWith(nwc, ChecklistExports.NwcSettings)
                 ? new Hint($"{Path.GetFileName(nwc)} was exported by Sketch ProMax with the office settings: {ChecklistExports.NwcSettings.Substring(ChecklistExports.NwcSettings.IndexOf(':') + 2)}.", Level.Ok)
                 : new Hint($"{Path.GetFileName(nwc)} wasn't exported by Sketch ProMax with the office settings (or was written again since), and an NWC doesn't record its settings. Export it again with the button below.", Level.Warn);
         });
         Add("ifcsettings", () =>
         {
+            if (!ChecklistExports.WantsIfc(def)) return new Hint("This project needs no IFC (Files the package must have has no .ifc" + Rules + "): answer N/A.", Level.Ok);
             if (Rule("ifcsetup").Trim('"') is { Length: > 0 } setup && !File.Exists(setup)) return new Hint($"The IFC setup file {setup} can't be found" + Rules + ".", Level.Warn);
-            if (NewestExport(".ifc") is not { } ifc) return new Hint($"No IFC named {stem}… yet. Use Export the NWC and IFC below.", Level.Warn);
+            if (NewestExport(".ifc") is not { } ifc) return new Hint($"No IFC named {stem}… yet. Use the Export button below.", Level.Warn);
             var settings = ChecklistExports.IfcSettings(def);
             return ChecklistExports.MadeWith(ifc, settings)
                 ? new Hint($"{Path.GetFileName(ifc)} was exported by Sketch ProMax with the office settings: {settings.Substring(settings.IndexOf(':') + 2)}.", Level.Ok)
@@ -747,7 +753,7 @@ internal static class ChecklistFacts
         });
         Add("nwcdate", () =>
         {
-            if (NewestExport(".nwc") is not { } nwc) return new Hint($"No NWC named {stem}… yet. Use Export the NWC and IFC below.", Level.Warn);
+            if (NewestExport(".nwc") is not { } nwc) return new Hint($"No NWC named {stem}… yet. Use the Export button below.", Level.Warn);
             var at = File.GetLastWriteTime(nwc);
             var problems = new List<string>();
             if (!string.IsNullOrEmpty(doc.PathName) && File.Exists(doc.PathName) && File.GetLastWriteTime(doc.PathName) > at.AddMinutes(5))
@@ -1134,7 +1140,7 @@ internal static class ChecklistFacts
 
     private static string TypeLabel(ElementType t) => (t.Category?.Name is { Length: > 0 } c ? c + ": " : "") + (t.FamilyName.Length > 0 ? t.FamilyName + ": " : "") + t.Name;
 
-    private static bool Filled(Parameter? p)
+    internal static bool Filled(Parameter? p)
     {
         if (p is null || !p.HasValue) return false;
         return p.StorageType switch
@@ -1149,6 +1155,101 @@ internal static class ChecklistFacts
     /// Views on no sheet that can go: not the Navisworks view, not the starting view, not a view whose dependent views
     /// would go with it, not the view open in front. The unusedviews hint counts these and ChecklistFixes deletes them.
     /// </summary>
+    /// <summary>The title block family every sheet should use: the rule, else the .rfa named in the check's example.</summary>
+    internal static string TitleBlockWanted(ChecklistMath.Definition? def)
+    {
+        if (ChecklistMath.Rule(def, "titleblock") is { Length: > 0 } set) return set;
+        var item = def?.Items.FirstOrDefault(i => i.Auto == "titleblock");
+        return item is not null && Regex.Match(item.Example + "\n" + item.Check, @"([\w\-.]+)\.rfa", RegexOptions.IgnoreCase) is { Success: true } m ? m.Groups[1].Value : "";
+    }
+
+    /// <summary>
+    /// The sheet or title block parameter showing the model name: the rule, else the first text parameter of a sheet or its
+    /// title block named like Model Name, Model File or File Name; "" when none.
+    /// </summary>
+    internal static string ModelNameParameter(Document doc, ChecklistMath.Definition? def)
+    {
+        if (ChecklistMath.Rule(def, "tbmodelname") is { Length: > 0 } set) return set;
+        var blocks = new FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_TitleBlocks).WhereElementIsNotElementType().ToList();
+        foreach (var sheet in new FilteredElementCollector(doc).OfClass(typeof(ViewSheet)).Cast<ViewSheet>().Where(x => !x.IsPlaceholder).Take(20))
+            foreach (var source in new Element?[] { sheet, blocks.FirstOrDefault(b => b.OwnerViewId == sheet.Id) })
+                foreach (Parameter p in source?.Parameters ?? new ParameterSet())
+                {
+                    var name = p.Definition?.Name ?? "";
+                    if (p.StorageType == StorageType.String && Regex.IsMatch(name, @"\bmodel\b.*\b(name|file)\b|\bfile\s*name\b", RegexOptions.IgnoreCase)) return name;
+                }
+        return "";
+    }
+
+    /// <summary>
+    /// The view parameters the Project Browser sorts views by (a view with one empty lands in ???): the rule, else the
+    /// project and shared parameters of the browser organisation in use.
+    /// </summary>
+    internal static List<string> ViewFolderParameters(Document doc, ChecklistMath.Definition? def)
+    {
+        var set = ChecklistMath.RuleList(ChecklistMath.Rule(def, "viewfolders"));
+        if (set.Count > 0) return set;
+        var names = new List<string>();
+        BrowserOrganization? org;
+        try { org = BrowserOrganization.GetCurrentBrowserOrganizationForViews(doc); }
+        catch (Autodesk.Revit.Exceptions.ApplicationException) { return names; }
+        if (org is null) return names;
+        foreach (var v in new FilteredElementCollector(doc).OfClass(typeof(View)).Cast<View>().Where(v => !v.IsTemplate && v.ViewType is not (ViewType.ProjectBrowser or ViewType.SystemBrowser or ViewType.Internal or ViewType.Undefined)).Take(60))
+        {
+            IList<FolderItemInfo> items;
+            try { items = org.GetFolderItems(v.Id); }
+            catch (Exception ex) when (ex is Autodesk.Revit.Exceptions.ApplicationException or Autodesk.Revit.Exceptions.ArgumentException) { continue; }
+            foreach (var item in items)
+                if (doc.GetElement(item.ElementId) is ParameterElement pe && pe.GetDefinition()?.Name is { Length: > 0 } n && !names.Contains(n, StringComparer.OrdinalIgnoreCase)) names.Add(n);
+        }
+        return names;
+    }
+
+    /// <summary>Whether a title block family is the landing page's (placed on the starting view, not a sheet's title block).</summary>
+    internal static bool IsLanding(string family, ChecklistMath.Definition? def)
+    {
+        var landing = ChecklistMath.Rule(def, "landing") is { Length: > 0 } set ? set : "LandingPage";
+        return family.IndexOf(landing, StringComparison.OrdinalIgnoreCase) >= 0 || ChecklistMath.Like(family, landing);
+    }
+
+    /// <summary>
+    /// Levels nothing is on: no element sits on them or is constrained to them, and every plan of them is a view on no
+    /// sheet (UnusedViews). The last level is never listed.
+    /// </summary>
+    internal static List<Autodesk.Revit.DB.Level> UnusedLevels(Document doc, ElementId? active = null)
+    {
+        var levels = new FilteredElementCollector(doc).OfClass(typeof(Autodesk.Revit.DB.Level)).Cast<Autodesk.Revit.DB.Level>().ToList();
+        if (levels.Count <= 1) return [];
+        var unusedViews = new HashSet<long>(UnusedViews(doc, active).Select(v => v.Id.Value));
+        var left = new Dictionary<long, Autodesk.Revit.DB.Level>();
+        foreach (var level in levels)
+        {
+            var on = new FilteredElementCollector(doc).WhereElementIsNotElementType().WherePasses(new ElementLevelFilter(level.Id)).ToElements();
+            if (on.Any(e => e is not View || !unusedViews.Contains(e.Id.Value))) continue;
+            if (new FilteredElementCollector(doc).OfClass(typeof(ViewPlan)).Cast<ViewPlan>().Any(v => !v.IsTemplate && v.GenLevel?.Id == level.Id && !unusedViews.Contains(v.Id.Value))) continue;
+            left[level.Id.Value] = level;
+        }
+        if (left.Count == 0) return [];
+        // Elements tied to a level by a constraint rather than sitting on it (a wall's top, a column's base and top, a beam's reference level).
+        var constraints = new[]
+        {
+            BuiltInParameter.WALL_BASE_CONSTRAINT, BuiltInParameter.WALL_HEIGHT_TYPE, BuiltInParameter.FAMILY_BASE_LEVEL_PARAM, BuiltInParameter.FAMILY_TOP_LEVEL_PARAM,
+            BuiltInParameter.SCHEDULE_BASE_LEVEL_PARAM, BuiltInParameter.SCHEDULE_TOP_LEVEL_PARAM, BuiltInParameter.INSTANCE_REFERENCE_LEVEL_PARAM, BuiltInParameter.SCHEDULE_LEVEL_PARAM,
+            BuiltInParameter.STAIRS_BASE_LEVEL_PARAM, BuiltInParameter.STAIRS_TOP_LEVEL_PARAM, BuiltInParameter.ROOF_CONSTRAINT_LEVEL_PARAM, BuiltInParameter.LEVEL_PARAM,
+            BuiltInParameter.INSTANCE_SCHEDULE_ONLY_LEVEL_PARAM, BuiltInParameter.RBS_START_LEVEL_PARAM,
+        };
+        foreach (var e in new FilteredElementCollector(doc).WhereElementIsNotElementType())
+        {
+            if (e is View or Autodesk.Revit.DB.Level) continue;
+            foreach (var bip in constraints)
+            {
+                if (e.get_Parameter(bip) is { StorageType: StorageType.ElementId } p && p.AsElementId() is { } id && left.Remove(id.Value) && left.Count == 0) return [];
+            }
+        }
+        if (left.Count == levels.Count) left.Remove(levels.OrderBy(l => l.ProjectElevation).First().Id.Value);
+        return left.Values.OrderBy(l => l.ProjectElevation).ToList();
+    }
+
     public static List<View> UnusedViews(Document doc, ElementId? active = null)
     {
         var on = new HashSet<long>(new FilteredElementCollector(doc).OfClass(typeof(Viewport)).Cast<Viewport>().Select(v => v.ViewId.Value));

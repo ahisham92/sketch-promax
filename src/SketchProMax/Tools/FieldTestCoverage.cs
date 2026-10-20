@@ -161,6 +161,9 @@ internal static class FieldTestCoverage
             "automatic model check result. Click Delete the checking views: they are gone from the Project Browser, except the one open in front, which it names."),
         new("checklist.fix", Issue, "Pre-submission checklist: the Fix buttons", How.Probe, "",
             "on the test project the Navisworks view is made, imported CAD and views on no sheet are deleted, groups used once are ungrouped and the landing view is set, then all rolled back (unloading links isn't probed: it can't be rolled back)"),
+        new("checklist.fix_more", Issue, "Pre-submission checklist: the Fix buttons for title blocks, levels, worksets, backgrounds, view folders, model name, duplicates, submitted copy and NWC", How.Probe, "",
+            "on the test project a spare level is deleted, a bare sheet gets the title block, the model name and a view folder value are written, a column copied onto itself is deleted again, " +
+            "the worksets and backgrounds fixes run, then all rolled back; the submitted copy is named _S03_R00 then R01, and a package without .ifc exports the NWC only"),
         new("checklist.details", Issue, "Pre-submission checklist: the details panel, beside Revit, and the helper", How.Manual, "",
             "the details panel, side-by-side mode, the Fix confirmations and the helper's answer in the chat are judged by a person",
             "On a _detached copy: Pre-submission checklist (next to Chat), stage A. Each card shows a short title; click one: the panel on the right shows what the model found " +
