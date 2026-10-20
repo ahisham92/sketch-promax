@@ -489,6 +489,7 @@ internal static partial class FieldTest
         await Probe(s, "checklist.views", app => ChecklistViewsProbe(app, s)).ConfigureAwait(false);
         await Probe(s, "checklist.fix", app => ChecklistFixProbe(app, s)).ConfigureAwait(false);
         await Probe(s, "checklist.fix_more", app => ChecklistFixMoreProbe(app, s)).ConfigureAwait(false);
+        await Probe(s, "checklist.fix_standards", app => ChecklistFixStandardsProbe(app, s)).ConfigureAwait(false);
         await Probe(s, "checklist.rules", app => ChecklistRulesProbe(app, s)).ConfigureAwait(false);
         await Probe(s, "package.sentence", app => PackageSentence(app, s)).ConfigureAwait(false);
         await Probe(s, "package.skip", app => PackageSkip(app, s)).ConfigureAwait(false);
@@ -2040,6 +2041,92 @@ internal static partial class FieldTest
             // Worksets and linked backgrounds: run without an error (the test project may be neither workshared nor linked).
             foreach (var key in new[] { "worksets", "backgrounds" })
                 said.Add(key + ": " + ChecklistFixes.Run(doc, key, null, def: def));
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException) { problems.Add("threw " + ex.GetType().Name + ": " + ex.Message); }
+        finally { RollBack(group); }
+        foreach (var line in said.Where(l => l.IndexOf("There is no automatic fix", StringComparison.Ordinal) >= 0)) problems.Add(line);
+        return problems.Count == 0 ? Pass("fixes ran and were rolled back: " + string.Join(" ", said)) : Fail(string.Join("; ", problems));
+    }
+
+    /// <summary>
+    /// The model-standard Fix buttons, each run on the test project and rolled back: project units, UniFormat codes, levels
+    /// and scope boxes named like the URS, view templates by view type, type renames from the suggested names, and Select
+    /// these in Revit.
+    /// </summary>
+    private static (string, string) ChecklistFixStandardsProbe(UIApplication app, State s)
+    {
+        if (TestDoc(app, s, out var why) is not { } doc) return Fail(why);
+        var problems = new List<string>();
+        var said = new List<string>();
+        foreach (var key in new[] { "units", "uniformat", "scopeboxes", "viewtemplates", "familynames" })
+            if (ChecklistFixes.For(key) is not { } offer || offer.Button.Length == 0) problems.Add(key + ": no Fix button");
+        if (ChecklistFixes.Offers("levels").Count != 2) problems.Add("levels: not both fixes (delete unused, name like the URS)");
+        if (ChecklistMath.ParseUnits("Length mm 0, Angle degrees 2") is not { Count: 2 } units || units[0].Unit != "mm" || units[1].Decimals != 2) problems.Add("units: the rule reads wrong");
+        if (!ChecklistFixes.SameViewType(ViewType.EngineeringPlan, "Structural Plan") || !ChecklistFixes.SameViewType(ViewType.ThreeD, "3D View") || ChecklistFixes.SameViewType(ViewType.Section, "Floor Plan"))
+            problems.Add("viewtemplates: view type names read wrong");
+        if (ChecklistFixes.SuggestName("Concrete Round 1200mm", "Structural Columns", "STR", "*_*_*") != "SC_STR_Concrete_Round_1200mm") problems.Add("familynames: suggested " + ChecklistFixes.SuggestName("Concrete Round 1200mm", "Structural Columns", "STR", "*_*_*"));
+
+        using var group = new TransactionGroup(doc, "Field test: model standard fixes");
+        group.Start();
+        try
+        {
+            var def = new ChecklistMath.Definition
+            {
+                Rules =
+                {
+                    ["units"] = "Length mm 0, Angle degrees 2",
+                    ["classification"] = "Assembly Code",
+                    ["uniformatmap"] = "*>B1010",
+                    ["typenames"] = "*_*_*",
+                },
+            };
+            said.Add("units: " + ChecklistFixes.Run(doc, "units", null, def: def));
+            var length = doc.GetUnits().GetFormatOptions(SpecTypeId.Length);
+            if (!length.GetUnitTypeId().Equals(UnitTypeId.Millimeters) || Math.Abs(length.Accuracy - 1) > 1e-6) problems.Add("units: length isn't mm with no decimals after the fix");
+            if (ChecklistFacts.Read(doc, def).Hints.TryGetValue("units", out var unitsHint) && unitsHint.Level != ChecklistFacts.Level.Ok) problems.Add("units: the check still fails: " + unitsHint.Text);
+
+            said.Add("uniformat: " + ChecklistFixes.Run(doc, "uniformat", null, def: def));
+            var empty = ChecklistFacts.TypesOf(doc, ChecklistFacts.Instances(doc))
+                .Count(t => t.LookupParameter("Assembly Code") is { IsReadOnly: false, StorageType: StorageType.String } p && !ChecklistFacts.Filled(p));
+            if (empty > 0) problems.Add($"uniformat: {empty} types still have no Assembly Code");
+
+            // A template for floor plans, then every floor plan on a sheet gets it.
+            var plan = new FilteredElementCollector(doc).OfClass(typeof(Viewport)).Cast<Viewport>().Select(vp => doc.GetElement(vp.ViewId) as ViewPlan).FirstOrDefault(v => v is { ViewType: ViewType.FloorPlan });
+            if (plan is null) said.Add("viewtemplates: no floor plan on a sheet in the test project");
+            else
+            {
+                View template;
+                using (var t = new Transaction(doc, "Field test: a plan template"))
+                {
+                    t.Start();
+                    template = plan.CreateViewTemplate();
+                    template.Name = "ZZ_TEST_PLAN_TEMPLATE";
+                    t.Commit();
+                }
+                def.Rules["templatemap"] = "Floor Plan>ZZ_TEST_PLAN_TEMPLATE";
+                said.Add("viewtemplates: " + ChecklistFixes.Run(doc, "viewtemplates", null, def: def));
+                if (plan.ViewTemplateId != template.Id) problems.Add("viewtemplates: the floor plan on a sheet didn't get the template");
+            }
+
+            // Type renames: the suggestions, the first one applied.
+            var suggested = ChecklistFixes.Suggest(doc, "familynames", def).Split('\n').Select(l => l.Split('\t')).Where(p => p.Length == 3).ToList();
+            if (suggested.Count > 0)
+            {
+                var id = new ElementId(long.Parse(suggested[0][0], System.Globalization.CultureInfo.InvariantCulture));
+                said.Add("familynames: " + ChecklistFixes.Run(doc, "familynames", null, def: def, answer: suggested[0][0] + "\tZZ_TEST_RENAMED_TYPE"));
+                if (doc.GetElement(id)?.Name != "ZZ_TEST_RENAMED_TYPE") problems.Add("familynames: the type wasn't renamed");
+            }
+            else said.Add("familynames: every type is already named *_*_*");
+
+            said.Add("scopeboxes: " + ChecklistFixes.Run(doc, "scopeboxes", null, def: def));
+
+            // Select these in Revit: a wall picked and shown.
+            if (app.ActiveUIDocument is { } ui && new FilteredElementCollector(doc).OfClass(typeof(Wall)).FirstElementId() is { } wall && wall != ElementId.InvalidElementId)
+            {
+                said.Add("select: " + ChecklistFixes.Select(ui, [wall.Value]));
+                if (!ui.Selection.GetElementIds().Contains(wall)) problems.Add("select: the wall isn't selected");
+                ui.Selection.SetElementIds(new List<ElementId>());
+            }
         }
         catch (Exception ex) when (ex is not OutOfMemoryException) { problems.Add("threw " + ex.GetType().Name + ": " + ex.Message); }
         finally { RollBack(group); }

@@ -212,6 +212,24 @@ internal static class ChecklistTests
         check("checklist: a Navisworks clash report's open clashes, in the tests this trade fixes (Trade-1_Vs_Trade-2: Trade 1 fixes)",
             clashTests.Count == 2 && ourTests.Count == 1 && ourTests[0] is { Name: "SC_Vs_MP", Open: 1, Closed: 1 } && OurClashTests(clashTests, "").Count == 2
             && ClashReport("<td>New</td><td>Approved</td><td>Active</td>") is [{ Open: 2, Closed: 1 }], string.Join("; ", clashTests));
+        var withIds = ClashReport("""
+            <exchange><batchtest><clashtests><clashtest name="SC_Vs_SC">
+              <clashresults>
+                <clashresult name="Clash1" status="new"><clashobjects>
+                  <clashobject><objectattribute><name>Element ID</name><value>1001</value></objectattribute></clashobject>
+                  <clashobject><objectattribute><name>Element ID</name><value>1002</value></objectattribute></clashobject>
+                </clashobjects></clashresult>
+                <clashresult name="Clash2" status="resolved"><clashobjects>
+                  <clashobject><objectattribute><name>Element ID</name><value>2001</value></objectattribute></clashobject>
+                </clashobjects></clashresult>
+              </clashresults>
+            </clashtest></clashtests></batchtest></exchange>
+            """);
+        check("checklist: a clash report's open clashes give their Revit element IDs (closed ones don't)",
+            withIds is [{ Open: 1, Closed: 1, Ids: [1001, 1002] }], string.Join("; ", withIds.Select(t => string.Join(",", t.Ids ?? []))));
+        var unitRules = ParseUnits("Length mm 0, Angle degrees 2, Length feet 1, Angle mm 0");
+        check("checklist: the project units rule reads its length and angle parts and skips the rest",
+            unitRules is [{ Kind: "length", Unit: "mm", Decimals: 0 }, { Kind: "angle", Unit: "degrees", Decimals: 2 }] && ParseUnits("").Count == 0, string.Join("; ", unitRules));
         check("checklist: the last publishing day", LastDay(new DateTime(2026, 10, 21, 9, 0, 0), DayOfWeek.Monday) == new DateTime(2026, 10, 19)
             && LastDay(new DateTime(2026, 10, 19, 23, 0, 0), DayOfWeek.Monday) == new DateTime(2026, 10, 19), "");
         var rulesPath = Path.Combine(Path.GetTempPath(), $"spm-checklist-{Guid.NewGuid():N}.xlsx");

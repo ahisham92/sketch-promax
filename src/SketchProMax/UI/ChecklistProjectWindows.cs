@@ -4,12 +4,14 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using SketchProMax.Tools;
 using Button = System.Windows.Controls.Button;
+using CheckBox = System.Windows.Controls.CheckBox;
 using TextBox = System.Windows.Controls.TextBox;
 
 namespace SketchProMax.UI;
 
 /// <summary>
-/// The small windows behind project checklists: the password for the Default checklist and a name. Modal; no Revit API.
+/// The small windows behind project checklists: the password for the Default checklist, a name, and the new names a
+/// rename fix suggests. Modal; no Revit API.
 /// </summary>
 internal static class ChecklistProjectWindows
 {
@@ -69,6 +71,69 @@ internal static class ChecklistProjectWindows
         buttons.Margin = new Thickness(0, 14, 0, 0);
         window.Content = new StackPanel { Margin = new Thickness(18, 16, 18, 16), Children = { text, input, buttons } };
         window.Loaded += (_, _) => { input.Focus(); if (input is TextBox t) t.SelectAll(); };
+        return window.ShowDialog() == true ? result : null;
+    }
+
+    /// <summary>
+    /// The renames a fix suggests, each with a tick and its new name to change: the new names in the same order (null for
+    /// one unticked), or null when cancelled.
+    /// </summary>
+    public static List<string?>? EditNames(Window owner, string title, List<(string Old, string New)> rows)
+    {
+        var window = new Window
+        {
+            Title = "Sketch ProMax: " + title, Owner = owner, Width = 760, Height = 560, ResizeMode = ResizeMode.CanResize,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner, ShowInTaskbar = false,
+        };
+        Brand.Prepare(window);
+        var intro = Brand.Text($"{rows.Count} types to rename. Change any new name, or untick the ones to keep. Nothing changes until you press Rename; Ctrl+Z in Revit undoes it.", size: 12.5);
+        intro.TextWrapping = TextWrapping.Wrap;
+        intro.Margin = new Thickness(0, 0, 0, 10);
+        var grid = new Grid();
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        var ticks = new List<CheckBox>();
+        var boxes = new List<TextBox>();
+        for (var i = 0; i < rows.Count; i++)
+        {
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            var tick = new CheckBox { IsChecked = true, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 3, 8, 3) };
+            AutomationProperties.SetName(tick, "Rename " + rows[i].Old);
+            var old = Brand.Text(rows[i].Old, size: 12);
+            old.TextTrimming = TextTrimming.CharacterEllipsis;
+            old.ToolTip = rows[i].Old;
+            old.VerticalAlignment = VerticalAlignment.Center;
+            old.Margin = new Thickness(0, 3, 10, 3);
+            var box = new TextBox { Text = rows[i].New, MinHeight = 26, Margin = new Thickness(0, 3, 0, 3) };
+            AutomationProperties.SetName(box, "New name for " + rows[i].Old);
+            tick.Checked += (_, _) => box.IsEnabled = true;
+            tick.Unchecked += (_, _) => box.IsEnabled = false;
+            Grid.SetRow(tick, i); Grid.SetRow(old, i); Grid.SetRow(box, i);
+            Grid.SetColumn(old, 1); Grid.SetColumn(box, 2);
+            grid.Children.Add(tick); grid.Children.Add(old); grid.Children.Add(box);
+            ticks.Add(tick);
+            boxes.Add(box);
+        }
+        var scroll = new ScrollViewer { Content = grid, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
+        List<string?>? result = null;
+        var ok = RichUi.Button(RichUi.Icon.Next, "Rename", Brand.Weight.Primary);
+        ok.Click += (_, _) =>
+        {
+            result = ticks.Select((t, i) => t.IsChecked == true && boxes[i].Text.Trim().Length > 0 ? boxes[i].Text.Trim() : null).ToList();
+            window.DialogResult = true;
+        };
+        var cancel = RichUi.Button(RichUi.Icon.Close, "Cancel");
+        cancel.IsCancel = true;
+        var buttons = Brand.ButtonRow(cancel, ok);
+        buttons.Margin = new Thickness(0, 12, 0, 0);
+        var layout = new DockPanel { Margin = new Thickness(18, 16, 18, 16) };
+        DockPanel.SetDock(intro, Dock.Top);
+        DockPanel.SetDock(buttons, Dock.Bottom);
+        layout.Children.Add(intro);
+        layout.Children.Add(buttons);
+        layout.Children.Add(scroll);
+        window.Content = layout;
         return window.ShowDialog() == true ? result : null;
     }
 }

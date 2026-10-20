@@ -1189,14 +1189,37 @@ internal sealed class ChecklistWindow : Window
             show.Click += async (_, _) => await ShowInRevit(show, result, key);
             actions.Children.Add(show);
         }
-        if (item.Auto.Length > 0 && hint?.Level != ChecklistFacts.Level.Ok && ChecklistFixes.For(item.Auto, _def) is { } offer)
+        if (item.Auto.Length > 0 && hint?.Level != ChecklistFacts.Level.Ok)
+            foreach (var offer in ChecklistFixes.Offers(item.Auto, _def))
+            {
+                var fix = RichUi.Button(RichUi.Icon.Fix, "Fix it: " + offer.Button, Brand.Weight.Primary);
+                fix.Margin = new Thickness(0, 0, 8, 6);
+                AutomationProperties.SetHelpText(fix, offer.Question);
+                var key = offer.Fix ?? item.Auto;
+                fix.Click += async (_, _) => await FixInRevit(fix, result, key, offer);
+                actions.Children.Add(fix);
+            }
+        // The elements a check flagged, picked in Revit, where the check has no Show button of its own.
+        if (item.Auto.Length > 0 && hint is { Level: ChecklistFacts.Level.Warn } flagged && flagged.Elements.Count > 0 && ChecklistViews.ButtonFor(item.Auto) is null)
         {
-            var fix = RichUi.Button(RichUi.Icon.Fix, "Fix it: " + offer.Button, Brand.Weight.Primary);
-            fix.Margin = new Thickness(0, 0, 8, 6);
-            AutomationProperties.SetHelpText(fix, offer.Question);
-            var key = item.Auto;
-            fix.Click += async (_, _) => await FixInRevit(fix, result, key, offer);
-            actions.Children.Add(fix);
+            var pick = RichUi.Button(RichUi.Icon.Eye, $"Select these in Revit ({flagged.Elements.Count})");
+            pick.Margin = new Thickness(0, 0, 8, 6);
+            AutomationProperties.SetHelpText(pick, "Selects the elements this check found in Revit and zooms to them, so you can look at each one.");
+            var ids = flagged.Elements;
+            pick.Click += async (_, _) =>
+            {
+                if (Brand.IsBusy(pick)) return;
+                Brand.SetBusy(pick, true, "Selecting…");
+                try
+                {
+                    result.Text = await OnModel(ui => ChecklistFixes.Select(ui, ids));
+                    result.Visibility = Visibility.Visible;
+                    SetSide(true);
+                    BringRevitForward();
+                }
+                finally { Brand.SetBusy(pick, false); }
+            };
+            actions.Children.Add(pick);
         }
         if (item.Auto.Length > 0)
         {
@@ -1423,6 +1446,15 @@ internal sealed class ChecklistWindow : Window
         if (MessageBox.Show(this, question, "Sketch ProMax: fix it", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes) return;
         string? answer = null;
         if (offer.Ask is { } ask && (answer = ChecklistProjectWindows.Ask(this, offer.Button, ask, "")) is null) return;
+        if (offer.Preview)
+        {
+            var defNow = _def;
+            var suggested = await OnModel(ui => ChecklistFixes.Suggest(ui.Document, key, defNow));
+            var rows = suggested.Split('\n').Select(l => l.Split('\t')).Where(p => p.Length == 3).Select(p => (Id: p[0], Old: p[1], New: p[2])).ToList();
+            if (rows.Count == 0) { said.Text = "Nothing to rename: every type in use is named like the rule (or no Type name pattern is set)."; said.Visibility = Visibility.Visible; return; }
+            if (ChecklistProjectWindows.EditNames(this, offer.Button, rows.Select(r => (r.Old, r.New)).ToList()) is not { } edited) return;
+            answer = string.Join("\n", rows.Zip(edited, (r, n) => (r.Id, New: n)).Where(x => x.New is not null).Select(x => x.Id + "\t" + x.New));
+        }
         Brand.SetBusy(button, true, offer.ChangesModel ? "Fixing…" : "Working…");
         var def = _def;
         try

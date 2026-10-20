@@ -26,6 +26,12 @@ internal static class ChecklistFacts
 
         /// <summary>A slow check not run yet: automatic, but it waits for Run the slow checks.</summary>
         public bool Pending { get; init; }
+
+        /// <summary>The model elements it found, for Select these in Revit: set, else read from "(id 123)" in the items.</summary>
+        public IReadOnlyList<long>? Ids { get; init; }
+
+        public IReadOnlyList<long> Elements => Ids ?? Items.SelectMany(i => Regex.Matches(i, @"\(id (\d+)\)").Cast<Match>())
+            .Select(m => long.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture)).Distinct().ToList();
     }
 
     /// <summary>
@@ -243,6 +249,24 @@ internal static class ChecklistFacts
                 ? new Hint($"{names.Count} levels, all named {pattern}." + unusedText, Level.Ok)
                 : new Hint($"{names.Count} levels" + (off.Count > 0 ? $"; {off.Count} not named {pattern}: {List(off)}." : $", all named {pattern}.") + unusedText,
                     Level.Warn, unusedItems.Concat(off.Select(n => n + $": not named {pattern}")).ToList());
+        });
+        Add("units", () =>
+        {
+            var wantedUnits = ChecklistMath.ParseUnits(Rule("units"));
+            if (wantedUnits.Count == 0) return null;
+            var units = doc.GetUnits();
+            var off = new List<string>();
+            var now = new List<string>();
+            foreach (var u in wantedUnits)
+            {
+                var (spec, unit, accuracy) = UnitTarget(u);
+                var fo = units.GetFormatOptions(spec);
+                var shown = $"{u.Kind} {LabelUtils.GetLabelForUnit(fo.GetUnitTypeId())}, {Decimals(fo.Accuracy)} decimals";
+                now.Add(shown);
+                if (!fo.GetUnitTypeId().Equals(unit) || Math.Abs(fo.Accuracy - accuracy) > accuracy / 100) off.Add($"{shown} (wanted {u.Unit}, {u.Decimals} decimals)");
+            }
+            return off.Count == 0 ? new Hint("Project units: " + string.Join("; ", now) + ".", Level.Ok)
+                : new Hint($"Project units differ from {Rule("units")}: " + string.Join("; ", off) + ".", Level.Warn, off);
         });
         Add("worksets", () =>
         {
@@ -573,12 +597,15 @@ internal static class ChecklistFacts
             var rule = Rule("othertrades");
             if (rule.Length == 0) return null;
             var found = new List<string>();
+            var ids = new List<long>();
             var total = 0;
             void Count(string? label, IEnumerable<Element> elements)
             {
-                var n = elements.Count();
+                var list = elements.ToList();
+                var n = list.Count;
                 if (n == 0 || label is null) return;
                 total += n;
+                ids.AddRange(list.Select(e => e.Id.Value));
                 found.Add($"{label} (×{n})");
             }
             string what;
@@ -600,7 +627,7 @@ internal static class ChecklistFacts
                         Count(c.Name, new FilteredElementCollector(doc).OfCategory((BuiltInCategory)c.Id.Value).WhereElementIsNotElementType().ToElements());
                 what = rule;
             }
-            return total == 0 ? new Hint($"No elements of {what}.", Level.Ok) : new Hint($"{total} elements of {what}.", Level.Warn, found);
+            return total == 0 ? new Hint($"No elements of {what}.", Level.Ok) : new Hint($"{total} elements of {what}.", Level.Warn, found) { Ids = ids };
         });
 
         // Drawings.
@@ -709,7 +736,8 @@ internal static class ChecklistFacts
             var open = ours.Sum(t => t.Open);
             var when = $" (report of {File.GetLastWriteTime(report):dd MMM yyyy HH:mm})";
             return open == 0 ? new Hint($"No open clashes in your {ours.Count} clash tests in {Path.GetFileName(report)}{when}.", Level.Ok, ours.Select(t => $"{t.Name}: {t.Closed} closed").ToList())
-                : new Hint($"{open} clashes are still New, Active or Reviewed in your tests{when}.", Level.Warn, ours.Where(t => t.Open > 0).Select(t => $"{t.Name}: {t.Open} open").ToList());
+                : new Hint($"{open} clashes are still New, Active or Reviewed in your tests{when}.", Level.Warn, ours.Where(t => t.Open > 0).Select(t => $"{t.Name}: {t.Open} open").ToList())
+                    { Ids = ours.SelectMany(t => t.Ids ?? []).Distinct().ToList() };
         });
         Add("signed", () =>
         {
@@ -796,8 +824,10 @@ internal static class ChecklistFacts
             var overlaps = Counted(doc.GetWarnings().Select(w => w.GetDescriptionText())
                 .Where(t => t.IndexOf("identical instances", StringComparison.OrdinalIgnoreCase) >= 0 || t.IndexOf("overlap", StringComparison.OrdinalIgnoreCase) >= 0));
             var all = dupes.Concat(overlaps).ToList();
+            var dupeIds = found.Where(f => f.Check == "duplicates").Select(f => f.ElementId)
+                .Concat(doc.GetWarnings().Where(w => w.GetFailureDefinitionId() == BuiltInFailures.OverlapFailures.DuplicateInstances).SelectMany(w => w.GetFailingElements()).Select(i => i.Value)).Distinct().ToList();
             return all.Count == 0 ? new Hint("No duplicate elements and no overlap warnings." + stamp, Level.Ok)
-                : new Hint($"{dupes.Count} duplicate elements; {overlaps.Count} kinds of overlap warning." + stamp + ReportOf(res), Level.Warn, all);
+                : new Hint($"{dupes.Count} duplicate elements; {overlaps.Count} kinds of overlap warning." + stamp + ReportOf(res), Level.Warn, all) { Ids = dupeIds };
         });
         Add("floating", () =>
         {
@@ -843,8 +873,10 @@ internal static class ChecklistFacts
             var note = root.TryGetProperty("note", out var n) && n.ValueKind == JsonValueKind.String ? " " + n.GetString() : "";
             var pairs = root.GetProperty("byCategories").EnumerateArray().Select(x => $"{x.GetProperty("pair").GetString()}: {x.GetProperty("count").GetInt32()}").ToList();
             var sample = root.GetProperty("sample").EnumerateArray().Select(x => $"{x.GetProperty("a").GetString()} / {x.GetProperty("b").GetString()} ({x.GetProperty("kind").GetString()})").ToList();
+            var clashIds = root.GetProperty("sample").EnumerateArray()
+                .SelectMany(x => new[] { "aId", "bId" }.Select(k => x.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.Number ? v.GetInt64() : 0)).Where(i => i > 0).Distinct().ToList();
             return count == 0 ? new Hint($"No clashes between {string.Join(", ", cats.Select(Pretty))}." + note + stamp, Level.Ok)
-                : new Hint($"{count} clashes inside your trade." + note + stamp + ReportOf(res), Level.Warn, pairs.Concat(sample).ToList());
+                : new Hint($"{count} clashes inside your trade." + note + stamp + ReportOf(res), Level.Warn, pairs.Concat(sample).ToList()) { Ids = clashIds };
         });
         Add("standards", () =>
         {
@@ -1123,7 +1155,7 @@ internal static class ChecklistFacts
     }
 
     /// <summary>Elements of model categories that have material quantities (the physical model), not in links.</summary>
-    private static IEnumerable<Element> Instances(Document doc)
+    internal static IEnumerable<Element> Instances(Document doc)
     {
         // Filtered by category inside Revit (fast), not by reading every element's category here.
         var cats = new List<ElementId>();
@@ -1135,10 +1167,10 @@ internal static class ChecklistFacts
     }
 
     /// <summary>The types those elements use.</summary>
-    private static List<ElementType> TypesOf(Document doc, IEnumerable<Element> instances) =>
+    internal static List<ElementType> TypesOf(Document doc, IEnumerable<Element> instances) =>
         instances.Select(e => e.GetTypeId().Value).Distinct().Select(id => doc.GetElement(new ElementId(id)) as ElementType).Where(t => t is not null).Select(t => t!).ToList();
 
-    private static string TypeLabel(ElementType t) => (t.Category?.Name is { Length: > 0 } c ? c + ": " : "") + (t.FamilyName.Length > 0 ? t.FamilyName + ": " : "") + t.Name;
+    internal static string TypeLabel(ElementType t) => (t.Category?.Name is { Length: > 0 } c ? c + ": " : "") + (t.FamilyName.Length > 0 ? t.FamilyName + ": " : "") + t.Name;
 
     internal static bool Filled(Parameter? p)
     {
@@ -1204,6 +1236,14 @@ internal static class ChecklistFacts
         }
         return names;
     }
+
+    /// <summary>The spec, unit and rounding (Revit's accuracy) a units rule part stands for.</summary>
+    internal static (ForgeTypeId Spec, ForgeTypeId Unit, double Accuracy) UnitTarget(ChecklistMath.UnitRule u) =>
+        (u.Kind == "angle" ? SpecTypeId.Angle : SpecTypeId.Length,
+         u.Unit switch { "mm" => UnitTypeId.Millimeters, "cm" => UnitTypeId.Centimeters, "m" => UnitTypeId.Meters, "radians" => UnitTypeId.Radians, _ => UnitTypeId.Degrees },
+         Math.Pow(10, -u.Decimals));
+
+    private static int Decimals(double accuracy) => accuracy >= 1 ? 0 : (int)Math.Round(-Math.Log10(accuracy));
 
     /// <summary>Whether a title block family is the landing page's (placed on the starting view, not a sheet's title block).</summary>
     internal static bool IsLanding(string family, ChecklistMath.Definition? def)

@@ -87,6 +87,12 @@ internal static class ChecklistMath
         new("linkworksets", "Worksets that must exist", "Z_Link_URS, Z_Link_CAD, Z_Link_AR, Z_Link_EL, Z_Link_ME, Z_Link_SC, Z_Link_SS", "Each of these worksets is in the model.", "worksets"),
         new("worksetmap", "Workset for each category", "", "Where Fix it moves elements that are on Workset1, or on Shared Levels and Grids but aren't levels or grids: " +
             "Category>Workset pairs, comma separated, e.g. Structural Foundations>ST_Piles, Floors>ST_Concrete (a missing workset is made; empty: nothing is moved).", "worksets"),
+        new("units", "Project units", "Length mm 0, Angle degrees 2", "The project units and decimal places Fix it sets: Length mm, cm or m and Angle degrees or radians, each with its decimals " +
+            "(empty: not tested).", "units"),
+        new("uniformatmap", "UniFormat code for each category or type", "", "What Fix it writes into the classification parameter of types that have none: Category>code or type name pattern>code, " +
+            "comma separated, e.g. Structural Foundations>A1020, Floors>B1010 (empty: nothing is filled).", "uniformat"),
+        new("templatemap", "View template for each view type", "", "What Fix it applies to views on sheets: View type>template name, comma separated, e.g. Floor Plan>ST_Plan, Section>ST_Section, 3D View>ST_3D " +
+            "(empty: nothing is applied).", "viewtemplates"),
         new("approvedworksets", "Approved worksets", "", "Every workset matches one of these (empty: not tested). Workset1 and Shared Levels and Grids are always allowed.", "newworksets"),
         new("columns", "Column levels tested", "yes", "yes: a column that runs past the next level up is flagged (list the double-height ones in the comment). no: not tested.", "columns"),
         new("classification", "Classification parameter", "Assembly Code", "The type parameter holding the UniFormat code; every model type in use must have it filled.", "uniformat"),
@@ -125,6 +131,32 @@ internal static class ChecklistMath
         new("packagefolder", "Package folder", "", "Where the e-Transmit package is saved (a folder, or a ZIP in it: the newest is read). The package checks look in it and open the packaged model (empty: not tested).", "packagecontents"),
         new("packagecontents", "Files the package must have", ".rvt, .ifc, .nwc, .dwg, .pdf", "File types the package must contain, e.g. add .xlsx for a BOQ.", "packagecontents"),
     ];
+
+    /// <summary>A project unit the units rule asks for: what it measures (length or angle), the unit and its decimals.</summary>
+    public sealed record UnitRule(string Kind, string Unit, int Decimals);
+
+    /// <summary>
+    /// The units rule ("Length mm 0, Angle degrees 2") as its parts; units are mm, cm, m, degrees or radians. Parts it can't
+    /// read are left out.
+    /// </summary>
+    public static List<UnitRule> ParseUnits(string rule)
+    {
+        var list = new List<UnitRule>();
+        foreach (var part in RuleList(rule))
+        {
+            var m = Regex.Match(part, @"^\s*(?<k>length|angle)\s+(?<u>mm|millimet(?:er|re)s?|cm|centimet(?:er|re)s?|m|met(?:er|re)s?|deg(?:rees?)?|°|rad(?:ians?)?)\s+(?<d>\d)\s*(?:decimals?)?\s*$", RegexOptions.IgnoreCase);
+            if (!m.Success) continue;
+            var u = m.Groups["u"].Value.ToLowerInvariant();
+            var unit = u.StartsWith("mm", StringComparison.Ordinal) || u.StartsWith("milli", StringComparison.Ordinal) ? "mm"
+                : u.StartsWith("c", StringComparison.Ordinal) ? "cm"
+                : u.StartsWith("deg", StringComparison.Ordinal) || u == "°" ? "degrees"
+                : u.StartsWith("rad", StringComparison.Ordinal) ? "radians" : "m";
+            var kind = m.Groups["k"].Value.ToLowerInvariant();
+            if (kind == "length" != unit is "mm" or "cm" or "m") continue;
+            list.Add(new UnitRule(kind, unit, int.Parse(m.Groups["d"].Value, CultureInfo.InvariantCulture)));
+        }
+        return list;
+    }
 
     /// <summary>The rule's value for this checklist: set, else the default ("" turns that test off).</summary>
     public static string Rule(Definition? def, string key)
@@ -425,6 +457,7 @@ internal static class ChecklistMath
         ("urs", Rx(@"URS is linked")),
         ("grids", Rx(@"^Grids are in the model")),
         ("levels", Rx(@"^Unused levels")),
+        ("units", Rx(@"\bunits\b")),
         ("worksets", Rx(@"on its .*workset")),
         ("scopeboxes", Rx(@"^Scope boxes")),
         ("categories", Rx(@"right Revit category|No Generic Models")),
@@ -599,7 +632,8 @@ internal static class ChecklistMath
     }
 
     /// <summary>A Navisworks clash report's open clashes (New, Active, Reviewed) per test, from its XML or HTML.</summary>
-    public sealed record ClashTest(string Name, int Open, int Closed);
+    /// <summary>A clash test: its open and closed clashes, and the Revit element IDs in its open clashes (XML reports only).</summary>
+    public sealed record ClashTest(string Name, int Open, int Closed, IReadOnlyList<long>? Ids = null);
 
     /// <summary>
     /// The clash tests in a Navisworks report and their open and closed clashes. XML reports give each test; an HTML
@@ -615,7 +649,13 @@ internal static class ChecklistMath
             {
                 var name = Regex.Match(t.Groups["attrs"].Value, @"\bname=""(?<n>[^""]*)""", RegexOptions.IgnoreCase).Groups["n"].Value;
                 var statuses = Regex.Matches(t.Groups["body"].Value, @"<clashresult\b[^>]*\bstatus=""(?<s>[^""]*)""", RegexOptions.IgnoreCase).Cast<Match>().Select(m => m.Groups["s"].Value).ToList();
-                tests.Add(new ClashTest(System.Net.WebUtility.HtmlDecode(name), statuses.Count(IsOpen), statuses.Count(s => !IsOpen(s))));
+                // The open clashes' Element ID attributes, so Select these in Revit can pick them.
+                var ids = new List<long>();
+                foreach (Match r in Regex.Matches(t.Groups["body"].Value, @"<clashresult\b(?<a>[^>]*)>(?<b>.*?)</clashresult>", RegexOptions.IgnoreCase | RegexOptions.Singleline))
+                    if (Regex.Match(r.Groups["a"].Value, @"\bstatus=""(?<s>[^""]*)""", RegexOptions.IgnoreCase) is { Success: true } st && IsOpen(st.Groups["s"].Value))
+                        foreach (Match id in Regex.Matches(r.Groups["b"].Value, @"<name>\s*Element ID\s*</name>\s*<value>\s*(\d+)\s*</value>", RegexOptions.IgnoreCase))
+                            ids.Add(long.Parse(id.Groups[1].Value, CultureInfo.InvariantCulture));
+                tests.Add(new ClashTest(System.Net.WebUtility.HtmlDecode(name), statuses.Count(IsOpen), statuses.Count(s => !IsOpen(s)), ids.Distinct().ToList()));
             }
             return tests;
         }
