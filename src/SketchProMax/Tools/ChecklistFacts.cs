@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.IO;
+using System.IO.Compression;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Autodesk.Revit.DB;
@@ -31,7 +32,7 @@ internal static class ChecklistFacts
     /// The checks that take longer (a full model check, a clash run, opening the trade's standard template): they run only
     /// when the user asks (Run the slow checks), not each time the window reads the model.
     /// </summary>
-    public static readonly HashSet<string> Slow = new(StringComparer.Ordinal) { "duplicates", "floating", "selfclash", "modelscore", "standards" };
+    public static readonly HashSet<string> Slow = new(StringComparer.Ordinal) { "duplicates", "floating", "selfclash", "modelscore", "standards", "etransmit", "packageopens" };
 
     public sealed class Result
     {
@@ -132,6 +133,7 @@ internal static class ChecklistFacts
             "selfclash" => Rule("clashcategories").Length == 0,
             "modelscore" => Rule("modelscore").Length == 0,
             "standards" => Rule("standardtemplate").Length == 0,
+            "etransmit" or "packageopens" => Rule("packagefolder").Length == 0,
             _ => false,
         };
         // The slow checks that run a Sketch ProMax tool need the model in front (the tools work on the active model).
@@ -148,6 +150,12 @@ internal static class ChecklistFacts
             return modelCheck.Value;
         }
         var stamp = " Checked at " + DateTime.Now.ToString("HH:mm", CultureInfo.InvariantCulture) + ".";
+        // The e-Transmit package (folder or the newest ZIP in it), and its model opened from a clean folder for the slow checks.
+        (Package? Package, string Why)? package = null;
+        (Package? Package, string Why) Pkg() => package ??= Package.Find(Rule("packagefolder"), Regex.Replace(Path.GetFileNameWithoutExtension(ChecklistMath.WorkingName(file)), @"_S\d{2}_R\d{2}$", "", RegexOptions.IgnoreCase));
+        Package.OpenResult? opened = null;
+        Package.OpenResult? Opened() => opened ??= Pkg().Package?.Open(doc.Application);
+        void CloseOpened() { opened?.Close(); opened = null; }
 
         void Add(string key, Func<Hint?> read)
         {
@@ -460,17 +468,28 @@ internal static class ChecklistFacts
             return wrong.Count == 0 ? new Hint($"Submitted copy found: {List(right)}.", Level.Ok, right)
                 : new Hint($"Submitted copy found ({List(right)}), but {wrong.Count} other copies aren't named {name}{endings[0]}.", Level.Warn, wrong);
         });
+        // The NWC and IFC folders: the checking rule's, else the model's folder and the folders in it.
+        var modelName = Path.GetFileNameWithoutExtension(ChecklistMath.WorkingName(file));
+        var stem = Regex.Replace(modelName, @"_S\d{2}_R\d{2}$", "", RegexOptions.IgnoreCase);
+        List<string>? exportFolders = null;
+        List<string> ExportFolders()
+        {
+            if (exportFolders is not null) return exportFolders;
+            exportFolders = ChecklistMath.RuleList(Rule("exportfolder")).Select(f => f.Trim('"')).ToList();
+            var home = Folder(doc);
+            if (exportFolders.Count == 0 && home.Length > 0) exportFolders = [home, .. Directory.EnumerateDirectories(home).Take(40)];
+            return exportFolders;
+        }
+        var newest = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        string? NewestExport(string ext) => newest.TryGetValue(ext, out var found) ? found
+            : newest[ext] = ExportFolders().Where(Directory.Exists).SelectMany(f => Directory.EnumerateFiles(f, stem + "*" + ext)).OrderByDescending(File.GetLastWriteTimeUtc).FirstOrDefault();
+
         Add("exportnames", () =>
         {
-            var name = Path.GetFileNameWithoutExtension(ChecklistMath.WorkingName(file));
-            var stem = Regex.Replace(name, @"_S\d{2}_R\d{2}$", "", RegexOptions.IgnoreCase);
-            var folders = ChecklistMath.RuleList(Rule("exportfolder"));
+            var name = modelName;
             var home = Folder(doc);
-            if (folders.Count == 0)
-            {
-                if (home.Length == 0) return new Hint("The model isn't saved on this PC, so its NWC and IFC files can't be looked for.", Level.Info);
-                folders = [home, .. Directory.EnumerateDirectories(home).Take(40)];
-            }
+            var folders = ExportFolders();
+            if (folders.Count == 0) return new Hint("The model isn't saved on this PC, so its NWC and IFC files can't be looked for.", Level.Info);
             var models = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { name };
             foreach (var f in folders.Append(home).Where(f => f.Length > 0 && Directory.Exists(f)).Distinct(StringComparer.OrdinalIgnoreCase))
                 foreach (var rvt in Directory.EnumerateFiles(f, stem + "*.rvt")) models.Add(Path.GetFileNameWithoutExtension(rvt));
@@ -575,6 +594,122 @@ internal static class ChecklistFacts
                            (loose.Count > 0 ? $"{loose.Count} of {all.Count} schedules are on no sheet: tick Schedules in e-Transmit so they stay, or place them on a sheet." : ""), Level.Warn, problems);
         });
 
+        // Files from outside the model: the MIDP, the stage's drawing list, the clash report, the checklist, the exports.
+        Add("midp", () =>
+        {
+            if (Rule("midp").Length == 0) return null;
+            var midp = ChecklistMath.NewestFile(Rule("midp"), ".xlsx", ".xlsm", ".csv", ".txt");
+            if (midp.Length == 0) return new Hint($"The MIDP {Rule("midp")} can't be found" + Rules + ".", Level.Warn);
+            var cells = ChecklistMath.FileCells(midp);
+            if (cells.Any(c => c.IndexOf(stem, StringComparison.OrdinalIgnoreCase) >= 0))
+                return new Hint($"{stem} is in the MIDP {Path.GetFileName(midp)} ({File.GetLastWriteTime(midp):dd MMM yyyy}).", Level.Ok);
+            var shape = ChecklistMath.Shape(stem);
+            var near = cells.Where(c => ChecklistMath.Shape(c) == shape).Distinct(StringComparer.OrdinalIgnoreCase).Take(40).ToList();
+            return new Hint($"{stem} isn't in the MIDP {Path.GetFileName(midp)}." + (near.Count > 0 ? " Model numbers shaped like it there:" : ""), Level.Warn, near);
+        });
+        Add("stagelist", () =>
+        {
+            if (Rule("stagelist").Length == 0) return null;
+            var list = ChecklistMath.NewestFile(Rule("stagelist"), ".xlsx", ".xlsm", ".csv", ".txt");
+            if (list.Length == 0) return new Hint($"The drawing list {Rule("stagelist")} can't be found" + Rules + ".", Level.Warn);
+            var sheets = new FilteredElementCollector(doc).OfClass(typeof(ViewSheet)).Cast<ViewSheet>().Where(x => !x.IsPlaceholder).Select(x => x.SheetNumber).ToList();
+            if (sheets.Count == 0) return new Hint("The model has no sheets.", Level.Warn);
+            var (missing, extra) = ChecklistMath.CompareDrawingList(ChecklistMath.FileCells(list), sheets);
+            var listed = missing.Count + sheets.Count - extra.Count;
+            if (listed == 0) return new Hint($"No drawing number in {Path.GetFileName(list)} is shaped like this model's sheet numbers (e.g. {sheets[0]}).", Level.Warn);
+            return missing.Count == 0
+                ? new Hint($"All {listed} drawings in {Path.GetFileName(list)} are sheets in the model. Check the drawings it relies on (e.g. ARC backgrounds) are in the set too." +
+                           (extra.Count > 0 ? $" {extra.Count} sheets aren't in the list:" : ""), Level.Ok, extra)
+                : new Hint($"{missing.Count} of the {listed} drawings in {Path.GetFileName(list)} aren't sheets in the model.", Level.Warn, missing.Select(n => n + " (in the list, no sheet)").Concat(extra.Select(n => n + " (sheet, not in the list)")).ToList());
+        });
+        Add("federated", () =>
+        {
+            if (Rule("clashreport").Length == 0) return null;
+            var report = ChecklistMath.NewestFile(Rule("clashreport"), ".xml", ".html", ".htm");
+            if (report.Length == 0) return new Hint($"The clash report {Rule("clashreport")} can't be found" + Rules + ".", Level.Warn);
+            var tests = ChecklistMath.ClashReport(File.ReadAllText(report));
+            if (tests.Count == 0) return new Hint($"No clash results found in {Path.GetFileName(report)}. Export the report from Navisworks as XML or HTML (tabular).", Level.Warn);
+            var ours = ChecklistMath.OurClashTests(tests, parts.Discipline);
+            var open = ours.Sum(t => t.Open);
+            var when = $" (report of {File.GetLastWriteTime(report):dd MMM yyyy HH:mm})";
+            return open == 0 ? new Hint($"No open clashes in your {ours.Count} clash tests in {Path.GetFileName(report)}{when}.", Level.Ok, ours.Select(t => $"{t.Name}: {t.Closed} closed").ToList())
+                : new Hint($"{open} clashes are still New, Active or Reviewed in your tests{when}.", Level.Warn, ours.Where(t => t.Open > 0).Select(t => $"{t.Name}: {t.Open} open").ToList());
+        });
+        Add("signed", () =>
+        {
+            var problems = new List<string>();
+            var folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Sketch ProMax", "Checklists");
+            var made = Directory.Exists(folder)
+                ? Directory.EnumerateFiles(folder, ChecklistMath.SafeName(modelName) + " pre-submission checklist *").Where(f => f.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase) || f.EndsWith(".docx", StringComparison.OrdinalIgnoreCase))
+                    .OrderByDescending(File.GetLastWriteTimeUtc).FirstOrDefault()
+                : null;
+            var ready = made is not null && Path.GetFileNameWithoutExtension(made).EndsWith(" - READY", StringComparison.Ordinal);
+            if (made is null) problems.Add("no signed checklist yet: answer every check, then Create the PDF on Review and sign");
+            else if (!ready) problems.Add($"the latest checklist file, {Path.GetFileName(made)}, isn't ready (it says NOT READY)");
+            var pattern = Rule("healthcheck");
+            if (pattern.Length > 0)
+            {
+                var (pkg, _) = Pkg();
+                var names = pkg?.Files.Select(f => Path.GetFileName(f)).ToList()
+                            ?? (Folder(doc) is { Length: > 0 } home ? Directory.EnumerateFiles(home).Select(Path.GetFileName).Select(n => n ?? "").ToList() : []);
+                var report = names.FirstOrDefault(n => ChecklistMath.LikeAny(n, pattern));
+                if (report is null) problems.Add($"no Model Health Check report named {pattern} in {(pkg is null ? "the model's folder" : "the package")}");
+            }
+            return problems.Count == 0 ? new Hint($"Signed checklist: {Path.GetFileName(made)}." + (pattern.Length > 0 ? " The Health Check report is there." : ""), Level.Ok)
+                : new Hint("Not signed off yet.", Level.Warn, problems);
+        });
+        Add("nwcsettings", () =>
+        {
+            if (NewestExport(".nwc") is not { } nwc) return new Hint($"No NWC named {stem}… yet. Use Export the NWC and IFC below.", Level.Warn);
+            return ChecklistExports.MadeWith(nwc, ChecklistExports.NwcSettings)
+                ? new Hint($"{Path.GetFileName(nwc)} was exported by Sketch ProMax with the office settings: {ChecklistExports.NwcSettings.Substring(ChecklistExports.NwcSettings.IndexOf(':') + 2)}.", Level.Ok)
+                : new Hint($"{Path.GetFileName(nwc)} wasn't exported by Sketch ProMax with the office settings (or was written again since), and an NWC doesn't record its settings. Export it again with the button below.", Level.Warn);
+        });
+        Add("ifcsettings", () =>
+        {
+            if (Rule("ifcsetup").Trim('"') is { Length: > 0 } setup && !File.Exists(setup)) return new Hint($"The IFC setup file {setup} can't be found" + Rules + ".", Level.Warn);
+            if (NewestExport(".ifc") is not { } ifc) return new Hint($"No IFC named {stem}… yet. Use Export the NWC and IFC below.", Level.Warn);
+            var settings = ChecklistExports.IfcSettings(def);
+            return ChecklistExports.MadeWith(ifc, settings)
+                ? new Hint($"{Path.GetFileName(ifc)} was exported by Sketch ProMax with the office settings: {settings.Substring(settings.IndexOf(':') + 2)}.", Level.Ok)
+                : new Hint($"{Path.GetFileName(ifc)} wasn't exported by Sketch ProMax with the office settings (or was written again since). Export it again with the button below.", Level.Warn);
+        });
+        Add("nwcdate", () =>
+        {
+            if (NewestExport(".nwc") is not { } nwc) return new Hint($"No NWC named {stem}… yet. Use Export the NWC and IFC below.", Level.Warn);
+            var at = File.GetLastWriteTime(nwc);
+            var problems = new List<string>();
+            if (!string.IsNullOrEmpty(doc.PathName) && File.Exists(doc.PathName) && File.GetLastWriteTime(doc.PathName) > at.AddMinutes(5))
+                problems.Add($"the model was saved after it ({File.GetLastWriteTime(doc.PathName):ddd dd MMM HH:mm}): publish it again after the fixes");
+            if (Enum.TryParse<DayOfWeek>(Rule("nwcday"), true, out var day) && at < ChecklistMath.LastDay(DateTime.Now, day))
+                problems.Add($"it is from before this {day} ({ChecklistMath.LastDay(DateTime.Now, day):dd MMM})");
+            return problems.Count == 0 ? new Hint($"{Path.GetFileName(nwc)} was published {at:ddd dd MMM HH:mm}, after the model's last save.", Level.Ok)
+                : new Hint($"{Path.GetFileName(nwc)} was published {at:ddd dd MMM HH:mm}.", Level.Warn, problems);
+        });
+
+        // Sheets, Civil 3D and the package.
+        Add("backgrounds", () =>
+        {
+            var shows = new List<string>();
+            foreach (var vp in new FilteredElementCollector(doc).OfClass(typeof(Viewport)).Cast<Viewport>())
+            {
+                if (doc.GetElement(vp.ViewId) is not View v || v.ViewType is ViewType.Legend or ViewType.DraftingView or ViewType.Schedule) continue;
+                var links = new FilteredElementCollector(doc, v.Id).OfClass(typeof(RevitLinkInstance)).Select(l => l.Name.Split(':')[0].Trim()).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                if (links.Count > 0 && doc.GetElement(vp.SheetId) is ViewSheet sheet) shows.Add($"{sheet.SheetNumber} {sheet.Name}: {v.Name} shows {List(links)}");
+            }
+            return shows.Count == 0 ? new Hint("No view on a sheet shows a linked model, so unloading the links blanks nothing.", Level.Ok)
+                : new Hint($"{shows.Count} views on sheets show a linked model as background: with the links unloaded it will be blank. Handle them as agreed.", Level.Warn, shows);
+        });
+        Add("civil3d", () => new Hint("This is a Revit model: this check is for Civil 3D only, so answer N/A.", Level.Ok));
+        Add("packagecontents", () =>
+        {
+            var (pkg, why) = Pkg();
+            if (pkg is null) return why.Length == 0 ? null : new Hint(why, Level.Warn);
+            var missing = ChecklistMath.RuleList(Rule("packagecontents")).Where(e => !pkg.Files.Any(f => f.EndsWith(e, StringComparison.OrdinalIgnoreCase))).Select(e => "no " + e + " file").ToList();
+            return missing.Count == 0 ? new Hint($"{pkg.Name} has {pkg.Files.Count} files, with every type needed ({Rule("packagecontents")}). Check the federated NWD and clash report from the BIM team are in the same transmittal.", Level.Ok, pkg.Files.Take(60).ToList())
+                : new Hint($"{pkg.Name} is missing {missing.Count} file types.", Level.Warn, missing);
+        });
+
         // The slow checks: run on request (Run the slow checks).
         Add("duplicates", () =>
         {
@@ -648,7 +783,143 @@ internal static class ChecklistFacts
             return missing.Count == 0 ? new Hint($"Every view template, filter and the browser organisation of {Path.GetFileName(path)} are in the model." + stamp, Level.Ok)
                 : new Hint($"{missing.Count} differences from {Path.GetFileName(path)}." + stamp, Level.Warn, missing);
         });
+        Add("etransmit", () =>
+        {
+            var (pkg, why) = Pkg();
+            if (pkg is null) return why.Length == 0 ? null : new Hint(why, Level.Warn);
+            var problems = new List<string>();
+            var rvts = pkg.Files.Where(f => f.EndsWith(".rvt", StringComparison.OrdinalIgnoreCase)).ToList();
+            foreach (var other in rvts.Where(f => !f.Equals(pkg.Model, StringComparison.OrdinalIgnoreCase))) problems.Add($"{other}: a linked Revit model is in the package (untick linked Revit models)");
+            var names = new HashSet<string>(pkg.Files.Select(f => Path.GetFileName(f)), StringComparer.OrdinalIgnoreCase);
+            foreach (var t in new FilteredElementCollector(doc).OfClass(typeof(CADLinkType)).Cast<CADLinkType>())
+                if (LinkFile(t) is { Length: > 0 } cad && !names.Contains(cad)) problems.Add($"{cad}: a linked CAD file isn't in the package");
+            foreach (var t in new FilteredElementCollector(doc).OfClass(typeof(ImageType)).Cast<ImageType>())
+                if (t.Source == ImageTypeSource.Link && Path.GetFileName(t.Path ?? "") is { Length: > 0 } img && !names.Contains(img)) problems.Add($"{img}: a linked image isn't in the package");
+            if (Opened() is { Doc: { } packed })
+            {
+                var loose = UnusedViews(packed).Count;
+                if (loose > 0) problems.Add($"the packaged model keeps {loose} views on no sheet (keep only views on sheets and the Navisworks view)");
+                if (Unused(packed) is { } unused && unused > 0) problems.Add($"the packaged model has {unused} unused items (purge unused)");
+            }
+            else if (Opened() is { Error: { } error }) problems.Add("the packaged model couldn't be opened: " + error);
+            return problems.Count == 0 ? new Hint($"{pkg.Name}: only your model, its CAD links and images, views on sheets and purged." + stamp, Level.Ok)
+                : new Hint($"{pkg.Name} doesn't match the e-Transmit settings." + stamp, Level.Warn, problems);
+        });
+        Add("packageopens", () =>
+        {
+            var (pkg, why) = Pkg();
+            if (pkg is null) return why.Length == 0 ? null : new Hint(why, Level.Warn);
+            if (Opened() is not { Doc: { } packed }) return new Hint($"{pkg.Model} didn't open from a clean folder: {Opened()?.Error ?? "it isn't in the package"}." + stamp, Level.Warn);
+            var problems = new List<string>();
+            var startId = StartingViewSettings.GetStartingViewSettings(packed).ViewId;
+            var start = startId == ElementId.InvalidElementId ? null : packed.GetElement(startId) as View;
+            var family = Rule("landing").Length > 0 ? Rule("landing") : "LandingPage";
+            if (start is null) problems.Add("no starting view is set");
+            else if (!new FilteredElementCollector(packed, start.Id).OfClass(typeof(FamilyInstance)).Cast<FamilyInstance>().Any(f => ChecklistMath.Like(f.Symbol?.FamilyName ?? "", "*" + family + "*")))
+                problems.Add($"the starting view {start.Name} doesn't show the {family} family");
+            if (packed.IsWorkshared)
+            {
+                var have = new HashSet<string>(new FilteredWorksetCollector(packed).OfKind(WorksetKind.UserWorkset).Select(w => w.Name), StringComparer.OrdinalIgnoreCase);
+                foreach (var w in ChecklistMath.RuleList(Rule("linkworksets")).Where(w => !have.Contains(w))) problems.Add("missing workset " + w);
+            }
+            var views = new FilteredElementCollector(packed).OfClass(typeof(ViewSheet)).GetElementCount();
+            return problems.Count == 0 ? new Hint($"{pkg.Model} opens from a clean folder on {start!.Name}, with {views} sheets and the worksets." + stamp, Level.Ok)
+                : new Hint($"{pkg.Model} opens from a clean folder, but:" + stamp, Level.Warn, problems);
+        });
+        // The packaged model opened by the slow checks is closed as the last step.
+        if (slow is not null) reading.Add(CloseOpened);
         return reading;
+    }
+
+    /// <summary>A linked CAD file's name, from its path.</summary>
+    private static string LinkFile(CADLinkType t)
+    {
+        try
+        {
+            var reference = t.GetExternalFileReference();
+            return reference is null ? "" : Path.GetFileName(ModelPathUtils.ConvertModelPathToUserVisiblePath(reference.GetAbsolutePath())) ?? "";
+        }
+        catch (Exception ex) when (ex is Autodesk.Revit.Exceptions.ApplicationException or ArgumentException) { return ""; }
+    }
+
+    /// <summary>How many elements Purge Unused would remove (null where Revit can't tell: before Revit 2024).</summary>
+    private static int? Unused(Document doc)
+    {
+        var method = typeof(Document).GetMethod("GetUnusedElements", [typeof(ISet<ElementId>)]);
+        return method?.Invoke(doc, [new HashSet<ElementId>()]) is ICollection<ElementId> ids ? ids.Count : null;
+    }
+
+    /// <summary>The e-Transmit package: a folder, or the newest ZIP in it; its files (relative paths) and the model in it.</summary>
+    private sealed class Package
+    {
+        public string Name { get; private init; } = "";
+        public string Source { get; private init; } = "";
+        public bool Zip { get; private init; }
+        public List<string> Files { get; private init; } = [];
+        public string Model { get; private init; } = "";
+
+        /// <summary>The package from the rule (null with "" when the rule is off, null with why when it can't be read).</summary>
+        public static (Package?, string) Find(string rule, string stem)
+        {
+            var path = rule.Trim().Trim('"');
+            if (path.Length == 0) return (null, "");
+            string? zip = path.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) && File.Exists(path) ? path
+                : Directory.Exists(path) ? Directory.EnumerateFiles(path, "*.zip").OrderByDescending(File.GetLastWriteTimeUtc).FirstOrDefault() : null;
+            List<string> files;
+            if (zip is not null)
+            {
+                using var archive = ZipFile.OpenRead(zip);
+                files = archive.Entries.Where(e => e.Name.Length > 0).Select(e => e.FullName.Replace('\\', '/')).ToList();
+            }
+            else if (Directory.Exists(path)) files = Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories).Select(f => f.Substring(path.TrimEnd('\\', '/').Length + 1).Replace('\\', '/')).ToList();
+            else return (null, $"The package folder {path} can't be found (set in Checking rules).");
+            var rvts = files.Where(f => f.EndsWith(".rvt", StringComparison.OrdinalIgnoreCase)).ToList();
+            var model = rvts.FirstOrDefault(f => Path.GetFileName(f).StartsWith(stem, StringComparison.OrdinalIgnoreCase)) ?? (rvts.Count == 1 ? rvts[0] : "");
+            return (new Package { Name = Path.GetFileName(zip ?? path.TrimEnd('\\', '/')), Source = zip ?? path, Zip = zip is not null, Files = files, Model = model }, "");
+        }
+
+        public sealed class OpenResult
+        {
+            public Document? Doc { get; init; }
+            public string? Error { get; init; }
+            public string? Temp { get; init; }
+
+            public void Close()
+            {
+                try { if (Doc is { IsValidObject: true }) Doc.Close(false); } catch (Autodesk.Revit.Exceptions.ApplicationException) { }
+                try { if (Temp is not null && Directory.Exists(Temp)) Directory.Delete(Temp, true); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            }
+        }
+
+        /// <summary>Opens the packaged model from a clean folder (a ZIP is unpacked into a new temporary folder first), detached, worksets closed.</summary>
+        public OpenResult Open(Autodesk.Revit.ApplicationServices.Application app)
+        {
+            if (Model.Length == 0) return new OpenResult { Error = "no model of this name is in the package" };
+            string? temp = null;
+            try
+            {
+                string path;
+                if (Zip)
+                {
+                    temp = Path.Combine(Path.GetTempPath(), "SketchProMax-package-" + Guid.NewGuid().ToString("N"));
+                    ZipFile.ExtractToDirectory(Source, temp);
+                    path = Path.Combine(temp, Model.Replace('/', Path.DirectorySeparatorChar));
+                }
+                else path = Path.Combine(Source, Model.Replace('/', Path.DirectorySeparatorChar));
+                var options = new OpenOptions { Audit = false };
+                options.SetOpenWorksetsConfiguration(new WorksetConfiguration(WorksetConfigurationOption.CloseAllWorksets));
+                try { if (BasicFileInfo.Extract(path).IsWorkshared) options.DetachFromCentralOption = DetachFromCentralOption.DetachAndPreserveWorksets; }
+                catch (Autodesk.Revit.Exceptions.ApplicationException) { }
+                var doc = app.OpenDocumentFile(ModelPathUtils.ConvertUserVisiblePathToModelPath(path), options);
+                return new OpenResult { Doc = doc, Temp = temp };
+            }
+            catch (Exception ex) when (ex is Autodesk.Revit.Exceptions.ApplicationException or IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException)
+            {
+                var result = new OpenResult { Error = ex.Message, Temp = temp };
+                result.Close();
+                return result;
+            }
+        }
     }
 
     private static string Folder(Document doc)

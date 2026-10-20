@@ -5,14 +5,14 @@ namespace SketchProMax.Tools;
 
 /// <summary>
 /// "Fix it for me" on the pre-submission checks whose fix is mechanical and safe to undo: unload the Revit links, delete
-/// the imported CAD, delete the views on no sheet, ungroup groups used once, make the 3D Navisworks Export view, and set
-/// a landing view as the starting view. Each is one Revit transaction (Ctrl+Z undoes it), except unloading links,
+/// the imported CAD, delete the views on no sheet, ungroup groups used once, make the 3D Navisworks Export view, set
+/// a landing view as the starting view, and export the NWC and IFC with the office settings (changes no model). Each is one Revit transaction (Ctrl+Z undoes it), except unloading links,
 /// which Manage Links reloads. The window asks first, saying exactly what changes. Revit API context only.
 /// </summary>
 internal static class ChecklistFixes
 {
     /// <summary>What the fix does, for its button and the question asked before it runs; null when a check has none.</summary>
-    public sealed record Offer(string Button, string Question);
+    public sealed record Offer(string Button, string Question, bool ChangesModel = true);
 
     public static Offer? For(string key) => key switch
     {
@@ -25,17 +25,22 @@ internal static class ChecklistFixes
         "navisview" => new("Make the Navisworks view",
             "Make a 3D view named \"3D Navisworks Export\": wireframe, with links, levels, grids and rooms hidden? Apply your trade's view template to it afterwards."),
         "landing" => new("Set the landing view as starting view", "Set the view with \"Landing\" in its name as the model's starting view?"),
+        "nwcsettings" or "ifcsettings" or "nwcdate" => new("Export the NWC and IFC with the office settings",
+            "Export the NWC from the 3D Navisworks Export view and the IFC, named exactly like the model, into the NWC and IFC folder (Checking rules), else next to the model? " +
+            "NWC: shared coordinates, divided into levels, element IDs, all parameters, no links. IFC: IFC 4x3 (or your IFC setup file), shared coordinates, no links. Files with the same names are replaced.", ChangesModel: false),
         _ => null,
     };
 
     /// <summary>Runs the fix for <paramref name="key"/> on the active model and opens what it made; a sentence saying what changed.</summary>
-    public static string Run(UIDocument uidoc, string key) => Run(uidoc.Document, key, uidoc.ActiveView?.Id, uidoc);
+    public static string Run(UIDocument uidoc, string key, ChecklistMath.Definition? def = null) => Run(uidoc.Document, key, uidoc.ActiveView?.Id, uidoc, def);
 
     /// <summary>Runs the fix on <paramref name="doc"/> (the field test passes no UIDocument, so nothing is opened).</summary>
-    public static string Run(Document doc, string key, ElementId? active, UIDocument? uidoc = null)
+    public static string Run(Document doc, string key, ElementId? active, UIDocument? uidoc = null, ChecklistMath.Definition? def = null)
     {
         switch (key)
         {
+            case "nwcsettings" or "ifcsettings" or "nwcdate":
+                return ChecklistExports.Export(doc, def);
             case "links":
             {
                 var loaded = new FilteredElementCollector(doc).OfClass(typeof(RevitLinkType)).Cast<RevitLinkType>()

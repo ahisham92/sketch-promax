@@ -47,7 +47,7 @@ internal sealed class ChecklistRulesWindow : Window
         var page = new StackPanel();
         page.Children.Add(Para("These are what the automatic model check compares the model with. Patterns: # is a digit, ? any one character, * anything; " +
                                "separate several with commas. Leave a rule empty to turn that test off: its check is then done by hand.", Brand.K.Muted));
-        page.Children.Add(Para("NWC and IFC export settings (checks on the export options) aren't stored in the model, so they can't be tested from it and stay with you.", Brand.K.Muted));
+        page.Children.Add(Para("NWC and IFC files don't record their export settings: checks 49 and 50 pass for the files Sketch ProMax exports itself (Fix it on those checks), with the office settings.", Brand.K.Muted));
         foreach (var rule in ChecklistMath.RuleDefs)
         {
             var label = Brand.Text(rule.Label, Brand.K.Text, 13, bold: true);

@@ -172,6 +172,12 @@ internal static class FieldTestCoverage
             "Settings > Sign-off > Helper = SketchPro: the button copies the question (paste it into Notepad to see it); None: the button is gone."),
         new("checklist.rules", Issue, "Pre-submission checklist: checking rules and the automatic tests they drive", How.Probe, "",
             "every model test of the built-in checklist, the slow ones included, with all checking rules on, reads the test project without an error (the window's rules dialog and the SketchPro paste are in checklist.sketchpro)"),
+        new("checklist.files", Issue, "Pre-submission checklist: the checks read from files (MIDP, drawing list, clash report, exports, package)", How.Manual, "",
+            "they read the office's own files and Navisworks output, which only a person has; the unit tests check the drawing list, clash report and date logic",
+            "On a _detached copy, Checking rules…: set the MIDP file, the drawing list, the Navisworks clash report (XML or HTML), the NWC and IFC folder and the package folder. " +
+            "Check 4 finds the model's number in the MIDP; 36 lists drawings in the list with no sheet; 44 counts your open clashes. On check 49 click Fix it: Export the NWC and IFC: " +
+            "both files appear in the folder named like the model, and 49, 50 and 51 pass. Create the PDF on Review and sign: its name ends READY or NOT READY and 46 follows it. " +
+            "54 lists sheets whose views show a linked model; 55 says N/A for Revit; 56 lists the package's file types; Run the slow checks: 53 and 57 open the packaged model from a clean folder."),
         new("checklist.slow", Issue, "Pre-submission checklist: the slow automatic checks and the new model tests", How.Manual, "",
             "whether the new tests' findings are right on a real model (names, legends, clashes, the standard template) is judged by a person",
             "On a _detached copy: Pre-submission checklist (next to Chat). Checks 18, 19, 38, 43 and 45 say Automatic (slow check): not run yet. Project details > Run the slow checks: " +
