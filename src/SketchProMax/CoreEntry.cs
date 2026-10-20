@@ -54,6 +54,21 @@ public static class CoreEntry
 
     public static int Command(string name, UIApplication app)
     {
+        if (!App.Shared) return Run(name, app);
+        // TritoRevit: a failure is saved as a problem report by itself (Documents\TritoRevit - <pack>\Bugs), then said.
+        try { return Run(name, app); }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            var file = Bugs.BugReport.Automatic(app, name, ex);
+            var inner = ex is System.Reflection.TargetInvocationException { InnerException: { } i } ? i : ex;
+            TaskDialog.Show("TritoRevit", $"That didn't work: {inner.Message}" + (file is null ? "" :
+                $"\n\nA problem report was saved in {System.IO.Path.GetDirectoryName(file)}. Send it to the person who shared these tools."));
+            return -1;
+        }
+    }
+
+    private static int Run(string name, UIApplication app)
+    {
         var result = name switch
         {
             "status" => CoreCommands.Status(app),

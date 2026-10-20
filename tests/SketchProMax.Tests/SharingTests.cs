@@ -161,6 +161,16 @@ internal static class SharingTests
         check("sharing: build puts TritoRevit in every version", build.Contains("TritoRevit.csproj") && build.Contains("TritoRevit.addin"), "");
         var release = Read(Path.Combine(root, ".github", "workflows", "release.yml"));
         check("sharing: release checks TritoRevit is in the zip", release.Contains("TritoRevit.dll"), "");
+
+        // ---- The TritoRevit folder in Documents (problem reports and checklists)
+        var listPack = new Pack { Id = "qa", Name = "QA tools", UpdateFrom = @"\\server\share" };
+        var checklistPack = new Pack { Id = "psc", Name = "Pre Submission Checklist", Checklist = ChecklistFile };
+        check("sharing: folder named after the pack with the checklist", FolderName([listPack, checklistPack]) == "TritoRevit - Pre Submission Checklist", FolderName([listPack, checklistPack]));
+        check("sharing: folder named after the only pack, or Shared tools", FolderName([listPack]) == "TritoRevit - QA tools" && FolderName([]) == "TritoRevit - Shared tools", "");
+        check("sharing: pack names made safe for a folder", CleanName("A/B: C?*  D.") == "A B C D" && CleanName(new string('x', 90)).Length == 60 && FolderName([new Pack { Name = "???" }]) == "TritoRevit - Shared tools", CleanName("A/B: C?*  D."));
+        var readMe = ReadMe([listPack]);
+        check("sharing: the how-to says where reports go", readMe.Contains("Bugs") && readMe.Contains("Report a problem") && readMe.Contains(@"\\server\share") && !readMe.Contains("Claude"), readMe);
+        check("sharing: the how-to without an update folder says to send the zips", ReadMe([checklistPack]).Contains("Send the zips"), "");
     }
 
     private static string Read(string path) => File.Exists(path) ? File.ReadAllText(path) : "";

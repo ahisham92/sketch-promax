@@ -27,7 +27,7 @@ internal static class BugReport
     }
 
     /// <summary>Writes the zip and refreshes Bug log.md. Returns the zip's path.</summary>
-    public static string Create(UIApplication app, string description, (byte[]? Jpeg, string? Error) shot, string from)
+    public static string Create(UIApplication app, string description, (byte[]? Jpeg, string? Error) shot, string from, string? details = null)
     {
         description = string.Join(" ", (description ?? "").Replace("\r", " ").Replace("\n", " ").Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries));
         if (description.Length == 0) throw new ArgumentException("Say in one line what went wrong.");
@@ -61,7 +61,10 @@ internal static class BugReport
         md.AppendLine($"**What happens:** {description}");
         md.AppendLine();
         md.AppendLine($"- Reported: {now:yyyy-MM-dd HH:mm} (local time), from {from}");
-        md.AppendLine($"- Add-in: Sketch ProMax {Update.Updater.CurrentText}");
+        md.AppendLine($"- Add-in: {Sharing.SharedTools.Product} {Update.Updater.CurrentText}");
+        if (App.Shared)
+            foreach (var pack in Sharing.SharedPacks.List().Select(i => i.Pack))
+                md.AppendLine($"- Shared pack: {pack.Name}, revision {pack.Revision}, made with {pack.MinVersion}");
         md.AppendLine($"- Revit: {app.Application.VersionName} ({app.Application.VersionNumber}, build {app.Application.VersionBuild})");
         md.AppendLine($"- Model: {model}" + (view.Length > 0 ? $", view: {view}" : ""));
         md.AppendLine($"- Screenshot: {(shot.Jpeg is not null ? "screenshot.jpg (Revit's main window)" : "none (" + shot.Error + ")")}");
@@ -89,6 +92,7 @@ internal static class BugReport
                 Add("activity.jsonl", utf8.GetBytes(string.Join("\n", activity) + "\n"));
                 Add("assemblies.md", utf8.GetBytes(assemblies));
                 if (shot.Jpeg is not null) Add("screenshot.jpg", shot.Jpeg, compress: false);
+                if (details is not null) Add("error.txt", utf8.GetBytes(details));
             }
             File.Move(partial, file);
         }
@@ -98,7 +102,70 @@ internal static class BugReport
             throw;
         }
         BugLog.RewriteLocal();
+        // TritoRevit: a copy to the person who shared the tools, in the background (a network folder may be slow or gone).
+        if (App.Shared) _ = System.Threading.Tasks.Task.Run(() => Sharing.UserFolder.Deliver(file));
         return file;
+    }
+
+    /// <summary>
+    /// TritoRevit: a report written by itself when a shared tool fails, with what failed as its description. Never throws;
+    /// returns the zip, or null when it couldn't be written.
+    /// </summary>
+    private static System.Windows.Threading.Dispatcher? _watched;
+    private static UIApplication? _watchedApp;
+
+    /// <summary>
+    /// TritoRevit: an exception from our code that reaches Revit's UI dispatcher (a window's button, an async handler) is
+    /// saved as a problem report. Only looked at, never marked handled, so Revit deals with it as before.
+    /// </summary>
+    public static void Watch(System.Windows.Threading.Dispatcher? ui, UIApplication app)
+    {
+        if (ui is null || _watched is not null) return;
+        _watched = ui;
+        _watchedApp = app;
+        ui.UnhandledException += OnUnhandled;
+    }
+
+    public static void Unwatch()
+    {
+        if (_watched is { } ui) ui.UnhandledException -= OnUnhandled;
+        _watched = null;
+        _watchedApp = null;
+    }
+
+    private static void OnUnhandled(object sender, System.Windows.Threading.DispatcherUnhandledExceptionEventArgs e)
+    {
+        if (!Ours(e.Exception)) return;
+        Automatic(_watchedApp, "a TritoRevit window", e.Exception);
+    }
+
+    /// <summary>True when the exception went through this add-in's code (other add-ins' failures are theirs).</summary>
+    internal static bool Ours(Exception ex)
+    {
+        for (var e = ex; e is not null; e = e.InnerException)
+            if ((e.StackTrace ?? "").IndexOf("SketchProMax.", StringComparison.Ordinal) >= 0) return true;
+        return false;
+    }
+
+    private static readonly object AutoGate = new();
+    private static DateTime _lastAuto = DateTime.MinValue;
+
+    public static string? Automatic(UIApplication? app, string what, Exception ex)
+    {
+        if (!App.Shared) return null;
+        // One by itself per half minute: a failure that repeats doesn't fill the folder.
+        lock (AutoGate)
+        {
+            if (DateTime.UtcNow - _lastAuto < TimeSpan.FromSeconds(30)) return null;
+            _lastAuto = DateTime.UtcNow;
+        }
+        try
+        {
+            var inner = ex is System.Reflection.TargetInvocationException { InnerException: { } i } ? i : ex;
+            var line = $"Automatic report: {what} failed with {inner.GetType().Name}: {inner.Message}";
+            return app is null ? null : Create(app, line, Screenshot(), "TritoRevit, by itself", inner.ToString());
+        }
+        catch (Exception) { return null; }
     }
 
     /// <summary>The last <paramref name="max"/> activity-log lines across the daily files, oldest first.</summary>
@@ -131,23 +198,39 @@ internal static class BugReport
     public static Result Command(UIApplication app)
     {
         var shot = Screenshot();
-        var window = new InputsWindow("Report bug", "One small zip for the Sketch ProMax developer.",
+        if (Ask() is not { } description) return Result.Cancelled;
+        string file;
+        try { file = Create(app, description, shot, App.Shared ? "Report a problem" : "the Report bug button"); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or InvalidDataException)
+        {
+            TaskDialog.Show(Sharing.SharedTools.Product, $"The bug report could not be saved: {ex.Message}");
+            return Result.Failed;
+        }
+        Saved(file);
+        return Result.Succeeded;
+    }
+
+    /// <summary>Asks for the one line; null when cancelled. Call on Revit's UI thread.</summary>
+    public static string? Ask()
+    {
+        var where = App.Shared ? BugLog.ReportsFolder.Replace(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Documents")
+            : "Documents\\Sketch ProMax\\Bugs\\Reports";
+        var window = new InputsWindow(App.Shared ? "Report a problem" : "Report bug",
+            App.Shared ? "One small zip for the person who shared these tools." : "One small zip for the Sketch ProMax developer.",
             "Say in one line what went wrong. The report also holds a picture of the Revit window, the versions, the model's name, " +
-            "the last tool calls and their errors. Nothing is sent: the zip is saved in Documents\\Sketch ProMax\\Bugs\\Reports.",
+            "the last tool calls and their errors. Nothing goes over the internet: the zip is saved in " + where + "." +
+            (App.Shared ? " A copy also goes to the shared tools' update folder when this PC can reach it." : ""),
             [],
             [new InputsWindow.Field("description", "What went wrong", "For example: the tags are placed on top of each other in Level 2.", "string", true, null, null)],
             "Save report");
-        if (window.ShowDialog() != true) return Result.Cancelled;
-        string file;
-        try { file = Create(app, window.Values["description"], shot, "the Report bug button"); }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or InvalidDataException)
-        {
-            TaskDialog.Show("Sketch ProMax", $"The bug report could not be saved: {ex.Message}");
-            return Result.Failed;
-        }
+        return window.ShowDialog() == true ? window.Values["description"] : null;
+    }
+
+    /// <summary>Shows the saved zip in its folder (Explorer with the file selected), or says where it is.</summary>
+    public static void Saved(string file)
+    {
         try { Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{file}\"") { UseShellExecute = true })?.Dispose(); }
-        catch (Exception) { TaskDialog.Show("Sketch ProMax", $"Bug report saved: {file}"); }
-        return Result.Succeeded;
+        catch (Exception) { TaskDialog.Show(Sharing.SharedTools.Product, $"Bug report saved: {file}"); }
     }
 
     /// <summary>The Open bug folder button.</summary>

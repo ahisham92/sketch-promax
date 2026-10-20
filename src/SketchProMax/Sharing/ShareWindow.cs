@@ -4,6 +4,7 @@ using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Input;
 using TaskDialog = Autodesk.Revit.UI.TaskDialog;
+using UIApplication = Autodesk.Revit.UI.UIApplication;
 using TaskDialogCommandLinkId = Autodesk.Revit.UI.TaskDialogCommandLinkId;
 using TaskDialogResult = Autodesk.Revit.UI.TaskDialogResult;
 using SketchProMax.UI;
@@ -284,9 +285,12 @@ internal sealed class SharedToolsWindow : Window
     private readonly StackPanel _list = new();
     private readonly TextBlock _status = Brand.Text("", Brand.K.Muted);
     private readonly Button _check;
+    private readonly UIApplication? _app;
 
-    public SharedToolsWindow()
+    /// <param name="app">The command's Revit, for Report a problem (the window is modal, so still inside the command).</param>
+    public SharedToolsWindow(UIApplication? app = null)
     {
+        _app = app;
         Title = "Shared tools";
         Width = 580;
         SizeToContent = SizeToContent.Height;
@@ -307,7 +311,11 @@ internal sealed class SharedToolsWindow : Window
         close.IsDefault = true;
         close.IsCancel = true;
         close.Click += (_, _) => Close();
-        var buttons = Brand.ButtonRow(add, _check, close);
+        var problem = Brand.Button("Report a problem…");
+        AutomationProperties.SetHelpText(problem, "Saves one small zip with a picture of Revit, the versions and what failed, in Documents\\TritoRevit - <pack>\\Bugs.");
+        problem.Click += (_, _) => ReportProblem();
+        problem.Visibility = _app is null ? Visibility.Collapsed : Visibility.Visible;
+        var buttons = Brand.ButtonRow(problem, add, _check, close);
         DockPanel.SetDock(buttons, Dock.Bottom);
         body.Children.Add(buttons);
 
@@ -373,6 +381,23 @@ internal sealed class SharedToolsWindow : Window
             Rebuild($"'{pack.Name}' was removed.");
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { Rebuild($"'{pack.Name}' couldn't be removed: {ex.Message}"); }
+    }
+
+    private void ReportProblem()
+    {
+        if (_app is null) return;
+        var shot = Bugs.BugReport.Screenshot();
+        if (Bugs.BugReport.Ask() is not { } description) return;
+        try
+        {
+            var file = Bugs.BugReport.Create(_app, description, shot, "Shared tools, Report a problem");
+            Rebuild("Problem report saved: " + file);
+            Bugs.BugReport.Saved(file);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or InvalidDataException)
+        {
+            Rebuild("The problem report couldn't be saved: " + ex.Message);
+        }
     }
 
     private void AddZip()
