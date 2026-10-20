@@ -18,7 +18,7 @@ internal static class SettingsLayout
         new(Standards, "Firm standards", "Your office's rules, followed in every conversation."),
         new(Time, "Time tracking", "Working time and time saved, kept in each model."),
         new(Issue, "Issue & drawings", "What the issue check lets through."),
-        new(SignOff, "Sign-off", "Your signature and the checklist used by Issue > Pre-submission checklist."),
+        new(SignOff, "Sign-off", "Your signature and the checklist used by the Pre-submission checklist button."),
         new(Updates, "Updates", "Keeping Sketch ProMax up to date."),
     ];
 

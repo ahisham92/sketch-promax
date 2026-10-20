@@ -101,7 +101,7 @@ internal static class FieldTestCoverage
         new("ribbon.status", RibbonArea, "Connection status, Copy prompt, Send view, pane", How.Manual, "", "these show dialogs, use the clipboard or depend on the Claude app running",
             "Click the connection status button (first panel) and read the dialog. Click Copy prompt and paste into Notepad. Open a plan, click Send view and check the picture is attached in the chat. Use More > Show or hide pane twice."),
         new("ribbon.job", RibbonArea, "Job and Update buttons", How.Manual, "", "they show live state that only exists while a job or update runs",
-            "Start a long tool (e.g. Model check), watch the Job button show progress, click it and stop the job. Click Updates and read the version and last check."),
+            "Start a long tool (e.g. Model check), watch the Job button show progress, click it and stop the job. Click Update: the update window opens on Checking, then says up to date (or installs the newer version in place); no browser or folder opens."),
         new("help", RibbonArea, "Help page", How.Manual, "", "opens a web page in your browser", "Help > Help and getting started: the guide opens in the browser."),
         new("diagnostics", RibbonArea, "Self-test, field test and the test checklist", How.Probe, "", "the field test runs the self-test (safe mode) on its own project; this report is the field test"),
 
@@ -143,7 +143,7 @@ internal static class FieldTestCoverage
         new("checklist.word", Issue, "Pre-submission checklist: model hints and the signed Word file", How.Probe, "",
             "a checklist whose checks ask for grids, warnings and imported CAD gets a hint for each from the test project; the Word file is written with the signature picture when every check is Y or NA, and says NOT READY with no picture when one is N"),
         new("checklist.ui", Issue, "The pre-submission checklist window and the printed checklist", How.Manual, "", "the stages, the cards, the keys, the signature and how the Word file and PDF print are judged by a person",
-            "On a _detached copy: Settings > Sign-off: type your name, pick your role, choose your signature picture and Save. Issue > Pre-submission checklist: it opens on the built-in checklist (57 checks, 7 stages) with no Excel file. " +
+            "On a _detached copy: Settings > Sign-off: type your name, pick your role, choose your signature picture and Save. Pre-submission checklist (large, next to Chat and Update): it opens on the built-in checklist (57 checks, 7 stages) with no Excel file. " +
             "Project details shows the file names and building from the model; Next goes stage by stage on the left, each with its count. On a card press Y: it turns green and the next check is focused; " +
             "press N: the comment box is focused and says why it is needed. Check the hints under the checks (grids, worksets, warnings) match the model. Close the window and open it again: your answers are still there. " +
             "Review and sign lists what is open; click one to go to it. Create the Word file while one check is No: it says NOT READY with no signatures. Answer everything Y or NA, create it again: it says READY with your signature " +
@@ -153,7 +153,7 @@ internal static class FieldTestCoverage
             "a plan with the grids and schedules of sheets, views and title blocks are made in the test project, named Sketch ProMax check - …, found by name and all deleted (rolled back)"),
         new("checklist.show", Issue, "Pre-submission checklist: Show in Revit and the automatic model check", How.Manual, "",
             "opening views and Revit's dialogs from the window, and the two scores, are judged by a person",
-            "On a _detached copy: Issue > Pre-submission checklist. The blue header shows two rings, Your answers and Automatic check, with their percentages; " +
+            "On a _detached copy: Pre-submission checklist (next to Chat). The blue header shows two rings, Your answers and Automatic check, with their percentages; " +
             "answer a check and Your answers sweeps to the new value. Buttons have icons, lift on hover and the Yes / No / N/A button pops when chosen; pages slide in. " +
             "Set Settings > Chat > animations to Off and reopen: the same changes show at once. On the grids check (in the details panel) click Show the grids: a plan named Sketch ProMax check - Grids opens with the grids, beside the checklist. " +
             "Try Open the warnings (Revit's warnings list opens), Select the imported CAD and List the views (a schedule opens). Answer every check Yes: Review and sign shows " +
@@ -163,7 +163,7 @@ internal static class FieldTestCoverage
             "on the test project the Navisworks view is made, imported CAD and views on no sheet are deleted, groups used once are ungrouped and the landing view is set, then all rolled back (unloading links isn't probed: it can't be rolled back)"),
         new("checklist.details", Issue, "Pre-submission checklist: the details panel, beside Revit, and the helper", How.Manual, "",
             "the details panel, side-by-side mode, the Fix confirmations and the helper's answer in the chat are judged by a person",
-            "On a _detached copy: Issue > Pre-submission checklist, stage A. Each card shows a short title; click one: the panel on the right shows what the model found " +
+            "On a _detached copy: Pre-submission checklist (next to Chat), stage A. Each card shows a short title; click one: the panel on the right shows what the model found " +
             "(with the full list, e.g. every level not named to the standard), How to fix, How to check and the checklist's wording, and Yes / No / N/A that follow the card. " +
             "Use the panel's arrows to go through every check. On the grids check click Show the grids: the window becomes a narrow panel at the right of the screen and the plan opens in Revit, " +
             "in view. Back to the full checklist puts the window where it was. On the unused views check click Fix it: it asks first, says what it will delete and that Ctrl+Z undoes it; " +
@@ -174,13 +174,13 @@ internal static class FieldTestCoverage
             "every model test of the built-in checklist, the slow ones included, with all checking rules on, reads the test project without an error (the window's rules dialog and the SketchPro paste are in checklist.sketchpro)"),
         new("checklist.slow", Issue, "Pre-submission checklist: the slow automatic checks and the new model tests", How.Manual, "",
             "whether the new tests' findings are right on a real model (names, legends, clashes, the standard template) is judged by a person",
-            "On a _detached copy: Issue > Pre-submission checklist. Checks 18, 19, 38, 43 and 45 say Automatic (slow check): not run yet. Project details > Run the slow checks: " +
+            "On a _detached copy: Pre-submission checklist (next to Chat). Checks 18, 19, 38, 43 and 45 say Automatic (slow check): not run yet. Project details > Run the slow checks: " +
             "the button says it is running, then those checks pass or list what they found with the time they ran (43 and 45 name the report file). Read the model again: they keep their results. " +
             "Checking rules…: set The trade's standard template file to your .rte and run the slow checks: 38 lists missing view templates or filters. " +
             "Check 15 lists type names not like *_*_*, 37 the types missing from the legends, 42 the schedules on no sheet, 2 and 5 look for the _S03_R copy, NWC and IFC next to the model."),
         new("checklist.sketchpro", Issue, "Pre-submission checklist: checking rules dialog, manual checks and pasting into SketchPro", How.Manual, "",
             "the rules dialog, the Automatic / You check this labels and pasting into another company's add-in are judged by a person",
-            "On a _detached copy: Issue > Pre-submission checklist > Project details: the How this checklist is checked card says how many checks are automatic. " +
+            "On a _detached copy: Pre-submission checklist (next to Chat) > Project details: the How this checklist is checked card says how many checks are automatic. " +
             "Each card is marked Automatic or You check this; Review and sign lists the ones you check yourself. Checking rules…: set Approved worksets to your list and Save: " +
             "check 12 becomes automatic and the counts go up. Export the checklist to Excel: it has a Rules sheet; change a rule there and import it back. " +
             "Settings > Sign-off > Helper = SketchPro. On a manual check click Ask SketchPro: SketchPro's Copilot opens and the question is pasted in its message box, not sent. " +

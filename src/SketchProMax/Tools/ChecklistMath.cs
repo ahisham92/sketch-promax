@@ -9,7 +9,7 @@ using System.Xml.Linq;
 namespace SketchProMax.Tools;
 
 /// <summary>
-/// The pre-submission checklist (Issue > Pre-submission checklist, UI/ChecklistWindow): the checklist read from the
+/// The pre-submission checklist (its button is next to Chat; UI/ChecklistWindow): the checklist read from the
 /// office's Excel sheet, the answers given in the window, what is still open, and the model hints each check gets. No
 /// Revit or WPF here, so the tests run it; ChecklistDocx writes the signed Word file and ChecklistFacts reads the model.
 ///

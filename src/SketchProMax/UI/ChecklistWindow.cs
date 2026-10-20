@@ -24,7 +24,7 @@ using Visibility = System.Windows.Visibility;
 namespace SketchProMax.UI;
 
 /// <summary>
-/// The pre-submission checklist (Issue > Pre-submission checklist): the office's checklist (built in, imported from Excel
+/// The pre-submission checklist (next to Chat): the office's checklist (built in, imported from Excel
 /// or edited in ChecklistEditor; ChecklistStore picks which, ChecklistMath reads it) walked
 /// through in stages, one per section, between Project details and Review and sign. Each check is a card with what to
 /// do, how to check it, where it came from, a hint read from the model (ChecklistFacts), Yes / No / N/A and a comment.

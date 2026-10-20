@@ -33,8 +33,14 @@ internal static class CoreRibbonManifest
             "and drawings, or send the current view. The first time, it helps you install Claude Code and sign in.")),
         // Update (0.33.1): also in the first panel, which Revit never folds away on a narrow ribbon, so updating is always one click.
         L(Button("Claude", "UpdateClaude", "Update", "update-button", "version",
-            "The installed version and updates: Update ready (click to install now), Updated – What's new (release notes), Up to date " +
+            "The installed version and updates: Update ready (click to install now), Updated to <version> (click to check again), Up to date " +
             "with the time of the last check (click to check now), Couldn't check (why, in this tooltip).", live: "update-first")),
+        // Pre-submission checklist (0.34.12: next to Chat and Update, large, so it is always in view): the office's checklist Excel in stages, ending in a signed Word file (UI/ChecklistWindow).
+        L(Button("Claude", "PreSubmission", "Pre-submission\nchecklist", "pre-submission", "field",
+            "Goes through the office's pre-submission checklist stage by stage, with hints from the model, and makes the signed Word file to print.",
+            "Stages from your checklist Excel: project details, one per section, then review and sign. Each check has how to check it, " +
+            "where it came from and what the model shows; answer Yes, No or N/A with a comment. The Word file carries the signatures " +
+            "only when nothing is No or unanswered. Reads the model only; answers are kept per model.", needsModel: true)),
         L(Button("Claude", "ClaudeStatus", "Status", "status", "logo:gray",
             "Whether the Claude desktop app is connected to this Revit window: green connected, amber ready, gray not running, red no link. Click for details.",
             "Green: the desktop app has talked to this Revit window in the last few minutes. Amber: ready, waiting for the app. Gray: the " +
@@ -143,12 +149,6 @@ internal static class CoreRibbonManifest
             "Its options open, then the preview: nothing changes until you press Delete them, and Ctrl+Z undoes it in one step.", needsModel: true)),
 
         // ---- Issue (0.33: the issue check gates Issue drawings and Export PDF of sheets, see UI/IssueGateWindow)
-        // Pre-submission checklist: the office's checklist Excel in stages, ending in a signed Word file (UI/ChecklistWindow).
-        L(Button("Issue", "PreSubmission", "Pre-submission\nchecklist", "pre-submission", "list",
-            "Goes through the office's pre-submission checklist stage by stage, with hints from the model, and makes the signed Word file to print.",
-            "Stages from your checklist Excel: project details, one per section, then review and sign. Each check has how to check it, " +
-            "where it came from and what the model shows; answer Yes, No or N/A with a comment. The Word file carries the signatures " +
-            "only when nothing is No or unanswered. Reads the model only; answers are kept per model.", needsModel: true)),
         L(Button("Issue", "IssueCheck", "Issue\ncheck", "issue-check", "check",
             "The zero-mistake check before an issue: drawing, spec, BOQ and model checks together, pass or fail per sheet.",
             "Runs check_drawings, spec_check, boq_check and check_model on the issue set and lists each finding under its sheet " +
@@ -171,7 +171,7 @@ internal static class CoreRibbonManifest
         L(Button("Sketch ProMax", "JobLive", "No job", "job-button", "job",
             "The tool running in Revit and its progress. While one runs, click to ask it to stop.", live: "job")),
         L(Button("Sketch ProMax", "UpdateLive", "Updates", "update-button", "version",
-            "The installed version and updates: Update ready (install it now), Updated – What's new (release notes), Up to date " +
+            "The installed version and updates: Update ready (install it now), Updated to <version> (click to check again), Up to date " +
             "with the time of the last check, Couldn't check (why, in this tooltip).", live: "update-badge")),
         // Bug reports (0.30): CoreEntry.Command "report-bug" / "bug-folder" / "export-chats-bugs"; the notes tab by PaneContent("notes").
         L(Button("Sketch ProMax", "ReportBug", "Report bug", "report-bug", "bug",
