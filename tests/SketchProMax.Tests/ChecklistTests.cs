@@ -29,7 +29,7 @@ internal static class ChecklistTests
                 [(0, "2"), (1, "Level field: a model that covers many levels uses 00."), (5, "High"), (9, "Waiting: BIM lead, 00 or MM")],
                 [(0, "B. Coordinates, levels, grids, worksets")],
                 [(0, "3"), (1, "Grids are in the model and visible in plans."), (2, "The client rejected BLDG-01 because the STR file had no grids")],
-                [(0, "4"), (1, "Every element is on its STD-0003 workset. Nothing on Workset1."), (2, "Link worksets: Z_Link_URS, Z_Link_AR")],
+                [(0, "4"), (1, "Every element is on its BIM standard workset. Nothing on Workset1."), (2, "Link worksets: Z_Link_URS, Z_Link_AR")],
                 [(0, "Sign-off")],
                 [(0, "Trade BIM coordinator: ____________________     Trade group leader: ____________________     Date: __________")],
                 [(0, "Yellow rows wait on an answer.")],

@@ -325,7 +325,7 @@ internal static class ChecklistMath
     }
 
     /// <summary>
-    /// The office's file name parts (D01C-070-00-ABC-002-STR-3DM-0010): the building code, the level field, the
+    /// The office's file name parts (PRJ1-070-00-ABC-002-STR-3DM-0010): the building code, the level field, the
     /// discipline and the doc type, or empty strings when the name doesn't follow the pattern.
     /// </summary>
     public static (string Building, string Level, string Discipline, string DocType, bool Has002) NameParts(string fileName)

@@ -122,7 +122,7 @@ internal static partial class FieldTest
         var basic = BasicWallType(doc);
         if (basic is null) return Fail("the test project has no basic wall type with layers");
         var problems = new List<string>();
-        if (!Revit.CentralAccess.IsUnavailable("The requested operation cannot be completed because the model N25185.rvt is not currently available."))
+        if (!Revit.CentralAccess.IsUnavailable("The requested operation cannot be completed because the model Project.rvt is not currently available."))
             problems.Add("Revit's dialog text isn't recognised");
         var tag = Guid.NewGuid().ToString("N").Substring(0, 6);
         using var group = new TransactionGroup(doc, "Field test: central model");

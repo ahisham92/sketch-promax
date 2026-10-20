@@ -434,7 +434,7 @@ public sealed class SettingsWindow : Window
         ShowSignature();
 
         page.Children.Add(SubHeading("Checklist"));
-        page.Children.Add(Brand.Text("Optional: an Excel checklist (.xlsx) to use instead of the built-in D01C one. It is followed while it changes; to edit the checklist instead, use Edit the checklist in the checklist window."));
+        page.Children.Add(Brand.Text("Optional: an Excel checklist (.xlsx) to use instead of the built-in one. It is followed while it changes; to edit the checklist instead, use Edit the checklist in the checklist window."));
         var pathRow = new DockPanel { Margin = new Thickness(0, 4, 0, 0) };
         var browse = Brand.Button("Browse…");
         AutomationProperties.SetName(browse, "Browse for the checklist Excel file");

@@ -9,7 +9,7 @@ using SketchProMax.UI;
 namespace SketchProMax.Chat;
 
 /// <summary>
-/// The chat's home screen, shown while a chat is empty: "Hey Ahmed!" with the brand mark, then a DISCOVER row of cards
+/// The chat's home screen, shown while a chat is empty: "Hey Sam!" with the brand mark, then a DISCOVER row of cards
 /// that each open a library view (with a back arrow). Explore all features is a searchable library of what Claude can
 /// do here, grouped like the ribbon with a count per group; Saved prompts are the user's own; Tailored prompts are
 /// picked by project type and phase. Choosing a prompt puts it in the message box to edit. The library is read the

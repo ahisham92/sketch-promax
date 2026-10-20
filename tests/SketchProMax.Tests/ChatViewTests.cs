@@ -77,17 +77,17 @@ internal static class ChatViewTests
         check("jump: hidden within the slack of the bottom", !ScrollFollow.JumpVisible(true, false, 900, 900 - ScrollFollow.Slack + 1), "");
 
         // The home screen's greeting.
-        check("greeting: display name", Greeting.FirstName("Ahmed Mitwally") == "Ahmed", Greeting.FirstName("Ahmed Mitwally") ?? "null");
-        check("greeting: last, first", Greeting.FirstName("Mitwally, Ahmed") == "Ahmed", Greeting.FirstName("Mitwally, Ahmed") ?? "null");
-        check("greeting: capitals and a note in brackets", Greeting.FirstName("AHMED MITWALLY (Structures)") == "Ahmed", Greeting.FirstName("AHMED MITWALLY (Structures)") ?? "null");
+        check("greeting: display name", Greeting.FirstName("Sam Taylor") == "Sam", Greeting.FirstName("Sam Taylor") ?? "null");
+        check("greeting: last, first", Greeting.FirstName("Taylor, Sam") == "Sam", Greeting.FirstName("Taylor, Sam") ?? "null");
+        check("greeting: capitals and a note in brackets", Greeting.FirstName("SAM TAYLOR (Structures)") == "Sam", Greeting.FirstName("SAM TAYLOR (Structures)") ?? "null");
         check("greeting: title skipped", Greeting.FirstName("Eng. Sara Ali") == "Sara" && Greeting.FirstName("Dr Omar Hassan") == "Omar", "");
-        check("greeting: sign-in name", Greeting.FirstName("ahmed.mitwally") == "Ahmed" && Greeting.FirstName("CORP\\sara_ali") == "Sara", "");
+        check("greeting: sign-in name", Greeting.FirstName("sam.taylor") == "Sam" && Greeting.FirstName("CORP\\sara_ali") == "Sara", "");
         check("greeting: e-mail", Greeting.FirstName("jean-luc.picard@example.com") == "Jean", Greeting.FirstName("jean-luc.picard@example.com") ?? "null");
         check("greeting: hyphenated display name kept", Greeting.FirstName("jean-luc picard") == "Jean-Luc", Greeting.FirstName("jean-luc picard") ?? "null");
         check("greeting: mixed case kept", Greeting.FirstName("McKay Smith") == "McKay", "");
-        check("greeting: not a name", Greeting.FirstName("a.mitwally") is null && Greeting.FirstName("user123") is null && Greeting.FirstName("  ") is null && Greeting.FirstName(null) is null, "");
+        check("greeting: not a name", Greeting.FirstName("s.taylor") is null && Greeting.FirstName("user123") is null && Greeting.FirstName("  ") is null && Greeting.FirstName(null) is null, "");
         check("greeting: non-Latin name", Greeting.FirstName("أحمد متولي") == "أحمد", Greeting.FirstName("أحمد متولي") ?? "null");
-        check("greeting: first usable candidate", Greeting.Pick(null, "", "x1", "ahmed") == "Ahmed" && Greeting.Pick("user1") is null, "");
+        check("greeting: first usable candidate", Greeting.Pick(null, "", "x1", "sam") == "Sam" && Greeting.Pick("user1") is null, "");
         // The chat's styles are parsed at run time with a plain fallback, so a slip would quietly lose the whole look.
         var xaml = ChatStyles.Xaml(8, 12);
         System.Xml.Linq.XDocument? styles = null;
@@ -101,7 +101,7 @@ internal static class ChatViewTests
             check("styles: no placeholder left", left.Count == 0, string.Join(",", left));
             check("styles: corners from the spacing scale", xaml.Contains("CornerRadius=\"8\"") && xaml.Contains("CornerRadius=\"12\"") && xaml.Contains("RadiusX=\"10\""), "");
         }
-        check("greeting: line", Greeting.Line("Ahmed") == "Hey Ahmed!" && Greeting.Line(null) == "Hey there!", "");
+        check("greeting: line", Greeting.Line("Sam") == "Hey Sam!" && Greeting.Line(null) == "Hey there!", "");
 
         // Hover fades and presses: on the chrome only, never on the label; no fade when Windows' animations are off.
         var still = ChatStyles.Xaml(8, 12, animate: false);
