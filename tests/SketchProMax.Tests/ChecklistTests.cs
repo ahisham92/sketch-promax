@@ -144,7 +144,8 @@ internal static class ChecklistTests
         var wordy = built.Items.Where(i => i.Short.Length == 0 || i.Short.Length > 45 || i.Fix.Length == 0 || i.Title.Length >= i.Check.Length).Select(i => i.Number).ToList();
         check("checklist: every built-in check has a short title (45 characters at most) and a way to fix it", wordy.Count == 0, "checks " + string.Join(", ", wordy));
         var json = ToJson(built);
-        var named = new[] { "S26103", "WSP", "N25185", "D01C" }.Where(n => json.IndexOf(n, StringComparison.OrdinalIgnoreCase) >= 0).ToList();
+        // Project numbers look like a letter and five digits, project codes like D01C; neither may appear (the test itself names none).
+        var named = System.Text.RegularExpressions.Regex.Matches(json, @"\b(?:[A-Z]\d{5}|[A-Z]\d{2}[A-Z])\b").Cast<System.Text.RegularExpressions.Match>().Select(m => m.Value).Distinct().ToList();
         check("checklist: the built-in checklist names no project or firm", named.Count == 0, string.Join(", ", named));
         check("checklist: a check without a short title shows its first sentence",
             new Item("1", "1", "Grids are in the model. They show in plans (BLDG-01).", "", "", "", "", "", "").Title == "Grids are in the model."
