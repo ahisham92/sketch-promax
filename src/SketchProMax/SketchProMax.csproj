@@ -86,6 +86,12 @@
     <EmbeddedResource Include="..\..\docs\bug-log.md" LogicalName="SketchProMax.bug-log.md" />
   </ItemGroup>
 
+  <!-- The installer Share tools puts in each shared tools zip (Sharing/SharedPacks). -->
+  <ItemGroup>
+    <EmbeddedResource Include="Sharing\install-tritorevit.ps1" LogicalName="SketchProMax.Sharing.install-tritorevit.ps1" />
+    <EmbeddedResource Include="Sharing\install-tritorevit.cmd" LogicalName="SketchProMax.Sharing.install-tritorevit.cmd" />
+  </ItemGroup>
+
   <!-- On Windows, copy the build into the per-user Revit add-ins folder so Revit picks it up. -->
   <Target Name="DeployToRevit" AfterTargets="Build" Condition="'$(OS)' == 'Windows_NT' AND '$(Configuration)' == 'Debug'">
     <PropertyGroup>

@@ -9,6 +9,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SketchProMax.Mcp", "src\Ske
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SketchProMax.Loader", "src\SketchProMax.Loader\SketchProMax.Loader.csproj", "{C446AF3D-F575-4B09-B08B-8DBE5AC386EF}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TritoRevit", "src\TritoRevit\TritoRevit.csproj", "{1D3E8446-EF6D-4904-949F-769D156BE586}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -43,6 +45,18 @@ Global
 		{C446AF3D-F575-4B09-B08B-8DBE5AC386EF}.Release|x64.Build.0 = Release|Any CPU
 		{C446AF3D-F575-4B09-B08B-8DBE5AC386EF}.Release|x86.ActiveCfg = Release|Any CPU
 		{C446AF3D-F575-4B09-B08B-8DBE5AC386EF}.Release|x86.Build.0 = Release|Any CPU
+		{1D3E8446-EF6D-4904-949F-769D156BE586}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{1D3E8446-EF6D-4904-949F-769D156BE586}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{1D3E8446-EF6D-4904-949F-769D156BE586}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{1D3E8446-EF6D-4904-949F-769D156BE586}.Debug|x64.Build.0 = Debug|Any CPU
+		{1D3E8446-EF6D-4904-949F-769D156BE586}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{1D3E8446-EF6D-4904-949F-769D156BE586}.Debug|x86.Build.0 = Debug|Any CPU
+		{1D3E8446-EF6D-4904-949F-769D156BE586}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{1D3E8446-EF6D-4904-949F-769D156BE586}.Release|Any CPU.Build.0 = Release|Any CPU
+		{1D3E8446-EF6D-4904-949F-769D156BE586}.Release|x64.ActiveCfg = Release|Any CPU
+		{1D3E8446-EF6D-4904-949F-769D156BE586}.Release|x64.Build.0 = Release|Any CPU
+		{1D3E8446-EF6D-4904-949F-769D156BE586}.Release|x86.ActiveCfg = Release|Any CPU
+		{1D3E8446-EF6D-4904-949F-769D156BE586}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -50,5 +64,6 @@ Global
 	GlobalSection(NestedProjects) = preSolution
 		{C3C44E28-8187-4E65-B6D6-1D76F8A84CEB} = {37C86A1A-A923-4791-B35B-65D4D677558B}
 		{C446AF3D-F575-4B09-B08B-8DBE5AC386EF} = {37C86A1A-A923-4791-B35B-65D4D677558B}
+		{1D3E8446-EF6D-4904-949F-769D156BE586} = {37C86A1A-A923-4791-B35B-65D4D677558B}
 	EndGlobalSection
 EndGlobal

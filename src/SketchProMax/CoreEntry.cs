@@ -28,6 +28,12 @@ public static class CoreEntry
 
     public static void Start(UIApplication app) => App.StartCore(app);
 
+    /// <summary>
+    /// (0.35+) Started by the TritoRevit add-in instead of <see cref="Start"/>: shared tools only, with no connection to
+    /// the Claude app, no chat and no Sketch ProMax ribbon (App.Shared). Commands and Query work as usual.
+    /// </summary>
+    public static void StartShared(UIApplication app) => App.StartCore(app, shared: true);
+
     public static void Stop(UIApplication app) => App.StopCore(app);
 
     public static void Shutdown() => App.ShutdownCore();
@@ -82,6 +88,10 @@ public static class CoreEntry
             "pre-submission" => ChecklistWindow.Command(app),
             // Purge and cleanup (0.34+): pick one of the four cleanup tools; each previews, then asks before deleting.
             "cleanup" => RibbonTools.Cleanup(app),
+            // Shared tools (0.35+): Share tools makes a TritoRevit zip; the TritoRevit tab's buttons and its Shared tools window.
+            "share-tools" => Sharing.SharedTools.Share(app),
+            "shared-manage" => Sharing.SharedTools.Manage(app),
+            _ when name.StartsWith("shared\t", StringComparison.Ordinal) && name.Split('\t') is { Length: 3 } shared => Sharing.SharedTools.Run(app, shared[1], shared[2]),
             // The guided test checklist (0.32+): the manual items of the field test's coverage, saved to the Bugs folder.
             "test-checklist" => TestChecklistWindow.Open(app),
             // Favourites on the My tools panel (0.30.1+): the manager, and the slot buttons ("fav:1"...).

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RevitAddIns>
+  <AddIn Type="Application">
+    <Name>TritoRevit</Name>
+    <Assembly>TritoRevit\TritoRevit.dll</Assembly>
+    <FullClassName>TritoRevit.TritoApp</FullClassName>
+    <ClientId>2d9a64c1-5b3e-4f87-a1c6-7e40b8f39d25</ClientId>
+    <VendorId>SPMX</VendorId>
+    <VendorDescription>TritoRevit: shared Revit tools</VendorDescription>
+  </AddIn>
+</RevitAddIns>

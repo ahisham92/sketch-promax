@@ -14,7 +14,7 @@ internal static class BrandTests
     // Tool code (Tools/*Tools.cs, Agent/) is not scanned: its descriptions and results go to the model.
     private static readonly string[] Scanned =
     [
-        "src/SketchProMax/Chat", "src/SketchProMax/UI", "src/SketchProMax/Commands", "src/SketchProMax/Bugs",
+        "src/SketchProMax/Chat", "src/SketchProMax/UI", "src/SketchProMax/Sharing", "src/TritoRevit", "src/SketchProMax/Commands", "src/SketchProMax/Bugs",
         "src/SketchProMax/Bridge/Approvals.cs", "src/SketchProMax/Bridge/JobControl.cs", "src/SketchProMax/CoreEntry.cs",
         "src/SketchProMax/App.cs", "src/SketchProMax/Update/Updater.cs", "src/SketchProMax/Tools/OutputPaths.cs",
         "src/SketchProMax/Tools/FieldTest.cs", "src/SketchProMax/Tools/FieldTest.Features.cs", "src/SketchProMax/Tools/FieldTest.Redlines.cs",

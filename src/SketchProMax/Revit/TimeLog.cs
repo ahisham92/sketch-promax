@@ -392,10 +392,13 @@ internal static class TimeLog
     // ---- Tasks -------------------------------------------------------------------------------------------------------
 
     /// <summary>A tool starts (the bridge or the ribbon), before its approval. Call on Revit's thread.</summary>
+    /// <summary>Set for TritoRevit's shared tools (App.Shared): no time is counted or written into the model.</summary>
+    internal static bool Off { get; set; }
+
     public static void BeginTool(UIApplication app, IRevitTool tool, bool fromChat)
     {
         LastLine = null;
-        if (!_on) return;
+        if (!_on || Off) return;
         try
         {
             if (app.ActiveUIDocument?.Document is not { } doc || !Tracked(doc)) return;

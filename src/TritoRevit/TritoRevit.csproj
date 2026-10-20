@@ -1,0 +1,57 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    TritoRevit: the small add-in that holds tools shared from Sketch ProMax (Share tools), for people who don't have
+    Sketch ProMax. TritoRevit.addin names it at Addins\<year>\TritoRevit\TritoRevit.dll. It owns the TritoRevit tab (one
+    panel per shared pack, its buttons read from %APPDATA%\TritoRevit\packs) and runs them in the Sketch ProMax core:
+    the one Sketch ProMax already runs in this Revit, or its own copy under %LOCALAPPDATA%\TritoRevit\versions, which it
+    switches to a newer one without restarting Revit, as the Sketch ProMax loader does.
+    Like that loader its bytes must stay the same from release to release (Revit's "Always Load" for an unsigned add-in
+    holds for the file it saw): raise TritoVersion only when this project's code changes.
+    Build per Revit release:  dotnet build -c Release -p:RevitVersion=2026
+  -->
+  <PropertyGroup>
+    <RevitVersion Condition="'$(RevitVersion)' == ''">2025</RevitVersion>
+    <TargetFramework Condition="'$(RevitVersion)' &lt; '2025'">net48</TargetFramework>
+    <TargetFramework Condition="'$(RevitVersion)' &gt;= '2025' AND '$(RevitVersion)' &lt; '2027'">net8.0-windows</TargetFramework>
+    <TargetFramework Condition="'$(RevitVersion)' &gt;= '2027'">net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>TritoRevit</RootNamespace>
+    <AssemblyName>TritoRevit</AssemblyName>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <TritoVersion>1.0.0</TritoVersion>
+    <Version>$(TritoVersion)</Version>
+    <FileVersion>$(TritoVersion).0</FileVersion>
+    <InformationalVersion>$(TritoVersion)</InformationalVersion>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <Deterministic>true</Deterministic>
+    <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
+    <DebugType>none</DebugType>
+    <DebugSymbols>false</DebugSymbols>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <OutputPath>bin\$(Configuration)\Revit$(RevitVersion)\</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <DefineConstants>$(DefineConstants);REVIT$(RevitVersion)</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Nice3point.Revit.Api.RevitAPI" Version="$(RevitVersion).*" ExcludeAssets="runtime" PrivateAssets="all" />
+    <PackageReference Include="Nice3point.Revit.Api.RevitAPIUI" Version="$(RevitVersion).*" ExcludeAssets="runtime" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' == 'net48'">
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+    <PackageReference Include="PolySharp" Version="1.15.0" PrivateAssets="all" IncludeAssets="runtime; build; native; contentfiles; analyzers" />
+  </ItemGroup>
+
+  <!-- The Sketch ProMax loader's ribbon icons, compiled in unchanged so the shared buttons look the same. -->
+  <ItemGroup>
+    <Compile Include="..\SketchProMax.Loader\Icons.cs" Link="Icons.cs" />
+    <None Update="TritoRevit.addin" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

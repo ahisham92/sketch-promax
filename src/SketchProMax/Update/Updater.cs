@@ -279,7 +279,7 @@ public static class Updater
     /// Revit may have it loaded: Windows lets a loaded DLL be renamed but not overwritten, so it is moved aside (removed
     /// by a later clean-up) and the new one copied in. When even that fails the installed loader stays; it runs any core.
     /// </summary>
-    private static void PlaceLoader(string source, string target)
+    internal static void PlaceLoader(string source, string target, string prefix = "SketchProMax.Loader")
     {
         if (string.Equals(Path.GetFullPath(source), Path.GetFullPath(target), StringComparison.OrdinalIgnoreCase)) return;
         var exists = File.Exists(target);
@@ -288,7 +288,7 @@ public static class Updater
         var folder = Path.GetDirectoryName(target)!;
         Directory.CreateDirectory(folder);
         var stamp = DateTime.UtcNow.Ticks;
-        var incoming = Path.Combine(folder, $"SketchProMax.Loader.{stamp}.new");
+        var incoming = Path.Combine(folder, $"{prefix}.{stamp}.new");
         string? aside = null;
         try
         {
@@ -296,7 +296,7 @@ public static class Updater
             ClearDownloadMark(incoming);
             if (exists)
             {
-                aside = Path.Combine(folder, $"SketchProMax.Loader.{stamp}.old");
+                aside = Path.Combine(folder, $"{prefix}.{stamp}.old");
                 File.Move(target, aside);
             }
             File.Move(incoming, target);
@@ -366,7 +366,7 @@ public static class Updater
         catch (Exception ex) when (ex is IOException or FileNotFoundException) { return null; }
     }
 
-    private sealed record Release(string Version, string ZipUrl, string? Sha256, string? Notes = null);
+    internal sealed record Release(string Version, string ZipUrl, string? Sha256, string? Notes = null);
 
     private static HttpClient CreateClient()
     {
@@ -383,7 +383,7 @@ public static class Updater
     /// The latest release: GitHub's API first, with a short time limit; on any failure of it (an error status, a refused or
     /// timed-out connection, an unreadable answer) the github.com release page, whose package has a fixed address there.
     /// </summary>
-    private static async Task<Release?> LatestReleaseAsync(CancellationToken ct)
+    internal static async Task<Release?> LatestReleaseAsync(CancellationToken ct)
     {
         var (release, _) = await ReleaseSource.ApiThenWebAsync(LatestReleaseFromApiAsync, LatestReleaseFromWebAsync, ReleaseSource.ApiTimeout, ct).ConfigureAwait(false);
         return release;
@@ -468,10 +468,16 @@ public static class Updater
         catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException) { return false; }
     }
 
-    private static async Task<string> DownloadAndUnpackAsync(Release release, UpdateProgress progress, CancellationToken ct)
+    /// <summary>
+    /// Downloads and unpacks <paramref name="release"/> into &lt;root&gt;\versions\&lt;version&gt; (root: %LOCALAPPDATA%\SketchProMax,
+    /// or TritoRevit's own folder for its copy). Returns that folder.
+    /// </summary>
+    internal static async Task<string> DownloadAndUnpackAsync(Release release, UpdateProgress progress, CancellationToken ct, string? root = null)
     {
-        Directory.CreateDirectory(UpdatesFolder);
-        var zip = Path.Combine(UpdatesFolder, $"SketchProMax-{release.Version}.zip");
+        var updatesFolder = root is null ? UpdatesFolder : Path.Combine(root, "updates");
+        var versionsFolder = root is null ? VersionsFolder : Path.Combine(root, "versions");
+        Directory.CreateDirectory(updatesFolder);
+        var zip = Path.Combine(updatesFolder, $"SketchProMax-{release.Version}.zip");
         // HttpClient.Timeout does not cover reading the body after the headers arrive, so the whole download gets a limit.
         using (var download = CancellationTokenSource.CreateLinkedTokenSource(ct))
         {
@@ -516,7 +522,7 @@ public static class Updater
 
         ClearDownloadMark(zip);
         progress.Report(UpdateStage.Unpacking, $"Unpacking Sketch ProMax {release.Version}…");
-        var target = Path.Combine(VersionsFolder, release.Version);
+        var target = Path.Combine(versionsFolder, release.Version);
         var temp = target + ".partial";
         if (Directory.Exists(temp)) Directory.Delete(temp, true);
         ZipFile.ExtractToDirectory(zip, temp);
@@ -613,7 +619,7 @@ public static class Updater
     /// .NET Framework (Revit 2024) don't block the files. HttpClient and ZipFile don't normally add it, but security
     /// software or a proxy can. The Win32 call is used because .NET Framework rejects "file:stream" paths.
     /// </summary>
-    private static void ClearDownloadMark(string path)
+    internal static void ClearDownloadMark(string path)
     {
         try { DeleteFileNative(path + ":Zone.Identifier"); }
         catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException or IOException or UnauthorizedAccessException) { }
@@ -625,7 +631,7 @@ public static class Updater
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
     }
 
-    private static Version Parse(string text) => Normalize(Version.TryParse(text, out var v) ? v : null);
+    internal static Version Parse(string text) => Normalize(Version.TryParse(text, out var v) ? v : null);
 
     private static Version Normalize(Version? v) => v is null ? new Version(0, 0, 0) : new Version(v.Major, v.Minor, Math.Max(v.Build, 0));
 
