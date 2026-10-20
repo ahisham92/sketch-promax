@@ -309,12 +309,20 @@ internal static class ChecklistFacts
         Add("titleblock", () =>
         {
             var expected = Rule("titleblock").Length > 0 ? Rule("titleblock") : Regex.Match(Ex("titleblock"), @"([\w\-.]+)\.rfa", RegexOptions.IgnoreCase) is { Success: true } m ? m.Groups[1].Value : "";
-            var used = new FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_TitleBlocks).WhereElementIsNotElementType()
-                .OfType<FamilyInstance>().Select(f => f.Symbol?.FamilyName ?? "").Where(n => n.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-            if (used.Count == 0) return new Hint("No title blocks on sheets.", Level.Warn);
-            var off = expected.Length == 0 ? new List<string>() : used.Where(n => !n.Equals(expected, StringComparison.OrdinalIgnoreCase)).ToList();
-            return off.Count == 0 ? new Hint("Title block on sheets: " + List(used) + ".", expected.Length > 0 ? Level.Ok : Level.Info)
-                : new Hint("Other title blocks on sheets: " + List(off) + ".", Level.Warn, off.Select(n => n + $" (expected {expected})").ToList());
+            // The landing page family is a title block family too: it isn't a sheet's title block, so it is left out.
+            var landing = Rule("landing").Length > 0 ? Rule("landing") : "LandingPage";
+            bool IsLanding(string family) => family.IndexOf(landing, StringComparison.OrdinalIgnoreCase) >= 0 || ChecklistMath.Like(family, landing);
+            var blocks = new FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_TitleBlocks).WhereElementIsNotElementType().OfType<FamilyInstance>().ToList();
+            var used = blocks.Select(f => f.Symbol?.FamilyName ?? "").Where(n => n.Length > 0 && !IsLanding(n)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            var withBlock = new HashSet<long>(blocks.Select(b => b.OwnerViewId.Value));
+            var bare = new FilteredElementCollector(doc).OfClass(typeof(ViewSheet)).Cast<ViewSheet>().Where(s => !s.IsPlaceholder && !withBlock.Contains(s.Id.Value))
+                .Select(s => $"{s.SheetNumber} - {s.Name}: no title block").ToList();
+            if (used.Count == 0 && bare.Count == 0) return new Hint("No title blocks on sheets.", Level.Warn);
+            var off = expected.Length == 0 ? new List<string>() : used.Where(n => !n.Equals(expected, StringComparison.OrdinalIgnoreCase) && !ChecklistMath.LikeAny(n, expected)).ToList();
+            var problems = off.Select(n => n + $" (expected {expected})").Concat(bare).ToList();
+            var text = (off.Count == 0 ? "Title block on sheets: " + (used.Count == 0 ? "none" : List(used)) + "." : "Other title blocks on sheets: " + List(off) + ".") +
+                       (bare.Count > 0 ? $" {bare.Count} sheets have no title block." : "");
+            return problems.Count == 0 ? new Hint(text, expected.Length > 0 ? Level.Ok : Level.Info) : new Hint(text, Level.Warn, problems);
         });
         Add("scales", () =>
         {
@@ -594,8 +602,19 @@ internal static class ChecklistFacts
         Add("detaillines", () =>
         {
             if (!int.TryParse(Rule("detaillines"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var limit) || limit < 0) return null;
-            var views = V().OnSheets.Where(v => v.ViewType is ViewType.FloorPlan or ViewType.CeilingPlan or ViewType.EngineeringPlan or ViewType.Section or ViewType.Elevation).ToList();
-            if (views.Count == 0) return new Hint("No plans, sections or elevations on sheets.", Level.Info);
+            // Plans only unless the rule says more; views where detail lines are normal (reinforcement, typical details) are skipped by name.
+            var kinds = ChecklistMath.RuleList(Rule("detailviews")).Select(k => k.ToLowerInvariant()).ToList();
+            bool Tested(ViewType t) => t switch
+            {
+                ViewType.FloorPlan or ViewType.CeilingPlan or ViewType.EngineeringPlan => kinds.Any(k => k.StartsWith("plan", StringComparison.Ordinal)),
+                ViewType.Section => kinds.Any(k => k.StartsWith("section", StringComparison.Ordinal)),
+                ViewType.Elevation => kinds.Any(k => k.StartsWith("elevation", StringComparison.Ordinal)),
+                _ => false,
+            };
+            var skip = Rule("detailskip");
+            var views = V().OnSheets.Where(v => Tested(v.ViewType) && (skip.Length == 0 || !ChecklistMath.LikeAny(v.Name, skip))).ToList();
+            var what = kinds.Count == 0 ? "views" : string.Join(", ", kinds);
+            if (views.Count == 0) return new Hint($"No {what} on sheets to test" + (skip.Length > 0 ? $" (views named like {skip} are skipped)." : "."), Level.Info);
             var busy = new List<string>();
             // One pass over the detail lines and filled regions of the whole model, not one search per view.
             var wantedViews = new HashSet<long>(views.Select(v => v.Id.Value));
@@ -611,8 +630,9 @@ internal static class ChecklistFacts
                 var regions = regionCount.TryGetValue(v.Id.Value, out var g) ? g : 0;
                 if (lines + regions > limit) busy.Add($"{v.Name}: {lines} detail lines, {regions} filled regions");
             }
-            return busy.Count == 0 ? new Hint($"None of the {views.Count} plans, sections and elevations on sheets has more than {limit} detail lines and filled regions.", Level.Ok)
-                : new Hint($"{busy.Count} views on sheets have more than {limit} detail lines and filled regions: look that none stands in for a real element.", Level.Warn, busy);
+            var skipped = skip.Length > 0 ? $" Views named like {skip} are skipped." : "";
+            return busy.Count == 0 ? new Hint($"None of the {views.Count} {what} on sheets has more than {limit} detail lines and filled regions.{skipped}", Level.Ok)
+                : new Hint($"{busy.Count} {what} on sheets have more than {limit} detail lines and filled regions: look that none stands in for a real element.{skipped}", Level.Warn, busy);
         });
         Add("legend", () =>
         {
@@ -778,10 +798,11 @@ internal static class ChecklistFacts
             if (!inFront) return NotInFront();
             var (res, found) = ModelCheck();
             var beams = found.Where(f => f.Check == "unsupported_beams").Select(f => $"{f.What} (id {f.ElementId}): {f.Issue}").ToList();
-            var columns = FloatingColumns(doc);
+            var columns = FloatingColumns(doc, Rule("piles"));
             var all = beams.Concat(columns).ToList();
-            return all.Count == 0 ? new Hint("Every beam end and column base sits on something." + stamp, Level.Ok)
-                : new Hint($"{beams.Count} beam ends and {columns.Count} column bases sit on nothing in this model (supports in linked models aren't seen)." + stamp, Level.Warn, all);
+            const string ground = " Piles, columns below the lowest level and foundations bear on the ground and aren't tested.";
+            return all.Count == 0 ? new Hint("Every beam end and column base sits on something." + ground + stamp, Level.Ok)
+                : new Hint($"{beams.Count} beam ends and {columns.Count} column bases sit on nothing in this model (supports in linked models aren't seen)." + ground + stamp, Level.Warn, all);
         });
         Add("modelscore", () =>
         {
@@ -1034,18 +1055,26 @@ internal static class ChecklistFacts
 
     private static string Pretty(string category) => Regex.Replace(category.StartsWith("OST_", StringComparison.Ordinal) ? category.Substring(4) : category, "(?<=[a-z])(?=[A-Z])", " ");
 
-    /// <summary>Structural columns whose base sits on nothing in this model: no foundation, floor, beam, wall or column under it.</summary>
-    private static List<string> FloatingColumns(Document doc)
+    /// <summary>
+    /// Structural columns whose base sits on nothing in this model: no foundation, floor, beam, wall or column under it.
+    /// Columns that bear on the ground are left out: those named like <paramref name="piles"/> (type or family), and
+    /// those whose base is below the lowest level (piles and the like, founded in the soil).
+    /// </summary>
+    internal static List<string> FloatingColumns(Document doc, string piles)
     {
         var reach = 50 / 304.8;
         var supports = new BoxIndex<Element>(10);
         var cats = new List<BuiltInCategory> { BuiltInCategory.OST_StructuralFoundation, BuiltInCategory.OST_Floors, BuiltInCategory.OST_StructuralFraming, BuiltInCategory.OST_Walls, BuiltInCategory.OST_StructuralColumns };
         foreach (var e in new FilteredElementCollector(doc).WherePasses(new ElementMulticategoryFilter(cats)).WhereElementIsNotElementType())
             if (e.get_BoundingBox(null) is { } b) supports.Add(e, b.Min, b.Max);
+        var levels = new FilteredElementCollector(doc).OfClass(typeof(Autodesk.Revit.DB.Level)).Cast<Autodesk.Revit.DB.Level>().Select(l => l.ProjectElevation).ToList();
+        var lowest = levels.Count > 0 ? levels.Min() : double.NegativeInfinity;
         var off = new List<string>();
         foreach (var c in new FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_StructuralColumns).WhereElementIsNotElementType().OfType<FamilyInstance>())
         {
             if (c.get_BoundingBox(null) is not { } b) continue;
+            if (b.Min.Z < lowest - reach) continue;
+            if (piles.Length > 0 && (ChecklistMath.LikeAny(c.Symbol?.Name ?? "", piles) || ChecklistMath.LikeAny(c.Symbol?.FamilyName ?? "", piles) || ChecklistMath.LikeAny(TypeName(c), piles))) continue;
             var at = c.Location switch
             {
                 LocationPoint lp => new XYZ(lp.Point.X, lp.Point.Y, b.Min.Z),

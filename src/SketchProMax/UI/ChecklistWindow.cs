@@ -99,7 +99,12 @@ internal sealed class ChecklistWindow : Window
         public RadioButton Yes = null!, No = null!, Na = null!;
         public TextBox Note = null!;
         public TextBlock Meta = null!, NoteHint = null!;
+        /// <summary>The card's own content, and the one line shown instead once it is removed as N/A.</summary>
+        public FrameworkElement Body = null!, RemovedRow = null!;
     }
+
+    /// <summary>The checklist without the checks answered N/A (removed for this model): what is scored and written.</summary>
+    private ChecklistMath.Definition Kept => ChecklistMath.WithoutRemoved(_def!, _state);
 
     private sealed class StageHeader
     {
@@ -1491,6 +1496,21 @@ internal sealed class ChecklistWindow : Window
             Changed();
         };
 
+        // Answered N/A, the check is removed from this model's checklist: one line in its place, with Put back.
+        var removed = new DockPanel();
+        var putBack = RichUi.Button(RichUi.Icon.Undo, "Put back");
+        AutomationProperties.SetName(putBack, $"Put back #{item.Number}");
+        putBack.Click += (_, e) => { e.Handled = true; PutBack(card); };
+        DockPanel.SetDock(putBack, Dock.Right);
+        removed.Children.Add(putBack);
+        var removedText = Brand.Text($"#{item.Number} {item.Title}: removed as not applicable. It is out of the score and the Word file and PDF.", Brand.K.Muted, 12);
+        removedText.TextWrapping = TextWrapping.Wrap;
+        removedText.VerticalAlignment = VerticalAlignment.Center;
+        removedText.Margin = new Thickness(0, 0, 10, 0);
+        removed.Children.Add(removedText);
+        card.Body = body;
+        card.RemovedRow = removed;
+
         // A coloured strip on the left says the answer at a glance (green yes, red no, grey N/A).
         card.Strip = new Rectangle { Width = 4, RadiusX = 2, RadiusY = 2, Margin = new Thickness(0, 0, 12, 0) };
         var grid = new Grid();
@@ -1499,6 +1519,8 @@ internal sealed class ChecklistWindow : Window
         grid.Children.Add(card.Strip);
         Grid.SetColumn(body, 1);
         grid.Children.Add(body);
+        Grid.SetColumn(removed, 1);
+        grid.Children.Add(removed);
         card.Root = CardBox(grid);
         card.Root.Tag = card;
         card.Root.Cursor = Cursors.Hand;
@@ -1567,6 +1589,20 @@ internal sealed class ChecklistWindow : Window
         else _next.Focus();
     }
 
+    /// <summary>A check removed as N/A comes back unanswered.</summary>
+    private void PutBack(Card card)
+    {
+        var a = _state.For(card.Item.Id);
+        a.Done = "";
+        _loading = true;
+        card.Na.IsChecked = false;
+        _loading = false;
+        ShowCard(card);
+        Changed();
+        ActivityLog.Note("checklist_put_back", "#" + card.Item.Number);
+        FocusCard(card);
+    }
+
     private string Signer()
     {
         var name = (_settings.SignatureName ?? "").Trim();
@@ -1593,6 +1629,9 @@ internal sealed class ChecklistWindow : Window
                  : "";
         card.NoteHint.Text = need;
         card.NoteHint.Visibility = need.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+        var removed = done == ChecklistMath.NotApplicable;
+        card.Body.Visibility = removed ? Visibility.Collapsed : Visibility.Visible;
+        card.RemovedRow.Visibility = removed ? Visibility.Visible : Visibility.Collapsed;
         SyncPane(card);
     }
 
@@ -1816,21 +1855,23 @@ internal sealed class ChecklistWindow : Window
     private void RefreshReview()
     {
         if (_review is not { } r || _def is null) return;
-        var p = ChecklistMath.Count(_def.Items, _state);
+        var p = ChecklistMath.Count(Kept.Items, _state);
         r.Yes.Text = p.Yes.ToString(CultureInfo.CurrentCulture);
         r.No.Text = p.No.ToString(CultureInfo.CurrentCulture);
-        r.Na.Text = p.NotApplicable.ToString(CultureInfo.CurrentCulture);
+        // N/A checks are removed from the checklist: the N/A count is how many were.
+        var removed = _def.Items.Count() - p.Total;
+        r.Na.Text = removed.ToString(CultureInfo.CurrentCulture);
         r.Score.Text = ChecklistMath.Percent(p).ToString(CultureInfo.CurrentCulture) + "%";
-        r.ScoreSub.Text = $"{p.Yes + p.NotApplicable} of {p.Total} checks Yes or N/A";
-        var auto = ChecklistMath.Auto(_def.Items, Verdict, _state);
+        r.ScoreSub.Text = $"{p.Yes + p.NotApplicable} of {p.Total} checks Yes" + (removed > 0 ? $" ({removed} removed as not applicable)" : "");
+        var auto = ChecklistMath.Auto(Kept.Items, Verdict, _state);
         r.AutoScore.Text = auto.Tested == 0 ? "–" : auto.Percent.ToString(CultureInfo.CurrentCulture) + "%";
         r.AutoScore.SetResourceReference(TextBlock.ForegroundProperty, auto.Tested == 0 ? Brand.K.Muted : auto.Percent == 100 ? Brand.K.SuccessText : Brand.K.WarningText);
         r.AutoSub.Text = auto.Tested == 0 ? "The model couldn't test any check. Read the model again on Project details."
             : $"{auto.Pass + auto.ManualDone} of all {auto.Total} checks pass. The model test passes {auto.Pass} of the {auto.Tested} it can test ({auto.Fail} fail, listed below). " +
               $"The other {auto.Manual} are checked by hand: each counts once you answer it Yes or N/A ({auto.ManualDone} so far), so the model test alone reaches at most {auto.Ceiling}%." +
-              (_def.Items.Count(i => i.Auto.Length > 0 && Pending(i.Auto)) is var slow and > 0 ? $" {slow} of them are slow checks not run yet: Run the slow checks on Project details." : "");
+              (Kept.Items.Count(i => i.Auto.Length > 0 && Pending(i.Auto)) is var slow and > 0 ? $" {slow} of them are slow checks not run yet: Run the slow checks on Project details." : "");
         r.Disagree.Children.Clear();
-        var disagree = ChecklistMath.Disagree(_def.Items, _state, Verdict);
+        var disagree = ChecklistMath.Disagree(Kept.Items, _state, Verdict);
         if (disagree.Count > 0) r.Disagree.Children.Add(Para("You answered Yes, but the model check says otherwise. Have another look:", Brand.K.WarningText, 12, 2));
         foreach (var item in disagree.Take(12))
         {
@@ -1844,7 +1885,7 @@ internal sealed class ChecklistWindow : Window
         }
         // Where the automatic score loses its points: every check the model test fails, with what it found.
         r.Failing.Children.Clear();
-        var failing = _def.Items.Where(i => i.Auto.Length > 0 && Verdict(i.Auto) == false).ToList();
+        var failing = Kept.Items.Where(i => i.Auto.Length > 0 && Verdict(i.Auto) == false).ToList();
         if (failing.Count > 0)
         {
             var head = Brand.Text($"Where the automatic score loses points ({failing.Count} checks fail)", Brand.K.Text, 13, bold: true);
@@ -1865,7 +1906,7 @@ internal sealed class ChecklistWindow : Window
         else if (auto.Tested > 0) r.Failing.Children.Add(Para("Every check the model can test passes.", Brand.K.SuccessText, 12, 4));
         // The checks the model test doesn't settle: yours (or the helper's), each with its answer so far.
         r.Manual.Children.Clear();
-        var manual = _def.Items.Where(i => !Automatic(i)).ToList();
+        var manual = Kept.Items.Where(i => !Automatic(i)).ToList();
         if (manual.Count > 0)
         {
             var head = Brand.Text($"Checks you do yourself ({manual.Count}): each counts in the automatic score once you answer it Yes or N/A", Brand.K.Text, 13, bold: true);
@@ -1891,7 +1932,7 @@ internal sealed class ChecklistWindow : Window
         r.Banner.SetResourceReference(Border.BorderBrushProperty, p.Ready ? Brand.K.SuccessText : Brand.K.DangerText);
 
         r.Problems.Children.Clear();
-        var problems = ChecklistMath.Problems(_def, _state);
+        var problems = ChecklistMath.Problems(Kept, _state);
         foreach (var (id, text) in problems.Take(12))
         {
             var link = new Button { Content = Brand.Text(text, Brand.K.Link, 12), Cursor = Cursors.Hand, HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(0, 2, 0, 0), Padding = new Thickness(4, 2, 4, 2) };
@@ -1922,17 +1963,17 @@ internal sealed class ChecklistWindow : Window
             var folder = Sharing.UserFolder.Checklists;
             var model = Path.GetFileNameWithoutExtension(ChecklistMath.WorkingName(_facts.Model));
             // READY or NOT READY in the name, so check 46 can find the signed checklist.
-            var name = $"{ChecklistMath.SafeName(model)} pre-submission checklist {DateTime.Now:yyyy-MM-dd HHmm} - {(ChecklistMath.Count(_def.Items, _state).Ready ? "READY" : "NOT READY")}";
+            var name = $"{ChecklistMath.SafeName(model)} pre-submission checklist {DateTime.Now:yyyy-MM-dd HHmm} - {(ChecklistMath.Count(Kept.Items, _state).Ready ? "READY" : "NOT READY")}";
             var docx = Path.Combine(folder, name + ".docx");
             var info = new ChecklistDocx.Info(_facts.Model, Update.Updater.CurrentText, DateTime.Now,
-                ChecklistMath.AutoLine(ChecklistMath.Auto(_def.Items, Verdict, _state), ChecklistMath.Disagree(_def.Items, _state, Verdict)));
+                ChecklistMath.AutoLine(ChecklistMath.Auto(Kept.Items, Verdict, _state), ChecklistMath.Disagree(Kept.Items, _state, Verdict)));
             var path = docx;
             var note = "";
             if (pdf)
             {
                 // The PDF is the Word file laid out by Word, so both look the same. The Word file is only a step on the way.
                 temp = Path.Combine(Path.GetTempPath(), "SketchProMax-checklist-" + Guid.NewGuid().ToString("N") + ".docx");
-                ChecklistDocx.Write(temp, _def, _state, info, images);
+                ChecklistDocx.Write(temp, Kept, _state, info, images);
                 path = Path.Combine(folder, name + ".pdf");
                 Directory.CreateDirectory(folder);
                 try { await ChecklistPdf.Convert(temp, path); }
@@ -1945,9 +1986,9 @@ internal sealed class ChecklistWindow : Window
                            " The PDF is made through Word, so the Word file was saved instead. Open it and use File > Save As > PDF if you need one.";
                 }
             }
-            else ChecklistDocx.Write(docx, _def, _state, info, images);
+            else ChecklistDocx.Write(docx, Kept, _state, info, images);
 
-            var p = ChecklistMath.Count(_def.Items, _state);
+            var p = ChecklistMath.Count(Kept.Items, _state);
             var kind = path.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase) ? "PDF" : "Word file";
             r.LastFile = path;
             r.Error.Text = note;
@@ -2091,16 +2132,16 @@ internal sealed class ChecklistWindow : Window
             foreach (var h in _headers) Paint(h, done: false, bad: false, active: true, 0);
             return;
         }
-        var p = ChecklistMath.Count(_def.Items, _state);
+        var p = ChecklistMath.Count(Kept.Items, _state);
         RichUi.To(_bar, p.Total == 0 ? 0 : (double)p.Answered / p.Total, _motion);
-        var ringAuto = ChecklistMath.Auto(_def.Items, Verdict, _state);
+        var ringAuto = ChecklistMath.Auto(Kept.Items, Verdict, _state);
         var mine = ChecklistMath.Percent(p);
         _answersRing.Show(mine, System.Windows.Media.Colors.White, $"Your answers: {p.Yes + p.NotApplicable} of {p.Total} checks Yes or N/A ({mine}%).");
         _autoRing.Show(ringAuto.Tested == 0 ? null : ringAuto.Percent,
             ringAuto.Percent == 100 ? System.Windows.Media.Color.FromRgb(0x86, 0xEF, 0xAC) : System.Windows.Media.Color.FromRgb(0xFC, 0xD3, 0x4D),
             ringAuto.Tested == 0 ? "The model couldn't test any check yet."
                 : $"Automatic check: {ringAuto.Pass + ringAuto.ManualDone} of {ringAuto.Total} checks pass ({ringAuto.Percent}%): {ringAuto.Pass} by the model test, {ringAuto.ManualDone} of the {ringAuto.Manual} checked by hand.");
-        var auto = ChecklistMath.Auto(_def.Items, Verdict, _state);
+        var auto = ChecklistMath.Auto(Kept.Items, Verdict, _state);
         _status.Text = $"{p.Answered} of {p.Total} answered ({ChecklistMath.Percent(p)}% Yes or N/A)" + (auto.Tested > 0 ? $" · automatic check {auto.Percent}%" : "") + (p.No > 0 ? $" · {p.No} No" : "") + (p.WaitingWithoutNote > 0 ? $" · {p.WaitingWithoutNote} open points without a comment" : "") +
                        (p.Ready ? " · ready to sign" : "");
         for (var i = 0; i < _headers.Count; i++)
