@@ -99,7 +99,7 @@
           "FoundOn": "",
           "Priority": "",
           "Waiting": "",
-          "Auto": "",
+          "Auto": "midp",
           "Short": "Model number matches the MIDP",
           "Fix": "Look the model up in the latest MIDP and rename the file to its number."
         },
@@ -530,7 +530,7 @@
           "FoundOn": "BLDG-01, 08",
           "Priority": "High",
           "Waiting": "",
-          "Auto": "",
+          "Auto": "stagelist",
           "Short": "Drawing list complete for the stage",
           "Fix": "Add every drawing the stage needs, plus the drawings it relies on, to the set and the drawing list."
         },
@@ -639,7 +639,7 @@
           "FoundOn": "BLDG-01, 08",
           "Priority": "High",
           "Waiting": "",
-          "Auto": "",
+          "Auto": "federated",
           "Short": "Federated clashes fixed",
           "Fix": "Run your clash tests in the federated model and fix your clashes (in Trade-1_Vs_Trade-2, Trade 1 fixes)."
         },
@@ -665,7 +665,7 @@
           "FoundOn": "BLDG-01, 08",
           "Priority": "High",
           "Waiting": "",
-          "Auto": "",
+          "Auto": "signed",
           "Short": "Signed checklist and Health Check",
           "Fix": "Sign this checklist (group leader and BIM coordinator) and put the Model Health Check report in the package."
         }
@@ -709,7 +709,7 @@
           "FoundOn": "",
           "Priority": "",
           "Waiting": "",
-          "Auto": "",
+          "Auto": "nwcsettings",
           "Short": "NWC settings are right",
           "Fix": "In the NWC export options use shared coordinates, current view, divide into levels, convert element IDs and all parameters; don't convert links."
         },
@@ -722,7 +722,7 @@
           "FoundOn": "",
           "Priority": "",
           "Waiting": "the .json setup file",
-          "Auto": "",
+          "Auto": "ifcsettings",
           "Short": "IFC settings are right",
           "Fix": "Export IFC 4x3 with the 'MOD IFC Export Setup' and shared coordinates; visible elements only, no links."
         },
@@ -735,7 +735,7 @@
           "FoundOn": "",
           "Priority": "",
           "Waiting": "",
-          "Auto": "",
+          "Auto": "nwcdate",
           "Short": "NWC published Monday and after fixes",
           "Fix": "Publish the NWC to the Shared folder on Monday, then again after fixes before you submit."
         }
@@ -766,7 +766,7 @@
           "FoundOn": "",
           "Priority": "",
           "Waiting": "",
-          "Auto": "",
+          "Auto": "etransmit",
           "Short": "e-Transmit settings are right",
           "Fix": "In e-Transmit purge unused, include CAD links and images, keep views on sheets plus the Navisworks view, and untick linked Revit models."
         },
@@ -779,7 +779,7 @@
           "FoundOn": "BLDG-01",
           "Priority": "",
           "Waiting": "BIM lead",
-          "Auto": "",
+          "Auto": "backgrounds",
           "Short": "Other-trade backgrounds handled",
           "Fix": "Agree how sheets with another trade's background are handled, since unloaded links show blank."
         },
@@ -792,7 +792,7 @@
           "FoundOn": "",
           "Priority": "",
           "Waiting": "",
-          "Auto": "",
+          "Auto": "civil3d",
           "Short": "Civil 3D package complete",
           "Fix": "Civil 3D only: one ZIP per model with fonts, textures, data links and photometric files. Mark N/A for Revit."
         },
@@ -805,7 +805,7 @@
           "FoundOn": "BLDG-01, 08",
           "Priority": "High",
           "Waiting": "",
-          "Auto": "",
+          "Auto": "packagecontents",
           "Short": "Package has everything",
           "Fix": "Check the package has native, IFC and NWC; DWG and PDF drawings; BOQ if needed; and the reports."
         },
@@ -818,7 +818,7 @@
           "FoundOn": "BLDG-01",
           "Priority": "",
           "Waiting": "",
-          "Auto": "",
+          "Auto": "packageopens",
           "Short": "Package opens cleanly",
           "Fix": "Unzip the package into a clean folder and open it: it should open on the landing page with worksets and views right."
         }
