@@ -208,7 +208,7 @@
           "FoundOn": "BLDG-03",
           "Priority": "",
           "Waiting": "",
-          "Auto": "",
+          "Auto": "newworksets",
           "Short": "No unapproved new worksets",
           "Fix": "Move elements off any workset the BIM Managers didn't agree, then delete it (Collaborate > Worksets)."
         },
@@ -278,7 +278,7 @@
           "FoundOn": "BLDG-01",
           "Priority": "",
           "Waiting": "",
-          "Auto": "",
+          "Auto": "columns",
           "Short": "Columns level by level",
           "Fix": "Split continuous columns at each level; keep only double-height ones with no slab, and list them."
         },
@@ -382,7 +382,7 @@
           "FoundOn": "BLDG-01, 08",
           "Priority": "High",
           "Waiting": "which parameter / Client 'MDS'",
-          "Auto": "",
+          "Auto": "uniformat",
           "Short": "UniFormat code on every element",
           "Fix": "Fill the Classification (UniFormat) code on every type, e.g. raft A1020.60, pile cap A1020.70."
         },
@@ -395,7 +395,7 @@
           "FoundOn": "BLDG-02",
           "Priority": "High",
           "Waiting": "",
-          "Auto": "",
+          "Auto": "parameters",
           "Short": "Project parameters are clean",
           "Fix": "Delete parameters from other firms or old projects (Manage > Project Parameters), rename the rest to the rule and mark temporary ones."
         },
@@ -408,7 +408,7 @@
           "FoundOn": "",
           "Priority": "",
           "Waiting": "",
-          "Auto": "",
+          "Auto": "ifc",
           "Short": "IFC entity and type are set",
           "Fix": "Set IfcExportAs and IfcExportType on each type (or instance), e.g. pile cap IfcFooting / PILE_CAP."
         },
@@ -465,7 +465,7 @@
           "FoundOn": "BLDG-02",
           "Priority": "",
           "Waiting": "",
-          "Auto": "",
+          "Auto": "tbmodelname",
           "Short": "Title block shows the file name",
           "Fix": "Correct the model name in the title block so it matches the file name exactly."
         },
@@ -569,7 +569,7 @@
           "FoundOn": "BLDG-01, 08",
           "Priority": "High",
           "Waiting": "view naming rule",
-          "Auto": "",
+          "Auto": "viewfolders",
           "Short": "Views in folders, clearly named",
           "Fix": "Give every view its folder parameters so no '???' group is left, and rename unclear views."
         },

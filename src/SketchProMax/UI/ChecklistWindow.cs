@@ -100,7 +100,7 @@ internal sealed class ChecklistWindow : Window
     {
         public TextBlock Yes = null!, No = null!, Na = null!, Open = null!;
         public TextBlock Score = null!, ScoreSub = null!, AutoScore = null!, AutoSub = null!;
-        public StackPanel Disagree = null!, Failing = null!;
+        public StackPanel Disagree = null!, Failing = null!, Manual = null!;
         public Border Banner = null!;
         public TextBlock BannerText = null!;
         public StackPanel Problems = null!;
@@ -392,10 +392,23 @@ internal sealed class ChecklistWindow : Window
         reread.Margin = new Thickness(0);
         AutomationProperties.SetHelpText(reread, "Reads the file names and the hints under each check from the model again, after you have fixed something.");
         reread.Click += async (_, _) => await ReadModelAgain(reread);
+        var rules = RichUi.Button(RichUi.Icon.Edit, "Checking rules…");
+        rules.Margin = new Thickness(0, 0, 8, 0);
+        AutomationProperties.SetHelpText(rules, "What the automatic check compares the model with: name patterns, approved scales and worksets, the classification and IFC parameters.");
+        rules.Click += (_, _) => EditRules();
         row.Children.Add(change);
+        row.Children.Add(rules);
         row.Children.Add(reread);
         source.Children.Add(row);
         page.Children.Add(CardBox(source, top: 16));
+
+        // How it's checked: which checks the model test does, which are yours.
+        var autoCount = _def.Items.Count(Automatic);
+        var how = new StackPanel();
+        how.Children.Add(Brand.Text("How this checklist is checked", size: 14, bold: true));
+        how.Children.Add(Para($"{autoCount} of {checks} checks are tested automatically from the model (marked Automatic). The other {checks - autoCount} you check yourself (marked You check this), " +
+                              "or ask the helper; Review and sign lists them. Checking rules… sets what the automatic test compares with, and can make more checks automatic.", Brand.K.Text));
+        page.Children.Add(CardBox(how, Brand.K.AccentSoft, Brand.K.Border));
 
         // The header fields, two columns: label above its box, the example as the box's hint.
         var grid = new Grid { Margin = new Thickness(0, 6, 0, 0) };
@@ -484,6 +497,24 @@ internal sealed class ChecklistWindow : Window
         Build();
         if (_def is not null) _ = ReadModelAgain(null);
     }
+
+    /// <summary>Opens the checking rules; after Save the model is read again with them.</summary>
+    private void EditRules()
+    {
+        if (_def is null) return;
+        _saveSoon.Stop();
+        SaveDraft();
+        if (ChecklistRulesWindow.Edit(this, _def) is not { } def) return;
+        _def = def;
+        _loadError = "";
+        _ = ReadModelAgain(null);
+    }
+
+    /// <summary>Whether the model test settles this check (it gives a pass or a fail); else the user checks it.</summary>
+    private bool Automatic(ChecklistMath.Item item) => item.Auto.Length > 0 && Verdict(item.Auto) is not null;
+
+    /// <summary>Whether a checking rule could make this check automatic (it has one, turned off or not readable now).</summary>
+    private static bool RuleCould(ChecklistMath.Item item) => item.Auto.Length > 0 && ChecklistMath.RuleDefs.Any(r => r.Check == item.Auto);
 
     /// <summary>Opens the checklist editor; after Save the stages are rebuilt, and answers stay with their checks.</summary>
     private void EditChecklist()
@@ -689,7 +720,7 @@ internal sealed class ChecklistWindow : Window
             ChecklistFacts.Level.Ok => (Brand.K.SuccessText, "✓ The model check passes", Brand.K.Raised, Brand.K.SuccessText),
             ChecklistFacts.Level.Warn => (Brand.K.WarningText, "! The model check found something to fix", Brand.K.NoticeBg, Brand.K.NoticeBorder),
             ChecklistFacts.Level.Info => (Brand.K.Text, "i What the model says", Brand.K.Raised, Brand.K.BorderSubtle),
-            _ => (Brand.K.Muted, "The model can't check this one: look yourself", Brand.K.Raised, Brand.K.BorderSubtle),
+            _ => (Brand.K.Muted, RuleCould(item) ? "You check this one (set its checking rule to make it automatic)" : "You check this one: the model test can't", Brand.K.Raised, Brand.K.BorderSubtle),
         };
         var status = new StackPanel();
         status.Children.Add(Brand.Text(headText, headKey, 12.5, bold: true));
@@ -890,13 +921,26 @@ internal sealed class ChecklistWindow : Window
         said.Visibility = Visibility.Visible;
         if (helper == ChecklistHelper.SketchPro)
         {
+            try { Clipboard.SetText(question); }
+            catch (System.Runtime.InteropServices.ExternalException)
+            {
+                said.Text = "Couldn't copy the question (another program is using the clipboard). Try again.";
+                return;
+            }
+            // Open SketchPro's Copilot (its own ribbon button), then click into its message box and paste. Enter is yours.
+            Brand.SetBusy(button, true, "Opening SketchPro…");
             try
             {
-                Clipboard.SetText(question);
-                said.Text = "Copied. Paste it into SketchPro's chat (Ctrl+V), then answer here from what it says.";
+                var moved = !_side;
+                SetSide(true);
+                var problem = await OnModel(ui => SketchProCopilot.Open(ui.Application));
+                var pasted = problem.Length == 0 && await Task.Run(() => SketchProCopilot.Paste(App.MainWindow, TimeSpan.FromSeconds(12)));
+                said.Text = pasted ? "Pasted into SketchPro's Copilot. Check it there and press Send, then answer here from what it says."
+                    : (problem.Length > 0 ? problem + " " : "SketchPro's Copilot opened, but its message box wasn't found. ") + "The question is copied: click in Copilot's message box and press Ctrl+V.";
+                ActivityLog.Note("checklist_ask", "sketchpro #" + item.Number + (pasted ? " pasted" : " copied"));
+                if (moved && _detailScroll.Content is StackPanel page) page.Children.Insert(Math.Min(page.Children.Count, 1), Para(said.Text, Brand.K.SuccessText, 12, 6));
             }
-            catch (System.Runtime.InteropServices.ExternalException) { said.Text = "Couldn't copy (another program is using the clipboard). Try again."; }
-            ActivityLog.Note("checklist_ask", "sketchpro #" + item.Number);
+            finally { Brand.SetBusy(button, false); }
             return;
         }
         Brand.SetBusy(button, true, "Asking…");
@@ -957,8 +1001,9 @@ internal sealed class ChecklistWindow : Window
         page.Children.Add(Heading(section.Title));
         var high = section.Items.Count(i => i.High);
         var waiting = section.Items.Count(i => i.Waiting.Length > 0);
-        page.Children.Add(Para($"{section.Items.Count} checks" + (high > 0 ? $", {high} high priority" : "") + (waiting > 0 ? $", {waiting} waiting on an answer" : "") +
-                               ". Answer each one; a No needs a comment saying why.", Brand.K.Muted));
+        var auto = section.Items.Count(Automatic);
+        page.Children.Add(Para($"{section.Items.Count} checks: {auto} tested automatically, {section.Items.Count - auto} you check yourself" + (high > 0 ? $"; {high} high priority" : "") + (waiting > 0 ? $"; {waiting} waiting on an answer" : "") +
+                               ". Click a check for its details. Answer each one; a No needs a comment saying why.", Brand.K.Muted));
         foreach (var item in section.Items) page.Children.Add(ItemCard(stage, item));
         return Scroll(page);
     }
@@ -991,8 +1036,9 @@ internal sealed class ChecklistWindow : Window
         if (_facts.Hints.TryGetValue(item.Auto, out var hint) && item.Auto.Length > 0 && hint.Level != ChecklistFacts.Level.Info)
         {
             var ok = hint.Level == ChecklistFacts.Level.Ok;
-            badges.Children.Add(Badge(ok ? "✓ Model check passes" : "! Model check: needs fixing", ok ? Brand.K.Surface : Brand.K.NoticeBg, ok ? Brand.K.SuccessText : Brand.K.WarningText));
+            badges.Children.Add(Badge(ok ? "✓ Automatic: passes" : "! Automatic: needs fixing", ok ? Brand.K.Surface : Brand.K.NoticeBg, ok ? Brand.K.SuccessText : Brand.K.WarningText));
         }
+        else badges.Children.Add(Badge(RuleCould(item) ? "You check this (a checking rule can make it automatic)" : "You check this", Brand.K.Surface, Brand.K.Muted));
         if (item.High) badges.Children.Add(Badge("High priority", Brand.K.BadgeError, Brand.K.OnDanger));
         if (item.Waiting.Length > 0) badges.Children.Add(Badge("Waiting on an answer", Brand.K.NoticeBg, Brand.K.WarningText));
         if (badges.Children.Count > 0) body.Children.Add(badges);
@@ -1173,6 +1219,9 @@ internal sealed class ChecklistWindow : Window
         r.Failing = new StackPanel { Margin = new Thickness(0, 8, 0, 0) };
         AutomationProperties.SetName(r.Failing, "Where the automatic score loses points");
         page.Children.Add(r.Failing);
+        r.Manual = new StackPanel { Margin = new Thickness(0, 8, 0, 0) };
+        AutomationProperties.SetName(r.Manual, "Checks you do yourself");
+        page.Children.Add(r.Manual);
 
         // Four tiles: Yes, No, N/A, not answered.
         var tiles = new UniformGrid { Columns = 4, Margin = new Thickness(0, 12, 0, 0) };
@@ -1401,6 +1450,26 @@ internal sealed class ChecklistWindow : Window
             }
         }
         else if (auto.Tested > 0) r.Failing.Children.Add(Para("Every check the model can test passes.", Brand.K.SuccessText, 12, 4));
+        // The checks the model test doesn't settle: yours (or the helper's), each with its answer so far.
+        r.Manual.Children.Clear();
+        var manual = _def.Items.Where(i => !Automatic(i)).ToList();
+        if (manual.Count > 0)
+        {
+            var head = Brand.Text($"Checks you do yourself ({manual.Count}): the automatic score doesn't include them", Brand.K.Text, 13, bold: true);
+            head.Margin = new Thickness(0, 10, 0, 2);
+            r.Manual.Children.Add(head);
+            foreach (var item in manual)
+            {
+                var done = ChecklistMath.Normal(_state.Answers.TryGetValue(item.Id, out var a) ? a.Done : "");
+                var mark = done.Length == 0 ? "not answered" : Word(done);
+                var link = new Button { Content = Para($"#{item.Number} {item.Title} ({mark})", done.Length == 0 ? Brand.K.Link : Brand.K.Muted, 12, 0), Cursor = Cursors.Hand, HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Left, Margin = new Thickness(0, 1, 0, 0), Padding = new Thickness(4, 1, 4, 1) };
+                link.SetResourceReference(StyleProperty, "SpmLinkButton");
+                AutomationProperties.SetName(link, $"Go to #{item.Number}");
+                var id = item.Id;
+                link.Click += (_, _) => { if (_cards.TryGetValue(id, out var c)) GoTo(c); };
+                r.Manual.Children.Add(link);
+            }
+        }
         r.Open.Text = p.Open.ToString(CultureInfo.CurrentCulture);
         r.BannerText.Text = p.Ready
             ? $"Ready for submission: all {p.Total} checks are Yes or N/A. The Word file or PDF will carry the signatures."

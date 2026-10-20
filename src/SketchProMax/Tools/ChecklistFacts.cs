@@ -62,6 +62,8 @@ internal static class ChecklistFacts
 
         Views? views = null;
         Views V() => views ??= new Views(doc);
+        string Rule(string key) => ChecklistMath.Rule(def, key);
+        const string Rules = " (set in Checking rules)";
 
         void Add(string key, Func<Hint?> read)
         {
@@ -70,9 +72,15 @@ internal static class ChecklistFacts
             catch (Exception ex) when (ex is not OutOfMemoryException) { r.Hints[key] = new Hint("Couldn't read this from the model (" + ex.Message + ").", Level.Info); }
         }
 
-        Add("name002", () => parts.Has002
-            ? new Hint($"The file name {file} has 002 after ABC.", Level.Ok)
-            : new Hint($"The file name {file} has no 002 after ABC.", Level.Warn));
+        Add("name002", () =>
+        {
+            var pattern = Rule("filename");
+            var name = Path.GetFileNameWithoutExtension(ChecklistMath.WorkingName(file));
+            if (pattern.Length == 0) return new Hint($"The file name is {file}. No file name pattern is set" + Rules + ".", Level.Info);
+            return ChecklistMath.LikeAny(name, pattern)
+                ? new Hint($"The file name {name} matches {pattern}.", Level.Ok)
+                : new Hint($"The file name {name} doesn't match {pattern}" + Rules + ".", Level.Warn, [name + " (expected " + pattern + ")"]);
+        });
         Add("doctype", () =>
         {
             var sheets = new FilteredElementCollector(doc).OfClass(typeof(ViewSheet)).Cast<ViewSheet>().Count(s => !s.IsPlaceholder);
@@ -85,7 +93,8 @@ internal static class ChecklistFacts
         {
             if (string.IsNullOrEmpty(doc.PathName) || !File.Exists(doc.PathName)) return new Hint("The model isn't saved on this PC, so its size can't be read.", Level.Info);
             var mb = new FileInfo(doc.PathName).Length / 1048576.0;
-            return new Hint($"This file is {mb:0} MB on disk now (check the e-Transmit output after purge).", mb > 300 ? Level.Warn : Level.Ok);
+            var limit = double.TryParse(Rule("filesize"), NumberStyles.Float, CultureInfo.InvariantCulture, out var l) && l > 0 ? l : 300;
+            return new Hint($"This file is {mb:0} MB on disk now; the limit is {limit:0} MB (check the e-Transmit output after purge).", mb > limit ? Level.Warn : Level.Ok);
         });
         Add("urs", () =>
         {
@@ -100,11 +109,13 @@ internal static class ChecklistFacts
         });
         Add("levels", () =>
         {
-            var names = new FilteredElementCollector(doc).OfClass(typeof(Level)).Select(l => l.Name).OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
-            var off = names.Where(n => !Regex.IsMatch(n, @"^BLDG\s*\d+\s+LVL\s+", RegexOptions.IgnoreCase)).ToList();
+            var names = new FilteredElementCollector(doc).OfClass(typeof(Autodesk.Revit.DB.Level)).Select(l => l.Name).OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
+            var pattern = Rule("levels");
+            if (pattern.Length == 0) return new Hint($"{names.Count} levels. No level name pattern is set" + Rules + ".", Level.Info, names);
+            var off = names.Where(n => !ChecklistMath.LikeAny(n, pattern)).ToList();
             return off.Count == 0
-                ? new Hint($"{names.Count} levels, all named BLDG n LVL ….", Level.Ok)
-                : new Hint($"{names.Count} levels; {off.Count} not named BLDG n LVL …: {List(off)}.", Level.Warn, off);
+                ? new Hint($"{names.Count} levels, all named {pattern}.", Level.Ok)
+                : new Hint($"{names.Count} levels; {off.Count} not named {pattern}: {List(off)}.", Level.Warn, off);
         });
         Add("worksets", () =>
         {
@@ -125,7 +136,7 @@ internal static class ChecklistFacts
                 if (others > 0) problems.Add($"{others} elements other than levels and grids on Shared Levels and Grids");
             }
             var names = new HashSet<string>(worksets.Select(w => w.Name), StringComparer.OrdinalIgnoreCase);
-            var missing = Regex.Matches(Ex("worksets"), @"\bZ_Link_\w+").Cast<Match>().Select(m => m.Value).Distinct().Where(n => !names.Contains(n)).ToList();
+            var missing = ChecklistMath.RuleList(Rule("linkworksets")).Where(n => !names.Contains(n)).ToList();
             foreach (var m in missing) problems.Add("missing workset " + m);
             return problems.Count == 0
                 ? new Hint($"{worksets.Count} worksets; nothing on Workset1, only levels and grids on Shared Levels and Grids, the link worksets are there.", Level.Ok)
@@ -135,8 +146,10 @@ internal static class ChecklistFacts
         {
             var names = new FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_VolumeOfInterest).WhereElementIsNotElementType().Select(e => e.Name).ToList();
             if (names.Count == 0) return new Hint("The model has no scope boxes.", Level.Warn);
-            var off = names.Where(n => !Regex.IsMatch(n, @"^BLDG-\d{2}-\d{3,4}$")).ToList();
-            return off.Count == 0 ? new Hint($"{names.Count} scope boxes, all named BLDG-NN-NNNN.", Level.Ok) : new Hint($"{off.Count} of {names.Count} scope boxes not named BLDG-NN-NNNN: {List(off)}.", Level.Warn, off);
+            var pattern = Rule("scopeboxes");
+            if (pattern.Length == 0) return new Hint($"{names.Count} scope boxes. No scope box name pattern is set" + Rules + ".", Level.Info, names);
+            var off = names.Where(n => !ChecklistMath.LikeAny(n, pattern)).ToList();
+            return off.Count == 0 ? new Hint($"{names.Count} scope boxes, all named {pattern}.", Level.Ok) : new Hint($"{off.Count} of {names.Count} scope boxes not named {pattern}: {List(off)}.", Level.Warn, off);
         });
         Add("categories", () =>
         {
@@ -167,13 +180,14 @@ internal static class ChecklistFacts
         {
             var start = StartingViewSettings.GetStartingViewSettings(doc).ViewId;
             var view = start == ElementId.InvalidElementId ? null : doc.GetElement(start) as View;
-            var landing = new FilteredElementCollector(doc).OfClass(typeof(Family)).Any(f => f.Name.IndexOf("LandingPage", StringComparison.OrdinalIgnoreCase) >= 0);
-            var text = (view is null ? "No starting view is set." : $"Starting view: {view.Name}.") + (landing ? " The LandingPage family is loaded." : " No LandingPage family is loaded.");
+            var family = Rule("landing").Length > 0 ? Rule("landing") : "LandingPage";
+            var landing = new FilteredElementCollector(doc).OfClass(typeof(Family)).Any(f => f.Name.IndexOf(family, StringComparison.OrdinalIgnoreCase) >= 0 || ChecklistMath.Like(f.Name, family));
+            var text = (view is null ? "No starting view is set." : $"Starting view: {view.Name}.") + (landing ? $" The {family} family is loaded." : $" No {family} family is loaded.");
             return new Hint(text, view is not null && landing ? Level.Ok : Level.Warn);
         });
         Add("titleblock", () =>
         {
-            var expected = Regex.Match(Ex("titleblock"), @"([\w\-.]+)\.rfa", RegexOptions.IgnoreCase) is { Success: true } m ? m.Groups[1].Value : "";
+            var expected = Rule("titleblock").Length > 0 ? Rule("titleblock") : Regex.Match(Ex("titleblock"), @"([\w\-.]+)\.rfa", RegexOptions.IgnoreCase) is { Success: true } m ? m.Groups[1].Value : "";
             var used = new FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_TitleBlocks).WhereElementIsNotElementType()
                 .OfType<FamilyInstance>().Select(f => f.Symbol?.FamilyName ?? "").Where(n => n.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
             if (used.Count == 0) return new Hint("No title blocks on sheets.", Level.Warn);
@@ -187,8 +201,11 @@ internal static class ChecklistFacts
                 .GroupBy(v => v.Scale).OrderBy(g => g.Key).Select(g => (Scale: g.Key, Count: g.Count())).ToList();
             if (scales.Count == 0) return new Hint("No plans, sections or details on sheets.", Level.Info);
             var text = "Scales on sheets: " + string.Join(", ", scales.Select(s => $"1:{s.Scale} ({s.Count})")) + ".";
-            var rejected = V().OnSheets.Where(v => v.Scale == 300).Select(v => v.Name + " at 1:300").ToList();
-            return new Hint(text, scales.Any(s => s.Scale == 300) ? Level.Warn : Level.Info, rejected);
+            var approved = ChecklistMath.RuleList(Rule("scales")).Select(a => int.TryParse(Regex.Replace(a, @"^\s*1\s*:\s*", ""), NumberStyles.Integer, CultureInfo.InvariantCulture, out var n) ? n : -1).Where(n => n > 0).ToHashSet();
+            if (approved.Count == 0) return new Hint(text + " No approved scales are set" + Rules + ".", Level.Info);
+            var rejected = V().OnSheets.Where(v => v.ViewType is ViewType.FloorPlan or ViewType.CeilingPlan or ViewType.EngineeringPlan or ViewType.Section or ViewType.Elevation or ViewType.Detail or ViewType.AreaPlan && !approved.Contains(v.Scale))
+                .Select(v => $"{v.Name} at 1:{v.Scale}").ToList();
+            return new Hint(text, rejected.Count > 0 ? Level.Warn : Level.Ok, rejected);
         });
         Add("drawinglist", () =>
         {
@@ -214,8 +231,9 @@ internal static class ChecklistFacts
         });
         Add("navisview", () =>
         {
-            var views = new FilteredElementCollector(doc).OfClass(typeof(View3D)).Cast<View3D>().Where(v => !v.IsTemplate && v.Name.IndexOf("Navisworks", StringComparison.OrdinalIgnoreCase) >= 0).ToList();
-            if (views.Count == 0) return new Hint("No 3D view named …Navisworks Export.", Level.Warn);
+            var pattern = Rule("navisview").Length > 0 ? Rule("navisview") : "*Navisworks*";
+            var views = new FilteredElementCollector(doc).OfClass(typeof(View3D)).Cast<View3D>().Where(v => !v.IsTemplate && ChecklistMath.LikeAny(v.Name, pattern)).ToList();
+            if (views.Count == 0) return new Hint($"No 3D view named {pattern}.", Level.Warn);
             var v = views[0];
             return new Hint($"3D view {v.Name}{(v.ViewTemplateId == ElementId.InvalidElementId ? ", with no view template" : "")}.", v.ViewTemplateId == ElementId.InvalidElementId ? Level.Warn : Level.Ok);
         });
@@ -231,7 +249,127 @@ internal static class ChecklistFacts
                 ? new Hint(detached + $"No Revit links are loaded ({types.Count} unloaded).", doc.IsDetached || !doc.IsWorkshared ? Level.Ok : Level.Warn)
                 : new Hint(detached + $"{loaded.Count} Revit links still loaded: {List(loaded)}.", Level.Warn, loaded);
         });
+        // Checks made automatic by the checking rules.
+        Add("newworksets", () =>
+        {
+            var approved = Rule("approvedworksets");
+            if (approved.Length == 0 || !doc.IsWorkshared) return null; // not tested: you check it
+            var off = new FilteredWorksetCollector(doc).OfKind(WorksetKind.UserWorkset).Select(w => w.Name)
+                .Where(n => !n.Equals("Workset1", StringComparison.OrdinalIgnoreCase) && !n.Equals("Shared Levels and Grids", StringComparison.OrdinalIgnoreCase) && !ChecklistMath.LikeAny(n, approved))
+                .OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
+            return off.Count == 0 ? new Hint("Every workset is on the approved list.", Level.Ok) : new Hint($"{off.Count} worksets aren't on the approved list: {List(off)}.", Level.Warn, off);
+        });
+        Add("columns", () =>
+        {
+            if (!Rule("columns").StartsWith("y", StringComparison.OrdinalIgnoreCase)) return null;
+            var levels = new FilteredElementCollector(doc).OfClass(typeof(Autodesk.Revit.DB.Level)).Cast<Autodesk.Revit.DB.Level>().Select(l => l.Elevation).OrderBy(e => e).ToList();
+            var tall = new List<string>();
+            var count = 0;
+            foreach (var c in new FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_StructuralColumns).WhereElementIsNotElementType().OfType<FamilyInstance>())
+            {
+                count++;
+                var baseId = c.get_Parameter(BuiltInParameter.FAMILY_BASE_LEVEL_PARAM)?.AsElementId();
+                var topId = c.get_Parameter(BuiltInParameter.FAMILY_TOP_LEVEL_PARAM)?.AsElementId();
+                if (baseId is null || topId is null || doc.GetElement(baseId) is not Autodesk.Revit.DB.Level b || doc.GetElement(topId) is not Autodesk.Revit.DB.Level t) continue;
+                var between = levels.Count(e => e > b.Elevation + 1e-6 && e < t.Elevation - 1e-6);
+                if (between > 0) tall.Add($"{TypeName(c)} (id {c.Id.Value}): {b.Name} to {t.Name}");
+            }
+            if (count == 0) return new Hint("The model has no structural columns.", Level.Info);
+            return tall.Count == 0 ? new Hint($"All {count} columns stop at the next level up.", Level.Ok)
+                : new Hint($"{tall.Count} of {count} columns run past the next level up. Split them, or list the double-height ones in the comment.", Level.Warn, tall);
+        });
+        Add("uniformat", () =>
+        {
+            var names = ChecklistMath.RuleList(Rule("classification"));
+            if (names.Count == 0) return null;
+            var missing = TypesInUse(doc).Where(t => !names.Any(n => Filled(t.LookupParameter(n))))
+                .Select(t => TypeLabel(t)).OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
+            return missing.Count == 0 ? new Hint($"Every model type in use has {string.Join(" or ", names)} filled.", Level.Ok)
+                : new Hint($"{missing.Count} model types in use have no {string.Join(" or ", names)}.", Level.Warn, missing);
+        });
+        Add("ifc", () =>
+        {
+            var names = ChecklistMath.RuleList(Rule("ifc"));
+            if (names.Count == 0) return null;
+            bool Has(Element e) => names.Any(n => Filled(e.LookupParameter(n)))
+                                    || Filled(e.get_Parameter(BuiltInParameter.IFC_EXPORT_ELEMENT_TYPE_AS)) || Filled(e.get_Parameter(BuiltInParameter.IFC_EXPORT_ELEMENT_AS));
+            var byType = Instances(doc).GroupBy(e => e.GetTypeId().Value).ToList();
+            var missing = new List<string>();
+            foreach (var g in byType)
+            {
+                if (doc.GetElement(new ElementId(g.Key)) is not ElementType t || Has(t) || g.All(Has)) continue;
+                missing.Add(TypeLabel(t));
+            }
+            missing.Sort(StringComparer.OrdinalIgnoreCase);
+            return missing.Count == 0 ? new Hint("Every model type in use has its IFC entity set (by type or on every instance).", Level.Ok)
+                : new Hint($"{missing.Count} model types in use have no IFC entity set.", Level.Warn, missing);
+        });
+        Add("parameters", () =>
+        {
+            var bad = Rule("badparameters");
+            if (bad.Length == 0) return null;
+            var names = new List<string>();
+            var it = doc.ParameterBindings.ForwardIterator();
+            while (it.MoveNext()) if (it.Key is Definition d) names.Add(d.Name);
+            var off = names.Where(n => ChecklistMath.LikeAny(n, bad)).OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
+            return off.Count == 0 ? new Hint($"{names.Count} project parameters; none matches {bad}.", Level.Ok)
+                : new Hint($"{off.Count} project parameters match {bad}: {List(off)}.", Level.Warn, off);
+        });
+        Add("tbmodelname", () =>
+        {
+            var param = Rule("tbmodelname");
+            if (param.Length == 0) return null;
+            var name = Path.GetFileNameWithoutExtension(ChecklistMath.WorkingName(file));
+            var blocks = new FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_TitleBlocks).WhereElementIsNotElementType().ToList();
+            var off = new List<string>();
+            var found = 0;
+            foreach (var sheet in new FilteredElementCollector(doc).OfClass(typeof(ViewSheet)).Cast<ViewSheet>().Where(x => !x.IsPlaceholder))
+            {
+                var p = sheet.LookupParameter(param) ?? blocks.FirstOrDefault(b => b.OwnerViewId == sheet.Id)?.LookupParameter(param);
+                if (p is null) continue;
+                found++;
+                var value = (p.AsString() ?? p.AsValueString() ?? "").Trim();
+                if (value.Length == 0 || value.IndexOf(name, StringComparison.OrdinalIgnoreCase) < 0 && name.IndexOf(Path.GetFileNameWithoutExtension(value), StringComparison.OrdinalIgnoreCase) < 0)
+                    off.Add($"{sheet.SheetNumber} {sheet.Name}: \"{value}\"");
+            }
+            if (found == 0) return new Hint($"No sheet or title block has a parameter named {param}" + Rules + ".", Level.Warn);
+            return off.Count == 0 ? new Hint($"{param} matches the file name {name} on all {found} sheets.", Level.Ok)
+                : new Hint($"{off.Count} of {found} sheets show a different model name in {param} (file: {name}).", Level.Warn, off);
+        });
+        Add("viewfolders", () =>
+        {
+            var names = ChecklistMath.RuleList(Rule("viewfolders"));
+            if (names.Count == 0) return null;
+            var views = new FilteredElementCollector(doc).OfClass(typeof(View)).Cast<View>()
+                .Where(v => !v.IsTemplate && v.ViewType is not (ViewType.ProjectBrowser or ViewType.SystemBrowser or ViewType.Internal or ViewType.Undefined or ViewType.DrawingSheet)).ToList();
+            if (!views.Any(v => names.Any(n => v.LookupParameter(n) is not null))) return new Hint($"No view has a parameter named {string.Join(" or ", names)}" + Rules + ".", Level.Warn);
+            var off = views.Where(v => names.Any(n => !Filled(v.LookupParameter(n)))).Select(v => v.Name).OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
+            return off.Count == 0 ? new Hint($"Every view has {string.Join(" and ", names)} filled.", Level.Ok)
+                : new Hint($"{off.Count} views have {string.Join(" or ", names)} empty, so they land in ???.", Level.Warn, off);
+        });
         return r;
+    }
+
+    /// <summary>Elements of model categories that have material quantities (the physical model), not in links.</summary>
+    private static IEnumerable<Element> Instances(Document doc) =>
+        new FilteredElementCollector(doc).WhereElementIsNotElementType().WhereElementIsViewIndependent()
+            .Where(e => e.Category is { CategoryType: CategoryType.Model, HasMaterialQuantities: true } && e.GetTypeId() != ElementId.InvalidElementId);
+
+    /// <summary>The types those elements use.</summary>
+    private static List<ElementType> TypesInUse(Document doc) =>
+        Instances(doc).Select(e => e.GetTypeId().Value).Distinct().Select(id => doc.GetElement(new ElementId(id)) as ElementType).Where(t => t is not null).Select(t => t!).ToList();
+
+    private static string TypeLabel(ElementType t) => (t.Category?.Name is { Length: > 0 } c ? c + ": " : "") + (t.FamilyName.Length > 0 ? t.FamilyName + ": " : "") + t.Name;
+
+    private static bool Filled(Parameter? p)
+    {
+        if (p is null || !p.HasValue) return false;
+        return p.StorageType switch
+        {
+            StorageType.String => (p.AsString() ?? "").Trim().Length > 0,
+            StorageType.ElementId => p.AsElementId() != ElementId.InvalidElementId,
+            _ => (p.AsValueString() ?? "").Trim().Length > 0,
+        };
     }
 
     /// <summary>

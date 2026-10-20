@@ -487,6 +487,7 @@ internal static partial class FieldTest
         await Probe(s, "checklist.word", app => ChecklistProbe(app, s)).ConfigureAwait(false);
         await Probe(s, "checklist.views", app => ChecklistViewsProbe(app, s)).ConfigureAwait(false);
         await Probe(s, "checklist.fix", app => ChecklistFixProbe(app, s)).ConfigureAwait(false);
+        await Probe(s, "checklist.rules", app => ChecklistRulesProbe(app, s)).ConfigureAwait(false);
         await Probe(s, "package.sentence", app => PackageSentence(app, s)).ConfigureAwait(false);
         await Probe(s, "package.skip", app => PackageSkip(app, s)).ConfigureAwait(false);
         await Probe(s, "redlines.pdf", app => RedlinePdf(app, s)).ConfigureAwait(false);
@@ -1873,6 +1874,21 @@ internal static partial class FieldTest
         }
         finally { RollBack(group); }
         return problems.Count == 0 ? Pass($"made and deleted {made.Count} checking views: {string.Join(", ", made)}") : Fail(string.Join("; ", problems));
+    }
+
+    /// <summary>Every model test of the built-in checklist, with every checking rule turned on, reads the test project without an error.</summary>
+    private static (string, string) ChecklistRulesProbe(UIApplication app, State s)
+    {
+        if (TestDoc(app, s, out var why) is not { } doc) return Fail(why);
+        if (ChecklistMath.BuiltIn() is not { } def) return Fail("the built-in checklist can't be read");
+        def.Rules["approvedworksets"] = "ST_*, Z_Link_*";
+        def.Rules["badparameters"] = "WSP*";
+        def.Rules["tbmodelname"] = "Sheet Name";
+        def.Rules["viewfolders"] = "Discipline";
+        var facts = ChecklistFacts.Read(doc, def);
+        var broken = facts.Hints.Where(h => h.Value.Text.StartsWith("Couldn't read", StringComparison.Ordinal)).Select(h => h.Key + ": " + h.Value.Text).ToList();
+        var tested = def.Items.Count(i => i.Auto.Length > 0 && facts.Hints.TryGetValue(i.Auto, out var h) && h.Level != ChecklistFacts.Level.Info);
+        return broken.Count == 0 ? Pass($"{facts.Hints.Count} model tests read, {tested} of {def.Items.Count()} checks settled automatically") : Fail(string.Join("; ", broken));
     }
 
     /// <summary>The checklist's Fix buttons that can be rolled back (not unloading links), run on the test project and rolled back.</summary>

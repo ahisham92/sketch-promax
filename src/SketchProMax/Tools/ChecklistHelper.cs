@@ -13,7 +13,7 @@ internal static class ChecklistHelper
     public static readonly (string Tag, string Text)[] Choices =
     [
         (ProMax, "Sketch ProMax chat (recommended)"),
-        (SketchPro, "SketchPro (copy the question to paste)"),
+        (SketchPro, "SketchPro (opens its Copilot and pastes the question)"),
         (None, "None"),
     ];
 
@@ -28,7 +28,7 @@ internal static class ChecklistHelper
     public static string? Button(string helper) => Parse(helper) switch
     {
         ProMax => "Ask Sketch ProMax to check",
-        SketchPro => "Copy the question for SketchPro",
+        SketchPro => "Ask SketchPro (paste in its Copilot)",
         _ => null,
     };
 

@@ -459,7 +459,7 @@ public sealed class SettingsWindow : Window
         AutomationProperties.SetHelpText(_helper, "Who the checklist's Ask button hands a check to.");
         page.Children.Add(Place("ChecklistHelper", _helper));
         page.Children.Add(Hint("Sketch ProMax: the check goes to the chat, which looks at the model (and pictures of views) and says pass or fail. " +
-                               "SketchPro: the question is copied for you to paste into SketchPro's chat. None: no Ask button. The helper only advises; you still answer each check."));
+                               "SketchPro: its Copilot opens with the question pasted in, for you to send. None: no Ask button. The helper only advises; you still answer each check."));
         return page;
     }
 

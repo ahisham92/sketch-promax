@@ -150,6 +150,30 @@ internal static class ChecklistTests
         check("checklist: a check without a short title shows its first sentence",
             new Item("1", "1", "Grids are in the model. They show in plans (BLDG-01).", "", "", "", "", "", "").Title == "Grids are in the model."
             && new Item("1", "1", "One sentence only", "", "", "", "", "", "").Title == "One sentence only", "");
+        check("checklist: rule patterns (# digit, ? one character, * anything, spaces loose, case ignored)",
+            Like("BLDG 7 LVL 01-TOC", "BLDG * LVL *") && Like("bldg  12 lvl B01", "BLDG * LVL *") && !Like("Level 1", "BLDG * LVL *")
+            && Like("BLDG-01-1101", "BLDG-##-###*") && !Like("BLDG7-1101", "BLDG-##-###*") && Like("A1", "?#") && !Like("AB", "?#")
+            && LikeAny("Z_Link_AR", "ST_*, Z_Link_*") && !LikeAny("MH_Ducting", "ST_*, Z_Link_*") && !LikeAny("x", ""), "");
+        var ruled = new Definition { Rules = { ["levels"] = "L*", ["approvedworksets"] = "" } };
+        check("checklist: a rule set wins, an empty one turns its test off, an unset one uses the default",
+            Rule(ruled, "levels") == "L*" && Rule(ruled, "approvedworksets") == "" && Rule(ruled, "filesize") == "300" && Rule(null, "scales").StartsWith("1:1,"), "");
+        var autoKeys = AutoRules.Select(r => r.Key).ToHashSet();
+        var orphan = RuleDefs.Where(r => !autoKeys.Contains(r.Check)).Select(r => r.Key).ToList();
+        check("checklist: every checking rule drives a model test", orphan.Count == 0, string.Join(", ", orphan));
+        var newlyAuto = new[] { "12", "17", "25", "26", "27", "31", "39" }.Where(n => built.Items.First(i => i.Number == n).Auto.Length == 0).ToList();
+        check("checklist: checks 12, 17, 25, 26, 27, 31 and 39 have model tests", newlyAuto.Count == 0, "no test on " + string.Join(", ", newlyAuto));
+        var rulesPath = Path.Combine(Path.GetTempPath(), $"spm-checklist-{Guid.NewGuid():N}.xlsx");
+        try
+        {
+            var withRules = Renumber(built);
+            withRules.Rules["levels"] = "BLDG ## LVL *";
+            withRules.Rules["approvedworksets"] = "ST_*, Z_Link_*";
+            ChecklistXlsx.Write(rulesPath, withRules);
+            var back = ReadXlsx(rulesPath);
+            check("checklist: checking rules go to the Excel Rules sheet and come back",
+                Rule(back, "levels") == "BLDG ## LVL *" && Rule(back, "approvedworksets") == "ST_*, Z_Link_*" && Rule(back, "scales") == Rule(null, "scales"), ToJson(back.Rules));
+        }
+        finally { File.Delete(rulesPath); }
         var question = ChecklistHelper.Question(built.Items.First(i => i.Number == "15"), "model.rvt", null);
         check("checklist: the helper's question has the check, how to check, no changes and the PASS / FAIL answer",
             question.Contains("check #15") && question.Contains("How to check:") && question.Contains("Don't change anything") && question.Contains("PASS, FAIL or CAN'T TELL")

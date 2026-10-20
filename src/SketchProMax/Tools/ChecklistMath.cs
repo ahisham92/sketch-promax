@@ -62,9 +62,62 @@ internal static class ChecklistMath
         public string SourcePath { get; set; } = "";
         public string SourceStamp { get; set; } = "";
 
+        /// <summary>The checking rules set for this checklist (RuleDefs keys); a rule not set uses its default.</summary>
+        public Dictionary<string, string> Rules { get; set; } = new(StringComparer.Ordinal);
+
         [System.Text.Json.Serialization.JsonIgnore]
         public IEnumerable<Item> Items => Sections.SelectMany(s => s.Items);
     }
+
+    // ---- Checking rules -------------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// A checking rule: what the automatic model test compares the model with (a name pattern, a list, a size), set per
+    /// checklist (Checking rules… in the window) and carried in the Excel file's Rules sheet. Patterns: # is a digit,
+    /// ? any one character, * anything; lists are comma separated. An empty value turns that part of the test off.
+    /// </summary>
+    public sealed record RuleDef(string Key, string Label, string Default, string Help, string Check);
+
+    public static readonly RuleDef[] RuleDefs =
+    [
+        new("filename", "Model file name pattern", "*-ABC-002-*", "The working model's file name, e.g. PRJ1-###-##-ABC-002-STR-3DM-####.", "name002"),
+        new("filesize", "Largest file size (MB)", "300", "The model file may be at most this size.", "filesize"),
+        new("levels", "Level name pattern", "BLDG * LVL *", "Every level name matches one of these.", "levels"),
+        new("scopeboxes", "Scope box name pattern", "BLDG-##-###*", "Every scope box name matches one of these.", "scopeboxes"),
+        new("linkworksets", "Worksets that must exist", "Z_Link_URS, Z_Link_CAD, Z_Link_AR, Z_Link_EL, Z_Link_ME, Z_Link_SC, Z_Link_SS", "Each of these worksets is in the model.", "worksets"),
+        new("approvedworksets", "Approved worksets", "", "Every workset matches one of these (empty: not tested). Workset1 and Shared Levels and Grids are always allowed.", "newworksets"),
+        new("columns", "Column levels tested", "yes", "yes: a column that runs past the next level up is flagged (list the double-height ones in the comment). no: not tested.", "columns"),
+        new("classification", "Classification parameter", "Assembly Code", "The type parameter holding the UniFormat code; every model type in use must have it filled.", "uniformat"),
+        new("ifc", "IFC entity parameter", "IfcExportAs", "The type or instance parameter holding the IFC entity; every model type in use must have it filled.", "ifc"),
+        new("badparameters", "Project parameters not allowed", "", "Project parameter names matching any of these are flagged, e.g. another firm's prefix (empty: not tested).", "parameters"),
+        new("titleblock", "Title block family", "", "The title block every sheet uses (empty: read from the check's example).", "titleblock"),
+        new("tbmodelname", "Sheet parameter with the model name", "", "The sheet or title block parameter that shows the model name; it must match the file name (empty: not tested).", "tbmodelname"),
+        new("scales", "Approved scales", "1:1, 1:2, 1:5, 1:10, 1:20, 1:25, 1:50, 1:100, 1:200, 1:250, 1:500, 1:1000", "Views on sheets use one of these scales.", "scales"),
+        new("viewfolders", "View folder parameters", "", "The view parameters the Project Browser sorts by, e.g. Discipline, Sub-Discipline; a view with one empty lands in ??? (empty: not tested).", "viewfolders"),
+        new("navisview", "Navisworks view name", "*Navisworks Export*", "The 3D view exported to NWC.", "navisview"),
+        new("landing", "Landing page family", "LandingPage", "The family placed on the starting view.", "landing"),
+    ];
+
+    /// <summary>The rule's value for this checklist: set, else the default ("" turns that test off).</summary>
+    public static string Rule(Definition? def, string key)
+    {
+        if (def is not null && def.Rules.TryGetValue(key, out var v)) return (v ?? "").Trim();
+        return RuleDefs.FirstOrDefault(r => r.Key == key)?.Default ?? "";
+    }
+
+    /// <summary>A comma separated rule as its parts.</summary>
+    public static List<string> RuleList(string value) =>
+        (value ?? "").Split([',', ';', '\n'], StringSplitOptions.RemoveEmptyEntries).Select(p => p.Trim()).Where(p => p.Length > 0).ToList();
+
+    /// <summary>Whether <paramref name="value"/> matches a pattern: # a digit, ? any one character, * anything; case ignored.</summary>
+    public static bool Like(string value, string pattern)
+    {
+        var rx = "^" + Regex.Escape(pattern.Trim()).Replace("\\*", ".*").Replace("\\?", ".").Replace("\\#", "[0-9]").Replace("\\ ", "\\s+") + "$";
+        return Regex.IsMatch((value ?? "").Trim(), rx, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    }
+
+    /// <summary>Whether <paramref name="value"/> matches any pattern of the list.</summary>
+    public static bool LikeAny(string value, string patterns) => RuleList(patterns).Any(p => Like(value, p));
 
     /// <summary>SourcePath of the checklist that ships with the add-in, and of one edited in the add-in.</summary>
     public const string BuiltInSource = "built-in", EditedSource = "edited";
@@ -101,7 +154,7 @@ internal static class ChecklistMath
         return new Definition
         {
             Title = def.Title.Trim(), Fields = def.Fields.ToList(), Sections = sections, Signatories = def.Signatories.ToList(),
-            SourcePath = def.SourcePath, SourceStamp = def.SourceStamp,
+            SourcePath = def.SourcePath, SourceStamp = def.SourceStamp, Rules = new(def.Rules, StringComparer.Ordinal),
         };
     }
 
@@ -317,6 +370,13 @@ internal static class ChecklistMath
         ("navisview", Rx(@"^A '?3D Navisworks Export'? view")),
         ("central", Rx(@"exported from the central")),
         ("links", Rx(@"links unloaded")),
+        ("newworksets", Rx(@"^No new worksets")),
+        ("columns", Rx(@"^Columns are modelled level by level")),
+        ("uniformat", Rx(@"Classification code")),
+        ("parameters", Rx(@"^Project parameters follow")),
+        ("ifc", Rx(@"^IFC entity")),
+        ("tbmodelname", Rx(@"model name shown in the title block")),
+        ("viewfolders", Rx(@"^Every view is in a folder")),
     ];
 
     private static Regex Rx(string pattern) => new(pattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -517,6 +577,14 @@ internal static class ChecklistMath
             }
         }
         Close();
+        // The Rules sheet (written by Export to Excel): rule name in column A, its value in B, its key in C.
+        if (sheets.FirstOrDefault(p => p.Key.Equals("Rules", StringComparison.OrdinalIgnoreCase)).Value is { } ruleRows)
+            foreach (var (_, cells) in ruleRows)
+            {
+                var key = Cell(cells, 2);
+                var rule = RuleDefs.FirstOrDefault(r => r.Key == key) ?? RuleDefs.FirstOrDefault(r => r.Label.Equals(Cell(cells, 0), StringComparison.OrdinalIgnoreCase));
+                if (rule is not null) def.Rules[rule.Key] = Cell(cells, 1);
+            }
         if (def.Title.Length == 0) def.Title = "Pre-submission checklist";
         if (def.Signatories.Count == 0) def.Signatories = ["Prepared by", "Approved by"];
         if (!def.Sections.Any())

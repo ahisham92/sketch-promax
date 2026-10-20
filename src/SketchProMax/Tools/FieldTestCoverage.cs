@@ -170,6 +170,15 @@ internal static class FieldTestCoverage
             "Yes deletes them, the check turns to passes and the automatic score goes up. Click the Automatic check ring: Review and sign opens at the list of checks the model test fails. " +
             "On check 15 click Ask Sketch ProMax to check: the Chat pane shows the question and the answer starts with PASS, FAIL or CAN'T TELL, and nothing in the model changes. " +
             "Settings > Sign-off > Helper = SketchPro: the button copies the question (paste it into Notepad to see it); None: the button is gone."),
+        new("checklist.rules", Issue, "Pre-submission checklist: checking rules and the automatic tests they drive", How.Probe, "",
+            "every model test of the built-in checklist, with all checking rules on, reads the test project without an error (the window's rules dialog and the SketchPro paste are in checklist.sketchpro)"),
+        new("checklist.sketchpro", Issue, "Pre-submission checklist: checking rules dialog, manual checks and pasting into SketchPro", How.Manual, "",
+            "the rules dialog, the Automatic / You check this labels and pasting into another company's add-in are judged by a person",
+            "On a _detached copy: Issue > Pre-submission checklist > Project details: the How this checklist is checked card says how many checks are automatic. " +
+            "Each card is marked Automatic or You check this; Review and sign lists the ones you check yourself. Checking rules…: set Approved worksets to your list and Save: " +
+            "check 12 becomes automatic and the counts go up. Export the checklist to Excel: it has a Rules sheet; change a rule there and import it back. " +
+            "Settings > Sign-off > Helper = SketchPro. On a manual check click Ask SketchPro: SketchPro's Copilot opens and the question is pasted in its message box, not sent. " +
+            "Without SketchPro loaded it says so and leaves the question copied."),
         new("checklist.edit", Issue, "Editing the pre-submission checklist, in Revit and through Excel", How.Manual, "",
             "the editor's lists, moves and confirmations and the Excel round trip in real Excel are judged by a person (the unit tests check the numbering, the answers and the Excel file)",
             "On a _detached copy: answer the first three checks, then Project details > Edit the checklist…: delete check 1, add a check in stage A, move a check down with Ctrl+Down, " +

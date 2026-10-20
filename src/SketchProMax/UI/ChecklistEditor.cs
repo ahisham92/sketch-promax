@@ -586,6 +586,7 @@ internal sealed class ChecklistEditor : Window
         {
             Title = _title.Text.Trim().Length > 0 ? Regex.Replace(_title.Text, @"\s+", " ").Trim() : "Pre-submission checklist",
             Fields = _base.Fields.ToList(),
+            Rules = new(_base.Rules, StringComparer.Ordinal),
             Signatories = roles,
             Sections = _model.Select(s => new ChecklistMath.Section(s.Title, s.Checks.Select(c => new ChecklistMath.Item("", "", c.Text.Trim(), c.Example.Trim(),
                 c.From.Trim(), c.FoundOn.Trim(), c.Priority.Trim(), Regex.Replace(c.Waiting.Trim(), @"^Waiting\s*:\s*", "", RegexOptions.IgnoreCase), "")
