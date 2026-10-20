@@ -46,7 +46,8 @@ public sealed class SettingsWindow : Window
     private readonly List<(string Setting, FrameworkElement Control)> _placed = [];
     private List<Tools.TimeRate>? _rates;
 
-    public SettingsWindow()
+    /// <param name="openTab">The tab to open on (a SettingsLayout key); null: the one used last.</param>
+    public SettingsWindow(string? openTab = null)
     {
         Title = "Sketch ProMax settings";
         var area = RevitWorkArea();
@@ -110,7 +111,7 @@ public sealed class SettingsWindow : Window
             AutomationProperties.SetHelpText(item, tab.Intro);
             _tabs.Items.Add(item);
         }
-        _tabs.SelectedIndex = SettingsLayout.StartIndex(ReadLastTab());
+        _tabs.SelectedIndex = SettingsLayout.StartIndex(openTab ?? ReadLastTab());
         Closed += (_, _) => WriteLastTab((_tabs.SelectedItem as TabItem)?.Tag as string);
 
         // The bar at the foot: always visible, whatever the size of the window or the page.

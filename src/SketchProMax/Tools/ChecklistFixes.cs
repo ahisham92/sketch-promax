@@ -6,7 +6,7 @@ namespace SketchProMax.Tools;
 /// <summary>
 /// "Fix it for me" on the pre-submission checks whose fix is mechanical and safe to undo: unload the Revit links, delete
 /// the imported CAD, delete the views on no sheet, ungroup groups used once, make the 3D Navisworks Export view, and set
-/// a landing view as the starting view. Each is one Revit transaction (Ctrl+Z undoes it), except unloading links,
+/// a landing view as the starting view, delete the empty project parameters. Each is one Revit transaction (Ctrl+Z undoes it), except unloading links,
 /// which Manage Links reloads. The window asks first, saying exactly what changes. Revit API context only.
 /// </summary>
 internal static class ChecklistFixes
@@ -24,18 +24,29 @@ internal static class ChecklistFixes
         "groups" => new("Ungroup groups used once", "Ungroup every model group whose type is used only once? The elements stay where they are."),
         "navisview" => new("Make the Navisworks view",
             "Make a 3D view named \"3D Navisworks Export\": wireframe, with links, levels, grids and rooms hidden? Apply your trade's view template to it afterwards."),
+        "parameters" => new("Delete the empty parameters",
+            "Delete every project parameter that is empty on all its elements, and the empty copy of a parameter that is there twice? " +
+            "Kept whatever they hold: Mark, Comments, the names in Checking rules (always kept, view folders, classification, IFC) and parameters used by schedules or view filters. Ctrl+Z undoes it."),
         "landing" => new("Set the landing view as starting view", "Set the view with \"Landing\" in its name as the model's starting view?"),
         _ => null,
     };
 
     /// <summary>Runs the fix for <paramref name="key"/> on the active model and opens what it made; a sentence saying what changed.</summary>
-    public static string Run(UIDocument uidoc, string key) => Run(uidoc.Document, key, uidoc.ActiveView?.Id, uidoc);
+    public static string Run(UIDocument uidoc, string key, ChecklistMath.Definition? def = null) => Run(uidoc.Document, key, uidoc.ActiveView?.Id, uidoc, def);
 
     /// <summary>Runs the fix on <paramref name="doc"/> (the field test passes no UIDocument, so nothing is opened).</summary>
-    public static string Run(Document doc, string key, ElementId? active, UIDocument? uidoc = null)
+    public static string Run(Document doc, string key, ElementId? active, UIDocument? uidoc = null, ChecklistMath.Definition? def = null)
     {
         switch (key)
         {
+            case "parameters":
+            {
+                var empty = ParameterCleanup.Find(doc, def);
+                if (empty.Count == 0) return "No project parameter is empty or an empty duplicate: nothing to delete.";
+                var (deleted, failed) = Delete(doc, empty.Select(e => e.Param.Id).ToList(), "delete empty project parameters");
+                return $"Deleted {deleted} empty project parameter{(deleted == 1 ? "" : "s")}: " + string.Join(", ", empty.Select(e => e.Param.Name).Distinct(StringComparer.OrdinalIgnoreCase).Take(12)) +
+                       (empty.Count > 12 ? " and more" : "") + "." + Failed(failed);
+            }
             case "links":
             {
                 var loaded = new FilteredElementCollector(doc).OfClass(typeof(RevitLinkType)).Cast<RevitLinkType>()

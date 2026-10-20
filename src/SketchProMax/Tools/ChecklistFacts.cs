@@ -396,17 +396,36 @@ internal static class ChecklistFacts
             return missing.Count == 0 ? new Hint("Every model type in use has its IFC entity set (by type or on every instance).", Level.Ok)
                 : new Hint($"{missing.Count} model types in use have no IFC entity set.", Level.Warn, missing);
         });
-        Add("parameters", () =>
+        // Project parameters: the not-allowed names, and the empty ones that can go (ParameterCleanup), one Revit search
+        // per parameter so a big model keeps Revit responsive between them.
+        if (wanted.Contains("parameters"))
         {
-            var bad = Rule("badparameters");
-            if (bad.Length == 0) return null;
-            var names = new List<string>();
-            var it = doc.ParameterBindings.ForwardIterator();
-            while (it.MoveNext()) if (it.Key is Definition d) names.Add(d.Name);
-            var off = names.Where(n => ChecklistMath.LikeAny(n, bad)).OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
-            return off.Count == 0 ? new Hint($"{names.Count} project parameters; none matches {bad}.", Level.Ok)
-                : new Hint($"{off.Count} project parameters match {bad}: {List(off)}.", Level.Warn, off);
-        });
+            var all = new List<ParameterCleanup.Param>();
+            try { all = ParameterCleanup.List(doc); } catch (Exception ex) when (ex is not OutOfMemoryException) { }
+            foreach (var p in all)
+                reading.Add(() =>
+                {
+                    try { ParameterCleanup.Fill(doc, p); }
+                    catch (Exception ex) when (ex is not OutOfMemoryException) { p.Filled = true; } // can't tell: never offered for deleting
+                });
+            Add("parameters", () =>
+            {
+                var found = new List<string>();
+                var bad = Rule("badparameters");
+                var off = bad.Length == 0 ? [] : all.Select(p => p.Name).Distinct(StringComparer.OrdinalIgnoreCase).Where(n => ChecklistMath.LikeAny(n, bad)).OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
+                found.AddRange(off.Select(n => n + " (matches " + bad + ")"));
+                var empty = ParameterCleanup.Deletable(all, ParameterCleanup.InUse(doc), ParameterCleanup.KeepNames(def));
+                found.AddRange(empty.Select(e => e.Line));
+                if (found.Count == 0)
+                    return bad.Length == 0
+                        ? new Hint($"{all.Count} project parameters; none is empty or an empty duplicate. No not-allowed names are set" + Rules + ".", Level.Info)
+                        : new Hint($"{all.Count} project parameters; none matches {bad}, none is empty or an empty duplicate.", Level.Ok);
+                var parts = new List<string>();
+                if (off.Count > 0) parts.Add($"{off.Count} match {bad}");
+                if (empty.Count > 0) parts.Add($"{empty.Count} are empty on every element or an empty copy of a duplicate (Mark, Comments, the parameters your rules name and those schedules or filters use are kept)");
+                return new Hint($"Of {all.Count} project parameters, " + string.Join("; ", parts) + ".", Level.Warn, found);
+            });
+        }
         Add("tbmodelname", () =>
         {
             var param = Rule("tbmodelname");
