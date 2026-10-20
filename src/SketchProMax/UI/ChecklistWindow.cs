@@ -630,15 +630,20 @@ internal sealed class ChecklistWindow : Window
             // One short Revit call at a time (about a fifth of a second each): between them Revit repaints and takes clicks,
             // where one call for the whole reading froze it on a big model.
             var total = Math.Max(1, reading.Left);
+            var clock = System.Diagnostics.Stopwatch.StartNew();
             while (!_closed && !_stopReading && await App.Dispatcher.InvokeAsync(_ => reading.RunFor(StepBudget)))
             {
                 var done = total - reading.Left;
                 _status.Text = label + " " + (100 * done / total) + "%";
-                ShowRun(label, 100 * done / total, $"Check {done} of {total}. You can keep working in Revit meanwhile; Stop ends it.");
+                var now = CheckName(reading.NextName);
+                ShowRun(label, 100 * done / total, (now.Length > 0 ? now + " · " : "") + "You can keep working in Revit meanwhile; Stop ends it.");
             }
             if (_closed) return;
             if (_stopReading) { _status.Text = "Stopped. The results are as they were before you pressed Run."; return; }
             var facts = reading.Result;
+            // How long the slowest checks took, so a slow model can be looked into from the activity log.
+            ActivityLog.Note("checklist_timing", $"{(slow ? "slow" : "quick")} run {clock.Elapsed.TotalSeconds:0.0} s; slowest: " +
+                string.Join(", ", reading.Slowest.Take(5).Select(t => $"{t.Key} {t.Value.TotalSeconds:0.0} s")));
             // A quick read keeps the slow checks' last results (they say when they ran).
             foreach (var old in _facts.Hints)
                 if (facts.Hints.TryGetValue(old.Key, out var now) && now.Pending && !old.Value.Pending) facts.Hints[old.Key] = old.Value;
@@ -670,6 +675,10 @@ internal sealed class ChecklistWindow : Window
             await ReadModelAgain(null, again);
         }
     }
+
+    /// <summary>The short title of the check a model test key belongs to, for the progress line.</summary>
+    private string CheckName(string key) =>
+        key.Length == 0 ? "" : _def?.Items.FirstOrDefault(i => i.Auto == key) is { } item ? $"#{item.Number} {item.Title}" : "";
 
     /// <summary>Lays out the run strip once; <see cref="ShowRun"/> fills it.</summary>
     private void RunStrip()

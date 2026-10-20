@@ -61,7 +61,8 @@ internal static class ChecklistFacts
     public sealed class Reading
     {
         private readonly Document _doc;
-        private readonly Queue<Action> _steps = new();
+        private readonly Queue<(string Name, Action Step)> _steps = new();
+        private readonly Dictionary<string, TimeSpan> _took = new(StringComparer.Ordinal);
         internal Reading(Document doc, Result result) { _doc = doc; Result = result; }
 
         /// <summary>The header fields at once; the hints as the steps run.</summary>
@@ -70,14 +71,23 @@ internal static class ChecklistFacts
         /// <summary>Steps left.</summary>
         public int Left => _steps.Count;
 
-        internal void Add(Action step) => _steps.Enqueue(step);
+        internal void Add(Action step, string name = "") => _steps.Enqueue((name, step));
+
+        /// <summary>The check the next step reads (its key), or "" between checks.</summary>
+        public string NextName => _steps.Count > 0 ? _steps.Peek().Name : "";
+
+        /// <summary>How long each check took to read, slowest first (for the activity log).</summary>
+        public IEnumerable<KeyValuePair<string, TimeSpan>> Slowest => _took.OrderByDescending(t => t.Value);
 
         /// <summary>Reads the next hint (Revit API context). False when none is left, or the model was closed.</summary>
         public bool Next()
         {
             if (_steps.Count == 0) return false;
             if (!_doc.IsValidObject) { _steps.Clear(); return false; }
-            _steps.Dequeue()();
+            var (name, step) = _steps.Dequeue();
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            step();
+            if (name.Length > 0) _took[name] = (_took.TryGetValue(name, out var before) ? before : TimeSpan.Zero) + clock.Elapsed;
             return true;
         }
 
@@ -132,6 +142,11 @@ internal static class ChecklistFacts
 
         Views? views = null;
         Views V() => views ??= new Views(doc);
+        // The physical model and the types it uses, read once for all the hints that need them.
+        List<Element>? instances = null;
+        List<Element> Inst() => instances ??= Instances(doc).ToList();
+        List<ElementType>? typesInUse = null;
+        List<ElementType> Types() => typesInUse ??= TypesOf(doc, Inst());
         string Rule(string key) => ChecklistMath.Rule(def, key);
         const string Rules = " (set in Checking rules)";
         bool SlowOff(string key) => key switch
@@ -175,7 +190,7 @@ internal static class ChecklistFacts
             {
                 try { if (read() is { } h) r.Hints[key] = h; }
                 catch (Exception ex) when (ex is not OutOfMemoryException) { r.Hints[key] = new Hint("Couldn't read this from the model (" + ex.Message + ").", Level.Info); }
-            });
+            }, key);
         }
 
         Add("name002", () =>
@@ -388,7 +403,7 @@ internal static class ChecklistFacts
         {
             var names = ChecklistMath.RuleList(Rule("classification"));
             if (names.Count == 0) return null;
-            var missing = TypesInUse(doc).Where(t => !names.Any(n => Filled(t.LookupParameter(n))))
+            var missing = Types().Where(t => !names.Any(n => Filled(t.LookupParameter(n))))
                 .Select(t => TypeLabel(t)).OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
             return missing.Count == 0 ? new Hint($"Every model type in use has {string.Join(" or ", names)} filled.", Level.Ok)
                 : new Hint($"{missing.Count} model types in use have no {string.Join(" or ", names)}.", Level.Warn, missing);
@@ -399,7 +414,7 @@ internal static class ChecklistFacts
             if (names.Count == 0) return null;
             bool Has(Element e) => names.Any(n => Filled(e.LookupParameter(n)))
                                     || Filled(e.get_Parameter(BuiltInParameter.IFC_EXPORT_ELEMENT_TYPE_AS)) || Filled(e.get_Parameter(BuiltInParameter.IFC_EXPORT_ELEMENT_AS));
-            var byType = Instances(doc).GroupBy(e => e.GetTypeId().Value).ToList();
+            var byType = Inst().GroupBy(e => e.GetTypeId().Value).ToList();
             var missing = new List<string>();
             foreach (var g in byType)
             {
@@ -416,12 +431,14 @@ internal static class ChecklistFacts
         {
             var all = new List<ParameterCleanup.Param>();
             try { all = ParameterCleanup.List(doc); } catch (Exception ex) when (ex is not OutOfMemoryException) { }
-            foreach (var p in all)
-                reading.Add(() =>
-                {
-                    try { ParameterCleanup.Fill(doc, p); }
-                    catch (Exception ex) when (ex is not OutOfMemoryException) { p.Filled = true; } // can't tell: never offered for deleting
-                });
+            // Looking for empty parameters searches the model once per parameter: only with Run the slow checks.
+            if (slow is not null)
+                foreach (var p in all)
+                    reading.Add(() =>
+                    {
+                        try { ParameterCleanup.Fill(doc, p); }
+                        catch (Exception ex) when (ex is not OutOfMemoryException) { p.Filled = true; } // can't tell: never offered for deleting
+                    }, "parameters");
             Add("parameters", () =>
             {
                 var found = new List<string>();
@@ -430,14 +447,15 @@ internal static class ChecklistFacts
                 found.AddRange(off.Select(n => n + " (matches " + bad + ")"));
                 var empty = ParameterCleanup.Deletable(all, ParameterCleanup.InUse(doc), ParameterCleanup.KeepNames(def));
                 found.AddRange(empty.Select(e => e.Line));
+                var emptyNote = slow is null ? " Empty parameters are looked for when you press Run the slow checks." : "";
                 if (found.Count == 0)
                     return bad.Length == 0
-                        ? new Hint($"{all.Count} project parameters; none is empty or an empty duplicate. No not-allowed names are set" + Rules + ".", Level.Info)
-                        : new Hint($"{all.Count} project parameters; none matches {bad}, none is empty or an empty duplicate.", Level.Ok);
+                        ? new Hint($"{all.Count} project parameters; " + (slow is null ? "no not-allowed names are set" + Rules + "." : "none is empty or an empty duplicate. No not-allowed names are set" + Rules + ".") + emptyNote, Level.Info)
+                        : new Hint($"{all.Count} project parameters; none matches {bad}" + (slow is null ? "." : ", none is empty or an empty duplicate.") + emptyNote, Level.Ok);
                 var parts = new List<string>();
                 if (off.Count > 0) parts.Add($"{off.Count} match {bad}");
                 if (empty.Count > 0) parts.Add($"{empty.Count} are empty on every element or an empty copy of a duplicate (Mark, Comments, the parameters your rules name and those schedules or filters use are kept)");
-                return new Hint($"Of {all.Count} project parameters, " + string.Join("; ", parts) + ".", Level.Warn, found);
+                return new Hint($"Of {all.Count} project parameters, " + string.Join("; ", parts) + "." + emptyNote, Level.Warn, found);
             });
         }
         Add("tbmodelname", () =>
@@ -532,7 +550,7 @@ internal static class ChecklistFacts
         {
             var pattern = Rule("typenames");
             if (pattern.Length == 0) return null;
-            var types = TypesInUse(doc);
+            var types = Types();
             var off = types.Where(t => !ChecklistMath.LikeAny(t.Name, pattern)).Select(TypeLabel).OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
             return off.Count == 0 ? new Hint($"All {types.Count} model types in use are named {pattern}.", Level.Ok)
                 : new Hint($"{off.Count} of {types.Count} model types in use aren't named {pattern}.", Level.Warn, off);
@@ -579,10 +597,18 @@ internal static class ChecklistFacts
             var views = V().OnSheets.Where(v => v.ViewType is ViewType.FloorPlan or ViewType.CeilingPlan or ViewType.EngineeringPlan or ViewType.Section or ViewType.Elevation).ToList();
             if (views.Count == 0) return new Hint("No plans, sections or elevations on sheets.", Level.Info);
             var busy = new List<string>();
+            // One pass over the detail lines and filled regions of the whole model, not one search per view.
+            var wantedViews = new HashSet<long>(views.Select(v => v.Id.Value));
+            var lineCount = new Dictionary<long, int>();
+            var regionCount = new Dictionary<long, int>();
+            foreach (var e in new FilteredElementCollector(doc).OfClass(typeof(CurveElement)))
+                if (e is DetailCurve && wantedViews.Contains(e.OwnerViewId.Value)) lineCount[e.OwnerViewId.Value] = (lineCount.TryGetValue(e.OwnerViewId.Value, out var n) ? n : 0) + 1;
+            foreach (var e in new FilteredElementCollector(doc).OfClass(typeof(FilledRegion)))
+                if (wantedViews.Contains(e.OwnerViewId.Value)) regionCount[e.OwnerViewId.Value] = (regionCount.TryGetValue(e.OwnerViewId.Value, out var n) ? n : 0) + 1;
             foreach (var v in views)
             {
-                var lines = new FilteredElementCollector(doc).OwnedByView(v.Id).OfClass(typeof(CurveElement)).Count(e => e is DetailCurve);
-                var regions = new FilteredElementCollector(doc).OwnedByView(v.Id).OfClass(typeof(FilledRegion)).GetElementCount();
+                var lines = lineCount.TryGetValue(v.Id.Value, out var l) ? l : 0;
+                var regions = regionCount.TryGetValue(v.Id.Value, out var g) ? g : 0;
                 if (lines + regions > limit) busy.Add($"{v.Name}: {lines} detail lines, {regions} filled regions");
             }
             return busy.Count == 0 ? new Hint($"None of the {views.Count} plans, sections and elevations on sheets has more than {limit} detail lines and filled regions.", Level.Ok)
@@ -594,7 +620,7 @@ internal static class ChecklistFacts
             if (rule.Length == 0) return null;
             var cats = new HashSet<long>();
             foreach (Category c in doc.Settings.Categories) if (c.CategoryType == CategoryType.Model && ChecklistMath.LikeAny(c.Name, rule)) cats.Add(c.Id.Value);
-            var types = TypesInUse(doc).Where(t => t.Category is { } c && cats.Contains(c.Id.Value)).ToList();
+            var types = Types().Where(t => t.Category is { } c && cats.Contains(c.Id.Value)).ToList();
             if (types.Count == 0) return new Hint($"No types in use in {rule}.", Level.Info);
             var legends = new FilteredElementCollector(doc).OfClass(typeof(View)).Cast<View>().Count(v => v.ViewType == ViewType.Legend && !v.IsTemplate);
             var shown = new HashSet<long>(new FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_LegendComponents).WhereElementIsNotElementType()
@@ -1062,13 +1088,20 @@ internal static class ChecklistFacts
     }
 
     /// <summary>Elements of model categories that have material quantities (the physical model), not in links.</summary>
-    private static IEnumerable<Element> Instances(Document doc) =>
-        new FilteredElementCollector(doc).WhereElementIsNotElementType().WhereElementIsViewIndependent()
-            .Where(e => e.Category is { CategoryType: CategoryType.Model, HasMaterialQuantities: true } && e.GetTypeId() != ElementId.InvalidElementId);
+    private static IEnumerable<Element> Instances(Document doc)
+    {
+        // Filtered by category inside Revit (fast), not by reading every element's category here.
+        var cats = new List<ElementId>();
+        foreach (Category c in doc.Settings.Categories)
+            if (c.CategoryType == CategoryType.Model && c.HasMaterialQuantities) cats.Add(c.Id);
+        if (cats.Count == 0) return [];
+        return new FilteredElementCollector(doc).WherePasses(new ElementMulticategoryFilter(cats)).WhereElementIsNotElementType().WhereElementIsViewIndependent()
+            .Where(e => e.GetTypeId() != ElementId.InvalidElementId);
+    }
 
     /// <summary>The types those elements use.</summary>
-    private static List<ElementType> TypesInUse(Document doc) =>
-        Instances(doc).Select(e => e.GetTypeId().Value).Distinct().Select(id => doc.GetElement(new ElementId(id)) as ElementType).Where(t => t is not null).Select(t => t!).ToList();
+    private static List<ElementType> TypesOf(Document doc, IEnumerable<Element> instances) =>
+        instances.Select(e => e.GetTypeId().Value).Distinct().Select(id => doc.GetElement(new ElementId(id)) as ElementType).Where(t => t is not null).Select(t => t!).ToList();
 
     private static string TypeLabel(ElementType t) => (t.Category?.Name is { Length: > 0 } c ? c + ": " : "") + (t.FamilyName.Length > 0 ? t.FamilyName + ": " : "") + t.Name;
 
