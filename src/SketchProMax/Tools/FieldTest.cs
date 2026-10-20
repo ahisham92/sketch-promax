@@ -83,6 +83,8 @@ internal static partial class FieldTest
         public bool ChatRoundTrip;
         public string? ReportFolder;
         public int ToolCapSeconds = 120;
+        /// <summary>What the run is called in its report and file name ("test before sharing" for Test before sharing).</summary>
+        public string Title = "field test";
     }
 
     internal sealed record Row(string Family, string Tool, string Status, long Ms, string Message);
@@ -90,6 +92,7 @@ internal static partial class FieldTest
     internal sealed class RunReport
     {
         public string RevitVersion = "", RevitBuild = "", RevitName = "", AddinVersion = "";
+        public string Title = "field test";
         public DateTime Started = DateTime.Now;
         public TimeSpan Took;
         public string Template = "";
@@ -114,7 +117,7 @@ internal static partial class FieldTest
         {
             var sb = new StringBuilder();
             if (Fatal is not null) sb.Append($"The field test could not run: {Fatal}\n");
-            sb.Append($"Field test in Revit {RevitVersion} ({RevitBuild}), Sketch ProMax {AddinVersion}: {Count("pass")} passed, " +
+            sb.Append($"{char.ToUpperInvariant(Title[0])}{Title.Substring(1)} in Revit {RevitVersion} ({RevitBuild}), Sketch ProMax {AddinVersion}: {Count("pass")} passed, " +
                       $"{Count("fail")} failed, {Count("manual")} manual (checklist), {Count("skip")} not run in {Jobs.Duration(Took)}.");
             if (StoppedBecause is not null) sb.Append($" Stopped early: {StoppedBecause}.");
             foreach (var g in Groups.Where(g => Rows.Any(r => r.Family == g.Key)))
@@ -148,6 +151,7 @@ internal static partial class FieldTest
         ("views_sheets", "Views, sheets and annotation", ["views", "sheets", "annotation", "documentation", "drawings", "viewssheets", "viewssheetsannotation", "viewssheetsandannotation"]),
         ("worksharing", "Worksharing", ["worksets", "workset"]),
         ("other", "Everything else", ["everythingelse", "rest", "modelling", "modeling", "general"]),
+        (SharingFamily, "Checklist and Share tools (test before sharing)", ["checklist", "share", "sharetools", "tritorevit", "beforesharing", "testbeforesharing"]),
         ("features", "Non-tool features", ["feature", "nontool", "nontoolfeatures", "ribbon", "chat", "updates", "bugs"]),
     ];
 
@@ -208,7 +212,7 @@ internal static partial class FieldTest
         public readonly Job Job = job;
         public readonly ToolRegistry Registry = registry;
         public readonly Options O = o;
-        public readonly RunReport Result = new() { Families = o.Families };
+        public readonly RunReport Result = new() { Families = o.Families, Title = o.Title };
         public readonly Stopwatch Watch = Stopwatch.StartNew();
         public string Folder = "";
         public Document? Original, Built, Test;
@@ -1194,12 +1198,14 @@ internal static partial class FieldTest
         {
             folder ??= DefaultReportFolder;
             Directory.CreateDirectory(folder);
-            var name = $"{r.Started:yyyyMMdd-HHmmss} field test Revit {r.RevitVersion}";
+            var name = $"{r.Started:yyyyMMdd-HHmmss} {r.Title} Revit {r.RevitVersion}";
+            // Test before sharing: only its own sections (the coverage and bug log are the whole field test's).
+            var whole = r.Title == "field test";
             r.ReportPath = Path.Combine(folder, name + ".md");
             r.JsonPath = Path.Combine(folder, name + ".json");
 
             var md = new StringBuilder();
-            md.AppendLine("# Sketch ProMax field test").AppendLine();
+            md.AppendLine($"# Sketch ProMax {r.Title}").AppendLine();
             md.AppendLine($"- Revit: {r.RevitName} ({r.RevitVersion}, build {r.RevitBuild})");
             md.AppendLine($"- Sketch ProMax: {r.AddinVersion}");
             md.AppendLine($"- Date: {r.Started:yyyy-MM-dd HH:mm}, took {Jobs.Duration(r.Took)}");
@@ -1239,9 +1245,19 @@ internal static partial class FieldTest
             if (r.TimeSaved is not null) md.AppendLine("## Time saved").AppendLine().AppendLine(r.TimeSaved).AppendLine();
             // Last, so it is easy to find: every tool and feature, tested or manual (the checklist's source).
             // Each fixed bug log row with the check that fails if it comes back: which rows can be marked Confirmed.
-            md.AppendLine(BugLogSection(r));
-            var coverage = Coverage(r);
-            md.AppendLine(CoverageMarkdown(coverage));
+            if (!whole)
+            {
+                md.AppendLine("## What each check covers").AppendLine();
+                foreach (var f in FieldTestCoverage.Features.Where(f => r.Rows.Any(x => x.Tool == f.Key)))
+                    md.AppendLine($"- **{f.Key}** ({f.Title}): {f.Reason}");
+                md.AppendLine();
+            }
+            var coverage = whole ? Coverage(r) : new List<CoverageRow>();
+            if (whole)
+            {
+                md.AppendLine(BugLogSection(r));
+                md.AppendLine(CoverageMarkdown(coverage));
+            }
             File.WriteAllText(r.ReportPath, md.ToString());
 
             File.WriteAllText(r.JsonPath, JsonSerializer.Serialize(new
@@ -1337,6 +1353,64 @@ internal static partial class FieldTest
         job.StartedSignal.TrySetResult(true);
         job.Task = Start(job, App.Bridge?.Registry ?? ToolRegistry.CreateDefault(), new Options(), ShowResult);
         return Autodesk.Revit.UI.Result.Succeeded;
+    }
+
+    /// <summary>
+    /// Test before sharing (checklist settings, behind the Default's password): the throwaway project and the "sharing"
+    /// family only, its report saved in Documents\Sketch ProMax\Test reports for the user to upload. Starts it as a job
+    /// and returns at once; the result is shown when it ends. Returns why it can't start, or null.
+    /// </summary>
+    internal static string? StartBeforeSharing()
+    {
+        if (Jobs.Running is not null || App.Dispatcher.IsRunning || SelfTest.IsRunning)
+            return SelfTest.IsRunning ? "A self-test is running. Wait for it to finish, then try again." : Jobs.Busy(Jobs.Running).Text;
+        var job = Jobs.TryCreate("run_field_test", out var inTheWay);
+        if (job is null) return Jobs.Busy(inTheWay).Text;
+        job.TryStart();
+        Jobs.Running = job;
+        job.StartedSignal.TrySetResult(true);
+        var o = new Options { Families = [SharingFamily], ReportFolder = TestReportFolder, Title = SharingTitle };
+        job.Task = Start(job, App.Bridge?.Registry ?? ToolRegistry.CreateDefault(), o, ShowBeforeSharing);
+        return null;
+    }
+
+    /// <summary>Test before sharing's result: the counts, the failures, and where the report is to upload it.</summary>
+    private static void ShowBeforeSharing(RunReport? result, ToolResult outcome)
+    {
+        ActivityLog.Note("test_before_sharing", result is null ? Short(outcome.Text, 900)
+            : $"{result.Summary()} Failed: {string.Join("; ", result.Rows.Where(x => x.Status == "fail").Select(x => x.Tool))}. Report: {result.ReportPath}");
+        if (result is null)
+        {
+            TaskDialog.Show("Sketch ProMax test before sharing", Short(outcome.Text, 1800));
+            return;
+        }
+        var failed = result.Rows.Where(x => x.Status == "fail").ToList();
+        var show = new TaskDialog("Sketch ProMax test before sharing")
+        {
+            MainInstruction = result.Fatal is not null ? "The test could not run"
+                : failed.Count == 0 ? $"All {result.Count("pass")} checks passed" : $"{failed.Count} of {result.Rows.Count} checks failed",
+            MainContent = (failed.Count == 0 ? "" : "Failed: " + string.Join(", ", failed.Select(x => x.Tool)) + "\n\n") +
+                          (result.ReportPath is null ? Short(result.Summary(), 1500) : $"The report is saved as:\n{result.ReportPath}"),
+            FooterText = result.ReportPath is null ? "" : "Upload the report in the Sketch ProMax project to share the results.",
+            CommonButtons = TaskDialogCommonButtons.Close,
+        };
+        if (result.ReportPath is not null)
+        {
+            show.AddCommandLink(TaskDialogCommandLinkId.CommandLink1, "Show the report in its folder", "To upload it in the Sketch ProMax project.");
+            show.AddCommandLink(TaskDialogCommandLinkId.CommandLink2, "Open the report");
+        }
+        var choice = show.Show();
+        try
+        {
+            if (choice == TaskDialogResult.CommandLink1 && result.ReportPath is not null)
+                Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{result.ReportPath}\"") { UseShellExecute = true })?.Dispose();
+            else if (choice == TaskDialogResult.CommandLink2 && result.ReportPath is not null)
+                Process.Start(new ProcessStartInfo(result.ReportPath) { UseShellExecute = true })?.Dispose();
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            TaskDialog.Show("Sketch ProMax test before sharing", $"Couldn't open {result.ReportPath}: {ex.Message}");
+        }
     }
 
     /// <summary>The ribbon run's result dialog, on Revit's thread once the run has ended.</summary>

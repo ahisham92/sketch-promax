@@ -30,6 +30,9 @@ internal sealed class ChecklistRulesWindow : Window
         return window.Saved;
     }
 
+    /// <summary>The window on <paramref name="def"/>, not shown (Test before sharing builds it).</summary>
+    internal static Window ForTest(ChecklistMath.Definition def) => new ChecklistRulesWindow(def);
+
     private ChecklistRulesWindow(ChecklistMath.Definition def)
     {
         _def = def;

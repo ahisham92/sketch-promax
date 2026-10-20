@@ -18,7 +18,7 @@ internal sealed class ChecklistSettingsWindow : Window
     /// <summary>What the checklist window does for the buttons here.</summary>
     public sealed record Actions(Action RunQuick, Action RunSlow, Action EditChecklist, Action EditRules,
         Action<string> UseForProject, Action NewChecklist, Action ImportForProject, Action Export, Action DeleteProjectChecklist, Action ChangePassword,
-        Action MakeDefault);
+        Action MakeDefault, Action TestBeforeSharing);
 
     /// <summary>The project the checklist is for, the project checklist it uses ("" for the office one), and those on this PC.</summary>
     public sealed record Project(string Code, string InUse, IReadOnlyList<string> Names);
@@ -36,6 +36,9 @@ internal sealed class ChecklistSettingsWindow : Window
         window._then?.Invoke();
         return window.HelperChanged;
     }
+
+    /// <summary>The window, not shown (Test before sharing builds it).</summary>
+    internal static Window ForTest(Actions actions, Project project) => new ChecklistSettingsWindow(actions, 40, 5, project);
 
     private ChecklistSettingsWindow(Actions actions, int automatic, int pending, Project project)
     {
@@ -116,8 +119,11 @@ internal sealed class ChecklistSettingsWindow : Window
 
         page.Children.Add(Section("The Default checklist for everyone"));
         page.Children.Add(Para("Make this the Default for everyone saves the checklist shown here as the next Default (password asked). Then ask in the Sketch ProMax project for your Default to be published: it goes into the next update, and every PC gets it when it updates, except for people who changed their Default themselves."));
+        page.Children.Add(Para("Test before sharing (password asked) tests the checklist and Share tools in depth on a throwaway project, without changing your models, checklists or shared tools, " +
+                               "and saves a report in Documents\\Sketch ProMax\\Test reports to upload in the Sketch ProMax project. It takes a few minutes.", Brand.K.Muted, 11.5));
         page.Children.Add(Row(
             Do(RichUi.Button(RichUi.Icon.Save, "Make this the Default for everyone…"), actions.MakeDefault),
+            Do(RichUi.Button(RichUi.Icon.Refresh, "Test before sharing…"), actions.TestBeforeSharing),
             Do(RichUi.Button(RichUi.Icon.Edit, "Change the password…"), actions.ChangePassword)));
 
         page.Children.Add(Section("Signatures"));

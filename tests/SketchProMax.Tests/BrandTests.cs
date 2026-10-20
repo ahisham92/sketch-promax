@@ -19,6 +19,7 @@ internal static class BrandTests
         "src/SketchProMax/App.cs", "src/SketchProMax/Update/Updater.cs", "src/SketchProMax/Tools/OutputPaths.cs",
         "src/SketchProMax/Tools/FieldTest.cs", "src/SketchProMax/Tools/FieldTest.Features.cs", "src/SketchProMax/Tools/FieldTest.Redlines.cs",
         "src/SketchProMax/Tools/FieldTest.Extras.cs", "src/SketchProMax/Tools/FieldTest.Package.cs", "src/SketchProMax/Tools/FieldTestCoverage.cs",
+        "src/SketchProMax/Tools/FieldTest.Sharing.cs",
     ];
 
     // Files that name the model on purpose: the rewriting itself.
