@@ -354,7 +354,8 @@ internal static partial class FieldTest
         var def = DefaultChecklist();
         var state = new ChecklistMath.State();
         var items = def.Items.ToList();
-        foreach (var item in items) { var a = state.For(item.Id); a.Done = item == items[1] ? ChecklistMath.NotApplicable : ChecklistMath.Yes; a.Check = item.Check; }
+        // A check that waits on an answer also needs its comment, as in the window.
+        foreach (var item in items) { var a = state.For(item.Id); a.Done = item == items[1] ? ChecklistMath.NotApplicable : ChecklistMath.Yes; a.Check = item.Check; if (item.Waiting.Length > 0) a.Note = "Done: answer received."; }
         var full = ChecklistMath.Percent(ChecklistMath.Count(items, state));
         if (full != 100) problems.Add($"all answered Yes or N/A shows {full}%");
         if (ChecklistMath.Problems(def, state).Count > 0) problems.Add("all answered still lists problems: " + ChecklistMath.Problems(def, state)[0].Text);

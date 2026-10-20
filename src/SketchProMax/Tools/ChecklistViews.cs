@@ -99,11 +99,15 @@ internal static class ChecklistViews
             case "worksets":
                 return Isolated(doc, "Worksets", WrongWorkset(doc), "elements on Workset1 or non-grid elements on Shared Levels and Grids");
             case "titleblock":
-                return Schedule(doc, "Title blocks", () => ViewSchedule.CreateSchedule(doc, new ElementId(BuiltInCategory.OST_TitleBlocks)), "Family and Type", "Sheet Number", "Sheet Name");
+                // Revit can't schedule title blocks in most templates (2024 refuses the category): a sheet list then.
+                return Schedule(doc, "Title blocks", () => ViewSchedule.IsValidCategoryForSchedule(new ElementId(BuiltInCategory.OST_TitleBlocks))
+                    ? ViewSchedule.CreateSchedule(doc, new ElementId(BuiltInCategory.OST_TitleBlocks))
+                    : ViewSchedule.CreateSheetList(doc), "Family and Type", "Sheet Number", "Sheet Name");
             case "drawinglist":
                 return Schedule(doc, "Sheets", () => ViewSchedule.CreateSheetList(doc), "Sheet Number", "Sheet Name", "Current Revision");
             case "scales" or "viewtemplates" or "unusedviews":
-                return Schedule(doc, "Views", () => ViewSchedule.CreateSchedule(doc, new ElementId(BuiltInCategory.OST_Views)),
+                // Views are scheduled as a view list (a regular schedule of the Views category is refused).
+                return Schedule(doc, "Views", () => ViewSchedule.CreateViewList(doc),
                     "View Name", "Family and Type", "View Scale", "Scale Value    1:", "View Template", "Sheet Number", "Sheet Name");
             default:
                 return (null, "There is nothing in the model to show for this check.");
