@@ -185,7 +185,7 @@ internal static class SharedPackMath
         [JsonPropertyName("items")] public List<string> Items { get; set; } = [];
         [JsonPropertyName("fingerprint")] public string Fingerprint { get; set; } = "";
         [JsonPropertyName("autoPublish")] public bool AutoPublish { get; set; } = true;
-        /// <summary>Include my checklist as everyone's Default: the pack carries the sharer's checklist (off unless ticked).</summary>
+        /// <summary>Include my checklist: the pack carries the sharer's checklist (off unless ticked).</summary>
         [JsonPropertyName("includeChecklist")] public bool IncludeChecklist { get; set; }
         [JsonPropertyName("lastZip")] public string LastZip { get; set; } = "";
     }
@@ -241,7 +241,7 @@ internal static class SharedPackMath
     }
 
     /// <summary>
-    /// Whether a pack may put its checklist (the sharer's Default, only when they ticked Include my checklist) in place:
+    /// Whether a pack may put its checklist (the sharer's own, only when they ticked Include my checklist) in place:
     /// none saved yet, or the saved one came from this pack and wasn't changed here. A colleague's own, edited or
     /// imported checklist is never replaced.
     /// </summary>

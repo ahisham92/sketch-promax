@@ -28,7 +28,7 @@ internal sealed class ShareWindow : Window
     private readonly StackPanel _list = new();
     private readonly TextBlock _count = Brand.Text("", Brand.K.Muted);
     private readonly TextBox _folder = new() { MinHeight = 28 };
-    private readonly CheckBox _mine = new() { Content = "Include my checklist as everyone's Default", IsChecked = false, Margin = new Thickness(0, 10, 0, 0) };
+    private readonly CheckBox _mine = new() { Content = "Include my checklist", IsChecked = false, Margin = new Thickness(0, 10, 0, 0) };
     private readonly CheckBox _auto = new() { Content = "Publish changes to these tools by themselves", IsChecked = true, Margin = new Thickness(0, 6, 0, 0) };
     private readonly TextBox _note = new() { MinHeight = 28 };
     private readonly TextBlock _error = Brand.Text("", Brand.K.DangerText);
@@ -84,7 +84,7 @@ internal sealed class ShareWindow : Window
         // Off by default: colleagues start from the built-in checklist. Ticked: the pack carries this PC's checklist, and
         // with automatic publishing its later edits reach everyone who hasn't changed or imported their own.
         _mine.SetResourceReference(ForegroundProperty, Brand.K.Text);
-        var mineHelp = "Only with Pre-submission checklist ticked. Off: colleagues start from the built-in checklist. On: they get yours as their Default, " +
+        var mineHelp = "Only with Pre-submission checklist ticked. Off: colleagues start from the built-in checklist. On: they get yours, " +
                        "and your later edits reach them too. A checklist they edited or imported themselves is never replaced.";
         AutomationProperties.SetHelpText(_mine, mineHelp);
         _mine.ToolTip = mineHelp;
