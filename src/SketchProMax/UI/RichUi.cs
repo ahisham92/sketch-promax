@@ -26,8 +26,8 @@ internal static class RichUi
         public const string Next = "", Back = "", Close = "", Word = "", Pdf = "", Print = "", Folder = "",
             Open = "", Delete = "", Edit = "", Refresh = "", Eye = "", Undo = "", Add = "", Up = "",
             Down = "", Save = "", Import = "", Export = "", Picture = "", Reset = "";
-        /// <summary>Repair, dock right, full screen, chat bubbles.</summary>
-        public const string Fix = "\uE90F", Side = "\uE90D", Expand = "\uE740", Ask = "\uE8F2";
+        /// <summary>Repair, dock right, full screen, chat bubbles, gear.</summary>
+        public const string Fix = "\uE90F", Side = "\uE90D", Expand = "\uE740", Ask = "\uE8F2", Settings = "\uE713";
     }
 
     private static readonly FontFamily Icons = new("Segoe Fluent Icons, Segoe MDL2 Assets");

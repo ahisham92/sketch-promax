@@ -6,7 +6,8 @@ namespace SketchProMax.Tools;
 /// <summary>
 /// "Fix it for me" on the pre-submission checks whose fix is mechanical and safe to undo: unload the Revit links, delete
 /// the imported CAD, delete the views on no sheet, ungroup groups used once, make the 3D Navisworks Export view, set
-/// a landing view as the starting view, and export the NWC and IFC with the office settings (changes no model). Each is one Revit transaction (Ctrl+Z undoes it), except unloading links,
+/// a landing view as the starting view, delete the empty project parameters, and export the NWC and IFC with the office
+/// settings (changes no model). Each is one Revit transaction (Ctrl+Z undoes it), except unloading links,
 /// which Manage Links reloads. The window asks first, saying exactly what changes. Revit API context only.
 /// </summary>
 internal static class ChecklistFixes
@@ -24,6 +25,9 @@ internal static class ChecklistFixes
         "groups" => new("Ungroup groups used once", "Ungroup every model group whose type is used only once? The elements stay where they are."),
         "navisview" => new("Make the Navisworks view",
             "Make a 3D view named \"3D Navisworks Export\": wireframe, with links, levels, grids and rooms hidden? Apply your trade's view template to it afterwards."),
+        "parameters" => new("Delete the empty parameters",
+            "Delete every project parameter that is empty on all its elements, and the empty copy of a parameter that is there twice? " +
+            "Kept whatever they hold: Mark, Comments, the names in Checking rules (always kept, view folders, classification, IFC) and parameters used by schedules or view filters. Ctrl+Z undoes it."),
         "landing" => new("Set the landing view as starting view", "Set the view with \"Landing\" in its name as the model's starting view?"),
         "nwcsettings" or "ifcsettings" or "nwcdate" => new("Export the NWC and IFC with the office settings",
             "Export the NWC from the 3D Navisworks Export view and the IFC, named exactly like the model, into the NWC and IFC folder (Checking rules), else next to the model? " +
@@ -41,6 +45,14 @@ internal static class ChecklistFixes
         {
             case "nwcsettings" or "ifcsettings" or "nwcdate":
                 return ChecklistExports.Export(doc, def);
+            case "parameters":
+            {
+                var empty = ParameterCleanup.Find(doc, def);
+                if (empty.Count == 0) return "No project parameter is empty or an empty duplicate: nothing to delete.";
+                var (deleted, failed) = Delete(doc, empty.Select(e => e.Param.Id).ToList(), "delete empty project parameters");
+                return $"Deleted {deleted} empty project parameter{(deleted == 1 ? "" : "s")}: " + string.Join(", ", empty.Select(e => e.Param.Name).Distinct(StringComparer.OrdinalIgnoreCase).Take(12)) +
+                       (empty.Count > 12 ? " and more" : "") + "." + Failed(failed);
+            }
             case "links":
             {
                 var loaded = new FilteredElementCollector(doc).OfClass(typeof(RevitLinkType)).Cast<RevitLinkType>()

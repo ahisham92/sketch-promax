@@ -215,7 +215,7 @@ internal sealed class ChecklistWindow : Window
         var subtitle = _def is null ? "Pick your office's checklist to start" : $"{_def.Title} · {Shown(_facts.Model)}";
         // The header band, with the two scores always in view on the right (they follow every answer).
         var band = Brand.Header("Pre-submission checklist", subtitle);
-        band.Padding = new Thickness(16, 12, _def is null ? 16 : 230, 12);
+        band.Padding = new Thickness(16, 12, _def is null ? 16 : 470, 12);
         var header = new Grid();
         header.Children.Add(band);
         if (_def is not null)
@@ -223,6 +223,18 @@ internal sealed class ChecklistWindow : Window
             foreach (var ring in new[] { _answersRing, _autoRing })
                 if (ring.Parent is System.Windows.Controls.Panel old) old.Children.Remove(ring);
             var rings = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 18, 0) };
+            // Run the checks and the checklist's settings, always in view (they were only on Project details).
+            var run = RichUi.Button(RichUi.Icon.Refresh, "Run checks");
+            run.VerticalAlignment = VerticalAlignment.Center;
+            run.Margin = new Thickness(0, 0, 8, 0);
+            AutomationProperties.SetHelpText(run, "Tests the model again with the quick automatic checks (seconds). The slow ones are in Settings.");
+            run.Click += async (_, _) => await ReadModelAgain(run);
+            var gear = RichUi.Button(RichUi.Icon.Settings, "Settings");
+            gear.VerticalAlignment = VerticalAlignment.Center;
+            AutomationProperties.SetHelpText(gear, "Run all checks, the helper for hand checks, edit the checklist and its checking rules, signatures.");
+            gear.Click += (_, _) => OpenSettings();
+            rings.Children.Add(run);
+            rings.Children.Add(gear);
             rings.Children.Add(_answersRing);
             rings.Children.Add(_autoRing);
             header.Children.Add(rings);
@@ -508,6 +520,23 @@ internal sealed class ChecklistWindow : Window
         }
         Build();
         if (_def is not null) _ = ReadModelAgain(null);
+    }
+
+    /// <summary>The checklist's settings (the gear in the header); a changed helper redraws the Ask buttons.</summary>
+    private void OpenSettings()
+    {
+        if (_def is null) return;
+        var automatic = _def.Items.Count(Automatic);
+        var pending = _def.Items.Count(i => i.Auto.Length > 0 && Pending(i.Auto));
+        var actions = new ChecklistSettingsWindow.Actions(
+            () => _ = ReadModelAgain(null),
+            () => _ = ReadModelAgain(null, slow: true),
+            EditChecklist,
+            EditRules);
+        if (!ChecklistSettingsWindow.Edit(this, actions, automatic, pending)) return;
+        var stage = _stages.SelectedIndex;
+        Build();
+        _stages.SelectedIndex = stage;
     }
 
     /// <summary>Opens the checking rules; after Save the model is read again with them.</summary>
