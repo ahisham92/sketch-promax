@@ -238,14 +238,14 @@ internal static class SharedPackMath
         return (Step.Copy, "");
     }
 
-    /// <summary>Whether a pack may put its checklist in place: none saved yet, or the saved one came from this pack.</summary>
-    public static (bool Write, string Why) DecideChecklist(string packId, bool savedExists, string? savedSource, string? excelPath)
-    {
-        if (!string.IsNullOrWhiteSpace(excelPath))
-            return (false, "this PC follows its own checklist Excel file (Settings), so the shared checklist is not used");
-        if (!savedExists || savedSource == ChecklistSource(packId)) return (true, "");
-        return (false, "this PC has its own checklist (imported or edited here), so the shared one is not used");
-    }
+    /// <summary>
+    /// Whether the checklist saved on this PC goes back to the built-in one when a pack is applied. A pack shares the
+    /// checklist window, never the sharer's checklist: colleagues start from the built-in checklist, and get the sharer's
+    /// only by importing the Excel file the sharer exports (Edit the checklist &gt; Export to Excel). So a checklist an
+    /// older pack put here (source "shared:&lt;pack&gt;", never changed here) goes; anything else stays.
+    /// </summary>
+    public static bool ResetsChecklist(string? savedSource) =>
+        savedSource is not null && savedSource.StartsWith("shared:", StringComparison.Ordinal);
 
     // ---- What can be shared ------------------------------------------------------------------------------------------
 
@@ -259,7 +259,7 @@ internal static class SharedPackMath
     public static readonly (string Command, string Title, string Glyph, string Tip)[] Commands =
     [
         ("pre-submission", "Pre-submission checklist", "list",
-            "Goes through the office's pre-submission checklist stage by stage, with hints from the model, and makes the signed Word file. The checklist in use when it was shared comes with it."),
+            "Goes through the office's pre-submission checklist stage by stage, with hints from the model, and makes the signed Word file. Colleagues start from the built-in checklist; to give them yours, export it to Excel and they import it."),
         ("issue-check", "Issue check", "check",
             "Drawing, spec, BOQ and model checks together on the issue set, pass or fail per sheet. Reads the model only."),
         ("cleanup", "Purge & cleanup", "refresh",
@@ -348,7 +348,7 @@ internal static class SharedPackMath
     public static string FolderName(IEnumerable<Pack> packs)
     {
         var list = packs.ToList();
-        var pack = list.FirstOrDefault(p => !string.IsNullOrEmpty(p.Checklist)) ?? list.FirstOrDefault();
+        var pack = list.FirstOrDefault(p => p.Tools.Any(t => t.Kind == "command" && t.Name == "pre-submission")) ?? list.FirstOrDefault();
         var name = CleanName(pack?.Name ?? "");
         return "TritoRevit - " + (name.Length > 0 ? name : "Shared tools");
     }

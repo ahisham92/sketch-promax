@@ -93,7 +93,7 @@ internal sealed class ShareWindow : Window
         body.Children.Add(folderRow);
         _auto.IsEnabled = false;
         _auto.SetResourceReference(ForegroundProperty, Brand.K.Text);
-        AutomationProperties.SetHelpText(_auto, "When a learned tool, recipe or the checklist in this pack changes on this PC, the next revision is published to the update folder within a few minutes.");
+        AutomationProperties.SetHelpText(_auto, "When a learned tool or recipe in this pack changes on this PC, the next revision is published to the update folder within a few minutes.");
         body.Children.Add(_auto);
 
         body.Children.Add(Label("Note (optional)", _note, "A line for the readme, such as who the tools are for."));
