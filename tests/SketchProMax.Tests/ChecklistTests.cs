@@ -20,6 +20,23 @@ internal static class ChecklistTests
         ChecklistMath.MarkChangedHere(imported);
         check("checklist: a shared checklist changed here is the user's own, so pack updates leave it",
             fromPack.SourcePath == ChecklistMath.EditedSource && imported.SourcePath == @"C:\x.xlsx", fromPack.SourcePath);
+        // ---- N/A removes a check from this model's checklist
+        ChecklistMath.Item Check(string id) => new(id, id, "Check " + id + ".", "", "", "", "", "", "");
+        var three = new ChecklistMath.Definition { Title = "T", Sections = [new("A. One", [Check("1"), Check("2")]), new("B. Two", [Check("3")])] };
+        var answers = new ChecklistMath.State();
+        answers.For("1").Done = ChecklistMath.Yes;
+        answers.For("2").Done = ChecklistMath.Yes;
+        answers.For("3").Done = ChecklistMath.NotApplicable;
+        var kept = ChecklistMath.WithoutRemoved(three, answers);
+        var keptCount = ChecklistMath.Count(kept.Items, answers);
+        check("checklist: a check answered N/A is removed (its stage too when empty), and the rest is 100% and ready",
+            kept.Items.Select(i => i.Id).SequenceEqual(["1", "2"]) && kept.Sections.Count == 1 && keptCount.Total == 2 && keptCount.Ready && ChecklistMath.Percent(keptCount) == 100
+            && three.Items.Count() == 3 && ChecklistMath.Removed(answers, three.Sections[1].Items[0]),
+            string.Join(",", kept.Items.Select(i => i.Id)));
+        answers.For("3").Done = "";
+        check("checklist: a removed check put back is on the checklist again, unanswered",
+            ChecklistMath.WithoutRemoved(three, answers).Items.Count() == 3 && !ChecklistMath.Count(three.Items, answers).Ready, "");
+
         // ---- Reading the workbook
         var xlsx = Workbook(
             ("Read me", [[(0, "Demo pre-submission checklist, Rev 02 (19-Oct-2026, comments added)")]]),

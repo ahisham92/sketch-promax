@@ -327,6 +327,21 @@ internal static class ChecklistMath
     }
 
     /// <summary>What still needs the user before the checklist is ready, one line each with the check it is about.</summary>
+    /// <summary>
+    /// A check answered N/A doesn't apply to this model, so it is taken off its checklist: out of the score, the open
+    /// list and the Word file and PDF. Putting it back (clearing the answer) brings it back. The checklist itself is
+    /// unchanged; the answer is kept per model like any other.
+    /// </summary>
+    public static bool Removed(State state, Item item) =>
+        state.Answers.TryGetValue(item.Id, out var a) && Normal(a.Done) == NotApplicable;
+
+    /// <summary>The checklist without the checks removed as N/A (stages left empty go too): what is scored, signed and written.</summary>
+    public static Definition WithoutRemoved(Definition def, State state) => new()
+    {
+        Title = def.Title, Fields = def.Fields, Signatories = def.Signatories, SourcePath = def.SourcePath, SourceStamp = def.SourceStamp, Rules = def.Rules,
+        Sections = def.Sections.Select(x => new Section(x.Title, x.Items.Where(i => !Removed(state, i)).ToList())).Where(x => x.Items.Count > 0).ToList(),
+    };
+
     public static List<(string Id, string Text)> Problems(Definition def, State state)
     {
         var list = new List<(string, string)>();

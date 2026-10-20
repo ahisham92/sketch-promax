@@ -366,6 +366,16 @@ internal static partial class FieldTest
         var part = ChecklistMath.Percent(ChecklistMath.Count(items, state));
         if (part >= 100) problems.Add("with a No and a gap it still shows 100%");
 
+        // N/A removes the check from this model's checklist (score, open list, files); Put back brings it back.
+        var kept = ChecklistMath.WithoutRemoved(def, state);
+        if (kept.Items.Count() != items.Count - 1 || kept.Items.Any(i => i.Id == items[1].Id) || !ChecklistMath.Removed(state, items[1]))
+            problems.Add("a check answered N/A isn't removed from the checklist that is scored and written");
+        if (ChecklistMath.Count(kept.Items, state).NotApplicable != 0) problems.Add("a check removed as N/A still counts in the score");
+        if (def.Items.Count() != items.Count) problems.Add("removing a check as N/A changed the checklist itself");
+        state.For(items[1].Id).Done = "";
+        if (ChecklistMath.WithoutRemoved(def, state).Items.Count() != items.Count) problems.Add("Put back doesn't bring the check back");
+        state.For(items[1].Id).Done = ChecklistMath.NotApplicable;
+
         // The checklist changes under the answers: check 1 deleted and the rest renumbered.
         var changed = Clone(def);
         changed.Sections = changed.Sections.Select((x, n) => n == 0 ? new ChecklistMath.Section(x.Title, x.Items.Skip(1).ToList()) : x).ToList();
@@ -374,7 +384,7 @@ internal static partial class FieldTest
         var moved = changed.Items.FirstOrDefault(i => i.Check == items[2].Check);
         if (dropped != 1) problems.Add($"{dropped} answers dropped when one check was deleted");
         if (moved is null || state.For(moved.Id).Done != ChecklistMath.No) problems.Add("an answer didn't follow its check when the checks were renumbered");
-        return Result(problems, [$"all answered: 100% and nothing listed", $"one No and one gap: {part}% and both listed", "answers follow their checks when one is deleted and the rest renumbered"]);
+        return Result(problems, [$"all answered: 100% and nothing listed", $"one No and one gap: {part}% and both listed", "a check answered N/A leaves the score and the files, and Put back brings it back", "answers follow their checks when one is deleted and the rest renumbered"]);
     }
 
     /// <summary>The whole Default as the signed Word file (and a PDF through Word): every check in it, READY only when it is.</summary>
@@ -415,6 +425,17 @@ internal static partial class FieldTest
         text = Text(notReady, out pics);
         if (!text.Contains("NOT READY") || pics != 0) problems.Add($"with a No it has {pics} signatures and {(text.Contains("NOT READY") ? "says" : "doesn't say")} NOT READY");
         else done.Add("with one No: NOT READY and unsigned");
+
+        // A check answered N/A is removed: not in the Word file, and the rest still READY.
+        state.For(def.Items.First().Id).Done = ChecklistMath.Yes;
+        var gone = def.Items.Last();
+        state.For(gone.Id).Done = ChecklistMath.NotApplicable;
+        var removedDocx = Path.Combine(folder, "one-removed.docx");
+        ChecklistDocx.Write(removedDocx, ChecklistMath.WithoutRemoved(def, state), state, info, images);
+        text = Text(removedDocx, out _);
+        if (Regex.Replace(text, @"\s+", " ").Contains(Regex.Replace(ChecklistMath.FirstSentence(gone.Check), @"\s+", " ")) || !text.Contains("READY FOR SUBMISSION"))
+            problems.Add("a check removed as N/A is still in the Word file, or the rest isn't READY");
+        else done.Add($"check #{gone.Number} answered N/A is left out of the Word file, the rest READY");
 
         if (Type.GetTypeFromProgID("Word.Application") is null) done.Add("Word isn't installed, so Create PDF saves the Word file (not tested)");
         else
