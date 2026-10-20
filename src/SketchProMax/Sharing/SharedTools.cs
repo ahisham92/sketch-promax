@@ -52,6 +52,52 @@ internal static class SharedTools
         return Result.Succeeded;
     }
 
+    /// <summary>
+    /// The TritoRevit tab's Update button: checks right away, in the update window, and either says everything is up to
+    /// date or updates (the add-in from its releases, the packs from their update folders), with no restart. With
+    /// Sketch ProMax running the tab, its packs are checked and then Sketch ProMax's own Update runs.
+    /// </summary>
+    public static Result CheckForUpdates(UIApplication? app)
+    {
+        if (!App.Shared && app is not null)
+        {
+            _ = Task.Run(() => { try { SharedPacks.Sync(); } catch (Exception) { } });
+            return CoreEntry.Command("update-button", app) switch { 0 => Result.Succeeded, 1 => Result.Cancelled, _ => Result.Failed };
+        }
+        if (UpdateProgress.Current is { } running && !running.Snapshot.IsFinal && running.Snapshot.Stage != UpdateStage.Idle)
+        {
+            UpdateWindow.ShowFor(running);
+            return Result.Succeeded;
+        }
+        var progress = new UpdateProgress { Interactive = true };
+        UpdateProgress.Current = progress;
+        progress.Surfaced = true;
+        progress.Report(UpdateStage.Checking, "Looking for updated shared tools…");
+        UpdateWindow.ShowFor(progress);
+        _ = Task.Run(() => CheckNowAsync(progress));
+        return Result.Succeeded;
+    }
+
+    private static async Task CheckNowAsync(UpdateProgress progress)
+    {
+        try
+        {
+            var packs = SharedPacks.Sync();
+            var version = await TritoRuntime.CheckAsync(progress.Cancellation.Token, progress).ConfigureAwait(false);
+            var count = SharedPacks.List().Count;
+            var packText = packs.Count > 0 ? $" Updated: {string.Join(", ", packs)}."
+                : count == 0 ? "" : count == 1 ? " The shared pack is up to date too." : $" All {count} shared packs are up to date too.";
+            if (version is not null)
+                progress.Report(UpdateStage.Updated, null, version); // TritoRevit switches to it within seconds, with Revit open
+            else if (packs.Count > 0)
+                progress.Report(UpdateStage.UpToDate, $"TritoRevit {Updater.CurrentText} is up to date.{packText}");
+            else
+                progress.Report(UpdateStage.UpToDate, $"Everything is up to date: TritoRevit {Updater.CurrentText}.{packText}");
+        }
+        catch (OperationCanceledException) { progress.Report(UpdateStage.Cancelled); }
+        catch (Exception ex) { progress.Report(UpdateStage.Failed, "Couldn't check: " + ex.Message); }
+    }
+
     /// <summary>Sketch ProMax's Share tools button: pick tools, make the zip, publish it to the update folder.</summary>
     public static Result Share(UIApplication app)
     {

@@ -176,7 +176,7 @@ internal static class FieldTestCoverage
             "On a PC (or Windows user) without Sketch ProMax and with Revit closed: extract the zip, double-click Install TritoRevit.cmd; it downloads TritoRevit and lists the tools. Open Revit and a _detached copy: " +
             "the TritoRevit tab has a QA tools panel with the three buttons; each runs (the learned tool asks once to approve its code) and the checklist is yours, not the built-in one. " +
             "Leave Revit open. On your PC edit the checklist (add a check) and wait a few minutes: Revit on the other PC shows the new check the next time the checklist opens, with no restart, " +
-            "and Shared tools on the TritoRevit tab shows revision 2. Share again with Model check unticked: its button goes from the tab within a few minutes. " +
+            "and Shared tools on the TritoRevit tab shows revision 2. Click Update on the TritoRevit tab: a small window checks and says everything is up to date (or updates), and no Explorer window opens. Share again with Model check unticked: its button goes from the tab within a few minutes. " +
             "On your own PC (Sketch ProMax installed) install the zip too: the TritoRevit tab works through Sketch ProMax. Shared tools > Remove: the panel goes."),
         new("issue.report", Issue, "Transmittal with the issue record and pass/fail report", How.Case, "issue_drawings", "issue_drawings with open items let through writes the transmittal workbook (drawings, the issue record saying it was overridden, the pass/fail report)"),
         new("issue.ui", Issue, "The issue check window", How.Manual, "", "the window, Fix taking you to the element and the ribbon flow are what a person sees and does",

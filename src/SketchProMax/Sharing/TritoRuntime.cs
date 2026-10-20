@@ -31,22 +31,24 @@ internal static class TritoRuntime
 
     /// <summary>
     /// Looks for a newer release and, when there is one, downloads it and asks TritoRevit to switch to it. Returns the
-    /// new version, or null. Throws on network and disk errors (the caller retries later).
+    /// new version, or null. Throws on network and disk errors (the caller retries later). <paramref name="progress"/>
+    /// (the Update button's window) is told each step; it is left at Checking or Downloading for the caller to finish.
     /// </summary>
-    public static async Task<string?> CheckAsync(CancellationToken ct)
+    public static async Task<string?> CheckAsync(CancellationToken ct, UpdateProgress? progress = null)
     {
         Directory.CreateDirectory(LocalRoot);
         FileStream gate;
         try { gate = new FileStream(Path.Combine(LocalRoot, "update.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None); }
-        catch (IOException) { return null; } // another Revit window is updating; this one finds it on disk within a minute
+        catch (IOException) { throw new IOException("Another Revit window is updating TritoRevit right now; this one follows it within a minute."); }
         try
         {
             CleanUp();
+            progress?.Report(UpdateStage.Checking, "Looking for a newer TritoRevit…");
             var release = await Updater.LatestReleaseAsync(ct).ConfigureAwait(false);
             if (release is null || Updater.Parse(release.Version) <= Updater.Current) return null;
             var folder = Path.Combine(VersionsFolder, release.Version);
             if (!File.Exists(Path.Combine(folder, "Revit" + App.RevitYear, "SketchProMax.dll")))
-                folder = await Updater.DownloadAndUnpackAsync(release, new UpdateProgress(), ct, LocalRoot).ConfigureAwait(false);
+                folder = await Updater.DownloadAndUnpackAsync(release, progress ?? new UpdateProgress(), ct, LocalRoot).ConfigureAwait(false);
             SettleLoaders(folder);
             var core = Path.Combine(folder, "Revit" + App.RevitYear, "SketchProMax.dll");
             if (File.Exists(core)) AppDomain.CurrentDomain.SetData(PendingKey, core);

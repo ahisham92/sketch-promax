@@ -217,7 +217,7 @@ internal static class Host
         return list.OrderByDescending(c => c.Version).ToList();
     }
 
-    /// <summary>Runs a TritoRevit button: "slot:N" (a shared tool) or "manage". Reached through an AppDomain delegate.</summary>
+    /// <summary>Runs a TritoRevit button: "slot:N" (a shared tool), "manage" or "update". Reached through an AppDomain delegate.</summary>
     public static int Dispatch(string name, UIApplication app)
     {
         string command;
@@ -232,6 +232,7 @@ internal static class Host
             command = found;
         }
         else if (name == "manage") command = "shared-manage";
+        else if (name == "update") command = "shared-update";
         else return -1;
 
         if (!_decided) Decide(app);
@@ -303,6 +304,15 @@ internal static class Buttons
             AvailabilityClassName = typeof(AlwaysAvailable).FullName,
         };
         panel.AddItem(data);
+        // Update: one click checks now, then says up to date or updates in place (no restart, no folder opened).
+        panel.AddItem(new PushButtonData("TritoRevit.Update", "Update", Assembly, typeof(UpdateCommand).FullName)
+        {
+            Image = Icons.Get("update", 16),
+            LargeImage = Icons.Get("update", 32),
+            ToolTip = "Checks for updates now: TritoRevit itself and the shared tools. Says when everything is up to date; otherwise it updates, with no restart.",
+            LongDescription = "Updates are also looked for by themselves while Revit is open: the shared tools every few minutes, TritoRevit every hour.",
+            AvailabilityClassName = typeof(AlwaysAvailable).FullName,
+        });
         _empty = panel;
     }
 
@@ -440,3 +450,4 @@ public sealed class ModelAvailable : IExternalCommandAvailability
 }
 
 [Transaction(TransactionMode.Manual)] public sealed class ManageCommand : ForwardCommand { protected override string Name => "manage"; }
+[Transaction(TransactionMode.Manual)] public sealed class UpdateCommand : ForwardCommand { protected override string Name => "update"; }

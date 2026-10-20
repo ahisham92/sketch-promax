@@ -91,6 +91,7 @@ public static class CoreEntry
             // Shared tools (0.35+): Share tools makes a TritoRevit zip; the TritoRevit tab's buttons and its Shared tools window.
             "share-tools" => Sharing.SharedTools.Share(app),
             "shared-manage" => Sharing.SharedTools.Manage(app),
+            "shared-update" => Sharing.SharedTools.CheckForUpdates(app),
             _ when name.StartsWith("shared\t", StringComparison.Ordinal) && name.Split('\t') is { Length: 3 } shared => Sharing.SharedTools.Run(app, shared[1], shared[2]),
             // The guided test checklist (0.32+): the manual items of the field test's coverage, saved to the Bugs folder.
             "test-checklist" => TestChecklistWindow.Open(app),

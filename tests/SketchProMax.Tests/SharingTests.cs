@@ -146,6 +146,12 @@ internal static class SharingTests
         var slotCount = System.Text.RegularExpressions.Regex.Matches(slots, @"class Slot\d\d\b").Count;
         var slotConst = System.Text.RegularExpressions.Regex.Match(Read(Path.Combine(trito, "TritoApp.cs")), @"Slots\s*=\s*(\d+)");
         check("sharing: one command class per button slot", slotCount == 96 && (!slotConst.Success || slotConst.Groups[1].Value == "96"), $"{slotCount} {slotConst.Value}");
+        var app = Read(Path.Combine(trito, "TritoApp.cs"));
+        check("sharing: TritoRevit's Update button checks in place", app.Contains("\"TritoRevit.Update\"") && app.Contains("\"update\") command = \"shared-update\"")
+            && Read(Path.Combine(root, "src", "SketchProMax", "CoreEntry.cs")).Contains("\"shared-update\" => Sharing.SharedTools.CheckForUpdates(app)"), "");
+        var shared = Read(Path.Combine(root, "src", "SketchProMax", "Sharing", "SharedTools.cs"));
+        var check4 = shared.Substring(Math.Max(0, shared.IndexOf("CheckForUpdates(UIApplication", StringComparison.Ordinal)));
+        check("sharing: the Update check never opens a folder", shared.Contains("UpdateStage.UpToDate") && !check4.Substring(0, Math.Min(check4.Length, 2500)).Contains("explorer", StringComparison.OrdinalIgnoreCase), "");
         var ps1 = Read(Path.Combine(root, "src", "SketchProMax", "Sharing", "install-tritorevit.ps1"));
         check("sharing: installer downloads the add-in only when missing and keeps a newer pack",
             ps1.Contains("$needs") && ps1.Contains("Get-LatestRelease") && ps1.Contains("Copy-Loader") && ps1.Contains("FileVersion") && ps1.Contains(".incoming") && ps1.Contains("revision"), "");
