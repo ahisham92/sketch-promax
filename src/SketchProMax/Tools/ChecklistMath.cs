@@ -450,7 +450,7 @@ internal static class ChecklistMath
         return "";
     }
 
-    /// <summary>The header field a label is filled from: model_file, submission_file, building, stage, coordinator, leader, date or "".</summary>
+    /// <summary>The header field a label is filled from: model_file, submission_file, building, stage, coordinator, leader, date, file_size or "".</summary>
     public static string FieldSource(string label)
     {
         var l = label.ToLowerInvariant();
@@ -461,6 +461,7 @@ internal static class ChecklistMath
         if (l.Contains("coordinator")) return "coordinator";
         if (l.Contains("leader")) return "leader";
         if (l.Trim() == "date") return "date";
+        if (l.Contains("file size")) return "file_size";
         return "";
     }
 

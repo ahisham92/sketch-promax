@@ -39,7 +39,7 @@
     {
       "Label": "Final file size (MB)",
       "Example": "",
-      "Source": ""
+      "Source": "file_size"
     },
     {
       "Label": "Date",

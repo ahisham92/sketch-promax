@@ -44,6 +44,7 @@ internal static class ChecklistTests
             def.Fields.Select(f => f.Label).SequenceEqual(["Model file name", "Building / discipline", "Trade BIM coordinator"]) && def.Fields[0].Example == "PRJ1-070-00-ABC-002-STR-3DM-0010.rvt",
             string.Join(" | ", def.Fields.Select(f => f.Label + "=" + f.Example)));
         check("checklist: header fields know where they are filled from", def.Fields.Select(f => f.Source).SequenceEqual(["model_file", "building", "coordinator"]), string.Join(",", def.Fields.Select(f => f.Source)));
+        check("checklist: the file size field is filled from the model", FieldSource("Final file size (MB)") == "file_size" && FieldSource("Model Checker score (%)") == "", FieldSource("Final file size (MB)"));
         check("checklist: sections become stages, with their checks", def.Sections.Count == 2 && def.Sections[0].Items.Count == 2 && def.Sections[1].Items.Count == 2,
             string.Join(" | ", def.Sections.Select(s => s.Title + ":" + s.Items.Count)));
         check("checklist: stages are details, sections, review", Stages(def).SequenceEqual(["Project details", "File names and size", "Coordinates, levels, grids, worksets", "Review and sign"]), string.Join(",", Stages(def)));

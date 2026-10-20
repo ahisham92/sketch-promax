@@ -116,6 +116,12 @@ internal static class ChecklistFacts
         }
         catch (Exception) { }
         r.Fields["date"] = DateTime.Now.ToString("dd-MMM-yyyy", CultureInfo.InvariantCulture);
+        try
+        {
+            if (!string.IsNullOrEmpty(doc.PathName) && File.Exists(doc.PathName))
+                r.Fields["file_size"] = (new FileInfo(doc.PathName).Length / 1048576.0).ToString("0", CultureInfo.InvariantCulture);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException) { }
 
         var wanted = new HashSet<string>(def?.Items.Select(i => i.Auto).Where(a => a.Length > 0) ?? ChecklistMath.AutoRules.Select(a => a.Key), StringComparer.Ordinal);
         // Each hint's check text and example (the expected names: link worksets, the title block file).

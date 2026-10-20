@@ -52,6 +52,17 @@ internal sealed class ChecklistWindow : Window
     private readonly Button _next = RichUi.Button(RichUi.Icon.Next, "Next", Brand.Weight.Primary);
     private readonly Button _pdf = RichUi.Button(RichUi.Icon.Pdf, "Create PDF");
     private readonly Chat.Motion _motion;
+    // The run strip under the header: not checked yet, reading (with its percentage), checked, or out of date.
+    private readonly Border _runStrip = new() { BorderThickness = new Thickness(0, 0, 0, 1), Padding = new Thickness(18, 10, 18, 10) };
+    private readonly TextBlock _runText = Brand.Text("", size: 13.5, bold: true);
+    private readonly TextBlock _runSub = Brand.Text("", Brand.K.Muted, size: 12);
+    private readonly ProgressBar _runBar = new() { Height = 8, Minimum = 0, Maximum = 100, Margin = new Thickness(0, 7, 0, 0) };
+    private readonly FrameworkElement _runSpin = Brand.Spinner();
+    private readonly Button _runNow = RichUi.Button(RichUi.Icon.Refresh, "Run checks", Brand.Weight.Primary);
+    private readonly Button _runStop = RichUi.Button(RichUi.Icon.Close, "Stop");
+    private bool _checked, _stale, _stopReading;
+    private string _staleWhy = "";
+    private DateTime _checkedAt;
     private readonly ScoreRing _answersRing, _autoRing;
     private readonly DispatcherTimer _saveSoon = new() { Interval = TimeSpan.FromMilliseconds(600) };
 
@@ -140,7 +151,6 @@ internal sealed class ChecklistWindow : Window
         var window = new ChecklistWindow(DocKey(doc), def, error, facts);
         _open = window;
         window.Closed += (_, _) => { if (_open == window) _open = null; };
-        window.Loaded += (_, _) => { if (window._def is not null) _ = window.ReadModelAgain(null); };
         window.Show();
         return Autodesk.Revit.UI.Result.Succeeded;
     }
@@ -182,6 +192,7 @@ internal sealed class ChecklistWindow : Window
         AutomationProperties.SetName(_detail, "Details of the check");
 
         _saveSoon.Tick += (_, _) => { _saveSoon.Stop(); SaveDraft(); };
+        RunStrip();
         _back.Click += (_, _) => Move(-1);
         _next.Click += async (_, _) => { if (_stages.SelectedIndex == _stages.Items.Count - 1) await CreateFile(pdf: false); else Move(1); };
         _pdf.Click += async (_, _) => await CreateFile(pdf: true);
@@ -207,7 +218,7 @@ internal sealed class ChecklistWindow : Window
         _review = null;
         _stages.Items.Clear();
         // The stage list, the progress and the footer buttons are kept between builds: take them out of the old layout first.
-        foreach (var reused in new FrameworkElement[] { _stages, _status, _bar, _back, _pdf, _next, _detail })
+        foreach (var reused in new FrameworkElement[] { _stages, _status, _bar, _back, _pdf, _next, _detail, _runStrip })
             if (reused.Parent is System.Windows.Controls.Panel old) old.Children.Remove(reused);
         Content = null;
         LoadDraft();
@@ -227,7 +238,7 @@ internal sealed class ChecklistWindow : Window
             var run = RichUi.Button(RichUi.Icon.Refresh, "Run checks");
             run.VerticalAlignment = VerticalAlignment.Center;
             run.Margin = new Thickness(0, 0, 8, 0);
-            AutomationProperties.SetHelpText(run, "Tests the model again with the quick automatic checks (seconds). The slow ones are in Settings.");
+            AutomationProperties.SetHelpText(run, "Tests the model with the quick automatic checks (seconds). Nothing is tested until you press it. The slow ones are in Settings.");
             run.Click += async (_, _) => await ReadModelAgain(run);
             var gear = RichUi.Button(RichUi.Icon.Settings, "Settings");
             gear.VerticalAlignment = VerticalAlignment.Center;
@@ -293,6 +304,12 @@ internal sealed class ChecklistWindow : Window
 
         var root = new DockPanel();
         root.Children.Add(header);
+        if (_def is not null)
+        {
+            DockPanel.SetDock(_runStrip, Dock.Top);
+            root.Children.Add(_runStrip);
+            if (!_reading) ShowRun();
+        }
         root.Children.Add(foot);
         root.Children.Add(body);
         Content = root;
@@ -403,9 +420,9 @@ internal sealed class ChecklistWindow : Window
         change.Margin = new Thickness(0, 0, 8, 0);
         AutomationProperties.SetHelpText(change, "Add, change, move or delete checks and stages, or export the checklist to Excel and import it back.");
         change.Click += (_, _) => EditChecklist();
-        var reread = RichUi.Button(RichUi.Icon.Refresh, "Read the model again");
+        var reread = RichUi.Button(RichUi.Icon.Refresh, "Run checks");
         reread.Margin = new Thickness(0);
-        AutomationProperties.SetHelpText(reread, "Reads the file names and the hints under each check from the model again, after you have fixed something.");
+        AutomationProperties.SetHelpText(reread, "Tests the model with the quick automatic checks, and reads the file names for the header.");
         reread.Click += async (_, _) => await ReadModelAgain(reread);
         var rules = RichUi.Button(RichUi.Icon.Edit, "Checking rules…");
         rules.Margin = new Thickness(0, 0, 8, 0);
@@ -423,15 +440,27 @@ internal sealed class ChecklistWindow : Window
         source.Children.Add(row);
         page.Children.Add(CardBox(source, top: 16));
 
-        // How it's checked: which checks the model test does, which are yours.
+        // How it's checked, in plain words: what the model test does, what's yours, and when it runs.
         var autoCount = _def.Items.Count(Automatic);
+        var pending = _def.Items.Count(i => i.Auto.Length > 0 && Pending(i.Auto));
         var how = new StackPanel();
         how.Children.Add(Brand.Text("How this checklist is checked", size: 14, bold: true));
-        how.Children.Add(Para($"{autoCount} of {checks} checks are tested automatically from the model (marked Automatic). The other {checks - autoCount} you check yourself (marked You check this), " +
-                              "or ask the helper; Review and sign lists them. Checking rules… sets what the automatic test compares with, and can make more checks automatic.", Brand.K.Text));
-        var pending = _def.Items.Count(i => i.Auto.Length > 0 && Pending(i.Auto));
-        if (pending > 0)
-            how.Children.Add(Para($"{pending} of them are slower (a full model check, clashes, the standard template): they run when you press Run the slow checks, not each time the model is read.", Brand.K.Text));
+        if (!_checked)
+        {
+            how.Children.Add(Para($"Sketch ProMax can test {autoCount} of the {checks} checks on the model for you: they're marked Automatic. " +
+                                  $"The other {checks - autoCount} are marked You check this: you answer them yourself, or ask the helper.", Brand.K.Text));
+            how.Children.Add(Para("Nothing is tested until you press Run checks at the top." +
+                                  (pending > 0 ? $" {pending} of the automatic checks take longer (such as duplicates, clashes and the model score), so they only run when you press Run the slow checks." : ""), Brand.K.Text));
+            how.Children.Add(Para("Some automatic checks compare the model with your office's files or names, such as the MIDP or the clash report. Set those in Checking rules; until one is set, you answer that check yourself.", Brand.K.Muted));
+        }
+        else
+        {
+            var off = _def.Items.Count(i => i.Auto.Length > 0 && !Automatic(i));
+            how.Children.Add(Para($"The model was checked at {_checkedAt:HH:mm}. {autoCount} of the {checks} checks were tested automatically (marked Automatic). " +
+                                  $"You answer the other {checks - autoCount} yourself (marked You check this), or ask the helper.", Brand.K.Text));
+            if (off > 0) how.Children.Add(Para($"{off} of those could be tested automatically too: set their file or name in Checking rules, then press Run checks.", Brand.K.Text));
+            if (pending > 0) how.Children.Add(Para($"{pending} slow check{(pending == 1 ? " hasn't" : "s haven't")} run yet. Press Run the slow checks when you have a few minutes.", Brand.K.Text));
+        }
         page.Children.Add(CardBox(how, Brand.K.AccentSoft, Brand.K.Border));
 
         // The header fields, two columns: label above its box, the example as the box's hint.
@@ -479,10 +508,12 @@ internal sealed class ChecklistWindow : Window
     /// <summary>The value a header field gets from the model or Settings, or "".</summary>
     private string FieldFromModel(ChecklistMath.Field f)
     {
-        if (f.Source.Length == 0) return "";
-        if (_facts.Fields.TryGetValue(f.Source, out var v) && v.Length > 0) return v;
+        // A checklist saved before a field had a source (an older edit or import) still gets it from its label.
+        var source = f.Source.Length > 0 ? f.Source : ChecklistMath.FieldSource(f.Label);
+        if (source.Length == 0) return "";
+        if (_facts.Fields.TryGetValue(source, out var v) && v.Length > 0) return v;
         var role = (_settings.SignatureRole ?? "").Trim();
-        if (f.Source is "coordinator" or "leader" && role.Length > 0 && Matches(role, f.Label)) return (_settings.SignatureName ?? "").Trim();
+        if (source is "coordinator" or "leader" && role.Length > 0 && Matches(role, f.Label)) return (_settings.SignatureName ?? "").Trim();
         return "";
     }
 
@@ -519,7 +550,7 @@ internal sealed class ChecklistWindow : Window
             _loadError = $"Couldn't open the checklist ({ex.Message}). If it is open in Excel, that is fine; check the file is on a drive you can reach, then try again.";
         }
         Build();
-        if (_def is not null) _ = ReadModelAgain(null);
+        OutOfDate("You picked another checklist.");
     }
 
     /// <summary>The checklist's settings (the gear in the header); a changed helper redraws the Ask buttons.</summary>
@@ -548,11 +579,12 @@ internal sealed class ChecklistWindow : Window
         if (ChecklistRulesWindow.Edit(this, _def) is not { } def) return;
         _def = def;
         _loadError = "";
-        _ = ReadModelAgain(null);
+        OutOfDate("The checking rules changed.");
     }
 
     /// <summary>Whether the model test settles this check (it gives a pass or a fail); else the user checks it.</summary>
-    private bool Automatic(ChecklistMath.Item item) => item.Auto.Length > 0 && (Verdict(item.Auto) is not null || Pending(item.Auto));
+    // Before the first Run checks, every check with a model test counts (its rule may still turn it off).
+    private bool Automatic(ChecklistMath.Item item) => item.Auto.Length > 0 && (!_checked || Verdict(item.Auto) is not null || Pending(item.Auto));
 
     /// <summary>A slow automatic check not run yet (Run the slow checks runs it).</summary>
     private bool Pending(string key) => _facts.Hints.TryGetValue(key, out var h) && h.Pending;
@@ -570,7 +602,7 @@ internal sealed class ChecklistWindow : Window
         _def = def;
         _loadError = "";
         Build();
-        _ = ReadModelAgain(null);
+        OutOfDate("The checklist changed.");
     }
 
     /// <summary>Reads the hints and file names from the model again, through Revit (the window itself runs outside a Revit call).</summary>
@@ -584,7 +616,10 @@ internal sealed class ChecklistWindow : Window
         {
             var def = _def;
             var key = _docKey;
-            _status.Text = slow ? "Running the slow checks…" : "Reading the model…";
+            var label = slow ? "Running the slow checks…" : "Reading the model…";
+            _status.Text = label;
+            _stopReading = false;
+            ShowRun(label, 0, "Getting ready.");
             var reading = await App.Dispatcher.InvokeAsync(app =>
             {
                 foreach (Autodesk.Revit.DB.Document d in app.Application.Documents)
@@ -595,19 +630,27 @@ internal sealed class ChecklistWindow : Window
             // One short Revit call at a time (about a fifth of a second each): between them Revit repaints and takes clicks,
             // where one call for the whole reading froze it on a big model.
             var total = Math.Max(1, reading.Left);
-            while (!_closed && await App.Dispatcher.InvokeAsync(_ => reading.RunFor(StepBudget)))
-                _status.Text = (slow ? "Running the slow checks… " : "Reading the model… ") + (100 * (total - reading.Left) / total) + "%";
+            while (!_closed && !_stopReading && await App.Dispatcher.InvokeAsync(_ => reading.RunFor(StepBudget)))
+            {
+                var done = total - reading.Left;
+                _status.Text = label + " " + (100 * done / total) + "%";
+                ShowRun(label, 100 * done / total, $"Check {done} of {total}. You can keep working in Revit meanwhile; Stop ends it.");
+            }
             if (_closed) return;
+            if (_stopReading) { _status.Text = "Stopped. The results are as they were before you pressed Run."; return; }
             var facts = reading.Result;
             // A quick read keeps the slow checks' last results (they say when they ran).
             foreach (var old in _facts.Hints)
                 if (facts.Hints.TryGetValue(old.Key, out var now) && now.Pending && !old.Value.Pending) facts.Hints[old.Key] = old.Value;
             _facts = facts;
+            _checked = true;
+            _stale = false;
+            _checkedAt = DateTime.Now;
             SaveDraft();
             var stage = _stages.SelectedIndex;
             Build();
             _stages.SelectedIndex = stage;
-            _status.Text = (slow ? "Ran the slow checks. " : "Read the model. ") + _status.Text;
+            _status.Text = (slow ? "Ran the slow checks. " : "Checked the model. ") + _status.Text;
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
@@ -616,7 +659,9 @@ internal sealed class ChecklistWindow : Window
         finally
         {
             _reading = false;
+            _stopReading = false;
             if (button is not null) Brand.SetBusy(button, false);
+            ShowRun();
         }
         if (_readAgain && !_closed)
         {
@@ -624,6 +669,86 @@ internal sealed class ChecklistWindow : Window
             _readAgain = _readAgainSlow = false;
             await ReadModelAgain(null, again);
         }
+    }
+
+    /// <summary>Lays out the run strip once; <see cref="ShowRun"/> fills it.</summary>
+    private void RunStrip()
+    {
+        _runSpin.Margin = new Thickness(0, 0, 10, 0);
+        var texts = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Children = { _runText, _runSub, _runBar } };
+        _runSub.TextWrapping = TextWrapping.Wrap;
+        AutomationProperties.SetLiveSetting(_runText, AutomationLiveSetting.Polite);
+        AutomationProperties.SetName(_runBar, "Checking the model");
+        _runNow.Margin = new Thickness(12, 0, 0, 0);
+        _runStop.Margin = new Thickness(12, 0, 0, 0);
+        AutomationProperties.SetHelpText(_runNow, "Tests the model with the quick automatic checks. It takes a few seconds, and Revit stays usable.");
+        AutomationProperties.SetHelpText(_runStop, "Stops checking. The results stay as they were.");
+        _runNow.Click += async (_, _) => await ReadModelAgain(null);
+        _runStop.Click += (_, _) => { _stopReading = true; Brand.SetBusy(_runStop, true, "Stopping…"); };
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Children = { _runNow, _runStop } };
+        var grid = new Grid();
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        grid.Children.Add(_runSpin);
+        Grid.SetColumn(texts, 1);
+        grid.Children.Add(texts);
+        Grid.SetColumn(buttons, 2);
+        grid.Children.Add(buttons);
+        _runStrip.Child = grid;
+        _runStrip.SetResourceReference(Border.BorderBrushProperty, Brand.K.Border);
+    }
+
+    /// <summary>Shows the run strip: reading (with <paramref name="label"/> and its percentage), or else where the results stand.</summary>
+    private void ShowRun(string? label = null, int percent = 0, string detail = "")
+    {
+        var reading = label is not null;
+        _runSpin.Visibility = reading ? Visibility.Visible : Visibility.Collapsed;
+        _runBar.Visibility = reading ? Visibility.Visible : Visibility.Collapsed;
+        _runStop.Visibility = reading ? Visibility.Visible : Visibility.Collapsed;
+        _runNow.Visibility = reading ? Visibility.Collapsed : Visibility.Visible;
+        if (!reading && Brand.IsBusy(_runStop)) Brand.SetBusy(_runStop, false);
+        string background;
+        if (reading)
+        {
+            background = Brand.K.AccentSoft;
+            _runText.Text = $"{label} {percent}%";
+            _runSub.Text = detail;
+            RichUi.To(_runBar, percent, _motion);
+        }
+        else if (!_checked)
+        {
+            background = Brand.K.NoticeBg;
+            _runText.Text = "The model hasn't been checked yet";
+            _runSub.Text = "Press Run checks to test it. The quick checks take a few seconds, and you can keep working in Revit meanwhile.";
+            RichUi.Set(_runNow, RichUi.Icon.Refresh, "Run checks");
+        }
+        else if (_stale)
+        {
+            background = Brand.K.NoticeBg;
+            _runText.Text = "The results may be out of date";
+            _runSub.Text = _staleWhy + " Press Run checks to update them.";
+            RichUi.Set(_runNow, RichUi.Icon.Refresh, "Run checks");
+        }
+        else
+        {
+            background = Brand.K.Raised;
+            var tested = _def?.Items.Where(i => i.Auto.Length > 0).Select(i => Verdict(i.Auto)).Where(v => v is not null).ToList() ?? [];
+            var pass = tested.Count(v => v == true);
+            var pending = _def?.Items.Count(i => i.Auto.Length > 0 && Pending(i.Auto)) ?? 0;
+            _runText.Text = $"✓ Checked at {_checkedAt:HH:mm}";
+            _runSub.Text = $"{pass} automatic check{(pass == 1 ? "" : "s")} pass, {tested.Count - pass} need fixing." +
+                           (pending > 0 ? $" {pending} slow check{(pending == 1 ? "" : "s")} not run yet (Settings, Run the slow checks)." : "");
+            RichUi.Set(_runNow, RichUi.Icon.Refresh, "Run again");
+        }
+        _runStrip.SetResourceReference(Border.BackgroundProperty, background);
+    }
+
+    /// <summary>Something changed what the results would say: they're kept, marked out of date until Run checks.</summary>
+    private void OutOfDate(string why)
+    {
+        if (_checked) { _stale = true; _staleWhy = why; }
+        if (_def is not null && !_reading) ShowRun();
     }
 
     private static readonly TimeSpan StepBudget = TimeSpan.FromMilliseconds(200);
@@ -786,7 +911,9 @@ internal sealed class ChecklistWindow : Window
         // What the model says: passes, needs fixing (with everything it found), or can't tell.
         _facts.Hints.TryGetValue(item.Auto, out var hint);
         if (item.Auto.Length == 0) hint = null;
-        var (headKey, headText, bg, border) = hint?.Level switch
+        var notRun = !_checked && item.Auto.Length > 0 && hint?.Pending != true;
+        if (notRun) hint = null;
+        var (headKey, headText, bg, border) = notRun ? (Brand.K.Text, "Automatic check: not run yet", Brand.K.Raised, Brand.K.BorderSubtle) : hint?.Level switch
         {
             ChecklistFacts.Level.Ok => (Brand.K.SuccessText, "✓ The model check passes", Brand.K.Raised, Brand.K.SuccessText),
             ChecklistFacts.Level.Warn => (Brand.K.WarningText, "! The model check found something to fix", Brand.K.NoticeBg, Brand.K.NoticeBorder),
@@ -806,7 +933,7 @@ internal sealed class ChecklistWindow : Window
                 if (hint.Items.Count > 40) status.Children.Add(Para($"…and {hint.Items.Count - 40} more.", Brand.K.Muted, 11.5, 2));
             }
         }
-        else status.Children.Add(Para("Use How to check below, then answer.", Brand.K.Muted, 12, 4));
+        else status.Children.Add(Para(notRun ? "Press Run checks at the top to test it on the model, or check it yourself with How to check below." : "Use How to check below, then answer.", Brand.K.Muted, 12, 4));
         page.Children.Add(CardBox(status, bg, border, 12));
 
         // The actions: look at it in Revit, let Sketch ProMax fix it, read the model again after fixing it yourself.
@@ -1064,10 +1191,9 @@ internal sealed class ChecklistWindow : Window
         }
         finally { Brand.SetBusy(button, false); }
         var message = said.Text;
-        await ReadModelAgain(null);
-        _status.Text = message + " " + _status.Text;
-        // The panel was rebuilt with the new reading: say there what the fix did.
-        if (_detailScroll.Content is StackPanel page) page.Children.Insert(Math.Min(page.Children.Count, 1), Para(message, Brand.K.SuccessText, 12, 6));
+        OutOfDate("A fix changed the model.");
+        _status.Text = message + " Press Run checks to see the result.";
+        if (_detailScroll.Content is StackPanel page) page.Children.Insert(Math.Min(page.Children.Count, 1), Para(message + " Press Run checks to see the result.", Brand.K.SuccessText, 12, 6));
     }
 
     // ---- Section stages -------------------------------------------------------------------------------------------
@@ -1079,7 +1205,7 @@ internal sealed class ChecklistWindow : Window
         var high = section.Items.Count(i => i.High);
         var waiting = section.Items.Count(i => i.Waiting.Length > 0);
         var auto = section.Items.Count(Automatic);
-        page.Children.Add(Para($"{section.Items.Count} checks: {auto} tested automatically, {section.Items.Count - auto} you check yourself" + (high > 0 ? $"; {high} high priority" : "") + (waiting > 0 ? $"; {waiting} waiting on an answer" : "") +
+        page.Children.Add(Para($"{section.Items.Count} checks: {auto} {(_checked ? "tested automatically" : "automatic (press Run checks)")}, {section.Items.Count - auto} you check yourself" + (high > 0 ? $"; {high} high priority" : "") + (waiting > 0 ? $"; {waiting} waiting on an answer" : "") +
                                ". Click a check for its details. Answer each one; a No needs a comment saying why.", Brand.K.Muted));
         foreach (var item in section.Items) page.Children.Add(ItemCard(stage, item));
         return Scroll(page);

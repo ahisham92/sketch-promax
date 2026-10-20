@@ -178,6 +178,12 @@ internal static class FieldTestCoverage
             "Check 4 finds the model's number in the MIDP; 36 lists drawings in the list with no sheet; 44 counts your open clashes. On check 49 click Fix it: Export the NWC and IFC: " +
             "both files appear in the folder named like the model, and 49, 50 and 51 pass. Create the PDF on Review and sign: its name ends READY or NOT READY and 46 follows it. " +
             "54 lists sheets whose views show a linked model; 55 says N/A for Revit; 56 lists the package's file types; Run the slow checks: 53 and 57 open the packaged model from a clean folder."),
+        new("checklist.run", Issue, "Pre-submission checklist: nothing is tested until Run checks, with a progress bar", How.Manual, "",
+            "how the run strip and its percentage look and read is judged by a person",
+            "On a _detached copy: Pre-submission checklist (next to Chat). Under the header a yellow strip says The model hasn't been checked yet, and nothing is tested; " +
+            "Final file size (MB) already shows the model's size, marked From the model. Press Run checks: the strip turns blue with a spinner, Reading the model… and a percentage that climbs " +
+            "with a bar, and Revit stays usable. Press Run again and then Stop: it stops and the results stay as they were. Let it finish: the strip says Checked at the time, how many pass and need fixing. " +
+            "Use a Fix button or save Checking rules: the strip says the results may be out of date and nothing runs until you press Run checks."),
         new("checklist.slow", Issue, "Pre-submission checklist: the slow automatic checks and the new model tests", How.Manual, "",
             "whether the new tests' findings are right on a real model (names, legends, clashes, the standard template) is judged by a person",
             "On a _detached copy: Pre-submission checklist (next to Chat). Checks 18, 19, 38, 43 and 45 say Automatic (slow check): not run yet. Project details > Run the slow checks: " +
