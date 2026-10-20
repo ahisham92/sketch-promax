@@ -89,6 +89,8 @@ internal static class ChecklistMath
         new("columns", "Column levels tested", "yes", "yes: a column that runs past the next level up is flagged (list the double-height ones in the comment). no: not tested.", "columns"),
         new("classification", "Classification parameter", "Assembly Code", "The type parameter holding the UniFormat code; every model type in use must have it filled.", "uniformat"),
         new("ifc", "IFC entity parameter", "IfcExportAs", "The type or instance parameter holding the IFC entity; every model type in use must have it filled.", "ifc"),
+        new("keepparameters", "Project parameters always kept", "Mark, Comments", "Project parameters with these names are never offered for deleting, even when empty. " +
+            "The parameters the other rules name, and those schedules or view filters use, are kept too.", "parameters"),
         new("badparameters", "Project parameters not allowed", "", "Project parameter names matching any of these are flagged, e.g. another firm's prefix (empty: not tested).", "parameters"),
         new("titleblock", "Title block family", "", "The title block every sheet uses (empty: read from the check's example).", "titleblock"),
         new("tbmodelname", "Sheet parameter with the model name", "", "The sheet or title block parameter that shows the model name; it must match the file name (empty: not tested).", "tbmodelname"),

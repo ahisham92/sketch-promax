@@ -1916,7 +1916,7 @@ internal static partial class FieldTest
             if (!new FilteredElementCollector(doc).OfClass(typeof(View3D)).Cast<View3D>().Any(v => v.Name.StartsWith("3D Navisworks Export", StringComparison.Ordinal)))
                 problems.Add("navisview: no 3D Navisworks Export view after the fix (" + navis + ")");
             said.Add(navis);
-            foreach (var key in new[] { "imports", "groups", "unusedviews", "landing" })
+            foreach (var key in new[] { "imports", "groups", "unusedviews", "landing", "parameters" })
             {
                 var text = ChecklistFixes.Run(doc, key, null);
                 said.Add(text);
