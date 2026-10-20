@@ -264,7 +264,11 @@ internal sealed class ChecklistWindow : Window
         _status.TextWrapping = TextWrapping.Wrap;
         AutomationProperties.SetName(_bar, "Checks answered");
         var left = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 16, 0), Children = { _status, _bar } };
-        var buttons = Brand.ButtonRow(close, _back, _pdf, _next);
+        // Report a problem: one zip with a picture of Revit and what failed (TritoRevit: in Documents\TritoRevit - <pack>\Bugs).
+        var problem = RichUi.Button(RichUi.Icon.Bug, "Report a problem");
+        AutomationProperties.SetHelpText(problem, "Saves one small zip with a picture of Revit, the versions and what failed, to send to whoever looks after this checklist.");
+        problem.Click += async (_, _) => await ReportProblem(problem);
+        var buttons = Brand.ButtonRow(problem, close, _back, _pdf, _next);
         buttons.Margin = new Thickness(0);
         buttons.VerticalAlignment = VerticalAlignment.Center;
         var footGrid = new Grid();
@@ -895,6 +899,22 @@ internal sealed class ChecklistWindow : Window
     } : null;
 
     /// <summary>Runs something on the model this checklist is for, through Revit; a sentence for the user either way.</summary>
+    private async Task ReportProblem(Button button)
+    {
+        if (Brand.IsBusy(button)) return;
+        var shot = Bugs.BugReport.Screenshot();
+        if (Bugs.BugReport.Ask() is not { } description) return;
+        Brand.SetBusy(button, true, "Saving…");
+        try
+        {
+            var file = await App.Dispatcher.InvokeAsync(app => Bugs.BugReport.Create(app, description, shot, "the checklist's Report a problem"));
+            _status.Text = "Problem report saved: " + Path.GetFileName(file);
+            Bugs.BugReport.Saved(file);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException) { _status.Text = "The problem report couldn't be saved: " + ex.Message; }
+        finally { Brand.SetBusy(button, false); }
+    }
+
     private async Task<string> OnModel(Func<UIDocument, string> work)
     {
         var key = _docKey;
@@ -1844,7 +1864,7 @@ internal sealed class ChecklistWindow : Window
             var images = new Dictionary<string, ChecklistDocx.Image>(StringComparer.Ordinal);
             foreach (var (sig, _, _, _) in _signs)
                 if (Signature.ForWord(SignaturePath(sig)) is { } img) images[sig.Role] = img;
-            var folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Sketch ProMax", "Checklists");
+            var folder = Sharing.UserFolder.Checklists;
             var model = Path.GetFileNameWithoutExtension(ChecklistMath.WorkingName(_facts.Model));
             // READY or NOT READY in the name, so check 46 can find the signed checklist.
             var name = $"{ChecklistMath.SafeName(model)} pre-submission checklist {DateTime.Now:yyyy-MM-dd HHmm} - {(ChecklistMath.Count(_def.Items, _state).Ready ? "READY" : "NOT READY")}";
@@ -1878,7 +1898,7 @@ internal sealed class ChecklistWindow : Window
             r.Error.Text = note;
             r.Error.Visibility = note.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
             r.DoneText.Text = (p.Ready ? $"Signed checklist created ({kind}): " : $"Checklist created for review ({kind}, NOT READY, no signatures): ") + Path.GetFileName(path) +
-                              "\nIn Documents\\Sketch ProMax\\Checklists.";
+                              "\nIn " + folder.Replace(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Documents") + ".";
             RichUi.Set(r.OpenFile, RichUi.Icon.Open, kind == "PDF" ? "Open PDF" : "Open in Word");
             ((Border)r.Done.Tag).Visibility = Visibility.Visible;
             RichUi.FadeIn((Border)r.Done.Tag, _motion);

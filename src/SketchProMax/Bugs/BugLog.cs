@@ -25,8 +25,15 @@ internal static class BugLog
     /// test's temporary folder. Not a tool argument.</summary>
     internal static string? RootOverride;
 
-    public static string Root => RootOverride ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Sketch ProMax", "Bugs");
-    public static string ReportsFolder => Path.Combine(Root, "Reports");
+    /// <summary>Set by TritoRevit's core (App.Shared): its Bugs folder, Documents\TritoRevit - &lt;pack&gt;\Bugs (Sharing/UserFolder).
+    /// The zips go straight into it, with no bug log.</summary>
+    internal static Func<string>? SharedRoot;
+
+    private static bool InShared => SharedRoot is not null && RootOverride is null;
+
+    public static string Root => RootOverride ?? SharedRoot?.Invoke()
+        ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Sketch ProMax", "Bugs");
+    public static string ReportsFolder => InShared ? Root : Path.Combine(Root, "Reports");
     public static string LocalLog => Path.Combine(Root, "Bug log.md");
 
     /// <summary>The last published log downloaded, kept apart so the local file can be rebuilt after a new report.</summary>
@@ -157,6 +164,7 @@ internal static class BugLog
     /// <summary>Rewrites "Bug log.md" from the last downloaded log and the reports on this PC. Never throws.</summary>
     public static void RewriteLocal()
     {
+        if (InShared) return; // TritoRevit's Bugs folder holds only the zips
         try
         {
             lock (Gate)

@@ -689,7 +689,7 @@ internal static class ChecklistFacts
         Add("signed", () =>
         {
             var problems = new List<string>();
-            var folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Sketch ProMax", "Checklists");
+            var folder = Sharing.UserFolder.Checklists;
             var made = Directory.Exists(folder)
                 ? Directory.EnumerateFiles(folder, ChecklistMath.SafeName(modelName) + " pre-submission checklist *").Where(f => f.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase) || f.EndsWith(".docx", StringComparison.OrdinalIgnoreCase))
                     .OrderByDescending(File.GetLastWriteTimeUtc).FirstOrDefault()

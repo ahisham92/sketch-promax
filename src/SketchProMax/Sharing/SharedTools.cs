@@ -48,7 +48,7 @@ internal static class SharedTools
     /// <summary>The Shared tools button: the installed packs, check for updates, add a pack from a zip, remove one.</summary>
     public static Result Manage(UIApplication app)
     {
-        new SharedToolsWindow().ShowDialog();
+        new SharedToolsWindow(app).ShowDialog();
         return Result.Succeeded;
     }
 

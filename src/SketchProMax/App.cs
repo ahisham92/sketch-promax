@@ -140,7 +140,12 @@ public sealed class App : IExternalApplication
             UI.RibbonLabels.Attach(app);
             UI.LoaderBrand.Attach(app);
         }
-        else TimeLog.Off = true; // nothing is written into the models for TritoRevit's tools
+        else
+        {
+            TimeLog.Off = true; // nothing is written into the models for TritoRevit's tools
+            Bugs.BugLog.SharedRoot = () => Sharing.UserFolder.Bugs; // Documents\TritoRevit - <pack>\Bugs
+            Bugs.BugReport.Watch(Ui, app); // a failure in a shared tool's window is saved as a problem report
+        }
         // The loader asks for the ribbon (favourites included) right after this returns: read the recipe and learned-tool
         // folders on a background thread meanwhile, not on Revit's.
         Commands.QuickTools.Warm();
@@ -261,6 +266,7 @@ public sealed class App : IExternalApplication
     {
         // Applied straight away, so a pack the installer just put here has its learned tools before a button is clicked.
         try { Sharing.SharedPacks.Sync(stop); } catch (Exception) { }
+        Sharing.UserFolder.Ensure(); // Documents\TritoRevit - <pack>, with Bugs and the how-to
         try
         {
             await Task.Delay(BackgroundDelay, stop).ConfigureAwait(false);
@@ -306,6 +312,7 @@ public sealed class App : IExternalApplication
         try { app.Application.DocumentOpening -= OnDocumentOpening; } catch (Exception) { }
         try { app.Application.DocumentOpened -= OnDocumentOpened; } catch (Exception) { }
         try { UI.UpdateNotice.Stop(); } catch (Exception) { }
+        Bugs.BugReport.Unwatch();
         UI.LoaderBrand.Stop();
         UI.LazyPane.Forget();
         Dispatcher.Shutdown(app);

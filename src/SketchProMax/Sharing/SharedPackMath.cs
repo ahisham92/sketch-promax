@@ -341,4 +341,38 @@ internal static class SharedPackMath
         (pack.UpdateFrom.Length > 0
             ? $"\r\nUpdates: when these tools change they are updated by themselves from\r\n  {pack.UpdateFrom}\r\nwhile Revit is open, with no restart.\r\n"
             : "\r\nUpdates: the TritoRevit add-in updates itself. To get changed tools, install a newer zip of this pack.\r\n");
+
+    // ---- TritoRevit's folder in Documents (Sharing/UserFolder)
+
+    /// <summary>"TritoRevit - Pre Submission Checklist" for a pack named so; "TritoRevit - Shared tools" with no pack.</summary>
+    public static string FolderName(IEnumerable<Pack> packs)
+    {
+        var list = packs.ToList();
+        var pack = list.FirstOrDefault(p => !string.IsNullOrEmpty(p.Checklist)) ?? list.FirstOrDefault();
+        var name = CleanName(pack?.Name ?? "");
+        return "TritoRevit - " + (name.Length > 0 ? name : "Shared tools");
+    }
+
+    /// <summary>A pack name as a folder name: characters Windows refuses dropped, spaces collapsed, at most 60 long.</summary>
+    internal static string CleanName(string name)
+    {
+        var bad = new HashSet<char>(System.IO.Path.GetInvalidFileNameChars().Concat(new[] { '<', '>', ':', '"', '/', '\\', '|', '?', '*' }));
+        var kept = new string(name.Select(c => bad.Contains(c) || char.IsControl(c) ? ' ' : c).ToArray());
+        kept = string.Join(" ", kept.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries)).Trim('.', ' ');
+        return kept.Length > 60 ? kept.Substring(0, 60).TrimEnd('.', ' ') : kept;
+    }
+
+    internal static string ReadMe(IEnumerable<Pack> packs)
+    {
+        var withFolder = packs.Where(p => p.UpdateFrom.Length > 0).Select(p => p.UpdateFrom).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        return "This folder is made by TritoRevit for the shared tools on this PC.\r\n\r\n" +
+               "Checklists: the checklist Word files and PDFs you create are saved here.\r\n\r\n" +
+               "Bugs: when something goes wrong, use Report a problem (at the bottom of the checklist window, or in Shared tools on the TritoRevit tab) " +
+               "and say in one line what happened. TritoRevit also saves a report by itself when a tool fails. Each report is one small zip " +
+               "in the Bugs folder (a picture of the Revit window, the versions, the model's name and what failed). Nothing is sent over the internet.\r\n\r\n" +
+               (withFolder.Count > 0
+                   ? "A copy of each report also goes to \"Bug reports\" in the shared tools' update folder (" + string.Join(", ", withFolder) + ") when this PC can reach it. " +
+                     "If it can't, send the zips in Bugs to the person who shared the tools.\r\n"
+                   : "Send the zips in the Bugs folder to the person who shared the tools.\r\n");
+    }
 }
