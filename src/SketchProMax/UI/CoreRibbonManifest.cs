@@ -33,8 +33,21 @@ internal static class CoreRibbonManifest
             "and drawings, or send the current view. The first time, it helps you install Claude Code and sign in.")),
         // Update (0.33.1): also in the first panel, which Revit never folds away on a narrow ribbon, so updating is always one click.
         L(Button("Claude", "UpdateClaude", "Update", "update-button", "version",
-            "The installed version and updates: Update ready (click to install now), Updated – What's new (release notes), Up to date " +
+            "The installed version and updates: Update ready (click to install now), Updated to <version> (click to check again), Up to date " +
             "with the time of the last check (click to check now), Couldn't check (why, in this tooltip).", live: "update-first")),
+        // Pre-submission checklist (0.34.12: next to Chat and Update, large, so it is always in view): the office's checklist Excel in stages, ending in a signed Word file (UI/ChecklistWindow).
+        L(Button("Claude", "PreSubmission", "Pre-submission\nchecklist", "pre-submission", "field",
+            "Goes through the office's pre-submission checklist stage by stage, with hints from the model, and makes the signed Word file to print.",
+            "Stages from your checklist Excel: project details, one per section, then review and sign. Each check has how to check it, " +
+            "where it came from and what the model shows; answer Yes, No or N/A with a comment. The Word file carries the signatures " +
+            "only when nothing is No or unanswered. Reads the model only; answers are kept per model.", needsModel: true)),
+        // Share tools (0.35): large, after the checklist. Makes a zip that installs the chosen tools on the TritoRevit tab for
+        // colleagues with or without Sketch ProMax (Sharing/ShareWindow).
+        L(Button("Claude", "ShareTools", "Share\ntools", "share-tools", "pack",
+            "Share any of your tools with colleagues, with or without Sketch ProMax: one zip installs them on the TritoRevit tab, and they update by themselves.",
+            "Pick tools (the pre-submission checklist, ribbon tools, learned tools, recipes), name the pack and, optionally, a folder everyone can reach. " +
+            "Colleagues extract the zip and double-click Install TritoRevit.cmd; it installs the TritoRevit add-in when they don't have it. Only the first " +
+            "install needs a Revit restart: later changes reach them from that folder while Revit is open.")),
         L(Button("Claude", "ClaudeStatus", "Status", "status", "logo:gray",
             "Whether the Claude desktop app is connected to this Revit window: green connected, amber ready, gray not running, red no link. Click for details.",
             "Green: the desktop app has talked to this Revit window in the last few minutes. Amber: ready, waiting for the app. Gray: the " +
@@ -143,12 +156,6 @@ internal static class CoreRibbonManifest
             "Its options open, then the preview: nothing changes until you press Delete them, and Ctrl+Z undoes it in one step.", needsModel: true)),
 
         // ---- Issue (0.33: the issue check gates Issue drawings and Export PDF of sheets, see UI/IssueGateWindow)
-        // Pre-submission checklist: the office's checklist Excel in stages, ending in a signed Word file (UI/ChecklistWindow).
-        L(Button("Issue", "PreSubmission", "Pre-submission\nchecklist", "pre-submission", "list",
-            "Goes through the office's pre-submission checklist stage by stage, with hints from the model, and makes the signed Word file to print.",
-            "Stages from your checklist Excel: project details, one per section, then review and sign. Each check has how to check it, " +
-            "where it came from and what the model shows; answer Yes, No or N/A with a comment. The Word file carries the signatures " +
-            "only when nothing is No or unanswered. Reads the model only; answers are kept per model.", needsModel: true)),
         L(Button("Issue", "IssueCheck", "Issue\ncheck", "issue-check", "check",
             "The zero-mistake check before an issue: drawing, spec, BOQ and model checks together, pass or fail per sheet.",
             "Runs check_drawings, spec_check, boq_check and check_model on the issue set and lists each finding under its sheet " +
@@ -171,7 +178,7 @@ internal static class CoreRibbonManifest
         L(Button("Sketch ProMax", "JobLive", "No job", "job-button", "job",
             "The tool running in Revit and its progress. While one runs, click to ask it to stop.", live: "job")),
         L(Button("Sketch ProMax", "UpdateLive", "Updates", "update-button", "version",
-            "The installed version and updates: Update ready (install it now), Updated – What's new (release notes), Up to date " +
+            "The installed version and updates: Update ready (install it now), Updated to <version> (click to check again), Up to date " +
             "with the time of the last check, Couldn't check (why, in this tooltip).", live: "update-badge")),
         // Bug reports (0.30): CoreEntry.Command "report-bug" / "bug-folder" / "export-chats-bugs"; the notes tab by PaneContent("notes").
         L(Button("Sketch ProMax", "ReportBug", "Report bug", "report-bug", "bug",
@@ -207,15 +214,6 @@ internal static class CoreRibbonManifest
         L(Tab("notes", "Notes", "Notes for this model")),
     ];
 
-    /// <summary>
-    /// Share tools (0.35): on My tools, before Favourites. Makes a zip that installs the chosen tools on the TritoRevit
-    /// tab for colleagues with or without Sketch ProMax (Sharing/ShareWindow).
-    /// </summary>
-    internal static readonly string ShareLine = Button(Favourites.Panel, "ShareTools", "Share\ntools", "share-tools", "pack",
-        "Share any of your tools with colleagues, with or without Sketch ProMax: one zip installs them on the TritoRevit tab, and they update by themselves.",
-        "Pick tools (the pre-submission checklist, ribbon tools, learned tools, recipes), name the pack and, optionally, a folder everyone can reach. " +
-        "Colleagues extract the zip and double-click Install TritoRevit.cmd; it installs the TritoRevit add-in when they don't have it. Only the first " +
-        "install needs a Revit restart: later changes reach them from that folder while Revit is open.");
 
     /// <summary>Every line, whether or not this core has the tools (for the tests).</summary>
     public static string Text => Build(_ => "");
@@ -244,7 +242,7 @@ internal static class CoreRibbonManifest
         // My tools (between Issue and Sketch ProMax, as on the tab): the Favourites button and the favourite slots, next
         // to the loader's own My tools drop-down.
         var at = lines.FindIndex(l => l.Split('\t') is var f && f.Length > 1 && f[1] == "Sketch ProMax");
-        lines.InsertRange(at < 0 ? lines.Count : at, new[] { ShareLine }.Concat(Favourites.ManifestLines(favourites ?? [])));
+        lines.InsertRange(at < 0 ? lines.Count : at, Favourites.ManifestLines(favourites ?? []));
         return string.Join("\n", lines);
     }
 

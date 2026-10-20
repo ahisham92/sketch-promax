@@ -128,12 +128,11 @@ internal static class SharingTests
             && readme.Contains(pack.UpdateFrom) && readme.Contains("no restart"), readme);
         check("sharing: readme without an update folder", Readme(new Pack { Id = "a", Name = "A" }).Contains("install a newer zip"), "");
 
-        // ---- Sketch ProMax's ribbon: Share tools sits on My tools, before the favourites
-        var manifest = CoreRibbonManifest.Build(_ => "", [new Favourites.Item("tool:check_model", "tool", "check_model", "Model check", "check", "tip")]);
-        var lines = manifest.Split('\n');
-        var share = Array.FindIndex(lines, l => l.Contains("share-tools"));
-        var fav = Array.FindIndex(lines, l => l.Contains("tool:check_model") && l.StartsWith("button") && l.Contains(Favourites.Panel));
-        check("sharing: Share tools button before the favourites", share >= 0 && (fav < 0 || share < fav), $"{share} {fav}");
+        // ---- Sketch ProMax's ribbon: Share tools is a large button in the first panel, right after the checklist
+        var shipped = SketchProMax.Loader.RibbonManifest.Parse(CoreRibbonManifest.Text).Controls.Where(c => c.Group == "Claude").Select(c => c.Command).ToList();
+        var at = shipped.IndexOf("share-tools");
+        check("sharing: Share tools follows the pre-submission checklist", at > 0 && shipped[at - 1] == "pre-submission", string.Join(",", shipped));
+        check("sharing: Share tools is a large button", CoreRibbonManifest.Text.Split('\n').Any(l => l.Contains("\tShareTools\t") && !l.Contains("\tsmall")), "");
 
         // ---- Files that ship
         var trito = Path.Combine(root, "src", "TritoRevit");

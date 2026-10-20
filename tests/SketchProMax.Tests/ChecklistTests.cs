@@ -119,20 +119,25 @@ internal static class ChecklistTests
         bool? Says(string key) => key switch { "grids" => true, "warnings" => false, _ => null };
         var autoState = new State();
         foreach (var i in autoItems) autoState.For(i.Id).Done = Yes;
-        var auto = Auto(autoItems, Says);
+        var auto = Auto(autoItems, Says, autoState);
         var disagree = Disagree(autoItems, autoState, Says);
-        check("checklist: your answers 100% while the automatic check is 50%",
-            Percent(Count(autoItems, autoState)) == 100 && auto is { Tested: 2, Pass: 1, Fail: 1, Percent: 50 }, $"{Percent(Count(autoItems, autoState))}% / {auto}");
+        check("checklist: your answers 100% while the automatic check is 75% (the model fails one)",
+            Percent(Count(autoItems, autoState)) == 100 && auto is { Tested: 2, Pass: 1, Fail: 1, Total: 4, Manual: 2, ManualDone: 2, Percent: 75 }, $"{Percent(Count(autoItems, autoState))}% / {auto}");
+        var unanswered = Auto(autoItems, key => key == "warnings" ? false : key == "grids" ? true : null, new State());
+        var allPass = Auto(autoItems, key => key is "grids" or "warnings" ? true : null, new State());
+        check("checklist: checks done by hand hold the automatic check down until answered Yes or N/A",
+            unanswered.Percent == 25 && allPass.Percent == 50 && allPass.Ceiling == 50 && Auto(autoItems, key => key is "grids" or "warnings" ? true : null, autoState).Percent == 100,
+            $"{unanswered.Percent}% / {allPass.Percent}% (ceiling {allPass.Ceiling}%)");
         check("checklist: a Yes the model check fails is listed", disagree.Select(i => i.Id).SequenceEqual(["2"]), string.Join(",", disagree.Select(i => i.Id)));
         var autoLine = AutoLine(auto, disagree);
-        check("checklist: the automatic line names the score and the disagreement", autoLine.Contains("1 of 2") && autoLine.Contains("(50%)") && autoLine.Contains("#2") && AutoLine(new AutoProgress(0, 0, 0), []) == "", autoLine);
+        check("checklist: the automatic line names the score and the disagreement", autoLine.Contains("3 of 4 checks pass (75%)") && autoLine.Contains("1 of the 2 it can test") && autoLine.Contains("#2") && AutoLine(new AutoProgress(0, 0, 0), []) == "", autoLine);
         var autoDoc = new MemoryStream();
         var autoDef = new Definition { Title = "T", Sections = [new Section("A. One", autoItems)], Signatories = ["Prepared by"] };
         ChecklistDocx.Write(autoDoc, autoDef, autoState, new ChecklistDocx.Info("m.rvt", "0", DateTime.Now, autoLine), new Dictionary<string, ChecklistDocx.Image>());
         autoDoc.Position = 0;
         using (var zip = new ZipArchive(autoDoc))
         using (var reader = new StreamReader(zip.GetEntry("word/document.xml")!.Open()))
-            check("checklist: the Word file carries the automatic check", reader.ReadToEnd().Contains("Automatic model check: 1 of 2"), "");
+            check("checklist: the Word file carries the automatic check", reader.ReadToEnd().Contains("Automatic check: 3 of 4 checks pass (75%)"), "");
 
         // ---- The built-in checklist
         var built = BuiltIn();
@@ -141,6 +146,53 @@ internal static class ChecklistTests
             built is null ? "null" : $"{built.Title}: {built.Items.Count()} checks, {built.Sections.Count} stages");
         if (built is null) return;
         check("checklist: built-in checks are numbered 1 to 57 in order", built.Items.Select(i => i.Id).SequenceEqual(Enumerable.Range(1, 57).Select(n => n.ToString())), "");
+        var wordy = built.Items.Where(i => i.Short.Length == 0 || i.Short.Length > 45 || i.Fix.Length == 0 || i.Title.Length >= i.Check.Length).Select(i => i.Number).ToList();
+        check("checklist: every built-in check has a short title (45 characters at most) and a way to fix it", wordy.Count == 0, "checks " + string.Join(", ", wordy));
+        var json = ToJson(built);
+        // Project numbers look like a letter and five digits, short project codes; neither may appear (the test itself names none).
+        var named = System.Text.RegularExpressions.Regex.Matches(json, @"\b(?:[A-Z]\d{5}|[A-Z]\d{2}[A-Z])\b").Cast<System.Text.RegularExpressions.Match>().Select(m => m.Value).Distinct().ToList();
+        check("checklist: the built-in checklist names no project or firm", named.Count == 0, string.Join(", ", named));
+        check("checklist: a check without a short title shows its first sentence",
+            new Item("1", "1", "Grids are in the model. They show in plans (BLDG-01).", "", "", "", "", "", "").Title == "Grids are in the model."
+            && new Item("1", "1", "One sentence only", "", "", "", "", "", "").Title == "One sentence only", "");
+        check("checklist: rule patterns (# digit, ? one character, * anything, spaces loose, case ignored)",
+            Like("BLDG 7 LVL 01-TOC", "BLDG * LVL *") && Like("bldg  12 lvl B01", "BLDG * LVL *") && !Like("Level 1", "BLDG * LVL *")
+            && Like("BLDG-01-1101", "BLDG-##-###*") && !Like("BLDG7-1101", "BLDG-##-###*") && Like("A1", "?#") && !Like("AB", "?#")
+            && LikeAny("Z_Link_AR", "ST_*, Z_Link_*") && !LikeAny("MH_Ducting", "ST_*, Z_Link_*") && !LikeAny("x", ""), "");
+        var ruled = new Definition { Rules = { ["levels"] = "L*", ["approvedworksets"] = "" } };
+        check("checklist: a rule set wins, an empty one turns its test off, an unset one uses the default",
+            Rule(ruled, "levels") == "L*" && Rule(ruled, "approvedworksets") == "" && Rule(ruled, "filesize") == "300" && Rule(null, "scales").StartsWith("1:1,"), "");
+        var autoKeys = AutoRules.Select(r => r.Key).ToHashSet();
+        var orphan = RuleDefs.Where(r => !autoKeys.Contains(r.Check)).Select(r => r.Key).ToList();
+        check("checklist: every checking rule drives a model test", orphan.Count == 0, string.Join(", ", orphan));
+        var newlyAuto = new[] { "12", "17", "25", "26", "27", "31", "39" }.Where(n => built.Items.First(i => i.Number == n).Auto.Length == 0).ToList();
+        check("checklist: checks 12, 17, 25, 26, 27, 31 and 39 have model tests", newlyAuto.Count == 0, "no test on " + string.Join(", ", newlyAuto));
+        var moreAuto = new[] { "2", "5", "15", "18", "19", "22", "34", "37", "38", "42", "43", "45" }.Where(n => built.Items.First(i => i.Number == n).Auto.Length == 0).ToList();
+        check("checklist: checks 2, 5, 15, 18, 19, 22, 34, 37, 38, 42, 43 and 45 have model tests", moreAuto.Count == 0, "no test on " + string.Join(", ", moreAuto));
+        var keyed = built.Items.Where(i => i.Auto.Length > 0 && AutoKey(i.Check) != i.Auto).Select(i => $"#{i.Number} {i.Auto} vs {AutoKey(i.Check)}").ToList();
+        check("checklist: each built-in check's model test is the one its wording finds (so an imported Excel gets the same)", keyed.Count == 0, string.Join("; ", keyed));
+        var manualLeft = built.Items.Where(i => i.Auto.Length == 0).Select(i => i.Number).ToList();
+        check("checklist: only checks needing data from outside the model or a person's judgement stay manual",
+            manualLeft.SequenceEqual(["4", "16", "20", "21", "33", "36", "44", "46", "49", "50", "51", "53", "54", "55", "56", "57"]), string.Join(", ", manualLeft));
+        var rulesPath = Path.Combine(Path.GetTempPath(), $"spm-checklist-{Guid.NewGuid():N}.xlsx");
+        try
+        {
+            var withRules = Renumber(built);
+            withRules.Rules["levels"] = "BLDG ## LVL *";
+            withRules.Rules["approvedworksets"] = "ST_*, Z_Link_*";
+            ChecklistXlsx.Write(rulesPath, withRules);
+            var back = ReadXlsx(rulesPath);
+            check("checklist: checking rules go to the Excel Rules sheet and come back",
+                Rule(back, "levels") == "BLDG ## LVL *" && Rule(back, "approvedworksets") == "ST_*, Z_Link_*" && Rule(back, "scales") == Rule(null, "scales"), ToJson(back.Rules));
+        }
+        finally { File.Delete(rulesPath); }
+        var question = ChecklistHelper.Question(built.Items.First(i => i.Number == "15"), "model.rvt", null);
+        check("checklist: the helper's question has the check, how to check, no changes and the PASS / FAIL answer",
+            question.Contains("check #15") && question.Contains("How to check:") && question.Contains("Don't change anything") && question.Contains("PASS, FAIL or CAN'T TELL")
+            && !question.Contains("Claude"), question);
+        check("checklist: the helper setting reads old and odd values as Sketch ProMax",
+            ChecklistHelper.Parse(null) == ChecklistHelper.ProMax && ChecklistHelper.Parse(" SketchPro ") == ChecklistHelper.SketchPro && ChecklistHelper.Parse("none") == ChecklistHelper.None
+            && ChecklistHelper.Button(ChecklistHelper.None) is null, "");
 
         // ---- Editing: delete a check and add one; answers follow their check
         var answered = new State();

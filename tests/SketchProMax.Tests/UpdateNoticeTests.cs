@@ -20,7 +20,7 @@ internal static class UpdateNoticeTests
         check("badge: update ready wins over restart, what's new and a failed check",
             UpdateBadge.For(null, "0.31.0", true, v30, new Version(0, 29, 0), now, "timeout", now).Kind == UpdateBadge.Kind.Ready, "");
         var updated = UpdateBadge.For(null, null, false, v30, new Version(0, 29, 0), now.AddMinutes(-20), null, now);
-        check("badge: updated, what's new", One(updated) == "Updated – What's new" && updated.Kind == UpdateBadge.Kind.WhatsNew, One(updated));
+        check("badge: updated, with the version", One(updated) == "Updated to 0.30.0" && updated.Kind == UpdateBadge.Kind.WhatsNew, One(updated));
         var upToDate = UpdateBadge.For(null, null, false, v30, v30, now.AddMinutes(-20), null, now);
         var clock = UpdateBadge.Clock(now.AddMinutes(-20));
         check("badge: up to date with the time of the check", One(upToDate) == $"Up to date (checked {clock})" && upToDate.Kind == UpdateBadge.Kind.UpToDate

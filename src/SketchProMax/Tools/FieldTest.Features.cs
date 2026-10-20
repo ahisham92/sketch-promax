@@ -486,6 +486,8 @@ internal static partial class FieldTest
         await Probe(s, "issue.gate", app => IssueGateProbe(app, s)).ConfigureAwait(false);
         await Probe(s, "checklist.word", app => ChecklistProbe(app, s)).ConfigureAwait(false);
         await Probe(s, "checklist.views", app => ChecklistViewsProbe(app, s)).ConfigureAwait(false);
+        await Probe(s, "checklist.fix", app => ChecklistFixProbe(app, s)).ConfigureAwait(false);
+        await Probe(s, "checklist.rules", app => ChecklistRulesProbe(app, s)).ConfigureAwait(false);
         await Probe(s, "package.sentence", app => PackageSentence(app, s)).ConfigureAwait(false);
         await Probe(s, "package.skip", app => PackageSkip(app, s)).ConfigureAwait(false);
         await Probe(s, "redlines.pdf", app => RedlinePdf(app, s)).ConfigureAwait(false);
@@ -1873,6 +1875,54 @@ internal static partial class FieldTest
         }
         finally { RollBack(group); }
         return problems.Count == 0 ? Pass($"made and deleted {made.Count} checking views: {string.Join(", ", made)}") : Fail(string.Join("; ", problems));
+    }
+
+    /// <summary>Every model test of the built-in checklist, with every checking rule turned on, reads the test project without an error.</summary>
+    private static (string, string) ChecklistRulesProbe(UIApplication app, State s)
+    {
+        if (TestDoc(app, s, out var why) is not { } doc) return Fail(why);
+        if (ChecklistMath.BuiltIn() is not { } def) return Fail("the built-in checklist can't be read");
+        def.Rules["approvedworksets"] = "ST_*, Z_Link_*";
+        def.Rules["badparameters"] = "OTHERFIRM*";
+        def.Rules["tbmodelname"] = "Sheet Name";
+        def.Rules["viewfolders"] = "Discipline";
+        def.Rules["othertrades"] = "Doors, Windows";
+        def.Rules["clashcategories"] = "OST_StructuralColumns, OST_StructuralFraming";
+        def.Rules["schedules"] = "*Schedule*";
+        var facts = ChecklistFacts.Read(doc, def, app); // the slow checks too
+        var broken = facts.Hints.Where(h => h.Value.Text.StartsWith("Couldn't read", StringComparison.Ordinal)).Select(h => h.Key + ": " + h.Value.Text).ToList();
+        broken.AddRange(facts.Hints.Where(h => h.Value.Pending).Select(h => h.Key + ": still not run"));
+        var tested = def.Items.Count(i => i.Auto.Length > 0 && facts.Hints.TryGetValue(i.Auto, out var h) && h.Level != ChecklistFacts.Level.Info);
+        return broken.Count == 0 ? Pass($"{facts.Hints.Count} model tests read (slow ones included), {tested} of {def.Items.Count()} checks settled automatically") : Fail(string.Join("; ", broken));
+    }
+
+    /// <summary>The checklist's Fix buttons that can be rolled back (not unloading links), run on the test project and rolled back.</summary>
+    private static (string, string) ChecklistFixProbe(UIApplication app, State s)
+    {
+        if (TestDoc(app, s, out var why) is not { } doc) return Fail(why);
+        var problems = new List<string>();
+        var said = new List<string>();
+        using var group = new TransactionGroup(doc, "Field test: checklist fixes");
+        group.Start();
+        try
+        {
+            var navis = ChecklistFixes.Run(doc, "navisview", null);
+            if (!new FilteredElementCollector(doc).OfClass(typeof(View3D)).Cast<View3D>().Any(v => v.Name.StartsWith("3D Navisworks Export", StringComparison.Ordinal)))
+                problems.Add("navisview: no 3D Navisworks Export view after the fix (" + navis + ")");
+            said.Add(navis);
+            foreach (var key in new[] { "imports", "groups", "unusedviews", "landing" })
+            {
+                var text = ChecklistFixes.Run(doc, key, null);
+                said.Add(text);
+                if (text.StartsWith("There is no automatic fix", StringComparison.Ordinal)) problems.Add(key + ": " + text);
+            }
+            if (new FilteredElementCollector(doc).OfClass(typeof(ImportInstance)).Cast<ImportInstance>().Any(i => !i.IsLinked)) problems.Add("imports: imported CAD left after the fix");
+            if (ChecklistFacts.UnusedViews(doc).Count > 0) problems.Add($"unusedviews: {ChecklistFacts.UnusedViews(doc).Count} views on no sheet left");
+            foreach (var key in ChecklistMath.AutoRules.Select(r => r.Key))
+                if (ChecklistFixes.For(key) is { } offer && (offer.Button.Length == 0 || offer.Question.Length == 0)) problems.Add(key + ": empty button or question");
+        }
+        finally { RollBack(group); }
+        return problems.Count == 0 ? Pass("fixes ran and were rolled back: " + string.Join(" ", said)) : Fail(string.Join("; ", problems));
     }
 
     /// <summary>A small ready checklist written as Word, then turned into a PDF through Word (off Revit's thread, as the window does).</summary>

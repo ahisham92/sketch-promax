@@ -15,7 +15,7 @@ namespace SketchProMax.Tools;
 internal static class ChecklistXlsx
 {
     private static readonly string[] Headings =
-        ["#", "Check (what to do)", "Example / how to check", "Where it came from", "Found it on", "Priority", "Done (Y/N/NA)", "Checked by", "Date", "Notes"];
+        ["#", "Check (what to do)", "Example / how to check", "Where it came from", "Found it on", "Priority", "Done (Y/N/NA)", "Checked by", "Date", "Notes", "Short title", "How to fix"];
 
     private const int Wrap = 1, Bold = 2, Section = 3, Head = 4;
 
@@ -42,17 +42,19 @@ internal static class ChecklistXlsx
             "<Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/><Default Extension=\"xml\" ContentType=\"application/xml\"/>" +
             "<Override PartName=\"/xl/workbook.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml\"/>" +
             "<Override PartName=\"/xl/worksheets/sheet1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/>" +
+            "<Override PartName=\"/xl/worksheets/sheet2.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/>" +
             "<Override PartName=\"/xl/styles.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml\"/></Types>");
         Entry("_rels/.rels",
             "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">" +
             "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"xl/workbook.xml\"/></Relationships>");
         Entry("xl/workbook.xml",
             "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" " +
-            "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><sheets><sheet name=\"Checklist\" sheetId=\"1\" r:id=\"rId1\"/></sheets></workbook>");
+            "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><sheets><sheet name=\"Checklist\" sheetId=\"1\" r:id=\"rId1\"/><sheet name=\"Rules\" sheetId=\"2\" r:id=\"rId3\"/></sheets></workbook>");
         Entry("xl/_rels/workbook.xml.rels",
             "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">" +
             "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet1.xml\"/>" +
-            "<Relationship Id=\"rId2\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles\" Target=\"styles.xml\"/></Relationships>");
+            "<Relationship Id=\"rId2\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles\" Target=\"styles.xml\"/>" +
+            "<Relationship Id=\"rId3\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet2.xml\"/></Relationships>");
         // Styles: 0 plain, 1 wrapped, 2 bold, 3 section (bold on light grey), 4 table heading (bold, wrapped, grey).
         Entry("xl/styles.xml",
             "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><styleSheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">" +
@@ -68,6 +70,7 @@ internal static class ChecklistXlsx
             "<xf numFmtId=\"0\" fontId=\"1\" fillId=\"2\" borderId=\"0\" xfId=\"0\" applyFont=\"1\" applyFill=\"1\" applyAlignment=\"1\"><alignment vertical=\"top\" wrapText=\"1\"/></xf></cellXfs>" +
             "</styleSheet>");
         Entry("xl/worksheets/sheet1.xml", Sheet(def));
+        Entry("xl/worksheets/sheet2.xml", RulesSheet(def));
     }
 
     private static string Sheet(ChecklistMath.Definition def)
@@ -103,7 +106,7 @@ internal static class ChecklistXlsx
             {
                 var number = double.TryParse(item.Number, NumberStyles.Float, CultureInfo.InvariantCulture, out _);
                 Row((0, item.Number, Wrap, number), T(1, item.Check, Wrap), T(2, item.Example, Wrap), T(3, item.From, Wrap), T(4, item.FoundOn, Wrap),
-                    T(5, item.Priority, Wrap), T(9, Notes(item.Waiting), Wrap));
+                    T(5, item.Priority, Wrap), T(9, Notes(item.Waiting), Wrap), T(10, item.Short, Wrap), T(11, item.Fix, Wrap));
             }
         }
         Row();
@@ -115,10 +118,36 @@ internal static class ChecklistXlsx
         var cols = "<cols><col min=\"1\" max=\"1\" width=\"7\" customWidth=\"1\"/><col min=\"2\" max=\"2\" width=\"60\" customWidth=\"1\"/>" +
                    "<col min=\"3\" max=\"3\" width=\"50\" customWidth=\"1\"/><col min=\"4\" max=\"4\" width=\"34\" customWidth=\"1\"/>" +
                    "<col min=\"5\" max=\"6\" width=\"12\" customWidth=\"1\"/><col min=\"7\" max=\"9\" width=\"11\" customWidth=\"1\"/>" +
-                   "<col min=\"10\" max=\"10\" width=\"40\" customWidth=\"1\"/></cols>";
+                   "<col min=\"10\" max=\"10\" width=\"40\" customWidth=\"1\"/>" +
+                   "<col min=\"11\" max=\"11\" width=\"34\" customWidth=\"1\"/><col min=\"12\" max=\"12\" width=\"60\" customWidth=\"1\"/></cols>";
         var freeze = $"<sheetViews><sheetView workbookViewId=\"0\"><pane ySplit=\"{headRow}\" topLeftCell=\"A{headRow + 1}\" activePane=\"bottomLeft\" state=\"frozen\"/></sheetView></sheetViews>";
         return "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">" +
                freeze + cols + "<sheetData>" + rows + "</sheetData></worksheet>";
+    }
+
+    /// <summary>The checking rules: name, value (edit this column), key (keep it), what it means.</summary>
+    private static string RulesSheet(ChecklistMath.Definition def)
+    {
+        var rows = new StringBuilder();
+        var r = 0;
+        void Row(int style, params string[] cells)
+        {
+            r++;
+            rows.Append("<row r=\"").Append(r).Append("\">");
+            for (var c = 0; c < cells.Length; c++)
+            {
+                if (cells[c].Length == 0) continue;
+                var at = (char)('A' + c) + r.ToString(CultureInfo.InvariantCulture);
+                rows.Append($"<c r=\"{at}\" s=\"{style}\" t=\"inlineStr\"><is><t xml:space=\"preserve\">{Esc(cells[c])}</t></is></c>");
+            }
+            rows.Append("</row>");
+        }
+        Row(Head, "Rule", "Value (edit this)", "Key (keep)", "What it means");
+        foreach (var rule in ChecklistMath.RuleDefs) Row(Wrap, rule.Label, ChecklistMath.Rule(def, rule.Key), rule.Key, rule.Help);
+        var cols = "<cols><col min=\"1\" max=\"1\" width=\"34\" customWidth=\"1\"/><col min=\"2\" max=\"2\" width=\"50\" customWidth=\"1\"/>" +
+                   "<col min=\"3\" max=\"3\" width=\"16\" customWidth=\"1\"/><col min=\"4\" max=\"4\" width=\"80\" customWidth=\"1\"/></cols>";
+        return "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">" +
+               cols + "<sheetData>" + rows + "</sheetData></worksheet>";
     }
 
     /// <summary>The Notes cell for a check that waits on an answer: "Waiting: …" (ReadXlsx strips it again).</summary>

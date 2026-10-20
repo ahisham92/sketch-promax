@@ -67,7 +67,7 @@ public sealed class AgentSettings
     /// <summary>How much the chat pane moves: full (the default), reduced or off (Chat.MotionLevels). Empty in older files: full.</summary>
     public string? ChatAnimations { get; set; }
 
-    /// <summary>Your name as it goes on a signed checklist (Issue > Pre-submission checklist).</summary>
+    /// <summary>Your name as it goes on a signed checklist (next to Chat).</summary>
     public string SignatureName { get; set; } = "";
 
     /// <summary>The sign-off role you sign as, e.g. "Trade BIM coordinator"; the checklist puts your signature there.</summary>
@@ -78,6 +78,13 @@ public sealed class AgentSettings
 
     /// <summary>The office's pre-submission checklist (.xlsx) the checklist window reads. Empty: asked the first time.</summary>
     public string ChecklistPath { get; set; } = "";
+
+    /// <summary>
+    /// Who helps with a checklist check the model test can't do (Ask the helper in the checklist's details): "promax"
+    /// sends it to the Sketch ProMax chat, "sketchpro" copies the question to paste into SketchPro's chat, "none" hides
+    /// the button.
+    /// </summary>
+    public string ChecklistHelper { get; set; } = "promax";
 
     public static string FilePath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "SketchProMax", "settings.json");

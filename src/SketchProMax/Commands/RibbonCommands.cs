@@ -150,24 +150,15 @@ internal static class CoreCommands
     public static Result JobButton() => Jobs.Running is not null || Tools.SelfTest.IsRunning ? CancelJob() : Job();
 
     /// <summary>
-    /// The Update button: "Update ready" installs the newer version now (in this Revit session), "What's new" opens the
-    /// release notes (and the badge goes back to normal), "Couldn't check" and "Check for updates" look for a new version
-    /// now, anything else shows the version with its update window or choices.
+    /// The Update button: every click checks now in the update window (Checking, then "up to date" or the update installing
+    /// in place). It never opens a browser or a folder (0.34.12); the release notes stay under Help and the update notice.
     /// </summary>
     public static Result UpdateButton()
     {
-        switch (Badge().Kind)
-        {
-            case UpdateBadge.Kind.WhatsNew:
-                return WhatsNew();
-            case UpdateBadge.Kind.Ready:
-            case UpdateBadge.Kind.Failed:
-            case UpdateBadge.Kind.Check:
-            default:
-                // One click always checks now and installs what it finds (the progress window shows it); details stay under Settings.
-                _checkState = null;
-                return CheckForUpdates();
-        }
+        // "Updated" goes back to the normal badge once clicked.
+        if (Badge().Kind == UpdateBadge.Kind.WhatsNew) MarkSeen();
+        _checkState = null;
+        return CheckForUpdates();
     }
 
     /// <summary>Opens the release notes; the "What's new" badge goes back to normal.</summary>

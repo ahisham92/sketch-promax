@@ -27,7 +27,7 @@ internal static class UpdateBadge
         if (!string.IsNullOrWhiteSpace(working)) return (working!.Trim(), Kind.Working);
         if (!string.IsNullOrWhiteSpace(ready)) return ($"Update ready\n{ready!.Trim()}", Kind.Ready);
         if (restart) return ("Restart\nRevit", Kind.Restart);
-        if (seen is not null && Plain(current) > Plain(seen)) return ("Updated –\nWhat's new", Kind.WhatsNew);
+        if (seen is not null && Plain(current) > Plain(seen)) return ($"Updated to\n{Plain(current)}", Kind.WhatsNew);
         if (lastError is not null) return ("Couldn't\ncheck", Kind.Failed);
         if (lastCheck is not { } last || now - last > Fresh || last > now.AddMinutes(5)) return ("Check for\nupdates", Kind.Check);
         return ($"Up to date\n(checked {Clock(last)})", Kind.UpToDate);
@@ -40,13 +40,13 @@ internal static class UpdateBadge
             Kind.Working => working ?? describe,
             Kind.Ready => $"{describe} Click to update now.",
             Kind.Restart => $"Sketch ProMax {version}. {restartNote}",
-            Kind.WhatsNew => $"Sketch ProMax {version} is installed. Click to read what's new in it.",
+            Kind.WhatsNew => $"Sketch ProMax {version} is installed. Click to check for a newer one.",
             Kind.Failed => $"Sketch ProMax {version}. The update check {(lastCheck is { } at ? "at " + Clock(at) + " " : "")}didn't work: " +
                            $"{(lastError ?? "").Trim().TrimEnd('.')}. Click to try again.",
             Kind.Check => lastCheck is { } at
                 ? $"Sketch ProMax {version}. Not checked for updates since {Clock(at)} on {Local(at):d MMM}. Click to check now."
                 : $"Sketch ProMax {version}. Not checked for updates yet. Click to check now.",
-            _ => $"{describe} Click for the version, a check now and the release notes.",
+            _ => $"{describe} Click to check now.",
         };
 
     /// <summary>
