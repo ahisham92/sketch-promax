@@ -197,7 +197,7 @@ internal static class ChecklistTests
         check("checklist: each built-in check's model test is the one its wording finds (so an imported Excel gets the same)", keyed.Count == 0, string.Join("; ", keyed));
         var manualLeft = built.Items.Where(i => i.Auto.Length == 0).Select(i => i.Number).ToList();
         check("checklist: only checks needing a person's judgement stay manual",
-            manualLeft.SequenceEqual(["16", "20", "21", "33"]), string.Join(", ", manualLeft));
+            manualLeft.Count == 0, string.Join(", ", manualLeft));
         var (missingDrawings, extraSheets) = CompareDrawingList(["Drawing list", "S-101", "S-102", "S-205", "A-101", "Rev P01", "Note"], ["S-101", "S-102", "S-300"]);
         check("checklist: the stage's drawing list against the sheets (only numbers shaped like the model's count)",
             missingDrawings.SequenceEqual(["S-205"]) && extraSheets.SequenceEqual(["S-300"]), string.Join(",", missingDrawings) + " / " + string.Join(",", extraSheets));
@@ -230,6 +230,18 @@ internal static class ChecklistTests
         var unitRules = ParseUnits("Length mm 0, Angle degrees 2, Length feet 1, Angle mm 0");
         check("checklist: the project units rule reads its length and angle parts and skips the rest",
             unitRules is [{ Kind: "length", Unit: "mm", Decimals: 0 }, { Kind: "angle", Unit: "degrees", Decimals: 2 }] && ParseUnits("").Count == 0, string.Join("; ", unitRules));
+        var loi = ParseLoi("A1020*>Material, Length, Diameter; B1010*>Material, Thickness; bad");
+        check("checklist: the LOI matrix rule reads each code with its parameters",
+            loi.Count == 2 && loi[0].Key == "A1020*" && loi[0].Params.SequenceEqual(new[] { "Material", "Length", "Diameter" }) && loi[1].Params.Count == 2, string.Join("; ", loi.Select(l => l.Key)));
+        var pairs = ParsePairs("Specialty Equipment>*Fender*, Walls");
+        check("checklist: what must be in the model reads category and type pattern pairs", pairs is [("Specialty Equipment", "*Fender*"), ("Walls", "*")], string.Join("; ", pairs));
+        check("checklist: the type field of a file name",
+            TypeField("PRJ1-0100D-ABC-RVT-SB-001.rvt", ["RVT", "C3D"]) == "RVT" && TypeField("PRJ1-0100D-ABC-C3D-SB-001", ["RVT", "C3D"]) == "C3D" && TypeField("PRJ1-0100D-SB-001", ["RVT"]) == "", "");
+        var saved = Renumber(built);
+        var oldJson = System.Text.RegularExpressions.Regex.Replace(ToJson(saved), "\"Auto\"\\s*:\\s*\"[a-z0-9]+\"", "\"Auto\":\"\"");
+        var reread = FromJson<Definition>(oldJson);
+        check("checklist: a saved checklist picks its automatic tests again from the wording (tests added later reach it)",
+            reread is not null && reread.Items.All(i => i.Auto == AutoKey(i.Check)) && reread.Items.Count(i => i.Auto.Length > 0) == saved.Items.Count(i => i.Auto.Length > 0), "");
         check("checklist: the last publishing day", LastDay(new DateTime(2026, 10, 21, 9, 0, 0), DayOfWeek.Monday) == new DateTime(2026, 10, 19)
             && LastDay(new DateTime(2026, 10, 19, 23, 0, 0), DayOfWeek.Monday) == new DateTime(2026, 10, 19), "");
         var rulesPath = Path.Combine(Path.GetTempPath(), $"spm-checklist-{Guid.NewGuid():N}.xlsx");

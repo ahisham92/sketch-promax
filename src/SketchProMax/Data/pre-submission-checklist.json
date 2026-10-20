@@ -265,7 +265,7 @@
           "FoundOn": "BLDG-01",
           "Priority": "",
           "Waiting": "",
-          "Auto": "",
+          "Auto": "freeshapes",
           "Short": "Proper families, no free shapes",
           "Fix": "Replace in-place or generic shapes with the proper system or loadable family."
         },
@@ -317,7 +317,7 @@
           "FoundOn": "BLDG-01, 08",
           "Priority": "High",
           "Waiting": "",
-          "Auto": "",
+          "Auto": "joints",
           "Short": "Building-edge elements in one model",
           "Fix": "Agree with the next building's modeller which model owns each edge element, and move or delete the duplicates."
         },
@@ -330,7 +330,7 @@
           "FoundOn": "BLDG-01",
           "Priority": "",
           "Waiting": "",
-          "Auto": "",
+          "Auto": "mustexist",
           "Short": "Nothing missing vs ARC and design",
           "Fix": "Overlay the latest ARC model and design markups and model whatever is missing."
         },
@@ -491,7 +491,7 @@
           "FoundOn": "BLDG-01, 08",
           "Priority": "High",
           "Waiting": "",
-          "Auto": "",
+          "Auto": "cadsheets",
           "Short": "Sheets made from model views",
           "Fix": "Replace any CAD-drawing sheet with model views, and keep a sheet list showing the views on each sheet."
         },

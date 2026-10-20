@@ -38,7 +38,7 @@ internal static class ChecklistFacts
     /// The checks that take longer (a full model check, a clash run, opening the trade's standard template): they run only
     /// when the user asks (Run the slow checks), not each time the window reads the model.
     /// </summary>
-    public static readonly HashSet<string> Slow = new(StringComparer.Ordinal) { "duplicates", "floating", "selfclash", "modelscore", "standards", "etransmit", "packageopens" };
+    public static readonly HashSet<string> Slow = new(StringComparer.Ordinal) { "duplicates", "floating", "selfclash", "modelscore", "standards", "etransmit", "packageopens", "joints" };
 
     public sealed class Result
     {
@@ -215,6 +215,31 @@ internal static class ChecklistFacts
             return parts.DocType.Length == 0
                 ? new Hint($"The file name doesn't follow the naming pattern, so the doc type can't be read. The model has {sheets} sheets.", Level.Warn)
                 : new Hint($"Doc type in the file name: {parts.DocType}. The model has {sheets} sheets.", Level.Info);
+        });
+        Add("typefield", () =>
+        {
+            var codes = ChecklistMath.RuleList(Rule("typecodes"));
+            if (codes.Count == 0) return null;
+            var name = Path.GetFileNameWithoutExtension(ChecklistMath.WorkingName(file));
+            var field = ChecklistMath.TypeField(name, codes);
+            if (field.Length == 0) return new Hint($"No type field ({string.Join(", ", codes)}) in the file name {name}.", Level.Warn, [name + ": no type field"]);
+            return field == "RVT" ? new Hint($"The type field in {name} is RVT, right for a Revit model.", Level.Ok)
+                : new Hint($"The type field in {name} is {field}, but this is a Revit model (RVT).", Level.Warn, [name + $": {field}, expected RVT"]);
+        });
+        Add("version", () =>
+        {
+            var want = Rule("revitversion");
+            if (want.Length == 0) return null;
+            var problems = new List<string>();
+            var running = doc.Application.VersionNumber;
+            if (running != want) problems.Add($"Revit {running} is open; the project's version is {want}");
+            try
+            {
+                if (!string.IsNullOrEmpty(doc.PathName) && File.Exists(doc.PathName) && BasicFileInfo.Extract(doc.PathName).Format is { Length: > 0 } saved && saved != want)
+                    problems.Add($"the file was last saved in Revit {saved}");
+            }
+            catch (Exception ex) when (ex is Autodesk.Revit.Exceptions.ApplicationException or Autodesk.Revit.Exceptions.ArgumentException or IOException) { }
+            return problems.Count == 0 ? new Hint($"Saved and open in Revit {want}, the project's version.", Level.Ok) : new Hint(string.Join("; ", problems) + ".", Level.Warn, problems);
         });
         Add("levelfield", () => parts.Level.Length == 0 ? null : new Hint($"Level field in the file name: {parts.Level}.", Level.Info));
         Add("filesize", () =>
@@ -573,13 +598,16 @@ internal static class ChecklistFacts
             var models = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { name };
             foreach (var f in folders.Append(home).Where(f => f.Length > 0 && Directory.Exists(f)).Distinct(StringComparer.OrdinalIgnoreCase))
                 foreach (var rvt in Directory.EnumerateFiles(f, stem + "*.rvt")) models.Add(Path.GetFileNameWithoutExtension(rvt));
-            var exports = folders.Where(Directory.Exists).SelectMany(f => Directory.EnumerateFiles(f, stem + "*.nwc").Concat(Directory.EnumerateFiles(f, stem + "*.ifc"))).ToList();
-            if (exports.Count == 0) return new Hint($"No NWC or IFC file named {stem}… in {List(folders)}" + (Rule("exportfolder").Length == 0 ? " (set their folder in Checking rules)" : "") + ".", Level.Warn);
+            // The IFC only when the project needs one (Files the package must have).
+            var kinds = ChecklistExports.WantsIfc(def) ? new[] { ".nwc", ".ifc" } : new[] { ".nwc" };
+            var what = kinds.Length == 2 ? "NWC and IFC" : "NWC";
+            var exports = folders.Where(Directory.Exists).SelectMany(f => kinds.SelectMany(k => Directory.EnumerateFiles(f, stem + "*" + k))).ToList();
+            if (exports.Count == 0) return new Hint($"No {what} file named {stem}… in {List(folders)}" + (Rule("exportfolder").Length == 0 ? " (set their folder in Checking rules)" : "") + ".", Level.Warn);
             var off = exports.Where(e => !models.Contains(Path.GetFileNameWithoutExtension(e))).Select(e => Path.GetFileName(e) + " (no model with this name)").ToList();
-            foreach (var ext in new[] { ".nwc", ".ifc" })
+            foreach (var ext in kinds)
                 if (!exports.Any(e => e.EndsWith(ext, StringComparison.OrdinalIgnoreCase))) off.Add($"no {ext.Substring(1).ToUpperInvariant()} file found");
-            return off.Count == 0 ? new Hint($"{exports.Count} NWC and IFC files, each named exactly like its model.", Level.Ok, exports.Select(Path.GetFileName).Select(n => n ?? "").ToList())
-                : new Hint($"{off.Count} problems with the NWC and IFC names.", Level.Warn, off);
+            return off.Count == 0 ? new Hint($"{exports.Count} {what} files, each named exactly like its model.", Level.Ok, exports.Select(Path.GetFileName).Select(n => n ?? "").ToList())
+                : new Hint($"{off.Count} problems with the {what} names.", Level.Warn, off);
         });
 
         // Model content.
@@ -805,6 +833,153 @@ internal static class ChecklistFacts
             return shows.Count == 0 ? new Hint("No view on a sheet shows a linked model, so unloading the links blanks nothing.", Level.Ok)
                 : new Hint($"{shows.Count} views on sheets show a linked model as background: with the links unloaded it will be blank. Handle them as agreed.", Level.Warn, shows);
         });
+        Add("cadsheets", () =>
+        {
+            var found = new List<string>();
+            var ids = new List<long>();
+            var sheets = new FilteredElementCollector(doc).OfClass(typeof(ViewSheet)).Cast<ViewSheet>().Where(x => !x.IsPlaceholder).ToList();
+            var cad = new FilteredElementCollector(doc).OfClass(typeof(ImportInstance)).Cast<ImportInstance>().Where(i => i.OwnerViewId != ElementId.InvalidElementId).ToList();
+            var images = new FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_RasterImages).WhereElementIsNotElementType().ToList();
+            foreach (var sheet in sheets)
+            {
+                var views = sheet.GetAllViewports().Select(id => doc.GetElement(id) is Viewport vp ? doc.GetElement(vp.ViewId) as View : null).Where(v => v is not null).Cast<View>().ToList();
+                var label = $"{sheet.SheetNumber} - {sheet.Name}";
+                var onSheet = cad.Where(c => c.OwnerViewId == sheet.Id).ToList();
+                if (onSheet.Count > 0) { found.Add($"{label}: CAD placed on the sheet"); ids.AddRange(onSheet.Select(c => c.Id.Value)); }
+                foreach (var d in views.Where(v => v.ViewType == ViewType.DraftingView))
+                {
+                    var inView = cad.Where(c => c.OwnerViewId == d.Id).ToList();
+                    if (inView.Count > 0) { found.Add($"{label}: CAD in the drafting view {d.Name}"); ids.AddRange(inView.Select(c => c.Id.Value)); }
+                }
+                var model = views.Count(v => v.ViewType is not (ViewType.DraftingView or ViewType.Legend or ViewType.Schedule or ViewType.Report));
+                var pictures = images.Count(i => i.OwnerViewId == sheet.Id);
+                if (model == 0 && (views.Any(v => v.ViewType == ViewType.DraftingView) || pictures > 0)) found.Add($"{label}: only drafting views or pictures, no model view");
+            }
+            return found.Count == 0 ? new Hint($"All {sheets.Count} sheets are made from model views, with no CAD on them or in their drafting views.", Level.Ok)
+                : new Hint($"{found.Count} sheet problems: CAD on sheets or in their drafting views, or sheets with no model view.", Level.Warn, found) { Ids = ids };
+        });
+        Add("freeshapes", () =>
+        {
+            var inPlace = new FilteredElementCollector(doc).OfClass(typeof(FamilyInstance)).Cast<FamilyInstance>().Where(f => f.Symbol?.Family?.IsInPlace == true).ToList();
+            var direct = new FilteredElementCollector(doc).OfClass(typeof(DirectShape)).WhereElementIsNotElementType().ToList();
+            var found = inPlace.Select(f => $"{TypeName(f)} (id {f.Id.Value}): in-place family").Concat(direct.Select(d => $"{d.Category?.Name ?? "DirectShape"} (id {d.Id.Value}): DirectShape (imported shape)")).ToList();
+            return found.Count == 0 ? new Hint("No in-place families or DirectShapes: every element is a family type.", Level.Ok)
+                : new Hint($"{inPlace.Count} in-place family elements and {direct.Count} DirectShapes, free shapes rather than family types.", Level.Warn, found);
+        });
+        Add("loi", () =>
+        {
+            var matrix = ChecklistMath.ParseLoi(Rule("loimatrix"));
+            var names = ChecklistMath.RuleList(Rule("classification"));
+            // eLOD: geometry that isn't a real family type (in-place, Generic Models, DirectShapes).
+            var free = new List<string>();
+            foreach (var e in Inst())
+                if (e is FamilyInstance { Symbol.Family.IsInPlace: true } || e.Category?.BuiltInCategory == BuiltInCategory.OST_GenericModel)
+                    free.Add($"eLOD: {TypeName(e)} (id {e.Id.Value}): " + (e.Category?.BuiltInCategory == BuiltInCategory.OST_GenericModel ? "Generic Model" : "in-place family"));
+            foreach (var d in new FilteredElementCollector(doc).OfClass(typeof(DirectShape)).WhereElementIsNotElementType())
+                free.Add($"eLOD: {d.Category?.Name ?? "DirectShape"} (id {d.Id.Value}): DirectShape");
+            if (matrix.Count == 0)
+                return free.Count == 0 ? null : new Hint($"{free.Count} elements are in-place, Generic Models or DirectShapes (eLOD). Set the LOI matrix" + Rules + " to test the parameters (iLOD) too.", Level.Warn, free);
+            // iLOD: each type's code (or category) picks the parameters it needs; a type passes a parameter when the type or every element of it has it filled.
+            var byType = Inst().GroupBy(e => e.GetTypeId().Value).ToDictionary(g => g.Key, g => g.ToList());
+            var missing = new List<string>();
+            var perCode = new Dictionary<string, (int Types, int Short)>(StringComparer.OrdinalIgnoreCase);
+            foreach (var t in Types())
+            {
+                var code = names.Select(n => t.LookupParameter(n)).Where(Filled).Select(p => p!.AsString() ?? p.AsValueString() ?? "").FirstOrDefault() ?? "";
+                var category = t.Category?.Name ?? "";
+                var entry = matrix.FirstOrDefault(m => code.Length > 0 && ChecklistMath.Like(code, m.Key) || category.Equals(m.Key, StringComparison.OrdinalIgnoreCase));
+                if (entry.Params is null) continue;
+                var label = code.Length > 0 ? code : category;
+                var elements = byType.TryGetValue(t.Id.Value, out var list) ? list : [];
+                var lacking = entry.Params.Where(p => !Filled(t.LookupParameter(p)) && (elements.Count == 0 || elements.Any(e => !Filled(e.LookupParameter(p))))).ToList();
+                var counts = perCode.TryGetValue(label, out var c) ? c : (Types: 0, Short: 0);
+                perCode[label] = (counts.Types + 1, counts.Short + (lacking.Count > 0 ? 1 : 0));
+                if (lacking.Count > 0) missing.Add($"iLOD {label}: {TypeLabel(t)}: no {string.Join(", ", lacking)}");
+            }
+            var summary = perCode.Count == 0 ? "No type in use matches a code in the LOI matrix." : "By code: " + string.Join("; ", perCode.OrderBy(p => p.Key, StringComparer.OrdinalIgnoreCase).Select(p => $"{p.Key} {p.Value.Types - p.Value.Short} of {p.Value.Types} types complete")) + ".";
+            var all = missing.Concat(free).ToList();
+            return all.Count == 0 ? new Hint("Every type the LOI matrix covers has its parameters filled, and no element is in-place, a Generic Model or a DirectShape. " + summary +
+                                             " The geometry's detail (eLOD) still needs a look in 3D.", perCode.Count == 0 ? Level.Info : Level.Ok)
+                : new Hint($"{missing.Count} types lack LOI parameters (iLOD); {free.Count} elements are in-place, Generic Models or DirectShapes (eLOD). " + summary, Level.Warn, all);
+        });
+        Add("pilerun", () =>
+        {
+            var pattern = Rule("piles");
+            if (pattern.Length == 0) return null;
+            var piles = new FilteredElementCollector(doc).OfClass(typeof(FamilyInstance)).Cast<FamilyInstance>()
+                .Where(f => f.Category?.BuiltInCategory is BuiltInCategory.OST_StructuralColumns or BuiltInCategory.OST_StructuralFoundation &&
+                            f.Symbol is { } sym && (ChecklistMath.LikeAny(sym.Name, pattern) || ChecklistMath.LikeAny(sym.FamilyName, pattern) || ChecklistMath.LikeAny(sym.FamilyName + ": " + sym.Name, pattern))).ToList();
+            if (piles.Count == 0) return new Hint($"No piles in the model (column or foundation types named {pattern}" + Rules + ").", Level.Info);
+            var p = ChecklistMath.RuleList(Rule("pileparameters"));
+            var (cutoff, toe, diameter) = (p.ElementAtOrDefault(0) ?? "", p.ElementAtOrDefault(1) ?? "", p.ElementAtOrDefault(2) ?? "");
+            var found = new List<string>();
+            var ids = new HashSet<long>();
+            // Split piles: two or more at the same spot.
+            XYZ? At(FamilyInstance f) => f.Location is LocationPoint lp ? lp.Point : f.get_BoundingBox(null) is { } b ? (b.Min + b.Max) / 2 : null;
+            foreach (var g in piles.Where(f => At(f) is not null).GroupBy(f => (Math.Round(At(f)!.X / 0.05), Math.Round(At(f)!.Y / 0.05))).Where(g => g.Count() > 1))
+            {
+                found.Add($"{g.Count()} piles at the same spot, split instead of one element: ids {string.Join(", ", g.Select(f => f.Id.Value))}");
+                foreach (var f in g) ids.Add(f.Id.Value);
+            }
+            // The pile's own parameters: filled, and its top at the cut-off and its bottom at the toe.
+            var basePoint = BasePoint.GetProjectBasePoint(doc).Position.Z;
+            var survey = BasePoint.GetSurveyPoint(doc).Position.Z;
+            Parameter? Param(FamilyInstance f, string name) => name.Length == 0 ? null : f.LookupParameter(name) ?? f.Symbol?.LookupParameter(name);
+            double? Height(Parameter? q) => q is null || !q.HasValue ? null
+                : q.StorageType == StorageType.ElementId && doc.GetElement(q.AsElementId()) is Autodesk.Revit.DB.Level l ? l.ProjectElevation
+                : q.StorageType == StorageType.Double ? q.AsDouble() : null;
+            bool Near(double z, double h) => new[] { z, z - basePoint, z - survey }.Any(v => Math.Abs(v - h) < 0.08); // about 25 mm
+            var noParam = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var f in piles)
+            {
+                var label = $"{TypeName(f)} (id {f.Id.Value})";
+                var empty = new List<string>();
+                foreach (var name in new[] { cutoff, toe, diameter }.Where(n => n.Length > 0))
+                {
+                    var q = Param(f, name);
+                    if (q is null) noParam.Add(name);
+                    else if (!Filled(q)) empty.Add(name);
+                }
+                if (empty.Count > 0) { found.Add($"{label}: {string.Join(", ", empty)} empty"); ids.Add(f.Id.Value); }
+                if (f.get_BoundingBox(null) is not { } box) continue;
+                if (Height(Param(f, cutoff)) is { } top && !Near(box.Max.Z, top)) { found.Add($"{label}: its top isn't at its {cutoff}"); ids.Add(f.Id.Value); }
+                if (Height(Param(f, toe)) is { } bottom && !Near(box.Min.Z, bottom)) { found.Add($"{label}: its bottom isn't at its {toe}"); ids.Add(f.Id.Value); }
+            }
+            foreach (var n in noParam) found.Add($"some piles have no parameter named {n}" + Rules);
+            return found.Count == 0 ? new Hint($"{piles.Count} piles, each one element from {cutoff} to {toe}, with {string.Join(", ", p)} filled.", Level.Ok)
+                : new Hint($"{found.Count} pile problems among {piles.Count} piles.", Level.Warn, found) { Ids = ids.ToList() };
+        });
+        Add("sharedcoords", () =>
+        {
+            var problems = new List<string>();
+            var cad = new FilteredElementCollector(doc).OfClass(typeof(ImportInstance)).Cast<ImportInstance>().Where(i => i.IsLinked).Select(i => i.Name).ToList();
+            if (cad.Count == 0) problems.Add("no CAD file is linked to take the shared coordinates from");
+            var pos = doc.ActiveProjectLocation.GetProjectPosition(XYZ.Zero);
+            if (Math.Abs(pos.EastWest) < 1e-6 && Math.Abs(pos.NorthSouth) < 1e-6 && Math.Abs(pos.Elevation) < 1e-6 && Math.Abs(pos.Angle) < 1e-9)
+                problems.Add("the shared coordinates are still Revit's default: they were never acquired");
+            return problems.Count == 0
+                ? new Hint($"Shared coordinates are set (not the default) and CAD is linked: {List(cad)}. Check the CAD link was placed by Shared Coordinates.", Level.Ok)
+                : new Hint(string.Join("; ", problems) + ".", Level.Warn, problems);
+        });
+        Add("mustexist", () =>
+        {
+            var wantedHere = ChecklistMath.ParsePairs(Rule("mustexist"));
+            if (wantedHere.Count == 0) return null;
+            var found = new List<string>();
+            var missing = new List<string>();
+            foreach (var (category, pattern) in wantedHere)
+            {
+                Category? cat = null;
+                foreach (Category c in doc.Settings.Categories)
+                    if (c.Name.Equals(category, StringComparison.OrdinalIgnoreCase) || ChecklistMath.Like(c.Name, category)) { cat = c; break; }
+                var n = cat is null ? 0 : new FilteredElementCollector(doc).OfCategoryId(cat.Id).WhereElementIsNotElementType()
+                    .Count(e => doc.GetElement(e.GetTypeId()) is ElementType t && (ChecklistMath.Like(t.Name, pattern) || ChecklistMath.Like(t.FamilyName, pattern)));
+                (n == 0 ? missing : found).Add($"{category} {pattern}: {n}");
+            }
+            const string review = " This counts what must be there; it doesn't replace a review against the design drawings.";
+            return missing.Count == 0 ? new Hint("Everything listed is in the model: " + string.Join(", ", found) + "." + review, Level.Ok, found)
+                : new Hint($"{missing.Count} things the design has are missing: " + string.Join(", ", missing) + "." + review, Level.Warn, missing.Concat(found).ToList());
+        });
         Add("civil3d", () => new Hint("This is a Revit model: this check is for Civil 3D only, so answer N/A.", Level.Ok));
         Add("packagecontents", () =>
         {
@@ -828,6 +1003,16 @@ internal static class ChecklistFacts
                 .Concat(doc.GetWarnings().Where(w => w.GetFailureDefinitionId() == BuiltInFailures.OverlapFailures.DuplicateInstances).SelectMany(w => w.GetFailingElements()).Select(i => i.Value)).Distinct().ToList();
             return all.Count == 0 ? new Hint("No duplicate elements and no overlap warnings." + stamp, Level.Ok)
                 : new Hint($"{dupes.Count} duplicate elements; {overlaps.Count} kinds of overlap warning." + stamp + ReportOf(res), Level.Warn, all) { Ids = dupeIds };
+        });
+        Add("joints", () =>
+        {
+            var (links, why) = JointLinks(doc, Rule("jointlinks"), parts.Discipline);
+            if (links.Count == 0) return new Hint(why, Level.Info);
+            var overlaps = JointOverlaps(doc, links);
+            var names = string.Join(", ", links.Select(l => l.Name.Split(':')[0].Trim()).Distinct());
+            return overlaps.Count == 0 ? new Hint($"No structural element of this model overlaps the same kind of element in {names}." + stamp, Level.Ok)
+                : new Hint($"{overlaps.Count} structural elements overlap the same kind of element in {names}: each belongs in one model only." + stamp, Level.Warn, overlaps.Select(o => o.Text).ToList())
+                    { Ids = overlaps.Select(o => o.Id).Distinct().ToList() };
         });
         Add("floating", () =>
         {
@@ -1235,6 +1420,74 @@ internal static class ChecklistFacts
                 if (doc.GetElement(item.ElementId) is ParameterElement pe && pe.GetDefinition()?.Name is { Length: > 0 } n && !names.Contains(n, StringComparer.OrdinalIgnoreCase)) names.Add(n);
         }
         return names;
+    }
+
+    /// <summary>
+    /// The loaded links that meet this model at a joint: those named like the rule, else those whose name has this model's
+    /// discipline, else every loaded Revit link. The second value says why none is used.
+    /// </summary>
+    internal static (List<RevitLinkInstance> Links, string Why) JointLinks(Document doc, string rule, string discipline)
+    {
+        var loaded = new FilteredElementCollector(doc).OfClass(typeof(RevitLinkInstance)).Cast<RevitLinkInstance>().Where(l => l.GetLinkDocument() is not null).ToList();
+        if (loaded.Count == 0) return ([], "No Revit link is loaded, so nothing meets this model at a joint (load the neighbouring berths, segments or models to test it).");
+        string Name(RevitLinkInstance l) => doc.GetElement(l.GetTypeId())?.Name ?? l.Name;
+        if (rule.Length > 0)
+        {
+            var picked = loaded.Where(l => ChecklistMath.LikeAny(Name(l), rule) || ChecklistMath.LikeAny(Path.GetFileNameWithoutExtension(Name(l)), rule)).ToList();
+            return (picked, picked.Count == 0 ? $"No loaded link is named {rule} (Linked models at the joints in Checking rules)." : "");
+        }
+        var same = discipline.Length == 0 ? [] : loaded.Where(l => Name(l).IndexOf(discipline, StringComparison.OrdinalIgnoreCase) >= 0).ToList();
+        return (same.Count > 0 ? same : loaded, "");
+    }
+
+    /// <summary>
+    /// This model's structural elements that overlap (by more than about 50 mm each way) an element of the same category in
+    /// one of the links: each joint element should be in one model only. At most 200 are listed.
+    /// </summary>
+    internal static List<(long Id, string Text)> JointOverlaps(Document doc, List<RevitLinkInstance> links)
+    {
+        var cats = new[] { BuiltInCategory.OST_StructuralColumns, BuiltInCategory.OST_StructuralFraming, BuiltInCategory.OST_StructuralFoundation, BuiltInCategory.OST_Floors, BuiltInCategory.OST_Walls };
+        var filter = new ElementMulticategoryFilter(cats.Select(c => new ElementId(c)).ToList());
+        const double cell = 10, depth = 0.15;
+        var grid = new Dictionary<(int, int), List<(Element E, BoundingBoxXYZ B)>>();
+        foreach (var e in new FilteredElementCollector(doc).WherePasses(filter).WhereElementIsNotElementType())
+        {
+            if (e.get_BoundingBox(null) is not { } b) continue;
+            for (var x = (int)Math.Floor(b.Min.X / cell); x <= (int)Math.Floor(b.Max.X / cell); x++)
+                for (var y = (int)Math.Floor(b.Min.Y / cell); y <= (int)Math.Floor(b.Max.Y / cell); y++)
+                    (grid.TryGetValue((x, y), out var list) ? list : grid[(x, y)] = []).Add((e, b));
+        }
+        var found = new List<(long, string)>();
+        var seen = new HashSet<long>();
+        foreach (var link in links)
+        {
+            var tf = link.GetTotalTransform();
+            var linkName = (doc.GetElement(link.GetTypeId())?.Name ?? link.Name).Split(':')[0].Trim();
+            foreach (var le in new FilteredElementCollector(link.GetLinkDocument()).WherePasses(filter).WhereElementIsNotElementType())
+            {
+                if (le.get_BoundingBox(null) is not { } lb) continue;
+                // The link element's box in this model (its eight corners moved by the link's placement).
+                var corners = new[] { lb.Min, lb.Max, new XYZ(lb.Min.X, lb.Min.Y, lb.Max.Z), new XYZ(lb.Min.X, lb.Max.Y, lb.Min.Z), new XYZ(lb.Max.X, lb.Min.Y, lb.Min.Z),
+                    new XYZ(lb.Max.X, lb.Max.Y, lb.Min.Z), new XYZ(lb.Max.X, lb.Min.Y, lb.Max.Z), new XYZ(lb.Min.X, lb.Max.Y, lb.Max.Z) }.Select(tf.OfPoint).ToList();
+                var min = new XYZ(corners.Min(p => p.X), corners.Min(p => p.Y), corners.Min(p => p.Z));
+                var max = new XYZ(corners.Max(p => p.X), corners.Max(p => p.Y), corners.Max(p => p.Z));
+                for (var x = (int)Math.Floor(min.X / cell); x <= (int)Math.Floor(max.X / cell); x++)
+                    for (var y = (int)Math.Floor(min.Y / cell); y <= (int)Math.Floor(max.Y / cell); y++)
+                    {
+                        if (!grid.TryGetValue((x, y), out var list)) continue;
+                        foreach (var (e, b) in list)
+                        {
+                            if (seen.Contains(e.Id.Value) || e.Category?.Id != le.Category?.Id) continue;
+                            if (Math.Min(b.Max.X, max.X) - Math.Max(b.Min.X, min.X) < depth || Math.Min(b.Max.Y, max.Y) - Math.Max(b.Min.Y, min.Y) < depth ||
+                                Math.Min(b.Max.Z, max.Z) - Math.Max(b.Min.Z, min.Z) < depth) continue;
+                            seen.Add(e.Id.Value);
+                            found.Add((e.Id.Value, $"{TypeName(e)} (id {e.Id.Value}) overlaps {TypeName(le)} in {linkName}"));
+                            if (found.Count >= 200) return found;
+                        }
+                    }
+            }
+        }
+        return found;
     }
 
     /// <summary>The spec, unit and rounding (Revit's accuracy) a units rule part stands for.</summary>

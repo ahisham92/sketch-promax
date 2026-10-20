@@ -93,6 +93,16 @@ internal static class ChecklistMath
             "comma separated, e.g. Structural Foundations>A1020, Floors>B1010 (empty: nothing is filled).", "uniformat"),
         new("templatemap", "View template for each view type", "", "What Fix it applies to views on sheets: View type>template name, comma separated, e.g. Floor Plan>ST_Plan, Section>ST_Section, 3D View>ST_3D " +
             "(empty: nothing is applied).", "viewtemplates"),
+        new("typecodes", "Type codes in the file name", "RVT, C3D, DRW, RPT", "The type field of a file name is one of these; a Revit model must carry RVT (empty: not tested).", "typefield"),
+        new("revitversion", "The project's Revit version", "", "The Revit version every model is saved in, e.g. 2024; Revit open now and the file's saved version are compared with it (empty: not tested).", "version"),
+        new("loimatrix", "LOI matrix (parameters each code needs)", "", "UniFormat code or category>parameters it must have filled, entries separated by ; e.g. A1020*>Material, Length, Diameter; B1010*>Material, Thickness. " +
+            "In-place families, Generic Models and DirectShapes are listed for the geometry (eLOD) too (empty: only those).", "loi"),
+        new("pileparameters", "Pile parameters (cut-off, toe, diameter)", "Cut-off Level, Toe Level, Diameter", "The pile parameters holding its cut-off level, toe level and diameter, in that order; " +
+            "piles are the types named by Columns that bear on the ground (piles).", "pilerun"),
+        new("jointlinks", "Linked models at the joints", "", "Name patterns of the loaded links that meet this model at a joint (other berths, segments or models of your trade); " +
+            "their structural elements may not overlap yours (empty: links whose name has this model's discipline, else every loaded link).", "joints"),
+        new("mustexist", "What must be in the model", "", "Category>type name pattern that must have at least one element, comma separated, e.g. Specialty Equipment>*Fender*, Specialty Equipment>*Bollard* " +
+            "(empty: not tested). It doesn't replace a review against the design.", "mustexist"),
         new("approvedworksets", "Approved worksets", "", "Every workset matches one of these (empty: not tested). Workset1 and Shared Levels and Grids are always allowed.", "newworksets"),
         new("columns", "Column levels tested", "yes", "yes: a column that runs past the next level up is flagged (list the double-height ones in the comment). no: not tested.", "columns"),
         new("classification", "Classification parameter", "Assembly Code", "The type parameter holding the UniFormat code; every model type in use must have it filled.", "uniformat"),
@@ -156,6 +166,23 @@ internal static class ChecklistMath
             list.Add(new UnitRule(kind, unit, int.Parse(m.Groups["d"].Value, CultureInfo.InvariantCulture)));
         }
         return list;
+    }
+
+    /// <summary>The LOI matrix rule ("A1020*>Material, Length; B1010*>Thickness"): each code or category with the parameters it needs.</summary>
+    public static List<(string Key, List<string> Params)> ParseLoi(string rule) =>
+        (rule ?? "").Split(';').Select(e => e.Split('>')).Where(p => p.Length == 2 && p[0].Trim().Length > 0)
+            .Select(p => (p[0].Trim(), RuleList(p[1]))).Where(e => e.Item2.Count > 0).ToList();
+
+    /// <summary>"Category>pattern" pairs, comma separated; a pair without > is a category with any type.</summary>
+    public static List<(string Category, string Pattern)> ParsePairs(string rule) =>
+        RuleList(rule).Select(e => e.Split('>')).Where(p => p.Length <= 2 && p[0].Trim().Length > 0)
+            .Select(p => (p[0].Trim(), p.Length == 2 && p[1].Trim().Length > 0 ? p[1].Trim() : "*")).ToList();
+
+    /// <summary>The type field of a file name: the first of its - or _ separated fields that is one of the codes; "" when none is.</summary>
+    public static string TypeField(string fileName, IEnumerable<string> codes)
+    {
+        var set = new HashSet<string>(codes, StringComparer.OrdinalIgnoreCase);
+        return Path.GetFileNameWithoutExtension(fileName ?? "").Split('-', '_').FirstOrDefault(f => set.Contains(f))?.ToUpperInvariant() ?? "";
     }
 
     /// <summary>The rule's value for this checklist: set, else the default ("" turns that test off).</summary>
@@ -450,7 +477,9 @@ internal static class ChecklistMath
     /// </summary>
     public static readonly (string Key, Regex Pattern)[] AutoRules =
     [
-        ("name002", Rx(@"\b002 after ABC")),
+        ("name002", Rx(@"\b002 after ABC|^The model file name\b")),
+        ("typefield", Rx(@"^The type field in the (file )?name")),
+        ("version", Rx(@"saved in the project's software version")),
         ("doctype", Rx(@"^Doc type")),
         ("levelfield", Rx(@"^Level field")),
         ("filesize", Rx(@"^File size")),
@@ -481,9 +510,16 @@ internal static class ChecklistMath
         ("tbmodelname", Rx(@"model name shown in the title block")),
         ("viewfolders", Rx(@"^Every view is in a folder")),
         ("submission", Rx(@"^The submitted copy adds")),
-        ("exportnames", Rx(@"^NWC and IFC files have")),
+        ("exportnames", Rx(@"^NWC and IFC files have|^The NWC file has exactly the same name")),
         ("familynames", Rx(@"^Family and type names follow")),
         ("duplicates", Rx(@"^No duplicate, overlapping")),
+        ("freeshapes", Rx(@"^Elements use the proper family type")),
+        ("loi", Rx(@"\bLOI matrix\b")),
+        ("pilerun", Rx(@"pile runs from its cut-off")),
+        ("sharedcoords", Rx(@"^Shared coordinates are acquired")),
+        ("joints", Rx(@"^At a (joint between|building edge)")),
+        ("mustexist", Rx(@"^Nothing is missing compared with")),
+        ("cadsheets", Rx(@"^Every sheet is made from model views")),
         ("floating", Rx(@"^No floating elements")),
         ("othertrades", Rx(@"Other trades' elements are removed")),
         ("detaillines", Rx(@"^No detail lines or filled regions")),
@@ -899,7 +935,15 @@ internal static class ChecklistMath
 
     public static T? FromJson<T>(string text) where T : class
     {
-        try { return JsonSerializer.Deserialize<T>(text); }
+        try
+        {
+            var read = JsonSerializer.Deserialize<T>(text);
+            // A saved checklist's checks pick their automatic test again from their wording, so tests added in an update
+            // reach checklists saved before it.
+            if (read is Definition def && def.Sections.Any(sec => sec.Items.Any(i => AutoKey(i.Check) != i.Auto)))
+                def.Sections = def.Sections.Select(sec => sec with { Items = sec.Items.Select(i => i with { Auto = AutoKey(i.Check) }).ToList() }).ToList();
+            return read;
+        }
         catch (Exception ex) when (ex is JsonException or NotSupportedException) { return null; }
     }
 

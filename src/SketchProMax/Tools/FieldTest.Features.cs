@@ -490,6 +490,7 @@ internal static partial class FieldTest
         await Probe(s, "checklist.fix", app => ChecklistFixProbe(app, s)).ConfigureAwait(false);
         await Probe(s, "checklist.fix_more", app => ChecklistFixMoreProbe(app, s)).ConfigureAwait(false);
         await Probe(s, "checklist.fix_standards", app => ChecklistFixStandardsProbe(app, s)).ConfigureAwait(false);
+        await Probe(s, "checklist.autotests", app => ChecklistAutoTestsProbe(app, s)).ConfigureAwait(false);
         await Probe(s, "checklist.rules", app => ChecklistRulesProbe(app, s)).ConfigureAwait(false);
         await Probe(s, "package.sentence", app => PackageSentence(app, s)).ConfigureAwait(false);
         await Probe(s, "package.skip", app => PackageSkip(app, s)).ConfigureAwait(false);
@@ -2132,6 +2133,63 @@ internal static partial class FieldTest
         finally { RollBack(group); }
         foreach (var line in said.Where(l => l.IndexOf("There is no automatic fix", StringComparison.Ordinal) >= 0)) problems.Add(line);
         return problems.Count == 0 ? Pass("fixes ran and were rolled back: " + string.Join(" ", said)) : Fail(string.Join("; ", problems));
+    }
+
+    /// <summary>
+    /// The ports checklist's newer model tests read the test project with their rules set: type field, Revit version,
+    /// free shapes, LOI matrix, sheets from model views, piles (a column copied onto itself is a split pile), shared
+    /// coordinates, what must be there and the joints with links. Changes are rolled back.
+    /// </summary>
+    private static (string, string) ChecklistAutoTestsProbe(UIApplication app, State s)
+    {
+        if (TestDoc(app, s, out var why) is not { } doc) return Fail(why);
+        var problems = new List<string>();
+        var keys = new[] { "typefield", "version", "freeshapes", "loi", "cadsheets", "pilerun", "sharedcoords", "mustexist", "joints", "exportnames" };
+        var column = new FilteredElementCollector(doc).OfClass(typeof(FamilyInstance)).OfCategory(BuiltInCategory.OST_StructuralColumns).Cast<FamilyInstance>().FirstOrDefault();
+        var def = new ChecklistMath.Definition
+        {
+            Title = "Field test",
+            Sections = [new ChecklistMath.Section("Tests", keys.Select((k, i) => new ChecklistMath.Item((i + 1).ToString(System.Globalization.CultureInfo.InvariantCulture),
+                (i + 1).ToString(System.Globalization.CultureInfo.InvariantCulture), "Test " + k, "", "", "", "", "", k)).ToList())],
+            Rules =
+            {
+                ["revitversion"] = app.Application.VersionNumber,
+                ["loimatrix"] = "*>Comments; Walls>Comments",
+                ["piles"] = column?.Symbol.Name ?? "NO-PILE-TYPE",
+                ["pileparameters"] = "Comments, Mark, ZZ Test Diameter",
+                ["mustexist"] = "Walls, Specialty Equipment>*Fender*",
+                ["packagecontents"] = ".rvt, .nwc",
+            },
+        };
+        using var group = new TransactionGroup(doc, "Field test: more automatic checks");
+        group.Start();
+        try
+        {
+            if (column is not null)
+                using (var t = new Transaction(doc, "Field test: a split pile"))
+                {
+                    t.Start();
+                    ElementTransformUtils.CopyElement(doc, column.Id, XYZ.Zero);
+                    t.Commit();
+                }
+            var facts = ChecklistFacts.Read(doc, def, app);
+            foreach (var key in keys)
+            {
+                if (!facts.Hints.TryGetValue(key, out var h)) { problems.Add(key + ": no result"); continue; }
+                if (h.Text.StartsWith("Couldn't read", StringComparison.Ordinal) || h.Pending) problems.Add(key + ": " + h.Text);
+            }
+            if (facts.Hints.TryGetValue("mustexist", out var must) && (must.Level != ChecklistFacts.Level.Warn || must.Text.IndexOf("Fender", StringComparison.Ordinal) < 0))
+                problems.Add("mustexist: the missing fenders aren't reported: " + must.Text);
+            if (column is not null && facts.Hints.TryGetValue("pilerun", out var pile) && !pile.Items.Any(i => i.IndexOf("same spot", StringComparison.Ordinal) >= 0))
+                problems.Add("pilerun: the split pile isn't reported: " + pile.Text);
+            if (facts.Hints.TryGetValue("version", out var version) && version.Text.IndexOf("is open", StringComparison.Ordinal) >= 0) problems.Add("version: " + version.Text);
+            if (facts.Hints.TryGetValue("exportnames", out var names) && names.Text.IndexOf("IFC", StringComparison.Ordinal) >= 0) problems.Add("exportnames: asks for an IFC the package doesn't need: " + names.Text);
+            if (problems.Count == 0)
+                return Pass(string.Join(" ", keys.Select(k => $"{k}: {facts.Hints[k].Level} ({facts.Hints[k].Text})")));
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException) { problems.Add("threw " + ex.GetType().Name + ": " + ex.Message); }
+        finally { RollBack(group); }
+        return Fail(string.Join("; ", problems));
     }
 
     /// <summary>A small ready checklist written as Word, then turned into a PDF through Word (off Revit's thread, as the window does).</summary>
