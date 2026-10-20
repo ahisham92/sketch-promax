@@ -44,7 +44,7 @@ internal sealed class ChecklistEditor : Window
 
     private sealed class Check
     {
-        public string Text = "", Example = "", From = "", FoundOn = "", Priority = "", Waiting = "";
+        public string Text = "", Short = "", Fix = "", Example = "", From = "", FoundOn = "", Priority = "", Waiting = "";
     }
 
     private readonly AgentSettings _settings;
@@ -55,7 +55,7 @@ internal sealed class ChecklistEditor : Window
     private readonly ListBox _stageList = new();
     private readonly ListBox _checkList = new();
     private readonly TextBox _stageName = Box(), _title = Box(), _roles = Box();
-    private readonly TextBox _text = Box(multi: true), _example = Box(multi: true), _from = Box(), _foundOn = Box(), _waiting = Box();
+    private readonly TextBox _text = Box(multi: true), _short = Box(), _fix = Box(multi: true), _example = Box(multi: true), _from = Box(), _foundOn = Box(), _waiting = Box();
     private readonly ComboBox _priority = new() { IsEditable = true, MinHeight = 28, Margin = new Thickness(0, 4, 0, 0) };
     private readonly ComboBox _moveTo = new() { MinHeight = 28, Margin = new Thickness(0, 4, 0, 0) };
     private readonly TextBlock _error = Brand.Text("", Brand.K.DangerText, 12);
@@ -157,11 +157,13 @@ internal sealed class ChecklistEditor : Window
             {
                 if (_loading || CurrentCheck is not { } c) return;
                 set(c, box.Text);
-                if (box == _text) _checkRows[_checkList.SelectedIndex].Label = CheckLabel(_stageList.SelectedIndex, _checkList.SelectedIndex);
+                if (box == _text || box == _short) _checkRows[_checkList.SelectedIndex].Label = CheckLabel(_stageList.SelectedIndex, _checkList.SelectedIndex);
                 Changed();
             };
         }
         Bind(_text, "Check (what to do)", (c, v) => c.Text = v);
+        Bind(_short, "Short title", (c, v) => c.Short = v);
+        Bind(_fix, "How to fix", (c, v) => c.Fix = v);
         Bind(_example, "Example or how to check", (c, v) => c.Example = v);
         Bind(_from, "Where it came from", (c, v) => c.From = v);
         Bind(_foundOn, "Found it on", (c, v) => c.FoundOn = v);
@@ -188,6 +190,10 @@ internal sealed class ChecklistEditor : Window
         two.Children.Add(right);
         _details.Children.Add(Label("Check (what to do)"));
         _details.Children.Add(_text);
+        _details.Children.Add(Label("Short title (a few plain words for the list; empty uses the first sentence)"));
+        _details.Children.Add(_short);
+        _details.Children.Add(Label("How to fix"));
+        _details.Children.Add(_fix);
         _details.Children.Add(Label("Example / how to check"));
         _details.Children.Add(_example);
         _details.Children.Add(Label("Where it came from"));
@@ -363,7 +369,7 @@ internal sealed class ChecklistEditor : Window
             _model.Add(new Stage
             {
                 Title = s.Title,
-                Checks = s.Items.Select(i => new Check { Text = i.Check, Example = i.Example, From = i.From, FoundOn = i.FoundOn, Priority = i.Priority, Waiting = i.Waiting }).ToList(),
+                Checks = s.Items.Select(i => new Check { Text = i.Check, Short = i.Short, Fix = i.Fix, Example = i.Example, From = i.From, FoundOn = i.FoundOn, Priority = i.Priority, Waiting = i.Waiting }).ToList(),
             });
         _title.Text = def.Title;
         _roles.Text = string.Join(", ", def.Signatories);
@@ -378,7 +384,8 @@ internal sealed class ChecklistEditor : Window
 
     private string CheckLabel(int stage, int i)
     {
-        var text = Regex.Replace(_model[stage].Checks[i].Text, @"\s+", " ").Trim();
+        var check = _model[stage].Checks[i];
+        var text = Regex.Replace(check.Short.Trim().Length > 0 ? check.Short : check.Text, @"\s+", " ").Trim();
         if (text.Length == 0) text = "(empty: type the check)";
         else if (text.Length > 120) text = text.Substring(0, 117).TrimEnd() + "…";
         return $"{NumberOf(stage, i)}. {text}";
@@ -427,6 +434,8 @@ internal sealed class ChecklistEditor : Window
         _details.Visibility = c is null ? Visibility.Collapsed : Visibility.Visible;
         _noCheck.Visibility = c is null && CurrentStage is not null ? Visibility.Visible : Visibility.Collapsed;
         _text.Text = c?.Text ?? "";
+        _short.Text = c?.Short ?? "";
+        _fix.Text = c?.Fix ?? "";
         _example.Text = c?.Example ?? "";
         _from.Text = c?.From ?? "";
         _foundOn.Text = c?.FoundOn ?? "";
@@ -579,7 +588,8 @@ internal sealed class ChecklistEditor : Window
             Fields = _base.Fields.ToList(),
             Signatories = roles,
             Sections = _model.Select(s => new ChecklistMath.Section(s.Title, s.Checks.Select(c => new ChecklistMath.Item("", "", c.Text.Trim(), c.Example.Trim(),
-                c.From.Trim(), c.FoundOn.Trim(), c.Priority.Trim(), Regex.Replace(c.Waiting.Trim(), @"^Waiting\s*:\s*", "", RegexOptions.IgnoreCase), "")).ToList())).ToList(),
+                c.From.Trim(), c.FoundOn.Trim(), c.Priority.Trim(), Regex.Replace(c.Waiting.Trim(), @"^Waiting\s*:\s*", "", RegexOptions.IgnoreCase), "")
+                { Short = Regex.Replace(c.Short, @"\s+", " ").Trim(), Fix = c.Fix.Trim() }).ToList())).ToList(),
             SourcePath = ChecklistMath.EditedSource,
             SourceStamp = DateTime.Now.ToString("dd-MMM-yyyy HH:mm", System.Globalization.CultureInfo.InvariantCulture),
         };

@@ -1830,6 +1830,25 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
 
     // ---- Sending --------------------------------------------------------------------------------------------------
 
+    /// <summary>
+    /// Sends <paramref name="text"/> as the user's message from elsewhere in Sketch ProMax (the checklist's Ask button).
+    /// Returns "" when it went, else why not (a turn is running, the chat isn't set up), in a sentence for the user.
+    /// </summary>
+    public static string Ask(string text)
+    {
+        var pane = (ChatPane)Get();
+        if (pane._stopped) return "The chat isn't running. Restart Revit, then try again.";
+        if (pane._turn is not null) return "The chat is still answering something else. Wait for it (or press Stop in the chat), then ask again.";
+        if (pane._setup != Setup.Ready)
+        {
+            pane.ShowSetup();
+            return "The chat isn't set up yet: open the Chat pane and finish its first step, then ask again.";
+        }
+        pane._input.Text = text;
+        pane.Send();
+        return "";
+    }
+
     private async void Send()
     {
         if (_stopped) return;

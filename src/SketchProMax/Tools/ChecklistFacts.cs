@@ -16,7 +16,11 @@ internal static class ChecklistFacts
     /// <summary>A hint: its text and whether it looks fine (Ok), needs a look (Warn) or is just information.</summary>
     public enum Level { Info, Ok, Warn }
 
-    public sealed record Hint(string Text, Level Level);
+    /// <summary>A hint: the sentence shown, its level, and what it found by name (shown in full in the details panel).</summary>
+    public sealed record Hint(string Text, Level Level, IReadOnlyList<string>? Found = null)
+    {
+        public IReadOnlyList<string> Items => Found ?? [];
+    }
 
     public sealed class Result
     {
@@ -100,7 +104,7 @@ internal static class ChecklistFacts
             var off = names.Where(n => !Regex.IsMatch(n, @"^BLDG\s*\d+\s+LVL\s+", RegexOptions.IgnoreCase)).ToList();
             return off.Count == 0
                 ? new Hint($"{names.Count} levels, all named BLDG n LVL ….", Level.Ok)
-                : new Hint($"{names.Count} levels; {off.Count} not named BLDG n LVL …: {List(off)}.", Level.Warn);
+                : new Hint($"{names.Count} levels; {off.Count} not named BLDG n LVL …: {List(off)}.", Level.Warn, off);
         });
         Add("worksets", () =>
         {
@@ -122,38 +126,42 @@ internal static class ChecklistFacts
             }
             var names = new HashSet<string>(worksets.Select(w => w.Name), StringComparer.OrdinalIgnoreCase);
             var missing = Regex.Matches(Ex("worksets"), @"\bZ_Link_\w+").Cast<Match>().Select(m => m.Value).Distinct().Where(n => !names.Contains(n)).ToList();
-            if (missing.Count > 0) problems.Add("missing " + List(missing));
+            foreach (var m in missing) problems.Add("missing workset " + m);
             return problems.Count == 0
                 ? new Hint($"{worksets.Count} worksets; nothing on Workset1, only levels and grids on Shared Levels and Grids, the link worksets are there.", Level.Ok)
-                : new Hint(string.Join("; ", problems) + ".", Level.Warn);
+                : new Hint(string.Join("; ", problems) + ".", Level.Warn, problems);
         });
         Add("scopeboxes", () =>
         {
             var names = new FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_VolumeOfInterest).WhereElementIsNotElementType().Select(e => e.Name).ToList();
             if (names.Count == 0) return new Hint("The model has no scope boxes.", Level.Warn);
             var off = names.Where(n => !Regex.IsMatch(n, @"^BLDG-\d{2}-\d{3,4}$")).ToList();
-            return off.Count == 0 ? new Hint($"{names.Count} scope boxes, all named BLDG-NN-NNNN.", Level.Ok) : new Hint($"{off.Count} of {names.Count} scope boxes not named BLDG-NN-NNNN: {List(off)}.", Level.Warn);
+            return off.Count == 0 ? new Hint($"{names.Count} scope boxes, all named BLDG-NN-NNNN.", Level.Ok) : new Hint($"{off.Count} of {names.Count} scope boxes not named BLDG-NN-NNNN: {List(off)}.", Level.Warn, off);
         });
         Add("categories", () =>
         {
-            var n = new FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_GenericModel).WhereElementIsNotElementType().GetElementCount();
-            return n == 0 ? new Hint("No Generic Model elements.", Level.Ok) : new Hint($"{n} Generic Model elements.", Level.Warn);
+            var generic = new FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_GenericModel).WhereElementIsNotElementType().ToList();
+            return generic.Count == 0 ? new Hint("No Generic Model elements.", Level.Ok)
+                : new Hint($"{generic.Count} Generic Model elements.", Level.Warn, Counted(generic.Select(TypeName)));
         });
         Add("imports", () =>
         {
-            var n = new FilteredElementCollector(doc).OfClass(typeof(ImportInstance)).Cast<ImportInstance>().Count(i => !i.IsLinked);
-            return n == 0 ? new Hint("No imported CAD in the project (inside families isn't counted).", Level.Ok) : new Hint($"{n} imported CAD files in the project.", Level.Warn);
+            var imports = new FilteredElementCollector(doc).OfClass(typeof(ImportInstance)).Cast<ImportInstance>().Where(i => !i.IsLinked).ToList();
+            return imports.Count == 0 ? new Hint("No imported CAD in the project (inside families isn't counted).", Level.Ok)
+                : new Hint($"{imports.Count} imported CAD files in the project.", Level.Warn, Counted(imports.Select(TypeName)));
         });
         Add("groups", () =>
         {
             var groups = new FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_IOSModelGroups).WhereElementIsNotElementType().Cast<Autodesk.Revit.DB.Group>().ToList();
-            var once = groups.GroupBy(g => g.GroupType?.Id.Value ?? -1).Count(g => g.Count() == 1);
-            return groups.Count == 0 ? new Hint("No model groups.", Level.Ok) : new Hint($"{groups.Count} model groups; {once} group types are used only once.", once > 0 ? Level.Warn : Level.Info);
+            var once = groups.GroupBy(g => g.GroupType?.Id.Value ?? -1).Where(g => g.Count() == 1).Select(g => g.First().GroupType?.Name ?? g.First().Name).ToList();
+            return groups.Count == 0 ? new Hint("No model groups.", Level.Ok)
+                : new Hint($"{groups.Count} model groups; {once.Count} group types are used only once.", once.Count > 0 ? Level.Warn : Level.Info, once.Select(n => n + " (used once)").ToList());
         });
         Add("warnings", () =>
         {
-            var n = doc.GetWarnings().Count;
-            return n == 0 ? new Hint("No warnings.", Level.Ok) : new Hint($"{n} warnings in the model.", Level.Warn);
+            var warnings = doc.GetWarnings();
+            return warnings.Count == 0 ? new Hint("No warnings.", Level.Ok)
+                : new Hint($"{warnings.Count} warnings in the model.", Level.Warn, Counted(warnings.Select(w => w.GetDescriptionText())));
         });
         Add("landing", () =>
         {
@@ -171,7 +179,7 @@ internal static class ChecklistFacts
             if (used.Count == 0) return new Hint("No title blocks on sheets.", Level.Warn);
             var off = expected.Length == 0 ? new List<string>() : used.Where(n => !n.Equals(expected, StringComparison.OrdinalIgnoreCase)).ToList();
             return off.Count == 0 ? new Hint("Title block on sheets: " + List(used) + ".", expected.Length > 0 ? Level.Ok : Level.Info)
-                : new Hint("Other title blocks on sheets: " + List(off) + ".", Level.Warn);
+                : new Hint("Other title blocks on sheets: " + List(off) + ".", Level.Warn, off.Select(n => n + $" (expected {expected})").ToList());
         });
         Add("scales", () =>
         {
@@ -179,7 +187,8 @@ internal static class ChecklistFacts
                 .GroupBy(v => v.Scale).OrderBy(g => g.Key).Select(g => (Scale: g.Key, Count: g.Count())).ToList();
             if (scales.Count == 0) return new Hint("No plans, sections or details on sheets.", Level.Info);
             var text = "Scales on sheets: " + string.Join(", ", scales.Select(s => $"1:{s.Scale} ({s.Count})")) + ".";
-            return new Hint(text, scales.Any(s => s.Scale == 300) ? Level.Warn : Level.Info);
+            var rejected = V().OnSheets.Where(v => v.Scale == 300).Select(v => v.Name + " at 1:300").ToList();
+            return new Hint(text, scales.Any(s => s.Scale == 300) ? Level.Warn : Level.Info, rejected);
         });
         Add("drawinglist", () =>
         {
@@ -192,18 +201,16 @@ internal static class ChecklistFacts
         {
             var graphic = V().OnSheets.Where(v => v.ViewType is ViewType.FloorPlan or ViewType.CeilingPlan or ViewType.EngineeringPlan or ViewType.Section or ViewType.Elevation or ViewType.ThreeD).ToList();
             if (graphic.Count == 0) return new Hint("No plans, sections or 3D views on sheets.", Level.Info);
-            var none = graphic.Count(v => v.ViewTemplateId == ElementId.InvalidElementId);
+            var bare = graphic.Where(v => v.ViewTemplateId == ElementId.InvalidElementId).Select(v => v.Name + " (no view template)").ToList();
+            var none = bare.Count;
             var templates = graphic.Where(v => v.ViewTemplateId != ElementId.InvalidElementId).Select(v => v.ViewTemplateId.Value).Distinct().Count();
-            return new Hint($"{none} of {graphic.Count} views on sheets have no view template; {templates} templates are used.", none > 0 || templates == 1 && graphic.Count > 3 ? Level.Warn : Level.Ok);
+            return new Hint($"{none} of {graphic.Count} views on sheets have no view template; {templates} templates are used.", none > 0 || templates == 1 && graphic.Count > 3 ? Level.Warn : Level.Ok, bare);
         });
         Add("unusedviews", () =>
         {
-            var on = new HashSet<long>(V().OnSheets.Select(v => v.Id.Value));
-            var unused = new FilteredElementCollector(doc).OfClass(typeof(View)).Cast<View>()
-                .Where(v => !v.IsTemplate && v.CanBePrinted && v.ViewType is not (ViewType.DrawingSheet or ViewType.Schedule or ViewType.ProjectBrowser or ViewType.SystemBrowser or ViewType.Internal or ViewType.Undefined)
-                            && !on.Contains(v.Id.Value) && v.Name.IndexOf("Navisworks", StringComparison.OrdinalIgnoreCase) < 0)
-                .Count();
-            return unused == 0 ? new Hint("Every view is on a sheet (or is the Navisworks view).", Level.Ok) : new Hint($"{unused} views are on no sheet. Check > Purge & cleanup can delete them.", Level.Warn);
+            var unused = UnusedViews(doc);
+            return unused.Count == 0 ? new Hint("Every view is on a sheet (or is the Navisworks view or the starting view).", Level.Ok)
+                : new Hint($"{unused.Count} views are on no sheet.", Level.Warn, unused.Select(v => v.Name).OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList());
         });
         Add("navisview", () =>
         {
@@ -222,9 +229,35 @@ internal static class ChecklistFacts
             var detached = doc.IsDetached ? "This copy is detached. " : doc.IsWorkshared ? "This isn't a detached copy. " : "";
             return loaded.Count == 0
                 ? new Hint(detached + $"No Revit links are loaded ({types.Count} unloaded).", doc.IsDetached || !doc.IsWorkshared ? Level.Ok : Level.Warn)
-                : new Hint(detached + $"{loaded.Count} Revit links still loaded: {List(loaded)}.", Level.Warn);
+                : new Hint(detached + $"{loaded.Count} Revit links still loaded: {List(loaded)}.", Level.Warn, loaded);
         });
         return r;
+    }
+
+    /// <summary>
+    /// Views on no sheet that can go: not the Navisworks view, not the starting view, not a view whose dependent views
+    /// would go with it, not the view open in front. The unusedviews hint counts these and ChecklistFixes deletes them.
+    /// </summary>
+    public static List<View> UnusedViews(Document doc, ElementId? active = null)
+    {
+        var on = new HashSet<long>(new FilteredElementCollector(doc).OfClass(typeof(Viewport)).Cast<Viewport>().Select(v => v.ViewId.Value));
+        var start = StartingViewSettings.GetStartingViewSettings(doc).ViewId;
+        return new FilteredElementCollector(doc).OfClass(typeof(View)).Cast<View>()
+            .Where(v => !v.IsTemplate && v.CanBePrinted && v.ViewType is not (ViewType.DrawingSheet or ViewType.Schedule or ViewType.ProjectBrowser or ViewType.SystemBrowser or ViewType.Internal or ViewType.Undefined)
+                        && !on.Contains(v.Id.Value) && v.Id != start && v.Id != active && v.Name.IndexOf("Navisworks", StringComparison.OrdinalIgnoreCase) < 0
+                        && v.GetDependentViewIds().Count == 0)
+            .ToList();
+    }
+
+    /// <summary>"Name (×3)" lines, most frequent first.</summary>
+    private static List<string> Counted(IEnumerable<string> names) =>
+        names.GroupBy(n => n.Length > 0 ? n : "(no name)").OrderByDescending(g => g.Count()).ThenBy(g => g.Key, StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.Count() > 1 ? $"{g.Key} (×{g.Count()})" : g.Key).ToList();
+
+    private static string TypeName(Element e)
+    {
+        var type = e.Document.GetElement(e.GetTypeId()) as ElementType;
+        return type is null ? e.Name : type.FamilyName.Length > 0 ? type.FamilyName + ": " + type.Name : type.Name;
     }
 
     private static string List(IReadOnlyCollection<string> names) =>

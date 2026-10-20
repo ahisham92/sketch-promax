@@ -40,6 +40,7 @@ public sealed class SettingsWindow : Window
     private readonly System.Windows.Controls.Image _sigPreview = new() { MaxHeight = 70, MaxWidth = 260, Stretch = System.Windows.Media.Stretch.Uniform, HorizontalAlignment = HorizontalAlignment.Left };
     private readonly TextBlock _sigHint = Brand.Text("", Brand.K.Muted, size: 11);
     private readonly TextBox _checklistPath = new();
+    private readonly ComboBox _helper = new() { MinHeight = 26 };
     private string _sigImage = "";
     private readonly TabControl _tabs = new();
     private readonly List<(string Setting, FrameworkElement Control)> _placed = [];
@@ -66,6 +67,8 @@ public sealed class SettingsWindow : Window
         _sigRole.Text = _settings.SignatureRole ?? "";
         _sigImage = _settings.SignatureImage ?? "";
         _checklistPath.Text = _settings.ChecklistPath ?? "";
+        foreach (var (tag, text) in Tools.ChecklistHelper.Choices) _helper.Items.Add(new ComboBoxItem { Content = text, Tag = tag });
+        _helper.SelectedIndex = Math.Max(0, Array.FindIndex(Tools.ChecklistHelper.Choices, c => c.Tag == Tools.ChecklistHelper.Parse(_settings.ChecklistHelper)));
 
         // One primary action: Save (Enter, except inside the standards box where Enter starts a new line). Esc cancels.
         var save = Brand.Button("Save", Brand.Weight.Primary);
@@ -450,6 +453,13 @@ public sealed class SettingsWindow : Window
         pathRow.Children.Add(Place("ChecklistPath", _checklistPath));
         page.Children.Add(pathRow);
         page.Children.Add(Hint("Empty: the built-in checklist, or the one edited in the checklist window."));
+
+        page.Children.Add(Label("Helper for the checks the model test can't do"));
+        AutomationProperties.SetName(_helper, "Checklist helper");
+        AutomationProperties.SetHelpText(_helper, "Who the checklist's Ask button hands a check to.");
+        page.Children.Add(Place("ChecklistHelper", _helper));
+        page.Children.Add(Hint("Sketch ProMax: the check goes to the chat, which looks at the model (and pictures of views) and says pass or fail. " +
+                               "SketchPro: the question is copied for you to paste into SketchPro's chat. None: no Ask button. The helper only advises; you still answer each check."));
         return page;
     }
 
@@ -719,6 +729,7 @@ public sealed class SettingsWindow : Window
         _settings.SignatureName = _sigName.Text.Trim();
         _settings.SignatureRole = _sigRole.Text.Trim();
         _settings.ChecklistPath = _checklistPath.Text.Trim().Trim('"');
+        _settings.ChecklistHelper = (_helper.SelectedItem as ComboBoxItem)?.Tag as string ?? Tools.ChecklistHelper.ProMax;
         try { _settings.SignatureImage = Signature.Keep(_sigImage); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

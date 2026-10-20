@@ -62,6 +62,20 @@ internal sealed class ChecklistWindow : Window
     private Review? _review;
     private bool _loading;
 
+    // The details panel on the right: the check picked in the list, what the model found, how to fix it. Kept between builds.
+    private readonly Border _detail = new() { Width = 390, BorderThickness = new Thickness(1, 0, 0, 0) };
+    private readonly ScrollViewer _detailScroll = new() { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Focusable = false, Padding = new Thickness(18, 14, 18, 18) };
+    private string _selectedId = "";
+    private RadioButton? _paneYes, _paneNo, _paneNa;
+    private TextBox? _paneNote;
+    private FrameworkElement? _headerPart, _footPart;
+    private ColumnDefinition? _stagesColumn, _detailColumn;
+
+    // Side by side: the window becomes a narrow panel at the right of the screen showing only the details, so the view
+    // Show in Revit opens isn't hidden behind it. _fullBounds is where it was, to go back.
+    private bool _side;
+    private Rect _fullBounds;
+
     private sealed class Card
     {
         public ChecklistMath.Item Item = null!;
@@ -86,7 +100,7 @@ internal sealed class ChecklistWindow : Window
     {
         public TextBlock Yes = null!, No = null!, Na = null!, Open = null!;
         public TextBlock Score = null!, ScoreSub = null!, AutoScore = null!, AutoSub = null!;
-        public StackPanel Disagree = null!;
+        public StackPanel Disagree = null!, Failing = null!;
         public Border Banner = null!;
         public TextBlock BannerText = null!;
         public StackPanel Problems = null!;
@@ -145,9 +159,9 @@ internal sealed class ChecklistWindow : Window
 
         Title = "Sketch ProMax pre-submission checklist";
         var area = SystemParameters.WorkArea;
-        Width = Math.Min(1120, Math.Floor(area.Width * 0.9));
+        Width = Math.Min(1320, Math.Floor(area.Width * 0.92));
         Height = Math.Min(780, Math.Floor(area.Height * 0.9));
-        MinWidth = Math.Min(760, Width);
+        MinWidth = Math.Min(900, Width);
         MinHeight = Math.Min(480, Height);
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         ResizeMode = ResizeMode.CanResize;
@@ -157,6 +171,12 @@ internal sealed class ChecklistWindow : Window
         RichUi.Apply(this, _motion);
         _answersRing = new ScoreRing("Your answers", _motion);
         _autoRing = new ScoreRing("Automatic check", _motion);
+        _answersRing.Clicked = () => GoToScores(auto: false);
+        _autoRing.Clicked = () => GoToScores(auto: true);
+        _detail.SetResourceReference(Border.BackgroundProperty, Brand.K.Surface);
+        _detail.SetResourceReference(Border.BorderBrushProperty, Brand.K.Border);
+        _detail.Child = _detailScroll;
+        AutomationProperties.SetName(_detail, "Details of the check");
 
         _saveSoon.Tick += (_, _) => { _saveSoon.Stop(); SaveDraft(); };
         _back.Click += (_, _) => Move(-1);
@@ -184,7 +204,7 @@ internal sealed class ChecklistWindow : Window
         _review = null;
         _stages.Items.Clear();
         // The stage list, the progress and the footer buttons are kept between builds: take them out of the old layout first.
-        foreach (var reused in new FrameworkElement[] { _stages, _status, _bar, _back, _pdf, _next })
+        foreach (var reused in new FrameworkElement[] { _stages, _status, _bar, _back, _pdf, _next, _detail })
             if (reused.Parent is System.Windows.Controls.Panel old) old.Children.Remove(reused);
         Content = null;
         LoadDraft();
@@ -246,16 +266,31 @@ internal sealed class ChecklistWindow : Window
             _stages.Items.Add(tab);
         }
 
+        // The stages (list on the left, the page in the middle) and the details panel on the right.
+        var body = new Grid();
+        _stagesColumn = new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) };
+        _detailColumn = new ColumnDefinition { Width = GridLength.Auto };
+        body.ColumnDefinitions.Add(_stagesColumn);
+        body.ColumnDefinitions.Add(_detailColumn);
+        body.Children.Add(_stages);
+        Grid.SetColumn(_detail, 1);
+        body.Children.Add(_detail);
+
         var root = new DockPanel();
         root.Children.Add(header);
         root.Children.Add(foot);
-        root.Children.Add(_stages);
+        root.Children.Add(body);
         Content = root;
+        _headerPart = header;
+        _footPart = foot;
 
         _loading = false;
         _stages.SelectedIndex = _def is null ? 0 : Math.Max(0, Math.Min(_state.Stage, _stages.Items.Count - 1));
         Refresh();
         StageChanged();
+        if (_selectedId.Length > 0 && _cards.TryGetValue(_selectedId, out var picked)) ShowDetail(picked);
+        else ShowDetail(null);
+        Layout();
     }
 
     private static string Shown(string model) => string.IsNullOrWhiteSpace(model) ? "model not saved" : model;
@@ -526,12 +561,31 @@ internal sealed class ChecklistWindow : Window
         Brand.SetBusy(button, true, "Opening…");
         try
         {
-            said.Text = await OnModel(ui => ChecklistViews.Show(ui, key));
+            var opened = false;
+            said.Text = await OnModel(ui => { var text = ChecklistViews.Show(ui, key); opened = true; return text; });
             said.Visibility = Visibility.Visible;
             RichUi.FadeIn(said, _motion, fromY: 4);
-            ActivityLog.Note("checklist_show", key);
+            ActivityLog.Note("checklist_show", key + ": " + said.Text);
+            // The view opens in Revit's window, which this one covered: move aside so it can be seen, and give Revit the
+            // focus so it switches views straight away. The panel stays on top (Revit owns it).
+            if (opened)
+            {
+                var moved = !_side;
+                SetSide(true);
+                if (moved && _detailScroll.Content is StackPanel page) page.Children.Insert(Math.Min(page.Children.Count, 1), Para(said.Text, Brand.K.SuccessText, 12, 6));
+                BringRevitForward();
+            }
         }
         finally { Brand.SetBusy(button, false); }
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    private static void BringRevitForward()
+    {
+        try { if (App.MainWindow != IntPtr.Zero) SetForegroundWindow(App.MainWindow); }
+        catch (Exception) { /* only a nicety */ }
     }
 
     private async Task DeleteCheckingViews(Button button, TextBlock result)
@@ -546,6 +600,353 @@ internal sealed class ChecklistWindow : Window
             ActivityLog.Note("checklist_views_deleted", result.Text);
         }
         finally { Brand.SetBusy(button, false); }
+    }
+
+    // ---- The details panel ----------------------------------------------------------------------------------------
+
+    /// <summary>Picks a check: its card is outlined and the details panel shows it.</summary>
+    private void Select(Card card)
+    {
+        if (card.Item.Id == _selectedId) return;
+        if (_selectedId.Length > 0 && _cards.TryGetValue(_selectedId, out var old)) Outline(old, false);
+        _selectedId = card.Item.Id;
+        Outline(card, true);
+        ShowDetail(card);
+    }
+
+    private static void Outline(Card card, bool on)
+    {
+        card.Root.SetResourceReference(Border.BorderBrushProperty, on ? Brand.K.Accent : Brand.K.BorderSubtle);
+        card.Root.BorderThickness = new Thickness(on ? 2 : 1);
+        card.Root.Padding = on ? new Thickness(13, 11, 13, 11) : new Thickness(14, 12, 14, 12);
+    }
+
+    /// <summary>Goes to a check from anywhere (the review lists, Next / Previous in the panel): its stage, its card, its details.</summary>
+    private void GoTo(Card card)
+    {
+        if (_stages.SelectedIndex != card.Stage) _stages.SelectedIndex = card.Stage;
+        Select(card);
+        if (!_side) FocusCard(card);
+    }
+
+    /// <summary>Fills the details panel for <paramref name="card"/> (null: how to use it).</summary>
+    private void ShowDetail(Card? card)
+    {
+        _paneYes = _paneNo = _paneNa = null;
+        _paneNote = null;
+        var page = new StackPanel();
+        if (card is not null && _cards.TryGetValue(card.Item.Id, out var live)) card = live;
+        if (card is null || _def is null)
+        {
+            page.Children.Add(Heading("Details", 15));
+            page.Children.Add(Para("Click a check to see what the model found, what's missing and how to fix it. Where Sketch ProMax can fix it for you, a Fix button shows here.", Brand.K.Muted));
+            if (_side) page.Children.Add(SideButton());
+            _detailScroll.Content = page;
+            return;
+        }
+        if (card.Item.Id == _selectedId) Outline(card, true);
+        var item = card.Item;
+        var stageCards = _cards.Values.OrderBy(c => c.Stage).ToList();
+        var at = stageCards.IndexOf(card);
+
+        // Where it is, with Previous / Next through every check.
+        var nav = new DockPanel();
+        var prev = RichUi.Button(RichUi.Icon.Back, "");
+        AutomationProperties.SetName(prev, "Previous check");
+        prev.MinWidth = 36;
+        prev.IsEnabled = at > 0;
+        prev.Click += (_, _) => { if (at > 0) GoTo(stageCards[at - 1]); };
+        var next = RichUi.Button(RichUi.Icon.Next, "");
+        AutomationProperties.SetName(next, "Next check");
+        next.MinWidth = 36;
+        next.IsEnabled = at >= 0 && at + 1 < stageCards.Count;
+        next.Click += (_, _) => { if (at >= 0 && at + 1 < stageCards.Count) GoTo(stageCards[at + 1]); };
+        var navButtons = new StackPanel { Orientation = Orientation.Horizontal, Children = { prev, next } };
+        DockPanel.SetDock(navButtons, Dock.Right);
+        nav.Children.Add(navButtons);
+        var where = Brand.Text($"Check #{item.Number} of {stageCards.Count} · {_def.Sections[card.Stage - 1].Title}", Brand.K.Muted, 11.5);
+        where.TextWrapping = TextWrapping.Wrap;
+        where.VerticalAlignment = VerticalAlignment.Center;
+        nav.Children.Add(where);
+        page.Children.Add(nav);
+
+        var title = Heading(item.Title, 16);
+        title.Margin = new Thickness(0, 10, 0, 0);
+        page.Children.Add(title);
+        if (item.High || item.Waiting.Length > 0)
+        {
+            var badges = new WrapPanel { Margin = new Thickness(0, 6, 0, 0) };
+            if (item.High) badges.Children.Add(Badge("High priority", Brand.K.BadgeError, Brand.K.OnDanger));
+            if (item.Waiting.Length > 0) badges.Children.Add(Badge("Waiting on an answer", Brand.K.NoticeBg, Brand.K.WarningText));
+            page.Children.Add(badges);
+        }
+
+        // What the model says: passes, needs fixing (with everything it found), or can't tell.
+        _facts.Hints.TryGetValue(item.Auto, out var hint);
+        if (item.Auto.Length == 0) hint = null;
+        var (headKey, headText, bg, border) = hint?.Level switch
+        {
+            ChecklistFacts.Level.Ok => (Brand.K.SuccessText, "✓ The model check passes", Brand.K.Raised, Brand.K.SuccessText),
+            ChecklistFacts.Level.Warn => (Brand.K.WarningText, "! The model check found something to fix", Brand.K.NoticeBg, Brand.K.NoticeBorder),
+            ChecklistFacts.Level.Info => (Brand.K.Text, "i What the model says", Brand.K.Raised, Brand.K.BorderSubtle),
+            _ => (Brand.K.Muted, "The model can't check this one: look yourself", Brand.K.Raised, Brand.K.BorderSubtle),
+        };
+        var status = new StackPanel();
+        status.Children.Add(Brand.Text(headText, headKey, 12.5, bold: true));
+        if (hint is not null)
+        {
+            status.Children.Add(Para(hint.Text, Brand.K.Text, 12, 4));
+            if (hint.Items.Count > 0)
+            {
+                status.Children.Add(Para(hint.Level == ChecklistFacts.Level.Warn ? "What's missing or wrong:" : "Found:", Brand.K.Text, 12, 8));
+                foreach (var line in hint.Items.Take(40)) status.Children.Add(Para("•  " + line, Brand.K.Text, 12, 2));
+                if (hint.Items.Count > 40) status.Children.Add(Para($"…and {hint.Items.Count - 40} more.", Brand.K.Muted, 11.5, 2));
+            }
+        }
+        else status.Children.Add(Para("Use How to check below, then answer.", Brand.K.Muted, 12, 4));
+        page.Children.Add(CardBox(status, bg, border, 12));
+
+        // The actions: look at it in Revit, let Sketch ProMax fix it, read the model again after fixing it yourself.
+        var result = Para("", Brand.K.Text, 12, 6);
+        result.Visibility = Visibility.Collapsed;
+        AutomationProperties.SetLiveSetting(result, AutomationLiveSetting.Polite);
+        var actions = new WrapPanel { Margin = new Thickness(0, 8, 0, 0) };
+        if (item.Auto.Length > 0 && ChecklistViews.ButtonFor(item.Auto) is { } showText)
+        {
+            var show = RichUi.Button(RichUi.Icon.Eye, showText);
+            show.Margin = new Thickness(0, 0, 8, 6);
+            AutomationProperties.SetHelpText(show, "Opens it in Revit and moves this window to the side so you can see it. Views made for checking are named " + ChecklistViews.Prefix + "…");
+            var key = item.Auto;
+            show.Click += async (_, _) => await ShowInRevit(show, result, key);
+            actions.Children.Add(show);
+        }
+        if (item.Auto.Length > 0 && hint?.Level != ChecklistFacts.Level.Ok && ChecklistFixes.For(item.Auto) is { } offer)
+        {
+            var fix = RichUi.Button(RichUi.Icon.Fix, "Fix it: " + offer.Button, Brand.Weight.Primary);
+            fix.Margin = new Thickness(0, 0, 8, 6);
+            AutomationProperties.SetHelpText(fix, offer.Question);
+            var key = item.Auto;
+            fix.Click += async (_, _) => await FixInRevit(fix, result, key, offer);
+            actions.Children.Add(fix);
+        }
+        if (item.Auto.Length > 0)
+        {
+            var again = RichUi.Button(RichUi.Icon.Refresh, "Check the model again");
+            again.Margin = new Thickness(0, 0, 8, 6);
+            AutomationProperties.SetHelpText(again, "After you fix something in Revit, reads the model again to update this check and the automatic score.");
+            again.Click += async (_, _) => await ReadModelAgain(again);
+            actions.Children.Add(again);
+        }
+        var helper = ChecklistHelper.Parse(AgentSettings.Load().ChecklistHelper);
+        if (ChecklistHelper.Button(helper) is { } askText)
+        {
+            var ask = RichUi.Button(RichUi.Icon.Ask, askText);
+            ask.Margin = new Thickness(0, 0, 8, 6);
+            AutomationProperties.SetHelpText(ask, helper == ChecklistHelper.ProMax
+                ? "Hands this check to the Sketch ProMax chat, which looks at the model and says pass or fail. It changes nothing; you still answer."
+                : "Copies the question so you can paste it into SketchPro's chat. You still answer.");
+            var it = item;
+            var said = hint?.Text;
+            ask.Click += async (_, _) => await AskHelper(ask, result, it, said, helper);
+            actions.Children.Add(ask);
+        }
+        if (actions.Children.Count > 0) page.Children.Add(actions);
+        page.Children.Add(result);
+
+        // How to fix, how to check, the office's full wording.
+        Section(page, "How to fix", item.Fix.Length > 0 ? item.Fix : "Put it right in the model, then answer Yes. If it can't be done before submission, answer No and say why.");
+        if (item.Example.Length > 0) Section(page, "How to check", item.Example);
+        if (item.Waiting.Length > 0)
+            page.Children.Add(CardBox(Para($"Open point: {item.Waiting}. Follow the example until the answer comes, and write what you did in the comment.", Brand.K.Text, 12, 0), Brand.K.NoticeBg, Brand.K.NoticeBorder, 10));
+        Section(page, "The checklist's wording", item.Check);
+        var origin = string.Join(" · ", new[] { item.From.Length > 0 ? "From: " + item.From : "", item.FoundOn.Length > 0 ? "Found on " + item.FoundOn : "" }.Where(t => t.Length > 0));
+        if (origin.Length > 0) page.Children.Add(Para(origin, Brand.K.Muted, 11, 6));
+
+        // The answer, here too, so the panel works on its own beside Revit.
+        var answerHead = Brand.Text("Your answer", Brand.K.Text, 13, bold: true);
+        answerHead.Margin = new Thickness(0, 16, 0, 6);
+        page.Children.Add(answerHead);
+        var group = "d" + item.Id;
+        _paneYes = Segment("Yes", "SpmSegYes", group, $"Yes, #{item.Number} is done");
+        _paneNo = Segment("No", "SpmSegNo", group, $"No, #{item.Number} is not done");
+        _paneNa = Segment("N/A", "SpmSegNa", group, $"Not applicable: #{item.Number}");
+        page.Children.Add(new StackPanel { Orientation = Orientation.Horizontal, Children = { _paneYes, _paneNo, _paneNa } });
+        _paneNote = new TextBox { MinHeight = 54, TextWrapping = TextWrapping.Wrap, AcceptsReturn = false, MaxLength = 1000, Margin = new Thickness(0, 8, 0, 0), Text = card.Note.Text };
+        AutomationProperties.SetName(_paneNote, $"Comment on #{item.Number}");
+        page.Children.Add(Placeholder(_paneNote, item.Waiting.Length > 0 ? "What you did while this waits (needed)" : "Comment (optional; needed for No)"));
+        SyncPane(card);
+        var c = card;
+        foreach (var (button, value) in new[] { (_paneYes, ChecklistMath.Yes), (_paneNo, ChecklistMath.No), (_paneNa, ChecklistMath.NotApplicable) })
+            button.Checked += (_, _) =>
+            {
+                if (_loading) return;
+                Answer(c, value, move: false);
+                if (value == ChecklistMath.No || c.Item.Waiting.Length > 0 && c.Note.Text.Trim().Length == 0) _paneNote?.Focus();
+                else if (at >= 0 && at + 1 < stageCards.Count) GoTo(stageCards[at + 1]);
+            };
+        _paneNote.TextChanged += (_, _) => { if (!_loading && _paneNote is { } box && c.Note.Text != box.Text) c.Note.Text = box.Text; };
+
+        page.Children.Add(SideButton());
+        _detailScroll.Content = page;
+        _detailScroll.ScrollToTop();
+        RichUi.FadeIn(page, _motion, fromX: 10, fromY: 0, ms: 160);
+    }
+
+    private static void Section(StackPanel page, string heading, string text)
+    {
+        var h = Brand.Text(heading, Brand.K.Text, 13, bold: true);
+        h.Margin = new Thickness(0, 14, 0, 0);
+        page.Children.Add(h);
+        page.Children.Add(Para(text, Brand.K.Text, 12, 4));
+    }
+
+    /// <summary>The panel's answer follows the card's (answered either place, or by key).</summary>
+    private void SyncPane(Card card)
+    {
+        if (card.Item.Id != _selectedId || _paneYes is null || _paneNo is null || _paneNa is null) return;
+        var was = _loading;
+        _loading = true;
+        var done = ChecklistMath.Normal(_state.Answers.TryGetValue(card.Item.Id, out var a) ? a.Done : "");
+        _paneYes.IsChecked = done == ChecklistMath.Yes;
+        _paneNo.IsChecked = done == ChecklistMath.No;
+        _paneNa.IsChecked = done == ChecklistMath.NotApplicable;
+        if (_paneNote is not null && _paneNote.Text != card.Note.Text) _paneNote.Text = card.Note.Text;
+        _loading = was;
+    }
+
+    private Button SideButton()
+    {
+        var side = RichUi.Button(_side ? RichUi.Icon.Expand : RichUi.Icon.Side, _side ? "Back to the full checklist" : "Put beside Revit");
+        side.HorizontalAlignment = HorizontalAlignment.Left;
+        side.Margin = new Thickness(0, 18, 0, 0);
+        AutomationProperties.SetHelpText(side, _side ? "Shows the whole checklist again." : "Makes this window a narrow panel at the right of the screen, so you can work in Revit and go through the checks here.");
+        side.Click += (_, _) => SetSide(!_side);
+        return side;
+    }
+
+    /// <summary>Side by side with Revit (only the details, at the right edge of the screen), or back to the full window.</summary>
+    private void SetSide(bool side)
+    {
+        if (side == _side) return;
+        var area = SystemParameters.WorkArea;
+        if (side)
+        {
+            if (WindowState == WindowState.Maximized) WindowState = WindowState.Normal;
+            _fullBounds = new Rect(Left, Top, Width, Height);
+            _side = true;
+            MinWidth = 360;
+            Width = Math.Min(440, area.Width / 2);
+            Height = area.Height;
+            Left = area.Right - Width;
+            Top = area.Top;
+        }
+        else
+        {
+            _side = false;
+            if (_fullBounds.Width > 0)
+            {
+                Left = _fullBounds.Left;
+                Top = _fullBounds.Top;
+                Width = _fullBounds.Width;
+                Height = _fullBounds.Height;
+            }
+            MinWidth = Math.Min(900, Width);
+        }
+        Layout();
+        ShowDetail(_selectedId.Length > 0 && _cards.TryGetValue(_selectedId, out var card) ? card : null);
+    }
+
+    /// <summary>Shows what the mode and the stage call for: full (stages, page, details on section stages) or side (details only).</summary>
+    private void Layout()
+    {
+        var section = _def is not null && _stages.SelectedIndex > 0 && _stages.SelectedIndex < _stages.Items.Count - 1;
+        _stages.Visibility = _side ? Visibility.Collapsed : Visibility.Visible;
+        // Side by side, the details column takes the whole width; otherwise the page does and the details keep 390.
+        if (_stagesColumn is not null) _stagesColumn.Width = _side ? new GridLength(0) : new GridLength(1, GridUnitType.Star);
+        if (_detailColumn is not null) _detailColumn.Width = _side ? new GridLength(1, GridUnitType.Star) : GridLength.Auto;
+        _detail.Visibility = _side || section ? Visibility.Visible : Visibility.Collapsed;
+        _detail.Width = _side ? double.NaN : 390;
+        _detail.BorderThickness = new Thickness(_side ? 0 : 1, 0, 0, 0);
+        if (_headerPart is not null) _headerPart.Visibility = _side ? Visibility.Collapsed : Visibility.Visible;
+        if (_footPart is not null) _footPart.Visibility = _side ? Visibility.Collapsed : Visibility.Visible;
+        Title = _side ? "Sketch ProMax checklist" : "Sketch ProMax pre-submission checklist";
+    }
+
+    /// <summary>A score ring was clicked: Review and sign, at the breakdown of that score.</summary>
+    private void GoToScores(bool auto)
+    {
+        if (_def is null || _review is null) return;
+        if (_side) SetSide(false);
+        _stages.SelectedIndex = _stages.Items.Count - 1;
+        var target = auto ? (FrameworkElement)_review.Failing : _review.Banner;
+        Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() => target.BringIntoView()));
+    }
+
+    /// <summary>Hands a check to the helper picked in Settings: the Sketch ProMax chat, or the clipboard for SketchPro.</summary>
+    private async Task AskHelper(Button button, TextBlock said, ChecklistMath.Item item, string? found, string helper)
+    {
+        if (Brand.IsBusy(button)) return;
+        var question = ChecklistHelper.Question(item, Shown(_facts.Model), found);
+        said.Visibility = Visibility.Visible;
+        if (helper == ChecklistHelper.SketchPro)
+        {
+            try
+            {
+                Clipboard.SetText(question);
+                said.Text = "Copied. Paste it into SketchPro's chat (Ctrl+V), then answer here from what it says.";
+            }
+            catch (System.Runtime.InteropServices.ExternalException) { said.Text = "Couldn't copy (another program is using the clipboard). Try again."; }
+            ActivityLog.Note("checklist_ask", "sketchpro #" + item.Number);
+            return;
+        }
+        Brand.SetBusy(button, true, "Asking…");
+        try
+        {
+            // The chat lives in Sketch ProMax's pane in Revit: show it (a Revit call), then send the question as your message.
+            var shown = await OnModel(ui =>
+            {
+                try { ui.Application.GetDockablePane(ChatPaneId).Show(); }
+                catch (Exception ex) when (ex is not OutOfMemoryException) { }
+                return "";
+            });
+            var problem = shown.Length > 0 ? shown : Chat.ChatPane.Ask(question);
+            said.Text = problem.Length > 0 ? problem : "Asked. Sketch ProMax's answer appears in the Chat pane: answer here from what it finds.";
+            ActivityLog.Note("checklist_ask", "promax #" + item.Number);
+            if (said.Text.StartsWith("Asked.", StringComparison.Ordinal))
+            {
+                var moved = !_side;
+                SetSide(true);
+                if (moved && _detailScroll.Content is StackPanel page) page.Children.Insert(Math.Min(page.Children.Count, 1), Para(said.Text, Brand.K.SuccessText, 12, 6));
+            }
+        }
+        finally { Brand.SetBusy(button, false); }
+    }
+
+    /// <summary>The Sketch ProMax pane (the loader registers it with this id; the chat is its Chat tab).</summary>
+    private static readonly DockablePaneId ChatPaneId = new(new Guid("448734fe-1b1a-47e2-94a5-1fd138cb74e7"));
+
+    /// <summary>Runs a check's automatic fix after asking, then reads the model again so the check and the score update.</summary>
+    private async Task FixInRevit(Button button, TextBlock said, string key, ChecklistFixes.Offer offer)
+    {
+        if (Brand.IsBusy(button)) return;
+        var detached = _facts.Hints.TryGetValue("links", out var links) && links.Text.StartsWith("This copy is detached", StringComparison.Ordinal);
+        var question = offer.Question + "\n\nThis changes the model " + Shown(_facts.Model) + ". Ctrl+Z in Revit undoes it" + (key == "links" ? " (for links: reload them in Manage Links)" : "") + "." +
+                       (detached ? "" : "\n\nThis doesn't look like a detached copy: fixes are meant for the copy you submit.");
+        // A plain message box: this window is modeless, outside a Revit API call, where Revit's own dialogs aren't allowed.
+        if (MessageBox.Show(this, question, "Sketch ProMax: fix it", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes) return;
+        Brand.SetBusy(button, true, "Fixing…");
+        try
+        {
+            said.Text = await OnModel(ui => ChecklistFixes.Run(ui, key));
+            said.Visibility = Visibility.Visible;
+            ActivityLog.Note("checklist_fix", key + ": " + said.Text);
+        }
+        finally { Brand.SetBusy(button, false); }
+        var message = said.Text;
+        await ReadModelAgain(null);
+        _status.Text = message + " " + _status.Text;
+        // The panel was rebuilt with the new reading: say there what the fix did.
+        if (_detailScroll.Content is StackPanel page) page.Children.Insert(Math.Min(page.Children.Count, 1), Para(message, Brand.K.SuccessText, 12, 6));
     }
 
     // ---- Section stages -------------------------------------------------------------------------------------------
@@ -567,54 +968,34 @@ internal sealed class ChecklistWindow : Window
         var card = new Card { Item = item, Stage = stage };
         var body = new StackPanel();
 
-        // Number and the check, then the badges.
+        // Number and the short title, then the badges: the full wording, how to check and how to fix are in the details
+        // panel on the right, which shows the card clicked.
         var top = new DockPanel();
         var number = new Border { CornerRadius = new CornerRadius(4), Padding = new Thickness(7, 2, 7, 2), Margin = new Thickness(0, 1, 10, 0), VerticalAlignment = VerticalAlignment.Top };
         number.SetResourceReference(Border.BackgroundProperty, Brand.K.Surface);
         number.Child = Brand.Text("#" + item.Number, Brand.K.Muted, 12, bold: true);
         DockPanel.SetDock(number, Dock.Left);
         top.Children.Add(number);
-        var check = Brand.Text(item.Check, size: 13.5, bold: true);
+        var more = Brand.Text("Details ›", Brand.K.Link, 11.5);
+        more.VerticalAlignment = VerticalAlignment.Top;
+        more.Margin = new Thickness(10, 2, 0, 0);
+        DockPanel.SetDock(more, Dock.Right);
+        top.Children.Add(more);
+        var check = Brand.Text(item.Title, size: 14, bold: true);
         check.TextWrapping = TextWrapping.Wrap;
+        check.ToolTip = item.Check;
         top.Children.Add(check);
         body.Children.Add(top);
 
         var badges = new WrapPanel { Margin = new Thickness(0, 6, 0, 0) };
+        if (_facts.Hints.TryGetValue(item.Auto, out var hint) && item.Auto.Length > 0 && hint.Level != ChecklistFacts.Level.Info)
+        {
+            var ok = hint.Level == ChecklistFacts.Level.Ok;
+            badges.Children.Add(Badge(ok ? "✓ Model check passes" : "! Model check: needs fixing", ok ? Brand.K.Surface : Brand.K.NoticeBg, ok ? Brand.K.SuccessText : Brand.K.WarningText));
+        }
         if (item.High) badges.Children.Add(Badge("High priority", Brand.K.BadgeError, Brand.K.OnDanger));
-        if (item.FoundOn.Length > 0) badges.Children.Add(Badge("Found on " + item.FoundOn, Brand.K.Surface, Brand.K.Muted));
         if (item.Waiting.Length > 0) badges.Children.Add(Badge("Waiting on an answer", Brand.K.NoticeBg, Brand.K.WarningText));
         if (badges.Children.Count > 0) body.Children.Add(badges);
-
-        if (item.Example.Length > 0)
-        {
-            var how = new TextBlock { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 0), FontSize = 12 };
-            how.SetResourceReference(TextBlock.ForegroundProperty, Brand.K.Text);
-            how.Inlines.Add(new System.Windows.Documents.Run("How to check: ") { FontWeight = FontWeights.SemiBold });
-            how.Inlines.Add(new System.Windows.Documents.Run(item.Example));
-            body.Children.Add(how);
-        }
-        if (item.From.Length > 0) body.Children.Add(Para("From: " + item.From, Brand.K.Muted, 11, 3));
-        if (item.Waiting.Length > 0)
-        {
-            var open = Para($"Open point: {item.Waiting}. Follow the example until the answer comes, and write what you did in the comment.", Brand.K.Text, 12, 0);
-            body.Children.Add(CardBox(open, Brand.K.NoticeBg, Brand.K.NoticeBorder, 8));
-        }
-        if (_facts.Hints.TryGetValue(item.Auto, out var hint) && item.Auto.Length > 0) body.Children.Add(HintRow(hint));
-        if (item.Auto.Length > 0 && ChecklistViews.ButtonFor(item.Auto) is { } showText)
-        {
-            var show = RichUi.Button(RichUi.Icon.Eye, showText);
-            show.HorizontalAlignment = HorizontalAlignment.Left;
-            show.Margin = new Thickness(26, 6, 0, 0);
-            AutomationProperties.SetHelpText(show, "Opens a view or Revit's dialog to check this in the model. Views made for checking are named " + ChecklistViews.Prefix + "…");
-            var said = Para("", Brand.K.Muted, 11, 3);
-            said.Margin = new Thickness(26, 3, 0, 0);
-            said.Visibility = Visibility.Collapsed;
-            AutomationProperties.SetLiveSetting(said, AutomationLiveSetting.Polite);
-            var key = item.Auto;
-            show.Click += async (_, _) => await ShowInRevit(show, said, key);
-            body.Children.Add(show);
-            body.Children.Add(said);
-        }
 
         // Yes / No / N/A, then the comment.
         var answer = new DockPanel { Margin = new Thickness(0, 10, 0, 0) };
@@ -663,6 +1044,9 @@ internal sealed class ChecklistWindow : Window
         grid.Children.Add(body);
         card.Root = CardBox(grid);
         card.Root.Tag = card;
+        card.Root.Cursor = Cursors.Hand;
+        card.Root.PreviewMouseLeftButtonDown += (_, _) => Select(card);
+        card.Root.GotKeyboardFocus += (_, _) => Select(card);
         AutomationProperties.SetName(card.Root, $"Check #{item.Number}: {item.Check}");
         _cards[item.Id] = card;
         ShowCard(card);
@@ -674,32 +1058,6 @@ internal sealed class ChecklistWindow : Window
         var b = new Border { CornerRadius = new CornerRadius(10), Padding = new Thickness(8, 2, 8, 3), Margin = new Thickness(0, 0, 6, 4), Child = Brand.Text(text, fg, 11, bold: true) };
         b.SetResourceReference(Border.BackgroundProperty, bg);
         return b;
-    }
-
-    private static FrameworkElement HintRow(ChecklistFacts.Hint hint)
-    {
-        var (key, mark) = hint.Level switch
-        {
-            ChecklistFacts.Level.Ok => (Brand.K.SuccessText, "✓"),
-            ChecklistFacts.Level.Warn => (Brand.K.WarningText, "!"),
-            _ => (Brand.K.Muted, "i"),
-        };
-        var row = new DockPanel { Margin = new Thickness(0, 8, 0, 0) };
-        var icon = new Border { Width = 18, Height = 18, CornerRadius = new CornerRadius(9), BorderThickness = new Thickness(1.5), Margin = new Thickness(0, 0, 8, 0), VerticalAlignment = VerticalAlignment.Top };
-        icon.SetResourceReference(Border.BorderBrushProperty, key);
-        var glyph = Brand.Text(mark, key, 11, bold: true);
-        glyph.HorizontalAlignment = HorizontalAlignment.Center;
-        glyph.VerticalAlignment = VerticalAlignment.Center;
-        icon.Child = glyph;
-        DockPanel.SetDock(icon, Dock.Left);
-        row.Children.Add(icon);
-        var text = new TextBlock { TextWrapping = TextWrapping.Wrap, FontSize = 12 };
-        text.SetResourceReference(TextBlock.ForegroundProperty, Brand.K.Text);
-        text.Inlines.Add(new System.Windows.Documents.Run("The model: ") { FontWeight = FontWeights.SemiBold });
-        text.Inlines.Add(new System.Windows.Documents.Run(hint.Text));
-        row.Children.Add(text);
-        AutomationProperties.SetName(row, "The model: " + hint.Text);
-        return row;
     }
 
     private static RadioButton Segment(string text, string style, string group, string name)
@@ -778,6 +1136,7 @@ internal sealed class ChecklistWindow : Window
                  : "";
         card.NoteHint.Text = need;
         card.NoteHint.Visibility = need.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+        SyncPane(card);
     }
 
     private static string Word(string done) => done switch { ChecklistMath.Yes => "Yes", ChecklistMath.No => "No", _ => "N/A" };
@@ -811,6 +1170,9 @@ internal sealed class ChecklistWindow : Window
         r.Disagree = new StackPanel { Margin = new Thickness(0, 6, 0, 0) };
         AutomationProperties.SetName(r.Disagree, "Answered Yes but failed by the model check");
         page.Children.Add(r.Disagree);
+        r.Failing = new StackPanel { Margin = new Thickness(0, 8, 0, 0) };
+        AutomationProperties.SetName(r.Failing, "Where the automatic score loses points");
+        page.Children.Add(r.Failing);
 
         // Four tiles: Yes, No, N/A, not answered.
         var tiles = new UniformGrid { Columns = 4, Margin = new Thickness(0, 12, 0, 0) };
@@ -1004,7 +1366,7 @@ internal sealed class ChecklistWindow : Window
         r.AutoScore.Text = auto.Tested == 0 ? "–" : auto.Percent.ToString(CultureInfo.CurrentCulture) + "%";
         r.AutoScore.SetResourceReference(TextBlock.ForegroundProperty, auto.Tested == 0 ? Brand.K.Muted : auto.Fail == 0 ? Brand.K.SuccessText : Brand.K.WarningText);
         r.AutoSub.Text = auto.Tested == 0 ? "The model couldn't test any check. Read the model again on Project details."
-            : $"{auto.Pass} of {auto.Tested} checks the model can test pass. The other {p.Total - auto.Tested} need your eyes.";
+            : $"{auto.Pass} of the {auto.Tested} checks the model can test pass; {auto.Fail} fail (listed below). The other {p.Total - auto.Tested} checks can't be tested from the model, so they aren't in this score.";
         r.Disagree.Children.Clear();
         var disagree = ChecklistMath.Disagree(_def.Items, _state, Verdict);
         if (disagree.Count > 0) r.Disagree.Children.Add(Para("You answered Yes, but the model check says otherwise. Have another look:", Brand.K.WarningText, 12, 2));
@@ -1015,9 +1377,30 @@ internal sealed class ChecklistWindow : Window
             link.SetResourceReference(StyleProperty, "SpmLinkButton");
             AutomationProperties.SetName(link, $"Go to #{item.Number}");
             var id = item.Id;
-            link.Click += (_, _) => { if (_cards.TryGetValue(id, out var c)) { _stages.SelectedIndex = c.Stage; FocusCard(c); } };
+            link.Click += (_, _) => { if (_cards.TryGetValue(id, out var c)) GoTo(c); };
             r.Disagree.Children.Add(link);
         }
+        // Where the automatic score loses its points: every check the model test fails, with what it found.
+        r.Failing.Children.Clear();
+        var failing = _def.Items.Where(i => i.Auto.Length > 0 && Verdict(i.Auto) == false).ToList();
+        if (failing.Count > 0)
+        {
+            var head = Brand.Text($"Where the automatic score loses points ({failing.Count} checks fail)", Brand.K.Text, 13, bold: true);
+            head.Margin = new Thickness(0, 6, 0, 2);
+            r.Failing.Children.Add(head);
+            r.Failing.Children.Add(Para("Each one is a check the model test fails. Click one to see what's missing and how to fix it (some have a Fix button); then Check the model again.", Brand.K.Muted, 12, 0));
+            foreach (var item in failing)
+            {
+                var said = _facts.Hints.TryGetValue(item.Auto, out var h) ? h.Text : "";
+                var link = new Button { Content = Para($"#{item.Number} {item.Title}: {said}", Brand.K.Link, 12, 0), Cursor = Cursors.Hand, HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Left, Margin = new Thickness(0, 2, 0, 0), Padding = new Thickness(4, 2, 4, 2) };
+                link.SetResourceReference(StyleProperty, "SpmLinkButton");
+                AutomationProperties.SetName(link, $"Go to #{item.Number}");
+                var id = item.Id;
+                link.Click += (_, _) => { if (_cards.TryGetValue(id, out var c)) GoTo(c); };
+                r.Failing.Children.Add(link);
+            }
+        }
+        else if (auto.Tested > 0) r.Failing.Children.Add(Para("Every check the model can test passes.", Brand.K.SuccessText, 12, 4));
         r.Open.Text = p.Open.ToString(CultureInfo.CurrentCulture);
         r.BannerText.Text = p.Ready
             ? $"Ready for submission: all {p.Total} checks are Yes or N/A. The Word file or PDF will carry the signatures."
@@ -1032,7 +1415,7 @@ internal sealed class ChecklistWindow : Window
             var link = new Button { Content = Brand.Text(text, Brand.K.Link, 12), Cursor = Cursors.Hand, HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(0, 2, 0, 0), Padding = new Thickness(4, 2, 4, 2) };
             link.SetResourceReference(StyleProperty, "SpmLinkButton");
             AutomationProperties.SetName(link, "Go to " + text);
-            link.Click += (_, _) => { if (_cards.TryGetValue(id, out var c)) { _stages.SelectedIndex = c.Stage; FocusCard(c); } };
+            link.Click += (_, _) => { if (_cards.TryGetValue(id, out var c)) GoTo(c); };
             r.Problems.Children.Add(link);
         }
         if (problems.Count > 12) r.Problems.Children.Add(Para($"…and {problems.Count - 12} more. Go through the stages on the left: a red ! marks a stage with a No.", Brand.K.Muted, 12, 2));
@@ -1149,6 +1532,7 @@ internal sealed class ChecklistWindow : Window
         _next.IsEnabled = _def is not null && _stages.Items.Count > 1;
         _pdf.Visibility = last ? Visibility.Visible : Visibility.Collapsed;
         if (_stages.SelectedItem is TabItem { Content: UIElement page }) RichUi.FadeIn(page, _motion, fromX: 14, fromY: 0);
+        Layout();
         Changed(refresh: false);
     }
 
@@ -1187,12 +1571,22 @@ internal sealed class ChecklistWindow : Window
         var value = e.Key switch { Key.Y => ChecklistMath.Yes, Key.N => ChecklistMath.No, Key.A => ChecklistMath.NotApplicable, _ => "" };
         if (value.Length == 0) return;
         for (DependencyObject? node = Keyboard.FocusedElement as DependencyObject; node is not null; node = VisualTreeHelper.GetParent(node))
+        {
             if (node is Border { Tag: Card card })
             {
                 Answer(card, value, move: true);
                 e.Handled = true;
                 return;
             }
+            // In the details panel: the check it shows (the panel's own buttons move on).
+            if (node == _detail && _cards.TryGetValue(_selectedId, out var shown))
+            {
+                var button = value switch { ChecklistMath.Yes => _paneYes, ChecklistMath.No => _paneNo, _ => _paneNa };
+                if (button is not null) button.IsChecked = true;
+                e.Handled = true;
+                return;
+            }
+        }
     }
 
     // ---- Progress, draft ------------------------------------------------------------------------------------------

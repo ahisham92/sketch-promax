@@ -41,6 +41,7 @@ internal static class SettingsLayout
         ["SignatureRole"] = SignOff,
         ["SignatureImage"] = SignOff,
         ["ChecklistPath"] = SignOff,
+        ["ChecklistHelper"] = SignOff,
         ["AutoUpdate"] = Updates,
     };
 

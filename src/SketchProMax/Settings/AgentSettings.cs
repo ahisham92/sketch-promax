@@ -79,6 +79,13 @@ public sealed class AgentSettings
     /// <summary>The office's pre-submission checklist (.xlsx) the checklist window reads. Empty: asked the first time.</summary>
     public string ChecklistPath { get; set; } = "";
 
+    /// <summary>
+    /// Who helps with a checklist check the model test can't do (Ask the helper in the checklist's details): "promax"
+    /// sends it to the Sketch ProMax chat, "sketchpro" copies the question to paste into SketchPro's chat, "none" hides
+    /// the button.
+    /// </summary>
+    public string ChecklistHelper { get; set; } = "promax";
+
     public static string FilePath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "SketchProMax", "settings.json");
 

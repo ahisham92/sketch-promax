@@ -155,10 +155,21 @@ internal static class FieldTestCoverage
             "opening views and Revit's dialogs from the window, and the two scores, are judged by a person",
             "On a _detached copy: Issue > Pre-submission checklist. The blue header shows two rings, Your answers and Automatic check, with their percentages; " +
             "answer a check and Your answers sweeps to the new value. Buttons have icons, lift on hover and the Yes / No / N/A button pops when chosen; pages slide in. " +
-            "Set Settings > Chat > animations to Off and reopen: the same changes show at once. On the grids check click Show the grids: a plan named Sketch ProMax check - Grids opens with the grids. " +
+            "Set Settings > Chat > animations to Off and reopen: the same changes show at once. On the grids check (in the details panel) click Show the grids: a plan named Sketch ProMax check - Grids opens with the grids, beside the checklist. " +
             "Try Open the warnings (Revit's warnings list opens), Select the imported CAD and List the views (a schedule opens). Answer every check Yes: Review and sign shows " +
             "Your answers 100% and the automatic model check lower, and lists the checks you said Yes to that the model fails. Create the Word file: under the banner it says the " +
             "automatic model check result. Click Delete the checking views: they are gone from the Project Browser, except the one open in front, which it names."),
+        new("checklist.fix", Issue, "Pre-submission checklist: the Fix buttons", How.Probe, "",
+            "on the test project the Navisworks view is made, imported CAD and views on no sheet are deleted, groups used once are ungrouped and the landing view is set, then all rolled back (unloading links isn't probed: it can't be rolled back)"),
+        new("checklist.details", Issue, "Pre-submission checklist: the details panel, beside Revit, and the helper", How.Manual, "",
+            "the details panel, side-by-side mode, the Fix confirmations and the helper's answer in the chat are judged by a person",
+            "On a _detached copy: Issue > Pre-submission checklist, stage A. Each card shows a short title; click one: the panel on the right shows what the model found " +
+            "(with the full list, e.g. every level not named to the standard), How to fix, How to check and the checklist's wording, and Yes / No / N/A that follow the card. " +
+            "Use the panel's arrows to go through every check. On the grids check click Show the grids: the window becomes a narrow panel at the right of the screen and the plan opens in Revit, " +
+            "in view. Back to the full checklist puts the window where it was. On the unused views check click Fix it: it asks first, says what it will delete and that Ctrl+Z undoes it; " +
+            "Yes deletes them, the check turns to passes and the automatic score goes up. Click the Automatic check ring: Review and sign opens at the list of checks the model test fails. " +
+            "On check 15 click Ask Sketch ProMax to check: the Chat pane shows the question and the answer starts with PASS, FAIL or CAN'T TELL, and nothing in the model changes. " +
+            "Settings > Sign-off > Helper = SketchPro: the button copies the question (paste it into Notepad to see it); None: the button is gone."),
         new("checklist.edit", Issue, "Editing the pre-submission checklist, in Revit and through Excel", How.Manual, "",
             "the editor's lists, moves and confirmations and the Excel round trip in real Excel are judged by a person (the unit tests check the numbering, the answers and the Excel file)",
             "On a _detached copy: answer the first three checks, then Project details > Edit the checklist…: delete check 1, add a check in stage A, move a check down with Ctrl+Down, " +

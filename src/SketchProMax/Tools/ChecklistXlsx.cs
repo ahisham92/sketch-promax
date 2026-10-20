@@ -15,7 +15,7 @@ namespace SketchProMax.Tools;
 internal static class ChecklistXlsx
 {
     private static readonly string[] Headings =
-        ["#", "Check (what to do)", "Example / how to check", "Where it came from", "Found it on", "Priority", "Done (Y/N/NA)", "Checked by", "Date", "Notes"];
+        ["#", "Check (what to do)", "Example / how to check", "Where it came from", "Found it on", "Priority", "Done (Y/N/NA)", "Checked by", "Date", "Notes", "Short title", "How to fix"];
 
     private const int Wrap = 1, Bold = 2, Section = 3, Head = 4;
 
@@ -103,7 +103,7 @@ internal static class ChecklistXlsx
             {
                 var number = double.TryParse(item.Number, NumberStyles.Float, CultureInfo.InvariantCulture, out _);
                 Row((0, item.Number, Wrap, number), T(1, item.Check, Wrap), T(2, item.Example, Wrap), T(3, item.From, Wrap), T(4, item.FoundOn, Wrap),
-                    T(5, item.Priority, Wrap), T(9, Notes(item.Waiting), Wrap));
+                    T(5, item.Priority, Wrap), T(9, Notes(item.Waiting), Wrap), T(10, item.Short, Wrap), T(11, item.Fix, Wrap));
             }
         }
         Row();
@@ -115,7 +115,8 @@ internal static class ChecklistXlsx
         var cols = "<cols><col min=\"1\" max=\"1\" width=\"7\" customWidth=\"1\"/><col min=\"2\" max=\"2\" width=\"60\" customWidth=\"1\"/>" +
                    "<col min=\"3\" max=\"3\" width=\"50\" customWidth=\"1\"/><col min=\"4\" max=\"4\" width=\"34\" customWidth=\"1\"/>" +
                    "<col min=\"5\" max=\"6\" width=\"12\" customWidth=\"1\"/><col min=\"7\" max=\"9\" width=\"11\" customWidth=\"1\"/>" +
-                   "<col min=\"10\" max=\"10\" width=\"40\" customWidth=\"1\"/></cols>";
+                   "<col min=\"10\" max=\"10\" width=\"40\" customWidth=\"1\"/>" +
+                   "<col min=\"11\" max=\"11\" width=\"34\" customWidth=\"1\"/><col min=\"12\" max=\"12\" width=\"60\" customWidth=\"1\"/></cols>";
         var freeze = $"<sheetViews><sheetView workbookViewId=\"0\"><pane ySplit=\"{headRow}\" topLeftCell=\"A{headRow + 1}\" activePane=\"bottomLeft\" state=\"frozen\"/></sheetView></sheetViews>";
         return "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">" +
                freeze + cols + "<sheetData>" + rows + "</sheetData></worksheet>";

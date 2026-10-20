@@ -141,6 +141,21 @@ internal static class ChecklistTests
             built is null ? "null" : $"{built.Title}: {built.Items.Count()} checks, {built.Sections.Count} stages");
         if (built is null) return;
         check("checklist: built-in checks are numbered 1 to 57 in order", built.Items.Select(i => i.Id).SequenceEqual(Enumerable.Range(1, 57).Select(n => n.ToString())), "");
+        var wordy = built.Items.Where(i => i.Short.Length == 0 || i.Short.Length > 45 || i.Fix.Length == 0 || i.Title.Length >= i.Check.Length).Select(i => i.Number).ToList();
+        check("checklist: every built-in check has a short title (45 characters at most) and a way to fix it", wordy.Count == 0, "checks " + string.Join(", ", wordy));
+        var json = ToJson(built);
+        var named = new[] { "S26103", "WSP", "N25185", "D01C" }.Where(n => json.IndexOf(n, StringComparison.OrdinalIgnoreCase) >= 0).ToList();
+        check("checklist: the built-in checklist names no project or firm", named.Count == 0, string.Join(", ", named));
+        check("checklist: a check without a short title shows its first sentence",
+            new Item("1", "1", "Grids are in the model. They show in plans (BLDG-01).", "", "", "", "", "", "").Title == "Grids are in the model."
+            && new Item("1", "1", "One sentence only", "", "", "", "", "", "").Title == "One sentence only", "");
+        var question = ChecklistHelper.Question(built.Items.First(i => i.Number == "15"), "model.rvt", null);
+        check("checklist: the helper's question has the check, how to check, no changes and the PASS / FAIL answer",
+            question.Contains("check #15") && question.Contains("How to check:") && question.Contains("Don't change anything") && question.Contains("PASS, FAIL or CAN'T TELL")
+            && !question.Contains("Claude"), question);
+        check("checklist: the helper setting reads old and odd values as Sketch ProMax",
+            ChecklistHelper.Parse(null) == ChecklistHelper.ProMax && ChecklistHelper.Parse(" SketchPro ") == ChecklistHelper.SketchPro && ChecklistHelper.Parse("none") == ChecklistHelper.None
+            && ChecklistHelper.Button(ChecklistHelper.None) is null, "");
 
         // ---- Editing: delete a check and add one; answers follow their check
         var answered = new State();

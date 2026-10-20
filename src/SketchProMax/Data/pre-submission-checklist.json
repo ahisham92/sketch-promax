@@ -60,7 +60,9 @@
           "FoundOn": "BLDG-01, 08",
           "Priority": "High",
           "Waiting": "",
-          "Auto": "name002"
+          "Auto": "name002",
+          "Short": "File name has 002 after ABC",
+          "Fix": "Rename the working model so 002 follows ABC (File > Save As), then tell the team the new name."
         },
         {
           "Id": "2",
@@ -71,7 +73,9 @@
           "FoundOn": "BLDG-01, 08",
           "Priority": "High",
           "Waiting": "",
-          "Auto": ""
+          "Auto": "",
+          "Short": "Submitted copy ends _S03_Rxx",
+          "Fix": "Save the submitted copy as <model>_S03_R00 the first time; add 1 to Rxx for each resubmission."
         },
         {
           "Id": "3",
@@ -82,7 +86,9 @@
           "FoundOn": "BLDG-01, 08",
           "Priority": "High",
           "Waiting": "Client uses 2DM for sheet numbers, waiting for the BIM lead's reply on mail",
-          "Auto": "doctype"
+          "Auto": "doctype",
+          "Short": "Right doc type in the file name",
+          "Fix": "Use 3DM for the 3D model, 2DM for the Revit file with the sheets and DWG for drawings; rename the file if it's wrong."
         },
         {
           "Id": "4",
@@ -93,7 +99,9 @@
           "FoundOn": "",
           "Priority": "",
           "Waiting": "",
-          "Auto": ""
+          "Auto": "",
+          "Short": "Model number matches the MIDP",
+          "Fix": "Look the model up in the latest MIDP and rename the file to its number."
         },
         {
           "Id": "5",
@@ -104,7 +112,9 @@
           "FoundOn": "",
           "Priority": "",
           "Waiting": "",
-          "Auto": ""
+          "Auto": "",
+          "Short": "NWC and IFC named like the model",
+          "Fix": "Export the NWC and IFC again, or rename them, so only the extension differs from the model's name."
         },
         {
           "Id": "6",
@@ -115,7 +125,9 @@
           "FoundOn": "BLDG-01, 08",
           "Priority": "High",
           "Waiting": "BIM lead, 00 or MM (asked 19-Oct)",
-          "Auto": "levelfield"
+          "Auto": "levelfield",
+          "Short": "Level field is 00 for many levels",
+          "Fix": "Use 00 in the level field for a model covering many levels; don't use MM until the BIM lead agrees."
         },
         {
           "Id": "7",
@@ -126,7 +138,9 @@
           "FoundOn": "",
           "Priority": "",
           "Waiting": "",
-          "Auto": "filesize"
+          "Auto": "filesize",
+          "Short": "File is 300 MB or less",
+          "Fix": "Purge unused (Manage > Purge Unused, or Check > Purge & cleanup), delete unused views and imported CAD, then e-Transmit and check the output size."
         }
       ]
     },
@@ -142,7 +156,9 @@
           "FoundOn": "BLDG-01, 08",
           "Priority": "High",
           "Waiting": "",
-          "Auto": "urs"
+          "Auto": "urs",
+          "Short": "URS linked by shared coordinates",
+          "Fix": "Link the URS By Shared Coordinates on the Z_Link_URS workset, then Collaborate > Copy/Monitor > Select Link > URS for grids and levels."
         },
         {
           "Id": "9",
@@ -153,7 +169,9 @@
           "FoundOn": "BLDG-01",
           "Priority": "High",
           "Waiting": "",
-          "Auto": "grids"
+          "Auto": "grids",
+          "Short": "Grids are modelled and visible",
+          "Fix": "Copy/Monitor the grids from the URS, and make sure no view template or filter hides them in plans."
         },
         {
           "Id": "10",
@@ -164,7 +182,9 @@
           "FoundOn": "BLDG-01, 08",
           "Priority": "High",
           "Waiting": "",
-          "Auto": "levels"
+          "Auto": "levels",
+          "Short": "Levels: unused gone, standard names",
+          "Fix": "Delete levels nothing is hosted on, and rename the rest to the standard (BLDG n LVL ...)."
         },
         {
           "Id": "11",
@@ -175,7 +195,9 @@
           "FoundOn": "BLDG-01, 08, 15",
           "Priority": "High",
           "Waiting": "",
-          "Auto": "worksets"
+          "Auto": "worksets",
+          "Short": "Elements on the right worksets",
+          "Fix": "Select what's on Workset1 or on Shared Levels and Grids and move it to its standard workset (Properties > Workset); add any missing Z_Link_ worksets."
         },
         {
           "Id": "12",
@@ -186,7 +208,9 @@
           "FoundOn": "BLDG-03",
           "Priority": "",
           "Waiting": "",
-          "Auto": ""
+          "Auto": "",
+          "Short": "No unapproved new worksets",
+          "Fix": "Move elements off any workset the BIM Managers didn't agree, then delete it (Collaborate > Worksets)."
         },
         {
           "Id": "13",
@@ -197,7 +221,9 @@
           "FoundOn": "",
           "Priority": "",
           "Waiting": "",
-          "Auto": "scopeboxes"
+          "Auto": "scopeboxes",
+          "Short": "Scope boxes copied from the URS",
+          "Fix": "Copy the scope boxes from the URS (Copy/Monitor) and keep their URS names (BLDG-NN-NNNN)."
         }
       ]
     },
@@ -213,7 +239,9 @@
           "FoundOn": "BLDG-01, 08",
           "Priority": "High",
           "Waiting": "",
-          "Auto": "categories"
+          "Auto": "categories",
+          "Short": "Right categories, no Generic Models",
+          "Fix": "Rebuild each Generic Model with a family of the right category (e.g. a pit as Structural Foundation)."
         },
         {
           "Id": "15",
@@ -224,7 +252,9 @@
           "FoundOn": "BLDG-01, 08",
           "Priority": "High",
           "Waiting": "CamelCase or UPPERCASE (BIM lead, BIM team)",
-          "Auto": ""
+          "Auto": "",
+          "Short": "Family and type names are standard",
+          "Fix": "Rename families and types to the standard pattern, e.g. FN_SC_40MPa_Raft_600, or ask Sketch ProMax in the chat to rename them."
         },
         {
           "Id": "16",
@@ -235,7 +265,9 @@
           "FoundOn": "BLDG-01",
           "Priority": "",
           "Waiting": "",
-          "Auto": ""
+          "Auto": "",
+          "Short": "Proper families, no free shapes",
+          "Fix": "Replace in-place or generic shapes with the proper system or loadable family."
         },
         {
           "Id": "17",
@@ -246,7 +278,9 @@
           "FoundOn": "BLDG-01",
           "Priority": "",
           "Waiting": "",
-          "Auto": ""
+          "Auto": "",
+          "Short": "Columns level by level",
+          "Fix": "Split continuous columns at each level; keep only double-height ones with no slab, and list them."
         },
         {
           "Id": "18",
@@ -257,7 +291,9 @@
           "FoundOn": "BLDG-01, 08",
           "Priority": "High",
           "Waiting": "",
-          "Auto": ""
+          "Auto": "",
+          "Short": "No duplicates or overlaps",
+          "Fix": "Fix Revit's 'identical instances' and overlap warnings; join or cut overlapping concrete so it isn't counted twice."
         },
         {
           "Id": "19",
@@ -268,7 +304,9 @@
           "FoundOn": "BLDG-01, 08",
           "Priority": "High",
           "Waiting": "",
-          "Auto": ""
+          "Auto": "",
+          "Short": "No floating elements",
+          "Fix": "Look at each column and beam in 3D for a support under it, and add or move what's missing."
         },
         {
           "Id": "20",
@@ -279,7 +317,9 @@
           "FoundOn": "BLDG-01, 08",
           "Priority": "High",
           "Waiting": "",
-          "Auto": ""
+          "Auto": "",
+          "Short": "Building-edge elements in one model",
+          "Fix": "Agree with the next building's modeller which model owns each edge element, and move or delete the duplicates."
         },
         {
           "Id": "21",
@@ -290,7 +330,9 @@
           "FoundOn": "BLDG-01",
           "Priority": "",
           "Waiting": "",
-          "Auto": ""
+          "Auto": "",
+          "Short": "Nothing missing vs ARC and design",
+          "Fix": "Overlay the latest ARC model and design markups and model whatever is missing."
         },
         {
           "Id": "22",
@@ -301,7 +343,9 @@
           "FoundOn": "",
           "Priority": "",
           "Waiting": "",
-          "Auto": ""
+          "Auto": "",
+          "Short": "No other trades' elements",
+          "Fix": "Delete ARC walls, MEP pipes and other trades' elements from your model; they come from their own links."
         },
         {
           "Id": "23",
@@ -312,7 +356,9 @@
           "FoundOn": "BLDG-01",
           "Priority": "",
           "Waiting": "",
-          "Auto": "imports"
+          "Auto": "imports",
+          "Short": "No imported CAD",
+          "Fix": "Delete imported CAD (Manage > Imports) and draw typical details in Revit, or keep the CAD inside one dedicated family."
         },
         {
           "Id": "24",
@@ -323,7 +369,9 @@
           "FoundOn": "",
           "Priority": "",
           "Waiting": "",
-          "Auto": "groups"
+          "Auto": "groups",
+          "Short": "Model groups kept to a minimum",
+          "Fix": "Ungroup groups that are used only once."
         },
         {
           "Id": "25",
@@ -334,18 +382,22 @@
           "FoundOn": "BLDG-01, 08",
           "Priority": "High",
           "Waiting": "which parameter / Client 'MDS'",
-          "Auto": ""
+          "Auto": "",
+          "Short": "UniFormat code on every element",
+          "Fix": "Fill the Classification (UniFormat) code on every type, e.g. raft A1020.60, pile cap A1020.70."
         },
         {
           "Id": "26",
           "Number": "26",
           "Check": "Project parameters follow the naming rule. Parameters from other firms or old projects are deleted. Temporary design-stage parameters are marked.",
-          "Example": "Delete 'WSP Design Parameters'. Manage > Project Parameters",
+          "Example": "Delete another firm's design parameters. Manage > Project Parameters",
           "From": "Client BIM-06 (BLDG-02)",
           "FoundOn": "BLDG-02",
           "Priority": "High",
           "Waiting": "",
-          "Auto": ""
+          "Auto": "",
+          "Short": "Project parameters are clean",
+          "Fix": "Delete parameters from other firms or old projects (Manage > Project Parameters), rename the rest to the rule and mark temporary ones."
         },
         {
           "Id": "27",
@@ -356,7 +408,9 @@
           "FoundOn": "",
           "Priority": "",
           "Waiting": "",
-          "Auto": ""
+          "Auto": "",
+          "Short": "IFC entity and type are set",
+          "Fix": "Set IfcExportAs and IfcExportType on each type (or instance), e.g. pile cap IfcFooting / PILE_CAP."
         },
         {
           "Id": "28",
@@ -367,7 +421,9 @@
           "FoundOn": "BLDG-01, 08",
           "Priority": "High",
           "Waiting": "",
-          "Auto": "warnings"
+          "Auto": "warnings",
+          "Short": "Warnings fixed or explained",
+          "Fix": "Open Manage > Review Warnings, fix identical instances and join warnings first, and list any left with a reason in the Health Check report."
         }
       ]
     },
@@ -378,23 +434,27 @@
           "Id": "29",
           "Number": "29",
           "Check": "Landing page is LandingPage.rfa for this project and this building (not copied from another job), all red fields are filled, and it opens as the Starting View.",
-          "Example": "Path: P:\\S26103-0100D\\0-CMN\\Shared\\Titleblock\\Latest\\LandingPage.rfa\nFill: 3D shot, key plan, building name and code, file name, stage, discipline, WIP or Submission, revision R00 + date, group leader, coordinator.\nBLDG-01 was rejected because its landing page was from another project.",
+          "Example": "Path: P:\\PRJ1\\0-CMN\\Shared\\Titleblock\\Latest\\LandingPage.rfa\nFill: 3D shot, key plan, building name and code, file name, stage, discipline, WIP or Submission, revision R00 + date, group leader, coordinator.\nBLDG-01 was rejected because its landing page was from another project.",
           "From": "Client BIM-04 (D, BLDG-01), BIM-02 (BLDG-02); BIM lead 11-Oct §9",
           "FoundOn": "BLDG-01, 08",
           "Priority": "High",
           "Waiting": "",
-          "Auto": "landing"
+          "Auto": "landing",
+          "Short": "Landing page is the starting view",
+          "Fix": "Load this project's LandingPage.rfa, fill its red fields, place it on its own view and set that view in Manage > Starting View."
         },
         {
           "Id": "30",
           "Number": "30",
           "Check": "All sheets use the title block PRJ1-000-00-ABC-DES-TMP-0000-C.rfa.",
-          "Example": "Path: P:\\S26103-0100D\\0-CMN\\Shared\\Titleblock\\Latest\\PRJ1-000-00-ABC-DES-TMP-0000-C.rfa",
+          "Example": "Path: P:\\PRJ1\\0-CMN\\Shared\\Titleblock\\Latest\\PRJ1-000-00-ABC-DES-TMP-0000-C.rfa",
           "From": "BIM lead QA/QC #13",
           "FoundOn": "",
           "Priority": "",
           "Waiting": "",
-          "Auto": "titleblock"
+          "Auto": "titleblock",
+          "Short": "Right title block on every sheet",
+          "Fix": "Swap every sheet's title block to PRJ1-000-00-ABC-DES-TMP-0000-C, or ask Sketch ProMax in the chat to swap them."
         },
         {
           "Id": "31",
@@ -405,7 +465,9 @@
           "FoundOn": "BLDG-02",
           "Priority": "",
           "Waiting": "",
-          "Auto": ""
+          "Auto": "",
+          "Short": "Title block shows the file name",
+          "Fix": "Correct the model name in the title block so it matches the file name exactly."
         },
         {
           "Id": "32",
@@ -416,7 +478,9 @@
           "FoundOn": "BLDG-02",
           "Priority": "",
           "Waiting": "approved scale list",
-          "Auto": "scales"
+          "Auto": "scales",
+          "Short": "Approved drawing scales",
+          "Fix": "Change views on sheets to an approved scale such as 1:100 or 1:200 (not 1:300)."
         },
         {
           "Id": "33",
@@ -427,7 +491,9 @@
           "FoundOn": "BLDG-01, 08",
           "Priority": "High",
           "Waiting": "",
-          "Auto": ""
+          "Auto": "",
+          "Short": "Sheets made from model views",
+          "Fix": "Replace any CAD-drawing sheet with model views, and keep a sheet list showing the views on each sheet."
         },
         {
           "Id": "34",
@@ -438,7 +504,9 @@
           "FoundOn": "BLDG-01",
           "Priority": "",
           "Waiting": "",
-          "Auto": ""
+          "Auto": "",
+          "Short": "No detail lines faking elements",
+          "Fix": "Model the real element (beam, wall, slab) and delete the detail lines or filled regions standing in for it."
         },
         {
           "Id": "35",
@@ -449,7 +517,9 @@
           "FoundOn": "BLDG-01",
           "Priority": "",
           "Waiting": "",
-          "Auto": "drawinglist"
+          "Auto": "drawinglist",
+          "Short": "Drawing list and General Notes sheets",
+          "Fix": "Make a sheet list schedule and place it on the List of Drawings sheet, and add a General Notes sheet."
         },
         {
           "Id": "36",
@@ -460,7 +530,9 @@
           "FoundOn": "BLDG-01, 08",
           "Priority": "High",
           "Waiting": "",
-          "Auto": ""
+          "Auto": "",
+          "Short": "Drawing list complete for the stage",
+          "Fix": "Add every drawing the stage needs, plus the drawings it relies on, to the set and the drawing list."
         },
         {
           "Id": "37",
@@ -471,7 +543,9 @@
           "FoundOn": "BLDG-01, 08",
           "Priority": "High",
           "Waiting": "",
-          "Auto": ""
+          "Auto": "",
+          "Short": "Every type has a hatch in the legend",
+          "Fix": "Give every type and thickness its own hatch through filters, and show each one in the legend."
         },
         {
           "Id": "38",
@@ -482,7 +556,9 @@
           "FoundOn": "BLDG-01, 08",
           "Priority": "High",
           "Waiting": "standard template / filter list",
-          "Auto": ""
+          "Auto": "",
+          "Short": "Browser and templates match the trade",
+          "Fix": "Compare with the trade's standard template and copy its browser organisation, view templates and filters (Transfer Project Standards)."
         },
         {
           "Id": "39",
@@ -493,7 +569,9 @@
           "FoundOn": "BLDG-01, 08",
           "Priority": "High",
           "Waiting": "view naming rule",
-          "Auto": ""
+          "Auto": "",
+          "Short": "Views in folders, clearly named",
+          "Fix": "Give every view its folder parameters so no '???' group is left, and rename unclear views."
         },
         {
           "Id": "40",
@@ -504,7 +582,9 @@
           "FoundOn": "BLDG-02",
           "Priority": "",
           "Waiting": "",
-          "Auto": "viewtemplates"
+          "Auto": "viewtemplates",
+          "Short": "Right view template on each view",
+          "Fix": "Apply the plan, section and 3D templates to their views; don't leave every view on Coordination."
         },
         {
           "Id": "41",
@@ -515,7 +595,9 @@
           "FoundOn": "",
           "Priority": "",
           "Waiting": "",
-          "Auto": "unusedviews"
+          "Auto": "unusedviews",
+          "Short": "Unused views deleted",
+          "Fix": "Delete views that aren't on a sheet, keeping the 3D Navisworks Export view (or use Check > Purge & cleanup)."
         },
         {
           "Id": "42",
@@ -526,7 +608,9 @@
           "FoundOn": "BLDG-01, 08",
           "Priority": "High",
           "Waiting": "tick Schedules in e-Transmit or put them on sheets",
-          "Auto": ""
+          "Auto": "",
+          "Short": "Used schedules kept",
+          "Fix": "Keep the schedules you use, such as the foundation schedule, in the submitted model."
         }
       ]
     },
@@ -542,7 +626,9 @@
           "FoundOn": "",
           "Priority": "",
           "Waiting": "",
-          "Auto": ""
+          "Auto": "",
+          "Short": "No clashes inside your trade",
+          "Fix": "Run the self-clash tests (e.g. STR beams vs columns) in Navisworks and fix them."
         },
         {
           "Id": "44",
@@ -553,7 +639,9 @@
           "FoundOn": "BLDG-01, 08",
           "Priority": "High",
           "Waiting": "",
-          "Auto": ""
+          "Auto": "",
+          "Short": "Federated clashes fixed",
+          "Fix": "Run your clash tests in the federated model and fix your clashes (in Trade-1_Vs_Trade-2, Trade 1 fixes)."
         },
         {
           "Id": "45",
@@ -564,7 +652,9 @@
           "FoundOn": "BLDG-01, 08",
           "Priority": "High",
           "Waiting": "",
-          "Auto": ""
+          "Auto": "",
+          "Short": "Model Checker score 90% or more",
+          "Fix": "Run the Model Checker template, fix until it scores 90% or more and keep the score in the QA/QC record."
         },
         {
           "Id": "46",
@@ -575,7 +665,9 @@
           "FoundOn": "BLDG-01, 08",
           "Priority": "High",
           "Waiting": "",
-          "Auto": ""
+          "Auto": "",
+          "Short": "Signed checklist and Health Check",
+          "Fix": "Sign this checklist (group leader and BIM coordinator) and put the Model Health Check report in the package."
         }
       ]
     },
@@ -591,7 +683,9 @@
           "FoundOn": "",
           "Priority": "",
           "Waiting": "",
-          "Auto": "navisview"
+          "Auto": "navisview",
+          "Short": "3D Navisworks Export view ready",
+          "Fix": "Make a 3D view named ...3D Navisworks Export with the trade template: your elements only, no levels, grids or rooms, wireframe."
         },
         {
           "Id": "48",
@@ -602,7 +696,9 @@
           "FoundOn": "BLDG-03",
           "Priority": "",
           "Waiting": "",
-          "Auto": "central"
+          "Auto": "central",
+          "Short": "NWC from the synced central",
+          "Fix": "Sync with central, then export the NWC from the central model, not a local copy."
         },
         {
           "Id": "49",
@@ -613,7 +709,9 @@
           "FoundOn": "",
           "Priority": "",
           "Waiting": "",
-          "Auto": ""
+          "Auto": "",
+          "Short": "NWC settings are right",
+          "Fix": "In the NWC export options use shared coordinates, current view, divide into levels, convert element IDs and all parameters; don't convert links."
         },
         {
           "Id": "50",
@@ -624,7 +722,9 @@
           "FoundOn": "",
           "Priority": "",
           "Waiting": "the .json setup file",
-          "Auto": ""
+          "Auto": "",
+          "Short": "IFC settings are right",
+          "Fix": "Export IFC 4x3 with the 'MOD IFC Export Setup' and shared coordinates; visible elements only, no links."
         },
         {
           "Id": "51",
@@ -635,7 +735,9 @@
           "FoundOn": "",
           "Priority": "",
           "Waiting": "",
-          "Auto": ""
+          "Auto": "",
+          "Short": "NWC published Monday and after fixes",
+          "Fix": "Publish the NWC to the Shared folder on Monday, then again after fixes before you submit."
         }
       ]
     },
@@ -651,7 +753,9 @@
           "FoundOn": "BLDG-01, 08",
           "Priority": "High",
           "Waiting": "",
-          "Auto": "links"
+          "Auto": "links",
+          "Short": "Detached, links unloaded, own model",
+          "Fix": "Detach the model, unload every Revit link, and leave other trades' models out of the ZIP."
         },
         {
           "Id": "53",
@@ -662,7 +766,9 @@
           "FoundOn": "",
           "Priority": "",
           "Waiting": "",
-          "Auto": ""
+          "Auto": "",
+          "Short": "e-Transmit settings are right",
+          "Fix": "In e-Transmit purge unused, include CAD links and images, keep views on sheets plus the Navisworks view, and untick linked Revit models."
         },
         {
           "Id": "54",
@@ -673,7 +779,9 @@
           "FoundOn": "BLDG-01",
           "Priority": "",
           "Waiting": "BIM lead",
-          "Auto": ""
+          "Auto": "",
+          "Short": "Other-trade backgrounds handled",
+          "Fix": "Agree how sheets with another trade's background are handled, since unloaded links show blank."
         },
         {
           "Id": "55",
@@ -684,7 +792,9 @@
           "FoundOn": "",
           "Priority": "",
           "Waiting": "",
-          "Auto": ""
+          "Auto": "",
+          "Short": "Civil 3D package complete",
+          "Fix": "Civil 3D only: one ZIP per model with fonts, textures, data links and photometric files. Mark N/A for Revit."
         },
         {
           "Id": "56",
@@ -695,7 +805,9 @@
           "FoundOn": "BLDG-01, 08",
           "Priority": "High",
           "Waiting": "",
-          "Auto": ""
+          "Auto": "",
+          "Short": "Package has everything",
+          "Fix": "Check the package has native, IFC and NWC; DWG and PDF drawings; BOQ if needed; and the reports."
         },
         {
           "Id": "57",
@@ -706,7 +818,9 @@
           "FoundOn": "BLDG-01",
           "Priority": "",
           "Waiting": "",
-          "Auto": ""
+          "Auto": "",
+          "Short": "Package opens cleanly",
+          "Fix": "Unzip the package into a clean folder and open it: it should open on the landing page with worksets and views right."
         }
       ]
     }

@@ -31,6 +31,24 @@ internal static class ChecklistMath
     {
         [System.Text.Json.Serialization.JsonIgnore]
         public bool High => Priority.Trim().Equals("High", StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>A few plain words for the list (the office's full wording stays in Check, and goes in the Word file).</summary>
+        public string Short { get; init; } = "";
+
+        /// <summary>How to put it right when it isn't done.</summary>
+        public string Fix { get; init; } = "";
+
+        /// <summary>What the list shows: the short title, else the check's first sentence.</summary>
+        [System.Text.Json.Serialization.JsonIgnore]
+        public string Title => Short.Trim().Length > 0 ? Short.Trim() : FirstSentence(Check);
+    }
+
+    /// <summary>The first sentence of <paramref name="text"/> (all of it when it has one).</summary>
+    public static string FirstSentence(string text)
+    {
+        text = (text ?? "").Trim();
+        var m = Regex.Match(text, @"^.+?[.!?](?=\s+[A-Z(])");
+        return m.Success ? m.Value : text;
     }
 
     public sealed record Section(string Title, IReadOnlyList<Item> Items);
@@ -442,6 +460,7 @@ internal static class ChecklistMath
         int number = head.First(p => p.Value.Trim() == "#").Key;
         int check = Col("Check");
         int example = Col("Example"), from = Col("Where it came", "Source", "Reference"), found = Col("found it on"), priority = Col("Priority"), notes = Col("Notes", "Remarks");
+        int shortTitle = Col("Short title"), fix = Col("How to fix");
         string Cell(Dictionary<int, string> cells, int col) => col >= 0 && cells.TryGetValue(col, out var v) ? v.Trim() : "";
 
         var def = new Definition();
@@ -486,7 +505,8 @@ internal static class ChecklistMath
                 for (var k = 2; !ids.Add(id); k++) id = num + "-" + k;
                 var note = Cell(cells, notes);
                 var waiting = Regex.IsMatch(note, @"^\s*(Waiting|Open point|TBC)\b", RegexOptions.IgnoreCase) ? Regex.Replace(note, @"^\s*Waiting\s*:\s*", "", RegexOptions.IgnoreCase) : "";
-                items.Add(new Item(id, num, text, Cell(cells, example), Cell(cells, from), Cell(cells, found), Cell(cells, priority), waiting, AutoKey(text)));
+                items.Add(new Item(id, num, text, Cell(cells, example), Cell(cells, from), Cell(cells, found), Cell(cells, priority), waiting, AutoKey(text))
+                    { Short = Cell(cells, shortTitle), Fix = Cell(cells, fix) });
                 continue;
             }
             // Text in the first column and nothing in the check column: a section (a note row with text across is ignored).

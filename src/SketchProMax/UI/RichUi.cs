@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Markup;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
@@ -25,6 +26,8 @@ internal static class RichUi
         public const string Next = "", Back = "", Close = "", Word = "", Pdf = "", Print = "", Folder = "",
             Open = "", Delete = "", Edit = "", Refresh = "", Eye = "", Undo = "", Add = "", Up = "",
             Down = "", Save = "", Import = "", Export = "", Picture = "", Reset = "";
+        /// <summary>Repair, dock right, full screen, chat bubbles.</summary>
+        public const string Fix = "\uE90F", Side = "\uE90D", Expand = "\uE740", Ask = "\uE8F2";
     }
 
     private static readonly FontFamily Icons = new("Segoe Fluent Icons, Segoe MDL2 Assets");
@@ -205,7 +208,25 @@ internal sealed class ScoreRing : StackPanel
         Children.Add(ring);
         Children.Add(new TextBlock { Text = label, FontSize = 11, Foreground = new SolidColorBrush(Color.FromArgb(0xE6, 0xFF, 0xFF, 0xFF)), HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 3, 0, 0) });
         AutomationProperties.SetName(this, label);
+        // Clickable (and Enter / Space with the keyboard) when someone listens: the checklist opens the score's breakdown.
+        Background = Brushes.Transparent;
+        MouseLeftButtonUp += (_, e) => { if (Clicked is { } go) { go(); e.Handled = true; } };
+        KeyDown += (_, e) => { if (e.Key is Key.Enter or Key.Space && Clicked is { } go) { go(); e.Handled = true; } };
         Draw();
+    }
+
+    private Action? _clicked;
+
+    /// <summary>Runs when the ring is clicked; setting it makes the ring look and act like a button.</summary>
+    public Action? Clicked
+    {
+        get => _clicked;
+        set
+        {
+            _clicked = value;
+            Cursor = value is null ? null : Cursors.Hand;
+            Focusable = value is not null;
+        }
     }
 
     /// <summary>Sets the percentage (null: unknown) and its colour; the arc sweeps there and the number counts up.</summary>
