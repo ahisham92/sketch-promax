@@ -7,8 +7,8 @@ namespace SketchProMax.Tools;
 
 /// <summary>
 /// Checklists per project, kept for this Windows user only in %APPDATA%\SketchProMax\project checklists: named
-/// checklists (made by picking checks from another one, or imported from Excel), which one each project uses (by the
-/// project code at the start of the model's file name), and the password asked before checks are changed. Add-in
+/// checklists (each starts as a copy of the Default, or is imported from Excel), which one each project uses (by the
+/// project code at the start of the model's file name), and the password that protects the Default checklist. Add-in
 /// updates and shared packs never write here, so nothing in it is overwritten. No Revit API.
 /// </summary>
 internal static class ChecklistProjects
@@ -133,20 +133,57 @@ internal static class ChecklistProjects
         File.WriteAllText(MapPath, JsonSerializer.Serialize(map, new JsonSerializerOptions { WriteIndented = true }));
     }
 
-    /// <summary>A new checklist with only the picked checks (by id), stages with none dropped, numbered 1, 2, 3… again.</summary>
-    public static ChecklistMath.Definition Pick(ChecklistMath.Definition from, string title, ICollection<string> pickedIds)
+    /// <summary>A new checklist that starts as a copy of <paramref name="from"/> (the Default), under its own title.</summary>
+    public static ChecklistMath.Definition Copy(ChecklistMath.Definition from, string title)
     {
-        var def = new ChecklistMath.Definition
-        {
-            Title = title.Trim(),
-            Fields = from.Fields.ToList(),
-            Rules = new(from.Rules, StringComparer.Ordinal),
-            Signatories = from.Signatories.ToList(),
-            Sections = from.Sections.Select(s => new ChecklistMath.Section(s.Title, s.Items.Where(i => pickedIds.Contains(i.Id)).ToList()))
-                .Where(s => s.Items.Count > 0).ToList(),
-            SourceStamp = DateTime.Now.ToString("dd-MMM-yyyy HH:mm", System.Globalization.CultureInfo.InvariantCulture),
-        };
+        var def = ChecklistMath.FromJson<ChecklistMath.Definition>(ChecklistMath.ToJson(from)) ?? throw new InvalidOperationException("The checklist couldn't be copied.");
+        def.Title = title.Trim();
+        def.SourceStamp = DateTime.Now.ToString("dd-MMM-yyyy HH:mm", System.Globalization.CultureInfo.InvariantCulture);
         return ChecklistMath.Renumber(def);
+    }
+
+    /// <summary>Where Make this the Default for everyone saves the next Default, for the next update to carry.</summary>
+    public static string NextDefaultPath => Path.Combine(DocumentsForTests ?? Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Sketch ProMax", "Default checklist for the next update.json");
+
+    /// <summary>The tests point this at a temporary folder.</summary>
+    internal static string? DocumentsForTests;
+
+    /// <summary>Saves <paramref name="def"/> as the next Default (the built-in checklist's layout); returns where.</summary>
+    public static string SaveNextDefault(ChecklistMath.Definition def)
+    {
+        var copy = ChecklistMath.FromJson<ChecklistMath.Definition>(ChecklistMath.ToJson(def)) ?? throw new InvalidOperationException("The checklist couldn't be copied.");
+        copy.SourcePath = "";
+        copy.SourceStamp = "";
+        var path = NextDefaultPath;
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, ChecklistMath.ToJson(ChecklistMath.Renumber(copy)));
+        return path;
+    }
+
+    // ---- A person's own checking rules on the Default --------------------------------------------------------------
+
+    /// <summary>
+    /// The rules <paramref name="mine"/> sets differently from <paramref name="theDefault"/> (a rule not set counts as
+    /// its built-in default): kept apart, so the Default can still be updated under them.
+    /// </summary>
+    public static Dictionary<string, string> OwnRules(ChecklistMath.Definition mine, ChecklistMath.Definition theDefault)
+    {
+        var own = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var rule in ChecklistMath.RuleDefs)
+        {
+            var value = mine.Rules.TryGetValue(rule.Key, out var m) ? m : rule.Default;
+            var given = theDefault.Rules.TryGetValue(rule.Key, out var d) ? d : rule.Default;
+            if (value != given) own[rule.Key] = value;
+        }
+        return own;
+    }
+
+    /// <summary>The Default with a person's own rules laid over it.</summary>
+    public static ChecklistMath.Definition WithRules(ChecklistMath.Definition theDefault, IReadOnlyDictionary<string, string> own)
+    {
+        foreach (var pair in own)
+            if (ChecklistMath.RuleDefs.Any(r => r.Key == pair.Key)) theDefault.Rules[pair.Key] = pair.Value;
+        return theDefault;
     }
 
     // ---- The editing password ---------------------------------------------------------------------------------------

@@ -28,16 +28,39 @@ internal static class ChecklistStore
         {
             if (ChecklistProjects.Read(own) is { } def) return (def, "");
             var (office, note) = Load(settings);
-            return (office, $"The checklist {own} picked for this project can't be read, so the office checklist is shown. " + note);
+            return (office, $"The checklist {own} picked for this project can't be read, so the Default checklist is shown. " + note);
         }
         return Load(settings);
     }
 
-    /// <summary>Saves a checklist where it came from: a project checklist to its own file, else as the office checklist.</summary>
+    /// <summary>
+    /// Saves a checklist where it came from: a project checklist to its own file; the Default's checking rules alone
+    /// (they name a person's own files and folders) beside it, so Default updates still reach them; else as the
+    /// office checklist.
+    /// </summary>
     public static void SaveInUse(ChecklistMath.Definition def)
     {
         if (ChecklistProjects.NameOf(def.SourcePath) is { } name) ChecklistProjects.Save(name, def);
+        else if (def.SourcePath == ChecklistMath.BuiltInSource && ChecklistMath.BuiltIn() is { } builtIn)
+        {
+            Directory.CreateDirectory(Folder);
+            File.WriteAllText(RulesPath, System.Text.Json.JsonSerializer.Serialize(ChecklistProjects.OwnRules(def, builtIn)));
+        }
         else Save(def);
+    }
+
+    /// <summary>Your own checking rules on the Default checklist.</summary>
+    private static string RulesPath => Path.Combine(Folder, "checklist rules.json");
+
+    private static ChecklistMath.Definition WithOwnRules(ChecklistMath.Definition builtIn)
+    {
+        try
+        {
+            if (File.Exists(RulesPath) && System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(RulesPath)) is { } own)
+                return ChecklistProjects.WithRules(builtIn, own);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException) { }
+        return builtIn;
     }
 
     /// <summary>The office checklist to use, and a note to show when something couldn't be read (empty when all is well).</summary>
@@ -81,7 +104,7 @@ internal static class ChecklistStore
         catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException) { }
         var builtIn = ChecklistMath.BuiltIn();
         if (builtIn is null && note.Length == 0) note = "The built-in checklist couldn't be read. Pick your office's checklist Excel file.";
-        return (builtIn, note);
+        return (builtIn is null ? null : WithOwnRules(builtIn), note);
     }
 
     /// <summary>Saves the checklist in use (imported or edited). Throws IOException / UnauthorizedAccessException when it can't.</summary>

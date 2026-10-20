@@ -17,7 +17,8 @@ internal sealed class ChecklistSettingsWindow : Window
 {
     /// <summary>What the checklist window does for the buttons here.</summary>
     public sealed record Actions(Action RunQuick, Action RunSlow, Action EditChecklist, Action EditRules,
-        Action<string> UseForProject, Action NewFromPicks, Action ImportForProject, Action Export, Action DeleteProjectChecklist, Action ChangePassword);
+        Action<string> UseForProject, Action NewChecklist, Action ImportForProject, Action Export, Action DeleteProjectChecklist, Action ChangePassword,
+        Action MakeDefault);
 
     /// <summary>The project the checklist is for, the project checklist it uses ("" for the office one), and those on this PC.</summary>
     public sealed record Project(string Code, string InUse, IReadOnlyList<string> Names);
@@ -79,7 +80,8 @@ internal sealed class ChecklistSettingsWindow : Window
         page.Children.Add(Para("Sketch ProMax chat: the check goes to the chat, which looks at the model and says pass or fail. SketchPro: its Copilot opens with the question pasted in, for you to send. None: no Ask buttons.", Brand.K.Muted, 11.5));
 
         page.Children.Add(Section("The checklist"));
-        page.Children.Add(Para("Edit the checklist adds, changes, moves or deletes checks and stages (also through Excel). Checking rules set what the automatic test compares the model with: name patterns, scales, worksets, parameters."));
+        page.Children.Add(Para("Edit the checklist adds, changes, moves or deletes checks and stages (also through Excel). Checking rules set what the automatic test compares the model with: name patterns, scales, worksets, parameters." +
+                               (project.InUse.Length > 0 ? "" : " This project uses the Default checklist, so changing its checks asks for the password; your own Checking rules (your files and folders) don't, and Default updates still reach you.")));
         page.Children.Add(Row(
             Do(RichUi.Button(RichUi.Icon.Edit, "Edit the checklist…"), actions.EditChecklist),
             Do(RichUi.Button(RichUi.Icon.Edit, "Checking rules…"), actions.EditRules)));
@@ -87,13 +89,13 @@ internal sealed class ChecklistSettingsWindow : Window
         page.Children.Add(Section("Checklist for this project"));
         var code = project.Code.Length > 0 ? project.Code : "this model";
         page.Children.Add(Para(project.InUse.Length > 0
-            ? $"Project {code} uses its own checklist, {project.InUse}. Edit the checklist and Checking rules change that one only."
-            : $"Project {code} uses the office checklist. Give it its own (a ports checklist, say) by picking checks, or by importing one exported from another project."));
-        page.Children.Add(Para("Project checklists are kept on this PC for you only: other people's aren't changed, and Sketch ProMax updates never overwrite them. " +
-                               "Changing checks asks for the editing password.", Brand.K.Muted, 11.5));
+            ? $"Project {code} uses its own checklist, {project.InUse}. Change it freely: Edit the checklist and Checking rules change that one only."
+            : $"Project {code} uses the Default checklist. Give it its own (a ports checklist, say): a new checklist starts as a copy of the Default for you to change, or import one exported from another project."));
+        page.Children.Add(Para("The Default checklist is the same for everyone and arrives with Sketch ProMax updates; only it is behind the password. " +
+                               "Your own checklists are kept on this PC for you only, and updates never overwrite them.", Brand.K.Muted, 11.5));
         var choose = new ComboBox { MinWidth = 260, Margin = new Thickness(0, 10, 8, 8), VerticalContentAlignment = VerticalAlignment.Center };
         AutomationProperties.SetName(choose, "Checklist this project uses");
-        choose.Items.Add(new ComboBoxItem { Content = "The office checklist", Tag = "" });
+        choose.Items.Add(new ComboBoxItem { Content = "The Default checklist", Tag = "" });
         foreach (var name in project.Names) choose.Items.Add(new ComboBoxItem { Content = name, Tag = name });
         choose.SelectedIndex = Math.Max(0, project.InUse.Length == 0 ? 0 : project.Names.ToList().FindIndex(n => string.Equals(n, project.InUse, StringComparison.OrdinalIgnoreCase)) + 1);
         var use = Do(RichUi.Button(RichUi.Icon.Next, "Use for this project"), () => actions.UseForProject((choose.SelectedItem as ComboBoxItem)?.Tag as string ?? ""));
@@ -105,13 +107,18 @@ internal sealed class ChecklistSettingsWindow : Window
         if (project.Names.Count > 0) page.Children.Add(pickRow);
         var buttons = new List<Button>
         {
-            Do(RichUi.Button(RichUi.Icon.Add, "New checklist from picked checks…"), actions.NewFromPicks),
+            Do(RichUi.Button(RichUi.Icon.Add, "New checklist (a copy of the Default)…"), actions.NewChecklist),
             Do(RichUi.Button(RichUi.Icon.Import, "Import a checklist from Excel…"), actions.ImportForProject),
             Do(RichUi.Button(RichUi.Icon.Export, "Export this checklist to Excel…"), actions.Export),
         };
         if (project.InUse.Length > 0) buttons.Add(Do(RichUi.Button(RichUi.Icon.Delete, $"Delete {project.InUse}", Brand.Weight.Danger), actions.DeleteProjectChecklist));
-        buttons.Add(Do(RichUi.Button(RichUi.Icon.Edit, "Change the editing password…"), actions.ChangePassword));
         page.Children.Add(Row(buttons.ToArray()));
+
+        page.Children.Add(Section("The Default checklist for everyone"));
+        page.Children.Add(Para("Make this the Default for everyone saves the checklist shown here as the next Default (password asked). Then ask in the Sketch ProMax project for your Default to be published: it goes into the next update, and every PC gets it when it updates, except for people who changed their Default themselves."));
+        page.Children.Add(Row(
+            Do(RichUi.Button(RichUi.Icon.Save, "Make this the Default for everyone…"), actions.MakeDefault),
+            Do(RichUi.Button(RichUi.Icon.Edit, "Change the password…"), actions.ChangePassword)));
 
         page.Children.Add(Section("Signatures"));
         page.Children.Add(Para("Your name, role and signature picture for the Word and PDF file, and an optional Excel checklist to use instead of the built-in one, are in Sketch ProMax settings, on the Sign-off tab."));

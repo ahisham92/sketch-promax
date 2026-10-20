@@ -574,11 +574,12 @@ internal sealed class ChecklistWindow : Window
             EditChecklist,
             EditRules,
             UseForProject,
-            NewFromPicks,
+            NewChecklist,
             ImportForProject,
             ExportChecklist,
             DeleteProjectChecklist,
-            () => { ChecklistProjectWindows.ChangePassword(this, _unlocked); });
+            () => { ChecklistProjectWindows.ChangePassword(this, _unlocked); },
+            MakeDefault);
         var project = new ChecklistSettingsWindow.Project(_project, ChecklistProjects.NameOf(_def.SourcePath) ?? "", ChecklistProjects.Names());
         if (!ChecklistSettingsWindow.Edit(this, actions, automatic, pending, project)) return;
         var stage = _stages.SelectedIndex;
@@ -589,7 +590,7 @@ internal sealed class ChecklistWindow : Window
     /// <summary>Opens the checking rules; after Save the model is read again with them.</summary>
     private void EditRules()
     {
-        if (_def is null || !Unlock("change the checking rules")) return;
+        if (_def is null) return; // rules are per person (their files and folders): no password, even on the Default
         _saveSoon.Stop();
         SaveDraft();
         if (ChecklistRulesWindow.Edit(this, _def) is not { } def) return;
@@ -611,7 +612,7 @@ internal sealed class ChecklistWindow : Window
     /// <summary>Opens the checklist editor; after Save the stages are rebuilt, and answers stay with their checks.</summary>
     private void EditChecklist()
     {
-        if (_def is null || !Unlock("edit the checks")) return;
+        if (_def is null || !OwnChecklist && !Unlock("change the Default checklist")) return;
         _saveSoon.Stop();
         SaveDraft();
         if (ChecklistEditor.Edit(this, _def, _settings) is not { } def) return;
@@ -622,6 +623,9 @@ internal sealed class ChecklistWindow : Window
     }
 
     // ---- Project checklists ----------------------------------------------------------------------------------------
+
+    /// <summary>Whether the checklist shown is the user's own (a project checklist), free to change without the password.</summary>
+    private bool OwnChecklist => ChecklistProjects.NameOf(_def?.SourcePath) is not null;
 
     /// <summary>Asks the editing password once per window; true when it was given.</summary>
     private bool Unlock(string what) => _unlocked || (_unlocked = ChecklistProjectWindows.Unlock(this, what));
@@ -643,33 +647,57 @@ internal sealed class ChecklistWindow : Window
     /// <summary>Sets the checklist this project uses ("" for the office one).</summary>
     private void UseForProject(string name)
     {
-        if (!Unlock("change the checklist this project uses")) return;
         try { ChecklistProjects.Assign(_project, name); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { Problem($"Couldn't save the choice ({ex.Message})."); return; }
         var (def, note) = ChecklistStore.Load(AgentSettings.Load(), _project);
         if (def is null) { Problem(note.Length > 0 ? note : "That checklist can't be read."); return; }
-        Switch(def, name.Length > 0 ? $"Project {_project} now uses the checklist {name}." : $"Project {_project} now uses the office checklist.");
+        Switch(def, name.Length > 0 ? $"Project {_project} now uses the checklist {name}." : $"Project {_project} now uses the Default checklist.");
     }
 
-    /// <summary>A new project checklist from ticked checks of the one shown, used for this project from now on.</summary>
-    private void NewFromPicks()
+    /// <summary>A new checklist for this project: a copy of the Default, opened in the editor to change as needed.</summary>
+    private void NewChecklist()
     {
-        if (_def is null || !Unlock("make a new checklist")) return;
-        if (ChecklistProjectWindows.Pick(this, _def, _project) is not { } made) return;
+        var (from, note) = ChecklistStore.Load(AgentSettings.Load());
+        if (from is null) { Problem(note.Length > 0 ? note : "The Default checklist can't be read."); return; }
+        var name = ChecklistProjectWindows.Ask(this, "New checklist", "Name of the new checklist (for example Ports). It starts as a copy of the Default checklist; change it as you need next.",
+            _project.Length > 0 ? _project + " checklist" : "");
+        if (name is null) return;
+        name = ChecklistProjects.CleanName(name);
+        if (name.Length == 0) { Problem("The checklist needs a name. Nothing was made."); return; }
+        if (ChecklistProjects.Exists(name) && MessageBox.Show(this, $"There is already a checklist called {name} on this PC. Replace it with a copy of the Default?", "Sketch ProMax",
+                MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes) return;
+        var def = ChecklistProjects.Copy(from, name);
         try
         {
-            ChecklistProjects.Save(made.Name, made.Def);
-            ChecklistProjects.Assign(_project, made.Name);
+            ChecklistProjects.Save(name, def);
+            ChecklistProjects.Assign(_project, name);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { Problem($"Couldn't save the new checklist ({ex.Message})."); return; }
-        ActivityLog.Note("checklist_project", $"new {made.Name}: {made.Def.Items.Count()} checks, used for {_project}");
-        Switch(made.Def, $"Made the checklist {made.Name} ({made.Def.Items.Count()} checks); project {_project} uses it now.");
+        ActivityLog.Note("checklist_project", $"new {name} from the Default: {def.Items.Count()} checks, used for {_project}");
+        Switch(def, $"Made the checklist {name} as a copy of the Default; project {_project} uses it now.");
+        EditChecklist();
+    }
+
+    /// <summary>Saves the checklist shown as the next Default for everyone, for the next update to carry (password asked).</summary>
+    private void MakeDefault()
+    {
+        if (_def is null || !Unlock("make the Default checklist for everyone")) return;
+        if (MessageBox.Show(this, $"Make \"{_def.Title}\" ({_def.Items.Count()} checks) the Default checklist for everyone? It goes into the next Sketch ProMax update once you ask for it to be published. " +
+                                  "Check it holds no client or project names: the Default is public.", "Sketch ProMax", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes) return;
+        try
+        {
+            var path = ChecklistProjects.SaveNextDefault(_def);
+            _status.Text = "Saved as the next Default. Ask in the Sketch ProMax project to publish your Default: it goes into the next update.";
+            ActivityLog.Note("checklist_default", $"next Default saved: {_def.Items.Count()} checks, {path}");
+            MessageBox.Show(this, "Saved as the next Default checklist:\n" + path + "\n\nNow ask in the Sketch ProMax project for your Default to be published. Every PC gets it with the next update.",
+                "Sketch ProMax", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { Problem($"Couldn't save it ({ex.Message})."); }
     }
 
     /// <summary>A checklist exported to Excel (from another project, say) becomes a project checklist used here.</summary>
     private void ImportForProject()
     {
-        if (!Unlock("import a checklist")) return;
         var dialog = new Microsoft.Win32.OpenFileDialog { Title = "Import a checklist for this project", Filter = "Excel workbooks|*.xlsx|All files|*.*" };
         if (dialog.ShowDialog(this) != true) return;
         ChecklistMath.Definition def;
@@ -722,14 +750,14 @@ internal sealed class ChecklistWindow : Window
     /// <summary>Deletes the project checklist in use; the projects that used it go back to the office checklist.</summary>
     private void DeleteProjectChecklist()
     {
-        if (_def is null || ChecklistProjects.NameOf(_def.SourcePath) is not { } name || !Unlock("delete a checklist")) return;
-        if (MessageBox.Show(this, $"Delete the checklist {name} from this PC? Every project that uses it goes back to the office checklist. Answers you gave are kept.",
+        if (_def is null || ChecklistProjects.NameOf(_def.SourcePath) is not { } name) return;
+        if (MessageBox.Show(this, $"Delete the checklist {name} from this PC? Every project that uses it goes back to the Default checklist. Answers you gave are kept.",
                 "Sketch ProMax", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No) != MessageBoxResult.Yes) return;
         try { ChecklistProjects.Delete(name); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { Problem($"Couldn't delete it ({ex.Message})."); return; }
         var (def, note) = ChecklistStore.Load(AgentSettings.Load(), _project);
         if (def is null) { Problem(note); return; }
-        Switch(def, $"Deleted the checklist {name}; project {_project} uses the office checklist again.");
+        Switch(def, $"Deleted the checklist {name}; project {_project} uses the Default checklist again.");
     }
 
     /// <summary>Reads the hints and file names from the model again, through Revit (the window itself runs outside a Revit call).</summary>
