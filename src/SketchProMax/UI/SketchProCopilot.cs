@@ -72,33 +72,63 @@ internal static class SketchProCopilot
     /// <summary>
     /// Waits up to <paramref name="wait"/> for SketchPro's chat (a window or pane of this process named SketchPro…), clicks
     /// into its message box and presses Ctrl+V. Call off Revit's UI thread. True when pasted.
+    /// While waiting it only looks inside windows titled SketchPro… or …Copilot (cheap). A UI Automation search of all of
+    /// Revit's windows makes Revit's UI thread answer for every ribbon button and pane item, which held Revit for seconds
+    /// per search; it runs at most once, as the last try.
     /// </summary>
     public static bool Paste(IntPtr revit, TimeSpan wait)
     {
         var until = DateTime.UtcNow + wait;
         while (DateTime.UtcNow < until)
         {
-            try
-            {
-                if (MessageBox(revit) is { } box)
-                {
-                    box.SetFocus();
-                    Thread.Sleep(150);
-                    PressCtrlV();
-                    return true;
-                }
-            }
-            catch (Exception ex) when (ex is ElementNotAvailableException or InvalidOperationException or COMException) { }
+            if (TryPaste(() => MessageBox(Titled(revit)))) return true;
             Thread.Sleep(400);
         }
-        return false;
+        return TryPaste(() => MessageBox(Everything(revit)));
     }
 
-    /// <summary>
-    /// The chat's message box: an editable box in this process's windows that sits inside something named SketchPro… or
-    /// …Copilot (the dockable pane, or its window when floating); the lowest one on screen when there are several.
-    /// </summary>
-    private static AutomationElement? MessageBox(IntPtr revit)
+    private static bool TryPaste(Func<AutomationElement?> find)
+    {
+        try
+        {
+            if (find() is not { } box) return false;
+            box.SetFocus();
+            Thread.Sleep(150);
+            PressCtrlV();
+            return true;
+        }
+        catch (Exception ex) when (ex is ElementNotAvailableException or InvalidOperationException or COMException) { return false; }
+    }
+
+    /// <summary>This process's windows (Revit's child windows and its own top-level ones) titled like SketchPro's chat.</summary>
+    private static List<AutomationElement> Titled(IntPtr revit)
+    {
+        var pid = (uint)System.Diagnostics.Process.GetCurrentProcess().Id;
+        var found = new List<IntPtr>();
+        bool Look(IntPtr hwnd, IntPtr _)
+        {
+            var length = GetWindowTextLength(hwnd);
+            if (length > 0 && length < 200)
+            {
+                var text = new System.Text.StringBuilder(length + 1);
+                GetWindowText(hwnd, text, text.Capacity);
+                if (IsSketchProName(text.ToString())) found.Add(hwnd);
+            }
+            return true;
+        }
+        if (revit != IntPtr.Zero) EnumChildWindows(revit, Look, IntPtr.Zero);
+        EnumWindows((hwnd, l) => { GetWindowThreadProcessId(hwnd, out var owner); if (owner == pid) { Look(hwnd, l); EnumChildWindows(hwnd, Look, IntPtr.Zero); } return true; }, IntPtr.Zero);
+        var roots = new List<AutomationElement>();
+        foreach (var hwnd in found.Distinct())
+        {
+            try { roots.Add(AutomationElement.FromHandle(hwnd)); }
+            catch (Exception ex) when (ex is ElementNotAvailableException or ArgumentException or COMException) { }
+        }
+        return roots;
+    }
+
+    /// <summary>All of Revit's windows (the slow search).</summary>
+    private static List<AutomationElement> Everything(IntPtr revit)
     {
         var pid = System.Diagnostics.Process.GetCurrentProcess().Id;
         var roots = new List<AutomationElement>();
@@ -106,6 +136,15 @@ internal static class SketchProCopilot
         // A floating pane is its own top-level window.
         foreach (AutomationElement top in AutomationElement.RootElement.FindAll(TreeScope.Children, new PropertyCondition(AutomationElement.ProcessIdProperty, pid)))
             if (!roots.Contains(top)) roots.Add(top);
+        return roots;
+    }
+
+    /// <summary>
+    /// The chat's message box: an editable box under <paramref name="roots"/> that sits inside something named SketchPro…
+    /// or …Copilot (the dockable pane, or its window when floating); the lowest one on screen when there are several.
+    /// </summary>
+    private static AutomationElement? MessageBox(List<AutomationElement> roots)
+    {
         var edits = new AndCondition(
             new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Edit),
             new PropertyCondition(AutomationElement.IsKeyboardFocusableProperty, true),
@@ -121,19 +160,27 @@ internal static class SketchProCopilot
         return lowest;
     }
 
+    private static bool IsSketchProName(string name) =>
+        name.StartsWith(Tab, StringComparison.OrdinalIgnoreCase) && name.IndexOf("ProMax", StringComparison.OrdinalIgnoreCase) < 0
+        || name.IndexOf("Copilot", StringComparison.OrdinalIgnoreCase) >= 0;
+
     private static bool InSketchPro(AutomationElement e, TreeWalker walker)
     {
         var node = e;
         for (var i = 0; i < 30 && node is not null; i++)
         {
-            var name = node.Current.Name ?? "";
-            if (name.StartsWith(Tab, StringComparison.OrdinalIgnoreCase) && name.IndexOf("ProMax", StringComparison.OrdinalIgnoreCase) < 0
-                || name.IndexOf("Copilot", StringComparison.OrdinalIgnoreCase) >= 0)
-                return true;
+            if (IsSketchProName(node.Current.Name ?? "")) return true;
             node = walker.GetParent(node);
         }
         return false;
     }
+
+    private delegate bool EnumProc(IntPtr hwnd, IntPtr lParam);
+    [DllImport("user32.dll")] private static extern bool EnumWindows(EnumProc proc, IntPtr lParam);
+    [DllImport("user32.dll")] private static extern bool EnumChildWindows(IntPtr parent, EnumProc proc, IntPtr lParam);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetWindowText(IntPtr hwnd, System.Text.StringBuilder text, int max);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetWindowTextLength(IntPtr hwnd);
+    [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
 
     [DllImport("user32.dll")]
     private static extern void keybd_event(byte key, byte scan, uint flags, UIntPtr extra);

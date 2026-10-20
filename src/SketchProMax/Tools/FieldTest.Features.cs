@@ -1822,6 +1822,12 @@ internal static partial class FieldTest
         foreach (var key in new[] { "grids", "warnings", "imports" })
             if (!facts.Hints.TryGetValue(key, out var hint) || hint.Text.StartsWith("Couldn't", StringComparison.Ordinal)) problems.Add($"no {key} hint{(hint is null ? "" : ": " + hint.Text)}");
         if (!facts.Fields.TryGetValue("model_file", out var model) || model.Length == 0) problems.Add("the model file name wasn't read");
+        // The window reads in steps (so Revit never freezes on a big model): the steps must give the same hints.
+        var reading = ChecklistFacts.Plan(doc, def);
+        var steps = 0;
+        while (reading.Next()) steps++;
+        if (steps == 0) problems.Add("the step-by-step reading had no steps");
+        if (!reading.Result.Hints.Keys.OrderBy(k => k).SequenceEqual(facts.Hints.Keys.OrderBy(k => k))) problems.Add("the step-by-step reading gave other hints than the one-call reading");
 
         var state = new ChecklistMath.State();
         foreach (var item in def.Items) state.For(item.Id).Done = item.Id == "3" ? ChecklistMath.NotApplicable : ChecklistMath.Yes;

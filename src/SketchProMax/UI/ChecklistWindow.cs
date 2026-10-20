@@ -128,8 +128,10 @@ internal sealed class ChecklistWindow : Window
         }
         var settings = AgentSettings.Load();
         var (def, error) = ChecklistStore.Load(settings);
+        // Only the header fields here: the model's hints are read after the window is up, in short steps (ReadModelAgain),
+        // so a big model never holds Revit (and this button) for the whole reading.
         ChecklistFacts.Result facts;
-        try { facts = ChecklistFacts.Read(doc, def); }
+        try { facts = ChecklistFacts.Plan(doc, def).Result; }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             facts = new ChecklistFacts.Result { Model = doc.Title, Title = doc.Title };
@@ -138,6 +140,7 @@ internal sealed class ChecklistWindow : Window
         var window = new ChecklistWindow(DocKey(doc), def, error, facts);
         _open = window;
         window.Closed += (_, _) => { if (_open == window) _open = null; };
+        window.Loaded += (_, _) => { if (window._def is not null) _ = window.ReadModelAgain(null); };
         window.Show();
         return Autodesk.Revit.UI.Result.Succeeded;
     }
@@ -185,7 +188,7 @@ internal sealed class ChecklistWindow : Window
         AutomationProperties.SetHelpText(_pdf, "Makes the same checklist as a PDF, through Microsoft Word on this PC.");
         _stages.SelectionChanged += (_, e) => { if (e.Source == _stages) StageChanged(); };
         PreviewKeyDown += OnKey;
-        Closed += (_, _) => { _saveSoon.Stop(); SaveDraft(); };
+        Closed += (_, _) => { _closed = true; _saveSoon.Stop(); SaveDraft(); };
 
         Build();
         Loaded += (_, _) => FocusStage();
@@ -544,18 +547,29 @@ internal sealed class ChecklistWindow : Window
     /// <summary>Reads the hints and file names from the model again, through Revit (the window itself runs outside a Revit call).</summary>
     private async Task ReadModelAgain(Button? button, bool slow = false)
     {
+        // One reading at a time: asked again meanwhile (a fix, new rules), it reads once more when this one ends.
+        if (_reading) { _readAgain = true; _readAgainSlow |= slow; return; }
         if (button is not null) { if (Brand.IsBusy(button)) return; Brand.SetBusy(button, true, slow ? "Running the slow checks…" : "Reading…"); }
+        _reading = true;
         try
         {
             var def = _def;
             var key = _docKey;
-            var facts = await App.Dispatcher.InvokeAsync(app =>
+            _status.Text = slow ? "Running the slow checks…" : "Reading the model…";
+            var reading = await App.Dispatcher.InvokeAsync(app =>
             {
                 foreach (Autodesk.Revit.DB.Document d in app.Application.Documents)
-                    if (!d.IsFamilyDocument && !d.IsLinked && DocKey(d) == key) return ChecklistFacts.Read(d, def, slow ? app : null);
+                    if (!d.IsFamilyDocument && !d.IsLinked && DocKey(d) == key) return ChecklistFacts.Plan(d, def, slow ? app : null);
                 return null;
             });
-            if (facts is null) { _status.Text = "The model this checklist is for isn't open any more, so it can't be read again."; return; }
+            if (reading is null) { _status.Text = "The model this checklist is for isn't open any more, so it can't be read again."; return; }
+            // One short Revit call at a time (about a fifth of a second each): between them Revit repaints and takes clicks,
+            // where one call for the whole reading froze it on a big model.
+            var total = Math.Max(1, reading.Left);
+            while (!_closed && await App.Dispatcher.InvokeAsync(_ => reading.RunFor(StepBudget)))
+                _status.Text = (slow ? "Running the slow checks… " : "Reading the model… ") + (100 * (total - reading.Left) / total) + "%";
+            if (_closed) return;
+            var facts = reading.Result;
             // A quick read keeps the slow checks' last results (they say when they ran).
             foreach (var old in _facts.Hints)
                 if (facts.Hints.TryGetValue(old.Key, out var now) && now.Pending && !old.Value.Pending) facts.Hints[old.Key] = old.Value;
@@ -564,14 +578,27 @@ internal sealed class ChecklistWindow : Window
             var stage = _stages.SelectedIndex;
             Build();
             _stages.SelectedIndex = stage;
-            _status.Text = (slow ? "Ran the slow checks. " : "Read the model again. ") + _status.Text;
+            _status.Text = (slow ? "Ran the slow checks. " : "Read the model. ") + _status.Text;
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             _status.Text = $"Couldn't read the model ({ex.Message}). Finish what Revit is doing (an edit mode or a dialog), then try again.";
         }
-        finally { if (button is not null) Brand.SetBusy(button, false); }
+        finally
+        {
+            _reading = false;
+            if (button is not null) Brand.SetBusy(button, false);
+        }
+        if (_readAgain && !_closed)
+        {
+            var again = _readAgainSlow;
+            _readAgain = _readAgainSlow = false;
+            await ReadModelAgain(null, again);
+        }
     }
+
+    private static readonly TimeSpan StepBudget = TimeSpan.FromMilliseconds(200);
+    private bool _reading, _readAgain, _readAgainSlow, _closed;
 
     /// <summary>The model check's verdict on a check's rule: passes, fails, or null when the model can't tell.</summary>
     private bool? Verdict(string key) => _facts.Hints.TryGetValue(key, out var h) ? h.Level switch
