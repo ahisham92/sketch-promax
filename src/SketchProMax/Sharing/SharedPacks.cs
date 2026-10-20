@@ -280,19 +280,40 @@ internal static class SharedPacks
     }
 
     /// <summary>
-    /// Packs don't carry the sharer's checklist (see <see cref="ResetsChecklist"/>): one an older pack put here, and not
-    /// changed here since, goes back to the built-in checklist. A colleague's own, edited or imported one is left alone.
+    /// The sharer's checklist, when the pack carries one (Include my checklist): put in place unless this PC has its own
+    /// (<see cref="DecideChecklist"/>). When the pack no longer carries one, the copy it put here goes and the built-in
+    /// checklist is used again. Users' project checklists are separate files and never touched.
     /// </summary>
     private static string ApplyChecklist(Pack pack, string folder)
     {
-        try
+        var settings = AgentSettings.Load();
+        var savedExists = File.Exists(ChecklistStore.SavedPath);
+        string? savedSource = null;
+        if (savedExists)
+            try { savedSource = ChecklistMath.FromJson<ChecklistMath.Definition>(File.ReadAllText(ChecklistStore.SavedPath))?.SourcePath; }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException) { }
+        var mine = savedSource == ChecklistSource(pack.Id);
+        if (pack.Checklist is null || !pack.Tools.Any(t => t.Name == "pre-submission"))
         {
-            if (!File.Exists(ChecklistStore.SavedPath)) return "";
-            var source = ChecklistMath.FromJson<ChecklistMath.Definition>(File.ReadAllText(ChecklistStore.SavedPath))?.SourcePath;
-            if (ResetsChecklist(source)) ChecklistStore.Reset();
+            if (mine) try { ChecklistStore.Reset(); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
             return "";
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException) { return ""; }
+        var (write, why) = DecideChecklist(pack.Id, savedExists, savedSource, settings.ChecklistPath);
+        if (!write) return "Pre-submission checklist: " + why;
+        var file = Path.Combine(folder, pack.Checklist.Replace('/', Path.DirectorySeparatorChar));
+        try
+        {
+            var def = File.Exists(file) ? ChecklistMath.FromJson<ChecklistMath.Definition>(File.ReadAllText(file)) : null;
+            if (def is null || !def.Items.Any()) return "Pre-submission checklist: the shared checklist can't be read, so the one here is used";
+            def.SourcePath = ChecklistSource(pack.Id);
+            def.SourceStamp = pack.Revision.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            ChecklistStore.Save(def);
+            return "";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            return "Pre-submission checklist: couldn't be saved (" + ex.Message + ")";
+        }
     }
 
     /// <summary>Removes an installed pack: its buttons go from the tab, and the files it put in place (unless changed here).</summary>
@@ -389,7 +410,8 @@ internal static class SharedPacks
     }
 
     /// <summary>What Share tools is asked to share.</summary>
-    public sealed record Request(string Name, IReadOnlyList<string> Items, string UpdateFrom, string Note, string ZipFolder, bool AutoPublish);
+    public sealed record Request(string Name, IReadOnlyList<string> Items, string UpdateFrom, string Note, string ZipFolder, bool AutoPublish,
+        bool IncludeChecklist = false);
 
     public sealed record Result(Pack Pack, string Zip, string? Published, List<string> Notes);
 
@@ -431,11 +453,22 @@ internal static class SharedPacks
         var tools = ToolsFor(request.Items, catalog, learned, recipe);
         foreach (var key in request.Items)
             if (tools.All(t => !KeyMatches(t, key))) notes.Add($"{key.Substring(key.IndexOf(':') + 1).Replace('_', ' ')}: not found here, so it was left out");
-        // The checklist window travels, the sharer's checklist doesn't: colleagues start from the built-in one.
+        // The sharer's checklist travels only when they ticked Include my checklist; otherwise colleagues use the built-in one.
+        string? checklist = null;
+        if (request.IncludeChecklist && tools.Any(t => t.Kind == "command" && t.Name == "pre-submission"))
+        {
+            var (def, note) = ChecklistStore.Load(AgentSettings.Load());
+            if (def is not null)
+            {
+                files[ChecklistFile] = ChecklistMath.ToJson(def);
+                checklist = ChecklistFile;
+            }
+            else notes.Add("Pre-submission checklist: " + (note.Length > 0 ? note : "no checklist could be read") + "; colleagues use the built-in one");
+        }
         var pack = new Pack
         {
             Id = id, Name = request.Name.Trim(), UpdateFrom = request.UpdateFrom.Trim(), Note = request.Note.Trim(),
-            MinVersion = version, Tools = tools,
+            MinVersion = version, Tools = tools, Checklist = checklist,
         };
         return (pack, files, notes);
     }
@@ -493,6 +526,7 @@ internal static class SharedPacks
         record.Note = pack.Note;
         record.Items = request.Items.ToList();
         record.AutoPublish = request.AutoPublish;
+        record.IncludeChecklist = request.IncludeChecklist;
         record.LastZip = zip;
         // Fingerprinted without the files that carry the revision and date.
         record.Fingerprint = Fingerprint(pack, files.Where(f => f.Key is not (PackFile or ButtonsFile)));
@@ -514,7 +548,7 @@ internal static class SharedPacks
             {
                 if (!Directory.Exists(record.UpdateFrom)) continue; // offline: tried again later
                 var request = new Request(record.Name, record.Items, record.UpdateFrom, record.Note,
-                    record.LastZip.Length > 0 ? Path.GetDirectoryName(record.LastZip)! : DefaultZipFolder, true);
+                    record.LastZip.Length > 0 ? Path.GetDirectoryName(record.LastZip)! : DefaultZipFolder, true, record.IncludeChecklist);
                 var (pack, files, _) = Build(record.Id, request, catalog, version);
                 if (pack.Tools.Count == 0) continue;
                 if (Fingerprint(pack, files.Where(f => f.Key is not (PackFile or ButtonsFile))) == record.Fingerprint) continue;

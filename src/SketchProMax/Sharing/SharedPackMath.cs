@@ -185,6 +185,8 @@ internal static class SharedPackMath
         [JsonPropertyName("items")] public List<string> Items { get; set; } = [];
         [JsonPropertyName("fingerprint")] public string Fingerprint { get; set; } = "";
         [JsonPropertyName("autoPublish")] public bool AutoPublish { get; set; } = true;
+        /// <summary>Include my checklist as everyone's Default: the pack carries the sharer's checklist (off unless ticked).</summary>
+        [JsonPropertyName("includeChecklist")] public bool IncludeChecklist { get; set; }
         [JsonPropertyName("lastZip")] public string LastZip { get; set; } = "";
     }
 
@@ -239,13 +241,17 @@ internal static class SharedPackMath
     }
 
     /// <summary>
-    /// Whether the checklist saved on this PC goes back to the built-in one when a pack is applied. A pack shares the
-    /// checklist window, never the sharer's checklist: colleagues start from the built-in checklist, and get the sharer's
-    /// only by importing the Excel file the sharer exports (Edit the checklist &gt; Export to Excel). So a checklist an
-    /// older pack put here (source "shared:&lt;pack&gt;", never changed here) goes; anything else stays.
+    /// Whether a pack may put its checklist (the sharer's Default, only when they ticked Include my checklist) in place:
+    /// none saved yet, or the saved one came from this pack and wasn't changed here. A colleague's own, edited or
+    /// imported checklist is never replaced.
     /// </summary>
-    public static bool ResetsChecklist(string? savedSource) =>
-        savedSource is not null && savedSource.StartsWith("shared:", StringComparison.Ordinal);
+    public static (bool Write, string Why) DecideChecklist(string packId, bool savedExists, string? savedSource, string? excelPath)
+    {
+        if (!string.IsNullOrWhiteSpace(excelPath))
+            return (false, "this PC follows its own checklist Excel file (Settings), so the shared checklist is not used");
+        if (!savedExists || savedSource == ChecklistSource(packId)) return (true, "");
+        return (false, "this PC has its own checklist (imported or edited here), so the shared one is not used");
+    }
 
     // ---- What can be shared ------------------------------------------------------------------------------------------
 
@@ -259,7 +265,7 @@ internal static class SharedPackMath
     public static readonly (string Command, string Title, string Glyph, string Tip)[] Commands =
     [
         ("pre-submission", "Pre-submission checklist", "list",
-            "Goes through the office's pre-submission checklist stage by stage, with hints from the model, and makes the signed Word file. Colleagues start from the built-in checklist; to give them yours, export it to Excel and they import it."),
+            "Goes through the office's pre-submission checklist stage by stage, with hints from the model, and makes the signed Word file. Colleagues start from the built-in checklist, or from yours when you tick Include my checklist."),
         ("issue-check", "Issue check", "check",
             "Drawing, spec, BOQ and model checks together on the issue set, pass or fail per sheet. Reads the model only."),
         ("cleanup", "Purge & cleanup", "refresh",

@@ -116,8 +116,13 @@ internal static class SharingTests
         check("sharing: another pack's tool kept", Decide("qa-tools", "h2", "h1", new Owned("other", "h1")).Step == Step.Keep, "");
         check("sharing: a pack's tool edited here kept", Decide("qa-tools", "h2", "h9", mine).Step == Step.Keep, "");
         check("sharing: a pack's untouched tool updated", Decide("qa-tools", "h2", "h1", mine).Step == Step.Copy, "");
-        check("sharing: a checklist an older pack put here goes back to the built-in one", ResetsChecklist(ChecklistSource("qa-tools")), "");
-        check("sharing: a colleague's own, edited, imported or built-in checklist is kept", !ResetsChecklist("edited") && !ResetsChecklist(@"C:\x.xlsx") && !ResetsChecklist("built-in") && !ResetsChecklist(null), "");
+        check("sharing: checklist with none saved", DecideChecklist("qa-tools", false, null, null).Write, "");
+        check("sharing: checklist from this pack replaced", DecideChecklist("qa-tools", true, ChecklistSource("qa-tools"), null).Write, "");
+        check("sharing: the PC's own checklist kept", !DecideChecklist("qa-tools", true, @"C:\x.xlsx", null).Write && !DecideChecklist("qa-tools", true, ChecklistSource("other"), null).Write
+            && !DecideChecklist("qa-tools", true, "edited", null).Write, "");
+        check("sharing: a checklist Excel in Settings wins", !DecideChecklist("qa-tools", false, null, @"C:\x.xlsx").Write, "");
+        check("sharing: the sharer's checklist goes only when ticked", ParseRecord(SerializeRecord(new Record { Id = "a" }))?.IncludeChecklist == false
+            && ParseRecord(SerializeRecord(new Record { Id = "a", IncludeChecklist = true }))?.IncludeChecklist == true, "");
 
         // ---- The zip's words
         check("sharing: zip name", ZipName("QA tools") == "TritoRevit - QA tools.zip" && ZipName("a/b:c") == "TritoRevit - a_b_c.zip" && ZipName(" ") == "TritoRevit - Shared tools.zip", ZipName("a/b:c"));
