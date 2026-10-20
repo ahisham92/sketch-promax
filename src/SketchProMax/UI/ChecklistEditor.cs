@@ -63,6 +63,8 @@ internal sealed class ChecklistEditor : Window
     private readonly TextBlock _noCheck = Brand.Text("This stage has no checks yet. Click Add check.", Brand.K.Muted, 12);
     private bool _loading, _changed;
     private string? _imported;
+    // The project checklist being edited (saved to its own file), or null for the office checklist.
+    private readonly string? _project;
 
     /// <summary>The saved checklist after Save or Go back to the built-in one; null when nothing changed.</summary>
     public ChecklistMath.Definition? Saved { get; private set; }
@@ -79,7 +81,8 @@ internal sealed class ChecklistEditor : Window
     {
         _settings = settings;
         _base = current;
-        Title = "Sketch ProMax: edit the checklist";
+        _project = ChecklistProjects.NameOf(current.SourcePath);
+        Title = _project is null ? "Sketch ProMax: edit the checklist" : $"Sketch ProMax: edit the project checklist {_project}";
         var area = SystemParameters.WorkArea;
         Width = Math.Min(1180, Math.Floor(area.Width * 0.9));
         Height = Math.Min(760, Math.Floor(area.Height * 0.9));
@@ -252,6 +255,8 @@ internal sealed class ChecklistEditor : Window
         cancel.IsCancel = true;
         var save = RichUi.Button(RichUi.Icon.Save, "Save", Brand.Weight.Primary);
         save.Click += (_, _) => Save();
+        // A project checklist is deleted from the checklist settings, not reset here.
+        if (_project is not null) reset.Visibility = Visibility.Collapsed;
         var leftButtons = new WrapPanel { Children = { export, import, reset }, VerticalAlignment = VerticalAlignment.Center };
         var rightButtons = Brand.ButtonRow(cancel, save);
         rightButtons.Margin = new Thickness(0);
@@ -591,7 +596,7 @@ internal sealed class ChecklistEditor : Window
             Sections = _model.Select(s => new ChecklistMath.Section(s.Title, s.Checks.Select(c => new ChecklistMath.Item("", "", c.Text.Trim(), c.Example.Trim(),
                 c.From.Trim(), c.FoundOn.Trim(), c.Priority.Trim(), Regex.Replace(c.Waiting.Trim(), @"^Waiting\s*:\s*", "", RegexOptions.IgnoreCase), "")
                 { Short = Regex.Replace(c.Short, @"\s+", " ").Trim(), Fix = c.Fix.Trim() }).ToList())).ToList(),
-            SourcePath = ChecklistMath.EditedSource,
+            SourcePath = _project is null ? ChecklistMath.EditedSource : ChecklistProjects.Source(_project),
             SourceStamp = DateTime.Now.ToString("dd-MMM-yyyy HH:mm", System.Globalization.CultureInfo.InvariantCulture),
         };
         return ChecklistMath.Renumber(def);
@@ -616,6 +621,16 @@ internal sealed class ChecklistEditor : Window
         else if ((def = Build()) is null) return;
         try
         {
+            if (_project is not null)
+            {
+                // A project checklist keeps its own file; it never follows an Excel file.
+                ChecklistProjects.Save(_project, def);
+                Saved = def;
+                _changed = false;
+                ActivityLog.Note("checklist_edit", $"project checklist {_project}: {def.Items.Count()} checks in {def.Sections.Count} stages");
+                DialogResult = true;
+                return;
+            }
             ChecklistStore.Save(def);
             // An import follows its Excel file again (a newer revision saved over it is picked up); edits made here stop that.
             // Fresh settings, so a change made in Settings since the checklist window opened isn't overwritten.

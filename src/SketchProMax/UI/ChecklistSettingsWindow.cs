@@ -16,7 +16,11 @@ namespace SketchProMax.UI;
 internal sealed class ChecklistSettingsWindow : Window
 {
     /// <summary>What the checklist window does for the buttons here.</summary>
-    public sealed record Actions(Action RunQuick, Action RunSlow, Action EditChecklist, Action EditRules);
+    public sealed record Actions(Action RunQuick, Action RunSlow, Action EditChecklist, Action EditRules,
+        Action<string> UseForProject, Action NewFromPicks, Action ImportForProject, Action Export, Action DeleteProjectChecklist, Action ChangePassword);
+
+    /// <summary>The project the checklist is for, the project checklist it uses ("" for the office one), and those on this PC.</summary>
+    public sealed record Project(string Code, string InUse, IReadOnlyList<string> Names);
 
     /// <summary>Whether the helper was changed (the checklist then redraws its Ask buttons).</summary>
     public bool HelperChanged { get; private set; }
@@ -24,15 +28,15 @@ internal sealed class ChecklistSettingsWindow : Window
     private Action? _then;
 
     /// <summary>Shows the settings; returns whether the helper changed. A button's action runs after this window closes.</summary>
-    public static bool Edit(Window owner, Actions actions, int automatic, int pending)
+    public static bool Edit(Window owner, Actions actions, int automatic, int pending, Project project)
     {
-        var window = new ChecklistSettingsWindow(actions, automatic, pending) { Owner = owner };
+        var window = new ChecklistSettingsWindow(actions, automatic, pending, project) { Owner = owner };
         window.ShowDialog();
         window._then?.Invoke();
         return window.HelperChanged;
     }
 
-    private ChecklistSettingsWindow(Actions actions, int automatic, int pending)
+    private ChecklistSettingsWindow(Actions actions, int automatic, int pending, Project project)
     {
         Title = "Sketch ProMax checklist settings";
         var area = SystemParameters.WorkArea;
@@ -48,7 +52,7 @@ internal sealed class ChecklistSettingsWindow : Window
         var page = new StackPanel();
 
         page.Children.Add(Section("Run the checks"));
-        page.Children.Add(Para($"{automatic} checks are tested from the model. The quick checks take seconds and run each time the checklist opens. " +
+        page.Children.Add(Para($"{automatic} checks are tested from the model. Nothing is tested until you press Run checks; the quick checks take seconds. " +
                                (pending > 0 ? $"{pending} slower ones (duplicates, floating elements, clashes, the model check score, the standard template) run only when you ask: they can take minutes on a big model."
                                             : "The slower ones (duplicates, floating elements, clashes, the model check score, the standard template) run only when you ask.")));
         page.Children.Add(Row(
@@ -79,6 +83,35 @@ internal sealed class ChecklistSettingsWindow : Window
         page.Children.Add(Row(
             Do(RichUi.Button(RichUi.Icon.Edit, "Edit the checklist…"), actions.EditChecklist),
             Do(RichUi.Button(RichUi.Icon.Edit, "Checking rules…"), actions.EditRules)));
+
+        page.Children.Add(Section("Checklist for this project"));
+        var code = project.Code.Length > 0 ? project.Code : "this model";
+        page.Children.Add(Para(project.InUse.Length > 0
+            ? $"Project {code} uses its own checklist, {project.InUse}. Edit the checklist and Checking rules change that one only."
+            : $"Project {code} uses the office checklist. Give it its own (a ports checklist, say) by picking checks, or by importing one exported from another project."));
+        page.Children.Add(Para("Project checklists are kept on this PC for you only: other people's aren't changed, and Sketch ProMax updates never overwrite them. " +
+                               "Changing checks asks for the editing password.", Brand.K.Muted, 11.5));
+        var choose = new ComboBox { MinWidth = 260, Margin = new Thickness(0, 10, 8, 8), VerticalContentAlignment = VerticalAlignment.Center };
+        AutomationProperties.SetName(choose, "Checklist this project uses");
+        choose.Items.Add(new ComboBoxItem { Content = "The office checklist", Tag = "" });
+        foreach (var name in project.Names) choose.Items.Add(new ComboBoxItem { Content = name, Tag = name });
+        choose.SelectedIndex = Math.Max(0, project.InUse.Length == 0 ? 0 : project.Names.ToList().FindIndex(n => string.Equals(n, project.InUse, StringComparison.OrdinalIgnoreCase)) + 1);
+        var use = Do(RichUi.Button(RichUi.Icon.Next, "Use for this project"), () => actions.UseForProject((choose.SelectedItem as ComboBoxItem)?.Tag as string ?? ""));
+        use.IsEnabled = false;
+        choose.SelectionChanged += (_, _) => use.IsEnabled = !string.Equals((choose.SelectedItem as ComboBoxItem)?.Tag as string ?? "", project.InUse, StringComparison.OrdinalIgnoreCase);
+        var pickRow = new WrapPanel { Margin = new Thickness(0, 6, 0, 0) };
+        pickRow.Children.Add(choose);
+        pickRow.Children.Add(use);
+        if (project.Names.Count > 0) page.Children.Add(pickRow);
+        var buttons = new List<Button>
+        {
+            Do(RichUi.Button(RichUi.Icon.Add, "New checklist from picked checks…"), actions.NewFromPicks),
+            Do(RichUi.Button(RichUi.Icon.Import, "Import a checklist from Excel…"), actions.ImportForProject),
+            Do(RichUi.Button(RichUi.Icon.Export, "Export this checklist to Excel…"), actions.Export),
+        };
+        if (project.InUse.Length > 0) buttons.Add(Do(RichUi.Button(RichUi.Icon.Delete, $"Delete {project.InUse}", Brand.Weight.Danger), actions.DeleteProjectChecklist));
+        buttons.Add(Do(RichUi.Button(RichUi.Icon.Edit, "Change the editing password…"), actions.ChangePassword));
+        page.Children.Add(Row(buttons.ToArray()));
 
         page.Children.Add(Section("Signatures"));
         page.Children.Add(Para("Your name, role and signature picture for the Word and PDF file, and an optional Excel checklist to use instead of the built-in one, are in Sketch ProMax settings, on the Sign-off tab."));

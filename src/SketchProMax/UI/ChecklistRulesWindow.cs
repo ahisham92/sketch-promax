@@ -109,7 +109,7 @@ internal sealed class ChecklistRulesWindow : Window
             var value = _boxes[rule.Key].Text.Trim();
             if (value != rule.Default) def.Rules[rule.Key] = value;
         }
-        try { ChecklistStore.Save(def); }
+        try { ChecklistStore.SaveInUse(def); }
         catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException or System.Security.SecurityException)
         {
             _error.Text = $"Couldn't save the rules ({ex.Message}).";

@@ -7,7 +7,8 @@ namespace SketchProMax.Tools;
 /// Which pre-submission checklist is in use, kept on this PC. In order: the Excel file imported (Settings.ChecklistPath)
 /// when it changed since it was read; else the copy saved in %APPDATA%\SketchProMax (imported, or edited in the add-in);
 /// else the built-in checklist. Editing in the add-in saves the copy and stops following the Excel file; importing
-/// follows it again; going back to the built-in one deletes the copy.
+/// follows it again; going back to the built-in one deletes the copy. A project can use one of its own checklists
+/// instead (ChecklistProjects), kept beside it.
 /// </summary>
 internal static class ChecklistStore
 {
@@ -19,7 +20,27 @@ internal static class ChecklistStore
     /// <summary>0.34.6 kept a copy of the picked Excel file here; it becomes the saved checklist the first time it is read.</summary>
     private static string OldCopy => Path.Combine(Folder, "pre-submission checklist.xlsx");
 
-    /// <summary>The checklist to use, and a note to show when something couldn't be read (empty when all is well).</summary>
+    /// <summary>The checklist a project uses: its own when one is set and can be read, else the office checklist.</summary>
+    public static (ChecklistMath.Definition? Def, string Note) Load(AgentSettings settings, string project)
+    {
+        var own = ChecklistProjects.Assigned(project);
+        if (own.Length > 0)
+        {
+            if (ChecklistProjects.Read(own) is { } def) return (def, "");
+            var (office, note) = Load(settings);
+            return (office, $"The checklist {own} picked for this project can't be read, so the office checklist is shown. " + note);
+        }
+        return Load(settings);
+    }
+
+    /// <summary>Saves a checklist where it came from: a project checklist to its own file, else as the office checklist.</summary>
+    public static void SaveInUse(ChecklistMath.Definition def)
+    {
+        if (ChecklistProjects.NameOf(def.SourcePath) is { } name) ChecklistProjects.Save(name, def);
+        else Save(def);
+    }
+
+    /// <summary>The office checklist to use, and a note to show when something couldn't be read (empty when all is well).</summary>
     public static (ChecklistMath.Definition? Def, string Note) Load(AgentSettings settings)
     {
         var note = "";
