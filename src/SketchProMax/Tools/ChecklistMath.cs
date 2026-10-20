@@ -103,11 +103,15 @@ internal static class ChecklistMath
         new("typenames", "Type name pattern", "*_*_*", "Every model type in use is named like one of these, e.g. FN_SC_40MPa_Raft_600 (empty: not tested).", "familynames"),
         new("othertrades", "Categories that don't belong in this model", "auto", "Other trades' categories, comma separated. auto: picked from the discipline in the file name " +
             "(STR: doors, windows, furniture, ceilings, pipes, ducts, cable trays, MEP equipment and fixtures, and walls that aren't structural). Empty: not tested.", "othertrades"),
-        new("detaillines", "Detail lines and filled regions per plan or section", "20", "A plan, section or elevation on a sheet with more than this many is listed for a look (empty: not tested).", "detaillines"),
+        new("detaillines", "Detail lines and filled regions per plan or section", "20", "A view on a sheet with more than this many is listed for a look (empty: not tested).", "detaillines"),
+        new("detailviews", "Views tested for detail lines", "plans", "Which views on sheets the detail lines test looks at: plans, sections, elevations (comma separated).", "detaillines"),
+        new("detailskip", "Views skipped for detail lines", "*REINFORCEMENT*, *TYPICAL*", "View name patterns the detail lines test leaves out, such as reinforcement and typical details, where detail lines are normal (empty: none skipped).", "detaillines"),
         new("legendcategories", "Categories whose types need a legend entry", "Walls, Floors, Structural Foundations", "Every type in use in these categories must be shown in a legend (empty: not tested).", "legend"),
         new("standardtemplate", "The trade's standard template file", "", "The trade's standard .rte or .rvt; its view templates, filters and browser organisation must all be in the model (empty: not tested).", "standards"),
         new("schedules", "Schedules that must be in the model", "", "Name patterns of the schedules you use, e.g. *Foundation*. Schedules on no sheet are always listed: tick Schedules in e-Transmit or place them.", "schedules"),
         new("clashcategories", "Categories clashed against each other", "auto", "auto: picked from the discipline in the file name (STR: structural columns, framing, foundations, floors and walls). Empty: not tested.", "selfclash"),
+        new("piles", "Columns that bear on the ground (piles)", "*Pile*", "Column type or family name patterns that sit in the soil, so the floating test leaves them out, e.g. Concrete Round* for piles modelled as columns. " +
+            "Columns whose base is below the lowest level are left out too (empty: only those).", "floating"),
         new("modelscore", "Lowest model check score (%)", "90", "Sketch ProMax's model check (warnings, duplicates, beams on nothing, columns off grid and more) must score at least this. " +
             "It stands in for the Model Checker template; keep that score in the QA/QC record too (empty: not tested).", "modelscore"),
         new("midp", "MIDP file", "", "The latest MIDP (.xlsx or .csv), or the folder it is saved in (the newest is read); the model's number must be in it (empty: not tested).", "midp"),

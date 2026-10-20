@@ -248,6 +248,8 @@ internal static class FieldTestCoverage
             "on the throwaway project: the whole Default read in the window's short steps with no test failing, no step holding Revit over 2 s, the check names for the progress bar, Final file size filled, the slowest tests, then the slow checks"),
         new("pretest.windows", BeforeSharing, "The checklist's windows", How.Probe, "",
             "on the throwaway project, built without showing: the checklist (Default and own), its settings (Default and own), the editor (Default and own) and checking rules"),
+        new("pretest.ports_rules", BeforeSharing, "Piles, detail lines and title blocks (the ports job's rules)", How.Probe, "",
+            "on the throwaway project: columns named by the piles rule (or below the lowest level) aren't floating; detail lines test plans only by default and skip views by name; a sheet with no title block is listed and the landing page family isn't a title block"),
         new("pretest.share_rules", BeforeSharing, "When a shared pack replaces a colleague's checklist", How.Probe, "",
             "a colleague with none gets the pack's, the pack's own copy is updated, and one they edited, one from another pack or their own Excel file is kept"),
         new("pretest.share_export", BeforeSharing, "Share tools with everything on this PC", How.Probe, "",

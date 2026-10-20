@@ -42,6 +42,7 @@ internal static partial class FieldTest
         // On Revit's thread: the model and the windows.
         await Probe(s, "pretest.reading", app => PretestReading(app, s), SharingFamily).ConfigureAwait(false);
         await Probe(s, "pretest.windows", app => PretestWindows(app, s), SharingFamily).ConfigureAwait(false);
+        await Probe(s, "pretest.ports_rules", app => PretestPortsRules(app, s), SharingFamily).ConfigureAwait(false);
         // Off Revit's thread: files only.
         await Probe(s, "pretest.default", PretestDefault, SharingFamily).ConfigureAwait(false);
         await Probe(s, "pretest.in_use", PretestInUse, SharingFamily).ConfigureAwait(false);
@@ -527,6 +528,59 @@ internal static partial class FieldTest
         Try("checking rules", () => ChecklistRulesWindow.ForTest(def));
         try { if (draft is not null && File.Exists(draft)) File.Delete(draft); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
         return Result(problems, ["built: " + string.Join(", ", built)]);
+    }
+
+    /// <summary>
+    /// The rules a ports job needed, on the throwaway project: piles (columns named by the rule, or below the lowest
+    /// level) aren't floating; detail lines test only the views asked for and skip views by name; a sheet with no title
+    /// block is listed, and the landing page family isn't taken for a title block. Changes are rolled back.
+    /// </summary>
+    private static (string, string) PretestPortsRules(UIApplication app, State s)
+    {
+        if (TestDoc(app, s, out var why) is not { } doc) return Fail(why);
+        var problems = new List<string>();
+        var done = new List<string>();
+        var columns = new FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_StructuralColumns).WhereElementIsNotElementType().GetElementCount();
+        if (ChecklistFacts.FloatingColumns(doc, "*").Count > 0) problems.Add("columns named by the piles rule are still tested for floating");
+        else done.Add($"the piles rule leaves all {columns} columns out of the floating test");
+
+        var def = DefaultChecklist();
+        def.Rules["detaillines"] = "0";
+        def.Rules["detailviews"] = "plans, sections, elevations";
+        def.Rules["detailskip"] = "";
+        var all = ChecklistFacts.Read(doc, def).Hints.TryGetValue("detaillines", out var h1) ? h1 : null;
+        def.Rules["detailskip"] = "*";
+        var none = ChecklistFacts.Read(doc, def).Hints.TryGetValue("detaillines", out var h2) ? h2 : null;
+        def.Rules.Remove("detailskip");
+        def.Rules.Remove("detailviews");
+        var plans = ChecklistFacts.Read(doc, def).Hints.TryGetValue("detaillines", out var h3) ? h3 : null;
+        if (all is null || none is null || plans is null) problems.Add("the detail lines test didn't run");
+        else
+        {
+            if (none.Level != ChecklistFacts.Level.Info || none.Items.Count > 0) problems.Add("skipping every view by name still tests some: " + none.Text);
+            if (plans.Items.Count > all.Items.Count) problems.Add("plans only lists more views than all kinds");
+            if (plans.Text.IndexOf("section", StringComparison.OrdinalIgnoreCase) >= 0 && plans.Level == ChecklistFacts.Level.Warn) problems.Add("by default it still tests sections: " + plans.Text);
+            done.Add($"detail lines: all kinds {all.Items.Count} listed, plans only (the default) {plans.Items.Count}, every view skipped by name 0");
+        }
+
+        using var group = new TransactionGroup(doc, "Test before sharing: sheet with no title block");
+        group.Start();
+        try
+        {
+            using (var t = new Transaction(doc, "Sheet with no title block"))
+            {
+                t.Start();
+                var sheet = ViewSheet.Create(doc, ElementId.InvalidElementId);
+                sheet.SheetNumber = "ZZ-TEST-01";
+                t.Commit();
+            }
+            var hint = ChecklistFacts.Read(doc, def).Hints.TryGetValue("titleblock", out var tb) ? tb : null;
+            if (hint is null || !hint.Items.Any(i => i.StartsWith("ZZ-TEST-01", StringComparison.Ordinal))) problems.Add("a sheet with no title block isn't listed: " + hint?.Text);
+            else done.Add("a sheet with no title block is listed");
+            if (hint is not null && hint.Text.IndexOf("LandingPage", StringComparison.OrdinalIgnoreCase) >= 0) problems.Add("the landing page family is taken for a title block");
+        }
+        finally { RollBack(group); }
+        return Result(problems, done);
     }
 
     // ---- Share tools -------------------------------------------------------------------------------------------------
