@@ -119,20 +119,25 @@ internal static class ChecklistTests
         bool? Says(string key) => key switch { "grids" => true, "warnings" => false, _ => null };
         var autoState = new State();
         foreach (var i in autoItems) autoState.For(i.Id).Done = Yes;
-        var auto = Auto(autoItems, Says);
+        var auto = Auto(autoItems, Says, autoState);
         var disagree = Disagree(autoItems, autoState, Says);
-        check("checklist: your answers 100% while the automatic check is 50%",
-            Percent(Count(autoItems, autoState)) == 100 && auto is { Tested: 2, Pass: 1, Fail: 1, Percent: 50 }, $"{Percent(Count(autoItems, autoState))}% / {auto}");
+        check("checklist: your answers 100% while the automatic check is 75% (the model fails one)",
+            Percent(Count(autoItems, autoState)) == 100 && auto is { Tested: 2, Pass: 1, Fail: 1, Total: 4, Manual: 2, ManualDone: 2, Percent: 75 }, $"{Percent(Count(autoItems, autoState))}% / {auto}");
+        var unanswered = Auto(autoItems, key => key == "warnings" ? false : key == "grids" ? true : null, new State());
+        var allPass = Auto(autoItems, key => key is "grids" or "warnings" ? true : null, new State());
+        check("checklist: checks done by hand hold the automatic check down until answered Yes or N/A",
+            unanswered.Percent == 25 && allPass.Percent == 50 && allPass.Ceiling == 50 && Auto(autoItems, key => key is "grids" or "warnings" ? true : null, autoState).Percent == 100,
+            $"{unanswered.Percent}% / {allPass.Percent}% (ceiling {allPass.Ceiling}%)");
         check("checklist: a Yes the model check fails is listed", disagree.Select(i => i.Id).SequenceEqual(["2"]), string.Join(",", disagree.Select(i => i.Id)));
         var autoLine = AutoLine(auto, disagree);
-        check("checklist: the automatic line names the score and the disagreement", autoLine.Contains("1 of 2") && autoLine.Contains("(50%)") && autoLine.Contains("#2") && AutoLine(new AutoProgress(0, 0, 0), []) == "", autoLine);
+        check("checklist: the automatic line names the score and the disagreement", autoLine.Contains("3 of 4 checks pass (75%)") && autoLine.Contains("1 of the 2 it can test") && autoLine.Contains("#2") && AutoLine(new AutoProgress(0, 0, 0), []) == "", autoLine);
         var autoDoc = new MemoryStream();
         var autoDef = new Definition { Title = "T", Sections = [new Section("A. One", autoItems)], Signatories = ["Prepared by"] };
         ChecklistDocx.Write(autoDoc, autoDef, autoState, new ChecklistDocx.Info("m.rvt", "0", DateTime.Now, autoLine), new Dictionary<string, ChecklistDocx.Image>());
         autoDoc.Position = 0;
         using (var zip = new ZipArchive(autoDoc))
         using (var reader = new StreamReader(zip.GetEntry("word/document.xml")!.Open()))
-            check("checklist: the Word file carries the automatic check", reader.ReadToEnd().Contains("Automatic model check: 1 of 2"), "");
+            check("checklist: the Word file carries the automatic check", reader.ReadToEnd().Contains("Automatic check: 3 of 4 checks pass (75%)"), "");
 
         // ---- The built-in checklist
         var built = BuiltIn();

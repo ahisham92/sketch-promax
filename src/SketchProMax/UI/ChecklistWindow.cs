@@ -1431,11 +1431,13 @@ internal sealed class ChecklistWindow : Window
         r.Na.Text = p.NotApplicable.ToString(CultureInfo.CurrentCulture);
         r.Score.Text = ChecklistMath.Percent(p).ToString(CultureInfo.CurrentCulture) + "%";
         r.ScoreSub.Text = $"{p.Yes + p.NotApplicable} of {p.Total} checks Yes or N/A";
-        var auto = ChecklistMath.Auto(_def.Items, Verdict);
+        var auto = ChecklistMath.Auto(_def.Items, Verdict, _state);
         r.AutoScore.Text = auto.Tested == 0 ? "–" : auto.Percent.ToString(CultureInfo.CurrentCulture) + "%";
-        r.AutoScore.SetResourceReference(TextBlock.ForegroundProperty, auto.Tested == 0 ? Brand.K.Muted : auto.Fail == 0 ? Brand.K.SuccessText : Brand.K.WarningText);
+        r.AutoScore.SetResourceReference(TextBlock.ForegroundProperty, auto.Tested == 0 ? Brand.K.Muted : auto.Percent == 100 ? Brand.K.SuccessText : Brand.K.WarningText);
         r.AutoSub.Text = auto.Tested == 0 ? "The model couldn't test any check. Read the model again on Project details."
-            : $"{auto.Pass} of the {auto.Tested} checks the model can test pass; {auto.Fail} fail (listed below). The other {p.Total - auto.Tested} checks can't be tested from the model, so they aren't in this score.";
+            : $"{auto.Pass + auto.ManualDone} of all {auto.Total} checks pass. The model test passes {auto.Pass} of the {auto.Tested} it can test ({auto.Fail} fail, listed below). " +
+              $"The other {auto.Manual} are checked by hand: each counts once you answer it Yes or N/A ({auto.ManualDone} so far), so the model test alone reaches at most {auto.Ceiling}%." +
+              (_def.Items.Count(i => i.Auto.Length > 0 && Pending(i.Auto)) is var slow and > 0 ? $" {slow} of them are slow checks not run yet: Run the slow checks on Project details." : "");
         r.Disagree.Children.Clear();
         var disagree = ChecklistMath.Disagree(_def.Items, _state, Verdict);
         if (disagree.Count > 0) r.Disagree.Children.Add(Para("You answered Yes, but the model check says otherwise. Have another look:", Brand.K.WarningText, 12, 2));
@@ -1475,7 +1477,7 @@ internal sealed class ChecklistWindow : Window
         var manual = _def.Items.Where(i => !Automatic(i)).ToList();
         if (manual.Count > 0)
         {
-            var head = Brand.Text($"Checks you do yourself ({manual.Count}): the automatic score doesn't include them", Brand.K.Text, 13, bold: true);
+            var head = Brand.Text($"Checks you do yourself ({manual.Count}): each counts in the automatic score once you answer it Yes or N/A", Brand.K.Text, 13, bold: true);
             head.Margin = new Thickness(0, 10, 0, 2);
             r.Manual.Children.Add(head);
             foreach (var item in manual)
@@ -1531,7 +1533,7 @@ internal sealed class ChecklistWindow : Window
             var name = $"{ChecklistMath.SafeName(model)} pre-submission checklist {DateTime.Now:yyyy-MM-dd HHmm}";
             var docx = Path.Combine(folder, name + ".docx");
             var info = new ChecklistDocx.Info(_facts.Model, Update.Updater.CurrentText, DateTime.Now,
-                ChecklistMath.AutoLine(ChecklistMath.Auto(_def.Items, Verdict), ChecklistMath.Disagree(_def.Items, _state, Verdict)));
+                ChecklistMath.AutoLine(ChecklistMath.Auto(_def.Items, Verdict, _state), ChecklistMath.Disagree(_def.Items, _state, Verdict)));
             var path = docx;
             var note = "";
             if (pdf)
@@ -1699,13 +1701,14 @@ internal sealed class ChecklistWindow : Window
         }
         var p = ChecklistMath.Count(_def.Items, _state);
         RichUi.To(_bar, p.Total == 0 ? 0 : (double)p.Answered / p.Total, _motion);
-        var ringAuto = ChecklistMath.Auto(_def.Items, Verdict);
+        var ringAuto = ChecklistMath.Auto(_def.Items, Verdict, _state);
         var mine = ChecklistMath.Percent(p);
         _answersRing.Show(mine, System.Windows.Media.Colors.White, $"Your answers: {p.Yes + p.NotApplicable} of {p.Total} checks Yes or N/A ({mine}%).");
         _autoRing.Show(ringAuto.Tested == 0 ? null : ringAuto.Percent,
-            ringAuto.Fail == 0 ? System.Windows.Media.Color.FromRgb(0x86, 0xEF, 0xAC) : System.Windows.Media.Color.FromRgb(0xFC, 0xD3, 0x4D),
-            ringAuto.Tested == 0 ? "The model couldn't test any check yet." : $"Automatic model check: {ringAuto.Pass} of {ringAuto.Tested} checks the model can test pass ({ringAuto.Percent}%).");
-        var auto = ChecklistMath.Auto(_def.Items, Verdict);
+            ringAuto.Percent == 100 ? System.Windows.Media.Color.FromRgb(0x86, 0xEF, 0xAC) : System.Windows.Media.Color.FromRgb(0xFC, 0xD3, 0x4D),
+            ringAuto.Tested == 0 ? "The model couldn't test any check yet."
+                : $"Automatic check: {ringAuto.Pass + ringAuto.ManualDone} of {ringAuto.Total} checks pass ({ringAuto.Percent}%): {ringAuto.Pass} by the model test, {ringAuto.ManualDone} of the {ringAuto.Manual} checked by hand.");
+        var auto = ChecklistMath.Auto(_def.Items, Verdict, _state);
         _status.Text = $"{p.Answered} of {p.Total} answered ({ChecklistMath.Percent(p)}% Yes or N/A)" + (auto.Tested > 0 ? $" · automatic check {auto.Percent}%" : "") + (p.No > 0 ? $" · {p.No} No" : "") + (p.WaitingWithoutNote > 0 ? $" · {p.WaitingWithoutNote} open points without a comment" : "") +
                        (p.Ready ? " · ready to sign" : "");
         for (var i = 0; i < _headers.Count; i++)

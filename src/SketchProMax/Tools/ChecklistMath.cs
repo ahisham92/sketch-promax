@@ -217,29 +217,44 @@ internal static class ChecklistMath
     /// <summary>Your answers as a percentage: checks answered Yes or N/A out of all checks.</summary>
     public static int Percent(Progress p) => p.Total == 0 ? 0 : (int)Math.Round(100.0 * (p.Yes + p.NotApplicable) / p.Total, MidpointRounding.AwayFromZero);
 
-    /// <summary>The automatic check: checks the model can test (Tested), and how many of those it passes or fails.</summary>
-    public sealed record AutoProgress(int Tested, int Pass, int Fail)
+    /// <summary>
+    /// The automatic check: checks the model can test (Tested) and how many of those pass or fail, out of all the checks
+    /// (Total). The checks the model can't test (Manual) count only once you answer them Yes or N/A (ManualDone), so the
+    /// score can't reach 100% while they are left undone.
+    /// </summary>
+    public sealed record AutoProgress(int Tested, int Pass, int Fail, int Total = 0, int Manual = 0, int ManualDone = 0)
     {
-        public int Percent => Tested == 0 ? 0 : (int)Math.Round(100.0 * Pass / Tested, MidpointRounding.AwayFromZero);
+        /// <summary>Passed checks (by the model, or answered Yes or N/A when the model can't test them) out of all the checks.</summary>
+        public int Percent => Total > 0 ? (int)Math.Round(100.0 * (Pass + ManualDone) / Total, MidpointRounding.AwayFromZero)
+            : Tested == 0 ? 0 : (int)Math.Round(100.0 * Pass / Tested, MidpointRounding.AwayFromZero);
+
+        /// <summary>The highest score the model test alone can give: the rest needs your answers.</summary>
+        public int Ceiling => Total == 0 ? 100 : (int)Math.Round(100.0 * (Total - Manual) / Total, MidpointRounding.AwayFromZero);
     }
 
     /// <summary>
     /// The model's own verdict on the checks it can test: <paramref name="verdict"/> gives true (passes), false (fails) or
-    /// null (the model can't tell) for a check's model rule. Separate from the answers: you can be at 100% while it is at 50%.
+    /// null (the model can't tell) for a check's model rule. The other checks count from <paramref name="state"/> when
+    /// answered Yes or N/A. Separate from the answers score: you can be at 100% while it is at 50%.
     /// </summary>
-    public static AutoProgress Auto(IEnumerable<Item> items, Func<string, bool?> verdict)
+    public static AutoProgress Auto(IEnumerable<Item> items, Func<string, bool?> verdict, State? state = null)
     {
-        int pass = 0, fail = 0;
+        int total = 0, pass = 0, fail = 0, manual = 0, manualDone = 0;
         foreach (var item in items)
         {
-            if (item.Auto.Length == 0) continue;
-            switch (verdict(item.Auto))
+            total++;
+            switch (item.Auto.Length == 0 ? null : verdict(item.Auto))
             {
                 case true: pass++; break;
                 case false: fail++; break;
+                default:
+                    manual++;
+                    var done = state is not null && state.Answers.TryGetValue(item.Id, out var a) ? Normal(a.Done) : "";
+                    if (done == Yes || done == NotApplicable) manualDone++;
+                    break;
             }
         }
-        return new AutoProgress(pass + fail, pass, fail);
+        return new AutoProgress(pass + fail, pass, fail, total, manual, manualDone);
     }
 
     /// <summary>Checks you answered Yes that the model check fails: worth a second look before signing.</summary>
@@ -250,7 +265,8 @@ internal static class ChecklistMath
     public static string AutoLine(AutoProgress auto, IReadOnlyCollection<Item> disagree)
     {
         if (auto.Tested == 0) return "";
-        var line = $"Automatic model check: {auto.Pass} of {auto.Tested} checks the model can test passed ({auto.Percent}%).";
+        var line = $"Automatic check: {auto.Pass + auto.ManualDone} of {auto.Total} checks pass ({auto.Percent}%): the model test passed {auto.Pass} of the {auto.Tested} it can test"
+                   + (auto.Manual > 0 ? $", and {auto.ManualDone} of the {auto.Manual} checked by hand are Yes or N/A." : ".");
         if (disagree.Count > 0) line += " Answered Yes but failed by the model check: " + string.Join(", ", disagree.Select(i => "#" + i.Number)) + ".";
         return line;
     }
