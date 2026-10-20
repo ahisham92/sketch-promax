@@ -167,6 +167,9 @@ internal static class FieldTestCoverage
         new("checklist.fix_standards", Issue, "Pre-submission checklist: the Fix buttons for units, UniFormat, URS names, view templates and type names, and Select these in Revit", How.Probe, "",
             "on the test project the units are set to mm, every type in use gets an Assembly Code, a floor plan on a sheet gets the mapped template, a type is renamed from the suggestions, " +
             "the URS naming runs and a wall is selected, then all rolled back"),
+        new("checklist.autotests", Issue, "Pre-submission checklist: type field, Revit version, free shapes, LOI matrix, sheets from model views, piles, shared coordinates, what must be there, joints", How.Probe, "",
+            "each test reads the test project with its rule set and no error; a column copied onto itself is reported as a split pile, missing fenders are reported, the version matches the Revit open, " +
+            "and with a package needing no IFC only the NWC name is asked for; rolled back"),
         new("checklist.details", Issue, "Pre-submission checklist: the details panel, beside Revit, and the helper", How.Manual, "",
             "the details panel, side-by-side mode, the Fix confirmations and the helper's answer in the chat are judged by a person",
             "On a _detached copy: Pre-submission checklist (next to Chat), stage A. Each card shows a short title; click one: the panel on the right shows what the model found " +
