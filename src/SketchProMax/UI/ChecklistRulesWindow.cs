@@ -109,6 +109,7 @@ internal sealed class ChecklistRulesWindow : Window
             var value = _boxes[rule.Key].Text.Trim();
             if (value != rule.Default) def.Rules[rule.Key] = value;
         }
+        ChecklistMath.MarkChangedHere(def);
         try { ChecklistStore.Save(def); }
         catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException or System.Security.SecurityException)
         {
