@@ -18,7 +18,8 @@ namespace SketchProMax.Tools;
 /// (a stage in the window) and a row whose first cell is a number is a check; the columns are found by their headings
 /// (Check, Example, Where it came from, found it on, Priority, Notes). A Notes cell starting "Waiting" marks a check that
 /// waits on an answer. The row after "Sign-off" names who signs ("Trade BIM coordinator: ___  Trade group leader: ___").
-/// The checklist is never shipped inside the add-in: the office's copy may be restricted, so each user picks it once.
+/// The office's checklist ships built in (Data/pre-submission-checklist.json, with the names of people, the client and the
+/// project replaced by roles and generic codes); an imported Excel file or edits made in the add-in replace it (ChecklistStore).
 /// </summary>
 internal static class ChecklistMath
 {
@@ -28,6 +29,7 @@ internal static class ChecklistMath
 
     public sealed record Item(string Id, string Number, string Check, string Example, string From, string FoundOn, string Priority, string Waiting, string Auto)
     {
+        [System.Text.Json.Serialization.JsonIgnore]
         public bool High => Priority.Trim().Equals("High", StringComparison.OrdinalIgnoreCase);
     }
 
@@ -42,7 +44,47 @@ internal static class ChecklistMath
         public string SourcePath { get; set; } = "";
         public string SourceStamp { get; set; } = "";
 
+        [System.Text.Json.Serialization.JsonIgnore]
         public IEnumerable<Item> Items => Sections.SelectMany(s => s.Items);
+    }
+
+    /// <summary>SourcePath of the checklist that ships with the add-in, and of one edited in the add-in.</summary>
+    public const string BuiltInSource = "built-in", EditedSource = "edited";
+
+    /// <summary>The checklist that ships with the add-in (an embedded resource), or null when it can't be read.</summary>
+    public static Definition? BuiltIn()
+    {
+        try
+        {
+            using var stream = typeof(ChecklistMath).Assembly.GetManifestResourceStream("SketchProMax.pre-submission-checklist.json");
+            if (stream is null) return null;
+            using var reader = new StreamReader(stream, Encoding.UTF8);
+            var def = FromJson<Definition>(reader.ReadToEnd());
+            if (def is null || !def.Items.Any()) return null;
+            def.SourcePath = BuiltInSource;
+            return def;
+        }
+        catch (IOException) { return null; }
+    }
+
+    /// <summary>
+    /// The checklist as edited: checks numbered 1, 2, 3… down the stages (ids follow), the model hint matched again
+    /// from each check's wording. Answers follow their check by its wording (Reconcile), so renumbering loses none.
+    /// </summary>
+    public static Definition Renumber(Definition def)
+    {
+        var n = 0;
+        var sections = def.Sections.Select(s => new Section(s.Title.Trim(), s.Items.Select(i =>
+        {
+            var num = (++n).ToString(CultureInfo.InvariantCulture);
+            var check = i.Check.Trim();
+            return i with { Id = num, Number = num, Check = check, Auto = AutoKey(check) };
+        }).ToList())).ToList();
+        return new Definition
+        {
+            Title = def.Title.Trim(), Fields = def.Fields.ToList(), Sections = sections, Signatories = def.Signatories.ToList(),
+            SourcePath = def.SourcePath, SourceStamp = def.SourceStamp,
+        };
     }
 
     public sealed class Answer
@@ -87,6 +129,47 @@ internal static class ChecklistMath
 
         /// <summary>The office's rule: nothing left unanswered and no check marked N.</summary>
         public bool Ready => Total > 0 && Open == 0 && No == 0;
+    }
+
+    /// <summary>Your answers as a percentage: checks answered Yes or N/A out of all checks.</summary>
+    public static int Percent(Progress p) => p.Total == 0 ? 0 : (int)Math.Round(100.0 * (p.Yes + p.NotApplicable) / p.Total, MidpointRounding.AwayFromZero);
+
+    /// <summary>The automatic check: checks the model can test (Tested), and how many of those it passes or fails.</summary>
+    public sealed record AutoProgress(int Tested, int Pass, int Fail)
+    {
+        public int Percent => Tested == 0 ? 0 : (int)Math.Round(100.0 * Pass / Tested, MidpointRounding.AwayFromZero);
+    }
+
+    /// <summary>
+    /// The model's own verdict on the checks it can test: <paramref name="verdict"/> gives true (passes), false (fails) or
+    /// null (the model can't tell) for a check's model rule. Separate from the answers: you can be at 100% while it is at 50%.
+    /// </summary>
+    public static AutoProgress Auto(IEnumerable<Item> items, Func<string, bool?> verdict)
+    {
+        int pass = 0, fail = 0;
+        foreach (var item in items)
+        {
+            if (item.Auto.Length == 0) continue;
+            switch (verdict(item.Auto))
+            {
+                case true: pass++; break;
+                case false: fail++; break;
+            }
+        }
+        return new AutoProgress(pass + fail, pass, fail);
+    }
+
+    /// <summary>Checks you answered Yes that the model check fails: worth a second look before signing.</summary>
+    public static List<Item> Disagree(IEnumerable<Item> items, State state, Func<string, bool?> verdict) =>
+        items.Where(i => i.Auto.Length > 0 && verdict(i.Auto) == false && state.Answers.TryGetValue(i.Id, out var a) && Normal(a.Done) == Yes).ToList();
+
+    /// <summary>The automatic check in one line, for the Word file and the window ("Automatic model check: 6 of 12 passed (50%)").</summary>
+    public static string AutoLine(AutoProgress auto, IReadOnlyCollection<Item> disagree)
+    {
+        if (auto.Tested == 0) return "";
+        var line = $"Automatic model check: {auto.Pass} of {auto.Tested} checks the model can test passed ({auto.Percent}%).";
+        if (disagree.Count > 0) line += " Answered Yes but failed by the model check: " + string.Join(", ", disagree.Select(i => "#" + i.Number)) + ".";
+        return line;
     }
 
     public static Progress Count(IEnumerable<Item> items, State state)
@@ -142,18 +225,31 @@ internal static class ChecklistMath
     private static string Short(string text) => text.Length <= 90 ? text : text.Substring(0, 87).TrimEnd() + "…";
 
     /// <summary>
-    /// Drops the answers whose check changed (a new revision of the checklist renumbered or reworded it) and those of
-    /// checks that are gone, so an answer never lands on a different check. Returns how many were dropped.
+    /// Keeps each answer with its check: a check renumbered (a new revision, or one added or deleted above it) takes its
+    /// answer along by its wording; answers of reworded or deleted checks are dropped, so an answer never lands on a
+    /// different check. Returns how many were dropped.
     /// </summary>
     public static int Reconcile(Definition def, State state)
     {
-        var items = def.Items.ToDictionary(i => i.Id, StringComparer.Ordinal);
-        var drop = state.Answers.Where(a => !items.TryGetValue(a.Key, out var item) || a.Value.Check.Length > 0 && !Same(a.Value.Check, item.Check))
-            .Select(a => a.Key).ToList();
-        foreach (var id in drop) state.Answers.Remove(id);
+        var old = state.Answers;
+        var kept = new Dictionary<string, Answer>(StringComparer.Ordinal);
+        var used = new HashSet<string>(StringComparer.Ordinal);
+        // Same number and wording (or no wording kept yet) first, then the same wording under another number (renumbered).
         foreach (var item in def.Items)
-            if (state.Answers.TryGetValue(item.Id, out var a) && a.Check.Length == 0) a.Check = item.Check;
-        return drop.Count;
+            if (old.TryGetValue(item.Id, out var a) && (a.Check.Length == 0 || Same(a.Check, item.Check))) { kept[item.Id] = a; used.Add(item.Id); }
+        foreach (var item in def.Items)
+        {
+            if (kept.ContainsKey(item.Id)) continue;
+            var hit = old.FirstOrDefault(p => !used.Contains(p.Key) && p.Value.Check.Length > 0 && Same(p.Value.Check, item.Check));
+            if (hit.Value is null) continue;
+            kept[item.Id] = hit.Value;
+            used.Add(hit.Key);
+        }
+        foreach (var item in def.Items)
+            if (kept.TryGetValue(item.Id, out var a) && a.Check.Length == 0) a.Check = item.Check;
+        var dropped = old.Count - used.Count;
+        state.Answers = kept;
+        return dropped;
     }
 
     private static bool Same(string a, string b) =>

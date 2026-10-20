@@ -24,7 +24,8 @@ using Visibility = System.Windows.Visibility;
 namespace SketchProMax.UI;
 
 /// <summary>
-/// The pre-submission checklist (Issue > Pre-submission checklist): the office's checklist Excel (ChecklistMath) walked
+/// The pre-submission checklist (Issue > Pre-submission checklist): the office's checklist (built in, imported from Excel
+/// or edited in ChecklistEditor; ChecklistStore picks which, ChecklistMath reads it) walked
 /// through in stages, one per section, between Project details and Review and sign. Each check is a card with what to
 /// do, how to check it, where it came from, a hint read from the model (ChecklistFacts), Yes / No / N/A and a comment.
 /// Review and sign lists what is still open, takes the signatures and writes the Word file (ChecklistDocx) or a PDF of it (ChecklistPdf), ready to open
@@ -47,9 +48,11 @@ internal sealed class ChecklistWindow : Window
     private readonly TabControl _stages = new();
     private readonly TextBlock _status = Brand.Text("");
     private readonly ProgressBar _bar = new() { Height = 6, Minimum = 0, Maximum = 1, Margin = new Thickness(0, 6, 0, 0) };
-    private readonly Button _back = Brand.Button("Back");
-    private readonly Button _next = Brand.Button("Next", Brand.Weight.Primary);
-    private readonly Button _pdf = Brand.Button("Create PDF");
+    private readonly Button _back = RichUi.Button(RichUi.Icon.Back, "Back");
+    private readonly Button _next = RichUi.Button(RichUi.Icon.Next, "Next", Brand.Weight.Primary);
+    private readonly Button _pdf = RichUi.Button(RichUi.Icon.Pdf, "Create PDF");
+    private readonly Chat.Motion _motion;
+    private readonly ScoreRing _answersRing, _autoRing;
     private readonly DispatcherTimer _saveSoon = new() { Interval = TimeSpan.FromMilliseconds(600) };
 
     private readonly Dictionary<string, Card> _cards = new(StringComparer.Ordinal);
@@ -76,11 +79,14 @@ internal sealed class ChecklistWindow : Window
         public TextBlock Glyph = null!, Sub = null!;
         public List<ChecklistMath.Item> Items = [];
         public string Name = "";
+        public bool WasDone = true; // no pop for stages already done when the window opens
     }
 
     private sealed class Review
     {
         public TextBlock Yes = null!, No = null!, Na = null!, Open = null!;
+        public TextBlock Score = null!, ScoreSub = null!, AutoScore = null!, AutoSub = null!;
+        public StackPanel Disagree = null!;
         public Border Banner = null!;
         public TextBlock BannerText = null!;
         public StackPanel Problems = null!;
@@ -107,7 +113,7 @@ internal sealed class ChecklistWindow : Window
             _open.Close();
         }
         var settings = AgentSettings.Load();
-        var (def, error) = LoadDefinition(settings.ChecklistPath);
+        var (def, error) = ChecklistStore.Load(settings);
         ChecklistFacts.Result facts;
         try { facts = ChecklistFacts.Read(doc, def); }
         catch (Exception ex) when (ex is not OutOfMemoryException)
@@ -126,63 +132,6 @@ internal sealed class ChecklistWindow : Window
     {
         try { return string.IsNullOrEmpty(doc.PathName) ? doc.Title : doc.PathName; }
         catch (Exception) { return doc.Title; }
-    }
-
-    /// <summary>
-    /// The add-in's own copy of the office checklist, made the first time it is picked, so the Excel file isn't needed
-    /// after that (moved, renamed, on a drive that isn't there). Kept on this PC only: the checklist is internal.
-    /// </summary>
-    internal static string KeptCopy => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "SketchProMax", "pre-submission checklist.xlsx");
-
-    /// <summary>
-    /// The checklist from the picked Excel file when it is there (a newer revision saved over it is picked up and kept),
-    /// else from the kept copy. An error only when neither can be read.
-    /// </summary>
-    private static (ChecklistMath.Definition? Def, string Error) LoadDefinition(string? path, bool orKept = true)
-    {
-        path = (path ?? "").Trim().Trim('"');
-        var error = "";
-        if (path.Length > 0)
-        {
-            try
-            {
-                if (File.Exists(path))
-                {
-                    var def = ChecklistMath.ReadXlsx(path);
-                    Keep(path);
-                    return (def, "");
-                }
-                error = $"The checklist file isn't there any more ({path}). Pick it again.";
-            }
-            catch (InvalidDataException ex) { error = $"Couldn't read the checklist: {ex.Message}"; }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                error = $"Couldn't open the checklist ({ex.Message}). If it is open in Excel, that is fine; check the file is on a drive you can reach, then try again.";
-            }
-        }
-        if (!orKept) return (null, error);
-        try
-        {
-            if (File.Exists(KeptCopy)) return (ChecklistMath.ReadXlsx(KeptCopy), "");
-        }
-        catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException) { }
-        return (null, error);
-    }
-
-    /// <summary>Copies the picked checklist into the add-in's folder (read shared, as Excel may have it open). Best effort.</summary>
-    private static void Keep(string path)
-    {
-        try
-        {
-            if (string.Equals(Path.GetFullPath(path), Path.GetFullPath(KeptCopy), StringComparison.OrdinalIgnoreCase)) return;
-            Directory.CreateDirectory(Path.GetDirectoryName(KeptCopy)!);
-            using var from = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-            var temp = KeptCopy + ".new";
-            using (var to = File.Create(temp)) from.CopyTo(to);
-            if (File.Exists(KeptCopy)) File.Delete(KeptCopy);
-            File.Move(temp, KeptCopy);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) { }
     }
 
     private ChecklistWindow(string docKey, ChecklistMath.Definition? def, string error, ChecklistFacts.Result facts)
@@ -204,6 +153,10 @@ internal sealed class ChecklistWindow : Window
         ResizeMode = ResizeMode.CanResize;
         Brand.Prepare(this);
         Styles();
+        _motion = RichUi.MotionOf(_settings);
+        RichUi.Apply(this, _motion);
+        _answersRing = new ScoreRing("Your answers", _motion);
+        _autoRing = new ScoreRing("Automatic check", _motion);
 
         _saveSoon.Tick += (_, _) => { _saveSoon.Stop(); SaveDraft(); };
         _back.Click += (_, _) => Move(-1);
@@ -237,11 +190,24 @@ internal sealed class ChecklistWindow : Window
         LoadDraft();
 
         var subtitle = _def is null ? "Pick your office's checklist to start" : $"{_def.Title} · {Shown(_facts.Model)}";
-        var header = Brand.Header("Pre-submission checklist", subtitle);
+        // The header band, with the two scores always in view on the right (they follow every answer).
+        var band = Brand.Header("Pre-submission checklist", subtitle);
+        band.Padding = new Thickness(16, 12, _def is null ? 16 : 230, 12);
+        var header = new Grid();
+        header.Children.Add(band);
+        if (_def is not null)
+        {
+            foreach (var ring in new[] { _answersRing, _autoRing })
+                if (ring.Parent is System.Windows.Controls.Panel old) old.Children.Remove(ring);
+            var rings = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 18, 0) };
+            rings.Children.Add(_answersRing);
+            rings.Children.Add(_autoRing);
+            header.Children.Add(rings);
+        }
         DockPanel.SetDock(header, Dock.Top);
 
         // The footer: progress on the left, Back / Next (or Create PDF and Create Word file) on the right. Always on screen.
-        var close = Brand.Button("Close");
+        var close = RichUi.Button(RichUi.Icon.Close, "Close");
         close.IsCancel = true;
         close.Click += (_, _) => Close();
         AutomationProperties.SetLiveSetting(_status, AutomationLiveSetting.Polite);
@@ -356,11 +322,10 @@ internal sealed class ChecklistWindow : Window
         if (_def is null)
         {
             source.Children.Add(Brand.Text("Pick your office's checklist", size: 14, bold: true));
-            source.Children.Add(Para("Choose the pre-submission checklist Excel file (.xlsx) once. Sketch ProMax takes its stages, checks, examples and sign-off into Revit " +
-                                     "and keeps its own copy, so you won't need the Excel file again. A new revision saved over the same file is picked up. " +
-                                     "The checklist stays on your PC, nowhere else."));
+            source.Children.Add(Para("The checklist that comes with Sketch ProMax couldn't be read. Choose the pre-submission checklist Excel file (.xlsx): " +
+                                     "Sketch ProMax takes its stages, checks, examples and sign-off into Revit and keeps its own copy on this PC."));
             if (_loadError.Length > 0) source.Children.Add(Para(_loadError, Brand.K.DangerText));
-            var pick = Brand.Button("Choose the checklist…", Brand.Weight.Primary);
+            var pick = RichUi.Button(RichUi.Icon.Import, "Choose the checklist…", Brand.Weight.Primary);
             pick.HorizontalAlignment = HorizontalAlignment.Left;
             pick.Margin = new Thickness(0, 10, 0, 0);
             pick.Click += (_, _) => PickChecklist();
@@ -371,18 +336,24 @@ internal sealed class ChecklistWindow : Window
         var checks = _def.Items.Count();
         source.Children.Add(Brand.Text(_def.Title, size: 14, bold: true));
         source.Children.Add(Para($"{checks} checks in {_def.Sections.Count} stages · signed by {string.Join(" and ", _def.Signatories)}", Brand.K.Muted));
-        var kept = string.Equals(_def.SourcePath, KeptCopy, StringComparison.OrdinalIgnoreCase);
-        var file = Para(kept ? "Kept in Sketch ProMax on this PC (the Excel file isn't needed)" : _def.SourcePath, Brand.K.Muted, 11);
+        var origin = _def.SourcePath switch
+        {
+            ChecklistMath.BuiltInSource => "Built into Sketch ProMax. Edit the checklist to add, change or delete checks, here or in Excel.",
+            ChecklistMath.EditedSource => "Edited in Sketch ProMax" + (_def.SourceStamp.Length > 0 ? " on " + _def.SourceStamp : "") + ", kept on this PC.",
+            _ => "Imported from " + _def.SourcePath + " (a newer revision saved over it is picked up).",
+        };
+        var file = Para(origin, Brand.K.Muted, 11);
         file.TextTrimming = TextTrimming.CharacterEllipsis;
         file.TextWrapping = TextWrapping.NoWrap;
         file.ToolTip = _def.SourcePath;
         source.Children.Add(file);
         if (_loadError.Length > 0) source.Children.Add(Para(_loadError, Brand.K.WarningText));
         var row = new WrapPanel { Margin = new Thickness(0, 10, 0, 0) };
-        var change = Brand.Button("Use another checklist…");
+        var change = RichUi.Button(RichUi.Icon.Edit, "Edit the checklist…");
         change.Margin = new Thickness(0, 0, 8, 0);
-        change.Click += (_, _) => PickChecklist();
-        var reread = Brand.Button("Read the model again");
+        AutomationProperties.SetHelpText(change, "Add, change, move or delete checks and stages, or export the checklist to Excel and import it back.");
+        change.Click += (_, _) => EditChecklist();
+        var reread = RichUi.Button(RichUi.Icon.Refresh, "Read the model again");
         reread.Margin = new Thickness(0);
         AutomationProperties.SetHelpText(reread, "Reads the file names and the hints under each check from the model again, after you have fixed something.");
         reread.Click += async (_, _) => await ReadModelAgain(reread);
@@ -447,33 +418,47 @@ internal sealed class ChecklistWindow : Window
     private static bool Matches(string role, string label) =>
         role.Length > 0 && (label.IndexOf(role, StringComparison.OrdinalIgnoreCase) >= 0 || role.IndexOf(label, StringComparison.OrdinalIgnoreCase) >= 0);
 
+    /// <summary>Only when the built-in checklist can't be read: imports the office's Excel file.</summary>
     private void PickChecklist()
     {
         var dialog = new Microsoft.Win32.OpenFileDialog { Title = "Pick the pre-submission checklist", Filter = "Excel workbooks|*.xlsx|All files|*.*" };
-        try
-        {
-            var current = (_settings.ChecklistPath ?? "").Trim();
-            if (current.Length > 0 && Path.GetDirectoryName(current) is { Length: > 0 } dir && Directory.Exists(dir)) dialog.InitialDirectory = dir;
-        }
-        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException) { }
         if (dialog.ShowDialog(this) != true) return;
         _saveSoon.Stop();
         SaveDraft();
-        var (def, error) = LoadDefinition(dialog.FileName, orKept: false);
-        if (def is null)
+        try
         {
-            _loadError = error;
-            Build();
-            return;
+            var def = ChecklistMath.ReadXlsx(dialog.FileName);
+            _def = def;
+            _loadError = "";
+            try
+            {
+                ChecklistStore.Save(def);
+                _settings.ChecklistPath = dialog.FileName;
+                _settings.Save();
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+            {
+                _loadError = $"The checklist is in use, but Sketch ProMax couldn't keep it for next time ({ex.Message}).";
+            }
         }
+        catch (InvalidDataException ex) { _loadError = $"Couldn't read the checklist: {ex.Message}"; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _loadError = $"Couldn't open the checklist ({ex.Message}). If it is open in Excel, that is fine; check the file is on a drive you can reach, then try again.";
+        }
+        Build();
+        if (_def is not null) _ = ReadModelAgain(null);
+    }
+
+    /// <summary>Opens the checklist editor; after Save the stages are rebuilt, and answers stay with their checks.</summary>
+    private void EditChecklist()
+    {
+        if (_def is null) return;
+        _saveSoon.Stop();
+        SaveDraft();
+        if (ChecklistEditor.Edit(this, _def, _settings) is not { } def) return;
         _def = def;
         _loadError = "";
-        _settings.ChecklistPath = dialog.FileName;
-        try { _settings.Save(); }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
-        {
-            _loadError = $"The checklist is in use, but Sketch ProMax couldn't remember it for next time ({ex.Message}).";
-        }
         Build();
         _ = ReadModelAgain(null);
     }
@@ -505,6 +490,62 @@ internal sealed class ChecklistWindow : Window
             _status.Text = $"Couldn't read the model ({ex.Message}). Finish what Revit is doing (an edit mode or a dialog), then try again.";
         }
         finally { if (button is not null) Brand.SetBusy(button, false); }
+    }
+
+    /// <summary>The model check's verdict on a check's rule: passes, fails, or null when the model can't tell.</summary>
+    private bool? Verdict(string key) => _facts.Hints.TryGetValue(key, out var h) ? h.Level switch
+    {
+        ChecklistFacts.Level.Ok => true,
+        ChecklistFacts.Level.Warn => false,
+        _ => null,
+    } : null;
+
+    /// <summary>Runs something on the model this checklist is for, through Revit; a sentence for the user either way.</summary>
+    private async Task<string> OnModel(Func<UIDocument, string> work)
+    {
+        var key = _docKey;
+        try
+        {
+            return await App.Dispatcher.InvokeAsync(app =>
+            {
+                var ui = app.ActiveUIDocument;
+                if (ui is null || ui.Document.IsFamilyDocument || DocKey(ui.Document) != key)
+                    return "Switch Revit to the model this checklist is for (" + Shown(_facts.Model) + "), then try again.";
+                return work(ui);
+            });
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            return $"Revit couldn't do it ({ex.Message}). Finish what Revit is doing (an edit mode or a dialog), then try again.";
+        }
+    }
+
+    private async Task ShowInRevit(Button button, TextBlock said, string key)
+    {
+        if (Brand.IsBusy(button)) return;
+        Brand.SetBusy(button, true, "Opening…");
+        try
+        {
+            said.Text = await OnModel(ui => ChecklistViews.Show(ui, key));
+            said.Visibility = Visibility.Visible;
+            RichUi.FadeIn(said, _motion, fromY: 4);
+            ActivityLog.Note("checklist_show", key);
+        }
+        finally { Brand.SetBusy(button, false); }
+    }
+
+    private async Task DeleteCheckingViews(Button button, TextBlock result)
+    {
+        if (Brand.IsBusy(button)) return;
+        Brand.SetBusy(button, true, "Deleting…");
+        try
+        {
+            result.Text = await OnModel(ChecklistViews.Cleanup);
+            result.Visibility = Visibility.Visible;
+            RichUi.FadeIn(result, _motion, fromY: 4);
+            ActivityLog.Note("checklist_views_deleted", result.Text);
+        }
+        finally { Brand.SetBusy(button, false); }
     }
 
     // ---- Section stages -------------------------------------------------------------------------------------------
@@ -559,6 +600,21 @@ internal sealed class ChecklistWindow : Window
             body.Children.Add(CardBox(open, Brand.K.NoticeBg, Brand.K.NoticeBorder, 8));
         }
         if (_facts.Hints.TryGetValue(item.Auto, out var hint) && item.Auto.Length > 0) body.Children.Add(HintRow(hint));
+        if (item.Auto.Length > 0 && ChecklistViews.ButtonFor(item.Auto) is { } showText)
+        {
+            var show = RichUi.Button(RichUi.Icon.Eye, showText);
+            show.HorizontalAlignment = HorizontalAlignment.Left;
+            show.Margin = new Thickness(26, 6, 0, 0);
+            AutomationProperties.SetHelpText(show, "Opens a view or Revit's dialog to check this in the model. Views made for checking are named " + ChecklistViews.Prefix + "…");
+            var said = Para("", Brand.K.Muted, 11, 3);
+            said.Margin = new Thickness(26, 3, 0, 0);
+            said.Visibility = Visibility.Collapsed;
+            AutomationProperties.SetLiveSetting(said, AutomationLiveSetting.Polite);
+            var key = item.Auto;
+            show.Click += async (_, _) => await ShowInRevit(show, said, key);
+            body.Children.Add(show);
+            body.Children.Add(said);
+        }
 
         // Yes / No / N/A, then the comment.
         var answer = new DockPanel { Margin = new Thickness(0, 10, 0, 0) };
@@ -681,8 +737,10 @@ internal sealed class ChecklistWindow : Window
         a.By = Signer();
         a.Date = Today();
         _loading = true;
-        (value switch { ChecklistMath.Yes => card.Yes, ChecklistMath.No => card.No, _ => card.Na }).IsChecked = true;
+        var chosen = value switch { ChecklistMath.Yes => card.Yes, ChecklistMath.No => card.No, _ => card.Na };
+        chosen.IsChecked = true;
         _loading = false;
+        RichUi.Pop(chosen, _motion);
         ShowCard(card);
         Changed();
         if (!move) return;
@@ -733,6 +791,27 @@ internal sealed class ChecklistWindow : Window
         page.Children.Add(Heading("Review and sign"));
         page.Children.Add(Para("Check the totals, clear anything still open, then create the Word file or PDF to print and sign.", Brand.K.Muted));
 
+        // Two scores side by side: your answers, and what the model check says on its own (you can be at 100% while it is at 50%).
+        var scores = new UniformGrid { Columns = 2, Margin = new Thickness(0, 12, 0, 0) };
+        (TextBlock, TextBlock) Score(string label)
+        {
+            var number = Brand.Text("0%", Brand.K.Text, 30, bold: true);
+            var sub = Brand.Text("", Brand.K.Muted, 12);
+            sub.TextWrapping = TextWrapping.Wrap;
+            var stack = new StackPanel { Children = { Brand.Text(label, Brand.K.Text, 13, bold: true), number, sub } };
+            var b = CardBox(stack, top: 0);
+            b.Margin = new Thickness(0, 0, 10, 0);
+            AutomationProperties.SetName(b, label);
+            scores.Children.Add(b);
+            return (number, sub);
+        }
+        (r.Score, r.ScoreSub) = Score("Your answers");
+        (r.AutoScore, r.AutoSub) = Score("Automatic model check");
+        page.Children.Add(scores);
+        r.Disagree = new StackPanel { Margin = new Thickness(0, 6, 0, 0) };
+        AutomationProperties.SetName(r.Disagree, "Answered Yes but failed by the model check");
+        page.Children.Add(r.Disagree);
+
         // Four tiles: Yes, No, N/A, not answered.
         var tiles = new UniformGrid { Columns = 4, Margin = new Thickness(0, 12, 0, 0) };
         TextBlock Tile(string label, string key)
@@ -774,9 +853,9 @@ internal sealed class ChecklistWindow : Window
         AutomationProperties.SetLiveSetting(r.Error, AutomationLiveSetting.Assertive);
         page.Children.Add(r.Error);
         r.DoneText = Para("", Brand.K.Text, 13, 0);
-        r.OpenFile = Brand.Button("Open", Brand.Weight.Primary);
-        r.Print = Brand.Button("Print");
-        r.Folder = Brand.Button("Show in folder");
+        r.OpenFile = RichUi.Button(RichUi.Icon.Open, "Open", Brand.Weight.Primary);
+        r.Print = RichUi.Button(RichUi.Icon.Print, "Print");
+        r.Folder = RichUi.Button(RichUi.Icon.Folder, "Show in folder");
         r.OpenFile.Margin = new Thickness(0, 0, 8, 0);
         r.OpenFile.Click += (_, _) => Shell(r.LastFile, null);
         r.Print.Click += (_, _) => Shell(r.LastFile, "print");
@@ -790,7 +869,22 @@ internal sealed class ChecklistWindow : Window
         r.Done.Tag = done;
         page.Children.Add(done);
 
-        var startAgain = Brand.Button("Start again", Brand.Weight.Danger);
+        // The views Show in Revit made: delete them before the model goes out.
+        var viewsHead = Heading("Checking views", 15);
+        viewsHead.Margin = new Thickness(0, 18, 0, 0);
+        page.Children.Add(viewsHead);
+        var viewsText = Para("Show in Revit makes views named \"" + ChecklistViews.Prefix + "…\" to check in. Delete them before you submit the model.", Brand.K.Muted);
+        var deleteViews = RichUi.Button(RichUi.Icon.Delete, "Delete the checking views", Brand.Weight.Danger);
+        deleteViews.HorizontalAlignment = HorizontalAlignment.Left;
+        deleteViews.Margin = new Thickness(0, 8, 0, 0);
+        AutomationProperties.SetHelpText(deleteViews, "Deletes every view named " + ChecklistViews.Prefix + "… from this model. Your own views are not touched.");
+        var viewsResult = Para("", Brand.K.Text, 12, 6);
+        viewsResult.Visibility = Visibility.Collapsed;
+        AutomationProperties.SetLiveSetting(viewsResult, AutomationLiveSetting.Polite);
+        deleteViews.Click += async (_, _) => await DeleteCheckingViews(deleteViews, viewsResult);
+        page.Children.Add(CardBox(new StackPanel { Children = { viewsText, deleteViews, viewsResult } }, top: 8));
+
+        var startAgain = RichUi.Button(RichUi.Icon.Undo, "Start again", Brand.Weight.Danger);
         startAgain.HorizontalAlignment = HorizontalAlignment.Left;
         startAgain.Margin = new Thickness(0, 24, 0, 0);
         AutomationProperties.SetHelpText(startAgain, "Clears every answer, comment and signature for this model. Word files and PDFs already made are kept.");
@@ -904,6 +998,26 @@ internal sealed class ChecklistWindow : Window
         r.Yes.Text = p.Yes.ToString(CultureInfo.CurrentCulture);
         r.No.Text = p.No.ToString(CultureInfo.CurrentCulture);
         r.Na.Text = p.NotApplicable.ToString(CultureInfo.CurrentCulture);
+        r.Score.Text = ChecklistMath.Percent(p).ToString(CultureInfo.CurrentCulture) + "%";
+        r.ScoreSub.Text = $"{p.Yes + p.NotApplicable} of {p.Total} checks Yes or N/A";
+        var auto = ChecklistMath.Auto(_def.Items, Verdict);
+        r.AutoScore.Text = auto.Tested == 0 ? "–" : auto.Percent.ToString(CultureInfo.CurrentCulture) + "%";
+        r.AutoScore.SetResourceReference(TextBlock.ForegroundProperty, auto.Tested == 0 ? Brand.K.Muted : auto.Fail == 0 ? Brand.K.SuccessText : Brand.K.WarningText);
+        r.AutoSub.Text = auto.Tested == 0 ? "The model couldn't test any check. Read the model again on Project details."
+            : $"{auto.Pass} of {auto.Tested} checks the model can test pass. The other {p.Total - auto.Tested} need your eyes.";
+        r.Disagree.Children.Clear();
+        var disagree = ChecklistMath.Disagree(_def.Items, _state, Verdict);
+        if (disagree.Count > 0) r.Disagree.Children.Add(Para("You answered Yes, but the model check says otherwise. Have another look:", Brand.K.WarningText, 12, 2));
+        foreach (var item in disagree.Take(12))
+        {
+            var said = _facts.Hints.TryGetValue(item.Auto, out var h) ? h.Text : "";
+            var link = new Button { Content = Brand.Text($"#{item.Number}: {said}", Brand.K.Link, 12), Cursor = Cursors.Hand, HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(0, 2, 0, 0), Padding = new Thickness(4, 2, 4, 2) };
+            link.SetResourceReference(StyleProperty, "SpmLinkButton");
+            AutomationProperties.SetName(link, $"Go to #{item.Number}");
+            var id = item.Id;
+            link.Click += (_, _) => { if (_cards.TryGetValue(id, out var c)) { _stages.SelectedIndex = c.Stage; FocusCard(c); } };
+            r.Disagree.Children.Add(link);
+        }
         r.Open.Text = p.Open.ToString(CultureInfo.CurrentCulture);
         r.BannerText.Text = p.Ready
             ? $"Ready for submission: all {p.Total} checks are Yes or N/A. The Word file or PDF will carry the signatures."
@@ -944,7 +1058,8 @@ internal sealed class ChecklistWindow : Window
             var model = Path.GetFileNameWithoutExtension(ChecklistMath.WorkingName(_facts.Model));
             var name = $"{ChecklistMath.SafeName(model)} pre-submission checklist {DateTime.Now:yyyy-MM-dd HHmm}";
             var docx = Path.Combine(folder, name + ".docx");
-            var info = new ChecklistDocx.Info(_facts.Model, Update.Updater.CurrentText, DateTime.Now);
+            var info = new ChecklistDocx.Info(_facts.Model, Update.Updater.CurrentText, DateTime.Now,
+                ChecklistMath.AutoLine(ChecklistMath.Auto(_def.Items, Verdict), ChecklistMath.Disagree(_def.Items, _state, Verdict)));
             var path = docx;
             var note = "";
             if (pdf)
@@ -973,8 +1088,9 @@ internal sealed class ChecklistWindow : Window
             r.Error.Visibility = note.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
             r.DoneText.Text = (p.Ready ? $"Signed checklist created ({kind}): " : $"Checklist created for review ({kind}, NOT READY, no signatures): ") + Path.GetFileName(path) +
                               "\nIn Documents\\Sketch ProMax\\Checklists.";
-            r.OpenFile.Content = kind == "PDF" ? "Open PDF" : "Open in Word";
+            RichUi.Set(r.OpenFile, RichUi.Icon.Open, kind == "PDF" ? "Open PDF" : "Open in Word");
             ((Border)r.Done.Tag).Visibility = Visibility.Visible;
+            RichUi.FadeIn((Border)r.Done.Tag, _motion);
             r.OpenFile.Focus();
             ActivityLog.Note(kind == "PDF" ? "checklist_pdf" : "checklist_word", $"{p.Yes} yes, {p.No} no, {p.NotApplicable} n/a, {p.Open} open, ready {p.Ready}");
         }
@@ -1032,6 +1148,7 @@ internal sealed class ChecklistWindow : Window
         StageButtonText();
         _next.IsEnabled = _def is not null && _stages.Items.Count > 1;
         _pdf.Visibility = last ? Visibility.Visible : Visibility.Collapsed;
+        if (_stages.SelectedItem is TabItem { Content: UIElement page }) RichUi.FadeIn(page, _motion, fromX: 14, fromY: 0);
         Changed(refresh: false);
     }
 
@@ -1098,8 +1215,15 @@ internal sealed class ChecklistWindow : Window
             return;
         }
         var p = ChecklistMath.Count(_def.Items, _state);
-        _bar.Value = p.Total == 0 ? 0 : (double)p.Answered / p.Total;
-        _status.Text = $"{p.Answered} of {p.Total} answered" + (p.No > 0 ? $" · {p.No} No" : "") + (p.WaitingWithoutNote > 0 ? $" · {p.WaitingWithoutNote} open points without a comment" : "") +
+        RichUi.To(_bar, p.Total == 0 ? 0 : (double)p.Answered / p.Total, _motion);
+        var ringAuto = ChecklistMath.Auto(_def.Items, Verdict);
+        var mine = ChecklistMath.Percent(p);
+        _answersRing.Show(mine, System.Windows.Media.Colors.White, $"Your answers: {p.Yes + p.NotApplicable} of {p.Total} checks Yes or N/A ({mine}%).");
+        _autoRing.Show(ringAuto.Tested == 0 ? null : ringAuto.Percent,
+            ringAuto.Fail == 0 ? System.Windows.Media.Color.FromRgb(0x86, 0xEF, 0xAC) : System.Windows.Media.Color.FromRgb(0xFC, 0xD3, 0x4D),
+            ringAuto.Tested == 0 ? "The model couldn't test any check yet." : $"Automatic model check: {ringAuto.Pass} of {ringAuto.Tested} checks the model can test pass ({ringAuto.Percent}%).");
+        var auto = ChecklistMath.Auto(_def.Items, Verdict);
+        _status.Text = $"{p.Answered} of {p.Total} answered ({ChecklistMath.Percent(p)}% Yes or N/A)" + (auto.Tested > 0 ? $" · automatic check {auto.Percent}%" : "") + (p.No > 0 ? $" · {p.No} No" : "") + (p.WaitingWithoutNote > 0 ? $" · {p.WaitingWithoutNote} open points without a comment" : "") +
                        (p.Ready ? " · ready to sign" : "");
         for (var i = 0; i < _headers.Count; i++)
         {
@@ -1131,12 +1255,15 @@ internal sealed class ChecklistWindow : Window
         if (Brand.IsBusy(_next)) return;
         var i = Math.Max(0, _stages.SelectedIndex);
         var names = _def is null ? ["Project details"] : ChecklistMath.Stages(_def);
-        _next.Content = _def is not null && i == names.Count - 1 ? "Create Word file" : i + 1 < names.Count ? "Next: " + names[i + 1] : "Next";
+        if (_def is not null && i == names.Count - 1) RichUi.Set(_next, RichUi.Icon.Word, "Create Word file");
+        else RichUi.Set(_next, RichUi.Icon.Next, i + 1 < names.Count ? "Next: " + names[i + 1] : "Next");
     }
 
     /// <summary>A stage's circle: green with a tick when done, red with ! when a check is No, accent outline once started, grey before.</summary>
-    private static void Paint(StageHeader h, bool done, bool bad, bool active, int index)
+    private void Paint(StageHeader h, bool done, bool bad, bool active, int index)
     {
+        if (done && !h.WasDone && !_loading) RichUi.Pop(h.Circle, _motion, 0.6);
+        h.WasDone = done;
         h.Glyph.Text = done ? "✓" : bad ? "!" : (index + 1).ToString(CultureInfo.InvariantCulture);
         if (done || bad)
         {
@@ -1171,7 +1298,7 @@ internal sealed class ChecklistWindow : Window
         _state.Checklist = _def.Title;
         var dropped = ChecklistMath.Reconcile(_def, _state);
         if (dropped > 0 && _loadError.Length == 0)
-            _loadError = $"The checklist changed since this model was last checked: {dropped} answers whose check was reworded, renumbered or removed were cleared. Answer them again.";
+            _loadError = $"The checklist changed since this model was last checked: {dropped} answers whose check was reworded or removed were cleared. Answer them again.";
         // Empty header fields get what the model (or Settings) says.
         foreach (var f in _def.Fields)
             if (!(_state.Fields.TryGetValue(f.Label, out var v) && v.Trim().Length > 0) && FieldFromModel(f) is { Length: > 0 } auto)

@@ -72,6 +72,11 @@
     <EmbeddedResource Include="Data\carbon-factors.csv" LogicalName="SketchProMax.carbon-factors.csv" />
   </ItemGroup>
 
+  <!-- The office's pre-submission checklist, built in (names of people, the client and the project taken out). Edited copies live in %APPDATA%. -->
+  <ItemGroup>
+    <EmbeddedResource Include="Data\pre-submission-checklist.json" LogicalName="SketchProMax.pre-submission-checklist.json" />
+  </ItemGroup>
+
   <!-- Step-by-step help guides (Tools/HelpGuides), the same files as docs/guides. -->
   <ItemGroup>
     <EmbeddedResource Include="..\..\docs\guides\*.md" LogicalName="SketchProMax.guides.%(Filename).md" />

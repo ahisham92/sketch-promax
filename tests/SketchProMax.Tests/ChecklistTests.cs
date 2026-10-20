@@ -7,7 +7,8 @@ using static SketchProMax.Tools.ChecklistMath;
 /// <summary>
 /// The pre-submission checklist (Tools/ChecklistMath, Tools/ChecklistDocx): reading the office's Excel layout, the
 /// answers and readiness, the file names, and the Word file signed only when ready. The workbook here is made in the
-/// test in the same layout (the office's own copy is restricted and isn't in the repository).
+/// test in the same layout; the built-in checklist (Data/pre-submission-checklist.json) is checked too, and the Excel
+/// export (ChecklistXlsx) must import back unchanged.
 /// </summary>
 internal static class ChecklistTests
 {
@@ -18,16 +19,16 @@ internal static class ChecklistTests
             ("Read me", [[(0, "Demo pre-submission checklist, Rev 02 (19-Oct-2026, comments added)")]]),
             ("Checklist", [
                 [(0, "Demo pre-submission checklist (one per model, per submission)")],
-                [(0, "Model file name"), (2, "e.g. D01C-070-00-ABC-002-STR-3DM-0010.rvt")],
+                [(0, "Model file name"), (2, "e.g. PRJ1-070-00-ABC-002-STR-3DM-0010.rvt")],
                 [(0, "Building / discipline")],
                 [(0, "Trade BIM coordinator")],
                 [(0, "Progress"), (2, "=COUNTIF(G15:G78,\"Y\")")],
-                [(0, "#"), (1, "Check (what to do)"), (2, "Example / how to check"), (3, "Where it came from"), (4, "ABCC/Khaled found it on"), (5, "Priority"), (6, "Done (Y/N/NA)"), (9, "Notes")],
+                [(0, "#"), (1, "Check (what to do)"), (2, "Example / how to check"), (3, "Where it came from"), (4, "Client/BIM lead found it on"), (5, "Priority"), (6, "Done (Y/N/NA)"), (9, "Notes")],
                 [(0, "A. File names and size")],
-                [(0, "1"), (1, "The working model name has 002 after ABC."), (2, "D01C-070-00-ABC-002-STR-3DM-0010.rvt"), (3, "ABCC BIM-02"), (4, "BLDG-07, 08"), (5, "High")],
-                [(0, "2"), (1, "Level field: a model that covers many levels uses 00."), (5, "High"), (9, "Waiting: Khaled, 00 or MM")],
+                [(0, "1"), (1, "The working model name has 002 after ABC."), (2, "PRJ1-070-00-ABC-002-STR-3DM-0010.rvt"), (3, "Client BIM-02"), (4, "BLDG-01, 08"), (5, "High")],
+                [(0, "2"), (1, "Level field: a model that covers many levels uses 00."), (5, "High"), (9, "Waiting: BIM lead, 00 or MM")],
                 [(0, "B. Coordinates, levels, grids, worksets")],
-                [(0, "3"), (1, "Grids are in the model and visible in plans."), (2, "ABCC rejected BLDG-07 because the STR file had no grids")],
+                [(0, "3"), (1, "Grids are in the model and visible in plans."), (2, "The client rejected BLDG-01 because the STR file had no grids")],
                 [(0, "4"), (1, "Every element is on its STD-0003 workset. Nothing on Workset1."), (2, "Link worksets: Z_Link_URS, Z_Link_AR")],
                 [(0, "Sign-off")],
                 [(0, "Trade BIM coordinator: ____________________     Trade group leader: ____________________     Date: __________")],
@@ -40,15 +41,15 @@ internal static class ChecklistTests
         finally { File.Delete(path); }
         check("checklist: the title, with the revision from the read-me sheet", def.Title == "Demo pre-submission checklist, Rev 02", def.Title);
         check("checklist: header fields above the table, Progress left out, e.g. dropped",
-            def.Fields.Select(f => f.Label).SequenceEqual(["Model file name", "Building / discipline", "Trade BIM coordinator"]) && def.Fields[0].Example == "D01C-070-00-ABC-002-STR-3DM-0010.rvt",
+            def.Fields.Select(f => f.Label).SequenceEqual(["Model file name", "Building / discipline", "Trade BIM coordinator"]) && def.Fields[0].Example == "PRJ1-070-00-ABC-002-STR-3DM-0010.rvt",
             string.Join(" | ", def.Fields.Select(f => f.Label + "=" + f.Example)));
         check("checklist: header fields know where they are filled from", def.Fields.Select(f => f.Source).SequenceEqual(["model_file", "building", "coordinator"]), string.Join(",", def.Fields.Select(f => f.Source)));
         check("checklist: sections become stages, with their checks", def.Sections.Count == 2 && def.Sections[0].Items.Count == 2 && def.Sections[1].Items.Count == 2,
             string.Join(" | ", def.Sections.Select(s => s.Title + ":" + s.Items.Count)));
         check("checklist: stages are details, sections, review", Stages(def).SequenceEqual(["Project details", "File names and size", "Coordinates, levels, grids, worksets", "Review and sign"]), string.Join(",", Stages(def)));
         var one = def.Items.First();
-        check("checklist: a check keeps its columns", one is { Number: "1", Example: "D01C-070-00-ABC-002-STR-3DM-0010.rvt", From: "ABCC BIM-02", FoundOn: "BLDG-07, 08", High: true }, one.ToString());
-        check("checklist: a Waiting note marks an open point", def.Items.ElementAt(1).Waiting == "Khaled, 00 or MM" && one.Waiting == "", def.Items.ElementAt(1).Waiting);
+        check("checklist: a check keeps its columns", one is { Number: "1", Example: "PRJ1-070-00-ABC-002-STR-3DM-0010.rvt", From: "Client BIM-02", FoundOn: "BLDG-01, 08", High: true }, one.ToString());
+        check("checklist: a Waiting note marks an open point", def.Items.ElementAt(1).Waiting == "BIM lead, 00 or MM" && one.Waiting == "", def.Items.ElementAt(1).Waiting);
         check("checklist: checks get their model hint by wording", def.Items.Select(i => i.Auto).SequenceEqual(["name002", "levelfield", "grids", "worksets"]), string.Join(",", def.Items.Select(i => i.Auto)));
         check("checklist: the sign-off line names who signs", def.Signatories.SequenceEqual(["Trade BIM coordinator", "Trade group leader"]), string.Join(",", def.Signatories));
         check("checklist: a workbook without the table is refused in plain words", Refused(Workbook(("Sheet1", [[(0, "Hello")]]))).Contains("header row"), "");
@@ -64,7 +65,7 @@ internal static class ChecklistTests
         p = Count(def.Items, state);
         check("checklist: an open point answered without a comment is counted", p.WaitingWithoutNote == 1 && p.Ready, p.ToString());
         check("checklist: the open point asks for a comment", Problems(def, state).Single().Text.Contains("waits on an answer"), string.Join(" / ", Problems(def, state).Select(x => x.Text)));
-        state.For("2").Note = "Used 00 as Khaled said.";
+        state.For("2").Note = "Used 00 as the BIM lead said.";
         state.For("3").Done = No;
         p = Count(def.Items, state);
         check("checklist: a No is never ready, and asks why", !p.Ready && p.No == 1 && p.NoWithoutNote == 1 && Problems(def, state).Single().Text.Contains("say why"), p.ToString());
@@ -83,30 +84,99 @@ internal static class ChecklistTests
             && revised.Answers["4"].Check == def.Items.Single(i => i.Id == "4").Check, $"{dropped} dropped: {string.Join(",", revised.Answers.Keys)}");
 
         // ---- File names
-        var parts = NameParts("D01C-070-00-ABC-002-STR-3DM-0010_detached.rvt");
+        var parts = NameParts("PRJ1-070-00-ABC-002-STR-3DM-0010_detached.rvt");
         check("checklist: file name parts", parts == ("070", "00", "STR", "3DM", true), parts.ToString());
-        check("checklist: a name without 002 says so", !NameParts("D01C-070-00-ABC-STR-3DM-0010.rvt").Has002 && NameParts("D01C-070-00-ABC-STR-3DM-0010.rvt").DocType == "3DM", "");
+        check("checklist: a name without 002 says so", !NameParts("PRJ1-070-00-ABC-STR-3DM-0010.rvt").Has002 && NameParts("PRJ1-070-00-ABC-STR-3DM-0010.rvt").DocType == "3DM", "");
         check("checklist: building code to name", BuildingName("070") == "BLDG-07" && BuildingName("150") == "BLDG-15" && BuildingName("7") == "", "");
-        check("checklist: working name drops _detached", WorkingName("D01C-070-00-ABC-002-STR-3DM-0010_detached") == "D01C-070-00-ABC-002-STR-3DM-0010.rvt", WorkingName("D01C-070-00-ABC-002-STR-3DM-0010_detached"));
-        check("checklist: first submission adds _S03_R00", SubmissionName("D01C-070-00-ABC-002-STR-3DM-0010.rvt") == "D01C-070-00-ABC-002-STR-3DM-0010_S03_R00.rvt", "");
-        check("checklist: a resubmission moves the revision on", SubmissionName("D01C-070-00-ABC-002-STR-3DM-0010_S03_R01.rvt") == "D01C-070-00-ABC-002-STR-3DM-0010_S03_R02.rvt", "");
+        check("checklist: working name drops _detached", WorkingName("PRJ1-070-00-ABC-002-STR-3DM-0010_detached") == "PRJ1-070-00-ABC-002-STR-3DM-0010.rvt", WorkingName("PRJ1-070-00-ABC-002-STR-3DM-0010_detached"));
+        check("checklist: first submission adds _S03_R00", SubmissionName("PRJ1-070-00-ABC-002-STR-3DM-0010.rvt") == "PRJ1-070-00-ABC-002-STR-3DM-0010_S03_R00.rvt", "");
+        check("checklist: a resubmission moves the revision on", SubmissionName("PRJ1-070-00-ABC-002-STR-3DM-0010_S03_R01.rvt") == "PRJ1-070-00-ABC-002-STR-3DM-0010_S03_R02.rvt", "");
         check("checklist: safe file names", SafeName("a/b:c*?") == "a_b_c__" && SafeName("  ") == "Untitled", SafeName("a/b:c*?"));
 
         // ---- The Word file
         var png = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==");
         check("checklist: picture kind and size from the header", ChecklistDocx.ImageKind(png) == "png" && ChecklistDocx.ImageSize(png) == (1, 1) && ChecklistDocx.ImageKind([1, 2, 3, 4]) is null, "");
-        state.Fields["Model file name"] = "D01C <070> & \"co\"";
+        state.Fields["Model file name"] = "PRJ1 <070> & \"co\"";
         state.Signatures.Add(new Signature { Role = "Trade BIM coordinator", Name = "A. Engineer", Mode = SignMode.Mine, Date = "19-Oct-2026" });
         state.Signatures.Add(new Signature { Role = "Trade group leader", Name = "G. Leader", Mode = SignMode.Hand, Date = "19-Oct-2026" });
         var images = new Dictionary<string, ChecklistDocx.Image> { ["Trade BIM coordinator"] = new(png, "png"), ["Trade group leader"] = new(png, "png") };
         var (ok, text, pictures, error) = Docx(def, state, images);
         check("checklist: the Word file is a valid package", ok, error);
-        check("checklist: ready file says READY and keeps the text escaped", text.Contains("READY FOR SUBMISSION") && text.Contains("D01C <070> & \"co\""), "");
+        check("checklist: ready file says READY and keeps the text escaped", text.Contains("READY FOR SUBMISSION") && text.Contains("PRJ1 <070> & \"co\""), "");
         check("checklist: signed only where a picture is used (by hand stays empty)", pictures == 1, pictures.ToString());
         state.For("1").Done = No;
         (ok, text, pictures, error) = Docx(def, state, images);
         check("checklist: not ready says so and has no signatures", ok && text.Contains("NOT READY") && pictures == 0, $"{pictures} pictures {error}");
         check("checklist: XML escaping drops control characters", ChecklistDocx.Esc("a\u0001<b>&\t") == "a&lt;b&gt;&amp;\t", ChecklistDocx.Esc("a\u0001<b>&\t"));
+        // ---- The automatic model check, beside the answers
+        var autoItems = new List<Item>
+        {
+            new("1", "1", "Grids are there.", "", "", "", "", "", "grids"),
+            new("2", "2", "Warnings fixed.", "", "", "", "", "", "warnings"),
+            new("3", "3", "Doc type right.", "", "", "", "", "", "doctype"),
+            new("4", "4", "No model rule.", "", "", "", "", "", ""),
+        };
+        bool? Says(string key) => key switch { "grids" => true, "warnings" => false, _ => null };
+        var autoState = new State();
+        foreach (var i in autoItems) autoState.For(i.Id).Done = Yes;
+        var auto = Auto(autoItems, Says);
+        var disagree = Disagree(autoItems, autoState, Says);
+        check("checklist: your answers 100% while the automatic check is 50%",
+            Percent(Count(autoItems, autoState)) == 100 && auto is { Tested: 2, Pass: 1, Fail: 1, Percent: 50 }, $"{Percent(Count(autoItems, autoState))}% / {auto}");
+        check("checklist: a Yes the model check fails is listed", disagree.Select(i => i.Id).SequenceEqual(["2"]), string.Join(",", disagree.Select(i => i.Id)));
+        var autoLine = AutoLine(auto, disagree);
+        check("checklist: the automatic line names the score and the disagreement", autoLine.Contains("1 of 2") && autoLine.Contains("(50%)") && autoLine.Contains("#2") && AutoLine(new AutoProgress(0, 0, 0), []) == "", autoLine);
+        var autoDoc = new MemoryStream();
+        var autoDef = new Definition { Title = "T", Sections = [new Section("A. One", autoItems)], Signatories = ["Prepared by"] };
+        ChecklistDocx.Write(autoDoc, autoDef, autoState, new ChecklistDocx.Info("m.rvt", "0", DateTime.Now, autoLine), new Dictionary<string, ChecklistDocx.Image>());
+        autoDoc.Position = 0;
+        using (var zip = new ZipArchive(autoDoc))
+        using (var reader = new StreamReader(zip.GetEntry("word/document.xml")!.Open()))
+            check("checklist: the Word file carries the automatic check", reader.ReadToEnd().Contains("Automatic model check: 1 of 2"), "");
+
+        // ---- The built-in checklist
+        var built = BuiltIn();
+        check("checklist: the built-in checklist reads", built is not null && built.Title.StartsWith("Pre-submission checklist") && built.Items.Count() == 57 && built.Sections.Count == 7
+            && built.Signatories.SequenceEqual(["Trade BIM coordinator", "Trade group leader"]) && built.SourcePath == BuiltInSource,
+            built is null ? "null" : $"{built.Title}: {built.Items.Count()} checks, {built.Sections.Count} stages");
+        if (built is null) return;
+        check("checklist: built-in checks are numbered 1 to 57 in order", built.Items.Select(i => i.Id).SequenceEqual(Enumerable.Range(1, 57).Select(n => n.ToString())), "");
+
+        // ---- Editing: delete a check and add one; answers follow their check
+        var answered = new State();
+        foreach (var item in built.Items) { answered.For(item.Id).Done = Yes; answered.For(item.Id).Check = item.Check; }
+        var sections = built.Sections.Select(x => new Section(x.Title, x.Items.ToList())).ToList();
+        var removed = sections[0].Items[0];
+        sections[0] = new Section(sections[0].Title, sections[0].Items.Skip(1).ToList());
+        sections.Add(new Section("H. Handover", [new Item("", "", "Model sent with <links> & a \"read me\".\nSecond line.", "e.g. zip", "Group leader", "BLDG-02", "High", "BIM lead to confirm", "")]));
+        var edited = Renumber(new Definition { Title = built.Title, Fields = built.Fields, Sections = sections, Signatories = built.Signatories, SourcePath = EditedSource });
+        var lost = Reconcile(edited, answered);
+        check("checklist: renumbered checks keep their answers, the deleted one's goes",
+            lost == 1 && edited.Items.Count() == 57 && edited.Items.Last().Id == "57" && !answered.Answers.ContainsKey("57")
+            && answered.Answers.Count == 56 && answered.Answers["1"].Check == edited.Items.First().Check && edited.Items.First().Check != removed.Check,
+            $"{lost} dropped, {answered.Answers.Count} kept");
+
+        // ---- Excel round trip: export, import, the same checklist
+        foreach (var (name, original) in new[] { ("built-in", built), ("edited", edited) })
+        {
+            var xlsxPath = Path.Combine(Path.GetTempPath(), $"spm-checklist-{Guid.NewGuid():N}.xlsx");
+            try
+            {
+                ChecklistXlsx.Write(xlsxPath, original);
+                var back = ReadXlsx(xlsxPath);
+                string Plain(Definition d) => ToJson(new Definition { Title = d.Title, Fields = d.Fields, Sections = d.Sections, Signatories = d.Signatories });
+                check($"checklist: the {name} checklist survives Excel export and import", Plain(back) == Plain(original),
+                    $"{back.Items.Count()} checks back; first difference near: {First(Plain(back), Plain(original))}");
+            }
+            finally { File.Delete(xlsxPath); }
+        }
+    }
+
+    private static string First(string a, string b)
+    {
+        var i = 0;
+        while (i < a.Length && i < b.Length && a[i] == b[i]) i++;
+        return i >= a.Length && i >= b.Length ? "(none)" : a.Substring(Math.Max(0, i - 40), Math.Min(80, a.Length - Math.Max(0, i - 40)));
     }
 
     private static string Refused(byte[] bytes)

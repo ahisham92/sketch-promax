@@ -143,13 +143,28 @@ internal static class FieldTestCoverage
         new("checklist.word", Issue, "Pre-submission checklist: model hints and the signed Word file", How.Probe, "",
             "a checklist whose checks ask for grids, warnings and imported CAD gets a hint for each from the test project; the Word file is written with the signature picture when every check is Y or NA, and says NOT READY with no picture when one is N"),
         new("checklist.ui", Issue, "The pre-submission checklist window and the printed checklist", How.Manual, "", "the stages, the cards, the keys, the signature and how the Word file and PDF print are judged by a person",
-            "On a _detached copy: Settings > Sign-off: type your name, pick your role, choose your signature picture and Save. Issue > Pre-submission checklist: choose the office's checklist Excel. " +
-            "Rename or move the Excel file, close the window and open it again: the checklist still opens, kept in Sketch ProMax. " +
+            "On a _detached copy: Settings > Sign-off: type your name, pick your role, choose your signature picture and Save. Issue > Pre-submission checklist: it opens on the built-in checklist (57 checks, 7 stages) with no Excel file. " +
             "Project details shows the file names and building from the model; Next goes stage by stage on the left, each with its count. On a card press Y: it turns green and the next check is focused; " +
             "press N: the comment box is focused and says why it is needed. Check the hints under the checks (grids, worksets, warnings) match the model. Close the window and open it again: your answers are still there. " +
             "Review and sign lists what is open; click one to go to it. Create the Word file while one check is No: it says NOT READY with no signatures. Answer everything Y or NA, create it again: it says READY with your signature " +
             "in your row and the other row left to sign by hand. Print it from the window. Click Create PDF: a PDF with the same pages and signatures opens with Open PDF. " +
             "Switch Revit to the dark theme: the window follows it."),
+        new("checklist.views", Issue, "Pre-submission checklist: Show in Revit's checking views are made and deleted", How.Probe, "",
+            "a plan with the grids and schedules of sheets, views and title blocks are made in the test project, named Sketch ProMax check - …, found by name and all deleted (rolled back)"),
+        new("checklist.show", Issue, "Pre-submission checklist: Show in Revit and the automatic model check", How.Manual, "",
+            "opening views and Revit's dialogs from the window, and the two scores, are judged by a person",
+            "On a _detached copy: Issue > Pre-submission checklist. The blue header shows two rings, Your answers and Automatic check, with their percentages; " +
+            "answer a check and Your answers sweeps to the new value. Buttons have icons, lift on hover and the Yes / No / N/A button pops when chosen; pages slide in. " +
+            "Set Settings > Chat > animations to Off and reopen: the same changes show at once. On the grids check click Show the grids: a plan named Sketch ProMax check - Grids opens with the grids. " +
+            "Try Open the warnings (Revit's warnings list opens), Select the imported CAD and List the views (a schedule opens). Answer every check Yes: Review and sign shows " +
+            "Your answers 100% and the automatic model check lower, and lists the checks you said Yes to that the model fails. Create the Word file: under the banner it says the " +
+            "automatic model check result. Click Delete the checking views: they are gone from the Project Browser, except the one open in front, which it names."),
+        new("checklist.edit", Issue, "Editing the pre-submission checklist, in Revit and through Excel", How.Manual, "",
+            "the editor's lists, moves and confirmations and the Excel round trip in real Excel are judged by a person (the unit tests check the numbering, the answers and the Excel file)",
+            "On a _detached copy: answer the first three checks, then Project details > Edit the checklist…: delete check 1, add a check in stage A, move a check down with Ctrl+Down, " +
+            "add a stage H with one check, rename it, and Save. The stages on the left show H; checks are numbered 1, 2, 3… again and checks 2 and 3 keep their answers. " +
+            "Edit again > Export to Excel…: open it in Excel, change a check's wording, add a row with a number, save; Import from Excel… shows the change; Save. " +
+            "Edit again > Use the built-in checklist: back to 57 checks. Try Save with an empty check or a stage with no checks: it says which and selects it."),
         new("checklist.pdf", Issue, "Pre-submission checklist: the PDF is made through Word", How.Probe, "",
             "a ready checklist's Word file is turned into a PDF by Microsoft Word on this PC and the result is a PDF; skipped when Word isn't installed"),
         new("issue.report", Issue, "Transmittal with the issue record and pass/fail report", How.Case, "issue_drawings", "issue_drawings with open items let through writes the transmittal workbook (drawings, the issue record saying it was overridden, the pass/fail report)"),

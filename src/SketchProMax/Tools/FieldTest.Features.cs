@@ -485,6 +485,7 @@ internal static partial class FieldTest
         await Probe(s, "time.queue", app => TimeQueue(app, s)).ConfigureAwait(false);
         await Probe(s, "issue.gate", app => IssueGateProbe(app, s)).ConfigureAwait(false);
         await Probe(s, "checklist.word", app => ChecklistProbe(app, s)).ConfigureAwait(false);
+        await Probe(s, "checklist.views", app => ChecklistViewsProbe(app, s)).ConfigureAwait(false);
         await Probe(s, "package.sentence", app => PackageSentence(app, s)).ConfigureAwait(false);
         await Probe(s, "package.skip", app => PackageSkip(app, s)).ConfigureAwait(false);
         await Probe(s, "redlines.pdf", app => RedlinePdf(app, s)).ConfigureAwait(false);
@@ -1845,6 +1846,32 @@ internal static partial class FieldTest
         return problems.Count == 0
             ? Pass($"hints: {string.Join("; ", new[] { "grids", "warnings", "imports" }.Select(k => facts.Hints[k].Text))} Word files written, signed only when ready")
             : Fail(string.Join("; ", problems));
+    }
+
+    /// <summary>Show in Revit's checking views are made (plan with grids, schedules) and all deleted again; rolled back at the end.</summary>
+    private static (string, string) ChecklistViewsProbe(UIApplication app, State s)
+    {
+        if (TestDoc(app, s, out var why) is not { } doc) return Fail(why);
+        var problems = new List<string>();
+        var made = new List<string>();
+        using var group = new TransactionGroup(doc, "Field test: checking views");
+        group.Start();
+        try
+        {
+            foreach (var key in new[] { "grids", "drawinglist", "scales", "titleblock" })
+            {
+                var (view, message) = ChecklistViews.Make(doc, key);
+                if (view is null) { if (key != "grids" || !message.Contains("no grids")) problems.Add($"{key}: {message}"); continue; }
+                if (!view.Name.StartsWith(ChecklistViews.Prefix, StringComparison.Ordinal)) problems.Add($"{key} view named {view.Name}");
+                made.Add(view.Name);
+            }
+            var found = ChecklistViews.Find(doc).Count;
+            if (found != made.Count) problems.Add($"{made.Count} made but {found} found by name");
+            var (deleted, failed) = ChecklistViews.Delete(doc, ElementId.InvalidElementId);
+            if (deleted != made.Count || failed > 0 || ChecklistViews.Find(doc).Count > 0) problems.Add($"deleted {deleted} of {made.Count}, {failed} failed");
+        }
+        finally { RollBack(group); }
+        return problems.Count == 0 ? Pass($"made and deleted {made.Count} checking views: {string.Join(", ", made)}") : Fail(string.Join("; ", problems));
     }
 
     /// <summary>A small ready checklist written as Word, then turned into a PDF through Word (off Revit's thread, as the window does).</summary>

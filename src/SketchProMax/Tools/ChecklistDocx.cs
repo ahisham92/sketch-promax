@@ -17,7 +17,8 @@ namespace SketchProMax.Tools;
 internal static class ChecklistDocx
 {
     /// <summary>About the file: the model it is for, this add-in's version, when it was made.</summary>
-    public sealed record Info(string Model, string Version, DateTime When);
+    /// <param name="AutoCheck">The automatic model check in one line ("Automatic model check: 6 of 12 passed (50%)…"), or empty.</param>
+    public sealed record Info(string Model, string Version, DateTime When, string AutoCheck = "");
 
     /// <summary>A signature image: the file's bytes and its extension (png or jpeg).</summary>
     public sealed record Image(byte[] Bytes, string Extension);
@@ -54,7 +55,7 @@ internal static class ChecklistDocx
             ? Run("READY FOR SUBMISSION", bold: true, color: OkText) + Run("   " + counts, color: OkText)
             : Run("NOT READY · DO NOT SUBMIT", bold: true, color: BadText) + Run("   " + counts + " Signatures are left out until every check is Y or NA.", color: BadText);
         body.Append(Table([Usable], Row(Cell(Usable, Para(banner, after: 0), fill: ready ? OkFill : BadFill, border: ready ? OkText : BadText))));
-        body.Append(Para("", after: 120));
+        body.Append(info.AutoCheck.Length > 0 ? Para(Run(info.AutoCheck, size: 18, color: Muted), after: 120) : Para("", after: 120));
 
         // ---- Project details: label | value | label | value
         body.Append(Heading("Project details"));

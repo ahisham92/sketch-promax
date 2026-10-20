@@ -1,0 +1,720 @@
+{
+  "Title": "Pre-submission checklist, Rev 01",
+  "Fields": [
+    {
+      "Label": "Model file name",
+      "Example": "PRJ1-070-00-ABC-002-STR-3DM-0010.rvt",
+      "Source": "model_file"
+    },
+    {
+      "Label": "Submission file name",
+      "Example": "PRJ1-070-00-ABC-002-STR-3DM-0010_S03_R00.rvt",
+      "Source": "submission_file"
+    },
+    {
+      "Label": "Building / discipline",
+      "Example": "",
+      "Source": "building"
+    },
+    {
+      "Label": "Stage",
+      "Example": "",
+      "Source": "stage"
+    },
+    {
+      "Label": "Trade BIM coordinator",
+      "Example": "",
+      "Source": "coordinator"
+    },
+    {
+      "Label": "Trade group leader",
+      "Example": "",
+      "Source": "leader"
+    },
+    {
+      "Label": "Model Checker score (%)",
+      "Example": "",
+      "Source": ""
+    },
+    {
+      "Label": "Final file size (MB)",
+      "Example": "",
+      "Source": ""
+    },
+    {
+      "Label": "Date",
+      "Example": "",
+      "Source": "date"
+    }
+  ],
+  "Sections": [
+    {
+      "Title": "A. File names and size",
+      "Items": [
+        {
+          "Id": "1",
+          "Number": "1",
+          "Check": "The working model name has 002 after ABC.",
+          "Example": "PRJ1-070-00-ABC-002-STR-3DM-0010.rvt (change 070 to your building code). Wrong: PRJ1-070-00-ABC-STR-3DM-0010.rvt",
+          "From": "Client BIM-02 (BLDG-01), BIM-03 (BLDG-02); BIM lead's mail 15-Oct",
+          "FoundOn": "BLDG-01, 08",
+          "Priority": "High",
+          "Waiting": "",
+          "Auto": "name002"
+        },
+        {
+          "Id": "2",
+          "Number": "2",
+          "Check": "The submitted copy adds _S03_R00 the first time, then _S03_R01, _S03_R02 for each resubmission.",
+          "Example": "First submission: PRJ1-070-00-ABC-002-STR-3DM-0010_S03_R00.rvt\nAfter Client comments: PRJ1-070-00-ABC-002-STR-3DM-0010_S03_R01.rvt",
+          "From": "Client BIM-02 (BLDG-01); BIM lead 15-Oct",
+          "FoundOn": "BLDG-01, 08",
+          "Priority": "High",
+          "Waiting": "",
+          "Auto": ""
+        },
+        {
+          "Id": "3",
+          "Number": "3",
+          "Check": "Doc type is right: 3DM for the 3D model, 2DM for the documentation model (the Revit file that holds the sheets), DWG for drawings.",
+          "Example": "3D model: PRJ1-070-00-ABC-002-STR-3DM-0010.rvt\nRevit file with the sheets (documentation model, if it exists): PRJ1-070-00-ABC-002-STR-2DM-0001.rvt\nDrawing: PRJ1-070-00-ABC-002-STR-DWG-0001.pdf",
+          "From": "Client BIM-06.1 (BLDG-01), BIM-07.2 (BLDG-02); BIM lead 11-Oct §2",
+          "FoundOn": "BLDG-01, 08",
+          "Priority": "High",
+          "Waiting": "Client uses 2DM for sheet numbers, waiting for the BIM lead's reply on mail",
+          "Auto": "doctype"
+        },
+        {
+          "Id": "4",
+          "Number": "4",
+          "Check": "The model number comes from the latest MIDP.",
+          "Example": "Check the number against the MIDP list before you name the file",
+          "From": "BIM lead 11-Oct §2",
+          "FoundOn": "",
+          "Priority": "",
+          "Waiting": "",
+          "Auto": ""
+        },
+        {
+          "Id": "5",
+          "Number": "5",
+          "Check": "NWC and IFC files have exactly the same name as the model.",
+          "Example": "PRJ1-070-00-ABC-002-STR-3DM-0010_S03_R00.rvt\nPRJ1-070-00-ABC-002-STR-3DM-0010_S03_R00.nwc\nPRJ1-070-00-ABC-002-STR-3DM-0010_S03_R00.ifc\n(only the extension changes)",
+          "From": "BIM lead 11-Oct §2",
+          "FoundOn": "",
+          "Priority": "",
+          "Waiting": "",
+          "Auto": ""
+        },
+        {
+          "Id": "6",
+          "Number": "6",
+          "Check": "Level field: a model that covers many levels uses 00 (the BIM lead's rule).",
+          "Example": "Use: PRJ1-070-00-ABC-002-STR-3DM-0010_S03_R00.rvt\nClient asked for MM instead: PRJ1-070-MM-ABC-002-STR-3DM-0010_S03_R00.rvt (do not use until BIM lead confirms)",
+          "From": "BIM lead 15-Oct; R04 register (00 = No level / Wide); Client BIM-02 (BLDG-01), BIM-03 (BLDG-02)",
+          "FoundOn": "BLDG-01, 08",
+          "Priority": "High",
+          "Waiting": "BIM lead, 00 or MM (asked 19-Oct)",
+          "Auto": "levelfield"
+        },
+        {
+          "Id": "7",
+          "Number": "7",
+          "Check": "File size is 300 MB or less after purge.",
+          "Example": "Check the size of the e-Transmit output, not the central model",
+          "From": "BIM lead QA/QC #1",
+          "FoundOn": "",
+          "Priority": "",
+          "Waiting": "",
+          "Auto": "filesize"
+        }
+      ]
+    },
+    {
+      "Title": "B. Coordinates, levels, grids, worksets",
+      "Items": [
+        {
+          "Id": "8",
+          "Number": "8",
+          "Check": "The URS is linked on Z_Link_URS by Shared Coordinates. Grids and levels are copy-monitored from the URS.",
+          "Example": "Collaborate > Copy/Monitor > Select Link > URS. Not from the ARC model.\nThen link ARC By Shared Coordinates: its grids must sit on yours.",
+          "From": "Client BIM-14, BIM-09 (D), BIM-12 (BLDG-01); BIM lead QA/QC #17",
+          "FoundOn": "BLDG-01, 08",
+          "Priority": "High",
+          "Waiting": "",
+          "Auto": "urs"
+        },
+        {
+          "Id": "9",
+          "Number": "9",
+          "Check": "Grids are in the model and visible in plans.",
+          "Example": "Client rejected BLDG-01 because the STR file had no grids",
+          "From": "Client BIM-14 (D, BLDG-01)",
+          "FoundOn": "BLDG-01",
+          "Priority": "High",
+          "Waiting": "",
+          "Auto": "grids"
+        },
+        {
+          "Id": "10",
+          "Number": "10",
+          "Check": "Unused levels are deleted. The rest follow the BIM standard level names.",
+          "Example": "BLDG 7 LVL 01-TOC, BLDG 7 LVL B01-FFL",
+          "From": "Client BIM-01.1 (BLDG-01); BIM lead QA/QC #10",
+          "FoundOn": "BLDG-01, 08",
+          "Priority": "High",
+          "Waiting": "",
+          "Auto": "levels"
+        },
+        {
+          "Id": "11",
+          "Number": "11",
+          "Check": "Every element is on its the BIM standard workset. Nothing but levels and grids on 'Shared Levels and Grids'. Nothing on Workset1. All link worksets exist (STR: all 7 are mandatory).",
+          "Example": "STR: raft, pile caps, columns, slabs on ST_Concrete; piles on ST_Enabling.\nLink worksets: Z_Link_URS, Z_Link_CAD, Z_Link_AR, Z_Link_EL, Z_Link_ME, Z_Link_SC, Z_Link_SS",
+          "From": "Client BIM-05 (BLDG-01), BIM-05 (BLDG-02); same fault on BLDG-03 (BIM lead 15-Oct); the BIM standard §2.4 Table 9; group leader 19-Oct",
+          "FoundOn": "BLDG-01, 08, 15",
+          "Priority": "High",
+          "Waiting": "",
+          "Auto": "worksets"
+        },
+        {
+          "Id": "12",
+          "Number": "12",
+          "Check": "No new worksets unless the BIM Managers agreed them first.",
+          "Example": "Wrong: MH_Ducting (use MH_HVAC), LC_Design (use EL_LC)",
+          "From": "BIM lead 15-Oct (BLDG-03 check)",
+          "FoundOn": "BLDG-03",
+          "Priority": "",
+          "Waiting": "",
+          "Auto": ""
+        },
+        {
+          "Id": "13",
+          "Number": "13",
+          "Check": "Scope boxes are copied from the URS and keep the same name as in the URS.",
+          "Example": "BLDG-01-1101\nBLDG = fixed text\n07 = building number (08 for BLDG-02, 15 for CUP)\n1101 = the number in the agreed cutsheets\nWrong: 'Scope Box 1', 'BLDG7-1101', 'B07-1101'",
+          "From": "BIM lead QA/QC #18; group leader 19-Oct",
+          "FoundOn": "",
+          "Priority": "",
+          "Waiting": "",
+          "Auto": "scopeboxes"
+        }
+      ]
+    },
+    {
+      "Title": "C. Model content",
+      "Items": [
+        {
+          "Id": "14",
+          "Number": "14",
+          "Check": "Every element has the right Revit category. No Generic Models left.",
+          "Example": "Trench or pit = Structural Foundation, not Generic Model",
+          "From": "Client BIM-07, BIM-01.4 (BLDG-01); BIM lead QA/QC #5",
+          "FoundOn": "BLDG-01, 08",
+          "Priority": "High",
+          "Waiting": "",
+          "Auto": "categories"
+        },
+        {
+          "Id": "15",
+          "Number": "15",
+          "Check": "Family and type names follow the standard.",
+          "Example": "FN_SC_40MPa_Raft_600. Wrong: 'Foundation Slab 1', '600mm'",
+          "From": "Client BIM-01.4 (BLDG-01); BIM lead QA/QC #2",
+          "FoundOn": "BLDG-01, 08",
+          "Priority": "High",
+          "Waiting": "CamelCase or UPPERCASE (BIM lead, BIM team)",
+          "Auto": ""
+        },
+        {
+          "Id": "16",
+          "Number": "16",
+          "Check": "Elements use the proper family type, not a free shape.",
+          "Example": "Raft = Structural Foundation Slab; footing and pile cap = loadable Structural Foundation family",
+          "From": "Client BIM-13 (BLDG-01)",
+          "FoundOn": "BLDG-01",
+          "Priority": "",
+          "Waiting": "",
+          "Auto": ""
+        },
+        {
+          "Id": "17",
+          "Number": "17",
+          "Check": "Columns are modelled level by level. Only a column through a double-height space with no slab stays continuous (list these).",
+          "Example": "Base: BLDG 7 LVL B01-TOC, Top: BLDG 7 LVL 00-TOC",
+          "From": "Client BIM-10 (BLDG-01)",
+          "FoundOn": "BLDG-01",
+          "Priority": "",
+          "Waiting": "",
+          "Auto": ""
+        },
+        {
+          "Id": "18",
+          "Number": "18",
+          "Check": "No duplicate, overlapping or badly joined elements.",
+          "Example": "Two raft pieces overlapping at a thickening: join or cut so concrete is not counted twice",
+          "From": "Client BIM-11, BIM-01.6 (BLDG-01)",
+          "FoundOn": "BLDG-01, 08",
+          "Priority": "High",
+          "Waiting": "",
+          "Auto": ""
+        },
+        {
+          "Id": "19",
+          "Number": "19",
+          "Check": "No floating elements.",
+          "Example": "A basement column with no foundation under it",
+          "From": "Client STR-02 (BLDG-01); BIM lead QA/QC #15",
+          "FoundOn": "BLDG-01, 08",
+          "Priority": "High",
+          "Waiting": "",
+          "Auto": ""
+        },
+        {
+          "Id": "20",
+          "Number": "20",
+          "Check": "At a building edge, each element is in the right building model. A column and the raft under it are in the same model.",
+          "Example": "BLDG-01/08 joint: columns were in one model, their raft in the other",
+          "From": "Client STR-02 (BLDG-01 and BLDG-02)",
+          "FoundOn": "BLDG-01, 08",
+          "Priority": "High",
+          "Waiting": "",
+          "Auto": ""
+        },
+        {
+          "Id": "21",
+          "Number": "21",
+          "Check": "Nothing is missing compared with the latest ARC model and the design.",
+          "Example": "Steel beams and composite deck at L04 / roof; roof truss",
+          "From": "Client STR-12, STR-15 (BLDG-01)",
+          "FoundOn": "BLDG-01",
+          "Priority": "",
+          "Waiting": "",
+          "Auto": ""
+        },
+        {
+          "Id": "22",
+          "Number": "22",
+          "Check": "Other trades' elements are removed from your model.",
+          "Example": "No ARC walls or MEP pipes inside the STR model",
+          "From": "BIM lead QA/QC #7",
+          "FoundOn": "",
+          "Priority": "",
+          "Waiting": "",
+          "Auto": ""
+        },
+        {
+          "Id": "23",
+          "Number": "23",
+          "Check": "No imported CAD. Typical details are drawn in Revit.",
+          "Example": "Manage > Imports: count = 0 (or CAD inside one dedicated family)",
+          "From": "Client BIM-06.4 (BLDG-01); BIM lead QA/QC #9",
+          "FoundOn": "BLDG-01",
+          "Priority": "",
+          "Waiting": "",
+          "Auto": "imports"
+        },
+        {
+          "Id": "24",
+          "Number": "24",
+          "Check": "Model Groups are kept to a minimum.",
+          "Example": "Ungroup groups used only once",
+          "From": "BIM lead QA/QC #6",
+          "FoundOn": "",
+          "Priority": "",
+          "Waiting": "",
+          "Auto": "groups"
+        },
+        {
+          "Id": "25",
+          "Number": "25",
+          "Check": "Classification code (UniFormat) is filled on every element.",
+          "Example": "Raft A1020.60, pile cap A1020.70, floor slab B1010.20 (the standard)",
+          "From": "Client BIM-01.5 (BLDG-01); BIM lead QA/QC #20",
+          "FoundOn": "BLDG-01, 08",
+          "Priority": "High",
+          "Waiting": "which parameter / Client 'MDS'",
+          "Auto": ""
+        },
+        {
+          "Id": "26",
+          "Number": "26",
+          "Check": "Project parameters follow the naming rule. Parameters from other firms or old projects are deleted. Temporary design-stage parameters are marked.",
+          "Example": "Delete 'WSP Design Parameters'. Manage > Project Parameters",
+          "From": "Client BIM-06 (BLDG-02)",
+          "FoundOn": "BLDG-02",
+          "Priority": "High",
+          "Waiting": "",
+          "Auto": ""
+        },
+        {
+          "Id": "27",
+          "Number": "27",
+          "Check": "IFC entity and predefined type are set (by type or by instance).",
+          "Example": "Pile cap: IfcFooting / PILE_CAP",
+          "From": "BIM lead 11-Oct §6",
+          "FoundOn": "",
+          "Priority": "",
+          "Waiting": "",
+          "Auto": ""
+        },
+        {
+          "Id": "28",
+          "Number": "28",
+          "Check": "Warnings are fixed. Any left are listed with a reason in the Health Check report.",
+          "Example": "Start with 'identical instances' and join warnings",
+          "From": "Client BIM-01.2 (BLDG-01); BIM lead QA/QC #3",
+          "FoundOn": "BLDG-01, 08",
+          "Priority": "High",
+          "Waiting": "",
+          "Auto": "warnings"
+        }
+      ]
+    },
+    {
+      "Title": "D. Views, sheets, drawings",
+      "Items": [
+        {
+          "Id": "29",
+          "Number": "29",
+          "Check": "Landing page is LandingPage.rfa for this project and this building (not copied from another job), all red fields are filled, and it opens as the Starting View.",
+          "Example": "Path: P:\\S26103-0100D\\0-CMN\\Shared\\Titleblock\\Latest\\LandingPage.rfa\nFill: 3D shot, key plan, building name and code, file name, stage, discipline, WIP or Submission, revision R00 + date, group leader, coordinator.\nBLDG-01 was rejected because its landing page was from another project.",
+          "From": "Client BIM-04 (D, BLDG-01), BIM-02 (BLDG-02); BIM lead 11-Oct §9",
+          "FoundOn": "BLDG-01, 08",
+          "Priority": "High",
+          "Waiting": "",
+          "Auto": "landing"
+        },
+        {
+          "Id": "30",
+          "Number": "30",
+          "Check": "All sheets use the title block PRJ1-000-00-ABC-DES-TMP-0000-C.rfa.",
+          "Example": "Path: P:\\S26103-0100D\\0-CMN\\Shared\\Titleblock\\Latest\\PRJ1-000-00-ABC-DES-TMP-0000-C.rfa",
+          "From": "BIM lead QA/QC #13",
+          "FoundOn": "",
+          "Priority": "",
+          "Waiting": "",
+          "Auto": "titleblock"
+        },
+        {
+          "Id": "31",
+          "Number": "31",
+          "Check": "The model name shown in the title block is the same as the actual model file name.",
+          "Example": "Title block says PRJ1-080-00-ABC-002-STR-3DM-0010_S03_R00 = file name",
+          "From": "Client BIM-07.1 (BLDG-02)",
+          "FoundOn": "BLDG-02",
+          "Priority": "",
+          "Waiting": "",
+          "Auto": ""
+        },
+        {
+          "Id": "32",
+          "Number": "32",
+          "Check": "Drawings use an approved scale.",
+          "Example": "1:300 was rejected on BLDG-02. Use 1:100, 1:200 etc.",
+          "From": "Client BIM-07.3 (BLDG-02)",
+          "FoundOn": "BLDG-02",
+          "Priority": "",
+          "Waiting": "approved scale list",
+          "Auto": "scales"
+        },
+        {
+          "Id": "33",
+          "Number": "33",
+          "Check": "Every sheet is made from model views. No sheet is a CAD drawing.",
+          "Example": "Keep a sheet list showing the views on each sheet as proof",
+          "From": "Client BIM-08 (D, BLDG-01), BIM-07.4 (BLDG-02); BIM lead QA/QC #12",
+          "FoundOn": "BLDG-01, 08",
+          "Priority": "High",
+          "Waiting": "",
+          "Auto": ""
+        },
+        {
+          "Id": "34",
+          "Number": "34",
+          "Check": "No detail lines or filled regions standing in for real elements.",
+          "Example": "A beam must be a modelled beam, not two detail lines",
+          "From": "Client BIM-06.5 (BLDG-01)",
+          "FoundOn": "BLDG-01",
+          "Priority": "",
+          "Waiting": "",
+          "Auto": ""
+        },
+        {
+          "Id": "35",
+          "Number": "35",
+          "Check": "The set has a List of Drawings sheet and a General Notes sheet.",
+          "Example": "Sheet list schedule placed on a sheet",
+          "From": "Client BIM-06.2, BIM-06.6 (BLDG-01)",
+          "FoundOn": "BLDG-01",
+          "Priority": "",
+          "Waiting": "",
+          "Auto": "drawinglist"
+        },
+        {
+          "Id": "36",
+          "Number": "36",
+          "Check": "The drawing list has everything the stage needs, and the drawings it relies on are included.",
+          "Example": "Foundation package: GA, sections, loading plan, general notes, plus the ARC basement GAs it is based on",
+          "From": "Client STR-03, STR-17 (BLDG-01)",
+          "FoundOn": "BLDG-01, 08",
+          "Priority": "High",
+          "Waiting": "",
+          "Auto": ""
+        },
+        {
+          "Id": "37",
+          "Number": "37",
+          "Check": "Every type or thickness has its own hatch, shown in the legend. Nothing left blank.",
+          "Example": "Give every thickness its own hatch. Do not leave any thickness blank: when a new thickness is added later, no one remembers to give it a hatch, so it shows blank by mistake.",
+          "From": "Client STR-04 (BLDG-01), STR-05 (BLDG-02)",
+          "FoundOn": "BLDG-01, 08",
+          "Priority": "High",
+          "Waiting": "",
+          "Auto": ""
+        },
+        {
+          "Id": "38",
+          "Number": "38",
+          "Check": "Browser organisation, view templates and filters are the same for every team modelling this trade on PRJ1, whichever office they are in.",
+          "Example": "Compare with the trade's standard template",
+          "From": "Client BIM-01.7 (BLDG-01); BIM lead QA/QC #14",
+          "FoundOn": "BLDG-01, 08",
+          "Priority": "High",
+          "Waiting": "standard template / filter list",
+          "Auto": ""
+        },
+        {
+          "Id": "39",
+          "Number": "39",
+          "Check": "Every view is in a folder (discipline / sub-discipline). No '???'. Views are named clearly.",
+          "Example": "Project Browser shows no '???' group",
+          "From": "Client BIM-01.8 (BLDG-01); BIM lead QA/QC #19",
+          "FoundOn": "BLDG-01, 08",
+          "Priority": "High",
+          "Waiting": "view naming rule",
+          "Auto": ""
+        },
+        {
+          "Id": "40",
+          "Number": "40",
+          "Check": "Each view has the view template and filters for its purpose. Not every view on the Coordination template.",
+          "Example": "Plan views on the plan template, sections on the section template, the 3D Navisworks view on its own template",
+          "From": "Client BIM-01.11 (BLDG-02)",
+          "FoundOn": "BLDG-02",
+          "Priority": "",
+          "Waiting": "",
+          "Auto": "viewtemplates"
+        },
+        {
+          "Id": "41",
+          "Number": "41",
+          "Check": "Unused views are deleted.",
+          "Example": "Keep only views on sheets + the 3D Navisworks Export view",
+          "From": "BIM lead QA/QC #8",
+          "FoundOn": "",
+          "Priority": "",
+          "Waiting": "",
+          "Auto": "unusedviews"
+        },
+        {
+          "Id": "42",
+          "Number": "42",
+          "Check": "Schedules you use stay in the submitted model.",
+          "Example": "Foundation schedule by type and volume",
+          "From": "Client BIM-01.9 (BLDG-01); BIM lead QA/QC #16",
+          "FoundOn": "BLDG-01, 08",
+          "Priority": "High",
+          "Waiting": "tick Schedules in e-Transmit or put them on sheets",
+          "Auto": ""
+        }
+      ]
+    },
+    {
+      "Title": "E. Checks before you submit",
+      "Items": [
+        {
+          "Id": "43",
+          "Number": "43",
+          "Check": "Self-check (SDC): no clashes inside your own trade and its sub-systems.",
+          "Example": "STR beams vs STR columns; ducts vs pipes inside MEP",
+          "From": "BIM lead 15-Oct",
+          "FoundOn": "",
+          "Priority": "",
+          "Waiting": "",
+          "Auto": ""
+        },
+        {
+          "Id": "44",
+          "Number": "44",
+          "Check": "Your clash tests in the federated model are run and your clashes are fixed. In Trade-1_Vs_Trade-2, Trade 1 fixes.",
+          "Example": "MP pipes vs SC foundations is P1 (25 mm clearance)",
+          "From": "Client BIM-15, STR-05 (D) (BLDG-01); BIM lead 15-Oct; the drawing standard",
+          "FoundOn": "BLDG-01, 08",
+          "Priority": "High",
+          "Waiting": "",
+          "Auto": ""
+        },
+        {
+          "Id": "45",
+          "Number": "45",
+          "Check": "Model Checker template is run until the score is 90% or more. Keep the score in the QA/QC record.",
+          "Example": "0-CMN\\Shared\\Library\\RVT\\Model Checker Templates. Note any check that fights STD names",
+          "From": "BIM lead 11-Oct §4",
+          "FoundOn": "BLDG-01, 08",
+          "Priority": "High",
+          "Waiting": "",
+          "Auto": ""
+        },
+        {
+          "Id": "46",
+          "Number": "46",
+          "Check": "The checklist is signed by the group leader and the BIM coordinator. The Model Health Check report goes in the package.",
+          "Example": "Health Check report: PRJ1-070-00-ABC-002-STR-RPT-0001_S03_R00.pdf, signed",
+          "From": "Client BIM-03 (BLDG-01), BIM-04 (BLDG-02)",
+          "FoundOn": "BLDG-01, 08",
+          "Priority": "High",
+          "Waiting": "",
+          "Auto": ""
+        }
+      ]
+    },
+    {
+      "Title": "F. NWC and IFC exports",
+      "Items": [
+        {
+          "Id": "47",
+          "Number": "47",
+          "Check": "A '3D Navisworks Export' view with the trade view template: your own elements only, no levels, grids or rooms, wireframe.",
+          "Example": "Hide links, rooms, levels, grids in that view",
+          "From": "BIM lead 11-Oct §5",
+          "FoundOn": "",
+          "Priority": "",
+          "Waiting": "",
+          "Auto": "navisview"
+        },
+        {
+          "Id": "48",
+          "Number": "48",
+          "Check": "NWC is exported from the central model (synced), not a local copy.",
+          "Example": "Wrong: the NWC source name ends with a user name, e.g. ..._username.rvt",
+          "From": "BLDG-03 screenshots (BIM lead 15-Oct), our reading",
+          "FoundOn": "BLDG-03",
+          "Priority": "",
+          "Waiting": "",
+          "Auto": "central"
+        },
+        {
+          "Id": "49",
+          "Number": "49",
+          "Check": "NWC settings: shared coordinates, current view, divide into levels, convert element IDs, parameters All, element and type properties.",
+          "Example": "Linked files and linked CAD not converted",
+          "From": "BIM lead 11-Oct §5",
+          "FoundOn": "",
+          "Priority": "",
+          "Waiting": "",
+          "Auto": ""
+        },
+        {
+          "Id": "50",
+          "Number": "50",
+          "Check": "IFC: Revit IFC 4x3 with the 'MOD IFC Export Setup', shared coordinates (UTM84-38N). Civil 3D: IFC4, Coordination View 2.0.",
+          "Example": "Only visible elements; linked files not exported",
+          "From": "BIM lead 11-Oct §6",
+          "FoundOn": "",
+          "Priority": "",
+          "Waiting": "the .json setup file",
+          "Auto": ""
+        },
+        {
+          "Id": "51",
+          "Number": "51",
+          "Check": "NWC is published on Monday, and published again after fixes before submission.",
+          "Example": "Save to the Shared folder, same name as the model",
+          "From": "BIM lead 15-Oct",
+          "FoundOn": "",
+          "Priority": "",
+          "Waiting": "",
+          "Auto": ""
+        }
+      ]
+    },
+    {
+      "Title": "G. Package (e-Transmit)",
+      "Items": [
+        {
+          "Id": "52",
+          "Number": "52",
+          "Check": "Submit detached, with all links unloaded, your own model only. No ARC, URS or other trade models in your ZIP.",
+          "Example": "Other trades' models come from their own submittals; Client sees all trades in the federated NWD",
+          "From": "Client BIM-01.3, BIM-06.3 (BLDG-01); BIM lead QA/QC #11; group leader and BIM lead 19-Oct",
+          "FoundOn": "BLDG-01, 08",
+          "Priority": "High",
+          "Waiting": "",
+          "Auto": "links"
+        },
+        {
+          "Id": "53",
+          "Number": "53",
+          "Check": "e-Transmit settings: purge unused; include CAD links and image files; keep views on sheets + the 3D Navisworks view.",
+          "Example": "Linked Revit models: unticked",
+          "From": "BIM lead 11-Oct §7",
+          "FoundOn": "",
+          "Priority": "",
+          "Waiting": "",
+          "Auto": ""
+        },
+        {
+          "Id": "54",
+          "Number": "54",
+          "Check": "Sheets that show another trade as background are handled as agreed.",
+          "Example": "With links unloaded, an ARC background on an STR sheet will be blank",
+          "From": "Client BIM-06.3 (BLDG-01)",
+          "FoundOn": "BLDG-01",
+          "Priority": "",
+          "Waiting": "BIM lead",
+          "Auto": ""
+        },
+        {
+          "Id": "55",
+          "Number": "55",
+          "Check": "Civil 3D only: one ZIP per model, with fonts, textures, data-link and photometric files.",
+          "Example": "Mark NA for Revit models",
+          "From": "BIM lead 11-Oct §8",
+          "FoundOn": "",
+          "Priority": "",
+          "Waiting": "",
+          "Auto": ""
+        },
+        {
+          "Id": "56",
+          "Number": "56",
+          "Check": "Package has everything the stage needs: native + IFC + NWC; drawings DWG + PDF; BOQ (XLSX + PDF) if needed; reports PDF.",
+          "Example": "Federated NWD + clash report come from the BIM team, check they are in the same transmittal",
+          "From": "BIM lead 11-Oct §1; Client BIM-01.10, STR-01 (BLDG-01)",
+          "FoundOn": "BLDG-01, 08",
+          "Priority": "High",
+          "Waiting": "",
+          "Auto": ""
+        },
+        {
+          "Id": "57",
+          "Number": "57",
+          "Check": "Open the package from a clean folder: it opens on the landing page, worksets and views look right.",
+          "Example": "Copy the ZIP to your desktop, unzip, open",
+          "From": "Lesson from BLDG-01 (BIM-04, BIM-08)",
+          "FoundOn": "BLDG-01",
+          "Priority": "",
+          "Waiting": "",
+          "Auto": ""
+        }
+      ]
+    }
+  ],
+  "Signatories": [
+    "Trade BIM coordinator",
+    "Trade group leader"
+  ],
+  "SourcePath": "",
+  "SourceStamp": ""
+}
