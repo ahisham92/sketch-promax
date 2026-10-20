@@ -185,6 +185,8 @@ internal static class SharedPackMath
         [JsonPropertyName("items")] public List<string> Items { get; set; } = [];
         [JsonPropertyName("fingerprint")] public string Fingerprint { get; set; } = "";
         [JsonPropertyName("autoPublish")] public bool AutoPublish { get; set; } = true;
+        /// <summary>Include my checklist: the pack carries the sharer's checklist (off unless ticked).</summary>
+        [JsonPropertyName("includeChecklist")] public bool IncludeChecklist { get; set; }
         [JsonPropertyName("lastZip")] public string LastZip { get; set; } = "";
     }
 
@@ -238,7 +240,11 @@ internal static class SharedPackMath
         return (Step.Copy, "");
     }
 
-    /// <summary>Whether a pack may put its checklist in place: none saved yet, or the saved one came from this pack.</summary>
+    /// <summary>
+    /// Whether a pack may put its checklist (the sharer's own, only when they ticked Include my checklist) in place:
+    /// none saved yet, or the saved one came from this pack and wasn't changed here. A colleague's own, edited or
+    /// imported checklist is never replaced.
+    /// </summary>
     public static (bool Write, string Why) DecideChecklist(string packId, bool savedExists, string? savedSource, string? excelPath)
     {
         if (!string.IsNullOrWhiteSpace(excelPath))
@@ -259,7 +265,7 @@ internal static class SharedPackMath
     public static readonly (string Command, string Title, string Glyph, string Tip)[] Commands =
     [
         ("pre-submission", "Pre-submission checklist", "list",
-            "Goes through the office's pre-submission checklist stage by stage, with hints from the model, and makes the signed Word file. The checklist in use when it was shared comes with it."),
+            "Goes through the office's pre-submission checklist stage by stage, with hints from the model, and makes the signed Word file. Colleagues start from the built-in checklist, or from yours when you tick Include my checklist."),
         ("issue-check", "Issue check", "check",
             "Drawing, spec, BOQ and model checks together on the issue set, pass or fail per sheet. Reads the model only."),
         ("cleanup", "Purge & cleanup", "refresh",
@@ -348,7 +354,7 @@ internal static class SharedPackMath
     public static string FolderName(IEnumerable<Pack> packs)
     {
         var list = packs.ToList();
-        var pack = list.FirstOrDefault(p => !string.IsNullOrEmpty(p.Checklist)) ?? list.FirstOrDefault();
+        var pack = list.FirstOrDefault(p => p.Tools.Any(t => t.Kind == "command" && t.Name == "pre-submission")) ?? list.FirstOrDefault();
         var name = CleanName(pack?.Name ?? "");
         return "TritoRevit - " + (name.Length > 0 ? name : "Shared tools");
     }

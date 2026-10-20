@@ -279,6 +279,11 @@ internal static class SharedPacks
         catch (JsonException) { return false; }
     }
 
+    /// <summary>
+    /// The sharer's checklist, when the pack carries one (Include my checklist): put in place unless this PC has its own
+    /// (<see cref="DecideChecklist"/>). When the pack no longer carries one, the copy it put here goes and the built-in
+    /// checklist is used again. Users' project checklists are separate files and never touched.
+    /// </summary>
     private static string ApplyChecklist(Pack pack, string folder)
     {
         var settings = AgentSettings.Load();
@@ -288,13 +293,11 @@ internal static class SharedPacks
             try { savedSource = ChecklistMath.FromJson<ChecklistMath.Definition>(File.ReadAllText(ChecklistStore.SavedPath))?.SourcePath; }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException) { }
         var mine = savedSource == ChecklistSource(pack.Id);
-        if (pack.Checklist is null)
+        if (pack.Checklist is null || !pack.Tools.Any(t => t.Name == "pre-submission"))
         {
-            // The pack no longer carries one: the copy it put here goes, and the built-in (or the user's own) is used again.
             if (mine) try { ChecklistStore.Reset(); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
             return "";
         }
-        if (!pack.Tools.Any(t => t.Name == "pre-submission")) return "";
         var (write, why) = DecideChecklist(pack.Id, savedExists, savedSource, settings.ChecklistPath);
         if (!write) return "Pre-submission checklist: " + why;
         var file = Path.Combine(folder, pack.Checklist.Replace('/', Path.DirectorySeparatorChar));
@@ -407,7 +410,8 @@ internal static class SharedPacks
     }
 
     /// <summary>What Share tools is asked to share.</summary>
-    public sealed record Request(string Name, IReadOnlyList<string> Items, string UpdateFrom, string Note, string ZipFolder, bool AutoPublish);
+    public sealed record Request(string Name, IReadOnlyList<string> Items, string UpdateFrom, string Note, string ZipFolder, bool AutoPublish,
+        bool IncludeChecklist = false);
 
     public sealed record Result(Pack Pack, string Zip, string? Published, List<string> Notes);
 
@@ -449,8 +453,9 @@ internal static class SharedPacks
         var tools = ToolsFor(request.Items, catalog, learned, recipe);
         foreach (var key in request.Items)
             if (tools.All(t => !KeyMatches(t, key))) notes.Add($"{key.Substring(key.IndexOf(':') + 1).Replace('_', ' ')}: not found here, so it was left out");
+        // The sharer's checklist travels only when they ticked Include my checklist; otherwise colleagues use the built-in one.
         string? checklist = null;
-        if (tools.Any(t => t.Kind == "command" && t.Name == "pre-submission"))
+        if (request.IncludeChecklist && tools.Any(t => t.Kind == "command" && t.Name == "pre-submission"))
         {
             var (def, note) = ChecklistStore.Load(AgentSettings.Load());
             if (def is not null)
@@ -458,7 +463,7 @@ internal static class SharedPacks
                 files[ChecklistFile] = ChecklistMath.ToJson(def);
                 checklist = ChecklistFile;
             }
-            else notes.Add("Pre-submission checklist: " + (note.Length > 0 ? note : "no checklist could be read") + "; the built-in one is used");
+            else notes.Add("Pre-submission checklist: " + (note.Length > 0 ? note : "no checklist could be read") + "; colleagues use the built-in one");
         }
         var pack = new Pack
         {
@@ -521,6 +526,7 @@ internal static class SharedPacks
         record.Note = pack.Note;
         record.Items = request.Items.ToList();
         record.AutoPublish = request.AutoPublish;
+        record.IncludeChecklist = request.IncludeChecklist;
         record.LastZip = zip;
         // Fingerprinted without the files that carry the revision and date.
         record.Fingerprint = Fingerprint(pack, files.Where(f => f.Key is not (PackFile or ButtonsFile)));
@@ -542,7 +548,7 @@ internal static class SharedPacks
             {
                 if (!Directory.Exists(record.UpdateFrom)) continue; // offline: tried again later
                 var request = new Request(record.Name, record.Items, record.UpdateFrom, record.Note,
-                    record.LastZip.Length > 0 ? Path.GetDirectoryName(record.LastZip)! : DefaultZipFolder, true);
+                    record.LastZip.Length > 0 ? Path.GetDirectoryName(record.LastZip)! : DefaultZipFolder, true, record.IncludeChecklist);
                 var (pack, files, _) = Build(record.Id, request, catalog, version);
                 if (pack.Tools.Count == 0) continue;
                 if (Fingerprint(pack, files.Where(f => f.Key is not (PackFile or ButtonsFile))) == record.Fingerprint) continue;

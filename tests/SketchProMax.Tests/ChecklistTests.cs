@@ -14,6 +14,12 @@ internal static class ChecklistTests
 {
     public static void Run(Action<string, bool, string> check)
     {
+        var fromPack = new ChecklistMath.Definition { SourcePath = "shared:qa-tools" };
+        ChecklistMath.MarkChangedHere(fromPack);
+        var imported = new ChecklistMath.Definition { SourcePath = @"C:\x.xlsx" };
+        ChecklistMath.MarkChangedHere(imported);
+        check("checklist: a shared checklist changed here is the user's own, so pack updates leave it",
+            fromPack.SourcePath == ChecklistMath.EditedSource && imported.SourcePath == @"C:\x.xlsx", fromPack.SourcePath);
         // ---- Reading the workbook
         var xlsx = Workbook(
             ("Read me", [[(0, "Demo pre-submission checklist, Rev 02 (19-Oct-2026, comments added)")]]),

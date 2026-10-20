@@ -144,6 +144,17 @@ internal static class ChecklistMath
     /// <summary>SourcePath of the checklist that ships with the add-in, and of one edited in the add-in.</summary>
     public const string BuiltInSource = "built-in", EditedSource = "edited";
 
+    /// <summary>
+    /// A checklist a shared pack put here ("shared:&lt;pack&gt;") becomes the user's own once they change it here (its
+    /// checking rules too), so the pack's later revisions no longer replace it. Others keep their source.
+    /// </summary>
+    public static void MarkChangedHere(Definition def)
+    {
+        if (!def.SourcePath.StartsWith("shared:", StringComparison.Ordinal)) return;
+        def.SourcePath = EditedSource;
+        def.SourceStamp = DateTime.Now.ToString("dd-MMM-yyyy HH:mm", System.Globalization.CultureInfo.InvariantCulture);
+    }
+
     /// <summary>The checklist that ships with the add-in (an embedded resource), or null when it can't be read.</summary>
     public static Definition? BuiltIn()
     {

@@ -56,7 +56,7 @@ At the first three levels Revit always asks before code Claude wrote (run_revit_
 
 ## Sharing tools (TritoRevit)
 
-**Share tools** (next to the pre-submission checklist) packs any number of tools into one zip for colleagues, whether or not they have Sketch ProMax: the pre-submission checklist (with the checklist in use), issue check, purge & cleanup, project pack, time saved, ribbon tools that run without the AI, learned tools and recipes. Name the pack, tick the tools and, optionally, pick an update folder everyone can reach (a shared drive).
+**Share tools** (next to the pre-submission checklist) packs any number of tools into one zip for colleagues, whether or not they have Sketch ProMax: the pre-submission checklist (colleagues start from the built-in checklist; tick **Include my checklist** to give them yours, and your later edits follow by themselves), issue check, purge & cleanup, project pack, time saved, ribbon tools that run without the AI, learned tools and recipes. Name the pack, tick the tools and, optionally, pick an update folder everyone can reach (a shared drive).
 
 The colleague extracts the zip and double-clicks **Install TritoRevit.cmd** (no admin rights). When they don't have it, it installs **TritoRevit**, a small add-in with its own tab, downloading the add-in from this repository's releases (about 40 MB, once). Only that first install needs a Revit restart. With TritoRevit (or Sketch ProMax) already installed, a new pack's buttons appear on the TritoRevit tab within a few seconds, with Revit open.
 

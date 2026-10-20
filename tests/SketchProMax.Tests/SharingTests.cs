@@ -118,8 +118,11 @@ internal static class SharingTests
         check("sharing: a pack's untouched tool updated", Decide("qa-tools", "h2", "h1", mine).Step == Step.Copy, "");
         check("sharing: checklist with none saved", DecideChecklist("qa-tools", false, null, null).Write, "");
         check("sharing: checklist from this pack replaced", DecideChecklist("qa-tools", true, ChecklistSource("qa-tools"), null).Write, "");
-        check("sharing: the PC's own checklist kept", !DecideChecklist("qa-tools", true, @"C:\x.xlsx", null).Write && !DecideChecklist("qa-tools", true, ChecklistSource("other"), null).Write, "");
+        check("sharing: the PC's own checklist kept", !DecideChecklist("qa-tools", true, @"C:\x.xlsx", null).Write && !DecideChecklist("qa-tools", true, ChecklistSource("other"), null).Write
+            && !DecideChecklist("qa-tools", true, "edited", null).Write, "");
         check("sharing: a checklist Excel in Settings wins", !DecideChecklist("qa-tools", false, null, @"C:\x.xlsx").Write, "");
+        check("sharing: the sharer's checklist goes only when ticked", ParseRecord(SerializeRecord(new Record { Id = "a" }))?.IncludeChecklist == false
+            && ParseRecord(SerializeRecord(new Record { Id = "a", IncludeChecklist = true }))?.IncludeChecklist == true, "");
 
         // ---- The zip's words
         check("sharing: zip name", ZipName("QA tools") == "TritoRevit - QA tools.zip" && ZipName("a/b:c") == "TritoRevit - a_b_c.zip" && ZipName(" ") == "TritoRevit - Shared tools.zip", ZipName("a/b:c"));
@@ -164,7 +167,7 @@ internal static class SharingTests
 
         // ---- The TritoRevit folder in Documents (problem reports and checklists)
         var listPack = new Pack { Id = "qa", Name = "QA tools", UpdateFrom = @"\\server\share" };
-        var checklistPack = new Pack { Id = "psc", Name = "Pre Submission Checklist", Checklist = ChecklistFile };
+        var checklistPack = new Pack { Id = "psc", Name = "Pre Submission Checklist", Tools = [new Tool { Id = "cmd.pre-submission", Kind = "command", Name = "pre-submission" }] };
         check("sharing: folder named after the pack with the checklist", FolderName([listPack, checklistPack]) == "TritoRevit - Pre Submission Checklist", FolderName([listPack, checklistPack]));
         check("sharing: folder named after the only pack, or Shared tools", FolderName([listPack]) == "TritoRevit - QA tools" && FolderName([]) == "TritoRevit - Shared tools", "");
         check("sharing: pack names made safe for a folder", CleanName("A/B: C?*  D.") == "A B C D" && CleanName(new string('x', 90)).Length == 60 && FolderName([new Pack { Name = "???" }]) == "TritoRevit - Shared tools", CleanName("A/B: C?*  D."));

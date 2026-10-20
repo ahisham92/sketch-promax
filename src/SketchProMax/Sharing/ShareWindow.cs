@@ -28,6 +28,7 @@ internal sealed class ShareWindow : Window
     private readonly StackPanel _list = new();
     private readonly TextBlock _count = Brand.Text("", Brand.K.Muted);
     private readonly TextBox _folder = new() { MinHeight = 28 };
+    private readonly CheckBox _mine = new() { Content = "Include my checklist", IsChecked = false, Margin = new Thickness(0, 10, 0, 0) };
     private readonly CheckBox _auto = new() { Content = "Publish changes to these tools by themselves", IsChecked = true, Margin = new Thickness(0, 6, 0, 0) };
     private readonly TextBox _note = new() { MinHeight = 28 };
     private readonly TextBlock _error = Brand.Text("", Brand.K.DangerText);
@@ -80,6 +81,15 @@ internal sealed class ShareWindow : Window
         });
         ((Border)body.Children[body.Children.Count - 1]).SetResourceReference(Border.BorderBrushProperty, Brand.K.Border);
 
+        // Off by default: colleagues start from the built-in checklist. Ticked: the pack carries this PC's checklist, and
+        // with automatic publishing its later edits reach everyone who hasn't changed or imported their own.
+        _mine.SetResourceReference(ForegroundProperty, Brand.K.Text);
+        var mineHelp = "Only with Pre-submission checklist ticked. Off: colleagues start from the built-in checklist. On: they get yours, " +
+                       "and your later edits reach them too. A checklist they edited or imported themselves is never replaced.";
+        AutomationProperties.SetHelpText(_mine, mineHelp);
+        _mine.ToolTip = mineHelp;
+        body.Children.Add(_mine);
+
         body.Children.Add(Label("Update folder (optional)", _folder,
             "A folder everyone can reach: a shared drive or a synced Teams or OneDrive folder. Colleagues' tools update from it by themselves, with Revit open. Leave empty for a zip only."));
         var folderRow = new DockPanel();
@@ -93,7 +103,7 @@ internal sealed class ShareWindow : Window
         body.Children.Add(folderRow);
         _auto.IsEnabled = false;
         _auto.SetResourceReference(ForegroundProperty, Brand.K.Text);
-        AutomationProperties.SetHelpText(_auto, "When a learned tool, recipe or the checklist in this pack changes on this PC, the next revision is published to the update folder within a few minutes.");
+        AutomationProperties.SetHelpText(_auto, "When a learned tool, recipe or your included checklist changes on this PC, the next revision is published to the update folder within a few minutes.");
         body.Children.Add(_auto);
 
         body.Children.Add(Label("Note (optional)", _note, "A line for the readme, such as who the tools are for."));
@@ -143,6 +153,7 @@ internal sealed class ShareWindow : Window
             _folder.Text = "";
             _note.Text = "";
             _auto.IsChecked = true;
+            _mine.IsChecked = false;
         }
         else
         {
@@ -150,6 +161,7 @@ internal sealed class ShareWindow : Window
             _folder.Text = record.UpdateFrom;
             _note.Text = record.Note;
             _auto.IsChecked = record.AutoPublish;
+            _mine.IsChecked = record.IncludeChecklist;
             foreach (var key in record.Items) _chosen.Add(key);
         }
         _name.IsReadOnly = record is not null; // the same pack keeps its name; a new name is a new pack
@@ -238,7 +250,8 @@ internal sealed class ShareWindow : Window
                 return;
             }
         }
-        var request = new SharedPacks.Request(name, items, folder, _note.Text.Trim(), SharedPacks.DefaultZipFolder, _auto.IsChecked == true);
+        var request = new SharedPacks.Request(name, items, folder, _note.Text.Trim(), SharedPacks.DefaultZipFolder, _auto.IsChecked == true,
+            _mine.IsChecked == true && items.Contains("command:pre-submission"));
         SharedPacks.Result result;
         Brand.SetBusy(_make, true, "Making…");
         try { result = SharedPacks.Export(request, SharedTools.RibbonTool, Updater.CurrentText, _id); }
