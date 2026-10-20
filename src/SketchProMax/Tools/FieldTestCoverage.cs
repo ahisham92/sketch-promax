@@ -178,6 +178,13 @@ internal static class FieldTestCoverage
             "Check 4 finds the model's number in the MIDP; 36 lists drawings in the list with no sheet; 44 counts your open clashes. On check 49 click Fix it: Export the NWC and IFC: " +
             "both files appear in the folder named like the model, and 49, 50 and 51 pass. Create the PDF on Review and sign: its name ends READY or NOT READY and 46 follows it. " +
             "54 lists sheets whose views show a linked model; 55 says N/A for Revit; 56 lists the package's file types; Run the slow checks: 53 and 57 open the packaged model from a clean folder."),
+        new("checklist.projects", Issue, "Pre-submission checklist: a checklist per project, picked checks, export / import, the editing password", How.Manual, "",
+            "the project checklist windows and the password prompt are judged by a person (ChecklistProjects itself is unit-tested)",
+            "On a _detached copy: Pre-submission checklist > Settings (gear). Checklist for this project names the project code from the file name and says it uses the office checklist. " +
+            "New checklist from picked checks: the password is asked; 1234 is refused, 0000 opens the picker. Name it Ports, clear stage A, Create: the checklist shows only the ticked checks, renumbered, and the strip says the results may be out of date. " +
+            "Edit the checklist: no password asked again in this window; a change is saved to Ports only (close and reopen: the office checklist on another project is unchanged). " +
+            "Export this checklist to Excel, then on a model of another project Import a checklist from Excel: it is named, used for that project, and its checks match. " +
+            "Use for this project > The office checklist goes back; Delete Ports removes it. Change the editing password to 4321: the next window asks for 4321, and 0000 is refused."),
         new("checklist.run", Issue, "Pre-submission checklist: nothing is tested until Run checks, with a progress bar", How.Manual, "",
             "how the run strip and its percentage look and read is judged by a person",
             "On a _detached copy: Pre-submission checklist (next to Chat). Under the header a yellow strip says The model hasn't been checked yet, and nothing is tested; " +
