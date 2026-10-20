@@ -73,7 +73,14 @@ internal static class ChecklistExports
         return new FilteredElementCollector(doc).OfClass(typeof(View3D)).Cast<View3D>().FirstOrDefault(v => !v.IsTemplate && ChecklistMath.LikeAny(v.Name, pattern));
     }
 
-    /// <summary>Exports the NWC and the IFC with the office's settings; a sentence saying what was written or why not.</summary>
+    /// <summary>Whether the project needs an IFC: not when Files the package must have is set without .ifc (the NWC alone is exported).</summary>
+    public static bool WantsIfc(ChecklistMath.Definition? def)
+    {
+        var contents = ChecklistMath.RuleList(ChecklistMath.Rule(def, "packagecontents"));
+        return contents.Count == 0 || contents.Any(c => c.TrimStart('.', '*').Equals("ifc", StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>Exports the NWC and the IFC with the office's settings (the NWC alone when the project needs no IFC); a sentence saying what was written or why not.</summary>
     public static string Export(Document doc, ChecklistMath.Definition? def)
     {
         var folder = Folder(doc, def);
@@ -104,6 +111,8 @@ internal static class ChecklistExports
             if (File.Exists(file)) { Record(file, NwcSettings); said.Add($"Exported {name}.nwc."); }
             else said.Add("Revit didn't write the NWC.");
         }
+
+        if (!WantsIfc(def)) return string.Join(" ", said) + $" In {folder}. No IFC: the package needs none (Files the package must have).";
 
         var ifc = new IFCExportOptions { FileVersion = Enum.TryParse<IFCVersion>("IFC4x3", out var v4x3) ? v4x3 : IFCVersion.IFC4RV, FilterViewId = view.Id };
         var setup = ChecklistMath.Rule(def, "ifcsetup").Trim('"');

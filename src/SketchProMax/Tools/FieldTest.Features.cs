@@ -488,6 +488,7 @@ internal static partial class FieldTest
         await Probe(s, "checklist.word", app => ChecklistProbe(app, s)).ConfigureAwait(false);
         await Probe(s, "checklist.views", app => ChecklistViewsProbe(app, s)).ConfigureAwait(false);
         await Probe(s, "checklist.fix", app => ChecklistFixProbe(app, s)).ConfigureAwait(false);
+        await Probe(s, "checklist.fix_more", app => ChecklistFixMoreProbe(app, s)).ConfigureAwait(false);
         await Probe(s, "checklist.rules", app => ChecklistRulesProbe(app, s)).ConfigureAwait(false);
         await Probe(s, "package.sentence", app => PackageSentence(app, s)).ConfigureAwait(false);
         await Probe(s, "package.skip", app => PackageSkip(app, s)).ConfigureAwait(false);
@@ -1929,6 +1930,120 @@ internal static partial class FieldTest
                 if (ChecklistFixes.For(key) is { } offer && (offer.Button.Length == 0 || offer.Question.Length == 0)) problems.Add(key + ": empty button or question");
         }
         finally { RollBack(group); }
+        return problems.Count == 0 ? Pass("fixes ran and were rolled back: " + string.Join(" ", said)) : Fail(string.Join("; ", problems));
+    }
+
+    /// <summary>
+    /// The nine Fix buttons added for the ports job, each set up on the test project, run, checked and rolled back: title
+    /// blocks, unused levels, worksets, linked backgrounds, view folders, the model name on sheets, identical instances,
+    /// the submitted copy's name and the NWC-only export.
+    /// </summary>
+    private static (string, string) ChecklistFixMoreProbe(UIApplication app, State s)
+    {
+        if (TestDoc(app, s, out var why) is not { } doc) return Fail(why);
+        if (ChecklistMath.BuiltIn() is not { } def) return Fail("the built-in checklist can't be read");
+        var problems = new List<string>();
+        var said = new List<string>();
+        foreach (var key in new[] { "titleblock", "levels", "worksets", "backgrounds", "viewfolders", "tbmodelname", "duplicates", "submission", "nwcsettings" })
+            if (ChecklistFixes.For(key, def) is not { } offer || offer.Button.Length == 0 || offer.Question.Length == 0) problems.Add(key + ": no Fix button");
+
+        // The submitted copy's name: the working name plus the ending, the first number not taken; the model itself isn't touched.
+        var folder = Path.Combine(s.Folder, "submission-test");
+        Directory.CreateDirectory(folder);
+        var first = ChecklistFixes.SubmissionFile(folder, "PRJ1-BLDG-01-STR_detached.rvt", "_S03_R##");
+        if (Path.GetFileName(first) != "PRJ1-BLDG-01-STR_S03_R00.rvt") problems.Add("submission: first copy named " + Path.GetFileName(first));
+        else
+        {
+            File.WriteAllText(first!, "");
+            var second = ChecklistFixes.SubmissionFile(folder, "PRJ1-BLDG-01-STR_detached.rvt", "_S03_R##");
+            if (Path.GetFileName(second) != "PRJ1-BLDG-01-STR_S03_R01.rvt") problems.Add("submission: with R00 taken the copy is named " + Path.GetFileName(second));
+        }
+        var submission = ChecklistFixes.Run(doc, "submission", null, def: def);
+        said.Add("submission: " + submission);
+
+        // NWC only when the package needs no IFC.
+        var nwcOnly = new ChecklistMath.Definition { Rules = { ["packagecontents"] = ".rvt, .nwc, .pdf" } };
+        if (ChecklistExports.WantsIfc(nwcOnly) || !ChecklistExports.WantsIfc(def)) problems.Add("nwc: the IFC is wanted the wrong way round");
+        if (ChecklistFixes.For("nwcsettings", nwcOnly)?.Button.IndexOf("IFC", StringComparison.Ordinal) >= 0) problems.Add("nwc: the button still says IFC when none is needed");
+
+        // The category to workset rule.
+        var map = ChecklistFixes.WorksetMap(new ChecklistMath.Definition { Rules = { ["worksetmap"] = "Structural Foundation>ST_Piles, Floors>ST_Concrete, bad" } });
+        if (map.Count != 2 || ChecklistFixes.WorksetFor("Structural Foundations", map) != "ST_Piles" || ChecklistFixes.WorksetFor("Floors", map) != "ST_Concrete" || ChecklistFixes.WorksetFor("Walls", map) is not null)
+            problems.Add("worksets: the category to workset rule reads wrong");
+
+        using var group = new TransactionGroup(doc, "Field test: more checklist fixes");
+        group.Start();
+        try
+        {
+            // An unused level high above the rest is listed and deleted.
+            Autodesk.Revit.DB.Level spare;
+            using (var t = new Transaction(doc, "Field test: a spare level"))
+            {
+                t.Start();
+                spare = Autodesk.Revit.DB.Level.Create(doc, 3000);
+                spare.Name = "ZZ TEST SPARE LEVEL";
+                t.Commit();
+            }
+            if (!ChecklistFacts.UnusedLevels(doc).Any(l => l.Id == spare.Id)) problems.Add("levels: the spare level isn't listed as unused");
+            said.Add("levels: " + ChecklistFixes.Run(doc, "levels", null, def: def));
+            if (spare.IsValidObject) problems.Add("levels: the spare level is still there");
+
+            // A sheet with no title block gets the title block family set in the rules.
+            var family = new FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_TitleBlocks).WhereElementIsElementType().OfType<FamilySymbol>()
+                .FirstOrDefault(f => !ChecklistFacts.IsLanding(f.FamilyName, def))?.FamilyName;
+            ViewSheet sheet;
+            using (var t = new Transaction(doc, "Field test: a bare sheet"))
+            {
+                t.Start();
+                sheet = ViewSheet.Create(doc, ElementId.InvalidElementId);
+                sheet.SheetNumber = "ZZ-TEST-02";
+                t.Commit();
+            }
+            var tbDef = new ChecklistMath.Definition { Rules = { ["titleblock"] = family ?? "NOT-LOADED-TB" } };
+            var tb = ChecklistFixes.Run(doc, "titleblock", null, def: tbDef);
+            said.Add("titleblock: " + tb);
+            var hasBlock = new FilteredElementCollector(doc, sheet.Id).OfCategory(BuiltInCategory.OST_TitleBlocks).WhereElementIsNotElementType().GetElementCount() > 0;
+            if (family is not null && !hasBlock) problems.Add("titleblock: the bare sheet got no title block (" + tb + ")");
+            if (family is null && tb.IndexOf("isn't loaded", StringComparison.Ordinal) < 0) problems.Add("titleblock: no title block family loaded, but it said " + tb);
+
+            // The model name written into a sheet parameter.
+            var nameDef = new ChecklistMath.Definition { Rules = { ["tbmodelname"] = "Approved By" } };
+            said.Add("tbmodelname: " + ChecklistFixes.Run(doc, "tbmodelname", null, def: nameDef));
+            var name = Path.GetFileNameWithoutExtension(ChecklistMath.WorkingName(string.IsNullOrEmpty(doc.PathName) ? doc.Title : Path.GetFileName(doc.PathName)));
+            if ((sheet.LookupParameter("Approved By")?.AsString() ?? "") != name) problems.Add("tbmodelname: the sheet's Approved By isn't " + name);
+
+            // View folders: an empty view parameter filled with the typed value.
+            var folderDef = new ChecklistMath.Definition { Rules = { ["viewfolders"] = "Title on Sheet" } };
+            said.Add("viewfolders: " + ChecklistFixes.Run(doc, "viewfolders", null, def: folderDef, answer: "PRJ1 TEST"));
+            var empty = new FilteredElementCollector(doc).OfClass(typeof(View)).Cast<View>()
+                .Count(v => !v.IsTemplate && v.ViewType is not (ViewType.ProjectBrowser or ViewType.SystemBrowser or ViewType.Internal or ViewType.Undefined or ViewType.DrawingSheet) &&
+                            v.LookupParameter("Title on Sheet") is { IsReadOnly: false, StorageType: StorageType.String } p && !ChecklistFacts.Filled(p));
+            if (empty > 0) problems.Add($"viewfolders: {empty} views still have Title on Sheet empty");
+
+            // Identical instances: a column copied onto itself is deleted again, one kept.
+            var original = new FilteredElementCollector(doc).OfClass(typeof(FamilyInstance)).OfCategory(BuiltInCategory.OST_StructuralColumns).FirstElement();
+            if (original is null) said.Add("duplicates: no column in the test project to copy");
+            else
+            {
+                ICollection<ElementId> copy;
+                using (var t = new Transaction(doc, "Field test: an identical copy"))
+                {
+                    t.Start();
+                    copy = ElementTransformUtils.CopyElement(doc, original.Id, XYZ.Zero);
+                    t.Commit();
+                }
+                said.Add("duplicates: " + ChecklistFixes.Run(doc, "duplicates", null, def: def));
+                if (copy.Any(id => doc.GetElement(id) is not null) && original.IsValidObject) problems.Add("duplicates: the identical copy is still there");
+                if (!original.IsValidObject && copy.All(id => doc.GetElement(id) is null)) problems.Add("duplicates: both copies were deleted");
+            }
+
+            // Worksets and linked backgrounds: run without an error (the test project may be neither workshared nor linked).
+            foreach (var key in new[] { "worksets", "backgrounds" })
+                said.Add(key + ": " + ChecklistFixes.Run(doc, key, null, def: def));
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException) { problems.Add("threw " + ex.GetType().Name + ": " + ex.Message); }
+        finally { RollBack(group); }
+        foreach (var line in said.Where(l => l.IndexOf("There is no automatic fix", StringComparison.Ordinal) >= 0)) problems.Add(line);
         return problems.Count == 0 ? Pass("fixes ran and were rolled back: " + string.Join(" ", said)) : Fail(string.Join("; ", problems));
     }
 

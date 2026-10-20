@@ -99,6 +99,8 @@ internal sealed class ChecklistWindow : Window
         public RadioButton Yes = null!, No = null!, Na = null!;
         public TextBox Note = null!;
         public TextBlock Meta = null!, NoteHint = null!;
+        /// <summary>Clears this check's answer (shown once it has one).</summary>
+        public Button Clear = null!;
         /// <summary>The card's own content, and the one line shown instead once it is removed as N/A.</summary>
         public FrameworkElement Body = null!, RemovedRow = null!;
     }
@@ -458,6 +460,11 @@ internal sealed class ChecklistWindow : Window
         row.Children.Add(rules);
         row.Children.Add(reread);
         row.Children.Add(slowRun);
+        var clearAll = RichUi.Button(RichUi.Icon.Close, "Clear all answers", Brand.Weight.Danger);
+        clearAll.Margin = new Thickness(8, 0, 0, 0);
+        AutomationProperties.SetHelpText(clearAll, "Takes back every Yes, No and N/A for this model. Comments, project details and signatures stay. Each check also has Clear answer.");
+        clearAll.Click += (_, _) => ClearAllAnswers();
+        row.Children.Add(clearAll);
         source.Children.Add(row);
         page.Children.Add(CardBox(source, top: 16));
 
@@ -793,9 +800,10 @@ internal sealed class ChecklistWindow : Window
     }
 
     /// <summary>Reads the hints and file names from the model again, through Revit (the window itself runs outside a Revit call).</summary>
-    private async Task ReadModelAgain(Button? button, bool slow = false)
+    private async Task ReadModelAgain(Button? button, bool slow = false, string? only = null)
     {
         // One reading at a time: asked again meanwhile (a fix, new rules), it reads once more when this one ends.
+        if (_reading && only is not null) { _status.Text = "The checks are being read: run this one again when they finish."; return; }
         if (_reading) { _readAgain = true; _readAgainSlow |= slow; return; }
         if (button is not null) { if (Brand.IsBusy(button)) return; Brand.SetBusy(button, true, slow ? "Running the slow checks…" : "Reading…"); }
         _reading = true;
@@ -803,14 +811,14 @@ internal sealed class ChecklistWindow : Window
         {
             var def = _def;
             var key = _docKey;
-            var label = slow ? "Running the slow checks…" : "Reading the model…";
+            var label = only is not null ? "Running " + CheckName(only) + "…" : slow ? "Running the slow checks…" : "Reading the model…";
             _status.Text = label;
             _stopReading = false;
             ShowRun(label, 0, "Getting ready.");
             var reading = await App.Dispatcher.InvokeAsync(app =>
             {
                 foreach (Autodesk.Revit.DB.Document d in app.Application.Documents)
-                    if (!d.IsFamilyDocument && !d.IsLinked && DocKey(d) == key) return ChecklistFacts.Plan(d, def, slow ? app : null);
+                    if (!d.IsFamilyDocument && !d.IsLinked && DocKey(d) == key) return ChecklistFacts.Plan(d, def, slow ? app : null, only);
                 return null;
             });
             if (reading is null) { _status.Text = "The model this checklist is for isn't open any more, so it can't be read again."; return; }
@@ -828,6 +836,25 @@ internal sealed class ChecklistWindow : Window
             if (_closed) return;
             if (_stopReading) { _status.Text = "Stopped. The results are as they were before you pressed Run."; return; }
             var facts = reading.Result;
+            if (only is not null)
+            {
+                // Just this check: its result replaces the old one, the others stay as they were.
+                if (facts.Hints.TryGetValue(only, out var one)) _facts.Hints[only] = one;
+                else _facts.Hints.Remove(only);
+                SaveDraft();
+                var at = _stages.SelectedIndex;
+                Build();
+                _stages.SelectedIndex = at;
+                if (_def?.Items.FirstOrDefault(i => i.Auto == only) is { } item && _cards.TryGetValue(item.Id, out var card)) Select(card);
+                _status.Text = $"Ran {CheckName(only)}: " + (one is null ? "nothing to test." : one.Level switch
+                {
+                    ChecklistFacts.Level.Ok => "it passes.",
+                    ChecklistFacts.Level.Warn => "it still needs fixing.",
+                    _ => "see its details.",
+                });
+                ActivityLog.Note("checklist_run_one", only + ": " + (one?.Level.ToString() ?? "none"));
+                return;
+            }
             // How long the slowest checks took, so a slow model can be looked into from the activity log.
             ActivityLog.Note("checklist_timing", $"{(slow ? "slow" : "quick")} run {clock.Elapsed.TotalSeconds:0.0} s; slowest: " +
                 string.Join(", ", reading.Slowest.Take(5).Select(t => $"{t.Key} {t.Value.TotalSeconds:0.0} s")));
@@ -1162,7 +1189,7 @@ internal sealed class ChecklistWindow : Window
             show.Click += async (_, _) => await ShowInRevit(show, result, key);
             actions.Children.Add(show);
         }
-        if (item.Auto.Length > 0 && hint?.Level != ChecklistFacts.Level.Ok && ChecklistFixes.For(item.Auto) is { } offer)
+        if (item.Auto.Length > 0 && hint?.Level != ChecklistFacts.Level.Ok && ChecklistFixes.For(item.Auto, _def) is { } offer)
         {
             var fix = RichUi.Button(RichUi.Icon.Fix, "Fix it: " + offer.Button, Brand.Weight.Primary);
             fix.Margin = new Thickness(0, 0, 8, 6);
@@ -1174,12 +1201,13 @@ internal sealed class ChecklistWindow : Window
         if (item.Auto.Length > 0)
         {
             var slow = ChecklistFacts.Slow.Contains(item.Auto);
-            var again = RichUi.Button(RichUi.Icon.Refresh, slow ? "Run the slow checks" : "Check the model again", slow && hint?.Pending == true ? Brand.Weight.Primary : Brand.Weight.Secondary);
+            var again = RichUi.Button(RichUi.Icon.Refresh, "Run this check", slow && hint?.Pending == true ? Brand.Weight.Primary : Brand.Weight.Secondary);
             again.Margin = new Thickness(0, 0, 8, 6);
             AutomationProperties.SetHelpText(again, slow
-                ? "Runs the slower checks (model check, clashes inside your trade, the standard template). It can take a few minutes on a big model; Revit is busy meanwhile."
-                : "After you fix something in Revit, reads the model again to update this check and the automatic score.");
-            again.Click += async (_, _) => await ReadModelAgain(again, slow);
+                ? "Tests just this check (a slower one: it can take a few minutes on a big model; Revit is busy meanwhile). Run checks tests them all."
+                : "After you fix something in Revit, tests just this check again and updates the automatic score. Run checks tests them all.");
+            var only = item.Auto;
+            again.Click += async (_, _) => await ReadModelAgain(again, slow, only);
             actions.Children.Add(again);
         }
         var helper = ChecklistHelper.Parse(AgentSettings.Load().ChecklistHelper);
@@ -1393,19 +1421,21 @@ internal sealed class ChecklistWindow : Window
                        (detached ? "" : "\n\nThis doesn't look like a detached copy: fixes are meant for the copy you submit."));
         // A plain message box: this window is modeless, outside a Revit API call, where Revit's own dialogs aren't allowed.
         if (MessageBox.Show(this, question, "Sketch ProMax: fix it", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes) return;
+        string? answer = null;
+        if (offer.Ask is { } ask && (answer = ChecklistProjectWindows.Ask(this, offer.Button, ask, "")) is null) return;
         Brand.SetBusy(button, true, offer.ChangesModel ? "Fixing…" : "Working…");
         var def = _def;
         try
         {
-            said.Text = await OnModel(ui => ChecklistFixes.Run(ui, key, def));
+            said.Text = await OnModel(ui => ChecklistFixes.Run(ui, key, def, answer));
             said.Visibility = Visibility.Visible;
             ActivityLog.Note("checklist_fix", key + ": " + said.Text);
         }
         finally { Brand.SetBusy(button, false); }
         var message = said.Text;
         OutOfDate("A fix changed the model.");
-        _status.Text = message + " Press Run checks to see the result.";
-        if (_detailScroll.Content is StackPanel page) page.Children.Insert(Math.Min(page.Children.Count, 1), Para(message + " Press Run checks to see the result.", Brand.K.SuccessText, 12, 6));
+        _status.Text = message + " Press Run this check (or Run checks) to see the result.";
+        if (_detailScroll.Content is StackPanel page) page.Children.Insert(Math.Min(page.Children.Count, 1), Para(message + " Press Run this check (or Run checks) to see the result.", Brand.K.SuccessText, 12, 6));
     }
 
     // ---- Section stages -------------------------------------------------------------------------------------------
@@ -1476,7 +1506,17 @@ internal sealed class ChecklistWindow : Window
         card.NoteHint.Visibility = Visibility.Collapsed;
         body.Children.Add(card.NoteHint);
         card.Meta = Para("", Brand.K.Muted, 11, 4);
-        body.Children.Add(card.Meta);
+        card.Meta.VerticalAlignment = VerticalAlignment.Center;
+        card.Clear = RichUi.Button(RichUi.Icon.Close, "Clear answer");
+        card.Clear.Margin = new Thickness(10, 4, 0, 0);
+        AutomationProperties.SetName(card.Clear, $"Clear the answer to #{item.Number}");
+        AutomationProperties.SetHelpText(card.Clear, "Takes back the Yes, No or N/A so the check is unanswered again; the comment stays.");
+        card.Clear.Click += (_, e) => { e.Handled = true; ClearAnswer(card); };
+        var metaRow = new DockPanel();
+        DockPanel.SetDock(card.Clear, Dock.Right);
+        metaRow.Children.Add(card.Clear);
+        metaRow.Children.Add(card.Meta);
+        body.Children.Add(metaRow);
 
         var a = _state.Answers.TryGetValue(item.Id, out var found) ? found : null;
         switch (ChecklistMath.Normal(a?.Done))
@@ -1589,6 +1629,36 @@ internal sealed class ChecklistWindow : Window
         else _next.Focus();
     }
 
+    /// <summary>Takes a check's answer back: unanswered again, the comment kept.</summary>
+    private void ClearAnswer(Card card)
+    {
+        var a = _state.For(card.Item.Id);
+        a.Done = "";
+        _loading = true;
+        card.Yes.IsChecked = card.No.IsChecked = card.Na.IsChecked = false;
+        _loading = false;
+        ShowCard(card);
+        Changed();
+        ActivityLog.Note("checklist_clear_answer", "#" + card.Item.Number);
+        FocusCard(card);
+    }
+
+    /// <summary>Clears every answer for this model (the project details and signatures stay).</summary>
+    private void ClearAllAnswers()
+    {
+        if (_state.Answers.Values.All(a => ChecklistMath.Normal(a.Done).Length == 0)) { _status.Text = "No check is answered yet: nothing to clear."; return; }
+        // A plain message box: this window is modeless, outside a Revit API call, where Revit's own dialogs aren't allowed.
+        if (MessageBox.Show(this, "Clear every Yes, No and N/A answer for this model, so every check is unanswered again? Comments, project details and signatures stay. Checks removed as N/A come back.",
+                "Sketch ProMax pre-submission checklist", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No) != MessageBoxResult.Yes) return;
+        foreach (var a in _state.Answers.Values) a.Done = "";
+        SaveDraft();
+        ActivityLog.Note("checklist_clear_answers", "all");
+        var stage = _stages.SelectedIndex;
+        Build();
+        _stages.SelectedIndex = stage;
+        _status.Text = "Cleared every answer.";
+    }
+
     /// <summary>A check removed as N/A comes back unanswered.</summary>
     private void PutBack(Card card)
     {
@@ -1623,6 +1693,7 @@ internal sealed class ChecklistWindow : Window
             _ => Brand.K.BorderSubtle,
         });
         card.Meta.Text = done.Length == 0 ? "Not answered yet." : $"Marked {Word(done)} by {a!.By}, {a.Date}.";
+        card.Clear.Visibility = done.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
         var note = card.Note.Text.Trim();
         var need = done == ChecklistMath.No && note.Length == 0 ? "Say why it isn't done, and what happens next."
                  : card.Item.Waiting.Length > 0 && done.Length > 0 && note.Length == 0 ? "This check waits on an answer: write what you did meanwhile."
@@ -1745,9 +1816,16 @@ internal sealed class ChecklistWindow : Window
         deleteViews.Click += async (_, _) => await DeleteCheckingViews(deleteViews, viewsResult);
         page.Children.Add(CardBox(new StackPanel { Children = { viewsText, deleteViews, viewsResult } }, top: 8));
 
+        var clearAnswers = RichUi.Button(RichUi.Icon.Close, "Clear all answers", Brand.Weight.Danger);
+        clearAnswers.HorizontalAlignment = HorizontalAlignment.Left;
+        clearAnswers.Margin = new Thickness(0, 24, 0, 0);
+        AutomationProperties.SetHelpText(clearAnswers, "Takes back every Yes, No and N/A for this model. Comments, project details and signatures stay.");
+        clearAnswers.Click += (_, _) => ClearAllAnswers();
+        page.Children.Add(clearAnswers);
+
         var startAgain = RichUi.Button(RichUi.Icon.Undo, "Start again", Brand.Weight.Danger);
         startAgain.HorizontalAlignment = HorizontalAlignment.Left;
-        startAgain.Margin = new Thickness(0, 24, 0, 0);
+        startAgain.Margin = new Thickness(0, 8, 0, 0);
         AutomationProperties.SetHelpText(startAgain, "Clears every answer, comment and signature for this model. Word files and PDFs already made are kept.");
         startAgain.Click += (_, _) => StartAgain();
         page.Children.Add(startAgain);

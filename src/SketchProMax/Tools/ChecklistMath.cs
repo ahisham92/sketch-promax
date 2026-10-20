@@ -85,6 +85,8 @@ internal static class ChecklistMath
         new("levels", "Level name pattern", "BLDG * LVL *", "Every level name matches one of these.", "levels"),
         new("scopeboxes", "Scope box name pattern", "BLDG-##-###*", "Every scope box name matches one of these.", "scopeboxes"),
         new("linkworksets", "Worksets that must exist", "Z_Link_URS, Z_Link_CAD, Z_Link_AR, Z_Link_EL, Z_Link_ME, Z_Link_SC, Z_Link_SS", "Each of these worksets is in the model.", "worksets"),
+        new("worksetmap", "Workset for each category", "", "Where Fix it moves elements that are on Workset1, or on Shared Levels and Grids but aren't levels or grids: " +
+            "Category>Workset pairs, comma separated, e.g. Structural Foundations>ST_Piles, Floors>ST_Concrete (a missing workset is made; empty: nothing is moved).", "worksets"),
         new("approvedworksets", "Approved worksets", "", "Every workset matches one of these (empty: not tested). Workset1 and Shared Levels and Grids are always allowed.", "newworksets"),
         new("columns", "Column levels tested", "yes", "yes: a column that runs past the next level up is flagged (list the double-height ones in the comment). no: not tested.", "columns"),
         new("classification", "Classification parameter", "Assembly Code", "The type parameter holding the UniFormat code; every model type in use must have it filled.", "uniformat"),
