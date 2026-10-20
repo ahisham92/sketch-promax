@@ -1882,7 +1882,7 @@ internal static partial class FieldTest
         if (TestDoc(app, s, out var why) is not { } doc) return Fail(why);
         if (ChecklistMath.BuiltIn() is not { } def) return Fail("the built-in checklist can't be read");
         def.Rules["approvedworksets"] = "ST_*, Z_Link_*";
-        def.Rules["badparameters"] = "WSP*";
+        def.Rules["badparameters"] = "OTHERFIRM*";
         def.Rules["tbmodelname"] = "Sheet Name";
         def.Rules["viewfolders"] = "Discipline";
         var facts = ChecklistFacts.Read(doc, def);
