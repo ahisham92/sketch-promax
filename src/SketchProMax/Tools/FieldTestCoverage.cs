@@ -164,6 +164,9 @@ internal static class FieldTestCoverage
         new("checklist.fix_more", Issue, "Pre-submission checklist: the Fix buttons for title blocks, levels, worksets, backgrounds, view folders, model name, duplicates, submitted copy and NWC", How.Probe, "",
             "on the test project a spare level is deleted, a bare sheet gets the title block, the model name and a view folder value are written, a column copied onto itself is deleted again, " +
             "the worksets and backgrounds fixes run, then all rolled back; the submitted copy is named _S03_R00 then R01, and a package without .ifc exports the NWC only"),
+        new("checklist.fix_standards", Issue, "Pre-submission checklist: the Fix buttons for units, UniFormat, URS names, view templates and type names, and Select these in Revit", How.Probe, "",
+            "on the test project the units are set to mm, every type in use gets an Assembly Code, a floor plan on a sheet gets the mapped template, a type is renamed from the suggestions, " +
+            "the URS naming runs and a wall is selected, then all rolled back"),
         new("checklist.details", Issue, "Pre-submission checklist: the details panel, beside Revit, and the helper", How.Manual, "",
             "the details panel, side-by-side mode, the Fix confirmations and the helper's answer in the chat are judged by a person",
             "On a _detached copy: Pre-submission checklist (next to Chat), stage A. Each card shows a short title; click one: the panel on the right shows what the model found " +

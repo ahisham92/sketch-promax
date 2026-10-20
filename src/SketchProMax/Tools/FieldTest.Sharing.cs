@@ -36,6 +36,7 @@ internal static partial class FieldTest
             await Probe(s, "checklist.views", app => ChecklistViewsProbe(app, s), SharingFamily).ConfigureAwait(false);
             await Probe(s, "checklist.fix", app => ChecklistFixProbe(app, s), SharingFamily).ConfigureAwait(false);
             await Probe(s, "checklist.fix_more", app => ChecklistFixMoreProbe(app, s), SharingFamily).ConfigureAwait(false);
+            await Probe(s, "checklist.fix_standards", app => ChecklistFixStandardsProbe(app, s), SharingFamily).ConfigureAwait(false);
             await Probe(s, "checklist.rules", app => ChecklistRulesProbe(app, s), SharingFamily).ConfigureAwait(false);
             await Probe(s, "checklist.pdf", () => ChecklistPdfProbe(s.Folder), SharingFamily).ConfigureAwait(false);
             await Probe(s, "share.pack", () => SharePackProbe(s.Folder), SharingFamily).ConfigureAwait(false);

@@ -17,8 +17,21 @@ namespace SketchProMax.Tools;
 internal static class ChecklistFixes
 {
     /// <summary>What the fix does, for its button and the question asked before it runs; null when a check has none.</summary>
-    /// <summary><paramref name="Ask"/>: a value the window asks for before running (the answer is passed to Run; empty is allowed).</summary>
-    public sealed record Offer(string Button, string Question, bool ChangesModel = true, string? Ask = null);
+    /// <summary>
+    /// <paramref name="Ask"/>: a value the window asks for before running (the answer is passed to Run; empty is allowed).
+    /// <paramref name="Preview"/>: the window first shows what would change (Suggest) for the user to edit, and passes the
+    /// edited list to Run. <paramref name="Fix"/>: the fix Run is called with, when not the check's own key.
+    /// </summary>
+    public sealed record Offer(string Button, string Question, bool ChangesModel = true, string? Ask = null, bool Preview = false, string? Fix = null);
+
+    /// <summary>Every fix a check offers: its own, then any other (levels can also be named like the URS).</summary>
+    public static List<Offer> Offers(string key, ChecklistMath.Definition? def = null)
+    {
+        var list = new List<Offer>();
+        if (For(key, def) is { } own) list.Add(own);
+        if (key == "levels" && For("scopeboxes", def) is { } urs) list.Add(urs);
+        return list;
+    }
 
     public static Offer? For(string key, ChecklistMath.Definition? def = null) => key switch
     {
@@ -41,6 +54,18 @@ internal static class ChecklistFixes
             $"Write the model's file name into {Named(ChecklistMath.Rule(def, "tbmodelname"), "the sheet parameter that shows the model name")} on every sheet where it differs?"),
         "duplicates" => new("Delete the identical instances",
             "Delete the copies Revit warns about as identical instances in the same place, keeping one of each?"),
+        "units" => new("Set the project units",
+            $"Set the project units to {Named(ChecklistMath.Rule(def, "units"), "the Project units in Checking rules")} (Manage > Project Units)? Other units are left as they are."),
+        "uniformat" => new("Fill the UniFormat codes",
+            $"Write the UniFormat code into {Named(ChecklistMath.RuleList(ChecklistMath.Rule(def, "classification")).FirstOrDefault() ?? "", "the classification parameter")} of every model type in use that has none, " +
+            $"from {Named(ChecklistMath.Rule(def, "uniformatmap"), "UniFormat code for each category or type in Checking rules (set it first)")}? Types already filled are left alone."),
+        "scopeboxes" => new("Name levels and scope boxes like the URS", 
+            "Rename each level to the name of the URS link's level at the same height, and each scope box to the name of the URS link's scope box in the same place? " +
+            "The URS link must be loaded. Ones with no match in the URS keep their names.", Fix: "scopeboxes"),
+        "viewtemplates" => new("Apply the view templates by view type",
+            $"Apply the view template for each view type ({Named(ChecklistMath.Rule(def, "templatemap"), "set View template for each view type in Checking rules first")}) to every view on a sheet that has another one or none?"),
+        "familynames" => new("Rename the types",
+            $"Rename the model types in use that aren't named {Named(ChecklistMath.Rule(def, "typenames"), "the Type name pattern")}? You see each suggested name first and can change or untick it.", Preview: true),
         "submission" => new("Save the submitted copy",
             $"Copy the saved model next to it, named with {Named(ChecklistMath.Rule(def, "submission"), "_S03_R00")} added (the first number not taken)? The model itself isn't changed; save it first.", ChangesModel: false),
         "links" => new("Unload the Revit links", "Unload every Revit link in this model? Manage Links can reload them."),
@@ -80,6 +105,11 @@ internal static class ChecklistFixes
             case "tbmodelname": return ModelName(doc, def);
             case "duplicates": return Duplicates(doc);
             case "submission": return Submission(doc, def);
+            case "units": return Units(doc, def);
+            case "uniformat": return UniFormat(doc, def);
+            case "scopeboxes": return UrsNames(doc);
+            case "viewtemplates": return Templates(doc, def);
+            case "familynames": return RenameTypes(doc, answer);
             case "nwcsettings" or "ifcsettings" or "nwcdate":
                 return ChecklistExports.Export(doc, def);
             case "parameters":
@@ -181,6 +211,8 @@ internal static class ChecklistFixes
     private static bool Revit(Exception ex) => ex is Autodesk.Revit.Exceptions.ApplicationException or Autodesk.Revit.Exceptions.ArgumentException or Autodesk.Revit.Exceptions.InvalidOperationException;
 
     private static string Plural(int n, string what) => $"{n} {what}{(n == 1 ? "" : "s")}";
+
+    private static string Plural(int n, string one, string many) => $"{n} {(n == 1 ? one : many)}";
 
     /// <summary>Every sheet's title block becomes the office's; sheets with none get it. The landing page's is left alone.</summary>
     private static string TitleBlocks(Document doc, ChecklistMath.Definition? def)
@@ -430,6 +462,221 @@ internal static class ChecklistFixes
         try { File.Copy(path, target, false); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return $"Couldn't save {Path.GetFileName(target)} ({ex.Message})."; }
         return $"Saved {Path.GetFileName(target)} next to the model." + (doc.IsWorkshared ? " It's a copy of a workshared file: open it with Detach from Central and save it once before you submit it." : "");
+    }
+
+    private static string Units(Document doc, ChecklistMath.Definition? def)
+    {
+        var wanted = ChecklistMath.ParseUnits(ChecklistMath.Rule(def, "units"));
+        if (wanted.Count == 0) return "No Project units are set in Checking rules (e.g. Length mm 0, Angle degrees 2).";
+        var units = doc.GetUnits();
+        var done = new List<string>();
+        foreach (var u in wanted)
+        {
+            var (spec, unit, accuracy) = ChecklistFacts.UnitTarget(u);
+            var old = units.GetFormatOptions(spec);
+            var fo = new FormatOptions(unit);
+            if (fo.IsValidAccuracy(accuracy)) fo.Accuracy = accuracy;
+            // Keep the symbol shown when the new unit has it, else the unit's own (° for degrees) or none.
+            var symbols = FormatOptions.GetValidSymbols(unit);
+            var symbol = symbols.FirstOrDefault(x => x.Equals(old.GetSymbolTypeId())) ?? (u.Kind == "angle" ? symbols.FirstOrDefault(x => !x.Empty()) : null);
+            if (symbol is not null && fo.CanHaveSymbol()) fo.SetSymbolTypeId(symbol);
+            units.SetFormatOptions(spec, fo);
+            done.Add($"{u.Kind} {u.Unit}, {u.Decimals} decimals");
+        }
+        using (var t = new Transaction(doc, "Sketch ProMax: set the project units"))
+        {
+            t.Start();
+            doc.SetUnits(units);
+            t.Commit();
+        }
+        return "Set the project units: " + string.Join("; ", done) + ".";
+    }
+
+    /// <summary>The Category>code (or type name pattern>code) pairs of the uniformatmap rule.</summary>
+    internal static List<(string Key, string Code)> UniFormatMap(ChecklistMath.Definition? def) =>
+        ChecklistMath.RuleList(ChecklistMath.Rule(def, "uniformatmap")).Select(p => p.Split('>'))
+            .Where(p => p.Length == 2 && p[0].Trim().Length > 0 && p[1].Trim().Length > 0).Select(p => (p[0].Trim(), p[1].Trim())).ToList();
+
+    /// <summary>The code for a type: a pair naming its category (or the start of it), else one whose pattern matches its family or type name.</summary>
+    internal static string? UniFormatFor(string category, string family, string type, List<(string Key, string Code)> map) =>
+        map.Where(m => category.Equals(m.Key, StringComparison.OrdinalIgnoreCase) || category.StartsWith(m.Key, StringComparison.OrdinalIgnoreCase))
+            .Concat(map.Where(m => ChecklistMath.Like(type, m.Key) || ChecklistMath.Like(family, m.Key) || ChecklistMath.Like(family + ": " + type, m.Key)))
+            .Select(m => m.Code).FirstOrDefault();
+
+    private static string UniFormat(Document doc, ChecklistMath.Definition? def)
+    {
+        var names = ChecklistMath.RuleList(ChecklistMath.Rule(def, "classification"));
+        if (names.Count == 0) return "No classification parameter is set in Checking rules.";
+        var map = UniFormatMap(def);
+        if (map.Count == 0) return "Set UniFormat code for each category or type in Checking rules first (e.g. Structural Foundations>A1020, Floors>B1010).";
+        var types = ChecklistFacts.TypesOf(doc, ChecklistFacts.Instances(doc)).Where(t => !names.Any(n => ChecklistFacts.Filled(t.LookupParameter(n)))).ToList();
+        if (types.Count == 0) return $"Every model type in use has {names[0]} filled: nothing to fill.";
+        int filled = 0, failed = 0;
+        var left = new List<string>();
+        using (var t = new Transaction(doc, "Sketch ProMax: fill the UniFormat codes"))
+        {
+            t.Start();
+            foreach (var type in types)
+            {
+                var code = UniFormatFor(type.Category?.Name ?? "", type.FamilyName, type.Name, map);
+                var p = names.Select(n => type.LookupParameter(n)).FirstOrDefault(x => x is not null);
+                if (code is null || p is null || p.IsReadOnly || p.StorageType != StorageType.String) { left.Add(ChecklistFacts.TypeLabel(type)); continue; }
+                try { if (p.Set(code)) filled++; else failed++; }
+                catch (Exception ex) when (Revit(ex)) { failed++; }
+            }
+            t.Commit();
+        }
+        return $"Filled the UniFormat code of {Plural(filled, "type")}." +
+               (left.Count > 0 ? $" {Plural(left.Count, "type")} got none (no code set for them in Checking rules): {string.Join(", ", left.Take(8))}{(left.Count > 8 ? " and more" : "")}." : "") + Failed(failed);
+    }
+
+    /// <summary>Levels and scope boxes renamed like the URS link's: levels at the same height, scope boxes in the same place.</summary>
+    private static string UrsNames(Document doc)
+    {
+        var link = new FilteredElementCollector(doc).OfClass(typeof(RevitLinkInstance)).Cast<RevitLinkInstance>()
+            .FirstOrDefault(l => l.GetLinkDocument() is not null && (doc.GetElement(l.GetTypeId())?.Name ?? l.Name).IndexOf("URS", StringComparison.OrdinalIgnoreCase) >= 0);
+        if (link?.GetLinkDocument() is not { } urs) return "No loaded linked model has URS in its name: load the URS link (Manage Links), then press Fix it again.";
+        var tf = link.GetTotalTransform();
+        const double sameHeight = 0.01; // feet, about 3 mm
+        const double samePlace = 0.5;   // feet, about 150 mm
+        var renames = new List<(Element E, string Name)>();
+        var hostLevels = new FilteredElementCollector(doc).OfClass(typeof(Autodesk.Revit.DB.Level)).Cast<Autodesk.Revit.DB.Level>().ToList();
+        foreach (var l in new FilteredElementCollector(urs).OfClass(typeof(Autodesk.Revit.DB.Level)).Cast<Autodesk.Revit.DB.Level>())
+        {
+            var z = tf.OfPoint(new XYZ(0, 0, l.ProjectElevation)).Z;
+            if (hostLevels.FirstOrDefault(h => Math.Abs(h.ProjectElevation - z) < sameHeight) is { } match && match.Name != l.Name) renames.Add((match, l.Name));
+        }
+        XYZ? Centre(Element e) => e.get_BoundingBox(null) is { } b ? (b.Min + b.Max) / 2 : null;
+        var hostBoxes = new FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_VolumeOfInterest).WhereElementIsNotElementType().ToList();
+        foreach (var b in new FilteredElementCollector(urs).OfCategory(BuiltInCategory.OST_VolumeOfInterest).WhereElementIsNotElementType())
+        {
+            if (Centre(b) is not { } c) continue;
+            var at = tf.OfPoint(c);
+            if (hostBoxes.FirstOrDefault(h => Centre(h) is { } hc && hc.DistanceTo(at) < samePlace) is { } match && match.Name != b.Name) renames.Add((match, b.Name));
+        }
+        if (renames.Count == 0) return "Every level and scope box with a match in the URS already has its name (or none matches by height or place).";
+        int done = 0;
+        var taken = new List<string>();
+        using (var t = new Transaction(doc, "Sketch ProMax: name levels and scope boxes like the URS"))
+        {
+            t.Start();
+            foreach (var (e, name) in renames)
+            {
+                try { e.Name = name; done++; }
+                catch (Exception ex) when (Revit(ex)) { taken.Add($"{e.Name} (the name {name} is taken)"); }
+            }
+            t.Commit();
+        }
+        return $"Renamed {Plural(done, "level or scope box", "levels and scope boxes")} like the URS ({link.Name.Split(':')[0].Trim()})." + (taken.Count > 0 ? " Not renamed: " + string.Join(", ", taken.Take(6)) + "." : "");
+    }
+
+    /// <summary>A view type named in the templatemap rule: Floor Plan, Structural Plan, Ceiling Plan, Section, Elevation, 3D View, Detail, Drafting, Area Plan.</summary>
+    internal static bool SameViewType(ViewType type, string name)
+    {
+        var n = new string(name.Where(char.IsLetterOrDigit).ToArray()).ToLowerInvariant();
+        if (n.EndsWith("view", StringComparison.Ordinal) && n.Length > 4) n = n.Substring(0, n.Length - 4);
+        return type switch
+        {
+            ViewType.FloorPlan => n is "floorplan" or "plan",
+            ViewType.EngineeringPlan => n is "structuralplan" or "engineeringplan",
+            ViewType.CeilingPlan => n is "ceilingplan" or "reflectedceilingplan" or "rcp",
+            ViewType.ThreeD => n is "3d" or "threed",
+            ViewType.DraftingView => n is "drafting",
+            _ => n == type.ToString().ToLowerInvariant(),
+        };
+    }
+
+    private static string Templates(Document doc, ChecklistMath.Definition? def)
+    {
+        var map = ChecklistMath.RuleList(ChecklistMath.Rule(def, "templatemap")).Select(p => p.Split('>'))
+            .Where(p => p.Length == 2 && p[0].Trim().Length > 0 && p[1].Trim().Length > 0).Select(p => (Type: p[0].Trim(), Template: p[1].Trim())).ToList();
+        if (map.Count == 0) return "Set View template for each view type in Checking rules first (e.g. Floor Plan>ST_Plan, Section>ST_Section).";
+        var templates = new FilteredElementCollector(doc).OfClass(typeof(View)).Cast<View>().Where(v => v.IsTemplate).ToList();
+        var views = new FilteredElementCollector(doc).OfClass(typeof(Viewport)).Cast<Viewport>().Select(vp => doc.GetElement(vp.ViewId) as View)
+            .Where(v => v is not null && !v.IsTemplate).Cast<View>().GroupBy(v => v.Id.Value).Select(g => g.First()).ToList();
+        int applied = 0, failed = 0;
+        var missing = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        using (var t = new Transaction(doc, "Sketch ProMax: apply view templates by view type"))
+        {
+            t.Start();
+            foreach (var v in views)
+            {
+                if (map.FirstOrDefault(m => SameViewType(v.ViewType, m.Type)) is not { Template: { } name }) continue;
+                var tpl = templates.FirstOrDefault(x => x.Name.Equals(name, StringComparison.OrdinalIgnoreCase)) ?? templates.FirstOrDefault(x => ChecklistMath.Like(x.Name, name));
+                if (tpl is null) { missing.Add(name); continue; }
+                if (v.ViewTemplateId == tpl.Id) continue;
+                try
+                {
+                    if (!v.IsValidViewTemplate(tpl.Id)) { failed++; continue; }
+                    v.ViewTemplateId = tpl.Id;
+                    applied++;
+                }
+                catch (Exception ex) when (Revit(ex)) { failed++; }
+            }
+            t.Commit();
+        }
+        return $"Applied the view template to {Plural(applied, "view")} on sheets." + (missing.Count > 0 ? " Not in the model: " + string.Join(", ", missing) + "." : "") +
+               (failed > 0 ? $" {failed} views couldn't take their template (it is for another kind of view, or they are in use)." : "");
+    }
+
+    /// <summary>
+    /// Suggested names for the model types in use not named like the typenames rule: one line each, "id\tfamily: old\tnew".
+    /// A suggestion keeps the old name's words, joined with _, behind the category's and the discipline's short codes.
+    /// </summary>
+    public static string Suggest(Document doc, string key, ChecklistMath.Definition? def)
+    {
+        if (key != "familynames") return "";
+        var pattern = ChecklistMath.Rule(def, "typenames");
+        if (pattern.Length == 0) return "";
+        var file = FileName(doc);
+        var discipline = ChecklistMath.NameParts(file).Discipline;
+        var lines = new List<string>();
+        foreach (var t in ChecklistFacts.TypesOf(doc, ChecklistFacts.Instances(doc)).Where(t => !ChecklistMath.LikeAny(t.Name, pattern)).OrderBy(t => t.Category?.Name).ThenBy(t => t.Name))
+            lines.Add($"{t.Id.Value}\t{ChecklistFacts.TypeLabel(t)}\t{SuggestName(t.Name, t.Category?.Name ?? "", discipline, pattern)}");
+        return string.Join("\n", lines);
+    }
+
+    internal static string SuggestName(string name, string category, string discipline, string pattern)
+    {
+        var words = System.Text.RegularExpressions.Regex.Replace(name.Trim(), @"[^A-Za-z0-9.]+", "_").Trim('_');
+        if (ChecklistMath.LikeAny(words, pattern)) return words;
+        var parts = category.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+        var code = parts.Length > 1 ? string.Concat(parts.Take(2).Select(p => char.ToUpperInvariant(p[0]))) : category.Length >= 2 ? category.Substring(0, 2).ToUpperInvariant() : "XX";
+        var built = string.Join("_", new[] { code, discipline.ToUpperInvariant(), words }.Where(x => x.Length > 0));
+        return built;
+    }
+
+    private static string RenameTypes(Document doc, string? answer)
+    {
+        var wanted = (answer ?? "").Split('\n').Select(l => l.Split('\t')).Where(p => p.Length == 2 && long.TryParse(p[0], out _) && p[1].Trim().Length > 0)
+            .Select(p => (Id: new ElementId(long.Parse(p[0], System.Globalization.CultureInfo.InvariantCulture)), Name: p[1].Trim())).ToList();
+        if (wanted.Count == 0) return "No type was picked to rename.";
+        int done = 0;
+        var failed = new List<string>();
+        using (var t = new Transaction(doc, "Sketch ProMax: rename types"))
+        {
+            t.Start();
+            foreach (var (id, name) in wanted)
+            {
+                if (doc.GetElement(id) is not ElementType type || type.Name == name) continue;
+                try { type.Name = name; done++; }
+                catch (Exception ex) when (Revit(ex)) { failed.Add($"{type.Name} → {name}"); }
+            }
+            t.Commit();
+        }
+        return $"Renamed {Plural(done, "type")}." + (failed.Count > 0 ? " Not renamed (the name is taken or not allowed): " + string.Join(", ", failed.Take(6)) + "." : "");
+    }
+
+    /// <summary>Selects these elements in the active model and zooms to them (Select these in Revit); a sentence saying what it did.</summary>
+    public static string Select(UIDocument uidoc, IReadOnlyList<long> ids)
+    {
+        var doc = uidoc.Document;
+        var found = ids.Select(i => new ElementId(i)).Where(i => doc.GetElement(i) is not null).ToList();
+        if (found.Count == 0) return "None of them is in this model any more.";
+        uidoc.Selection.SetElementIds(found);
+        try { uidoc.ShowElements(found); }
+        catch (Exception ex) when (Revit(ex)) { return $"Selected {Plural(found.Count, "element")}; no open view shows them, so open a 3D view to see them."; }
+        return $"Selected {Plural(found.Count, "element")} and zoomed to them" + (found.Count < ids.Count ? $" ({ids.Count - found.Count} are gone)" : "") + ".";
     }
 
     private static string FileName(Document doc)
