@@ -172,8 +172,24 @@ internal static class ChecklistTests
         var keyed = built.Items.Where(i => i.Auto.Length > 0 && AutoKey(i.Check) != i.Auto).Select(i => $"#{i.Number} {i.Auto} vs {AutoKey(i.Check)}").ToList();
         check("checklist: each built-in check's model test is the one its wording finds (so an imported Excel gets the same)", keyed.Count == 0, string.Join("; ", keyed));
         var manualLeft = built.Items.Where(i => i.Auto.Length == 0).Select(i => i.Number).ToList();
-        check("checklist: only checks needing data from outside the model or a person's judgement stay manual",
-            manualLeft.SequenceEqual(["4", "16", "20", "21", "33", "36", "44", "46", "49", "50", "51", "53", "54", "55", "56", "57"]), string.Join(", ", manualLeft));
+        check("checklist: only checks needing a person's judgement stay manual",
+            manualLeft.SequenceEqual(["16", "20", "21", "33"]), string.Join(", ", manualLeft));
+        var (missingDrawings, extraSheets) = CompareDrawingList(["Drawing list", "S-101", "S-102", "S-205", "A-101", "Rev P01", "Note"], ["S-101", "S-102", "S-300"]);
+        check("checklist: the stage's drawing list against the sheets (only numbers shaped like the model's count)",
+            missingDrawings.SequenceEqual(["S-205"]) && extraSheets.SequenceEqual(["S-300"]), string.Join(",", missingDrawings) + " / " + string.Join(",", extraSheets));
+        var xml = """
+            <exchange><batchtest><clashtests>
+            <clashtest name="SC_Vs_MP" test_type="hard"><clashresults><clashresult name="Clash1" status="active"/><clashresult name="Clash2" status="resolved"/></clashresults></clashtest>
+            <clashtest name="MP_Vs_SC"><clashresults><clashresult name="Clash1" status="new"/></clashresults></clashtest>
+            </clashtests></batchtest></exchange>
+            """;
+        var clashTests = ClashReport(xml);
+        var ourTests = OurClashTests(clashTests, "SC");
+        check("checklist: a Navisworks clash report's open clashes, in the tests this trade fixes (Trade-1_Vs_Trade-2: Trade 1 fixes)",
+            clashTests.Count == 2 && ourTests.Count == 1 && ourTests[0] is { Name: "SC_Vs_MP", Open: 1, Closed: 1 } && OurClashTests(clashTests, "").Count == 2
+            && ClashReport("<td>New</td><td>Approved</td><td>Active</td>") is [{ Open: 2, Closed: 1 }], string.Join("; ", clashTests));
+        check("checklist: the last publishing day", LastDay(new DateTime(2026, 10, 21, 9, 0, 0), DayOfWeek.Monday) == new DateTime(2026, 10, 19)
+            && LastDay(new DateTime(2026, 10, 19, 23, 0, 0), DayOfWeek.Monday) == new DateTime(2026, 10, 19), "");
         var rulesPath = Path.Combine(Path.GetTempPath(), $"spm-checklist-{Guid.NewGuid():N}.xlsx");
         try
         {

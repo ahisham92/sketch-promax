@@ -1020,14 +1020,16 @@ internal sealed class ChecklistWindow : Window
     {
         if (Brand.IsBusy(button)) return;
         var detached = _facts.Hints.TryGetValue("links", out var links) && links.Text.StartsWith("This copy is detached", StringComparison.Ordinal);
-        var question = offer.Question + "\n\nThis changes the model " + Shown(_facts.Model) + ". Ctrl+Z in Revit undoes it" + (key == "links" ? " (for links: reload them in Manage Links)" : "") + "." +
-                       (detached ? "" : "\n\nThis doesn't look like a detached copy: fixes are meant for the copy you submit.");
+        var question = offer.Question + (!offer.ChangesModel ? "" :
+                       "\n\nThis changes the model " + Shown(_facts.Model) + ". Ctrl+Z in Revit undoes it" + (key == "links" ? " (for links: reload them in Manage Links)" : "") + "." +
+                       (detached ? "" : "\n\nThis doesn't look like a detached copy: fixes are meant for the copy you submit."));
         // A plain message box: this window is modeless, outside a Revit API call, where Revit's own dialogs aren't allowed.
         if (MessageBox.Show(this, question, "Sketch ProMax: fix it", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes) return;
-        Brand.SetBusy(button, true, "Fixing…");
+        Brand.SetBusy(button, true, offer.ChangesModel ? "Fixing…" : "Working…");
+        var def = _def;
         try
         {
-            said.Text = await OnModel(ui => ChecklistFixes.Run(ui, key));
+            said.Text = await OnModel(ui => ChecklistFixes.Run(ui, key, def));
             said.Visibility = Visibility.Visible;
             ActivityLog.Note("checklist_fix", key + ": " + said.Text);
         }
@@ -1557,7 +1559,8 @@ internal sealed class ChecklistWindow : Window
                 if (Signature.ForWord(SignaturePath(sig)) is { } img) images[sig.Role] = img;
             var folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Sketch ProMax", "Checklists");
             var model = Path.GetFileNameWithoutExtension(ChecklistMath.WorkingName(_facts.Model));
-            var name = $"{ChecklistMath.SafeName(model)} pre-submission checklist {DateTime.Now:yyyy-MM-dd HHmm}";
+            // READY or NOT READY in the name, so check 46 can find the signed checklist.
+            var name = $"{ChecklistMath.SafeName(model)} pre-submission checklist {DateTime.Now:yyyy-MM-dd HHmm} - {(ChecklistMath.Count(_def.Items, _state).Ready ? "READY" : "NOT READY")}";
             var docx = Path.Combine(folder, name + ".docx");
             var info = new ChecklistDocx.Info(_facts.Model, Update.Updater.CurrentText, DateTime.Now,
                 ChecklistMath.AutoLine(ChecklistMath.Auto(_def.Items, Verdict, _state), ChecklistMath.Disagree(_def.Items, _state, Verdict)));

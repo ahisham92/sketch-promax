@@ -108,6 +108,14 @@ internal static class ChecklistMath
         new("clashcategories", "Categories clashed against each other", "auto", "auto: picked from the discipline in the file name (STR: structural columns, framing, foundations, floors and walls). Empty: not tested.", "selfclash"),
         new("modelscore", "Lowest model check score (%)", "90", "Sketch ProMax's model check (warnings, duplicates, beams on nothing, columns off grid and more) must score at least this. " +
             "It stands in for the Model Checker template; keep that score in the QA/QC record too (empty: not tested).", "modelscore"),
+        new("midp", "MIDP file", "", "The latest MIDP (.xlsx or .csv), or the folder it is saved in (the newest is read); the model's number must be in it (empty: not tested).", "midp"),
+        new("stagelist", "Drawing list for the stage", "", "The stage's drawing list (.xlsx or .csv), or its folder (the newest is read); every drawing number in it shaped like this model's sheet numbers must be a sheet (empty: not tested).", "stagelist"),
+        new("clashreport", "Navisworks clash report", "", "The federated model's clash report (.xml or .html), or the folder it is saved in (the newest is read); none of your clashes may be New, Active or Reviewed (empty: not tested).", "federated"),
+        new("healthcheck", "Model Health Check report name", "*-RPT-*.pdf", "The Health Check report's file name pattern, looked for in the package folder, else next to the model (empty: only the signed checklist is checked).", "signed"),
+        new("ifcsetup", "IFC export setup file (.json)", "", "The office's IFC export setup saved from Revit's IFC exporter; Export the NWC and IFC applies it (empty: IFC 4x3, shared coordinates, visible elements only, no links).", "ifcsettings"),
+        new("nwcday", "Day the NWC is published", "Monday", "The newest NWC must be from this day of the week or later, and newer than the model's last save (empty: only newer than the model).", "nwcdate"),
+        new("packagefolder", "Package folder", "", "Where the e-Transmit package is saved (a folder, or a ZIP in it: the newest is read). The package checks look in it and open the packaged model (empty: not tested).", "packagecontents"),
+        new("packagecontents", "Files the package must have", ".rvt, .ifc, .nwc, .dwg, .pdf", "File types the package must contain, e.g. add .xlsx for a BOQ.", "packagecontents"),
     ];
 
     /// <summary>The rule's value for this checklist: set, else the default ("" turns that test off).</summary>
@@ -417,6 +425,18 @@ internal static class ChecklistMath
         ("schedules", Rx(@"^Schedules you use stay")),
         ("selfclash", Rx(@"no clashes inside your own trade")),
         ("modelscore", Rx(@"^Model Checker template is run")),
+        ("midp", Rx(@"model number comes from the latest MIDP")),
+        ("stagelist", Rx(@"^The drawing list has everything")),
+        ("federated", Rx(@"clash tests in the federated model")),
+        ("signed", Rx(@"^The checklist is signed")),
+        ("nwcsettings", Rx(@"^NWC settings")),
+        ("ifcsettings", Rx(@"^IFC:\s")),
+        ("nwcdate", Rx(@"NWC is published on")),
+        ("etransmit", Rx(@"^e-Transmit settings")),
+        ("backgrounds", Rx(@"another trade as background")),
+        ("civil3d", Rx(@"^Civil 3D only")),
+        ("packagecontents", Rx(@"^Package has everything")),
+        ("packageopens", Rx(@"^Open the package from a clean folder")),
     ];
 
     private static Regex Rx(string pattern) => new(pattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -496,6 +516,93 @@ internal static class ChecklistMath
         }
         return list;
     }
+
+    // ---- Files the checks read: lists, reports, dates ----------------------------------------------------------------
+
+    /// <summary>
+    /// A rule naming a file or the folder it is saved in: the file itself, or the newest file in the folder with one of
+    /// <paramref name="extensions"/>; "" when there is none.
+    /// </summary>
+    public static string NewestFile(string fileOrFolder, params string[] extensions)
+    {
+        var path = (fileOrFolder ?? "").Trim().Trim('"');
+        if (path.Length == 0) return "";
+        if (File.Exists(path)) return path;
+        if (!Directory.Exists(path)) return "";
+        return Directory.EnumerateFiles(path).Where(f => extensions.Any(e => f.EndsWith(e, StringComparison.OrdinalIgnoreCase)) && !Path.GetFileName(f).StartsWith("~$", StringComparison.Ordinal))
+            .OrderByDescending(File.GetLastWriteTimeUtc).FirstOrDefault() ?? "";
+    }
+
+    /// <summary>Every non-empty cell of an .xlsx (all sheets) or the fields of a .csv / .txt, as text.</summary>
+    public static List<string> FileCells(string path)
+    {
+        if (path.EndsWith(".xlsx", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".xlsm", StringComparison.OrdinalIgnoreCase))
+        {
+            using var stream = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            return ReadSheets(stream).Values.SelectMany(rows => rows.SelectMany(r => r.Cells.Values)).Select(c => c.Trim()).Where(c => c.Length > 0).ToList();
+        }
+        var text = File.ReadAllText(path);
+        return text.Split(['\n', '\r', ',', ';', '\t'], StringSplitOptions.RemoveEmptyEntries).Select(c => c.Trim().Trim('"').Trim()).Where(c => c.Length > 0).ToList();
+    }
+
+    /// <summary>A drawing number's shape: its digits as #, the rest kept ("S-101" and "S-205" are both "S-###").</summary>
+    public static string Shape(string number) => Regex.Replace((number ?? "").Trim().ToUpperInvariant(), @"\d", "#");
+
+    /// <summary>
+    /// The stage's drawing list against the model's sheets: the list's numbers shaped like the model's sheet numbers that
+    /// aren't sheets (Missing), and the model's sheets the list doesn't have (Extra).
+    /// </summary>
+    public static (List<string> Missing, List<string> Extra) CompareDrawingList(IEnumerable<string> listCells, IReadOnlyCollection<string> sheetNumbers)
+    {
+        var sheets = new HashSet<string>(sheetNumbers.Select(n => n.Trim()), StringComparer.OrdinalIgnoreCase);
+        var shapes = new HashSet<string>(sheets.Select(Shape), StringComparer.Ordinal);
+        var listed = listCells.Select(c => c.Trim()).Where(c => c.Length > 1 && shapes.Contains(Shape(c))).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var missing = listed.Where(n => !sheets.Contains(n)).OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
+        var listedSet = new HashSet<string>(listed, StringComparer.OrdinalIgnoreCase);
+        var extra = sheets.Where(n => !listedSet.Contains(n)).OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
+        return (missing, extra);
+    }
+
+    /// <summary>A Navisworks clash report's open clashes (New, Active, Reviewed) per test, from its XML or HTML.</summary>
+    public sealed record ClashTest(string Name, int Open, int Closed);
+
+    /// <summary>
+    /// The clash tests in a Navisworks report and their open and closed clashes. XML reports give each test; an HTML
+    /// report is counted as one test named "report".
+    /// </summary>
+    public static List<ClashTest> ClashReport(string text)
+    {
+        static bool IsOpen(string status) => status.ToLowerInvariant() is "new" or "active" or "reviewed";
+        var tests = new List<ClashTest>();
+        if (Regex.IsMatch(text, @"<clashtest\b", RegexOptions.IgnoreCase))
+        {
+            foreach (Match t in Regex.Matches(text, @"<clashtest\b(?<attrs>[^>]*)>(?<body>.*?)</clashtest>", RegexOptions.IgnoreCase | RegexOptions.Singleline))
+            {
+                var name = Regex.Match(t.Groups["attrs"].Value, @"\bname=""(?<n>[^""]*)""", RegexOptions.IgnoreCase).Groups["n"].Value;
+                var statuses = Regex.Matches(t.Groups["body"].Value, @"<clashresult\b[^>]*\bstatus=""(?<s>[^""]*)""", RegexOptions.IgnoreCase).Cast<Match>().Select(m => m.Groups["s"].Value).ToList();
+                tests.Add(new ClashTest(System.Net.WebUtility.HtmlDecode(name), statuses.Count(IsOpen), statuses.Count(s => !IsOpen(s))));
+            }
+            return tests;
+        }
+        var cells = Regex.Matches(text, @">\s*(?<s>New|Active|Reviewed|Approved|Resolved)\s*<", RegexOptions.IgnoreCase).Cast<Match>().Select(m => m.Groups["s"].Value).ToList();
+        if (cells.Count > 0) tests.Add(new ClashTest("report", cells.Count(IsOpen), cells.Count(s => !IsOpen(s))));
+        return tests;
+    }
+
+    /// <summary>
+    /// The clash tests this trade fixes: in "Trade-1_Vs_Trade-2" the first trade fixes. A test whose first trade names
+    /// <paramref name="discipline"/> is ours; with no discipline, or no test named that way, every test counts.
+    /// </summary>
+    public static List<ClashTest> OurClashTests(IReadOnlyList<ClashTest> tests, string discipline)
+    {
+        if ((discipline ?? "").Length == 0) return tests.ToList();
+        var ours = tests.Where(t => Regex.Match(t.Name, @"^\s*(?<first>.+?)\s*[_\- ]\s*vs\.?\s*[_\- ]", RegexOptions.IgnoreCase) is { Success: true } m
+                                    && Regex.IsMatch(m.Groups["first"].Value, @"(^|[^A-Za-z])" + Regex.Escape(discipline) + @"($|[^A-Za-z])", RegexOptions.IgnoreCase)).ToList();
+        return ours.Count > 0 ? ours : tests.ToList();
+    }
+
+    /// <summary>The start of the most recent <paramref name="day"/> on or before <paramref name="now"/>.</summary>
+    public static DateTime LastDay(DateTime now, DayOfWeek day) => now.Date.AddDays(-(((int)now.DayOfWeek - (int)day + 7) % 7));
 
     // ---- Reading the Excel sheet ----------------------------------------------------------------------------------
 
