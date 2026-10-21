@@ -42,7 +42,7 @@ internal sealed class JobCardModel
 
     /// <summary>Read-only helpers and job plumbing: not steps of their own on the card.</summary>
     public static bool Quiet(string tool) =>
-        tool is "wait_for_job" or "cancel_job" or "get_model_context" or "Read" or "Glob" or "Grep" or "help_guide" ||
+        tool is "wait_for_job" or "cancel_job" or "chat_jobs" or "get_model_context" or "Read" or "Glob" or "Grep" or "help_guide" ||
         tool.StartsWith("get_", StringComparison.Ordinal) || tool.StartsWith("list_", StringComparison.Ordinal) ||
         tool.StartsWith("find_", StringComparison.Ordinal);
 

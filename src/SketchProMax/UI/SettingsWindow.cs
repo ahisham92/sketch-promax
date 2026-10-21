@@ -41,6 +41,7 @@ public sealed class SettingsWindow : Window
     private readonly TextBlock _sigHint = Brand.Text("", Brand.K.Muted, size: 11);
     private readonly TextBox _checklistPath = new();
     private readonly ComboBox _helper = new() { MinHeight = 26 };
+    private readonly ComboBox _jobLimit = new() { MinHeight = 26, MinWidth = 56, Margin = new Thickness(6, 0, 6, 0) };
     private string _sigImage = "";
     private readonly TabControl _tabs = new();
     private readonly List<(string Setting, FrameworkElement Control)> _placed = [];
@@ -70,6 +71,8 @@ public sealed class SettingsWindow : Window
         _checklistPath.Text = _settings.ChecklistPath ?? "";
         foreach (var (tag, text) in Tools.ChecklistHelper.Choices) _helper.Items.Add(new ComboBoxItem { Content = text, Tag = tag });
         _helper.SelectedIndex = Math.Max(0, Array.FindIndex(Tools.ChecklistHelper.Choices, c => c.Tag == Tools.ChecklistHelper.Parse(_settings.ChecklistHelper)));
+        for (var n = Chat.JobBoard.MinLimit; n <= Chat.JobBoard.MaxLimit; n++) _jobLimit.Items.Add(new ComboBoxItem { Content = n.ToString(System.Globalization.CultureInfo.CurrentCulture), Tag = n });
+        _jobLimit.SelectedIndex = Chat.JobBoard.ClampLimit(_settings.ChatJobLimit) - Chat.JobBoard.MinLimit;
 
         // One primary action: Save (Enter, except inside the standards box where Enter starts a new line). Esc cancels.
         var save = Brand.Button("Save", Brand.Weight.Primary);
@@ -115,7 +118,7 @@ public sealed class SettingsWindow : Window
         Closed += (_, _) => WriteLastTab((_tabs.SelectedItem as TabItem)?.Tag as string);
 
         // The bar at the foot: always visible, whatever the size of the window or the page.
-        var note = Brand.Text("Changes apply to new chats; chat animations change straight away.", Brand.K.Muted, size: 11);
+        var note = Brand.Text("Changes apply to new chats; chat animations and the number of jobs change straight away.", Brand.K.Muted, size: 11);
         _error.Margin = new Thickness(0, 6, 0, 0);
         _error.Visibility = Visibility.Collapsed;
         AutomationProperties.SetLiveSetting(_error, AutomationLiveSetting.Assertive);
@@ -295,6 +298,19 @@ public sealed class SettingsWindow : Window
             page.Children.Add(Place("ChatAnimations", radio));
         }
         page.Children.Add(Hint("When Windows' Show animations is off (Settings > Accessibility > Visual effects), the chat doesn't animate whatever you pick."));
+        page.Children.Add(SubHeading("Parallel jobs"));
+        page.Children.Add(Hint("The chat can split a request into jobs that work side by side, each shown as a card. Reads run together; changes to the model take turns, one at a time.", 2));
+        var jobRow = new WrapPanel { Margin = new Thickness(0, 8, 0, 0) };
+        var before = Brand.Text("Run up to");
+        before.VerticalAlignment = VerticalAlignment.Center;
+        jobRow.Children.Add(before);
+        AutomationProperties.SetName(_jobLimit, "How many jobs run at once");
+        AutomationProperties.SetHelpText(_jobLimit, "Each job uses your plan while it works; more jobs wait to start until one finishes. 3 is usual.");
+        jobRow.Children.Add(Place("ChatJobLimit", _jobLimit));
+        var after = Brand.Text("jobs at once (3 is usual; fewer keeps more of your plan's limits)");
+        after.VerticalAlignment = VerticalAlignment.Center;
+        jobRow.Children.Add(after);
+        page.Children.Add(jobRow);
         page.Children.Add(Hint("The model and Brief before running are chosen in the Chat pane, next to the message box.", 12));
         return page;
     }
@@ -725,6 +741,7 @@ public sealed class SettingsWindow : Window
         _settings.TimeTracking = _timeOn.IsChecked == true;
         var motion = _motion.FirstOrDefault(m => m.Button.IsChecked == true).Level;
         _settings.ChatAnimations = Chat.MotionLevels.Store(motion);
+        _settings.ChatJobLimit = (_jobLimit.SelectedItem as ComboBoxItem)?.Tag is int limit ? limit : Chat.JobBoard.DefaultLimit;
         _settings.IdleMinutes = idle;
         _settings.TimeRates = _rates is { Count: > 0 } ? _rates : null;
         _settings.SignatureName = _sigName.Text.Trim();

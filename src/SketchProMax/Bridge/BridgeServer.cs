@@ -24,7 +24,8 @@ namespace SketchProMax.Bridge;
 ///   {"method":"ping"}                                   -> {"ok":true,"pid":..,"revitVersion":"2025","documents":[..]}
 ///   {"method":"activate_document","title":"..."}       -> {"ok":true} or {"text":"...","isError":true}
 ///   {"method":"call_tool","name":"...","arguments":{}}  -> {"text":"...","isError":false,"pngBase64":null}
-///   (call_tool may carry "origin":"chat" when the in-Revit chat started the connector; see Approvals and ApprovalPolicy.)
+///   (call_tool may carry "origin":"chat" when the in-Revit chat started the connector; see Approvals and ApprovalPolicy,
+///   and "job":"<key>" when one of the chat's parallel jobs did; see JobTurns and Chat.JobBoard.)
 /// The tool catalogue is written to %APPDATA%\SketchProMax\tools.json at startup so the MCP server can
 /// list tools even before Revit is running.
 /// </summary>
@@ -284,11 +285,13 @@ public sealed class BridgeServer
                         ? a.EnumerateObject().ToDictionary(p => p.Name, p => p.Value.Clone())
                         : new Dictionary<string, JsonElement>();
                     var fromChat = root.TryGetProperty("origin", out var origin) && origin.ValueKind == JsonValueKind.String && origin.GetString() == "chat";
-                    var result = await CallTool(name, args, fromChat, ct).ConfigureAwait(false);
+                    // One of the chat's parallel jobs (its own session): its changes take turns with the other jobs'.
+                    var jobKey = fromChat && root.TryGetProperty("job", out var jk) && jk.ValueKind == JsonValueKind.String && jk.GetString() is { Length: > 0 } k ? k : null;
+                    var result = await CallTool(name, args, fromChat, ct, jobKey: jobKey).ConfigureAwait(false);
                     // Messages the user typed while the chat task ran go with the answer Claude reads now (any tool's,
                     // "still running" too). Not when the caller has gone: they then stay queued, and the chat sends
-                    // what is left when the turn ends.
-                    if (fromChat && !ct.IsCancellationRequested) result = result with { Text = JobNotes.Attach(name, result.Text) };
+                    // what is left when the turn ends. A job's calls never take them: they are the main chat's.
+                    if (fromChat && jobKey is null && !ct.IsCancellationRequested) result = result with { Text = JobNotes.Attach(name, result.Text) };
                     return JsonSerializer.Serialize(new
                     {
                         text = result.Text,
@@ -330,11 +333,16 @@ public sealed class BridgeServer
     /// <summary>How long a call waits for its result before returning "still running" (the connector gives up later than this).</summary>
     private const int InlineWaitMs = 45000;
 
-    private async Task<ToolResult> CallTool(string name, Dictionary<string, JsonElement> args, bool fromChat, CancellationToken ct, int handoffs = 0)
+    private async Task<ToolResult> CallTool(string name, Dictionary<string, JsonElement> args, bool fromChat, CancellationToken ct, int handoffs = 0,
+        string? jobKey = null)
     {
         // Job questions are answered here, without Revit's thread, so they work while Revit is busy.
         if (name == "wait_for_job") return await WaitForJobTool.AnswerAsync(new ToolArgs(args), ct).ConfigureAwait(false);
         if (name == "cancel_job") return CancelJobTool.Cancel(new ToolArgs(args));
+        // The chat's parallel jobs: only the main chat of the pane manages them (not a job, not the desktop app).
+        if (name == ChatJobsTool.ToolName) return ChatJobsTool.Answer(new ToolArgs(args), coordinator: fromChat && jobKey is null);
+        // A call of the main chat's task (its card, Pause, Skip step, Stop, Undo all and typed notes); a job's calls are its own.
+        var task = fromChat && jobKey is null;
 
         if (name == "run_learned_tool" && args.TryGetValue("name", out var inner) && inner.ValueKind == JsonValueKind.String
             && LearnedTools.Load(inner.GetString()!) is { } learned)
@@ -358,14 +366,25 @@ public sealed class BridgeServer
             return StillRunning(held);
         }
         // The chat task's Pause, Skip step and Stop between steps: a pause waits here, off Revit's thread, so Revit stays free.
-        if (fromChat && JobControl.Current is { } control && await BeforeStep(control, tool.Name, ct).ConfigureAwait(false) is { } early) return early;
+        if (task && JobControl.Current is { } control && await BeforeStep(control, tool.Name, ct).ConfigureAwait(false) is { } early) return early;
 
-        // One job at a time: say what is running (or queued) instead of waiting behind it until the call times out.
-        if (Jobs.Running is { } running) return Jobs.Busy(running);
-        if (_dispatcher.IsRunning) return Jobs.Busy(null);
-
-        var job = Jobs.TryCreate(tool.Name, out var inTheWay);
-        if (job is null) return Jobs.Busy(inTheWay);
+        Job? job;
+        JobTurns.Ticket? turn = null;
+        if (jobKey is null)
+        {
+            // One job at a time: say what is running (or queued) instead of waiting behind it until the call times out.
+            if (Jobs.Running is { } running) return Jobs.Busy(running);
+            if (_dispatcher.IsRunning) return Jobs.Busy(null);
+            job = Jobs.TryCreate(tool.Name, out var inTheWay);
+            if (job is null) return Jobs.Busy(inTheWay);
+        }
+        else
+        {
+            // A parallel job waits instead: a change for its turn in the one queue, then any call for Revit to be free.
+            (job, turn) = await TakeTurnAsync(jobKey, tool, ct).ConfigureAwait(false);
+            if (job is null) return ToolResult.Error(ct.IsCancellationRequested ? "The call was cancelled while it waited its turn; nothing was run."
+                : $"{tool.Name} waited more than {(int)TurnWait.TotalMinutes} minutes for its turn in Revit, so nothing was run. Call it again to wait again.");
+        }
         job.Key = key;
         // Dropped while still queued if the caller goes away or cancel_job asks; once started it runs to the end.
         var queued = CancellationTokenSource.CreateLinkedTokenSource(ct, job.Abandon.Token);
@@ -376,15 +395,15 @@ public sealed class BridgeServer
             Jobs.Running = job;
             job.StartedSignal.TrySetResult(true);
             // The chat task this call belongs to, for its whole run (a later task gets a control of its own).
-            var chat = fromChat ? JobControl.Current : null;
+            var chat = task ? JobControl.Current : null;
             JobControl.Tool = chat;
-            if (fromChat)
+            if (task)
             {
                 JobFeed.StepStarted(tool.Name);
                 JobUndo.BeginTool();
             }
             // Every way out of a chat call ends its step (the feed, and a skip is used up), rejected or not.
-            ToolResult Ended(ToolResult r) => fromChat && job.Continuation is null ? AfterStep(chat, tool.Name, r) : r;
+            ToolResult Ended(ToolResult r) => task && job.Continuation is null ? AfterStep(chat, tool.Name, r) : r;
             try
             {
                 // Time saved and AI time: from here (the approval wait included) to the end of the run.
@@ -413,10 +432,10 @@ public sealed class BridgeServer
             {
                 TimeLog.EndTool(null); // rejected or no model: only the wait is counted (no-op once ended above)
                 Approvals.Call = null;
-                if (fromChat) JobUndo.EndTool();
+                if (task) JobUndo.EndTool();
                 JobControl.Tool = null;
                 // The chat step of a call that handed on ends with its continuation (Jobs.Follow).
-                if (fromChat && job.Continuation is not null) job.AfterContinuation = r => AfterStep(chat, tool.Name, r);
+                if (task && job.Continuation is not null) job.AfterContinuation = r => AfterStep(chat, tool.Name, r);
                 // A tool that handed on to a continuation (the field test) is still running: the continuation ends the job.
                 if (job.Continuation is null)
                 {
@@ -426,6 +445,8 @@ public sealed class BridgeServer
             }
         }, queued.Token);
         job.Task = Jobs.Follow(job, firstCall);
+        // A parallel job's change holds its turn until its Revit job ends (a "still running" answer doesn't give it back).
+        if (turn is not null) _ = job.Task.ContinueWith(_ => JobTurns.Shared.Leave(turn), TaskScheduler.Default);
 
         // Revit picks work up within a second when idle. If it doesn't, it is showing a dialog (said within a few seconds,
         // with its title), busy with a long operation of its own, in an edit mode, or running a command of its own: say
@@ -442,12 +463,67 @@ public sealed class BridgeServer
         {
             // Only the user can end an edit mode or answer a dialog: hand it over, and send the call again on Continue.
             if (handoffs >= 3) return ToolResult.Error(why);
-            return await HandOverBlocked(key + "\n#" + handoffs, name, args, fromChat, tool.Name, why, handoffs, ct).ConfigureAwait(false);
+            return await HandOverBlocked(key + "\n#" + handoffs, name, args, fromChat, tool.Name, why, handoffs, ct, jobKey).ConfigureAwait(false);
         }
 
         await Task.WhenAny(job.Task, Task.Delay(InlineWaitMs, ct)).ConfigureAwait(false);
         if (job.Task.IsCompleted) return job.Task.Status == TaskStatus.RanToCompletion ? job.Task.Result : Jobs.Status(job);
         return StillRunning(job);
+    }
+
+    /// <summary>The longest a parallel job's call waits for its turn and for Revit (its session allows longer: ClaudeCli.JobStart).</summary>
+    internal static readonly TimeSpan TurnWait = TimeSpan.FromMinutes(30);
+
+    /// <summary>
+    /// A parallel job's call waits its turn: a change takes a ticket in the one queue (JobTurns) and waits to be at the
+    /// front; then any call waits for Revit to be free of other work and creates its Revit job. The job's card says
+    /// "Waiting its turn" meanwhile. Returns the Revit job and the ticket (the caller gives it back when the job ends);
+    /// a null job when the wait was cancelled or too long (no ticket is kept then).
+    /// </summary>
+    private async Task<(Job? Job, JobTurns.Ticket? Turn)> TakeTurnAsync(string jobKey, IRevitTool tool, CancellationToken ct)
+    {
+        var turns = JobTurns.Shared;
+        var ticket = tool.ModifiesModel ? turns.Enter(jobKey, tool.Name) : null;
+        var waited = false;
+        var started = DateTime.UtcNow;
+        try
+        {
+            if (ticket is not null && turns.Position(ticket) > 1)
+            {
+                waited = true;
+                void Moved() => Chat.ChatJobs.SetWaiting(jobKey, Math.Max(1, turns.Position(ticket)));
+                turns.Changed += Moved;
+                try
+                {
+                    Moved();
+                    if (!await turns.WaitAsync(ticket, TurnWait, ct).ConfigureAwait(false)) return (null, null);
+                }
+                finally { turns.Changed -= Moved; }
+            }
+            while (true)
+            {
+                ct.ThrowIfCancellationRequested();
+                if (Jobs.Running is null && !_dispatcher.IsRunning && Jobs.TryCreate(tool.Name, out _) is { } job)
+                {
+                    var keep = ticket;
+                    ticket = null; // handed to the caller
+                    return (job, keep);
+                }
+                if (DateTime.UtcNow - started > TurnWait) return (null, null);
+                if (!waited)
+                {
+                    waited = true;
+                    Chat.ChatJobs.SetWaiting(jobKey, 1);
+                }
+                await Task.Delay(400, ct).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) { return (null, null); }
+        finally
+        {
+            if (ticket is not null) turns.Leave(ticket);
+            if (waited) Chat.ChatJobs.SetWaiting(jobKey, null);
+        }
     }
 
     /// <summary>How long a call waits at a paused chat task before telling Claude to send it again (the connector waits longer).</summary>
@@ -516,7 +592,7 @@ public sealed class BridgeServer
     /// The step closes as Stop only when every caller has gone.
     /// </summary>
     private async Task<ToolResult> HandOverBlocked(string key, string name, Dictionary<string, JsonElement> args, bool fromChat, string tool, string why,
-        int handoffs, CancellationToken ct)
+        int handoffs, CancellationToken ct, string? jobKey)
     {
         BlockedCall entry;
         bool first;
@@ -526,7 +602,7 @@ public sealed class BridgeServer
             if (first) _blocked[key] = entry = new BlockedCall();
             entry.Waiters++;
         }
-        if (first) _ = Task.Run(() => RunBlocked(entry, key, name, args, fromChat, tool, why, handoffs));
+        if (first) _ = Task.Run(() => RunBlocked(entry, key, name, args, fromChat, tool, why, handoffs, jobKey));
         try
         {
             var gone = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -547,14 +623,15 @@ public sealed class BridgeServer
         }
     }
 
-    private async Task RunBlocked(BlockedCall entry, string key, string name, Dictionary<string, JsonElement> args, bool fromChat, string tool, string why, int handoffs)
+    private async Task RunBlocked(BlockedCall entry, string key, string name, Dictionary<string, JsonElement> args, bool fromChat, string tool, string why, int handoffs,
+        string? jobKey)
     {
         ToolResult result;
         try
         {
             var step = await BlockedStep(tool).ConfigureAwait(false);
             result = await Handoff.AskBlocked(step, entry.Stop.Token).ConfigureAwait(false)
-                ? await CallTool(name, args, fromChat, entry.Stop.Token, handoffs + 1).ConfigureAwait(false)
+                ? await CallTool(name, args, fromChat, entry.Stop.Token, handoffs + 1, jobKey).ConfigureAwait(false)
                 : ToolResult.Error(why);
         }
         catch (Exception ex) { result = ToolResult.Error($"{ex.GetType().Name}: {ex.Message}"); }

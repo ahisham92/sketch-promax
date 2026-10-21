@@ -171,6 +171,8 @@ internal static class ClaudeCli
         // file steps. The summary is what a shrink keeps; anything else is asked for or found with recall_chats.
         var denied = new List<string> { TranscriptRule };
         if (ConnectorIsOlder()) denied.AddRange(SketchProMax.Tools.OutputPaths.CodeTools.Select(t => $"mcp__{ServerName}__{t}"));
+        // Parallel jobs need a connector as new as this add-in (it passes the job on, so its changes take turns).
+        if (!JobsAvailable) denied.Add($"mcp__{ServerName}__{SketchProMax.Tools.ChatJobsTool.ToolName}");
         args.Add("--disallowedTools");
         args.Add(string.Join(",", denied));
         if (!string.IsNullOrEmpty(resumeSessionId)) { args.Add("--resume"); args.Add(resumeSessionId!); }
@@ -195,8 +197,64 @@ internal static class ClaudeCli
         return info;
     }
 
+    /// <summary>
+    /// A parallel job's own Claude Code (Chat.JobBoard, ChatPane.Jobs): like the chat's engine, with the job's instructions,
+    /// the connector told which job it serves (SKETCHPROMAX_JOB, so its changes take turns with the other jobs'), no
+    /// chat_jobs (a job doesn't start jobs), whole messages rather than streamed words, and its own session: a new id
+    /// (<paramref name="newSession"/>) or the one it resumes, never the main chat's.
+    /// </summary>
+    public static ProcessStartInfo JobStart(Install install, string jobKey, string? resume, string? newSession, string? model)
+    {
+        Directory.CreateDirectory(WorkFolder);
+        var engine = Path.Combine(Folder, "engine");
+        Directory.CreateDirectory(engine);
+        var pid = Process.GetCurrentProcess().Id.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var mcpFile = WriteMcpConfig(engine, pid, "mcp-job-" + jobKey + "-", install.Path, model, jobKey);
+        var promptFile = Path.Combine(engine, "job-" + jobKey + "-" + pid + ".md");
+        File.WriteAllText(promptFile, JobPrompt(), new UTF8Encoding(false));
+        var args = new List<string>
+        {
+            "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
+            "--mcp-config", mcpFile, "--strict-mcp-config",
+            "--append-system-prompt-file", promptFile,
+            "--tools", "Read,Glob,Grep",
+            "--allowedTools", $"mcp__{ServerName},mcp__{ServerName}__*,Read,Glob,Grep",
+            "--permission-mode", "dontAsk",
+            "--disallowedTools", string.Join(",", TranscriptRule, $"mcp__{ServerName}__{SketchProMax.Tools.ChatJobsTool.ToolName}"),
+        };
+        if (!string.IsNullOrEmpty(resume)) { args.Add("--resume"); args.Add(resume!); }
+        else { args.Add("--session-id"); args.Add(newSession ?? Guid.NewGuid().ToString()); }
+        if (!string.IsNullOrEmpty(model)) { args.Add("--model"); args.Add(model!); }
+        var command = string.Join(" ", args.Select(Quote));
+        var info = install.Path.EndsWith(".cmd", StringComparison.OrdinalIgnoreCase)
+            ? new ProcessStartInfo("cmd.exe", "/d /s /c \"" + Quote(install.Path) + " " + command + "\"")
+            : new ProcessStartInfo(install.Path, command);
+        info.UseShellExecute = false;
+        info.CreateNoWindow = true;
+        info.RedirectStandardInput = true;
+        info.RedirectStandardOutput = true;
+        info.RedirectStandardError = true;
+        info.StandardOutputEncoding = Encoding.UTF8;
+        info.StandardErrorEncoding = Encoding.UTF8;
+        info.WorkingDirectory = WorkFolder;
+        info.EnvironmentVariables.Remove("ANTHROPIC_API_KEY");
+        // Its own session, always: nothing of a parent session carries over.
+        foreach (var name in info.EnvironmentVariables.Keys.Cast<string>().Where(k => k == "CLAUDECODE" || k.StartsWith("CLAUDE_CODE_", StringComparison.Ordinal) && k.Contains("SESSION")).ToList())
+            info.EnvironmentVariables.Remove(name);
+        info.EnvironmentVariables["SKETCHPROMAX_REVIT_PID"] = pid;
+        // A change may wait its turn behind other jobs' changes (BridgeServer.TurnWait): the call must not time out first.
+        info.EnvironmentVariables["MCP_TOOL_TIMEOUT"] = "2400000";
+        return info;
+    }
+
+    /// <summary>
+    /// True when the chat may run parallel jobs: the installed connector is as new as this add-in (an older one doesn't
+    /// pass the job on, so the job's changes couldn't take turns).
+    /// </summary>
+    public static bool JobsAvailable => !ConnectorIsOlder();
+
     /// <summary>Writes the MCP config: the connector the installer and ClaudeRegistration register for the desktop app.</summary>
-    private static string WriteMcpConfig(string engine, string pid, string name = "mcp-", string? claude = null, string? model = null)
+    private static string WriteMcpConfig(string engine, string pid, string name = "mcp-", string? claude = null, string? model = null, string? job = null)
     {
         var mcp = new JsonObject
         {
@@ -209,7 +267,8 @@ internal static class ClaudeCli
                     ["args"] = new JsonArray(),
                     // SKETCHPROMAX_CHAT: the bridge then asks in Revit before code, recipes and files written where Claude chose.
                     // SKETCHPROMAX_CLAUDE and _MODEL: read_pdf_part reads a part of a large PDF with the same Claude Code and model.
-                    ["env"] = Env(pid, claude, model),
+                    // SKETCHPROMAX_JOB: the parallel job this connector serves (its changes take turns with the other jobs').
+                    ["env"] = Env(pid, claude, model, job),
                 },
             },
         };
@@ -262,11 +321,12 @@ internal static class ClaudeCli
     }
 
     /// <summary>True when the installed connector's file version is known and older than this add-in.</summary>
-    private static JsonObject Env(string pid, string? claude, string? model)
+    private static JsonObject Env(string pid, string? claude, string? model, string? job = null)
     {
         var env = new JsonObject { ["SKETCHPROMAX_REVIT_PID"] = pid, ["SKETCHPROMAX_CHAT"] = "1" };
         if (!string.IsNullOrEmpty(claude)) env["SKETCHPROMAX_CLAUDE"] = claude;
         if (!string.IsNullOrEmpty(model)) env["SKETCHPROMAX_MODEL"] = model;
+        if (!string.IsNullOrEmpty(job)) env["SKETCHPROMAX_JOB"] = job;
         return env;
     }
 
@@ -324,7 +384,43 @@ internal static class ClaudeCli
         - When the chat was shrunk, the summary you have is what it keeps. Don't try to open the earlier conversation's
           file (the .jsonl transcript): it isn't allowed here, and it would cost far more than it saves. If a detail is
           missing, read it from the model or ask the user in one line.
-        """ + Notes() + Recall();
+        """ + JobsPrompt() + Notes() + Recall();
+
+    /// <summary>How the main chat coordinates parallel jobs (chat_jobs); nothing when jobs aren't available.</summary>
+    private static string JobsPrompt() => !JobsAvailable ? "" : $"""
+
+        - Jobs: you coordinate. When a request has separate parts that can go side by side ("make sheets for levels 1-5
+          and check the walls"), or is one long piece of model work, hand it to jobs with chat_jobs. Call action=list first;
+          a follow-up that belongs to an existing job ("also add level 6" after a sheets job) goes to that job with
+          action=message, never to a new job. Otherwise action=start, once per part: a short title, and the whole task in
+          full with every detail (the job doesn't see this chat). Up to {ChatJobs.Limit} jobs run at once; more wait to start.
+          Reads run in parallel; changes to the model take turns, one at a time. Answer quick questions and small single
+          changes yourself, without a job.
+        - After starting or messaging jobs, say in one line which jobs have it and end your turn: don't wait for them and
+          don't do their work. While jobs work, leave model changes to them (Revit may say it is busy). Each job reports
+          back when it finishes, in a message marked as a job report: then tell the user briefly. Stop a job with
+          action=stop when the user asks.
+        """;
+
+    /// <summary>A parallel job's instructions: Sketch ProMax's agent instructions plus what is special about a job.</summary>
+    private static string JobPrompt() => SketchProMax.Agent.SystemPrompt.Build(AgentSettings.Load().FirmStandards) + """
+
+
+        You are one job of the Sketch ProMax chat in this Revit window: the main chat gave you one task, and you work on it
+        in the background, perhaps alongside other jobs on the same model. The person is a structural engineer; they see
+        your progress on your card in the chat and can send you messages there.
+        - Do your task completely with the Revit tools from the sketch-promax MCP server. Besides them you have only Read,
+          Glob and Grep (to look at files on this PC). Don't start other work.
+        - Other jobs may work at the same time. Reads run at once; changes to the model take turns, one at a time, so a
+          change may wait a while before it runs: that is normal, don't send it again. Don't change or undo elements
+          outside your task.
+        - Revit asks the user to approve some calls; if they decline, leave that part and say so.
+        - If you need the person to decide something the model can't settle, end with one short question: they answer on
+          your card.
+        - End every run with a short report for the main chat, in plain words: what you did (with counts and names),
+          anything you couldn't do and why, and what the person should check. A few lines; no tool names, element ids or
+          JSON.
+        """ + Notes();
 
     /// <summary>The memory notes for this chat (global and the open model's), as a block at the end of the prompt.</summary>
     private static string Notes()

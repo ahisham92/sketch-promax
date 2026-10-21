@@ -7,7 +7,7 @@ namespace SketchProMax.Chat;
 /// <summary>One line of a saved conversation, as the pane shows it.</summary>
 internal sealed class ChatItem
 {
-    /// <summary>user, assistant, tool, note, error, brief or job.</summary>
+    /// <summary>user, assistant, tool, note, error, brief, job or pjob (a parallel job's card: Name is the job's number).</summary>
     public string Kind { get; set; } = "";
     public string Text { get; set; } = "";
     /// <summary>Tools: the short tool name. User: attachment names.</summary>
@@ -57,6 +57,8 @@ internal sealed class Conversation
     public long AttachedBytes { get; set; }
     public int AttachedPages { get; set; }
     public string AttachedSession { get; set; } = "";
+    /// <summary>The chat's parallel jobs (JobBoard): each its own hidden session, shown as a card ("pjob" item) in the chat.</summary>
+    public List<ChatJob> Jobs { get; set; } = [];
 
     /// <summary>The file it was read from (not saved).</summary>
     [JsonIgnore] public string File { get; set; } = "";

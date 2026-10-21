@@ -242,7 +242,12 @@ internal static class RevitBridge
         }
 
         // From the in-Revit chat (SKETCHPROMAX_CHAT=1), Revit asks the user before code, recipe and file-writing calls run.
-        var request = JsonSerializer.Serialize(new { method = "call_tool", name, arguments = arguments ?? new Dictionary<string, JsonElement>(), origin = FromChat ? "chat" : null });
+        // From one of its parallel jobs (SKETCHPROMAX_JOB), the job's changes take turns with the other jobs' in Revit.
+        var request = JsonSerializer.Serialize(new
+        {
+            method = "call_tool", name, arguments = arguments ?? new Dictionary<string, JsonElement>(), origin = FromChat ? "chat" : null,
+            job = FromChat ? JobKey() : null,
+        });
         // The read has no timeout: a tool call may wait on the approval dialog in Revit.
         var responseLine = await SendAsync(target.Pipe, request, 5000, ct);
         if (responseLine is null)
@@ -262,6 +267,9 @@ internal static class RevitBridge
 
     /// <summary>True when the in-Revit chat started this server (SKETCHPROMAX_CHAT=1 in the config it passes to Claude Code).</summary>
     private static bool FromChat => Environment.GetEnvironmentVariable("SKETCHPROMAX_CHAT") == "1";
+
+    /// <summary>The parallel job of the in-Revit chat that started this server (SKETCHPROMAX_JOB), if any.</summary>
+    private static string? JobKey() => Environment.GetEnvironmentVariable("SKETCHPROMAX_JOB") is { Length: > 0 } key ? key : null;
 
     /// <summary>The Revit process whose chat pane started this server (SKETCHPROMAX_REVIT_PID), if any.</summary>
     private static int? PreferredPid() =>

@@ -42,6 +42,7 @@ internal static class StepNames
         ["ve_compare_options"] = "Compare value engineering options",
         ["what_if"] = "What if",
         ["read_pdf_part"] = "Read a part of the PDF",
+        ["chat_jobs"] = "Jobs",
         // Built-in steps of the chat engine.
         ["Read"] = "Read a file",
         ["Write"] = "Write a file",
@@ -92,6 +93,8 @@ internal static class StepNames
             using var doc = JsonDocument.Parse(json);
             var root = doc.RootElement;
             if (root.ValueKind != JsonValueKind.Object) return "";
+            // The main chat handing work to its parallel jobs: what it did with which job.
+            if (Short(tool) == "chat_jobs") return Cut(JobsLine(root), max);
             foreach (var key in DescriptionKeys)
                 if (root.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.String && OneLine(v.GetString()) is { Length: > 0 } text)
                     return Cut(text, max);
@@ -143,10 +146,24 @@ internal static class StepNames
     {
         tool = Short(tool);
         return tool is "run_revit_query_code" or "query_elements" or "query_linked_models" or "capture_view_image" or "select_elements"
-                   or "wait_for_job" or "cancel_job" or "help" or "features" or "memory_note" or "diagnostics"
+                   or "wait_for_job" or "cancel_job" or "chat_jobs" or "help" or "features" or "memory_note" or "diagnostics"
                    or "Read" or "Glob" or "Grep" or "LS" or "TodoWrite" or "WebFetch" or "WebSearch" or "ToolSearch"
                || tool.StartsWith("get_", StringComparison.Ordinal) || tool.StartsWith("list_", StringComparison.Ordinal)
                || tool.StartsWith("find_", StringComparison.Ordinal) || tool.StartsWith("read_", StringComparison.Ordinal);
+    }
+
+    /// <summary>"Start a job: Sheets for levels 1-5", "Message job 2", "Stop job 2", "List the jobs".</summary>
+    private static string JobsLine(JsonElement root)
+    {
+        string Str(string key) => root.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.String ? OneLine(v.GetString()) : "";
+        var job = root.TryGetProperty("job", out var j) ? OneLine(j.ValueKind == JsonValueKind.String ? j.GetString() : j.GetRawText()) : "";
+        return Str("action").ToLowerInvariant() switch
+        {
+            "start" => Str("title") is { Length: > 0 } title ? "Start a job: " + title : "Start a job",
+            "message" => job.Length > 0 ? "Message job " + job : "Message a job",
+            "stop" => job.Length > 0 ? "Stop job " + job : "Stop a job",
+            _ => "List the jobs",
+        };
     }
 
     private static string Short(string tool)

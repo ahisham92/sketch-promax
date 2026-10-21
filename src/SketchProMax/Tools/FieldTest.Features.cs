@@ -519,6 +519,7 @@ internal static partial class FieldTest
         await Probe(s, "chat.models", () => Models(s.Folder)).ConfigureAwait(false);
         await Probe(s, "chat.prompts", () => Prompts(s.Folder)).ConfigureAwait(false);
         await Probe(s, "chat.notes", Notes).ConfigureAwait(false);
+        await Probe(s, "chat.jobs", _ => ParallelJobs(s.Folder)).ConfigureAwait(false);
         await Probe(s, "chat.pdf", PdfAttach).ConfigureAwait(false);
         await Probe(s, "chat.office", OfficeAttach).ConfigureAwait(false);
         await Probe(s, "bugs.sync", () => BugSync(s.Folder)).ConfigureAwait(false);
@@ -992,6 +993,62 @@ internal static partial class FieldTest
         return global.Contains("Field test global note") && model.Contains("Field test model note")
             ? Pass($"notes were written and read back (in memory); your Notes file has {yours.Sum(x => x.Notes.Count)} note(s) and was only read")
             : Fail("a note written was not read back");
+    }
+
+    /// <summary>
+    /// The chat's parallel jobs without starting one (no plan use): opening and routing, the limit, the queue changes take
+    /// turns in, the report, saving with the chat and sessions.json, and a card. On Revit's thread for the card.
+    /// </summary>
+    private static (string, string) ParallelJobs(string folder)
+    {
+        var problems = new List<string>();
+        var now = DateTime.UtcNow;
+        var conv = new Conversation { Key = "field test", Title = "Field test", Id = "fieldtestjobs" };
+        var board = new JobBoard(conv.Jobs);
+        var sheets = board.Start("Sheets for levels 1-5", "Create a sheet for each of levels 1 to 5 with its plan.", now, false, out _);
+        var walls = board.Start("Wall warnings", "Check the walls for warnings and list them.", now.AddSeconds(1), false, out _);
+        var views = board.Start("Section views", "Make a section through each core.", now.AddSeconds(2), false, out _);
+        if (sheets is null || walls is null || views is null) return Fail("three separate jobs weren't all opened");
+        if (board.Start("More sheets", "also add level 6", now, false, out var similar) is not null || similar?.Number != sheets.Number)
+            problems.Add("\"also add level 6\" wasn't routed to the sheets job");
+        if (JobRouting.Best(conv.Jobs, "check the roof drainage") is { } wrong) problems.Add($"an unrelated request was routed to job {wrong.Number}");
+        var first = board.ToStart(2, now);
+        if (first.Count != 2 || first[0].Job != sheets || board.ActiveCount != 2) problems.Add($"the limit of 2 started {first.Count} job(s)");
+        if (!first[0].Message.Contains("level")) problems.Add("a new job's first message doesn't carry its task");
+        if (board.Message(sheets.Number, "also add level 6", now) != JobBoard.Delivery.Queued) problems.Add("a message to a running job wasn't queued");
+        if (board.RunEnded(sheets, true, "Made 5 sheets.", now) is not { } next || !next.Contains("level 6")) problems.Add("a running job didn't carry on with the message sent meanwhile");
+        board.RunEnded(sheets, true, "Made 6 sheets, A-101 to A-106.", now);
+        if (sheets.State != JobBoard.Done || board.ToStart(2, now).FirstOrDefault().Job != views) problems.Add("the next job didn't start when one ended");
+        if (board.Stop(walls.Number, now) != JobBoard.Running || walls.State != JobBoard.Stopped) problems.Add("Stop didn't stop a running job");
+        var report = JobBoard.Report([sheets], 1);
+        if (!report.Contains("Job 1") || !report.Contains("A-101") || !report.Contains("not typed by the user")) problems.Add("the report for the main chat is missing the job or its summary");
+
+        var turns = new JobTurns();
+        var a = turns.Enter(sheets.Key, "create_sheets");
+        var b = turns.Enter(views.Key, "create_section_views");
+        if (turns.Position(a) != 1 || turns.Position(b) != 2 || turns.WaitAsync(b, TimeSpan.FromMilliseconds(50), CancellationToken.None).Result)
+            problems.Add("the second change didn't wait behind the first");
+        var c = turns.Enter(views.Key, "create_section_views");
+        turns.Leave(a);
+        if (!turns.WaitAsync(c, TimeSpan.FromSeconds(1), CancellationToken.None).Result) problems.Add("the next change didn't get its turn when the first ended");
+        turns.Leave(c);
+
+        var jobsFolder = Path.Combine(folder, "jobs");
+        JobSessions.Set(jobsFolder, sheets.Key, "11111111-2222-3333-4444-555555555555");
+        var back = JsonSerializer.Deserialize<Conversation>(JsonSerializer.Serialize(conv))!;
+        var reloaded = new JobBoard(back.Jobs);
+        reloaded.AfterReload(now);
+        if (back.Jobs.Count != 3 || reloaded.Find(views.Number)?.State != JobBoard.Stopped || reloaded.Find(sheets.Number)?.Summary != sheets.Summary
+            || JobSessions.Get(jobsFolder, sheets.Key) != "11111111-2222-3333-4444-555555555555")
+            problems.Add("the jobs or their sessions weren't read back as saved (running ones stopped)");
+
+        var card = new ParallelJobCard(sheets.Number);
+        card.Render(board.Snapshot()[0], now, 3);
+        if (card.Headline != "Job 1 · Sheets for levels 1-5" || card.StateShown != "Done" || !BrandText.Clean(card.Headline + " " + card.StateShown))
+            problems.Add($"the card says \"{card.Headline}\", \"{card.StateShown}\"");
+        return problems.Count == 0
+            ? Pass("3 jobs opened, a follow-up routed to its job, 2 ran at once and the third started when one ended, changes took turns, the report and the saved jobs read back (temporary folder)")
+            : Fail(string.Join("; ", problems));
     }
 
     private static (string, string) PdfAttach()
