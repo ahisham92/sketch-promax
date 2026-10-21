@@ -67,6 +67,12 @@ public sealed class AgentSettings
     /// <summary>How much the chat pane moves: full (the default), reduced or off (Chat.MotionLevels). Empty in older files: full.</summary>
     public string? ChatAnimations { get; set; }
 
+    /// <summary>
+    /// How many of a chat's parallel jobs run at once (each is a session on the user's plan): 3 by default, 1 to 6
+    /// (Chat.JobBoard). More wait to start until one finishes.
+    /// </summary>
+    public int ChatJobLimit { get; set; } = 3;
+
     /// <summary>Your name as it goes on a signed checklist (next to Chat).</summary>
     public string SignatureName { get; set; } = "";
 

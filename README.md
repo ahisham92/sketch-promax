@@ -2,7 +2,7 @@
 
 <p align="center"><img src="assets/logo/sketch-promax-wordmark.png" alt="Sketch ProMax" width="420"></p>
 
-An AI agent for Autodesk Revit 2024, 2025, 2026 and 2027, powered by Claude. Ask in plain language; it reads, documents, audits and edits the open model through 217 tools, and it learns new ones as you use it. Every change can be undone with Ctrl+Z, and it asks for your approval before anything risky (or before every change, if you prefer).
+An AI agent for Autodesk Revit 2024, 2025, 2026 and 2027, powered by Claude. Ask in plain language; it reads, documents, audits and edits the open model through 218 tools, and it learns new ones as you use it. Every change can be undone with Ctrl+Z, and it asks for your approval before anything risky (or before every change, if you prefer).
 
 See [docs/PLAN.md](docs/PLAN.md) for the comparison with SketchPro, the roadmap and the architecture.
 
@@ -53,6 +53,8 @@ At the first three levels Revit always asks before code Claude wrote (run_revit_
 - **Full** (the default): the Sketch ProMax mark breathes while it works, new words of an answer fade in, each step shows a spinning ring and then a check or cross that pops in, Send and Stop morph into each other, your message rises from the box, and when a task of 20 seconds or more ends the answer glows once and Revit's taskbar button flashes if you are in another program.
 - **Reduced**: only quick opens and closes (step details, the history drawer, hover fades) and the small progress spinners; the taskbar still flashes.
 - **Off**: every change shows at once and the taskbar never flashes. With Windows' Show animations off, the chat behaves as Off whatever you pick.
+
+**Parallel jobs** (in the Revit chat): the chat acts as coordinator. Ask for work with separate parts ("make sheets for levels 1-5 and check the walls") and it splits it into jobs, each its own hidden session with a card in the chat: its state (waiting to start, working, waiting its turn, done, stopped), what it is doing and, at the end, its report, which also goes back to the chat for a short wrap-up. **Open** on a card shows the job's steps and a box to message it; **Stop** stops it. A follow-up ("also add level 6") goes to the job it belongs to, not a new one. Reads run side by side; changes to the model take turns, one at a time. Up to 3 jobs run at once (Settings > Chat, 1 to 6), to keep within your plan's limits; jobs are saved with the chat. Jobs need the connector installed with the same version as the add-in (Install.cmd installs both).
 
 ## Sharing tools (TritoRevit)
 
@@ -229,7 +231,7 @@ src/SketchProMax/            The Revit add-in core (net48 for Revit 2024, net8.0
   Agent/SystemPrompt         Instructions the desktop app receives from the connector
   Bridge/BridgeServer        Per-Revit-window named-pipe server the connector talks to
   Revit/                     Main-thread dispatcher (ExternalEvent), helpers, Revit 2024 dependency loader
-  Tools/                     The 215 IRevitTool implementations and the registry (CodeTools compiles C# with Roslyn)
+  Tools/                     The 216 IRevitTool implementations and the registry (CodeTools compiles C# with Roslyn)
   UI/                        Settings, update progress, quick-tool input and result windows
   Settings/                  Per-user settings (approval level, auto-update, firm standards)
   Update/Updater             Self-update from GitHub Releases, with progress, switched to without restarting Revit

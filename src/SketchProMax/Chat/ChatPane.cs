@@ -43,8 +43,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     private static string _modelKey = "", _modelTitle = "";
     private static EventHandler<ViewActivatedEventArgs>? _viewActivated;
 
-    /// <summary>True while a turn runs: switching to a new core version waits for it.</summary>
-    public static bool IsBusy => _instance?._turn is not null;
+    /// <summary>True while a turn or a parallel job runs: switching to a new core version waits for it.</summary>
+    public static bool IsBusy => _instance is { } pane && (pane._turn is not null || pane.JobsOpen);
 
     /// <summary>The pane's chat element (created on first use).</summary>
     public static FrameworkElement Get() => _instance ??= new ChatPane();
@@ -84,6 +84,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             pane._idle.Start();
             Brand.UseTheme(pane);
             pane.ShowStatus();
+            pane.HookJobs();
             pane.ModelChanged();
         }
     }
@@ -101,6 +102,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     public static void Shutdown()
     {
         if (_instance is not { } pane) return;
+        pane.EndRuns("Revit closed, so this job stopped. Send it a message to carry on.", now: true);
         pane.Save();
         pane._engine?.KillNow();
         pane._engine = null;
@@ -983,6 +985,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
 
     private void ShowConversation()
     {
+        AttachJobs();
         ShowTitle();
         // Another chat: the saved prompts and the model menu open only on request, so they start closed.
         if (_promptPanel.Visibility == Visibility.Visible) TogglePrompts();
@@ -1034,6 +1037,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             "handoff" => HandoffCard.Build(item, Tools.Handoff.Find(item.Name)),
             "brief" => BriefCard(item),
             "job" => JobCard(item),
+            "pjob" => ParallelJobCardFor(item),
             "note" when item.Name.StartsWith("ack:", StringComparison.Ordinal) => AckLine(item),
             _ => NoteLine(item),
         };
@@ -2444,7 +2448,9 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         SendLeftover(left, stopped || _pendingModel is not null);
         ShrinkIfLong(ended, stopped || left.Count > 0);
         if (ended is { Planning: false, Shrinking: false } && !stopped && ended.Outcome == "done") Finished(ended);
-        if (_pendingModel is { } next)
+        // Jobs that finished while the main chat answered report back now.
+        Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(FlushReports));
+        if (_pendingModel is { } next && !JobsOpen)
         {
             _pendingModel = null;
             SwitchTo(next.Key, next.Title);
@@ -2527,6 +2533,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         _turn = null;
         _engine?.Kill();
         _engine = null;
+        EndRuns("A new chat was started, so this job stopped. Open this chat again and send it a message to carry on.");
         Save();
         Remember(_conv);
         _contextTokens = 0;
@@ -2601,6 +2608,12 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             CloseDrawer();
             return;
         }
+        if (JobsOpen)
+        {
+            Status("Jobs are still working in this chat. Wait for them, or press Stop on their cards, then open the other chat.", spin: false);
+            CloseDrawer();
+            return;
+        }
         if (ChatStore.Read(chat.File) is not { } conv)
         {
             Status("That chat couldn't be read. Open the history again and press Refresh.", spin: false);
@@ -2635,7 +2648,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     bool IHistoryHost.DeleteChat(string file)
     {
         var current = string.Equals(file, _conv.File, StringComparison.OrdinalIgnoreCase);
-        if (current && _turn is not null) return false;
+        if (current && (_turn is not null || JobsOpen)) return false;
         if (!ChatStore.Delete(file)) return false;
         if (current)
         {
@@ -2652,7 +2665,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     private void ModelChanged()
     {
         if (_stopped) return;
-        if (_turn is not null) _pendingModel = (ConversationKey, ConversationTitle);
+        // Not while the chat answers or its jobs work: the switch happens when they are done.
+        if (_turn is not null || JobsOpen) _pendingModel = (ConversationKey, ConversationTitle);
         else SwitchTo(ConversationKey, ConversationTitle);
     }
 
@@ -2693,7 +2707,9 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         if (_sample || _handedOver) return; // the DPI snapshot's and frame test's stand-alone pane keeps nothing; nor a retired one
         _saveSoon.Stop();
         var old = _conv.Items.ToList();
-        ChatStore.Save(_conv);
+        // The bridge may change a job meanwhile (a chat_jobs call): the jobs are written as one consistent state.
+        if (_board is { } board) lock (board.Gate) ChatStore.Save(_conv);
+        else ChatStore.Save(_conv);
         // The store keeps the latest items only: let go of the drawn ones it dropped too.
         var removed = old.Count - _conv.Items.Count;
         if (removed <= 0) return;
@@ -2735,6 +2751,9 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
                 EndJob("stopped", null);
             }
             _undoTimer?.Stop();
+            _reportTimer?.Stop();
+            EndRuns("Sketch ProMax updated, so this job stopped. Send it a message to carry on.");
+            if (ChatJobs.Board == _board) { ChatJobs.Board = null; ChatJobs.Changed = null; }
         }
         catch (Exception) { /* whatever failed above, the chat is saved and handed over below */ }
         finally

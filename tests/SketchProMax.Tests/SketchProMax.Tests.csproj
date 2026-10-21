@@ -19,6 +19,8 @@
     <Compile Include="../../src/SketchProMax/Chat/ChatStyles.cs" Link="ChatStyles.cs" />
     <Compile Include="../../src/SketchProMax/Chat/ChatModels.cs" Link="ChatModels.cs" />
     <Compile Include="../../src/SketchProMax/Chat/ChatHistory.cs" Link="ChatHistory.cs" />
+    <Compile Include="../../src/SketchProMax/Chat/JobBoard.cs" Link="JobBoard.cs" />
+    <Compile Include="../../src/SketchProMax/Bridge/JobTurns.cs" Link="JobTurns.cs" />
     <Compile Include="../../src/SketchProMax/Chat/ChatStore.cs" Link="ChatStore.cs" />
     <Compile Include="../../src/SketchProMax/Chat/ChatRecall.cs" Link="ChatRecall.cs" />
     <Compile Include="../../src/SketchProMax/Chat/ChatHandover.cs" Link="ChatHandover.cs" />

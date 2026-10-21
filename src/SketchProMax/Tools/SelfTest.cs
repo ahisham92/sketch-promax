@@ -526,6 +526,8 @@ internal static partial class SelfTest
         new("memory_note", _ => new { action = "list" }),
         new("recall_chats", _ => new { action = "search", query = "walls levels" })
             { Expect = r => r.TryGetProperty("chats", out var c) && c.ValueKind == System.Text.Json.JsonValueKind.Array ? null : "no list of chats: " + r.GetRawText() },
+        // Outside the pane's main chat a job is never started (it would use the plan): the refusal is the check.
+        new("chat_jobs", _ => new { action = "start", title = "Self-test job", task = "Nothing: this job must not start." }) { ExpectError = "only from the main chat" },
         new("list_recipes", _ => new { }),
         new("list_learned_tools", _ => new { }),
         new("list_steel_connection_types", _ => new { }),
