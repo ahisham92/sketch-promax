@@ -16,7 +16,7 @@
     <LangVersion>latest</LangVersion>
     <RootNamespace>SketchProMax</RootNamespace>
     <AssemblyName>SketchProMax</AssemblyName>
-    <Version>0.34.30</Version>
+    <Version>0.34.31</Version>
     <!-- Copy NuGet dependencies (System.Text.Json on Revit 2024) next to the add-in DLL. -->
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
@@ -82,6 +82,11 @@
   <!-- The office's pre-submission checklist, built in (names of people, the client and the project taken out). Edited copies live in %APPDATA%. -->
   <ItemGroup>
     <EmbeddedResource Include="Data\pre-submission-checklist.json" LogicalName="SketchProMax.pre-submission-checklist.json" />
+  </ItemGroup>
+
+  <!-- What the last full field test proved, per Revit year (scripts/field-test-proven.py): the field test skips those rows. -->
+  <ItemGroup>
+    <EmbeddedResource Include="Data\field-test-proven.json" LogicalName="SketchProMax.field-test-proven.json" />
   </ItemGroup>
 
   <!-- Step-by-step help guides (Tools/HelpGuides), the same files as docs/guides. -->

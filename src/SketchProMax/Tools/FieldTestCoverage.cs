@@ -440,7 +440,9 @@ internal static class FieldTestCoverage
 
     // ---- The guided checklist --------------------------------------------------------------------------------------------
 
-    internal sealed record CheckItem(string Id, string Area, string Title, string Steps, string Why);
+    /// <param name="Unchanged">Set when the item's code is unchanged since the last full run's version: it is not asked again
+    /// (the window lists it apart, collapsed), with this note. Empty: an item to check.</param>
+    internal sealed record CheckItem(string Id, string Area, string Title, string Steps, string Why, string Unchanged = "");
 
     internal sealed record BugRow(int Number, string What, string Status);
 
@@ -461,17 +463,23 @@ internal static class FieldTestCoverage
         return rows.Values.OrderBy(r => r.Number).ToList();
     }
 
-    /// <summary>The checklist: every manual feature and tool, then one step per fixed bug row, in area order.</summary>
-    internal static List<CheckItem> Checklist(IEnumerable<BugRow> fixedBugs)
+    /// <summary>
+    /// The checklist: every manual feature and tool, then one step per fixed bug row, in area order. Features in
+    /// <paramref name="unchanged"/> (code unchanged since the last full run, FieldTestProven) carry <paramref name="note"/>
+    /// and come last, so the list to check is the new and changed items.
+    /// </summary>
+    internal static List<CheckItem> Checklist(IEnumerable<BugRow> fixedBugs, IReadOnlyCollection<string>? unchanged = null, string note = "")
     {
-        var items = Features.Where(f => f.How == How.Manual).Select(f => new CheckItem(f.Key, f.Area, f.Title, f.Steps, f.Reason)).ToList();
+        var items = Features.Where(f => f.How == How.Manual)
+            .Select(f => new CheckItem(f.Key, f.Area, f.Title, f.Steps, f.Reason, unchanged?.Contains(f.Key) == true ? note : "")).ToList();
         items.AddRange(ManualTools.OrderBy(t => t.Key).Select(t => new CheckItem("tool:" + t.Key, Limits, t.Key, t.Value.Steps, t.Value.Reason)));
         string[] order = [Chat, RibbonArea, Tasks, Job, Time, Issue, Package, Cleanup, Central, Carbon, Ve, Costing, Redlines, Rebar2D, Bugs, Updates, Model, Limits, BugFixes];
         items = items.OrderBy(i => Array.IndexOf(order, i.Area) is var x && x < 0 ? order.Length : x).ToList();
         items.AddRange(fixedBugs.Select(b => new CheckItem("bug:" + b.Number, BugFixes, $"#{b.Number}: {b.What}",
             "Do what the row describes on a _detached copy and check it no longer happens." +
             (BugChecks.FirstOrDefault(c => c.Row == b.Number) is { } check ? $" The field test checks it too ({check.What}): see its Bug log section." : ""), b.Status)));
-        return items;
+        // Stable: the items to check keep their order, the unchanged ones follow in theirs.
+        return items.OrderBy(i => i.Unchanged.Length > 0 ? 1 : 0).ToList();
     }
 
     // ---- The bug log rows, each with what proves its fix still holds ---------------------------------------------------------
@@ -576,7 +584,8 @@ internal static class FieldTestCoverage
         else return "not run";
         var list = mine.ToList();
         if (list.Any(r => r.Status == "fail")) return "fail";
-        if (list.Any(r => r.Status == "pass")) return "pass";
+        // Proven: passed in the last full run, with code unchanged since (FieldTestProven).
+        if (list.Any(r => r.Status is "pass" or "proven")) return "pass";
         if (list.Any(r => r.Status == "manual")) return "manual";
         return "not run";
     }
@@ -619,17 +628,20 @@ internal static class FieldTestCoverage
     internal static string ResultMarkdown(IReadOnlyList<CheckItem> items, IReadOnlyDictionary<string, Mark> marks, string version, string revit, string model, DateTime when)
     {
         int Count(string r) => items.Count(i => marks.TryGetValue(i.Id, out var m) && m.Result == r);
+        var unchanged = items.Count(i => i.Unchanged.Length > 0 && !(marks.TryGetValue(i.Id, out var m) && m.Result.Length > 0));
         var sb = new StringBuilder();
         sb.AppendLine("# Sketch ProMax test checklist").AppendLine();
         sb.AppendLine($"- Date: {when.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture)}");
         sb.AppendLine($"- Sketch ProMax {version}, Revit {revit}");
         if (model.Length > 0) sb.AppendLine($"- Model: {model}");
-        sb.AppendLine($"- Result: {Count("pass")} pass, {Count("fail")} fail, {items.Count - Count("pass") - Count("fail")} not checked").AppendLine();
+        sb.AppendLine($"- Result: {Count("pass")} pass, {Count("fail")} fail, {items.Count - Count("pass") - Count("fail") - unchanged} not checked" +
+                      (unchanged > 0 ? $", {unchanged} unchanged (not asked again)" : "")).AppendLine();
         sb.AppendLine("| Item | Area | Result | Note |").AppendLine("|---|---|---|---|");
         foreach (var i in items)
         {
             marks.TryGetValue(i.Id, out var m);
-            sb.AppendLine($"| {Cell(i.Title)} | {i.Area} | {(m is null || m.Result.Length == 0 ? "not checked" : m.Result == "fail" ? "**fail**" : m.Result)} | {Cell(m?.Note ?? "")} |");
+            var result = m is null || m.Result.Length == 0 ? (i.Unchanged.Length > 0 ? "unchanged" : "not checked") : m.Result == "fail" ? "**fail**" : m.Result;
+            sb.AppendLine($"| {Cell(i.Title)} | {i.Area} | {result} | {Cell(m?.Note is { Length: > 0 } n ? n : m is null || m.Result.Length == 0 ? i.Unchanged : "")} |");
         }
         return sb.ToString();
     }

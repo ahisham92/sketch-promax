@@ -66,6 +66,8 @@
     <Compile Include="../../src/SketchProMax/Tools/StaticDimensionText.cs" Link="StaticDimensionText.cs" />
     <EmbeddedResource Include="../../docs/guides/*.md" LogicalName="SketchProMax.guides.%(Filename).md" />
     <Compile Include="../../src/SketchProMax/Tools/FieldTestCoverage.cs" Link="FieldTestCoverage.cs" />
+    <Compile Include="../../src/SketchProMax/Tools/FieldTestProven.cs" Link="FieldTestProven.cs" />
+    <EmbeddedResource Include="../../src/SketchProMax/Data/field-test-proven.json" LogicalName="SketchProMax.field-test-proven.json" />
     <Compile Include="../../src/SketchProMax/Sharing/SharedPackMath.cs" Link="SharedPackMath.cs" />
     <Compile Include="../../src/TritoRevit/PackButtons.cs" Link="PackButtons.cs" />
     <Compile Include="../../src/SketchProMax/Bridge/JobControl.cs" Link="JobControl.cs" />

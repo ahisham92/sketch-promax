@@ -2655,9 +2655,12 @@ internal static partial class FieldTest
         };
         var path = TestChecklistWindow.SaveTo(Path.Combine(folder, "checklist"), items, marks, Update.Updater.CurrentText, "field test", "Field test project", DateTime.Now);
         var text = File.Exists(path) ? File.ReadAllText(path) : "";
-        if (!text.Contains($"1 pass, 1 fail, {items.Count - 2} not checked") || !text.Contains("field test / note")) problems.Add($"the saved file {path} doesn't hold the marks");
+        // Items unchanged since the last full run and not marked are saved as "unchanged", not "not checked".
+        var unchanged = items.Count(i => i.Unchanged.Length > 0 && !marks.ContainsKey(i.Id));
+        if (!text.Contains($"1 pass, 1 fail, {items.Count - 2 - unchanged} not checked") || !text.Contains("field test / note")) problems.Add($"the saved file {path} doesn't hold the marks");
         return problems.Count == 0
-            ? Pass($"{items.Count} items: {manual} manual steps and {bugs} fixed bug rows; a result with one pass and one fail was saved to {path}")
+            ? Pass($"{items.Count} items: {manual} manual steps ({items.Count(i => i.Unchanged.Length > 0)} unchanged since the last full run, not asked again) " +
+                   $"and {bugs} fixed bug rows; a result with one pass and one fail was saved to {path}")
             : Fail(string.Join("; ", problems));
     }
 
@@ -2669,12 +2672,14 @@ internal static partial class FieldTest
     private static List<CoverageRow> Coverage(RunReport r)
     {
         var list = new List<CoverageRow>();
+        var proven = FieldTestProven.Load();
         string Of(IEnumerable<Row> rows, string missing)
         {
             var mine = rows.ToList();
             if (mine.Count == 0) return missing;
             if (mine.Any(x => x.Status == "fail")) return "tested: FAIL";
             if (mine.Any(x => x.Status == "pass")) return "tested";
+            if (mine.Any(x => x.Status == "proven")) return "proven earlier";
             if (mine.Any(x => x.Status == "manual")) return "manual (checklist)";
             return "not run";
         }
@@ -2694,8 +2699,10 @@ internal static partial class FieldTest
                 FieldTestCoverage.How.Case => r.Rows.Where(x => x.Tool == f.By || x.Tool.StartsWith(f.By + " ", StringComparison.Ordinal)),
                 _ => [],
             };
-            var status = f.How == FieldTestCoverage.How.Manual ? "manual (checklist)" : Of(rows, "not run");
-            list.Add(new(f.Key, "feature", status, f.How == FieldTestCoverage.How.Case ? $"{f.Reason} (by {f.By})" : f.Reason));
+            var unchanged = f.How == FieldTestCoverage.How.Manual && proven.ManualUnchanged.Contains(f.Key);
+            var status = unchanged ? "manual, unchanged" : f.How == FieldTestCoverage.How.Manual ? "manual (checklist)" : Of(rows, "not run");
+            list.Add(new(f.Key, "feature", status, f.How == FieldTestCoverage.How.Case ? $"{f.Reason} (by {f.By})"
+                : unchanged ? $"{FieldTestProven.ManualNote(proven)} ({f.Reason})" : f.Reason));
         }
         return list;
     }
@@ -2705,7 +2712,8 @@ internal static partial class FieldTest
         var md = new StringBuilder("## Coverage\n\n");
         int Count(string s) => rows.Count(x => x.Status == s);
         md.Append($"{rows.Count(x => x.Kind == "tool")} tools and {rows.Count(x => x.Kind == "feature")} features: {Count("tested") + Count("tested: FAIL")} tested " +
-                  $"({Count("tested: FAIL")} failing), {Count("manual (checklist)")} manual (checklist: Sketch ProMax tab > Help > Test checklist), {Count("not run")} not run in this report.\n\n");
+                  $"({Count("tested: FAIL")} failing), {Count("proven earlier")} proven earlier (not run again), {Count("manual (checklist)")} manual (checklist: Sketch ProMax tab > Help > Test checklist), " +
+                  $"{Count("manual, unchanged")} manual but unchanged since {FieldTestProven.Load().Version} (not asked again), {Count("not run")} not run in this report.\n\n");
         md.Append("| Tool or feature | Kind | Coverage | Detail |\n|---|---|---|---|\n");
         foreach (var row in rows.OrderBy(x => x.Status == "tested: FAIL" ? 0 : x.Status == "not run" ? 1 : x.Status.StartsWith("manual", StringComparison.Ordinal) ? 2 : 3).ThenBy(x => x.Kind).ThenBy(x => x.Name))
             md.Append($"| {row.Name} | {row.Kind} | {(row.Status == "tested" ? "tested" : "**" + row.Status + "**")} | {Cell(row.Detail)} |\n");
