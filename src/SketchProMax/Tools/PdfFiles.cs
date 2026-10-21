@@ -115,6 +115,65 @@ internal static class PdfFiles
         return parts;
     }
 
+    public sealed record ChatParts(string Folder, int Pages, List<Part> Parts, string? TextFile, TextResult Text);
+
+    /// <summary>
+    /// A large PDF made ready for the chat: split into parts the chat's helpers read whole (at most
+    /// <paramref name="maxBytes"/> and 100 pages each), its text page by page, and "parts.json" (the original's name, its
+    /// pages and each part's pages, which read_pdf_part reads). Kept in a folder under <paramref name="root"/> named by
+    /// the file's path, size and time, so the same file attached again uses the same parts, and their helpers' chats.
+    /// </summary>
+    public static ChatParts ForChat(string pdf, string root, long maxBytes, CancellationToken ct = default)
+    {
+        var info = new FileInfo(pdf);
+        string hash;
+        using (var sha = System.Security.Cryptography.SHA1.Create())
+            hash = string.Concat(sha.ComputeHash(Encoding.UTF8.GetBytes($"{info.FullName.ToLowerInvariant()}|{info.Length}|{info.LastWriteTimeUtc.Ticks}"))
+                .Take(4).Select(b => b.ToString("x2")));
+        var name = Path.GetFileNameWithoutExtension(pdf);
+        var folder = Path.Combine(root, $"{(name.Length > 60 ? name.Substring(0, 60) : name)} parts {hash}");
+        var manifest = Path.Combine(folder, "parts.json");
+        var textFile = Path.Combine(folder, name + " - text.txt");
+        if (Read(manifest, folder) is { } kept && File.Exists(textFile))
+        {
+            Directory.SetLastWriteTimeUtc(folder, DateTime.UtcNow); // kept while it is used (attachments are cleaned after two weeks)
+            return kept with { TextFile = textFile };
+        }
+        Directory.CreateDirectory(folder);
+        var text = WriteText(pdf, textFile, ct);
+        var parts = Split(pdf, maxBytes, folder, null, ct, maxPages: 100);
+        var json = new System.Text.Json.Nodes.JsonObject
+        {
+            ["source"] = Path.GetFileName(pdf),
+            ["pages"] = parts.Count == 0 ? 0 : parts[^1].LastPage,
+            ["parts"] = new System.Text.Json.Nodes.JsonArray(parts.Select(p => (System.Text.Json.Nodes.JsonNode)new System.Text.Json.Nodes.JsonObject
+            {
+                ["file"] = Path.GetFileName(p.File), ["first"] = p.FirstPage, ["last"] = p.LastPage,
+            }).ToArray()),
+        };
+        File.WriteAllText(manifest, json.ToJsonString(), new UTF8Encoding(false));
+        return new ChatParts(folder, parts.Count == 0 ? 0 : parts[^1].LastPage, parts, text.Error is null ? textFile : null, text);
+    }
+
+    private static ChatParts? Read(string manifest, string folder)
+    {
+        try
+        {
+            if (!File.Exists(manifest)) return null;
+            using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(manifest));
+            var r = doc.RootElement;
+            var parts = r.GetProperty("parts").EnumerateArray().Select(p =>
+            {
+                var file = Path.Combine(folder, p.GetProperty("file").GetString() ?? "");
+                return new Part(file, p.GetProperty("first").GetInt32(), p.GetProperty("last").GetInt32(), File.Exists(file) ? new FileInfo(file).Length : -1);
+            }).ToList();
+            if (parts.Count == 0 || parts.Any(p => p.Bytes < 0)) return null;
+            var pages = r.GetProperty("pages").GetInt32();
+            return new ChatParts(folder, pages, parts, null, new TextResult(pages, 0, pages, null));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException or KeyNotFoundException or InvalidOperationException) { return null; }
+    }
+
     // ---- Samples for the tests and the field test ---------------------------------------------------------------------
 
     /// <summary>

@@ -211,7 +211,7 @@ internal static class CoreRibbonManifest
             "Writes one zip with the chats of every model, all bug reports, the tool-call log and the versions, to send to the developer. Asks for the period first; nothing is sent.")),
         L(Pane("Bugs", "TestChecklist", "Test checklist", "test-checklist",
             "Walks you through the checks only you can do, on a _detached copy, and saves pass or fail for each in the Bugs folder.")),
-        // Split PDF (0.34.29): a pane button (the ribbon's command slots are kept free), also on a large PDF's chip in the chat.
+        // Split PDF (0.34.29): a pane button (the ribbon's command slots are kept free). The chat splits a large PDF by itself.
         L(Pane("Files", "SplitPdf", "Split PDF", "split-pdf",
             "Cuts a large PDF into parts of at most 18 MB (or the size you set), in page order, so each part can be attached in the chat and read whole. The original is not changed.")),
         L(Tab("notes", "Notes", "Notes for this model")),

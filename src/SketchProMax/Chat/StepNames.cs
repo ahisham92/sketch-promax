@@ -41,6 +41,7 @@ internal static class StepNames
         ["ve_opportunities"] = "Find value engineering ideas",
         ["ve_compare_options"] = "Compare value engineering options",
         ["what_if"] = "What if",
+        ["read_pdf_part"] = "Read a part of the PDF",
         // Built-in steps of the chat engine.
         ["Read"] = "Read a file",
         ["Write"] = "Write a file",
@@ -94,6 +95,9 @@ internal static class StepNames
             foreach (var key in DescriptionKeys)
                 if (root.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.String && OneLine(v.GetString()) is { Length: > 0 } text)
                     return Cut(text, max);
+            // A part of a large PDF: the part's name says which pages.
+            if (Short(tool) == "read_pdf_part" && root.TryGetProperty("file", out var part) && part.ValueKind == JsonValueKind.String && OneLine(part.GetString()) is { Length: > 0 } partPath)
+                return Cut(FileName(partPath), max);
             // File steps of the chat engine: the file's name says enough.
             foreach (var key in new[] { "file_path", "path" })
                 if (root.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.String && OneLine(v.GetString()) is { Length: > 0 } path)

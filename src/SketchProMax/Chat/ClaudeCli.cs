@@ -150,7 +150,7 @@ internal static class ClaudeCli
         Directory.CreateDirectory(engine);
         var pid = Process.GetCurrentProcess().Id.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
-        var mcpFile = WriteMcpConfig(engine, pid);
+        var mcpFile = WriteMcpConfig(engine, pid, claude: install.Path, model: model);
 
         var promptFile = Path.Combine(engine, "prompt-" + pid + ".md");
         File.WriteAllText(promptFile, Prompt(), new UTF8Encoding(false));
@@ -196,7 +196,7 @@ internal static class ClaudeCli
     }
 
     /// <summary>Writes the MCP config: the connector the installer and ClaudeRegistration register for the desktop app.</summary>
-    private static string WriteMcpConfig(string engine, string pid, string name = "mcp-")
+    private static string WriteMcpConfig(string engine, string pid, string name = "mcp-", string? claude = null, string? model = null)
     {
         var mcp = new JsonObject
         {
@@ -208,7 +208,8 @@ internal static class ClaudeCli
                     ["command"] = ClaudeRegistration.ConnectorPath,
                     ["args"] = new JsonArray(),
                     // SKETCHPROMAX_CHAT: the bridge then asks in Revit before code, recipes and files written where Claude chose.
-                    ["env"] = new JsonObject { ["SKETCHPROMAX_REVIT_PID"] = pid, ["SKETCHPROMAX_CHAT"] = "1" },
+                    // SKETCHPROMAX_CLAUDE and _MODEL: read_pdf_part reads a part of a large PDF with the same Claude Code and model.
+                    ["env"] = Env(pid, claude, model),
                 },
             },
         };
@@ -261,7 +262,16 @@ internal static class ClaudeCli
     }
 
     /// <summary>True when the installed connector's file version is known and older than this add-in.</summary>
-    private static bool ConnectorIsOlder()
+    private static JsonObject Env(string pid, string? claude, string? model)
+    {
+        var env = new JsonObject { ["SKETCHPROMAX_REVIT_PID"] = pid, ["SKETCHPROMAX_CHAT"] = "1" };
+        if (!string.IsNullOrEmpty(claude)) env["SKETCHPROMAX_CLAUDE"] = claude;
+        if (!string.IsNullOrEmpty(model)) env["SKETCHPROMAX_MODEL"] = model;
+        return env;
+    }
+
+    /// <summary>True when the installed connector is older than this add-in (so it may lack newer connector tools, such as read_pdf_part).</summary>
+    internal static bool ConnectorIsOlder()
     {
         try
         {
@@ -286,10 +296,11 @@ internal static class ClaudeCli
           and leave folder and file_name out unless the user asked for a location. If the user declines, ask what they
           want instead. Don't ask the user for permission in the chat before a normal change: Revit asks when needed.
         - Files the user attaches are named by full path. Pictures and PDFs that fit come with the message itself, and the
-          text of Word and PowerPoint files is in the message: read them there. A PDF too large to send whole is named
-          with a note and a text file of its pages: search and read that, and look at a page's drawings with
-          redline_read (file and page), which shows any PDF page as a picture, not only redlines. Read other files with
-          the Read tool. For DWG or DXF files, pass the path to the Revit tools (for example import_cad); don't try to
+          text of Word and PowerPoint files is in the message: read them there. A PDF too large to send whole comes split
+          into parts, with a text file of its pages: find the pages in the text, then ask the parts that cover them with
+          read_pdf_part, which reads a part in full. Without parts, read the text file and look at a page's drawings
+          with redline_read (file and page), which shows any PDF page as a picture, not only redlines. Read other files
+          with the Read tool. For DWG or DXF files, pass the path to the Revit tools (for example import_cad); don't try to
           Read them.
         - Keep it easy: lead with the answer in a sentence or two of plain words, then only the detail that helps. No tool
           names, internal ids, element ids, JSON or API terms unless the user asks for them. Use the model's own units.

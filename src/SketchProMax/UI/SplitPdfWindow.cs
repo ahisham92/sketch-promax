@@ -12,7 +12,7 @@ using TextBox = System.Windows.Controls.TextBox;
 namespace SketchProMax.UI;
 
 /// <summary>
-/// Split PDF (the Split button on a large PDF attached in the chat, or the pane's Activity tab): cuts a large PDF into parts of at most a given size, in page order, saved in a folder next
+/// Split PDF (the pane's Activity tab): cuts a large PDF into parts of at most a given size, in page order, saved in a folder next
 /// to it, so each part can be attached in the chat whole or sent on. The split runs off Revit's thread and the window is
 /// modeless, so Revit stays usable; nothing in the model is read or changed.
 /// </summary>

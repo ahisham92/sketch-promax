@@ -146,6 +146,7 @@ internal static class RevitBridge
         tools.RemoveAll(t => JobTools.Any(j => j.Name == t.Name));
         tools.InsertRange(0, first);
         tools.InsertRange(0, ConnectionTools);
+        if (!tools.Any(t => t.Name == PdfParts.ToolName)) tools.Add(PdfParts.Definition);
         tools.AddRange(LearnedTools(tools.Select(t => t.Name).ToHashSet()));
         return tools;
     }
@@ -192,6 +193,9 @@ internal static class RevitBridge
     {
         if (name == "sketch_promax_status")
             return Text("Install the Sketch ProMax add-in, start Revit and open a model, then restart this app so the Revit tools load.", true);
+
+        // Runs here, without Revit: a part of a large PDF read by its own chat.
+        if (name == PdfParts.ToolName) return await PdfParts.CallAsync(arguments, ct);
 
         var sessions = await DiscoverAsync(ct);
         if (name == "list_revit_models") return Text(Describe(sessions), false);

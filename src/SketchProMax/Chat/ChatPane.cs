@@ -632,6 +632,9 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             if (!Directory.Exists(ClaudeCli.AttachmentsFolder)) return;
             foreach (var file in Directory.GetFiles(ClaudeCli.AttachmentsFolder))
                 if (File.GetLastWriteTimeUtc(file) < DateTime.UtcNow.AddDays(-14)) File.Delete(file);
+            // A large PDF's parts (PdfFiles.ForChat), two weeks after it was last attached.
+            foreach (var folder in Directory.GetDirectories(ClaudeCli.AttachmentsFolder))
+                if (Directory.GetLastWriteTimeUtc(folder) < DateTime.UtcNow.AddDays(-14)) Directory.Delete(folder, true);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
     }
@@ -2051,6 +2054,17 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
                    ", included in full with this message: read it from there, not with the Read tool";
         }
         if (check.Verdict == PdfAttachment.Verdict.NotPdf) return PdfAttachment.Note(check, null, false);
+        // Split by itself into parts its helpers read whole (read_pdf_part, in a connector as new as this add-in).
+        if (check.Verdict != PdfAttachment.Verdict.Locked && !ClaudeCli.ConnectorIsOlder())
+        {
+            try
+            {
+                var ready = PdfFiles.ForChat(a.Path, ClaudeCli.AttachmentsFolder, PdfAttachment.MaxBytes);
+                if (ready.Parts.Count > 0)
+                    return PdfAttachment.PartsNote(check, ready.Parts.Select(p => (p.File, p.FirstPage, p.LastPage)).ToList(), ready.Pages, ready.TextFile);
+            }
+            catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or InvalidOperationException) { }
+        }
         var target = ReadFileName(a.Path, "text");
         var result = PdfFiles.WriteText(a.Path, target);
         return PdfAttachment.Note(check, result.Error is null ? target : null, result.MostlyPictures);
@@ -2789,18 +2803,6 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             };
             DockPanel.SetDock(remove, Dock.Right);
             row.Children.Add(remove);
-            if (TooLargeToSend(a.Path))
-            {
-                // Read page by page as it is; Split PDF makes parts that are read whole.
-                var split = ChatUi.Ghost(ChatUi.GlyphFile, "Split", "Split " + a.Name + " into parts",
-                    $"{a.Name} is more than {PdfAttachment.MaxBytes / (1024 * 1024)} MB, so the chat reads its text and the pages it needs. " +
-                    "Split it into parts that can be attached and read whole.");
-                split.Padding = new Thickness(4, 0, 4, 0);
-                split.Margin = new Thickness(4, 0, 0, 0);
-                split.Click += (_, _) => SplitPdfWindow.Open(attachment.Path);
-                DockPanel.SetDock(split, Dock.Right);
-                row.Children.Add(split);
-            }
             if (a.IsImage)
             {
                 var thumb = ChatUi.Thumbnail(a.Path, 28);
@@ -2826,13 +2828,6 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             chip.SetResourceReference(Border.BorderBrushProperty, Brand.K.BorderSubtle);
             _chips.Children.Add(chip);
         }
-    }
-
-    private static bool TooLargeToSend(string path)
-    {
-        if (!System.IO.Path.GetExtension(path).Equals(".pdf", StringComparison.OrdinalIgnoreCase)) return false;
-        try { return new FileInfo(path).Length > PdfAttachment.MaxBytes; }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return false; }
     }
 
     private void OnPreviewCanPaste(object sender, CanExecuteRoutedEventArgs e)
