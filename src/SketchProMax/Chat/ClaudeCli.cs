@@ -296,7 +296,8 @@ internal static class ClaudeCli
           and leave folder and file_name out unless the user asked for a location. If the user declines, ask what they
           want instead. Don't ask the user for permission in the chat before a normal change: Revit asks when needed.
         - Files the user attaches are named by full path. Pictures and PDFs that fit come with the message itself, and the
-          text of Word and PowerPoint files is in the message: read them there. A PDF too large to send whole comes split
+          text of Word, PowerPoint and Excel files is in the message (sheets as tables with row numbers and
+          column letters): read them there. A PDF too large to send whole comes split
           into parts, with a text file of its pages: find the pages in the text, then ask the parts that cover them with
           read_pdf_part, which reads a part in full. Without parts, read the text file and look at a page's drawings
           with redline_read (file and page), which shows any PDF page as a picture, not only redlines. Read other files

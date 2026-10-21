@@ -187,6 +187,16 @@ internal static class ChatTests
             var oldRefused = false;
             try { OfficeText.Read(Encoding.ASCII.GetBytes("old binary .doc"), word: true); } catch (InvalidDataException) { oldRefused = true; }
             check("word: an old .doc or damaged file is refused with a readable reason", oldRefused, "");
+            var book = OfficeText.Read(OfficeText.SampleWorkbook(), ".xlsx").Text;
+            check("excel: sheets in order as tables with row numbers and column letters",
+                book.Contains("=== Sheet 1 of 2: Piles ===") && book.Contains("| Row | A | B | C | D | E | F |") &&
+                book.Contains("| 1 | Mark | Diameter (m) | Cast | Done |  |  |") && book.IndexOf("Piles") < book.IndexOf("Notes"), book);
+            check("excel: shared and rich text, numbers without binary noise, dates, percents, formula results and TRUE",
+                book.Contains("| 2 | P-01 | 0.3 | 2025-01-01 | 85% |  |  |") && book.Contains("| 4 | P-01b | 0.6 |  | TRUE |  | far / away |"), book);
+            check("excel: empty rows left out, hidden sheets named as hidden", !book.Contains("| 3 |") && book.Contains("=== Sheet 2 of 2: Notes (hidden) ===") && book.Contains("Check toe levels"), book);
+            var xlsRefused = false;
+            try { OfficeText.Read(Encoding.ASCII.GetBytes("old binary .xls"), ".xlsx"); } catch (InvalidDataException) { xlsRefused = true; }
+            check("excel: an old .xls or damaged file is refused with a readable reason", xlsRefused, "");
         }
         using (var doc = JsonDocument.Parse(StreamInput.Interrupt("r1")))
             check("input: interrupt request", doc.RootElement.GetProperty("request").GetProperty("subtype").GetString() == "interrupt", "");
