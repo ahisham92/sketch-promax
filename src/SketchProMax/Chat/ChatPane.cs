@@ -1973,10 +1973,13 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         }
     }
 
-    /// <summary>The stream-json line for a turn: text with notes on attached files, and pictures as image blocks.</summary>
+    /// <summary>The stream-json line for a turn: text with notes on attached files, pictures as image blocks and PDFs that fit as document blocks.</summary>
     private static string BuildMessage(string text, List<Attachment> attachments)
     {
         var images = new List<(string, string)>();
+        var pdfs = new List<(string, string)>();
+        int pdfPages = 0;
+        long pdfBytes = 0;
         var notes = new StringBuilder();
         foreach (var a in attachments)
         {
@@ -1986,9 +1989,25 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
                 continue;
             }
             var ext = System.IO.Path.GetExtension(a.Path).ToLowerInvariant();
+            string? pdfNote = null;
+            if (ext == ".pdf")
+            {
+                // Sent whole when it fits, as the Claude app does; otherwise its pages are looked at one by one.
+                var bytes = File.ReadAllBytes(a.Path);
+                var check = PdfAttachment.Assess(bytes, pdfPages, pdfBytes);
+                if (check.Verdict == PdfAttachment.Verdict.Send)
+                {
+                    pdfs.Add((a.Name, Convert.ToBase64String(bytes)));
+                    pdfPages += check.Pages == 0 ? 20 : check.Pages;
+                    pdfBytes += bytes.Length;
+                    pdfNote = "PDF" + (check.Pages > 0 ? $" of {check.Pages} page{(check.Pages == 1 ? "" : "s")}" : "") +
+                              ", included in full with this message: read it from there, not with the Read tool";
+                }
+                else pdfNote = PdfAttachment.Note(check);
+            }
             var kind = ext switch
             {
-                ".pdf" => "PDF; read it with the Read tool",
+                ".pdf" => pdfNote!,
                 ".dwg" or ".dxf" => "CAD drawing; use this path with the Revit tools, e.g. import_cad. It can't be read as text",
                 ".rvt" or ".rfa" => "Revit file; use this path with the Revit tools (e.g. link_model or copy_from_file)",
                 ".xlsx" or ".xls" or ".csv" => "spreadsheet; the Revit tools that take a file (e.g. place_many, boq_check) accept this path",
@@ -2002,7 +2021,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         if (images.Count > 0)
             body += "\n\n(Attached picture" + (images.Count > 1 ? "s" : "") + ": " +
                     string.Join(", ", attachments.Where(a => a.IsImage).Take(MaxImages).Select(a => a.Name)) + ")";
-        return StreamInput.UserMessage(body, images);
+        return StreamInput.UserMessage(body, images, pdfs);
     }
 
     private static string? ImageType(string path) => System.IO.Path.GetExtension(path).ToLowerInvariant() switch

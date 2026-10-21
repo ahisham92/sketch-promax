@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using SketchProMax.Chat;
 
@@ -95,6 +96,32 @@ internal static class ChatTests
                 m.GetProperty("type").GetString() == "user" && m.GetProperty("message").GetProperty("role").GetString() == "user" &&
                 content[0].GetProperty("type").GetString() == "image" && content[0].GetProperty("source").GetProperty("media_type").GetString() == "image/png" &&
                 content[1].GetProperty("text").GetString() == "hi \"there\"", m.GetRawText());
+        }
+        using (var doc = JsonDocument.Parse(StreamInput.UserMessage("read it", [], [("spec.pdf", "JVBERg==")])))
+        {
+            var content = doc.RootElement.GetProperty("message").GetProperty("content");
+            check("input: a PDF goes as a document block before the text",
+                content[0].GetProperty("type").GetString() == "document" &&
+                content[0].GetProperty("source").GetProperty("media_type").GetString() == "application/pdf" &&
+                content[0].GetProperty("source").GetProperty("data").GetString() == "JVBERg==" &&
+                content[0].GetProperty("title").GetString() == "spec.pdf" && content[1].GetProperty("text").GetString() == "read it", doc.RootElement.GetRawText());
+        }
+        {
+            var plain = PdfAttachment.Assess(PdfAttachment.Sample(3));
+            var packed = PdfAttachment.Assess(PdfAttachment.Sample(7, compressed: true));
+            var many = PdfAttachment.Assess(PdfAttachment.Sample(101));
+            var locked = PdfAttachment.Assess(PdfAttachment.Sample(2, locked: true));
+            var full = PdfAttachment.Assess(PdfAttachment.Sample(10), usedPages: 95);
+            var big = PdfAttachment.Assess(PdfAttachment.Sample(1), usedBytes: PdfAttachment.MaxBytes);
+            var notPdf = PdfAttachment.Assess(Encoding.ASCII.GetBytes("hello"));
+            check("pdf: short PDFs go whole, page objects counted also inside compressed object streams",
+                plain is { Verdict: PdfAttachment.Verdict.Send, Pages: 3 } && packed is { Verdict: PdfAttachment.Verdict.Send, Pages: 7 }, $"{plain} {packed}");
+            check("pdf: over 100 pages (alone or with the others), over the size, locked or not a PDF are not sent whole",
+                many.Verdict == PdfAttachment.Verdict.TooManyPages && full.Verdict == PdfAttachment.Verdict.TooManyPages &&
+                big.Verdict == PdfAttachment.Verdict.TooBig && locked.Verdict == PdfAttachment.Verdict.Locked && notPdf.Verdict == PdfAttachment.Verdict.NotPdf,
+                $"{many} {full} {big} {locked} {notPdf}");
+            check("pdf: a PDF not sent whole says to read its pages with redline_read",
+                PdfAttachment.Note(many).Contains("redline_read") && PdfAttachment.Note(many).Contains("101 pages") && PdfAttachment.Note(locked).Contains("password"), PdfAttachment.Note(many));
         }
         using (var doc = JsonDocument.Parse(StreamInput.Interrupt("r1")))
             check("input: interrupt request", doc.RootElement.GetProperty("request").GetProperty("subtype").GetString() == "interrupt", "");

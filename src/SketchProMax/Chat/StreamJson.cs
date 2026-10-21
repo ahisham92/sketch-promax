@@ -338,8 +338,9 @@ internal sealed class StreamParser
 /// <summary>The lines the pane writes to Claude Code's stdin (--input-format stream-json).</summary>
 internal static class StreamInput
 {
-    /// <summary>One user turn: text plus images as base64 content blocks.</summary>
-    public static string UserMessage(string text, IEnumerable<(string MediaType, string Base64)> images)
+    /// <summary>One user turn: text plus images, and PDFs as document blocks, all base64.</summary>
+    public static string UserMessage(string text, IEnumerable<(string MediaType, string Base64)> images,
+                                     IEnumerable<(string Title, string Base64)>? pdfs = null)
     {
         using var stream = new MemoryStream();
         using (var w = new Utf8JsonWriter(stream))
@@ -358,6 +359,18 @@ internal static class StreamInput
                 w.WriteString("media_type", media);
                 w.WriteString("data", data);
                 w.WriteEndObject();
+                w.WriteEndObject();
+            }
+            foreach (var (title, data) in pdfs ?? [])
+            {
+                w.WriteStartObject();
+                w.WriteString("type", "document");
+                w.WriteStartObject("source");
+                w.WriteString("type", "base64");
+                w.WriteString("media_type", "application/pdf");
+                w.WriteString("data", data);
+                w.WriteEndObject();
+                w.WriteString("title", title);
                 w.WriteEndObject();
             }
             w.WriteStartObject();

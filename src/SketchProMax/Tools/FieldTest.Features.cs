@@ -519,6 +519,7 @@ internal static partial class FieldTest
         await Probe(s, "chat.models", () => Models(s.Folder)).ConfigureAwait(false);
         await Probe(s, "chat.prompts", () => Prompts(s.Folder)).ConfigureAwait(false);
         await Probe(s, "chat.notes", Notes).ConfigureAwait(false);
+        await Probe(s, "chat.pdf", PdfAttach).ConfigureAwait(false);
         await Probe(s, "bugs.sync", () => BugSync(s.Folder)).ConfigureAwait(false);
         string? latest = null;
         await Probe(s, "update.endpoint", () => { var (row, tag) = Endpoint(); latest = tag; return row; }).ConfigureAwait(false);
@@ -990,6 +991,25 @@ internal static partial class FieldTest
         return global.Contains("Field test global note") && model.Contains("Field test model note")
             ? Pass($"notes were written and read back (in memory); your Notes file has {yours.Sum(x => x.Notes.Count)} note(s) and was only read")
             : Fail("a note written was not read back");
+    }
+
+    private static (string, string) PdfAttach()
+    {
+        var problems = new List<string>();
+        void Expect(string what, byte[] pdf, Chat.PdfAttachment.Verdict verdict, int pages)
+        {
+            var check = Chat.PdfAttachment.Assess(pdf);
+            if (check.Verdict != verdict || check.Pages != pages) problems.Add($"{what}: {check.Verdict}, {check.Pages} pages (expected {verdict}, {pages})");
+        }
+        Expect("a 3-page PDF", Chat.PdfAttachment.Sample(3), Chat.PdfAttachment.Verdict.Send, 3);
+        Expect("a 5-page PDF with compressed page objects", Chat.PdfAttachment.Sample(5, compressed: true), Chat.PdfAttachment.Verdict.Send, 5);
+        Expect("a 140-page PDF", Chat.PdfAttachment.Sample(140, compressed: true), Chat.PdfAttachment.Verdict.TooManyPages, 140);
+        Expect("a password-protected PDF", Chat.PdfAttachment.Sample(2, locked: true), Chat.PdfAttachment.Verdict.Locked, 2);
+        var line = Chat.StreamInput.UserMessage("hi", [], [("a.pdf", Convert.ToBase64String(Chat.PdfAttachment.Sample(1)))]);
+        if (!line.Contains("\"type\":\"document\"") || !line.Contains("application/pdf")) problems.Add("the message has no PDF document block");
+        return problems.Count == 0
+            ? Pass("short PDFs go whole with the message (also with compressed page objects); over 100 pages or password-protected ones are read page by page or explained")
+            : Fail(string.Join("; ", problems));
     }
 
     // ---- Bug log, updates, the Claude app
