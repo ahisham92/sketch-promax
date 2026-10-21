@@ -75,8 +75,8 @@ internal sealed partial class ChatPane
         _usageFill.Width = Math.Round(_usageBar.Width * Math.Min(1, high ?? 0));
         _usageFill.SetResourceReference(Border.BackgroundProperty, high >= 1 ? Brand.K.DangerText : high >= PlanUsage.WarnAt ? Brand.K.WarningText : Brand.K.Accent);
         _usagePill.ToolTip = meter.Length > 0
-            ? "Your plan's usage, as Claude Code last reported it. Click for each limit and when it resets."
-            : "Your plan's usage shows after Sketch ProMax's next answer (Claude Code reports it with each answer).";
+            ? "Your plan's usage, as last reported with an answer. Click for each limit and when it resets."
+            : "Your plan's usage shows after Sketch ProMax's next answer.";
         AutomationProperties.SetName(_usagePill, "Plan usage: " + (meter.Length > 0 ? meter.Replace("·", ",") : "not reported yet"));
         AutomationProperties.SetHelpText(_usagePill, (string)_usagePill.ToolTip);
         if (_usageMenu.IsOpen) FillUsage();
@@ -107,7 +107,7 @@ internal sealed partial class ChatPane
         _usageList.Children.Add(heading);
         if (_usage is not { Windows.Count: > 0 } usage)
         {
-            _usageList.Children.Add(Brand.Text("Not reported yet. Claude Code reports your plan's usage with each answer, so it shows here after Sketch ProMax's next answer.", Brand.K.Muted, ChatUi.SmallSize));
+            _usageList.Children.Add(Brand.Text("Not reported yet. Your plan's usage comes with each answer, so it shows here after Sketch ProMax's next answer.", Brand.K.Muted, ChatUi.SmallSize));
         }
         else
         {
@@ -137,8 +137,8 @@ internal sealed partial class ChatPane
             }
             var state = usage.Status switch
             {
-                "rejected" => "Claude Code reports a limit is reached: requests wait until it resets" + (usage.UsingExtra ? "." : ", unless extra usage is on."),
-                "allowed_warning" => "Claude Code reports you are near a limit.",
+                "rejected" => "A limit is reached: requests wait until it resets" + (usage.UsingExtra ? "." : ", unless extra usage is on."),
+                "allowed_warning" => "You are near a limit.",
                 _ => "",
             };
             if (usage.UsingExtra) state = (state + " Extra usage is being used.").Trim();
@@ -150,7 +150,7 @@ internal sealed partial class ChatPane
             }
             var age = now - usage.ReadAt;
             var when = usage.ReadAt.ToLocalTime().ToString(age < TimeSpan.FromHours(20) ? "HH:mm" : "ddd d MMM HH:mm", System.Globalization.CultureInfo.InvariantCulture);
-            _usageList.Children.Add(Brand.Text($"As Claude Code reported it with an answer at {when}. Only what it reports is shown, never an estimate: the weekly Opus or Sonnet limit appears only once Claude Code names it as the limit in force.",
+            _usageList.Children.Add(Brand.Text($"As reported with an answer at {when}. Only reported figures are shown, never an estimate: the weekly Opus or Sonnet limit appears only once it is the limit in force.",
                 Brand.K.Muted, ChatUi.SmallSize));
         }
         var close = new Button { Content = "Close", Margin = new Thickness(0, ChatUi.S3, 0, 0), HorizontalAlignment = HorizontalAlignment.Right, MinWidth = 64 };
