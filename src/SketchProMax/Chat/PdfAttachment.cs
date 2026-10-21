@@ -118,7 +118,33 @@ internal static class PdfAttachment
         return why + $". Its text, page by page, is in {textFile}: search it with Grep (pages are headed \"=== Page N of M ===\") and read the parts you need with the Read tool. " +
                (mostlyPictures ? "Most pages have little or no text (drawings or scans), so look at the pages that matter with redline_read (file and page), which shows a PDF page as a picture. "
                                : "For a page's drawings or layout, look at it with redline_read (file and page), which shows a PDF page as a picture. ") +
-               "Tell the user in one line that the file is large and you read the parts that matter, and that the Split button on the attached file (or Split PDF in the pane's Activity tab) makes parts that can be attached whole";
+               "Tell the user in one line that the file is large and you read the parts that matter, and that Split PDF in the pane's Activity tab makes parts that can be attached whole";
+    }
+
+    /// <summary>
+    /// The note on a large PDF that the chat split by itself: its parts, each read in full by its own helper chat
+    /// (read_pdf_part), and its text page by page to find which parts to ask. <paramref name="parts"/> are each part's
+    /// file and pages.
+    /// </summary>
+    public static string PartsNote(Check check, IReadOnlyList<(string File, int First, int Last)> parts, int pages, string? textFile)
+    {
+        var sb = new StringBuilder(check.Verdict switch
+        {
+            Verdict.TooManyPages => $"PDF of {check.Pages} pages",
+            _ => $"PDF of {check.Bytes / (1024.0 * 1024):0.#} MB" + (pages > 0 ? $" and {pages} pages" : ""),
+        });
+        sb.Append($", too large to send whole with what this chat holds, so Sketch ProMax split it into {parts.Count} part{(parts.Count == 1 ? " that is" : "s that are")} read whole:");
+        for (var i = 0; i < parts.Count; i++)
+            sb.Append($"\n    Part {i + 1}: pages {parts[i].First}-{parts[i].Last}: {parts[i].File}");
+        if (textFile is not null)
+            sb.Append($"\n  Its text, page by page, is in {textFile} (pages headed \"=== Page N of M ===\"). ");
+        else sb.Append("\n  Its text couldn't be read, so go by the parts. ");
+        sb.Append("To answer: find the pages the question is about (search the text file with Grep), then ask the part or parts covering them with " +
+                  "read_pdf_part (file and the question in full; parts in parallel when it spans them). Each part is read in full by its own helper, " +
+                  "text and drawings, and answers with page numbers. For a question about the whole file (a summary, every mention of something), when the " +
+                  "user asks for a detailed check or to check all parts (or everything), or when the text can't show where the answer is (drawings or scans with no text), ask every part. Combine the answers into one reply that says which pages each point comes from. Tell the user in one line that the " +
+                  "file was large and which parts you read; they never need to split it themselves");
+        return sb.ToString();
     }
 
     /// <summary>

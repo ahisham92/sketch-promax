@@ -1017,6 +1017,9 @@ internal static partial class FieldTest
             var text = PdfFiles.WriteText(heavy, Path.Combine(folder, "heavy.txt"));
             if (text.Error is not null || text.Pages != 6 || !File.ReadAllText(Path.Combine(folder, "heavy.txt")).Contains("Sample page 4"))
                 problems.Add($"the text of a PDF wasn't written page by page ({text.Error ?? text.Pages + " pages"})");
+            var ready = PdfFiles.ForChat(heavy, Path.Combine(folder, "chat"), 1024 * 1024);
+            if (ready.Parts.Count < 2 || ready.TextFile is null || !File.Exists(Path.Combine(ready.Folder, "parts.json")))
+                problems.Add("a large PDF wasn't made ready for the chat (parts, parts.json and its text)");
             var parts = PdfFiles.Split(heavy, 1024 * 1024, Path.Combine(folder, "parts"));
             if (parts.Count < 2 || parts.Any(p => p.Bytes > 1024 * 1024) || parts[^1].LastPage != 6 || parts.Sum(p => p.LastPage - p.FirstPage + 1) != 6)
                 problems.Add("the split parts are not all under 1 MB with every page once: " + string.Join(", ", parts.Select(p => $"{p.FirstPage}-{p.LastPage} {p.Bytes}")));

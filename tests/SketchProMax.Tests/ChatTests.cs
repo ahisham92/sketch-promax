@@ -155,6 +155,18 @@ internal static class ChatTests
                     $"{size} bytes: " + string.Join("; ", parts.Select(p => $"{Path.GetFileName(p.File)} {p.Bytes}")));
                 var capped = SketchProMax.Tools.PdfFiles.Split(plain, 20 * 1024 * 1024, Path.Combine(folder, "capped"), maxPages: 2);
                 check("pdf files: a part keeps to the page limit", capped.Count == 3 && capped.All(p => p.LastPage - p.FirstPage < 2), capped.Count.ToString());
+                var ready = SketchProMax.Tools.PdfFiles.ForChat(heavy, Path.Combine(folder, "chat"), 1024 * 1024);
+                var manifest = File.ReadAllText(Path.Combine(ready.Folder, "parts.json"));
+                var again = SketchProMax.Tools.PdfFiles.ForChat(heavy, Path.Combine(folder, "chat"), 1024 * 1024);
+                check("pdf files: a large PDF made ready for the chat: parts, their pages in parts.json, its text, reused when attached again",
+                    ready.Parts.Count >= 3 && ready.Pages == 6 && ready.TextFile is not null && File.ReadAllText(ready.TextFile).Contains("Sample page 6") &&
+                    manifest.Contains("\"source\":\"heavy.pdf\"") && manifest.Contains("\"pages\":6") && manifest.Contains("\"first\":1") &&
+                    again.Folder == ready.Folder && again.Parts.Count == ready.Parts.Count && again.TextFile == ready.TextFile, manifest);
+                var note = PdfAttachment.PartsNote(PdfAttachment.Assess(File.ReadAllBytes(heavy), usedBytes: PdfAttachment.MaxBytes),
+                    ready.Parts.Select(p => (p.File, p.FirstPage, p.LastPage)).ToList(), ready.Pages, ready.TextFile);
+                check("pdf: the parts note lists each part's pages and file and says to ask them with read_pdf_part",
+                    note.Contains("Part 1: pages 1-") && note.Contains(ready.Parts[^1].File) && note.Contains("read_pdf_part") && note.Contains(ready.TextFile!) &&
+                    note.Contains("every part"), note);
                 var junk = Path.Combine(folder, "junk.pdf");
                 File.WriteAllText(junk, "not a pdf");
                 var junkRefused = false;
