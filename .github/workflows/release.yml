@@ -65,7 +65,7 @@ jobs:
           Copy-Item dist $pkg -Recurse
           # Every Revit build must carry the loader the manifest names, or installed copies couldn't update in place.
           foreach ($v in 2024, 2025, 2026, 2027) {
-            foreach ($f in "SketchProMax.dll", "SketchProMax.Loader.dll", "SketchProMax.addin", "TritoRevit\TritoRevit.dll", "TritoRevit\TritoRevit.addin") {
+            foreach ($f in "SketchProMax.dll", "SketchProMax.Loader.dll", "SketchProMax.addin", "UglyToad.PdfPig.dll", "TritoRevit\TritoRevit.dll", "TritoRevit\TritoRevit.addin") {
               if (-not (Test-Path "$pkg\dist\Revit$v\$f")) { throw "Package is missing dist\Revit$v\$f" }
             }
           }
