@@ -237,6 +237,7 @@ internal static class ChecklistTests
         check("checklist: what must be in the model reads category and type pattern pairs", pairs is [("Specialty Equipment", "*Fender*"), ("Walls", "*")], string.Join("; ", pairs));
         check("checklist: the type field of a file name",
             TypeField("PRJ1-0100D-ABC-RVT-SB-001.rvt", ["RVT", "C3D"]) == "RVT" && TypeField("PRJ1-0100D-ABC-C3D-SB-001", ["RVT", "C3D"]) == "C3D" && TypeField("PRJ1-0100D-SB-001", ["RVT"]) == "", "");
+        check("checklist: pile parameter slots can be left empty", RuleSlots(", , b", 3).SequenceEqual(["", "", "b"]) && RuleSlots("A, B", 3).SequenceEqual(["A", "B", ""]), "");
         var saved = Renumber(built);
         var oldJson = System.Text.RegularExpressions.Regex.Replace(ToJson(saved), "\"Auto\"\\s*:\\s*\"[a-z0-9]+\"", "\"Auto\":\"\"");
         var reread = FromJson<Definition>(oldJson);

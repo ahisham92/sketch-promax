@@ -910,8 +910,9 @@ internal static class ChecklistFacts
                 .Where(f => f.Category?.BuiltInCategory is BuiltInCategory.OST_StructuralColumns or BuiltInCategory.OST_StructuralFoundation &&
                             f.Symbol is { } sym && (ChecklistMath.LikeAny(sym.Name, pattern) || ChecklistMath.LikeAny(sym.FamilyName, pattern) || ChecklistMath.LikeAny(sym.FamilyName + ": " + sym.Name, pattern))).ToList();
             if (piles.Count == 0) return new Hint($"No piles in the model (column or foundation types named {pattern}" + Rules + ").", Level.Info);
-            var p = ChecklistMath.RuleList(Rule("pileparameters"));
-            var (cutoff, toe, diameter) = (p.ElementAtOrDefault(0) ?? "", p.ElementAtOrDefault(1) ?? "", p.ElementAtOrDefault(2) ?? "");
+            // Cut-off, toe and diameter parameter names by position; an empty slot ("", "", "b") is left out of the test.
+            var slots = ChecklistMath.RuleSlots(Rule("pileparameters"), 3);
+            var (cutoff, toe, diameter) = (slots[0], slots[1], slots[2]);
             var found = new List<string>();
             var ids = new HashSet<long>();
             // Split piles: two or more at the same spot.
@@ -921,7 +922,6 @@ internal static class ChecklistFacts
                 found.Add($"{g.Count()} piles at the same spot, split instead of one element: ids {string.Join(", ", g.Select(f => f.Id.Value))}");
                 foreach (var f in g) ids.Add(f.Id.Value);
             }
-            // The pile's own parameters: filled, and its top at the cut-off and its bottom at the toe.
             var basePoint = BasePoint.GetProjectBasePoint(doc).Position.Z;
             var survey = BasePoint.GetSurveyPoint(doc).Position.Z;
             Parameter? Param(FamilyInstance f, string name) => name.Length == 0 ? null : f.LookupParameter(name) ?? f.Symbol?.LookupParameter(name);
@@ -929,25 +929,52 @@ internal static class ChecklistFacts
                 : q.StorageType == StorageType.ElementId && doc.GetElement(q.AsElementId()) is Autodesk.Revit.DB.Level l ? l.ProjectElevation
                 : q.StorageType == StorageType.Double ? q.AsDouble() : null;
             bool Near(double z, double h) => new[] { z, z - basePoint, z - survey }.Any(v => Math.Abs(v - h) < 0.08); // about 25 mm
+            // A pile modelled as a column: its top is its top level plus the top offset, its toe its base level plus the base offset.
+            double? ColumnEnd(FamilyInstance f, BuiltInParameter level, BuiltInParameter offset) =>
+                f.get_Parameter(level)?.AsElementId() is { } id && doc.GetElement(id) is Autodesk.Revit.DB.Level l ? l.ProjectElevation + (f.get_Parameter(offset)?.AsDouble() ?? 0) : null;
+            var tops = new List<double>();
+            var toes = new List<double>();
             var noParam = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var noDiameter = 0;
             foreach (var f in piles)
             {
                 var label = $"{TypeName(f)} (id {f.Id.Value})";
+                var column = f.Category?.BuiltInCategory == BuiltInCategory.OST_StructuralColumns;
                 var empty = new List<string>();
-                foreach (var name in new[] { cutoff, toe, diameter }.Where(n => n.Length > 0))
+                foreach (var name in new[] { cutoff, toe }.Where(n => n.Length > 0))
                 {
                     var q = Param(f, name);
-                    if (q is null) noParam.Add(name);
+                    if (q is null) { if (!column) noParam.Add(name); }
                     else if (!Filled(q)) empty.Add(name);
                 }
+                // The diameter: the rule's name, else the usual names, on the element or (usually) its type.
+                var dia = new[] { diameter, "b", "Diameter", "d", "D" }.Where(n => n.Length > 0).Select(n => f.Symbol?.LookupParameter(n) ?? f.LookupParameter(n)).FirstOrDefault(q => q is not null);
+                if (dia is null) noDiameter++;
+                else if (!Filled(dia)) empty.Add(dia.Definition?.Name ?? "diameter");
                 if (empty.Count > 0) { found.Add($"{label}: {string.Join(", ", empty)} empty"); ids.Add(f.Id.Value); }
+                if (column)
+                {
+                    var top = ColumnEnd(f, BuiltInParameter.FAMILY_TOP_LEVEL_PARAM, BuiltInParameter.FAMILY_TOP_LEVEL_OFFSET_PARAM);
+                    var bottom = ColumnEnd(f, BuiltInParameter.FAMILY_BASE_LEVEL_PARAM, BuiltInParameter.FAMILY_BASE_LEVEL_OFFSET_PARAM);
+                    if (top is null || bottom is null) { found.Add($"{label}: no top or base level"); ids.Add(f.Id.Value); continue; }
+                    tops.Add(top.Value);
+                    toes.Add(bottom.Value);
+                    continue;
+                }
                 if (f.get_BoundingBox(null) is not { } box) continue;
-                if (Height(Param(f, cutoff)) is { } top && !Near(box.Max.Z, top)) { found.Add($"{label}: its top isn't at its {cutoff}"); ids.Add(f.Id.Value); }
-                if (Height(Param(f, toe)) is { } bottom && !Near(box.Min.Z, bottom)) { found.Add($"{label}: its bottom isn't at its {toe}"); ids.Add(f.Id.Value); }
+                tops.Add(box.Max.Z);
+                toes.Add(box.Min.Z);
+                if (Height(Param(f, cutoff)) is { } cut && !Near(box.Max.Z, cut)) { found.Add($"{label}: its top isn't at its {cutoff}"); ids.Add(f.Id.Value); }
+                if (Height(Param(f, toe)) is { } low && !Near(box.Min.Z, low)) { found.Add($"{label}: its bottom isn't at its {toe}"); ids.Add(f.Id.Value); }
             }
             foreach (var n in noParam) found.Add($"some piles have no parameter named {n}" + Rules);
-            return found.Count == 0 ? new Hint($"{piles.Count} piles, each one element from {cutoff} to {toe}, with {string.Join(", ", p)} filled.", Level.Ok)
-                : new Hint($"{found.Count} pile problems among {piles.Count} piles.", Level.Warn, found) { Ids = ids.ToList() };
+            if (noDiameter > 0) found.Add($"{noDiameter} piles have no diameter parameter (looked for {string.Join(", ", new[] { diameter, "b", "Diameter", "d", "D" }.Where(n => n.Length > 0).Distinct())})");
+            // The cut-off and toe range in shared elevations (the site's datum), for a sanity look.
+            var datum = doc.ActiveProjectLocation.GetProjectPosition(XYZ.Zero).Elevation;
+            string M(double z) => UnitUtils.ConvertFromInternalUnits(z + datum, UnitTypeId.Meters).ToString("0.00", CultureInfo.InvariantCulture);
+            var range = tops.Count == 0 ? "" : $" Cut-off from {M(tops.Min())} to {M(tops.Max())} m, toe from {M(toes.Min())} to {M(toes.Max())} m (shared elevations).";
+            return found.Count == 0 ? new Hint($"{piles.Count} piles, each one element from cut-off to toe, with its diameter filled." + range, Level.Ok)
+                : new Hint($"{found.Count} pile problems among {piles.Count} piles." + range, Level.Warn, found) { Ids = ids.ToList() };
         });
         Add("sharedcoords", () =>
         {

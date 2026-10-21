@@ -168,7 +168,7 @@ internal static class FieldTestCoverage
             "on the test project the units are set to mm, every type in use gets an Assembly Code, a floor plan on a sheet gets the mapped template, a type is renamed from the suggestions, " +
             "the URS naming runs and a wall is selected, then all rolled back"),
         new("checklist.autotests", Issue, "Pre-submission checklist: type field, Revit version, free shapes, LOI matrix, sheets from model views, piles, shared coordinates, what must be there, joints", How.Probe, "",
-            "each test reads the test project with its rule set and no error; a column copied onto itself is reported as a split pile, missing fenders are reported, the version matches the Revit open, " +
+            "each test reads the test project with its rule set and no error; a column copied onto itself is reported as a split pile, column piles report their cut-off and toe range from their levels, missing fenders are reported, the version matches the Revit open, " +
             "and with a package needing no IFC only the NWC name is asked for; rolled back"),
         new("checklist.details", Issue, "Pre-submission checklist: the details panel, beside Revit, and the helper", How.Manual, "",
             "the details panel, side-by-side mode, the Fix confirmations and the helper's answer in the chat are judged by a person",
