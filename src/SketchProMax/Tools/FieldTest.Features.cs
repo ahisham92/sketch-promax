@@ -2156,7 +2156,7 @@ internal static partial class FieldTest
                 ["revitversion"] = app.Application.VersionNumber,
                 ["loimatrix"] = "*>Comments; Walls>Comments",
                 ["piles"] = column?.Symbol.Name ?? "NO-PILE-TYPE",
-                ["pileparameters"] = "Comments, Mark, ZZ Test Diameter",
+                ["pileparameters"] = ", , ZZ Test Diameter", // empty slots: piles as columns take their top and base levels
                 ["mustexist"] = "Walls, Specialty Equipment>*Fender*",
                 ["packagecontents"] = ".rvt, .nwc",
             },
@@ -2182,6 +2182,8 @@ internal static partial class FieldTest
                 problems.Add("mustexist: the missing fenders aren't reported: " + must.Text);
             if (column is not null && facts.Hints.TryGetValue("pilerun", out var pile) && !pile.Items.Any(i => i.IndexOf("same spot", StringComparison.Ordinal) >= 0))
                 problems.Add("pilerun: the split pile isn't reported: " + pile.Text);
+            if (column is not null && facts.Hints.TryGetValue("pilerun", out var run) && run.Text.IndexOf("Cut-off from", StringComparison.Ordinal) < 0)
+                problems.Add("pilerun: no cut-off and toe range: " + run.Text);
             if (facts.Hints.TryGetValue("version", out var version) && version.Text.IndexOf("is open", StringComparison.Ordinal) >= 0) problems.Add("version: " + version.Text);
             if (facts.Hints.TryGetValue("exportnames", out var names) && names.Text.IndexOf("IFC", StringComparison.Ordinal) >= 0) problems.Add("exportnames: asks for an IFC the package doesn't need: " + names.Text);
             if (problems.Count == 0)

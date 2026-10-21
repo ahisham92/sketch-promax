@@ -98,7 +98,8 @@ internal static class ChecklistMath
         new("loimatrix", "LOI matrix (parameters each code needs)", "", "UniFormat code or category>parameters it must have filled, entries separated by ; e.g. A1020*>Material, Length, Diameter; B1010*>Material, Thickness. " +
             "In-place families, Generic Models and DirectShapes are listed for the geometry (eLOD) too (empty: only those).", "loi"),
         new("pileparameters", "Pile parameters (cut-off, toe, diameter)", "Cut-off Level, Toe Level, Diameter", "The pile parameters holding its cut-off level, toe level and diameter, in that order; " +
-            "piles are the types named by Columns that bear on the ground (piles).", "pilerun"),
+            "leave a slot empty to skip it (e.g. , , b). Piles modelled as columns use their top and base levels and offsets for cut-off and toe, and the diameter is looked for in the type " +
+            "(this name, else b, Diameter, d or D). Piles are the types named by Columns that bear on the ground (piles).", "pilerun"),
         new("jointlinks", "Linked models at the joints", "", "Name patterns of the loaded links that meet this model at a joint (other berths, segments or models of your trade); " +
             "their structural elements may not overlap yours (empty: links whose name has this model's discipline, else every loaded link).", "joints"),
         new("mustexist", "What must be in the model", "", "Category>type name pattern that must have at least one element, comma separated, e.g. Specialty Equipment>*Fender*, Specialty Equipment>*Bollard* " +
@@ -166,6 +167,14 @@ internal static class ChecklistMath
             list.Add(new UnitRule(kind, unit, int.Parse(m.Groups["d"].Value, CultureInfo.InvariantCulture)));
         }
         return list;
+    }
+
+    /// <summary>A comma separated rule read by position: <paramref name="count"/> slots, an empty or missing one as "".</summary>
+    public static List<string> RuleSlots(string rule, int count)
+    {
+        var parts = (rule ?? "").Split(',').Select(p => p.Trim()).ToList();
+        while (parts.Count < count) parts.Add("");
+        return parts.Take(count).ToList();
     }
 
     /// <summary>The LOI matrix rule ("A1020*>Material, Length; B1010*>Thickness"): each code or category with the parameters it needs.</summary>
