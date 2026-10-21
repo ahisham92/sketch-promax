@@ -7,7 +7,7 @@ using System.Text.RegularExpressions;
 
 namespace SketchProMax.Chat;
 
-/// <summary>One line of a job's detail: what it was asked, what it wrote, a step it took, or a note.</summary>
+/// <summary>One line of a job's detail as saved before 0.34.33 (read only: <see cref="JobBoard"/> turns it into chat items).</summary>
 internal sealed class JobLine
 {
     /// <summary>you (a message to the job), text (the job's answer), step (a tool call) or note.</summary>
@@ -20,7 +20,8 @@ internal sealed class JobLine
 
 /// <summary>
 /// One parallel job of a chat: its own hidden Claude Code session (kept in the jobs folder's sessions.json under
-/// <see cref="Key"/>), shown as a card in the pane, saved with the chat (<see cref="Conversation.Jobs"/>).
+/// <see cref="Key"/>), shown as a card in the pane and as its own chat (the job view), saved with the chat
+/// (<see cref="Conversation.Jobs"/>).
 /// </summary>
 internal sealed class ChatJob
 {
@@ -42,15 +43,33 @@ internal sealed class ChatJob
     public DateTime Created { get; set; }
     public DateTime Started { get; set; }
     public DateTime Ended { get; set; }
+    /// <summary>The kind of work (ChatAuto: simple, everyday, hard), the model alias and the effort it runs with, set when it opens.</summary>
+    public string Kind { get; set; } = "";
+    public string Model { get; set; } = "";
+    public string Effort { get; set; } = "";
     /// <summary>True once it has a Claude Code session (the next run resumes it).</summary>
     public bool HasSession { get; set; }
-    /// <summary>Messages for it not sent yet: they go as its next run (or right after the current one).</summary>
+    /// <summary>
+    /// Messages for it not sent yet, each saying who sent it ("The user says: …", "The main chat says: …"): they go as
+    /// its next run (or right after the current one).
+    /// </summary>
     public List<string> Inbox { get; set; } = [];
-    public List<JobLine> Log { get; set; } = [];
+    /// <summary>Files attached to the messages waiting in <see cref="Inbox"/> (full paths), sent with them.</summary>
+    public List<string> InboxFiles { get; set; } = [];
+    /// <summary>
+    /// The job's own conversation, as the job view shows it: what it was asked (user items; State "coordinator" when the
+    /// main chat sent it), its answers (assistant), its steps (tool) and notes. At most <see cref="JobBoard.MaxItems"/>.
+    /// </summary>
+    public List<ChatItem> Items { get; set; } = [];
+    /// <summary>The detail lines of a job saved before 0.34.33; turned into <see cref="Items"/> when the chat is opened.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public List<JobLine>? Log { get; set; }
 
     /// <summary>True while it has (or is about to have) a Claude Code process: running or waiting its turn.</summary>
     [JsonIgnore] public bool Active => State is JobBoard.Running or JobBoard.Waiting;
 }
+
+/// <summary>What a job's run is sent: the text (its task, or the messages waiting for it) and the files attached to them.</summary>
+internal sealed record JobMessage(string Text, List<string> Files);
 
 /// <summary>
 /// A chat's parallel jobs and the rules that need no WPF or Revit (the unit tests compile this file): starting one,
@@ -66,14 +85,49 @@ internal sealed class JobBoard
     /// <summary>How many jobs may run at once (Settings, Chat tab): the default, and the range allowed.</summary>
     public const int DefaultLimit = 3, MinLimit = 1, MaxLimit = 6;
 
-    /// <summary>Lines kept in a job's detail, and the longest line kept.</summary>
-    public const int MaxLog = 150, MaxLine = 4000;
+    /// <summary>Items kept in a job's conversation, and the longest text kept in one.</summary>
+    public const int MaxItems = 300, MaxLine = 20000;
+
+    /// <summary>A user item's State when the main chat (the coordinator) sent it, not the user.</summary>
+    public const string FromCoordinator = "coordinator";
+
+    /// <summary>How the messages waiting for a job start, by who sent them.</summary>
+    public const string UserSays = "The user says: ", MainSays = "The main chat says: ";
+
+    /// <summary>What a resumed job is sent when it has no message waiting.</summary>
+    public const string CarryOn = "Carry on with your task.";
 
     public readonly object Gate = new();
     private readonly List<ChatJob> _jobs;
 
     /// <summary>The board of a chat's saved jobs (the same list: changes are saved with the chat).</summary>
-    public JobBoard(List<ChatJob> jobs) => _jobs = jobs;
+    public JobBoard(List<ChatJob> jobs)
+    {
+        _jobs = jobs;
+        foreach (var job in _jobs) Migrate(job);
+    }
+
+    /// <summary>A job saved before 0.34.33 kept its detail as lines: they become its conversation's items.</summary>
+    internal static void Migrate(ChatJob job)
+    {
+        job.Items ??= [];
+        job.Inbox ??= [];
+        job.InboxFiles ??= [];
+        if (job.Log is not { } log) return;
+        if (job.Items.Count == 0)
+            for (var k = 0; k < log.Count; k++)
+            {
+                var line = log[k];
+                job.Items.Add(line.Kind switch
+                {
+                    "you" => new ChatItem { Kind = "user", Text = line.Text, State = k == 0 ? FromCoordinator : "", Time = line.Time },
+                    "text" => new ChatItem { Kind = "assistant", Text = line.Text, Time = line.Time },
+                    "step" => new ChatItem { Kind = "note", Text = "Step: " + line.Text + (line.State == "failed" ? " (failed)" : ""), Time = line.Time },
+                    _ => new ChatItem { Kind = "note", Text = line.Text, Time = line.Time },
+                });
+            }
+        job.Log = null;
+    }
 
     public static int ClampLimit(int limit) => limit < MinLimit ? DefaultLimit : Math.Min(MaxLimit, limit);
 
@@ -123,7 +177,7 @@ internal sealed class JobBoard
             };
             if (job.Title.Length == 0) job.Title = ChatHistory.AutoTitle(task, 60);
             _jobs.Add(job);
-            AddLine(job, "you", job.Task, "", now);
+            AddItem(job, new ChatItem { Kind = "user", Text = job.Task, State = FromCoordinator }, now);
             return job;
         }
     }
@@ -132,18 +186,26 @@ internal sealed class JobBoard
     internal enum Delivery { NotFound, Queued, Reopened }
 
     /// <summary>
-    /// A message for job <paramref name="number"/>: a running job gets it as soon as its current run ends; a finished,
+    /// A message for job <paramref name="number"/>, from the user (typed in the job view, with any
+    /// <paramref name="files"/>) or from the main chat: a running job gets it as soon as its current run ends; a finished,
     /// failed or stopped one opens again with it (it waits to start like a new job).
     /// </summary>
-    public Delivery Message(int number, string text, DateTime now)
+    public Delivery Message(int number, string text, DateTime now, bool fromUser = false, IReadOnlyList<string>? files = null)
     {
         lock (Gate)
         {
             var job = _jobs.FirstOrDefault(j => j.Number == number);
             text = text.Trim();
-            if (job is null || text.Length == 0) return Delivery.NotFound;
-            job.Inbox.Add(text);
-            AddLine(job, "you", text, "", now);
+            files ??= [];
+            if (job is null || text.Length == 0 && files.Count == 0) return Delivery.NotFound;
+            var said = text.Length > 0 ? text : "(see the attached files)";
+            job.Inbox.Add((fromUser ? UserSays : MainSays) + said);
+            job.InboxFiles.AddRange(files);
+            AddItem(job, new ChatItem
+            {
+                Kind = "user", Text = text, State = fromUser ? "" : FromCoordinator,
+                Files = files.ToList(), Name = string.Join(", ", files.Select(f => f.Split('\\', '/').Last())),
+            }, now);
             if (job.Active || job.State == Queued) return Delivery.Queued;
             job.State = Queued;
             job.Summary = "";
@@ -166,7 +228,8 @@ internal sealed class JobBoard
                 job.Now = "";
                 job.Ahead = 0;
                 job.Inbox.Clear();
-                AddLine(job, "note", "Stopped. Send it a message to carry on.", "", now);
+                job.InboxFiles.Clear();
+                AddItem(job, new ChatItem { Kind = "note", Text = "Stopped. Send it a message to carry on." }, now);
             }
             return was;
         }
@@ -176,11 +239,11 @@ internal sealed class JobBoard
     /// The jobs to start now, oldest first, while fewer than <paramref name="limit"/> run: each is marked running and
     /// comes with the message its run starts with (the whole task for a new job, else the messages waiting for it).
     /// </summary>
-    public List<(ChatJob Job, string Message)> ToStart(int limit, DateTime now)
+    public List<(ChatJob Job, JobMessage Message)> ToStart(int limit, DateTime now)
     {
         lock (Gate)
         {
-            var list = new List<(ChatJob, string)>();
+            var list = new List<(ChatJob, JobMessage)>();
             var free = ClampLimit(limit) - _jobs.Count(j => j.Active);
             foreach (var job in _jobs.Where(j => j.State == Queued).OrderBy(j => j.Created).ThenBy(j => j.Number).ToList())
             {
@@ -195,27 +258,42 @@ internal sealed class JobBoard
         }
     }
 
-    /// <summary>The message a run starts with: the task first time, the waiting messages after (the inbox is emptied).</summary>
-    public static string NextMessage(ChatJob job)
+    /// <summary>
+    /// The message a run starts with: the task first time, the waiting messages after, each saying who sent it, with
+    /// their files (the inbox is emptied).
+    /// </summary>
+    public static JobMessage NextMessage(ChatJob job)
+    {
+        var (waiting, files) = TakeWaiting(job);
+        if (job.HasSession) return new JobMessage(waiting.Length > 0 ? waiting : CarryOn, files);
+        var first = "Your job (number " + job.Number + ", \"" + job.Title + "\"):\n\n" + job.Task;
+        return new JobMessage(waiting.Length > 0 ? first + "\n\nSince then:\n\n" + waiting : first, files);
+    }
+
+    /// <summary>The messages waiting for the job, joined, and their files (the inbox is emptied).</summary>
+    private static (string Text, List<string> Files) TakeWaiting(ChatJob job)
     {
         var waiting = string.Join("\n\n", job.Inbox);
+        var files = job.InboxFiles.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         job.Inbox.Clear();
-        if (job.HasSession) return waiting.Length > 0 ? "Message from the user: " + waiting : "Carry on with your task.";
-        var first = "Your job (number " + job.Number + ", \"" + job.Title + "\"):\n\n" + job.Task;
-        return waiting.Length > 0 && !job.Task.Contains(waiting) ? first + "\n\nAlso: " + waiting : first;
+        job.InboxFiles.Clear();
+        return (waiting, files);
     }
 
     /// <summary>
     /// The job's session is gone (made on another PC, deleted): its run starts from the task again, with
     /// <paramref name="pending"/> (the message that run was to start with) after it. The new first message.
     /// </summary>
-    public string Restart(ChatJob job, string pending)
+    public JobMessage Restart(ChatJob job, JobMessage pending)
     {
-        const string fromUser = "Message from the user: ";
         lock (Gate)
         {
             job.HasSession = false;
-            if (pending.StartsWith(fromUser, StringComparison.Ordinal)) job.Inbox.Insert(0, pending.Substring(fromUser.Length));
+            if (pending.Text.StartsWith(UserSays, StringComparison.Ordinal) || pending.Text.StartsWith(MainSays, StringComparison.Ordinal))
+            {
+                job.Inbox.Insert(0, pending.Text);
+                job.InboxFiles.InsertRange(0, pending.Files);
+            }
             return NextMessage(job);
         }
     }
@@ -224,7 +302,7 @@ internal sealed class JobBoard
     /// A run ended. With messages waiting, the job carries on with them (returned; it stays running). Otherwise it is
     /// done (or failed) with <paramref name="summary"/>; null is returned. A job stopped meanwhile stays stopped.
     /// </summary>
-    public string? RunEnded(ChatJob job, bool ok, string summary, DateTime now)
+    public JobMessage? RunEnded(ChatJob job, bool ok, string summary, DateTime now)
     {
         lock (Gate)
         {
@@ -233,7 +311,8 @@ internal sealed class JobBoard
             {
                 job.Summary = summary.Trim();
                 job.State = Running;
-                return "Message from the user: " + string.Join("\n\n", Take(job.Inbox));
+                var (waiting, files) = TakeWaiting(job); // the same process carries on: only the new messages
+                return new JobMessage(waiting, files);
             }
             job.State = ok ? Done : Failed;
             job.Summary = summary.Trim();
@@ -242,13 +321,6 @@ internal sealed class JobBoard
             job.Ahead = 0;
             return null;
         }
-    }
-
-    private static List<string> Take(List<string> inbox)
-    {
-        var all = inbox.ToList();
-        inbox.Clear();
-        return all;
     }
 
     /// <summary>The bridge: the job's change waits its turn (<paramref name="ahead"/> changes before it), or got it (null).</summary>
@@ -274,21 +346,34 @@ internal sealed class JobBoard
                 job.Ended = now;
                 job.Now = "";
                 job.Ahead = 0;
-                AddLine(job, "note", "It stopped when the chat closed. Send it a message to carry on.", "", now);
+                AddItem(job, new ChatItem { Kind = "note", Text = "It stopped when the chat closed. Send it a message to carry on." }, now);
             }
     }
 
-    /// <summary>Adds a line to the job's detail (the oldest go first past <see cref="MaxLog"/>); the line, to update a step later.</summary>
-    public JobLine AddLine(ChatJob job, string kind, string text, string state, DateTime now)
+    /// <summary>
+    /// Adds an item to the job's conversation (the oldest go first past <see cref="MaxItems"/>); its answers and steps are
+    /// what it is doing now. The item, to update a step when it ends.
+    /// </summary>
+    public ChatItem AddItem(ChatJob job, ChatItem item, DateTime now)
     {
         lock (Gate)
         {
-            var line = new JobLine { Kind = kind, Text = text.Length > MaxLine ? text.Substring(0, MaxLine) + "…" : text, State = state, Time = now };
-            job.Log.Add(line);
-            if (job.Log.Count > MaxLog) job.Log.RemoveRange(0, job.Log.Count - MaxLog);
-            if (kind is "text" or "step") job.Now = OneLine(text, 120);
-            return line;
+            if (item.Time == default) item.Time = now;
+            if (item.Text.Length > MaxLine) item.Text = item.Text.Substring(0, MaxLine) + "…";
+            job.Items.Add(item);
+            if (job.Items.Count > MaxItems) job.Items.RemoveRange(0, job.Items.Count - MaxItems);
+            if (item.Kind == "assistant") job.Now = OneLine(item.Text, 120);
+            return item;
         }
+    }
+
+    /// <summary>A note in the job's conversation (it stopped, its session was gone, a problem).</summary>
+    public ChatItem AddNote(ChatJob job, string text, DateTime now) => AddItem(job, new ChatItem { Kind = "note", Text = text }, now);
+
+    /// <summary>The job's conversation as it is now (a copy of the list; the items are the board's own), for the job view.</summary>
+    public List<ChatItem> ItemsOf(int number)
+    {
+        lock (Gate) return _jobs.FirstOrDefault(j => j.Number == number)?.Items.ToList() ?? [];
     }
 
     // ---- Words ----------------------------------------------------------------------------------------------------
@@ -332,7 +417,7 @@ internal sealed class JobBoard
         foreach (var j in finished)
             sb.Append($"\nJob {j.Number} \"{j.Title}\" {(j.State == Failed ? "ended with a problem" : "finished")}:\n{(j.Summary.Length > 0 ? j.Summary.Trim() : "(it gave no summary)")}\n");
         sb.Append(stillOpen > 0 ? $"\n{stillOpen} other job(s) are still open. " : "\nNo other jobs are open. ");
-        sb.Append("Tell the user in a line or two what it did and anything they need to check; the card shows the details. Don't redo its work.");
+        sb.Append("Tell the user in a line or two what it did and anything they need to check; the job's card opens its full conversation. Don't redo its work.");
         return sb.ToString();
     }
 
@@ -346,9 +431,9 @@ internal sealed class JobBoard
 
     private static ChatJob Copy(ChatJob j) => new()
     {
-        Number = j.Number, Key = j.Key, Title = j.Title, Task = j.Task, State = j.State, Summary = j.Summary, Now = j.Now, Ahead = j.Ahead,
+        Number = j.Number, Key = j.Key, Title = j.Title, Task = j.Task, State = j.State, Kind = j.Kind, Model = j.Model, Effort = j.Effort, Summary = j.Summary, Now = j.Now, Ahead = j.Ahead,
         Created = j.Created, Started = j.Started, Ended = j.Ended, HasSession = j.HasSession, Inbox = j.Inbox.ToList(),
-        Log = j.Log.Select(l => new JobLine { Kind = l.Kind, Text = l.Text, State = l.State, Time = l.Time }).ToList(),
+        InboxFiles = j.InboxFiles.ToList(), Items = j.Items.ToList(),
     };
 }
 

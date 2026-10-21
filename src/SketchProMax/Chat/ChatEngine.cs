@@ -25,14 +25,24 @@ internal sealed class ChatEngine : IDisposable
     private readonly Func<ProcessStartInfo>? _start;
 
     /// <param name="start">How to start the process: the main chat's engine when null; a parallel job's own (ClaudeCli.JobStart).</param>
-    public ChatEngine(Dispatcher ui, ClaudeCli.Install install, string? resumeSessionId, string model, Func<ProcessStartInfo>? start = null)
+    /// <param name="coordinator">The main chat's engine: true for a chat With coordinator (it gets chat_jobs and the
+    /// coordinator's instructions), false for a Simple chat.</param>
+    public ChatEngine(Dispatcher ui, ClaudeCli.Install install, string? resumeSessionId, string model, Func<ProcessStartInfo>? start = null, bool coordinator = true, string effort = "")
     {
+        Effort = effort;
         _ui = ui;
         _install = install;
         ResumedFrom = resumeSessionId;
         Model = model;
         _start = start;
+        Coordinator = coordinator;
     }
+
+    /// <summary>The main chat's kind this process was started for (ChatTypes); switching the kind needs a new process.</summary>
+    public bool Coordinator { get; }
+
+    /// <summary>The effort this process runs at (--effort; "" for Claude Code's default); a different one needs a new process.</summary>
+    public string Effort { get; }
 
     /// <summary>The Claude model this process runs (--model); a different choice needs a new process.</summary>
     public string Model { get; }
@@ -73,7 +83,7 @@ internal sealed class ChatEngine : IDisposable
     /// <summary>Starts the process off the UI thread and writes <paramref name="firstLine"/> to it.</summary>
     public Task StartAsync(string firstLine) => Task.Run(() =>
     {
-        var info = _start?.Invoke() ?? ClaudeCli.EngineStart(_install, ResumedFrom, Model);
+        var info = _start?.Invoke() ?? ClaudeCli.EngineStart(_install, ResumedFrom, Model, Coordinator, Effort);
         var process = new Process { StartInfo = info, EnableRaisingEvents = true };
         process.Exited += (_, _) => OnExited();
         process.Start();

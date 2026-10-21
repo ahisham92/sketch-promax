@@ -21,6 +21,8 @@ public sealed class SettingsWindow : Window
     private readonly AgentSettings _settings = AgentSettings.Load();
     private readonly List<(RadioButton Button, Tools.ApprovalLevel Level)> _levels = [];
     private readonly List<(RadioButton Button, Chat.Motion Level)> _motion = [];
+    private readonly List<(RadioButton Button, string Type)> _chatTypes = [];
+    private readonly Dictionary<string, ComboBox> _picks = new(StringComparer.Ordinal);
     private readonly List<string> _noAsk;
     private readonly StackPanel _noAskList = new();
     private readonly CheckBox _autoUpdate = Check("Update Sketch ProMax automatically");
@@ -298,8 +300,59 @@ public sealed class SettingsWindow : Window
             page.Children.Add(Place("ChatAnimations", radio));
         }
         page.Children.Add(Hint("When Windows' Show animations is off (Settings > Accessibility > Visual effects), the chat doesn't animate whatever you pick."));
+        page.Children.Add(SubHeading("New chats"));
+        page.Children.Add(Hint("Each chat keeps its own type, shown under its name, where you can switch it while none of its jobs is open. New chat starts this type; the arrow beside New chat picks the other one.", 2));
+        var defaultType = Chat.ChatTypes.Parse(_settings.ChatTypeDefault);
+        foreach (var type in Chat.ChatTypes.All)
+        {
+            var radio = new RadioButton
+            {
+                GroupName = "chattype", IsChecked = type == defaultType, Margin = new Thickness(0, 6, 0, 0), MinHeight = 24,
+                Content = new StackPanel
+                {
+                    Children =
+                    {
+                        Brand.Text(Chat.ChatTypes.Label(type) + (type == Chat.ChatTypes.Coordinator ? " (recommended)" : "")),
+                        Brand.Text(Chat.ChatTypes.Hint(type) + ".", Brand.K.Muted, size: 11),
+                    },
+                },
+            };
+            AutomationProperties.SetName(radio, "New chats start as: " + Chat.ChatTypes.Label(type));
+            AutomationProperties.SetHelpText(radio, Chat.ChatTypes.Hint(type));
+            _chatTypes.Add((radio, type));
+            page.Children.Add(Place("ChatTypeDefault", radio));
+        }
+        page.Children.Add(SubHeading("Model and effort"));
+        page.Children.Add(Hint("New chats start on these; the pickers under a chat's name change them for that chat (and its new jobs) until set back to Automatic. Automatic sorts each request and job into simple, everyday or hard work by its words and uses the model and effort below, to save your plan's limits.", 2));
+        page.Children.Add(PickRow("New chats' model", "ChatModelDefault", _settings.ChatModelDefault, models: true, automatic: true, b => Place("ChatModelDefault", b)));
+        page.Children.Add(PickRow("New chats' effort", "ChatEffortDefault", _settings.ChatEffortDefault, models: false, automatic: true, b => Place("ChatEffortDefault", b)));
+        foreach (var kind in Chat.ChatAuto.Kinds)
+        {
+            var label = Brand.Text(Chat.ChatAuto.KindLabel(kind), bold: true);
+            label.Margin = new Thickness(0, 10, 0, 0);
+            page.Children.Add(label);
+            page.Children.Add(Hint(Chat.ChatAuto.KindHint(kind) + ".", 0));
+            var what = Chat.ChatAuto.KindLabel(kind);
+            var row = new WrapPanel();
+            switch (kind)
+            {
+                case Chat.ChatAuto.Simple:
+                    row.Children.Add(PickRow("Model", "ChatModelSimple", _settings.ChatModelSimple, models: true, automatic: false, b => Place("ChatModelSimple", b), what));
+                    row.Children.Add(PickRow("Effort", "ChatEffortSimple", _settings.ChatEffortSimple, models: false, automatic: false, b => Place("ChatEffortSimple", b), what));
+                    break;
+                case Chat.ChatAuto.Hard:
+                    row.Children.Add(PickRow("Model", "ChatModelHard", _settings.ChatModelHard, models: true, automatic: false, b => Place("ChatModelHard", b), what));
+                    row.Children.Add(PickRow("Effort", "ChatEffortHard", _settings.ChatEffortHard, models: false, automatic: false, b => Place("ChatEffortHard", b), what));
+                    break;
+                default:
+                    row.Children.Add(PickRow("Model", "ChatModelEveryday", _settings.ChatModelEveryday, models: true, automatic: false, b => Place("ChatModelEveryday", b), what));
+                    row.Children.Add(PickRow("Effort", "ChatEffortEveryday", _settings.ChatEffortEveryday, models: false, automatic: false, b => Place("ChatEffortEveryday", b), what));
+                    break;
+            }
+            page.Children.Add(row);
+        }
         page.Children.Add(SubHeading("Parallel jobs"));
-        page.Children.Add(Hint("The chat can split a request into jobs that work side by side, each shown as a card. Reads run together; changes to the model take turns, one at a time.", 2));
+        page.Children.Add(Hint("A chat With coordinator can split a request into jobs that work side by side, each shown as a card that opens the job's own chat. Reads run together; changes to the model take turns, one at a time.", 2));
         var jobRow = new WrapPanel { Margin = new Thickness(0, 8, 0, 0) };
         var before = Brand.Text("Run up to");
         before.VerticalAlignment = VerticalAlignment.Center;
@@ -314,6 +367,27 @@ public sealed class SettingsWindow : Window
         page.Children.Add(Hint("The model and Brief before running are chosen in the Chat pane, next to the message box.", 12));
         return page;
     }
+
+    /// <summary>A label and a list of models (Claude Code's aliases) or effort levels, optionally with Automatic first.</summary>
+    private FrameworkElement PickRow(string label, string key, string? value, bool models, bool automatic, Func<ComboBox, ComboBox> place, string what = "")
+    {
+        var box = new ComboBox { MinHeight = 26, MinWidth = 120, Margin = new Thickness(6, 0, 12, 0) };
+        if (automatic) box.Items.Add(new ComboBoxItem { Content = "Automatic", Tag = Chat.ChatAuto.Automatic });
+        if (models) foreach (var m in Chat.ChatModels.All) box.Items.Add(new ComboBoxItem { Content = m.Label, Tag = m.Id, ToolTip = m.Hint });
+        else foreach (var e in Chat.ChatAuto.Efforts) box.Items.Add(new ComboBoxItem { Content = Chat.ChatAuto.EffortLabel(e), Tag = e, ToolTip = Chat.ChatAuto.EffortHint(e) });
+        var stored = models ? Chat.ChatAuto.ParseModel(value) : Chat.ChatAuto.ParseEffort(value);
+        box.SelectedItem = box.Items.OfType<ComboBoxItem>().FirstOrDefault(i => (string)i.Tag == stored) ?? box.Items[0];
+        AutomationProperties.SetName(box, (what.Length > 0 ? what + ": " : "") + label);
+        _picks[key] = box;
+        var row = new WrapPanel { Margin = new Thickness(0, 6, 0, 0) };
+        var text = Brand.Text(label);
+        text.VerticalAlignment = VerticalAlignment.Center;
+        row.Children.Add(text);
+        row.Children.Add(place(box));
+        return row;
+    }
+
+    private string Picked(string key, string fallback) => _picks.TryGetValue(key, out var box) && (box.SelectedItem as ComboBoxItem)?.Tag is string v ? v : fallback;
 
     /// <summary>Firm standards in plain English, and the legend seed file with Browse.</summary>
     private StackPanel StandardsPage()
@@ -742,6 +816,15 @@ public sealed class SettingsWindow : Window
         var motion = _motion.FirstOrDefault(m => m.Button.IsChecked == true).Level;
         _settings.ChatAnimations = Chat.MotionLevels.Store(motion);
         _settings.ChatJobLimit = (_jobLimit.SelectedItem as ComboBoxItem)?.Tag is int limit ? limit : Chat.JobBoard.DefaultLimit;
+        _settings.ChatTypeDefault = _chatTypes.FirstOrDefault(t => t.Button.IsChecked == true).Type ?? Chat.ChatTypes.Coordinator;
+        _settings.ChatModelDefault = Picked("ChatModelDefault", Chat.ChatAuto.Automatic);
+        _settings.ChatEffortDefault = Picked("ChatEffortDefault", Chat.ChatAuto.Automatic);
+        _settings.ChatModelSimple = Picked("ChatModelSimple", Chat.ChatAuto.DefaultModel(Chat.ChatAuto.Simple));
+        _settings.ChatModelEveryday = Picked("ChatModelEveryday", Chat.ChatAuto.DefaultModel(Chat.ChatAuto.Everyday));
+        _settings.ChatModelHard = Picked("ChatModelHard", Chat.ChatAuto.DefaultModel(Chat.ChatAuto.Hard));
+        _settings.ChatEffortSimple = Picked("ChatEffortSimple", Chat.ChatAuto.DefaultEffort(Chat.ChatAuto.Simple));
+        _settings.ChatEffortEveryday = Picked("ChatEffortEveryday", Chat.ChatAuto.DefaultEffort(Chat.ChatAuto.Everyday));
+        _settings.ChatEffortHard = Picked("ChatEffortHard", Chat.ChatAuto.DefaultEffort(Chat.ChatAuto.Hard));
         _settings.IdleMinutes = idle;
         _settings.TimeRates = _rates is { Count: > 0 } ? _rates : null;
         _settings.SignatureName = _sigName.Text.Trim();

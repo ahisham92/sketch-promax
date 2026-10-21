@@ -520,6 +520,8 @@ internal static partial class FieldTest
         await Probe(s, "chat.prompts", () => Prompts(s.Folder)).ConfigureAwait(false);
         await Probe(s, "chat.notes", Notes).ConfigureAwait(false);
         await Probe(s, "chat.jobs", _ => ParallelJobs(s.Folder)).ConfigureAwait(false);
+        await Probe(s, "chat.types", () => ChatTypesProbe(s.Folder)).ConfigureAwait(false);
+        await Probe(s, "chat.auto", ChatAutoProbe).ConfigureAwait(false);
         await Probe(s, "chat.pdf", PdfAttach).ConfigureAwait(false);
         await Probe(s, "chat.office", OfficeAttach).ConfigureAwait(false);
         await Probe(s, "bugs.sync", () => BugSync(s.Folder)).ConfigureAwait(false);
@@ -1014,9 +1016,16 @@ internal static partial class FieldTest
         if (JobRouting.Best(conv.Jobs, "check the roof drainage") is { } wrong) problems.Add($"an unrelated request was routed to job {wrong.Number}");
         var first = board.ToStart(2, now);
         if (first.Count != 2 || first[0].Job != sheets || board.ActiveCount != 2) problems.Add($"the limit of 2 started {first.Count} job(s)");
-        if (!first[0].Message.Contains("level")) problems.Add("a new job's first message doesn't carry its task");
-        if (board.Message(sheets.Number, "also add level 6", now) != JobBoard.Delivery.Queued) problems.Add("a message to a running job wasn't queued");
-        if (board.RunEnded(sheets, true, "Made 5 sheets.", now) is not { } next || !next.Contains("level 6")) problems.Add("a running job didn't carry on with the message sent meanwhile");
+        if (!first[0].Message.Text.Contains("level")) problems.Add("a new job's first message doesn't carry its task");
+        // The job's own chat: the task from the coordinator, then a message the user typed in the job's view, with a file.
+        var picture = Path.Combine(folder, "job-view.png");
+        File.WriteAllBytes(picture, [0x89, 0x50, 0x4E, 0x47]);
+        if (board.Message(sheets.Number, "also add level 6", now, fromUser: true, [picture]) != JobBoard.Delivery.Queued) problems.Add("a message to a running job wasn't queued");
+        var view = board.ItemsOf(sheets.Number);
+        if (view.Count != 2 || view[0].State != JobBoard.FromCoordinator || view[1].Kind != "user" || view[1].State == JobBoard.FromCoordinator || view[1].Files.FirstOrDefault() != picture)
+            problems.Add("the job's own chat doesn't show the coordinator's task and then the user's message with its file");
+        if (board.RunEnded(sheets, true, "Made 5 sheets.", now) is not { } next || !next.Text.StartsWith(JobBoard.UserSays + "also add level 6", StringComparison.Ordinal) || next.Files.FirstOrDefault() != picture)
+            problems.Add("a running job didn't carry on with the user's message (and its file) sent meanwhile");
         board.RunEnded(sheets, true, "Made 6 sheets, A-101 to A-106.", now);
         if (sheets.State != JobBoard.Done || board.ToStart(2, now).FirstOrDefault().Job != views) problems.Add("the next job didn't start when one ended");
         if (board.Stop(walls.Number, now) != JobBoard.Running || walls.State != JobBoard.Stopped) problems.Add("Stop didn't stop a running job");
@@ -1046,8 +1055,109 @@ internal static partial class FieldTest
         card.Render(board.Snapshot()[0], now, 3);
         if (card.Headline != "Job 1 · Sheets for levels 1-5" || card.StateShown != "Done" || !BrandText.Clean(card.Headline + " " + card.StateShown))
             problems.Add($"the card says \"{card.Headline}\", \"{card.StateShown}\"");
+        var opened = 0;
+        card.Opened += n => opened = n;
+        card.PressOpen();
+        if (opened != sheets.Number) problems.Add("Open job on the card doesn't ask for that job's view");
+        sheets.Model = "sonnet";
+        sheets.Effort = "medium";
+        card.Render(sheets, now, 3);
+        if (card.RunsOnShown != "Sonnet, medium effort" || !BrandText.Clean(card.RunsOnShown)) problems.Add($"the card says it runs on \"{card.RunsOnShown}\"");
+        // A job saved before 0.34.33 (detail lines) opens with them as its chat.
+        var old = new ChatJob { Number = 9, Key = "oldjob000001", Title = "Old", Task = "t", Log = [new JobLine { Kind = "you", Text = "t" }, new JobLine { Kind = "text", Text = "Done it." }] };
+        _ = new JobBoard([old]);
+        if (old.Log is not null || old.Items.Count != 2 || old.Items[1].Kind != "assistant") problems.Add("a job saved before its own chat existed didn't get its lines as chat items");
         return problems.Count == 0
-            ? Pass("3 jobs opened, a follow-up routed to its job, 2 ran at once and the third started when one ended, changes took turns, the report and the saved jobs read back (temporary folder)")
+            ? Pass("3 jobs opened, a follow-up routed to its job, 2 ran at once and the third started when one ended, changes took turns, a job's own chat holds the coordinator's task and the user's message with its file, Open job asks for its view, the card shows its model and effort, the report and the saved jobs read back (temporary folder)")
+            : Fail(string.Join("; ", problems));
+    }
+
+    /// <summary>
+    /// Chat types without a plan run: a new chat takes the Settings' default type, a chat saved before types is a Simple
+    /// chat unless it has jobs, the type is saved and read back, the switch is refused while jobs are open, and a Simple
+    /// chat's Claude Code gets neither chat_jobs nor the coordinator's instructions (a chat With coordinator gets both).
+    /// </summary>
+    private static (string, string) ChatTypesProbe(string folder)
+    {
+        var problems = new List<string>();
+        var before = Chat.ChatStore.NewType;
+        try
+        {
+            Chat.ChatStore.NewType = Chat.ChatTypes.Simple;
+            if (Chat.ChatStore.New("k", "t").Type != Chat.ChatTypes.Simple) problems.Add("a new chat didn't take the default type");
+            if (Chat.ChatStore.New("k", "t", Chat.ChatTypes.Coordinator).Type != Chat.ChatTypes.Coordinator) problems.Add("New chat with coordinator didn't make one");
+        }
+        finally { Chat.ChatStore.NewType = before; }
+        var legacy = JsonSerializer.Deserialize<Conversation>("""{"Key":"k","Items":[]}""")!;
+        var legacyJobs = JsonSerializer.Deserialize<Conversation>("""{"Key":"k","Items":[],"Jobs":[{"Number":1,"Key":"abcdefabcdef","Title":"x"}]}""")!;
+        if (Chat.ChatTypes.Of(legacy) != Chat.ChatTypes.Simple || Chat.ChatTypes.Of(legacyJobs) != Chat.ChatTypes.Coordinator)
+            problems.Add("chats saved before types don't default to Simple (or With coordinator when they have jobs)");
+        var typed = new Conversation { Key = "k", Type = Chat.ChatTypes.Simple };
+        if (Chat.ChatTypes.Of(JsonSerializer.Deserialize<Conversation>(JsonSerializer.Serialize(typed))!) != Chat.ChatTypes.Simple) problems.Add("the type isn't saved with the chat");
+        if (Chat.ChatTypes.WhyNotSwitch(jobsOpen: true, answering: false) is null || Chat.ChatTypes.WhyNotSwitch(false, false) is not null)
+            problems.Add("switching the type isn't refused only while jobs are open");
+        var install = new Chat.ClaudeCli.Install("claude.exe", "0.0.0");
+        var jobsTool = "mcp__" + Chat.ClaudeCli.ServerName + "__" + ChatJobsTool.ToolName;
+        string Args(System.Diagnostics.ProcessStartInfo i) => i.Arguments;
+        string PromptOf(string args)
+        {
+            var m = System.Text.RegularExpressions.Regex.Match(args, @"--append-system-prompt-file ""?([^""]+?\.md)""?(\s|$)");
+            return m.Success && File.Exists(m.Groups[1].Value) ? File.ReadAllText(m.Groups[1].Value) : "";
+        }
+        var simpleArgs = Args(Chat.ClaudeCli.EngineStart(install, null, "haiku", coordinator: false, effort: "low"));
+        var simplePrompt = PromptOf(simpleArgs);
+        var deniedSimple = System.Text.RegularExpressions.Regex.Match(simpleArgs, @"--disallowedTools ""?([^""\s]+)").Groups[1].Value;
+        if (!deniedSimple.Contains(jobsTool) || simplePrompt.Contains("chat_jobs") || !simplePrompt.Contains("simple chat"))
+            problems.Add("a Simple chat still gets chat_jobs or the coordinator's instructions");
+        if (!simpleArgs.Contains("--effort low") || !simpleArgs.Contains("--model haiku")) problems.Add("the chat's model and effort aren't passed to Claude Code");
+        var coordArgs = Args(Chat.ClaudeCli.EngineStart(install, null, "sonnet", coordinator: true));
+        var coordPrompt = PromptOf(coordArgs);
+        if (Chat.ClaudeCli.JobsAvailable && (System.Text.RegularExpressions.Regex.Match(coordArgs, @"--disallowedTools ""?([^""\s]+)").Groups[1].Value.Contains(jobsTool) || !coordPrompt.Contains("chat_jobs")))
+            problems.Add("a chat With coordinator doesn't get chat_jobs and its instructions");
+        if (!Chat.ChatTypes.All.Select(Chat.ChatTypes.Label).All(BrandText.Clean)) problems.Add("a type's name isn't Sketch ProMax wording");
+        return problems.Count == 0
+            ? Pass("new chats take the default type, older chats are Simple unless they have jobs, the type is saved, switching waits for open jobs, and a Simple chat gets no chat_jobs or coordinator instructions (no plan use)")
+            : Fail(string.Join("; ", problems));
+    }
+
+    /// <summary>
+    /// Automatic model and effort without a plan run: requests are sorted into simple, everyday and hard work, Automatic
+    /// gives each its model and effort, a model or effort picked by hand sticks (also for new jobs), a refused model is
+    /// skipped, and an older Claude Code's refusal of --effort is recognised.
+    /// </summary>
+    private static (string, string) ChatAutoProbe()
+    {
+        var problems = new List<string>();
+        void Kind(string text, string kind)
+        {
+            var got = Chat.ChatAuto.Classify(text).Kind;
+            if (got != kind) problems.Add($"\"{text}\" was sorted as {got}, not {kind}");
+        }
+        Kind("rename the level 2 views to the new standard", Chat.ChatAuto.Simple);
+        Kind("tag all the beams in this view", Chat.ChatAuto.Simple);
+        Kind("make sheets for levels 1 to 5 with their plans", Chat.ChatAuto.Everyday);
+        Kind("check the model against the BEP and list what doesn't comply", Chat.ChatAuto.Hard);
+        Kind("go through the redlines on this drawing and apply them", Chat.ChatAuto.Hard);
+        var auto = Chat.ChatAuto.Pick("rename the views", "auto", "auto");
+        if (auto.Model != "haiku" || auto.Effort != "low" || !auto.ModelAuto) problems.Add($"Automatic picked {auto.Label} for simple work");
+        var hard = Chat.ChatAuto.Pick("compare the spec with the model", "", "");
+        if (hard.Model != "opus" || hard.Effort != "high") problems.Add($"Automatic picked {hard.Label} for hard reasoning");
+        var stuck = Chat.ChatAuto.Pick("rename the views", "opus", "xhigh");
+        if (stuck.Model != "opus" || stuck.Effort != "xhigh" || stuck.ModelAuto || stuck.EffortAuto) problems.Add("a model and effort picked by hand didn't stick");
+        var job = new ChatJob { Title = "Tags", Task = "tag the doors" };
+        var (models, efforts) = (new Dictionary<string, string> { ["simple"] = "sonnet" }, new Dictionary<string, string>());
+        var edited = Chat.ChatAuto.Pick(job.Task, "auto", "auto", models, efforts);
+        if (edited.Model != "sonnet" || edited.Effort != "low") problems.Add("the Settings' model for a kind of work isn't used");
+        var skip = Chat.ChatAuto.Pick("compare the spec", "auto", "auto", refused: ["opus"]);
+        if (skip.Model == "opus") problems.Add("a model the plan refused was picked again");
+        if (Chat.ChatAuto.Pick("x", "auto", "auto", kind: "hard").Model != "opus") problems.Add("the coordinator's kind for a job isn't used");
+        if (!Chat.ChatAuto.IsEffortRefusal("error: unknown option '--effort'") || Chat.ChatAuto.IsEffortRefusal("Warning: Unknown --effort value 'x' — ignoring it"))
+            problems.Add("an older Claude Code's refusal of --effort isn't recognised (or a warning is taken for one)");
+        if (Chat.ChatModels.All.Any(m => m.Id.Contains('-'))) problems.Add("a model is a fixed version, not Claude Code's alias");
+        var said = Chat.ChatAuto.Said(auto);
+        if (!BrandText.Clean(said) || !said.Contains("Haiku")) problems.Add($"the chat's line says \"{said}\"");
+        return problems.Count == 0
+            ? Pass($"requests sorted into simple, everyday and hard work; Automatic picks Haiku/low, Sonnet/medium and Opus/high by default; a hand-picked model and effort stick; the chat says \"{said}\" (no plan use)")
             : Fail(string.Join("; ", problems));
     }
 

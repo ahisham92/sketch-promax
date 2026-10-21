@@ -124,6 +124,7 @@ internal static class ChatUi
         public const string Grid = "M2.5,2.5 L6.5,2.5 L6.5,6.5 L2.5,6.5 Z M9.5,2.5 L13.5,2.5 L13.5,6.5 L9.5,6.5 Z M2.5,9.5 L6.5,9.5 L6.5,13.5 L2.5,13.5 Z M9.5,9.5 L13.5,9.5 L13.5,13.5 L9.5,13.5 Z";
         public const string Sparkle = "M8,2 L9.3,6.7 L14,8 L9.3,9.3 L8,14 L6.7,9.3 L2,8 L6.7,6.7 Z";
         public const string ChevronUp = "M4.5,10 L8,6.5 L11.5,10";
+        public const string ChevronDown = "M4.5,6.5 L8,10 L11.5,6.5";
         public const string ChevronRight = "M6,3.5 L10.5,8 L6,12.5";
         public const string ArrowDown = "M8,3 L8,12.5 M4,8.5 L8,12.5 L12,8.5";
         public const string Square = "M5,5 L11,5 L11,11 L5,11 Z";

@@ -59,6 +59,18 @@ internal sealed class Conversation
     public string AttachedSession { get; set; } = "";
     /// <summary>The chat's parallel jobs (JobBoard): each its own hidden session, shown as a card ("pjob" item) in the chat.</summary>
     public List<ChatJob> Jobs { get; set; } = [];
+    /// <summary>
+    /// What kind of chat it is (<see cref="ChatTypes"/>): "coordinator" (it hands work to parallel jobs) or "simple" (it
+    /// does everything itself). "" in a chat saved before 0.34.33: <see cref="ChatTypes.Of"/> decides.
+    /// </summary>
+    public string Type { get; set; } = "";
+    /// <summary>
+    /// The chat's model (ChatAuto): "auto" picks one per request and per job by the kind of work; an alias (haiku,
+    /// sonnet, opus, fable) picked by hand sticks for this chat and its new jobs. "" (saved before the pickers) is auto.
+    /// </summary>
+    public string Model { get; set; } = "";
+    /// <summary>The chat's effort (ChatAuto): "auto", or a level picked by hand that sticks. "" is auto.</summary>
+    public string Effort { get; set; } = "";
 
     /// <summary>The file it was read from (not saved).</summary>
     [JsonIgnore] public string File { get; set; } = "";
@@ -69,7 +81,42 @@ internal sealed class Conversation
 }
 
 /// <summary>A saved chat as the history drawer lists it, without its messages.</summary>
-internal sealed record ChatSummary(string File, string Key, string ModelTitle, string Name, bool Pinned, DateTime Updated, int Count, string Search);
+internal sealed record ChatSummary(string File, string Key, string ModelTitle, string Name, bool Pinned, DateTime Updated, int Count, string Search, string Type = ChatTypes.Simple);
+
+/// <summary>
+/// The two kinds of chat. With coordinator: the chat can split work into parallel jobs (chat_jobs), each with its own
+/// view. Simple chat: one chat does everything itself, as before jobs existed; it never gets chat_jobs or the
+/// coordinator's instructions. Each chat keeps its kind; it can be switched while none of its jobs is open.
+/// </summary>
+internal static class ChatTypes
+{
+    public const string Coordinator = "coordinator", Simple = "simple";
+    public static readonly string[] All = [Coordinator, Simple];
+
+    /// <summary>
+    /// The chat's kind. A chat saved before kinds existed is a Simple chat (how chats worked until jobs came), unless it
+    /// already has jobs: then it stays With coordinator, so its jobs keep working.
+    /// </summary>
+    public static string Of(Conversation conv) =>
+        conv.Type is Coordinator or Simple ? conv.Type : conv.Jobs is { Count: > 0 } ? Coordinator : Simple;
+
+    /// <summary>A stored kind (the Settings default); anything unknown is With coordinator.</summary>
+    public static string Parse(string? type) => type == Simple ? Simple : Coordinator;
+
+    /// <summary>The kind's name as the pane shows it.</summary>
+    public static string Label(string type) => type == Simple ? "Simple chat" : "With coordinator";
+
+    /// <summary>One line on what the kind does.</summary>
+    public static string Hint(string type) => type == Simple
+        ? "One chat does all the work itself, step by step"
+        : "Splits bigger requests into jobs that work side by side; open a job to chat with it";
+
+    /// <summary>Why the chat's kind can't be switched now, or null when it can.</summary>
+    public static string? WhyNotSwitch(bool jobsOpen, bool answering) =>
+        jobsOpen ? "Jobs are still open in this chat. Stop them or wait until they finish, then switch."
+        : answering ? "Sketch ProMax is still answering. Wait for it (or press Stop), then switch."
+        : null;
+}
 
 /// <summary>
 /// The history drawer's rules, which need no WPF: chat names from the first request, the date groups, search, and the
@@ -141,6 +188,6 @@ internal static class ChatHistory
             if (item.Kind is "user" or "assistant") search.Append(item.Text.Length > 600 ? item.Text.Substring(0, 600) : item.Text).Append('\n');
         }
         var name = conv.Name.Length > 0 ? conv.Name : AutoTitle(conv.Items.FirstOrDefault(i => i.Kind == "user")?.Text);
-        return new ChatSummary(conv.File, conv.Key, conv.Title, name, conv.Pinned, conv.Updated, conv.Items.Count, search.ToString());
+        return new ChatSummary(conv.File, conv.Key, conv.Title, name, conv.Pinned, conv.Updated, conv.Items.Count, search.ToString(), ChatTypes.Of(conv));
     }
 }

@@ -29,7 +29,8 @@ public sealed class ChatJobsTool : IRevitTool
       "task": {"type": "string", "description": "start: the whole task for the job, with every detail it needs (names, levels, types, settings)."},
       "job": {"type": "integer", "description": "message and stop: the job's number."},
       "text": {"type": "string", "description": "message: what to tell the job, in full."},
-      "new": {"type": "boolean", "description": "start: true when it is separate work even though it resembles an existing job."}
+      "new": {"type": "boolean", "description": "start: true when it is separate work even though it resembles an existing job."},
+      "kind": {"type": "string", "enum": ["simple", "everyday", "hard"], "description": "start: the kind of work, which picks the job's model and effort when the chat is on Automatic. simple: mechanical work (rename, tag, list, fill parameters, short summaries); everyday: most Revit work (sheets, views, dimensions, checks, normal modelling); hard: hard reasoning (a spec or BEP against the model, redlines, tricky modelling logic, costing decisions). Left out, it is judged from the task's words."}
     }
     """;
     public string[] Required => [];
@@ -52,6 +53,8 @@ public sealed class ChatJobsTool : IRevitTool
         if (action is not ("start" or "message" or "stop")) return ToolResult.Error("action is start, list, message or stop.");
         if (!coordinator || board is null)
             return ToolResult.Error("Jobs run only from the main chat of the Sketch ProMax pane in Revit. Do the work here yourself instead.");
+        if (!ChatJobs.Coordinator)
+            return ToolResult.Error(SimpleChatRefusal);
         if (!ChatJobs.Available)
             return ToolResult.Error("Jobs aren't available right now (the Sketch ProMax connector is older than the add-in, or the chat is switching). Do the work here yourself.");
         var now = DateTime.UtcNow;
@@ -71,11 +74,13 @@ public sealed class ChatJobsTool : IRevitTool
                         next = $"Not started: this reads as a follow-up of job {similar.Number} (\"{similar.Title}\"). Send it there with " +
                                $"action=message, job={similar.Number}. If it really is separate work, call start again with new=true.",
                     });
+                var kind = (Str(args, "kind") ?? "").Trim().ToLowerInvariant();
+                lock (board.Gate) ChatJobs.Assign(job, kind is ChatAuto.Simple or ChatAuto.Everyday or ChatAuto.Hard ? kind : null);
                 ChatJobs.Changed?.Invoke();
                 var waiting = board.OpenCount > JobBoard.ClampLimit(limit);
                 return ToolResult.Ok(new
                 {
-                    started = true, job = job.Number, title = job.Title,
+                    started = true, job = job.Number, title = job.Title, model = ChatAuto.ModelLabel(job.Model), effort = job.Effort,
                     state = waiting ? "waiting to start (others are running)" : "starting",
                     next = "The user sees its card. Tell them in one line which jobs started, then end your turn: each job reports back when it finishes.",
                 });
@@ -85,7 +90,7 @@ public sealed class ChatJobsTool : IRevitTool
                 var number = Number(args);
                 var text = (Str(args, "text") ?? "").Trim();
                 if (number is null || text.Length == 0) return ToolResult.Error("Give the job's number in 'job' and what to tell it in 'text'.");
-                var sent = board.Message(number.Value, text, now);
+                var sent = board.Message(number.Value, text, now, fromUser: false);
                 if (sent == JobBoard.Delivery.NotFound) return ToolResult.Error($"There is no job {number}. " + board.Describe(limit));
                 ChatJobs.Changed?.Invoke();
                 return ToolResult.Ok(new
@@ -113,6 +118,10 @@ public sealed class ChatJobsTool : IRevitTool
             }
         }
     }
+
+    /// <summary>What start, message and stop say in a Simple chat (ChatTypes).</summary>
+    internal const string SimpleChatRefusal =
+        "This is a simple chat, so it has no jobs: do the work here yourself. (The user can switch the chat to With coordinator in the chat's header.)";
 
     private static string? Str(ToolArgs args, string key) =>
         args.Raw.TryGetValue(key, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;

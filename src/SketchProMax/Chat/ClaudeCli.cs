@@ -143,7 +143,10 @@ internal static class ClaudeCli
     /// Revit's own dialog asks before model changes (per the settings) and always before code, recipes and files written
     /// to a folder Claude chose.
     /// </summary>
-    public static ProcessStartInfo EngineStart(Install install, string? resumeSessionId, string? model = null)
+    /// <param name="coordinator">A chat With coordinator (ChatTypes): it may start jobs with chat_jobs and is told how.
+    /// A Simple chat never gets chat_jobs or those instructions.</param>
+    /// <param name="effort">Claude Code's --effort level (ChatAuto.Efforts); left out when empty or this Claude Code doesn't take it.</param>
+    public static ProcessStartInfo EngineStart(Install install, string? resumeSessionId, string? model = null, bool coordinator = true, string? effort = null)
     {
         Directory.CreateDirectory(WorkFolder);
         var engine = Path.Combine(Folder, "engine");
@@ -153,7 +156,7 @@ internal static class ClaudeCli
         var mcpFile = WriteMcpConfig(engine, pid, claude: install.Path, model: model);
 
         var promptFile = Path.Combine(engine, "prompt-" + pid + ".md");
-        File.WriteAllText(promptFile, Prompt(), new UTF8Encoding(false));
+        File.WriteAllText(promptFile, Prompt(coordinator), new UTF8Encoding(false));
 
         var args = new List<string>
         {
@@ -171,12 +174,14 @@ internal static class ClaudeCli
         // file steps. The summary is what a shrink keeps; anything else is asked for or found with recall_chats.
         var denied = new List<string> { TranscriptRule };
         if (ConnectorIsOlder()) denied.AddRange(SketchProMax.Tools.OutputPaths.CodeTools.Select(t => $"mcp__{ServerName}__{t}"));
-        // Parallel jobs need a connector as new as this add-in (it passes the job on, so its changes take turns).
-        if (!JobsAvailable) denied.Add($"mcp__{ServerName}__{SketchProMax.Tools.ChatJobsTool.ToolName}");
+        // Parallel jobs need a connector as new as this add-in (it passes the job on, so its changes take turns), and a
+        // chat With coordinator: a Simple chat does everything itself.
+        if (!JobsAvailable || !coordinator) denied.Add($"mcp__{ServerName}__{SketchProMax.Tools.ChatJobsTool.ToolName}");
         args.Add("--disallowedTools");
         args.Add(string.Join(",", denied));
         if (!string.IsNullOrEmpty(resumeSessionId)) { args.Add("--resume"); args.Add(resumeSessionId!); }
         if (!string.IsNullOrEmpty(model)) { args.Add("--model"); args.Add(model!); }
+        AddEffort(args, effort);
 
         var command = string.Join(" ", args.Select(Quote));
         var cmdShim = install.Path.EndsWith(".cmd", StringComparison.OrdinalIgnoreCase);
@@ -203,7 +208,7 @@ internal static class ClaudeCli
     /// chat_jobs (a job doesn't start jobs), whole messages rather than streamed words, and its own session: a new id
     /// (<paramref name="newSession"/>) or the one it resumes, never the main chat's.
     /// </summary>
-    public static ProcessStartInfo JobStart(Install install, string jobKey, string? resume, string? newSession, string? model)
+    public static ProcessStartInfo JobStart(Install install, string jobKey, string? resume, string? newSession, string? model, string? effort = null)
     {
         Directory.CreateDirectory(WorkFolder);
         var engine = Path.Combine(Folder, "engine");
@@ -225,6 +230,7 @@ internal static class ClaudeCli
         if (!string.IsNullOrEmpty(resume)) { args.Add("--resume"); args.Add(resume!); }
         else { args.Add("--session-id"); args.Add(newSession ?? Guid.NewGuid().ToString()); }
         if (!string.IsNullOrEmpty(model)) { args.Add("--model"); args.Add(model!); }
+        AddEffort(args, effort);
         var command = string.Join(" ", args.Select(Quote));
         var info = install.Path.EndsWith(".cmd", StringComparison.OrdinalIgnoreCase)
             ? new ProcessStartInfo("cmd.exe", "/d /s /c \"" + Quote(install.Path) + " " + command + "\"")
@@ -252,6 +258,19 @@ internal static class ClaudeCli
     /// pass the job on, so the job's changes couldn't take turns).
     /// </summary>
     public static bool JobsAvailable => !ConnectorIsOlder();
+
+    /// <summary>
+    /// Set once Claude Code refused --effort (a version older than the option, ChatAuto.IsEffortRefusal): from then on
+    /// this Revit session starts it without, at its own default effort.
+    /// </summary>
+    public static volatile bool EffortRefused;
+
+    private static void AddEffort(List<string> args, string? effort)
+    {
+        if (EffortRefused || string.IsNullOrEmpty(effort) || !ChatAuto.Efforts.Contains(effort)) return;
+        args.Add("--effort");
+        args.Add(effort!);
+    }
 
     /// <summary>Writes the MCP config: the connector the installer and ClaudeRegistration register for the desktop app.</summary>
     private static string WriteMcpConfig(string engine, string pid, string name = "mcp-", string? claude = null, string? model = null, string? job = null)
@@ -343,7 +362,7 @@ internal static class ClaudeCli
     }
 
     /// <summary>Sketch ProMax's agent instructions (also sent by the MCP server) plus what is special about the pane.</summary>
-    private static string Prompt() => SketchProMax.Agent.SystemPrompt.Build(AgentSettings.Load().FirmStandards) + """
+    private static string Prompt(bool coordinator) => SketchProMax.Agent.SystemPrompt.Build(AgentSettings.Load().FirmStandards) + """
 
 
         You are chatting in the Sketch ProMax pane inside this Revit window. The person is a structural engineer.
@@ -384,7 +403,14 @@ internal static class ClaudeCli
         - When the chat was shrunk, the summary you have is what it keeps. Don't try to open the earlier conversation's
           file (the .jsonl transcript): it isn't allowed here, and it would cost far more than it saves. If a detail is
           missing, read it from the model or ask the user in one line.
-        """ + JobsPrompt() + Notes() + Recall();
+        """ + (coordinator ? JobsPrompt() : SimplePrompt) + Notes() + Recall();
+
+    /// <summary>A Simple chat (ChatTypes): it may have used jobs before it was switched, so it is told it has none now.</summary>
+    private const string SimplePrompt = """
+
+        - This is a simple chat: there are no jobs here. Do all the work in this chat yourself, step by step, even if
+          earlier messages mention jobs.
+        """;
 
     /// <summary>How the main chat coordinates parallel jobs (chat_jobs); nothing when jobs aren't available.</summary>
     private static string JobsPrompt() => !JobsAvailable ? "" : $"""
@@ -393,7 +419,9 @@ internal static class ClaudeCli
           and check the walls"), or is one long piece of model work, hand it to jobs with chat_jobs. Call action=list first;
           a follow-up that belongs to an existing job ("also add level 6" after a sheets job) goes to that job with
           action=message, never to a new job. Otherwise action=start, once per part: a short title, and the whole task in
-          full with every detail (the job doesn't see this chat). Up to {ChatJobs.Limit} jobs run at once; more wait to start.
+          full with every detail (the job doesn't see this chat), and its kind: simple (rename, tag, list, fill parameters,
+          short summaries), everyday (sheets, views, dimensions, checks, normal modelling) or hard (a spec or BEP against
+          the model, redlines, tricky modelling logic, costing decisions); the kind picks its model and effort. Up to {ChatJobs.Limit} jobs run at once; more wait to start.
           Reads run in parallel; changes to the model take turns, one at a time. Answer quick questions and small single
           changes yourself, without a job.
         - After starting or messaging jobs, say in one line which jobs have it and end your turn: don't wait for them and
@@ -408,15 +436,17 @@ internal static class ClaudeCli
 
         You are one job of the Sketch ProMax chat in this Revit window: the main chat gave you one task, and you work on it
         in the background, perhaps alongside other jobs on the same model. The person is a structural engineer; they see
-        your progress on your card in the chat and can send you messages there.
+        your progress in your own view of the chat (they open your card) and can send you messages there.
         - Do your task completely with the Revit tools from the sketch-promax MCP server. Besides them you have only Read,
           Glob and Grep (to look at files on this PC). Don't start other work.
         - Other jobs may work at the same time. Reads run at once; changes to the model take turns, one at a time, so a
           change may wait a while before it runs: that is normal, don't send it again. Don't change or undo elements
           outside your task.
         - Revit asks the user to approve some calls; if they decline, leave that part and say so.
-        - If you need the person to decide something the model can't settle, end with one short question: they answer on
-          your card.
+        - Messages that reach you later say who sent them: "The user says: …" (the person, typing in your view) or "The
+          main chat says: …" (the coordinator). Both count; the person's word wins if they disagree.
+        - If you need the person to decide something the model can't settle, end with one short question: they answer in
+          your view.
         - End every run with a short report for the main chat, in plain words: what you did (with counts and names),
           anything you couldn't do and why, and what the person should check. A few lines; no tool names, element ids or
           JSON.

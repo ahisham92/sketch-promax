@@ -15,7 +15,7 @@ internal static class ParallelJobTests
         var sheets = board.Start("Sheets for levels 1-5", "Create a sheet for each of levels 1 to 5 with its floor plan.", now, false, out _);
         var walls = board.Start("Wall warnings", "Check the walls for warnings and list them.", now.AddSeconds(1), false, out var notSimilar);
         check("jobs: separate work opens numbered jobs, waiting to start", sheets is { Number: 1, State: JobBoard.Queued } && walls is { Number: 2 } && notSimilar is null
-            && sheets.Key.Length == 12 && sheets.Key != walls.Key && sheets.Log.Count == 1 && sheets.Log[0].Kind == "you", $"{sheets?.Number} {walls?.Number} {notSimilar?.Number}");
+            && sheets.Key.Length == 12 && sheets.Key != walls.Key && sheets.Items.Count == 1 && sheets.Items[0].Kind == "user" && sheets.Items[0].State == JobBoard.FromCoordinator, $"{sheets?.Number} {walls?.Number} {notSimilar?.Number}");
         var follow = board.Start("Level 6", "also add level 6", now, false, out var similar);
         check("jobs: a follow-up is routed to the job it belongs to, not opened", follow is null && similar == sheets && jobs.Count == 2, similar?.Title ?? "none");
         check("jobs: routing scores", JobRouting.Score("also add level 6", sheets!) >= JobRouting.Threshold && JobRouting.Score("also add level 6", walls!) == 0
@@ -33,29 +33,36 @@ internal static class ParallelJobTests
         var started = board.ToStart(2, now);
         check("jobs: no more than the limit start, oldest first", started.Count == 2 && started[0].Job == sheets && started[1].Job == walls
             && board.ActiveCount == 2 && forced!.State == JobBoard.Queued && board.OpenCount == 3, string.Join(",", started.Select(s => s.Job.Number)));
-        check("jobs: a new job's first message is its whole task", started[0].Message.StartsWith("Your job (number 1, \"Sheets for levels 1-5\")") && started[0].Message.Contains("floor plan"), started[0].Message);
+        check("jobs: a new job's first message is its whole task", started[0].Message.Text.StartsWith("Your job (number 1, \"Sheets for levels 1-5\")") && started[0].Message.Text.Contains("floor plan")
+            && started[0].Message.Files.Count == 0, started[0].Message.Text);
         check("jobs: nothing more starts while the limit is reached", board.ToStart(2, now).Count == 0, "");
 
         // ---- Messages, run ends, Stop
         check("jobs: a message to a running job waits for its run to end", board.Message(1, "also add level 6", now) == JobBoard.Delivery.Queued && sheets!.Inbox.Count == 1, "");
         check("jobs: a message to no such job", board.Message(9, "hi", now) == JobBoard.Delivery.NotFound && board.Message(1, "  ", now) == JobBoard.Delivery.NotFound, "");
+        check("jobs: the user's message in the job view, with a file", board.Message(1, "", now, fromUser: true, ["C:\\a\\plan.png"]) == JobBoard.Delivery.Queued
+            && sheets!.Items[^1] is { Kind: "user", State: "", Name: "plan.png" } && sheets.Items[^1].Files.SequenceEqual(["C:\\a\\plan.png"])
+            && sheets.Items[^2].State == JobBoard.FromCoordinator, sheets!.Items[^1].Name);
         var next = board.RunEnded(sheets!, true, "Made 5 sheets.", now);
-        check("jobs: a run that ends with messages waiting carries on with them", next == "Message from the user: also add level 6" && sheets!.State == JobBoard.Running && sheets.Inbox.Count == 0, next ?? "null");
+        check("jobs: a run that ends with messages waiting carries on with them, saying who sent each", next is not null
+            && next.Text == "The main chat says: also add level 6\n\nThe user says: (see the attached files)" && next.Files.SequenceEqual(["C:\\a\\plan.png"])
+            && sheets!.State == JobBoard.Running && sheets.Inbox.Count == 0 && sheets.InboxFiles.Count == 0, next?.Text ?? "null");
         check("jobs: a run that ends is done with its summary", board.RunEnded(sheets!, true, "  Made 6 sheets, A-101 to A-106.  ", now.AddMinutes(2)) is null
             && sheets!.State == JobBoard.Done && sheets.Summary == "Made 6 sheets, A-101 to A-106." && sheets.Ended == now.AddMinutes(2), sheets!.State);
         check("jobs: the next starts when one ends", board.ToStart(2, now).Select(s => s.Job).SequenceEqual([forced!]), "");
         check("jobs: a failed run says so", board.RunEnded(forced!, false, "It couldn't open the view.", now) is null && forced!.State == JobBoard.Failed
             && JobBoard.StateLabel(forced) == "Ended with a problem", forced!.State);
-        check("jobs: a message to a finished job opens it again with the message", board.Message(1, "rename them to S-101 on", now) == JobBoard.Delivery.Reopened
+        check("jobs: a message to a finished job opens it again with the message", board.Message(1, "rename them to S-101 on", now, fromUser: true) == JobBoard.Delivery.Reopened
             && sheets!.State == JobBoard.Queued && sheets.Summary == "", sheets!.State);
         sheets!.HasSession = true;
         var resumed = board.ToStart(3, now).FirstOrDefault(s => s.Job == sheets);
-        check("jobs: a job with a session starts with the messages waiting for it", resumed.Message == "Message from the user: rename them to S-101 on", resumed.Message ?? "");
-        var restarted = board.Restart(sheets, resumed.Message);
-        check("jobs: a job whose session is gone starts from its task, the message after it", !sheets.HasSession && restarted.StartsWith("Your job (number 1")
-            && restarted.EndsWith("Also: rename them to S-101 on") && sheets.Inbox.Count == 0, restarted);
+        check("jobs: a job with a session starts with the messages waiting for it", resumed.Message?.Text == "The user says: rename them to S-101 on", resumed.Message?.Text ?? "");
+        var restarted = board.Restart(sheets, resumed.Message!);
+        check("jobs: a job whose session is gone starts from its task, the message after it", !sheets.HasSession && restarted.Text.StartsWith("Your job (number 1")
+            && restarted.Text.EndsWith("Since then:\n\nThe user says: rename them to S-101 on") && sheets.Inbox.Count == 0, restarted.Text);
+        check("jobs: a resumed job with nothing waiting carries on", JobBoard.NextMessage(new ChatJob { HasSession = true }).Text == JobBoard.CarryOn, "");
         check("jobs: Stop stops a running job and tells which state it was in", board.Stop(2, now) == JobBoard.Running && walls!.State == JobBoard.Stopped
-            && walls.Log[^1].Kind == "note" && board.Stop(2, now) == JobBoard.Stopped && board.Stop(42, now) is null, walls!.State);
+            && walls.Items[^1].Kind == "note" && board.Stop(2, now) == JobBoard.Stopped && board.Stop(42, now) is null, walls!.State);
         check("jobs: a stopped job's run end changes nothing", board.RunEnded(walls!, true, "late", now) is null && walls!.State == JobBoard.Stopped && walls.Summary == "", "");
 
         // ---- Waiting its turn, words on the card, the list, the report
@@ -74,13 +81,21 @@ internal static class ParallelJobTests
         check("jobs: the report for the main chat", report.StartsWith("[Job report from Sketch ProMax, not typed by the user]") && report.Contains("Job 1 \"Sheets for levels 1-5\" finished:\nMade 6 sheets.")
             && report.Contains("Job 3 \"Level 6 sheet\" ended with a problem") && report.Contains("1 other job(s) are still open") && !report.Contains("Claude"), report);
 
-        // ---- Detail lines
+        // ---- The job's own chat (the job view)
         var log = new JobBoard([]);
         var long1 = log.Start("Long", "x", now, true, out _)!;
-        for (var i = 0; i < JobBoard.MaxLog + 20; i++) log.AddLine(long1, "step", "Step " + i, "done", now);
-        var big = log.AddLine(long1, "text", new string('a', JobBoard.MaxLine + 50), "", now);
-        check("jobs: the detail keeps the latest lines, each capped", long1.Log.Count == JobBoard.MaxLog && long1.Log[^2].Text == "Step 169" && big.Text.Length == JobBoard.MaxLine + 1
-            && long1.Now.Length <= 120, long1.Log.Count.ToString());
+        for (var i = 0; i < JobBoard.MaxItems + 20; i++) log.AddItem(long1, new ChatItem { Kind = "tool", Name = "list_views", Text = "Step " + i, State = "done" }, now);
+        var big = log.AddItem(long1, new ChatItem { Kind = "assistant", Text = new string('a', JobBoard.MaxLine + 50) }, now);
+        check("jobs: its chat keeps the latest items, each capped", long1.Items.Count == JobBoard.MaxItems && long1.Items[^2].Text == "Step 319" && big.Text.Length == JobBoard.MaxLine + 1
+            && long1.Now.Length <= 120 && big.Time == now, long1.Items.Count.ToString());
+        var shown = log.ItemsOf(long1.Number);
+        log.AddNote(long1, "later", now);
+        check("jobs: the view's copy of its items doesn't change under it", shown.Count == JobBoard.MaxItems && log.ItemsOf(long1.Number)[^1].Text == "later" && log.ItemsOf(99).Count == 0, "");
+        var legacy = JsonSerializer.Deserialize<ChatJob>("""{"Number":4,"Key":"aaaaaaaaaaaa","Title":"Old","Log":[{"Kind":"you","Text":"Do it"},{"Kind":"step","Text":"List views","State":"failed"},{"Kind":"text","Text":"Done."},{"Kind":"note","Text":"Stopped."}]}""")!;
+        new JobBoard([legacy]);
+        check("jobs: a job saved before job views gets its lines as its chat", legacy.Log is null && legacy.Items.Select(i => i.Kind).SequenceEqual(["user", "note", "assistant", "note"])
+            && legacy.Items[0].State == JobBoard.FromCoordinator && legacy.Items[1].Text == "Step: List views (failed)" && !JsonSerializer.Serialize(legacy).Contains("\"Log\""),
+            string.Join(",", legacy.Items.Select(i => i.Kind)));
 
         // ---- Thread safety: jobs opened from several threads at once get one number each
         var many = new JobBoard([]);
@@ -94,7 +109,7 @@ internal static class ParallelJobTests
         var back = JsonSerializer.Deserialize<Conversation>(json)!;
         new JobBoard(back.Jobs).AfterReload(now);
         check("jobs: saved with the chat and read back; running and waiting ones stopped", back.Jobs.Count == 3 && back.Jobs[0].State == JobBoard.Stopped
-            && back.Jobs[0].Log.Count == sheets.Log.Count + 1 && back.Jobs[2].State == JobBoard.Failed && back.Jobs[0].Key == sheets.Key, json.Length.ToString());
+            && back.Jobs[0].Items.Count == sheets.Items.Count + 1 && back.Jobs[0].Items[0].State == JobBoard.FromCoordinator && back.Jobs[2].State == JobBoard.Failed && back.Jobs[0].Key == sheets.Key, json.Length.ToString());
         var old = JsonSerializer.Deserialize<Conversation>("""{"Key":"m","Items":[]}""")!;
         check("jobs: a chat saved before jobs has none", old.Jobs is { Count: 0 }, "");
 
