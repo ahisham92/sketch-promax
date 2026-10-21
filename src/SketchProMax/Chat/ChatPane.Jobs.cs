@@ -278,6 +278,9 @@ internal sealed partial class ChatPane
             case ResultEvent end:
                 OnJobResult(run, end);
                 return;
+            case UsageEvent usage:
+                OnUsage(usage.Usage); // a job's answers report the plan's usage too
+                return;
             default:
                 return;
         }

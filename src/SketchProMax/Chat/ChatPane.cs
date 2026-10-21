@@ -314,6 +314,10 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         top.Children.Add(_newChat);
         DockPanel.SetDock(_choiceMenu, Dock.Right);
         top.Children.Add(_choiceMenu);
+        // The plan's usage (5-hour and weekly limits), as Claude Code reports it with each answer.
+        BuildUsageMeter();
+        DockPanel.SetDock(_usageMenu, Dock.Right);
+        top.Children.Add(_usageMenu);
         _shrink = ShrinkButton();
         DockPanel.SetDock(_shrink, Dock.Right);
         top.Children.Add(_shrink);
@@ -335,6 +339,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         var pickers = new WrapPanel();
         pickers.Children.Add(_modelPick);
         pickers.Children.Add(_effortPick);
+        pickers.Children.Add(_usagePill);
         names.Children.Add(pickers);
         top.Children.Add(names);
         SetDock(top, Dock.Top);
@@ -639,6 +644,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         _render.Tick += (_, _) => RenderDirty();
         _poll.Tick += (_, _) => Check(quiet: true);
         _idle.Tick += (_, _) => IdleCheck();
+        _idle.Tick += (_, _) => ShowUsage(); // a limit's reset time passing
         _saveSoon.Tick += (_, _) =>
         {
             _saveSoon.Stop();
@@ -2341,6 +2347,9 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
                 break;
             case CompactedEvent compacted:
                 Compacted(compacted, turn);
+                break;
+            case UsageEvent usage:
+                OnUsage(usage.Usage);
                 break;
             case ContextEvent context:
                 // The summarising request of a shrink is not what later messages send.
