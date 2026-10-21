@@ -109,7 +109,7 @@ To publish an update: bump `<Version>` in both project files and push to `main`.
 
 **View filters:** create rule-based filters, apply them to views or templates with colors, halftone, transparency or hide, and color-code a view by any parameter in one step (e.g. doors by fire rating) with a legend.
 
-**Pictures, sketches and cut sheets:** attach photos or PDFs in the desktop app.
+**Pictures, sketches and cut sheets:** attach photos, PDFs, Word (.docx) and PowerPoint (.pptx) files in the chat or the desktop app. In the Revit chat a PDF is read whole, like the Claude app reads it, while the chat's PDFs and pictures stay within 18 MB and 100 pages; a larger PDF has the text of every page read and the pages that matter looked at as pictures, and **Split** on its attachment (or **Split PDF** in the pane's Activity tab) cuts it into parts that are read whole. Word and PowerPoint files give their text (headings, tables, slides in order) and their larger pictures.
 - Build a Revit family from a product photo or manufacturer cut sheet
 - Redraw a hand sketch as clean linework in a drafting view
 - Place pictures or PDF pages into views and sheets

@@ -85,6 +85,7 @@ internal sealed partial class ChatPane
         else if (end.IsError && message.IndexOf("No conversation found", StringComparison.OrdinalIgnoreCase) >= 0)
         {
             _conv.SessionId = "";
+            _conv.AttachedSession = "";
             _engine?.Kill();
             _engine = null;
             Note("This chat couldn't be shrunk because its earlier conversation couldn't be reopened. Your next message starts fresh.");
@@ -100,6 +101,8 @@ internal sealed partial class ChatPane
     private void Compacted(CompactedEvent e, Turn? turn)
     {
         _contextTokens = 0;
+        _conv.AttachedBytes = 0; // the summary that replaces the conversation carries no attachments
+        _conv.AttachedPages = 0;
         if (turn is not null) turn.Compacted = true;
         if (turn is { Shrinking: true })
         {

@@ -120,8 +120,61 @@ internal static class ChatTests
                 many.Verdict == PdfAttachment.Verdict.TooManyPages && full.Verdict == PdfAttachment.Verdict.TooManyPages &&
                 big.Verdict == PdfAttachment.Verdict.TooBig && locked.Verdict == PdfAttachment.Verdict.Locked && notPdf.Verdict == PdfAttachment.Verdict.NotPdf,
                 $"{many} {full} {big} {locked} {notPdf}");
-            check("pdf: a PDF not sent whole says to read its pages with redline_read",
-                PdfAttachment.Note(many).Contains("redline_read") && PdfAttachment.Note(many).Contains("101 pages") && PdfAttachment.Note(locked).Contains("password"), PdfAttachment.Note(many));
+            var noText = PdfAttachment.Note(many, null, false);
+            var withText = PdfAttachment.Note(big, @"C:\a\spec - text.txt", false);
+            var pictures = PdfAttachment.Note(many, @"C:\a\set - text.txt", true);
+            check("pdf: a PDF not sent whole points to its text file, and to redline_read for pages",
+                noText.Contains("redline_read") && noText.Contains("101 pages") && withText.Contains(@"C:\a\spec - text.txt") && withText.Contains("Grep") &&
+                withText.Contains("Split PDF") && pictures.Contains("little or no text") && PdfAttachment.Note(locked, null, false).Contains("unlocked copy"), withText);
+            var counted = PdfAttachment.Assess(PdfAttachment.Sample(1), knownPages: 30);
+            check("pdf: PdfPig's page count is used when larger", counted.Pages == 30, counted.ToString());
+        }
+        {
+            // PdfPig: the text of every page, and splitting by size.
+            var folder = Path.Combine(Path.GetTempPath(), "spm-pdf-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(folder);
+            try
+            {
+                var plain = Path.Combine(folder, "plain.pdf");
+                File.WriteAllBytes(plain, SketchProMax.Tools.PdfFiles.Sample(5));
+                check("pdf files: page count", SketchProMax.Tools.PdfFiles.PageCount(File.ReadAllBytes(plain)) == 5, "");
+                var txt = Path.Combine(folder, "plain.txt");
+                var text = SketchProMax.Tools.PdfFiles.WriteText(plain, txt);
+                var written = File.ReadAllText(txt);
+                check("pdf files: every page's text, headed by page", text.Error is null && text.Pages == 5 && text.PagesWithText == 5 && !text.MostlyPictures &&
+                    written.Contains("=== Page 3 of 5 ===") && written.Contains("Sample page 3") && written.IndexOf("Sample page 2") < written.IndexOf("Sample page 3"), text + written);
+                var heavy = Path.Combine(folder, "heavy.pdf");
+                File.WriteAllBytes(heavy, SketchProMax.Tools.PdfFiles.Sample(6, noise: 420));
+                var size = new FileInfo(heavy).Length;
+                var parts = SketchProMax.Tools.PdfFiles.Split(heavy, 1024 * 1024, Path.Combine(folder, "parts"));
+                var pagesBack = parts.Sum(p => SketchProMax.Tools.PdfFiles.PageCount(File.ReadAllBytes(p.File)) ?? 0);
+                check("pdf files: split into parts under the size, every page once, in order",
+                    size > 2 * 1024 * 1024 && parts.Count >= 3 && parts.All(p => p.Bytes <= 1024 * 1024 && new FileInfo(p.File).Length == p.Bytes) &&
+                    parts[0].FirstPage == 1 && parts[^1].LastPage == 6 && parts.Zip(parts.Skip(1), (a, b) => b.FirstPage == a.LastPage + 1).All(x => x) && pagesBack == 6 &&
+                    Path.GetFileName(parts[0].File).StartsWith("heavy - part 1 (pages 1"),
+                    $"{size} bytes: " + string.Join("; ", parts.Select(p => $"{Path.GetFileName(p.File)} {p.Bytes}")));
+                var capped = SketchProMax.Tools.PdfFiles.Split(plain, 20 * 1024 * 1024, Path.Combine(folder, "capped"), maxPages: 2);
+                check("pdf files: a part keeps to the page limit", capped.Count == 3 && capped.All(p => p.LastPage - p.FirstPage < 2), capped.Count.ToString());
+                var junk = Path.Combine(folder, "junk.pdf");
+                File.WriteAllText(junk, "not a pdf");
+                var junkRefused = false;
+                try { SketchProMax.Tools.PdfFiles.Split(junk, 1024 * 1024, Path.Combine(folder, "junk")); } catch (ArgumentException) { junkRefused = true; }
+                check("pdf files: a damaged PDF is refused with a readable error, and its text says why", junkRefused && SketchProMax.Tools.PdfFiles.WriteText(junk, txt).Error is not null, "");
+            }
+            finally { try { Directory.Delete(folder, true); } catch (IOException) { } }
+        }
+        {
+            var doc = OfficeText.Read(OfficeText.Sample(word: true), word: true).Text;
+            check("word: headings, paragraphs, bullets and tables, without deleted text",
+                doc.Contains("# Concrete works") && doc.Contains("Slabs are C40.") && !doc.Contains("C30") && doc.Contains("- Cover 40 mm") &&
+                doc.Contains("| Element | Grade |") && doc.Contains("| Columns | C50 |"), doc);
+            var slides = OfficeText.Read(OfficeText.Sample(word: false), word: false).Text;
+            check("powerpoint: slides in order with their text",
+                slides.Contains("=== Slide 1 of 2 ===") && slides.Contains("Slide 2 title") && slides.Contains("Point 2") &&
+                slides.IndexOf("Slide 1 title") < slides.IndexOf("Slide 2 title"), slides);
+            var oldRefused = false;
+            try { OfficeText.Read(Encoding.ASCII.GetBytes("old binary .doc"), word: true); } catch (InvalidDataException) { oldRefused = true; }
+            check("word: an old .doc or damaged file is refused with a readable reason", oldRefused, "");
         }
         using (var doc = JsonDocument.Parse(StreamInput.Interrupt("r1")))
             check("input: interrupt request", doc.RootElement.GetProperty("request").GetProperty("subtype").GetString() == "interrupt", "");

@@ -370,7 +370,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         _input.SetResourceReference(StyleProperty, "SpmChatBare");
         AutomationProperties.SetName(_input, "Message to Sketch ProMax");
         AutomationProperties.SetHelpText(_input, "Type your question or request here. Enter sends, Shift+Enter starts a new line, Escape stops the answer. Paste a picture or a file to attach it.");
-        _input.ToolTip = "Type here. Enter sends. Shift+Enter: new line. Paste or drop pictures, PDFs and drawings to attach them.";
+        _input.ToolTip = "Type here. Enter sends. Shift+Enter: new line. Paste or drop pictures, PDFs, Word and PowerPoint files and drawings to attach them.";
         _input.PreviewKeyDown += OnInputKey;
         // A click in the box: once WPF has placed the caret, check Windows' keyboard focus followed (see TakeKeyboard).
         _input.PreviewMouseLeftButtonDown += (_, _) => Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(TakeKeyboard));
@@ -401,7 +401,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         _input.IsKeyboardFocusedChanged += (_, _) => ShowFieldState();
 
         var buttons = new DockPanel { Margin = new Thickness(ChatUi.S1, 0, ChatUi.S2, ChatUi.S2) };
-        _attach = ChatUi.IconButton(ChatUi.Paths.Plus, "Attach files", "Attach pictures, PDFs or drawings (DWG, DXF). You can also paste or drop them here.");
+        _attach = ChatUi.IconButton(ChatUi.Paths.Plus, "Attach files", "Attach pictures, PDFs, Word and PowerPoint files, or drawings (DWG, DXF). You can also paste or drop them here.");
         _attach.Click += (_, _) => PickFiles();
         _prompts = ChatUi.IconButton(ChatUi.Paths.Bookmark, "Saved prompts", "Your saved prompts: pick one to put it in the message box. Save one from any message with ⋯ › Save prompt.");
         _prompts.Click += (_, _) => TogglePrompts();
@@ -1908,7 +1908,11 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         ShowStatus(attachments.Count > 0 ? "Preparing the attachments…" : null);
         try
         {
-            turn.Line = await Task.Run(() => BuildMessage(text, attachments));
+            var used = _conv.SessionId.Length == 0 ? new AttachedSoFar()
+                : _conv.AttachedSession.Length == 0 || _conv.AttachedSession == _conv.SessionId ? new AttachedSoFar { Bytes = _conv.AttachedBytes, Pages = _conv.AttachedPages }
+                : new AttachedSoFar();
+            turn.Line = await Task.Run(() => BuildMessage(text, attachments, used));
+            (_conv.AttachedBytes, _conv.AttachedPages, _conv.AttachedSession) = (used.Bytes, used.Pages, _conv.SessionId);
         }
         catch (Exception ex)
         {
@@ -1973,41 +1977,49 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         }
     }
 
-    /// <summary>The stream-json line for a turn: text with notes on attached files, pictures as image blocks and PDFs that fit as document blocks.</summary>
-    private static string BuildMessage(string text, List<Attachment> attachments)
+    /// <summary>What the chat's session already carries as attachments; BuildMessage adds this message's.</summary>
+    private sealed class AttachedSoFar
+    {
+        public long Bytes;
+        public int Pages;
+    }
+
+    /// <summary>Longer text from a Word or PowerPoint file goes to a text file named in the message instead.</summary>
+    private const int MaxInlineText = 60_000;
+
+    /// <summary>
+    /// The stream-json line for a turn: text with notes on attached files, pictures as image blocks, PDFs that fit what
+    /// the chat already carries (<paramref name="used"/>, updated) as document blocks, and the text of Word and
+    /// PowerPoint files. A PDF too large to send whole has its text written to a file the note names.
+    /// </summary>
+    private static string BuildMessage(string text, List<Attachment> attachments, AttachedSoFar used)
     {
         var images = new List<(string, string)>();
         var pdfs = new List<(string, string)>();
-        int pdfPages = 0;
-        long pdfBytes = 0;
         var notes = new StringBuilder();
+        var contents = new StringBuilder();
+        var pictureNames = new List<string>();
+        void AddImage(string path, string name)
+        {
+            var image = EncodeImage(path);
+            images.Add(image);
+            pictureNames.Add(name);
+            used.Bytes += image.Base64.Length * 3L / 4;
+        }
         foreach (var a in attachments)
         {
             if (a.IsImage && images.Count < MaxImages)
             {
-                images.Add(EncodeImage(a.Path));
+                AddImage(a.Path, a.Name);
                 continue;
             }
             var ext = System.IO.Path.GetExtension(a.Path).ToLowerInvariant();
-            string? pdfNote = null;
-            if (ext == ".pdf")
+            string? read = null;
+            if (ext == ".pdf") read = PdfNote(a, used, pdfs);
+            else if (OfficeText.IsOffice(a.Path)) read = OfficeNote(a, contents, images.Count, (path, name) => AddImage(path, name));
+            var kind = read ?? ext switch
             {
-                // Sent whole when it fits, as the Claude app does; otherwise its pages are looked at one by one.
-                var bytes = File.ReadAllBytes(a.Path);
-                var check = PdfAttachment.Assess(bytes, pdfPages, pdfBytes);
-                if (check.Verdict == PdfAttachment.Verdict.Send)
-                {
-                    pdfs.Add((a.Name, Convert.ToBase64String(bytes)));
-                    pdfPages += check.Pages == 0 ? 20 : check.Pages;
-                    pdfBytes += bytes.Length;
-                    pdfNote = "PDF" + (check.Pages > 0 ? $" of {check.Pages} page{(check.Pages == 1 ? "" : "s")}" : "") +
-                              ", included in full with this message: read it from there, not with the Read tool";
-                }
-                else pdfNote = PdfAttachment.Note(check);
-            }
-            var kind = ext switch
-            {
-                ".pdf" => pdfNote!,
+                ".doc" or ".ppt" => "older Word or PowerPoint file, which can't be read here. Ask the user to save it as .docx or .pptx (File > Save As) and attach that",
                 ".dwg" or ".dxf" => "CAD drawing; use this path with the Revit tools, e.g. import_cad. It can't be read as text",
                 ".rvt" or ".rfa" => "Revit file; use this path with the Revit tools (e.g. link_model or copy_from_file)",
                 ".xlsx" or ".xls" or ".csv" => "spreadsheet; the Revit tools that take a file (e.g. place_many, boq_check) accept this path",
@@ -2018,10 +2030,84 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         }
         var body = text.Length > 0 ? text : attachments.Count == 1 ? "Please look at the attached file." : "Please look at the attached files.";
         if (notes.Length > 0) body += "\n\nAttached files (full paths on this PC):\n" + notes.ToString().TrimEnd();
+        if (contents.Length > 0) body += contents.ToString().TrimEnd();
         if (images.Count > 0)
-            body += "\n\n(Attached picture" + (images.Count > 1 ? "s" : "") + ": " +
-                    string.Join(", ", attachments.Where(a => a.IsImage).Take(MaxImages).Select(a => a.Name)) + ")";
+            body += "\n\n(Attached picture" + (images.Count > 1 ? "s" : "") + ": " + string.Join(", ", pictureNames) + ")";
         return StreamInput.UserMessage(body, images, pdfs);
+    }
+
+    /// <summary>A PDF: sent whole when it fits, as the Claude app does; otherwise its text goes to a file the note names.</summary>
+    private static string PdfNote(Attachment a, AttachedSoFar used, List<(string, string)> pdfs)
+    {
+        var bytes = File.ReadAllBytes(a.Path);
+        // PdfPig opens it only when it could still fit, for an exact page count.
+        var check = PdfAttachment.Assess(bytes, used.Pages, used.Bytes, used.Bytes + bytes.Length <= PdfAttachment.MaxBytes ? PdfFiles.PageCount(bytes) : null);
+        if (check.Verdict == PdfAttachment.Verdict.Send)
+        {
+            pdfs.Add((a.Name, Convert.ToBase64String(bytes)));
+            used.Pages += check.Pages == 0 ? 20 : check.Pages;
+            used.Bytes += bytes.Length;
+            return "PDF" + (check.Pages > 0 ? $" of {check.Pages} page{(check.Pages == 1 ? "" : "s")}" : "") +
+                   ", included in full with this message: read it from there, not with the Read tool";
+        }
+        if (check.Verdict == PdfAttachment.Verdict.NotPdf) return PdfAttachment.Note(check, null, false);
+        var target = ReadFileName(a.Path, "text");
+        var result = PdfFiles.WriteText(a.Path, target);
+        return PdfAttachment.Note(check, result.Error is null ? target : null, result.MostlyPictures);
+    }
+
+    /// <summary>A Word or PowerPoint file: its text in the message (or in a file when long), and its larger pictures while there is room.</summary>
+    private static string OfficeNote(Attachment a, StringBuilder contents, int imagesSoFar, Action<string, string> addImage)
+    {
+        var word = System.IO.Path.GetExtension(a.Path).Equals(".docx", StringComparison.OrdinalIgnoreCase);
+        var what = word ? "Word document" : "PowerPoint file";
+        OfficeText.Content content;
+        try { content = OfficeText.Read(a.Path); }
+        catch (Exception ex) when (ex is InvalidDataException or System.Xml.XmlException)
+        {
+            return $"{what} that couldn't be read ({ex.Message}). Ask the user to save it again as .docx or .pptx, or to export it to PDF and attach that";
+        }
+        string where;
+        if (content.Text.Length == 0) where = "it has no text";
+        else if (content.Text.Length <= MaxInlineText)
+        {
+            contents.Append($"\n\nText of {a.Name}:\n<file name=\"{a.Name}\">\n{content.Text}\n</file>");
+            where = "its text is below";
+        }
+        else
+        {
+            var target = ReadFileName(a.Path, "text");
+            File.WriteAllText(target, content.Text, new UTF8Encoding(false));
+            where = $"its text is long, so it is in {target}: search it with Grep and read the parts you need with the Read tool";
+        }
+        var room = Math.Max(0, MaxImages - imagesSoFar);
+        var shown = 0;
+        if (room > 0 && content.Pictures.Count > 0)
+        {
+            foreach (var (name, bytes) in content.Pictures.Take(room))
+            {
+                var path = ReadFileName(a.Path, name);
+                File.WriteAllBytes(path, bytes);
+                try { addImage(path, $"{a.Name}: {name}"); shown++; }
+                catch (Exception ex) when (ex is NotSupportedException or FileFormatException or ArgumentException or InvalidOperationException or IOException) { }
+            }
+        }
+        var pictures = content.Pictures.Count == 0 ? "" :
+            shown == content.Pictures.Count ? $"; its {shown} picture{(shown == 1 ? " is" : "s are")} attached" :
+            $"; {shown} of its {content.Pictures.Count} pictures {(shown == 1 ? "is" : "are")} attached (the limit is {MaxImages} pictures a message)";
+        return $"{what}; {where}{pictures}";
+    }
+
+    /// <summary>
+    /// A file next to the pasted pictures (kept two weeks, like them) for what was read from <paramref name="source"/>:
+    /// "name stamp - text.txt", or "name stamp - image1.png" for a picture taken out of it.
+    /// </summary>
+    private static string ReadFileName(string source, string what)
+    {
+        Directory.CreateDirectory(ClaudeCli.AttachmentsFolder);
+        var stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss", System.Globalization.CultureInfo.InvariantCulture);
+        var name = $"{System.IO.Path.GetFileNameWithoutExtension(source)} {stamp} - {what}";
+        return System.IO.Path.Combine(ClaudeCli.AttachmentsFolder, what == "text" ? name + ".txt" : name);
     }
 
     private static string? ImageType(string path) => System.IO.Path.GetExtension(path).ToLowerInvariant() switch
@@ -2204,6 +2290,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             // The saved session is gone (deleted, or made on another PC): start fresh with the same message.
             turn.Retried = true;
             _conv.SessionId = "";
+            _conv.AttachedSession = ""; // the fresh session carries this message's attachments: counted as before, never less
             _engine?.Kill();
             _engine = null;
             Note("The earlier conversation couldn't be reopened, so Sketch ProMax starts fresh (it doesn't remember the messages above).");
@@ -2285,6 +2372,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             // The saved session couldn't be reopened (deleted, or from another PC): start fresh with the same message.
             turn.Retried = true;
             _conv.SessionId = "";
+            _conv.AttachedSession = ""; // the fresh session carries this message's attachments: counted as before, never less
             Note("The earlier conversation couldn't be reopened, so Sketch ProMax starts fresh (it doesn't remember the messages above).");
             _ = Deliver(turn);
             return;
@@ -2660,7 +2748,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         {
             Title = "Attach files for Sketch ProMax",
             Multiselect = true,
-            Filter = "Pictures, PDFs and drawings|*.png;*.jpg;*.jpeg;*.gif;*.webp;*.bmp;*.tif;*.tiff;*.pdf;*.dwg;*.dxf|All files|*.*",
+            Filter = "Pictures, PDFs, Word, PowerPoint and drawings|*.png;*.jpg;*.jpeg;*.gif;*.webp;*.bmp;*.tif;*.tiff;*.pdf;*.docx;*.pptx;*.dwg;*.dxf|All files|*.*",
         };
         var owner = Window.GetWindow(this);
         if ((owner is null ? dialog.ShowDialog() : dialog.ShowDialog(owner)) == true) AddFiles(dialog.FileNames);
@@ -2701,6 +2789,18 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             };
             DockPanel.SetDock(remove, Dock.Right);
             row.Children.Add(remove);
+            if (TooLargeToSend(a.Path))
+            {
+                // Read page by page as it is; Split PDF makes parts that are read whole.
+                var split = ChatUi.Ghost(ChatUi.GlyphFile, "Split", "Split " + a.Name + " into parts",
+                    $"{a.Name} is more than {PdfAttachment.MaxBytes / (1024 * 1024)} MB, so the chat reads its text and the pages it needs. " +
+                    "Split it into parts that can be attached and read whole.");
+                split.Padding = new Thickness(4, 0, 4, 0);
+                split.Margin = new Thickness(4, 0, 0, 0);
+                split.Click += (_, _) => SplitPdfWindow.Open(attachment.Path);
+                DockPanel.SetDock(split, Dock.Right);
+                row.Children.Add(split);
+            }
             if (a.IsImage)
             {
                 var thumb = ChatUi.Thumbnail(a.Path, 28);
@@ -2726,6 +2826,13 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             chip.SetResourceReference(Border.BorderBrushProperty, Brand.K.BorderSubtle);
             _chips.Children.Add(chip);
         }
+    }
+
+    private static bool TooLargeToSend(string path)
+    {
+        if (!System.IO.Path.GetExtension(path).Equals(".pdf", StringComparison.OrdinalIgnoreCase)) return false;
+        try { return new FileInfo(path).Length > PdfAttachment.MaxBytes; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return false; }
     }
 
     private void OnPreviewCanPaste(object sender, CanExecuteRoutedEventArgs e)

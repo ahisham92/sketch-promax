@@ -91,6 +91,7 @@ public static class CoreEntry
             "job-button" => CoreCommands.JobButton(),
             "update-button" => CoreCommands.UpdateButton(),
             "send-view" => SendView(),
+            "split-pdf" => UI.SplitPdfWindow.Open(),
             // Bug reports (0.30+): one small zip per report, in Documents\Sketch ProMax\Bugs.
             "report-bug" => Bugs.BugReport.Command(app),
             "bug-folder" => Bugs.BugReport.OpenFolder(),

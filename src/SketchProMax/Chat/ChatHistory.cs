@@ -49,6 +49,14 @@ internal sealed class Conversation
     public int RecallCount { get; set; }
     /// <summary>The least any request of this chat sent to Claude (tokens): what the chat costs empty, so it shrinks on growth.</summary>
     public long ContextFloor { get; set; }
+    /// <summary>
+    /// What this chat's Claude Code session carries as attachments, sent with every message: raw bytes of PDFs and
+    /// pictures, and PDF pages (PdfAttachment's limits). <see cref="AttachedSession"/> is the session they were counted
+    /// for ("" while it had no id yet); a shrink empties them.
+    /// </summary>
+    public long AttachedBytes { get; set; }
+    public int AttachedPages { get; set; }
+    public string AttachedSession { get; set; } = "";
 
     /// <summary>The file it was read from (not saved).</summary>
     [JsonIgnore] public string File { get; set; } = "";
