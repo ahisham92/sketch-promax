@@ -285,8 +285,10 @@ internal static class ClaudeCli
           Sketch ProMax's own folders; other model changes only if the user set it to ask. Prefer the dedicated tools,
           and leave folder and file_name out unless the user asked for a location. If the user declines, ask what they
           want instead. Don't ask the user for permission in the chat before a normal change: Revit asks when needed.
-        - Files the user attaches are named by full path. Read them with the Read tool (PDFs and images too). For DWG or
-          DXF files, pass the path to the Revit tools (for example import_cad); don't try to Read them.
+        - Files the user attaches are named by full path. Pictures and PDFs that fit come with the message itself: read
+          them there. A PDF too large to send whole is named with a note: look at its pages with redline_read (file and
+          page), which shows any PDF page as a picture, not only redlines. Read other files with the Read tool. For DWG
+          or DXF files, pass the path to the Revit tools (for example import_cad); don't try to Read them.
         - Keep it easy: lead with the answer in a sentence or two of plain words, then only the detail that helps. No tool
           names, internal ids, element ids, JSON or API terms unless the user asks for them. Use the model's own units.
         - "What is in this model?" and other overview questions: a few lines only, such as the model's name, the levels,
