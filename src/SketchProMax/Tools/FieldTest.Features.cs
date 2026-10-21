@@ -520,6 +520,7 @@ internal static partial class FieldTest
         await Probe(s, "chat.prompts", () => Prompts(s.Folder)).ConfigureAwait(false);
         await Probe(s, "chat.notes", Notes).ConfigureAwait(false);
         await Probe(s, "chat.pdf", PdfAttach).ConfigureAwait(false);
+        await Probe(s, "chat.office", OfficeAttach).ConfigureAwait(false);
         await Probe(s, "bugs.sync", () => BugSync(s.Folder)).ConfigureAwait(false);
         string? latest = null;
         await Probe(s, "update.endpoint", () => { var (row, tag) = Endpoint(); latest = tag; return row; }).ConfigureAwait(false);
@@ -1007,9 +1008,33 @@ internal static partial class FieldTest
         Expect("a password-protected PDF", Chat.PdfAttachment.Sample(2, locked: true), Chat.PdfAttachment.Verdict.Locked, 2);
         var line = Chat.StreamInput.UserMessage("hi", [], [("a.pdf", Convert.ToBase64String(Chat.PdfAttachment.Sample(1)))]);
         if (!line.Contains("\"type\":\"document\"") || !line.Contains("application/pdf")) problems.Add("the message has no PDF document block");
+        var folder = Path.Combine(Path.GetTempPath(), "SketchProMax-field-pdf-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(folder);
+            var heavy = Path.Combine(folder, "heavy.pdf");
+            File.WriteAllBytes(heavy, PdfFiles.Sample(6, noise: 420));
+            var text = PdfFiles.WriteText(heavy, Path.Combine(folder, "heavy.txt"));
+            if (text.Error is not null || text.Pages != 6 || !File.ReadAllText(Path.Combine(folder, "heavy.txt")).Contains("Sample page 4"))
+                problems.Add($"the text of a PDF wasn't written page by page ({text.Error ?? text.Pages + " pages"})");
+            var parts = PdfFiles.Split(heavy, 1024 * 1024, Path.Combine(folder, "parts"));
+            if (parts.Count < 2 || parts.Any(p => p.Bytes > 1024 * 1024) || parts[^1].LastPage != 6 || parts.Sum(p => p.LastPage - p.FirstPage + 1) != 6)
+                problems.Add("the split parts are not all under 1 MB with every page once: " + string.Join(", ", parts.Select(p => $"{p.FirstPage}-{p.LastPage} {p.Bytes}")));
+        }
+        finally { try { Directory.Delete(folder, true); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { } }
         return problems.Count == 0
-            ? Pass("short PDFs go whole with the message (also with compressed page objects); over 100 pages or password-protected ones are read page by page or explained")
+            ? Pass("short PDFs go whole with the message (also with compressed page objects); larger ones have their text written page by page and split into parts under the size")
             : Fail(string.Join("; ", problems));
+    }
+
+    private static (string, string) OfficeAttach()
+    {
+        var doc = Chat.OfficeText.Read(Chat.OfficeText.Sample(word: true), word: true).Text;
+        var slides = Chat.OfficeText.Read(Chat.OfficeText.Sample(word: false), word: false).Text;
+        var problems = new List<string>();
+        if (!doc.Contains("# Concrete works") || !doc.Contains("| Columns | C50 |") || doc.Contains("C30")) problems.Add("the Word text is wrong: " + doc);
+        if (!slides.Contains("=== Slide 2 of 2 ===") || !slides.Contains("Slide 2 title")) problems.Add("the PowerPoint text is wrong: " + slides);
+        return problems.Count == 0 ? Pass("Word text (headings, bullets, table rows, no deleted text) and PowerPoint slides in order are read") : Fail(string.Join("; ", problems));
     }
 
     // ---- Bug log, updates, the Claude app

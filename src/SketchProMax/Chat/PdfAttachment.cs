@@ -9,15 +9,16 @@ namespace SketchProMax.Chat;
 
 /// <summary>
 /// How an attached PDF goes to the chat: whole, as a document block (read like the Claude app reads it, text and pages),
-/// when it fits the API's limits; otherwise named by path with a note on how to look at its pages. Claude Code's Read
+/// when it fits the API's limits with what the chat already sent; otherwise named by path with its text in a file
+/// and a note on how to look at its pages. Claude Code's Read
 /// tool can't be relied on for PDFs on Windows (larger ones need page rendering it doesn't have there).
 /// </summary>
 internal static class PdfAttachment
 {
-    /// <summary>The API reads at most 100 PDF pages per request.</summary>
+    /// <summary>The API reads at most 100 PDF pages per request, and each request carries the whole chat.</summary>
     public const int MaxPages = 100;
 
-    /// <summary>Raw bytes of all PDFs in one message: base64 grows them by a third, and a request is at most 32 MB with the pictures.</summary>
+    /// <summary>Raw bytes of all PDFs and pictures in one chat: base64 grows them by a third, and a request is at most 32 MB.</summary>
     public const long MaxBytes = 18L * 1024 * 1024;
 
     public enum Verdict { Send, TooBig, TooManyPages, PagesUnknown, Locked, NotPdf }
@@ -25,16 +26,18 @@ internal static class PdfAttachment
     public sealed record Check(Verdict Verdict, int Pages, long Bytes);
 
     /// <summary>
-    /// Whether <paramref name="bytes"/> can go whole, given what is already in the message (<paramref name="usedPages"/>,
-    /// <paramref name="usedBytes"/>). A PDF whose pages can't be counted goes only when it is small, so a long one that hides
+    /// Whether <paramref name="bytes"/> can go whole, given what this chat already sent (<paramref name="usedPages"/>,
+    /// <paramref name="usedBytes"/>): Claude Code sends the whole conversation with each message, earlier PDFs and pictures
+    /// too, and past the API's limit it quietly leaves them out. <paramref name="knownPages"/> is PdfPig's count, when it
+    /// could open the file. A PDF whose pages can't be counted goes only when it is small, so a long one that hides
     /// its page tree never makes the API refuse the whole message.
     /// </summary>
-    public static Check Assess(byte[] bytes, int usedPages = 0, long usedBytes = 0)
+    public static Check Assess(byte[] bytes, int usedPages = 0, long usedBytes = 0, int? knownPages = null)
     {
         var text = Encoding.GetEncoding("ISO-8859-1").GetString(bytes);
         if (!text.StartsWith("%PDF", StringComparison.Ordinal) && text.IndexOf("%PDF", 0, Math.Min(text.Length, 1024), StringComparison.Ordinal) < 0)
             return new Check(Verdict.NotPdf, 0, bytes.Length);
-        var pages = Pages(text);
+        var pages = Math.Max(knownPages ?? 0, Pages(text));
         if (Regex.IsMatch(text, @"/Encrypt\s+(\d+\s+\d+\s+R|<<)")) return new Check(Verdict.Locked, pages, bytes.Length);
         if (usedBytes + bytes.Length > MaxBytes) return new Check(Verdict.TooBig, pages, bytes.Length);
         if (pages == 0) return new Check(bytes.Length <= 2_000_000 && usedPages + 20 <= MaxPages ? Verdict.Send : Verdict.PagesUnknown, 0, bytes.Length);
@@ -94,20 +97,29 @@ internal static class PdfAttachment
         catch (InvalidDataException) { return null; }
     }
 
-    /// <summary>The note on a PDF that is not sent whole: why, and how to look at it instead.</summary>
-    public static string Note(Check check) => check.Verdict switch
+    /// <summary>
+    /// The note on a PDF that is not sent whole: why, and how to read it instead: its text, page by page, in
+    /// <paramref name="textFile"/> (null when it couldn't be read), and any page as a picture with redline_read.
+    /// </summary>
+    public static string Note(Check check, string? textFile, bool mostlyPictures)
     {
-        Verdict.Locked => "password-protected PDF, so it can't be read. Ask the user for an unlocked copy, or to export the pages they mean as pictures",
-        Verdict.NotPdf => "named .pdf but not a PDF file; read it with the Read tool if it is text",
-        _ => (check.Verdict switch
-             {
-                 Verdict.TooManyPages => $"PDF of {check.Pages} pages, more than the {MaxPages} that can be sent whole in one message",
-                 Verdict.TooBig => $"PDF of {check.Bytes / (1024.0 * 1024):0.#} MB, more than can be sent whole in one message",
-                 _ => "large PDF whose pages couldn't be counted, so it isn't sent whole",
-             }) +
-             ". Look at the pages that matter with redline_read (file and page): it shows any PDF page as a picture. " +
-             "Tell the user in one line that you are reading it page by page",
-    };
+        if (check.Verdict == Verdict.NotPdf) return "named .pdf but not a PDF file; read it with the Read tool if it is text";
+        var why = check.Verdict switch
+        {
+            Verdict.Locked => "PDF with a password or restrictions, so it can't be sent whole",
+            Verdict.TooManyPages => $"PDF of {check.Pages} pages, more than can be sent whole (at most {MaxPages} pages in a chat)",
+            Verdict.TooBig => $"PDF of {check.Bytes / (1024.0 * 1024):0.#} MB, more than can be sent whole (at most {MaxBytes / (1024 * 1024)} MB of PDFs and pictures in a chat)",
+            _ => "large PDF whose pages couldn't be counted, so it isn't sent whole",
+        };
+        if (textFile is null)
+            return why + (check.Verdict == Verdict.Locked
+                ? ", and its text couldn't be read either. Ask the user for an unlocked copy, or to export the pages they mean as pictures"
+                : ". Look at the pages that matter with redline_read (file and page): it shows any PDF page as a picture. Tell the user in one line that you are reading it page by page");
+        return why + $". Its text, page by page, is in {textFile}: search it with Grep (pages are headed \"=== Page N of M ===\") and read the parts you need with the Read tool. " +
+               (mostlyPictures ? "Most pages have little or no text (drawings or scans), so look at the pages that matter with redline_read (file and page), which shows a PDF page as a picture. "
+                               : "For a page's drawings or layout, look at it with redline_read (file and page), which shows a PDF page as a picture. ") +
+               "Tell the user in one line that the file is large and you read the parts that matter, and that the Split button on the attached file (or Split PDF in the pane's Activity tab) makes parts that can be attached whole";
+    }
 
     /// <summary>
     /// A small PDF of <paramref name="pages"/> blank pages for the tests and the field test: its page objects in the file,
