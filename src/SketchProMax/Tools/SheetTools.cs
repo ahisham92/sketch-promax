@@ -265,21 +265,29 @@ public sealed class ExportPdfTool : IRevitTool
     public string Description =>
         "Print sheets or views to PDF (a print/issue set). Defaults to one combined file in Documents\\SketchProMax. Sheets " +
         "go through the issue check first (issue_check), as issue_drawings does: while it has open items for them nothing is " +
-        "exported and the result lists them. Views that are not sheets are exported straight away.";
+        "exported and the result lists them. Views that are not sheets are exported straight away. For a print the user only " +
+        "wants to look at (a check print, a review set, not an issue or submission) pass check_print true: the issue check is " +
+        "skipped. sheet_set takes the sheets from a saved View/Sheet Set and pdf_setup uses a saved PDF export setup (paper " +
+        "size, colour, zoom, hidden items) instead of writing export code.";
     public string PropertiesJson => """
     {
-      "view_ids": {"type": "array", "items": {"type": "integer"}, "description": "Sheets or views, in order."},
+      "view_ids": {"type": "array", "items": {"type": "integer"}, "description": "Sheets or views, in order. Or give sheet_set."},
+      "sheet_set": {"type": "string", "description": "Name of a saved View/Sheet Set (Revit's Print dialog): its sheets, by sheet number, then its views. Used when view_ids is not given."},
+      "pdf_setup": {"type": "string", "description": "Name of a saved PDF export setup (Revit's Export PDF dialog): its paper size, orientation, colour, zoom and hidden items. Default: Revit's defaults."},
+      "check_print": {"type": "boolean", "description": "true: an internal check print, not an issue or submission. The issue check is skipped and nothing is recorded as issued. Use only when the user says it is for checking or review."},
       "file_name": {"type": "string", "description": "Name for the combined PDF (no extension)."},
       "combine": {"type": "boolean", "description": "One PDF (default true) or one file per sheet."},
       "folder": {"type": "string"},
       "name_pattern": {"type": "string", "description": "One file per sheet named from the pattern, e.g. '{number} - {name}' or 'PRJ-{number}-{revision}'. Placeholders: {number} {name} {revision} {view} {date} {project}. The result checks each file name."}
     }
     """;
-    public string[] Required => ["view_ids"];
+    public string[] Required => [];
     public bool ModifiesModel => false;
 
     public ToolResult Execute(UIApplication app, ToolArgs args)
     {
+        // A check print is for looking at, not an issue: the issue check (and its model-wide items) doesn't gate it.
+        if (args.OptBool("check_print")) return Export(app, args);
         // From Claude (a bridge call), sheets go through the issue check first, as Issue drawings does and as the ribbon's
         // Export PDF does (UI/IssueGateWindow.Before; Approvals.Call is null there, so it isn't checked twice). Views that
         // are not sheets are not an issue set. Other tools' own exports (redline_apply's revised sheets) call Export.
@@ -306,7 +314,39 @@ public sealed class ExportPdfTool : IRevitTool
 
     /// <summary>The sheets among view_ids (placeholders left out): what the issue check gates.</summary>
     private static List<ViewSheet> Sheets(Document doc, ToolArgs args) =>
-        args.LongList("view_ids").Select(id => doc.GetElement(new ElementId(id))).OfType<ViewSheet>().Where(s => !s.IsPlaceholder).ToList();
+        Ids(doc, args).Select(doc.GetElement).OfType<ViewSheet>().Where(s => !s.IsPlaceholder).ToList();
+
+    /// <summary>What the result says about the issue check of a check print (null otherwise).</summary>
+    private static string? CheckPrintNote(ToolArgs args) =>
+        args.OptBool("check_print") ? "skipped: a check print for review, not an issue (nothing was recorded as issued)" : null;
+
+    /// <summary>The views to export: view_ids in order, or the saved sheet set's sheets by number, then its other views.</summary>
+    internal static List<ElementId> Ids(Document doc, ToolArgs args)
+    {
+        var given = args.LongList("view_ids");
+        if (given.Count > 0) return given.Select(i => new ElementId(i)).ToList();
+        if (args.OptString("sheet_set") is not { } name) throw new ArgumentException("Give view_ids (the sheets or views) or sheet_set (a saved View/Sheet Set's name).");
+        var sets = new FilteredElementCollector(doc).OfClass(typeof(ViewSheetSet)).Cast<ViewSheetSet>().ToList();
+        var set = Named(sets, name, s => s.Name, "View/Sheet Set");
+        var views = set.Views.Cast<View>().ToList();
+        if (views.Count == 0) throw new ArgumentException($"The View/Sheet Set '{set.Name}' is empty.");
+        return views.OfType<ViewSheet>().OrderBy(v => v.SheetNumber, StringComparer.OrdinalIgnoreCase).Cast<View>()
+            .Concat(views.Where(v => v is not ViewSheet).OrderBy(v => v.Name, StringComparer.OrdinalIgnoreCase)).Select(v => v.Id).ToList();
+    }
+
+    /// <summary>The saved item called <paramref name="name"/>: exact (any case), else the one name containing it; else the error lists them.</summary>
+    private static T Named<T>(List<T> items, string name, Func<T, string> nameOf, string what)
+    {
+        name = name.Trim();
+        var exact = items.Where(i => string.Equals(nameOf(i), name, StringComparison.OrdinalIgnoreCase)).ToList();
+        if (exact.Count == 1) return exact[0];
+        var part = items.Where(i => nameOf(i).IndexOf(name, StringComparison.OrdinalIgnoreCase) >= 0).ToList();
+        if (exact.Count == 0 && part.Count == 1) return part[0];
+        var names = string.Join("; ", items.Select(nameOf).OrderBy(n => n, StringComparer.OrdinalIgnoreCase).Take(40));
+        throw new ArgumentException(part.Count > 1
+            ? $"More than one {what} matches '{name}': {string.Join("; ", part.Select(nameOf))}. Give the full name."
+            : $"No {what} is called '{name}'. Saved ones: {(names.Length > 0 ? names : "none")}.");
+    }
 
     private static string Folder(ToolArgs args) => OutputPaths.Checked(args.OptString("folder"))
         ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "SketchProMax");
@@ -363,13 +403,15 @@ public sealed class ExportPdfTool : IRevitTool
     {
         var doc = app.ActiveUIDocument.Document;
         var folder = Folder(args);
+        var ids = Ids(doc, args);
+        // A saved PDF export setup brings its paper, colour, zoom and hidden items; the file name and combining stay this call's.
+        var options = args.OptString("pdf_setup") is { } setup
+            ? Named(new FilteredElementCollector(doc).OfClass(typeof(ExportPDFSettings)).Cast<ExportPDFSettings>().ToList(), setup, s => s.Name,
+                "saved PDF export setup (Export > PDF; printer settings from the Print dialog are not PDF setups)").GetOptions()
+            : new PDFExportOptions();
+        options.Combine = args.OptBool("combine", true);
+        options.FileName = OutputPaths.Checked(args.OptString("file_name")) ?? $"{doc.Title} - {DateTime.Now:yyyy-MM-dd HHmm}";
         Directory.CreateDirectory(folder);
-        var options = new PDFExportOptions
-        {
-            Combine = args.OptBool("combine", true),
-            FileName = OutputPaths.Checked(args.OptString("file_name")) ?? $"{doc.Title} - {DateTime.Now:yyyy-MM-dd HHmm}",
-        };
-        var ids = args.LongList("view_ids").Select(i => new ElementId(i)).ToList();
         if (args.OptString("name_pattern") is { } pattern)
         {
             ExportNames.RequireUnique(doc, ids, pattern);
@@ -390,14 +432,14 @@ public sealed class ExportPdfTool : IRevitTool
                 if (!doc.Export(folder, [id], options)) { naming.Add(new { view = view.Name, expected = expected + ".pdf", found = (string?)null, ok = false }); continue; }
                 naming.Add(ExportNames.Settle(folder, expected, ".pdf", before, started, view.Name));
             }
-            return ToolResult.Ok(new { folder, exported = ids.Count, naming });
+            return ToolResult.Ok(new { folder, exported = ids.Count, naming, issueCheck = CheckPrintNote(args) });
         }
         // Revit only says "failed" when it can't write the file; the usual cause is the same PDF open in a viewer.
         var combined = options.Combine ? Path.Combine(folder, options.FileName + ".pdf") : null;
         if (combined is not null && FileInUse.Why(combined) is { } locked) return ToolResult.Error(locked);
         var exportStarted = DateTime.UtcNow;
         var ok = doc.Export(folder, ids, options);
-        if (ok) return ToolResult.Ok(new { folder, exported = ids.Count });
+        if (ok) return ToolResult.Ok(new { folder, exported = ids.Count, file = combined, issueCheck = CheckPrintNote(args) });
         var held = combined is not null
             ? FileInUse.Why(combined)
             : FileInUse.Describe(Directory.GetFiles(folder, "*.pdf").Where(f => File.GetLastWriteTimeUtc(f) < exportStarted && FileInUse.Why(f) is not null).ToList());
