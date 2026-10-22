@@ -250,9 +250,12 @@ internal static class ClaudeCli
             info.EnvironmentVariables.Remove(name);
         info.EnvironmentVariables["SKETCHPROMAX_REVIT_PID"] = pid;
         // A change may wait its turn behind other jobs' changes (BridgeServer.TurnWait): the call must not time out first.
-        info.EnvironmentVariables["MCP_TOOL_TIMEOUT"] = "2400000";
+        info.EnvironmentVariables["MCP_TOOL_TIMEOUT"] = JobToolTimeoutMs.ToString(System.Globalization.CultureInfo.InvariantCulture);
         return info;
     }
+
+    /// <summary>How long a job's tool call may take, its wait for its turn included (BridgeServer.TurnWait is 30 minutes).</summary>
+    private const int JobToolTimeoutMs = 2_400_000;
 
     /// <summary>
     /// True when the chat may run parallel jobs: always with the connection inside Revit; with the connector program
@@ -302,7 +305,14 @@ internal static class ClaudeCli
             // The job this session is (its changes take turns with the other jobs'), and the model read_pdf_part reads with.
             if (!string.IsNullOrEmpty(job)) headers[Bridge.McpHttpServer.JobHeader] = job;
             if (!string.IsNullOrEmpty(model)) headers[Bridge.McpHttpServer.ModelHeader] = model;
-            return new JsonObject { ["type"] = "http", ["url"] = http.Url, ["headers"] = headers };
+            // Claude Code gives up on an HTTP server's call that is silent for 5 minutes (30 for a program it started):
+            // a call may wait on an approval in Revit, and a job's change on its turn (BridgeServer.TurnWait). This
+            // server's own limit raises that wait, as long as a job's MCP_TOOL_TIMEOUT or the 30 minutes the connector had.
+            return new JsonObject
+            {
+                ["type"] = "http", ["url"] = http.Url, ["headers"] = headers,
+                ["timeout"] = string.IsNullOrEmpty(job) ? 1_800_000 : JobToolTimeoutMs,
+            };
         }
         return new JsonObject
         {

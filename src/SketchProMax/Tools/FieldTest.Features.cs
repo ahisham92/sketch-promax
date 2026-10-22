@@ -865,8 +865,8 @@ internal static partial class FieldTest
         var live = ChatMcp.Current;
         if (live is null) problems.Add("the chat's own connection isn't running (" + (ChatMcp.StartError ?? "not started") + "), so the chat uses the connector program");
         else if (ClaudeCli.McpServer("1", null, "sonnet", "abcdefabcdef") is not { } entry || entry["type"]?.ToString() != "http" || entry["url"]?.ToString() != live.Url
-                 || entry["headers"]?[McpHttpServer.JobHeader]?.ToString() != "abcdefabcdef")
-            problems.Add("a job's MCP config doesn't name the running connection with its job");
+                 || entry["headers"]?[McpHttpServer.JobHeader]?.ToString() != "abcdefabcdef" || (int?)entry["timeout"] < (int)BridgeServer.TurnWait.TotalMilliseconds)
+            problems.Add("a job's MCP config doesn't name the running connection with its job, or lets a call wait less than its turn may take");
         return problems.Count == 0
             ? Pass($"a server on 127.0.0.1:{server.Port} answered initialize, listed {tools} tools and ran list_revit_models with the token, and turned a request without it away; " +
                    $"the chat's own connection runs at {live!.Url} (no helper program, no plan use)")
