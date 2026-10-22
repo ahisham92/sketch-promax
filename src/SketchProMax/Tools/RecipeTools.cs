@@ -164,8 +164,10 @@ public sealed class RunRecipeTool : IRevitTool
                 continue;
             }
             ToolResult result;
+            Revit.RunningCall.Begin("a recipe", name, app.ActiveUIDocument?.Document?.Title, stepArgs);
             try { result = tool.Execute(app, new ToolArgs(stepArgs)); }
             catch (Exception ex) { result = ToolResult.Error($"{ex.GetType().Name}: {ex.Message}"); }
+            finally { Revit.RunningCall.End(); }
             ActivityLog.Write(app.ActiveUIDocument?.Document?.Title ?? "", tool, stepArgs, result);
             results.Add(new { step = index, tool = name, ok = !result.IsError, result = result.Text.Length > 800 ? result.Text.Substring(0, 800) + "…" : result.Text });
             if (result.IsError && !keepGoing) break;

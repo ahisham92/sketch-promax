@@ -418,13 +418,19 @@ public sealed class BridgeServer
                 var askHere = decision.Ask && !(decision.CanSilence && Approvals.OwnDialog(tool.Name));
                 Approvals.Call = new Approvals.CallState(decision, chat, askHere);
                 if (askHere && !Approvals.Ask(tool, args, decision, chat)) return Ended(ToolResult.Error("The user rejected this change in Revit. Ask them how to proceed."));
-                var result = FailureGuard.Run(() =>
+                RunningCall.Begin(fromChat ? "the chat" : "Claude", tool.Name, app.ActiveUIDocument.Document.Title, args);
+                ToolResult result;
+                try
                 {
-                    try { return tool.Execute(app, new ToolArgs(args)); }
-                    catch (ManualStepException manual) { return Handoff.FromException(tool, app, new ToolArgs(args), manual); }
-                    catch (OperationCanceledException ex) when (job.CancelRequested || chat?.Halting == true) { return ToolResult.Error(JobControl.EndedEarly(ex.Message)); }
-                    catch (Exception ex) { return ToolResult.Error(Describe(tool, ex)); }
-                });
+                    result = FailureGuard.Run(() =>
+                    {
+                        try { return tool.Execute(app, new ToolArgs(args)); }
+                        catch (ManualStepException manual) { return Handoff.FromException(tool, app, new ToolArgs(args), manual); }
+                        catch (OperationCanceledException ex) when (job.CancelRequested || chat?.Halting == true) { return ToolResult.Error(JobControl.EndedEarly(ex.Message)); }
+                        catch (Exception ex) { return ToolResult.Error(Describe(tool, ex)); }
+                    });
+                }
+                finally { RunningCall.End(); }
                 ActivityLog.Write(app.ActiveUIDocument?.Document?.Title ?? "", tool, args, result);
                 TimeLog.EndTool(result);
                 return Ended(Capped(result));

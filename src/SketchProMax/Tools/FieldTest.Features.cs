@@ -70,7 +70,9 @@ internal static partial class FieldTest
         var tool = registry.Find(name) ?? throw new InvalidOperationException($"{name} is not in the registry");
         var raw = JsonSerializer.SerializeToElement(args);
         var dict = raw.EnumerateObject().ToDictionary(p => p.Name, p => p.Value.Clone());
-        return Revit.FailureGuard.Run(() => tool.Execute(app, new ToolArgs(dict)));
+        Revit.RunningCall.Begin("the field test", name, app.ActiveUIDocument?.Document?.Title, dict);
+        try { return Revit.FailureGuard.Run(() => tool.Execute(app, new ToolArgs(dict))); }
+        finally { Revit.RunningCall.End(); }
     }
 
     // ---- batch_run_recipe and ve_apply on a copy ------------------------------------------------------------------------
@@ -1473,11 +1475,16 @@ internal static partial class FieldTest
     {
         var tool = registry.Find(name) ?? throw new InvalidOperationException($"{name} is not in the registry");
         var dict = JsonSerializer.SerializeToElement(args).EnumerateObject().ToDictionary(p => p.Name, p => p.Value.Clone());
-        return Revit.FailureGuard.Run(() =>
+        Revit.RunningCall.Begin("the field test", name, app.ActiveUIDocument?.Document?.Title, dict);
+        try
         {
-            try { return tool.Execute(app, new ToolArgs(dict)); }
-            catch (ManualStepException manual) { return Handoff.FromException(tool, app, new ToolArgs(dict), manual); }
-        });
+            return Revit.FailureGuard.Run(() =>
+            {
+                try { return tool.Execute(app, new ToolArgs(dict)); }
+                catch (ManualStepException manual) { return Handoff.FromException(tool, app, new ToolArgs(dict), manual); }
+            });
+        }
+        finally { Revit.RunningCall.End(); }
     }
 
     /// <summary>The result's "handoff" section, one (choice, done) per step; null when it has none.</summary>
