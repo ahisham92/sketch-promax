@@ -523,6 +523,7 @@ internal static partial class FieldTest
         await Probe(s, "chat.roundtrip", () => RoundTrip(cli, s.O.ChatRoundTrip)).ConfigureAwait(false);
         await Probe(s, "chat.shrink", ShrinkProbe).ConfigureAwait(false);
         await Probe(s, "chat.http_mcp", ChatHttpMcp).ConfigureAwait(false);
+        await Probe(s, "chat.tools_ready", ChatToolsReady).ConfigureAwait(false);
         await ProbeCore(s, "chat.recall_run", () => RecallRun(cli, s.O.ChatRoundTrip)).ConfigureAwait(false);
         await ProbeCore(s, "brief.plan", () => BriefPlan(s)).ConfigureAwait(false);
         await ProbeCore(s, "brief.choose", () => BriefChoose(s)).ConfigureAwait(false);
@@ -888,6 +889,44 @@ internal static partial class FieldTest
         return problems.Count == 0
             ? Pass($"a server on 127.0.0.1:{server.Port} answered initialize, listed {tools} tools and ran list_revit_models with the token, and turned a request without it away; " +
                    $"the chat's own connection runs at {live!.Url} (no helper program, no plan use)")
+            : Fail(string.Join("; ", problems));
+    }
+
+    /// <summary>
+    /// Bug log row 40: a new chat process (a new chat, or the model and effort a brief picked) sent its first message
+    /// before Claude Code had the Revit tools, so the first call failed with "No such tool available". The chat's
+    /// connection remembers who was sent the tool list and when; ChatEngine waits for it. A real HTTP round trip on a
+    /// server of its own, as a main chat and as a job.
+    /// </summary>
+    private static (string, string) ChatToolsReady()
+    {
+        if (App.Bridge is not { } bridge) return Fail("the bridge isn't running");
+        var problems = new List<string>();
+        using var server = ChatMcp.Create(bridge);
+        server.Start();
+        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(60) };
+        void Post(string body, string? job)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, server.Url) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
+            request.Headers.TryAddWithoutValidation("Accept", "application/json, text/event-stream");
+            request.Headers.TryAddWithoutValidation("Authorization", "Bearer " + server.Token);
+            if (job is not null) request.Headers.TryAddWithoutValidation(McpHttpServer.JobHeader, job);
+            using var answer = http.SendAsync(request).GetAwaiter().GetResult();
+            if (!answer.IsSuccessStatusCode) problems.Add($"{body.Substring(0, Math.Min(60, body.Length))} answered {(int)answer.StatusCode}");
+        }
+        var start = DateTime.UtcNow;
+        if (server.ToolsListedSince(null, start)) problems.Add("the main chat counted as having its tools before it asked");
+        Post("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"field-test","version":"1"}}}""", null);
+        if (server.ToolsListedSince(null, start)) problems.Add("initialize alone counted as the tool list");
+        Post("""{"jsonrpc":"2.0","id":2,"method":"tools/list"}""", null);
+        if (!server.ToolsListedSince(null, start)) problems.Add("the main chat's tool list wasn't remembered");
+        if (server.ToolsListedSince("abcdefabcdef", start)) problems.Add("a job counted as having its tools from the main chat's list");
+        Post("""{"jsonrpc":"2.0","id":3,"method":"tools/list"}""", "abcdefabcdef");
+        if (!server.ToolsListedSince("abcdefabcdef", start)) problems.Add("a job's tool list wasn't remembered");
+        if (server.ToolsListedSince(null, DateTime.UtcNow.AddMinutes(1))) problems.Add("an earlier tool list counted for a process started later");
+        if (Chat.ChatEngine.ToolsWaitUseless) problems.Add("a chat process in this Revit session didn't get its tools within 15 s, so new ones no longer wait (Claude Code may connect only once a message arrives)");
+        return problems.Count == 0
+            ? Pass("the tool list sent to the main chat and to a job is remembered for each, from that moment, so a new chat process waits for its Revit tools before its first message")
             : Fail(string.Join("; ", problems));
     }
 

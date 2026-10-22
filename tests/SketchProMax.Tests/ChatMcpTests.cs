@@ -183,9 +183,15 @@ internal static class ChatMcpTests
         var note = await http.SendAsync(Post("""{"jsonrpc":"2.0","method":"notifications/initialized"}""", session: session));
         check("chat mcp server: a notification is accepted with 202", note.StatusCode == HttpStatusCode.Accepted, note.StatusCode.ToString());
 
+        var beforeList = DateTime.UtcNow;
+        var listedEarly = server.ToolsListedSince("job7", beforeList);
         var list = await http.SendAsync(Post("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""", session: session));
         var listJson = JsonDocument.Parse(await list.Content.ReadAsStringAsync()).RootElement;
         check("chat mcp server: tools/list over HTTP", listJson.GetProperty("result").GetProperty("tools").GetArrayLength() == 6, listJson.ToString());
+        // Bug log row 40: a new chat process waits for its tool list before its first message (ChatEngine.WaitForTools).
+        check("chat mcp server: a tool list sent is remembered for that job only, from that moment",
+            !listedEarly && server.ToolsListedSince("job7", beforeList) && !server.ToolsListedSince(null, beforeList)
+            && !server.ToolsListedSince("job7", DateTime.UtcNow.AddMinutes(1)), $"{listedEarly}");
 
         var plain = await http.SendAsync(Post("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"quick","arguments":{"x":1}}}""", session: session, accept: "application/json"));
         var plainJson = JsonDocument.Parse(await plain.Content.ReadAsStringAsync()).RootElement;

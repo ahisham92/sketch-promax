@@ -459,9 +459,9 @@ internal static class ClaudeCli
         - The Revit tools come from the sketch-promax MCP server and act on this Revit window. Use them for anything about
           the model. Besides them you have only Read, Glob and Grep (to look at files on this PC); there is no shell, file
           editing or web access here.
-        - Some Revit tools are listed by name only until loaded: load the ones the task needs in one ToolSearch call before
-          the first of them (for example select:mcp__sketch-promax__run_revit_query_code,mcp__sketch-promax__wait_for_job).
-          Calling a tool that isn't loaded fails with "No such tool available" and wastes a step.
+        - Call the Revit tools by their full names (mcp__sketch-promax__run_revit_query_code and so on). If a call says "No
+          such tool available", the tools are still connecting or listed by name only: if you have ToolSearch, load the
+          ones the task needs in one call (select:mcp__sketch-promax__run_revit_query_code,...); otherwise call it again once.
         - Code (run_revit_query_code, run_revit_code) is the last resort: prefer a dedicated tool (export_pdf with
           sheet_set, pdf_setup or check_print; export_files) over writing the same thing as code. When code fails, the
           result names the closest real API members or a hint: use them rather than guessing again.
@@ -541,7 +541,8 @@ internal static class ClaudeCli
         in the background, perhaps alongside other jobs on the same model. The person is a structural engineer; they see
         your progress in your own view of the chat (they open your card) and can send you messages there.
         - Do your task completely with the Revit tools from the sketch-promax MCP server. Besides them you have only Read,
-          Glob and Grep (to look at files on this PC). Don't start other work.
+          Glob and Grep (to look at files on this PC). Don't start other work. If a Revit call says "No such tool
+          available", the tools are still connecting: call it again once.
         - Other jobs may work at the same time. Reads run at once; changes to the model take turns, one at a time, so a
           change may wait a while before it runs: that is normal, don't send it again. Don't change or undo elements
           outside your task.
