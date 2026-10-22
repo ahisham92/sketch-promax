@@ -177,7 +177,7 @@ public abstract class RevitCodeToolBase : IRevitTool
     {
         if (ex is TargetInvocationException { InnerException: { } inner }) ex = inner;
         var line = ScriptCompiler.LineOf(ex);
-        return $"{ex.GetType().Name}: {ex.Message}{(line is null ? "" : $" (line {line})")}";
+        return $"{ex.GetType().Name}: {ex.Message}{(line is null ? "" : $" (line {line})")}{ScriptSource.RuntimeHint(ex.Message)}";
     }
 
     private static string Trim(string s, int max) => s.Length <= max ? s : s.Substring(0, max);
@@ -290,7 +290,7 @@ internal static class ScriptCompiler
             var errors = Diagnostics(emitted)
                 .Where(d => d.Severity == DiagnosticSeverity.Error)
                 .Take(15)
-                .Select(d => $"line {d.Location.GetMappedLineSpan().StartLinePosition.Line + 1}: {d.GetMessage()}");
+                .Select(d => $"line {d.Location.GetMappedLineSpan().StartLinePosition.Line + 1}: {d.GetMessage()}{MemberHint(compilation, d)}");
             return (null, string.Join("\n", errors));
         }
 
@@ -304,6 +304,35 @@ internal static class ScriptCompiler
         Cache[code] = new Entry(run, context);
         return (run, "");
     }
+
+    /// <summary>
+    /// For "'X' does not contain a definition for 'Y'" (CS1061, CS0117): the members of X closest to Y in this Revit
+    /// version's API, so the next try uses a name that exists. "" when none is close or anything goes wrong.
+    /// </summary>
+    private static string MemberHint(CSharpCompilation compilation, Diagnostic d)
+    {
+        if (d.Id is not ("CS1061" or "CS0117") || d.Location.SourceTree is not { } tree) return "";
+        try
+        {
+            var node = tree.GetRoot().FindNode(d.Location.SourceSpan);
+            var access = node.AncestorsAndSelf().OfType<Microsoft.CodeAnalysis.CSharp.Syntax.MemberAccessExpressionSyntax>().FirstOrDefault();
+            if (access is null) return "";
+            var model = compilation.GetSemanticModel(tree);
+            var type = model.GetTypeInfo(access.Expression).Type ?? model.GetSymbolInfo(access.Expression).Symbol as ITypeSymbol;
+            if (type is null || type.TypeKind == Microsoft.CodeAnalysis.TypeKind.Error) return "";
+            var names = new List<string>();
+            for (var t = type; t is not null && t.SpecialType != Microsoft.CodeAnalysis.SpecialType.System_Object; t = t.BaseType)
+                names.AddRange(Members(t).Where(m => m.DeclaredAccessibility == Microsoft.CodeAnalysis.Accessibility.Public && m.CanBeReferencedByName
+                    && m.Kind is Microsoft.CodeAnalysis.SymbolKind.Property or Microsoft.CodeAnalysis.SymbolKind.Method or Microsoft.CodeAnalysis.SymbolKind.Field or Microsoft.CodeAnalysis.SymbolKind.Event).Select(m => m.Name));
+            var close = ScriptSource.Closest(access.Name.Identifier.ValueText, names);
+            return close.Count > 0 ? $" (closest members of {type.Name}: {string.Join(", ", close)})" : "";
+        }
+        catch (Exception) { return ""; }
+    }
+
+    /// <summary>A type's members without naming ImmutableArray in this assembly (see Compile).</summary>
+    private static IEnumerable<ISymbol> Members(ITypeSymbol type) =>
+        (typeof(INamespaceOrTypeSymbol).GetMethod("GetMembers", Type.EmptyTypes)?.Invoke(type, null) as System.Collections.IEnumerable)?.OfType<ISymbol>() ?? [];
 
     /// <summary>EmitResult.Diagnostics without naming its ImmutableArray type in this assembly (see Compile).</summary>
     private static IEnumerable<Diagnostic> Diagnostics(Microsoft.CodeAnalysis.Emit.EmitResult result) =>
