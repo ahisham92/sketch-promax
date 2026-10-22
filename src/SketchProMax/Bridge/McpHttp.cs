@@ -59,8 +59,8 @@ internal sealed class McpHttpServer : IDisposable
 
     public void Dispose()
     {
-        try { _stop.Cancel(); } catch (ObjectDisposedException) { }
-        try { _listener?.Stop(); } catch (SocketException) { }
+        try { _stop.Cancel(); } catch (Exception) { /* disposed, or a callback failed (AggregateException): never let it out */ }
+        try { _listener?.Stop(); } catch (Exception) { }
         foreach (var session in _sessions.Values) session.CancelAll();
         _sessions.Clear();
     }
@@ -213,7 +213,7 @@ internal sealed class McpHttpServer : IDisposable
             finally
             {
                 session.Untrack(key, call);
-                try { call.Cancel(); } catch (ObjectDisposedException) { } // ends the disconnect watch's wait
+                try { call.Cancel(); } catch (Exception) { /* ends the disconnect watch's wait; never let a failed callback out */ }
             }
         }
     }
@@ -232,7 +232,7 @@ internal sealed class McpHttpServer : IDisposable
         {
             if (t.IsCanceled || (t.Status == TaskStatus.RanToCompletion && t.Result > 0)) return;
             _ = t.Exception; // observed
-            try { call.Cancel(); } catch (ObjectDisposedException) { }
+            try { call.Cancel(); } catch (Exception) { /* disposed, or a callback failed (AggregateException): never let it out */ }
         }, TaskScheduler.Default);
     }
 
@@ -309,13 +309,13 @@ internal sealed class McpSession
     internal void Cancel(string id)
     {
         if (_calls.TryGetValue(id, out var call))
-            try { call.Cancel(); } catch (ObjectDisposedException) { }
+            try { call.Cancel(); } catch (Exception) { /* disposed, or a callback failed (AggregateException): never let it out */ }
     }
 
     internal void CancelAll()
     {
         foreach (var call in _calls.Values)
-            try { call.Cancel(); } catch (ObjectDisposedException) { }
+            try { call.Cancel(); } catch (Exception) { /* disposed, or a callback failed (AggregateException): never let it out */ }
     }
 }
 

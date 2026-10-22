@@ -89,7 +89,8 @@ internal sealed class ChatEngine : IDisposable
         var info = _start?.Invoke() ?? ClaudeCli.EngineStart(_install, ResumedFrom, Model, Coordinator, Effort);
         McpAddress = ClaudeCli.McpAddress;
         var process = new Process { StartInfo = info, EnableRaisingEvents = true };
-        process.Exited += (_, _) => OnExited();
+        // Raised on a thread-pool thread: an exception there would close Revit.
+        process.Exited += (_, _) => { try { OnExited(); } catch (Exception) { } };
         process.Start();
         lock (_gate)
         {
@@ -157,6 +158,8 @@ internal sealed class ChatEngine : IDisposable
             }
         }
         catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException) { }
+        // Its own thread: anything else escaping it (the parser, a dispatcher that shut down) would close Revit.
+        catch (Exception) { }
     }
 
     private void ReadErrors(Process process)
@@ -174,6 +177,7 @@ internal sealed class ChatEngine : IDisposable
             }
         }
         catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException) { }
+        catch (Exception) { /* its own thread: nothing may escape */ }
     }
 
     private void OnExited()
@@ -185,7 +189,11 @@ internal sealed class ChatEngine : IDisposable
             lock (_gate) disposed = _disposed;
             if (disposed) return;
             var tail = ErrorTail;
-            _ui.BeginInvoke(new Action(() => Exited?.Invoke(tail)));
+            _ui.BeginInvoke(new Action(() =>
+            {
+                try { Exited?.Invoke(tail); }
+                catch (Exception) { /* a UI problem must not reach Revit's dispatcher */ }
+            }));
         });
     }
 

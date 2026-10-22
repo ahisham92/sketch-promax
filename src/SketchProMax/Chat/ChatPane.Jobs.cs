@@ -255,7 +255,8 @@ internal sealed partial class ChatPane
                     var status = server.Status;
                     _ = Task.Run(() => ClaudeCli.ToolsFailed(status, address, job: true)).ContinueWith(t => Dispatcher.BeginInvoke(new Action(() =>
                     {
-                        if (_board == board) board.AddNote(run.Job, t.Result, DateTime.UtcNow);
+                        try { if (_board == board) board.AddNote(run.Job, t.Result, DateTime.UtcNow); }
+                        catch (Exception) { /* on Revit's UI thread: a note that can't be added must not escape */ }
                     })), TaskContinuationOptions.OnlyOnRanToCompletion);
                 }
                 break;

@@ -91,6 +91,9 @@ internal static class RunningCall
     /// </summary>
     public static List<string> Recover() => Recover(Pid, IsRevitRunning);
 
+    /// <summary>What <see cref="Recover"/> found, by process id: the field test's interrupted report names the call too.</summary>
+    internal static readonly System.Collections.Concurrent.ConcurrentDictionary<int, string> Recovered = new();
+
     internal static List<string> Recover(int self, Func<int, bool> alive)
     {
         var lines = new List<string>();
@@ -104,7 +107,11 @@ internal static class RunningCall
             try
             {
                 var entry = JsonSerializer.Deserialize<Entry>(File.ReadAllText(file));
-                if (entry is not null) lines.Add(Describe(entry));
+                if (entry is not null)
+                {
+                    lines.Add(Describe(entry));
+                    Recovered[pid] = Describe(entry);
+                }
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException) { }
             Delete(file);
@@ -118,7 +125,8 @@ internal static class RunningCall
         (e.Model.Length > 0 ? $" on '{e.Model}'" : "") + $", started {e.Time}" + (e.Version.Length > 0 ? $", Sketch ProMax {e.Version}" : "") +
         ". Its arguments: " + (e.Arguments.Length > 0 ? e.Arguments : "(none)");
 
-    private static bool IsRevitRunning(int pid)
+    /// <summary>True when <paramref name="pid"/> is a running Revit (the field test's journal uses the same check).</summary>
+    internal static bool IsRevitRunning(int pid)
     {
         try
         {

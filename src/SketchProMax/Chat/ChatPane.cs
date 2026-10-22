@@ -1615,7 +1615,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     {
         var list = string.Join(",", ids.Select(i => i.ToString(CultureInfo.InvariantCulture)));
         try { await App.Dispatcher.InvokeAsync(app => UI.Pane.Select(app, list)); }
-        catch (Exception ex) when (ex is InvalidOperationException or OperationCanceledException or Autodesk.Revit.Exceptions.ApplicationException)
+        // async void: nothing may escape to Revit's UI dispatcher.
+        catch (Exception ex)
         {
             Status("Revit couldn't select the elements now: " + ex.Message, spin: false);
         }
@@ -1944,7 +1945,21 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         return "";
     }
 
+    /// <summary>
+    /// The Send button and Enter. async void: an exception would reach Revit's UI dispatcher and could close Revit, so
+    /// whatever <see cref="SendAsync"/> throws ends here, said in the status line.
+    /// </summary>
     private async void Send()
+    {
+        try { await SendAsync(); }
+        catch (Exception ex)
+        {
+            try { Status($"The message couldn't be sent ({ex.GetType().Name}: {ex.Message}). Try again.", spin: false); }
+            catch (Exception) { /* the pane is closing */ }
+        }
+    }
+
+    private async Task SendAsync()
     {
         if (_stopped) return;
         // In a job's view the message goes to that job, also while the main chat answers.
@@ -3063,7 +3078,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             AddFiles(new[] { SaveAttachment(png, name) });
             ShowStatus();
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or OperationCanceledException)
+        // async void: nothing may escape to Revit's UI dispatcher.
+        catch (Exception ex)
         {
             Status("The view couldn't be captured: " + ex.Message, spin: false);
         }

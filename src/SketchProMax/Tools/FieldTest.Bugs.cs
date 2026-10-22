@@ -278,6 +278,20 @@ internal static partial class FieldTest
         finally { try { Directory.Delete(dir, true); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { } }
     }
 
+    /// <summary>
+    /// The field test's breadcrumbs, in a folder of the test folder: a run stopped as if Revit closed during a step is found
+    /// as left behind, its interrupted rows end with the crash row, Continue carries what ran and skips the crashed step.
+    /// </summary>
+    private static (string, string) JournalProbe(string testFolder)
+    {
+        var folder = Path.Combine(testFolder, "journal");
+        var problem = FieldTestJournal.SelfCheck(folder);
+        return problem is null
+            ? Pass($"a journal stopped as if Revit closed during purge_unused was found as left behind, its report rows end with \"{FieldTestJournal.CrashMessage}\", " +
+                   "Continue carries the step that ended and skips the crashed one, the crash is remembered until it runs normally, and a finished run leaves no journal")
+            : Fail(problem);
+    }
+
     // ---- The report's Bug log section ----------------------------------------------------------------------------------------
 
     private static string BugLogSection(RunReport r)

@@ -79,13 +79,16 @@ internal static partial class FieldTest
 
     private static async Task BatchAndCopy(State s)
     {
+        if (FromEarlier(s, FamilyOf("batch_run_recipe"), "batch_run_recipe")) return;
         Jobs.Report("Field test: batch_run_recipe on two copies of the test project, then ve_apply on a copy");
+        Begin(s, FamilyOf("batch_run_recipe"), "batch_run_recipe");
         var watch = Stopwatch.StartNew();
         List<Row> rows;
         // Opens and closes documents: only from the external event.
         try { rows = await App.Dispatcher.InvokeFromEventAsync(app => BatchOnRevit(app, s)).ConfigureAwait(false); }
         catch (Exception ex) { rows = [new(FamilyOf("batch_run_recipe"), "batch_run_recipe", "fail", watch.ElapsedMilliseconds, $"{ex.GetType().Name}: {ex.Message}")]; }
         s.Result.Rows.AddRange(rows);
+        End(s, "batch_run_recipe", rows.Any(r => IsFail(r.Status)) ? "fail" : "pass");
         await Task.Delay(150).ConfigureAwait(false);
     }
 
@@ -415,7 +418,15 @@ internal static partial class FieldTest
     private static async Task SelfTestRun(State s)
     {
         var family = FamilyOf("run_self_test");
+        if (FromEarlier(s, family, "run_self_test")) return;
         Jobs.Report("Field test: run_self_test (safe mode) on the test project");
+        Begin(s, family, "run_self_test");
+        try { await SelfTestSteps(s, family).ConfigureAwait(false); }
+        finally { End(s, "run_self_test", "done"); }
+    }
+
+    private static async Task SelfTestSteps(State s, string family)
+    {
         var watch = Stopwatch.StartNew();
         ToolResult start;
         try { start = await App.Dispatcher.InvokeAsync(app => Call(app, s.Registry, "run_self_test", new { mode = "safe" })).ConfigureAwait(false); }
@@ -535,6 +546,7 @@ internal static partial class FieldTest
         await Probe(s, "update.version", () => VersionCompare(latest)).ConfigureAwait(false);
         await Probe(s, "update.fallback", UpdateFallback).ConfigureAwait(false);
         await Probe(s, "update.resume", UpdateResumeProbe).ConfigureAwait(false);
+        await Probe(s, "diagnostics.journal", () => JournalProbe(s.Folder)).ConfigureAwait(false);
         await Probe(s, "claude.msix", Msix).ConfigureAwait(false);
         await Probe(s, "diagnostics", () => Diagnostics(s.Result)).ConfigureAwait(false);
     }
@@ -550,12 +562,15 @@ internal static partial class FieldTest
     private static async Task ProbeCore(State s, string key, Func<Task<(string Status, string Message)>> run, string family = "features")
     {
         if (StoppedOrCancelled(s)) { s.Result.Rows.Add(new(family, key, "skip", 0, "not reached: " + s.Result.StoppedBecause)); return; }
+        if (FromEarlier(s, family, key)) return;
         Jobs.Report($"Field test: feature {key}");
+        Begin(s, family, key);
         var watch = Stopwatch.StartNew();
         (string Status, string Message) outcome;
         try { outcome = await run().ConfigureAwait(false); }
         catch (Exception ex) { outcome = ("fail", $"{ex.GetType().Name}: {ex.Message}"); }
         s.Result.Rows.Add(new(family, key, outcome.Status, watch.ElapsedMilliseconds, outcome.Message));
+        End(s, key, outcome.Status);
     }
 
     private static (string, string) Pass(string message) => ("pass", message);

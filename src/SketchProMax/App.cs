@@ -188,6 +188,8 @@ public sealed class App : IExternalApplication
             try { StartupTimings.Time("time log", () => TimeLog.Start(app)); } catch (Exception) { /* tasks still run; time is not counted */ }
         }
         CentralAccess.Watch(app);
+        // Our exceptions that reach Revit's UI thread are caught and logged; one on a background thread is logged before Revit closes.
+        if (!shared) CrashGuard.Start(Ui);
 
         var token = _life.Token;
         _ = Task.Run(() => shared ? SharedBackgroundAsync(token) : BackgroundStartAsync(token));
@@ -220,6 +222,8 @@ public sealed class App : IExternalApplication
             for (var i = 0; i < 300 && StartupTimings.IsOpening; i++) await Task.Delay(2000, stop).ConfigureAwait(false);
         }
         catch (OperationCanceledException) { return; }
+        // Revit closed during a field test last time: its report of what ran, then the user is told once.
+        try { Tools.FieldTest.AfterStart(); } catch (Exception) { }
         try { ClaudeRegistration.Ensure(); } catch (Exception) { }
         // Moves a manifest from an older release onto the one fixed loader path, once; writes nothing when settled.
         try { Updater.SettleInstall(); } catch (Exception) { }
@@ -323,6 +327,7 @@ public sealed class App : IExternalApplication
         try { app.Application.DocumentOpened -= OnDocumentOpened; } catch (Exception) { }
         try { UI.UpdateNotice.Stop(); } catch (Exception) { }
         Bugs.BugReport.Unwatch();
+        CrashGuard.Stop();
         UI.LoaderBrand.Stop();
         UI.LazyPane.Forget();
         Dispatcher.Shutdown(app);
