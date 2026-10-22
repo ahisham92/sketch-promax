@@ -333,7 +333,7 @@ internal sealed class BerthStatusWindow : Window
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         var texts = new StackPanel();
         texts.Children.Add(Brand.Text(s.Berth.Name, size: 14, bold: true));
-        var due = s.Next is null ? (s.Last is { } last ? $"Submitted: {last.Name} ({last.Date:dd-MMM})" : "No submission set") : $"{s.Next.Name}: {s.Due:ddd dd-MMM HH:mm}" + (s.Due > DateTime.Now ? $" · {Math.Round(s.HoursLeft):0} working h left" : "");
+        var due = s.Next is null ? (s.Last is { } last ? $"Submitted: {last.Name}{When(last, "dd-MMM", ", ")}" : "No submission set") : $"{s.Next.Name}: {s.Due:ddd dd-MMM HH:mm}" + (s.Due > DateTime.Now ? $" · {Math.Round(s.HoursLeft):0} working h left" : "");
         texts.Children.Add(Small(due));
         texts.Children.Add(Small("Expected finish: " + (s.Finish is { } f ? f.ToString("ddd dd-MMM HH:mm", CultureInfo.CurrentCulture) + (s.FinishByHand ? " (by hand)" : "") : "needs two readings")));
         texts.Children.Add(Chip(s.Verdict));
@@ -395,7 +395,7 @@ internal sealed class BerthStatusWindow : Window
         var sub = new StackPanel();
         sub.Children.Add(Brand.Text("Next submission", size: 13, bold: true));
         if (s.Next is null) sub.Children.Add(Para(s.Last is { } last
-            ? $"Submitted: {last.Name} ({last.Date:dddd dd-MMM-yyyy}). It is still checked: what is below to fix belongs to the BIM submission."
+            ? $"Submitted: {last.Name}{When(last, "dddd dd-MMM-yyyy", ", ")}. It is still checked: what is below to fix belongs to the BIM submission."
             : "No submission for this berth in the setup's Submissions sheet."));
         else
         {

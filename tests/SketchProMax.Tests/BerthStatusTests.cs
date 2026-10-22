@@ -131,6 +131,15 @@ internal static class BerthStatusTests
             var q = Question(setup, s3, tue);
             check("berth status: the AI question carries the schedule, the areas and the rules", q.Contains("Berth 1") && q.Contains("Mine") && q.Contains("08:00") && q.Contains("Annotation: 40%") && q.Contains("Don't change the model"), q);
 
+            // A package marked submitted with no date reads back as submitted.
+            var nodate = new Setup { Models = [new("Port A", "PORTA")], Berths = [new("Port A", "T1 Berths 5, 6", FindBy.WholeModel)], Submissions = [new("Port A", "T1 Berths 5, 6", "T1", NoDate, null, true)] };
+            var nodateFile = Path.Combine(temp, "nodate.xlsx");
+            OfficeXlsx.Write(nodateFile, "nodate", SetupSheets(nodate));
+            var nodateBack = ReadSetup(nodateFile);
+            var nodateSummary = Summarize(nodateBack, nodateBack.Berths[0], new State(), tue);
+            check("berth status: a submission marked submitted with no date is kept", nodateBack.Submissions.Count == 1 && nodateBack.Submissions[0].Submitted
+                && nodateSummary.Last is not null && When(nodateSummary.Last, "dd-MMM") == "", "");
+
             // Submitted packages keep their status and what is left to fix.
             setup.Submissions = [new("Port A", "Berth 1", "Done one", thu.AddDays(-7), null, true)];
             var done = Summarize(setup, berth, state, tue);

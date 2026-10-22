@@ -120,6 +120,12 @@ internal static class BerthStatusMath
 
     // ---- The working calendar ---------------------------------------------------------------------------------------
 
+    /// <summary>The date of a submission made with no date noted.</summary>
+    public static readonly DateTime NoDate = DateTime.MinValue;
+
+    /// <summary>The submission's date as text after <paramref name="lead"/>, or "" when it has none.</summary>
+    public static string When(Submission s, string format, string lead = " ") => s.Date == NoDate ? "" : lead + s.Date.ToString(format, CultureInfo.InvariantCulture);
+
     /// <summary>When a submission is due: its time (or the calendar's due time, 08:00) on its date.</summary>
     public static DateTime DueAt(Submission s, Calendar week) => s.Date.Date + (s.Time ?? week.Due);
 
@@ -531,7 +537,7 @@ internal static class BerthStatusMath
             Sheet("Berths", "Berths: Find elements by is Scope box, Parameter, Workset or Whole model", BerthCols,
                 s.Berths.Select(b => new object?[] { b.Model, b.Name, b.FindBy, b.Value, b.Parameter, b.Sheets, b.Schedules }), [18, 18, 18, 22, 18, 18, 18]),
             Sheet("Submissions", "Submissions: Berth empty means every berth of the model; Time empty means the due time (08:00)", SubmissionCols,
-                s.Submissions.Select(x => new object?[] { x.Model, x.Berth, x.Name, x.Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), x.Time is { } t ? t.ToString(@"hh\:mm", CultureInfo.InvariantCulture) : "", x.Submitted ? "Yes" : "" }), [18, 18, 34, 14, 10, 12]),
+                s.Submissions.Select(x => new object?[] { x.Model, x.Berth, x.Name, x.Date == NoDate ? "" : x.Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), x.Time is { } t ? t.ToString(@"hh\:mm", CultureInfo.InvariantCulture) : "", x.Submitted ? "Yes" : "" }), [18, 18, 34, 14, 10, 12]),
             Sheet("Planned", "Planned: a category (Structural Columns / Pile for its types with Pile), or Drawings, Details, Schedules", PlannedCols,
                 s.Planned.Select(p => new object?[] { p.Model, p.Berth, p.What, p.Count.ToString(CultureInfo.InvariantCulture) }), [18, 18, 34, 12]),
             Sheet("Deliverables", "Deliverables of every berth: done by hand, or when a file with the text ({berth} = the berth's name) is in the folder", DeliverableCols,
@@ -637,7 +643,12 @@ internal static class BerthStatusMath
         }
         foreach (var r in Table("Submissions", SubmissionCols))
         {
-            if (V(r, "Date").Length == 0) continue;
+            // A package submitted before its date was noted: Submitted with no date.
+            if (V(r, "Date").Length == 0)
+            {
+                if (IsYes(V(r, "Submitted"))) s.Submissions.Add(new(V(r, "Model"), V(r, "Berth"), V(r, "Submission").Length > 0 ? V(r, "Submission") : "Submission", NoDate, null, true));
+                continue;
+            }
             if (ParseDate(V(r, "Date")) is not { } date) { problems.Add($"submission \"{V(r, "Submission")}\": \"{V(r, "Date")}\" isn't a date"); continue; }
             var time = ParseTime(V(r, "Time"));
             s.Submissions.Add(new(V(r, "Model"), V(r, "Berth"), V(r, "Submission").Length > 0 ? V(r, "Submission") : "Submission", date, time, IsYes(V(r, "Submitted"))));
@@ -746,7 +757,7 @@ internal static class BerthStatusMath
             status.Add(new([a.Area.Name, P(a.Percent), a.Weight, From(a.From), a.Result?.Done.ToString(CultureInfo.InvariantCulture) ?? "", a.Result?.Total.ToString(CultureInfo.InvariantCulture) ?? "", a.Result?.Summary ?? "", a.Hand?.Comment ?? ""]));
         status.Add(new(["Overall", P(s.Percent), s.Scores.Where(x => x.Percent is not null).Sum(x => x.Weight), "", "", "", Text(s.Verdict), b.Comment], Bold: true));
         status.Add(new(["", "", "", "", "", "", "", ""]));
-        status.Add(new(["Next submission", "", "", "", "", "", s.Next?.Name ?? (s.Last is { } last ? $"All submitted (last: {last.Name}, {DueAt(last, setup.Week):dd-MMM-yyyy}); what is left to fix still counts" : "None set"), ""]));
+        status.Add(new(["Next submission", "", "", "", "", "", s.Next?.Name ?? (s.Last is { } last ? $"All submitted (last: {last.Name}{When(last, "dd-MMM-yyyy", ", ")}); what is left to fix still counts" : "None set"), ""]));
         status.Add(new(["Due", "", "", "", "", "", s.Due is { } due ? due.ToString("ddd dd-MMM-yyyy HH:mm", CultureInfo.InvariantCulture) : "", ""]));
         status.Add(new(["Working hours left", "", "", "", "", "", s.Due is null ? "" : Math.Round(s.HoursLeft, 1).ToString(CultureInfo.InvariantCulture), ""]));
         status.Add(new(["Expected finish", "", "", s.FinishByHand ? "By hand" : "From the readings", "", "", s.Finish is { } f ? f.ToString("ddd dd-MMM-yyyy HH:mm", CultureInfo.InvariantCulture) : "Needs two readings", ""]));
@@ -760,7 +771,7 @@ internal static class BerthStatusMath
         var subs = SubmissionsFor(setup, s.Berth).Select(x =>
         {
             var due = DueAt(x, setup.Week);
-            return new OfficeXlsx.Row([x.Name, due.ToString("ddd dd-MMM-yyyy HH:mm", CultureInfo.InvariantCulture), x.Submitted ? "" : Math.Round(WorkHours(now, due, setup.Week), 1).ToString(CultureInfo.InvariantCulture), x.Submitted ? "Submitted" : due <= now ? "Overdue" : "To come"]);
+            return new OfficeXlsx.Row([x.Name, x.Date == NoDate ? "" : due.ToString("ddd dd-MMM-yyyy HH:mm", CultureInfo.InvariantCulture), x.Submitted ? "" : Math.Round(WorkHours(now, due, setup.Week), 1).ToString(CultureInfo.InvariantCulture), x.Submitted ? "Submitted" : due <= now ? "Overdue" : "To come"]);
         }).ToList();
         sheets.Add(new("Submissions", "Submissions (due at their time on the day; working hours only)", ["Submission", "Due", "Working hours left", "State"], subs, ["text", "text", "text", "text"], [34, 24, 18, 14], false));
 
