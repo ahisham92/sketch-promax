@@ -41,6 +41,12 @@ internal static class CoreRibbonManifest
             "Stages from your checklist Excel: project details, one per section, then review and sign. Each check has how to check it, " +
             "where it came from and what the model shows; answer Yes, No or N/A with a comment. The Word file carries the signatures " +
             "only when nothing is No or unanswered. Reads the model only; answers are kept per model.", needsModel: true)),
+        // Berth status (0.35): next to the checklist. Each berth's status for its next submission (UI/BerthStatusWindow); the
+        // model is read only when the user presses Update status there, in short steps.
+        L(Button("Claude", "BerthStatus", "Berth\nstatus", "berth-status", "list",
+            "Each berth's status for its next submission: a percentage from modelling, coordination, clashes, drawings, details, annotation, schedules and deliverables, with the expected finish.",
+            "Set up once from an Excel file (models, berths, submission schedule, planned counts, deliverables, working week). Click a berth for its areas, " +
+            "what to fix, hand entries and comments, and export its Excel. The model is read only when you press Update status, in short steps, so Revit never freezes.")),
         // Share tools (0.35): large, after the checklist. Makes a zip that installs the chosen tools on the TritoRevit tab for
         // colleagues with or without Sketch ProMax (Sharing/ShareWindow).
         L(Button("Claude", "ShareTools", "Share\ntools", "share-tools", "pack",
@@ -55,9 +61,8 @@ internal static class CoreRibbonManifest
             small: true, live: "status")),
         L(Button("Claude", "SendView", "Send view", "send-view", "view",
             "Attaches a picture of the active view to the chat, as Revit shows it now, ready to ask about.", needsModel: true, small: true)),
-        L(Button("Claude", "CopyPrompt", "Copy prompt", "copy-prompt", "copy",
-            "Copies a good first message to the clipboard, to paste into a new chat in the Claude desktop app.",
-            "The prompt names the open model and asks for a look at it and suggestions of what Sketch ProMax can do for you.", small: true, breakBefore: true)),
+        // Copy prompt moved to the pane (Claude app section) in 0.35 to free a loader slot for Berth status; More now stacks
+        // three high with Status and Send view.
         L(Pulldown("Claude", "ClaudeMore", "More", "more", "Open the Claude desktop app, or show or hide the Sketch ProMax pane.", small: true)),
         L(Entry("ClaudeMore", "OpenClaude", "Open Claude app", "open-claude", "open",
             "Starts the Claude desktop app, or brings it to the front. Works with the normal installer and the Microsoft Store version.")),
@@ -205,6 +210,8 @@ internal static class CoreRibbonManifest
             "exports and the fixed bugs), on a _detached copy. Mark each pass or fail; the result is saved in the Bugs folder.")),
 
         // ---- The pane
+        L(Pane("Claude app", "CopyPrompt", "Copy prompt", "copy-prompt",
+            "Copies a good first message to the clipboard, to paste into a new chat in the Claude desktop app.")),
         L(Pane("Bugs", "ReportBug", "Report bug", "report-bug", "Writes a bug report for Sketch ProMax with what just happened, ready to send.")),
         L(Pane("Bugs", "BugFolder", "Open bug folder", "bug-folder", "Opens the folder with the bug reports written so far.")),
         L(Pane("Bugs", "ExportChatsBugs", "Export chats & bugs", "export-chats-bugs",

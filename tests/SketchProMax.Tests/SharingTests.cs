@@ -134,7 +134,7 @@ internal static class SharingTests
         // ---- Sketch ProMax's ribbon: Share tools is a large button in the first panel, right after the checklist
         var shipped = SketchProMax.Loader.RibbonManifest.Parse(CoreRibbonManifest.Text).Controls.Where(c => c.Group == "Claude").Select(c => c.Command).ToList();
         var at = shipped.IndexOf("share-tools");
-        check("sharing: Share tools follows the pre-submission checklist", at > 0 && shipped[at - 1] == "pre-submission", string.Join(",", shipped));
+        check("sharing: Share tools follows the pre-submission checklist and Berth status", at > 1 && shipped[at - 1] == "berth-status" && shipped[at - 2] == "pre-submission", string.Join(",", shipped));
         check("sharing: Share tools is a large button", CoreRibbonManifest.Text.Split('\n').Any(l => l.Contains("\tShareTools\t") && !l.Contains("\tsmall")), "");
 
         // ---- Files that ship
