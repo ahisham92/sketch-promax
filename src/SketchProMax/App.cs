@@ -181,6 +181,8 @@ public sealed class App : IExternalApplication
         _started = true;
         if (!shared)
         {
+            // The chat's own connection, inside Revit (no helper program to start): a new port and token for each core.
+            try { StartupTimings.Time("chat connection", () => ChatMcp.Start(Bridge!)); } catch (Exception) { /* the chat uses the connector program */ }
             try { StartupTimings.Time("chat hooks", () => Chat.ChatPane.Start(app)); } catch (Exception) { /* the chat tab says what is wrong when it is opened */ }
             try { StartupTimings.Time("restart note", () => UI.RestartNote.AfterStart(Ui)); } catch (Exception) { /* the chat and the Version button still say it */ }
             try { StartupTimings.Time("time log", () => TimeLog.Start(app)); } catch (Exception) { /* tasks still run; time is not counted */ }
@@ -305,6 +307,7 @@ public sealed class App : IExternalApplication
         try { Chat.NotesView.Stop(); } catch (Exception) { }
         try { TimeLog.Stop(app); } catch (Exception) { }
         CentralAccess.Unwatch(app);
+        ChatMcp.Stop();
         // A shared-mode core never opened the connection point, and the session file named after this Revit is Sketch ProMax's.
         if (!Shared) Bridge?.Stop(keepSession: true);
         Bridge = null;
@@ -328,6 +331,7 @@ public sealed class App : IExternalApplication
         if (Shared) return;
         try { Chat.ChatPane.Shutdown(); } catch (Exception) { }
         try { TimeLog.Shutdown(); } catch (Exception) { }
+        ChatMcp.Stop();
         Bridge?.Stop();
 #if NETFRAMEWORK
         DependencyResolver.Unregister();

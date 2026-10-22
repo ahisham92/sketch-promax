@@ -45,6 +45,8 @@ Requirements: Windows, Revit 2024 to 2027, and the .NET 8 and .NET 10 SDKs to bu
 
 `install.ps1` copies the add-in into each installed Revit version, installs the connector to `%LOCALAPPDATA%\SketchProMax\mcp`, and registers it with the Claude desktop app, including the Microsoft Store version (your existing config is backed up to `claude_desktop_config.json.bak`). Revit repeats the registration at every start, so installing the Claude app later also works.
 
+The chat inside Revit doesn't need the connector program: Revit serves the same tools to it directly, on this PC's own address (127.0.0.1, a new port and access token each time Revit starts), so it also works on company PCs that block programs which aren't signed (AppLocker, App Control). Only the Claude desktop app starts the connector. If that connection can't start, the chat falls back to the connector, and if the PC blocks the connector too, the chat says so and names the file to ask IT to allow.
+
 Then:
 1. Start Revit, choose **Always Load**, and open a model. The **Sketch ProMax** tab appears on the ribbon.
 2. Restart the Claude desktop app. The Sketch ProMax tools show under the tools (plug) menu. Chat as normal: "Tag all doors in the active view".
@@ -64,7 +66,7 @@ At the first three levels Revit always asks before code Claude wrote (run_revit_
 - **Reduced**: only quick opens and closes (step details, the history drawer, hover fades) and the small progress spinners; the taskbar still flashes.
 - **Off**: every change shows at once and the taskbar never flashes. With Windows' Show animations off, the chat behaves as Off whatever you pick.
 
-**Parallel jobs** (in the Revit chat): the chat acts as coordinator. Ask for work with separate parts ("make sheets for levels 1-5 and check the walls") and it splits it into jobs, each its own hidden session with a card in the chat: its state (waiting to start, working, waiting its turn, done, stopped), what it is doing and, at the end, its report, which also goes back to the chat for a short wrap-up. **Open job** on a card (or the job's pill in the row above the conversation: Coordinator, Job 1, Job 2, each with its state) switches the pane to that job's own chat: everything it was asked and did, and the message box then talks to that job, attachments included. **Back to coordinator** (or Esc) returns to the main chat; **Stop** stops a job. A follow-up ("also add level 6") goes to the job it belongs to, not a new one. Reads run side by side; changes to the model take turns, one at a time. Up to 3 jobs run at once (Settings > Chat, 1 to 6), to keep within your plan's limits; jobs are saved with the chat. Jobs need the connector installed with the same version as the add-in (Install.cmd installs both).
+**Parallel jobs** (in the Revit chat): the chat acts as coordinator. Ask for work with separate parts ("make sheets for levels 1-5 and check the walls") and it splits it into jobs, each its own hidden session with a card in the chat: its state (waiting to start, working, waiting its turn, done, stopped), what it is doing and, at the end, its report, which also goes back to the chat for a short wrap-up. **Open job** on a card (or the job's pill in the row above the conversation: Coordinator, Job 1, Job 2, each with its state) switches the pane to that job's own chat: everything it was asked and did, and the message box then talks to that job, attachments included. **Back to coordinator** (or Esc) returns to the main chat; **Stop** stops a job. A follow-up ("also add level 6") goes to the job it belongs to, not a new one. Reads run side by side; changes to the model take turns, one at a time. Up to 3 jobs run at once (Settings > Chat, 1 to 6), to keep within your plan's limits; jobs are saved with the chat. Jobs use the chat's connection inside Revit, so nothing extra needs installing (only if the chat had to fall back to the connector program does that need the same version as the add-in, which Install.cmd installs).
 
 **Chat types**: each chat is **With coordinator** (it can hand work to parallel jobs) or a **Simple chat** (one chat does everything itself, step by step, with no jobs). The type shows under the chat's name and in the history; click it to switch while none of the chat's jobs is open. **New chat** starts your default type (Settings > Chat); the arrow beside it offers New chat with coordinator or New simple chat. Chats saved before types existed open as Simple chats, unless they already had jobs.
 
@@ -248,12 +250,14 @@ src/SketchProMax/            The Revit add-in core (net48 for Revit 2024, net8.0
   Commands/                  What the ribbon buttons do, and running recipes / learned tools from the ribbon
   Agent/SystemPrompt         Instructions the desktop app receives from the connector
   Bridge/BridgeServer        Per-Revit-window named-pipe server the connector talks to
+  Bridge/ChatMcp, McpHttp    The chat's MCP server inside Revit (HTTP on 127.0.0.1 with a token), no connector program needed
+  Bridge/ConnectorTools, RevitTargets, PdfPartReader  Tool list, Revit-window routing and read_pdf_part, shared with the connector
   Revit/                     Main-thread dispatcher (ExternalEvent), helpers, Revit 2024 dependency loader
   Tools/                     The 217 IRevitTool implementations and the registry (CodeTools compiles C# with Roslyn)
   UI/                        Settings, update progress, quick-tool input and result windows
   Settings/                  Per-user settings (approval level, auto-update, firm standards)
   Update/Updater             Self-update from GitHub Releases, with progress, switched to without restarting Revit
-src/SketchProMax.Mcp/        MCP server (stdio) the Claude desktop app launches; finds open Revit windows and forwards tool calls
+src/SketchProMax.Mcp/        MCP server (stdio) the Claude desktop app launches; finds open Revit windows and forwards tool calls (the Revit chat uses the server inside Revit instead)
 ```
 
 ## Adding a tool

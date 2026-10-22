@@ -47,6 +47,9 @@ internal sealed class ChatEngine : IDisposable
     /// <summary>The Claude model this process runs (--model); a different choice needs a new process.</summary>
     public string Model { get; }
 
+    /// <summary>Where this process reaches the Revit tools (ClaudeCli.McpAddress when it started).</summary>
+    public string McpAddress { get; private set; } = "";
+
     /// <summary>The session this engine was asked to resume, if any.</summary>
     public string? ResumedFrom { get; }
 
@@ -84,6 +87,7 @@ internal sealed class ChatEngine : IDisposable
     public Task StartAsync(string firstLine) => Task.Run(() =>
     {
         var info = _start?.Invoke() ?? ClaudeCli.EngineStart(_install, ResumedFrom, Model, Coordinator, Effort);
+        McpAddress = ClaudeCli.McpAddress;
         var process = new Process { StartInfo = info, EnableRaisingEvents = true };
         process.Exited += (_, _) => OnExited();
         process.Start();

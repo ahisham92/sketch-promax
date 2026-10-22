@@ -27,7 +27,8 @@ namespace SketchProMax.Bridge;
 ///   (call_tool may carry "origin":"chat" when the in-Revit chat started the connector; see Approvals and ApprovalPolicy,
 ///   and "job":"<key>" when one of the chat's parallel jobs did; see JobTurns and Chat.JobBoard.)
 /// The tool catalogue is written to %APPDATA%\SketchProMax\tools.json at startup so the MCP server can
-/// list tools even before Revit is running.
+/// list tools even before Revit is running. The chat's own connection inside Revit (ChatMcp) sends this window the same
+/// requests without the pipe, straight to <see cref="Handle"/>.
 /// </summary>
 public sealed class BridgeServer
 {
@@ -218,7 +219,7 @@ public sealed class BridgeServer
     // The open models as of the last time Revit answered, for pings that arrive while Revit is busy.
     private volatile object _lastDocuments = Array.Empty<object>();
 
-    private async Task<string> Handle(string line, CancellationToken ct)
+    internal async Task<string> Handle(string line, CancellationToken ct)
     {
         try
         {

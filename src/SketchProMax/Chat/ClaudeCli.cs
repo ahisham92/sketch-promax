@@ -136,12 +136,12 @@ internal static class ClaudeCli
     }
 
     /// <summary>
-    /// The engine's start info: Claude Code in print mode with stream-json in and out, our MCP server (the same command
-    /// the desktop app is given) and its tools allowed without prompts, Read, Glob and Grep for attached files, and
-    /// nothing else that could act on the PC. Anything that would need a permission prompt is denied (dontAsk), because
-    /// nobody can answer a prompt in a hidden process. The MCP server is told it serves the chat (SKETCHPROMAX_CHAT), so
-    /// Revit's own dialog asks before model changes (per the settings) and always before code, recipes and files written
-    /// to a folder Claude chose.
+    /// The engine's start info: Claude Code in print mode with stream-json in and out, our MCP server (the chat's own
+    /// connection inside Revit, or the connector the desktop app is given when that couldn't start) and its tools allowed
+    /// without prompts, Read, Glob and Grep for attached files, and nothing else that could act on the PC. Anything that
+    /// would need a permission prompt is denied (dontAsk), because nobody can answer a prompt in a hidden process. The MCP
+    /// server knows it serves the chat (inside Revit always; the connector by SKETCHPROMAX_CHAT), so Revit's own dialog
+    /// asks before model changes (per the settings) and always before code, recipes and files written to a folder Claude chose.
     /// </summary>
     /// <param name="coordinator">A chat With coordinator (ChatTypes): it may start jobs with chat_jobs and is told how.
     /// A Simple chat never gets chat_jobs or those instructions.</param>
@@ -167,15 +167,16 @@ internal static class ClaudeCli
             "--allowedTools", $"mcp__{ServerName},mcp__{ServerName}__*,Read,Glob,Grep",
             "--permission-mode", "dontAsk",
         };
-        // A connector older than this add-in may not pass SKETCHPROMAX_CHAT on, so Revit would not know to ask: then the
-        // code and recipe tools are left out of the chat altogether.
+        // A connector older than this add-in (only used when the connection inside Revit couldn't start) may not pass
+        // SKETCHPROMAX_CHAT on, so Revit would not know to ask: then the code and recipe tools are left out of the chat altogether.
         // Claude Code's own transcripts of earlier conversations (…\.claude\projects\…\<session>.jsonl): after a shrink
         // it is told it may read the full transcript, which would send the long conversation again and fill the chat with
         // file steps. The summary is what a shrink keeps; anything else is asked for or found with recall_chats.
         var denied = new List<string> { TranscriptRule };
-        if (ConnectorIsOlder()) denied.AddRange(SketchProMax.Tools.OutputPaths.CodeTools.Select(t => $"mcp__{ServerName}__{t}"));
-        // Parallel jobs need a connector as new as this add-in (it passes the job on, so its changes take turns), and a
-        // chat With coordinator: a Simple chat does everything itself.
+        if (OlderConnectorInUse) denied.AddRange(SketchProMax.Tools.OutputPaths.CodeTools.Select(t => $"mcp__{ServerName}__{t}"));
+        // Parallel jobs need the connection to pass the job on (so its changes take turns): the one inside Revit always
+        // does, the connector program when it is as new as this add-in. And a chat With coordinator: a Simple chat does
+        // everything itself.
         if (!JobsAvailable || !coordinator) denied.Add($"mcp__{ServerName}__{SketchProMax.Tools.ChatJobsTool.ToolName}");
         args.Add("--disallowedTools");
         args.Add(string.Join(",", denied));
@@ -254,10 +255,16 @@ internal static class ClaudeCli
     }
 
     /// <summary>
-    /// True when the chat may run parallel jobs: the installed connector is as new as this add-in (an older one doesn't
-    /// pass the job on, so the job's changes couldn't take turns).
+    /// True when the chat may run parallel jobs: always with the connection inside Revit; with the connector program
+    /// only when it is as new as this add-in (an older one doesn't pass the job on, so the job's changes couldn't take turns).
     /// </summary>
-    public static bool JobsAvailable => !ConnectorIsOlder();
+    public static bool JobsAvailable => !OlderConnectorInUse;
+
+    /// <summary>
+    /// True when the chat falls back to the connector program (the connection inside Revit couldn't start) and that is
+    /// older than this add-in, so it may lack newer connector tools (read_pdf_part) and the job key.
+    /// </summary>
+    internal static bool OlderConnectorInUse => Bridge.ChatMcp.Ensure() is null && ConnectorIsOlder();
 
     /// <summary>
     /// Set once Claude Code refused --effort (a version older than the option, ChatAuto.IsEffortRefusal): from then on
@@ -272,29 +279,45 @@ internal static class ClaudeCli
         args.Add(effort!);
     }
 
-    /// <summary>Writes the MCP config: the connector the installer and ClaudeRegistration register for the desktop app.</summary>
+    /// <summary>
+    /// Writes the MCP config. Normally the chat's own connection inside Revit (Bridge.ChatMcp): its address, its token, and
+    /// headers naming the parallel job and the model. When that couldn't start, the connector program the installer and
+    /// ClaudeRegistration register for the desktop app, as before. Written at each start, so a new core's address is used.
+    /// </summary>
     private static string WriteMcpConfig(string engine, string pid, string name = "mcp-", string? claude = null, string? model = null, string? job = null)
     {
-        var mcp = new JsonObject
-        {
-            ["mcpServers"] = new JsonObject
-            {
-                [ServerName] = new JsonObject
-                {
-                    ["type"] = "stdio",
-                    ["command"] = ClaudeRegistration.ConnectorPath,
-                    ["args"] = new JsonArray(),
-                    // SKETCHPROMAX_CHAT: the bridge then asks in Revit before code, recipes and files written where Claude chose.
-                    // SKETCHPROMAX_CLAUDE and _MODEL: read_pdf_part reads a part of a large PDF with the same Claude Code and model.
-                    // SKETCHPROMAX_JOB: the parallel job this connector serves (its changes take turns with the other jobs').
-                    ["env"] = Env(pid, claude, model, job),
-                },
-            },
-        };
+        if (!string.IsNullOrEmpty(claude)) Bridge.ChatMcp.Claude = claude;
+        var mcp = new JsonObject { ["mcpServers"] = new JsonObject { [ServerName] = McpServer(pid, claude, model, job) } };
         var mcpFile = Path.Combine(engine, name + pid + ".json");
         File.WriteAllText(mcpFile, mcp.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
         return mcpFile;
     }
+
+    /// <summary>The config's entry for our server: the connection inside Revit, or the connector program.</summary>
+    internal static JsonObject McpServer(string pid, string? claude, string? model, string? job)
+    {
+        if (Bridge.ChatMcp.Ensure() is { } http)
+        {
+            var headers = new JsonObject { ["Authorization"] = "Bearer " + http.Token };
+            // The job this session is (its changes take turns with the other jobs'), and the model read_pdf_part reads with.
+            if (!string.IsNullOrEmpty(job)) headers[Bridge.McpHttpServer.JobHeader] = job;
+            if (!string.IsNullOrEmpty(model)) headers[Bridge.McpHttpServer.ModelHeader] = model;
+            return new JsonObject { ["type"] = "http", ["url"] = http.Url, ["headers"] = headers };
+        }
+        return new JsonObject
+        {
+            ["type"] = "stdio",
+            ["command"] = ClaudeRegistration.ConnectorPath,
+            ["args"] = new JsonArray(),
+            // SKETCHPROMAX_CHAT: the bridge then asks in Revit before code, recipes and files written where Claude chose.
+            // SKETCHPROMAX_CLAUDE and _MODEL: read_pdf_part reads a part of a large PDF with the same Claude Code and model.
+            // SKETCHPROMAX_JOB: the parallel job this connector serves (its changes take turns with the other jobs').
+            ["env"] = Env(pid, claude, model, job),
+        };
+    }
+
+    /// <summary>The address the chat's Claude Code reaches the Revit tools at now: the connection inside Revit, or "" for the connector program.</summary>
+    internal static string McpAddress => Bridge.ChatMcp.Current?.Url ?? "";
 
     /// <summary>
     /// A one-shot run for the prompt enhancer (PromptBriefs): print mode, the message read from stdin, one JSON result
@@ -339,7 +362,6 @@ internal static class ClaudeCli
         return info;
     }
 
-    /// <summary>True when the installed connector's file version is known and older than this add-in.</summary>
     private static JsonObject Env(string pid, string? claude, string? model, string? job = null)
     {
         var env = new JsonObject { ["SKETCHPROMAX_REVIT_PID"] = pid, ["SKETCHPROMAX_CHAT"] = "1" };
@@ -347,6 +369,64 @@ internal static class ClaudeCli
         if (!string.IsNullOrEmpty(model)) env["SKETCHPROMAX_MODEL"] = model;
         if (!string.IsNullOrEmpty(job)) env["SKETCHPROMAX_JOB"] = job;
         return env;
+    }
+
+    /// <summary>
+    /// What the chat says about Revit tools that didn't connect (<paramref name="status"/> from Claude Code), naming a PC
+    /// that blocks them: Claude Code's own log of the connection says EPERM or access denied, or, for the connector
+    /// program, Revit itself isn't allowed to start it. Reads files and may start the connector: call off the UI thread.
+    /// </summary>
+    internal static string ToolsFailed(string status, string address, bool job = false)
+    {
+        var inside = address.Length > 0;
+        var blocked = ToolsNote.IsBlocked(LastMcpError()) || !inside && ConnectorRefused();
+        return ToolsNote.Failed(status, inside, inside ? address : ClaudeRegistration.ConnectorPath, blocked, job);
+    }
+
+    /// <summary>The end of Claude Code's newest log of connecting to our server (its cache folder, the last few minutes), or "".</summary>
+    private static string LastMcpError()
+    {
+        try
+        {
+            var cache = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "claude-cli-nodejs", "Cache");
+            if (!Directory.Exists(cache)) return "";
+            var newest = Directory.GetDirectories(cache)
+                .Select(d => Path.Combine(d, "mcp-logs-" + ServerName))
+                .Where(Directory.Exists)
+                .SelectMany(d => new DirectoryInfo(d).GetFiles())
+                .Where(f => f.LastWriteTimeUtc > DateTime.UtcNow.AddMinutes(-10))
+                .OrderByDescending(f => f.LastWriteTimeUtc)
+                .FirstOrDefault();
+            if (newest is null) return "";
+            using var stream = new FileStream(newest.FullName, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            stream.Seek(Math.Max(0, stream.Length - 4000), SeekOrigin.Begin);
+            return new StreamReader(stream, Encoding.UTF8).ReadToEnd();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or System.Security.SecurityException) { return ""; }
+    }
+
+    /// <summary>True when Windows refuses to start the connector program for Revit too (a policy such as AppLocker), not when it is missing.</summary>
+    private static bool ConnectorRefused()
+    {
+        try
+        {
+            using var process = Process.Start(new ProcessStartInfo(ClaudeRegistration.ConnectorPath)
+            {
+                UseShellExecute = false, CreateNoWindow = true,
+                RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true,
+            });
+            if (process is null) return false;
+            // It started: with its input closed it ends by itself.
+            process.StandardInput.Close();
+            if (!process.WaitForExit(3000)) KillTree(process);
+            return false;
+        }
+        catch (System.ComponentModel.Win32Exception ex)
+        {
+            // 5 access denied, 1260 blocked by group policy, 4551 blocked by App Control; 2 (not found) is a broken install.
+            return ex.NativeErrorCode is 5 or 1260 or 4551 || ToolsNote.IsBlocked(ex.Message);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or IOException) { return false; }
     }
 
     /// <summary>True when the installed connector is older than this add-in (so it may lack newer connector tools, such as read_pdf_part).</summary>

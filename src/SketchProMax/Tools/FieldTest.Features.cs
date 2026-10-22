@@ -509,6 +509,7 @@ internal static partial class FieldTest
         await Probe(s, "chat.signin", () => SignIn(cli)).ConfigureAwait(false);
         await Probe(s, "chat.roundtrip", () => RoundTrip(cli, s.O.ChatRoundTrip)).ConfigureAwait(false);
         await Probe(s, "chat.shrink", ShrinkProbe).ConfigureAwait(false);
+        await Probe(s, "chat.http_mcp", ChatHttpMcp).ConfigureAwait(false);
         await ProbeCore(s, "chat.recall_run", () => RecallRun(cli, s.O.ChatRoundTrip)).ConfigureAwait(false);
         await ProbeCore(s, "brief.plan", () => BriefPlan(s)).ConfigureAwait(false);
         await ProbeCore(s, "brief.choose", () => BriefChoose(s)).ConfigureAwait(false);
@@ -801,6 +802,75 @@ internal static partial class FieldTest
         return code == 0 && output.IndexOf("OK", StringComparison.OrdinalIgnoreCase) >= 0
             ? Pass("one short message answered: " + Short(output.Trim(), 120))
             : Fail($"no answer (exit {code}): {Short(output.Trim(), 300)}");
+    }
+
+    /// <summary>
+    /// The chat's connection inside Revit, without the plan: a server of its own on a free port of 127.0.0.1 answers
+    /// initialize, lists the Revit tools (with the connector's own: models, jobs, read_pdf_part) and runs list_revit_models
+    /// over real HTTP with its token, turns away a request without it, and the chat's config names the running one.
+    /// </summary>
+    private static (string, string) ChatHttpMcp()
+    {
+        if (App.Bridge is not { } bridge) return Fail("the bridge isn't running");
+        var problems = new List<string>();
+        using var server = ChatMcp.Create(bridge);
+        server.Start();
+        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(60) };
+        (System.Net.HttpStatusCode Status, string Body, string? Session) Post(string body, bool token = true, string? session = null)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, server.Url) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
+            request.Headers.TryAddWithoutValidation("Accept", "application/json, text/event-stream");
+            if (token) request.Headers.TryAddWithoutValidation("Authorization", "Bearer " + server.Token);
+            if (session is not null) request.Headers.TryAddWithoutValidation("Mcp-Session-Id", session);
+            using var answer = http.SendAsync(request).GetAwaiter().GetResult();
+            var text = answer.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+            // A tool call comes as an event stream: its answer is the last data line.
+            if (answer.Content.Headers.ContentType?.MediaType == "text/event-stream")
+                text = text.Split('\n').LastOrDefault(l => l.StartsWith("data: ", StringComparison.Ordinal))?.Substring(6) ?? "";
+            return (answer.StatusCode, text, answer.Headers.TryGetValues("Mcp-Session-Id", out var ids) ? ids.FirstOrDefault() : null);
+        }
+        const string init = """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"field-test","version":"1"}}}""";
+        if (Post(init, token: false).Status != System.Net.HttpStatusCode.Unauthorized) problems.Add("a request without the token wasn't turned away (401)");
+        var started = Post(init);
+        string? session = null;
+        if (started.Status != System.Net.HttpStatusCode.OK || started.Session is null) problems.Add($"initialize answered {(int)started.Status}");
+        else
+        {
+            session = started.Session;
+            using var doc = JsonDocument.Parse(started.Body);
+            if (doc.RootElement.GetProperty("result").GetProperty("protocolVersion").GetString() != "2025-06-18") problems.Add("the protocol version wasn't agreed");
+        }
+        var tools = 0;
+        var listed = Post("""{"jsonrpc":"2.0","id":2,"method":"tools/list"}""", session: session);
+        if (listed.Status == System.Net.HttpStatusCode.OK)
+        {
+            using var doc = JsonDocument.Parse(listed.Body);
+            var names = doc.RootElement.GetProperty("result").GetProperty("tools").EnumerateArray().Select(t => t.GetProperty("name").GetString()).ToList();
+            tools = names.Count;
+            foreach (var needed in new[] { "list_revit_models", "use_revit_model", "wait_for_job", PdfPartReader.ToolName, ChatJobsTool.ToolName })
+                if (!names.Contains(needed)) problems.Add($"tools/list lacks {needed}");
+            if (names.Count < bridge.Registry.All.Count) problems.Add($"tools/list has {names.Count} tools, fewer than the {bridge.Registry.All.Count} registered");
+        }
+        else problems.Add($"tools/list answered {(int)listed.Status}");
+        var called = Post("""{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_revit_models","arguments":{}}}""", session: session);
+        var models = "";
+        try
+        {
+            using var doc = JsonDocument.Parse(called.Body);
+            var result = doc.RootElement.GetProperty("result");
+            models = result.GetProperty("content")[0].GetProperty("text").GetString() ?? "";
+            if (!models.Contains("Revit " + App.RevitYear)) problems.Add("list_revit_models didn't find this Revit window: " + models);
+        }
+        catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException or IndexOutOfRangeException) { problems.Add("tools/call answered " + called.Body); }
+        var live = ChatMcp.Current;
+        if (live is null) problems.Add("the chat's own connection isn't running (" + (ChatMcp.StartError ?? "not started") + "), so the chat uses the connector program");
+        else if (ClaudeCli.McpServer("1", null, "sonnet", "abcdefabcdef") is not { } entry || entry["type"]?.ToString() != "http" || entry["url"]?.ToString() != live.Url
+                 || entry["headers"]?[McpHttpServer.JobHeader]?.ToString() != "abcdefabcdef")
+            problems.Add("a job's MCP config doesn't name the running connection with its job");
+        return problems.Count == 0
+            ? Pass($"a server on 127.0.0.1:{server.Port} answered initialize, listed {tools} tools and ran list_revit_models with the token, and turned a request without it away; " +
+                   $"the chat's own connection runs at {live!.Url} (no helper program, no plan use)")
+            : Fail(string.Join("; ", problems));
     }
 
     /// <summary>

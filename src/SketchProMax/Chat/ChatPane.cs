@@ -2041,7 +2041,10 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         try
         {
             var effort = ClaudeCli.EffortRefused ? "" : _effort;
-            if (_engine is { IsAlive: true } engine && engine.Model == _model && engine.Coordinator == IsCoordinator && engine.Effort == effort)
+            // A process started for another model, kind or effort needs a new one, and so does one whose Revit tools are at
+            // an address that changed (a new core while Revit runs, or the connection inside Revit started after a fallback).
+            if (_engine is { IsAlive: true } engine && engine.Model == _model && engine.Coordinator == IsCoordinator && engine.Effort == effort
+                && engine.McpAddress == ClaudeCli.McpAddress)
             {
                 ShowStatus();
                 await engine.SendAsync(turn.Line);
@@ -2155,8 +2158,9 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
                    ", included in full with this message: read it from there, not with the Read tool";
         }
         if (check.Verdict == PdfAttachment.Verdict.NotPdf) return PdfAttachment.Note(check, null, false);
-        // Split by itself into parts its helpers read whole (read_pdf_part, in a connector as new as this add-in).
-        if (check.Verdict != PdfAttachment.Verdict.Locked && !ClaudeCli.ConnectorIsOlder())
+        // Split by itself into parts its helpers read whole (read_pdf_part: always in the connection inside Revit, and in a
+        // connector program as new as this add-in).
+        if (check.Verdict != PdfAttachment.Verdict.Locked && !ClaudeCli.OlderConnectorInUse)
         {
             try
             {
@@ -2298,10 +2302,16 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
                     SaveSoon();
                 }
                 var server = init.Servers.FirstOrDefault(s => s.Name == ClaudeCli.ServerName);
+                var address = _engine?.McpAddress ?? ClaudeCli.McpAddress;
                 if (server.Name is null)
-                    Note("The Revit tools didn't load in this chat. Run Install.cmd from the Sketch ProMax download again, then press New chat.");
+                    Note(ToolsNote.Missing(inside: address.Length > 0));
                 else if (server.Status is not ("connected" or "pending" or ""))
-                    Note($"The Revit tools didn't connect ({server.Status}). Check that Sketch ProMax is installed (Install.cmd), then press New chat.");
+                {
+                    // Whether the PC blocks it takes a look at Claude Code's log and perhaps starting the connector: off the UI thread.
+                    var status = server.Status;
+                    _ = Task.Run(() => ClaudeCli.ToolsFailed(status, address))
+                        .ContinueWith(t => Dispatcher.BeginInvoke(new Action(() => { if (!_stopped) Note(t.Result); })), TaskContinuationOptions.OnlyOnRanToCompletion);
+                }
                 if (turn is not null && !turn.Stopping) ShowStatus(turn.Shrinking ? "Shrinking this chat…" : null);
                 break;
             case TextStartEvent start:

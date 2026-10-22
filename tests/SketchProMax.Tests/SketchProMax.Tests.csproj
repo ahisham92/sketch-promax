@@ -23,6 +23,11 @@
     <Compile Include="../../src/SketchProMax/Chat/JobBoard.cs" Link="JobBoard.cs" />
     <Compile Include="../../src/SketchProMax/Chat/ChatAuto.cs" Link="ChatAuto.cs" />
     <Compile Include="../../src/SketchProMax/Bridge/JobTurns.cs" Link="JobTurns.cs" />
+    <Compile Include="../../src/SketchProMax/Bridge/McpHttp.cs" Link="McpHttp.cs" />
+    <Compile Include="../../src/SketchProMax/Bridge/ConnectorTools.cs" Link="ConnectorTools.cs" />
+    <Compile Include="../../src/SketchProMax/Bridge/RevitTargets.cs" Link="RevitTargets.cs" />
+    <Compile Include="../../src/SketchProMax/Bridge/PdfPartReader.cs" Link="PdfPartReader.cs" />
+    <Compile Include="../../src/SketchProMax/Chat/ToolsNote.cs" Link="ToolsNote.cs" />
     <Compile Include="../../src/SketchProMax/Chat/ChatStore.cs" Link="ChatStore.cs" />
     <Compile Include="../../src/SketchProMax/Chat/ChatRecall.cs" Link="ChatRecall.cs" />
     <Compile Include="../../src/SketchProMax/Chat/ChatHandover.cs" Link="ChatHandover.cs" />

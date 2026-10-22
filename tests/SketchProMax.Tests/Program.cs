@@ -80,6 +80,7 @@ ChecklistTests.Run((name, ok, detail) => Check(name, ok, detail));
 ChecklistProjectTests.Run((name, ok, detail) => Check(name, ok, detail));
 JobCardTests.Run((name, ok, detail) => Check(name, ok, detail));
 ParallelJobTests.Run((name, ok, detail) => Check(name, ok, detail));
+ChatMcpTests.Run((name, ok, detail) => Check(name, ok, detail));
 ChatAutoTests.Run((name, ok, detail) => Check(name, ok, detail));
 PlanUsageTests.Run((name, ok, detail) => Check(name, ok, detail));
 PackageTests.Run((name, ok, detail) => Check(name, ok, detail));

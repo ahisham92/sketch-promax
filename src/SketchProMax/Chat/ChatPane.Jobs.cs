@@ -246,8 +246,18 @@ internal sealed partial class ChatPane
         {
             case InitEvent init:
                 if (init.SessionId.Length > 0) JobSessions.Set(JobsFolder(_conv), run.Job.Key, init.SessionId);
-                if (init.Servers.All(s => s.Name != ClaudeCli.ServerName))
-                    board.AddNote(run.Job, "The Revit tools didn't load for this job. Run Install.cmd from the Sketch ProMax download again.", now);
+                var address = run.Engine.McpAddress;
+                var server = init.Servers.FirstOrDefault(s => s.Name == ClaudeCli.ServerName);
+                if (server.Name is null)
+                    board.AddNote(run.Job, ToolsNote.Missing(inside: address.Length > 0, job: true), now);
+                else if (server.Status is not ("connected" or "pending" or ""))
+                {
+                    var status = server.Status;
+                    _ = Task.Run(() => ClaudeCli.ToolsFailed(status, address, job: true)).ContinueWith(t => Dispatcher.BeginInvoke(new Action(() =>
+                    {
+                        if (_board == board) board.AddNote(run.Job, t.Result, DateTime.UtcNow);
+                    })), TaskContinuationOptions.OnlyOnRanToCompletion);
+                }
                 break;
             case AssistantTextEvent text when text.Text.Trim().Length > 0:
                 run.LastText = text.Text.Trim();

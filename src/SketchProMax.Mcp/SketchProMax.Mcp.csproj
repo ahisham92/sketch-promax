@@ -17,6 +17,10 @@
   <ItemGroup>
     <!-- Same agent instructions as the in-Revit chat pane. -->
     <Compile Include="..\SketchProMax\Agent\SystemPrompt.cs" Link="SystemPrompt.cs" />
+    <!-- The tool list, the way to the Revit windows and read_pdf_part, shared with the chat's connection inside Revit (Bridge.ChatMcp). -->
+    <Compile Include="..\SketchProMax\Bridge\ConnectorTools.cs" Link="ConnectorTools.cs" />
+    <Compile Include="..\SketchProMax\Bridge\RevitTargets.cs" Link="RevitTargets.cs" />
+    <Compile Include="..\SketchProMax\Bridge\PdfPartReader.cs" Link="PdfPartReader.cs" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="ModelContextProtocol" Version="2.2.0" />
