@@ -639,9 +639,11 @@ internal static class ChecklistFixes
     internal static string SuggestName(string name, string category, string discipline, string pattern)
     {
         var words = System.Text.RegularExpressions.Regex.Replace(name.Trim(), @"[^A-Za-z0-9.]+", "_").Trim('_');
-        if (ChecklistMath.LikeAny(words, pattern)) return words;
         var parts = category.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
         var code = parts.Length > 1 ? string.Concat(parts.Take(2).Select(p => char.ToUpperInvariant(p[0]))) : category.Length >= 2 ? category.Substring(0, 2).ToUpperInvariant() : "XX";
+        // Only a name that already starts with its category's code is kept as it is (with underscores): a loose pattern
+        // such as *_*_* would otherwise pass "Concrete_Round_1200mm" without the code and discipline the standard asks for.
+        if (words.StartsWith(code + "_", StringComparison.OrdinalIgnoreCase) && ChecklistMath.LikeAny(words, pattern)) return words;
         var built = string.Join("_", new[] { code, discipline.ToUpperInvariant(), words }.Where(x => x.Length > 0));
         return built;
     }

@@ -36,9 +36,9 @@ doesn't cover yet: a report counts as sent once a row below names it by the date
 | 24 | 2026-10-17 | Loading a family with a bad type catalog stops Revit on a "Could not parse column header" dialog | 0.33.0 | Fixed in 0.33.3 (please check) |
 | 25 | 2026-10-17 | Chat crashes drawing the icon on every reply header (frozen geometry transformed in place) | 0.33.0 | Fixed in 0.33.3 (please check) |
 | 26 | 2026-10-17 | title_block_from_cad fails trying to delete template lines Revit doesn't allow to be deleted | 0.33.0 | Fixed in 0.33.3 (please check) |
-| 27 | 2026-10-17 | find_clashes ignores void-only cutting families (they have no bounding box of their own) | 0.33.0 | Fixed in 0.33.3 (please check) |
-| 28 | 2026-10-17 | The issue check stops with an error when one of its checks crashes, instead of naming the step and carrying on | 0.33.0 | Fixed in 0.33.3 (please check) |
-| 29 | 2026-10-17 | Redlines are matched to the wrong place on the sheet (markups worked out before the sheet was drawn, viewport mapping off) | 0.33.0 | Fixed in 0.33.3 (please check) |
+| 27 | 2026-10-17 | find_clashes ignores void-only cutting families (they have no bounding box of their own) | 0.33.0 | Fixed again in next release (the field test still found the void not rebuilt: a void's geometry is inside out; an extruded void is now built again from its profile) |
+| 28 | 2026-10-17 | The issue check stops with an error when one of its checks crashes, instead of naming the step and carrying on | 0.33.0 | Fixed again in next release (the field test's issue check crashed placing a view on a sheet: the viewport's outline is read after Revit regenerates) |
+| 29 | 2026-10-17 | Redlines are matched to the wrong place on the sheet (markups worked out before the sheet was drawn, viewport mapping off) | 0.33.0 | Open (the field test still matches no element to three markups; its report now says how far the nearest element was, to find the cause) |
 | 30 | 2026-10-17 | The chat message box looks like two boxes and typed text starts at the bottom, not where the hint was | 0.33.3 | Fixed in 0.33.4 (please check) |
 | 31 | 2026-10-17 | The chat shows a "finish your edit mode" card when Revit is only busy, not in an edit mode | 0.33.3 | Fixed in 0.33.4 (please check) |
 | 32 | 2026-10-17 | Too many approval dialogs: Revit asks before every small change | 0.33.4 | Fixed in 0.33.5 (please check) |
