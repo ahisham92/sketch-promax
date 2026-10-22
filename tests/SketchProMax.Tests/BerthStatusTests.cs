@@ -41,6 +41,7 @@ internal static class BerthStatusTests
             var example = Example();
             example.Weights[Drawings] = 30;
             example.Week.Due = TimeSpan.FromHours(9);
+            example.ClashToleranceMm = 40;
             var xlsx = Path.Combine(temp, "setup.xlsx");
             OfficeXlsx.Write(xlsx, "setup", SetupSheets(example));
             var back = ReadSetup(xlsx);
@@ -50,7 +51,7 @@ internal static class BerthStatusTests
                 && back.Submissions.Count == 2 && back.Submissions[0].Date == example.Submissions[0].Date && back.Submissions[1].Berth == ""
                 && back.Planned.Count == 5 && back.Planned[0].What == "Structural Columns / Pile" && back.Planned[0].Count == 120
                 && back.Deliverables.Count == 4 && back.WeightOf(Drawings) == 30 && back.Week.Due == TimeSpan.FromHours(9) && back.Week.Days.Count == 5
-                && back.SourcePath == xlsx && back.SourceStamp.Length > 0,
+                && back.ClashToleranceMm == 40 && new Setup().ClashToleranceMm == 50 && back.SourcePath == xlsx && back.SourceStamp.Length > 0,
                 $"{back.Berths.Count} berths, {back.Submissions.Count} submissions, due {back.Week.Due}");
 
             var bad = new Setup { Models = [new("Port A", "PORTA")], Berths = [new("Port C", "Berth 9", FindBy.WholeModel)], Submissions = [new("Port A", "", "x", thu)] };
@@ -129,6 +130,31 @@ internal static class BerthStatusTests
             }
             var q = Question(setup, s3, tue);
             check("berth status: the AI question carries the schedule, the areas and the rules", q.Contains("Berth 1") && q.Contains("Mine") && q.Contains("08:00") && q.Contains("Annotation: 40%") && q.Contains("Don't change the model"), q);
+
+            // Submitted packages keep their status and what is left to fix.
+            setup.Submissions = [new("Port A", "Berth 1", "Done one", thu.AddDays(-7), null, true)];
+            var done = Summarize(setup, berth, state, tue);
+            check("berth status: a submitted berth is still scored, with fixes open", done.Next is null && done.Last?.Name == "Done one" && done.Verdict == Verdict.Submitted && done.Percent is not null,
+                Text(done.Verdict));
+
+            // Hand entries from the chat: by area or deliverable name, by berth code.
+            setup.Berths = [new("Port A", "T3 Berths 9, 10", FindBy.Parameter, "B9-10", "Zone"), new("Port A", "T4 RORO", FindBy.ScopeBox, "RORO"), new("Port B", "A2 Bull Nose", FindBy.WholeModel)];
+            check("berth status: berths found by code, name or a unique part",
+                FindBerth(setup, "T3")?.Name == "T3 Berths 9, 10" && FindBerth(setup, "roro")?.Name == "T4 RORO" && FindBerth(setup, "Bull")?.Name == "A2 Bull Nose" && FindBerth(setup, "r") is null && FindBerth(setup, "T9") is null, "");
+            setup.Deliverables = [new("Design of sections"), new("Calculations")];
+            var t3 = setup.Berths[0];
+            var said = SetByHand(setup, state, t3, "design of sections", 60, "Deck slab done, beams next");
+            SetByHand(setup, state, t3, "drawings", 75, null);
+            SetByHand(setup, state, t3, "berth", null, "Waiting for the fender loads");
+            var t3s = Summarize(setup, t3, state, tue);
+            check("berth status: the chat records deliverables, areas and the berth's comment",
+                said.Contains("60%") && t3s.Deliverables.First(d => d.Deliverable.Name == "Design of sections") is { Percent: 60, Comment: "Deck slab done, beams next" }
+                && t3s.Scores.First(x => x.Area.Key == Drawings) is { Percent: 75, From: Source.Hand } && state.For(t3.Key).Comment == "Waiting for the fender loads", said);
+            SetByHand(setup, state, t3, "Drawings", null, null, clearPercent: true);
+            string? refused = null;
+            try { SetByHand(setup, state, t3, "weather", 10, null); } catch (ArgumentException ex) { refused = ex.Message; }
+            check("berth status: clearing goes back to the model, and an unknown area is refused with the choices",
+                state.For(t3.Key).Hand[Drawings].Percent is null && refused is not null && refused.Contains("Calculations") && refused.Contains("Drawings"), refused ?? "");
 
             // Saved per project.
             SaveSetup("PRJ1", setup);

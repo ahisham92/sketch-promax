@@ -31,8 +31,8 @@ internal static class BerthStatusMath
     [
         new(Modelling, "Modelling", "Elements modelled in the berth against the planned counts (Planned sheet).", 20),
         new(CategoryData, "Categories and data", "Elements on the right category and ready for the bills: no Generic Models, no in-place families, Assembly Code filled.", 10),
-        new(Coordination, "Coordination", "Open clashes with the other disciplines in the latest Navisworks clash report, and links that are not loaded.", 10),
-        new(Clashes, "Structural clashes", "Structural elements in the berth that run into each other (not joined).", 10),
+        new(Coordination, "Services and openings", "Pipes, conduits, cable trays and ducts (in this model and every loaded link) that pass through the berth's structure with no opening, deeper than the clash tolerance; open clashes in the Navisworks clash report when one is set; links not loaded.", 15),
+        new(Clashes, "Structural clashes", "Structural elements in the berth that run into each other (not joined), deeper than the clash tolerance.", 10),
         new(Drawings, "Drawings", "The berth's sheets against the planned drawings: each with views and a title block.", 20),
         new(Details, "Details", "Detail and section views placed on the berth's sheets, empty drafting views, details not on a sheet.", 10),
         new(Annotation, "Annotation", "On the berth's sheets: elements without a tag, and views without dimensions.", 10),
@@ -57,6 +57,8 @@ internal static class BerthStatusMath
         public Calendar Week { get; set; } = new();
         /// <summary>The categories whose elements should carry a tag on the sheets (Annotation).</summary>
         public List<string> TagCategories { get; set; } = ["Structural Columns", "Structural Framing", "Structural Foundations", "Specialty Equipment"];
+        /// <summary>Overlaps thinner than this (mm) are not clashes: below it the fix isn't buildable or worth doing.</summary>
+        public double ClashToleranceMm { get; set; } = 50;
         public string SourcePath { get; set; } = "";
         public string SourceStamp { get; set; } = "";
 
@@ -307,7 +309,7 @@ internal static class BerthStatusMath
         return AddWorkHours(now, (100 - percent) / rate, week);
     }
 
-    public enum Verdict { Done, OnTrack, AtRisk, Behind, Overdue, NotKnown, NoSubmission }
+    public enum Verdict { Done, OnTrack, AtRisk, Behind, Overdue, NotKnown, NoSubmission, Submitted }
 
     /// <summary>
     /// How the berth stands for its next submission: Done at 100% (or submitted), Overdue when the due time has passed,
@@ -333,6 +335,7 @@ internal static class BerthStatusMath
         Verdict.Behind => "Behind",
         Verdict.Overdue => "Overdue",
         Verdict.NoSubmission => "No submission set",
+        Verdict.Submitted => "Submitted, fixes open",
         _ => "Needs two readings",
     };
 
@@ -345,7 +348,8 @@ internal static class BerthStatusMath
     }
 
     /// <summary>One line per berth for the overview and the AI question.</summary>
-    public sealed record Summary(Berth Berth, double? Percent, Submission? Next, DateTime? Due, double HoursLeft, DateTime? Finish, bool FinishByHand, Verdict Verdict, List<AreaScore> Scores, List<DeliverableScore> Deliverables, BerthState State);
+    /// <param name="Last">When every submission of the berth is made: the last one (its status still counts what is left to fix).</param>
+    public sealed record Summary(Berth Berth, double? Percent, Submission? Next, DateTime? Due, double HoursLeft, DateTime? Finish, bool FinishByHand, Verdict Verdict, List<AreaScore> Scores, List<DeliverableScore> Deliverables, BerthState State, Submission? Last = null);
 
     public static Summary Summarize(Setup setup, Berth berth, State state, DateTime now, Func<Deliverable, Berth, string>? findFile = null)
     {
@@ -358,7 +362,48 @@ internal static class BerthStatusMath
         var hours = due is null ? 0 : WorkHours(now, due.Value, setup.Week);
         var forecast = percent is null ? null : Forecast(b.History, percent.Value, now, setup.Week);
         var finish = b.FinishByHand ?? forecast;
-        return new Summary(berth, percent, next, due, hours, finish, b.FinishByHand is not null, Judge(percent, next, finish, now, setup.Week), scores, deliverables, b);
+        // Submitted already: still checked, so what the BIM submission needs fixed stays in view.
+        var last = next is null ? SubmissionsFor(setup, berth).LastOrDefault(x => x.Submitted) : null;
+        var verdict = last is not null ? (percent >= 100 ? Verdict.Done : Verdict.Submitted) : Judge(percent, next, finish, now, setup.Week);
+        return new Summary(berth, percent, next, due, hours, finish, b.FinishByHand is not null, verdict, scores, deliverables, b, last);
+    }
+
+    /// <summary>The berth a text names: its name, its code (the first word, such as T3), its key, or the only one containing the text.</summary>
+    public static Berth? FindBerth(Setup setup, string text)
+    {
+        var t = (text ?? "").Trim();
+        if (t.Length == 0) return null;
+        var exact = setup.Berths.Where(b => Same(b.Name, t) || Same(b.Key, t) || Same(b.Name.Split(' ')[0], t)).ToList();
+        if (exact.Count == 1) return exact[0];
+        var part = setup.Berths.Where(b => b.Name.IndexOf(t, StringComparison.OrdinalIgnoreCase) >= 0 || b.Key.IndexOf(t, StringComparison.OrdinalIgnoreCase) >= 0).ToList();
+        return part.Count == 1 ? part[0] : null;
+    }
+
+    /// <summary>
+    /// Sets a percentage (null: back to the model or the files) and/or a comment on an area or a deliverable of a berth,
+    /// as typed in the window or told to the chat. Returns what was set, or throws ArgumentException naming the choices.
+    /// </summary>
+    public static string SetByHand(Setup setup, State state, Berth berth, string what, double? percent, string? comment, bool clearPercent = false)
+    {
+        var b = state.For(berth.Key);
+        var w = (what ?? "").Trim();
+        HandEntry entry;
+        string name;
+        if (Same(w, "berth") || Same(w, "comment") || w.Length == 0)
+        {
+            if (comment is null) throw new ArgumentException("Give the comment for the berth.");
+            b.Comment = comment;
+            return $"{berth.Name}: comment saved.";
+        }
+        var area = Areas.FirstOrDefault(a => Same(a.Key, w) || Same(a.Name, w)) ?? Areas.FirstOrDefault(a => a.Name.IndexOf(w, StringComparison.OrdinalIgnoreCase) >= 0);
+        var deliverable = setup.Deliverables.FirstOrDefault(d => Same(d.Name, w)) ?? setup.Deliverables.FirstOrDefault(d => d.Name.IndexOf(w, StringComparison.OrdinalIgnoreCase) >= 0);
+        if (deliverable is not null && (area is null || Same(deliverable.Name, w))) { entry = b.DeliveredFor(deliverable.Name); name = deliverable.Name; }
+        else if (area is not null) { entry = b.HandFor(area.Key); name = area.Name; }
+        else throw new ArgumentException($"\"{w}\" is not an area or a deliverable. Areas: {string.Join(", ", Areas.Select(a => a.Name))}. Deliverables: {string.Join(", ", setup.Deliverables.Select(d => d.Name))}.");
+        if (clearPercent) entry.Percent = null;
+        else if (percent is { } p) entry.Percent = Clamp(p);
+        if (comment is not null) entry.Comment = comment;
+        return $"{berth.Name}, {name}: " + (entry.Percent is { } now ? $"{now:0}% by hand" : "from the model or files") + (entry.Comment.Length > 0 ? $"; comment: {entry.Comment}" : "") + ".";
     }
 
     /// <summary>Saves a reading's results for the berth and adds its percentage to the history (one point per hour at most).</summary>
@@ -384,7 +429,7 @@ internal static class BerthStatusMath
         {
             $"Berth status tracker: estimate when {s.Berth.Name} ({s.Berth.Model}) will be ready for submission. Don't change the model.",
             $"Now: {now:ddd dd-MMM-yyyy HH:mm}. Working days: {string.Join(", ", setup.Week.Days.Select(d => d.ToString().Substring(0, 3)))}, {setup.Week.Start:hh\\:mm}-{setup.Week.End:hh\\:mm}. A submission is due at its time (default {setup.Week.Due:hh\\:mm}) on its day, with calculations, bills, their back-up calculations and costing.",
-            $"Status now: {Pct(s.Percent)}." + (s.Next is null ? " No submission set." : $" Next submission: {s.Next.Name}, due {s.Due:ddd dd-MMM-yyyy HH:mm} ({s.HoursLeft:0} working hours left)."),
+            $"Status now: {Pct(s.Percent)}." + (s.Next is null ? (s.Last is { } last ? $" Already submitted ({last.Name}); estimate when what is left to fix will be done." : " No submission set.") : $" Next submission: {s.Next.Name}, due {s.Due:ddd dd-MMM-yyyy HH:mm} ({s.HoursLeft:0} working hours left)."),
         };
         foreach (var a in s.Scores) lines.Add($"- {a.Area.Name}: {Pct(a.Percent)}" + (a.Result?.Summary is { Length: > 0 } sum ? $" ({sum})" : "") + (a.Hand?.Comment is { Length: > 0 } c ? $" Comment: {c}" : ""));
         foreach (var d in s.Deliverables) lines.Add($"- Deliverable {d.Deliverable.Name}: {Pct(d.Percent)}" + (d.Comment.Length > 0 ? $" ({d.Comment})" : ""));
@@ -443,6 +488,13 @@ internal static class BerthStatusMath
 
     public static void SaveSetup(string project, Setup setup) => SafeFile.Write(Path.Combine(ProjectFolder(project), "setup.json"), JsonSerializer.Serialize(setup, Json));
 
+    /// <summary>The saved results' file text (to notice a change made elsewhere, such as by the chat), or "".</summary>
+    public static string StateText(string project)
+    {
+        try { return SafeFile.Read(Path.Combine(ProjectFolder(project), "status.json")) ?? ""; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return ""; }
+    }
+
     public static State LoadState(string project)
     {
         var file = Path.Combine(ProjectFolder(project), "status.json");
@@ -494,6 +546,7 @@ internal static class BerthStatusMath
                 ["End", week.End.ToString(@"hh\:mm", CultureInfo.InvariantCulture)],
                 ["Due time", week.Due.ToString(@"hh\:mm", CultureInfo.InvariantCulture)],
                 ["Tag categories", string.Join(", ", s.TagCategories)],
+                ["Clash tolerance (mm)", s.ClashToleranceMm.ToString(CultureInfo.InvariantCulture)],
             ], [22, 70]),
         ];
     }
@@ -609,6 +662,10 @@ internal static class BerthStatusMath
                 case "start": if (ParseTime(value) is { } a) s.Week.Start = a; break;
                 case "end": if (ParseTime(value) is { } b) s.Week.End = b; break;
                 case "due time": if (ParseTime(value) is { } d) s.Week.Due = d; break;
+                case "clash tolerance (mm)":
+                case "clash tolerance":
+                    if (double.TryParse(value.Replace("mm", "").Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var tol) && tol >= 0) s.ClashToleranceMm = tol;
+                    break;
                 case "tag categories": s.TagCategories = value.Split([',', ';'], StringSplitOptions.RemoveEmptyEntries).Select(x => x.Trim()).Where(x => x.Length > 0).ToList(); break;
             }
         }
@@ -689,7 +746,7 @@ internal static class BerthStatusMath
             status.Add(new([a.Area.Name, P(a.Percent), a.Weight, From(a.From), a.Result?.Done.ToString(CultureInfo.InvariantCulture) ?? "", a.Result?.Total.ToString(CultureInfo.InvariantCulture) ?? "", a.Result?.Summary ?? "", a.Hand?.Comment ?? ""]));
         status.Add(new(["Overall", P(s.Percent), s.Scores.Where(x => x.Percent is not null).Sum(x => x.Weight), "", "", "", Text(s.Verdict), b.Comment], Bold: true));
         status.Add(new(["", "", "", "", "", "", "", ""]));
-        status.Add(new(["Next submission", "", "", "", "", "", s.Next?.Name ?? "None set", ""]));
+        status.Add(new(["Next submission", "", "", "", "", "", s.Next?.Name ?? (s.Last is { } last ? $"All submitted (last: {last.Name}, {DueAt(last, setup.Week):dd-MMM-yyyy}); what is left to fix still counts" : "None set"), ""]));
         status.Add(new(["Due", "", "", "", "", "", s.Due is { } due ? due.ToString("ddd dd-MMM-yyyy HH:mm", CultureInfo.InvariantCulture) : "", ""]));
         status.Add(new(["Working hours left", "", "", "", "", "", s.Due is null ? "" : Math.Round(s.HoursLeft, 1).ToString(CultureInfo.InvariantCulture), ""]));
         status.Add(new(["Expected finish", "", "", s.FinishByHand ? "By hand" : "From the readings", "", "", s.Finish is { } f ? f.ToString("ddd dd-MMM-yyyy HH:mm", CultureInfo.InvariantCulture) : "Needs two readings", ""]));

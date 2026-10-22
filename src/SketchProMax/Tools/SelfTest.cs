@@ -525,6 +525,8 @@ internal static partial class SelfTest
         new("convert_coordinates", _ => new { points = new[] { new[] { 0.0, 0.0, 0.0 } }, from = "internal" }),
         new("get_activity_log", _ => new { limit = 5 }),
         new("memory_note", _ => new { action = "list" }),
+        // A project that isn't set up is refused by name; on a PC with exactly one set up, that one is listed instead.
+        new("berth_status", _ => new { action = "list", project = "SELFTEST-NONE" }) { ExpectError = "berth status", ExpectErrorIf = _ => BerthStatusMath.Projects().Count != 1 },
         new("recall_chats", _ => new { action = "search", query = "walls levels" })
             { Expect = r => r.TryGetProperty("chats", out var c) && c.ValueKind == System.Text.Json.JsonValueKind.Array ? null : "no list of chats: " + r.GetRawText() },
         new("make_document", c => new
