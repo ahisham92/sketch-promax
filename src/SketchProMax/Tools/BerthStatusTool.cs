@@ -110,7 +110,7 @@ public sealed class BerthStatusTool : IRevitTool
         status = Pct(s.Percent),
         verdict = Text(s.Verdict),
         next = s.Next is null ? null : new { s.Next.Name, due = s.Due?.ToString("ddd dd-MMM-yyyy HH:mm", CultureInfo.InvariantCulture), workingHoursLeft = Math.Round(s.HoursLeft, 1) },
-        submitted = s.Last is { } last ? $"{last.Name} ({last.Date:dd-MMM-yyyy})" : null,
+        submitted = s.Last is { } last ? last.Name + When(last, "dd-MMM-yyyy", ", ") : null,
         expectedFinish = s.Finish?.ToString("ddd dd-MMM-yyyy HH:mm", CultureInfo.InvariantCulture),
         finishByHand = s.FinishByHand,
         readAt = s.State.ReadAt?.ToString("dd-MMM-yyyy HH:mm", CultureInfo.InvariantCulture),
