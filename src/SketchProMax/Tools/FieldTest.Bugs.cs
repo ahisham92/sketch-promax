@@ -242,6 +242,36 @@ internal static partial class FieldTest
         return tag is not null ? Pass($"the API failed ({why}); github.com named {tag}") : Fail($"the API failed ({why}) and {url} named no release either");
     }
 
+    /// <summary>
+    /// An update stopped while unpacking continues on the next try: a small package is unpacked in a temp folder, one file
+    /// is taken away as if the unpack had stopped there, and unpacking again keeps the rest and puts that one back.
+    /// </summary>
+    private static (string, string) UpdateResumeProbe()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "SketchProMax-resume-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(dir);
+            var zip = Path.Combine(dir, "SketchProMax-0.0.1.zip");
+            using (var archive = System.IO.Compression.ZipFile.Open(zip, System.IO.Compression.ZipArchiveMode.Create))
+                foreach (var name in new[] { "a.dll", "b.dll", "c.dll" })
+                    using (var writer = new StreamWriter(archive.CreateEntry("pkg/dist/Revit" + App.RevitYear + "/" + name).Open()))
+                        writer.Write(name);
+            var sha = UpdateResume.Sha256Of(zip);
+            var folder = Path.Combine(dir, "0.0.1.partial");
+            UpdateResume.Extract(zip, folder, sha);
+            var missing = Path.Combine(folder, "pkg", "dist", "Revit" + App.RevitYear, "b.dll");
+            File.Delete(missing);
+            var kept = UpdateResume.Extract(zip, folder, sha);
+            if (kept != 2 || !File.Exists(missing)) return Fail($"unpacking again kept {kept} of 2 files and {(File.Exists(missing) ? "put back" : "did not put back")} the missing one");
+            UpdateResume.MarkComplete(folder, "0.0.1");
+            return UpdateResume.IsComplete(folder)
+                ? Pass($"unpacking again kept the 2 files already written and added the missing one, in {Path.GetTempPath()}")
+                : Fail("the finished version could not be marked as unpacked");
+        }
+        finally { try { Directory.Delete(dir, true); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { } }
+    }
+
     // ---- The report's Bug log section ----------------------------------------------------------------------------------------
 
     private static string BugLogSection(RunReport r)

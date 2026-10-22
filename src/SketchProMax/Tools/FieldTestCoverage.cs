@@ -393,6 +393,7 @@ internal static class FieldTestCoverage
         new("update.loader_fixed", Updates, "The loader stays at one place (bug #17)", How.Probe, "", "the loader that started this core is the fixed one in the add-in folder (not inside a version folder), and the .addin file points at it"),
         new("startup.timings", Updates, "Startup stays out of the way (bug #18)", How.Probe, "", "the time Sketch ProMax took at Revit start, and what it added to opening models, are under the limits (3 s, 1 s)"),
         new("update.fallback", Updates, "The update check falls back to github.com (bug #23)", How.Probe, "", "with GitHub's API made to fail, the check still finds the latest version from the github.com releases page"),
+        new("update.resume", Updates, "An interrupted update continues where it stopped", How.Probe, "", "on this PC's disk, an unpack stopped part way is continued (the files already written are kept) and the finished version is marked so Try again goes straight to installing"),
 
         // ---- Revit limits
         new("legend.components", Limits, "Legend components copied from one placed by hand", How.Manual, "", "the Revit API can't place a legend component from scratch, and the test project's template has none to copy (the field test looks in the Revit templates first)",

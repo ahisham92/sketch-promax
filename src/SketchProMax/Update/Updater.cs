@@ -163,7 +163,6 @@ public static class Updater
 
             // What was found is kept even if the download then fails: the badge still offers the new version.
             SaveState(state);
-            progress.Report(UpdateStage.Downloading, $"Downloading Sketch ProMax {release.Version}…", release.Version);
             var folder = await DownloadAndUnpackAsync(release, progress, ct).ConfigureAwait(false);
             progress.Report(UpdateStage.Applying, "Installing…");
             if (SettleInstall(folder) == 0)
@@ -186,13 +185,14 @@ public static class Updater
         }
         catch (Exception ex) when (ex is HttpRequestException or IOException or UnauthorizedAccessException
                                        or JsonException or InvalidDataException or OperationCanceledException or InvalidOperationException
-                                       or System.Xml.XmlException)
+                                       or System.Xml.XmlException or TimeoutException)
         {
             var state = LoadState();
             state.LastCheck = DateTime.UtcNow;
             state.LastError = ex is OperationCanceledException ? "the download took too long" : ex.Message;
             SaveState(state);
-            progress.Report(UpdateStage.Failed, $"The update didn't finish: {state.LastError}. Nothing changed; it is tried again later.");
+            progress.Report(UpdateStage.Failed, $"The update didn't finish: {state.LastError}. Nothing changed. " +
+                                                "Try again (or the next automatic check) continues from where it stopped.");
             return null;
         }
         finally
@@ -470,70 +470,90 @@ public static class Updater
 
     /// <summary>
     /// Downloads and unpacks <paramref name="release"/> into &lt;root&gt;\versions\&lt;version&gt; (root: %LOCALAPPDATA%\SketchProMax,
-    /// or TritoRevit's own folder for its copy). Returns that folder.
+    /// or TritoRevit's own folder for its copy). Returns that folder. An earlier try that stopped part way is continued, not
+    /// started again (<see cref="UpdateResume"/>): a folder already unpacked is used as it is, a complete download is only
+    /// checked, a partial one continues from where it stopped, and unpacking skips files already written.
     /// </summary>
     internal static async Task<string> DownloadAndUnpackAsync(Release release, UpdateProgress progress, CancellationToken ct, string? root = null)
     {
         var updatesFolder = root is null ? UpdatesFolder : Path.Combine(root, "updates");
         var versionsFolder = root is null ? VersionsFolder : Path.Combine(root, "versions");
+        var target = Path.Combine(versionsFolder, release.Version);
+        if (UpdateResume.IsComplete(target))
+        {
+            progress.Report(UpdateStage.Unpacking, $"Sketch ProMax {release.Version} was already downloaded and unpacked by an earlier try.", release.Version);
+            return target;
+        }
         Directory.CreateDirectory(updatesFolder);
         var zip = Path.Combine(updatesFolder, $"SketchProMax-{release.Version}.zip");
-        // HttpClient.Timeout does not cover reading the body after the headers arrive, so the whole download gets a limit.
-        using (var download = CancellationTokenSource.CreateLinkedTokenSource(ct))
+
+        // A complete download from an earlier try is checked rather than fetched again; a damaged one is fetched afresh.
+        string? sha = null;
+        if (File.Exists(zip))
         {
-            download.CancelAfter(TimeSpan.FromMinutes(5));
-            using var http = CreateClient();
-            using var response = await http.GetAsync(release.ZipUrl, HttpCompletionOption.ResponseHeadersRead, download.Token).ConfigureAwait(false);
-            response.EnsureSuccessStatusCode();
-            var total = response.Content.Headers.ContentLength;
-            using var body = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
-            using var file = File.Create(zip);
-            var buffer = new byte[81920];
-            long done = 0;
-            progress.ReportBytes(0, total);
-            int read;
-            while ((read = await body.ReadAsync(buffer, 0, buffer.Length, download.Token).ConfigureAwait(false)) > 0)
+            progress.Report(UpdateStage.Verifying, "Checking the download an earlier try finished…", release.Version);
+            try { sha = Verify(zip, release); }
+            catch (InvalidDataException) { UpdateResume.Discard(zip); }
+        }
+        if (sha is null)
+        {
+            var have = UpdateResume.Downloaded(zip);
+            progress.Report(UpdateStage.Downloading, have > 0
+                ? $"Continuing the download of Sketch ProMax {release.Version} from {UpdateSnapshot.Megabytes(have)}…"
+                : $"Downloading Sketch ProMax {release.Version}…", release.Version);
+            using (var http = CreateClient())
+                await UpdateResume.DownloadAsync(http, release.ZipUrl, zip, progress.ReportBytes, UpdateResume.Stall, ct).ConfigureAwait(false);
+            progress.Report(UpdateStage.Verifying, "Checking the download is complete and undamaged…");
+            try { sha = Verify(zip, release); }
+            catch (InvalidDataException)
             {
-                await file.WriteAsync(buffer, 0, read, download.Token).ConfigureAwait(false);
-                done += read;
-                progress.ReportBytes(done, total);
+                // Damaged: the next try downloads it afresh rather than continuing it.
+                UpdateResume.Discard(zip);
+                throw;
             }
         }
         // From here on the update completes: cancelling half an unpack would only leave a mess.
-        ct = CancellationToken.None;
-        progress.Report(UpdateStage.Verifying, "Checking the download is complete and undamaged…");
-
-        if (release.Sha256 is { } expected)
-        {
-            using var sha = SHA256.Create();
-            using var stream = File.OpenRead(zip);
-            var actual = BitConverter.ToString(sha.ComputeHash(stream)).Replace("-", "");
-            if (!actual.Equals(expected, StringComparison.OrdinalIgnoreCase))
-                throw new InvalidDataException("The downloaded update is damaged (checksum mismatch). It will be retried later.");
-        }
-        else
-        {
-            // No published digest: at least make sure the zip opens and holds what an update needs.
-            using var archive = ZipFile.OpenRead(zip);
-            var names = archive.Entries.Select(e => e.FullName.Replace('\\', '/')).ToList();
-            if (!names.Any(n => n.Contains("dist/") && n.EndsWith("/SketchProMax.dll", StringComparison.OrdinalIgnoreCase)))
-                throw new InvalidDataException("The downloaded update is incomplete (no SketchProMax.dll). It will be retried later.");
-        }
-
         ClearDownloadMark(zip);
-        progress.Report(UpdateStage.Unpacking, $"Unpacking Sketch ProMax {release.Version}…");
-        var target = Path.Combine(versionsFolder, release.Version);
         var temp = target + ".partial";
-        if (Directory.Exists(temp)) Directory.Delete(temp, true);
-        ZipFile.ExtractToDirectory(zip, temp);
+        var kept = 0;
+        progress.Report(UpdateStage.Unpacking, $"Unpacking Sketch ProMax {release.Version}…");
+        try { kept = UpdateResume.Extract(zip, temp, sha); }
+        catch (InvalidDataException)
+        {
+            // The zip itself is unreadable (a check without a published digest can't see every fault): fetch it afresh next time.
+            UpdateResume.Discard(zip);
+            throw;
+        }
+        if (kept > 0) progress.Report(UpdateStage.Unpacking, $"Unpacking Sketch ProMax {release.Version} (continuing: {kept} files were already unpacked)…");
         var dist = Directory.GetDirectories(temp, "dist", SearchOption.AllDirectories).FirstOrDefault()
                    ?? throw new InvalidDataException("The update package has no dist folder.");
-        if (Directory.Exists(target)) Directory.Delete(target, true);
-        Directory.Move(dist, target);
-        Directory.Delete(temp, true);
+        if (Directory.Exists(target)) UpdateResume.WithRetry(() => Directory.Delete(target, true));
+        UpdateResume.WithRetry(() => Directory.Move(dist, target));
         foreach (var file in Directory.GetFiles(target, "*", SearchOption.AllDirectories)) ClearDownloadMark(file);
-        File.Delete(zip);
+        UpdateResume.MarkComplete(target, release.Version);
+        TryDelete(() => Directory.Delete(temp, true));
+        TryDelete(() => File.Delete(zip));
         return target;
+    }
+
+    /// <summary>
+    /// Checks a downloaded zip against the published digest, or (without one) that it opens and holds what an update
+    /// needs. Returns its SHA-256; throws <see cref="InvalidDataException"/> when it is damaged or incomplete.
+    /// </summary>
+    private static string Verify(string zip, Release release)
+    {
+        var actual = UpdateResume.Sha256Of(zip);
+        if (release.Sha256 is { } expected)
+        {
+            if (!actual.Equals(expected, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("The downloaded update is damaged (checksum mismatch). The next try downloads it again.");
+            return actual;
+        }
+        using var archive = ZipFile.OpenRead(zip);
+        var names = archive.Entries.Select(e => e.FullName.Replace('\\', '/')).ToList();
+        if (!names.Any(n => n.Contains("dist/") && n.EndsWith("/SketchProMax.dll", StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidDataException("The downloaded update is incomplete (no SketchProMax.dll). The next try downloads it again.");
+        return actual;
     }
 
     private static void ReplaceConnector(string versionFolder)
@@ -584,7 +604,21 @@ public static class Updater
         var running = Path.GetDirectoryName(typeof(Updater).Assembly.Location) ?? "";
         var loaderPath = AppDomain.CurrentDomain.GetData(LoaderPathKey) as string ?? "";
         var keep = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { CurrentText };
-        if (LoadState().Staged is { } staged) keep.Add(staged);
+        var saved = LoadState();
+        if (saved.Staged is { } staged) keep.Add(staged);
+        // What a try of the newest release has done so far (unpacked, or partly), so the next try continues it.
+        var latest = saved.Latest is { } l && Parse(l) > Current ? l : null;
+        if (latest is not null) keep.Add(latest);
+        if (latest is not null) keep.Add(latest + ".partial");
+        // Downloads (whole or partial) of any other version are no longer wanted.
+        if (Directory.Exists(UpdatesFolder))
+            foreach (var file in Directory.GetFiles(UpdatesFolder, "SketchProMax-*"))
+            {
+                var name = Path.GetFileName(file);
+                if (latest is not null && name.StartsWith($"SketchProMax-{latest}.zip", StringComparison.OrdinalIgnoreCase)) continue;
+                TryDelete(() => File.Delete(file));
+            }
+
         // Any Revit version may load a different build; never delete one a manifest still points at.
         var referenced = ManifestAssemblies().ToList();
         foreach (var folder in Directory.GetDirectories(VersionsFolder))

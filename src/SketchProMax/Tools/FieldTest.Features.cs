@@ -530,6 +530,7 @@ internal static partial class FieldTest
         await Probe(s, "update.endpoint", () => { var (row, tag) = Endpoint(); latest = tag; return row; }).ConfigureAwait(false);
         await Probe(s, "update.version", () => VersionCompare(latest)).ConfigureAwait(false);
         await Probe(s, "update.fallback", UpdateFallback).ConfigureAwait(false);
+        await Probe(s, "update.resume", UpdateResumeProbe).ConfigureAwait(false);
         await Probe(s, "claude.msix", Msix).ConfigureAwait(false);
         await Probe(s, "diagnostics", () => Diagnostics(s.Result)).ConfigureAwait(false);
     }
