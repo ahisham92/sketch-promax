@@ -1246,7 +1246,9 @@ internal static partial class FieldTest
         var problems = new List<string>();
         if (!doc.Contains("# Concrete works") || !doc.Contains("| Columns | C50 |") || doc.Contains("C30")) problems.Add("the Word text is wrong: " + doc);
         if (!slides.Contains("=== Slide 2 of 2 ===") || !slides.Contains("Slide 2 title")) problems.Add("the PowerPoint text is wrong: " + slides);
-        return problems.Count == 0 ? Pass("Word text (headings, bullets, table rows, no deleted text) and PowerPoint slides in order are read") : Fail(string.Join("; ", problems));
+        var book = Chat.OfficeText.Read(Chat.OfficeText.SampleWorkbook(), ".xlsx").Text;
+        if (!book.Contains("| 2 | P-01 | 0.3 | 2025-01-01 | 85% |") || !book.Contains("Notes (hidden)")) problems.Add("the Excel text is wrong: " + book);
+        return problems.Count == 0 ? Pass("Word text (headings, bullets, table rows, no deleted text), PowerPoint slides in order and Excel sheets as tables are read") : Fail(string.Join("; ", problems));
     }
 
     // ---- Bug log, updates, the Claude app
