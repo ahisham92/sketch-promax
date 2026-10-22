@@ -271,6 +271,8 @@ public sealed class ToolRegistry
         new MemoryNoteTool(),
         new RecallChatsTool(),
         new ChatJobsTool(),
+        // Files for the user: Excel, Word, PowerPoint and PDF
+        new MakeDocumentTool(),
     ]);
         // Recipes replay other tools, so they need the registry itself.
         registry.Add(new SaveRecipeTool(registry));
