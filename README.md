@@ -26,10 +26,10 @@ If your company manages your Claude account, IT may need to allow the desktop ap
 
 ## Install
 
-From a release: download `SketchProMax-<version>.zip` from [Releases](https://github.com/ahisham92/sketch-promax/releases), extract it and double-click **Install.cmd**. Or install the latest release with one PowerShell line, no .cmd needed:
+From a release: download `SketchProMax-<version>.zip` from [Releases](https://github.com/ahisham92/sketch-promax/releases), extract it and double-click **Install.cmd**. Or open PowerShell (Start menu, type PowerShell) and paste this line to install the latest release, no .cmd needed:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/ahisham92/sketch-promax/main/get.ps1 | iex"
+irm https://raw.githubusercontent.com/ahisham92/sketch-promax/main/get.ps1 | iex
 ```
 
 If Install.cmd says Windows cannot access the file: open the zip's Properties, tick **Unblock**, extract it again, or use the PowerShell line.

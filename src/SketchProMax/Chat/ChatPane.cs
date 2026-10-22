@@ -131,6 +131,9 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
 
     private enum Setup { Checking, Missing, Installing, SignedOut, SigningIn, Ready, Failed }
 
+    /// <summary>Why Revit couldn't open PowerShell to install Claude Code, once it couldn't: the user pastes the line instead.</summary>
+    private string? _installBlocked;
+
     private sealed class Turn
     {
         public string Line = "";
@@ -951,6 +954,20 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
                 Add("Install Claude Code", Brand.Weight.Primary, () => Launch(Setup.Installing));
                 Add("Check again", Brand.Weight.Secondary, () => Check(quiet: false));
                 break;
+            case Setup.Installing when _installBlocked is not null:
+                // Some company PCs don't let Revit start PowerShell; the user's own PowerShell window usually still works.
+                Title("Install Claude Code from your own PowerShell");
+                Para("This PC didn't let Sketch ProMax open PowerShell (" + _installBlocked + "). Open PowerShell yourself " +
+                     "(Start menu, type PowerShell), paste this line and press Enter:");
+                var line = Brand.Text(ClaudeCli.InstallCommand, Brand.K.Text, ChatUi.SmallSize);
+                line.FontFamily = new FontFamily("Consolas, Courier New");
+                line.Margin = new Thickness(0, 2, 0, 0);
+                panel.Children.Add(line);
+                Waiting("Waiting for Claude Code to be installed…");
+                Para("If PowerShell says it can't run it, ask IT to install Claude Code for you.", Brand.K.Muted);
+                row.Children.Add(ChatUi.CopyButton(() => ClaudeCli.InstallCommand, "the install line", "Copy the line"));
+                Add("Check again", Brand.Weight.Secondary, () => Check(quiet: false));
+                break;
             case Setup.Installing:
                 Title("Installing Claude Code");
                 Waiting("Waiting for the installer in the PowerShell window to finish…");
@@ -997,6 +1014,17 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             if (next == Setup.Installing) ClaudeCli.StartInstall();
             else if (_install is { } install) ClaudeCli.StartSignIn(install);
             else { Check(quiet: false); return; }
+        }
+        catch (Exception ex) when (next == Setup.Installing && ex is System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            // Blocked by a company policy, most often: ask for the line to be pasted into the user's own PowerShell.
+            _installBlocked = ex.Message.TrimEnd('.');
+            _setup = Setup.Installing;
+            _waitingSince = DateTime.UtcNow;
+            _poll.Start();
+            ShowSetup();
+            ShowStatus();
+            return;
         }
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
         {

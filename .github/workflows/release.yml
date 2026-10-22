@@ -80,10 +80,10 @@ jobs:
         run: |
           $v = "${{ steps.version.outputs.version }}"
           $notes = @"
-          **Install:** extract the zip and double-click Install.cmd, or run this PowerShell line (no .cmd needed):
+          **Install:** extract the zip and double-click Install.cmd, or open PowerShell and paste this line (no .cmd needed):
 
           ``````
-          powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/${{ github.repository }}/main/get.ps1 | iex"
+          irm https://raw.githubusercontent.com/${{ github.repository }}/main/get.ps1 | iex
           ``````
 
           If Install.cmd says Windows cannot access the file: Properties > Unblock on the zip, or use the PowerShell line. Installed copies update themselves.

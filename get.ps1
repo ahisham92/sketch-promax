@@ -1,10 +1,12 @@
 # Installs the latest Sketch ProMax release in one line, with no .cmd file to double-click (for PCs where Windows
-# refuses to run Install.cmd, such as a zip marked "came from the internet" or a policy that blocks .cmd files):
+# refuses to run Install.cmd, such as a zip marked "came from the internet" or a policy that blocks .cmd files or
+# starting powershell.exe from another program). Paste this into PowerShell:
 #
-#   powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/ahisham92/sketch-promax/main/get.ps1 | iex"
+#   irm https://raw.githubusercontent.com/ahisham92/sketch-promax/main/get.ps1 | iex
 #
 # It downloads the latest release zip into %TEMP%, clears its download mark, extracts it and runs its install.ps1
-# (for the current user, no admin needed). Close Revit and the Claude desktop app first.
+# in this same PowerShell window (no new powershell.exe; for the current user, no admin needed). Close Revit and the
+# Claude desktop app first.
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"   # Windows PowerShell downloads far slower while it draws progress
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
@@ -35,5 +37,7 @@ Get-ChildItem $out -Recurse -File | Unblock-File -ErrorAction SilentlyContinue
 $install = Get-ChildItem $out -Recurse -Filter "install.ps1" -File | Select-Object -First 1
 if (-not $install) { throw "The zip has no install.ps1. Download it from https://github.com/$repo/releases instead." }
 Write-Host "Installing Sketch ProMax $($release.tag_name.TrimStart('v'))..."
-& powershell -NoProfile -ExecutionPolicy Bypass -File $install.FullName
-if ($LASTEXITCODE) { throw "install.ps1 stopped with an error (see above). The files are in $out." }
+# In this window: some company PCs refuse to start powershell.exe from another program. Bypass lasts for this window only.
+Set-ExecutionPolicy -Scope Process Bypass -Force
+try { & $install.FullName }
+catch { throw "install.ps1 stopped: $($_.Exception.Message) The files are in $out." }
