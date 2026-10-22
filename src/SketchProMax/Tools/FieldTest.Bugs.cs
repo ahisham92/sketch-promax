@@ -45,18 +45,24 @@ internal static partial class FieldTest
             using var p = JsonDocument.Parse(preview.Text);
             var problems = new List<string>();
             var total = p.RootElement.GetProperty("total").GetInt32();
-            var passes = p.RootElement.GetProperty("passes").GetInt32();
-            if (total != 2) problems.Add($"the preview found {total}, not the type and its material");
-            if (passes < 2) problems.Add($"the preview took {passes} pass(es): the material only goes unused once the type is gone");
+            var summary = p.RootElement.GetProperty("summary").GetString() ?? "";
+            // The preview deletes nothing, not even in a rolled-back transaction (Revit 2024 closed inside the old one):
+            // it lists what is unused now, the type; the material only goes unused once the type is gone, when applying.
+            if (total != 1) problems.Add($"the preview found {total}, not just the unused type");
+            if (!summary.Contains(CleanupMath.PreviewPassesNote)) problems.Add("the preview doesn't say applying finds more");
             if (doc.GetElement(typeId) is null || doc.GetElement(materialId) is null) problems.Add("the preview deleted something");
+            if (doc.IsModifiable) problems.Add("the preview left a transaction open");
             if (problems.Count > 0) return Fail(string.Join("; ", problems) + ". " + Short(preview.Text, 300));
 
             var applied = Call(app, s.Registry, "purge_unused", new { only, apply = true });
             if (applied.IsError) return Fail("apply: " + Short(applied.Text, 400));
+            using var a = JsonDocument.Parse(applied.Text);
+            var passes = a.RootElement.GetProperty("passes").GetInt32();
             if (doc.GetElement(typeId) is not null) problems.Add("the type is still there");
             if (doc.GetElement(materialId) is not null) problems.Add("the material is still there");
+            if (passes < 2) problems.Add($"applying took {passes} pass(es): the material only goes unused once the type is gone");
             return problems.Count == 0
-                ? Pass($"preview: 2 found in {passes} passes, nothing changed; apply deleted both ({Short(JsonDocument.Parse(applied.Text).RootElement.GetProperty("summary").GetString() ?? "", 160)}); rolled back")
+                ? Pass($"preview: the type found, nothing deleted and no transaction opened; apply deleted both in {passes} passes ({Short(a.RootElement.GetProperty("summary").GetString() ?? "", 160)}); rolled back")
                 : Fail(string.Join("; ", problems) + ". " + Short(applied.Text, 300));
         }
         finally

@@ -7,8 +7,8 @@ using SketchProMax.Revit;
 namespace SketchProMax.Tools;
 
 /// <summary>
-/// What the purge and cleanup tools share: a preview by default (the deletes are made in a transaction that is rolled
-/// back, so the counts, later passes and what else goes with them are exact), apply to do it as one Undo step, repeat
+/// What the purge and cleanup tools share: a preview by default (nothing is deleted: the candidates are listed and what
+/// else goes with them is read with GetDependentElements; see <see cref="DeleteSafety"/>), apply to do it as one Undo step, repeat
 /// passes until nothing new turns up, keep and only name lists, workshared elements another user owns left and named,
 /// Cancel and the job card's Stop between chunks, and a paged result with before/after counts and the file size.
 /// </summary>
@@ -37,6 +37,8 @@ internal static class Cleanup
         public readonly Dictionary<string, int> AlsoByCategory = new(StringComparer.Ordinal);
         public int Passes, Before, After;
         public string? Stopped;
+        /// <summary>A preview of a tool that repeats passes: applying may find more once these are gone.</summary>
+        public bool MoreOnApply;
     }
 
     public const string Kept = "kept by name", Owned = "owned by someone else", Protected = "protected", Refused = "refused by Revit";
@@ -92,45 +94,50 @@ internal static class Cleanup
     public static List<ElementId> FirstPass(Document doc, Spec spec) =>
         Filter(doc, spec, spec.Collect(doc, 1), [], null).Select(i => i.Id).ToList();
 
-    /// <summary>Runs the passes: in a rolled-back transaction for a preview, as one transaction group (one Undo) to apply.</summary>
+    /// <summary>
+    /// Applies the passes as one transaction group (one Undo), or previews without deleting anything: the first pass's
+    /// candidates, and what each takes along read with GetDependentElements (<see cref="DeleteSafety"/>). Revit 2024 closed
+    /// by itself inside the old preview, which deleted families in a rolled-back transaction.
+    /// </summary>
     public static Outcome Sweep(Document doc, Spec spec, bool apply)
     {
         if (doc.IsModifiable) throw new InvalidOperationException("A transaction is already open; this tool must run on its own.");
         var o = new Outcome { Before = Count(doc) };
         if (apply)
         {
-            Batch.InGroup(doc, spec.Title, () => { Passes(doc, spec, o, true); return o.Deleted.Count; }, n => n > 0);
+            Batch.InGroup(doc, spec.Title, () => { Passes(doc, spec, o); return o.Deleted.Count; }, n => n > 0);
             o.After = Count(doc);
             return o;
         }
-        using (var t = new Transaction(doc, $"Sketch ProMax: {spec.Title} (preview)"))
-        {
-            var options = t.GetFailureHandlingOptions();
-            options.SetFailuresPreprocessor(new Quiet());
-            options.SetClearAfterRollback(true);
-            options.SetForcedModalHandling(false);
-            t.SetFailureHandlingOptions(options);
-            FailureGuard.Muted++;
-            try
-            {
-                t.Start();
-                Passes(doc, spec, o, false);
-                o.After = Count(doc);
-            }
-            finally
-            {
-                if (t.HasStarted() && !t.HasEnded()) t.RollBack();
-                FailureGuard.Muted--;
-            }
-        }
-        // Rolled back: what went along with the candidates is there again to be named.
-        foreach (var id in o.Also)
-            if (doc.GetElement(new ElementId(id)) is { } e && e.Category is { } c && c.CategoryType is CategoryType.Model or CategoryType.Annotation)
-                o.AlsoByCategory[c.Name] = o.AlsoByCategory.TryGetValue(c.Name, out var n) ? n + 1 : 1;
+        Preview(doc, spec, o);
         return o;
     }
 
-    private static void Passes(Document doc, Spec spec, Outcome o, bool apply)
+    /// <summary>A preview: no transaction, nothing deleted. What only becomes unused once these go is found when applying.</summary>
+    private static void Preview(Document doc, Spec spec, Outcome o)
+    {
+        var go = Filter(doc, spec, spec.Collect(doc, 1), [], o.Stayed);
+        if (go.Count > 0) o.Passes = 1;
+        var chunks = CleanupMath.Chunks(go, ChunkSize);
+        for (var i = 0; i < chunks.Count; i++)
+        {
+            if (CancelPoint.Stop(spec.Title, i, chunks.Count)) { o.Stopped = CancelPoint.Stopped + "; the preview covers what was looked at so far."; break; }
+            foreach (var item in chunks[i])
+            {
+                o.Deleted.Add(item);
+                o.DeletedIds.Add(item.Id.Value);
+            }
+            foreach (var id in DeleteSafety.Dependents(doc, chunks[i].Select(x => x.Id).ToList())) o.Also.Add(id.Value);
+        }
+        o.Also.ExceptWith(o.DeletedIds);
+        o.MoreOnApply = spec.MaxPasses > 1 && go.Count > 0;
+        o.After = Math.Max(0, o.Before - o.Deleted.Count - o.Also.Count);
+        foreach (var id in o.Also)
+            if (doc.GetElement(new ElementId(id)) is { } e && e.Category is { } c && c.CategoryType is CategoryType.Model or CategoryType.Annotation)
+                o.AlsoByCategory[c.Name] = o.AlsoByCategory.TryGetValue(c.Name, out var n) ? n + 1 : 1;
+    }
+
+    private static void Passes(Document doc, Spec spec, Outcome o)
     {
         var seen = new HashSet<long>();
         for (var pass = 1; pass <= Math.Max(1, spec.MaxPasses); pass++)
@@ -140,52 +147,14 @@ internal static class Cleanup
             if (go.Count == 0) break;
             o.Passes = pass;
             var before = o.Deleted.Count;
-            if (apply) DeleteApply(doc, spec.Title, go, o);
-            else DeletePreview(doc, spec.Title, go, o);
+            DeleteApply(doc, spec.Title, go, o);
             if (o.Stopped is not null || o.Deleted.Count == before) break;
-            if (!apply) doc.Regenerate();
         }
     }
 
     private const int ChunkSize = 50;
 
     private static readonly ICollection<ElementId> None = Array.Empty<ElementId>();
-
-    /// <summary>Preview: deletes chunk by chunk in sub-transactions of the open (rolled-back) transaction; a refused chunk one by one.</summary>
-    private static void DeletePreview(Document doc, string title, List<Item> go, Outcome o)
-    {
-        var chunks = CleanupMath.Chunks(go, ChunkSize);
-        for (var i = 0; i < chunks.Count; i++)
-        {
-            if (CancelPoint.Stop(title, i, chunks.Count)) { o.Stopped = CancelPoint.Stopped + "; the preview covers what was looked at so far."; return; }
-            if (!TryDelete(doc, chunks[i], o))
-                foreach (var item in chunks[i])
-                    if (!TryDelete(doc, [item], o, out var why)) o.Stayed.Add(new(item, Refused, why));
-        }
-    }
-
-    private static bool TryDelete(Document doc, List<Item> items, Outcome o) => TryDelete(doc, items, o, out _);
-
-    private static bool TryDelete(Document doc, List<Item> items, Outcome o, out string why)
-    {
-        why = "";
-        var asked = items.Where(i => Exists(doc, i.Id)).Select(i => i.Id).ToList();
-        using var sub = new SubTransaction(doc);
-        sub.Start();
-        try
-        {
-            var gone = asked.Count == 0 ? None : doc.Delete(asked);
-            sub.Commit();
-            Record(items, gone, o);
-            return true;
-        }
-        catch (Exception ex) when (ex is Autodesk.Revit.Exceptions.ApplicationException or ArgumentException or InvalidOperationException)
-        {
-            if (sub.HasStarted() && !sub.HasEnded()) sub.RollBack();
-            why = ex.Message.Trim();
-            return false;
-        }
-    }
 
     /// <summary>The items count as deleted (one already gone with an earlier one too); anything else Revit removed is "also".</summary>
     private static void Record(List<Item> items, ICollection<ElementId> gone, Outcome o)
@@ -200,10 +169,19 @@ internal static class Cleanup
             if (!o.DeletedIds.Contains(id.Value)) o.Also.Add(id.Value);
     }
 
-    /// <summary>Apply: chunks through ItemBatch (borrowing in a workshared model, progress, Pause/Skip/Stop); a refused chunk one by one.</summary>
+    /// <summary>
+    /// Apply: families and family types one at a time (families first, so their types go with them), then the rest in
+    /// chunks through ItemBatch (borrowing in a workshared model, progress, Pause/Skip/Stop); a refused chunk one by one.
+    /// </summary>
     private static void DeleteApply(Document doc, string title, List<Item> go, Outcome o)
     {
-        var chunks = CleanupMath.Chunks(go, ChunkSize);
+        var family = go.Where(i => DeleteSafety.IsFamilyContent(doc, i.Id)).OrderBy(i => doc.GetElement(i.Id) is Family ? 0 : 1).ToList();
+        if (family.Count > 0) DeleteEach(doc, title, family, o);
+        if (o.Stopped is not null) return;
+        var familyIds = new HashSet<long>(family.Select(i => i.Id.Value));
+        var rest = go.Where(i => !familyIds.Contains(i.Id.Value)).ToList();
+        if (rest.Count == 0) return;
+        var chunks = CleanupMath.Chunks(rest, ChunkSize);
         var batch = ItemBatch.Run(doc, title, chunks, c => c.Count == 1 ? c[0].Name : $"{c.Count} items from {c[0].Name}",
             c => c.Select(i => i.Id).Where(id => doc.GetElement(id) is not null),
             c => { var ids = c.Where(i => Exists(doc, i.Id)).Select(i => i.Id).ToList(); return ids.Count == 0 ? None : doc.Delete(ids); });
@@ -216,14 +194,20 @@ internal static class Cleanup
             retry.AddRange(chunks[i]);
         }
         if (retry.Count == 0 || o.Stopped is not null) return;
-        var each = ItemBatch.Run(doc, title, retry, it => it.Name, it => [it.Id],
-            it => Exists(doc, it.Id) ? doc.Delete(it.Id) : None, borrow: false);
-        for (var i = 0; i < retry.Count; i++)
+        DeleteEach(doc, title, retry, o, borrow: false);
+    }
+
+    /// <summary>Each item in its own transaction; one already gone (with its family, say) counts as deleted.</summary>
+    private static void DeleteEach(Document doc, string title, List<Item> items, Outcome o, bool borrow = true)
+    {
+        var each = ItemBatch.Run(doc, title, items, it => it.Name, it => doc.GetElement(it.Id) is null ? [] : [it.Id],
+            it => Exists(doc, it.Id) ? doc.Delete(it.Id) : None, borrow);
+        for (var i = 0; i < items.Count; i++)
         {
             var r = each.Items[i];
-            if (r.Ok) Record([retry[i]], r.Value as ICollection<ElementId> ?? None, o);
+            if (r.Ok) Record([items[i]], r.Value as ICollection<ElementId> ?? None, o);
             else if (Halted(r.Error)) o.Stopped = "Stopped part-way: what was deleted is kept (one Undo step); the rest was not done.";
-            else o.Stayed.Add(new(retry[i], Refused, r.Error ?? "Revit did not accept it"));
+            else o.Stayed.Add(new(items[i], Refused, r.Error ?? "Revit did not accept it"));
         }
     }
 
@@ -242,7 +226,8 @@ internal static class Cleanup
         var also = apply ? o.Also.Count : o.AlsoByCategory.Values.Sum();
         return ToolResult.Ok(new
         {
-            summary = CleanupMath.Summary(spec.Title, apply, o.Deleted.Count, o.Passes, byGroup, stayed, also, o.Stopped),
+            summary = CleanupMath.Summary(spec.Title, apply, o.Deleted.Count, o.Passes, byGroup, stayed, also, o.Stopped) +
+                      (o.MoreOnApply ? " " + CleanupMath.PreviewPassesNote : ""),
             preview = !apply,
             total = o.Deleted.Count,
             passes = o.Passes,
@@ -391,17 +376,6 @@ internal static class Cleanup
             catch (Exception ex) when (ex is Autodesk.Revit.Exceptions.ApplicationException or InvalidOperationException) { }
         }
         return new FilteredElementCollector(doc).OfClass(typeof(ParameterFilterElement)).Cast<ParameterFilterElement>().Where(f => !used.Contains(f.Id.Value));
-    }
-
-    /// <summary>Lets the preview's deletes go through quietly; it is rolled back anyway.</summary>
-    private sealed class Quiet : IFailuresPreprocessor
-    {
-        public FailureProcessingResult PreprocessFailures(FailuresAccessor accessor)
-        {
-            foreach (var f in accessor.GetFailureMessages())
-                if (f.GetSeverity() == FailureSeverity.Warning) accessor.DeleteWarning(f);
-            return FailureProcessingResult.Continue;
-        }
     }
 }
 

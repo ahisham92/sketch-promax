@@ -55,6 +55,10 @@ internal static class CleanupMath
         return shown.Count == 1 ? shown[0] : string.Join(", ", shown.Take(shown.Count - 1)) + " and " + shown[^1];
     }
 
+    /// <summary>A preview deletes nothing, so it finds one pass: said after its summary when applying repeats passes.</summary>
+    public const string PreviewPassesNote =
+        "The preview lists what is unused now and deletes nothing; applying repeats the passes, so what these leave unused goes too and the result lists it.";
+
     /// <summary>
     /// The one line the chat shows: what was found or deleted, what was left and why, and the next step.
     /// <paramref name="skipped"/> counts the reasons things stay ("kept by name", "owned by someone else"...).

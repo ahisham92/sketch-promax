@@ -640,53 +640,23 @@ internal static class Redlines
 
     /// <summary>
     /// What else goes when <paramref name="id"/> is deleted (hosted elements, tags, dimensions...), e.g. "It also deletes
-    /// 2 Doors, 3 Door Tags.": found by deleting it in a transaction that is rolled back, so nothing changes. Null when
-    /// nothing else goes. Call with no transaction open.
+    /// 2 Doors, 3 Door Tags.": read with GetDependentElements, so nothing is deleted, not even in a rolled-back
+    /// transaction. Null when nothing else goes.
     /// </summary>
     public static string? AlsoDeleted(Document doc, ElementId id) => AlsoDeleted(doc, [id]);
 
     /// <summary>As above for several elements at once: what goes besides them.</summary>
     public static string? AlsoDeleted(Document doc, ICollection<ElementId> ids)
     {
+        // Read, not tried: deleting in a rolled-back transaction can close Revit (see DeleteSafety).
         List<ElementId> gone;
-        var asked = new HashSet<long>(ids.Select(i => i.Value));
-        if (doc.IsModifiable || doc.IsReadOnly) return "What else it deletes could not be checked.";
-        using (var t = new Transaction(doc, "Sketch ProMax: what a delete takes with it"))
-        {
-            var options = t.GetFailureHandlingOptions();
-            options.SetFailuresPreprocessor(new Quiet());
-            options.SetClearAfterRollback(true);
-            options.SetForcedModalHandling(false);
-            t.SetFailureHandlingOptions(options);
-            FailureGuard.Muted++;
-            try
-            {
-                t.Start();
-                try { gone = doc.Delete(ids).Where(x => !asked.Contains(x.Value)).ToList(); }
-                catch (Exception ex) when (ex is Autodesk.Revit.Exceptions.ApplicationException or ArgumentException) { return "What else it deletes could not be checked."; }
-            }
-            finally
-            {
-                if (t.HasStarted() && !t.HasEnded()) t.RollBack();
-                FailureGuard.Muted--;
-            }
-        }
-        // Rolled back: the elements are there again to name. Only what a user would see (model and annotation elements).
+        try { gone = DeleteSafety.Dependents(doc, ids); }
+        catch (Exception ex) when (ex is Autodesk.Revit.Exceptions.ApplicationException or ArgumentException or InvalidOperationException) { return "What else it deletes could not be checked."; }
+        // Only what a user would see (model and annotation elements).
         var named = gone.Select(doc.GetElement).Where(e => e is not null and not ElementType && e.Category is { } c
                 && c.CategoryType is CategoryType.Model or CategoryType.Annotation && !Never.Contains((BuiltInCategory)c.Id.Value))
             .GroupBy(e => e!.Category!.Name).OrderByDescending(g => g.Count()).Select(g => $"{g.Count()} {g.Key}").ToList();
         return named.Count == 0 ? null : "It also deletes " + string.Join(", ", named) + ".";
-    }
-
-    /// <summary>Lets the trial delete go through quietly; it is rolled back anyway.</summary>
-    private sealed class Quiet : IFailuresPreprocessor
-    {
-        public FailureProcessingResult PreprocessFailures(FailuresAccessor accessor)
-        {
-            foreach (var f in accessor.GetFailureMessages())
-                if (f.GetSeverity() == FailureSeverity.Warning) accessor.DeleteWarning(f);
-            return FailureProcessingResult.Continue;
-        }
     }
 
     /// <summary>Applies one approved change and clouds it on the sheet, inside the item's transaction. Returns the cloud's id (or why there is none).</summary>
