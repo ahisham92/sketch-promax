@@ -97,6 +97,9 @@ internal static class ChecklistMath
         new("revitversion", "The project's Revit version", "", "The Revit version every model is saved in, e.g. 2024; Revit open now and the file's saved version are compared with it (empty: not tested).", "version"),
         new("loimatrix", "LOI matrix (parameters each code needs)", "", "UniFormat code or category>parameters it must have filled, entries separated by ; e.g. A1020*>Material, Length, Diameter; B1010*>Material, Thickness. " +
             "In-place families, Generic Models and DirectShapes are listed for the geometry (eLOD) too (empty: only those).", "loi"),
+        new("loivalues", "LOI values the model can't give", "", "What Fill the LOI data writes where the model has no value: code or category>Parameter=value, entries separated by ; " +
+            "e.g. A1020*>Status=For construction, Fire Rating=N/A; *>Phase=New. {Parameter} copies another parameter, e.g. Description={Type Name}. Material, length, diameter, thickness, " +
+            "width, height, depth, volume, area, level, grade, cut-off (top) and toe (bottom) are read from the model (empty: only those).", "loi"),
         new("pileparameters", "Pile parameters (cut-off, toe, diameter)", "Cut-off Level, Toe Level, Diameter", "The pile parameters holding its cut-off level, toe level and diameter, in that order; " +
             "leave a slot empty to skip it (e.g. , , b). Piles modelled as columns use their top and base levels and offsets for cut-off and toe, and the diameter is looked for in the type " +
             "(this name, else b, Diameter, d or D). Piles are the types named by Columns that bear on the ground (piles).", "pilerun"),
@@ -181,6 +184,62 @@ internal static class ChecklistMath
     public static List<(string Key, List<string> Params)> ParseLoi(string rule) =>
         (rule ?? "").Split(';').Select(e => e.Split('>')).Where(p => p.Length == 2 && p[0].Trim().Length > 0)
             .Select(p => (p[0].Trim(), RuleList(p[1]))).Where(e => e.Item2.Count > 0).ToList();
+
+    /// <summary>The loivalues rule, "code or category>Parameter=value, Parameter=value; ...", as (key, parameter, value) entries.</summary>
+    public static List<(string Key, string Param, string Value)> ParseLoiValues(string rule)
+    {
+        var list = new List<(string, string, string)>();
+        foreach (var entry in (rule ?? "").Split(';'))
+        {
+            var at = entry.IndexOf('>');
+            if (at <= 0) continue;
+            var key = entry.Substring(0, at).Trim();
+            foreach (var pair in entry.Substring(at + 1).Split(','))
+            {
+                var eq = pair.IndexOf('=');
+                if (eq <= 0) continue;
+                var (name, value) = (pair.Substring(0, eq).Trim(), pair.Substring(eq + 1).Trim());
+                if (key.Length > 0 && name.Length > 0 && value.Length > 0) list.Add((key, name, value));
+            }
+        }
+        return list;
+    }
+
+    /// <summary>
+    /// What the model gives an LOI parameter, from its name: material, diameter, thickness, top (cut-off), bottom (toe),
+    /// length, width, height, depth, volume, area, level or grade; "" when the model can't give it.
+    /// </summary>
+    public static string LoiSource(string param)
+    {
+        var n = " " + Regex.Replace((param ?? "").ToLowerInvariant(), "[^a-z0-9]+", " ").Trim() + " ";
+        bool Has(params string[] words) => words.Any(w => n.Contains(" " + w + " "));
+        if (Has("grade", "strength") && !Has("fire")) return "grade";
+        if (Has("material", "materials")) return "material";
+        if (Has("diameter", "dia")) return "diameter";
+        if (Has("thickness", "thk")) return "thickness";
+        if (Has("cut off", "cutoff", "top")) return "top";
+        if (Has("toe", "bottom", "founding")) return "bottom";
+        if (Has("length")) return "length";
+        if (Has("width")) return "width";
+        if (Has("height")) return "height";
+        if (Has("depth")) return "depth";
+        if (Has("volume")) return "volume";
+        if (Has("area")) return "area";
+        if (Has("level")) return "level";
+        return "";
+    }
+
+    /// <summary>A concrete or steel grade in a material or type name: C40/50, 40 MPa (from 40MPa or 40 N/mm2), S355; "" when it has none.</summary>
+    public static string GradeIn(string text)
+    {
+        text ??= "";
+        var m = Regex.Match(text, @"(?<![A-Za-z0-9])C\d{2,3}/\d{2,3}(?![0-9])", RegexOptions.IgnoreCase);
+        if (m.Success) return m.Value.ToUpperInvariant();
+        m = Regex.Match(text, @"(?<![\d.])(\d{2,3})\s*(MPa|N/mm2|N/mm²)", RegexOptions.IgnoreCase);
+        if (m.Success) return m.Groups[1].Value + " MPa";
+        m = Regex.Match(text, @"(?<![A-Za-z0-9])S(235|275|355|420|460)(?![0-9])", RegexOptions.IgnoreCase);
+        return m.Success ? "S" + m.Groups[1].Value : "";
+    }
 
     /// <summary>"Category>pattern" pairs, comma separated; a pair without > is a category with any type.</summary>
     public static List<(string Category, string Pattern)> ParsePairs(string rule) =>

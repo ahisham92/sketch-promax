@@ -59,6 +59,10 @@ internal static class ChecklistFixes
         "uniformat" => new("Fill the UniFormat codes",
             $"Write the UniFormat code into {Named(ChecklistMath.RuleList(ChecklistMath.Rule(def, "classification")).FirstOrDefault() ?? "", "the classification parameter")} of every model type in use that has none, " +
             $"from {Named(ChecklistMath.Rule(def, "uniformatmap"), "UniFormat code for each category or type in Checking rules (set it first)")}? Types already filled are left alone."),
+        "loi" => new("Fill the LOI data",
+            $"Fill the parameters the LOI matrix asks for ({Named(ChecklistMath.Rule(def, "loimatrix"), "set LOI matrix in Checking rules first")}) on every model type in use, and its elements, that has them empty? " +
+            "Values come from LOI values the model can't give (Checking rules), else from the model: material, sizes, length, levels, grade, cut-off and toe. A parameter the model doesn't have is added as a project parameter " +
+            "(from your shared parameter file when it has one of that name). Values already filled are left alone. Fill the UniFormat codes first: the matrix goes by code. You see each value first and can change or untick it.", Preview: true),
         "scopeboxes" => new("Name levels and scope boxes like the URS", 
             "Rename each level to the name of the URS link's level at the same height, and each scope box to the name of the URS link's scope box in the same place? " +
             "The URS link must be loaded. Ones with no match in the URS keep their names.", Fix: "scopeboxes"),
@@ -110,6 +114,7 @@ internal static class ChecklistFixes
             case "scopeboxes": return UrsNames(doc);
             case "viewtemplates": return Templates(doc, def);
             case "familynames": return RenameTypes(doc, answer);
+            case "loi": return LoiFill.Apply(doc, LoiFill.SpecOf(def), answer);
             case "nwcsettings" or "ifcsettings" or "nwcdate":
                 return ChecklistExports.Export(doc, def);
             case "parameters":
@@ -621,10 +626,12 @@ internal static class ChecklistFixes
 
     /// <summary>
     /// Suggested names for the model types in use not named like the typenames rule: one line each, "id\tfamily: old\tnew".
+    /// For loi, the LOI values to fill (LoiFill.Suggest), read in one go; the window reads them in steps.
     /// A suggestion keeps the old name's words, joined with _, behind the category's and the discipline's short codes.
     /// </summary>
     public static string Suggest(Document doc, string key, ChecklistMath.Definition? def)
     {
+        if (key == "loi") { var spec = LoiFill.SpecOf(def); return LoiFill.Suggest(doc, spec, LoiFill.TypeIds(doc, spec)); }
         if (key != "familynames") return "";
         var pattern = ChecklistMath.Rule(def, "typenames");
         if (pattern.Length == 0) return "";
