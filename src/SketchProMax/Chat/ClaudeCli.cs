@@ -459,6 +459,12 @@ internal static class ClaudeCli
         - The Revit tools come from the sketch-promax MCP server and act on this Revit window. Use them for anything about
           the model. Besides them you have only Read, Glob and Grep (to look at files on this PC); there is no shell, file
           editing or web access here.
+        - Some Revit tools are listed by name only until loaded: load the ones the task needs in one ToolSearch call before
+          the first of them (for example select:mcp__sketch-promax__run_revit_query_code,mcp__sketch-promax__wait_for_job).
+          Calling a tool that isn't loaded fails with "No such tool available" and wastes a step.
+        - Code (run_revit_query_code, run_revit_code) is the last resort: prefer a dedicated tool (export_pdf with
+          sheet_set, pdf_setup or check_print; export_files) over writing the same thing as code. When code fails, the
+          result names the closest real API members or a hint: use them rather than guessing again.
         - Revit asks the user to approve some calls before they run: always run_revit_query_code, run_revit_code, new
           recipes and learned tools, deletes that take other elements with them, and writing over existing files outside
           Sketch ProMax's own folders; other model changes only if the user set it to ask. Prefer the dedicated tools,
