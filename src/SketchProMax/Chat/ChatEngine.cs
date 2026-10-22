@@ -27,8 +27,10 @@ internal sealed class ChatEngine : IDisposable
     /// <param name="start">How to start the process: the main chat's engine when null; a parallel job's own (ClaudeCli.JobStart).</param>
     /// <param name="coordinator">The main chat's engine: true for a chat With coordinator (it gets chat_jobs and the
     /// coordinator's instructions), false for a Simple chat.</param>
-    public ChatEngine(Dispatcher ui, ClaudeCli.Install install, string? resumeSessionId, string model, Func<ProcessStartInfo>? start = null, bool coordinator = true, string effort = "")
+    /// <param name="job">The parallel job this process is (its MCP config's job header), or null for the main chat.</param>
+    public ChatEngine(Dispatcher ui, ClaudeCli.Install install, string? resumeSessionId, string model, Func<ProcessStartInfo>? start = null, bool coordinator = true, string effort = "", string? job = null)
     {
+        Job = job;
         Effort = effort;
         _ui = ui;
         _install = install;
@@ -37,6 +39,9 @@ internal sealed class ChatEngine : IDisposable
         _start = start;
         Coordinator = coordinator;
     }
+
+    /// <summary>The parallel job this process is, or null for the main chat.</summary>
+    public string? Job { get; }
 
     /// <summary>The main chat's kind this process was started for (ChatTypes); switching the kind needs a new process.</summary>
     public bool Coordinator { get; }
@@ -88,6 +93,7 @@ internal sealed class ChatEngine : IDisposable
     {
         var info = _start?.Invoke() ?? ClaudeCli.EngineStart(_install, ResumedFrom, Model, Coordinator, Effort);
         McpAddress = ClaudeCli.McpAddress;
+        var started = DateTime.UtcNow;
         var process = new Process { StartInfo = info, EnableRaisingEvents = true };
         // Raised on a thread-pool thread: an exception there would close Revit.
         process.Exited += (_, _) => { try { OnExited(); } catch (Exception) { } };
@@ -105,8 +111,45 @@ internal sealed class ChatEngine : IDisposable
         }
         new Thread(() => ReadOutput(process)) { IsBackground = true, Name = "Sketch ProMax chat output" }.Start();
         new Thread(() => ReadErrors(process)) { IsBackground = true, Name = "Sketch ProMax chat errors" }.Start();
+        WaitForTools(process, started);
         Write(firstLine);
     });
+
+    /// <summary>How long a new process may take to fetch the Revit tools before its first message goes anyway.</summary>
+    internal const int ToolsWaitMs = 15000;
+
+    /// <summary>
+    /// Set when a process didn't fetch the Revit tools within <see cref="ToolsWaitMs"/> (a Claude Code that connects only
+    /// once a message arrives, or a very slow start): later processes in this Revit session don't wait at all.
+    /// </summary>
+    internal static volatile bool ToolsWaitUseless;
+
+    /// <summary>
+    /// Claude Code connects to its MCP servers in the background and starts the first turn without waiting: a turn that
+    /// begins with a Revit call (after a brief, which also starts a new process for the model and effort it picked) failed
+    /// with "No such tool available" and had to try again (bug log row 40). So the first message waits until the chat's
+    /// connection inside Revit has sent this process the tool list, plus a moment for Claude Code to take it in. Nothing
+    /// to wait for with the connector program (it is outside Revit). Blocks: called from StartAsync's thread-pool task.
+    /// </summary>
+    private void WaitForTools(Process process, DateTime started)
+    {
+        if (ToolsWaitUseless || Bridge.ChatMcp.Current is not { } http || http.Url != McpAddress || McpAddress.Length == 0) return;
+        var until = started.AddMilliseconds(ToolsWaitMs);
+        while (!http.ToolsListedSince(Job, started))
+        {
+            bool gone;
+            lock (_gate) gone = _disposed;
+            try { gone |= process.HasExited; } catch (InvalidOperationException) { gone = true; }
+            if (gone) return;
+            if (DateTime.UtcNow >= until)
+            {
+                ToolsWaitUseless = true;
+                return;
+            }
+            Thread.Sleep(100);
+        }
+        Thread.Sleep(300);
+    }
 
     /// <summary>Writes one stream-json line (a user message or a control request) off the UI thread.</summary>
     public Task SendAsync(string line) => Task.Run(() => Write(line));

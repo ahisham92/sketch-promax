@@ -214,7 +214,7 @@ internal sealed partial class ChatPane
         var model = job.Model;
         var effort = ClaudeCli.EffortRefused ? "" : job.Effort;
         var key = job.Key;
-        var engine = new ChatEngine(Dispatcher, install, resume, model, () => ClaudeCli.JobStart(install, key, resume, session, model, effort), effort: effort);
+        var engine = new ChatEngine(Dispatcher, install, resume, model, () => ClaudeCli.JobStart(install, key, resume, session, model, effort), effort: effort, job: key);
         var run = new JobRun { Job = job, Engine = engine, Message = message, Resumed = resume is not null };
         _runs[key] = run;
         engine.Event += e => { if (_runs.TryGetValue(key, out var r) && r == run) OnJobEvent(run, e); };

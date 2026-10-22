@@ -58,6 +58,7 @@ internal static class FieldTestCoverage
             "With a model open, open an older chat from the history menu and type a message without sending it. Install an update while Revit runs (Updates panel, or wait for the automatic one). When the update is done, the Chat tab shows that same chat scrolled to the end with your unsent message in the box. Send it: Sketch ProMax answers knowing the earlier messages. The history menu still lists every chat. " +
             "Also check bug #1: right after the update, without restarting Revit, the Chat button, the Chat tab and the tab's position are all there."),
         new("chat.http_mcp", Chat, "The chat reaches the Revit tools inside Revit", How.Probe, "", "a connection of its own on a free port of 127.0.0.1 answers initialize, lists the Revit tools with the connector's own (models, jobs, read_pdf_part) and runs list_revit_models over real HTTP with its token, turns away a request without the token, and the chat's and a job's config name the running connection (with the job); no helper program and no plan use"),
+        new("chat.tools_ready", Chat, "A new chat waits for its Revit tools", How.Probe, "", "the chat's own connection remembers which process (the main chat or a job) was sent the tool list and when, so a new chat process sends its first message only once it has the Revit tools (bug #40: \"No such tool available\" after a brief); no plan use"),
         new("chat.connector_blocked", Chat, "The chat on a PC that blocks the helper program", How.Manual, "", "it needs a PC whose policy (AppLocker or App Control) blocks programs that aren't signed",
             "On a company PC that blocks unsigned programs (or after IT blocks %LOCALAPPDATA%\\SketchProMax\\mcp\\SketchProMax.Mcp.exe), open Chat and ask \"what is in this model?\": Sketch ProMax answers from the model, with no note that the Revit tools didn't connect. Ask it to make sheets for two levels with jobs: the job cards work too. The desktop app, which still uses the helper program, may fail to reach Revit there. If the chat ever says the Revit tools didn't connect there, the note reads \"Your company blocks Sketch ProMax's helper program (…). Ask IT to allow it, or …\" with the program's path, never \"run Install.cmd\"."),
         new("chat.shrink", Chat, "Shrink chat: the /compact message and the automatic shrink", How.Probe, "", "the Shrink message is Claude Code's /compact, the compaction and each request's size are read from the stream, and a chat shrinks by itself once it grew by the set size over an empty chat; no plan use"),
@@ -564,6 +565,7 @@ internal static class FieldTestCoverage
         new(37, ["diagnostics.running_call"], "the call Revit closed during is read back at the next start with its arguments"),
         new(38, ["issue.gate"], "export_pdf with check_print isn't stopped by the issue check"),
         new(39, ["bug#39"], "export_pdf looks a saved View/Sheet Set up by name"),
+        new(40, ["chat.tools_ready"], "a new chat process has the Revit tools before its first message"),
     ];
 
     /// <summary>

@@ -26,6 +26,7 @@ internal sealed class McpHttpServer : IDisposable
 
     private readonly McpEndpoint _endpoint;
     private readonly ConcurrentDictionary<string, McpSession> _sessions = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, DateTime> _listed = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource _stop = new();
     private TcpListener? _listener;
 
@@ -56,6 +57,12 @@ internal sealed class McpHttpServer : IDisposable
         Port = ((IPEndPoint)listener.LocalEndpoint).Port;
         _ = Task.Run(() => AcceptLoop(listener, _stop.Token));
     }
+
+    /// <summary>
+    /// True once a client of this kind (a parallel job's key, or null for the main chat) was sent the tool list at or after
+    /// <paramref name="sinceUtc"/>: a Claude Code started then has the Revit tools (ChatEngine waits for it before the first message).
+    /// </summary>
+    public bool ToolsListedSince(string? job, DateTime sinceUtc) => _listed.TryGetValue(job ?? "", out var at) && at >= sinceUtc;
 
     public void Dispose()
     {
@@ -201,6 +208,7 @@ internal sealed class McpHttpServer : IDisposable
                 var outcome = await work.ConfigureAwait(false);
                 if (!streamed)
                 {
+                    if (method == "tools/list") _listed[session.Job ?? ""] = DateTime.UtcNow;
                     await WriteAsync(stream, HttpRequest.Response(200, Encoding.UTF8.GetBytes(outcome.Response), "application/json", headers)).ConfigureAwait(false);
                     return;
                 }
