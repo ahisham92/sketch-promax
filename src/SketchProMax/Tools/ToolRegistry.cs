@@ -269,6 +269,8 @@ public sealed class ToolRegistry
         new SketchProMax.Bugs.ReportBugTool(),
         new SketchProMax.Bugs.ExportChatsAndBugsTool(),
         new MemoryNoteTool(),
+        // The berth status tracker: read it and record what the user reports (never reads the model)
+        new BerthStatusTool(),
         new RecallChatsTool(),
         new ChatJobsTool(),
         // Files for the user: Excel, Word, PowerPoint and PDF

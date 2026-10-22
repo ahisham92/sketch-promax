@@ -18,6 +18,13 @@ internal static class BerthStatusFacts
     private static readonly BuiltInCategory[] ClashCats =
         [BuiltInCategory.OST_StructuralColumns, BuiltInCategory.OST_StructuralFraming, BuiltInCategory.OST_StructuralFoundation, BuiltInCategory.OST_Floors, BuiltInCategory.OST_Walls];
 
+    /// <summary>The services checked for openings through the structure.</summary>
+    private static readonly List<BuiltInCategory> ServiceCats =
+    [
+        BuiltInCategory.OST_PipeCurves, BuiltInCategory.OST_PipeFitting, BuiltInCategory.OST_FlexPipeCurves, BuiltInCategory.OST_Conduit, BuiltInCategory.OST_ConduitFitting,
+        BuiltInCategory.OST_CableTray, BuiltInCategory.OST_CableTrayFitting, BuiltInCategory.OST_DuctCurves, BuiltInCategory.OST_DuctFitting,
+    ];
+
     /// <summary>Model categories that are not built things (left out of the counts).</summary>
     private static readonly HashSet<BuiltInCategory> NotBuilt =
     [
@@ -37,6 +44,7 @@ internal static class BerthStatusFacts
         public long Id;
         public bool Linked;
         public string Link = "";
+        public Transform T = Transform.Identity;
         public string Category = "";
         public BuiltInCategory Bic;
         public string Type = "";
@@ -132,6 +140,24 @@ internal static class BerthStatusFacts
             var wanted = model.Links.Split([',', ';'], StringSplitOptions.RemoveEmptyEntries).Select(x => x.Trim()).Where(x => x.Length > 0);
             if (wanted.Any(w => name.IndexOf(w, StringComparison.OrdinalIgnoreCase) >= 0)) sources.Add((linkDoc, inst.GetTotalTransform(), name));
         }
+        // Services (pipes, conduits, cable trays, ducts) from this model and every loaded link, for the openings check.
+        var tolerance = Math.Max(1, setup.ClashToleranceMm) / 304.8;
+        var services = new List<Placed>();
+        var serviceSources = new List<string>();
+        reading.Once("services", () =>
+        {
+            var filter = new ElementMulticategoryFilter(ServiceCats);
+            void From(Document d, Transform t, string source, bool inHost)
+            {
+                var before = services.Count;
+                foreach (var e in new FilteredElementCollector(d).WherePasses(filter).WhereElementIsNotElementType())
+                    if (Place(e, t, source, inHost) is { } p) services.Add(p);
+                if (services.Count > before) serviceSources.Add($"{(inHost ? "this model" : source)} ({services.Count - before})");
+            }
+            From(doc, Transform.Identity, "model", true);
+            foreach (var inst in new FilteredElementCollector(doc).OfClass(typeof(RevitLinkInstance)).Cast<RevitLinkInstance>())
+                if (inst.GetLinkDocument() is { } ld) From(ld, inst.GetTotalTransform(), ld.Title, false);
+        });
         IEnumerator<Item>? walk = null;
         reading.Add("elements", () =>
         {
@@ -223,84 +249,113 @@ internal static class BerthStatusFacts
                 res[CategoryData] = r;
             });
 
-            // Structural clashes, a slice of elements at a time.
-            var clashPairs = new HashSet<(long, long)>();
-            var clashing = new HashSet<long>();
+            // The berth's structure as clash shapes (this model only), with a box index for both clash checks.
+            List<Placed>? structure = null;
+            BoxIndex<Placed>? index = null;
+            void Structure()
+            {
+                if (structure is not null) return;
+                // The structure of a documentation model is in its included links: their elements take part, moved into place.
+                structure = mine.Where(i => ClashCats.Contains(i.Bic)).OrderBy(i => i.Linked).ThenBy(i => i.Id).Take(ClashCap)
+                    .Select(i => Place(i.El, i.T, i.Linked ? i.Link : "model", !i.Linked)).OfType<Placed>().ToList();
+                index = new BoxIndex<Placed>(10);
+                foreach (var p in structure) index.Add(p, p.Min, p.Max);
+            }
+
+            // Structural clashes deeper than the tolerance, a slice of elements at a time.
+            var clashFound = new List<(Placed A, Placed B, double Depth)>();
+            var clashSeen = new HashSet<string>();
             var clashIndex = 0;
-            List<Item>? candidates = null;
-            ICollection<ElementId>? candidateIds = null;
             reading.Add(Clashes + "|" + key, () =>
             {
                 if (inBerth is null) return false;
-                if (candidates is null)
-                {
-                    candidates = mine.Where(i => !i.Linked && ClashCats.Contains(i.Bic)).OrderBy(i => i.Id).Take(ClashCap).ToList();
-                    candidateIds = candidates.Select(i => i.El.Id).ToList();
-                }
-                var stop = Math.Min(candidates.Count, clashIndex + 25);
+                Structure();
+                var stop = Math.Min(structure!.Count, clashIndex + 20);
                 for (; clashIndex < stop; clashIndex++)
                 {
-                    var a = candidates[clashIndex];
-                    var box = a.El.get_BoundingBox(null);
-                    if (box is null || candidateIds!.Count < 2) continue;
-                    var near = new FilteredElementCollector(doc, candidateIds).WherePasses(new BoundingBoxIntersectsFilter(new Outline(box.Min, box.Max)))
-                        .WherePasses(new ElementIntersectsElementFilter(a.El));
-                    foreach (var b in near)
+                    var a = structure[clashIndex];
+                    foreach (var b in index!.Overlapping(a.Min, a.Max, 0))
                     {
-                        var bId = b.Id.Value;
-                        if (bId == a.Id) continue;
-                        var pair = a.Id < bId ? (a.Id, bId) : (bId, a.Id);
-                        if (clashPairs.Contains(pair)) continue;
-                        try { if (JoinGeometryUtils.AreElementsJoined(doc, a.El, b)) continue; } catch (Autodesk.Revit.Exceptions.ApplicationException) { }
-                        clashPairs.Add(pair);
-                        clashing.Add(a.Id);
-                        clashing.Add(bId);
+                        if (string.CompareOrdinal(a.Key, b.Key) >= 0 || !clashSeen.Add(a.Key + "|" + b.Key) || FindClashesTool.Related(a, b)) continue;
+                        if (BoxDepth(a, b) < tolerance) continue;
+                        var (hit, depth, _, _) = FindClashesTool.Hard(a, b, tolerance);
+                        if (hit) clashFound.Add((a, b, depth));
                     }
                 }
-                if (clashIndex < candidates.Count) return true;
-                var r = new AreaResult { Total = candidates.Count, Done = candidates.Count - clashing.Count };
-                var byId = candidates.ToDictionary(i => i.Id);
-                foreach (var (x, y) in clashPairs.Take(500))
-                    r.Findings.Add(new Finding(Clashes, $"{byId[x].Describe} (id {x})", $"runs into {byId[y].Describe} (id {y}), not joined", x));
-                r.Percent = candidates.Count == 0 ? null : Part(r.Done, r.Total);
-                r.Summary = candidates.Count == 0 ? "No structural elements found for this berth." :
-                    $"{clashPairs.Count} clashes between {clashing.Count} of {candidates.Count} structural elements" +
-                    (mine.Count(i => !i.Linked && ClashCats.Contains(i.Bic)) > ClashCap ? $" (the first {ClashCap} checked)." : ".");
+                if (clashIndex < structure.Count) return true;
+                var clashing = new HashSet<string>(clashFound.SelectMany(c => new[] { c.A.Key, c.B.Key }));
+                var r = new AreaResult { Total = structure.Count, Done = structure.Count - clashing.Count };
+                foreach (var (a, b, depth) in clashFound.Take(500))
+                    r.Findings.Add(new Finding(Clashes, a.Describe(), $"runs {Mm(depth)} into {b.Describe()} (not joined)", a.InHost ? a.Element.Id.Value : b.InHost ? b.Element.Id.Value : null));
+                r.Percent = structure.Count == 0 ? null : Part(r.Done, r.Total);
+                r.Summary = structure.Count == 0 ? "No structural elements found for this berth." :
+                    $"{clashFound.Count} clashes deeper than {setup.ClashToleranceMm:0} mm between {clashing.Count} of {structure.Count} structural elements" +
+                    (mine.Count(i => ClashCats.Contains(i.Bic)) > ClashCap ? $" (the first {ClashCap} checked)." : ".");
                 res[Clashes] = r;
                 return false;
             });
 
-            reading.Once(Coordination + "|" + key, () =>
+            // Services and openings: pipes, conduits, cable trays and ducts (this model and every loaded link) through the
+            // berth's structure with no opening (an opening cuts the structure, so a service through it doesn't overlap).
+            var serviceIndex = 0;
+            var crossing = new Dictionary<string, Placed>(StringComparer.Ordinal);
+            var blocked = new List<(Placed Service, Placed Structure, double Depth)>();
+            reading.Add(Coordination + "|" + key, () =>
             {
+                Structure();
+                var stop = Math.Min(services.Count, serviceIndex + 40);
+                for (; serviceIndex < stop; serviceIndex++)
+                {
+                    var svc = services[serviceIndex];
+                    foreach (var st in index!.Overlapping(svc.Min, svc.Max, 0))
+                    {
+                        if (BoxDepth(svc, st) < tolerance) continue;
+                        crossing[svc.Key] = svc;
+                        var (hit, depth, _, _) = FindClashesTool.Hard(svc, st, tolerance);
+                        if (hit) blocked.Add((svc, st, depth));
+                    }
+                }
+                if (serviceIndex < services.Count) return true;
                 var r = new AreaResult();
                 r.Findings.AddRange(linkProblems);
+                var blockedKeys = new HashSet<string>(blocked.Select(b => b.Service.Key));
+                foreach (var (svc, st, depth) in blocked.Take(500))
+                    r.Findings.Add(new Finding(Coordination, svc.Describe(), $"passes {Mm(depth)} through {st.Describe()} with no opening", st.InHost ? st.Element.Id.Value : svc.InHost ? svc.Element.Id.Value : null));
+                r.Total = crossing.Count;
+                r.Done = crossing.Count - blockedKeys.Count;
+                var parts = new List<double>();
+                if (services.Count > 0) parts.Add(Part(r.Done, r.Total));
+                var summary = services.Count == 0
+                    ? "No pipes, conduits, cable trays or ducts in this model or its loaded links."
+                    : $"{blockedKeys.Count} of {crossing.Count} services crossing the structure have no opening (tolerance {setup.ClashToleranceMm:0} mm; {services.Count} services checked from {string.Join(", ", serviceSources)}).";
+
+                // The Navisworks clash report, when one is set.
                 var report = model.ClashReport.Trim().Length == 0 ? "" : ChecklistMath.NewestFile(model.ClashReport, ".xml", ".html", ".htm");
-                if (report.Length == 0)
+                if (model.ClashReport.Trim().Length > 0 && report.Length == 0) summary += " No clash report found at " + model.ClashReport + ".";
+                if (report.Length > 0)
                 {
-                    r.Summary = (model.ClashReport.Trim().Length == 0 ? "No clash report set for this model (Models sheet, Clash report)." : "No clash report found at " + model.ClashReport + ".") +
-                                (linkProblems.Count > 0 ? $" {linkProblems.Count} of {linksTotal} links not loaded." : "");
-                    res[Coordination] = r;
-                    return;
+                    var tests = ChecklistMath.ClashReport(File.ReadAllText(report));
+                    int open = tests.Sum(t => t.Open), closed = tests.Sum(t => t.Closed);
+                    var ids = tests.Where(t => t.Ids is not null).SelectMany(t => t.Ids!).Distinct().ToList();
+                    if (ids.Count > 0 && inBerth is not null)
+                    {
+                        // Only the open clashes on this berth's elements count when the report lists the element ids.
+                        var mineIds = new HashSet<long>(mine.Where(i => !i.Linked).Select(i => i.Id));
+                        var ours = ids.Where(mineIds.Contains).ToList();
+                        foreach (var id in ours.Take(500)) r.Findings.Add(new Finding(Coordination, $"Element {id}", "In an open clash in the Navisworks clash report", id));
+                        open = ours.Count;
+                    }
+                    else foreach (var t in tests.Where(t => t.Open > 0)) r.Findings.Add(new Finding(Coordination, t.Name, $"{t.Open} open clashes in the Navisworks clash report"));
+                    parts.Add(Part(closed, open + closed));
+                    summary += $" Clash report {Path.GetFileName(report)} ({File.GetLastWriteTime(report):dd-MMM HH:mm}): {open} open, {closed} resolved.";
                 }
-                var tests = ChecklistMath.ClashReport(File.ReadAllText(report));
-                int open = tests.Sum(t => t.Open), closed = tests.Sum(t => t.Closed);
-                var ids = tests.Where(t => t.Ids is not null).SelectMany(t => t.Ids!).Distinct().ToList();
-                if (ids.Count > 0 && inBerth is not null)
-                {
-                    // Only the open clashes on this berth's elements count when the report lists the element ids.
-                    var mineIds = new HashSet<long>(mine.Where(i => !i.Linked).Select(i => i.Id));
-                    var ours = ids.Where(mineIds.Contains).ToList();
-                    foreach (var id in ours.Take(500)) r.Findings.Add(new Finding(Coordination, $"Element {id}", "In an open clash in the clash report", id));
-                    open = ours.Count;
-                }
-                else foreach (var t in tests.Where(t => t.Open > 0)) r.Findings.Add(new Finding(Coordination, t.Name, $"{t.Open} open clashes"));
-                r.Done = closed;
-                r.Total = open + closed;
+                if (linkProblems.Count > 0) summary += $" {linkProblems.Count} of {linksTotal} links not loaded (not checked).";
                 var loaded = linksTotal == 0 ? 1 : (linksTotal - linkProblems.Count) / (double)linksTotal;
-                r.Percent = Part(closed, open + closed) * loaded;
-                r.Summary = $"{open} open and {closed} resolved clashes in {Path.GetFileName(report)} ({File.GetLastWriteTime(report):dd-MMM HH:mm})" +
-                            (linkProblems.Count > 0 ? $"; {linkProblems.Count} of {linksTotal} links not loaded." : ".");
+                r.Percent = parts.Count == 0 ? null : parts.Average() * loaded;
+                r.Summary = summary;
                 res[Coordination] = r;
+                foreach (var svc in services) svc.Release();
+                return false;
             });
 
             // Drawings: the berth's sheets.
@@ -445,7 +500,7 @@ internal static class BerthStatusFacts
                 var center = (box.Min + box.Max) / 2;
                 var item = new Item
                 {
-                    El = el, Id = el.Id.Value, Linked = t is not null, Link = link, Category = cat.Name, Bic = bic,
+                    El = el, Id = el.Id.Value, Linked = t is not null, Link = link, T = t ?? Transform.Identity, Category = cat.Name, Bic = bic,
                     Type = type?.Name ?? "", Family = type?.FamilyName ?? "", Center = t is null ? center : t.OfPoint(center),
                 };
                 if (worksets is not null) try { item.Workset = worksets.GetWorkset(el.WorksetId)?.Name ?? ""; } catch (Exception) { }
@@ -456,6 +511,27 @@ internal static class BerthStatusFacts
             }
         }
     }
+
+    /// <summary>An element as a clash shape in the model's coordinates (its box moved by the link's transform), or null without a box.</summary>
+    private static Placed? Place(Element e, Transform t, string source, bool inHost)
+    {
+        var bb = e.get_BoundingBox(null);
+        if (bb is null) return null;
+        var p = new Placed(e, t, source, inHost);
+        if (t.IsIdentity) { p.Min = bb.Min; p.Max = bb.Max; return p; }
+        var corners = new[] { bb.Min, bb.Max, new XYZ(bb.Min.X, bb.Max.Y, bb.Min.Z), new XYZ(bb.Max.X, bb.Min.Y, bb.Min.Z),
+            new XYZ(bb.Min.X, bb.Min.Y, bb.Max.Z), new XYZ(bb.Max.X, bb.Max.Y, bb.Min.Z), new XYZ(bb.Min.X, bb.Max.Y, bb.Max.Z), new XYZ(bb.Max.X, bb.Min.Y, bb.Max.Z) }
+            .Select(t.OfPoint).ToList();
+        p.Min = new XYZ(corners.Min(c => c.X), corners.Min(c => c.Y), corners.Min(c => c.Z));
+        p.Max = new XYZ(corners.Max(c => c.X), corners.Max(c => c.Y), corners.Max(c => c.Z));
+        return p;
+    }
+
+    /// <summary>How far two boxes overlap (their thinnest side of overlap; negative when apart).</summary>
+    private static double BoxDepth(Placed a, Placed b) =>
+        Math.Min(Math.Min(a.Max.X, b.Max.X) - Math.Max(a.Min.X, b.Min.X), Math.Min(Math.Min(a.Max.Y, b.Max.Y) - Math.Max(a.Min.Y, b.Min.Y), Math.Min(a.Max.Z, b.Max.Z) - Math.Max(a.Min.Z, b.Min.Z)));
+
+    private static string Mm(double feet) => Math.Round(feet * 304.8).ToString("0", CultureInfo.InvariantCulture) + " mm";
 
     /// <summary>Whether an element belongs to the berth, or null (with why) when the berth's rule can't be used.</summary>
     private static Func<Item, bool>? Membership(Document doc, Berth berth, out string why)

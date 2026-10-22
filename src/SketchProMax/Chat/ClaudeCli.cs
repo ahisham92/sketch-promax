@@ -496,6 +496,10 @@ internal static class ClaudeCli
         - When the user says "remember that ..." (or "from now on ..."), save it with memory_note action=remember: scope=global
           for habits and standards that hold for every model, scope=model for facts about this model. When they say
           "forget ...", use action=forget. Confirm in one line. They can see and edit the notes in the pane's Notes tab.
+        - When the user reports progress on a berth or package (sections designed, calculations, bills, costing, or any
+          area's status), record it with berth_status action=set (what = the deliverable or area, percent and/or comment)
+          and confirm in one line. berth_status action=list or details answers "where are we" questions; it never reads
+          the model, so for fresh model results ask them to press Update status in the Berth status window.
         - When the user says something is a bug ("that's a bug", "report this"), call report_bug with one plain line you
           write from the conversation: what they did, what happened, what they expected, and the tool involved. Then say
           the report is saved in Documents\Sketch ProMax\Bugs\Reports.

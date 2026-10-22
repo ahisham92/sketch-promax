@@ -2273,7 +2273,7 @@ internal static partial class FieldTest
         while (reading.Next()) steps++;
         if (steps < reading.Total) problems.Add($"only {steps} steps for {reading.Total} parts");
         var whole = reading.Results[setup.Berths[0].Key];
-        foreach (var area in new[] { BerthStatusMath.CategoryData, BerthStatusMath.Clashes, BerthStatusMath.Drawings, BerthStatusMath.Annotation, BerthStatusMath.Schedules })
+        foreach (var area in new[] { BerthStatusMath.CategoryData, BerthStatusMath.Clashes, BerthStatusMath.Coordination, BerthStatusMath.Drawings, BerthStatusMath.Annotation, BerthStatusMath.Schedules })
             if (!whole.TryGetValue(area, out var r)) problems.Add($"no {area} result");
             else if (r.Summary.StartsWith("Couldn't", StringComparison.Ordinal)) problems.Add($"{area}: {r.Summary}");
         var missing = reading.Results[setup.Berths[1].Key];

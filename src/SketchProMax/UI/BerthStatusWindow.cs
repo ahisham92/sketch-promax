@@ -35,6 +35,7 @@ internal sealed class BerthStatusWindow : Window
     private State _state = new();
     private string _selected = "";
     private bool _reading, _stop, _closed;
+    private string _savedText = "";
 
     private readonly TextBlock _status = Brand.Text("", Brand.K.Muted);
     private readonly StackPanel _list = new() { Margin = new Thickness(14, 12, 14, 14) };
@@ -90,6 +91,13 @@ internal sealed class BerthStatusWindow : Window
         _stopButton.Click += (_, _) => { _stop = true; Brand.SetBusy(_stopButton, true, "Stopping…"); };
         PreviewKeyDown += (_, e) => { if (e.Key == Key.Escape && !_reading) Close(); };
         Closed += (_, _) => { _closed = true; _stop = true; Save(); };
+        // The chat can set percentages and comments too (berth_status): coming back to the window shows them.
+        Deactivated += (_, _) => { if (!_reading) Save(); };
+        Activated += (_, _) =>
+        {
+            if (_reading || _project.Length == 0 || _setup is null) return;
+            if (StateText(_project) is { Length: > 0 } text && text != _savedText) { _state = LoadState(_project); _savedText = text; Refresh(); }
+        };
         Load();
         Build();
     }
@@ -110,12 +118,13 @@ internal sealed class BerthStatusWindow : Window
             catch (InvalidDataException ex) { _status.Text = "The setup Excel changed but couldn't be read: " + ex.Message; }
         }
         _state = _project.Length == 0 ? new State() : LoadState(_project);
+        _savedText = _project.Length == 0 ? "" : StateText(_project);
     }
 
     private void Save()
     {
         if (_project.Length == 0) return;
-        try { SaveState(_project, _state); }
+        try { SaveState(_project, _state); _savedText = StateText(_project); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { _status.Text = "Couldn't save (" + ex.Message + ")."; }
     }
 
@@ -324,7 +333,7 @@ internal sealed class BerthStatusWindow : Window
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         var texts = new StackPanel();
         texts.Children.Add(Brand.Text(s.Berth.Name, size: 14, bold: true));
-        var due = s.Next is null ? "No submission set" : $"{s.Next.Name}: {s.Due:ddd dd-MMM HH:mm}" + (s.Due > DateTime.Now ? $" · {Math.Round(s.HoursLeft):0} working h left" : "");
+        var due = s.Next is null ? (s.Last is { } last ? $"Submitted: {last.Name} ({last.Date:dd-MMM})" : "No submission set") : $"{s.Next.Name}: {s.Due:ddd dd-MMM HH:mm}" + (s.Due > DateTime.Now ? $" · {Math.Round(s.HoursLeft):0} working h left" : "");
         texts.Children.Add(Small(due));
         texts.Children.Add(Small("Expected finish: " + (s.Finish is { } f ? f.ToString("ddd dd-MMM HH:mm", CultureInfo.CurrentCulture) + (s.FinishByHand ? " (by hand)" : "") : "needs two readings")));
         texts.Children.Add(Chip(s.Verdict));
@@ -357,7 +366,7 @@ internal sealed class BerthStatusWindow : Window
         var key = v switch
         {
             Verdict.Done or Verdict.OnTrack => Brand.K.BadgeOk,
-            Verdict.AtRisk => Brand.K.BadgeWarn,
+            Verdict.AtRisk or Verdict.Submitted => Brand.K.BadgeWarn,
             Verdict.Behind or Verdict.Overdue => Brand.K.BadgeError,
             _ => Brand.K.BadgeMuted,
         };
@@ -385,7 +394,9 @@ internal sealed class BerthStatusWindow : Window
         // The submission, the time left and the expected finish (from the readings, by hand, or asked of the AI).
         var sub = new StackPanel();
         sub.Children.Add(Brand.Text("Next submission", size: 13, bold: true));
-        if (s.Next is null) sub.Children.Add(Para("No submission for this berth in the setup's Submissions sheet."));
+        if (s.Next is null) sub.Children.Add(Para(s.Last is { } last
+            ? $"Submitted: {last.Name} ({last.Date:dddd dd-MMM-yyyy}). It is still checked: what is below to fix belongs to the BIM submission."
+            : "No submission for this berth in the setup's Submissions sheet."));
         else
         {
             sub.Children.Add(Para($"{s.Next.Name}: due {s.Due:dddd dd-MMM-yyyy HH:mm}" + (s.Due > DateTime.Now ? $", {s.HoursLeft:0} working hours left" : ", overdue") + "."));
