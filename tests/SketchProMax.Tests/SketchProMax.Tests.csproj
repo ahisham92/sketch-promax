@@ -48,6 +48,7 @@
     <Compile Include="../../src/SketchProMax/UI/UpdateNoticeRules.cs" Link="UpdateNoticeRules.cs" />
     <Compile Include="../../src/SketchProMax/Update/AddinFiles.cs" Link="AddinFiles.cs" />
     <Compile Include="../../src/SketchProMax/Update/ReleaseSource.cs" Link="ReleaseSource.cs" />
+    <Compile Include="../../src/SketchProMax/Update/UpdateResume.cs" Link="UpdateResume.cs" />
     <Compile Include="../../src/SketchProMax/Tools/TypeCatalog.cs" Link="TypeCatalog.cs" />
     <Compile Include="../../src/SketchProMax/Tools/CarbonMath.cs" Link="CarbonMath.cs" />
     <Compile Include="../../src/SketchProMax/Tools/VeMath.cs" Link="VeMath.cs" />

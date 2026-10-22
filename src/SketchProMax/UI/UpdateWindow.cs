@@ -217,7 +217,7 @@ internal sealed class UpdateWindow : Window
         {
             UpdateStage.Failed when App.Shared => "Check the internet connection, then press Try again. TritoRevit also tries again by itself every hour.",
             UpdateStage.Failed => canRetry
-                ? "Check the internet connection, then press Try again. If it keeps failing, open What's new in the Updates panel " +
+                ? "Check the internet connection, then press Try again: it continues from where it stopped. If it keeps failing, open What's new in the Updates panel " +
                   "and install the release by hand."
                 : "Use Check now in the Updates panel to try again.",
             UpdateStage.Cancelled => canRetry ? "Press Try again to update now, or Close to keep this version." : "",

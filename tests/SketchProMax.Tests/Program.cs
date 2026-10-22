@@ -67,6 +67,7 @@ RibbonFormTests.Run((name, ok, detail) => Check(name, ok, detail));
 FavouritesTests.Run((name, ok, detail) => Check(name, ok, detail));
 UpdateNoticeTests.Run((name, ok, detail) => Check(name, ok, detail));
 ReleaseSourceTests.Run((name, ok, detail) => Check(name, ok, detail));
+UpdateResumeTests.Run((name, ok, detail) => Check(name, ok, detail));
 TypeCatalogTests.Run((name, ok, detail) => Check(name, ok, detail));
 CarbonTests.Run((name, ok, detail) => Check(name, ok, detail));
 VeTests.Run((name, ok, detail) => Check(name, ok, detail));
