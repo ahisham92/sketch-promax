@@ -45,3 +45,8 @@ doesn't cover yet: a report counts as sent once a row below names it by the date
 | 33 | 2026-10-17 | After an in-Revit update the chat opens empty instead of the chat that was open | 0.33.5 | Fixed in 0.33.6 (please check) |
 | 34 | 2026-10-18 | Shared models: Revit shows "Unable to Access the Model … is not currently available" again and again while Sketch ProMax works | 0.34.1 | Fixed in 0.34.2 (please check) |
 | 35 | 2026-10-18 | After Shrink chat, the chat rereads the old conversation file (steps named like a long code ".jsonl") and loses the saving | 0.34.0 | Fixed in 0.34.2 (please check) |
+| 36 | 2026-10-22 | Revit closes by itself during the field test, at the purge_unused preview (twice, Revit 2024) | 0.34.38 | Open (fix in progress) |
+| 37 | 2026-10-22 | Revit closed by itself while the chat ran a code query, and nothing recorded which call it was | 0.34.38 | Fixed in next release (the next start logs which call was running) |
+| 38 | 2026-10-22 | export_pdf: an internal check print was refused because of thousands of model-wide issue-check items; the chat had to write its own export code | 0.34.38 | Fixed in next release (check_print) |
+| 39 | 2026-10-22 | export_pdf can't use a saved View/Sheet Set or a saved PDF export setup (A0, colour, 100%), so the chat wrote its own export code | 0.34.38 | Fixed in next release (sheet_set, pdf_setup) |
+| 40 | 2026-10-22 | The chat sometimes calls a Revit tool before it is loaded ("No such tool available") and has to try again (twice in one day) | 0.34.38 | Open |
