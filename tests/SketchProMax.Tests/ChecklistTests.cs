@@ -233,6 +233,15 @@ internal static class ChecklistTests
         var loi = ParseLoi("A1020*>Material, Length, Diameter; B1010*>Material, Thickness; bad");
         check("checklist: the LOI matrix rule reads each code with its parameters",
             loi.Count == 2 && loi[0].Key == "A1020*" && loi[0].Params.SequenceEqual(new[] { "Material", "Length", "Diameter" }) && loi[1].Params.Count == 2, string.Join("; ", loi.Select(l => l.Key)));
+        var loiValues = ParseLoiValues("A1020*>Status=For construction, Description={Type Name}; *>Phase=New; bad; B1010*>Empty=");
+        check("checklist: the LOI values rule reads each code's parameter=value pairs and skips empty ones",
+            loiValues is [("A1020*", "Status", "For construction"), ("A1020*", "Description", "{Type Name}"), ("*", "Phase", "New")], string.Join("; ", loiValues));
+        var sources = new[] { "Material", "Concrete Grade", "Pile Diameter", "Slab Thickness", "Cut-off Level", "Toe Level", "Length", "Width", "Volume", "Reference Level", "Fire Rating", "Status" }.Select(LoiSource).ToList();
+        check("checklist: LOI parameters read from the model by their names",
+            sources.SequenceEqual(["material", "grade", "diameter", "thickness", "top", "bottom", "length", "width", "volume", "level", "", ""]), string.Join(", ", sources));
+        check("checklist: the grade in a material or type name",
+            GradeIn("FN_SB_40MPa_PileCap_1500") == "40 MPa" && GradeIn("Concrete C32/40") == "C32/40" && GradeIn("Steel S355") == "S355" && GradeIn("Concrete Round 1500") == "" && GradeIn("Pile 1200 x 30 N/mm2") == "30 MPa",
+            $"{GradeIn("FN_SB_40MPa_PileCap_1500")} {GradeIn("Concrete C32/40")} {GradeIn("Steel S355")}");
         var pairs = ParsePairs("Specialty Equipment>*Fender*, Walls");
         check("checklist: what must be in the model reads category and type pattern pairs", pairs is [("Specialty Equipment", "*Fender*"), ("Walls", "*")], string.Join("; ", pairs));
         check("checklist: the type field of a file name",

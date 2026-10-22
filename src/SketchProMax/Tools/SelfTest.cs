@@ -743,6 +743,12 @@ internal static partial class SelfTest
         }),
         new("general_notes", _ => new { values = new { codes = "Self-test code" } }),
         new("typical_details", _ => new { kinds = new[] { "lap_schedule", "cover_schedule" } }),
+        // A matrix on walls: Comments from the values rule, a new parameter filled from the walls' material.
+        new("fill_loi_data", c =>
+        {
+            _ = c.Wall ?? throw new Skip("the model has no walls");
+            return new { matrix = "Walls>Comments, ZZ Self-test LOI Material", values = "Walls>Comments=Self-test LOI", apply = true };
+        }) { Expect = r => r.GetProperty("summary").GetString() is { } said && (said.StartsWith("Filled LOI data", StringComparison.Ordinal) || said.StartsWith("Nothing to fill", StringComparison.Ordinal)) ? null : "not filled: " + r },
         new("issue_check", c => new { folder = Path.Combine(c.Temp, "issue check") }) { Heavy = true, Expect = r => r.TryGetProperty("gate", out var g) && g.TryGetProperty("verdict", out _) ? null : "no pass/fail verdict" },
         // The throwaway sheet has empty title block fields, so the issue check blocks it: let it through (as the setting would) to run the exports.
         new("issue_drawings", c => new { sheet_numbers = new[] { "ST-999" }, revision_description = "Self-test issue", folder = Path.Combine(c.Temp, "issue"), allow_open_items = true, open_items_reason = "Self-test" }, Setup: ["create_sheets"])

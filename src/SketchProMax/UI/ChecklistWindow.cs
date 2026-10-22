@@ -1431,6 +1431,36 @@ internal sealed class ChecklistWindow : Window
         finally { Brand.SetBusy(button, false); }
     }
 
+    /// <summary>
+    /// The LOI values to fill, read in steps: the types the matrix covers first, then a few types per Revit call, so
+    /// Revit never stops for long on a big model. Null when Revit couldn't read (the reason is shown).
+    /// </summary>
+    private async Task<string?> LoiPreview(Button button, TextBlock said, ChecklistMath.Definition? def)
+    {
+        const int perStep = 20;
+        var spec = LoiFill.SpecOf(def);
+        Brand.SetBusy(button, true, "Reading…");
+        try
+        {
+            var ids = await OnModel(ui => "ids:" + string.Join(",", LoiFill.TypeIds(ui.Document, spec)));
+            if (!ids.StartsWith("ids:", StringComparison.Ordinal)) { said.Text = ids; said.Visibility = Visibility.Visible; return null; }
+            var list = ids.Substring(4).Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries).Select(x => long.Parse(x, System.Globalization.CultureInfo.InvariantCulture)).ToList();
+            var lines = new List<string>();
+            said.Visibility = Visibility.Visible;
+            for (var i = 0; i < list.Count; i += perStep)
+            {
+                said.Text = $"Reading the LOI data: {i} of {list.Count} types…";
+                var batch = list.Skip(i).Take(perStep).ToList();
+                var part = await OnModel(ui => "rows:" + LoiFill.Suggest(ui.Document, spec, batch));
+                if (!part.StartsWith("rows:", StringComparison.Ordinal)) { said.Text = part; return null; }
+                if (part.Length > 5) lines.Add(part.Substring(5));
+            }
+            said.Visibility = Visibility.Collapsed;
+            return string.Join("\n", lines);
+        }
+        finally { Brand.SetBusy(button, false); }
+    }
+
     /// <summary>The Sketch ProMax pane (the loader registers it with this id; the chat is its Chat tab).</summary>
     private static readonly DockablePaneId ChatPaneId = new(new Guid("448734fe-1b1a-47e2-94a5-1fd138cb74e7"));
 
@@ -1449,10 +1479,23 @@ internal sealed class ChecklistWindow : Window
         if (offer.Preview)
         {
             var defNow = _def;
-            var suggested = await OnModel(ui => ChecklistFixes.Suggest(ui.Document, key, defNow));
+            var loi = key == "loi";
+            var suggested = loi ? await LoiPreview(button, said, defNow) : await OnModel(ui => ChecklistFixes.Suggest(ui.Document, key, defNow));
+            if (suggested is null) return;
             var rows = suggested.Split('\n').Select(l => l.Split('\t')).Where(p => p.Length == 3).Select(p => (Id: p[0], Old: p[1], New: p[2])).ToList();
-            if (rows.Count == 0) { said.Text = "Nothing to rename: every type in use is named like the rule (or no Type name pattern is set)."; said.Visibility = Visibility.Visible; return; }
-            if (ChecklistProjectWindows.EditNames(this, offer.Button, rows.Select(r => (r.Old, r.New)).ToList()) is not { } edited) return;
+            if (rows.Count == 0)
+            {
+                said.Text = loi ? "Nothing to fill: every type the LOI matrix covers has its parameters filled (or no LOI matrix is set in Checking rules)."
+                    : "Nothing to rename: every type in use is named like the rule (or no Type name pattern is set).";
+                said.Visibility = Visibility.Visible;
+                return;
+            }
+            var edited = loi
+                ? ChecklistProjectWindows.EditNames(this, offer.Button, rows.Select(r => (r.Old, r.New)).ToList(),
+                    $"{rows.Count} LOI values to fill. Change any value, or untick the ones to leave empty; an empty box is skipped. \"{LoiFill.EachOwn}\" fills each element from its own geometry. " +
+                    "Nothing changes until you press Fill; Ctrl+Z in Revit undoes it.", "Fill")
+                : ChecklistProjectWindows.EditNames(this, offer.Button, rows.Select(r => (r.Old, r.New)).ToList());
+            if (edited is null) return;
             answer = string.Join("\n", rows.Zip(edited, (r, n) => (r.Id, New: n)).Where(x => x.New is not null).Select(x => x.Id + "\t" + x.New));
         }
         Brand.SetBusy(button, true, offer.ChangesModel ? "Fixing…" : "Working…");

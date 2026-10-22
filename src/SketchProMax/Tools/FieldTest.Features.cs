@@ -2542,7 +2542,7 @@ internal static partial class FieldTest
         if (TestDoc(app, s, out var why) is not { } doc) return Fail(why);
         var problems = new List<string>();
         var said = new List<string>();
-        foreach (var key in new[] { "units", "uniformat", "scopeboxes", "viewtemplates", "familynames" })
+        foreach (var key in new[] { "units", "uniformat", "scopeboxes", "viewtemplates", "familynames", "loi" })
             if (ChecklistFixes.For(key) is not { } offer || offer.Button.Length == 0) problems.Add(key + ": no Fix button");
         if (ChecklistFixes.Offers("levels").Count != 2) problems.Add("levels: not both fixes (delete unused, name like the URS)");
         if (ChecklistMath.ParseUnits("Length mm 0, Angle degrees 2") is not { Count: 2 } units || units[0].Unit != "mm" || units[1].Decimals != 2) problems.Add("units: the rule reads wrong");
@@ -2573,6 +2573,19 @@ internal static partial class FieldTest
             var empty = ChecklistFacts.TypesOf(doc, ChecklistFacts.Instances(doc))
                 .Count(t => t.LookupParameter("Assembly Code") is { IsReadOnly: false, StorageType: StorageType.String } p && !ChecklistFacts.Filled(p));
             if (empty > 0) problems.Add($"uniformat: {empty} types still have no Assembly Code");
+
+            // LOI data: Comments from the values rule on every coded type, a new parameter filled from the material.
+            def.Rules["loimatrix"] = "*>Comments, ZZ Test LOI Material";
+            def.Rules["loivalues"] = "*>Comments=Field test LOI";
+            var loi = ChecklistFixes.Suggest(doc, "loi", def).Split('\n').Select(l => l.Split('\t')).Where(p => p.Length == 3).ToList();
+            if (loi.Count == 0) said.Add("loi: nothing to fill in the test project");
+            else
+            {
+                said.Add("loi: " + ChecklistFixes.Run(doc, "loi", null, def: def, answer: string.Join("\n", loi.Where(r => r[2].Length > 0).Select(r => r[0] + "\t" + r[2]))));
+                if (ChecklistFacts.Read(doc, def).Hints.TryGetValue("loi", out var loiHint) && loiHint.Items.FirstOrDefault(i => i.StartsWith("iLOD", StringComparison.Ordinal) && i.Contains("Comments")) is { } still)
+                    problems.Add("loi: still empty after the fill: " + still);
+                if (loi.Any(r => r[1].Contains("ZZ Test LOI Material") && r[2].Length > 0) && !said[said.Count - 1].Contains("ZZ Test LOI Material")) problems.Add("loi: the missing parameter wasn't added: " + said[said.Count - 1]);
+            }
 
             // A template for floor plans, then every floor plan on a sheet gets it.
             var plan = new FilteredElementCollector(doc).OfClass(typeof(Viewport)).Cast<Viewport>().Select(vp => doc.GetElement(vp.ViewId) as ViewPlan).FirstOrDefault(v => v is { ViewType: ViewType.FloorPlan });

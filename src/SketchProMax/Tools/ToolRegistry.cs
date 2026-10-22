@@ -180,6 +180,7 @@ public sealed class ToolRegistry
         new GeneralNotesTool(),
         new TypicalDetailsTool(),
         new IssueCheckTool(),
+        new FillLoiDataTool(),
         new IssueDrawingsTool(),
         new GetDrawingPackagePlanTool(),
         new DrawingPackageTool(),
