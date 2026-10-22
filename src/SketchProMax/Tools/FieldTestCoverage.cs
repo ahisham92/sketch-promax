@@ -132,6 +132,7 @@ internal static class FieldTestCoverage
             "Start a long tool (e.g. Model check), watch the Job button show progress, click it and stop the job. Click Update: the update window opens on Checking, then says up to date (or installs the newer version in place); no browser or folder opens."),
         new("help", RibbonArea, "Help page", How.Manual, "", "opens a web page in your browser", "Help > Help and getting started: the guide opens in the browser."),
         new("diagnostics.journal", RibbonArea, "The field test's breadcrumbs when Revit closes", How.Probe, "", "in a temporary folder, a breadcrumb journal written as a run writes it, stopped as if Revit closed during a step: the next start finds it (its Revit is gone), its rows end with a crash row naming that step, Continue carries the steps that ended and doesn't run the crashed one (nor one remembered from an earlier crash), and a run that ends by itself leaves no journal"),
+        new("diagnostics.running_call", RibbonArea, "Which call Revit closed during", How.Probe, "", "in a temporary folder, the running-call file of a Revit that is gone is read back at the next start as which call was running, with its arguments, and removed (once)"),
         new("diagnostics.crash_ui", RibbonArea, "After Revit closed during the field test", How.Manual, "", "it needs Revit to close during a run",
             "Start Help > Diagnostics > Field test (Run everything). When the job card says it is on the tool families, end Revit in Task Manager (End task on Revit). Start Revit again and open any model: within a minute or two (or at once when you click Field test) a window says \"Revit closed during the field test, while running <tool> (<family>). A report of what ran is in <folder>.\" Open the report folder: a report named \"field test (interrupted)\" lists the rows that ran and the tool that was running as \"crash\". Report bug's folder has a new bug report about it. Click Field test and pick Continue the field test after that step: the run builds the test project again, the steps from before say \"done before Revit closed\", the crashed tool says \"not run again\" and counts as a failure, and the rest runs. The window doesn't come back after that; Run everything runs every step again."),
         new("diagnostics", RibbonArea, "Self-test, field test and the test checklist", How.Probe, "", "the field test runs the self-test (safe mode) on its own project; this report is the field test"),
@@ -559,6 +560,10 @@ internal static class FieldTestCoverage
         new(33, ["chat.survives_update", "chat.update_reopen"], "the open chat survives an update"),
         new(34, ["central.once", "central.real"], "one borrow request per batch, then a pause, on a shared model"),
         new(35, ["chat.shrink"], "after a shrink the chat relies on the summary and never rereads the old transcript"),
+        new(36, ["cleanup.passes", "diagnostics.journal", "diagnostics.crash_ui"], "the purge preview deletes nothing; a run Revit closes during is reported and continued after"),
+        new(37, ["diagnostics.running_call"], "the call Revit closed during is read back at the next start with its arguments"),
+        new(38, ["issue.gate"], "export_pdf with check_print isn't stopped by the issue check"),
+        new(39, ["bug#39"], "export_pdf looks a saved View/Sheet Set up by name"),
     ];
 
     /// <summary>

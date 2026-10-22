@@ -1313,6 +1313,9 @@ internal static partial class SelfTest
         }, Setup: ["cut_geometry#2"]) { Heavy = true },
         new("find_clashes", c => new { set_a = new { categories = new[] { "Floors", "Structural Framing", "Generic Models" } }, limit = 50, folder = c.Temp, voids = "rebuild" },
             Setup: ["cut_geometry#2", "place_void_cuts#2"]) { Heavy = true, Expect = VoidsRebuilt, Bug = 27 },
+        // #39: export_pdf looks a saved View/Sheet Set up by name, and one that isn't there is named with the saved ones.
+        new("export_pdf", c => new { sheet_set = "Self-test set that isn't there", folder = c.Temp, file_name = "set", check_print = true })
+            { Heavy = true, Bug = 39, ExpectError = "No View/Sheet Set is called" },
         // Workshared: target copy is refused with the reason; not workshared: the copy is made, changed, saved and closed.
         new("ve_apply", c => new
         {

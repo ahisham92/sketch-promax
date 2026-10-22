@@ -292,6 +292,35 @@ internal static partial class FieldTest
             : Fail(problem);
     }
 
+    /// <summary>
+    /// The running-call file (bug #37): one left by a Revit that is gone is read back, at the next start, as which call
+    /// Revit closed during, with its arguments, and removed. In a folder of the test folder, with a process id that isn't running.
+    /// </summary>
+    private static (string, string) RunningCallProbe(string testFolder)
+    {
+        var folder = Path.Combine(testFolder, "running-call");
+        var saved = Revit.RunningCall.FolderOverride;
+        Revit.RunningCall.FolderOverride = folder;
+        try
+        {
+            Directory.CreateDirectory(folder);
+            const int gone = 999_999_003;
+            var file = Revit.RunningCall.FileOf(gone);
+            File.WriteAllText(file, JsonSerializer.Serialize(new Revit.RunningCall.Entry
+            {
+                Time = "2099-01-02T03:04:05", Where = "the chat", Tool = "run_revit_query_code", Model = "Field test", Version = "0.0.0", Arguments = "{\"code\":\"return 1;\"}",
+            }));
+            var lines = Revit.RunningCall.Recover(1, _ => false);
+            var line = lines.FirstOrDefault() ?? "";
+            if (lines.Count != 1 || !line.Contains("run_revit_query_code") || !line.Contains("return 1;")) return Fail("the call left behind wasn't read back with its arguments: " + string.Join(" | ", lines));
+            if (File.Exists(file)) return Fail("the call left behind was read back but not removed");
+            return Revit.RunningCall.Recover(1, _ => false).Count == 0
+                ? Pass("a call left behind by a Revit that is gone was read back at the next start with its tool and arguments, then removed: " + Short(line, 160))
+                : Fail("the call was reported twice");
+        }
+        finally { Revit.RunningCall.FolderOverride = saved; }
+    }
+
     // ---- The report's Bug log section ----------------------------------------------------------------------------------------
 
     private static string BugLogSection(RunReport r)
