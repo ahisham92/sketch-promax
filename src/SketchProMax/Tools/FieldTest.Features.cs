@@ -1742,16 +1742,18 @@ internal static partial class FieldTest
             CopyDimensionsTool.CutEdgeForTest = dim => dim.Id == d.Dim.Id;
             var asked = 0;
             Handoff.TestResponder = (_, _) => { asked++; return HandoffChoice.Stop; };
+            // Detail lines have no Comments parameter in every Revit version, so the stand-in's lines are the ones it made.
+            int DetailLines() => new FilteredElementCollector(doc, target.Id).OfClass(typeof(CurveElement)).OfType<DetailCurve>().Count();
+            var linesBefore = DetailLines();
             var result = Call(app, s.Registry, "copy_dimensions",
                 new { source_view_id = d.Plan.Id.Value, target_view_ids = new[] { target.Id.Value }, dimension_ids = new[] { d.Dim.Id.Value }, static_fallback = true });
-            var lines = new FilteredElementCollector(doc, target.Id).OfClass(typeof(CurveElement)).OfType<DetailCurve>()
-                .Count(c => c.get_Parameter(BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS)?.AsString() == StaticDimensionText.Comment);
+            var lines = DetailLines() - linesBefore;
             var texts = new FilteredElementCollector(doc, target.Id).OfClass(typeof(TextNote)).Cast<TextNote>().Select(n => n.Text ?? "").ToList();
             var values = texts.Count(t => t.Contains("(static)"));
             var labelled = texts.Any(t => t.Contains("not a live dimension"));
             var problems = new List<string>();
             if (result.IsError) problems.Add("copy_dimensions failed: " + Short(result.Text, 300));
-            if (lines == 0) problems.Add("no detail line marked as a static stand-in in the target view");
+            if (lines < 3) problems.Add($"{lines} detail line(s) drawn in the target view, not the line and its two ticks");
             if (values == 0) problems.Add("no \"(static)\" value note in the target view");
             if (!labelled) problems.Add("no note saying it is not a live dimension");
             if (asked > 0) problems.Add("it handed the dimension over instead of drawing a stand-in");
@@ -3043,7 +3045,8 @@ internal static partial class FieldTest
     {
         var items = TestChecklistWindow.Items();
         var manual = FieldTestCoverage.Features.Count(f => f.How == FieldTestCoverage.How.Manual) + FieldTestCoverage.ManualTools.Count;
-        var bugs = items.Count(i => i.Area == FieldTestCoverage.BugFixes);
+        // The bug log's rows are "bug:N"; the manual checks filed under Bug fixes (bug.titleblock_params…) are manual items.
+        var bugs = items.Count(i => i.Id.StartsWith("bug:", StringComparison.Ordinal));
         var problems = new List<string>();
         if (items.Count - bugs != manual) problems.Add($"{items.Count - bugs} manual items, the coverage table has {manual}");
         if (bugs == 0) problems.Add("no fixed bug rows (the bug log built into this version was not read)");

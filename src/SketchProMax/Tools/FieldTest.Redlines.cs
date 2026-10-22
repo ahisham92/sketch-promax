@@ -243,6 +243,8 @@ internal static partial class FieldTest
             foreach (var (id, element) in new[] { ("M1", oldId), ("M2", wallId), ("M3", struckId) })
                 if (!Where(id).Contains($"'{r.Plan.Name}'") || !Where(id).Contains(element.ToString()))
                     problems.Add($"{id} was placed at \"{Where(id)}\", not on element {element} in '{r.Plan.Name}' ({Short(Note(id), 160)})");
+            // What the probe itself worked out, so a mapping failure can be compared with the tool's distances above.
+            if (problems.Count > 0) problems.Add($"the probe's sheet frame was {frame} and its M1 was {Short(JsonSerializer.Serialize(markups[0]), 200)}");
             if (!asked.SequenceEqual(["M1", "M2", "M3", "M4"])) problems.Add("approval was asked for " + (asked.Count == 0 ? "nothing" : string.Join(", ", asked)) + ", not M1 to M4 one by one");
 
             // The changes.
