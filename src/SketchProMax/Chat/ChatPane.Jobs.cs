@@ -273,6 +273,7 @@ internal sealed partial class ChatPane
                     step.State = state;
                     if (result.Text.Length > 0) step.Result = result.Text.Length > MaxResult ? result.Text.Substring(0, MaxResult) + "…" : result.Text;
                 }
+                if (!result.IsError && FilesItem(step.Name, result.Text) is { } files) board.AddItem(run.Job, files, now);
                 break;
             }
             case ResultEvent end:
@@ -698,12 +699,13 @@ internal sealed partial class ChatPane
     private UIElement BuildJobItem(List<ChatItem> items, int index)
     {
         var item = items[index];
-        var first = index == 0 || items[index - 1].Kind is not ("assistant" or "tool");
+        var first = index == 0 || items[index - 1].Kind is not ("assistant" or "tool" or "file");
         return item.Kind switch
         {
             "user" => UserMessage(item),
             "assistant" => AssistantMessage(item, first),
             "tool" => ToolCard(item, first),
+            "file" => FileCard(item),
             "error" => ErrorBox(item),
             _ => NoteLine(item),
         };

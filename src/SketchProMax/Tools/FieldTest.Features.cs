@@ -525,6 +525,7 @@ internal static partial class FieldTest
         await Probe(s, "chat.usage", () => UsageProbe(s.Folder)).ConfigureAwait(false);
         await Probe(s, "chat.pdf", PdfAttach).ConfigureAwait(false);
         await Probe(s, "chat.office", OfficeAttach).ConfigureAwait(false);
+        await Probe(s, "chat.documents", () => Documents(s.Folder)).ConfigureAwait(false);
         await Probe(s, "bugs.sync", () => BugSync(s.Folder)).ConfigureAwait(false);
         string? latest = null;
         await Probe(s, "update.endpoint", () => { var (row, tag) = Endpoint(); latest = tag; return row; }).ConfigureAwait(false);
@@ -1246,6 +1247,58 @@ internal static partial class FieldTest
         if (!doc.Contains("# Concrete works") || !doc.Contains("| Columns | C50 |") || doc.Contains("C30")) problems.Add("the Word text is wrong: " + doc);
         if (!slides.Contains("=== Slide 2 of 2 ===") || !slides.Contains("Slide 2 title")) problems.Add("the PowerPoint text is wrong: " + slides);
         return problems.Count == 0 ? Pass("Word text (headings, bullets, table rows, no deleted text) and PowerPoint slides in order are read") : Fail(string.Join("; ", problems));
+    }
+
+    /// <summary>make_document: each kind of file is written to a temporary folder and read back; nothing is replaced.</summary>
+    private static (string, string) Documents(string folder)
+    {
+        var dir = Path.Combine(folder, "documents-" + Guid.NewGuid().ToString("N").Substring(0, 8));
+        var problems = new List<string>();
+        string? Make(string json)
+        {
+            var args = new ToolArgs(System.Text.Json.JsonDocument.Parse(json).RootElement.EnumerateObject().ToDictionary(p => p.Name, p => p.Value.Clone()));
+            var result = MakeDocumentTool.Make(args, dir);
+            if (result.IsError) { problems.Add(result.Text); return null; }
+            var files = Chat.ChatFiles.Find(result.Text);
+            if (files.Count != 1) { problems.Add("the chat doesn't find the file in the result: " + result.Text); return null; }
+            return files[0];
+        }
+        try
+        {
+            var bill = """{"format":"excel","title":"Field test bill","sheets":[{"name":"Bill","title":"Concrete","columns":["Item","Qty","Rate","Amount"],"rows":[["Columns C40",12.5,950,"=B4*C4"],{"cells":["Total",null,null,"=SUM(D4:D4)"],"bold":true}]}]}""";
+            if (Make(bill) is { } xlsx)
+            {
+                var rows = Xlsx.Read(xlsx);
+                if (rows.Count < 4 || rows[0][0] != "Concrete" || rows[1][1] != "Qty" || rows[2][1] != "12.5" || rows[3][0] != "Total") problems.Add("the workbook reads back wrong: " + string.Join(" / ", rows.Select(r => string.Join(",", r))));
+                using var zip = System.IO.Compression.ZipFile.OpenRead(xlsx);
+                using var reader = new StreamReader(zip.GetEntry("xl/worksheets/sheet1.xml")!.Open());
+                if (!reader.ReadToEnd().Contains("<f>B4*C4</f>")) problems.Add("the workbook has no formula for the amount");
+                if (Make(bill) is { } second && !Path.GetFileName(second).Equals("Field test bill (2).xlsx", StringComparison.Ordinal)) problems.Add("a second file of the same name is " + Path.GetFileName(second));
+            }
+            if (Make("""{"format":"word","title":"Field test report","content":"# Concrete\n\n- Columns: **C40**\n\n| Element | Grade |\n|---|---|\n| Columns | C40 |"}""") is { } docx)
+            {
+                var text = Chat.OfficeText.Read(File.ReadAllBytes(docx), word: true).Text;
+                if (!text.Contains("Concrete") || !text.Contains("| Columns | C40 |")) problems.Add("the Word document reads back wrong: " + text);
+            }
+            var rowsJson = string.Join(",", Enumerable.Range(1, 20).Select(i => $"[\"Pile {i}\",\"{i * 2}\"]"));
+            if (Make("""{"format":"powerpoint","title":"Field test deck","slides":[{"title":"Scope","bullets":["Piles","  Bored"]},{"title":"Piles","table":{"columns":["Pile","Load"],"rows":[""" + rowsJson + "]}}]}") is { } pptx)
+            {
+                var text = Chat.OfficeText.Read(File.ReadAllBytes(pptx), word: false).Text;
+                if (!text.Contains("=== Slide 4 of 4 ===") || !text.Contains("Scope") || !text.Contains("Piles (continued)")) problems.Add("the presentation reads back wrong: " + text);
+            }
+            if (Make("""{"format":"pdf","title":"Field test PDF","content":"# Concrete\n\nColumns are C40.\n\n[page break]\n\n## Piles\n\n| Pile | Load |\n|---|---:|\n| P1 | 1,200 |"}""") is { } pdf)
+            {
+                var check = Chat.PdfAttachment.Assess(File.ReadAllBytes(pdf));
+                if (check.Verdict != Chat.PdfAttachment.Verdict.Send || check.Pages != 2) problems.Add($"the PDF is {check.Verdict} with {check.Pages} pages (expected 2 to send)");
+            }
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        }
+        return problems.Count == 0
+            ? Pass("an Excel workbook (title, header, a number, the amount's formula, a bold total), a Word document, a 4-slide presentation (a long table carried over) and a 2-page PDF are made and read back; a second file of the same name gets (2); the chat finds each file for its card")
+            : Fail(string.Join("; ", problems));
     }
 
     // ---- Bug log, updates, the Claude app

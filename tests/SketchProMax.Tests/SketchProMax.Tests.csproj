@@ -57,6 +57,11 @@
     <Compile Include="../../src/SketchProMax/Tools/ChecklistMath.cs" Link="ChecklistMath.cs" />
     <Compile Include="../../src/SketchProMax/Tools/ChecklistDocx.cs" Link="ChecklistDocx.cs" />
     <Compile Include="../../src/SketchProMax/Tools/ChecklistXlsx.cs" Link="ChecklistXlsx.cs" />
+    <Compile Include="../../src/SketchProMax/Tools/OfficeDocs.cs" Link="OfficeDocs.cs" />
+    <Compile Include="../../src/SketchProMax/Tools/OfficeDocx.cs" Link="OfficeDocx.cs" />
+    <Compile Include="../../src/SketchProMax/Tools/OfficePptx.cs" Link="OfficePptx.cs" />
+    <Compile Include="../../src/SketchProMax/Tools/OfficePdf.cs" Link="OfficePdf.cs" />
+    <Compile Include="../../src/SketchProMax/Chat/ChatFiles.cs" Link="ChatFiles.cs" />
     <Compile Include="../../src/SketchProMax/Tools/ChecklistHelper.cs" Link="ChecklistHelper.cs" />
     <Compile Include="../../src/SketchProMax/Tools/ChecklistProjects.cs" Link="ChecklistProjects.cs" />
     <EmbeddedResource Include="../../src/SketchProMax/Data/pre-submission-checklist.json" LogicalName="SketchProMax.pre-submission-checklist.json" />

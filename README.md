@@ -2,7 +2,7 @@
 
 <p align="center"><img src="assets/logo/sketch-promax-wordmark.png" alt="Sketch ProMax" width="420"></p>
 
-An AI agent for Autodesk Revit 2024, 2025, 2026 and 2027, powered by Claude. Ask in plain language; it reads, documents, audits and edits the open model through 218 tools, and it learns new ones as you use it. Every change can be undone with Ctrl+Z, and it asks for your approval before anything risky (or before every change, if you prefer).
+An AI agent for Autodesk Revit 2024, 2025, 2026 and 2027, powered by Claude. Ask in plain language; it reads, documents, audits and edits the open model through 219 tools, and it learns new ones as you use it. Every change can be undone with Ctrl+Z, and it asks for your approval before anything risky (or before every change, if you prefer).
 
 See [docs/PLAN.md](docs/PLAN.md) for the comparison with SketchPro, the roadmap and the architecture.
 
@@ -148,6 +148,8 @@ To publish an update: bump `<Version>` in both project files and push to `main`.
 
 **Chats remember each other:** each chat keeps a short summary of itself (decisions, settings, steps that worked, what is left), written by a quick Claude run when you shrink it, leave it for another chat or leave it idle. A new chat about the same model starts with the latest three, so you don't explain the project again, and "do it the same way as in the Tower project" searches every chat of every model (the recall_chats tool) and follows that chat's steps. The summaries are in the Notes tab under "From earlier chats", to edit or delete.
 
+**Excel, Word, PowerPoint and PDF files from the chat:** ask the Revit chat for a file ("make an Excel bill of quantities of the concrete with rates I can fill in", "a Word report of this model with a picture of level 1", "a 5-slide presentation for the client", "the same as a PDF") and it gets the facts from the model, then writes the file (the make_document tool). Excel workbooks have a bold, frozen header with filters, numbers as numbers, formulas for amounts and totals, and print fitted to the page width; Word documents and PDFs have headings, lists, tables, pictures and page numbers; presentations have a title slide, bullets, pictures and tables (long ones carry over). Nothing needs Office to be made. Files go to `Documents\Sketch ProMax\Made in chat` (or a folder you name) and never replace another file. Each one shows in the chat as a card with Open, Show in folder and Save a copy; exports such as the priced bill of quantities show the same card. PDFs use the standard PDF font, so for Arabic or other non-Latin text ask for a Word file and save it as PDF from Word.
+
 **Shrink chat:** every message resends the whole conversation, so long chats use more of your plan. The arrows button next to New chat shrinks the chat: Claude Code replaces the earlier messages with a summary and carries on (the messages stay on screen). It also happens by itself after a reply once a chat sends about 60k tokens more than it did empty.
 
 **Steps only you can do:** when a task hits something only you can do in Revit (a Revit API limit, a missing family or DWG, an edit mode, a legend component, a cut-edge dimension, a missing schedule), Sketch ProMax shows a window (or a card in the chat) saying what to do, where in Revit and why, with **Continue** (checks it is done and carries on where it stopped), **Skip this item** and **Stop**. Legend components are added by copying one that exists and changing its type (`add_legend_components`); cut-edge dimensions Revit refuses can be drawn as clearly labelled static stand-ins (`copy_dimensions` with `static_fallback`). Guides: [converting in-place families to loadable ones](docs/guides/in-place-to-loadable.md).
@@ -237,7 +239,7 @@ src/SketchProMax/            The Revit add-in core (net48 for Revit 2024, net8.0
   Agent/SystemPrompt         Instructions the desktop app receives from the connector
   Bridge/BridgeServer        Per-Revit-window named-pipe server the connector talks to
   Revit/                     Main-thread dispatcher (ExternalEvent), helpers, Revit 2024 dependency loader
-  Tools/                     The 216 IRevitTool implementations and the registry (CodeTools compiles C# with Roslyn)
+  Tools/                     The 217 IRevitTool implementations and the registry (CodeTools compiles C# with Roslyn)
   UI/                        Settings, update progress, quick-tool input and result windows
   Settings/                  Per-user settings (approval level, auto-update, firm standards)
   Update/Updater             Self-update from GitHub Releases, with progress, switched to without restarting Revit

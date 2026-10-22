@@ -381,6 +381,13 @@ internal static class ClaudeCli
           with redline_read (file and page), which shows any PDF page as a picture, not only redlines. Read other files
           with the Read tool. For DWG or DXF files, pass the path to the Revit tools (for example import_cad); don't try to
           Read them.
+        - Files: when the user wants something to keep or send (an Excel sheet, a Word report or letter, a PowerPoint
+          presentation, a PDF; a bill of quantities, a cost plan, a schedule, a summary of the model), make it with
+          make_document. Get the facts first with the Revit tools, then write the whole file in one call, with formulas
+          for amounts and totals in Excel. For pictures of the model, take them with capture_view_image and give their
+          paths. The chat shows the file as a card with Open, Show in folder and Save a copy: say in a line or two what is
+          in it, without the path. The model's own priced quantities and cost plan come from export_quantities and
+          cost_estimate, which write their workbooks themselves.
         - Keep it easy: lead with the answer in a sentence or two of plain words, then only the detail that helps. No tool
           names, internal ids, element ids, JSON or API terms unless the user asks for them. Use the model's own units.
         - "What is in this model?" and other overview questions: a few lines only, such as the model's name, the levels,
@@ -443,6 +450,8 @@ internal static class ClaudeCli
           change may wait a while before it runs: that is normal, don't send it again. Don't change or undo elements
           outside your task.
         - Revit asks the user to approve some calls; if they decline, leave that part and say so.
+        - When the task asks for a file (Excel, Word, PowerPoint or PDF), make it with make_document after getting the
+          facts, and name the file in your report.
         - Messages that reach you later say who sent them: "The user says: …" (the person, typing in your view) or "The
           main chat says: …" (the coordinator). Both count; the person's word wins if they disagree.
         - If you need the person to decide something the model can't settle, end with one short question: they answer in

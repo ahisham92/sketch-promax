@@ -1074,12 +1074,13 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     private UIElement Build(int index)
     {
         var item = _conv.Items[index];
-        var first = index == 0 || _conv.Items[index - 1].Kind is not ("assistant" or "tool");
+        var first = index == 0 || _conv.Items[index - 1].Kind is not ("assistant" or "tool" or "file");
         return item.Kind switch
         {
             "user" => UserMessage(item),
             "assistant" => AssistantMessage(item, first),
             "tool" => ToolCard(item, first),
+            "file" => FileCard(item),
             "error" => ErrorBox(item),
             "handoff" => HandoffCard.Build(item, Tools.Handoff.Find(item.Name)),
             "brief" => BriefCard(item),
@@ -2332,7 +2333,11 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             }
             case ToolResultEvent result:
                 if (_tools.TryGetValue(result.ToolUseId, out var done))
+                {
                     SetTool(done, result.IsError ? "failed" : "done", done.Item.Text, result.Text);
+                    // A file the step made (a workbook, a report, a presentation…): a card to open or save it.
+                    if (!result.IsError && FilesItem(done.Item.Name, result.Text) is { } files) Add(files);
+                }
                 JobToolEnded(result.ToolUseId, result.Text, result.IsError);
                 if (turn is { Stopping: false }) ShowStatus("Sketch ProMax is thinking…");
                 break;

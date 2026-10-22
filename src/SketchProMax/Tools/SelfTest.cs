@@ -526,6 +526,11 @@ internal static partial class SelfTest
         new("memory_note", _ => new { action = "list" }),
         new("recall_chats", _ => new { action = "search", query = "walls levels" })
             { Expect = r => r.TryGetProperty("chats", out var c) && c.ValueKind == System.Text.Json.JsonValueKind.Array ? null : "no list of chats: " + r.GetRawText() },
+        new("make_document", c => new
+        {
+            format = "excel", title = "Self-test bill", folder = c.Temp,
+            sheets = new[] { new { name = "Bill", columns = new[] { "Item", "Qty", "Rate", "Amount" }, rows = new object[] { new object[] { "Concrete C40", 12.5, 950, "=B2*C2" } } } },
+        }) { Expect = r => Zip(r, "file", 1, "xl/workbook.xml", "xl/worksheets/sheet1.xml") },
         // Outside the pane's main chat a job is never started (it would use the plan): the refusal is the check.
         new("chat_jobs", _ => new { action = "start", title = "Self-test job", task = "Nothing: this job must not start." }) { ExpectError = "only from the main chat" },
         new("list_recipes", _ => new { }),
