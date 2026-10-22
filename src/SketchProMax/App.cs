@@ -195,6 +195,13 @@ public sealed class App : IExternalApplication
         // The loader's ribbon queries follow in this same Idling; the line goes to the log at the next one.
         Dispatcher.Later(() => ActivityLog.Note("startup_timing",
             $"Sketch ProMax {Updater.CurrentText} in Revit {RevitYear}: {StartupTimings.StartLine()}; first Idling {StartupTimings.SinceStart} ms after start"));
+        if (!shared)
+        {
+            // A Revit that closed by itself mid-call left that call behind: the log says which, with its arguments.
+            RunningCall.Version = Updater.CurrentText;
+            RunningCall.Enabled = true;
+            _ = Task.Run(() => { foreach (var line in RunningCall.Recover()) ActivityLog.Note("revit_closed_during", line); });
+        }
     }
 
     /// <summary>How long after start the network and install work waits, so it doesn't compete with Revit opening a model.</summary>
@@ -329,6 +336,7 @@ public sealed class App : IExternalApplication
     {
         _life?.Cancel();
         if (Shared) return;
+        RunningCall.Clear();
         try { Chat.ChatPane.Shutdown(); } catch (Exception) { }
         try { TimeLog.Shutdown(); } catch (Exception) { }
         ChatMcp.Stop();
