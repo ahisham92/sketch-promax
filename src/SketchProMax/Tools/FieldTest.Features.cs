@@ -499,6 +499,7 @@ internal static partial class FieldTest
         await Probe(s, "time.queue", app => TimeQueue(app, s)).ConfigureAwait(false);
         await Probe(s, "issue.gate", app => IssueGateProbe(app, s)).ConfigureAwait(false);
         await Probe(s, "checklist.word", app => ChecklistProbe(app, s)).ConfigureAwait(false);
+        await Probe(s, "berth.read", app => BerthStatusProbe(app, s)).ConfigureAwait(false);
         await Probe(s, "checklist.views", app => ChecklistViewsProbe(app, s)).ConfigureAwait(false);
         await Probe(s, "checklist.fix", app => ChecklistFixProbe(app, s)).ConfigureAwait(false);
         await Probe(s, "checklist.fix_more", app => ChecklistFixMoreProbe(app, s)).ConfigureAwait(false);
@@ -2214,6 +2215,44 @@ internal static partial class FieldTest
     /// The pre-submission checklist on the test project: the hints for three checks the model can answer, then the Word
     /// file signed (everything Y or NA) and not ready (one N), opened again as a package to check what is in it.
     /// </summary>
+    /// <summary>Berth status: a whole-model berth read step by step, a berth whose scope box is missing, and its Excel.</summary>
+    private static (string, string) BerthStatusProbe(UIApplication app, State s)
+    {
+        if (TestDoc(app, s, out var why) is not { } doc) return Fail(why);
+        var problems = new List<string>();
+        var model = new BerthStatusMath.Model("Test", doc.Title);
+        var setup = new BerthStatusMath.Setup
+        {
+            Models = [model],
+            Berths = [new("Test", "Whole", BerthStatusMath.FindBy.WholeModel), new("Test", "Missing box", BerthStatusMath.FindBy.ScopeBox, "No such scope box")],
+            Submissions = [new("Test", "", "Field test submission", DateTime.Today.AddDays(7))],
+            Planned = [new("Test", "Whole", "Drawings", 3)],
+            Deliverables = [new("Calculations")],
+        };
+        var reading = BerthStatusFacts.Plan(doc, setup, model);
+        var steps = 0;
+        while (reading.Next()) steps++;
+        if (steps < reading.Total) problems.Add($"only {steps} steps for {reading.Total} parts");
+        var whole = reading.Results[setup.Berths[0].Key];
+        foreach (var area in new[] { BerthStatusMath.CategoryData, BerthStatusMath.Clashes, BerthStatusMath.Drawings, BerthStatusMath.Annotation, BerthStatusMath.Schedules })
+            if (!whole.TryGetValue(area, out var r)) problems.Add($"no {area} result");
+            else if (r.Summary.StartsWith("Couldn't", StringComparison.Ordinal)) problems.Add($"{area}: {r.Summary}");
+        var missing = reading.Results[setup.Berths[1].Key];
+        if (!missing.TryGetValue(BerthStatusMath.Modelling, out var m) || !m.Summary.Contains("No scope box")) problems.Add("the missing scope box wasn't reported");
+        var state = new BerthStatusMath.State();
+        BerthStatusMath.Record(setup, setup.Berths[0], state, whole, doc.Title, DateTime.Now);
+        var summary = BerthStatusMath.Summarize(setup, setup.Berths[0], state, DateTime.Now);
+        if (summary.Percent is null) problems.Add("the berth got no percentage");
+        var file = Path.Combine(s.Folder, "berth status", "Whole.xlsx");
+        Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+        OfficeXlsx.Write(file, "Whole status", BerthStatusMath.BerthSheets(setup, summary, DateTime.Now));
+        using (var zip = System.IO.Compression.ZipFile.OpenRead(file))
+            if (zip.GetEntry("xl/workbook.xml") is not { } wb || !new StreamReader(wb.Open()).ReadToEnd().Contains("Status")) problems.Add("the Excel has no Status sheet");
+        return problems.Count == 0
+            ? Pass($"{steps} steps; {BerthStatusMath.Pct(summary.Percent)} ({BerthStatusFacts.Describe(reading)}); Excel written")
+            : Fail(string.Join("; ", problems));
+    }
+
     private static (string, string) ChecklistProbe(UIApplication app, State s)
     {
         if (TestDoc(app, s, out var why) is not { } doc) return Fail(why);

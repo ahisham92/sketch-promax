@@ -78,6 +78,7 @@ TimeTests.Run((name, ok, detail) => Check(name, ok, detail));
 IssueGateTests.Run((name, ok, detail) => Check(name, ok, detail));
 ChecklistTests.Run((name, ok, detail) => Check(name, ok, detail));
 ChecklistProjectTests.Run((name, ok, detail) => Check(name, ok, detail));
+BerthStatusTests.Run((name, ok, detail) => Check(name, ok, detail));
 JobCardTests.Run((name, ok, detail) => Check(name, ok, detail));
 ParallelJobTests.Run((name, ok, detail) => Check(name, ok, detail));
 RunningCallTests.Run((name, ok, detail) => Check(name, ok, detail));

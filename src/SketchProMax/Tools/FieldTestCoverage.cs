@@ -181,6 +181,14 @@ internal static class FieldTestCoverage
             "Review and sign lists what is open; click one to go to it. Create the Word file while one check is No: it says NOT READY with no signatures. Answer everything Y or NA, create it again: it says READY with your signature " +
             "in your row and the other row left to sign by hand. Print it from the window. Click Create PDF: a PDF with the same pages and signatures opens with Open PDF. " +
             "Switch Revit to the dark theme: the window follows it."),
+        new("berth.read", Issue, "Berth status: the model read in steps and the berth's Excel", How.Probe, "",
+            "a whole-model berth on the test project is read step by step (each step a short Revit call) and gets categories, clashes, drawings, annotation and schedules results; a missing scope box says so instead of failing; the berth's Excel is written with its Status sheet"),
+        new("berth.ui", Issue, "The berth status window", How.Manual, "", "the overview, the details, hand entries, the Excel and how Revit stays usable while it reads are judged by a person",
+            "On a _detached copy: Berth status (next to the pre-submission checklist). With no setup it offers Make the setup Excel: it opens in Excel with Models, Berths, Submissions, Planned, Deliverables, Weights and Week sheets. " +
+            "Put the copy's file name text on Models, one berth with Find elements by Whole model, a submission next week, save, and Setup > Import the setup Excel: the berth shows with No reading yet. " +
+            "Press Update status: a strip shows the progress and you can pan the view in Revit meanwhile; Stop ends it. The berth gets a percentage, its areas fill in, and What to fix lists sheets and views (Show opens them). " +
+            "Type 80 in an area's By hand box: the berth's percentage changes. Set an expected finish by hand after the submission: the chip says At risk or Behind. Export this berth to Excel: it opens with Status, Submissions, Deliverables, the areas with findings, Comments and History. " +
+            "Close and reopen: everything is as you left it, and nothing is read until you press Update status."),
         new("checklist.views", Issue, "Pre-submission checklist: Show in Revit's checking views are made and deleted", How.Probe, "",
             "a plan with the grids and schedules of sheets, views and title blocks are made in the test project, named Sketch ProMax check - …, found by name and all deleted (rolled back)"),
         new("checklist.show", Issue, "Pre-submission checklist: Show in Revit and the automatic model check", How.Manual, "",
@@ -424,7 +432,7 @@ internal static class FieldTestCoverage
         ["open-claude"] = "claude.open", ["pane"] = "ribbon.status", ["export-pack"] = "pack.export", ["job-button"] = "ribbon.job",
         ["update-button"] = "ribbon.job", ["report-bug"] = "bugs.ui", ["split-pdf"] = "chat.split_ui", ["bug-folder"] = "bugs.ui", ["export-chats-bugs"] = "bugs.export",
         ["settings"] = "settings.ui", ["help"] = "help", ["self-test"] = "diagnostics", ["field-test"] = "diagnostics",
-        ["test-checklist"] = "diagnostics", ["time-saved"] = "time.ui", ["issue-check"] = "issue.ui", ["pre-submission"] = "checklist.ui", ["cleanup"] = "cleanup.ui", ["share-tools"] = "share.ui", ["favourites"] = "favourites", ["fav:*"] = "favourites", ["tab:notes"] = "chat.notes",
+        ["test-checklist"] = "diagnostics", ["time-saved"] = "time.ui", ["issue-check"] = "issue.ui", ["pre-submission"] = "checklist.ui", ["berth-status"] = "berth.ui", ["cleanup"] = "cleanup.ui", ["share-tools"] = "share.ui", ["favourites"] = "favourites", ["fav:*"] = "favourites", ["tab:notes"] = "chat.notes",
     };
 
     /// <summary>The coverage key of a manifest line, or null when it runs nothing (drop-downs, hidden items, tool entries).</summary>

@@ -102,6 +102,8 @@ public static class CoreEntry
             "issue-check" => IssueGateWindow.Command(app),
             // The pre-submission checklist (0.35+): the office's checklist in stages, ending in a signed Word file.
             "pre-submission" => ChecklistWindow.Command(app),
+            // Berth status (0.35+): each berth's status for its next submission, read from the model only when asked.
+            "berth-status" => BerthStatusWindow.Command(app),
             // Purge and cleanup (0.34+): pick one of the four cleanup tools; each previews, then asks before deleting.
             "cleanup" => RibbonTools.Cleanup(app),
             // Shared tools (0.35+): Share tools makes a TritoRevit zip; the TritoRevit tab's buttons and its Shared tools window.
