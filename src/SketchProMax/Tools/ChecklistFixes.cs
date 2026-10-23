@@ -32,7 +32,7 @@ internal static class ChecklistFixes
         if (For(key, def) is { } own) list.Add(own);
         if (key == "levels" && For("scopeboxes", def) is { } urs) list.Add(urs);
         if (key == "uniformat" && For("assemblytable", def) is { } table) list.Add(table);
-        if (key == "warnings") list.AddRange(new[] { For("offaxisclear", def), For("offaxis", def), For("unjoinapart", def) }.OfType<Offer>());
+        if (key == "warnings") list.AddRange(new[] { For("offaxisclear", def), For("offaxis1", def), For("offaxis", def), For("unjoinapart", def) }.OfType<Offer>());
         if (key is "uniformat" or "loi") list.AddRange(new[] { For("bepexport", def), For("bepimport", def) }.OfType<Offer>());
         return list;
     }
@@ -102,10 +102,15 @@ internal static class ChecklistFixes
         "offaxisclear" => new("Clear the off-axis warnings (nothing moves)",
             "Clear every slightly off axis warning without changing the geometry? Each element is moved and moved straight back in one step, so Revit checks it again, " +
             "and the off-axis warning is not kept. Every element ends exactly where it was. Pinned elements are left with their warning. Ctrl+Z undoes it.", Fix: "offaxisclear"),
-        "offaxis" => new("Straighten the off-axis lines",
-            "Turn every element Revit warns is slightly off axis (walls, beams, grids, lines, reference planes) about its middle onto the exact 0° or 90° direction, " +
+        // The order the BIM lead set: nothing moves (Clear the off-axis warnings), else 1 mm at most, else 2 mm at most.
+        "offaxis1" => new("Straighten the off-axis lines (1 mm at most)",
+            "For the off-axis warnings Clear the off-axis warnings left: turn each element about its middle onto the exact 0° or 90° direction, " +
+            "only where it is off by less than 0.2° and neither end moves more than 1 mm? Inclined elements, pinned ones and anything that would move more are left as they are. " +
+            "This moves geometry very slightly. Ctrl+Z undoes it.", Fix: "offaxis1"),
+        "offaxis" => new("Straighten the off-axis lines (2 mm at most)",
+            "The last step, for the off-axis warnings still left after 1 mm: turn each element about its middle onto the exact 0° or 90° direction, " +
             "only where it is off by less than 0.2° and neither end moves more than 2 mm? Inclined elements, pinned ones and anything that would move more are left as they are. " +
-            "This moves geometry slightly: don't use it on a model already submitted. Ctrl+Z undoes it.", Fix: "offaxis"),
+            "This moves geometry slightly. Ctrl+Z undoes it.", Fix: "offaxis"),
         "unjoinapart" => new("Unjoin elements that don't touch",
             "Unjoin every pair Revit warns is joined but doesn't intersect? Their geometry stays as it is.", Fix: "unjoinapart"),
         "landing" => new("Set the landing view as starting view", "Set the view with \"Landing\" in its name as the model's starting view?"),
@@ -129,6 +134,7 @@ internal static class ChecklistFixes
             case "titleblock": return TitleBlocks(doc, def);
             case "levels": return Levels(doc, active);
             case "worksets": return Worksets(doc, def);
+            case "offaxis1": return WarningFixes.OffAxis(doc, maxMm: 1);
             case "offaxis": return WarningFixes.OffAxis(doc);
             case "offaxisclear": return WarningFixes.ClearOffAxis(doc);
             case "unjoinapart": return WarningFixes.UnjoinApart(doc);

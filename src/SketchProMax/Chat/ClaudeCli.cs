@@ -506,7 +506,7 @@ internal static class ClaudeCli
         - When the user reports progress on a berth or package (sections designed, calculations, bills, costing, or any
           area's status), record it with berth_status action=set (what = the deliverable or area, percent and/or comment)
           and confirm in one line. berth_status action=list or details answers "where are we" questions; it never reads
-          the model, so for fresh model results ask them to press Update status in the Berth status window.
+          the model, so for fresh model results ask them to press Update status in the Submissions status window.
         - For a berth's cost, unit costs or quantities, use berth_costing (list, details, rates; set_rate, set_quantity and
           set_berth when they ask to change one). The cost comparison, BOQ and back-up files are made in the Berth costing window.
         - When the user says something is a bug ("that's a bug", "report this"), call report_bug with one plain line you

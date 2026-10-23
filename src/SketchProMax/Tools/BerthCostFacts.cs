@@ -175,7 +175,7 @@ internal static class BerthCostFacts
                 if (missing.Count > 0 || shapes.Count == 0) { why = $"no scope box named \"{string.Join("\", \"", missing.DefaultIfEmpty(value))}\" in this model."; return null; }
                 return e => shapes.Any(s => BerthStatusFacts.Inside(s, e.X, e.Y));
             case BerthStatusMath.FindBy.Parameter:
-                if (b.Parameter.Trim().Length == 0) { why = "set the parameter that names the berth (Berth status setup, Berths sheet)."; return null; }
+                if (b.Parameter.Trim().Length == 0) { why = "set the parameter that names the berth (Submissions status setup, Berths sheet)."; return null; }
                 var values = BerthStatusMath.Values(value);
                 var name = b.Parameter.Trim();
                 return e => BerthStatusMath.ValueMatches(Text(e, name), values);

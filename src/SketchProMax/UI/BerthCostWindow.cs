@@ -276,7 +276,7 @@ internal sealed class BerthCostWindow : Window
         {
             _list.Children.Add(Heading("No berths yet"));
             _list.Children.Add(Para(_setup is null
-                ? "Set up the berth status (Berth status > Setup) and its berths come here; or add a berth below by the parameter that names it."
+                ? "Set up the berth status (Submissions status > Setup) and its berths come here; or add a berth below by the parameter that names it."
                 : "The berth status setup has no berths found by a parameter or a scope box. Add one below."));
             _list.Children.Add(AddBerthBox());
             ShowDetail();

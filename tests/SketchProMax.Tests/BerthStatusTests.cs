@@ -239,6 +239,13 @@ internal static class BerthStatusTests
             state.For(berth.Key).Results[Annotation] = new AreaResult { Percent = 40, Summary = "3 of 10 tagged", Findings = [new(Annotation, "Plan 1", "7 of 10 elements without a tag", 5)] };
             state.For(berth.Key).Comment = "Waiting for the pile layout.";
             var s3 = Summarize(setup, berth, state, tue);
+            var report = SketchProMax.Tools.BerthStatusReport.Markdown(setup, state, [s3], tue);
+            check("submissions status: the Word report has the overview, the areas, what to fix and the comment",
+                report.Contains("## Overview") && report.Contains("| Berth 1 |") && report.Contains("| Annotation | 40%") && report.Contains("Plan 1: 7 of 10 elements without a tag")
+                && report.Contains("Waiting for the pile layout.") && report.Contains("Next submission: Mine"), report.Length > 400 ? report.Substring(0, 400) : report);
+            var reportDocx = Path.Combine(temp, "report.docx");
+            SketchProMax.Tools.OfficeDocx.Write(reportDocx, "Submissions status", "PRJ1", report, landscape: true);
+            check("submissions status: the Word report is written", File.Exists(reportDocx) && new FileInfo(reportDocx).Length > 2000, "");
             var file = Path.Combine(temp, "berth.xlsx");
             OfficeXlsx.Write(file, "berth", BerthSheets(setup, s3, tue));
             using (var stream = File.OpenRead(file))

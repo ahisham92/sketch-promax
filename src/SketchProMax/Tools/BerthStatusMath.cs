@@ -763,7 +763,7 @@ internal static class BerthStatusMath
     /// <summary>A setup to start from, with made-up names (the user replaces them with the project's).</summary>
     public static Setup Example() => new()
     {
-        Title = "Berth status",
+        Title = "Submissions status",
         Models = [new("Port A", "PORTA"), new("Port B", "PORTB-DOC", "PORTB")],
         Berths =
         [
@@ -811,7 +811,7 @@ internal static class BerthStatusMath
 
     internal static Setup FromSheets(Dictionary<string, List<(int Row, Dictionary<int, string> Cells)>> sheets)
     {
-        var s = new Setup { Title = "Berth status" };
+        var s = new Setup { Title = "Submissions status" };
         var problems = new List<string>();
         List<Dictionary<string, string>> Table(string sheet, string[] cols)
         {
