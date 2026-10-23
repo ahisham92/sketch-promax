@@ -118,6 +118,9 @@ internal static class BerthStatusTests
             && codes.First(c => c.Code == "A1020.15").Name == "Bored Piles" && codes.First(c => c.Code == "A").Name == "SUBSTRUCTURE" && codes.First(c => c.Code == "A1020").Name == "A1020"
             && codes.First(c => c.Code == "B1010.20").Name == "B1010.20" && SketchProMax.Tools.AssemblyCodeText.Level("A1020.15") == 4 && SketchProMax.Tools.AssemblyCodeText.Level("A10") == 2,
             string.Join("|", codes));
+        var picked = SketchProMax.Tools.AssemblyCodeText.Picked("12\tA1020.15\r\n13\t \nx\tB1010\n14\tB1010.20 \n15");
+        check("Assembly Codes: the kept lines are read as type id and code, empty codes and bad ids skipped",
+            picked.Count == 2 && picked[0] == (12, "A1020.15") && picked[1] == (14, "B1010.20"), string.Join(",", picked));
         var table = SketchProMax.Tools.AssemblyCodeText.TableText(codes);
         check("assembly codes: written in Revit's table format and read back", table.StartsWith("A\tSUBSTRUCTURE\t1\t\r\n", StringComparison.Ordinal)
             && SketchProMax.Tools.AssemblyCodeText.FromTable(table).SequenceEqual(codes), table.Split('\n')[0]);

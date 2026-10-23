@@ -1478,6 +1478,19 @@ internal sealed class ChecklistWindow : Window
     private async Task FixInRevit(Button button, TextBlock said, string key, ChecklistFixes.Offer offer)
     {
         if (Brand.IsBusy(button)) return;
+        if (key == "assemblycodes")
+        {
+            Brand.SetBusy(button, true, "Working…");
+            string? done;
+            try { done = await AssemblyCodesFlow.Run(this, OnModel, _def); }
+            finally { Brand.SetBusy(button, false); }
+            if (done is null) return;
+            said.Text = done;
+            said.Visibility = Visibility.Visible;
+            OutOfDate("A fix changed the model.");
+            _status.Text = done + " Press Run this check (or Run checks) to see the result.";
+            return;
+        }
         var detached = _facts.Hints.TryGetValue("links", out var links) && links.Text.StartsWith("This copy is detached", StringComparison.Ordinal);
         var question = offer.Question + (!offer.ChangesModel ? "" :
                        "\n\nThis changes the model " + Shown(_facts.Model) + ". Ctrl+Z in Revit undoes it" + (key == "links" ? " (for links: reload them in Manage Links)" : "") + "." +
