@@ -65,6 +65,41 @@ internal static class BerthStatusTests
             && StageOf(Sum(40, dueSub, null, Verdict.OnTrack)) == Stage.InProgress && StageOf(Sum(null, dueSub, null, Verdict.NotKnown)) == Stage.NotStarted
             && StageOf(Sum(0, dueSub, null, Verdict.NotKnown)) == Stage.NotStarted && Text(Stage.InProgress) == "In progress", "");
 
+        // Deliverables are set per berth: the package shows their average (a berth not set counts 0).
+        var dState = new State();
+        dState.For(kids[0].Key).DeliveredFor("Calculations").Percent = 100;
+        dState.For(package.Key).DeliveredFor("Costing").Percent = 40;
+        var dSetup = new Setup { Berths = [package], Deliverables = [new("Calculations"), new("Costing")] };
+        var dPackage = Summarize(dSetup, package, dState, new DateTime(2026, 10, 23, 12, 0, 0), (_, _) => "");
+        var dBerth = Summarize(dSetup, kids[1], dState, new DateTime(2026, 10, 23, 12, 0, 0), (_, _) => "");
+        check("berth status: deliverables are per berth and the package averages them",
+            dPackage.Deliverables.First(d => d.Deliverable.Name == "Calculations").Percent == 50 && dPackage.Deliverables.First(d => d.Deliverable.Name == "Costing").Percent == 40
+            && dBerth.Deliverables.First(d => d.Deliverable.Name == "Calculations").Percent is null, string.Join(", ", dPackage.Deliverables.Select(d => d.Deliverable.Name + " " + d.Percent)));
+
+        // Modelling against the submitted berths: what they have is expected here at their average count.
+        var refA = new Dictionary<string, int> { ["Structural Columns: Concrete Round"] = 400, ["Specialty Equipment: Fender"] = 10, ["Floors: Floor"] = 30 };
+        var refB = new Dictionary<string, int> { ["Structural Columns: Concrete Round"] = 420, ["Specialty Equipment: Fender"] = 12, ["Floors: Floor"] = 34 };
+        var full = CompareModelling(new Dictionary<string, int>(refA, StringComparer.OrdinalIgnoreCase) { ["Structural Columns: Concrete Round"] = 500 }, [refA, refB]);
+        var half = CompareModelling(new Dictionary<string, int> { ["Structural Columns: Concrete Round"] = 200, ["Floors: Floor"] = 32 }, [refA, refB]);
+        check("berth status: a berth with what the submitted berths have is fully modelled", full.Percent >= 99 && full.Short.Count == 0, full.Percent?.ToString() ?? "");
+        check("berth status: what the submitted berths have and this berth lacks is listed", half.Percent is > 50 and < 60 && half.Short.Count == 2 && half.Short[0].Kind == "Specialty Equipment: Fender"
+            && half.Short[0].Have == 0 && half.Short[0].Expected == 11 && CompareModelling([], []).Percent is null, $"{half.Percent} {string.Join("|", half.Short)}");
+
+        // The Assembly Code table from an LOI matrix: codes wherever they sit in a row, their names, parents added.
+        var codes = SketchProMax.Tools.AssemblyCodeText.FromRows([
+            ["A   SUBSTRUCTURE", "Uniformat 2010 Assemble Code reference"],
+            ["A10   Foundations", "A1010", "Standard foundations", "A1010.10", "Wall Foundation", "G1", "200", "200", "G2", "300"],
+            ["", "A1020.15", "Bored Piles", "G1", "200", "SE"],
+            ["GEO"], ["A"], ["B1010.20", "G1"],
+        ]);
+        check("assembly codes: an LOI matrix gives each code its name and level", codes.Select(c => c.Code).SequenceEqual(["A", "A10", "A1010", "A1010.10", "A1020", "A1020.15", "B", "B10", "B1010", "B1010.20"])
+            && codes.First(c => c.Code == "A1020.15").Name == "Bored Piles" && codes.First(c => c.Code == "A").Name == "SUBSTRUCTURE" && codes.First(c => c.Code == "A1020").Name == "A1020"
+            && codes.First(c => c.Code == "B1010.20").Name == "B1010.20" && SketchProMax.Tools.AssemblyCodeText.Level("A1020.15") == 4 && SketchProMax.Tools.AssemblyCodeText.Level("A10") == 2,
+            string.Join("|", codes));
+        var table = SketchProMax.Tools.AssemblyCodeText.TableText(codes);
+        check("assembly codes: written in Revit's table format and read back", table.StartsWith("A\tSUBSTRUCTURE\t1\t\r\n", StringComparison.Ordinal)
+            && SketchProMax.Tools.AssemblyCodeText.FromTable(table).SequenceEqual(codes), table.Split('\n')[0]);
+
         // Tagging: only the views the rules name need tags (a piles plan tags its piles); others need dimensions only.
         var tagSetup = new Setup();
         check("berth status: a piles plan must tag its piles", TagCategoriesFor(tagSetup, "BERTH 9 - PART 2 PILES PLAN", []).SequenceEqual(["Structural Columns"])

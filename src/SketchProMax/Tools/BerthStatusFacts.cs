@@ -53,7 +53,6 @@ internal static class BerthStatusFacts
         public string Workset = "";
         public bool InPlace;
         public bool NoAssembly;
-        public bool NoTypeMark;
         public long TypeId;
         public string Describe => $"{Category}: {(Family.Length > 0 && Family != Type ? Family + " : " : "")}{Type}{(Linked ? " (link " + Link + ")" : "")}";
     }
@@ -109,7 +108,8 @@ internal static class BerthStatusFacts
     }
 
     /// <summary>The reading of <paramref name="model"/>'s berths in <paramref name="doc"/>, as steps. Revit API context for this call and each step.</summary>
-    public static Reading Plan(Document doc, Setup setup, Model model, IReadOnlyCollection<string>? onlyBerths = null)
+    /// <param name="def">The project's pre-submission checklist: its LOI matrix and classification parameter measure the modelling (LOD 300).</param>
+    public static Reading Plan(Document doc, Setup setup, Model model, IReadOnlyCollection<string>? onlyBerths = null, ChecklistMath.Definition? def = null)
     {
         var reading = new Reading(doc) { Model = doc.Title };
         // A package of several berths is read one berth at a time (its status puts them together).
@@ -187,6 +187,8 @@ internal static class BerthStatusFacts
                 }
         });
 
+        // What each berth has modelled (category: family), to hold each berth against the berths already submitted.
+        var kinds = new Dictionary<string, Dictionary<string, int>>(StringComparer.OrdinalIgnoreCase);
         foreach (var berth in berths)
         {
             var key = berth.Key;
@@ -212,16 +214,39 @@ internal static class BerthStatusFacts
                 var r = new AreaResult();
                 if (plan.Count == 0)
                 {
-                    // No planned counts: the structure is measured by what its drawings and schedules need, a Type Mark
-                    // on every type (piles and beams are tagged and scheduled by it).
-                    var built = mine.Where(i => ClashCats.Contains(i.Bic) || i.Bic == BuiltInCategory.OST_SpecialityEquipment).ToList();
+                    // No planned counts: the structure is measured against LOD 300 (the BEP): each element a real family type
+                    // (eLOD: not in-place, a Generic Model or a DirectShape) with the information the LOI matrix asks for its
+                    // UniFormat code or category filled (iLOD), on its type or on the element.
+                    var matrix = ChecklistMath.ParseLoi(ChecklistMath.Rule(def, "loimatrix"));
+                    var codes = ChecklistMath.RuleList(ChecklistMath.Rule(def, "classification")) is { Count: > 0 } c ? c : ["Assembly Code"];
+                    var built = mine.Where(i => ClashCats.Contains(i.Bic) || i.Bic == BuiltInCategory.OST_SpecialityEquipment || i.Bic == BuiltInCategory.OST_GenericModel || i.InPlace).ToList();
+                    var problems = new List<(Item Item, string Problem)>();
+                    foreach (var i in built)
+                    {
+                        if (i.InPlace || i.Bic == BuiltInCategory.OST_GenericModel || i.El is DirectShape)
+                        {
+                            problems.Add((i, "eLOD: " + (i.InPlace ? "in-place family" : i.El is DirectShape ? "DirectShape (imported shape)" : "Generic Model") + ", not a family type of its category"));
+                            continue;
+                        }
+                        if (matrix.Count == 0) continue;
+                        var type = i.El.Document.GetElement(i.El.GetTypeId());
+                        var code = codes.Select(n => type?.LookupParameter(n)).Where(ChecklistFacts.Filled).Select(p => p!.AsString() ?? p.AsValueString() ?? "").FirstOrDefault() ?? "";
+                        var entry = matrix.FirstOrDefault(m => code.Length > 0 && ChecklistMath.Like(code, m.Key) || i.Category.Equals(m.Key, StringComparison.OrdinalIgnoreCase));
+                        if (entry.Params is null) continue;
+                        var lacking = entry.Params.Where(p => !ChecklistFacts.Filled(type?.LookupParameter(p)) && !ChecklistFacts.Filled(i.El.LookupParameter(p))).ToList();
+                        if (lacking.Count > 0) problems.Add((i, $"iLOD {(code.Length > 0 ? code : i.Category)}: no {string.Join(", ", lacking)}"));
+                    }
+                    kinds[key] = built.Where(i => !i.InPlace && i.Bic != BuiltInCategory.OST_GenericModel && i.Family.Length > 0)
+                        .GroupBy(i => $"{i.Category}: {i.Family}", StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.Count(), StringComparer.OrdinalIgnoreCase);
                     r.Total = built.Count;
-                    r.Done = built.Count(i => !i.NoTypeMark);
-                    foreach (var g in built.Where(i => i.NoTypeMark).GroupBy(i => i.Describe).OrderByDescending(g => g.Count()).Take(200))
-                        r.Findings.Add(new Finding(Modelling, g.Key, $"No Type Mark ({g.Count()} element{(g.Count() == 1 ? "" : "s")}): its tags and schedule rows come out empty", g.First().Linked ? null : g.First().Id));
+                    r.Done = built.Count - problems.Select(p => p.Item).Distinct().Count();
+                    foreach (var g in problems.GroupBy(p => (p.Item.Describe, p.Problem)).OrderByDescending(g => g.Count()).Take(200))
+                        r.Findings.Add(new Finding(Modelling, g.Key.Describe, $"{g.Key.Problem} ({g.Count()} element{(g.Count() == 1 ? "" : "s")})", g.First().Item.Linked ? null : g.First().Item.Id,
+                            g.Key.Problem.StartsWith("iLOD", StringComparison.Ordinal) ? "loi" : null));
                     r.Percent = built.Count == 0 ? null : Part(r.Done, r.Total);
                     r.Summary = built.Count == 0 ? $"{mine.Count} elements, none structural." :
-                        $"{r.Done} of {r.Total} structural elements have a Type Mark. Add planned counts (Planned sheet) to measure against the plan too.";
+                        $"{r.Done} of {r.Total} structural elements meet LOD 300: a family type" + (matrix.Count > 0 ? " with the LOI matrix's information filled." :
+                            ". Set the LOI matrix in the pre-submission checklist's Checking rules to test their information (iLOD) too.");
                 }
                 else
                 {
@@ -521,8 +546,33 @@ internal static class BerthStatusFacts
                 res[Schedules] = r;
             });
         }
+
+        // Modelling against the submitted berths: what they have (piles, caps, beams, slabs, fenders, bollards...) is
+        // expected in each berth too. Without a submitted berth it stays the LOD 300 check.
+        reading.Once(Modelling + "|compare", () =>
+        {
+            var references = berths.Where(b => IsReference(setup, b) && kinds.ContainsKey(b.Key)).ToList();
+            foreach (var berth in berths)
+            {
+                if (!kinds.TryGetValue(berth.Key, out var have) || !reading.Results[berth.Key].TryGetValue(Modelling, out var r)) continue;
+                var others = references.Where(b => b.Key != berth.Key).ToList();
+                if (others.Count == 0) continue;
+                var cmp = CompareModelling(have, others.Select(b => kinds[b.Key]).ToList());
+                if (cmp.Percent is null) continue;
+                var lod = r.Summary;
+                r.Percent = cmp.Percent;
+                r.Done = cmp.Done;
+                r.Total = cmp.Total;
+                r.Findings.InsertRange(0, cmp.Short.Select(k => new Finding(Modelling, k.Kind,
+                    k.Have == 0 ? $"none here; the submitted berths have about {k.Expected:0} each" : $"{k.Have} here; the submitted berths have about {k.Expected:0} each")));
+                r.Summary = $"Against the submitted berths ({string.Join(", ", others.Select(b => b.Name))}): {cmp.Done} of about {cmp.Total} of their elements are here. {lod}";
+            }
+        });
         return reading;
     }
+
+    /// <summary>A berth whose package is submitted (all of its submissions): its modelling is the example for the others.</summary>
+    private static bool IsReference(Setup setup, Berth berth) => SubmissionsFor(setup, berth).Any(x => x.Submitted) && Next(setup, berth) is null;
 
     /// <summary>The built elements of each source (the model, then its included links), with link elements moved into the model's coordinates.</summary>
     private static IEnumerable<Item> Walk(List<(Document Doc, Transform? T, string Link)> sources)
@@ -549,8 +599,6 @@ internal static class BerthStatusFacts
                 if (el is FamilyInstance fi) try { item.InPlace = fi.Symbol?.Family?.IsInPlace == true; } catch (Exception) { }
                 var code = type?.LookupParameter("Assembly Code");
                 item.NoAssembly = code is not null && (code.AsString() ?? "").Trim().Length == 0;
-                var mark = type?.get_Parameter(BuiltInParameter.ALL_MODEL_TYPE_MARK);
-                item.NoTypeMark = mark is not null && (mark.AsString() ?? "").Trim().Length == 0;
                 item.TypeId = type?.Id.Value ?? -1;
                 yield return item;
             }
@@ -694,8 +742,22 @@ internal static class BerthStatusFacts
     }
 
     /// <summary>
+    /// Fills every LOI value the model (or the loivalues rule) can give, as the checklist's Fill the LOI data would with
+    /// its preview kept as suggested; values nothing gives are left for the checklist's preview.
+    /// </summary>
+    private static string FillLoi(Autodesk.Revit.UI.UIDocument ui, ChecklistMath.Definition? def)
+    {
+        var spec = LoiFill.SpecOf(def);
+        var rows = LoiFill.Plan(ui.Document, spec, LoiFill.TypeIds(ui.Document, spec));
+        var known = rows.Where(r => r.Value.Trim().Length > 0).ToList();
+        if (rows.Count == 0) return "Every type already has the LOI matrix's information: nothing to fill.";
+        var said = known.Count == 0 ? "Nothing in the model gives these values." : ChecklistFixes.Run(ui, "loi", def, string.Join("\n", known.Select(r => r.Key + "\t" + r.Value)));
+        return said + (rows.Count > known.Count ? $" {rows.Count - known.Count} values nothing in the model gives: type them in the pre-submission checklist's Fill the LOI data." : "");
+    }
+
+    /// <summary>
     /// Runs a finding's Fix on the active model (Revit API context): "uniformat" fills the Assembly Codes from the project
-    /// checklist's UniFormat rules, "tag:view:category" tags the untagged in that view, "join:a:b" joins two clashing elements.
+    /// checklist's UniFormat rules, "loi" fills the LOI matrix's parameters, "tag:view:category" tags the untagged in that view, "join:a:b" joins two clashing elements.
     /// A sentence saying what changed.
     /// </summary>
     public static string RunFix(Autodesk.Revit.UI.UIApplication app, string fix, ChecklistMath.Definition? def)
@@ -707,8 +769,12 @@ internal static class BerthStatusFacts
         {
             case "uniformat":
                 return ChecklistMath.Rule(def, "uniformatmap").Trim().Length == 0
-                    ? "Set the UniFormat code for each category in the project's checklist (Pre-submission checklist > Checking rules) first: the Assembly Codes come from there."
+                    ? "Set the UniFormat code for each category in the project's checklist first (Pre-submission checklist > Checking rules, or import your project's checklist Excel that has them): the Assembly Codes come from there."
                     : ChecklistFixes.Run(ui, "uniformat", def);
+            case "loi":
+                return ChecklistMath.Rule(def, "loimatrix").Trim().Length == 0
+                    ? "Set the LOI matrix in the project's checklist (Pre-submission checklist > Checking rules) first: the parameters to fill come from there."
+                    : FillLoi(ui, def);
             case "tag" when parts.Length == 3 && long.TryParse(parts[1], out var viewId):
             {
                 var json = System.Text.Json.JsonSerializer.SerializeToElement(new { category = parts[2], view_id = viewId });

@@ -414,6 +414,31 @@ internal static class BerthStatusMath
     };
 
     /// <summary>The percentage needed per working day from now to finish by the due time (null when due has passed).</summary>
+    /// <summary>
+    /// A berth's modelling against submitted berths: each kind of element (category: family) they have is expected here
+    /// at their average count per berth; the percentage is how much of that is here (more than expected counts as full).
+    /// Short lists the kinds at under half what is expected, the emptiest first.
+    /// </summary>
+    public static (double? Percent, int Done, int Total, List<(string Kind, int Have, double Expected)> Short) CompareModelling(
+        Dictionary<string, int> have, List<Dictionary<string, int>> references)
+    {
+        var expected = references.SelectMany(r => r.Keys).Distinct(StringComparer.OrdinalIgnoreCase)
+            .Select(k => (Kind: k, Expected: references.Sum(r => r.TryGetValue(k, out var n) ? n : 0) / (double)references.Count))
+            .Where(k => k.Expected >= 1).ToList();
+        if (expected.Count == 0) return (null, 0, 0, []);
+        double want = 0, got = 0;
+        var shortList = new List<(string, int, double)>();
+        foreach (var (kind, exp) in expected)
+        {
+            var n = have.TryGetValue(kind, out var c) ? c : 0;
+            want += exp;
+            got += Math.Min(n, exp);
+            if (n < exp / 2) shortList.Add((kind, n, exp));
+        }
+        return (Part(got, want), (int)Math.Round(got), (int)Math.Round(want),
+            shortList.OrderBy(k => k.Item2 / k.Item3).ThenByDescending(k => k.Item3).ToList());
+    }
+
     /// <summary>The overview's short status of a package or berth.</summary>
     public enum Stage { NotStarted, InProgress, Overdue, Submitted }
 
@@ -469,8 +494,8 @@ internal static class BerthStatusMath
     public static Summary Summarize(Setup setup, Berth berth, State state, DateTime now, Func<Deliverable, Berth, string>? findFile = null)
     {
         var b = Merged(berth, state);
-        // The deliverables (calculations, bills, costing) belong to the package: a berth of it shows the package's.
-        var deliverables = DeliverableScores(setup, berth, berth.Parent.Length > 0 ? state.For(KeyOf(berth.Model, berth.Parent)) : b, findFile);
+        // The deliverables (calculations, bills, costing) are set per berth; a package of several shows their average.
+        var deliverables = DeliverableScores(setup, berth, b, findFile);
         var scores = Scores(setup, berth, b, deliverables);
         var percent = Overall(scores);
         var next = Next(setup, berth);
@@ -496,7 +521,7 @@ internal static class BerthStatusMath
         var parts = children.Select(c => (c, s: state.Berths.TryGetValue(c.Key, out var x) ? x : null)).Where(p => p.s is not null).ToList();
         var merged = new BerthState
         {
-            Hand = own.Hand, Delivered = own.Delivered, FinishByHand = own.FinishByHand, Comment = own.Comment, History = own.History, Engineers = own.Engineers,
+            Hand = own.Hand, Delivered = MergedDelivered(own, parts.Select(p => p.s!).ToList(), children.Count), FinishByHand = own.FinishByHand, Comment = own.Comment, History = own.History, Engineers = own.Engineers,
             ReadAt = parts.Select(p => p.s!.ReadAt).Max(), ReadFrom = parts.Select(p => p.s!.ReadFrom).FirstOrDefault(f => f.Length > 0) ?? "",
         };
         foreach (var key in parts.SelectMany(p => p.s!.Results.Keys).Distinct())
@@ -509,6 +534,25 @@ internal static class BerthStatusMath
                 Done = each.Sum(e => e.r.Done), Total = each.Sum(e => e.r.Total),
                 Summary = string.Join(" · ", each.Select(e => $"{e.c.Name}: {Pct(e.r.Percent)}")),
                 Findings = each.SelectMany(e => e.r.Findings.Select(f => f with { Item = $"{e.c.Name} · {f.Item}" })).ToList(),
+            };
+        }
+        return merged;
+    }
+
+    /// <summary>
+    /// A package's deliverables from its berths: a deliverable set on any berth is the average over all its berths (one
+    /// not set counts 0); one set on no berth keeps the package's own entry (set before the berths were split, or by the chat).
+    /// </summary>
+    private static Dictionary<string, HandEntry> MergedDelivered(BerthState own, List<BerthState> parts, int berths)
+    {
+        var merged = new Dictionary<string, HandEntry>(own.Delivered, StringComparer.OrdinalIgnoreCase);
+        foreach (var name in parts.SelectMany(p => p.Delivered.Where(d => d.Value.Percent is not null).Select(d => d.Key)).Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            var set = parts.Select(p => p.Delivered.TryGetValue(name, out var h) ? h : null).Where(h => h?.Percent is not null).ToList();
+            merged[name] = new HandEntry
+            {
+                Percent = set.Sum(h => h!.Percent!.Value) / Math.Max(berths, set.Count),
+                Comment = string.Join(" · ", set.Select(h => h!.Comment).Where(c => c.Trim().Length > 0)),
             };
         }
         return merged;

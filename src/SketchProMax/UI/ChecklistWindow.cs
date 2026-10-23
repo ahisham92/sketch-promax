@@ -1476,6 +1476,12 @@ internal sealed class ChecklistWindow : Window
         if (MessageBox.Show(this, question, "Sketch ProMax: fix it", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes) return;
         string? answer = null;
         if (offer.Ask is { } ask && (answer = ChecklistProjectWindows.Ask(this, offer.Button, ask, "")) is null) return;
+        if (offer.PickFile is { } filter)
+        {
+            var pick = new Microsoft.Win32.OpenFileDialog { Title = offer.Button, Filter = filter + "|All files|*.*" };
+            if (pick.ShowDialog(this) != true) return;
+            answer = pick.FileName;
+        }
         if (offer.Preview)
         {
             var defNow = _def;

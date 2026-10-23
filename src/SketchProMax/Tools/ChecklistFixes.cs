@@ -22,7 +22,8 @@ internal static class ChecklistFixes
     /// <paramref name="Preview"/>: the window first shows what would change (Suggest) for the user to edit, and passes the
     /// edited list to Run. <paramref name="Fix"/>: the fix Run is called with, when not the check's own key.
     /// </summary>
-    public sealed record Offer(string Button, string Question, bool ChangesModel = true, string? Ask = null, bool Preview = false, string? Fix = null);
+    /// <param name="PickFile">A file to pick before it runs (an open-file filter); its path is the answer.</param>
+    public sealed record Offer(string Button, string Question, bool ChangesModel = true, string? Ask = null, bool Preview = false, string? Fix = null, string? PickFile = null);
 
     /// <summary>Every fix a check offers: its own, then any other (levels can also be named like the URS).</summary>
     public static List<Offer> Offers(string key, ChecklistMath.Definition? def = null)
@@ -30,6 +31,7 @@ internal static class ChecklistFixes
         var list = new List<Offer>();
         if (For(key, def) is { } own) list.Add(own);
         if (key == "levels" && For("scopeboxes", def) is { } urs) list.Add(urs);
+        if (key == "uniformat" && For("assemblytable", def) is { } table) list.Add(table);
         return list;
     }
 
@@ -59,6 +61,11 @@ internal static class ChecklistFixes
         "uniformat" => new("Fill the UniFormat codes",
             $"Write the UniFormat code into {Named(ChecklistMath.RuleList(ChecklistMath.Rule(def, "classification")).FirstOrDefault() ?? "", "the classification parameter")} of every model type in use that has none, " +
             $"from {Named(ChecklistMath.Rule(def, "uniformatmap"), "UniFormat code for each category or type in Checking rules (set it first)")}? Types already filled are left alone."),
+        "assemblytable" => new("Import the Assembly Codes",
+            "Load the UniFormat codes and their names from your LOI matrix Excel (or a Revit assembly code .txt) into the model's Assembly Code table " +
+            "(Manage > Additional Settings > Assembly Code), so each code the types get, such as A1020.15 Bored Piles, is in the table with its name? " +
+            "You pick the file next. It replaces the model's table; the codes already on types stay. Then use Fill the UniFormat codes.",
+            Fix: "assemblytable", PickFile: "LOI matrix Excel or assembly code file|*.xlsx;*.txt"),
         "loi" => new("Fill the LOI data",
             $"Fill the parameters the LOI matrix asks for ({Named(ChecklistMath.Rule(def, "loimatrix"), "set LOI matrix in Checking rules first")}) on every model type in use, and its elements, that has them empty? " +
             "Values come from LOI values the model can't give (Checking rules), else from the model: material, sizes, length, levels, grade, cut-off and toe. A parameter the model doesn't have is added as a project parameter " +
@@ -111,6 +118,7 @@ internal static class ChecklistFixes
             case "submission": return Submission(doc, def);
             case "units": return Units(doc, def);
             case "uniformat": return UniFormat(doc, def);
+            case "assemblytable": return AssemblyTable(doc, answer);
             case "scopeboxes": return UrsNames(doc);
             case "viewtemplates": return Templates(doc, def);
             case "familynames": return RenameTypes(doc, answer);
@@ -533,6 +541,43 @@ internal static class ChecklistFixes
         }
         return $"Filled the UniFormat code of {Plural(filled, "type")}." +
                (left.Count > 0 ? $" {Plural(left.Count, "type")} got none (no code set for them in Checking rules): {string.Join(", ", left.Take(8))}{(left.Count > 8 ? " and more" : "")}." : "") + Failed(failed);
+    }
+
+    /// <summary>
+    /// Loads the codes of an LOI Excel (or a Revit assembly code file) as the model's Assembly Code table: written next
+    /// to the other Sketch ProMax files in Revit's format, then loaded from there.
+    /// </summary>
+    private static string AssemblyTable(Document doc, string? path)
+    {
+        if (path is null || !File.Exists(path)) return "Pick the LOI matrix Excel (or an assembly code .txt) to load the codes from.";
+        List<(string Code, string Name)> codes;
+        try { codes = AssemblyCodeText.Read(path); }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or System.Xml.XmlException) { return $"Couldn't read {Path.GetFileName(path)} ({ex.Message}). Close it in Excel and try again."; }
+        if (codes.Count == 0) return $"No UniFormat codes (such as A1020.15) were found in {Path.GetFileName(path)}.";
+        var folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Sketch ProMax", "Assembly codes");
+        Directory.CreateDirectory(folder);
+        var file = Path.Combine(folder, OfficeDocs.SafeName(Path.GetFileNameWithoutExtension(doc.Title)) + " assembly codes.txt");
+        File.WriteAllText(file, AssemblyCodeText.TableText(codes), System.Text.Encoding.Unicode);
+        var results = new KeyBasedTreeEntriesLoadResults();
+        using (var t = new Transaction(doc, "Sketch ProMax: import the Assembly Codes"))
+        {
+            t.Start();
+            try
+            {
+                var source = ExternalResourceReference.CreateLocalResource(doc, ExternalResourceTypes.BuiltInExternalResourceTypes.AssemblyCodeTable,
+                    ModelPathUtils.ConvertUserVisiblePathToModelPath(file), PathType.Absolute);
+                AssemblyCodeTable.GetAssemblyCodeTable(doc).LoadFrom(source, results);
+            }
+            catch (Exception ex) when (Revit(ex))
+            {
+                t.RollBack();
+                return $"Revit didn't take the table ({ex.Message}). The file is {file}: load it in Manage > Additional Settings > Assembly Code.";
+            }
+            t.Commit();
+        }
+        var problems = results.GetFileReadErrors().Count + results.GetFileSyntaxErrors().Count;
+        return $"Loaded {codes.Count} Assembly Codes from {Path.GetFileName(path)} into the model ({codes.Count(c => c.Code.Contains('.'))} at the most detailed level, such as " +
+               $"{codes.LastOrDefault(c => c.Code.Contains('.')).Code ?? codes[^1].Code}). Saved as {file}." + (problems > 0 ? $" Revit skipped {problems} lines it couldn't read." : "");
     }
 
     /// <summary>Levels and scope boxes renamed like the URS link's: levels at the same height, scope boxes in the same place.</summary>

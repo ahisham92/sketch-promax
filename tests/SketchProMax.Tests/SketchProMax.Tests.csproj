@@ -72,6 +72,7 @@
     <Compile Include="../../src/SketchProMax/Tools/ChecklistHelper.cs" Link="ChecklistHelper.cs" />
     <Compile Include="../../src/SketchProMax/Tools/ChecklistProjects.cs" Link="ChecklistProjects.cs" />
     <Compile Include="../../src/SketchProMax/Tools/BerthStatusMath.cs" Link="BerthStatusMath.cs" />
+    <Compile Include="../../src/SketchProMax/Tools/AssemblyCodeText.cs" Link="AssemblyCodeText.cs" />
     <EmbeddedResource Include="../../src/SketchProMax/Data/pre-submission-checklist.json" LogicalName="SketchProMax.pre-submission-checklist.json" />
     <Compile Include="../../src/SketchProMax/Tools/DrawingPackageMath.cs" Link="DrawingPackageMath.cs" />
     <Compile Include="../../src/SketchProMax/Tools/RedlineMath.cs" Link="RedlineMath.cs" />
