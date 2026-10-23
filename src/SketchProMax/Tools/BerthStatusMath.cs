@@ -272,6 +272,8 @@ internal static class BerthStatusMath
         public Dictionary<string, HandEntry> Delivered { get; set; } = new(StringComparer.OrdinalIgnoreCase);
         public DateTime? FinishByHand { get; set; }
         public string Comment { get; set; } = "";
+        /// <summary>Engineers working on the package: the progress needed per working day is shared between them.</summary>
+        public int? Engineers { get; set; }
         public List<Snapshot> History { get; set; } = [];
 
         public HandEntry HandFor(string area) => Hand.TryGetValue(area, out var h) ? h : Hand[area] = new HandEntry();
@@ -412,6 +414,47 @@ internal static class BerthStatusMath
     };
 
     /// <summary>The percentage needed per working day from now to finish by the due time (null when due has passed).</summary>
+    /// <summary>The overview's short status of a package or berth.</summary>
+    public enum Stage { NotStarted, InProgress, Overdue, Submitted }
+
+    public static Stage StageOf(Summary s) =>
+        s.Next is null && s.Last is not null ? Stage.Submitted :
+        s.Verdict == Verdict.Overdue ? Stage.Overdue :
+        s.Percent is null or <= 0 ? Stage.NotStarted : Stage.InProgress;
+
+    public static string Text(Stage s) => s switch
+    {
+        Stage.Submitted => "Submitted",
+        Stage.Overdue => "Overdue",
+        Stage.InProgress => "In progress",
+        _ => "Not started",
+    };
+
+    /// <summary>
+    /// The ring colour of a percentage: red at 0, through orange to yellow at 50, to green at 90 and over (hue 0-125).
+    /// Unknown: grey.
+    /// </summary>
+    public static (byte R, byte G, byte B) RingColor(double? percent)
+    {
+        if (percent is not { } p) return (0x9C, 0xA3, 0xAF);
+        p = Clamp(p);
+        var hue = p < 50 ? p : p >= 90 ? 125 : 50 + (p - 50) / 40 * 75;
+        return Hsl(hue, 0.78, 0.44);
+    }
+
+    private static (byte, byte, byte) Hsl(double h, double s, double l)
+    {
+        var c = (1 - Math.Abs(2 * l - 1)) * s;
+        var x = c * (1 - Math.Abs(h / 60 % 2 - 1));
+        var m = l - c / 2;
+        var (r, g, b) = h < 60 ? (c, x, 0.0) : h < 120 ? (x, c, 0.0) : h < 180 ? (0.0, c, x) : (0.0, x, c);
+        static byte B(double v) => (byte)Math.Round(Math.Max(0, Math.Min(1, v)) * 255);
+        return (B(r + m), B(g + m), B(b + m));
+    }
+
+    /// <summary>What each engineer must add a working day: the package's need shared between its engineers.</summary>
+    public static double? PerEngineer(double? perDay, int? engineers) => perDay is { } d ? d / Math.Max(1, engineers ?? 1) : null;
+
     public static double? NeededPerDay(double percent, DateTime due, DateTime now, Calendar week)
     {
         var hours = WorkHours(now, due, week);
@@ -453,7 +496,7 @@ internal static class BerthStatusMath
         var parts = children.Select(c => (c, s: state.Berths.TryGetValue(c.Key, out var x) ? x : null)).Where(p => p.s is not null).ToList();
         var merged = new BerthState
         {
-            Hand = own.Hand, Delivered = own.Delivered, FinishByHand = own.FinishByHand, Comment = own.Comment, History = own.History,
+            Hand = own.Hand, Delivered = own.Delivered, FinishByHand = own.FinishByHand, Comment = own.Comment, History = own.History, Engineers = own.Engineers,
             ReadAt = parts.Select(p => p.s!.ReadAt).Max(), ReadFrom = parts.Select(p => p.s!.ReadFrom).FirstOrDefault(f => f.Length > 0) ?? "",
         };
         foreach (var key in parts.SelectMany(p => p.s!.Results.Keys).Distinct())

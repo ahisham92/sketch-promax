@@ -257,3 +257,40 @@ internal sealed class ScoreRing : StackPanel
         _arc.Data = new PathGeometry([figure]);
     }
 }
+
+/// <summary>
+/// A plain percentage ring (no animation) with the number inside: the berth status overview's packages, berths and areas.
+/// The arc's colour runs red, yellow, green with the percentage (BerthStatusMath.RingColor); null shows a dash.
+/// </summary>
+internal sealed class PercentRing : Grid
+{
+    public PercentRing(double? percent, double size, double thick, double fontSize)
+    {
+        Width = Height = size;
+        var track = new Ellipse { StrokeThickness = thick, Margin = new Thickness(thick / 2) };
+        track.SetResourceReference(Shape.StrokeProperty, Brand.K.BorderSubtle);
+        Children.Add(track);
+        var (r, g, b) = Tools.BerthStatusMath.RingColor(percent);
+        var arc = new Path { StrokeThickness = thick, StrokeStartLineCap = PenLineCap.Round, StrokeEndLineCap = PenLineCap.Round, Stroke = new SolidColorBrush(Color.FromRgb(r, g, b)) };
+        var v = Math.Max(0, Math.Min(100, percent ?? 0));
+        var rad = (size - thick) / 2;
+        var c = size / 2;
+        if (v >= 99.95) arc.Data = new EllipseGeometry(new Point(c, c), rad, rad);
+        else if (v > 0.05)
+        {
+            var angle = v / 100 * 2 * Math.PI;
+            var figure = new PathFigure { StartPoint = new Point(c, c - rad), IsClosed = false };
+            figure.Segments.Add(new ArcSegment(new Point(c + rad * Math.Sin(angle), c - rad * Math.Cos(angle)), new Size(rad, rad), 0, v > 50, SweepDirection.Clockwise, true));
+            arc.Data = new PathGeometry([figure]);
+        }
+        Children.Add(arc);
+        var number = new TextBlock
+        {
+            Text = percent is { } p ? Math.Round(p).ToString(CultureInfo.CurrentCulture) + "%" : "–",
+            FontSize = fontSize, FontWeight = FontWeights.Bold, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
+        };
+        number.SetResourceReference(TextBlock.ForegroundProperty, Brand.K.Text);
+        Children.Add(number);
+        AutomationProperties.SetItemStatus(this, percent is null ? "not measured" : Math.Round(v) + "%");
+    }
+}

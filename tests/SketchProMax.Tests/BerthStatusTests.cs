@@ -51,6 +51,20 @@ internal static class BerthStatusTests
         RecordPackages(pSetup, pState, new DateTime(2026, 10, 23, 12, 0, 0));
         check("berth status: the package gets a history point from its berths", pState.For(package.Key).History.Count == 1, "");
 
+        // The overview: a ring per package coloured red, yellow, green; its short status; engineers share the daily need.
+        check("berth status: rings run red at 0, yellow at 50, green at 90 and over, grey when not measured",
+            RingColor(0) is { R: > 180, G: < 40 } && RingColor(50) is { R: > 180, G: > 140, B: < 40 } && RingColor(90) == RingColor(100) && RingColor(95) is { G: > 150, R: < 80 }
+            && RingColor(null) == (0x9C, 0xA3, 0xAF) && RingColor(-5) == RingColor(0), RingColor(50).ToString());
+        pState.For(package.Key).Engineers = 3;
+        check("berth status: the engineers belong to the package and share its daily need", Merged(package, pState).Engineers == 3 && PerEngineer(9, 3) == 3 && PerEngineer(9, null) == 9 && PerEngineer(null, 2) is null, "");
+        var due = new DateTime(2026, 11, 5, 8, 0, 0);
+        var dueSub = new Submission("Port A", package.Name, "P1", due);
+        Summary Sum(double? p, Submission? next, Submission? last, Verdict v) => new(package, p, next, next is null ? null : due, 0, null, false, v, [], [], new BerthState(), last);
+        check("berth status: a package is Submitted, Overdue, In progress or Not started",
+            StageOf(Sum(70, null, dueSub, Verdict.Submitted)) == Stage.Submitted && StageOf(Sum(70, dueSub, null, Verdict.Overdue)) == Stage.Overdue
+            && StageOf(Sum(40, dueSub, null, Verdict.OnTrack)) == Stage.InProgress && StageOf(Sum(null, dueSub, null, Verdict.NotKnown)) == Stage.NotStarted
+            && StageOf(Sum(0, dueSub, null, Verdict.NotKnown)) == Stage.NotStarted && Text(Stage.InProgress) == "In progress", "");
+
         // Tagging: only the views the rules name need tags (a piles plan tags its piles); others need dimensions only.
         var tagSetup = new Setup();
         check("berth status: a piles plan must tag its piles", TagCategoriesFor(tagSetup, "BERTH 9 - PART 2 PILES PLAN", []).SequenceEqual(["Structural Columns"])

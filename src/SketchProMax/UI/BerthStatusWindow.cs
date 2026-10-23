@@ -4,6 +4,7 @@ using System.IO;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using Autodesk.Revit.UI;
@@ -34,6 +35,7 @@ internal sealed class BerthStatusWindow : Window
     private Setup? _setup;
     private State _state = new();
     private string _selected = "";
+    private string _area = "";
     private bool _reading, _stop, _closed;
     private string _savedText = "";
     private string _file = "";
@@ -83,15 +85,15 @@ internal sealed class BerthStatusWindow : Window
         _project = project;
         Title = "Sketch ProMax berth status";
         var area = SystemParameters.WorkArea;
-        Width = Math.Min(1280, Math.Floor(area.Width * 0.9));
-        Height = Math.Min(800, Math.Floor(area.Height * 0.9));
+        Width = Math.Min(1440, Math.Floor(area.Width * 0.92));
+        Height = Math.Min(900, Math.Floor(area.Height * 0.92));
         MinWidth = Math.Min(860, Width);
         MinHeight = Math.Min(480, Height);
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         Brand.Prepare(this);
         var motion = RichUi.MotionOf(Settings.AgentSettings.Load());
         RichUi.Apply(this, motion);
-        _ring = new ScoreRing("All berths", motion);
+        _ring = new ScoreRing("All packages", motion);
         _update.Click += async (_, _) => await UpdateStatus();
         AutomationProperties.SetHelpText(_update, "Reads the open models for their berths, in short steps so Revit stays usable. Nothing is read until you press it.");
         _stopButton.Click += (_, _) => { _stop = true; Brand.SetBusy(_stopButton, true, "Stopping…"); };
@@ -151,7 +153,8 @@ internal sealed class BerthStatusWindow : Window
         var band = Brand.Header("Berth status", null);
         if (band.Child is DockPanel row && row.Children.OfType<StackPanel>().LastOrDefault() is { } texts) texts.Children.Add(_subtitle);
         _subtitle.Text = _setup is null ? (_project.Length == 0 ? "Open a model of the project first" : $"{_project}: not set up yet") :
-            $"{(_setup.Title.Length > 0 ? _setup.Title : "Berth status")} · {_project} · {_setup.Berths.Count} berths in {_setup.Models.Count} models";
+            $"{(_setup.Title.Length > 0 ? _setup.Title : "Berth status")} · {_project} · " +
+            (ShownModel is { } shown ? $"{shown.Name} model · {_setup.Berths.Count(b => Same(b.Model, shown.Name))} submissions" : $"{_setup.Berths.Count} submissions in {_setup.Models.Count} models");
         band.Padding = new Thickness(16, 12, 420, 12);
         var header = new Grid();
         header.Children.Add(band);
@@ -183,7 +186,7 @@ internal sealed class BerthStatusWindow : Window
 
         var close = RichUi.Button(RichUi.Icon.Close, "Close");
         close.Click += (_, _) => Close();
-        var exportAll = RichUi.Button(RichUi.Icon.Export, "Export all berths");
+        var exportAll = RichUi.Button(RichUi.Icon.Export, "Export all to Excel");
         AutomationProperties.SetHelpText(exportAll, "Writes one Excel file per berth (status, submissions, deliverables, what to fix, comments, history) and opens the folder.");
         exportAll.Click += (_, _) => ExportAll();
         exportAll.IsEnabled = _setup is not null;
@@ -201,8 +204,8 @@ internal sealed class BerthStatusWindow : Window
         DockPanel.SetDock(footBorder, Dock.Bottom);
 
         var body = new Grid();
-        body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(400) });
-        body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.1, GridUnitType.Star), MinWidth = 400 });
+        body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star), MinWidth = 420 });
         var listScroll = new ScrollViewer { Content = _list, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Focusable = false };
         var listBorder = new Border { BorderThickness = new Thickness(0, 0, 1, 0), Child = listScroll };
         listBorder.SetResourceReference(Border.BorderBrushProperty, Brand.K.Border);
@@ -313,111 +316,187 @@ internal sealed class BerthStatusWindow : Window
         return _setup!.Berths.Where(b => model is null || Same(b.Model, model.Name)).Select(b => Summarize(_setup, b, _state, now)).ToList();
     }
 
-    /// <summary>Redraws the list and the selected berth's details from the setup and the saved results.</summary>
+    /// <summary>
+    /// Redraws the overview from the setup and the saved results: a ring per submission package, the berths of the chosen
+    /// package (each with its own ring), the coming submissions with time left and the progress each engineer needs a
+    /// working day, and the chosen package's or berth's details on the right.
+    /// </summary>
     private void Refresh()
     {
         if (_setup is null) return;
+        var now = DateTime.Now;
         var all = Summaries();
-        var children = new List<Summary>();
         _list.Children.Clear();
         var known = all.Where(s => s.Percent is not null).ToList();
         double? overall = known.Count == 0 ? null : known.Average(s => s.Percent!.Value);
-        _ring.Show(overall is null ? null : (int)Math.Round(overall.Value), Colors.White, "The average status of the berths that have been read");
-        foreach (var model in all.GroupBy(s => s.Berth.Model, StringComparer.OrdinalIgnoreCase))
-        {
-            var title = Brand.Text(model.Key, Brand.K.Muted, 12, bold: true);
-            title.Margin = new Thickness(2, _list.Children.Count == 0 ? 0 : 14, 0, 6);
-            _list.Children.Add(title);
-            foreach (var s in model)
-            {
-                _list.Children.Add(Card(s));
-                // Each berth of a package of several, on its own under it.
-                foreach (var child in ChildrenOf(s.Berth))
-                {
-                    var c = Summarize(_setup, child, _state, DateTime.Now);
-                    children.Add(c);
-                    _list.Children.Add(ChildCard(c));
-                }
-            }
-        }
+        var (r, g, b) = RingColor(overall);
+        _ring.Show(overall is null ? null : (int)Math.Round(overall.Value), overall is null ? Colors.White : Color.FromRgb(r, g, b), "The average status of the packages that have been read");
+        var children = all.SelectMany(s => ChildrenOf(s.Berth).Select(c => Summarize(_setup, c, _state, now))).ToList();
         var every = all.Concat(children).ToList();
         if (_selected.Length == 0 || every.All(s => s.Berth.Key != _selected)) _selected = all.FirstOrDefault()?.Berth.Key ?? "";
-        ShowDetail(every.FirstOrDefault(s => s.Berth.Key == _selected));
+        var selected = every.FirstOrDefault(s => s.Berth.Key == _selected);
+        var package = selected is null ? null : all.FirstOrDefault(s => s.Berth.Key == PackageKey(selected.Berth));
+        foreach (var model in all.GroupBy(s => s.Berth.Model, StringComparer.OrdinalIgnoreCase))
+        {
+            var title = Brand.Text(model.Key.ToUpperInvariant() + " SUBMISSIONS", Brand.K.Muted, 12, bold: true);
+            title.Margin = new Thickness(2, _list.Children.Count == 0 ? 0 : 14, 0, 6);
+            _list.Children.Add(title);
+            var tiles = new WrapPanel();
+            foreach (var s in model) tiles.Children.Add(PackageTile(s, s.Berth.Key == package?.Berth.Key));
+            _list.Children.Add(tiles);
+        }
+        if (package is not null)
+            _list.Children.Add(BerthsPanel(package, children.Where(c => PackageKey(c.Berth) == package.Berth.Key).ToList()));
+        _list.Children.Add(Coming(all, now));
+        ShowDetail(selected);
     }
 
-    private FrameworkElement Card(Summary s)
+    /// <summary>The package a berth belongs to (itself when it is a package).</summary>
+    private static string PackageKey(Berth b) => b.Parent.Length > 0 ? KeyOf(b.Model, b.Parent) : b.Key;
+
+    private static string DueText(Summary s) =>
+        s.Next is null
+            ? (s.Last is { } last ? $"Submitted: {last.Name}{When(last, "dd-MMM", ", ")}" : "No submission set")
+            : $"{s.Next.Name}: due {s.Due:ddd dd-MMM HH:mm}" + (s.Due > DateTime.Now ? $" · {Math.Round(s.HoursLeft):0} working hours left" : " · overdue");
+
+    private FrameworkElement PackageTile(Summary s, bool on)
     {
-        var selected = s.Berth.Key == _selected;
-        var grid = new Grid();
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        var texts = new StackPanel();
-        texts.Children.Add(Brand.Text(s.Berth.Name, size: 14, bold: true));
-        var due = s.Next is null ? (s.Last is { } last ? $"Submitted: {last.Name}{When(last, "dd-MMM", ", ")}" : "No submission set") : $"{s.Next.Name}: {s.Due:ddd dd-MMM HH:mm}" + (s.Due > DateTime.Now ? $" · {Math.Round(s.HoursLeft):0} working h left" : "");
-        texts.Children.Add(Small(due));
-        texts.Children.Add(Small("Expected finish: " + (s.Finish is { } f ? f.ToString("ddd dd-MMM HH:mm", CultureInfo.CurrentCulture) + (s.FinishByHand ? " (by hand)" : "") : "needs two readings")));
-        texts.Children.Add(Chip(s.Verdict));
-        grid.Children.Add(texts);
-        var pct = Brand.Text(Pct(s.Percent).Replace("not measured", "–"), PercentKey(s.Percent), 22, bold: true);
-        pct.VerticalAlignment = VerticalAlignment.Center;
-        pct.Margin = new Thickness(10, 0, 0, 0);
-        Grid.SetColumn(pct, 1);
-        grid.Children.Add(pct);
-        var bar = new ProgressBar { Height = 5, Minimum = 0, Maximum = 100, Value = s.Percent ?? 0, Margin = new Thickness(0, 8, 0, 0) };
-        var stack = new StackPanel { Children = { grid, bar } };
-        var card = new Border
+        var stack = new StackPanel { Width = 104 };
+        stack.Children.Add(new PercentRing(s.Percent, 76, 8, 17) { HorizontalAlignment = HorizontalAlignment.Center });
+        var name = Brand.Text(s.Berth.Name, size: 12.5, bold: true);
+        name.TextAlignment = TextAlignment.Center;
+        name.TextWrapping = TextWrapping.Wrap;
+        name.Margin = new Thickness(0, 4, 0, 0);
+        stack.Children.Add(name);
+        var chip = StageChip(StageOf(s));
+        chip.HorizontalAlignment = HorizontalAlignment.Center;
+        stack.Children.Add(chip);
+        var tip = $"{s.Berth.Name} · {Pct(s.Percent)} · {DueText(s)}" + (ChildrenOf(s.Berth).Count > 0 ? ". Click to see its berths." : ". Click for its details.");
+        return Tile(stack, on, tip, $"{s.Berth.Name}, {Pct(s.Percent)}, {Text(StageOf(s))}", () => { _selected = s.Berth.Key; Refresh(); }, new Thickness(8, 8, 8, 8));
+    }
+
+    /// <summary>The second level: the chosen package's berths, each with its own ring.</summary>
+    private FrameworkElement BerthsPanel(Summary package, List<Summary> berths)
+    {
+        var page = new StackPanel();
+        page.Children.Add(Brand.Text(berths.Count > 0 ? $"{package.Berth.Name}: its {berths.Count} berths" : package.Berth.Name, size: 14, bold: true));
+        page.Children.Add(Small(berths.Count > 0
+            ? $"Each berth is measured on its own; {package.Berth.Name}'s ring is their average. Click a berth for its details."
+            : "Not split into berths: list its berths in the setup's Berths sheet (Value, with ;) to see each on its own."));
+        var tiles = new WrapPanel { Margin = new Thickness(0, 8, 0, 0) };
+        foreach (var b in berths)
         {
-            Padding = new Thickness(12, 10, 12, 10), Margin = new Thickness(0, 0, 0, 8), CornerRadius = new CornerRadius(8),
-            BorderThickness = new Thickness(selected ? 2 : 1), Child = stack, Cursor = Cursors.Hand, Focusable = true,
+            var row = new StackPanel { Orientation = Orientation.Horizontal };
+            row.Children.Add(new PercentRing(b.Percent, 58, 7, 14));
+            var texts = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 4, 0) };
+            texts.Children.Add(Brand.Text(b.Berth.Name, size: 13.5, bold: true));
+            texts.Children.Add(Small(b.State.ReadAt is { } at ? $"read {at:dd-MMM HH:mm}" : "not read yet"));
+            row.Children.Add(texts);
+            tiles.Children.Add(Tile(row, b.Berth.Key == _selected, $"{b.Berth.Name} of {package.Berth.Name}: its own status. Click for its areas and what to fix.",
+                $"{b.Berth.Name} of {package.Berth.Name}, {Pct(b.Percent)}", () => { _selected = b.Berth.Key; Refresh(); }, new Thickness(8, 8, 14, 8)));
+        }
+        if (berths.Count > 0) page.Children.Add(tiles);
+        var box = Box(page, top: 6);
+        box.BorderThickness = new Thickness(2);
+        box.SetResourceReference(Border.BorderBrushProperty, Brand.K.Accent);
+        return box;
+    }
+
+    /// <summary>The coming submissions: due time, working time left, engineers and what each must add a working day.</summary>
+    private FrameworkElement Coming(List<Summary> all, DateTime now)
+    {
+        var page = new StackPanel();
+        page.Children.Add(Brand.Text("Coming submissions", size: 14, bold: true));
+        var week = _setup!.Week;
+        page.Children.Add(Small($"Due {week.Due:hh\\:mm} on the day unless the setup says otherwise · working days {string.Join(", ", week.Days.Select(d => d.ToString().Substring(0, 3)))}, {week.Start:hh\\:mm}-{week.End:hh\\:mm}"));
+        var coming = all.Where(s => s.Next is not null).OrderBy(s => s.Due).ToList();
+        if (coming.Count == 0) { page.Children.Add(Para("None: every package is submitted or has no date in the Submissions sheet.", Brand.K.Muted)); return Box(page, top: 12); }
+        var grid = new Grid { Margin = new Thickness(0, 8, 0, 0) };
+        foreach (var w in new[] { 1.4, 0.8, 1.4, 1.1, 1.3, 1.2 }) grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(w, GridUnitType.Star) });
+        void Cell(UIElement e, int row, int col) { Grid.SetRow(e, row); Grid.SetColumn(e, col); grid.Children.Add(e); }
+        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        string[] heads = ["PACKAGE", "STATUS", "DUE", "TIME LEFT", "ENGINEERS", "EACH / DAY"];
+        for (var i = 0; i < heads.Length; i++) Cell(Brand.Text(heads[i], Brand.K.Muted, 10.5, bold: true), 0, i);
+        var row = 1;
+        foreach (var s in coming)
+        {
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            var name = Brand.Text(s.Berth.Name, size: 12, bold: true);
+            name.TextTrimming = TextTrimming.CharacterEllipsis;
+            name.ToolTip = s.Berth.Name;
+            Cell(name, row, 0);
+            Cell(Brand.Text(Pct(s.Percent).Replace("not measured", "–"), PercentKey(s.Percent), 12, bold: true), row, 1);
+            Cell(Brand.Text($"{s.Due:ddd dd-MMM HH:mm}", size: 12), row, 2);
+            var late = s.Due <= now;
+            Cell(Brand.Text(late ? "Overdue" : $"{s.HoursLeft:0} h · {s.HoursLeft / Math.Max(1, week.HoursPerDay):0.0} days", late ? Brand.K.DangerText : Brand.K.Text, 12, bold: late), row, 3);
+            Cell(Engineers(s), row, 4);
+            var each = PerEngineer(s.Percent is { } p && s.Due is { } due ? NeededPerDay(p, due, now, week) : null, _state.For(s.Berth.Key).Engineers);
+            var need = Brand.Text(each is { } e ? $"{e:0.#}% a day" : "–", each > 10 ? Brand.K.DangerText : Brand.K.Text, 12, bold: each > 10);
+            need.ToolTip = "The progress each engineer must add every working day to finish by the due time: what is left, over the working days left, shared between the engineers.";
+            Cell(need, row, 5);
+            foreach (var cell in grid.Children.OfType<FrameworkElement>().Where(c => Grid.GetRow(c) == row)) { cell.Margin = new Thickness(0, 4, 6, 0); cell.VerticalAlignment = VerticalAlignment.Center; }
+            row++;
+        }
+        page.Children.Add(grid);
+        return Box(page, top: 12);
+    }
+
+    /// <summary>The engineers on a package (− n +): the progress needed per working day is shared between them.</summary>
+    private FrameworkElement Engineers(Summary s)
+    {
+        var state = _state.For(PackageKey(s.Berth));
+        var n = state.Engineers ?? 1;
+        var panel = new StackPanel { Orientation = Orientation.Horizontal };
+        Button Step(string text, string help, int by)
+        {
+            var b = new Button { Content = text, Width = 24, Height = 22, Padding = new Thickness(0) };
+            b.SetResourceReference(StyleProperty, "SpmSecondaryButton");
+            AutomationProperties.SetName(b, help);
+            b.ToolTip = help;
+            b.Click += (_, _) => { state.Engineers = Math.Max(1, Math.Min(50, n + by)); Save(); Refresh(); };
+            return b;
+        }
+        panel.Children.Add(Step("−", "One engineer fewer", -1));
+        var count = Brand.Text(n.ToString(CultureInfo.CurrentCulture), size: 12.5, bold: true);
+        count.Width = 24;
+        count.TextAlignment = TextAlignment.Center;
+        count.VerticalAlignment = VerticalAlignment.Center;
+        AutomationProperties.SetName(count, "Engineers");
+        panel.Children.Add(count);
+        panel.Children.Add(Step("+", "One engineer more", 1));
+        panel.ToolTip = "Engineers working on this package: the progress needed per working day is shared between them.";
+        return panel;
+    }
+
+    /// <summary>A clickable tile (mouse, Enter or Space) with its description on hover.</summary>
+    private static Border Tile(UIElement child, bool on, string tip, string name, Action pick, Thickness padding)
+    {
+        var tile = new Border
+        {
+            Padding = padding, Margin = new Thickness(0, 0, 8, 8), CornerRadius = new CornerRadius(10),
+            BorderThickness = new Thickness(on ? 2 : 1), Child = child, Cursor = Cursors.Hand, Focusable = true, ToolTip = tip,
         };
-        card.SetResourceReference(Border.BackgroundProperty, Brand.K.Bg);
-        card.SetResourceReference(Border.BorderBrushProperty, selected ? Brand.K.Accent : Brand.K.Border);
-        AutomationProperties.SetName(card, $"{s.Berth.Name}, {Pct(s.Percent)}, {Text(s.Verdict)}");
-        void Pick() { _selected = s.Berth.Key; Refresh(); }
-        card.MouseLeftButtonUp += (_, _) => Pick();
-        card.KeyDown += (_, e) => { if (e.Key is Key.Enter or Key.Space) { Pick(); e.Handled = true; } };
-        return card;
+        tile.SetResourceReference(Border.BackgroundProperty, on ? Brand.K.AccentSoft : Brand.K.Bg);
+        tile.SetResourceReference(Border.BorderBrushProperty, on ? Brand.K.Accent : Brand.K.Border);
+        AutomationProperties.SetName(tile, name);
+        AutomationProperties.SetHelpText(tile, tip);
+        tile.MouseLeftButtonUp += (_, _) => pick();
+        tile.KeyDown += (_, e) => { if (e.Key is Key.Enter or Key.Space) { pick(); e.Handled = true; } };
+        return tile;
     }
 
-    /// <summary>One berth of a package: a smaller card under the package's, with its own status.</summary>
-    private FrameworkElement ChildCard(Summary s)
-    {
-        var selected = s.Berth.Key == _selected;
-        var grid = new Grid();
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        grid.Children.Add(new StackPanel { Children = { Brand.Text(s.Berth.Name, size: 13, bold: true), Small(s.State.ReadAt is { } at ? $"read {at:dd-MMM HH:mm}" : "not read yet") } });
-        var pct = Brand.Text(Pct(s.Percent).Replace("not measured", "–"), PercentKey(s.Percent), 16, bold: true);
-        pct.VerticalAlignment = VerticalAlignment.Center;
-        Grid.SetColumn(pct, 1);
-        grid.Children.Add(pct);
-        var card = new Border
-        {
-            Padding = new Thickness(10, 6, 10, 6), Margin = new Thickness(22, -4, 0, 8), CornerRadius = new CornerRadius(6),
-            BorderThickness = new Thickness(selected ? 2 : 1), Child = grid, Cursor = Cursors.Hand, Focusable = true,
-            ToolTip = $"{s.Berth.Name} of {s.Berth.Parent}: its own status. Click for its areas and what to fix.",
-        };
-        card.SetResourceReference(Border.BackgroundProperty, Brand.K.Bg);
-        card.SetResourceReference(Border.BorderBrushProperty, selected ? Brand.K.Accent : Brand.K.Border);
-        AutomationProperties.SetName(card, $"{s.Berth.Name} of {s.Berth.Parent}, {Pct(s.Percent)}");
-        void Pick() { _selected = s.Berth.Key; Refresh(); }
-        card.MouseLeftButtonUp += (_, _) => Pick();
-        card.KeyDown += (_, e) => { if (e.Key is Key.Enter or Key.Space) { Pick(); e.Handled = true; } };
-        return card;
-    }
+    private static string PercentKey(double? p) => p is null ? Brand.K.Muted : p >= 90 ? Brand.K.SuccessText : p >= 50 ? Brand.K.WarningText : Brand.K.DangerText;
 
-    private static string PercentKey(double? p) => p is null ? Brand.K.Muted : p >= 90 ? Brand.K.SuccessText : p >= 60 ? Brand.K.WarningText : Brand.K.DangerText;
-
-    private static FrameworkElement Chip(Verdict v)
+    private static Border StageChip(Stage stage)
     {
-        var key = v switch
+        var key = stage switch
         {
-            Verdict.Done or Verdict.OnTrack => Brand.K.BadgeOk,
-            Verdict.AtRisk or Verdict.Submitted => Brand.K.BadgeWarn,
-            Verdict.Behind or Verdict.Overdue => Brand.K.BadgeError,
+            Stage.Submitted => Brand.K.BadgeOk,
+            Stage.InProgress => Brand.K.BadgeWarn,
+            Stage.Overdue => Brand.K.BadgeError,
             _ => Brand.K.BadgeMuted,
         };
-        var chip = new Border { CornerRadius = new CornerRadius(9), Padding = new Thickness(8, 1, 8, 2), Margin = new Thickness(0, 6, 0, 0), HorizontalAlignment = HorizontalAlignment.Left, Child = Brand.Text(Text(v), Brand.K.OnAccent, 11, bold: true) };
+        var chip = new Border { CornerRadius = new CornerRadius(9), Padding = new Thickness(8, 1, 8, 2), Margin = new Thickness(0, 5, 0, 0), HorizontalAlignment = HorizontalAlignment.Left, Child = Brand.Text(Text(stage), Brand.K.OnAccent, 11, bold: true) };
         chip.SetResourceReference(Border.BackgroundProperty, key);
         return chip;
     }
@@ -432,30 +511,40 @@ internal sealed class BerthStatusWindow : Window
         var b = s.State;
         // What is typed here is kept on the berth's own state (a package's status shown is put together from its berths).
         var own = _state.For(s.Berth.Key);
-        var title = new DockPanel();
-        var pct = Brand.Text(Pct(s.Percent), PercentKey(s.Percent), 26, bold: true);
-        DockPanel.SetDock(pct, Dock.Right);
-        title.Children.Add(pct);
-        title.Children.Add(new StackPanel { Children = { Heading($"{s.Berth.Name}"), Small($"{s.Berth.Model} · " + (b.ReadAt is { } at ? $"read {at:ddd dd-MMM HH:mm} from {b.ReadFrom}" : "not read yet: open its model and press Update status")) } });
-        page.Children.Add(title);
-        page.Children.Add(Chip(s.Verdict));
+        var now = DateTime.Now;
+        var head = new StackPanel { Orientation = Orientation.Horizontal };
+        head.Children.Add(new PercentRing(s.Percent, 104, 10, 22));
+        var texts = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(16, 0, 0, 0) };
+        texts.Children.Add(Heading(s.Berth.Name));
+        texts.Children.Add(Small(s.Berth.Model + (s.Berth.Parent.Length > 0 ? $" · part of {s.Berth.Parent}" : "") + " · " +
+            (b.ReadAt is { } at ? $"read {at:ddd dd-MMM HH:mm} from {b.ReadFrom}" : "not read yet: open its model and press Update status")));
+        texts.Children.Add(StageChip(StageOf(s)));
+        head.Children.Add(texts);
+        page.Children.Add(head);
 
-        // The submission, the time left and the expected finish (from the readings, by hand, or asked of the AI).
-        var sub = new StackPanel();
-        sub.Children.Add(Brand.Text("Next submission", size: 13, bold: true));
-        if (s.Next is null) sub.Children.Add(Para(s.Last is { } last
-            ? $"Submitted: {last.Name}{When(last, "dddd dd-MMM-yyyy", ", ")}. It is still checked: what is below to fix belongs to the BIM submission."
-            : "No submission for this berth in the setup's Submissions sheet."));
-        else
-        {
-            sub.Children.Add(Para($"{s.Next.Name}: due {s.Due:dddd dd-MMM-yyyy HH:mm}" + (s.Due > DateTime.Now ? $", {s.HoursLeft:0} working hours left" : ", overdue") + "."));
-            if (s.Percent is { } p && s.Due is { } due && NeededPerDay(p, due, DateTime.Now, _setup!.Week) is { } need)
-                sub.Children.Add(Para($"Needs about {need:0.#}% a working day to make it."));
-        }
-        var forecast = s.Percent is null ? null : Forecast(b.History, s.Percent.Value, DateTime.Now, _setup!.Week);
-        sub.Children.Add(Para("From the readings: " + (forecast is { } fc ? $"finishes {fc:ddd dd-MMM HH:mm}." : "needs two readings with progress between them (press Update status again after some work).")));
+        // Due, expected finish and engineers, side by side.
+        var facts = new UniformGrid { Columns = 3, Margin = new Thickness(0, 14, 0, 0) };
+        facts.Children.Add(Fact("DUE", s.Next is null ? (s.Last is not null ? "Submitted" : "No date") : $"{s.Due:ddd dd-MMM HH:mm}",
+            s.Next is null ? (s.Last is not null ? "Still checked for the BIM fixes" : "Set it in the Submissions sheet") : s.Due > now ? $"{s.HoursLeft:0} working hours · {s.HoursLeft / Math.Max(1, _setup!.Week.HoursPerDay):0.0} days" : "Overdue",
+            "Due at its time (08:00 unless the setup says otherwise) on the submission day"));
+        var forecast = s.Percent is null ? null : Forecast(b.History, s.Percent.Value, now, _setup!.Week);
+        facts.Children.Add(Fact("EXPECTED FINISH", s.Finish is { } f ? $"{f:ddd dd-MMM HH:mm}" : "–",
+            (s.FinishByHand ? "Set by you" : forecast is not null ? "From your readings" : "Needs two readings") + " · " + Text(s.Verdict),
+            "From the progress between your readings, or the date you set yourself (below)"));
+        var engineers = new StackPanel();
+        engineers.Children.Add(Brand.Text("ENGINEERS", Brand.K.Muted, 10.5, bold: true));
+        var stepper = Engineers(s);
+        stepper.Margin = new Thickness(0, 4, 0, 2);
+        engineers.Children.Add(stepper);
+        var perDay = s.Percent is { } pc && s.Due is { } due ? NeededPerDay(pc, due, now, _setup!.Week) : null;
+        var each = PerEngineer(perDay, _state.For(PackageKey(s.Berth)).Engineers);
+        engineers.Children.Add(Small(perDay is { } pd ? $"{pd:0.#}% a day in all · {each:0.#}% each" : s.Next is null ? "Nothing due" : "Measure it first"));
+        facts.Children.Add(FactBox(engineers, "Engineers on the package: the progress needed per working day is shared between them"));
+        page.Children.Add(facts);
+
+        // The expected finish by hand or asked of the AI, folded.
         var byHand = new DatePicker { SelectedDate = b.FinishByHand?.Date, Width = 140, Margin = new Thickness(0, 0, 8, 0) };
-        AutomationProperties.SetName(byHand, "Expected finish by hand");
+        AutomationProperties.SetName(byHand, "Expected finish set by you");
         var handTime = new TextBox { Text = b.FinishByHand is { } fh ? fh.ToString("HH:mm", CultureInfo.InvariantCulture) : "17:00", Width = 60, Margin = new Thickness(0, 0, 8, 0), VerticalContentAlignment = VerticalAlignment.Center };
         AutomationProperties.SetName(handTime, "Time");
         void SetHand()
@@ -469,25 +558,46 @@ internal sealed class BerthStatusWindow : Window
         var clear = RichUi.Button(RichUi.Icon.Undo, "Use the readings");
         clear.Click += (_, _) => { own.FinishByHand = null; Save(); Refresh(); };
         var ask = RichUi.Button(RichUi.Icon.Ask, "Ask Sketch ProMax for an estimate");
-        AutomationProperties.SetHelpText(ask, "Sends this berth's status, schedule and history to the Sketch ProMax chat, which estimates the finish. Type its date by hand if you agree.");
+        AutomationProperties.SetHelpText(ask, "Sends this berth's status, schedule and history to the Sketch ProMax chat, which estimates the finish. Set its date yourself if you agree.");
         ask.Click += (_, _) =>
         {
             var problem = Chat.ChatPane.Ask(Question(_setup!, s, DateTime.Now));
-            _status.Text = problem.Length > 0 ? problem : "Asked the Sketch ProMax chat (in the pane): put its date in Expected finish by hand if you agree.";
+            _status.Text = problem.Length > 0 ? problem : "Asked the Sketch ProMax chat (in the pane): set its date as the expected finish if you agree.";
         };
-        var handRow = new WrapPanel { Margin = new Thickness(0, 8, 0, 0) };
-        handRow.Children.Add(new TextBlock { Text = "Expected finish by hand:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) });
+        var handRow = new WrapPanel { Margin = new Thickness(0, 6, 0, 0) };
         handRow.Children.Add(byHand);
         handRow.Children.Add(handTime);
         handRow.Children.Add(clear);
         handRow.Children.Add(ask);
         clear.Margin = ask.Margin = new Thickness(0, 4, 8, 4);
-        sub.Children.Add(handRow);
-        page.Children.Add(Box(sub));
+        page.Children.Add(new Expander { Header = "Set the expected finish myself, or ask Sketch ProMax", Content = handRow, Margin = new Thickness(0, 10, 0, 0), IsExpanded = b.FinishByHand is not null });
 
-        // The areas.
+        // The areas as rings: what each measures on hover, click one for what to fix.
         page.Children.Add(Section("Status by area"));
-        foreach (var a in s.Scores) page.Children.Add(AreaRow(s, a));
+        page.Children.Add(Small("Point at a ring for what it measures; click it for what to fix."));
+        if (s.Scores.Count > 0 && s.Scores.All(a => a.Area.Key != _area))
+            _area = (s.Scores.FirstOrDefault(a => a.Result is { Findings.Count: > 0 } && a.Area.Key != Deliverables) ?? s.Scores[0]).Area.Key;
+        var rings = new UniformGrid { Columns = 5, Margin = new Thickness(0, 6, 0, 0) };
+        foreach (var a in s.Scores)
+        {
+            var stack = new StackPanel();
+            stack.Children.Add(new PercentRing(a.Percent, 58, 7, 14) { HorizontalAlignment = HorizontalAlignment.Center });
+            var name = Brand.Text(a.Area.Name, size: 11.5, bold: true);
+            name.TextAlignment = TextAlignment.Center;
+            name.TextWrapping = TextWrapping.Wrap;
+            name.Margin = new Thickness(0, 3, 0, 0);
+            stack.Children.Add(name);
+            var badge = Small($"weight {a.Weight:0.#}" + (a.From == Source.Hand ? " · set by you" : a.From == Source.Files ? " · from files" : ""));
+            badge.TextAlignment = TextAlignment.Center;
+            stack.Children.Add(badge);
+            var key = a.Area.Key;
+            var tile = Tile(stack, key == _area, $"{a.Area.Name} (weight {a.Weight:0.#}): {a.Area.Measures}" + (a.Result?.Summary is { Length: > 0 } sum ? "\n" + sum : ""),
+                $"{a.Area.Name}, {Pct(a.Percent)}", () => { _area = key; ShowDetail(s); }, new Thickness(4, 8, 4, 8));
+            tile.Margin = new Thickness(0, 0, 6, 6);
+            rings.Children.Add(tile);
+        }
+        page.Children.Add(rings);
+        if (s.Scores.FirstOrDefault(a => a.Area.Key == _area) is { } chosen) page.Children.Add(AreaRow(s, chosen));
 
         // Deliverables.
         page.Children.Add(Section("Deliverables"));
@@ -507,6 +617,25 @@ internal sealed class BerthStatusWindow : Window
         page.Children.Add(actions);
     }
 
+    private static Border Fact(string label, string value, string sub, string tip)
+    {
+        var stack = new StackPanel();
+        stack.Children.Add(Brand.Text(label, Brand.K.Muted, 10.5, bold: true));
+        var v = Brand.Text(value, size: 15, bold: true);
+        v.Margin = new Thickness(0, 3, 0, 0);
+        stack.Children.Add(v);
+        stack.Children.Add(Small(sub));
+        return FactBox(stack, tip);
+    }
+
+    private static Border FactBox(UIElement child, string tip)
+    {
+        var box = new Border { Padding = new Thickness(12, 9, 12, 10), Margin = new Thickness(0, 0, 8, 0), CornerRadius = new CornerRadius(10), Child = child, ToolTip = tip };
+        box.SetResourceReference(Border.BackgroundProperty, Brand.K.Surface);
+        AutomationProperties.SetHelpText(box, tip);
+        return box;
+    }
+
     private FrameworkElement AreaRow(Summary s, AreaScore a)
     {
         var row = new StackPanel();
@@ -514,9 +643,8 @@ internal sealed class BerthStatusWindow : Window
         var value = Brand.Text(Pct(a.Percent), PercentKey(a.Percent), 13, bold: true);
         DockPanel.SetDock(value, Dock.Right);
         top.Children.Add(value);
-        top.Children.Add(Brand.Text($"{a.Area.Name}  ·  weight {a.Weight:0.#}" + (a.From == Source.Hand ? "  ·  by hand" : a.From == Source.Files ? "  ·  from files" : ""), size: 13, bold: true));
+        top.Children.Add(Brand.Text($"{a.Area.Name}  ·  weight {a.Weight:0.#}" + (a.From == Source.Hand ? "  ·  set by you" : a.From == Source.Files ? "  ·  from files" : ""), size: 13, bold: true));
         row.Children.Add(top);
-        row.Children.Add(new ProgressBar { Height = 5, Minimum = 0, Maximum = 100, Value = a.Percent ?? 0, Margin = new Thickness(0, 5, 0, 2) });
         row.Children.Add(Small(a.Result?.Summary is { Length: > 0 } sum ? sum : a.Area.Measures));
         // What the area measures shows when the pointer is on it, so the page stays light.
         row.ToolTip = a.Area.Measures;
@@ -572,7 +700,7 @@ internal sealed class BerthStatusWindow : Window
             }
             foreach (var f in r.Findings.Take(40)) list.Children.Add(FindingRow(s, f));
             if (r.Findings.Count > 40) list.Children.Add(Small($"…and {r.Findings.Count - 40} more in the Excel export."));
-            var fold = new Expander { Header = $"What to fix ({r.Findings.Count})", Content = list, Margin = new Thickness(0, 6, 0, 0) };
+            var fold = new Expander { Header = $"What to fix ({r.Findings.Count})", Content = list, Margin = new Thickness(0, 6, 0, 0), IsExpanded = true };
             row.Children.Add(fold);
         }
         return Box(row, top: 8);
