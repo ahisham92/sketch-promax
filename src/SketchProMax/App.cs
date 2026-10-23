@@ -186,6 +186,7 @@ public sealed class App : IExternalApplication
             try { StartupTimings.Time("chat hooks", () => Chat.ChatPane.Start(app)); } catch (Exception) { /* the chat tab says what is wrong when it is opened */ }
             try { StartupTimings.Time("restart note", () => UI.RestartNote.AfterStart(Ui)); } catch (Exception) { /* the chat and the Version button still say it */ }
             try { StartupTimings.Time("time log", () => TimeLog.Start(app)); } catch (Exception) { /* tasks still run; time is not counted */ }
+            try { StartupTimings.Time("bim ready", () => BimReady.Start(app)); } catch (Exception) { /* models are only kept ready by the checklist's Fix buttons */ }
             // This PC's license (Licensing/LicenseState): without a valid key the License window opens at the first idle moment.
             try
             {
@@ -328,6 +329,7 @@ public sealed class App : IExternalApplication
         try { Chat.ChatPane.Stop(app); } catch (Exception) { }
         try { Chat.NotesView.Stop(); } catch (Exception) { }
         try { TimeLog.Stop(app); } catch (Exception) { }
+        try { BimReady.Stop(); } catch (Exception) { }
         CentralAccess.Unwatch(app);
         ChatMcp.Stop();
         // A shared-mode core never opened the connection point, and the session file named after this Revit is Sketch ProMax's.

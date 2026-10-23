@@ -32,6 +32,7 @@ internal static class ChecklistFixes
         if (For(key, def) is { } own) list.Add(own);
         if (key == "levels" && For("scopeboxes", def) is { } urs) list.Add(urs);
         if (key == "uniformat" && For("assemblytable", def) is { } table) list.Add(table);
+        if (key is "uniformat" or "loi") list.AddRange(new[] { For("bepexport", def), For("bepimport", def) }.OfType<Offer>());
         return list;
     }
 
@@ -66,6 +67,13 @@ internal static class ChecklistFixes
             "(Manage > Additional Settings > Assembly Code), so each code the types get, such as A1020.15 Bored Piles, is in the table with its name? " +
             "You pick the file next. It replaces the model's table; the codes already on types stay. Then use Fill the UniFormat codes.",
             Fix: "assemblytable", PickFile: "LOI matrix Excel or assembly code file|*.xlsx;*.txt"),
+        "bepexport" => new("Export the BEP data Excel",
+            "Write an Excel with one row per model type in use: its Assembly Code (and the code your UniFormat rules suggest), every parameter the LOI matrix asks for, " +
+            "and what is still missing? Fill it in Excel, then use Import the BEP data Excel.", ChangesModel: false, Fix: "bepexport"),
+        "bepimport" => new("Import the BEP data Excel",
+            "Write the values you filled in the BEP data Excel to the types (or to their elements, where the parameter is on the elements)? " +
+            "You pick the file next. Only cells that differ from the model are written; empty cells, n/a and (varies) are skipped.",
+            Fix: "bepimport", PickFile: "BEP data Excel|*.xlsx"),
         "loi" => new("Fill the LOI data",
             $"Fill the parameters the LOI matrix asks for ({Named(ChecklistMath.Rule(def, "loimatrix"), "set LOI matrix in Checking rules first")}) on every model type in use, and its elements, that has them empty? " +
             "Values come from LOI values the model can't give (Checking rules), else from the model: material, sizes, length, levels, grade, cut-off and toe. A parameter the model doesn't have is added as a project parameter " +
@@ -119,6 +127,8 @@ internal static class ChecklistFixes
             case "units": return Units(doc, def);
             case "uniformat": return UniFormat(doc, def);
             case "assemblytable": return AssemblyTable(doc, answer);
+            case "bepexport": return BepSheet.Export(doc, def);
+            case "bepimport": return BepSheet.Import(doc, answer);
             case "scopeboxes": return UrsNames(doc);
             case "viewtemplates": return Templates(doc, def);
             case "familynames": return RenameTypes(doc, answer);

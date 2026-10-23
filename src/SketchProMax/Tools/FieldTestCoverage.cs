@@ -264,6 +264,10 @@ internal static class FieldTestCoverage
             "check 12 becomes automatic and the counts go up. Export the checklist to Excel: it has a Rules sheet; change a rule there and import it back. " +
             "Settings > Sign-off > Helper = SketchPro. On a manual check click Ask SketchPro: SketchPro's Copilot opens and the question is pasted in its message box, not sent. " +
             "Without SketchPro loaded it says so and leaves the question copied."),
+        new("checklist.bep", Issue, "Assembly Codes, the BEP data Excel and keeping the model BIM-ready", How.Manual, "", "importing the codes, filling the Excel and the automatic filling are judged by a person on a copy",
+            "On a _detached copy, Pre-submission checklist, the Classification code check: Import the Assembly Codes, pick the project's LOI matrix Excel: Manage > Additional Settings > Assembly Code lists its codes with their names (A1020.15 Bored Piles). " +
+            "Export the BEP data Excel: it opens with one row per type in use, its code, the suggested code, the LOI matrix's parameters and Still missing. Type a code and a material on a row, save, Import the BEP data Excel: those values are on the type. " +
+            "Checking rules: Keep the model BIM-ready while you model = yes. Duplicate a column type and place one: the new type gets its Assembly Code from the rules, and an element placed on Workset1 goes to its category's workset; Ctrl+Z undoes both with the placing."),
         new("checklist.edit", Issue, "Editing the pre-submission checklist, in Revit and through Excel", How.Manual, "",
             "the editor's lists, moves and confirmations and the Excel round trip in real Excel are judged by a person (the unit tests check the numbering, the answers and the Excel file)",
             "On a _detached copy: answer the first three checks, then Project details > Edit the checklist…: delete check 1, add a check in stage A, move a check down with Ctrl+Down, " +
