@@ -459,7 +459,17 @@ internal sealed class ChecklistWindow : Window
         row.Children.Add(change);
         row.Children.Add(rules);
         row.Children.Add(reread);
+        // The doer next to the checker: Make it BIM-ready fixes what the BEP and LOI need, then this checklist checks it.
+        var ready = RichUi.Button(RichUi.Icon.Fix, "Make it BIM-ready", Brand.Weight.Primary);
+        ready.Margin = new Thickness(8, 0, 0, 0);
+        AutomationProperties.SetHelpText(ready, "Opens Make it BIM-ready: what the BEP and LOI still need, the warnings and the berths' clashes, and one button that fixes what the model can give. Run the checks again afterwards.");
+        ready.Click += async (_, _) =>
+        {
+            try { await App.Dispatcher.InvokeAsync(a => BimReadyWindow.Command(a)); }
+            catch (Exception ex) when (ex is not OutOfMemoryException) { _status.Text = $"Couldn't open Make it BIM-ready ({ex.Message}). Finish what Revit is doing, then try again."; }
+        };
         row.Children.Add(slowRun);
+        row.Children.Add(ready);
         var clearAll = RichUi.Button(RichUi.Icon.Close, "Clear all answers", Brand.Weight.Danger);
         clearAll.Margin = new Thickness(8, 0, 0, 0);
         AutomationProperties.SetHelpText(clearAll, "Takes back every Yes, No and N/A for this model. Comments, project details and signatures stay. Each check also has Clear answer.");

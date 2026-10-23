@@ -155,7 +155,7 @@ internal sealed class BerthStatusWindow : Window
         _subtitle.Text = _setup is null ? (_project.Length == 0 ? "Open a model of the project first" : $"{_project}: not set up yet") :
             $"{(_setup.Title.Length > 0 ? _setup.Title : "Berth status")} · {_project} · " +
             (ShownModel is { } shown ? $"{shown.Name} model · {_setup.Berths.Count(b => Same(b.Model, shown.Name))} submissions" : $"{_setup.Berths.Count} submissions in {_setup.Models.Count} models");
-        band.Padding = new Thickness(16, 12, 520, 12);
+        band.Padding = new Thickness(16, 12, 680, 12);
         var header = new Grid();
         header.Children.Add(band);
         var right = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 18, 0) };
@@ -178,6 +178,18 @@ internal sealed class BerthStatusWindow : Window
             catch (Exception ex) when (ex is not OutOfMemoryException) { _status.Text = $"Couldn't open Berth costing ({ex.Message}). Finish what Revit is doing, then try again."; }
         };
         right.Children.Add(costing);
+        // Make it BIM-ready for the chosen berth or package (all of this model's berths when none is chosen).
+        var ready = RichUi.Button(RichUi.Icon.Fix, "Make BIM-ready");
+        ready.VerticalAlignment = VerticalAlignment.Center;
+        ready.Margin = new Thickness(0, 0, 8, 0);
+        AutomationProperties.SetHelpText(ready, "Fills what the BEP and LOI need, joins the structural clashes, straightens off-axis lines and tags what is untagged for the chosen berth (or all), then lists what is left for you.");
+        ready.Click += async (_, _) =>
+        {
+            var chosen = _selected.Length > 0 ? new[] { _selected } : null;
+            try { await App.Dispatcher.InvokeAsync(a => BimReadyWindow.Command(a, chosen)); }
+            catch (Exception ex) when (ex is not OutOfMemoryException) { _status.Text = $"Couldn't open Make BIM-ready ({ex.Message}). Finish what Revit is doing, then try again."; }
+        };
+        right.Children.Add(ready);
         right.Children.Add(_update);
         right.Children.Add(_ring);
         header.Children.Add(right);
