@@ -192,7 +192,9 @@ internal static class FieldTestCoverage
             "On a _detached copy: Berth status (next to the pre-submission checklist). With no setup it offers Make the setup Excel: it opens in Excel with Models, Berths, Submissions, Planned, Deliverables, Weights and Week sheets. " +
             "Put the copy's file name text on Models, one berth with Find elements by Whole model, a submission next week, save, and Setup > Import the setup Excel: the berth shows with No reading yet. " +
             "Press Update status: a strip shows the progress and you can pan the view in Revit meanwhile; Stop ends it. The berth gets a percentage, its areas fill in, and What to fix lists sheets and views (Show opens them). " +
-            "Type 80 in an area's By hand box: the berth's percentage changes. Set an expected finish by hand after the submission: the chip says At risk or Behind. Export this berth to Excel: it opens with Status, Submissions, Deliverables, the areas with findings, Comments and History. " +
+            "A package with two values (Value 5; 6) shows a card for each berth under it, each with its own percentage; the package's areas are their average. " +
+            "With two models in the setup, the window shows only the open model's packages. In a piles plan with untagged piles, the Annotation area's Fix tags them; Categories and data's Fill the Assembly Codes fills them from the project checklist's UniFormat rules. " +
+            "Type 80 in an area's Set % myself box: the berth's percentage changes. Set an expected finish by hand after the submission: the chip says At risk or Behind. Export this berth to Excel: it opens with Status, Submissions, Deliverables, the areas with findings, Comments and History. " +
             "Close and reopen: everything is as you left it, and nothing is read until you press Update status."),
         new("checklist.views", Issue, "Pre-submission checklist: Show in Revit's checking views are made and deleted", How.Probe, "",
             "a plan with the grids and schedules of sheets, views and title blocks are made in the test project, named Sketch ProMax check - …, found by name and all deleted (rolled back)"),
@@ -584,6 +586,7 @@ internal static class FieldTestCoverage
         new(44, ["tool:duplicate_view_to_location"], "a copied dimension that loses its references is left out, not the whole copy"),
         new(45, ["tool:arrange_tags"], "a view with no tags says what it has instead"),
         new(46, ["berth.ui"], "after Setup > Import the setup Excel the window shows the berths, not a blank page"),
+        new(47, ["berth.read"], "a pair Revit cannot intersect is skipped, the clash area still gets its result"),
     ];
 
     /// <summary>

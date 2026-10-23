@@ -53,6 +53,8 @@ internal static class BerthStatusFacts
         public string Workset = "";
         public bool InPlace;
         public bool NoAssembly;
+        public bool NoTypeMark;
+        public long TypeId;
         public string Describe => $"{Category}: {(Family.Length > 0 && Family != Type ? Family + " : " : "")}{Type}{(Linked ? " (link " + Link + ")" : "")}";
     }
 
@@ -110,7 +112,8 @@ internal static class BerthStatusFacts
     public static Reading Plan(Document doc, Setup setup, Model model, IReadOnlyCollection<string>? onlyBerths = null)
     {
         var reading = new Reading(doc) { Model = doc.Title };
-        var berths = BerthsOf(setup, model).Where(b => onlyBerths is null || onlyBerths.Contains(b.Key)).ToList();
+        // A package of several berths is read one berth at a time (its status puts them together).
+        var berths = Units(BerthsOf(setup, model)).Where(b => onlyBerths is null || onlyBerths.Contains(b.Key)).ToList();
         reading.Berths.AddRange(berths);
         foreach (var b in berths) reading.Results[b.Key] = new Dictionary<string, AreaResult>(StringComparer.Ordinal);
         reading.Fail = (name, ex) =>
@@ -209,8 +212,16 @@ internal static class BerthStatusFacts
                 var r = new AreaResult();
                 if (plan.Count == 0)
                 {
-                    r.Summary = $"{mine.Count} elements; no planned counts (add them on the setup's Planned sheet).";
-                    r.Done = mine.Count;
+                    // No planned counts: the structure is measured by what its drawings and schedules need, a Type Mark
+                    // on every type (piles and beams are tagged and scheduled by it).
+                    var built = mine.Where(i => ClashCats.Contains(i.Bic) || i.Bic == BuiltInCategory.OST_SpecialityEquipment).ToList();
+                    r.Total = built.Count;
+                    r.Done = built.Count(i => !i.NoTypeMark);
+                    foreach (var g in built.Where(i => i.NoTypeMark).GroupBy(i => i.Describe).OrderByDescending(g => g.Count()).Take(200))
+                        r.Findings.Add(new Finding(Modelling, g.Key, $"No Type Mark ({g.Count()} element{(g.Count() == 1 ? "" : "s")}): its tags and schedule rows come out empty", g.First().Linked ? null : g.First().Id));
+                    r.Percent = built.Count == 0 ? null : Part(r.Done, r.Total);
+                    r.Summary = built.Count == 0 ? $"{mine.Count} elements, none structural." :
+                        $"{r.Done} of {r.Total} structural elements have a Type Mark. Add planned counts (Planned sheet) to measure against the plan too.";
                 }
                 else
                 {
@@ -235,6 +246,7 @@ internal static class BerthStatusFacts
             {
                 if (inBerth is null) return;
                 var r = new AreaResult { Total = mine.Count };
+                var bad = new List<(Item Item, string Problems)>();
                 foreach (var i in mine)
                 {
                     var problems = new List<string>();
@@ -242,8 +254,12 @@ internal static class BerthStatusFacts
                     if (i.InPlace) problems.Add("In-place family: make it a loadable family so it schedules and counts");
                     if (i.NoAssembly) problems.Add("Assembly Code empty: it won't land in the right bill item");
                     if (problems.Count == 0) { r.Done++; continue; }
-                    r.Findings.Add(new Finding(CategoryData, i.Describe, string.Join("; ", problems), i.Linked ? null : i.Id));
+                    bad.Add((i, string.Join("; ", problems)));
                 }
+                // One line per type and problem (not one per element): "Pile type: Assembly Code empty (120 elements)".
+                foreach (var g in bad.GroupBy(b => (b.Item.Describe, b.Problems)).OrderByDescending(g => g.Count()).Take(300))
+                    r.Findings.Add(new Finding(CategoryData, g.Key.Describe, $"{g.Key.Problems} ({g.Count()} element{(g.Count() == 1 ? "" : "s")})",
+                        g.First().Item.Linked ? null : g.First().Item.Id, g.Key.Problems.Contains("Assembly Code") ? "uniformat" : null));
                 r.Percent = mine.Count == 0 ? null : Part(r.Done, r.Total);
                 r.Summary = mine.Count == 0 ? "No elements found for this berth." : $"{r.Total - r.Done} of {r.Total} elements need their category or data fixed.";
                 res[CategoryData] = r;
@@ -266,6 +282,7 @@ internal static class BerthStatusFacts
             var clashFound = new List<(Placed A, Placed B, double Depth)>();
             var clashSeen = new HashSet<string>();
             var clashIndex = 0;
+            var clashSkipped = 0;
             reading.Add(Clashes + "|" + key, () =>
             {
                 if (inBerth is null) return false;
@@ -278,19 +295,27 @@ internal static class BerthStatusFacts
                     {
                         if (string.CompareOrdinal(a.Key, b.Key) >= 0 || !clashSeen.Add(a.Key + "|" + b.Key) || FindClashesTool.Related(a, b)) continue;
                         if (BoxDepth(a, b) < tolerance) continue;
-                        var (hit, depth, _, _) = FindClashesTool.Hard(a, b, tolerance);
-                        if (hit) clashFound.Add((a, b, depth));
+                        // Revit can't intersect some solids ("unable to complete the centroid calculation"): that pair is
+                        // counted as not checked, the rest go on.
+                        try
+                        {
+                            var (hit, depth, _, _) = FindClashesTool.Hard(a, b, tolerance);
+                            if (hit) clashFound.Add((a, b, depth));
+                        }
+                        catch (Exception ex) when (ex is Autodesk.Revit.Exceptions.ApplicationException or InvalidOperationException or ArgumentException) { clashSkipped++; }
                     }
                 }
                 if (clashIndex < structure.Count) return true;
                 var clashing = new HashSet<string>(clashFound.SelectMany(c => new[] { c.A.Key, c.B.Key }));
                 var r = new AreaResult { Total = structure.Count, Done = structure.Count - clashing.Count };
                 foreach (var (a, b, depth) in clashFound.Take(500))
-                    r.Findings.Add(new Finding(Clashes, a.Describe(), $"runs {Mm(depth)} into {b.Describe()} (not joined)", a.InHost ? a.Element.Id.Value : b.InHost ? b.Element.Id.Value : null));
+                    r.Findings.Add(new Finding(Clashes, a.Describe(), $"runs {Mm(depth)} into {b.Describe()} (not joined)", a.InHost ? a.Element.Id.Value : b.InHost ? b.Element.Id.Value : null,
+                        a.InHost && b.InHost ? $"join:{a.Element.Id.Value}:{b.Element.Id.Value}" : null));
                 r.Percent = structure.Count == 0 ? null : Part(r.Done, r.Total);
                 r.Summary = structure.Count == 0 ? "No structural elements found for this berth." :
                     $"{clashFound.Count} clashes deeper than {setup.ClashToleranceMm:0} mm between {clashing.Count} of {structure.Count} structural elements" +
-                    (mine.Count(i => ClashCats.Contains(i.Bic)) > ClashCap ? $" (the first {ClashCap} checked)." : ".");
+                    (mine.Count(i => ClashCats.Contains(i.Bic)) > ClashCap ? $" (the first {ClashCap} checked)." : ".") +
+                    (clashSkipped > 0 ? $" {clashSkipped} pairs Revit couldn't intersect were skipped." : "");
                 res[Clashes] = r;
                 return false;
             });
@@ -311,8 +336,12 @@ internal static class BerthStatusFacts
                     {
                         if (BoxDepth(svc, st) < tolerance) continue;
                         crossing[svc.Key] = svc;
-                        var (hit, depth, _, _) = FindClashesTool.Hard(svc, st, tolerance);
-                        if (hit) blocked.Add((svc, st, depth));
+                        try
+                        {
+                            var (hit, depth, _, _) = FindClashesTool.Hard(svc, st, tolerance);
+                            if (hit) blocked.Add((svc, st, depth));
+                        }
+                        catch (Exception ex) when (ex is Autodesk.Revit.Exceptions.ApplicationException or InvalidOperationException or ArgumentException) { }
                     }
                 }
                 if (serviceIndex < services.Count) return true;
@@ -349,9 +378,9 @@ internal static class BerthStatusFacts
                     parts.Add(Part(closed, open + closed));
                     summary += $" Clash report {Path.GetFileName(report)} ({File.GetLastWriteTime(report):dd-MMM HH:mm}): {open} open, {closed} resolved.";
                 }
-                if (linkProblems.Count > 0) summary += $" {linkProblems.Count} of {linksTotal} links not loaded (not checked).";
-                var loaded = linksTotal == 0 ? 1 : (linksTotal - linkProblems.Count) / (double)linksTotal;
-                r.Percent = parts.Count == 0 ? null : parts.Average() * loaded;
+                // A link not loaded isn't checked: it is listed, but doesn't lower the status (an existing-structures link needn't be loaded).
+                if (linkProblems.Count > 0) summary += $" {linkProblems.Count} of {linksTotal} links not loaded, so not checked: {string.Join(", ", linkProblems.Select(f => f.Item))}.";
+                r.Percent = parts.Count == 0 ? null : parts.Average();
                 r.Summary = summary;
                 res[Coordination] = r;
                 foreach (var svc in services) svc.Release();
@@ -414,7 +443,6 @@ internal static class BerthStatusFacts
             });
 
             // Annotation: one view per slice.
-            var tagCats = TagCats(doc, setup.TagCategories);
             var annViews = new List<View>();
             var annIndex = 0;
             int elements = 0, tagged = 0, withDims = 0, dimViews = 0;
@@ -431,6 +459,9 @@ internal static class BerthStatusFacts
                 if (annIndex >= 0 && annIndex < annViews.Count)
                 {
                     var v = annViews[annIndex++];
+                    // What this view must tag comes from the Tagging rules (a piles plan tags its piles); other views need dimensions only.
+                    var sheetNames = viewSheets.TryGetValue(v.Id.Value, out var on) ? on.Select(x => x.Name) : [];
+                    var tagCats = TagCats(doc, TagCategoriesFor(setup, v.Name, sheetNames));
                     var shown = tagCats.Count == 0 ? [] : new FilteredElementCollector(doc, v.Id).WherePasses(new ElementMulticategoryFilter(tagCats)).WhereElementIsNotElementType().Select(e => e.Id.Value).Take(2000).ToList();
                     var tags = new HashSet<long>();
                     foreach (var t in new FilteredElementCollector(doc, v.Id).OfClass(typeof(IndependentTag)).Cast<IndependentTag>())
@@ -438,7 +469,14 @@ internal static class BerthStatusFacts
                     var missing = shown.Where(id => !tags.Contains(id)).ToList();
                     elements += shown.Count;
                     tagged += shown.Count - missing.Count;
-                    if (missing.Count > 0) annotation.Findings.Add(new Finding(Annotation, v.Name, $"{missing.Count} of {shown.Count} elements without a tag", v.Id.Value));
+                    if (missing.Count > 0)
+                        foreach (var cat in tagCats)
+                        {
+                            var ofCat = missing.Count(id => doc.GetElement(new ElementId(id))?.Category?.Id == cat);
+                            if (ofCat == 0) continue;
+                            var catName = Category.GetCategory(doc, cat)?.Name ?? "elements";
+                            annotation.Findings.Add(new Finding(Annotation, v.Name, $"{ofCat} {catName} without a tag", v.Id.Value, $"tag:{v.Id.Value}:{catName}"));
+                        }
                     if (v.ViewType is not ViewType.Detail)
                     {
                         dimViews++;
@@ -449,9 +487,10 @@ internal static class BerthStatusFacts
                 }
                 annotation.Total = annViews.Count;
                 annotation.Done = annViews.Count - annotation.Findings.Select(f => f.Id).Distinct().Count();
-                annotation.Percent = annViews.Count == 0 ? null : 0.7 * Part(tagged, elements) + 0.3 * Part(withDims, dimViews);
+                annotation.Percent = annViews.Count == 0 ? null : elements == 0 ? Part(withDims, dimViews) : 0.7 * Part(tagged, elements) + 0.3 * Part(withDims, dimViews);
                 annotation.Summary = annViews.Count == 0 ? "No plans or sections on this berth's sheets yet." :
-                    $"{tagged} of {elements} elements tagged; {withDims} of {dimViews} views dimensioned ({annViews.Count} views on the sheets).";
+                    (elements == 0 ? "No view here needs tags (Tagging sheet); " : $"{tagged} of {elements} elements tagged where the Tagging sheet asks; ") +
+                    $"{withDims} of {dimViews} views dimensioned ({annViews.Count} views on the sheets).";
                 res[Annotation] = annotation;
                 return false;
             });
@@ -459,10 +498,12 @@ internal static class BerthStatusFacts
             reading.Once(Schedules + "|" + key, () =>
             {
                 var r = new AreaResult();
-                var text = berth.ScheduleText;
-                List<string> texts = berth.Schedules.Trim().Length > 0 ? Values(berth.Schedules) : [text];
+                var texts = berth.ScheduleTexts;
+                var text = string.Join("\" or \"", texts);
+                var whole = berth.FindBy == FindBy.WholeModel && berth.Schedules.Trim().Length == 0;
                 var found = new FilteredElementCollector(doc).OfClass(typeof(ViewSchedule)).Cast<ViewSchedule>()
-                    .Where(s => !s.IsTemplate && !s.IsTitleblockRevisionSchedule && texts.Any(t => s.Name.IndexOf(t, StringComparison.OrdinalIgnoreCase) >= 0)).ToList();
+                    .Where(s => !s.IsTemplate && !s.IsTitleblockRevisionSchedule && !s.IsInternalKeynoteSchedule && !s.IsTitleblockRevisionSchedule
+                                && (whole || texts.Any(t => s.Name.IndexOf(t, StringComparison.OrdinalIgnoreCase) >= 0))).ToList();
                 foreach (var s in found)
                 {
                     int rows;
@@ -508,6 +549,9 @@ internal static class BerthStatusFacts
                 if (el is FamilyInstance fi) try { item.InPlace = fi.Symbol?.Family?.IsInPlace == true; } catch (Exception) { }
                 var code = type?.LookupParameter("Assembly Code");
                 item.NoAssembly = code is not null && (code.AsString() ?? "").Trim().Length == 0;
+                var mark = type?.get_Parameter(BuiltInParameter.ALL_MODEL_TYPE_MARK);
+                item.NoTypeMark = mark is not null && (mark.AsString() ?? "").Trim().Length == 0;
+                item.TypeId = type?.Id.Value ?? -1;
                 yield return item;
             }
         }
@@ -647,6 +691,50 @@ internal static class BerthStatusFacts
                 .Any(v => v.get_Parameter(BuiltInParameter.VIEWER_VOLUME_OF_INTEREST_CROP)?.AsElementId() is { } id && ids.Contains(id))).ToList();
         }
         return sheets.Where(s => s.SheetNumber.IndexOf(berth.Name, StringComparison.OrdinalIgnoreCase) >= 0 || s.Name.IndexOf(berth.Name, StringComparison.OrdinalIgnoreCase) >= 0).ToList();
+    }
+
+    /// <summary>
+    /// Runs a finding's Fix on the active model (Revit API context): "uniformat" fills the Assembly Codes from the project
+    /// checklist's UniFormat rules, "tag:view:category" tags the untagged in that view, "join:a:b" joins two clashing elements.
+    /// A sentence saying what changed.
+    /// </summary>
+    public static string RunFix(Autodesk.Revit.UI.UIApplication app, string fix, ChecklistMath.Definition? def)
+    {
+        var ui = app.ActiveUIDocument;
+        var doc = ui.Document;
+        var parts = fix.Split([':'], 3);
+        switch (parts[0])
+        {
+            case "uniformat":
+                return ChecklistMath.Rule(def, "uniformatmap").Trim().Length == 0
+                    ? "Set the UniFormat code for each category in the project's checklist (Pre-submission checklist > Checking rules) first: the Assembly Codes come from there."
+                    : ChecklistFixes.Run(ui, "uniformat", def);
+            case "tag" when parts.Length == 3 && long.TryParse(parts[1], out var viewId):
+            {
+                var json = System.Text.Json.JsonSerializer.SerializeToElement(new { category = parts[2], view_id = viewId });
+                var result = new TagElementsInViewTool().Execute(app, new ToolArgs(json.EnumerateObject().ToDictionary(p => p.Name, p => p.Value.Clone())));
+                var view = doc.GetElement(new ElementId(viewId)) as View;
+                if (result.IsError) return result.Text;
+                using var said = System.Text.Json.JsonDocument.Parse(result.Text);
+                var tagged = said.RootElement.TryGetProperty("tagged", out var t) ? t.GetInt32() : 0;
+                return $"Tagged {tagged} {parts[2]} in {view?.Name ?? "the view"}.";
+            }
+            case "join" when parts.Length == 3 && long.TryParse(parts[1], out var a) && long.TryParse(parts[2], out var b):
+            {
+                var ea = doc.GetElement(new ElementId(a));
+                var eb = doc.GetElement(new ElementId(b));
+                if (ea is null || eb is null) return "One of the two elements isn't in the model any more.";
+                if (JoinGeometryUtils.AreElementsJoined(doc, ea, eb)) return $"{ea.Name} and {eb.Name} are already joined.";
+                using var tx = new Transaction(doc, "Sketch ProMax: join clashing elements");
+                tx.Start();
+                try { JoinGeometryUtils.JoinGeometry(doc, ea, eb); }
+                catch (Exception ex) when (ex is Autodesk.Revit.Exceptions.ApplicationException or ArgumentException) { tx.RollBack(); return $"Revit couldn't join {ea.Name} and {eb.Name} ({ex.Message}): move or cut one of them."; }
+                tx.Commit();
+                return $"Joined {ea.Name} and {eb.Name}.";
+            }
+            default:
+                return "Nothing to fix here.";
+        }
     }
 
     private static List<ElementId> TagCats(Document doc, IEnumerable<string> names)

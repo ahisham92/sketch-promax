@@ -55,14 +55,33 @@ internal static class BerthStatusMath
         /// <summary>Weight per area key; an area missing here keeps its default weight.</summary>
         public Dictionary<string, double> Weights { get; set; } = new(StringComparer.Ordinal);
         public Calendar Week { get; set; } = new();
-        /// <summary>The categories whose elements should carry a tag on the sheets (Annotation).</summary>
-        public List<string> TagCategories { get; set; } = ["Structural Columns", "Structural Framing", "Structural Foundations", "Specialty Equipment"];
+        /// <summary>Old setups: the categories once tagged in every view (replaced by <see cref="TagRules"/>; kept so old files still read).</summary>
+        public List<string> TagCategories { get; set; } = [];
+        /// <summary>
+        /// Which elements a view on the berth's sheets must tag: the first rule whose text is in the view's or its sheet's
+        /// name. A view no rule names needs no tags (an overall plan or a framing plan labelled with notes), only dimensions.
+        /// </summary>
+        public List<TagRule> TagRules { get; set; } = DefaultTagRules();
         /// <summary>Overlaps thinner than this (mm) are not clashes: below it the fix isn't buildable or worth doing.</summary>
         public double ClashToleranceMm { get; set; } = 50;
         public string SourcePath { get; set; } = "";
         public string SourceStamp { get; set; } = "";
 
         public double WeightOf(string area) => Weights.TryGetValue(area, out var w) ? w : AreaOf(area).Weight;
+    }
+
+    /// <summary>A tagging rule: views (or sheets) whose name has <paramref name="ViewContains"/> tag every element of <paramref name="Categories"/> (comma separated).</summary>
+    public sealed record TagRule(string ViewContains, string Categories);
+
+    /// <summary>Piles plans tag every pile (with its type mark); other plans are labelled with notes and dimensions.</summary>
+    public static List<TagRule> DefaultTagRules() => [new("Piles plan", "Structural Columns"), new("Pile plan", "Structural Columns")];
+
+    /// <summary>The categories a view must tag (none when no rule names the view or its sheets).</summary>
+    public static List<string> TagCategoriesFor(Setup setup, string view, IEnumerable<string> sheets)
+    {
+        var names = new[] { view }.Concat(sheets).ToList();
+        var rule = setup.TagRules.FirstOrDefault(r => r.ViewContains.Trim().Length > 0 && names.Any(n => n.IndexOf(r.ViewContains.Trim(), StringComparison.OrdinalIgnoreCase) >= 0));
+        return rule is null ? [] : Values(rule.Categories);
     }
 
     /// <summary>A model of the project: matched to the open file by text in its file name.</summary>
@@ -89,12 +108,43 @@ internal static class BerthStatusMath
     /// <param name="Value">The scope box name, the parameter value or the text in the workset name; a package of several berths lists them with ";" or ",".</param>
     /// <param name="Parameter">The parameter holding the berth (FindBy Parameter).</param>
     /// <param name="Sheets">Text in the sheet number or name of the berth's sheets (empty: sheets showing the scope box, or every sheet for a whole model).</param>
-    /// <param name="Schedules">Text in the names of the berth's schedules (empty: the berth's name).</param>
-    public sealed record Berth(string Model, string Name, string FindBy, string Value = "", string Parameter = "", string Sheets = "", string Schedules = "")
+    /// <param name="Schedules">Text in the names of the berth's schedules (empty: the berth's name; "Berth 9" for a berth found by the value 9).</param>
+    /// <param name="Parent">For one berth of a package of several (see <see cref="ChildrenOf"/>): the package's name.</param>
+    public sealed record Berth(string Model, string Name, string FindBy, string Value = "", string Parameter = "", string Sheets = "", string Schedules = "", string Parent = "")
     {
-        public string Key => KeyOf(Model, Name);
-        public string ScheduleText => Schedules.Trim().Length > 0 ? Schedules.Trim() : Name.Trim();
+        public string Key => KeyOf(Model, Parent.Length > 0 ? Parent + " / " + Name : Name);
+        public string ScheduleText => ScheduleTexts.FirstOrDefault() ?? Name.Trim();
+
+        /// <summary>The texts the berth's schedule names contain: the Schedules cell, else "Berth 9" for a berth found by its number, else its name.</summary>
+        public List<string> ScheduleTexts =>
+            Schedules.Trim().Length > 0 ? Values(Schedules)
+            : FindBy is BerthStatusMath.FindBy.Parameter or BerthStatusMath.FindBy.ScopeBox && Values(Value) is [var v] ? [ChildName(v)]
+            : [Name.Trim()];
     }
+
+    /// <summary>A berth's name from its value: "9" is "Berth 9", "BERTH 9" stays as written.</summary>
+    public static string ChildName(string value) => value.Trim().All(char.IsDigit) ? "Berth " + value.Trim() : value.Trim();
+
+    /// <summary>
+    /// A package of several berths (Value "5; 6") read and shown one berth at a time: one berth per value, with the sheet
+    /// text at the same place in Sheets contain (or the package's), and its own schedules. Empty for a package of one.
+    /// </summary>
+    public static List<Berth> ChildrenOf(Berth package)
+    {
+        var values = Values(package.Value);
+        if (package.Parent.Length > 0 || values.Count < 2 || package.FindBy is not (BerthStatusMath.FindBy.Parameter or BerthStatusMath.FindBy.ScopeBox)) return [];
+        var sheets = Values(package.Sheets);
+        var schedules = Values(package.Schedules);
+        return values.Select((v, i) => new Berth(package.Model, ChildName(v), package.FindBy, v, package.Parameter,
+            sheets.Count == values.Count ? sheets[i] : package.Sheets, schedules.Count == values.Count ? schedules[i] : "", package.Name)).ToList();
+    }
+
+    /// <summary>What is read from the model: each berth of a package of several, and each package of one.</summary>
+    public static List<Berth> Units(IEnumerable<Berth> packages) => packages.SelectMany(b => ChildrenOf(b) is { Count: > 0 } c ? c : [b]).ToList();
+
+    /// <summary>The package a berth belongs to (itself for a package).</summary>
+    public static Berth PackageOf(Setup setup, Berth berth) =>
+        berth.Parent.Length == 0 ? berth : setup.Berths.FirstOrDefault(b => Same(b.Model, berth.Model) && Same(b.Name, berth.Parent)) ?? berth;
 
     public static string KeyOf(string model, string berth) => model.Trim() + " | " + berth.Trim();
 
@@ -190,7 +240,8 @@ internal static class BerthStatusMath
     // ---- Results, hand entries and history (saved per project) ------------------------------------------------------
 
     /// <summary>Something to fix found in the model: the area, what (sheet, view, element), the problem, and its element id when it has one.</summary>
-    public sealed record Finding(string Area, string Item, string Problem, long? Id = null);
+    /// <param name="Fix">What the Fix button does: "uniformat" (fill the Assembly Codes), "tag:viewId:category" (tag the missing), "join:idA:idB" (join the clash).</param>
+    public sealed record Finding(string Area, string Item, string Problem, long? Id = null, string? Fix = null);
 
     /// <summary>What the model reading measured for one area of a berth. Percent null: not measured (no rule or plan for it).</summary>
     public sealed class AreaResult
@@ -308,7 +359,7 @@ internal static class BerthStatusMath
 
     /// <summary>The submissions for a berth (its own, and the model's for every berth), by due time.</summary>
     public static List<Submission> SubmissionsFor(Setup setup, Berth berth) =>
-        setup.Submissions.Where(s => Same(s.Model, berth.Model) && (s.Berth.Trim().Length == 0 || Same(s.Berth, berth.Name)))
+        setup.Submissions.Where(s => Same(s.Model, berth.Model) && (s.Berth.Trim().Length == 0 || Same(s.Berth, berth.Name) || (berth.Parent.Length > 0 && Same(s.Berth, berth.Parent))))
             .OrderBy(s => DueAt(s, setup.Week)).ToList();
 
     /// <summary>The next submission not yet made (an overdue one first), or null.</summary>
@@ -374,8 +425,9 @@ internal static class BerthStatusMath
 
     public static Summary Summarize(Setup setup, Berth berth, State state, DateTime now, Func<Deliverable, Berth, string>? findFile = null)
     {
-        var b = state.For(berth.Key);
-        var deliverables = DeliverableScores(setup, berth, b, findFile);
+        var b = Merged(berth, state);
+        // The deliverables (calculations, bills, costing) belong to the package: a berth of it shows the package's.
+        var deliverables = DeliverableScores(setup, berth, berth.Parent.Length > 0 ? state.For(KeyOf(berth.Model, berth.Parent)) : b, findFile);
         var scores = Scores(setup, berth, b, deliverables);
         var percent = Overall(scores);
         var next = Next(setup, berth);
@@ -389,6 +441,49 @@ internal static class BerthStatusMath
         return new Summary(berth, percent, next, due, hours, finish, b.FinishByHand is not null, verdict, scores, deliverables, b, last);
     }
 
+    /// <summary>
+    /// The berth's state; for a package of several berths, its own (hand entries, comment, history) with the model results
+    /// of its berths put together: each area's percentage is their average, and what to fix names the berth.
+    /// </summary>
+    public static BerthState Merged(Berth berth, State state)
+    {
+        var own = state.For(berth.Key);
+        var children = ChildrenOf(berth);
+        if (children.Count == 0) return own;
+        var parts = children.Select(c => (c, s: state.Berths.TryGetValue(c.Key, out var x) ? x : null)).Where(p => p.s is not null).ToList();
+        var merged = new BerthState
+        {
+            Hand = own.Hand, Delivered = own.Delivered, FinishByHand = own.FinishByHand, Comment = own.Comment, History = own.History,
+            ReadAt = parts.Select(p => p.s!.ReadAt).Max(), ReadFrom = parts.Select(p => p.s!.ReadFrom).FirstOrDefault(f => f.Length > 0) ?? "",
+        };
+        foreach (var key in parts.SelectMany(p => p.s!.Results.Keys).Distinct())
+        {
+            var each = parts.Where(p => p.s!.Results.ContainsKey(key)).Select(p => (p.c, r: p.s!.Results[key])).ToList();
+            var known = each.Where(e => e.r.Percent is not null).ToList();
+            merged.Results[key] = new AreaResult
+            {
+                Percent = known.Count == 0 ? null : known.Average(e => e.r.Percent!.Value),
+                Done = each.Sum(e => e.r.Done), Total = each.Sum(e => e.r.Total),
+                Summary = string.Join(" · ", each.Select(e => $"{e.c.Name}: {Pct(e.r.Percent)}")),
+                Findings = each.SelectMany(e => e.r.Findings.Select(f => f with { Item = $"{e.c.Name} · {f.Item}" })).ToList(),
+            };
+        }
+        return merged;
+    }
+
+    /// <summary>After a reading: a history point for each package of several berths, from its berths' results.</summary>
+    public static void RecordPackages(Setup setup, State state, DateTime now)
+    {
+        foreach (var package in setup.Berths.Where(b => ChildrenOf(b).Count > 0))
+        {
+            var b = state.For(package.Key);
+            if (Overall(Scores(setup, package, Merged(package, state))) is not { } p) continue;
+            b.History.RemoveAll(h => h.At > now.AddHours(-1) && h.At <= now);
+            b.History.Add(new Snapshot(now, Math.Round(p, 1)));
+            if (b.History.Count > 400) b.History.RemoveRange(0, b.History.Count - 400);
+        }
+    }
+
     /// <summary>The berth a text names: its name, its code (the first word, such as T3), its key, or the only one containing the text.</summary>
     public static Berth? FindBerth(Setup setup, string text)
     {
@@ -396,6 +491,10 @@ internal static class BerthStatusMath
         if (t.Length == 0) return null;
         var exact = setup.Berths.Where(b => Same(b.Name, t) || Same(b.Key, t) || Same(b.Name.Split(' ')[0], t)).ToList();
         if (exact.Count == 1) return exact[0];
+        // One berth of a package: "Berth 9", or with its package's code ("T3 Berth 9").
+        var units = Units(setup.Berths).Where(b => b.Parent.Length > 0).ToList();
+        var one = units.Where(b => Same(b.Name, t) || Same(b.Key, t) || Same(b.Parent.Split(' ')[0] + " " + b.Name, t)).ToList();
+        if (one.Count == 1) return one[0];
         var part = setup.Berths.Where(b => b.Name.IndexOf(t, StringComparison.OrdinalIgnoreCase) >= 0 || b.Key.IndexOf(t, StringComparison.OrdinalIgnoreCase) >= 0).ToList();
         return part.Count == 1 ? part[0] : null;
     }
@@ -538,6 +637,7 @@ internal static class BerthStatusMath
     private static readonly string[] DeliverableCols = ["Deliverable", "Folder", "File name contains"];
     private static readonly string[] WeightCols = ["Area", "Weight", "What it measures"];
     private static readonly string[] WeekCols = ["Setting", "Value"];
+    private static readonly string[] TagCols = ["View or sheet name contains", "Tag these categories"];
 
     /// <summary>The setup as an Excel workbook to fill in or change, and import back.</summary>
     public static List<OfficeXlsx.Sheet> SetupSheets(Setup s)
@@ -566,9 +666,10 @@ internal static class BerthStatusMath
                 ["Start", week.Start.ToString(@"hh\:mm", CultureInfo.InvariantCulture)],
                 ["End", week.End.ToString(@"hh\:mm", CultureInfo.InvariantCulture)],
                 ["Due time", week.Due.ToString(@"hh\:mm", CultureInfo.InvariantCulture)],
-                ["Tag categories", string.Join(", ", s.TagCategories)],
                 ["Clash tolerance (mm)", s.ClashToleranceMm.ToString(CultureInfo.InvariantCulture)],
             ], [22, 70]),
+            Sheet("Tagging", "Tagging: views (or sheets) whose name has the text must tag every element of these categories; other views need dimensions only", TagCols,
+                s.TagRules.Select(r => new object?[] { r.ViewContains, r.Categories }), [34, 50]),
         ];
     }
 
@@ -695,6 +796,10 @@ internal static class BerthStatusMath
                 case "tag categories": s.TagCategories = value.Split([',', ';'], StringSplitOptions.RemoveEmptyEntries).Select(x => x.Trim()).Where(x => x.Length > 0).ToList(); break;
             }
         }
+        // The Tagging sheet replaces the defaults (empty: no view needs tags); an older file without it keeps them.
+        if (sheets.ContainsKey("Tagging"))
+            s.TagRules = Table("Tagging", TagCols).Where(r => V(r, "View or sheet name contains").Length > 0)
+                .Select(r => new TagRule(V(r, "View or sheet name contains"), V(r, "Tag these categories"))).ToList();
         if (s.Berths.Count == 0) problems.Insert(0, "the Berths sheet has no berths (it needs the columns Model and Berth)");
         if (problems.Count > 0) throw new InvalidDataException(string.Join("; ", problems) + ".");
         return s;
