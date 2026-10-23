@@ -15,7 +15,7 @@ namespace SketchProMax.Revit;
 /// idle a few seconds later, the LOI matrix's information the model gives (material, sizes, length, levels...) is filled
 /// on the types placed, retyped or changed, a few types at a time, in its own transaction ("Sketch ProMax: fill the LOI
 /// data"). Never overwrites a value. A "slightly off axis" warning raised by an edit is not kept: nothing is moved, the
-/// warning just isn't recorded (Ahmed: submitted geometry must not change, inclined elements stay as drawn).
+/// warning just isn't recorded (BIM lead: submitted geometry must not change, inclined elements stay as drawn).
 /// </summary>
 internal static class BimReady
 {
