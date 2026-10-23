@@ -610,6 +610,7 @@ internal static class FieldTestCoverage
         new(45, ["tool:arrange_tags"], "a view with no tags says what it has instead"),
         new(46, ["berth.ui"], "after Setup > Import the setup Excel the window shows the berths, not a blank page"),
         new(47, ["berth.read"], "a pair Revit cannot intersect is skipped, the clash area still gets its result"),
+        new(48, ["berth.ui"], "opened on one model, only that model's submissions show (not every model of the setup)"),
     ];
 
     /// <summary>
