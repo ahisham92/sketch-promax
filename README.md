@@ -84,6 +84,14 @@ Updates need no restart either: with an update folder set, Sketch ProMax republi
 
 Problem reports come back to you: on a colleague's PC TritoRevit makes **Documents\TritoRevit - <pack name>** (for example TritoRevit - Pre Submission Checklist) with a **Bugs** folder and a short how-to. **Report a problem** (at the bottom of the checklist window, or in **Shared tools**) saves one small zip there with a picture of Revit, the versions, the pack revision and what failed; TritoRevit also saves one by itself when a shared tool fails. A copy goes to **Bug reports** in the pack's update folder when their PC can reach it, so you get it without asking; otherwise they send you the zip. Their checklist Word files and PDFs are saved in the same folder.
 
+## License
+
+Sketch ProMax works on the owner's PC and on PCs with a key made for them. On any other PC, **License** (Sketch ProMax tab) shows the PC's code, for example `SPM-7K2Q-9XW4-M3TD`; the user sends it to the owner, who sends back a key that works on that PC only (pasted on another PC it says the key belongs to another PC). Without a valid key the tools and the chat are off; updates, help, settings and bug reports still work. TritoRevit's shared tools need no key.
+
+On the owner's PC the same button opens the **License manager**: make a key for a PC code with a name and an end date (or none), change a key's end date, cancel a key, and export the list to Excel. Keys are signed with the owner's signing secret, which is never in this repository; the add-in carries only the public half, so it can check keys but not make them. A later end date is simply a new key. An earlier date or a cancel reaches a PC that already has its key through `licenses/changes.txt` (key ids only), which licensed PCs read at each Revit start; the manager publishes it with the owner's GitHub token, added once.
+
+The code is public, so this stops keys being passed around, not someone rebuilding the add-in without the check.
+
 ## Updates
 
 Install once; after that Sketch ProMax updates itself, without restarting Revit. Each time Revit starts, and hourly while it is open, it checks this repository's latest GitHub Release. When there is a newer version a small window shows it downloading (percent and MB), verifying, unpacking and applying; you can hide it and keep working, or cancel the download. As soon as Revit is idle and no job is running, Sketch ProMax switches to the new version in place and says "Updated to X". The Claude app sees the new tool list straight away. Your settings are kept. Turn this off from **Settings**, or check right away with **Check now**.

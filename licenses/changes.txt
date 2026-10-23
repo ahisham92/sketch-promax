@@ -1,0 +1,3 @@
+# Sketch ProMax license changes, read by every licensed PC at start (Licensing/LicenseState).
+# One per line, by key id only: "<id> ends yyyy-MM-dd" (an earlier end date) or "<id> cancelled".
+# Written by the License manager on the owner's PC; no names or PC codes here.

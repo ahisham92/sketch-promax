@@ -186,6 +186,15 @@ public sealed class App : IExternalApplication
             try { StartupTimings.Time("chat hooks", () => Chat.ChatPane.Start(app)); } catch (Exception) { /* the chat tab says what is wrong when it is opened */ }
             try { StartupTimings.Time("restart note", () => UI.RestartNote.AfterStart(Ui)); } catch (Exception) { /* the chat and the Version button still say it */ }
             try { StartupTimings.Time("time log", () => TimeLog.Start(app)); } catch (Exception) { /* tasks still run; time is not counted */ }
+            // This PC's license (Licensing/LicenseState): without a valid key the License window opens at the first idle moment.
+            try
+            {
+                StartupTimings.Time("license", () =>
+                {
+                    if (!Licensing.LicenseState.Allowed) Dispatcher.Later(() => UI.LicenseWindow.Open());
+                });
+            }
+            catch (Exception) { /* the License button still opens it */ }
         }
         CentralAccess.Watch(app);
         // Our exceptions that reach Revit's UI thread are caught and logged; one on a background thread is logged before Revit closes.
@@ -225,6 +234,8 @@ public sealed class App : IExternalApplication
         // Revit closed during a field test last time: its report of what ran, then the user is told once.
         try { Tools.FieldTest.AfterStart(); } catch (Exception) { }
         try { ClaudeRegistration.Ensure(); } catch (Exception) { }
+        // The owner's changes to keys given out (a shorter date, a cancelled key), kept for offline days.
+        try { await Licensing.LicenseState.RefreshChangesAsync(stop).ConfigureAwait(false); } catch (Exception) { }
         // Moves a manifest from an older release onto the one fixed loader path, once; writes nothing when settled.
         try { Updater.SettleInstall(); } catch (Exception) { }
         if (stop.IsCancellationRequested) return;

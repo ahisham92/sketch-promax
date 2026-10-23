@@ -1962,6 +1962,12 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     private async Task SendAsync()
     {
         if (_stopped) return;
+        // A PC without a valid key: the License window, and nothing is sent.
+        if (UI.LicenseWindow.BlockIfLocked())
+        {
+            Status("Sketch ProMax needs a license for this PC. Send the PC code in the License window for a key.", spin: false);
+            return;
+        }
         // In a job's view the message goes to that job, also while the main chat answers.
         if (_viewJob is { } shownJob)
         {
