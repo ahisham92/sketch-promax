@@ -25,9 +25,11 @@ namespace SketchProMax.UI;
 /// costing is (a ring), its cost and US$ per linear metre; click a berth for its costs by group and item, where each
 /// quantity came from (the model, by hand, worked out) and what is missing. The unit costs and the item rules are
 /// editable at any time. Measure reads the open model per berth in short steps (BerthCostFacts), leaving out what a
-/// berth excludes (Berth 9's RoRo part). The chosen berths go out as the cost comparison workbook, a BOQ Excel each and
-/// one Word back-up calculation, each made from the user's own file so it has its format, and each file marks its
-/// deliverable done in the berth status. Reads the model only.
+/// berth excludes (Berth 9's RoRo part); while the window is open it measures again by itself a few seconds after the
+/// model changes, so the costs and US$/lm follow the model. The ticked berths go out as a costing workbook, a BOQ Excel
+/// each and one Word back-up calculation in the built-in formats (BerthCostDocs) with the ticked items, their
+/// descriptions filled from the model; a project can export a format, edit it in Excel or Word and import it back as its
+/// own template (BerthCostExports fills it). Each file marks its deliverable done in the berth status. Reads the model only.
 /// </summary>
 internal sealed class BerthCostWindow : Window
 {
@@ -40,7 +42,7 @@ internal sealed class BerthCostWindow : Window
     private BerthStatusMath.Setup? _setup;
     private string _selected = "";
     private readonly HashSet<string> _chosen = new(StringComparer.OrdinalIgnoreCase);
-    private string _page = "berth"; // berth, rates, items
+    private string _page = "berth"; // berth, rates, items, details
     private bool _reading, _stop, _closed;
     private string _savedText = "";
 
@@ -53,6 +55,10 @@ internal sealed class BerthCostWindow : Window
     private readonly Button _measure = RichUi.Button(RichUi.Icon.Refresh, "Measure the model", Brand.Weight.Primary);
     private readonly Button _stopButton = RichUi.Button(RichUi.Icon.Close, "Stop");
     private readonly TextBlock _subtitle = Brand.Text("", Brand.K.HeaderSub);
+    private readonly CheckBox _live = new() { Content = "Follow the model", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 12, 0) };
+    private readonly System.Windows.Threading.DispatcherTimer _follow = new() { Interval = TimeSpan.FromSeconds(1) };
+    private long _seen = -1;
+    private DateTime _changedAt = DateTime.MinValue;
 
     // ---- Opening --------------------------------------------------------------------------------------------------
 
@@ -95,7 +101,7 @@ internal sealed class BerthCostWindow : Window
         AutomationProperties.SetHelpText(_measure, "Reads the open model for the chosen berths (or all of this model's berths), in short steps so Revit stays usable.");
         _stopButton.Click += (_, _) => { _stop = true; Brand.SetBusy(_stopButton, true, "Stopping…"); };
         PreviewKeyDown += (_, e) => { if (e.Key == Key.Escape && !_reading) Close(); };
-        Closed += (_, _) => { _closed = true; _stop = true; Save(); };
+        Closed += (_, _) => { _closed = true; _stop = true; _follow.Stop(); Save(); };
         Deactivated += (_, _) => { if (!_reading) Save(); };
         // The chat can change rates and quantities too (berth_costing): coming back shows them.
         Activated += (_, _) =>
@@ -105,6 +111,34 @@ internal sealed class BerthCostWindow : Window
         };
         Load();
         Build();
+        _live.IsChecked = _p.Follow;
+        AutomationProperties.SetHelpText(_live, "Measure the open model again by itself a few seconds after it changes, so the costs follow the model.");
+        _live.Checked += (_, _) => { _p.Follow = true; Save(); _seen = -1; };
+        _live.Unchecked += (_, _) => { _p.Follow = false; Save(); };
+        _follow.Tick += async (_, _) => await Follow();
+        _follow.Start();
+    }
+
+    /// <summary>
+    /// Every second: when the models changed (the change count moved) and have been quiet for 3 seconds, the open
+    /// model's berths are measured again in steps. The first tick after opening measures once if the open model's
+    /// berths were never measured or measured over an hour ago.
+    /// </summary>
+    private async Task Follow()
+    {
+        if (_closed || _reading || !_p.Follow || _project.Length == 0 || !IsLoaded) return;
+        var now = Revit.TimeLog.Changes;
+        if (_seen < 0)
+        {
+            _seen = now;
+            var mine = Berths().Where(b => OpenSite.Length == 0 || Same(b.Site, OpenSite)).ToList();
+            if (_file.Length > 0 && mine.Count > 0 && mine.Any(b => b.Measured is null || (DateTime.Now - b.Measured.At).TotalHours > 1)) await Measure(quiet: true);
+            return;
+        }
+        if (now != _seen) { _seen = now; _changedAt = DateTime.Now; return; }
+        if (_changedAt == DateTime.MinValue || (DateTime.Now - _changedAt).TotalSeconds < 3) return;
+        _changedAt = DateTime.MinValue;
+        await Measure(quiet: true);
     }
 
     private void Load()
@@ -133,7 +167,7 @@ internal sealed class BerthCostWindow : Window
 
     private void Build()
     {
-        foreach (var reused in new FrameworkElement[] { _status, _list, _detail, _runStrip, _runText, _runBar, _measure, _stopButton, _subtitle })
+        foreach (var reused in new FrameworkElement[] { _status, _list, _detail, _runStrip, _runText, _runBar, _measure, _stopButton, _subtitle, _live })
             switch (reused.Parent)
             {
                 case Panel p: p.Children.Remove(reused); break;
@@ -144,7 +178,7 @@ internal sealed class BerthCostWindow : Window
 
         var band = Brand.Header("Berth costing", null);
         if (band.Child is DockPanel row && row.Children.OfType<StackPanel>().LastOrDefault() is { } texts) texts.Children.Add(_subtitle);
-        band.Padding = new Thickness(16, 12, 520, 12);
+        band.Padding = new Thickness(16, 12, 720, 12);
         var header = new Grid();
         header.Children.Add(band);
         var right = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 18, 0) };
@@ -159,9 +193,12 @@ internal sealed class BerthCostWindow : Window
             return b;
         }
         Top(RichUi.Icon.Edit, "Unit costs", "Change the unit costs and the pile rate basis; every berth's cost follows.", () => { _page = "rates"; ShowDetail(); });
-        Top(RichUi.Icon.Settings, "Items", "How each item is found in the model and in the BOQ, and its back-up section.", () => { _page = "items"; ShowDetail(); });
-        var files = Top(RichUi.Icon.Folder, "Your files", "Pick the cost comparison workbook, the BOQ and the back-up calculation the exports are made from.", () => { });
-        files.Click += (_, _) => FilesMenu(files);
+        Top(RichUi.Icon.Settings, "Items", "Which items go in the files, how each is found in the model, its BOQ description and back-up section.", () => { _page = "items"; ShowDetail(); });
+        Top(RichUi.Icon.Edit, "Project details", "The header lines, title and document number printed on the BOQ, typed once for the project.", () => { _page = "details"; ShowDetail(); });
+        var files = Top(RichUi.Icon.Folder, "Templates", "Export a built-in format to edit in Excel or Word and import it back as this project's own template.", () => { });
+        files.Click += (_, _) => TemplatesMenu(files);
+        _live.IsEnabled = _project.Length > 0;
+        right.Children.Add(_live);
         _measure.VerticalAlignment = VerticalAlignment.Center;
         _measure.IsEnabled = _project.Length > 0;
         right.Children.Add(_measure);
@@ -183,9 +220,9 @@ internal sealed class BerthCostWindow : Window
         var close = RichUi.Button(RichUi.Icon.Close, "Close");
         close.Click += (_, _) => Close();
         var all = RichUi.Button(RichUi.Icon.Export, "Make all three", Brand.Weight.Primary);
-        AutomationProperties.SetHelpText(all, "Makes the cost comparison, a BOQ per berth and the back-up calculation for the ticked berths, and marks them done in the berth status.");
+        AutomationProperties.SetHelpText(all, "Makes the costing, a BOQ per berth and the back-up calculation for the ticked berths, and marks them done in the berth status.");
         all.Click += (_, _) => Export(Made.Comparison, Made.Boq, Made.Backup);
-        var comparison = RichUi.Button(RichUi.Icon.Export, "Cost comparison");
+        var comparison = RichUi.Button(RichUi.Icon.Export, "Costing Excel");
         comparison.Click += (_, _) => Export(Made.Comparison);
         var boq = RichUi.Button(RichUi.Icon.Export, "BOQ Excel");
         boq.Click += (_, _) => Export(Made.Boq);
@@ -228,7 +265,7 @@ internal sealed class BerthCostWindow : Window
 
     // ---- The berth list -------------------------------------------------------------------------------------------
 
-    private void Refresh()
+    private void Refresh(bool detail = true)
     {
         var berths = Berths();
         _subtitle.Text = _project.Length == 0 ? "Open a model of the project first"
@@ -256,7 +293,7 @@ internal sealed class BerthCostWindow : Window
         sums.Children.Add(Brand.Text("All berths", size: 14, bold: true));
         sums.Children.Add(Small(costed.Count == 0 ? "Nothing measured yet: press Measure the model with a model open." :
             $"{costed.Count} of {berths.Count} costed · {BerthCostMath.Money(structural, _p.Currency)}" + (length > 0 ? $" · {BerthCostMath.Money(structural / length, _p.Currency)} / lm" : "")));
-        sums.Children.Add(Small($"Tick berths to make their files; {_chosen.Count} ticked."));
+        sums.Children.Add(Small($"Tick berths to make their files; {_chosen.Count} ticked." + (_p.Follow ? " Costs follow the model." : "")));
         top.Children.Add(sums);
         _list.Children.Add(top);
 
@@ -270,7 +307,7 @@ internal sealed class BerthCostWindow : Window
             _list.Children.Add(tiles);
         }
         _list.Children.Add(AddBerthBox());
-        ShowDetail();
+        if (detail) ShowDetail();
     }
 
     private FrameworkElement BerthTile(Berth b)
@@ -349,6 +386,7 @@ internal sealed class BerthCostWindow : Window
         {
             "rates" => RatesPage(),
             "items" => ItemsPage(),
+            "details" => DetailsPage(),
             _ => Selected is { } b ? BerthPage(b) : Para("Pick a berth on the left.", Brand.K.Muted),
         };
     }
@@ -428,7 +466,7 @@ internal sealed class BerthCostWindow : Window
         page.Children.Add(groups);
 
         page.Children.Add(Section("Items"));
-        page.Children.Add(Small("Type a quantity to set it by hand (empty: the model's). Worked-out items follow the concrete and the kg/m³. Show selects the elements in Revit."));
+        page.Children.Add(Small("Tick the items that go in the files. Type a quantity to set it by hand (empty: the model's). Worked-out items follow the concrete and the kg/m³. Under each item, its BOQ description with this berth's numbers. Show selects the elements in Revit."));
         page.Children.Add(ItemsTable(b));
 
         var missing = Missing(_p, b);
@@ -445,19 +483,30 @@ internal sealed class BerthCostWindow : Window
     private FrameworkElement ItemsTable(Berth b)
     {
         var grid = new Grid { Margin = new Thickness(0, 6, 0, 0) };
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         foreach (var w in new[] { 0.35, 2.6, 1.0, 0.5, 0.8, 1.0, 1.1, 0.6 }) grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(w, GridUnitType.Star) });
         grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        string[] heads = ["#", "ITEM", "QUANTITY", "UNIT", "FROM", "RATE", "COST", ""];
+        string[] heads = ["IN FILES", "#", "ITEM", "QUANTITY", "UNIT", "FROM", "RATE", "COST", ""];
         for (var i = 0; i < heads.Length; i++) Put(grid, Brand.Text(heads[i], Brand.K.Muted, 10.5, bold: true), 0, i);
         var row = 1;
         foreach (var line in Costs(_p, b))
         {
             var item = line.Item;
             grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            Put(grid, Brand.Text(item.No.ToString(CultureInfo.InvariantCulture), Brand.K.Muted, 12), row, 0);
-            Put(grid, Brand.Text(item.Name, size: 12), row, 1);
+            // Ticked items go in the BOQ and the back-up (for every berth of the project); the cost counts every item.
+            var inFiles = new CheckBox { IsChecked = item.InFiles, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(4, 4, 10, 0), ToolTip = "In the BOQ and the back-up calculation" };
+            AutomationProperties.SetName(inFiles, item.Name + " in the files");
+            inFiles.Checked += (_, _) => { item.InFiles = true; Changed(); };
+            inFiles.Unchecked += (_, _) => { item.InFiles = false; Changed(); };
+            Put(grid, inFiles, row, 0);
+            Put(grid, Brand.Text(item.No.ToString(CultureInfo.InvariantCulture), Brand.K.Muted, 12), row, 1);
+            var name = new StackPanel { Margin = new Thickness(0, 2, 8, 4) };
+            name.Children.Add(Brand.Text(item.Name, item.InFiles ? Brand.K.Text : Brand.K.Muted, 12));
+            // Its BOQ description with the berth's numbers (pile lengths, tips, tonnage) as it will be printed.
+            if (item.BoqText.Length > 0 && line.Qty is > 0) name.Children.Add(Small(Describe(_p, b, item)));
+            Put(grid, name, row, 2);
             if (item.No is InfillRebar or SuperRebar && line.From != Source.Hand)
-                Put(grid, Brand.Text(Qty(line.Qty), size: 12), row, 2);
+                Put(grid, Brand.Text(Qty(line.Qty), size: 12), row, 3);
             else
             {
                 var box = Field(b.Hand.TryGetValue(item.No, out var h) ? h.ToString("0.###", CultureInfo.InvariantCulture) : "", item.Name + " quantity");
@@ -472,18 +521,20 @@ internal sealed class BerthCostWindow : Window
                     else { _status.Text = $"{item.Name}: type a number, or leave it empty for the model's."; return; }
                     Changed();
                 };
-                Put(grid, box, row, 2);
+                box.VerticalAlignment = VerticalAlignment.Top;
+                Put(grid, box, row, 3);
             }
-            Put(grid, Brand.Text(item.Unit, Brand.K.Muted, 12), row, 3);
+            Put(grid, Brand.Text(item.Unit, Brand.K.Muted, 12), row, 4);
             Put(grid, Brand.Text(line.From switch { Source.Model => "model", Source.Hand => "by hand", Source.Worked => "worked out", _ => "–" },
-                line.From == Source.Hand ? Brand.K.WarningText : Brand.K.Muted, 11.5), row, 4);
-            Put(grid, Right(Brand.Text(line.Rate > 0 ? line.Rate.ToString("#,0.##", CultureInfo.InvariantCulture) : "–", size: 12)), row, 5);
-            Put(grid, Right(Brand.Text(line.Cost > 0 ? Math.Round(line.Cost).ToString("#,0", CultureInfo.InvariantCulture) : "–", size: 12)), row, 6);
+                line.From == Source.Hand ? Brand.K.WarningText : Brand.K.Muted, 11.5), row, 5);
+            Put(grid, Right(Brand.Text(line.Rate > 0 ? line.Rate.ToString("#,0.##", CultureInfo.InvariantCulture) : "–", size: 12)), row, 6);
+            Put(grid, Right(Brand.Text(line.Cost > 0 ? Math.Round(line.Cost).ToString("#,0", CultureInfo.InvariantCulture) : "–", size: 12)), row, 7);
             if (b.Measured?.Ids.TryGetValue(item.No, out var ids) == true && ids.Count > 0)
             {
                 var show = new Button { Content = "Show", Padding = new Thickness(6, 1, 6, 1), Margin = new Thickness(6, 1, 0, 1), ToolTip = $"Select the {ids.Count} elements in Revit" };
                 show.Click += async (_, _) => await ShowInRevit(ids);
-                Put(grid, show, row, 7);
+                show.VerticalAlignment = VerticalAlignment.Top;
+                Put(grid, show, row, 8);
             }
             row++;
         }
@@ -511,7 +562,7 @@ internal sealed class BerthCostWindow : Window
     {
         var page = new StackPanel();
         page.Children.Add(Heading("Unit costs"));
-        page.Children.Add(Para("Change any rate at any time; every berth's cost follows. They come from your cost comparison workbook (Your files > Take the unit costs from it) and go back into it when you make it.", Brand.K.Muted));
+        page.Children.Add(Para("Change any rate at any time; every berth's cost follows. Templates > Take the unit costs from a cost comparison workbook fills them from one.", Brand.K.Muted));
         page.Children.Add(Section("Bored pile rate"));
         page.Children.Add(Small("A bored pile's rate per lm is rebuilt from the given pile rate (R_PILE_GIVEN) for its own diameter and kg/m³: installation scaled by area (or by diameter), plus its concrete and reinforcement."));
         var basis = new WrapPanel { Margin = new Thickness(0, 4, 0, 0) };
@@ -575,7 +626,9 @@ internal sealed class BerthCostWindow : Window
         page.Children.Add(Heading("Items"));
         page.Children.Add(Para("How each item is found. Model rule: cat=category; a parameter=value (* any text, several with ,; != for not); thick=mm,mm for floors; " +
             "over=parameter=value for floors over those elements; measure=count, length, volume, area or weight; table=tube, core, pile or slab for the back-up; group=a parameter, thickness or number; " +
-            "OR between two ways. BOQ row: words in its description (; all of them, | choices, ^ starts with, = the whole text).", Brand.K.Muted));
+            "OR between two ways. BOQ description: the words printed in the BOQ, with {count}, {height}, {tips}, {tip}, {od}, {id}, {t}, {d}, {dmm}, {rebar}, {thicks}, {type}, {items} " +
+            "filled from the model per berth (a figure the model doesn't give prints as …). BOQ section: SECTION|Sub-heading ({n} the berth). Own BOQ row: for a project's own BOQ template, " +
+            "words in its row's description (; all of them, | choices, ^ starts with, = the whole text). Untick an item to leave it out of the BOQ and the back-up.", Brand.K.Muted));
         var reset = RichUi.Button(RichUi.Icon.Reset, "Back to the standard items");
         reset.HorizontalAlignment = HorizontalAlignment.Left;
         reset.Margin = new Thickness(0, 8, 0, 4);
@@ -584,7 +637,14 @@ internal sealed class BerthCostWindow : Window
         foreach (var item in _p.Items)
         {
             var box = new StackPanel();
-            box.Children.Add(Brand.Text($"{item.No}. {item.Name}  ·  {item.Unit}  ·  {item.Group}  ·  rate {item.RateCode}", size: 12.5, bold: true));
+            var tick = new CheckBox
+            {
+                IsChecked = item.InFiles, Content = Brand.Text($"{item.No}. {item.Name}  ·  {item.Unit}  ·  {item.Group}  ·  rate {item.RateCode}", size: 12.5, bold: true),
+                ToolTip = "Ticked: in the BOQ and the back-up calculation",
+            };
+            tick.Checked += (_, _) => { item.InFiles = true; Save(); };
+            tick.Unchecked += (_, _) => { item.InFiles = false; Save(); };
+            box.Children.Add(tick);
             TextBox Line(string label, string text, Action<string> set)
             {
                 var row = new DockPanel { Margin = new Thickness(0, 3, 0, 0) };
@@ -605,68 +665,152 @@ internal sealed class BerthCostWindow : Window
                 try { if (v.Length > 0) ParseRule(v); item.Rule = v; }
                 catch (FormatException ex) { _status.Text = $"{item.Name}: {ex.Message} Not changed."; }
             });
-            Line("BOQ row", item.Boq, v => item.Boq = v);
+            Line("BOQ description", item.BoqText, v => item.BoqText = v);
+            Line("BOQ section", item.Section, v => item.Section = v);
+            Line("BOQ unit", item.BoqUnit, v => item.BoqUnit = v);
+            Line("Own BOQ row", item.Boq, v => item.Boq = v);
             Line("Back-up", item.Backup, v => item.Backup = v);
             page.Children.Add(Box(box, top: 8));
         }
         return page;
     }
 
-    // ---- Your files ---------------------------------------------------------------------------------------------------
+    // ---- Project details ------------------------------------------------------------------------------------------------
 
-    private void FilesMenu(Button anchor)
+    private FrameworkElement DetailsPage()
+    {
+        var d = _p.Details;
+        var page = new StackPanel();
+        page.Children.Add(Heading("Project details"));
+        page.Children.Add(Para("What the built-in BOQ prints about the project, typed once. {n} is the berth's number, {nn} the same with two digits, {length} its quay length.", Brand.K.Muted));
+        void Text(string label, string help, string value, Action<string> set, bool lines = false)
+        {
+            page.Children.Add(Section(label));
+            page.Children.Add(Small(help));
+            var box = Field(value, label);
+            box.Margin = new Thickness(0, 4, 0, 0);
+            if (lines) { box.AcceptsReturn = true; box.TextWrapping = TextWrapping.Wrap; box.MinHeight = 64; box.VerticalContentAlignment = VerticalAlignment.Top; }
+            box.LostFocus += (_, _) => { var v = box.Text.Replace("\r\n", "\n").TrimEnd(); if (v != value) { value = v; set(v); Save(); } };
+            page.Children.Add(box);
+        }
+        Text("Page header, left", "The project's lines at the top left of every BOQ page (one per line).", d.HeaderLeft, v => d.HeaderLeft = v, lines: true);
+        Text("Page header, right", "Lines at the top right (for example the stage or the client's reference).", d.HeaderRight, v => d.HeaderRight = v, lines: true);
+        Text("Structure title", "Under the works' name at the top of the bill.", d.Title, v => d.Title = v);
+        Text("Document number", "In the footer and the file name, for example PRJ1-B{nn}-BOQ. Empty: the file is named BOQ Berth nn.", d.DocNumber, v => d.DocNumber = v);
+        Text("Works", "The works' name: the bill's heading, the footer and the summary line.", d.Works, v => d.Works = v);
+        var rates = new CheckBox { Content = "Print the unit rates and amounts in the BOQ (unticked: an empty bill for pricing)", IsChecked = d.BoqRates, Margin = new Thickness(0, 14, 0, 0) };
+        rates.Checked += (_, _) => { d.BoqRates = true; Save(); };
+        rates.Unchecked += (_, _) => { d.BoqRates = false; Save(); };
+        page.Children.Add(rates);
+        page.Children.Add(Section("Where the files go"));
+        page.Children.Add(Small(OutputFolder()));
+        return page;
+    }
+
+    // ---- Templates ----------------------------------------------------------------------------------------------------
+
+    private void TemplatesMenu(Button anchor)
     {
         var menu = new ContextMenu { PlacementTarget = anchor, Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom };
         void Item(string text, Action go, bool enabled = true)
         {
-            var mi = new MenuItem { Header = text, IsEnabled = enabled };
+            var mi = new MenuItem { Header = text, IsEnabled = enabled && _project.Length > 0 };
             mi.Click += (_, _) => go();
             menu.Items.Add(mi);
         }
-        string Named(string path) => path.Length > 0 && File.Exists(path) ? " (" + Path.GetFileName(path) + ")" : " (not picked)";
-        Item("Cost comparison workbook…" + Named(_p.ComparisonTemplate), () => Pick("comparison"), _project.Length > 0);
-        Item("BOQ of a berth…" + Named(_p.BoqTemplate), () => Pick("boq"), _project.Length > 0);
-        Item("Back-up calculation (Word)…" + Named(_p.BackupTemplate), () => Pick("backup"), _project.Length > 0);
+        string Using(string path) => File.Exists(path) ? "this project's own (" + Strip(path) + ")" : "built in";
+        menu.Items.Add(new MenuItem { Header = $"BOQ: {Using(_p.BoqTemplate)}", IsEnabled = false });
+        Item("Export the BOQ format to edit in Excel…", () => ExportFormat(Made.Boq), Selected is not null);
+        Item("Use an edited BOQ as this project's…", () => Pick(Made.Boq));
+        Item("BOQ back to the built-in format", () => Base(Made.Boq), File.Exists(_p.BoqTemplate));
         menu.Items.Add(new Separator());
-        Item("Take the unit costs and berth data from the comparison workbook", () => ImportComparison(_p.ComparisonTemplate), File.Exists(_p.ComparisonTemplate));
-        Item("Open the costing folder", () => Shell(OutputFolder()), _project.Length > 0);
+        menu.Items.Add(new MenuItem { Header = $"Back-up calculation: {Using(_p.BackupTemplate)}", IsEnabled = false });
+        Item("Export the back-up format to edit in Word…", () => ExportFormat(Made.Backup));
+        Item("Use an edited back-up calculation as this project's…", () => Pick(Made.Backup));
+        Item("Back-up back to the built-in format", () => Base(Made.Backup), File.Exists(_p.BackupTemplate));
+        menu.Items.Add(new Separator());
+        menu.Items.Add(new MenuItem { Header = $"Costing: {(File.Exists(_p.ComparisonTemplate) ? "your cost comparison workbook (" + Strip(_p.ComparisonTemplate) + ")" : "built in")}", IsEnabled = false });
+        Item("Make the costing in a cost comparison workbook…", () => Pick(Made.Comparison));
+        Item("Costing back to the built-in workbook", () => Base(Made.Comparison), File.Exists(_p.ComparisonTemplate));
+        Item("Take the unit costs from a cost comparison workbook…", () => { if (Choose(false, "A cost comparison workbook") is { } path) ImportComparison(path); });
+        menu.Items.Add(new Separator());
+        Item("Open the project's templates folder", () => { var f = Path.Combine(ProjectFolder(_project), "templates"); Directory.CreateDirectory(f); Shell(f); });
         menu.IsOpen = true;
     }
 
-    /// <summary>Copies the picked file into the project's costing folder (so it stays as it was) and uses it from there.</summary>
-    private void Pick(string kind)
+    private string? Choose(bool word, string title)
     {
-        var word = kind == "backup";
-        var dialog = new Microsoft.Win32.OpenFileDialog
-        {
-            Title = kind switch { "comparison" => "Your cost comparison workbook", "boq" => "The BOQ Excel of one berth", _ => "The back-up calculation Word file" },
-            Filter = word ? "Word document (*.docx)|*.docx" : "Excel workbook (*.xlsx)|*.xlsx",
-        };
-        if (dialog.ShowDialog(this) != true) return;
+        var dialog = new Microsoft.Win32.OpenFileDialog { Title = title, Filter = word ? "Word document (*.docx)|*.docx" : "Excel workbook (*.xlsx)|*.xlsx" };
+        return dialog.ShowDialog(this) == true ? dialog.FileName : null;
+    }
+
+    /// <summary>Writes the built-in format (with this project's figures) to edit and opens it; Use … brings it back.</summary>
+    private void ExportFormat(string kind)
+    {
         try
         {
             var folder = Path.Combine(ProjectFolder(_project), "templates");
             Directory.CreateDirectory(folder);
-            var copy = Path.Combine(folder, kind + " - " + Path.GetFileName(dialog.FileName));
-            File.Copy(dialog.FileName, copy, overwrite: true);
+            string path;
+            if (kind == Made.Boq)
+            {
+                if (Selected is not { } b) { _status.Text = "Pick a berth first: its BOQ is the format to edit."; return; }
+                path = OfficeDocs.FreePath(OutputFolder(), "BOQ format to edit", ".xlsx");
+                BerthCostDocs.WriteBoq(_p, b, path);
+            }
+            else
+            {
+                var berths = Chosen();
+                path = OfficeDocs.FreePath(OutputFolder(), "Back-up format to edit", ".docx");
+                BerthCostDocs.WriteBackup(_p, berths, path, example: true);
+            }
+            _status.Text = $"Wrote {Path.GetFileName(path)}. Change its layout, words and styles (keep one table of each kind), save it, then Templates > Use an edited … to make it this project's.";
+            Shell(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { _status.Text = "Couldn't write it: " + ex.Message; }
+    }
+
+    /// <summary>Copies the picked file into the project's templates folder (so it stays as it was) and uses it from there.</summary>
+    private void Pick(string kind)
+    {
+        var word = kind == Made.Backup;
+        var picked = Choose(word, kind switch { Made.Comparison => "Your cost comparison workbook", Made.Boq => "The edited BOQ (one berth's)", _ => "The edited back-up calculation" });
+        if (picked is null) return;
+        try
+        {
+            var folder = Path.Combine(ProjectFolder(_project), "templates");
+            Directory.CreateDirectory(folder);
+            var copy = Path.Combine(folder, kind + " - " + Path.GetFileName(picked));
+            File.Copy(picked, copy, overwrite: true);
             File.SetAttributes(copy, FileAttributes.Normal);
             switch (kind)
             {
-                case "comparison":
+                case Made.Comparison:
                     using (var book = XlsxBook.Read(copy)) BerthCostExports.Layout.Of(book);
                     _p.ComparisonTemplate = copy;
-                    ImportComparison(copy);
-                    return;
-                case "boq": _p.BoqTemplate = copy; break;
+                    break;
+                case Made.Boq: _p.BoqTemplate = copy; break;
                 default: _p.BackupTemplate = copy; break;
             }
             Changed();
-            _status.Text = $"Using {Path.GetFileName(dialog.FileName)} for the {(kind == "boq" ? "BOQ" : "back-up calculation")}.";
+            _status.Text = $"This project's {(kind == Made.Boq ? "BOQ" : kind == Made.Backup ? "back-up calculation" : "costing")} is now made in {Path.GetFileName(picked)}. Templates > back to the built-in undoes it.";
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or System.Xml.XmlException)
         {
             _status.Text = "Couldn't use it: " + ex.Message;
         }
+    }
+
+    private void Base(string kind)
+    {
+        switch (kind)
+        {
+            case Made.Comparison: _p.ComparisonTemplate = ""; break;
+            case Made.Boq: _p.BoqTemplate = ""; break;
+            default: _p.BackupTemplate = ""; break;
+        }
+        Changed();
+        _status.Text = "Back to the built-in format (the project's copy stays in its templates folder).";
     }
 
     private void ImportComparison(string path)
@@ -682,12 +826,14 @@ internal sealed class BerthCostWindow : Window
 
     // ---- Measuring --------------------------------------------------------------------------------------------------
 
-    private async Task Measure()
+    /// <param name="quiet">Following the model: all the open model's berths, nothing said when no model is open, and a
+    /// box being typed in keeps its focus.</param>
+    private async Task Measure(bool quiet = false)
     {
         if (_reading || _project.Length == 0) return;
         _reading = true;
         _stop = false;
-        Brand.SetBusy(_measure, true, "Measuring…");
+        Brand.SetBusy(_measure, true, quiet ? "Updating…" : "Measuring…");
         _runStrip.Visibility = Visibility.Visible;
         Brand.SetBusy(_stopButton, false);
         try
@@ -704,12 +850,13 @@ internal sealed class BerthCostWindow : Window
                 var site = setup is not null && BerthStatusMath.ModelFor(setup, _file) is { } m ? m.Name : "";
                 // This model's berths: the ticked ones of its site (or every one of its site); with no setup, every berth.
                 var mine = all.Where(b => site.Length == 0 || Same(b.Site, site)).ToList();
-                var ticked = mine.Where(b => _chosen.Contains(b.Key)).ToList();
+                var ticked = quiet ? new List<Berth>() : mine.Where(b => _chosen.Contains(b.Key)).ToList();
                 var list = ticked.Count > 0 ? ticked : mine;
                 return list.Count == 0 ? null : (Reading: BerthCostFacts.Plan(doc, _p, list), Berths: list, Model: doc.Title);
             });
             if (plan is null)
             {
+                if (quiet) return;
                 _status.Text = "No berth of the open model to measure: open the model (the berth status setup says which file is which site), or add a berth.";
                 return;
             }
@@ -719,19 +866,21 @@ internal sealed class BerthCostWindow : Window
             {
                 var done = reading.Total - reading.Left;
                 _runBar.Value = 100.0 * done / Math.Max(1, reading.Total);
-                _runText.Text = $"Measuring {model}: {reading.NextName} ({100 * done / Math.Max(1, reading.Total)}%). Revit stays usable; Stop ends it.";
+                _runText.Text = $"{(quiet ? "The model changed, updating" : "Measuring")} {model}: {reading.NextName} ({100 * done / Math.Max(1, reading.Total)}%). Revit stays usable; Stop ends it.";
             }
             if (_closed) return;
             if (_stop) { _status.Text = "Stopped. The quantities are as they were."; return; }
             BerthCostFacts.Apply(_p, reading);
             Save();
-            ActivityLog.Note("berth_costing_measure", $"{_project}: {string.Join(", ", berths.Select(b => b.Title))} in {model}, {clock.Elapsed.TotalSeconds:0.0} s");
-            Refresh();
-            _status.Text = $"Measured {berths.Count} berths at {DateTime.Now:HH:mm}." + (reading.Problems.Count > 0 ? " " + string.Join(" ", reading.Problems.Take(4)) : "");
+            if (!quiet) ActivityLog.Note("berth_costing_measure", $"{_project}: {string.Join(", ", berths.Select(b => b.Title))} in {model}, {clock.Elapsed.TotalSeconds:0.0} s");
+            // A box being typed in keeps its focus: only the berths on the left change then.
+            Refresh(detail: !(quiet && Keyboard.FocusedElement is TextBox typing && typing.IsDescendantOf(_detail)));
+            _status.Text = $"{(quiet ? "Updated from the model" : $"Measured {berths.Count} berths")} at {DateTime.Now:HH:mm:ss}." + (reading.Problems.Count > 0 ? " " + string.Join(" ", reading.Problems.Take(4)) : "");
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            _status.Text = $"Couldn't read the model ({ex.Message}). Finish what Revit is doing (an edit mode or a dialog), then try again.";
+            _status.Text = quiet ? $"Couldn't update from the model just now ({ex.Message}); it tries again after the next change."
+                : $"Couldn't read the model ({ex.Message}). Finish what Revit is doing (an edit mode or a dialog), then try again.";
         }
         finally
         {
@@ -769,12 +918,18 @@ internal sealed class BerthCostWindow : Window
         return folder;
     }
 
-    private void Export(params string[] kinds)
+    /// <summary>The ticked berths, or the one picked when none is ticked.</summary>
+    private List<Berth> Chosen()
     {
         var berths = Berths().Where(b => _chosen.Contains(b.Key)).ToList();
         if (berths.Count == 0 && Selected is { } one) berths.Add(one);
+        return berths;
+    }
+
+    private void Export(params string[] kinds)
+    {
+        var berths = Chosen();
         if (berths.Count == 0) { _status.Text = "Tick the berths to make the files for (or pick one)."; return; }
-        var said = new List<string>();
         var notes = new List<string>();
         var made = new List<(string Kind, string File, List<Berth> Berths)>();
         var now = DateTime.Now;
@@ -782,28 +937,36 @@ internal sealed class BerthCostWindow : Window
         var names = string.Join(", ", berths.Select(b => b.Number.Length > 0 ? b.Number : b.Name));
         try
         {
+            // The built-in formats, or the project's own template where one was imported.
             foreach (var kind in kinds)
                 switch (kind)
                 {
                     case Made.Comparison:
-                        if (!File.Exists(_p.ComparisonTemplate)) { said.Add("no cost comparison workbook picked (Your files)"); break; }
-                        var c = OfficeDocs.FreePath(OutputFolder(), OfficeDocs.SafeName($"{Path.GetFileNameWithoutExtension(Strip(_p.ComparisonTemplate))} {stamp}"), ".xlsx");
-                        notes.AddRange(BerthCostExports.WriteComparison(_p, berths, _p.ComparisonTemplate, c, b => $"Sketch ProMax model take-off, {b.Measured?.Model ?? "by hand"} {now:dd-MMM-yyyy}"));
-                        made.Add((kind, c, berths));
+                        if (File.Exists(_p.ComparisonTemplate))
+                        {
+                            var c = OfficeDocs.FreePath(OutputFolder(), OfficeDocs.SafeName($"{Path.GetFileNameWithoutExtension(Strip(_p.ComparisonTemplate))} {stamp}"), ".xlsx");
+                            notes.AddRange(BerthCostExports.WriteComparison(_p, berths, _p.ComparisonTemplate, c, b => $"Sketch ProMax model take-off, {b.Measured?.Model ?? "by hand"} {now:dd-MMM-yyyy}"));
+                            made.Add((kind, c, berths));
+                        }
+                        else
+                        {
+                            var c = OfficeDocs.FreePath(OutputFolder(), OfficeDocs.SafeName($"Costing Berth {names} {stamp}"), ".xlsx");
+                            BerthCostDocs.WriteCosting(_p, berths, c);
+                            made.Add((kind, c, berths));
+                        }
                         break;
                     case Made.Boq:
-                        if (!File.Exists(_p.BoqTemplate)) { said.Add("no BOQ picked (Your files)"); break; }
                         foreach (var b in berths)
                         {
-                            var path = OfficeDocs.FreePath(OutputFolder(), OfficeDocs.SafeName(BerthCostExports.BoqName(Strip(_p.BoqTemplate), b)), ".xlsx");
-                            notes.AddRange(BerthCostExports.WriteBoq(_p, b, _p.BoqTemplate, path));
+                            var own = File.Exists(_p.BoqTemplate);
+                            var path = OfficeDocs.FreePath(OutputFolder(), OfficeDocs.SafeName(own ? BerthCostExports.BoqName(Strip(_p.BoqTemplate), b) : BerthCostDocs.BoqName(_p, b)), ".xlsx");
+                            notes.AddRange(own ? BerthCostExports.WriteBoq(_p, b, _p.BoqTemplate, path) : BerthCostDocs.WriteBoq(_p, b, path));
                             made.Add((kind, path, [b]));
                         }
                         break;
                     case Made.Backup:
-                        if (!File.Exists(_p.BackupTemplate)) { said.Add("no back-up calculation picked (Your files)"); break; }
                         var w = OfficeDocs.FreePath(OutputFolder(), OfficeDocs.SafeName($"Back-up calculation Berth {names}"), ".docx");
-                        notes.AddRange(BerthCostExports.WriteBackup(_p, berths, _p.BackupTemplate, w));
+                        notes.AddRange(File.Exists(_p.BackupTemplate) ? BerthCostExports.WriteBackup(_p, berths, _p.BackupTemplate, w) : BerthCostDocs.WriteBackup(_p, berths, w));
                         made.Add((kind, w, berths));
                         break;
                 }
@@ -830,7 +993,7 @@ internal sealed class BerthCostWindow : Window
         Refresh();
         _status.Text = (made.Count > 0 ? $"Made {made.Count} file{(made.Count == 1 ? "" : "s")} for berth {names}" : "Nothing made") +
             (marked.Count > 0 ? $"; marked {string.Join(", ", marked)} done in the berth status" : "") +
-            (said.Count > 0 ? "; " + string.Join("; ", said) : "") + (notes.Count > 0 ? $". {notes.Count} notes to check in the notes file." : ".");
+            (notes.Count > 0 ? $". {notes.Count} notes to check in the notes file." : ".");
         if (made.Count > 0) Shell("explorer.exe", $"/select,\"{made[0].File}\"");
     }
 

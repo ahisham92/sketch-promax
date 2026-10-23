@@ -19,10 +19,12 @@ public sealed class BerthCostTool : IRevitTool
         "a unit cost (code or name) and every berth follows; 'set_quantity' sets an item's quantity by hand (clear: back to the model's); 'set_berth' sets " +
         "quay length, scope boxes to leave out (exclude, e.g. BERTH 9 - PART 1) and what that is (exclude_note, e.g. excl. RoRo) or a design parameter " +
         "(param + value: MiddleD, MiddleKg, RearD, RearKg, InfillKg, FrontBeamKg, RearBeamKg, TransverseKg, DeckKg, ApproachKg); 'measure' reads the open " +
-        "model for the berths (all of the open model's when none given). The cost comparison, BOQ and back-up files are made in the Berth costing window.";
+        "model for the berths (all of the open model's when none given); 'set_details' sets what the built-in BOQ prints (header_left, header_right, title, " +
+        "doc_number with {nn}/{n}/{length}, works, boq_rates); 'in_files' ticks an item in or out of the BOQ and back-up (item + value 1 or 0); 'describe' gives one berth's BOQ " +
+        "descriptions as they will print (pile lengths, tips, reinforcement from the model). The costing, BOQ and back-up files are made in the Berth costing window.";
     public string PropertiesJson => """
     {
-      "action": {"type": "string", "enum": ["list", "details", "rates", "set_rate", "set_quantity", "set_berth", "measure"]},
+      "action": {"type": "string", "enum": ["list", "details", "rates", "set_rate", "set_quantity", "set_berth", "measure", "set_details", "in_files", "describe"]},
       "berth": {"type": "string", "description": "details, set_quantity, set_berth: the berth (Berth 9, 9, or its name). measure: berths with ';' (default: the open model's)."},
       "rate": {"type": "string", "description": "set_rate: the rate's code (R_PIPE) or name."},
       "item": {"type": "integer", "description": "set_quantity: the item number (1-42)."},
@@ -32,6 +34,12 @@ public sealed class BerthCostTool : IRevitTool
       "exclude": {"type": "string", "description": "set_berth: scope boxes whose elements are left out, ';' between."},
       "exclude_note": {"type": "string", "description": "set_berth: what is left out, in the berth's name (excl. RoRo)."},
       "param": {"type": "string", "description": "set_berth: a design parameter to set with value."},
+      "header_left": {"type": "string", "description": "set_details: the BOQ page header's left lines (new lines with \\n)."},
+      "header_right": {"type": "string", "description": "set_details: the BOQ page header's right lines."},
+      "title": {"type": "string", "description": "set_details: the structure title ({n}, {length})."},
+      "doc_number": {"type": "string", "description": "set_details: the document number ({nn}, {n}); also the BOQ file name."},
+      "works": {"type": "string", "description": "set_details: the works' name (STRUCTURAL WORKS)."},
+      "boq_rates": {"type": "boolean", "description": "set_details: print unit rates and amounts in the BOQ."},
       "project": {"type": "string", "description": "The project code; default: the open model's."}
     }
     """;
@@ -161,8 +169,41 @@ public sealed class BerthCostTool : IRevitTool
                     problems = reading.Problems,
                 });
             }
+            case "set_details":
+            {
+                var det = p.Details;
+                var said = new List<string>();
+                if (args.OptString("header_left") is { } hl) { det.HeaderLeft = hl.Replace("\\n", "\n").Trim(); said.Add("header_left"); }
+                if (args.OptString("header_right") is { } hr) { det.HeaderRight = hr.Replace("\\n", "\n").Trim(); said.Add("header_right"); }
+                if (args.OptString("title") is { } ti) { det.Title = ti.Trim(); said.Add("title"); }
+                if (args.OptString("doc_number") is { } dn) { det.DocNumber = dn.Trim(); said.Add("doc_number"); }
+                if (args.OptString("works") is { } wk) { det.Works = wk.Trim(); said.Add("works"); }
+                if (args.Has("boq_rates")) { det.BoqRates = args.OptBool("boq_rates"); said.Add("boq_rates"); }
+                if (said.Count == 0) return ToolResult.Ok(new { details = det });
+                Save(project, p);
+                return ToolResult.Ok(new { set = said, details = det });
+            }
+            case "in_files":
+            {
+                var no = (int?)args.OptLong("item") ?? throw new ArgumentException("Give item (its number).");
+                var item = p.ItemOf(no) ?? throw new ArgumentException($"No item {no}.");
+                item.InFiles = (args.OptDouble("value") ?? 1) != 0;
+                Save(project, p);
+                return ToolResult.Ok(new { item = item.Name, inFiles = item.InFiles });
+            }
+            case "describe":
+            {
+                var b = Pick();
+                var unknown = new List<string>();
+                return ToolResult.Ok(new
+                {
+                    berth = b.Title,
+                    rows = BerthCostDocs.BoqItems(p, b).Select(x => new { no = x.Item.No, section = x.Item.Section, qty = Math.Round(x.Qty, 2), unit = x.Item.BoqUnit, description = Describe(p, b, x.Item, unknown) }),
+                    notFromModel = unknown.Distinct(),
+                });
+            }
             default:
-                throw new ArgumentException("action is list, details, rates, set_rate, set_quantity, set_berth or measure.");
+                throw new ArgumentException("action is list, details, rates, set_rate, set_quantity, set_berth, measure, set_details, in_files or describe.");
         }
     }
 }

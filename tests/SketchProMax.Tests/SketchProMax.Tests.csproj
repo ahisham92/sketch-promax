@@ -75,6 +75,7 @@
     <Compile Include="../../src/SketchProMax/Tools/BerthCostMath.cs" Link="BerthCostMath.cs" />
     <Compile Include="../../src/SketchProMax/Tools/XlsxBook.cs" Link="XlsxBook.cs" />
     <Compile Include="../../src/SketchProMax/Tools/BerthCostExports.cs" Link="BerthCostExports.cs" />
+    <Compile Include="../../src/SketchProMax/Tools/BerthCostDocs.cs" Link="BerthCostDocs.cs" />
     <Compile Include="../../src/SketchProMax/Tools/AssemblyCodeText.cs" Link="AssemblyCodeText.cs" />
     <Compile Include="../../src/SketchProMax/Tools/BepSheetText.cs" Link="BepSheetText.cs" />
     <EmbeddedResource Include="../../src/SketchProMax/Data/pre-submission-checklist.json" LogicalName="SketchProMax.pre-submission-checklist.json" />

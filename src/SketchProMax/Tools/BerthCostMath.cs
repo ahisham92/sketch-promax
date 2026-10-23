@@ -85,6 +85,19 @@ internal static class BerthCostMath
         public string BackupNote { get; set; } = "";
         /// <summary>Where its section comes in the back-up calculation (lowest first).</summary>
         public int BackupOrder { get; set; }
+        /// <summary>Goes in the BOQ and the back-up (ticked); off leaves it out of the files, its cost still counts.</summary>
+        public bool InFiles { get; set; } = true;
+        /// <summary>The BOQ section it is billed under; "SECTION|Sub-heading" for a sub-heading ({n} is the berth number).</summary>
+        public string Section { get; set; } = "";
+        /// <summary>Its order in the BOQ (lowest first).</summary>
+        public int BoqOrder { get; set; }
+        /// <summary>The BOQ unit as the bill writes it (T, m3, m, m2, Nr).</summary>
+        public string BoqUnit { get; set; } = "";
+        /// <summary>
+        /// The BOQ description; filled from the model: {count} {height} {length} {tips} {tip} {od} {id} {t} {dmm} {d} {rebar}
+        /// {thicks} {type} {items} {n}. Empty: no row in the BOQ.
+        /// </summary>
+        public string BoqText { get; set; } = "";
     }
 
     public static readonly (string Code, string Name)[] Groups =
@@ -157,8 +170,64 @@ internal static class BerthCostMath
         I(42, "C10", "Demolition of RC piles", "Nr", "R_DEMO_PILE", "", ""),
     ];
 
+    /// <summary>The BOQ side of each item (section, order, unit, description): the base format, changed in Items.</summary>
+    private static readonly Dictionary<int, (string Section, int Order, string Unit, string Text)> BoqBase = new()
+    {
+        [1] = (S, 10, "T", "Supply, delivery, installation, and quality control testing of steel tube piles of diameter {od} m and thickness {t} mm with minimum yield stress of 355 MPa for {count} piles of height {height} m. This shall include all the accepted works, fixations, connections, and materials needed to complete installation and completion of the steel tube piles as per the project documents, to ensure specified life to first maintenance."),
+        [2] = (S, 20, "T", "Supply, delivery, installation, and quality control testing of the steel sheet pile wall of section {type} with minimum yield stress of 355 MPa as per the manufacturer's profile tables or equivalent for {count} steel sheets of length {height} m. This shall include all the accepted works, fixations, connections, and materials needed to complete installation and completion of the sheet piles wall as per the project documents and specifications."),
+        [3] = (S, 30, "m3", "Front Combi-wall reinforced concrete filling, {tips} Including Reinforcement ({rebar} Ton)"),
+        [15] = (S, 40, "m3", "Blinding"),
+        [16] = (S, 50, "m2", "Polystyrene Sheets"),
+        [5] = (S, 60, "m", "Middle Piles D={dmm}mm, {tips} Including Reinforcement ({rebar} Ton)"),
+        [8] = (S, 70, "T", "Supply, delivery, installation, and quality control testing of steel tube piles of diameter {od} m and thickness {t} mm with minimum yield stress of 355 MPa for {count} piles of height {height} m. This shall include all the accepted works, fixations, connections, and materials needed to complete installation and completion of the steel tube piles as per the project documents, to ensure specified life to first maintenance."),
+        [6] = (S, 80, "m", "Rear Piles D={dmm}mm, {tips} Including Reinforcement ({rebar} Ton)"),
+        [7] = (S, 85, "m", "Rear Barrettes, {tips} Including Reinforcement ({rebar} Ton)"),
+        [9] = (S, 90, "m3", "Front capping beam {thicks}"),
+        [10] = (S, 100, "m3", "Rear capping beam {thicks}"),
+        [11] = (S, 105, "m3", "Transverse beams"),
+        [12] = (S, 110, "m3", "Slab"),
+        [13] = (S, 120, "m3", "Approach Slab"),
+        [14] = (S, 130, "T", "Reinforcement Steel Grade of 500 MPa For the following items ({items})"),
+        [17] = (S, 140, "m2", "Stereoform"),
+        [19] = (G, 200, "m3", "Engineered compacted backfilling from the existing level, after removing the existing deck, up to the bottom surface of the new slab"),
+        [18] = (G, 210, "m3", "Cemented Stabilized Sand between new and existing front wall as per project specifications"),
+        [20] = (G + "|Berth ({n}) Combi wall", 220, "Nr", "Drivability analysis for the Combi-wall to confirm the design capacity on site during construction"),
+        [21] = (G + "|Berth ({n}) Combi wall", 230, "Nr", "Dynamic pile load test on the combi wall as per the project specifications"),
+        [23] = (G + "|Berth ({n}) Bored piles", 240, "Nr", "Compression static pile load test to be tested to 200 % of the design working load as per project specifications."),
+        [22] = (G + "|Berth ({n}) Bored piles", 250, "Nr", "Static pile load test as per the project specifications"),
+        [24] = (G + "|Berth ({n}) Bored piles", 260, "Nr", "Low strain integrity testing as per the project specifications"),
+        [25] = (G + "|Berth ({n}) Bored piles", 270, "Nr", "Cross hole sonic as per the project specifications"),
+        [26] = (A, 300, "Nr", "Fenders"),
+        [27] = (A, 310, "Nr", "Bollards"),
+        [28] = (A, 320, "Nr", "Supply, delivery, installation, and quality control testing for steel ladder detail as per drawings and project documents, including all plates, anchors, welds, fittings and all components shown in the drawings."),
+        [29] = (A, 330, "Nr", "Supply, delivery, installation, and quality control testing for mooring ring detail as per drawings and project documents, including all plates, anchors, welds, fittings and all components shown in the drawings."),
+        [30] = (A, 340, "m", "PVC pipes D500"),
+        [31] = (A, 350, "m", "Crane rail"),
+        [32] = (A, 360, "Nr", "Crane stoppers / buffers"),
+        [33] = (A, 370, "Nr", "Crane tie-downs / storm anchors"),
+        [34] = (A, 380, "Nr", "Crane stow pins"),
+        [35] = (A, 390, "m", "Panzerbelt"),
+        [38] = (U, 400, "Nr", "Wet Utilities Pits"),
+        [37] = (U, 410, "Nr", "Cold Ironing Pits"),
+        [39] = (U, 420, "Nr", "ICT Pits"),
+        [36] = (U, 430, "Nr", "Turn-over Pits"),
+        [40] = (D, 500, "m3", "Demolition of the existing RC slab"),
+        [41] = (D, 510, "m2", "Demolition of the existing RC slab"),
+        [42] = (D, 520, "Nr", "Demolition of the existing RC piles"),
+    };
+
+    private const string S = "STRUCTURAL ITEMS", G = "GEOTECHNICAL ITEMS", A = "ANCILLARY FACILITIES", U = "UTILITIES PROVISIONS IN CONCRETE", D = "DEMOLITION";
+
+    /// <summary>Gives an item its base BOQ section, order, unit and description (the infill's reinforcement is in the infill's row).</summary>
+    internal static Item WithBoq(Item i)
+    {
+        if (BoqBase.TryGetValue(i.No, out var b)) { i.Section = b.Section; i.BoqOrder = b.Order; i.BoqUnit = b.Unit; i.BoqText = b.Text; }
+        else { i.BoqOrder = 1000 + i.No; i.BoqUnit = i.Unit; }
+        return i;
+    }
+
     private static Item I(int no, string group, string name, string unit, string rate, string rule, string boq, string backup = "", string note = "", int order = 0) =>
-        new() { No = no, Group = group, Name = name, Unit = unit, RateCode = rate, Rule = rule, Boq = boq, Backup = backup, BackupNote = note, BackupOrder = order > 0 ? order : no * 10 };
+        WithBoq(new() { No = no, Group = group, Name = name, Unit = unit, RateCode = rate, Rule = rule, Boq = boq, Backup = backup, BackupNote = note, BackupOrder = order > 0 ? order : no * 10 });
 
     // ---- Design parameters ----------------------------------------------------------------------------------------------
 
@@ -255,20 +324,41 @@ internal static class BerthCostMath
         public PileBasis Pile { get; set; } = new();
         public List<Item> Items { get; set; } = DefaultItems();
         public Dictionary<string, Berth> Berths { get; set; } = new(StringComparer.OrdinalIgnoreCase);
-        /// <summary>The user's files the exports fill: kept copies in the project folder.</summary>
+        /// <summary>
+        /// The project's own templates (exported from the base, edited in Excel or Word, imported back; kept copies in the
+        /// project folder). Empty: the built-in base format.
+        /// </summary>
         public string ComparisonTemplate { get; set; } = "";
         public string BoqTemplate { get; set; } = "";
         public string BackupTemplate { get; set; } = "";
+        /// <summary>The project's words on the files (typed once; nothing of a project is in the code).</summary>
+        public Details Details { get; set; } = new();
         public string Stage { get; set; } = "Detailed Design";
         public string Currency { get; set; } = "US$";
         /// <summary>Steel and reinforced concrete unit weights (t/m³) for the back-up calculation.</summary>
         public double SteelDensity { get; set; } = 7.85;
         public double ConcreteDensity { get; set; } = 2.5;
         public string OutputFolder { get; set; } = "";
+        /// <summary>The window measures the open model again by itself a few seconds after it changes.</summary>
+        public bool Follow { get; set; } = true;
 
         public Rate? RateOf(string code) => Rates.FirstOrDefault(r => string.Equals(r.Code, code, StringComparison.OrdinalIgnoreCase));
         public double RateValue(string code) => RateOf(code)?.Value ?? 0;
         public Item? ItemOf(int no) => Items.FirstOrDefault(i => i.No == no);
+    }
+
+    /// <summary>
+    /// What the base formats print about the project: the page header lines (left and right), the structure title with
+    /// {n} (berth number) and {length}, the document number with {n} / {nn}, and whether the BOQ shows the unit rates.
+    /// </summary>
+    public sealed class Details
+    {
+        public string HeaderLeft { get; set; } = "";
+        public string HeaderRight { get; set; } = "";
+        public string Title { get; set; } = "QUAY WALL - BERTH {n} - LENGTH {length} METER";
+        public string DocNumber { get; set; } = "";
+        public string Works { get; set; } = "STRUCTURAL WORKS";
+        public bool BoqRates { get; set; }
     }
 
     [ThreadStatic] internal static string? FolderForTests;
@@ -287,7 +377,10 @@ internal static class BerthCostMath
             {
                 // Rates and items added in an update reach projects saved before it.
                 foreach (var r in DefaultRates()) if (p.RateOf(r.Code) is null) p.Rates.Add(r);
-                foreach (var i in DefaultItems()) if (p.ItemOf(i.No) is null) p.Items.Add(i);
+                foreach (var i in DefaultItems())
+                    if (p.ItemOf(i.No) is not { } had) p.Items.Add(i);
+                    else if (had.BoqOrder == 0) { had.Section = i.Section; had.BoqOrder = i.BoqOrder; had.BoqUnit = i.BoqUnit; had.BoqText = i.BoqText; }
+                p.Details ??= new Details();
                 p.Items.Sort((a, b) => a.No.CompareTo(b.No));
                 return p;
             }
@@ -552,6 +645,86 @@ internal static class BerthCostMath
         Add("Approach Slab", 13, b.Param("ApproachKg"), Q(13));
         return rows;
     }
+
+    // ---- BOQ descriptions --------------------------------------------------------------------------------------------------
+
+    /// <summary>The short name of an element in a BOQ sentence ("MP1-DS01a" → "MP1").</summary>
+    private static string Short(string label) { var t = label.Trim(); var dash = t.IndexOf('-'); return dash > 0 ? t.Substring(0, dash) : t; }
+
+    private static string N(double v, int dp) => Math.Round(v, dp).ToString(dp == 0 ? "0" : "0." + new string('#', dp), CultureInfo.InvariantCulture);
+
+    /// <summary>
+    /// An item's BOQ description for a berth: its <see cref="Item.BoqText"/> with the numbers from the model (count,
+    /// typical height, tip levels, diameters, wall thickness, reinforcement tonnage, thicknesses, type). A number the
+    /// model doesn't give shows as "…" and is listed in <paramref name="unknown"/>.
+    /// </summary>
+    public static string Describe(Project p, Berth b, Item item, List<string>? unknown = null)
+    {
+        var lines = (b.Measured?.Lines ?? []).Where(l => l.No == item.No && l.Count > 0).ToList();
+        string Val(string key)
+        {
+            switch (key)
+            {
+                case "n": return b.Number.Length > 0 ? b.Number : b.Name;
+                case "count": return lines.Count > 0 ? lines.Sum(l => l.Count).ToString(CultureInfo.InvariantCulture) : "";
+                case "height" or "length":
+                    return lines.Count > 0 ? N(lines.GroupBy(l => Math.Round(l.Height, 1)).OrderByDescending(g => g.Sum(l => l.Count)).ThenByDescending(g => g.Key).First().Key, 1) : "";
+                case "tip":
+                    return lines.Count > 0 ? lines.GroupBy(l => Math.Round(l.Bottom, 2)).OrderByDescending(g => g.Sum(l => l.Count)).First().Key.ToString("0.00", CultureInfo.InvariantCulture) : "";
+                case "tips":
+                {
+                    if (lines.Count == 0) return "";
+                    var tips = lines.GroupBy(l => Math.Round(l.Bottom, 2)).OrderByDescending(g => g.Sum(l => l.Count)).ToList();
+                    string Tip(double v) => "Tip Level (" + v.ToString("0.00", CultureInfo.InvariantCulture) + ") CD";
+                    if (tips.Count == 1) return Tip(tips[0].Key);
+                    // The others first by their elements, the most common last "for Other Piles".
+                    var parts = tips.Skip(1).Select(g => Tip(g.Key) + " for " + string.Join(", ", g.Select(l => Short(l.Label)).Distinct()))
+                        .Append(Tip(tips[0].Key) + " for Other " + (item.Unit == "m" || item.Name.IndexOf("pile", StringComparison.OrdinalIgnoreCase) >= 0 ? "Piles" : "Elements"));
+                    return string.Join(", ", parts);
+                }
+                case "od": return lines.FirstOrDefault(l => l.Diameter > 0) is { } o ? N(o.Diameter, 3) : "";
+                case "id": return lines.FirstOrDefault(l => l.Inner > 0) is { } i ? N(i.Inner, 3) : "";
+                case "t": return lines.FirstOrDefault(l => l.Diameter > 0 && l.Inner > 0) is { } w ? N((w.Diameter - w.Inner) / 2 * 1000, 0) : "";
+                case "d": return Mode(l => l.Diameter) is { } d ? N(d, 3) : "";
+                case "dmm": return Mode(l => l.Diameter) is { } dm ? N(dm * 1000, 0) : "";
+                case "thicks":
+                {
+                    var t = lines.Where(l => l.Thickness > 0).Select(l => Math.Round(l.Thickness * 1000)).Distinct().OrderBy(x => x).ToList();
+                    return t.Count > 0 ? string.Join("/", t.Select(x => x.ToString("0", CultureInfo.InvariantCulture))) + "mm thick" : "";
+                }
+                case "type": return lines.GroupBy(l => l.Label).OrderByDescending(g => g.Sum(l => l.Count)).FirstOrDefault()?.Key ?? "";
+                case "rebar":
+                {
+                    var rows = Rebar(p, b).Where(r => item.No == SuperRebar ? RebarOf.Any(x => x.No == r.No) : r.No == item.No).ToList();
+                    if (item.No == SuperRebar && Quantity(p, b, SuperRebar).Qty is { } sq) return N(sq, 0);
+                    return rows.Count > 0 ? N(rows.Sum(r => r.Weight), 0) : "";
+                }
+                case "items":
+                {
+                    var names = Rebar(p, b).Where(r => RebarOf.Any(x => x.No == r.No)).Select(r => r.No switch
+                    {
+                        9 => "Front Beam", 10 => "Rear Beam", 11 => "Transverse Beams", 12 => "Slab", 13 => "Approach Slab", _ => r.Name,
+                    }).ToList();
+                    return names.Count > 0 ? string.Join(" - ", names) : "";
+                }
+                default: return "{" + key + "}";
+            }
+        }
+        double? Mode(Func<Line, double> of) =>
+            lines.Where(l => of(l) > 0).GroupBy(l => Math.Round(of(l), 3)).OrderByDescending(g => g.Sum(l => l.Count)).Select(g => (double?)g.Key).FirstOrDefault();
+        return Regex.Replace(item.BoqText ?? "", @"\{(\w+)\}", m =>
+        {
+            var v = Val(m.Groups[1].Value);
+            if (v.Length > 0) return v;
+            unknown?.Add($"{b.Title}: {item.Name} has no {m.Groups[1].Value} from the model");
+            return "…";
+        });
+    }
+
+    /// <summary>A project text with the berth's number and length: {n}, {nn} (two digits), {length}.</summary>
+    public static string ForBerth(string text, Berth b) =>
+        (text ?? "").Replace("{nn}", b.Number.PadLeft(2, '0')).Replace("{n}", b.Number.Length > 0 ? b.Number : b.Name)
+            .Replace("{length}", b.Length is { } l ? N(l, 1) : "…");
 
     // ---- Deliverables in the berth status ----------------------------------------------------------------------------------
 
