@@ -45,6 +45,8 @@ internal static class BerthCostTests
         var two = ParseRule("cat=Floors; thick=150,300; Comments!=*PIT*; measure=volume OR cat=Floors; Comments=SLAB THICK*; label=Thickening");
         check("berth costing: OR gives a second rule, != a negation, thick a list in mm", two.Count == 2 && two[0].Thick.SequenceEqual([150.0, 300.0])
             && two[0].Filters.Single() == ("Comments", "*PIT*", true) && two[1].Label == "Thickening", two.Count.ToString());
+        var range = ParseRule("cat=Floors; thick=1450-3200, 780")[0];
+        check("berth costing: thick takes a range and single thicknesses", range.ThickRanges.Single() == (1450, 3200) && range.Thick.SequenceEqual([780.0]), "");
         var over = ParseRule("cat=Floors; over=Legend=FKS*; factor=0.1; round=up")[0];
         check("berth costing: over, factor and round", over.Over == ("Legend", "FKS*") && over.Factor == 0.1 && over.RoundUp && Finish(over, 92) == 10, "");
         check("berth costing: wildcards and lists", Like("FKS-DS01a", "FKS*") && Like("RP1-DS01a", "MP*,RP*") && !Like("SP-DS01a", "MP*,RP*") && Like("abc", "ABC") && !Like("abcd", "abc"), "");
