@@ -23,6 +23,11 @@ internal static class BerthStatusTests
 
     public static void Run(Action<string, bool, string> check)
     {
+        // A package of several berths: its cells list them, and "9" matches a value written "BERTH 9" (and back).
+        check("berth status: a cell lists several values", Values(" 9; 10 ,BERTH 11;9").SequenceEqual(["9", "10", "BERTH 11"]), string.Join("|", Values(" 9; 10 ,BERTH 11;9")));
+        check("berth status: a parameter value matches any of the berth's", ValueMatches("10", ["9", "10"]) && ValueMatches("9", ["BERTH 9"]) && ValueMatches("Berth 9", ["9"])
+            && !ValueMatches("1", ["10"]) && !ValueMatches("", ["9"]) && !ValueMatches("19", ["BERTH 9"]), "");
+
         var week = new BerthStatusMath.Calendar();
         // Thursday 2026-10-29: due at 08:00 that day, so Wednesday's working day is the last before it.
         var thu = new DateTime(2026, 10, 29);

@@ -86,7 +86,7 @@ internal static class BerthStatusMath
     }
 
     /// <summary>A berth: which model it is in, and how its elements, sheets and schedules are found there.</summary>
-    /// <param name="Value">The scope box name, the parameter value or the text in the workset name.</param>
+    /// <param name="Value">The scope box name, the parameter value or the text in the workset name; a package of several berths lists them with ";" or ",".</param>
     /// <param name="Parameter">The parameter holding the berth (FindBy Parameter).</param>
     /// <param name="Sheets">Text in the sheet number or name of the berth's sheets (empty: sheets showing the scope box, or every sheet for a whole model).</param>
     /// <param name="Schedules">Text in the names of the berth's schedules (empty: the berth's name).</param>
@@ -97,6 +97,21 @@ internal static class BerthStatusMath
     }
 
     public static string KeyOf(string model, string berth) => model.Trim() + " | " + berth.Trim();
+
+    /// <summary>The texts of a setup cell that may list several (a package of berths 9 and 10: "9; 10" or "BERTH 9, BERTH 10").</summary>
+    public static List<string> Values(string cell) =>
+        cell.Split([';', ',', '\n'], StringSplitOptions.RemoveEmptyEntries).Select(v => v.Trim()).Where(v => v.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+
+    /// <summary>Whether an element's parameter value is one of the berth's values ("9" also matches a value written "BERTH 9", and the other way).</summary>
+    public static bool ValueMatches(string actual, IReadOnlyCollection<string> values)
+    {
+        var a = actual.Trim();
+        if (a.Length == 0) return false;
+        static string Last(string t) => t.Split([' '], StringSplitOptions.RemoveEmptyEntries).LastOrDefault() ?? "";
+        return values.Any(v => string.Equals(a, v, StringComparison.OrdinalIgnoreCase)
+            || (v.Contains(' ') && !a.Contains(' ') && string.Equals(Last(v), a, StringComparison.OrdinalIgnoreCase))
+            || (a.Contains(' ') && !v.Contains(' ') && string.Equals(Last(a), v, StringComparison.OrdinalIgnoreCase)));
+    }
 
     /// <summary>A submission: for one berth, or every berth of the model when Berth is empty. Due at Time (default 08:00) on Date.</summary>
     public sealed record Submission(string Model, string Berth, string Name, DateTime Date, TimeSpan? Time = null, bool Submitted = false);
@@ -534,7 +549,7 @@ internal static class BerthStatusMath
         [
             Sheet("Models", "Models: one row per model; File name contains matches the open file", ModelCols,
                 s.Models.Select(m => new object?[] { m.Name, m.FileContains, m.Links, m.ClashReport }), [18, 26, 30, 50]),
-            Sheet("Berths", "Berths: Find elements by is Scope box, Parameter, Workset or Whole model", BerthCols,
+            Sheet("Berths", "Berths: Find elements by is Scope box, Parameter, Workset or Whole model; list several values with ; (a package of berths 9 and 10: 9; 10)", BerthCols,
                 s.Berths.Select(b => new object?[] { b.Model, b.Name, b.FindBy, b.Value, b.Parameter, b.Sheets, b.Schedules }), [18, 18, 18, 22, 18, 18, 18]),
             Sheet("Submissions", "Submissions: Berth empty means every berth of the model; Time empty means the due time (08:00)", SubmissionCols,
                 s.Submissions.Select(x => new object?[] { x.Model, x.Berth, x.Name, x.Date == NoDate ? "" : x.Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), x.Time is { } t ? t.ToString(@"hh\:mm", CultureInfo.InvariantCulture) : "", x.Submitted ? "Yes" : "" }), [18, 18, 34, 14, 10, 12]),
