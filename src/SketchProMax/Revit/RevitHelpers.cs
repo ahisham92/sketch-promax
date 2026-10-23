@@ -11,13 +11,31 @@ internal static class RevitHelpers
         if (Enum.TryParse<BuiltInCategory>(trimmed, true, out var bic)) return bic;
         if (Enum.TryParse("OST_" + trimmed.Replace(" ", ""), true, out bic)) return bic;
 
+        if (Aliases.TryGetValue(trimmed, out bic)) return bic;
+
+        var near = new List<string>();
+        var words = trimmed.Split([' '], StringSplitOptions.RemoveEmptyEntries).Select(w => w.TrimEnd('s')).Where(w => w.Length >= 3).ToList();
         foreach (Category c in doc.Settings.Categories)
         {
             if (string.Equals(c.Name, trimmed, StringComparison.OrdinalIgnoreCase))
                 return (BuiltInCategory)c.Id.Value;
+            if (words.Any(w => c.Name.IndexOf(w, StringComparison.OrdinalIgnoreCase) >= 0)) near.Add(c.Name);
         }
-        throw new ArgumentException($"Unknown category '{name}'.");
+        throw new ArgumentException($"Unknown category '{name}'." + (near.Count > 0 ? $" Close ones: {string.Join(", ", near.OrderBy(n => n).Take(8))}." : ""));
     }
+
+    /// <summary>Names users and the chat give that are neither the enum's nor Revit's category name (both were refused in chats).</summary>
+    private static readonly Dictionary<string, BuiltInCategory> Aliases = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["Detail Groups"] = BuiltInCategory.OST_IOSDetailGroups,
+        ["Detail Group"] = BuiltInCategory.OST_IOSDetailGroups,
+        ["Model Groups"] = BuiltInCategory.OST_IOSModelGroups,
+        ["Model Group"] = BuiltInCategory.OST_IOSModelGroups,
+        ["Groups"] = BuiltInCategory.OST_IOSModelGroups,
+        ["Slab Edges"] = BuiltInCategory.OST_EdgeSlab,
+        ["Slab Edge"] = BuiltInCategory.OST_EdgeSlab,
+        ["Floor Slab Edges"] = BuiltInCategory.OST_EdgeSlab,
+    };
 
     public static ForgeTypeId LengthUnit(Document doc) =>
         doc.GetUnits().GetFormatOptions(SpecTypeId.Length).GetUnitTypeId();

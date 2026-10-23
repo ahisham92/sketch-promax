@@ -110,6 +110,17 @@ internal static partial class FieldTest
         return Directory.GetFiles(folder, "*.png").FirstOrDefault(f => !before.Contains(f)) ?? throw new InvalidOperationException("Revit exported no image of the test sheet");
     }
 
+    /// <summary>What the probe worked out, short: the sheet frame (mm), whether it has a title block, and M1's box as page fractions.</summary>
+    private static string RedlineFrameNote(RedlineSet r, LayoutMath.Rect f, List<object> markups)
+    {
+        static string Mm(double ft) => (ft * 304.8).ToString("0", System.Globalization.CultureInfo.InvariantCulture);
+        var titleBlock = new FilteredElementCollector(r.Sheet.Document, r.Sheet.Id).OfCategory(BuiltInCategory.OST_TitleBlocks).WhereElementIsNotElementType().GetElementCount() > 0;
+        var box = JsonSerializer.SerializeToElement(markups[0]).GetProperty("bbox").EnumerateArray().Select(v => v.GetDouble()).ToArray();
+        var outside = box.Any(v => v < 0 || v > 1) ? " (outside the page: the tool reads such numbers as percentages)" : "";
+        return $"probe: frame x {Mm(f.X0)}..{Mm(f.X1)}, y {Mm(f.Y0)}..{Mm(f.Y1)} mm, title block {(titleBlock ? "yes" : "no")}; " +
+               $"M1 box {string.Join(" ", box.Select(v => v.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)))}{outside}";
+    }
+
     /// <summary>The sheet's image with the markups drawn on in red, as a reviewer would.</summary>
     private static string RedlinePageImage(string exported, List<object> markups, string folder)
     {
@@ -244,7 +255,8 @@ internal static partial class FieldTest
                 if (!Where(id).Contains($"'{r.Plan.Name}'") || !Where(id).Contains(element.ToString()))
                     problems.Add($"{id} was placed at \"{Where(id)}\", not on element {element} in '{r.Plan.Name}' ({Short(Note(id), 160)})");
             // What the probe itself worked out, so a mapping failure can be compared with the tool's distances above.
-            if (problems.Count > 0) problems.Add($"the probe's sheet frame was {frame} and its M1 was {Short(JsonSerializer.Serialize(markups[0]), 200)}");
+            // First, so the report's cut-off detail keeps it.
+            if (problems.Count > 0) problems.Insert(0, RedlineFrameNote(r, frame, markups));
             if (!asked.SequenceEqual(["M1", "M2", "M3", "M4"])) problems.Add("approval was asked for " + (asked.Count == 0 ? "nothing" : string.Join(", ", asked)) + ", not M1 to M4 one by one");
 
             // The changes.

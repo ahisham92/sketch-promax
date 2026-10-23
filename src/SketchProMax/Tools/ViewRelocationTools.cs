@@ -461,7 +461,18 @@ public sealed class DuplicateViewToLocationTool : IRevitTool
         var notes = new List<string>();
         var place = ViewRelocation.ReadPlacement(doc, source, args, notes);
 
-        using var t = RevitHelpers.StartTransaction(doc, "Duplicate view to location");
+        // A copied dimension whose references don't show in the moved copy made Revit refuse the whole copy at commit
+        // ("One or more dimension references are or have become invalid", five times in one chat): those dimensions are
+        // dropped and listed instead.
+        var dims = new HashSet<ElementId>();
+        var dropped = new HashSet<ElementId>();
+        var failures = new List<string>();
+        using var t = new Transaction(doc, "Sketch ProMax: Duplicate view to location");
+        var handling = t.GetFailureHandlingOptions();
+        handling.SetFailuresPreprocessor(new CopyViewDetailingTool.DropFailedCopies(dims, dropped, failures));
+        handling.SetForcedModalHandling(false);
+        t.SetFailureHandlingOptions(handling);
+        t.Start();
         var copy = (View)doc.GetElement(source.Duplicate(option));
         doc.Regenerate();
         if (copy.ViewDirection.DotProduct(source.ViewDirection) < 0.999)
@@ -471,7 +482,11 @@ public sealed class DuplicateViewToLocationTool : IRevitTool
         var where = ViewRelocation.Move(doc, copy, place, notes);
         var detailing = snaps.Count > 0 ? ViewRelocation.Follow(doc, copy, ViewFrame.Of(copy), snaps, args.OptBool("fix_detailing", true)) : null;
         var name = ViewKit.Finish(doc, copy, args.OptString("name"), null, null);
-        t.Commit();
+        foreach (var id in new FilteredElementCollector(doc, copy.Id).OfClass(typeof(Dimension)).ToElementIds()) dims.Add(id);
+        if (t.Commit() != TransactionStatus.Committed)
+            return ToolResult.Error("Revit did not accept the copy, so nothing was changed: " + (failures.Count > 0 ? string.Join("; ", failures) : "no reason given"));
+        if (dropped.Count > 0)
+            notes.Add($"{dropped.Count} copied dimension(s) lost their references in the new place and were left out (Revit: {string.Join("; ", failures)}). Add them again with add_dimensions.");
         return ToolResult.Ok(new
         {
             id = copy.Id.Value,
@@ -790,7 +805,7 @@ public sealed class CopyViewDetailingTool : IRevitTool
 
     /// <summary>Warnings are dismissed; errors caused only by copied elements (e.g. a dimension whose references are not
     /// in the target view) delete those copies instead of rolling the whole copy back.</summary>
-    private sealed class DropFailedCopies(HashSet<ElementId> copies, HashSet<ElementId> removed, List<string> messages) : IFailuresPreprocessor
+    internal sealed class DropFailedCopies(HashSet<ElementId> copies, HashSet<ElementId> removed, List<string> messages) : IFailuresPreprocessor
     {
         public FailureProcessingResult PreprocessFailures(FailuresAccessor accessor)
         {

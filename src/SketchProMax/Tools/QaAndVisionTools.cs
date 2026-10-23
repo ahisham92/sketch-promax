@@ -103,7 +103,7 @@ public sealed class CaptureViewImageTool : IRevitTool
     {
       "view_id": {"type": "integer", "description": "View or sheet id. Defaults to the active view."},
       "pixel_width": {"type": "integer", "description": "Image width in pixels (default 1600, max 2400)."},
-      "element_ids": {"type": "array", "items": {"type": "integer"}, "description": "Plan views: zoom to these elements (the view itself is left unchanged). The image is exported at the pixel density of the export resolution, so it can come out narrower than pixel_width; for small print use a sheet region."},
+      "element_ids": {"type": "array", "items": {"type": "integer"}, "description": "Plans, sections, elevations and detail views: zoom to these elements (the view itself is left unchanged). The image is exported at the pixel density of the export resolution, so it can come out narrower than pixel_width; for small print use a sheet region."},
       "region": {"type": "array", "items": {"type": "number"}, "description": "Sheets: [x_min, y_min, x_max, y_max] in sheet coordinates (project units, paper size) to export at high resolution, e.g. the title panel."},
       "margin": {"type": "number", "description": "Around element_ids, project units. Default 2 m."},
       "source": {"type": "string", "enum": ["export", "screen"], "description": "Default: screen when the view is the active view and no element_ids/margin/resolution_dpi are given, else export. export: Revit image export. screen: what the open, active view window shows right now."},
@@ -196,16 +196,18 @@ public sealed class CaptureViewImageTool : IRevitTool
         }
 
         // Zooming crops the view for the export only: the crop is committed inside a group that is then rolled back.
-        ViewPlan? plan = null;
+        // Plans, and sections, elevations and detail views (ViewSection): both crop with a box in the view's own frame.
+        View? plan = null;
         List<BoundingBoxXYZ> boxes = [];
         double margin = 0;
         var ids = args.LongList("element_ids");
         if (ids.Count > 0)
         {
-            plan = doc.GetElement(viewId) as ViewPlan;
-            if (plan is null) return ToolResult.Error("element_ids zoom works on plan views; capture the whole view instead.");
-            boxes = ids.Select(i => doc.GetElement(new ElementId(i))?.get_BoundingBox(null)).OfType<BoundingBoxXYZ>().ToList();
-            if (boxes.Count == 0) return ToolResult.Error("None of those elements have a location to zoom to.");
+            plan = doc.GetElement(viewId) is View { } v and (ViewPlan or ViewSection) ? v : null;
+            if (plan is null) return ToolResult.Error("element_ids zoom works on plans, sections, elevations and detail views; capture the whole view (or the sheet with region) instead.");
+            // An element's model box, else its box in this view (annotation and detail items have only that one).
+            boxes = ids.Select(i => doc.GetElement(new ElementId(i)) is { } e ? e.get_BoundingBox(null) ?? e.get_BoundingBox(plan) : null).OfType<BoundingBoxXYZ>().ToList();
+            if (boxes.Count == 0) return ToolResult.Error("None of those elements have a location to zoom to in this view (they may be in another view, or deleted).");
             margin = args.OptDouble("margin") is { } m ? RevitHelpers.ToInternal(doc, m) : 2000 / 304.8;
         }
         var zoom = plan is null ? null : new TransactionGroup(doc, "Sketch ProMax: zoom for image");
