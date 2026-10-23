@@ -32,6 +32,7 @@ internal static class StepNames
         ["cancel_job"] = "Stop the job",
         ["memory_note"] = "Save a note",
         ["berth_status"] = "Berth status",
+        ["berth_costing"] = "Berth costing",
         ["help"] = "Read the guide",
         ["features"] = "List what it can do",
         ["diagnostics"] = "Check the setup",

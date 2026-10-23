@@ -188,6 +188,14 @@ internal static class FieldTestCoverage
             "Switch Revit to the dark theme: the window follows it."),
         new("berth.read", Issue, "Berth status: the model read in steps and the berth's Excel", How.Probe, "",
             "a whole-model berth on the test project is read step by step (each step a short Revit call) and gets categories, clashes, drawings, annotation and schedules results; a missing scope box says so instead of failing; the berth's Excel is written with its Status sheet"),
+        new("costing.berth", Costing, "Berth costing: the model measured per berth and the three files", How.Probe, "",
+            "a berth found by a parameter on the test project is measured step by step (each step a short Revit call), a missing scope box to leave out is said, and the cost comparison, BOQ and Word back-up made from small templates open with the berth in them"),
+        new("costing.ui", Costing, "The berth costing window", How.Manual, "", "the overview, the editing and the files made from the user's own templates are judged by a person",
+            "On a _detached copy with the berth status set up: Berth status > Costing (no ribbon slot of its own). Each berth of the setup shows with a ring. Your files: pick the cost comparison workbook " +
+            "(its unit costs come in), a berth's BOQ and the back-up calculation. Pick Berth 9 and type BERTH 9 - PART 1 in Leave out scope boxes and excl. RoRo in Which is. Press Measure the model: a strip shows progress, " +
+            "Revit stays usable, Stop ends it. The ring fills, the cost and US$ / lm show, items say model, by hand or worked out; Show selects an item's elements. Type a quantity: the cost changes; empty it: back to the model's. " +
+            "Unit costs: change a rate: every berth's cost follows. Tick Berth 9 and Berth 10, Make all three: the comparison (Berth 09 (excl. RoRo) in its own column, totals recalculated when Excel opens), " +
+            "a BOQ per berth in your BOQ's format with the berth's numbers, and one Word back-up with a table per berth. Berth status then shows Costing, Bills of quantities and Back-up calculations done for them."),
         new("berth.ui", Issue, "The berth status window", How.Manual, "", "the overview, the details, hand entries, the Excel and how Revit stays usable while it reads are judged by a person",
             "On a _detached copy: Berth status (next to the pre-submission checklist). With no setup it offers Make the setup Excel: it opens in Excel with Models, Berths, Submissions, Planned, Deliverables, Weights and Week sheets. " +
             "Put the copy's file name text on Models, one berth with Find elements by Whole model, a submission next week, save, and Setup > Import the setup Excel: the berth shows with No reading yet. " +

@@ -272,6 +272,8 @@ public sealed class ToolRegistry
         new MemoryNoteTool(),
         // The berth status tracker: read it and record what the user reports (never reads the model)
         new BerthStatusTool(),
+        // Berth costing: each berth's cost, the unit costs and quantities by hand, measuring the model
+        new BerthCostTool(),
         new RecallChatsTool(),
         new ChatJobsTool(),
         // Files for the user: Excel, Word, PowerPoint and PDF

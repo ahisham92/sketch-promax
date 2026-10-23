@@ -155,7 +155,7 @@ internal sealed class BerthStatusWindow : Window
         _subtitle.Text = _setup is null ? (_project.Length == 0 ? "Open a model of the project first" : $"{_project}: not set up yet") :
             $"{(_setup.Title.Length > 0 ? _setup.Title : "Berth status")} · {_project} · " +
             (ShownModel is { } shown ? $"{shown.Name} model · {_setup.Berths.Count(b => Same(b.Model, shown.Name))} submissions" : $"{_setup.Berths.Count} submissions in {_setup.Models.Count} models");
-        band.Padding = new Thickness(16, 12, 420, 12);
+        band.Padding = new Thickness(16, 12, 520, 12);
         var header = new Grid();
         header.Children.Add(band);
         var right = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 18, 0) };
@@ -167,6 +167,17 @@ internal sealed class BerthStatusWindow : Window
         _update.VerticalAlignment = VerticalAlignment.Center;
         _update.IsEnabled = _setup is not null;
         right.Children.Add(setupButton);
+        // Berth costing opens from here (it has no ribbon button: the loader's slots are kept for live updates).
+        var costing = RichUi.Button(RichUi.Icon.Open, "Costing");
+        costing.VerticalAlignment = VerticalAlignment.Center;
+        costing.Margin = new Thickness(0, 0, 8, 0);
+        AutomationProperties.SetHelpText(costing, "Berth costing: each berth's cost from the model and editable unit costs, and the cost comparison, BOQ and back-up calculation in your own formats.");
+        costing.Click += async (_, _) =>
+        {
+            try { await App.Dispatcher.InvokeAsync(a => BerthCostWindow.Command(a)); }
+            catch (Exception ex) when (ex is not OutOfMemoryException) { _status.Text = $"Couldn't open Berth costing ({ex.Message}). Finish what Revit is doing, then try again."; }
+        };
+        right.Children.Add(costing);
         right.Children.Add(_update);
         right.Children.Add(_ring);
         header.Children.Add(right);
