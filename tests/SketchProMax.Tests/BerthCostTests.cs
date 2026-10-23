@@ -79,6 +79,14 @@ internal static class BerthCostTests
 
     private static void Money(Action<string, bool, string> check)
     {
+        var single = new Berth { Name = "A6 Berths 4", Value = "4", FindBy = BerthStatusMath.FindBy.Parameter };
+        check("berth costing: a package of one berth takes its value as the number", single.Number == "4" && single.Title == "Berth 04", single.Title);
+        var fresh = new Project();
+        var unread = AddBerth(fresh, "Port A", "Berth Number", "5");
+        var said = Missing(fresh, unread);
+        check("berth costing: before a reading nothing is 'not found', and no unit costs is one line",
+            !said.Any(x => x.Contains("not found")) && said.Count(x => x.Contains("unit cost")) == 1, string.Join("; ", said));
+
         var p = Sample(out var b);
         check("berth costing: a berth is Berth 09 with its exclusion", b.Number == "9" && b.Title == "Berth 09 (excl. RoRo)", b.Title);
         var (infill, from) = Quantity(p, b, InfillRebar);
