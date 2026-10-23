@@ -9,6 +9,18 @@ using static SketchProMax.Tools.BerthStatusMath;
 /// </summary>
 internal static class BerthStatusTests
 {
+    /// <summary>The window rebuilds itself (after Import): every control it keeps in a field must leave its old parent first.</summary>
+    public static void RunSource(string repoRoot, Action<string, bool, string> check)
+    {
+        var source = File.ReadAllText(Path.Combine(repoRoot, "src/SketchProMax/UI/BerthStatusWindow.cs"));
+        var kept = System.Text.RegularExpressions.Regex.Matches(source, @"private readonly (?:TextBlock|StackPanel|ScrollViewer|Border|ProgressBar|Button|ScoreRing) (_\w+)")
+            .Select(m => m.Groups[1].Value).ToList();
+        var reuse = System.Text.RegularExpressions.Regex.Match(source, @"foreach \(var reused in new FrameworkElement\[\] \{([^}]*)\}").Groups[1].Value;
+        var listed = reuse.Split(',').Select(x => x.Trim()).ToHashSet();
+        var missing = kept.Where(k => !listed.Contains(k)).ToList();
+        check("berth status: the window detaches every kept control before rebuilding", kept.Count >= 8 && missing.Count == 0, "missing: " + string.Join(", ", missing));
+    }
+
     public static void Run(Action<string, bool, string> check)
     {
         var week = new BerthStatusMath.Calendar();
