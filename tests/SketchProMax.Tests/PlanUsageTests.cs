@@ -15,6 +15,12 @@ internal static class PlanUsageTests
             && usage.Windows[0] is { Key: PlanUsage.FiveHour, Used: 0.43 } && usage.Windows[0].ResetsAt == DateTimeOffset.FromUnixTimeSeconds(1792614600)
             && usage.Windows[1] is { Key: PlanUsage.Weekly, Used: 0.05 }, events.Count.ToString());
         check("usage: the meter", usage!.Meter(now) == "5h 43%, 4h 3m left · Week 5%" && usage.Highest(now) == 0.43, usage.Meter(now));
+        check("usage: the header meter leaves the time left to its hover, shorter when narrow",
+            usage.Meter(now, timeLeft: false, narrow: false) == "5h 43% · Week 5%" && usage.Meter(now, timeLeft: false, narrow: true) == "5h 43% · Wk 5%",
+            usage.Meter(now, timeLeft: false, narrow: true));
+        check("usage: the hover gives each limit's time left and reset",
+            usage.Hover(now, utc) == "Current session (5-hour limit): 43% used, 4h 3m left (resets 20:30)\nWeekly limit, all models: 5% used, resets Wed 28 Oct 13:00"
+            && usage.Hover(now.AddHours(5), utc).StartsWith("Current session (5-hour limit): reset;"), usage.Hover(now, utc));
         check("usage: reset words", PlanUsage.ResetText(usage.Windows[0], now, utc) == "Resets in 4 h 3 min (20:30)"
             && PlanUsage.ResetText(usage.Windows[0], now.AddSeconds(14000), utc) == "Resets in 10 min (20:30)"
             && PlanUsage.ResetText(usage.Windows[1], now, utc) == "Resets Wed 28 Oct 13:00"

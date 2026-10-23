@@ -102,6 +102,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     public static void Shutdown()
     {
         if (_instance is not { } pane) return;
+        pane.CloseBig();
         pane.EndRuns("Revit closed, so this job stopped. Send it a message to carry on.", now: true);
         pane.Save();
         pane._engine?.KillNow();
@@ -290,7 +291,9 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         if (sample is null) DefaultType();
         _conv = sample ?? ChatHandover.Open(handover, ConversationKey, ConversationTitle);
 
-        // Top: the history menu, this chat's name with the Revit model as a muted caption, then New chat and Refresh.
+        // Top: the history menu, this chat's name with its type and the Revit model as a muted caption, its effort and
+        // the plan's usage; on the right Shrink, New chat (one button: its menu picks the type), the large window and,
+        // only while the setup needs it, Check again. A narrow pane shortens the words (Narrow).
         var top = new DockPanel { Margin = new Thickness(ChatUi.S2, ChatUi.S2, ChatUi.S2, ChatUi.S2) };
         _menu = ChatUi.IconButton(ChatUi.Paths.Menu, "Chat history", "Your chats: search, open, rename, pin, export or delete them.");
         _menu.Margin = new Thickness(0, 0, ChatUi.S1, 0);
@@ -298,6 +301,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         DockPanel.SetDock(_menu, Dock.Left);
         top.Children.Add(_menu);
         _refresh = ChatUi.IconButton(ChatUi.Paths.Refresh, "Check the setup again", "Checks again that the chat is installed and signed in.");
+        _refresh.Visibility = Visibility.Collapsed; // ShowSetup shows it while the chat isn't ready
         _refresh.Click += (_, _) =>
         {
             _refreshAsked = true;
@@ -306,13 +310,17 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         };
         DockPanel.SetDock(_refresh, Dock.Right);
         top.Children.Add(_refresh);
-        // New chat starts one of the default type (Settings, Chat tab); the arrow beside it picks the type for one chat.
+        // The large window (and back to the side).
+        BuildBigButton();
+        DockPanel.SetDock(_bigButton, Dock.Right);
+        top.Children.Add(_bigButton);
+        // New chat: one button whose menu starts a chat With coordinator or a Simple one, your default (Settings, Chat
+        // tab) first and marked.
         BuildTypeControls();
-        DockPanel.SetDock(_newKind, Dock.Right);
-        top.Children.Add(_newKind);
-        _newChat = ChatUi.IconButton(ChatUi.Paths.Plus, "New chat", "New chat of your default type (Settings > Chat). This one stays in the history (the menu at the top left). The arrow beside it picks the type.");
+        _newChat = ChatUi.IconButton(ChatUi.Paths.Plus, "New chat", "New chat: pick With coordinator or Simple chat (your default is marked, Settings > Chat). This one stays in the history (the menu at the top left).");
         _newChat.Margin = new Thickness(ChatUi.S1, 0, 0, 0);
-        _newChat.Click += (_, _) => NewChat();
+        _newChat.Click += (_, _) => ToggleChoice(_newChat, NewChoices());
+        AutomationProperties.SetItemStatus(_newChat, "Collapsed");
         DockPanel.SetDock(_newChat, Dock.Right);
         top.Children.Add(_newChat);
         DockPanel.SetDock(_choiceMenu, Dock.Right);
@@ -327,6 +335,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         var names = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(ChatUi.S1, 0, 0, 0) };
         _chatName = ChatUi.Small("", Brand.K.Text, bold: true);
         _chatName.FontSize = ChatUi.BodySize;
+        _chatName.TextTrimming = TextTrimming.CharacterEllipsis;
         names.Children.Add(_chatName);
         _modelLine = ChatUi.Small("");
         _modelLine.FontSize = ChatUi.SmallSize;
@@ -338,9 +347,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         caption.Children.Add(_typePill);
         caption.Children.Add(_modelLine);
         names.Children.Add(caption);
-        // The chat's model and effort (Automatic unless picked here).
+        // The chat's effort (Automatic unless picked here) and the plan's usage. The model is picked by the message box.
         var pickers = new WrapPanel();
-        pickers.Children.Add(_modelPick);
         pickers.Children.Add(_effortPick);
         pickers.Children.Add(_usagePill);
         names.Children.Add(pickers);
@@ -809,6 +817,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     {
         var label = _briefMode switch { BriefMode.Always => "Always", BriefMode.Off => "Off", _ => "Changes" };
         _briefLabel.Text = "Brief: " + label;
+        _briefLabel.Visibility = _narrow ? Visibility.Collapsed : Visibility.Visible; // a narrow pane: the icon, with the tooltip
         _briefPill.ToolTip = "Brief before running: " + PromptBriefs.Label(_briefMode) + ". " + PromptBriefs.Hint(_briefMode) + ". Click to change.";
         AutomationProperties.SetName(_briefPill, "Brief before running: " + PromptBriefs.Label(_briefMode));
         AutomationProperties.SetHelpText(_briefPill, _briefPill.ToolTip as string ?? "");
@@ -901,6 +910,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
 
     private void ShowSetup()
     {
+        // Check again is in the header only while the setup needs it (the card has its own too).
+        _refresh.Visibility = _setup == Setup.Ready ? Visibility.Collapsed : Visibility.Visible;
         if (_setup == Setup.Ready)
         {
             _setupCard.Visibility = Visibility.Collapsed;
@@ -1837,7 +1848,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         if (!busy) Brand.SetBusy(_stop, false);
         if (busy && sendHadFocus) _stop.Focus();
         if (!busy && stopHadFocus) _input.Focus();
-        _newChat.IsEnabled = _newKind.IsEnabled = _typePill.IsEnabled = _modelPick.IsEnabled = _effortPick.IsEnabled = !_stopped;
+        _newChat.IsEnabled = _typePill.IsEnabled = _effortPick.IsEnabled = !_stopped;
         ShowShrink();
         _send.IsEnabled = _attach.IsEnabled = _view.IsEnabled = _prompts.IsEnabled = !_stopped;
         if (_stopped)
@@ -2872,6 +2883,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     /// </summary>
     private void Retire()
     {
+        // Large: back in the dock first, so the next core (or this one, revived) finds the pane where Revit shows it.
+        CloseBig();
         _stopped = true;
         _poll.Stop();
         // Nothing may keep a retired pane alive after a hot swap: timers (rooted by the dispatcher while running) and static events.

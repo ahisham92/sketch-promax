@@ -301,7 +301,7 @@ public sealed class SettingsWindow : Window
         }
         page.Children.Add(Hint("When Windows' Show animations is off (Settings > Accessibility > Visual effects), the chat doesn't animate whatever you pick."));
         page.Children.Add(SubHeading("New chats"));
-        page.Children.Add(Hint("Each chat keeps its own type, shown under its name, where you can switch it while none of its jobs is open. New chat starts this type; the arrow beside New chat picks the other one.", 2));
+        page.Children.Add(Hint("Each chat keeps its own type, shown under its name, where you can switch it while none of its jobs is open. New chat (+) offers both types, this one first.", 2));
         var defaultType = Chat.ChatTypes.Parse(_settings.ChatTypeDefault);
         foreach (var type in Chat.ChatTypes.All)
         {

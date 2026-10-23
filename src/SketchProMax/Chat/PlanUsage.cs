@@ -141,23 +141,57 @@ internal sealed class PlanUsage
     /// The header meter's words: "5h 43%, 2h 10m left · Week 5%" (only the session and the all-models week). The
     /// session counts down to its reset; once it has reset it says "5h reset" until the next answer brings a new figure.
     /// </summary>
-    public string Meter(DateTimeOffset now)
+    public string Meter(DateTimeOffset now) => Meter(now, timeLeft: true, narrow: false);
+
+    /// <summary>
+    /// The meter's words for the pane's header: without the session's time left (it shows on hover, <see cref="Hover"/>)
+    /// when <paramref name="timeLeft"/> is false, and with "Wk" for the week when <paramref name="narrow"/>.
+    /// </summary>
+    public string Meter(DateTimeOffset now, bool timeLeft, bool narrow)
     {
         var parts = new List<string>();
         foreach (var key in new[] { FiveHour, Weekly })
             if (Windows.FirstOrDefault(w => w.Key == key) is { } w)
-                parts.Add(Part(w, now));
+                parts.Add(Part(w, now, timeLeft, narrow));
         if (parts.Count == 0 && Windows.FirstOrDefault() is { } first)
-            parts.Add(Part(first, now));
+            parts.Add(Part(first, now, timeLeft, narrow));
         return string.Join(" · ", parts);
     }
 
-    private static string Part(UsageWindow w, DateTimeOffset now)
+    private static string Part(UsageWindow w, DateTimeOffset now, bool timeLeft, bool narrow)
     {
-        if (HasReset(w, now)) return Short(w.Key) + " reset";
-        var text = Short(w.Key) + " " + (w.Used is { } used ? Percent(used) : "—");
-        if (w.Key == FiveHour && w.ResetsAt is { } at) text += ", " + Left(at - now) + " left";
+        var name = narrow && w.Key == Weekly ? "Wk" : Short(w.Key);
+        if (HasReset(w, now)) return name + " reset";
+        var text = name + " " + (w.Used is { } used ? Percent(used) : "—");
+        if (timeLeft && w.Key == FiveHour && w.ResetsAt is { } at) text += ", " + Left(at - now) + " left";
         return text;
+    }
+
+    /// <summary>
+    /// The meter's hover text: each reported limit on its own line with % used and when it resets ("5h: 8% used, 2h 1m
+    /// left (resets 17:30)"), the session first.
+    /// </summary>
+    public string Hover(DateTimeOffset now, TimeZoneInfo? zone = null)
+    {
+        var lines = new List<string>();
+        foreach (var w in Windows.OrderBy(w => w.Key == FiveHour ? 0 : w.Key == Weekly ? 1 : 2))
+        {
+            var line = Label(w.Key) + ": ";
+            if (HasReset(w, now)) line += "reset; the new figure shows after the next answer";
+            else
+            {
+                line += w.Used is { } used ? Percent(used) + " used" : "no figure reported";
+                if (w.ResetsAt is { } at)
+                {
+                    var clock = TimeZoneInfo.ConvertTime(at, zone ?? TimeZoneInfo.Local).ToString("HH:mm", CultureInfo.InvariantCulture);
+                    var reset = ResetText(w, now, zone);
+                    line += w.Key == FiveHour && at > now && at - now < TimeSpan.FromHours(24) ? $", {Left(at - now)} left (resets {clock})"
+                        : ", " + char.ToLowerInvariant(reset[0]) + reset.Substring(1);
+                }
+            }
+            lines.Add(line);
+        }
+        return string.Join("\n", lines);
     }
 
     /// <summary>"2h 10m", or "25m" under an hour (at least 1m).</summary>

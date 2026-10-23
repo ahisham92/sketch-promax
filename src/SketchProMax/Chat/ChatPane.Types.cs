@@ -9,23 +9,22 @@ using SketchProMax.UI;
 namespace SketchProMax.Chat;
 
 /// <summary>
-/// Each chat's model and effort (ChatAuto), shown under its name as two pickers that start on Automatic (the Settings
-/// default): Automatic picks per request (and per job) by the kind of work and says in the chat what it picked when that
+/// Each chat's model and effort (ChatAuto): the model on the pill by the message box, the effort under the chat's name,
+/// both starting on Automatic (the Settings default): Automatic picks per request (and per job) by the kind of work and says in the chat what it picked when that
 /// changes; a model or effort picked by hand sticks for the chat and its new jobs until it is set back to Automatic.
 /// And each chat's kind (ChatTypes): With coordinator (it hands work to parallel jobs) or Simple chat (it does everything
-/// itself). The kind shows under the chat's name as a small pill that switches it (while none of its jobs is open), New
-/// chat starts one of the Settings' default kind, and the arrow beside New chat picks the other kind for one chat.
+/// itself). The kind shows under the chat's name as a small pill that switches it (while none of its jobs is open), and
+/// New chat's menu starts either kind, the Settings' default first.
 /// </summary>
 internal sealed partial class ChatPane
 {
     private readonly Popup _choiceMenu = new() { StaysOpen = false, AllowsTransparency = true, Placement = PlacementMode.Bottom };
     private readonly StackPanel _choiceList = new() { Margin = new Thickness(ChatUi.S1) };
     private readonly TextBlock _typeLabel = new() { FontSize = ChatUi.SmallSize, VerticalAlignment = VerticalAlignment.Center };
-    private Button _typePill = null!, _newKind = null!;
+    private Button _typePill = null!;
     private DateTime _choiceClosed;
-    private readonly TextBlock _modelPickLabel = new() { FontSize = ChatUi.SmallSize, VerticalAlignment = VerticalAlignment.Center };
     private readonly TextBlock _effortPickLabel = new() { FontSize = ChatUi.SmallSize, VerticalAlignment = VerticalAlignment.Center };
-    private Button _modelPick = null!, _effortPick = null!;
+    private Button _effortPick = null!;
     /// <summary>What Automatic picked for the main chat's latest request (null before one, or after a chat switch).</summary>
     private AutoPick? _lastPick;
     /// <summary>Models the plan refused in this Revit session: Automatic doesn't pick them again.</summary>
@@ -65,7 +64,7 @@ internal sealed partial class ChatPane
         ShowModelChoice();
     }
 
-    /// <summary>The kind pill (under the chat's name) and the arrow beside New chat, with the menu they share.</summary>
+    /// <summary>The kind pill (under the chat's name) and the effort picker, and the menu they share with New chat.</summary>
     private void BuildTypeControls()
     {
         var row = new StackPanel { Orientation = Orientation.Horizontal };
@@ -78,16 +77,9 @@ internal sealed partial class ChatPane
         _typePill.Click += (_, _) => ToggleChoice(_typePill, TypeChoices());
         AutomationProperties.SetItemStatus(_typePill, "Collapsed");
 
-        // The model and effort pickers.
-        _modelPick = PickerPill(_modelPickLabel, () => ToggleChoice(_modelPick, new Choice("Model for this chat",
-            ModelChoices().Select(c => (c.Label, c.Hint, c.Id == ChatAuto.ParseModel(_conv.Model), (Action)(() => SetChatModel(c.Id)))).ToList())));
+        // The effort picker (the model is picked on the pill by the message box).
         _effortPick = PickerPill(_effortPickLabel, () => ToggleChoice(_effortPick, new Choice("Effort for this chat",
             EffortChoices().Select(c => (c.Label, c.Hint, c.Id == ChatAuto.ParseEffort(_conv.Effort), (Action)(() => SetChatEffort(c.Id)))).ToList())));
-
-        _newKind = ChatUi.IconButton(ChatUi.Paths.ChevronDown, "New chat options", "Start a new chat With coordinator or a Simple chat.");
-        _newKind.Width = 20;
-        _newKind.Click += (_, _) => ToggleChoice(_newKind, NewChoices());
-        AutomationProperties.SetItemStatus(_newKind, "Collapsed");
 
         var card = ChatUi.Elevated(_choiceList, out _, ChatUi.Radius);
         card.Margin = new Thickness(ChatUi.S3);
@@ -98,7 +90,7 @@ internal sealed partial class ChatPane
         {
             _choiceClosed = DateTime.UtcNow;
             AutomationProperties.SetItemStatus(_typePill, "Collapsed");
-            AutomationProperties.SetItemStatus(_newKind, "Collapsed");
+            AutomationProperties.SetItemStatus(_newChat, "Collapsed");
         };
     }
 
@@ -116,26 +108,20 @@ internal sealed partial class ChatPane
         return pill;
     }
 
-    /// <summary>The model and effort pickers say the chat's choice; on Automatic, what it picked last.</summary>
+    /// <summary>The effort picker says the chat's choice; on Automatic, what it picked last. Shorter in a narrow pane.</summary>
     private void ShowPickers()
     {
-        if (_modelPick is null) return;
+        if (_effortPick is null) return;
         var model = ChatAuto.ParseModel(_conv.Model);
         var effort = ChatAuto.ParseEffort(_conv.Effort);
-        var modelAuto = ChatAuto.IsAuto(model);
         var effortAuto = ChatAuto.IsAuto(effort);
-        _modelPickLabel.Text = "Model: " + (modelAuto ? "Automatic" + (_lastPick is { } p ? " (" + ChatModels.Find(p.Model).Label + ")" : "") : ChatModels.Find(model).Label);
-        _effortPickLabel.Text = "Effort: " + (effortAuto ? "Automatic" + (_lastPick is { } q ? " (" + ChatAuto.EffortLabel(q.Effort).ToLowerInvariant() + ")" : "") : ChatAuto.EffortLabel(effort));
-        Brand.Fg(_modelPickLabel, Brand.K.Muted);
+        _effortPickLabel.Text = "Effort: " + (effortAuto
+            ? (_narrow ? "Auto" : "Automatic") + (_lastPick is { } q ? " (" + ChatAuto.EffortLabel(q.Effort).ToLowerInvariant() + ")" : "")
+            : ChatAuto.EffortLabel(effort));
         Brand.Fg(_effortPickLabel, Brand.K.Muted);
-        _modelPick.ToolTip = modelAuto
-            ? "Automatic: each request and each job gets Haiku, Sonnet or Opus by the kind of work (Settings > Chat). Click to pick one for this chat."
-            : $"{ChatModels.Find(model).Label} for this chat and its new jobs, until you set it back to Automatic. Click to change.";
         _effortPick.ToolTip = effortAuto
             ? "Automatic: low effort for simple work, higher for hard reasoning (Settings > Chat). Click to pick one for this chat."
             : $"{ChatAuto.EffortLabel(effort)} effort for this chat and its new jobs, until you set it back to Automatic. Click to change.";
-        AutomationProperties.SetName(_modelPick, "Model for this chat: " + (modelAuto ? "Automatic" : ChatModels.Find(model).Label));
-        AutomationProperties.SetHelpText(_modelPick, (string)_modelPick.ToolTip);
         AutomationProperties.SetName(_effortPick, "Effort for this chat: " + (effortAuto ? "Automatic" : ChatAuto.EffortLabel(effort)));
         AutomationProperties.SetHelpText(_effortPick, (string)_effortPick.ToolTip);
         ChatJobs.ChatModel = model;
@@ -193,7 +179,7 @@ internal sealed partial class ChatPane
     private Choice NewChoices()
     {
         var standard = DefaultType();
-        return new Choice("Start a new chat", ChatTypes.All.Select(t => (
+        return new Choice("Start a new chat", ChatTypes.All.OrderBy(t => t == standard ? 0 : 1).Select(t => (
             t == ChatTypes.Simple ? "New simple chat" : "New chat with coordinator",
             ChatTypes.Hint(t) + (t == standard ? " (your default, Settings > Chat)" : ""),
             false, (Action)(() => NewChat(t)))).ToList());

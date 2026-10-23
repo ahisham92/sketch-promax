@@ -8,8 +8,8 @@ using SketchProMax.UI;
 namespace SketchProMax.Chat;
 
 /// <summary>
-/// The plan's usage in the chat's header, the way the Claude app shows it: a small meter ("5h 43%, 2h 10m left · Week 5%") that
-/// opens a detail with each limit Claude Code reported (the current 5-hour session, the weekly limits), how much is used
+/// The plan's usage in the chat's header, the way the Claude app shows it: a small meter ("Usage: 5h 43% · Week 5%", or
+/// "5h 43% · Wk 5%" in a narrow pane) whose hover gives the session's time left and each reset, and a click opens a detail with each limit Claude Code reported (the current 5-hour session, the weekly limits), how much is used
 /// and when it resets. The figures are only what Claude Code reports with each answer (rate_limit_event, PlanUsage):
 /// nothing is estimated. Near a limit (80 %) the chat says so once per limit and reset, naming the jobs running then.
 /// </summary>
@@ -77,7 +77,9 @@ internal sealed partial class ChatPane
         if (_usagePill is null) return;
         var now = DateTimeOffset.UtcNow;
         var meter = _usage?.Meter(now) ?? "";
-        _usageText.Text = "Usage: " + (meter.Length > 0 ? meter : "not reported yet");
+        // The header keeps it short: the session's time left and each reset show on hover (and in the detail).
+        var shown = _usage?.Meter(now, timeLeft: false, narrow: _narrow) ?? "";
+        _usageText.Text = shown.Length > 0 ? (_narrow ? shown : "Usage: " + shown) : _narrow ? "Usage" : "Usage: not reported yet";
         var high = _usage?.Highest(now);
         var key = high >= 1 ? Brand.K.DangerText : high >= PlanUsage.WarnAt ? Brand.K.WarningText : Brand.K.Muted;
         Brand.Fg(_usageText, key);
@@ -85,7 +87,7 @@ internal sealed partial class ChatPane
         _usageFill.Width = Math.Round(_usageBar.Width * Math.Min(1, high ?? 0));
         _usageFill.SetResourceReference(Border.BackgroundProperty, high >= 1 ? Brand.K.DangerText : high >= PlanUsage.WarnAt ? Brand.K.WarningText : Brand.K.Accent);
         _usagePill.ToolTip = meter.Length > 0
-            ? "Your plan's usage, as last reported with an answer. Click for each limit and when it resets."
+            ? _usage!.Hover(now) + "\nAs last reported with an answer. Click for the details."
             : "Your plan's usage shows after Sketch ProMax's next answer.";
         AutomationProperties.SetName(_usagePill, "Plan usage: " + (meter.Length > 0 ? meter.Replace("·", ",") : "not reported yet"));
         AutomationProperties.SetHelpText(_usagePill, (string)_usagePill.ToolTip);
