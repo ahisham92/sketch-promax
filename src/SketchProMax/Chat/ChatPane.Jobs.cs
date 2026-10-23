@@ -517,6 +517,7 @@ internal sealed partial class ChatPane
         _switcher.Child = _switchList;
         _switcher.Padding = new Thickness(0, 0, 0, ChatUi.S1);
         top.Children.Add(_switcher);
+        _switcherHome = top; // the large window moves it into its jobs column (ShowBig)
 
         // The job's bar: Back to coordinator, the job's name and state, Stop.
         var bar = new DockPanel();
@@ -588,6 +589,7 @@ internal sealed partial class ChatPane
         if (_viewJob is { } shownJob && jobs.All(j => j.Number != shownJob)) ShowCoordinator(focus: false);
         var key = (_viewJob?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "c") + "|" + string.Join("|", jobs.Select(j => j.Number + j.Title + j.State + j.Ahead));
         _switcher.Visibility = jobs.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        ShowSideEmpty(jobs.Count);
         if (key == _switchShown) return;
         _switchShown = key;
         var focused = _switchList.Children.OfType<Button>().FirstOrDefault(b => b.IsKeyboardFocused) is { } had ? AutomationProperties.GetAutomationId(had) : null;
@@ -596,6 +598,13 @@ internal sealed partial class ChatPane
         Button Pill(string id, UIElement content, string name, string help, bool selected, Action click)
         {
             var b = new Button { Content = content, Margin = new Thickness(0, 0, ChatUi.S1, ChatUi.S1), Padding = new Thickness(ChatUi.S2, 2, ChatUi.S2, 2), ToolTip = help };
+            // In the large window's jobs column: one full-width row each.
+            if (_jobsSide)
+            {
+                b.Width = SideWidth - 2 * ChatUi.S3 - ChatUi.S1;
+                b.HorizontalContentAlignment = HorizontalAlignment.Left;
+                b.Padding = new Thickness(ChatUi.S2, ChatUi.S1, ChatUi.S2, ChatUi.S1);
+            }
             b.SetResourceReference(StyleProperty, "SpmChatPill");
             b.SetResourceReference(BackgroundProperty, selected ? Brand.K.AccentSoft : Brand.K.Raised);
             AutomationProperties.SetAutomationId(b, id);
@@ -615,12 +624,25 @@ internal sealed partial class ChatPane
             dot.Margin = new Thickness(0, 0, ChatUi.S1, 0);
             if (!job.Active && job.State != JobBoard.Done && job.State != JobBoard.Failed && job.State != JobBoard.Stopped) dot.Text = "○";
             row.Children.Add(dot);
-            var title = new TextBlock { Text = $"Job {job.Number} · {JobBoard.OneLine(job.Title, 24)}", FontSize = ChatUi.SmallSize, VerticalAlignment = VerticalAlignment.Center, FontWeight = _viewJob == job.Number ? FontWeights.SemiBold : FontWeights.Normal };
+            var title = new TextBlock { Text = $"Job {job.Number} · {JobBoard.OneLine(job.Title, _jobsSide ? 60 : 24)}", FontSize = ChatUi.SmallSize, VerticalAlignment = VerticalAlignment.Center, FontWeight = _viewJob == job.Number ? FontWeights.SemiBold : FontWeights.Normal, TextTrimming = TextTrimming.CharacterEllipsis };
             Brand.Fg(title, Brand.K.Text);
             row.Children.Add(title);
             var state = JobBoard.StateLabel(job);
+            UIElement content = row;
+            if (_jobsSide)
+            {
+                // The column has room for the state under the title.
+                var lines = new StackPanel();
+                lines.Children.Add(row);
+                var said = Brand.Text(state, StateColor(job), ChatUi.SmallSize);
+                said.Margin = new Thickness(14, 1, 0, 0);
+                said.TextTrimming = TextTrimming.CharacterEllipsis;
+                said.TextWrapping = TextWrapping.NoWrap;
+                lines.Children.Add(said);
+                content = lines;
+            }
             var number = job.Number;
-            Pill("switch-job-" + number, row, $"Job {number}: {job.Title}, {state}", $"Job {number}, {state.ToLowerInvariant()}. Opens its own chat: everything it did, and what you send goes to it.",
+            Pill("switch-job-" + number, content, $"Job {number}: {job.Title}, {state}", $"Job {number}, {state.ToLowerInvariant()}. Opens its own chat: everything it did, and what you send goes to it.",
                 _viewJob == number, () => OpenJobView(number));
         }
         if (focused is not null && _switchList.Children.OfType<Button>().FirstOrDefault(b => AutomationProperties.GetAutomationId(b) == focused) is { } again) again.Focus();
