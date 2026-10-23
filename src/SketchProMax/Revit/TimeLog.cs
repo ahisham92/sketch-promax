@@ -302,8 +302,16 @@ internal static class TimeLog
         }
     }
 
+    /// <summary>
+    /// How many changes the models have had (committed, undone or redone transactions) since Revit started: windows that
+    /// follow the model (Berth costing) compare it on a timer instead of subscribing themselves.
+    /// </summary>
+    public static long Changes => System.Threading.Interlocked.Read(ref _changes);
+    private static long _changes;
+
     private static void OnDocumentChanged(object? sender, DocumentChangedEventArgs e)
     {
+        System.Threading.Interlocked.Increment(ref _changes);
         // The chat's "Undo all" needs to know every change (this handler is the one DocumentChanged subscription).
         JobUndo.Changed(e);
         try

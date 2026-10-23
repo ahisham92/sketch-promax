@@ -299,7 +299,8 @@ internal static class BerthCostFacts
             };
             total = (total ?? 0) + Finish(r, q);
             ids.AddRange(ones.Select(o => o.Id));
-            if (r.Table.Length > 0 && r.Table != "none") lines.AddRange(Group(item, r, ones));
+            // Lines for every rule: the back-up shows those with a table, the BOQ descriptions read counts and heights from all.
+            lines.AddRange(Group(item, r, ones));
         }
         NumberGroups(lines);
         if (total is { } t) m.Quantities[item.No] = Math.Round(t, 3);

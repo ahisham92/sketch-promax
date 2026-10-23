@@ -27,6 +27,7 @@ internal static class BerthCostTests
             Comparison(check, dir);
             Boq(check, dir);
             Backup(check, dir);
+            Base(check, dir);
             Real(check);
         }
         finally
@@ -288,6 +289,57 @@ internal static class BerthCostTests
         check("berth costing: the reinforcement section is built", texts.Contains("Reinforcement") && tables.Any(t => string.Concat(t.Descendants(W + "t").Select(x => x.Value)).Contains("CombiWall")), "");
         check("berth costing: items not measured are noted, not invented", notes.Any(n => n.Contains("no Rear")), string.Join(" | ", notes));
         check("berth costing: the section settings stay last", xml.Root!.Element(W + "body")!.Elements().Last().Name == W + "sectPr", "");
+    }
+
+    // ---- Built-in formats (no files needed) --------------------------------------------------------------------------
+
+    private static void Base(Action<string, bool, string> check, string dir)
+    {
+        var p = Sample(out var b);
+        p.Details.HeaderLeft = "PROJECT LINE 1\nPROJECT LINE 2";
+        p.Details.DocNumber = "PRJ1-B{nn}-BOQ";
+        var unknown = new List<string>();
+        var pipe = Describe(p, b, p.ItemOf(1)!, unknown);
+        check("berth costing: a BOQ description fills from the model (diameter, count, length)", pipe.Contains("1.626") && pipe.Contains("42 piles") && !pipe.Contains("{"), pipe);
+        var mp = Describe(p, b, p.ItemOf(5)!, unknown);
+        check("berth costing: the middle piles' description has their tip and diameter", mp.Contains("1200") && mp.Contains("-39.3") && !mp.Contains("{"), mp);
+        check("berth costing: {nn} and {length} follow the berth", ForBerth("B{nn} {n} {length}", b) == "B09 9 200", ForBerth("B{nn} {n} {length}", b));
+
+        var boq = Path.Combine(dir, "base-boq.xlsx");
+        var notes = BerthCostDocs.WriteBoq(p, b, boq);
+        var sheet = Entry(boq, "xl/worksheets/sheet1.xml");
+        var strings = sheet;
+        check("berth costing: built-in BOQ has its sections, collection and summary", strings.Contains("STRUCTURAL ITEMS") && strings.Contains("COLLECTION") && strings.Contains("To Summary")
+            && sheet.Contains("SUM(") && strings.Contains("PROJECT LINE 1"), string.Join(" | ", notes));
+        check("berth costing: built-in BOQ has its footer with the berth's number", Entry(boq, "xl/worksheets/sheet1.xml").Contains("PRJ1-B09-BOQ"), "");
+        p.Details.HeaderLeft = "";
+        p.ItemOf(1)!.InFiles = false;
+        BerthCostDocs.WriteBoq(p, b, boq);
+        check("berth costing: an item ticked off stays out of the BOQ", !Entry(boq, "xl/worksheets/sheet1.xml").Contains("1.626"), "");
+        p.ItemOf(1)!.InFiles = true;
+
+        var costing = Path.Combine(dir, "base-costing.xlsx");
+        BerthCostDocs.WriteCosting(p, [b], costing);
+        var book = Entry(costing, "xl/workbook.xml");
+        check("berth costing: built-in costing has a summary, a sheet per berth and the unit costs", book.Contains("Summary") && book.Contains("Unit Costs") && book.Contains("Berth"), book.Length.ToString());
+
+        var docx = Path.Combine(dir, "base-backup.docx");
+        notes = BerthCostDocs.WriteBackup(p, [b], docx);
+        var doc = Entry(docx, "word/document.xml");
+        var xml = XDocument.Parse(doc);
+        check("berth costing: built-in back-up has the berth's tables with totals", doc.Contains("Total") && xml.Descendants(W + "tbl").Any() && doc.Contains("Berth 9"), string.Join(" | ", notes));
+        check("berth costing: built-in back-up is a valid Word body", xml.Root!.Element(W + "body")!.Elements().Last().Name == W + "sectPr", "");
+        var example = Path.Combine(dir, "base-example.docx");
+        BerthCostDocs.WriteBackup(p, [b], example, example: true);
+        var again = Path.Combine(dir, "base-again.docx");
+        var refill = BerthCostExports.WriteBackup(p, [b], example, again);
+        check("berth costing: the exported back-up template fills again as a project template", File.Exists(again) && Entry(again, "word/document.xml").Contains("Total"), string.Join(" | ", refill));
+        var boqAgain = Path.Combine(dir, "base-boq-again.xlsx");
+        var refillBoq = BerthCostExports.WriteBoq(p, b, boq, boqAgain);
+        check("berth costing: the exported BOQ fills again as a project template", File.Exists(boqAgain), string.Join(" | ", refillBoq));
+
+        var keep = Environment.GetEnvironmentVariable("SKETCHPROMAX_BERTH_BASE_OUT");
+        if (!string.IsNullOrEmpty(keep)) { Directory.CreateDirectory(keep); foreach (var x in new[] { boq, costing, docx, example, again, boqAgain }) File.Copy(x, Path.Combine(keep, Path.GetFileName(x)), true); }
     }
 
     // ---- Real files (only on a PC that has them) -------------------------------------------------------------------------

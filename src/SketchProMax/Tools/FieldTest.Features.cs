@@ -2301,7 +2301,8 @@ internal static partial class FieldTest
 
     /// <summary>
     /// Berth costing: the whole test model as one berth (columns counted, floors by volume) measured step by step, a scope
-    /// box to leave out that isn't there said, and the three files made from small templates written here.
+    /// box to leave out that isn't there said, the three files in the built-in formats, and the same made from small
+    /// project templates written here.
     /// </summary>
     private static (string, string) BerthCostProbe(UIApplication app, State s)
     {
@@ -2311,8 +2312,10 @@ internal static partial class FieldTest
         {
             Items =
             [
-                new() { No = 1, Group = "C1", Name = "Columns", Unit = "Nr", RateCode = "R_A", Rule = "cat=Structural Columns,Columns; measure=count; table=pile", Boq = "Columns", Backup = "Columns" },
-                new() { No = 12, Group = "C4", Name = "Floors", Unit = "m³", RateCode = "R_B", Rule = "cat=Floors; measure=volume; table=slab; group=thickness", Boq = "Floors", Backup = "Floors" },
+                new() { No = 1, Group = "C1", Name = "Columns", Unit = "Nr", RateCode = "R_A", Rule = "cat=Structural Columns,Columns; measure=count; table=pile", Boq = "Columns", Backup = "Columns",
+                    Section = "STRUCTURAL ITEMS", BoqOrder = 1, BoqUnit = "Nr", BoqText = "Columns, {count} in all, typical height {height} m" },
+                new() { No = 12, Group = "C4", Name = "Floors", Unit = "m³", RateCode = "R_B", Rule = "cat=Floors; measure=volume; table=slab; group=thickness", Boq = "Floors", Backup = "Floors",
+                    Section = "STRUCTURAL ITEMS", BoqOrder = 2, BoqUnit = "m3", BoqText = "Floors {thicks}" },
             ],
         };
         p.Rates = [new() { Code = "R_A", Name = "Column", Unit = "Nr", Value = 100 }, new() { Code = "R_B", Name = "Floor", Unit = "m³", Value = 200 }];
@@ -2366,10 +2369,32 @@ internal static partial class FieldTest
             using (var zip = ZipFile.OpenRead(outW))
             using (var r = new StreamReader(zip.GetEntry("word/document.xml")!.Open()))
                 if (!r.ReadToEnd().Contains("Berth 01")) problems.Add("the back-up doesn't name the berth");
+
+            // The built-in formats: no files needed.
+            string Sheet1(string path)
+            {
+                using var zip = ZipFile.OpenRead(path);
+                using var r = new StreamReader(zip.GetEntry("xl/worksheets/sheet1.xml")!.Open());
+                return r.ReadToEnd();
+            }
+            var baseBoq = Path.Combine(folder, "built-in BOQ.xlsx");
+            BerthCostDocs.WriteBoq(p, berth, baseBoq);
+            var boqXml = Sheet1(baseBoq);
+            if (m.Quantities.ContainsKey(1) && !boqXml.Contains("Columns, " + berth.Measured.Lines.Where(l => l.No == 1).Sum(l => l.Count) + " in all"))
+                problems.Add("the built-in BOQ's description doesn't have the model's column count");
+            if (!boqXml.Contains("To Summary")) problems.Add("the built-in BOQ has no summary line");
+            var baseCost = Path.Combine(folder, "built-in costing.xlsx");
+            BerthCostDocs.WriteCosting(p, [berth], baseCost);
+            if (!Sheet1(baseCost).Contains("Berth 1")) problems.Add("the built-in costing doesn't list the berth");
+            var baseDoc = Path.Combine(folder, "built-in back-up.docx");
+            BerthCostDocs.WriteBackup(p, [berth], baseDoc);
+            using (var zip = ZipFile.OpenRead(baseDoc))
+            using (var r = new StreamReader(zip.GetEntry("word/document.xml")!.Open()))
+                if (!r.ReadToEnd().Contains("<w:tbl>")) problems.Add("the built-in back-up has no table");
         }
         catch (Exception ex) when (ex is IOException or InvalidDataException or System.Xml.XmlException) { problems.Add("making the files: " + ex.Message); }
         return problems.Count == 0
-            ? Pass($"{steps} steps; {string.Join(", ", m.Quantities.Select(q => $"item {q.Key} = {q.Value:0.##}"))}; {BerthCostMath.Money(total.Structural)}; three files made")
+            ? Pass($"{steps} steps; {string.Join(", ", m.Quantities.Select(q => $"item {q.Key} = {q.Value:0.##}"))}; {BerthCostMath.Money(total.Structural)}; three built-in files and three from templates made")
             : Fail(string.Join("; ", problems));
     }
 
