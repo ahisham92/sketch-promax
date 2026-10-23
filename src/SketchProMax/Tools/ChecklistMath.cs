@@ -109,6 +109,8 @@ internal static class ChecklistMath
             "(empty: not tested). It doesn't replace a review against the design.", "mustexist"),
         new("approvedworksets", "Approved worksets", "", "Every workset matches one of these (empty: not tested). Workset1 and Shared Levels and Grids are always allowed.", "newworksets"),
         new("columns", "Column levels tested", "yes", "yes: a column that runs past the next level up is flagged (list the double-height ones in the comment). no: not tested.", "columns"),
+        new("genericok", "Generic Models allowed", "", "Family names (wildcards allowed) that may stay Generic Models, comma separated, e.g. *Stabilized Sand*, Connector*. " +
+            "Submissions status doesn't list them as eLOD problems. Families with VOID in the name are never checked (empty: every Generic Model is listed).", "uniformat"),
         new("autoready", "Keep the model BIM-ready while you model", "", "yes: as you place elements (or change their type), their type gets its UniFormat code from the rules above when it has none, " +
             "the fixed LOI values (LOI values the model can't give) where empty, and elements on Workset1 go to their category's workset. Inside your own edit (Ctrl+Z undoes both); nothing filled is overwritten. Empty or no: off.", "uniformat"),
         new("classification", "Classification parameter", "Assembly Code", "The type parameter holding the UniFormat code; every model type in use must have it filled.", "uniformat"),

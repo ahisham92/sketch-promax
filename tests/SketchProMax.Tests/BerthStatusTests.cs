@@ -84,6 +84,28 @@ internal static class BerthStatusTests
         check("berth status: a berth with what the submitted berths have is fully modelled", full.Percent >= 99 && full.Short.Count == 0, full.Percent?.ToString() ?? "");
         check("berth status: what the submitted berths have and this berth lacks is listed", half.Percent is > 50 and < 60 && half.Short.Count == 2 && half.Short[0].Kind == "Specialty Equipment: Fender"
             && half.Short[0].Have == 0 && half.Short[0].Expected == 11 && CompareModelling([], []).Percent is null, $"{half.Percent} {string.Join("|", half.Short)}");
+        // Modelling after a reading: against the submitted berths' saved counts; the only submitted berth is the example; the BIM model follows its berths.
+        var mSetup = new Setup
+        {
+            Models = [new("Port A", "PORTA")],
+            Berths = [new("Port A", "Berth 1", FindBy.WholeModel), new("Port A", "Berth 2", FindBy.WholeModel), new("Port A", "BIM Model", FindBy.WholeModel)],
+            Submissions = [new("Port A", "Berth 1", "S1", new DateTime(2026, 9, 1), null, true), new("Port A", "Berth 2", "S2", new DateTime(2026, 12, 1))],
+        };
+        mSetup.Berths[2] = mSetup.Berths[2] with { FindBy = "Whole model" };
+        var mBerths = mSetup.Berths.Take(2).Select(b => b with { FindBy = FindBy.Parameter }).Concat([mSetup.Berths[2]]).ToList();
+        mSetup.Berths = mBerths;
+        var mState = new State();
+        mState.For(mBerths[0].Key).Results[Modelling] = new AreaResult { Kinds = new(StringComparer.OrdinalIgnoreCase) { ["Structural Columns: Pile"] = 100, ["Floors: Slab"] = 10 } };
+        mState.For(mBerths[1].Key).Results[Modelling] = new AreaResult { Kinds = new(StringComparer.OrdinalIgnoreCase) { ["Structural Columns: Pile"] = 50 } };
+        mState.For(mBerths[2].Key).Results[Modelling] = new AreaResult { Kinds = new(StringComparer.OrdinalIgnoreCase) { ["Structural Columns: Pile"] = 150, ["Floors: Slab"] = 10 } };
+        CompareModelling(mSetup, mState);
+        var m1 = mState.For(mBerths[0].Key).Results[Modelling];
+        var m2 = mState.For(mBerths[1].Key).Results[Modelling];
+        var mw = mState.For(mBerths[2].Key).Results[Modelling];
+        check("modelling: the only submitted berth is the example, the next one is held against it, the BIM model is their average",
+            m1.Percent == 100 && m2.Percent is { } p2 && Math.Abs(p2 - 100.0 * 50 / 110) < 0.5 && m2.Findings.Any(f => f.Item == "Floors: Slab")
+            && mw.Percent is { } pw && Math.Abs(pw - (100 + p2) / 2) < 0.5 && mw.Summary.Contains("average"), $"{m1.Percent} {m2.Percent} {mw.Percent}");
+
 
         // The Assembly Code table from an LOI matrix: codes wherever they sit in a row, their names, parents added.
         var codes = SketchProMax.Tools.AssemblyCodeText.FromRows([

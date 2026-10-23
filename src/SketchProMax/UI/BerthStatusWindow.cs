@@ -853,11 +853,14 @@ internal sealed class BerthStatusWindow : Window
             }
             var text = string.Join(" ", said.Distinct().Take(6)) + (said.Count > 6 ? $" (and {said.Count - 6} more)." : "");
             ActivityLog.Note("berth_status_fix", $"{what}: {text}");
-            _status.Text = text + " Press Update status to see the new status.";
+            _status.Text = text;
             button.Content = "Done";
             button.IsEnabled = false;
+            // Said in a dialog, not only in the status line (it was missed: "nothing happened"), then the berths it changed are read again.
+            MessageBox.Show(this, text, "Sketch ProMax: " + what, MessageBoxButton.OK, said.Any(x => x.StartsWith("Bring ", StringComparison.Ordinal)) ? MessageBoxImage.Warning : MessageBoxImage.Information);
+            if (!said.Any(x => x.StartsWith("Bring ", StringComparison.Ordinal))) await UpdateStatus();
         }
-        catch (Exception ex) when (ex is not OutOfMemoryException) { _status.Text = $"Couldn't fix it ({ex.Message})."; }
+        catch (Exception ex) when (ex is not OutOfMemoryException) { _status.Text = $"Couldn't fix it ({ex.Message})."; MessageBox.Show(this, _status.Text, "Sketch ProMax", MessageBoxButton.OK, MessageBoxImage.Warning); }
         finally { if (button.IsEnabled) Brand.SetBusy(button, false); }
     }
 
