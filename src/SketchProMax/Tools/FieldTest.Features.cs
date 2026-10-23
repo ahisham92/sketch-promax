@@ -5,6 +5,7 @@ using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Xml.Linq;
 using System.Windows.Controls;
 using Autodesk.Revit.DB;
 using Autodesk.Revit.UI;
@@ -500,6 +501,7 @@ internal static partial class FieldTest
         await Probe(s, "issue.gate", app => IssueGateProbe(app, s)).ConfigureAwait(false);
         await Probe(s, "checklist.word", app => ChecklistProbe(app, s)).ConfigureAwait(false);
         await Probe(s, "berth.read", app => BerthStatusProbe(app, s)).ConfigureAwait(false);
+        await Probe(s, "costing.berth", app => BerthCostProbe(app, s)).ConfigureAwait(false);
         await Probe(s, "checklist.views", app => ChecklistViewsProbe(app, s)).ConfigureAwait(false);
         await Probe(s, "checklist.fix", app => ChecklistFixProbe(app, s)).ConfigureAwait(false);
         await Probe(s, "checklist.fix_more", app => ChecklistFixMoreProbe(app, s)).ConfigureAwait(false);
@@ -2294,6 +2296,80 @@ internal static partial class FieldTest
             if (zip.GetEntry("xl/workbook.xml") is not { } wb || !new StreamReader(wb.Open()).ReadToEnd().Contains("Status")) problems.Add("the Excel has no Status sheet");
         return problems.Count == 0
             ? Pass($"{steps} steps; {BerthStatusMath.Pct(summary.Percent)} ({BerthStatusFacts.Describe(reading)}); Excel written")
+            : Fail(string.Join("; ", problems));
+    }
+
+    /// <summary>
+    /// Berth costing: the whole test model as one berth (columns counted, floors by volume) measured step by step, a scope
+    /// box to leave out that isn't there said, and the three files made from small templates written here.
+    /// </summary>
+    private static (string, string) BerthCostProbe(UIApplication app, State s)
+    {
+        if (TestDoc(app, s, out var why) is not { } doc) return Fail(why);
+        var problems = new List<string>();
+        var p = new BerthCostMath.Project
+        {
+            Items =
+            [
+                new() { No = 1, Group = "C1", Name = "Columns", Unit = "Nr", RateCode = "R_A", Rule = "cat=Structural Columns,Columns; measure=count; table=pile", Boq = "Columns", Backup = "Columns" },
+                new() { No = 12, Group = "C4", Name = "Floors", Unit = "m³", RateCode = "R_B", Rule = "cat=Floors; measure=volume; table=slab; group=thickness", Boq = "Floors", Backup = "Floors" },
+            ],
+        };
+        p.Rates = [new() { Code = "R_A", Name = "Column", Unit = "Nr", Value = 100 }, new() { Code = "R_B", Name = "Floor", Unit = "m³", Value = 200 }];
+        var berth = new BerthCostMath.Berth { Key = "Test|Berth 1", Name = "Berth 1", Site = "Test", FindBy = BerthStatusMath.FindBy.WholeModel, Exclude = "No such scope box", Length = 100 };
+        p.Berths[berth.Key] = berth;
+        var reading = BerthCostFacts.Plan(doc, p, [berth]);
+        var steps = 0;
+        while (reading.Next()) steps++;
+        if (steps < reading.Total) problems.Add($"only {steps} steps for {reading.Total} parts");
+        if (!reading.Problems.Any(x => x.Contains("No such scope box"))) problems.Add("the missing scope box to leave out wasn't said");
+        BerthCostFacts.Apply(p, reading);
+        if (berth.Measured is not { } m) return Fail("the berth wasn't measured: " + string.Join("; ", reading.Problems));
+        if (m.Quantities.Count == 0) problems.Add("nothing measured (the test model has columns and floors): " + string.Join("; ", m.Notes.Values));
+        var total = BerthCostMath.Total(p, berth);
+        if (m.Quantities.Count > 0 && total.Structural <= 0) problems.Add("no cost from the measured quantities");
+
+        var folder = Path.Combine(s.Folder, "berth costing");
+        Directory.CreateDirectory(folder);
+        OfficeXlsx.Row R(params object?[] cells) => new(cells);
+        var comparison = Path.Combine(folder, "comparison template.xlsx");
+        OfficeXlsx.Write(comparison, "Comparison", [new OfficeXlsx.Sheet("Quantities", "", [],
+            [R("", "Stage", "", ""), R("", "Site", "", ""), R("", "Bill / Berth", "", "Spare - new berth"), R("", "Quay length (m)", "", ""), R("", "Remarks", "", ""), R(1, "Columns", "Nr", ""), R(12, "Floors", "m³", "")],
+            [], [], false)]);
+        var boq = Path.Combine(folder, "BOQ-Berth 5-ST.xlsx");
+        OfficeXlsx.Write(boq, "BOQ", [new OfficeXlsx.Sheet("ST", "", [], [R("", "BERTH 5 - LENGTH 50 METER", "", ""), R("A", "Columns", 1, "Nr"), R("B", "Floors", 1, "m³")], [], [], false)]);
+        var backup = Path.Combine(folder, "backup template.docx");
+        XNamespace w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+        XElement P(string text, bool list = false) => new(w + "p", list ? new XElement(w + "pPr", new XElement(w + "numPr", new XElement(w + "numId", new XAttribute(w + "val", "5")))) : null, new XElement(w + "r", new XElement(w + "t", text)));
+        XElement Tbl(params string[] head) => new(w + "tbl", new XElement(w + "tr", head.Select(h => new XElement(w + "tc", P(h)))), new XElement(w + "tr", head.Select(_ => new XElement(w + "tc", P("")))));
+        if (File.Exists(backup)) File.Delete(backup);
+        using (var zip = ZipFile.Open(backup, ZipArchiveMode.Create))
+        using (var stream = zip.CreateEntry("word/document.xml").Open())
+            new XDocument(new XElement(w + "document", new XAttribute(XNamespace.Xmlns + "w", w), new XElement(w + "body",
+                P("BACKUP CALCULATION"), P("This document provides the backup calculation of the bill quantities for Berth 5. Each element is shown."),
+                P("Floors", list: true), P("How it is billed."), P("Berth 5"),
+                Tbl("Item", "Pile Diameter (m)", "Top Level (mCD)", "Bottom Level (mCD)", "Height (m)", "Count", "Quantity (m)"),
+                Tbl("Item", "Area (m²)", "Thickness (m)", "Volume (m³)"),
+                Tbl("Item", "Rate (kg/m³)", "Volume (m³)", "Reinforcement Weight (Ton)")))).Save(stream);
+        try
+        {
+            var outC = Path.Combine(folder, "comparison.xlsx");
+            BerthCostExports.WriteComparison(p, [berth], comparison, outC, _ => "field test");
+            using (var book = XlsxBook.Read(outC))
+                if (book.Text("Quantities", 3, 3) != berth.Title) problems.Add("the comparison has no column for the berth");
+            var outB = Path.Combine(folder, BerthCostExports.BoqName(boq, berth) + ".xlsx");
+            BerthCostExports.WriteBoq(p, berth, boq, outB);
+            using (var book = XlsxBook.Read(outB))
+                if (!book.Text("ST", 1, 1).Contains("BERTH 1 - LENGTH 100")) problems.Add("the BOQ title isn't the berth's: " + book.Text("ST", 1, 1));
+            var outW = Path.Combine(folder, "backup.docx");
+            BerthCostExports.WriteBackup(p, [berth], backup, outW);
+            using (var zip = ZipFile.OpenRead(outW))
+            using (var r = new StreamReader(zip.GetEntry("word/document.xml")!.Open()))
+                if (!r.ReadToEnd().Contains("Berth 01")) problems.Add("the back-up doesn't name the berth");
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or System.Xml.XmlException) { problems.Add("making the files: " + ex.Message); }
+        return problems.Count == 0
+            ? Pass($"{steps} steps; {string.Join(", ", m.Quantities.Select(q => $"item {q.Key} = {q.Value:0.##}"))}; {BerthCostMath.Money(total.Structural)}; three files made")
             : Fail(string.Join("; ", problems));
     }
 
