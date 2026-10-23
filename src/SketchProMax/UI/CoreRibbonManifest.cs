@@ -41,9 +41,9 @@ internal static class CoreRibbonManifest
             "Stages from your checklist Excel: project details, one per section, then review and sign. Each check has how to check it, " +
             "where it came from and what the model shows; answer Yes, No or N/A with a comment. The Word file carries the signatures " +
             "only when nothing is No or unanswered. Reads the model only; answers are kept per model.", needsModel: true)),
-        // Berth status (0.35): next to the checklist. Each berth's status for its next submission (UI/BerthStatusWindow); the
+        // Submissions status (0.35, named Berth status until 0.34.60; id and command kept so the live ribbon renames it): next to the checklist. Each berth's status for its next submission (UI/BerthStatusWindow); the
         // model is read only when the user presses Update status there, in short steps.
-        L(Button("Claude", "BerthStatus", "Berth\nstatus", "berth-status", "list",
+        L(Button("Claude", "BerthStatus", "Submissions\nstatus", "berth-status", "list",
             "Each berth's status for its next submission: a percentage from modelling, coordination, clashes, drawings, details, annotation, schedules and deliverables, with the expected finish.",
             "Set up once from an Excel file (models, berths, submission schedule, planned counts, deliverables, working week). Click a berth for its areas, " +
             "what to fix, hand entries and comments, and export its Excel. The model is read only when you press Update status, in short steps, so Revit never freezes.")),

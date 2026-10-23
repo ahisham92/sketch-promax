@@ -24,24 +24,24 @@ internal static class WarningFixes
 
     /// <summary>
     /// The element's line and the turn (degrees, about its middle) that puts it on its exact direction, when it is a
-    /// straight line in plan, not pinned, and neither end moves more than BimReadyPlan.MaxMoveMm. Null otherwise.
+    /// straight line in plan, not pinned, and neither end moves more than <paramref name="maxMm"/> (at most BimReadyPlan.MaxMoveMm). Null otherwise.
     /// </summary>
-    public static (Line Line, double Turn)? Straighten(Element e)
+    public static (Line Line, double Turn)? Straighten(Element e, double maxMm = BimReadyPlan.MaxMoveMm)
     {
         if (e.Pinned || LineOf(e) is not { } line) return null;
         var d = line.Direction;
         if (Math.Abs(d.Z) > 1e-6) return null;
         var turn = BimReadyPlan.OffAxisTurn(Math.Atan2(d.Y, d.X) * 180.0 / Math.PI);
-        if (turn is null || BimReadyPlan.EndMoveMm(line.Length * 304.8, turn.Value) > BimReadyPlan.MaxMoveMm) return null;
+        if (turn is null || BimReadyPlan.EndMoveMm(line.Length * 304.8, turn.Value) > Math.Min(maxMm, BimReadyPlan.MaxMoveMm)) return null;
         return (line, turn.Value);
     }
 
     /// <summary>
     /// Turns each element of a "slightly off axis" warning, about its middle, onto the exact 0° or 90° direction, when
-    /// neither end moves more than BimReadyPlan.MaxMoveMm (2 mm); the rest are left for the user.
+    /// neither end moves more than <paramref name="maxMm"/> (1 mm first, then 2 mm at most); the rest are left for the user.
     /// </summary>
     /// <param name="only">These elements (the ones whose warning was hidden as they were drawn), not the warnings' elements.</param>
-    public static string OffAxis(Document doc, IEnumerable<ElementId>? only = null)
+    public static string OffAxis(Document doc, IEnumerable<ElementId>? only = null, double maxMm = BimReadyPlan.MaxMoveMm)
     {
         var ids = (only ?? Of(doc, OffAxisText).SelectMany(w => w.GetFailingElements())).Distinct().ToList();
         if (ids.Count == 0) return "No slightly off axis warnings.";
@@ -51,7 +51,7 @@ internal static class WarningFixes
         foreach (var id in ids)
         {
             var e = doc.GetElement(id);
-            if (e is null || Straighten(e) is not { } fix) { skipped++; continue; }
+            if (e is null || Straighten(e, maxMm) is not { } fix) { skipped++; continue; }
             var (line, turn) = fix;
             var start = (line.GetEndPoint(0) + line.GetEndPoint(1)) / 2;
             using var sub = new SubTransaction(doc);
@@ -70,14 +70,14 @@ internal static class WarningFixes
         }
         tx.Commit();
         return $"Straightened {turned} slightly off axis element{(turned == 1 ? "" : "s")}" +
-               (skipped > 0 ? $"; {skipped} left (an end would move more than {BimReadyPlan.MaxMoveMm:0} mm, pinned, owned by someone else, or not a straight line): check them in Manage > Warnings." : ".");
+               (skipped > 0 ? $"; {skipped} left (an end would move more than {maxMm:0} mm, pinned, owned by someone else, or not a straight line): check them in Manage > Warnings." : ".");
     }
 
     /// <summary>
     /// Clears the "slightly off axis" warnings with no change to the geometry: each element is moved 1 mm and straight
     /// back in the same transaction (net zero), which makes Revit check it again, and the off-axis warning it raises again
     /// is dropped as the transaction commits (DropWarnings), so it is no longer kept in the model. The elements end exactly
-    /// where they were. The first choice for a model already submitted; Straighten the off-axis lines is the fallback.
+    /// where they were. The first choice for a model already submitted; Straighten the off-axis lines (1 mm, then 2 mm at most) is the fallback.
     /// </summary>
     public static string ClearOffAxis(Document doc)
     {
@@ -108,7 +108,7 @@ internal static class WarningFixes
         }
         var after = Of(doc, OffAxisText).Count;
         return $"Cleared {before - after} of {before} slightly off axis warning{(before == 1 ? "" : "s")} without moving anything" +
-               (after > 0 ? $"; {after} stayed (pinned or owned by someone else): Straighten the off-axis lines (2 mm at most) is the fallback." : ".");
+               (after > 0 ? $"; {after} stayed (pinned or owned by someone else): Straighten the off-axis lines (1 mm at most, then 2 mm at most) is the fallback." : ".");
     }
 
     /// <summary>Drops the warnings whose text contains <c>text</c> as a transaction commits (they are then not kept in the model).</summary>

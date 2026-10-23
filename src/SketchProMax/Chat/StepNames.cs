@@ -31,7 +31,7 @@ internal static class StepNames
         ["wait_for_job"] = "Wait for the job",
         ["cancel_job"] = "Stop the job",
         ["memory_note"] = "Save a note",
-        ["berth_status"] = "Berth status",
+        ["berth_status"] = "Submissions status",
         ["berth_costing"] = "Berth costing",
         ["help"] = "Read the guide",
         ["features"] = "List what it can do",

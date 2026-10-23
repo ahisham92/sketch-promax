@@ -57,7 +57,7 @@ public sealed class BerthCostTool : IRevitTool
         var p = Load(project);
         var berths = SyncBerths(p, setup);
         if (berths.Count == 0)
-            return ToolResult.Error($"No berths to cost for '{project}': set up the berth status (Berth status > Setup) or add berths in the Berth costing window.");
+            return ToolResult.Error($"No berths to cost for '{project}': set up the berth status (Submissions status > Setup) or add berths in the Berth costing window.");
 
         Berth Pick(string? text = null)
         {

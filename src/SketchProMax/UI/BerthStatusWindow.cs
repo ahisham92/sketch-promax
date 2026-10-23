@@ -20,7 +20,7 @@ using Visibility = System.Windows.Visibility;
 namespace SketchProMax.UI;
 
 /// <summary>
-/// The berth status tracker (Berth status button, next to the pre-submission checklist): every berth of the project with
+/// The submissions status tracker (Submissions status button, formerly Berth status; next to the pre-submission checklist): every berth of the project with
 /// its status percentage, its next submission (due 08:00 on the day, or the setup's time) and the expected finish; click a
 /// berth for its areas, what to fix, hand entries, deliverables and comments, and its Excel file. The model is read only
 /// when Update status is pressed, in short steps (BerthStatusFacts), so Revit is never held; the window otherwise shows
@@ -83,7 +83,7 @@ internal sealed class BerthStatusWindow : Window
     private BerthStatusWindow(string project)
     {
         _project = project;
-        Title = "Sketch ProMax berth status";
+        Title = "Sketch ProMax submissions status";
         var area = SystemParameters.WorkArea;
         Width = Math.Min(1440, Math.Floor(area.Width * 0.92));
         Height = Math.Min(900, Math.Floor(area.Height * 0.92));
@@ -150,10 +150,10 @@ internal sealed class BerthStatusWindow : Window
             }
         Content = null;
 
-        var band = Brand.Header("Berth status", null);
+        var band = Brand.Header("Submissions status", null);
         if (band.Child is DockPanel row && row.Children.OfType<StackPanel>().LastOrDefault() is { } texts) texts.Children.Add(_subtitle);
         _subtitle.Text = _setup is null ? (_project.Length == 0 ? "Open a model of the project first" : $"{_project}: not set up yet") :
-            $"{(_setup.Title.Length > 0 ? _setup.Title : "Berth status")} · {_project} · " +
+            $"{(_setup.Title.Length > 0 && _setup.Title != "Berth status" ? _setup.Title : "Submissions status")} · {_project} · " +
             (ShownModel is { } shown ? $"{shown.Name} model · {_setup.Berths.Count(b => Same(b.Model, shown.Name))} submissions" : $"{_setup.Berths.Count} submissions in {_setup.Models.Count} models");
         band.Padding = new Thickness(16, 12, 680, 12);
         var header = new Grid();
@@ -213,11 +213,15 @@ internal sealed class BerthStatusWindow : Window
         AutomationProperties.SetHelpText(exportAll, "Writes one Excel file per berth (status, submissions, deliverables, what to fix, comments, history) and opens the folder.");
         exportAll.Click += (_, _) => ExportAll();
         exportAll.IsEnabled = _setup is not null;
+        var word = RichUi.Button(RichUi.Icon.Word, "Word report");
+        AutomationProperties.SetHelpText(word, "Writes one Word report of the submissions shown: an overview, then each submission with its berths, areas, deliverables, what to fix and comments. Opens it, to print or send.");
+        word.Click += (_, _) => WordReport();
+        word.IsEnabled = _setup is not null;
         _status.TextWrapping = TextWrapping.Wrap;
         _status.VerticalAlignment = VerticalAlignment.Center;
         AutomationProperties.SetLiveSetting(_status, AutomationLiveSetting.Polite);
         var foot = new DockPanel { Margin = new Thickness(18, 10, 18, 12) };
-        var buttons = Brand.ButtonRow(exportAll, close);
+        var buttons = Brand.ButtonRow(word, exportAll, close);
         buttons.Margin = new Thickness(12, 0, 0, 0);
         DockPanel.SetDock(buttons, Dock.Right);
         foot.Children.Add(buttons);
@@ -964,6 +968,26 @@ internal sealed class BerthStatusWindow : Window
         var written = Summaries().Select(s => Export(s, open: false)).OfType<string>().ToList();
         _status.Text = $"Saved {written.Count} berth files.";
         if (written.Count > 0) Shell("explorer.exe", $"/select,\"{written[0]}\"");
+    }
+
+    /// <summary>The submissions shown as one Word report in the project's status folder, opened.</summary>
+    private void WordReport()
+    {
+        if (_setup is null) return;
+        try
+        {
+            var now = DateTime.Now;
+            var folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Sketch ProMax", "Berth status", ChecklistProjects.CleanName(_project.Length == 0 ? "Project" : _project));
+            Directory.CreateDirectory(folder);
+            var shown = ShownModel?.Name ?? "";
+            var path = OfficeDocs.FreePath(folder, OfficeDocs.SafeName($"Submissions status {(shown.Length > 0 ? shown + " " : "")}{now:yyyy-MM-dd HHmm}"), ".docx");
+            var title = _setup.Title.Length > 0 && _setup.Title != "Berth status" ? _setup.Title : "Submissions status";
+            OfficeDocx.Write(path, title, $"{_project}{(shown.Length > 0 ? " · " + shown + " model" : "")} · Submissions status", BerthStatusReport.Markdown(_setup, _state, Summaries(), now), landscape: true);
+            Shell(path);
+            _status.Text = $"Saved {Path.GetFileName(path)}.";
+            ActivityLog.Note("berth_status_word", path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { _status.Text = $"Couldn't save the Word report ({ex.Message})."; }
     }
 
     private void Shell(string file, string? args = null)

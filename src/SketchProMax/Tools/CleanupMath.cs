@@ -102,7 +102,7 @@ internal static class CleanupMath
         if (Has("lines overlap")) return "Overlapping lines: delete the duplicate line.";
         if (Has("not in a properly enclosed region")) return "Unbounded room or area: add the missing wall or a separation line, or delete it if it is left over.";
         if (Has("multiple rooms are in the same enclosed region") || Has("multiple areas")) return "Two rooms or areas in one space: delete the extra one, or split the space with a separation line.";
-        if (Has("slightly off axis")) return "Slightly off axis: the element is a hair off 0° or 90°. Clear the off-axis warnings clears it with nothing moved (first choice, also for submitted models); Straighten the off-axis lines turns it onto the axis, 2 mm at most at an end, if any stay. With Keep the model BIM-ready on, new ones are hidden as you model.";
+        if (Has("slightly off axis")) return "Slightly off axis: the element is a hair off 0° or 90°. Clear the off-axis warnings clears it with nothing moved (first choice, also for submitted models); if any stay, Straighten the off-axis lines turns it onto the axis, 1 mm at most at an end, then 2 mm at most. With Keep the model BIM-ready on, new ones are hidden as you model.";
         if (Has("duplicate") && Has("mark")) return "Duplicate Mark values: renumber them (rename or set_parameters).";
         if (Has("joined but do not intersect")) return "Joined but not touching: unjoin them (Modify > Join > Unjoin, or cut_geometry with unjoin).";
         if (Has("completely inside another")) return "One element inside another: delete the inner one or check the join.";
