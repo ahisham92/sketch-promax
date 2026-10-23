@@ -232,6 +232,17 @@ internal static class BerthCostFacts
         return 0;
     }
 
+    /// <summary>
+    /// The element's own steel mass (t) from its family's mass parameter (Mass per pile, Mass, Weight; kg), or 0. A sheet
+    /// pile family gives it; its solid and its "b" (the pair's width) are no measure of its steel.
+    /// </summary>
+    private static double Mass(El e)
+    {
+        foreach (var n in new[] { "Mass per pile", "Mass", "Weight", "Total Mass" })
+            if (Param(e, n) is { StorageType: StorageType.Double, HasValue: true } p && p.AsDouble() > 0) return p.AsDouble() / 1000;
+        return 0;
+    }
+
     private static double Builtin(Element e, BuiltInParameter bip) =>
         e.get_Parameter(bip) is { StorageType: StorageType.Double, HasValue: true } p ? p.AsDouble() : 0;
 
@@ -281,7 +292,8 @@ internal static class BerthCostFacts
         {
             var hits = mine.Where(e => r.Categories.Any(c => string.Equals(c, e.Category, StringComparison.OrdinalIgnoreCase))
                 && r.Filters.All(f => Like(Text(e, f.Name), f.Pattern) != f.Not)).ToList();
-            if (r.Thick.Count > 0) hits = hits.Where(e => Thickness(e) is var t && r.Thick.Any(mm => Math.Abs(t * 1000 - mm) < 1.5)).ToList();
+            if (r.Thick.Count > 0 || r.ThickRanges.Count > 0)
+                hits = hits.Where(e => Thickness(e) * 1000 is var mm && (r.Thick.Any(x => Math.Abs(mm - x) < 1.5) || r.ThickRanges.Any(x => mm >= x.Min - 1.5 && mm <= x.Max + 1.5))).ToList();
             if (r.Over is { } over)
             {
                 var under = mine.Where(e => Like(Text(e, over.Name), over.Pattern)).ToList();
@@ -323,6 +335,14 @@ internal static class BerthCostFacts
             area = Builtin(e.E, BuiltInParameter.HOST_AREA_COMPUTED) * M2;
             volume = Volume(e);
             if (volume <= 0) volume = area * thick;
+        }
+        else if (inner <= 0 && Mass(e) is > 0 and var tonnes)
+        {
+            // Not a tube (no inner diameter) but the family knows its steel: a sheet pile. Its weight is the family's.
+            var steel = r.Density > 0 ? r.Density : p.SteelDensity;
+            area = 0;
+            volume = tonnes / steel;
+            outer = 0;
         }
         else
         {

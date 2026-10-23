@@ -130,12 +130,12 @@ internal static class BerthCostMath
         I(7, "C3", "Rear barrettes", "lm", "pile:barrette", "", ""),
         I(8, "C3", "Permanent steel casing", "ton", "R_CASING", "cat=Structural Columns; Legend=SP-*; measure=weight; table=tube; label=Casing", "steel tube piles; diameter 1.2",
             "+Steel Casing", "", 40),
-        I(9, "C4", "Front capping beam", "m³", "R_CONC_BEAM", "cat=Floors; thick=2000,2500,3000; over=Legend=FKS*; measure=volume; table=slab; group=thickness", "Front capping beam",
+        I(9, "C4", "Front capping beam", "m³", "R_CONC_BEAM", "cat=Floors; thick=1450-3200; Comments!=CRANE RAIL*,CABLE SLOT*,TIE DOWN*,STOW PIN*,*PIT*,BLINDING*,SLAB THICK*; over=Legend=FKS*; measure=volume; table=slab; group=thickness", "Front capping beam",
             "Front Capping Beam", "Capping beams are billed by volume. Volume = Area on plan × thickness."),
-        I(10, "C4", "Rear capping beam", "m³", "R_CONC_BEAM", "cat=Floors; thick=2300,3000; over=Legend=RP*; measure=volume; table=slab; group=thickness", "Rear capping beam",
+        I(10, "C4", "Rear capping beam", "m³", "R_CONC_BEAM", "cat=Floors; thick=1450-3200; Comments!=CRANE RAIL*,CABLE SLOT*,TIE DOWN*,STOW PIN*,*PIT*,BLINDING*,SLAB THICK*; over=Legend=RP*; measure=volume; table=slab; group=thickness", "Rear capping beam",
             "Rear Capping Beam", "Capping beams are billed by volume. Volume = Area on plan × thickness."),
         I(11, "C4", "Transverse beams", "m³", "R_CONC_BEAM", "", "Transverse beam"),
-        I(12, "C4", "Deck slab", "m³", "R_CONC_SLAB", "cat=Floors; thick=150,300,700,942; type!=*Precast*; Comments!=*PIT*; measure=volume; table=slab; group=number OR cat=Floors; Comments=SLAB THICK*; measure=volume; table=slab; label=Thickening", "=Slab",
+        I(12, "C4", "Deck slab", "m³", "R_CONC_SLAB", "cat=Floors; thick=150-1100; type!=*Precast*,*Cover*,APPROACH*; Comments!=CRANE RAIL*,CABLE SLOT*,TIE DOWN*,STOW PIN*,*PIT*,BLINDING*,SLAB THICK*; measure=volume; table=slab; group=number OR cat=Floors; Comments=SLAB THICK*; measure=volume; table=slab; label=Thickening", "=Slab",
             "Deck Slab", "Slabs are billed by volume = plan area × thickness. Due to the slope in the deck an average thickness was considered for each case."),
         I(13, "C4", "Approach slab", "m³", "R_CONC_SLAB", "cat=Floors; type=APPROACH SLAB*; thick=250; measure=volume; table=slab; group=number", "Approach Slab",
             "Approach Slab", "Slabs are billed by volume = plan area × thickness."),
@@ -372,6 +372,14 @@ internal static class BerthCostMath
 
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = true };
 
+    /// <summary>Standard rules of earlier versions: a project still on one gets the current one (a rule the user changed stays).</summary>
+    private static readonly Dictionary<int, string> OldRules = new()
+    {
+        [9] = "cat=Floors; thick=2000,2500,3000; over=Legend=FKS*; measure=volume; table=slab; group=thickness",
+        [10] = "cat=Floors; thick=2300,3000; over=Legend=RP*; measure=volume; table=slab; group=thickness",
+        [12] = "cat=Floors; thick=150,300,700,942; type!=*Precast*; Comments!=*PIT*; measure=volume; table=slab; group=number OR cat=Floors; Comments=SLAB THICK*; measure=volume; table=slab; label=Thickening",
+    };
+
     public static Project Load(string project)
     {
         try
@@ -382,6 +390,7 @@ internal static class BerthCostMath
                 foreach (var r in DefaultRates()) if (p.RateOf(r.Code) is null) p.Rates.Add(r);
                 foreach (var i in DefaultItems())
                     if (p.ItemOf(i.No) is not { } had) p.Items.Add(i);
+                    else if (OldRules.TryGetValue(i.No, out var old) && had.Rule == old) had.Rule = i.Rule;
                     else if (had.BoqOrder == 0) { had.Section = i.Section; had.BoqOrder = i.BoqOrder; had.BoqUnit = i.BoqUnit; had.BoqText = i.BoqText; }
                 p.Details ??= new Details();
                 p.Items.Sort((a, b) => a.No.CompareTo(b.No));
@@ -440,6 +449,8 @@ internal static class BerthCostMath
         public List<string> Categories = [];
         public List<(string Name, string Pattern, bool Not)> Filters = [];
         public List<double> Thick = [];
+        /// <summary>Thickness ranges in mm ("thick=1450-3200"): a beam or slab of any thickness between.</summary>
+        public List<(double Min, double Max)> ThickRanges = [];
         public (string Name, string Pattern)? Over;
         public string Measure = "count", Table = "", Group = "", Label = "";
         public double Density = 7.85, Factor = 1;
@@ -468,7 +479,12 @@ internal static class BerthCostMath
                     case "type": r.Filters.Add(("@type", value, not)); break;
                     case "family": r.Filters.Add(("@family", value, not)); break;
                     case "thick" or "thickness":
-                        r.Thick.AddRange(value.Split(',').Select(v => double.TryParse(v.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var t) ? t : double.NaN).Where(t => !double.IsNaN(t)));
+                        foreach (var bit in value.Split(',').Select(v => v.Trim()).Where(v => v.Length > 0))
+                        {
+                            var dash = bit.IndexOf('-', 1);
+                            if (dash > 0 && Num(bit.Substring(0, dash)) is { } lo && Num(bit.Substring(dash + 1)) is { } hi) r.ThickRanges.Add((Math.Min(lo, hi), Math.Max(lo, hi)));
+                            else if (Num(bit) is { } t) r.Thick.Add(t);
+                        }
                         break;
                     case "over":
                         var eq = value.IndexOf('=');
