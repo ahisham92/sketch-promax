@@ -11,13 +11,25 @@ namespace SketchProMax.Revit;
 /// Keep the model BIM-ready while you model = yes): each element placed, or switched to another type, gets its type's
 /// Assembly Code from the UniFormat rules when the type has none, the fixed LOI values the rules give (loivalues) where
 /// they are empty, and is moved off Workset1 (or Shared Levels and Grids) to its category's workset when that workset
-/// exists. A Revit updater, inside the user's own transaction: one Ctrl+Z undoes it with the edit. Never overwrites a value.
+/// exists. A Revit updater, inside the user's own transaction: one Ctrl+Z undoes it with the edit. Then, when Revit is
+/// idle a few seconds later, the LOI matrix's information the model gives (material, sizes, length, levels...) is filled
+/// on the types placed, retyped or changed, a few types at a time, in its own transaction ("Sketch ProMax: fill the LOI
+/// data"). Never overwrites a value. A "slightly off axis" warning on an edit isn't shown when its elements can be
+/// straightened moving no end more than 2 mm: they are turned onto their exact direction at the same quiet moment ("Sketch ProMax: straighten off-axis lines"), so the warning never stays.
 /// </summary>
 internal static class BimReady
 {
     private static readonly Guid UpdaterGuid = new("5b0c3f8e-9a51-4d7e-8f0b-2a6c4d1e7b93");
     private static Updater? _updater;
     private static readonly Dictionary<string, (DateTime At, ChecklistMath.Definition? Def)> Defs = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>Per open model (its title): the types whose LOI data is filled at the next quiet moment.</summary>
+    private static readonly Dictionary<string, HashSet<long>> Pending = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>Per open model (its title): elements drawn slightly off axis, straightened at the next quiet moment.</summary>
+    private static readonly Dictionary<string, HashSet<long>> OffAxis = new(StringComparer.OrdinalIgnoreCase);
+    private static Autodesk.Revit.ApplicationServices.Application? _app;
+    private static DateTime _lastChange;
+    private const int TypesPerIdle = 8;
+    private static readonly TimeSpan Quiet = TimeSpan.FromSeconds(3);
 
     public static void Start(UIApplication app)
     {
@@ -31,10 +43,17 @@ internal static class BimReady
         var instances = new ElementIsElementTypeFilter(true);
         UpdaterRegistry.AddTrigger(id, instances, Element.GetChangeTypeElementAddition());
         try { UpdaterRegistry.AddTrigger(id, instances, Element.GetChangeTypeParameter(new ElementId(BuiltInParameter.ELEM_TYPE_PARAM))); } catch (Exception) { }
+        try { UpdaterRegistry.AddTrigger(id, instances, Element.GetChangeTypeGeometry()); } catch (Exception) { }
+        RevitDispatcher.Idle += OnIdle;
+        _app = app.Application;
+        _app.FailuresProcessing += OnFailures;
     }
 
     public static void Stop()
     {
+        RevitDispatcher.Idle -= OnIdle;
+        if (_app is not null) { try { _app.FailuresProcessing -= OnFailures; } catch (Exception) { } _app = null; }
+        lock (Pending) { Pending.Clear(); OffAxis.Clear(); }
         if (_updater is not { } updater) return;
         try { UpdaterRegistry.UnregisterUpdater(updater.GetUpdaterId()); } catch (Exception) { }
         _updater = null;
@@ -70,12 +89,14 @@ internal static class BimReady
         var codes = ChecklistFixes.UniFormatMap(def);
         var values = ChecklistMath.ParseLoiValues(ChecklistMath.Rule(def, "loivalues")).Where(v => !v.Value.Contains('{')).ToList();
         var worksets = doc.IsWorkshared ? ChecklistFixes.WorksetMap(def) : [];
+        var loi = ChecklistMath.ParseLoi(ChecklistMath.Rule(def, "loimatrix")).Count > 0;
         var seenTypes = new HashSet<long>();
         foreach (var id in data.GetAddedElementIds().Concat(data.GetModifiedElementIds()))
         {
             if (doc.GetElement(id) is not { Category: { CategoryType: CategoryType.Model } cat } e) continue;
             if (worksets.Count > 0) ToWorkset(doc, e, cat.Name, worksets);
             if (doc.GetElement(e.GetTypeId()) is not ElementType type || !seenTypes.Add(type.Id.Value)) continue;
+            if (loi) lock (Pending) { (Pending.TryGetValue(doc.Title, out var set) ? set : Pending[doc.Title] = []).Add(type.Id.Value); _lastChange = DateTime.UtcNow; }
             var codeParam = codeNames.Select(x => type.LookupParameter(x)).FirstOrDefault(x => x is not null);
             if (codeParam is { IsReadOnly: false, StorageType: StorageType.String } && !ChecklistFacts.Filled(codeParam)
                 && ChecklistFixes.UniFormatFor(cat.Name, type.FamilyName, type.Name, codes) is { } code)
@@ -87,6 +108,73 @@ internal static class BimReady
                 if (type.LookupParameter(param) is { IsReadOnly: false, StorageType: StorageType.String } p && !ChecklistFacts.Filled(p)) Try(() => p.Set(value));
             }
         }
+    }
+
+    /// <summary>
+    /// Hides Revit's "slightly off axis" warning when the model is kept BIM-ready, and remembers its elements to be
+    /// straightened at the next quiet moment (OnIdle), so neither the dialog nor the warning stays.
+    /// </summary>
+    private static void OnFailures(object? sender, Autodesk.Revit.DB.Events.FailuresProcessingEventArgs e)
+    {
+        try
+        {
+            var fa = e.GetFailuresAccessor();
+            var doc = fa.GetDocument();
+            if (doc.IsFamilyDocument) return;
+            var off = fa.GetFailureMessages().Where(m => m.GetSeverity() == FailureSeverity.Warning
+                && (m.GetDescriptionText() ?? "").IndexOf(WarningFixes.OffAxisText, StringComparison.OrdinalIgnoreCase) >= 0).ToList();
+            if (off.Count == 0 || !On(ChecklistMath.Rule(DefFor(doc), "autoready"))) return;
+            lock (Pending)
+            {
+                var set = OffAxis.TryGetValue(doc.Title, out var had) ? had : OffAxis[doc.Title] = [];
+                // Hidden only when every element of it can be straightened within 2 mm; the others stay for the user to see.
+                foreach (var m in off)
+                {
+                    var ids = m.GetFailingElementIds().ToList();
+                    if (ids.Count == 0 || !ids.All(id => doc.GetElement(id) is { } el && WarningFixes.Straighten(el) is not null)) continue;
+                    foreach (var id in ids) set.Add(id.Value);
+                    fa.DeleteWarning(m);
+                }
+                _lastChange = DateTime.UtcNow;
+            }
+        }
+        catch (Exception) { /* best effort: Make it BIM-ready straightens what is left */ }
+    }
+
+    /// <summary>At a quiet moment: the LOI data of a few pending types of each open model, each model in its own transaction.</summary>
+    private static void OnIdle(UIApplication app)
+    {
+        lock (Pending) if (Pending.Count == 0 && OffAxis.Count == 0 || DateTime.UtcNow - _lastChange < Quiet) return;
+        if (App.Dispatcher.IsRunning) return;
+        foreach (Document doc in app.Application.Documents)
+        {
+            List<ElementId>? straighten = null;
+            lock (Pending)
+                if (OffAxis.TryGetValue(doc.Title, out var offIds)) { straighten = offIds.Select(i => new ElementId(i)).ToList(); OffAxis.Remove(doc.Title); }
+            if (straighten is { Count: > 0 } && !doc.IsFamilyDocument && !doc.IsReadOnly && !doc.IsModifiable && !doc.IsLinked)
+                try { WarningFixes.OffAxis(doc, straighten.Where(i => doc.GetElement(i) is not null)); } catch (Exception) { }
+
+            List<long> batch;
+            lock (Pending)
+            {
+                if (!Pending.TryGetValue(doc.Title, out var set)) continue;
+                batch = set.Take(TypesPerIdle).ToList();
+                set.ExceptWith(batch);
+                if (set.Count == 0) Pending.Remove(doc.Title);
+            }
+            if (doc.IsFamilyDocument || doc.IsReadOnly || doc.IsModifiable || doc.IsLinked) continue;
+            try
+            {
+                var spec = LoiFill.SpecOf(DefFor(doc));
+                var answer = LoiFill.AutoAnswer(doc, spec, batch);
+                if (answer.Length > 0) LoiFill.Apply(doc, spec, answer);
+            }
+            catch (Exception) { /* best effort: the checklist's Make it BIM-ready fills what is left */ }
+        }
+        // Forget models that were closed.
+        lock (Pending)
+            foreach (var title in Pending.Keys.ToList())
+                if (!app.Application.Documents.Cast<Document>().Any(d => d.Title == title)) Pending.Remove(title);
     }
 
     private static void ToWorkset(Document doc, Element e, string category, List<(string Category, string Workset)> map)

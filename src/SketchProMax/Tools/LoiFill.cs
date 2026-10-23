@@ -246,6 +246,10 @@ internal static class LoiFill
         return null;
     }
 
+    /// <summary>The answer Apply takes with every value the model (or the loivalues rule) gives, as the preview suggests it; "" when none.</summary>
+    public static string AutoAnswer(Document doc, Spec spec, IEnumerable<long> typeIds) =>
+        string.Join("\n", Plan(doc, spec, typeIds).Where(r => r.Value.Trim().Length > 0).Select(r => r.Key + "\t" + r.Value));
+
     /// <summary>
     /// Fills what the user kept in the preview: lines "type id|parameter\tvalue" (EachOwn... takes each element's own).
     /// Missing parameters are added first. A sentence saying what changed.

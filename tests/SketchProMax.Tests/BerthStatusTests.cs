@@ -112,6 +112,17 @@ internal static class BerthStatusTests
             && !SketchProMax.Tools.BepSheetText.Writable("Suggested code", "B1010") && !SketchProMax.Tools.BepSheetText.Writable("Material", "n/a")
             && !SketchProMax.Tools.BepSheetText.Writable("Material", "(varies)") && !SketchProMax.Tools.BepSheetText.Writable("Material", " ") && !SketchProMax.Tools.BepSheetText.Writable("Type", "X"), "");
 
+        // Make it BIM-ready: a step runs when its rule is set and the check doesn't pass; one with no rule only when flagged.
+        var readyRules = new Dictionary<string, string> { ["units"] = "Length mm 0", ["uniformatmap"] = "Floors=B1010", ["loimatrix"] = "B1010: Material" };
+        var readyFlags = new Dictionary<string, bool?> { ["units"] = false, ["uniformat"] = true, ["navisview"] = true, ["landing"] = false };
+        var ready = SketchProMax.Tools.BimReadyPlan.ToRun(r => readyRules.TryGetValue(r, out var v) ? v : "", k => readyFlags.TryGetValue(k, out var f) ? f : null).Select(st => st.Key).ToList();
+        check("BIM-ready: runs set rules that don't pass, and flagged rule-free fixes", ready.SequenceEqual(["uniformat", "loi", "navisview"]), string.Join(",", ready));
+        check("BIM-ready: off-axis lines turn to the nearest exact direction, at most 2 mm at an end", SketchProMax.Tools.BimReadyPlan.OffAxisTurn(0.05) is { } t1 && Math.Abs(t1 + 0.05) < 1e-9
+            && SketchProMax.Tools.BimReadyPlan.OffAxisTurn(89.97) is { } t2 && Math.Abs(t2 - 0.03) < 1e-9 && SketchProMax.Tools.BimReadyPlan.OffAxisTurn(90) is null
+            && SketchProMax.Tools.BimReadyPlan.OffAxisTurn(30) is null && SketchProMax.Tools.BimReadyPlan.EndMoveMm(6000, 0.01) < 2 && SketchProMax.Tools.BimReadyPlan.EndMoveMm(6000, 0.1) > 2, "");
+        check("BIM-ready: warnings steps run when the warnings check is flagged", SketchProMax.Tools.BimReadyPlan.ToRun(_ => "", k => k == "warnings" ? true : false).Select(st => st.Key).SequenceEqual(["offaxis", "unjoinapart"]), "");
+        check("BIM-ready: never deletes or exports", !SketchProMax.Tools.BimReadyPlan.Steps.Any(st => st.Key is "levels" or "unusedviews" or "imports" or "links" or "groups" or "duplicates" or "parameters" or "nwcsettings" or "submission"), "");
+
         // Tagging: only the views the rules name need tags (a piles plan tags its piles); others need dimensions only.
         var tagSetup = new Setup();
         check("berth status: a piles plan must tag its piles", TagCategoriesFor(tagSetup, "BERTH 9 - PART 2 PILES PLAN", []).SequenceEqual(["Structural Columns"])
