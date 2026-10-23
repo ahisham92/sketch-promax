@@ -544,10 +544,13 @@ internal static class ChecklistFixes
         ChecklistMath.RuleList(ChecklistMath.Rule(def, "uniformatmap")).Select(p => p.Split('>'))
             .Where(p => p.Length == 2 && p[0].Trim().Length > 0 && p[1].Trim().Length > 0).Select(p => (p[0].Trim(), p[1].Trim())).ToList();
 
-    /// <summary>The code for a type: a pair naming its category (or the start of it), else one whose pattern matches its family or type name.</summary>
+    /// <summary>
+    /// The code for a type: a pair whose pattern matches its family or type name first (so *Beam*>B1010.10 gives beams
+    /// modelled as floors the beam code), else one naming its category (or the start of it).
+    /// </summary>
     internal static string? UniFormatFor(string category, string family, string type, List<(string Key, string Code)> map) =>
-        map.Where(m => category.Equals(m.Key, StringComparison.OrdinalIgnoreCase) || category.StartsWith(m.Key, StringComparison.OrdinalIgnoreCase))
-            .Concat(map.Where(m => ChecklistMath.Like(type, m.Key) || ChecklistMath.Like(family, m.Key) || ChecklistMath.Like(family + ": " + type, m.Key)))
+        map.Where(m => ChecklistMath.Like(type, m.Key) || ChecklistMath.Like(family, m.Key) || ChecklistMath.Like(family + ": " + type, m.Key))
+            .Concat(map.Where(m => category.Length > 0 && (category.Equals(m.Key, StringComparison.OrdinalIgnoreCase) || category.StartsWith(m.Key, StringComparison.OrdinalIgnoreCase))))
             .Select(m => m.Code).FirstOrDefault();
 
     private static string UniFormat(Document doc, ChecklistMath.Definition? def)

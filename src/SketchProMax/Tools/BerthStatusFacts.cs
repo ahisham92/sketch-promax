@@ -107,7 +107,11 @@ internal static class BerthStatusFacts
         BuiltInCategory.OST_Cameras, BuiltInCategory.OST_VolumeOfInterest, BuiltInCategory.OST_SectionBox, BuiltInCategory.OST_IOSModelGroups,
         BuiltInCategory.OST_Grids, BuiltInCategory.OST_Levels, BuiltInCategory.OST_Topography, BuiltInCategory.OST_Viewers, BuiltInCategory.OST_Mass,
         BuiltInCategory.OST_ProjectBasePoint, BuiltInCategory.OST_SharedBasePoint, BuiltInCategory.OST_ReferenceLines, BuiltInCategory.OST_CLines,
+        BuiltInCategory.OST_Sheets, BuiltInCategory.OST_Views, BuiltInCategory.OST_Viewports,
     ];
+
+    /// <summary>Not a built element (lines, rooms, levels, grids, scope boxes, sheets…): no Assembly Code or clash for it.</summary>
+    internal static bool IsNotBuilt(BuiltInCategory bic) => NotBuilt.Contains(bic);
 
     /// <summary>At most this many elements per berth are checked for structural clashes (the summary says when it stopped).</summary>
     private const int ClashCap = 3000;

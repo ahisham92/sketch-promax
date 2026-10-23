@@ -70,9 +70,10 @@ internal static class AssemblyCodeText
             (IReadOnlyList<string>)(r.Cells.Count == 0 ? [] : Enumerable.Range(0, r.Cells.Keys.Max() + 1).Select(i => r.Cells.TryGetValue(i, out var v) ? v : "").ToList()))));
     }
 
-    /// <summary>The "type id, code" lines (tab separated) of the Assembly Codes list the user kept: ids that parse, codes not empty.</summary>
-    public static List<(long Id, string Code)> Picked(string? answer) =>
+    /// <summary>The "key, code" lines (tab separated) of the Assembly Codes list the user kept: a type id or "cat:" and a category name, codes not empty.</summary>
+    public static List<(string Key, string Code)> Picked(string? answer) =>
         (answer ?? "").Split('\n').Select(l => l.TrimEnd('\r').Split('\t'))
-            .Where(p => p.Length == 2 && long.TryParse(p[0].Trim(), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out _) && p[1].Trim().Length > 0)
-            .Select(p => (long.Parse(p[0].Trim(), System.Globalization.CultureInfo.InvariantCulture), p[1].Trim())).ToList();
+            .Where(p => p.Length == 2 && p[1].Trim().Length > 0 && (p[0].Trim().StartsWith("cat:", StringComparison.Ordinal) && p[0].Trim().Length > 4
+                || long.TryParse(p[0].Trim(), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out _)))
+            .Select(p => (p[0].Trim(), p[1].Trim())).ToList();
 }

@@ -46,11 +46,15 @@ internal static class AssemblyCodesFlow
             MessageBox.Show(owner, done, "Sketch ProMax: Assembly Codes", MessageBoxButton.OK, MessageBoxImage.Information);
             return done;
         }
+        var types = rows.Count(r => !r.Id.StartsWith(AssemblyCodes.CategoryKey, StringComparison.Ordinal));
+        var categories = rows.Count - types;
         var given = rows.Count(r => r.Code.Length > 0);
         var edited = ChecklistProjectWindows.EditNames(owner, "Assembly Codes", rows.Select(r => (r.What, r.Code)).ToList(),
-            $"{loaded}\n\n{rows.Count} type{(rows.Count == 1 ? "" : "s")} in use need an Assembly Code. {given} got one from the UniFormat rules of the project's checklist; " +
-            "type a code from the Excel (such as A1020.15) for the rest, change any, or untick the ones to leave. An empty box is skipped. " +
-            "Nothing changes until you press Fill; Ctrl+Z in Revit undoes it.", "Fill");
+            $"{loaded}\n\n{types} type{(types == 1 ? "" : "s")} in use, in {categories} categor{(categories == 1 ? "y" : "ies")}, need an Assembly Code. " +
+            "The ALL rows at the top give every type of that category the code you type (such as B1010.20 for all Floors); a type's own row below wins over it. " +
+            (given > 0 ? $"{given} box{(given == 1 ? " was" : "es were")} filled from the UniFormat rules of the project's checklist. " :
+                "None was filled for you: the project's checklist has no UniFormat rules (Pre-submission checklist > Checklist for this project > Import your project's checklist Excel). ") +
+            "An empty box is skipped. Nothing changes until you press Fill; Ctrl+Z in Revit undoes it.", "Fill");
         if (edited is null) return loaded;
         var answer = string.Join("\n", rows.Zip(edited, (r, code) => (r.Id, Code: code)).Where(x => x.Code is not null).Select(x => x.Id + "\t" + x.Code));
         var result = answer.Length == 0 ? "No type was given a code." : await onModel(ui => AssemblyCodes.Apply(ui.Document, def, answer));

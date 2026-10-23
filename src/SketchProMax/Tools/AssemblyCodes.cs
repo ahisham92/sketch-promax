@@ -66,18 +66,21 @@ internal static class AssemblyCodes
     public static List<string> Names(ChecklistMath.Definition? def) =>
         ChecklistMath.RuleList(ChecklistMath.Rule(def, "classification")) is { Count: > 0 } names ? names : ["Assembly Code"];
 
-    /// <summary>Every model type placed in the model (not in a view only) that has a code parameter it can write, with how many elements use it.</summary>
+    /// <summary>
+    /// Every type of a built element placed in the model that has a code parameter it can write, with how many elements
+    /// use it: the elements Submissions status counts (not sheets, views, levels, grids, rooms, scope boxes or lines).
+    /// </summary>
     public static List<(ElementType Type, int Count)> TypesInUse(Document doc, IReadOnlyList<string> names)
     {
         var cats = new List<ElementId>();
         foreach (Category c in doc.Settings.Categories)
-            if (c.CategoryType == CategoryType.Model) cats.Add(c.Id);
+            if (c.CategoryType == CategoryType.Model && !BerthStatusFacts.IsNotBuilt(c.BuiltInCategory)) cats.Add(c.Id);
         if (cats.Count == 0) return [];
         var counts = new Dictionary<long, int>();
         foreach (var e in new FilteredElementCollector(doc).WherePasses(new ElementMulticategoryFilter(cats)).WhereElementIsNotElementType().WhereElementIsViewIndependent())
         {
             var id = e.GetTypeId();
-            if (id == ElementId.InvalidElementId) continue;
+            if (id == ElementId.InvalidElementId || e is View) continue;
             counts[id.Value] = counts.TryGetValue(id.Value, out var n) ? n + 1 : 1;
         }
         var list = new List<(ElementType, int)>();
@@ -87,35 +90,62 @@ internal static class AssemblyCodes
         return list;
     }
 
+    /// <summary>The types in use that need a code: none yet, or one that isn't in the model's table when it has one.</summary>
+    private static List<(ElementType Type, int Count, string Now)> Needing(Document doc, IReadOnlyList<string> names, HashSet<string> table) =>
+        TypesInUse(doc, names).Select(x => (x.Type, x.Count, Now: (CodeOf(x.Type, names)?.AsString() ?? "").Trim()))
+            .Where(x => x.Now.Length == 0 || table.Count > 0 && !table.Contains(x.Now)).ToList();
+
     /// <summary>
-    /// The types to fill, one "type id, what it is, suggested code" line each (tab separated): those with no code, and
-    /// those whose code isn't in the model's table when it has one. The suggestion comes from the UniFormat rules; empty when they give none.
+    /// What to fill, one "key, what it is, suggested code" line each (tab separated). First one line per category
+    /// (key "cat:" and its name), whose code goes to every type of it below that has none of its own, with the code the
+    /// UniFormat rules give the category; then one line per type (key its id), with the code the rules give its family or
+    /// type name. Types with no code, and those whose code isn't in the model's table when it has one.
     /// </summary>
     public static string Suggest(Document doc, ChecklistMath.Definition? def)
     {
         var names = Names(def);
         var map = ChecklistFixes.UniFormatMap(def);
-        var table = InTable(doc);
-        var lines = new List<(string Category, string Line)>();
-        foreach (var (type, count) in TypesInUse(doc, names))
+        var lines = new List<string>();
+        var types = new List<(string Category, string Line)>();
+        foreach (var group in Needing(doc, names, InTable(doc)).GroupBy(x => x.Type.Category?.Name ?? "").OrderBy(g => g.Key, StringComparer.OrdinalIgnoreCase))
         {
-            var now = (CodeOf(type, names)?.AsString() ?? "").Trim();
-            var unknown = now.Length > 0 && table.Count > 0 && !table.Contains(now);
-            if (now.Length > 0 && !unknown) continue;
-            var suggested = ChecklistFixes.UniFormatFor(type.Category?.Name ?? "", type.FamilyName, type.Name, map) ?? (unknown ? now : "");
-            var what = $"{ChecklistFacts.TypeLabel(type)} ({count} element{(count == 1 ? "" : "s")}{(unknown ? $", now {now}: not in the code list" : "")})";
-            lines.Add((type.Category?.Name ?? "", $"{type.Id.Value}\t{what.Replace('\t', ' ')}\t{suggested}"));
+            if (group.Key.Length > 0)
+            {
+                var n = group.Count();
+                var forCategory = map.Where(m => group.Key.Equals(m.Key, StringComparison.OrdinalIgnoreCase) || group.Key.StartsWith(m.Key, StringComparison.OrdinalIgnoreCase)).Select(m => m.Code).FirstOrDefault() ?? "";
+                lines.Add($"{CategoryKey}{group.Key}\tALL {group.Key.ToUpperInvariant()}: {n} type{(n == 1 ? "" : "s")}, {group.Sum(x => x.Count)} elements (a type's own box below wins)\t{forCategory}");
+            }
+            foreach (var (type, count, now) in group.OrderBy(x => ChecklistFacts.TypeLabel(x.Type), StringComparer.OrdinalIgnoreCase))
+            {
+                var unknown = now.Length > 0;
+                var suggested = ChecklistFixes.UniFormatFor("", type.FamilyName, type.Name, map) ?? "";
+                var what = $"{ChecklistFacts.TypeLabel(type)} ({count} element{(count == 1 ? "" : "s")}{(unknown ? $", now {now}: not in the code list" : "")})";
+                types.Add((group.Key, $"{type.Id.Value}\t{what.Replace('\t', ' ')}\t{suggested}"));
+            }
         }
-        return string.Join("\n", lines.OrderBy(l => l.Category, StringComparer.OrdinalIgnoreCase).ThenBy(l => l.Line, StringComparer.OrdinalIgnoreCase).Select(l => l.Line));
+        return string.Join("\n", lines.Concat(types.Select(t => t.Line)));
     }
 
-    /// <summary>Writes the codes of "type id, code" lines (tab separated) to the types.</summary>
+    /// <summary>The key of a category's line in Suggest.</summary>
+    public const string CategoryKey = "cat:";
+
+    /// <summary>Writes the codes of "key, code" lines (tab separated): a type id to that type, a category to its types that need one and got none of their own.</summary>
     public static string Apply(Document doc, ChecklistMath.Definition? def, string? answer)
     {
-        var wanted = AssemblyCodeText.Picked(answer);
-        if (wanted.Count == 0) return "No type was given a code.";
+        var picked = AssemblyCodeText.Picked(answer);
+        if (picked.Count == 0) return "No type was given a code.";
         var names = Names(def);
         var table = InTable(doc);
+        var wanted = picked.Where(p => !p.Key.StartsWith(CategoryKey, StringComparison.Ordinal))
+            .Select(p => (Id: long.Parse(p.Key, System.Globalization.CultureInfo.InvariantCulture), p.Code)).ToList();
+        var byCategory = picked.Where(p => p.Key.StartsWith(CategoryKey, StringComparison.Ordinal))
+            .GroupBy(p => p.Key.Substring(CategoryKey.Length), StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.Last().Code, StringComparer.OrdinalIgnoreCase);
+        if (byCategory.Count > 0)
+        {
+            var own = new HashSet<long>(wanted.Select(w => w.Id));
+            foreach (var (type, _, _) in Needing(doc, names, table))
+                if (!own.Contains(type.Id.Value) && byCategory.TryGetValue(type.Category?.Name ?? "", out var code)) wanted.Add((type.Id.Value, code));
+        }
         int filled = 0, failed = 0;
         var notListed = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
         using (var t = new Transaction(doc, "Sketch ProMax: fill the Assembly Codes"))
