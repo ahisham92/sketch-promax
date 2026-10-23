@@ -581,6 +581,7 @@ internal static class FieldTestCoverage
         new(43, ["tool:capture_view_image"], "zoom to elements in a section or detail view"),
         new(44, ["tool:duplicate_view_to_location"], "a copied dimension that loses its references is left out, not the whole copy"),
         new(45, ["tool:arrange_tags"], "a view with no tags says what it has instead"),
+        new(46, ["berth.ui"], "after Setup > Import the setup Excel the window shows the berths, not a blank page"),
     ];
 
     /// <summary>

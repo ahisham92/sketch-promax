@@ -132,7 +132,8 @@ internal sealed class BerthStatusWindow : Window
 
     private void Build()
     {
-        foreach (var reused in new FrameworkElement[] { _status, _list, _detail, _runStrip, _update, _stopButton, _ring, _subtitle })
+        // Every control kept across rebuilds leaves its old parent first: one still attached throws and leaves the window blank.
+        foreach (var reused in new FrameworkElement[] { _status, _list, _detail, _runStrip, _runText, _runBar, _update, _stopButton, _ring, _subtitle })
             switch (reused.Parent)
             {
                 case Panel p: p.Children.Remove(reused); break;
