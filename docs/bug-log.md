@@ -38,7 +38,7 @@ doesn't cover yet: a report counts as sent once a row below names it by the date
 | 26 | 2026-10-17 | title_block_from_cad fails trying to delete template lines Revit doesn't allow to be deleted | 0.33.0 | Fixed in 0.33.3 (please check) |
 | 27 | 2026-10-17 | find_clashes ignores void-only cutting families (they have no bounding box of their own) | 0.33.0 | Confirmed (the 0.34.45 field test rebuilt the void and found the clash) |
 | 28 | 2026-10-17 | The issue check stops with an error when one of its checks crashes, instead of naming the step and carrying on | 0.33.0 | Confirmed (the 0.34.49 field test's issue check placed its view and passed) |
-| 29 | 2026-10-17 | Redlines are matched to the wrong place on the sheet (markups worked out before the sheet was drawn, viewport mapping off) | 0.33.0 | Fixed again in next release (the 0.34.49 field test showed the probe's own test sheet was wrong: its plan copy showed the whole model, so the markups fell past the page; the probe now clears the scope box and centres its elements on the sheet) |
+| 29 | 2026-10-17 | Redlines are matched to the wrong place on the sheet (markups worked out before the sheet was drawn, viewport mapping off) | 0.33.0 | Confirmed (the 0.34.50 field test matched all four markups to the right elements and applied them) |
 | 30 | 2026-10-17 | The chat message box looks like two boxes and typed text starts at the bottom, not where the hint was | 0.33.3 | Fixed in 0.33.4 (please check) |
 | 31 | 2026-10-17 | The chat shows a "finish your edit mode" card when Revit is only busy, not in an edit mode | 0.33.3 | Fixed in 0.33.4 (please check) |
 | 32 | 2026-10-17 | Too many approval dialogs: Revit asks before every small change | 0.33.4 | Fixed in 0.33.5 (please check) |
