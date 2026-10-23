@@ -8,7 +8,7 @@ using SketchProMax.UI;
 namespace SketchProMax.Chat;
 
 /// <summary>
-/// The plan's usage in the chat's header, the way the Claude app shows it: a small meter ("5h 43% · Week 5%") that
+/// The plan's usage in the chat's header, the way the Claude app shows it: a small meter ("5h 43%, 2h 10m left · Week 5%") that
 /// opens a detail with each limit Claude Code reported (the current 5-hour session, the weekly limits), how much is used
 /// and when it resets. The figures are only what Claude Code reports with each answer (rate_limit_event, PlanUsage):
 /// nothing is estimated. Near a limit (80 %) the chat says so once per limit and reset, naming the jobs running then.
@@ -59,6 +59,16 @@ internal sealed partial class ChatPane
             AutomationProperties.SetItemStatus(_usagePill, "Collapsed");
         };
         ShowUsage();
+        // The session's time left counts down between answers.
+        var tick = new DispatcherTimer(DispatcherPriority.Background, Dispatcher) { Interval = TimeSpan.FromSeconds(30) };
+        tick.Tick += (_, _) =>
+        {
+            try { if (IsLoaded) ShowUsage(); }
+            catch (Exception) { /* the next answer redraws it */ }
+        };
+        Loaded += (_, _) => tick.Start();
+        Unloaded += (_, _) => tick.Stop();
+        if (IsLoaded) tick.Start();
     }
 
     /// <summary>The meter: the session and weekly figures, coloured as they near the limit.</summary>

@@ -137,17 +137,33 @@ internal sealed class PlanUsage
         return "Resets " + local.ToString("ddd d MMM HH:mm", CultureInfo.InvariantCulture);
     }
 
-    /// <summary>The header meter's words: "5h 43% · Week 5%" (only the session and the all-models week; "—" when unknown).</summary>
+    /// <summary>
+    /// The header meter's words: "5h 43%, 2h 10m left · Week 5%" (only the session and the all-models week). The
+    /// session counts down to its reset; once it has reset it says "5h reset" until the next answer brings a new figure.
+    /// </summary>
     public string Meter(DateTimeOffset now)
     {
         var parts = new List<string>();
         foreach (var key in new[] { FiveHour, Weekly })
             if (Windows.FirstOrDefault(w => w.Key == key) is { } w)
-                parts.Add(Short(key) + " " + (Current(w, now) is { } used ? Percent(used) : "—"));
+                parts.Add(Part(w, now));
         if (parts.Count == 0 && Windows.FirstOrDefault() is { } first)
-            parts.Add(Short(first.Key) + " " + (Current(first, now) is { } u ? Percent(u) : "—"));
+            parts.Add(Part(first, now));
         return string.Join(" · ", parts);
     }
+
+    private static string Part(UsageWindow w, DateTimeOffset now)
+    {
+        if (HasReset(w, now)) return Short(w.Key) + " reset";
+        var text = Short(w.Key) + " " + (w.Used is { } used ? Percent(used) : "—");
+        if (w.Key == FiveHour && w.ResetsAt is { } at) text += ", " + Left(at - now) + " left";
+        return text;
+    }
+
+    /// <summary>"2h 10m", or "25m" under an hour (at least 1m).</summary>
+    public static string Left(TimeSpan left) => left.TotalHours >= 1
+        ? $"{(int)left.TotalHours}h {left.Minutes}m"
+        : $"{Math.Max(1, (int)Math.Ceiling(left.TotalMinutes))}m";
 
     /// <summary>The highest figure shown now (for the meter's colour), or null.</summary>
     public double? Highest(DateTimeOffset now) => Windows.Select(w => Current(w, now)).Where(u => u is not null).Max();

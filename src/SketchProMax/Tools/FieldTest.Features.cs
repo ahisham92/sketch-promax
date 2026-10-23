@@ -1306,7 +1306,7 @@ internal static partial class FieldTest
         var parsed = new StreamParser().ParseLine(line).OfType<UsageEvent>().SingleOrDefault()?.Usage;
         if (parsed is null || parsed.Windows.Count != 2 || parsed.Windows[0].Key != PlanUsage.FiveHour || parsed.Windows[0].Used != 0.43 || parsed.Windows[1].Key != PlanUsage.Weekly)
             return Fail("Claude Code's rate_limit_event line wasn't read into the 5-hour and weekly limits");
-        if (parsed.Meter(now) != "5h 43% · Week 5%") problems.Add($"the meter says \"{parsed.Meter(now)}\"");
+        if (parsed.Meter(now) != "5h 43%, 4h 3m left · Week 5%") problems.Add($"the meter says \"{parsed.Meter(now)}\"");
         if (PlanUsage.ResetText(parsed.Windows[0], now, TimeZoneInfo.Utc) != "Resets in 4 h 3 min (20:30)") problems.Add("the reset reads " + PlanUsage.ResetText(parsed.Windows[0], now, TimeZoneInfo.Utc));
         var opus = PlanUsage.ParseLine("""{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","resetsAt":1793192400,"rateLimitType":"seven_day_opus","utilization":0.81}}""", now.AddMinutes(5))!;
         var merged = PlanUsage.Merge(parsed, opus);
@@ -1320,9 +1320,9 @@ internal static partial class FieldTest
             problems.Add("the 80 % warning didn't come once, naming the limit and the running jobs: " + text);
         var full = PlanUsage.Merge(merged, PlanUsage.ParseLine("""{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","rateLimitType":"seven_day_opus","utilization":1.0,"resetsAt":1793192400}}""", now)!);
         if (full.NewWarnings(warned, now) is not [{ Reached: true }]) problems.Add("reaching a limit already warned at 80 % wasn't said");
-        if (PlanUsage.Current(parsed.Windows[0], now.AddHours(5)) is not null || !parsed.Meter(now.AddHours(5)).StartsWith("5h —")) problems.Add("a limit that reset still shows its old figure");
+        if (PlanUsage.Current(parsed.Windows[0], now.AddHours(5)) is not null || !parsed.Meter(now.AddHours(5)).StartsWith("5h reset")) problems.Add("a limit that reset still shows its old figure");
         var none = PlanUsage.ParseLine("""{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","rateLimitType":"five_hour","resetsAt":1792614600}}""", now)!;
-        if (none.Windows[0].Used is not null || none.Meter(now) != "5h —") problems.Add("a report without a figure got one");
+        if (none.Windows[0].Used is not null || !none.Meter(now).StartsWith("5h —")) problems.Add("a report without a figure got one");
         var store = Path.Combine(folder, "usage-test");
         merged.Save(store);
         if (PlanUsage.Load(store) is not { } back || back.Meter(now) != merged.Meter(now) || back.Windows.Count != 3) problems.Add("the last report wasn't kept on disk");

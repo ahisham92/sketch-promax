@@ -14,26 +14,28 @@ internal static class PlanUsageTests
         check("usage: Claude Code's rate_limit_event is read", usage is { Status: "allowed", Binding: "five_hour", UsingExtra: false } && usage.Windows.Count == 2
             && usage.Windows[0] is { Key: PlanUsage.FiveHour, Used: 0.43 } && usage.Windows[0].ResetsAt == DateTimeOffset.FromUnixTimeSeconds(1792614600)
             && usage.Windows[1] is { Key: PlanUsage.Weekly, Used: 0.05 }, events.Count.ToString());
-        check("usage: the meter", usage!.Meter(now) == "5h 43% · Week 5%" && usage.Highest(now) == 0.43, usage.Meter(now));
+        check("usage: the meter", usage!.Meter(now) == "5h 43%, 4h 3m left · Week 5%" && usage.Highest(now) == 0.43, usage.Meter(now));
         check("usage: reset words", PlanUsage.ResetText(usage.Windows[0], now, utc) == "Resets in 4 h 3 min (20:30)"
             && PlanUsage.ResetText(usage.Windows[0], now.AddSeconds(14000), utc) == "Resets in 10 min (20:30)"
             && PlanUsage.ResetText(usage.Windows[1], now, utc) == "Resets Wed 28 Oct 13:00"
             && PlanUsage.ResetText(usage.Windows[0], now.AddHours(5), utc).StartsWith("Reset at 20:30")
             && PlanUsage.ResetText(new UsageWindow("x", 0.1, null, now), now, utc) == "Reset time not reported", PlanUsage.ResetText(usage.Windows[1], now, utc));
+        check("usage: the session counts down to its reset", usage.Meter(now.AddSeconds(14000)) == "5h 43%, 10m left · Week 5%"
+            && PlanUsage.Left(TimeSpan.FromSeconds(20)) == "1m" && PlanUsage.Left(TimeSpan.FromMinutes(130)) == "2h 10m", usage.Meter(now.AddSeconds(14000)));
         check("usage: percent rounds down", PlanUsage.Percent(0.796) == "79%" && PlanUsage.Percent(0.8) == "80%" && PlanUsage.Percent(1) == "100%" && PlanUsage.Percent(0) == "0%", PlanUsage.Percent(0.8));
-        check("usage: a limit whose reset passed shows no figure", PlanUsage.Current(usage.Windows[0], now.AddHours(5)) is null && usage.Meter(now.AddHours(5)) == "5h — · Week 5%", usage.Meter(now.AddHours(5)));
+        check("usage: a limit whose reset passed shows no figure", PlanUsage.Current(usage.Windows[0], now.AddHours(5)) is null && usage.Meter(now.AddHours(5)) == "5h reset · Week 5%", usage.Meter(now.AddHours(5)));
 
         var opus = PlanUsage.ParseLine("""{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","resetsAt":1793192400,"rateLimitType":"seven_day_opus","utilization":0.81}}""", now.AddMinutes(5));
         check("usage: the limit in force adds its own window", opus is { Status: "allowed_warning" } && opus.Windows.Single() is { Key: PlanUsage.WeeklyOpus, Used: 0.81 }, "");
         var merged = PlanUsage.Merge(usage, opus!);
         check("usage: later reports merge, ordered session first", merged.Windows.Select(w => w.Key).SequenceEqual([PlanUsage.FiveHour, PlanUsage.Weekly, PlanUsage.WeeklyOpus])
-            && merged.Windows[0].ReadAt == usage.Windows[0].ReadAt && merged.Windows[2].ReadAt == now.AddMinutes(5) && merged.Status == "allowed_warning" && merged.Meter(now) == "5h 43% · Week 5%",
+            && merged.Windows[0].ReadAt == usage.Windows[0].ReadAt && merged.Windows[2].ReadAt == now.AddMinutes(5) && merged.Status == "allowed_warning" && merged.Meter(now) == "5h 43%, 4h 3m left · Week 5%",
             string.Join(",", merged.Windows.Select(w => w.Key)));
         var newer = PlanUsage.Merge(merged, PlanUsage.ParseLine(line.Replace("0.43", "0.5"), now.AddMinutes(9))!);
         check("usage: a newer figure replaces the older", newer.Windows.Count == 3 && newer.Windows[0].Used == 0.5 && newer.Windows[2].Used == 0.81, "");
 
         check("usage: a report without a figure gets none", PlanUsage.ParseLine("""{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","rateLimitType":"five_hour","resetsAt":1792614600}}""", now) is { } bare
-            && bare.Windows.Single().Used is null && bare.Meter(now) == "5h —" && bare.Highest(now) is null, "");
+            && bare.Windows.Single().Used is null && bare.Meter(now) == "5h —, 4h 3m left" && bare.Highest(now) is null, "");
         check("usage: other lines and junk aren't usage", PlanUsage.ParseLine("""{"type":"result"}""", now) is null && PlanUsage.ParseLine("nope", now) is null
             && PlanUsage.ParseLine("""{"type":"rate_limit_event","rate_limit_info":{}}""", now) is null
             && new StreamParser().ParseLine("""{"type":"rate_limit_event"}""").Count == 0, "");
