@@ -599,11 +599,14 @@ internal static partial class FieldTest
         foreach (var panel in app.GetRibbonPanels("Sketch ProMax"))
             foreach (var item in panel.GetItems())
                 if (item is not null) Add(item);
-        var missing = declared.Where(f => !found.TryGetValue(f[2], out var i) || !i.Visible).Select(f => f[2]).ToList();
+        // Empty favourite slots are hidden by the core on purpose (FavouritesRibbon): there but not shown is right for them.
+        var emptySlots = new HashSet<string>(Enumerable.Range(FavouritesRibbon.Shown.Count + 1, Math.Max(0, Favourites.Max - FavouritesRibbon.Shown.Count)).Select(Favourites.SlotId), StringComparer.Ordinal);
+        var missing = declared.Where(f => !found.TryGetValue(f[2], out var i) || (!i.Visible && !emptySlots.Contains(f[2]))).Select(f => f[2]).ToList();
         // Live buttons (Job, Update, the favourite slots) are greyed out on purpose when there is nothing to do.
         var disabled = declared.Where(f => !f[8].Contains("live:") && found.TryGetValue(f[2], out var i) && i.Visible && !i.Enabled).Select(f => f[2]).ToList();
         var summary = $"{declared.Count - missing.Count} of {declared.Count} declared buttons, drop-downs and entries are on the Sketch ProMax tab";
-        if (missing.Count == 0 && disabled.Count == 0) return Pass(summary + ", all enabled.");
+        if (missing.Count == 0 && disabled.Count == 0)
+            return Pass(summary + ", all enabled" + (emptySlots.Count > 0 ? $" ({emptySlots.Count} empty favourite slot(s) hidden, as they should be)." : "."));
         return Fail(summary + "." + (missing.Count > 0 ? $" Missing: {string.Join(", ", missing.Take(20))}." : "") +
                     (disabled.Count > 0 ? $" Disabled: {string.Join(", ", disabled.Take(20))}." : "") +
                     (UpdateWindowsOld() ? " The loader is older than 0.30, so new buttons need a Revit restart." : ""));
