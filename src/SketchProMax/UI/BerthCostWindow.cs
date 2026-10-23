@@ -72,7 +72,7 @@ internal sealed class BerthCostWindow : Window
             if (_open._project == project || project.Length == 0) { _open._file = file.Length > 0 ? file : _open._file; _open.Refresh(); _open.Activate(); return Result.Succeeded; }
             _open.Close();
         }
-        var window = new BerthCostWindow(project) { _file = file };
+        var window = new BerthCostWindow(project, file);
         _open = window;
         window.Closed += (_, _) => { if (_open == window) _open = null; };
         window.Show();
@@ -85,9 +85,10 @@ internal sealed class BerthCostWindow : Window
         catch (Exception) { return doc.Title; }
     }
 
-    private BerthCostWindow(string project)
+    private BerthCostWindow(string project, string file)
     {
         _project = project;
+        _file = file;
         Title = "Sketch ProMax berth costing";
         var area = SystemParameters.WorkArea;
         Width = Math.Min(1440, Math.Floor(area.Width * 0.92));
@@ -160,6 +161,11 @@ internal sealed class BerthCostWindow : Window
     private string OpenSite => _setup is not null && _file.Length > 0 && BerthStatusMath.ModelFor(_setup, _file) is { } m ? m.Name : "";
 
     private List<Berth> Berths() => SyncBerths(_p, _setup);
+
+    /// <summary>The berths shown: the open model's (its site's) only, unless Show every site is on or no site is known.</summary>
+    private List<Berth> Shown() => Berths().Where(b => _allSites || OpenSite.Length == 0 || Same(b.Site, OpenSite)).ToList();
+
+    private bool _allSites;
 
     private Berth? Selected => _p.Berths.TryGetValue(_selected, out var b) ? b : null;
 
@@ -267,12 +273,13 @@ internal sealed class BerthCostWindow : Window
 
     private void Refresh(bool detail = true)
     {
-        var berths = Berths();
+        var every = Berths();
+        var berths = Shown();
         _subtitle.Text = _project.Length == 0 ? "Open a model of the project first"
-            : $"{_project} · {berths.Count} berths" + (OpenSite.Length > 0 ? $" · {OpenSite} model open" : "") + $" · {_p.Stage}";
-        if (_selected.Length == 0 || !_p.Berths.ContainsKey(_selected)) _selected = berths.FirstOrDefault(b => OpenSite.Length == 0 || Same(b.Site, OpenSite))?.Key ?? "";
+            : $"{_project} · " + (OpenSite.Length > 0 && !_allSites ? $"{OpenSite} model open · {berths.Count} berths" : $"{berths.Count} berths") + $" · {_p.Stage}";
+        if (_selected.Length == 0 || !berths.Any(b => b.Key == _selected)) _selected = berths.FirstOrDefault()?.Key ?? "";
         _list.Children.Clear();
-        if (berths.Count == 0)
+        if (every.Count == 0)
         {
             _list.Children.Add(Heading("No berths yet"));
             _list.Children.Add(Para(_setup is null
@@ -290,12 +297,21 @@ internal sealed class BerthCostWindow : Window
         var costed = berths.Where(b => b.Measured is not null || b.Hand.Count > 0).ToList();
         var structural = costed.Sum(b => Total(_p, b).Structural);
         var length = costed.Sum(b => b.Length ?? 0);
-        sums.Children.Add(Brand.Text("All berths", size: 14, bold: true));
+        sums.Children.Add(Brand.Text(OpenSite.Length > 0 && !_allSites ? OpenSite : "All berths", size: 14, bold: true));
+        var noRates = _p.Rates.All(r => r.Value is null);
         sums.Children.Add(Small(costed.Count == 0 ? "Nothing measured yet: press Measure the model with a model open." :
-            $"{costed.Count} of {berths.Count} costed · {BerthCostMath.Money(structural, _p.Currency)}" + (length > 0 ? $" · {BerthCostMath.Money(structural / length, _p.Currency)} / lm" : "")));
+            noRates ? $"{costed.Count} of {berths.Count} measured · no unit costs yet, so no cost: Unit costs, or Templates > Take the unit costs from a cost comparison workbook" :
+            $"{costed.Count} of {berths.Count} costed · {BerthCostMath.Money(structural, _p.Currency)}" + (length > 0 ? $" · {BerthCostMath.Money(structural / length, _p.Currency)} / lm" : " · type the quay lengths for US$ / lm")));
         sums.Children.Add(Small($"Tick berths to make their files; {_chosen.Count} ticked." + (_p.Follow ? " Costs follow the model." : "")));
         top.Children.Add(sums);
         _list.Children.Add(top);
+        if (OpenSite.Length > 0 && every.Any(b => !Same(b.Site, OpenSite)))
+        {
+            var all = new CheckBox { Content = "Show the other sites' berths too", IsChecked = _allSites, Margin = new Thickness(2, 2, 0, 0) };
+            all.Checked += (_, _) => { _allSites = true; Refresh(); };
+            all.Unchecked += (_, _) => { _allSites = false; Refresh(); };
+            _list.Children.Add(all);
+        }
 
         foreach (var site in berths.GroupBy(b => b.Site.Length > 0 ? b.Site : "Project"))
         {
@@ -323,7 +339,7 @@ internal sealed class BerthCostWindow : Window
         row.Children.Add(new PercentRing(done, 58, 7, 14));
         var texts = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 4, 0), Width = 150 };
         texts.Children.Add(Brand.Text(b.Title, size: 13, bold: true));
-        texts.Children.Add(Small(done is null ? "not measured" : BerthCostMath.Money(t.Structural, _p.Currency)));
+        texts.Children.Add(Small(done is null ? "not measured" : t.Structural <= 0 && _p.Rates.All(r => r.Value is null) ? "measured · no unit costs" : BerthCostMath.Money(t.Structural, _p.Currency)));
         if (t.PerLm > 0) texts.Children.Add(Small(BerthCostMath.Money(t.PerLm, _p.Currency) + " / lm"));
         var made = b.Made.Count > 0 ? "made: " + string.Join(", ", b.Made.Keys) : "";
         if (made.Length > 0) texts.Children.Add(Small(made));
@@ -586,15 +602,18 @@ internal sealed class BerthCostWindow : Window
 
         page.Children.Add(Section("Rates"));
         var grid = new Grid { Margin = new Thickness(0, 4, 0, 0) };
-        foreach (var w in new[] { 2.6, 0.6, 1.0, 1.1 }) grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(w, GridUnitType.Star) });
+        foreach (var w in new[] { 2.6, 0.6, 1.0 }) grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(w, GridUnitType.Star) });
         grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        string[] heads = ["ITEM", "UNIT", $"RATE ({_p.Currency})", "CODE"];
+        string[] heads = ["ITEM", "UNIT", $"RATE ({_p.Currency})"];
         for (var i = 0; i < heads.Length; i++) Put(grid, Brand.Text(heads[i], Brand.K.Muted, 10.5, bold: true), 0, i);
         var row = 1;
         foreach (var rate in _p.Rates)
         {
             grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            Put(grid, Brand.Text(rate.Name, size: 12), row, 0);
+            // The rate's short code (R_PIPE) is only how items point at it (Items page); it shows on hover.
+            var rateName = Brand.Text(rate.Name, size: 12);
+            rateName.ToolTip = $"Code {rate.Code}: the items' rate column on the Items page points at it.";
+            Put(grid, rateName, row, 0);
             Put(grid, Brand.Text(rate.Unit, Brand.K.Muted, 12), row, 1);
             var box = Field(rate.Value is { } v ? v.ToString("0.##", CultureInfo.InvariantCulture) : "", rate.Name + " rate");
             box.Margin = new Thickness(0, 1, 8, 1);
@@ -611,7 +630,6 @@ internal sealed class BerthCostWindow : Window
                 _status.Text = $"{r.Name}: {(value is { } x ? x.ToString("#,0.##", CultureInfo.InvariantCulture) : "no rate")}. Every berth's cost follows.";
             };
             Put(grid, box, row, 2);
-            Put(grid, Brand.Text(rate.Code, Brand.K.Muted, 11), row, 3);
             row++;
         }
         page.Children.Add(grid);

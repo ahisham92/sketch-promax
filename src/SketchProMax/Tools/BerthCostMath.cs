@@ -305,7 +305,10 @@ internal static class BerthCostMath
         public Dictionary<string, DateTime> Made { get; set; } = new(StringComparer.Ordinal);
 
         /// <summary>The berth's number ("Berth 9" is 9), or "" when it has none.</summary>
-        public string Number => Regex.Match(Name, @"\d+") is { Success: true } m ? m.Value.TrimStart('0') is { Length: > 0 } n ? n : "0" : "";
+        /// <summary>The berth's number: its single value (a package "A6 Berths 4" of one berth is berth 4), else the first number in its name.</summary>
+        public string Number =>
+            (FindBy == BerthStatusMath.FindBy.Parameter && Value.Trim().Length > 0 && Value.Trim().All(char.IsDigit) ? Value.Trim() : Regex.Match(Name, @"\d+") is { Success: true } m ? m.Value : "")
+            is { Length: > 0 } digits ? digits.TrimStart('0') is { Length: > 0 } n ? n : "0" : "";
         /// <summary>The berth's name in the files: "Berth 09 (excl. RoRo)".</summary>
         public string Title => (Number.Length > 0 ? "Berth " + Number.PadLeft(2, '0') : Name) + (ExcludeNote.Trim().Length > 0 ? $" ({ExcludeNote.Trim()})" : "");
         public double Param(string key) => Params.TryGetValue(key, out var v) ? v : 0;
@@ -617,12 +620,16 @@ internal static class BerthCostMath
     {
         var list = new List<string>();
         if (b.Length is not > 0) list.Add("the quay length");
-        if (b.Measured is null) list.Add("a reading of the model (Measure)");
+        if (b.Measured is null) list.Add("a reading of the model (Measure, with this berth's model open)");
+        // With no unit cost typed at all, one line says so instead of one per item.
+        var noRates = p.Rates.All(r => r.Value is null);
+        if (noRates) list.Add("the unit costs (Unit costs, or Templates > Take the unit costs from a cost comparison workbook)");
         foreach (var i in p.Items)
         {
             var (q, _) = Quantity(p, b, i.No);
-            if (i.Rule.Trim().Length > 0 && q is null) list.Add($"{i.Name}: not found in the model" + (b.Measured?.Notes.TryGetValue(i.No, out var why) == true ? $" ({why})" : ""));
-            if (q is > 0 && RateFor(p, b, i) <= 0) list.Add($"{i.Name}: no unit cost" + (i.RateCode.StartsWith("pile:", StringComparison.Ordinal) ? " (pile diameter and kg/m³, and the pile, concrete and rebar rates)" : ""));
+            // Before a reading nothing is "not found": the model hasn't been read for this berth yet.
+            if (b.Measured is not null && i.Rule.Trim().Length > 0 && q is null) list.Add($"{i.Name}: not found in the model" + (b.Measured?.Notes.TryGetValue(i.No, out var why) == true ? $" ({why})" : ""));
+            if (!noRates && q is > 0 && RateFor(p, b, i) <= 0) list.Add($"{i.Name}: no unit cost" + (i.RateCode.StartsWith("pile:", StringComparison.Ordinal) ? " (pile diameter and kg/m³, and the pile, concrete and rebar rates)" : ""));
         }
         return list;
     }
