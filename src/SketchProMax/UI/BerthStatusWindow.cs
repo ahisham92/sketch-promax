@@ -708,13 +708,14 @@ internal sealed class BerthStatusWindow : Window
 
     private static string FixAllText(List<Finding> fixes) =>
         fixes.All(f => f.Fix == "uniformat") ? "Fill the Assembly Codes" :
+        fixes.All(f => f.Fix == "loi") ? "Fill the LOI data" :
         fixes.All(f => f.Fix!.StartsWith("tag:", StringComparison.Ordinal)) ? $"Tag what is missing ({fixes.Count} views)" :
         fixes.All(f => f.Fix!.StartsWith("join:", StringComparison.Ordinal)) ? $"Join them ({fixes.Count})" : $"Fix all ({fixes.Count})";
 
     private FrameworkElement FindingRow(Summary s, Finding f)
     {
         var line = new DockPanel { Margin = new Thickness(0, 2, 0, 2) };
-        if (f.Fix is { } fix && fix != "uniformat")
+        if (f.Fix is { } fix && fix is not ("uniformat" or "loi"))
         {
             var button = new Button { Content = "Fix", Padding = new Thickness(8, 1, 8, 1), Margin = new Thickness(8, 0, 0, 0) };
             button.SetResourceReference(StyleProperty, "SpmSecondaryButton");
@@ -748,15 +749,20 @@ internal sealed class BerthStatusWindow : Window
         top.Children.Add(value);
         top.Children.Add(Brand.Text(d.Deliverable.Name, size: 13, bold: true));
         row.Children.Add(top);
+        // Deliverables are set per berth: a package of several shows its berths' average and is set on each berth.
+        if (ChildrenOf(s.Berth).Count > 0)
+        {
+            row.Children.Add(Small("The average of its berths: choose a berth above to set its own." + (d.Comment.Length > 0 ? " " + d.Comment : "")));
+            return Box(row, top: 8);
+        }
         row.Children.Add(Small(d.From switch
         {
-            Source.Hand => "By hand." + (d.File.Length > 0 ? " File: " + Path.GetFileName(d.File) : ""),
+            Source.Hand => "Set by you." + (d.File.Length > 0 ? " File: " + Path.GetFileName(d.File) : ""),
             Source.Files when d.File.Length > 0 => "Found: " + d.File,
             Source.Files => $"Not in {d.Deliverable.Folder} yet.",
             _ => "Type its percentage (no folder set for it in the setup).",
         }));
-        // Deliverables belong to the package: a berth of it edits the package's.
-        var hand = (s.Berth.Parent.Length > 0 ? _state.For(KeyOf(s.Berth.Model, s.Berth.Parent)) : _state.For(s.Berth.Key)).DeliveredFor(d.Deliverable.Name);
+        var hand = _state.For(s.Berth.Key).DeliveredFor(d.Deliverable.Name);
         var pct = new TextBox { Text = hand.Percent?.ToString("0", CultureInfo.InvariantCulture) ?? "", Width = 52, Margin = new Thickness(0, 0, 8, 0) };
         AutomationProperties.SetName(pct, d.Deliverable.Name + " percentage");
         var note = new TextBox { Text = hand.Comment, MinWidth = 260 };
@@ -854,13 +860,15 @@ internal sealed class BerthStatusWindow : Window
         {
             _runText.Text = "Finding the project's open models…";
             _runBar.Value = 0;
+            // The project's pre-submission checklist: its LOI matrix measures the modelling (LOD 300).
+            var checklist = ChecklistStore.Load(Settings.AgentSettings.Load(), _project).Def;
             // The open models of this project (not links, not families), each with its setup model.
             var plans = await App.Dispatcher.InvokeAsync(app =>
             {
                 var list = new List<BerthStatusFacts.Reading>();
                 foreach (Autodesk.Revit.DB.Document d in app.Application.Documents)
                     if (!d.IsFamilyDocument && !d.IsLinked && ModelFor(setup, DocName(d)) is { } m)
-                        list.Add(BerthStatusFacts.Plan(d, setup, m));
+                        list.Add(BerthStatusFacts.Plan(d, setup, m, def: checklist));
                 return list;
             });
             if (plans.Count == 0)
