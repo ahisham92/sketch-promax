@@ -29,7 +29,7 @@ internal static class BimReadyPlan
         new("navisview", "the Navisworks view", ""),
         new("landing", "the starting view", ""),
         // Revit's warnings, toward zero: the ones a fix can clear without deleting anything.
-        new("offaxis", "the slightly off axis lines (straightened)", "", "warnings"),
+        new("offaxisclear", "the slightly off axis warnings (cleared, nothing moves)", "", "warnings"),
         new("unjoinapart", "joins of elements that don't touch (unjoined)", "", "warnings"),
     ];
 
@@ -45,12 +45,13 @@ internal static class BimReadyPlan
         Steps.Where(s => flagged(s.CheckKey) != false && (s.Rule.Length > 0 ? rule(s.Rule).Trim().Length > 0 : flagged(s.CheckKey) == true)).ToList();
 
     /// <summary>
-    /// How far to turn a line (degrees, anticlockwise) to put it exactly on the nearest 45° direction, when it is off by
-    /// less than <paramref name="within"/> degrees: what Revit calls slightly off axis. Null when it is on axis or meant to be at an angle.
+    /// How far to turn a line (degrees, anticlockwise) to put it exactly on the nearest axis (0°, 90°, 180°, 270°), when it is
+    /// off by less than <paramref name="within"/> degrees: what Revit calls slightly off axis. Null when it is on an axis or
+    /// inclined on purpose (any other angle is left as drawn).
     /// </summary>
-    public static double? OffAxisTurn(double angleDegrees, double within = 1.0)
+    public static double? OffAxisTurn(double angleDegrees, double within = 0.2)
     {
-        var nearest = Math.Round(angleDegrees / 45.0) * 45.0;
+        var nearest = Math.Round(angleDegrees / 90.0) * 90.0;
         var turn = nearest - angleDegrees;
         return Math.Abs(turn) < 1e-9 || Math.Abs(turn) >= within ? null : turn;
     }

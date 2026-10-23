@@ -438,7 +438,7 @@ internal sealed class BimReadyWindow : Window
         var parts = plan.Select(s => s.What).ToList();
         if (joins > 0) parts.Add($"join {joins} structural clash{(joins == 1 ? "" : "es")} in the berths");
         if (tags > 0) parts.Add($"tag what is untagged in {tags} view{(tags == 1 ? "" : "s")} on the berths' sheets");
-        var question = "Fix " + string.Join(", ", parts) + "?\n\nValues already filled are left alone and nothing is deleted; off-axis lines move no more than 2 mm at an end. " +
+        var question = "Fix " + string.Join(", ", parts) + "?\n\nValues already filled are left alone and nothing is deleted or moved. " +
                        "Each part is its own step in Revit's undo list." + (detached ? "" : "\n\nThis doesn't look like a detached copy: test on a copy first if you aren't sure.");
         if (MessageBox.Show(this, question, "Sketch ProMax: make it BIM-ready", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes) return;
 

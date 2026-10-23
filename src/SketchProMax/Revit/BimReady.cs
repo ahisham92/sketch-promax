@@ -14,8 +14,8 @@ namespace SketchProMax.Revit;
 /// exists. A Revit updater, inside the user's own transaction: one Ctrl+Z undoes it with the edit. Then, when Revit is
 /// idle a few seconds later, the LOI matrix's information the model gives (material, sizes, length, levels...) is filled
 /// on the types placed, retyped or changed, a few types at a time, in its own transaction ("Sketch ProMax: fill the LOI
-/// data"). Never overwrites a value. A "slightly off axis" warning on an edit isn't shown when its elements can be
-/// straightened moving no end more than 2 mm: they are turned onto their exact direction at the same quiet moment ("Sketch ProMax: straighten off-axis lines"), so the warning never stays.
+/// data"). Never overwrites a value. A "slightly off axis" warning raised by an edit is not kept: nothing is moved, the
+/// warning just isn't recorded (Ahmed: submitted geometry must not change, inclined elements stay as drawn).
 /// </summary>
 internal static class BimReady
 {
@@ -24,8 +24,6 @@ internal static class BimReady
     private static readonly Dictionary<string, (DateTime At, ChecklistMath.Definition? Def)> Defs = new(StringComparer.OrdinalIgnoreCase);
     /// <summary>Per open model (its title): the types whose LOI data is filled at the next quiet moment.</summary>
     private static readonly Dictionary<string, HashSet<long>> Pending = new(StringComparer.OrdinalIgnoreCase);
-    /// <summary>Per open model (its title): elements drawn slightly off axis, straightened at the next quiet moment.</summary>
-    private static readonly Dictionary<string, HashSet<long>> OffAxis = new(StringComparer.OrdinalIgnoreCase);
     private static Autodesk.Revit.ApplicationServices.Application? _app;
     private static DateTime _lastChange;
     private const int TypesPerIdle = 8;
@@ -53,7 +51,7 @@ internal static class BimReady
     {
         RevitDispatcher.Idle -= OnIdle;
         if (_app is not null) { try { _app.FailuresProcessing -= OnFailures; } catch (Exception) { } _app = null; }
-        lock (Pending) { Pending.Clear(); OffAxis.Clear(); }
+        lock (Pending) Pending.Clear();
         if (_updater is not { } updater) return;
         try { UpdaterRegistry.UnregisterUpdater(updater.GetUpdaterId()); } catch (Exception) { }
         _updater = null;
@@ -111,8 +109,8 @@ internal static class BimReady
     }
 
     /// <summary>
-    /// Hides Revit's "slightly off axis" warning when the model is kept BIM-ready, and remembers its elements to be
-    /// straightened at the next quiet moment (OnIdle), so neither the dialog nor the warning stays.
+    /// Hides Revit's "slightly off axis" warning when the model is kept BIM-ready: the warning is dropped as the edit is
+    /// committed, so it never pops up or stays in Manage > Warnings. Nothing in the model changes.
     /// </summary>
     private static void OnFailures(object? sender, Autodesk.Revit.DB.Events.FailuresProcessingEventArgs e)
     {
@@ -124,36 +122,18 @@ internal static class BimReady
             var off = fa.GetFailureMessages().Where(m => m.GetSeverity() == FailureSeverity.Warning
                 && (m.GetDescriptionText() ?? "").IndexOf(WarningFixes.OffAxisText, StringComparison.OrdinalIgnoreCase) >= 0).ToList();
             if (off.Count == 0 || !On(ChecklistMath.Rule(DefFor(doc), "autoready"))) return;
-            lock (Pending)
-            {
-                var set = OffAxis.TryGetValue(doc.Title, out var had) ? had : OffAxis[doc.Title] = [];
-                // Hidden only when every element of it can be straightened within 2 mm; the others stay for the user to see.
-                foreach (var m in off)
-                {
-                    var ids = m.GetFailingElementIds().ToList();
-                    if (ids.Count == 0 || !ids.All(id => doc.GetElement(id) is { } el && WarningFixes.Straighten(el) is not null)) continue;
-                    foreach (var id in ids) set.Add(id.Value);
-                    fa.DeleteWarning(m);
-                }
-                _lastChange = DateTime.UtcNow;
-            }
+            foreach (var m in off) fa.DeleteWarning(m);
         }
-        catch (Exception) { /* best effort: Make it BIM-ready straightens what is left */ }
+        catch (Exception) { /* best effort: the warning just stays */ }
     }
 
     /// <summary>At a quiet moment: the LOI data of a few pending types of each open model, each model in its own transaction.</summary>
     private static void OnIdle(UIApplication app)
     {
-        lock (Pending) if (Pending.Count == 0 && OffAxis.Count == 0 || DateTime.UtcNow - _lastChange < Quiet) return;
+        lock (Pending) if (Pending.Count == 0 || DateTime.UtcNow - _lastChange < Quiet) return;
         if (App.Dispatcher.IsRunning) return;
         foreach (Document doc in app.Application.Documents)
         {
-            List<ElementId>? straighten = null;
-            lock (Pending)
-                if (OffAxis.TryGetValue(doc.Title, out var offIds)) { straighten = offIds.Select(i => new ElementId(i)).ToList(); OffAxis.Remove(doc.Title); }
-            if (straighten is { Count: > 0 } && !doc.IsFamilyDocument && !doc.IsReadOnly && !doc.IsModifiable && !doc.IsLinked)
-                try { WarningFixes.OffAxis(doc, straighten.Where(i => doc.GetElement(i) is not null)); } catch (Exception) { }
-
             List<long> batch;
             lock (Pending)
             {
