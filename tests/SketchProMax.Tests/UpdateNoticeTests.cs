@@ -73,6 +73,27 @@ internal static class UpdateNoticeTests
         var top = UpdateNotice.TopLines(notes);
         check("notice: top lines of the notes, as plain text", top.SequenceEqual(["What's new in 0.32.0",
             "Update notice: says when a new version is out, see the guide.", "Ribbon labels stay on narrow screens"]), string.Join(" | ", top));
+        const string releaseNotes = """
+            **Install:** extract the zip and double-click Install.cmd, or open PowerShell and paste this line (no .cmd needed):
+
+            ```
+            irm https://raw.githubusercontent.com/owner/repo/main/get.ps1 | iex
+            ```
+
+            If Install.cmd says Windows cannot access the file: Properties > Unblock on the zip, or use the PowerShell line.
+
+            ## What's Changed
+            * Berth status by someone in https://example.com/pull/35
+
+            **Full Changelog**: https://example.com/compare/v1...v2
+            """;
+        var changed = UpdateNotice.TopLines(releaseNotes);
+        check("notice: the install help and changelog link are left out", changed.SequenceEqual(["What's Changed",
+            "Berth status by someone in https://example.com/pull/35"]), string.Join(" | ", changed));
+        check("notice: an update applied in place with nothing to do shows no toast; one needing a restart does",
+            !UpdateNotice.WorthShowing(UpdateNotice.Kind.Updated, null) && !UpdateNotice.WorthShowing(UpdateNotice.Kind.Updated, " ")
+            && UpdateNotice.WorthShowing(UpdateNotice.Kind.Updated, "Restart Revit for the new ribbon.")
+            && UpdateNotice.WorthShowing(UpdateNotice.Kind.Available, null) && UpdateNotice.WorthShowing(UpdateNotice.Kind.Installed, null), "");
         check("notice: no notes, no lines; long lines cut", UpdateNotice.TopLines(null).Count == 0
             && UpdateNotice.TopLines(new string('x', 400))[0].Length == 140, "");
 

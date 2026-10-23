@@ -213,6 +213,8 @@ public static class CoreEntry
             case "announce":
                 // Started by the loader after an automatic update, one this window followed from another Revit window, or
                 // one whose window was hidden: a toast that doesn't take the focus, and the band at the top of the chat.
+                // Nothing to do after an update that applied in place: no toast (the Update button says "Updated to").
+                if (!UpdateNotice.WorthShowing(UpdateNotice.Kind.Updated, RestartNote.Text)) return "quiet";
                 UpdateNotice.Offer(new UpdateNotice.Notice(UpdateNotice.Kind.Updated, Updater.CurrentText,
                     UpdateNotice.TopLines(Updater.NotesFor(Updater.CurrentText)), RestartNote.Text));
                 return "shown";
