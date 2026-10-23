@@ -37,6 +37,9 @@ internal static partial class FieldTest
         var textType = doc.GetDefaultElementTypeId(ElementTypeGroup.TextNoteType);
         var old = TextNote.Create(doc, plan.Id, o + new XYZ(0, 15, 0), "OLD NOTE", textType);
         var struck = TextNote.Create(doc, plan.Id, o + new XYZ(0, -15, 0), "DELETE ME", textType);
+        // A scope box on the copied plan overrides the crop set below, and the whole model then shows at 1:100: the
+        // probe's elements landed about 800 mm past the 11x17 sheet's border (0.34.48 field test, bug log row 29).
+        if (plan.get_Parameter(BuiltInParameter.VIEWER_VOLUME_OF_INTEREST_CROP) is { IsReadOnly: false } scope) scope.Set(ElementId.InvalidElementId);
         var crop = plan.CropBox;
         var inverse = crop.Transform.Inverse;
         var a = inverse.OfPoint(o + new XYZ(-10, -30, 0));
@@ -56,7 +59,14 @@ internal static partial class FieldTest
         doc.Regenerate();
         var frame = Redlines.Frame(sheet);
         var center = frame.W > 0.5 ? new XYZ(frame.Cx, frame.Cy, 0) : new XYZ(1.2, 0.8, 0);
-        Viewport.Create(doc, sheet.Id, plan.Id, center);
+        var vp = Viewport.Create(doc, sheet.Id, plan.Id, center);
+        doc.Regenerate();
+        // Centre the probe's elements on the sheet, whatever the view shows round them, so every markup is on the page.
+        var (wx, wy) = Redlines.Ports(sheet).Single().ToSheet(o + new XYZ(15, 0, 0));
+        frame = Redlines.Frame(sheet);
+        var target = frame.W > 0.5 ? new XYZ(frame.Cx, frame.Cy, 0) : center;
+        vp.SetBoxCenter(vp.GetBoxCenter() + new XYZ(target.X - wx, target.Y - wy, 0));
+        doc.Regenerate();
         t.Commit();
         return new RedlineSet(sheet, plan, wall, old, struck, o);
     }
@@ -117,7 +127,8 @@ internal static partial class FieldTest
         var titleBlock = new FilteredElementCollector(r.Sheet.Document, r.Sheet.Id).OfCategory(BuiltInCategory.OST_TitleBlocks).WhereElementIsNotElementType().GetElementCount() > 0;
         var box = JsonSerializer.SerializeToElement(markups[0]).GetProperty("bbox").EnumerateArray().Select(v => v.GetDouble()).ToArray();
         var outside = box.Any(v => v < 0 || v > 1) ? " (outside the page: the tool reads such numbers as percentages)" : "";
-        return $"probe: frame x {Mm(f.X0)}..{Mm(f.X1)}, y {Mm(f.Y0)}..{Mm(f.Y1)} mm, title block {(titleBlock ? "yes" : "no")}; " +
+        var vp = Redlines.Ports(r.Sheet).Select(p => p.Box).FirstOrDefault();
+        return $"probe: frame x {Mm(f.X0)}..{Mm(f.X1)}, y {Mm(f.Y0)}..{Mm(f.Y1)} mm, title block {(titleBlock ? "yes" : "no")}, viewport {Mm(vp.W)} x {Mm(vp.H)} mm; " +
                $"M1 box {string.Join(" ", box.Select(v => v.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)))}{outside}";
     }
 
