@@ -189,8 +189,10 @@ internal static class CoreRibbonManifest
         L(Button("Sketch ProMax", "ReportBug", "Report bug", "report-bug", "bug",
             "Writes a bug report for Sketch ProMax with what just happened, ready to send.", small: true, breakBefore: true)),
         // Bug folder left the ribbon in 0.35 (still on the pane's Bugs section) to free a loader slot for Share tools.
-        L(Button("Sketch ProMax", "ExportChatsBugs", "Export chats", "export-chats-bugs", "pack",
-            "Writes one zip with the chats of every model, all bug reports, the tool-call log and the versions, to send to the developer.", small: true)),
+        // License (0.35) took Export chats' place, which stays on the pane's Bugs section, to keep the loader's free slots:
+        // this PC's license, or on the owner's PC the License manager (UI/LicenseWindow, UI/LicenseManagerWindow).
+        L(Button("Sketch ProMax", "License", "License", "license", "settings",
+            "This PC's license, and its PC code to send for a key. On the owner's PC: the License manager, to make keys, change their dates and cancel them.", small: true)),
         L(Button("Sketch ProMax", "SettingsButton", "Settings", "settings", "settings",
             "Firm standards, whether Revit asks before Sketch ProMax changes the model, and automatic updates.", small: true, breakBefore: true)),
         L(Pulldown("Sketch ProMax", "HelpMenu", "Help", "help", "How to use Sketch ProMax, and diagnostics that test its tools.", small: true)),

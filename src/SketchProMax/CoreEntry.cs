@@ -67,10 +67,19 @@ public static class CoreEntry
         }
     }
 
+    /// <summary>What still works on a PC without a valid key: the license itself, updates, help, settings and bug reports.</summary>
+    internal static readonly HashSet<string> WithoutLicense = new(StringComparer.Ordinal)
+    {
+        "license", "status", "update-info", "update-check", "update-button", "whats-new", "help", "settings", "pane", "chat",
+        "report-bug", "bug-folder", "export-chats-bugs",
+    };
+
     private static int Run(string name, UIApplication app)
     {
+        if (!App.Shared && !WithoutLicense.Contains(name) && LicenseWindow.BlockIfLocked()) return 1;
         var result = name switch
         {
+            "license" => LicenseWindow.Command(),
             "status" => CoreCommands.Status(app),
             "copy-prompt" => CoreCommands.CopyPrompt(app),
             "open-claude" => CoreCommands.OpenClaude(),

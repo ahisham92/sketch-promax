@@ -337,6 +337,10 @@ public sealed class BridgeServer
     private async Task<ToolResult> CallTool(string name, Dictionary<string, JsonElement> args, bool fromChat, CancellationToken ct, int handoffs = 0,
         string? jobKey = null)
     {
+        // A PC without a valid key runs no tools (Licensing/LicenseState; TritoRevit's shared tools aren't licensed).
+        if (!App.Shared && !Licensing.LicenseState.Allowed)
+            return ToolResult.Error("Sketch ProMax isn't licensed on this PC, so its tools are off. Tell the user to click License on the " +
+                                    "Sketch ProMax tab and send the PC code shown there to whoever gave them Sketch ProMax, for a key.");
         // Job questions are answered here, without Revit's thread, so they work while Revit is busy.
         if (name == "wait_for_job") return await WaitForJobTool.AnswerAsync(new ToolArgs(args), ct).ConfigureAwait(false);
         if (name == "cancel_job") return CancelJobTool.Cancel(new ToolArgs(args));
