@@ -194,6 +194,26 @@ internal sealed class BerthStatusWindow : Window
             catch (Exception ex) when (ex is not OutOfMemoryException) { _status.Text = $"Couldn't open Make BIM-ready ({ex.Message}). Finish what Revit is doing, then try again."; }
         };
         right.Children.Add(ready);
+        // The Assembly Codes in one button: load the LOI Excel's code list, see every type without a code, fill.
+        var codesButton = RichUi.Button(RichUi.Icon.Fix, "Assembly Codes");
+        codesButton.VerticalAlignment = VerticalAlignment.Center;
+        codesButton.Margin = new Thickness(0, 0, 8, 0);
+        AutomationProperties.SetHelpText(codesButton, "Pick the Excel with the Assembly Codes (your LOI matrix): its codes are loaded into the model, then you see every type without a code, with the code the checklist's UniFormat rules give it, and press Fill.");
+        codesButton.Click += async (_, _) =>
+        {
+            if (Brand.IsBusy(codesButton)) return;
+            Brand.SetBusy(codesButton, true, "Working…");
+            try
+            {
+                var done = await AssemblyCodesFlow.Run(this, OnModel(null), ChecklistStore.Load(Settings.AgentSettings.Load(), _project).Def);
+                if (done is null) return;
+                _status.Text = done;
+                if (!done.StartsWith("Bring ", StringComparison.Ordinal) && !done.StartsWith("Open ", StringComparison.Ordinal)) await UpdateStatus();
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException) { _status.Text = $"Couldn't fill the Assembly Codes ({ex.Message})."; }
+            finally { Brand.SetBusy(codesButton, false); }
+        };
+        right.Children.Add(codesButton);
         right.Children.Add(_update);
         right.Children.Add(_ring);
         header.Children.Add(right);
@@ -833,7 +853,9 @@ internal sealed class BerthStatusWindow : Window
         var what = FixAllText(fixes);
         var question = $"{what} in {from}?\n\nThis changes the model. Ctrl+Z in Revit undoes it." +
                        (from.IndexOf("detached", StringComparison.OrdinalIgnoreCase) >= 0 ? "" : "\n\nThis doesn't look like a detached copy: fixes are meant for the copy you submit.");
-        if (MessageBox.Show(this, question, "Sketch ProMax: fix it", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes) return;
+        // The Assembly Codes ask their own way (pick the Excel, see the types and codes, Fill), so no question first.
+        if (fixes.Any(f => f.Fix != "uniformat") &&
+            MessageBox.Show(this, question, "Sketch ProMax: fix it", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes) return;
         Brand.SetBusy(button, true, "Fixing…");
         var project = _project;
         try
@@ -842,6 +864,14 @@ internal sealed class BerthStatusWindow : Window
             foreach (var group in fixes.GroupBy(f => f.Fix!.Split(':')[0] == "uniformat" ? "uniformat" : f.Fix!))
             {
                 if (_closed) break;
+                if (group.Key == "uniformat")
+                {
+                    var codes = await AssemblyCodesFlow.Run(this, OnModel(from), ChecklistStore.Load(Settings.AgentSettings.Load(), project).Def);
+                    if (codes is null) { if (fixes.All(f => f.Fix == "uniformat")) return; continue; }
+                    said.Add(codes);
+                    if (codes.StartsWith("Bring ", StringComparison.Ordinal)) break;
+                    continue;
+                }
                 said.Add(await App.Dispatcher.InvokeAsync(app =>
                 {
                     var ui = app.ActiveUIDocument;
@@ -857,12 +887,33 @@ internal sealed class BerthStatusWindow : Window
             button.Content = "Done";
             button.IsEnabled = false;
             // Said in a dialog, not only in the status line (it was missed: "nothing happened"), then the berths it changed are read again.
-            MessageBox.Show(this, text, "Sketch ProMax: " + what, MessageBoxButton.OK, said.Any(x => x.StartsWith("Bring ", StringComparison.Ordinal)) ? MessageBoxImage.Warning : MessageBoxImage.Information);
+            // The Assembly Codes said theirs already.
+            if (fixes.Any(f => f.Fix != "uniformat")) MessageBox.Show(this, text, "Sketch ProMax: " + what, MessageBoxButton.OK, said.Any(x => x.StartsWith("Bring ", StringComparison.Ordinal)) ? MessageBoxImage.Warning : MessageBoxImage.Information);
             if (!said.Any(x => x.StartsWith("Bring ", StringComparison.Ordinal))) await UpdateStatus();
         }
         catch (Exception ex) when (ex is not OutOfMemoryException) { _status.Text = $"Couldn't fix it ({ex.Message})."; MessageBox.Show(this, _status.Text, "Sketch ProMax", MessageBoxButton.OK, MessageBoxImage.Warning); }
         finally { if (button.IsEnabled) Brand.SetBusy(button, false); }
     }
+
+    /// <summary>Runs work on the model in front, when it is <paramref name="from"/> (any project model when null); says what to do otherwise.</summary>
+    private static Func<Func<UIDocument, string>, Task<string>> OnModel(string? from) => async work =>
+    {
+        try
+        {
+            return await App.Dispatcher.InvokeAsync(app =>
+            {
+                var ui = app.ActiveUIDocument;
+                if (ui is null || ui.Document.IsFamilyDocument) return "Open the model in Revit first.";
+                if (from is not null && !string.Equals(ui.Document.Title, from, StringComparison.OrdinalIgnoreCase))
+                    return $"Bring {from} to the front in Revit first: these results were read from it.";
+                return work(ui);
+            });
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            return $"Revit couldn't do it ({ex.Message}). Finish what Revit is doing (an edit mode or a dialog), then try again.";
+        }
+    };
 
     /// <summary>Opens the view or sheet, or selects the element, when the berth's model is the one in front.</summary>
     private async Task Show(Summary s, long id)

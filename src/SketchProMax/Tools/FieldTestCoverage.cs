@@ -279,7 +279,9 @@ internal static class FieldTestCoverage
             "Settings > Sign-off > Helper = SketchPro. On a manual check click Ask SketchPro: SketchPro's Copilot opens and the question is pasted in its message box, not sent. " +
             "Without SketchPro loaded it says so and leaves the question copied."),
         new("checklist.bep", Issue, "Assembly Codes, the BEP data Excel and keeping the model BIM-ready", How.Manual, "", "importing the codes, filling the Excel and the automatic filling are judged by a person on a copy",
-            "On a _detached copy, Pre-submission checklist, the Classification code check: Import the Assembly Codes, pick the project's LOI matrix Excel: Manage > Additional Settings > Assembly Code lists its codes with their names (A1020.15 Bored Piles). " +
+            "On a _detached copy, Pre-submission checklist, the Classification code check: Load and fill the Assembly Codes, pick the project's LOI matrix Excel: Manage > Additional Settings > Assembly Code lists its codes with their names (A1020.15 Bored Piles), " +
+            "and a list shows every type in use without a code, with the code the UniFormat rules give (empty where they give none). Type a code on an empty row, press Fill: a dialog says how many types were filled, and those types have it in Type Properties. " +
+            "Submissions status, Assembly Codes (top right) does the same, then reads the berths again: Categories and data no longer lists Assembly Code empty for those types. " +
             "Export the BEP data Excel: it opens with one row per type in use, its code, the suggested code, the LOI matrix's parameters and Still missing. Type a code and a material on a row, save, Import the BEP data Excel: those values are on the type. " +
             "Checking rules: Keep the model BIM-ready while you model = yes. Duplicate a column type and place one: the new type gets its Assembly Code from the rules, and an element placed on Workset1 goes to its category's workset; Ctrl+Z undoes both with the placing. Leave Revit idle a few seconds: the new type's LOI parameters the model gives (material, sizes) are filled. " +
             "On a copy with slightly off axis warnings: Make BIM-ready (or the checklist's Clear the off-axis warnings) clears them and each element's start and end coordinates are unchanged (compare in the properties or with a dimension). " +
@@ -613,6 +615,7 @@ internal static class FieldTestCoverage
         new(46, ["berth.ui"], "after Setup > Import the setup Excel the window shows the berths, not a blank page"),
         new(47, ["berth.read"], "a pair Revit cannot intersect is skipped, the clash area still gets its result"),
         new(48, ["berth.ui"], "opened on one model, only that model's submissions show (not every model of the setup)"),
+        new(49, ["checklist.bep"], "Load and fill the Assembly Codes loads the Excel's codes, lists every type in use without a code and fills the ones kept; the dialog says how many"),
     ];
 
     /// <summary>
