@@ -37,7 +37,7 @@ internal static class WarningFixes
     }
 
     /// <summary>
-    /// Turns each element of a "slightly off axis" warning, about its middle, onto the nearest exact 45° direction, when
+    /// Turns each element of a "slightly off axis" warning, about its middle, onto the exact 0° or 90° direction, when
     /// neither end moves more than BimReadyPlan.MaxMoveMm (2 mm); the rest are left for the user.
     /// </summary>
     /// <param name="only">These elements (the ones whose warning was hidden as they were drawn), not the warnings' elements.</param>
@@ -71,6 +71,56 @@ internal static class WarningFixes
         tx.Commit();
         return $"Straightened {turned} slightly off axis element{(turned == 1 ? "" : "s")}" +
                (skipped > 0 ? $"; {skipped} left (an end would move more than {BimReadyPlan.MaxMoveMm:0} mm, pinned, owned by someone else, or not a straight line): check them in Manage > Warnings." : ".");
+    }
+
+    /// <summary>
+    /// Clears the "slightly off axis" warnings with no change to the geometry: each element is moved 1 mm and straight
+    /// back in the same transaction (net zero), which makes Revit check it again, and the off-axis warning it raises again
+    /// is dropped as the transaction commits (DropWarnings), so it is no longer kept in the model. The elements end exactly
+    /// where they were. The first choice for a model already submitted; Straighten the off-axis lines is the fallback.
+    /// </summary>
+    public static string ClearOffAxis(Document doc)
+    {
+        var ids = Of(doc, OffAxisText).SelectMany(w => w.GetFailingElements()).Distinct().Where(id => doc.GetElement(id) is { Pinned: false }).ToList();
+        if (ids.Count == 0) return "No slightly off axis warnings (or only on pinned elements).";
+        var before = Of(doc, OffAxisText).Count;
+        using (var tx = new Transaction(doc, "Sketch ProMax: clear the off-axis warnings"))
+        {
+            var options = tx.GetFailureHandlingOptions();
+            options.SetFailuresPreprocessor(new DropWarnings(OffAxisText));
+            tx.SetFailureHandlingOptions(options);
+            tx.Start();
+            // 1 mm, not more: joins with neighbours follow a move this small, so they are as they were after the move back.
+            var there = new XYZ(1 / 304.8, 0, 0);
+            foreach (var id in ids)
+            {
+                using var sub = new SubTransaction(doc);
+                sub.Start();
+                try
+                {
+                    ElementTransformUtils.MoveElement(doc, id, there);
+                    ElementTransformUtils.MoveElement(doc, id, there.Negate());
+                    sub.Commit();
+                }
+                catch (Exception ex) when (ex is Autodesk.Revit.Exceptions.ApplicationException or ArgumentException or InvalidOperationException) { sub.RollBack(); }
+            }
+            tx.Commit();
+        }
+        var after = Of(doc, OffAxisText).Count;
+        return $"Cleared {before - after} of {before} slightly off axis warning{(before == 1 ? "" : "s")} without moving anything" +
+               (after > 0 ? $"; {after} stayed (pinned or owned by someone else): Straighten the off-axis lines (2 mm at most) is the fallback." : ".");
+    }
+
+    /// <summary>Drops the warnings whose text contains <c>text</c> as a transaction commits (they are then not kept in the model).</summary>
+    internal sealed class DropWarnings(string text) : IFailuresPreprocessor
+    {
+        public FailureProcessingResult PreprocessFailures(FailuresAccessor fa)
+        {
+            foreach (var m in fa.GetFailureMessages())
+                if (m.GetSeverity() == FailureSeverity.Warning && (m.GetDescriptionText() ?? "").IndexOf(text, StringComparison.OrdinalIgnoreCase) >= 0)
+                    fa.DeleteWarning(m);
+            return FailureProcessingResult.Continue;
+        }
     }
 
     /// <summary>Unjoins the pairs Revit warns are joined but don't intersect.</summary>

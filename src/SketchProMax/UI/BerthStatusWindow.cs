@@ -182,7 +182,7 @@ internal sealed class BerthStatusWindow : Window
         var ready = RichUi.Button(RichUi.Icon.Fix, "Make BIM-ready");
         ready.VerticalAlignment = VerticalAlignment.Center;
         ready.Margin = new Thickness(0, 0, 8, 0);
-        AutomationProperties.SetHelpText(ready, "Fills what the BEP and LOI need, joins the structural clashes, straightens off-axis lines and tags what is untagged for the chosen berth (or all), then lists what is left for you.");
+        AutomationProperties.SetHelpText(ready, "Fills what the BEP and LOI need, joins the structural clashes and tags what is untagged (nothing is moved) for the chosen berth (or all), then lists what is left for you.");
         ready.Click += async (_, _) =>
         {
             var chosen = _selected.Length > 0 ? new[] { _selected } : null;
