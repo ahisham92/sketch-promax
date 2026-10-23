@@ -14,6 +14,81 @@ namespace SketchProMax.Tools;
 /// </summary>
 internal static class BerthStatusFacts
 {
+    /// <summary>
+    /// Per open model (its title): which berths each element, type, sheet and view on a sheet belonged to at its last
+    /// reading in this session, so a change (even a deletion) can be traced to its berths (<see cref="Touched"/>).
+    /// </summary>
+    private static readonly Dictionary<string, Dictionary<long, HashSet<string>>> Indexes = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Notes that <paramref name="ids"/> belong to the berth <paramref name="key"/> (after its old entries were dropped).</summary>
+    private static void Index(Document doc, string key, IEnumerable<long> ids, bool fresh)
+    {
+        lock (Indexes)
+        {
+            if (!Indexes.TryGetValue(doc.Title, out var index)) Indexes[doc.Title] = index = [];
+            if (fresh) foreach (var set in index.Values) set.Remove(key);
+            foreach (var id in ids) (index.TryGetValue(id, out var keys) ? keys : index[id] = new HashSet<string>(StringComparer.OrdinalIgnoreCase)).Add(key);
+        }
+    }
+
+    /// <summary>
+    /// The berths of <paramref name="berths"/> that the changes touch (Revit API context): an element, type, sheet or view
+    /// on a sheet that belonged to a berth at its last reading, an element now in a berth by its rule (scope box,
+    /// parameter, workset), and annotation in a view on a berth's sheet. Null: read every berth (too many changes,
+    /// nothing read yet, or a change to a scope box, level, grid or link, which can move berths' contents).
+    /// </summary>
+    public static HashSet<string>? Touched(Document doc, IReadOnlyList<Berth> berths, HashSet<long> changed, HashSet<long> deleted)
+    {
+        Dictionary<long, HashSet<string>> index;
+        lock (Indexes)
+        {
+            if (!Indexes.TryGetValue(doc.Title, out var had)) return null;
+            index = had.ToDictionary(p => p.Key, p => new HashSet<string>(p.Value, StringComparer.OrdinalIgnoreCase));
+        }
+        var touched = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        void From(long id) { if (index.TryGetValue(id, out var keys)) touched.UnionWith(keys); }
+        foreach (var id in deleted) From(id);
+        if (changed.Count == 0) return touched;
+
+        var sheets = new FilteredElementCollector(doc).OfClass(typeof(ViewSheet)).Cast<ViewSheet>().Where(s => !s.IsTemplate).ToList();
+        var sheetBerths = new Dictionary<long, HashSet<string>>();
+        foreach (var b in berths)
+            foreach (var s in SheetsOf(doc, b, sheets))
+            {
+                (sheetBerths.TryGetValue(s.Id.Value, out var on) ? on : sheetBerths[s.Id.Value] = []).Add(b.Key);
+                foreach (var v in s.GetAllPlacedViews()) (sheetBerths.TryGetValue(v.Value, out var onView) ? onView : sheetBerths[v.Value] = []).Add(b.Key);
+            }
+        var rules = berths.Select(b => (b.Key, In: Membership(doc, b, out _))).ToList();
+        var worksets = doc.IsWorkshared ? doc.GetWorksetTable() : null;
+        foreach (var id in changed)
+        {
+            From(id);
+            var el = doc.GetElement(new ElementId(id));
+            if (el is null) continue;
+            if (el is RevitLinkInstance or RevitLinkType or Level or Grid || el.Category?.BuiltInCategory == BuiltInCategory.OST_VolumeOfInterest) return null;
+            if (el is ElementType) continue;
+            if (el is View view)
+            {
+                if (sheetBerths.TryGetValue(view.Id.Value, out var onSheet)) touched.UnionWith(onSheet);
+                if (view is ViewSchedule)
+                    foreach (var b in berths.Where(b => b.ScheduleTexts.Any(t => view.Name.IndexOf(t, StringComparison.OrdinalIgnoreCase) >= 0))) touched.Add(b.Key);
+                continue;
+            }
+            if (el.OwnerViewId != ElementId.InvalidElementId)
+            {
+                if (sheetBerths.TryGetValue(el.OwnerViewId.Value, out var inView)) touched.UnionWith(inView);
+                continue;
+            }
+            if (el.Category is not { CategoryType: CategoryType.Model } cat || el.get_BoundingBox(null) is not { } box) continue;
+            var type = doc.GetElement(el.GetTypeId()) as ElementType;
+            var item = new Item { El = el, Id = id, Category = cat.Name, Bic = cat.BuiltInCategory, Type = type?.Name ?? "", Family = type?.FamilyName ?? "", Center = (box.Min + box.Max) / 2, TypeId = type?.Id.Value ?? -1 };
+            if (worksets is not null) try { item.Workset = worksets.GetWorkset(el.WorksetId)?.Name ?? ""; } catch (Exception) { }
+            foreach (var (key, inBerth) in rules)
+                if (inBerth is null || inBerth(item)) touched.Add(key);
+        }
+        return touched;
+    }
+
     /// <summary>The structural categories checked for clashes between each other.</summary>
     private static readonly BuiltInCategory[] ClashCats =
         [BuiltInCategory.OST_StructuralColumns, BuiltInCategory.OST_StructuralFraming, BuiltInCategory.OST_StructuralFoundation, BuiltInCategory.OST_Floors, BuiltInCategory.OST_Walls];
@@ -205,6 +280,8 @@ internal static class BerthStatusFacts
                     return;
                 }
                 mine = items.Where(inBerth).ToList();
+                // What belongs to the berth now, to trace later changes to it (only this model's own elements change here).
+                Index(doc, key, mine.Where(i => !i.Linked).SelectMany(i => new[] { i.Id, i.TypeId }), fresh: true);
             });
 
             reading.Once(Modelling + "|" + key, () =>
@@ -417,6 +494,7 @@ internal static class BerthStatusFacts
             reading.Once(Drawings + "|" + key, () =>
             {
                 mySheets = SheetsOf(doc, berth, sheets);
+                Index(doc, key, mySheets.SelectMany(s => s.GetAllPlacedViews().Select(v => v.Value).Append(s.Id.Value)), fresh: false);
                 var r = new AreaResult();
                 double score = 0;
                 foreach (var s in mySheets.OrderBy(s => s.SheetNumber, StringComparer.OrdinalIgnoreCase))

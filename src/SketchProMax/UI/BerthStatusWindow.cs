@@ -36,7 +36,9 @@ internal sealed class BerthStatusWindow : Window
     private State _state = new();
     private string _selected = "";
     private string _area = "";
-    private bool _reading, _stop, _closed;
+    private bool _reading, _stop, _closed, _readAll;
+    /// <summary>The changes the reading took per model, given back when it doesn't finish that model.</summary>
+    private readonly List<(Autodesk.Revit.DB.Document Doc, Revit.ChangeTracker.Changes Changes)> taken = [];
     private string _savedText = "";
     private string _file = "";
 
@@ -297,6 +299,8 @@ internal sealed class BerthStatusWindow : Window
         Item("Make an example setup Excel", () => WriteSetupExcel(Example(), open: true), _project.Length > 0);
         menu.Items.Add(new Separator());
         Item("Open the exports folder", () => Shell(ExportFolder()), _project.Length > 0);
+        // Update status reads only what changed; this reads every berth again (after a setup or rule change, say).
+        Item("Read every berth again", async () => { _readAll = true; await UpdateStatus(); }, _setup is not null && !_reading);
         menu.IsOpen = true;
     }
 
@@ -892,14 +896,39 @@ internal sealed class BerthStatusWindow : Window
             // The project's pre-submission checklist: its LOI matrix measures the modelling (LOD 300).
             var checklist = ChecklistStore.Load(Settings.AgentSettings.Load(), _project).Def;
             // The open models of this project (not links, not families), each with its setup model.
+            // Only the berths that changed since their last reading (ChangeTracker), plus any not read since Revit started
+            // watching the model; a model with no change is skipped. Read every berth again reads them all.
+            var all = _readAll;
+            _readAll = false;
+            var state = _state;
+            taken.Clear();
+            var unchanged = new List<string>();
             var plans = await App.Dispatcher.InvokeAsync(app =>
             {
                 var list = new List<BerthStatusFacts.Reading>();
                 foreach (Autodesk.Revit.DB.Document d in app.Application.Documents)
-                    if (!d.IsFamilyDocument && !d.IsLinked && ModelFor(setup, DocName(d)) is { } m)
-                        list.Add(BerthStatusFacts.Plan(d, setup, m, def: checklist));
+                {
+                    if (d.IsFamilyDocument || d.IsLinked || ModelFor(setup, DocName(d)) is not { } m) continue;
+                    var changes = Revit.ChangeTracker.Take(d);
+                    taken.Add((d, changes));
+                    var units = Units(BerthsOf(setup, m));
+                    HashSet<string>? only = null;
+                    if (!all && !changes.Overflow)
+                    {
+                        var stale = units.Where(b => state.For(b.Key) is var st && (st.ReadAt is not { } at || at < changes.Since || !Same(st.ReadFrom, d.Title))).Select(b => b.Key);
+                        var touched = BerthStatusFacts.Touched(d, units, changes.Changed, changes.Deleted);
+                        if (touched is not null) only = new HashSet<string>(stale.Concat(touched), StringComparer.OrdinalIgnoreCase);
+                    }
+                    if (only is { Count: 0 }) { unchanged.Add(m.Name); continue; }
+                    list.Add(BerthStatusFacts.Plan(d, setup, m, only, def: checklist));
+                }
                 return list;
             });
+            if (plans.Count == 0 && unchanged.Count > 0)
+            {
+                _status.Text = $"No changes in {string.Join(", ", unchanged)} since the last reading: the status is current. (Setup > Read every berth again reads them all.)";
+                return;
+            }
             if (plans.Count == 0)
             {
                 _status.Text = "None of the open models is in the setup (Models sheet, File name contains). Open a model of the project, then press Update status.";
@@ -917,11 +946,12 @@ internal sealed class BerthStatusWindow : Window
                     _runText.Text = $"Reading {plan.Model}: {(step.Length == 2 ? AreaOf(step[0]).Name + " of " + step[1] : step[0])} ({100 * done / total}%). Revit stays usable; Stop ends it.";
                 }
                 if (_closed || _stop) break;
+                taken.RemoveAll(t => t.Doc.Title == plan.Model);
                 var now = DateTime.Now;
                 foreach (var berth in plan.Berths)
                     Record(setup, berth, _state, plan.Results[berth.Key], plan.Model, now);
                 RecordPackages(setup, _state, now);
-                read.Add($"{plan.Model} ({plan.Berths.Count} berths)");
+                read.Add($"{plan.Model} ({plan.Berths.Count} berth{(plan.Berths.Count == 1 ? "" : "s")} that changed)");
             }
             if (_closed) return;
             Save();
@@ -929,7 +959,7 @@ internal sealed class BerthStatusWindow : Window
             Refresh();
             _status.Text = _stop
                 ? (read.Count == 0 ? "Stopped. The results are as they were." : "Stopped after " + string.Join(", ", read) + ".")
-                : $"Updated {string.Join(", ", read)} at {DateTime.Now:HH:mm}.";
+                : $"Updated {string.Join(", ", read)} at {DateTime.Now:HH:mm}." + (unchanged.Count > 0 ? $" No changes in {string.Join(", ", unchanged)}." : "");
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
@@ -937,6 +967,14 @@ internal sealed class BerthStatusWindow : Window
         }
         finally
         {
+            // A reading that didn't finish a model gives its changes back, so the next Update status still reads those berths.
+            if (taken.Count > 0)
+            {
+                var back = taken.ToList();
+                taken.Clear();
+                try { await App.Dispatcher.InvokeAsync(_ => { foreach (var (d, c) in back) if (d.IsValidObject) Revit.ChangeTracker.GiveBack(d, c); return true; }); }
+                catch (Exception ex) when (ex is not OutOfMemoryException) { }
+            }
             _reading = false;
             Brand.SetBusy(_update, false);
             Brand.SetBusy(_stopButton, false);
