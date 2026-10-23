@@ -392,7 +392,7 @@ internal static class BerthStatusFacts
             {
                 var r = new AreaResult();
                 var onSheets = new HashSet<long>(mySheets.SelectMany(s => s.GetAllPlacedViews()).Select(i => i.Value));
-                var text = new[] { berth.Sheets, berth.Name }.Select(t => t.Trim()).Where(t => t.Length > 0).ToList();
+                var text = Values(berth.Sheets).Append(berth.Name.Trim()).Where(t => t.Length > 0).ToList();
                 var detailViews = new FilteredElementCollector(doc).OfClass(typeof(View)).Cast<View>()
                     .Where(v => !v.IsTemplate && v.ViewType is ViewType.Detail or ViewType.DraftingView or ViewType.Section)
                     .Where(v => onSheets.Contains(v.Id.Value) || (!viewSheets.ContainsKey(v.Id.Value) && text.Any(t => v.Name.IndexOf(t, StringComparison.OrdinalIgnoreCase) >= 0)))
@@ -460,8 +460,9 @@ internal static class BerthStatusFacts
             {
                 var r = new AreaResult();
                 var text = berth.ScheduleText;
+                List<string> texts = berth.Schedules.Trim().Length > 0 ? Values(berth.Schedules) : [text];
                 var found = new FilteredElementCollector(doc).OfClass(typeof(ViewSchedule)).Cast<ViewSchedule>()
-                    .Where(s => !s.IsTemplate && !s.IsTitleblockRevisionSchedule && s.Name.IndexOf(text, StringComparison.OrdinalIgnoreCase) >= 0).ToList();
+                    .Where(s => !s.IsTemplate && !s.IsTitleblockRevisionSchedule && texts.Any(t => s.Name.IndexOf(t, StringComparison.OrdinalIgnoreCase) >= 0)).ToList();
                 foreach (var s in found)
                 {
                     int rows;
@@ -541,20 +542,23 @@ internal static class BerthStatusFacts
         switch (berth.FindBy)
         {
             case FindBy.ScopeBox:
-                var box = new FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_VolumeOfInterest).WhereElementIsNotElementType()
-                    .FirstOrDefault(b => string.Equals(b.Name.Trim(), value, StringComparison.OrdinalIgnoreCase));
-                if (box is null) { why = $"No scope box named \"{value}\" in this model (Berths sheet, Value)."; return null; }
-                var (poly, zMin, zMax) = Footprint(box);
-                if (poly.Count < 3) { why = $"Couldn't read the outline of scope box \"{value}\"."; return null; }
-                return i => i.Center.Z >= zMin - 1 && i.Center.Z <= zMax + 1 && Inside(poly, i.Center.X, i.Center.Y);
+            {
+                // A package of several berths lists several scope boxes ("BERTH 9; BERTH 10"): an element in any of them belongs.
+                var boxes = ScopeBoxes(doc, value, out var missing);
+                if (missing.Count > 0) { why = $"No scope box named \"{string.Join("\", \"", missing)}\" in this model (Berths sheet, Value)."; return null; }
+                var shapes = boxes.Select(Footprint).ToList();
+                if (shapes.Count == 0 || shapes.Any(f => f.Poly.Count < 3)) { why = $"Couldn't read the outline of scope box \"{value}\"."; return null; }
+                return i => shapes.Any(f => i.Center.Z >= f.ZMin - 1 && i.Center.Z <= f.ZMax + 1 && Inside(f.Poly, i.Center.X, i.Center.Y));
+            }
             case FindBy.Parameter:
                 if (berth.Parameter.Trim().Length == 0) { why = "Set the Parameter column for this berth (Berths sheet)."; return null; }
                 var name = berth.Parameter.Trim();
+                var values = Values(value);
                 return i =>
                 {
                     var p = i.El.LookupParameter(name) ?? (i.El.Document.GetElement(i.El.GetTypeId()) as ElementType)?.LookupParameter(name);
                     var v = p is null ? "" : p.StorageType == StorageType.String ? p.AsString() ?? "" : p.AsValueString() ?? "";
-                    return string.Equals(v.Trim(), value, StringComparison.OrdinalIgnoreCase);
+                    return ValueMatches(v, values);
                 };
             case FindBy.Workset:
                 if (value.Length == 0) { why = "Set the Value column (text in the workset name) for this berth."; return null; }
@@ -562,6 +566,19 @@ internal static class BerthStatusFacts
             default:
                 return _ => true;
         }
+    }
+
+    /// <summary>The scope boxes the berth's Value names (one or several), and the names not found.</summary>
+    private static List<Element> ScopeBoxes(Document doc, string value, out List<string> missing)
+    {
+        var all = new FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_VolumeOfInterest).WhereElementIsNotElementType().ToList();
+        var found = new List<Element>();
+        missing = [];
+        foreach (var name in Values(value))
+            if (all.FirstOrDefault(b => string.Equals(b.Name.Trim(), name, StringComparison.OrdinalIgnoreCase)) is { } box) found.Add(box);
+            else missing.Add(name);
+        if (found.Count == 0 && missing.Count == 0) missing.Add(value.Trim());
+        return found;
     }
 
     /// <summary>The scope box's outline in plan (its corners, in order) and its height range.</summary>
@@ -618,17 +635,16 @@ internal static class BerthStatusFacts
     /// </summary>
     private static List<ViewSheet> SheetsOf(Document doc, Berth berth, List<ViewSheet> sheets)
     {
-        var text = berth.Sheets.Trim();
-        if (text.Length > 0)
-            return sheets.Where(s => s.SheetNumber.IndexOf(text, StringComparison.OrdinalIgnoreCase) >= 0 || s.Name.IndexOf(text, StringComparison.OrdinalIgnoreCase) >= 0).ToList();
+        var texts = Values(berth.Sheets);
+        if (texts.Count > 0)
+            return sheets.Where(s => texts.Any(text => s.SheetNumber.IndexOf(text, StringComparison.OrdinalIgnoreCase) >= 0 || s.Name.IndexOf(text, StringComparison.OrdinalIgnoreCase) >= 0)).ToList();
         if (berth.FindBy == FindBy.WholeModel) return sheets;
         if (berth.FindBy == FindBy.ScopeBox)
         {
-            var box = new FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_VolumeOfInterest).WhereElementIsNotElementType()
-                .FirstOrDefault(b => string.Equals(b.Name.Trim(), berth.Value.Trim(), StringComparison.OrdinalIgnoreCase));
-            if (box is null) return [];
+            var ids = ScopeBoxes(doc, berth.Value, out _).Select(b => b.Id).ToHashSet();
+            if (ids.Count == 0) return [];
             return sheets.Where(s => s.GetAllPlacedViews().Select(doc.GetElement).OfType<View>()
-                .Any(v => v.get_Parameter(BuiltInParameter.VIEWER_VOLUME_OF_INTEREST_CROP)?.AsElementId() == box.Id)).ToList();
+                .Any(v => v.get_Parameter(BuiltInParameter.VIEWER_VOLUME_OF_INTEREST_CROP)?.AsElementId() is { } id && ids.Contains(id))).ToList();
         }
         return sheets.Where(s => s.SheetNumber.IndexOf(berth.Name, StringComparison.OrdinalIgnoreCase) >= 0 || s.Name.IndexOf(berth.Name, StringComparison.OrdinalIgnoreCase) >= 0).ToList();
     }
