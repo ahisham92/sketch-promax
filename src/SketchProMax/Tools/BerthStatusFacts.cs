@@ -262,8 +262,6 @@ internal static class BerthStatusFacts
                 }
         });
 
-        // What each berth has modelled (category: family), to hold each berth against the berths already submitted.
-        var kinds = new Dictionary<string, Dictionary<string, int>>(StringComparer.OrdinalIgnoreCase);
         foreach (var berth in berths)
         {
             var key = berth.Key;
@@ -284,46 +282,21 @@ internal static class BerthStatusFacts
                 Index(doc, key, mine.Where(i => !i.Linked).SelectMany(i => new[] { i.Id, i.TypeId }), fresh: true);
             });
 
+            // Modelling: is everything modelled. With planned counts, against them; otherwise what the berth has (category:
+            // family counts) is kept, and BerthStatusMath.CompareModelling holds it against the submitted berths after the
+            // reading (their counts are saved, so a berth read alone still compares). Voids are not modelled elements.
             reading.Once(Modelling + "|" + key, () =>
             {
                 if (inBerth is null) return;
                 var plan = PlannedElements(setup, berth);
                 var r = new AreaResult();
+                var built = mine.Where(i => !IsVoid(i)).ToList();
+                r.Kinds = built.Where(i => i.Family.Length > 0).GroupBy(i => $"{i.Category}: {i.Family}", StringComparer.OrdinalIgnoreCase)
+                    .ToDictionary(g => g.Key, g => g.Count(), StringComparer.OrdinalIgnoreCase);
                 if (plan.Count == 0)
                 {
-                    // No planned counts: the structure is measured against LOD 300 (the BEP): each element a real family type
-                    // (eLOD: not in-place, a Generic Model or a DirectShape) with the information the LOI matrix asks for its
-                    // UniFormat code or category filled (iLOD), on its type or on the element.
-                    var matrix = ChecklistMath.ParseLoi(ChecklistMath.Rule(def, "loimatrix"));
-                    var codes = ChecklistMath.RuleList(ChecklistMath.Rule(def, "classification")) is { Count: > 0 } c ? c : ["Assembly Code"];
-                    var built = mine.Where(i => ClashCats.Contains(i.Bic) || i.Bic == BuiltInCategory.OST_SpecialityEquipment || i.Bic == BuiltInCategory.OST_GenericModel || i.InPlace).ToList();
-                    var problems = new List<(Item Item, string Problem)>();
-                    foreach (var i in built)
-                    {
-                        if (i.InPlace || i.Bic == BuiltInCategory.OST_GenericModel || i.El is DirectShape)
-                        {
-                            problems.Add((i, "eLOD: " + (i.InPlace ? "in-place family" : i.El is DirectShape ? "DirectShape (imported shape)" : "Generic Model") + ", not a family type of its category"));
-                            continue;
-                        }
-                        if (matrix.Count == 0) continue;
-                        var type = i.El.Document.GetElement(i.El.GetTypeId());
-                        var code = codes.Select(n => type?.LookupParameter(n)).Where(ChecklistFacts.Filled).Select(p => p!.AsString() ?? p.AsValueString() ?? "").FirstOrDefault() ?? "";
-                        var entry = matrix.FirstOrDefault(m => code.Length > 0 && ChecklistMath.Like(code, m.Key) || i.Category.Equals(m.Key, StringComparison.OrdinalIgnoreCase));
-                        if (entry.Params is null) continue;
-                        var lacking = entry.Params.Where(p => !ChecklistFacts.Filled(type?.LookupParameter(p)) && !ChecklistFacts.Filled(i.El.LookupParameter(p))).ToList();
-                        if (lacking.Count > 0) problems.Add((i, $"iLOD {(code.Length > 0 ? code : i.Category)}: no {string.Join(", ", lacking)}"));
-                    }
-                    kinds[key] = built.Where(i => !i.InPlace && i.Bic != BuiltInCategory.OST_GenericModel && i.Family.Length > 0)
-                        .GroupBy(i => $"{i.Category}: {i.Family}", StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.Count(), StringComparer.OrdinalIgnoreCase);
                     r.Total = built.Count;
-                    r.Done = built.Count - problems.Select(p => p.Item).Distinct().Count();
-                    foreach (var g in problems.GroupBy(p => (p.Item.Describe, p.Problem)).OrderByDescending(g => g.Count()).Take(200))
-                        r.Findings.Add(new Finding(Modelling, g.Key.Describe, $"{g.Key.Problem} ({g.Count()} element{(g.Count() == 1 ? "" : "s")})", g.First().Item.Linked ? null : g.First().Item.Id,
-                            g.Key.Problem.StartsWith("iLOD", StringComparison.Ordinal) ? "loi" : null));
-                    r.Percent = built.Count == 0 ? null : Part(r.Done, r.Total);
-                    r.Summary = built.Count == 0 ? $"{mine.Count} elements, none structural." :
-                        $"{r.Done} of {r.Total} structural elements meet LOD 300: a family type" + (matrix.Count > 0 ? " with the LOI matrix's information filled." :
-                            ". Set the LOI matrix in the pre-submission checklist's Checking rules to test their information (iLOD) too.");
+                    r.Summary = $"{built.Count} elements modelled.";
                 }
                 else
                 {
@@ -340,30 +313,52 @@ internal static class BerthStatusFacts
                     }
                     r.Percent = parts.Average();
                     r.Summary = $"{r.Done} of {r.Total} planned elements modelled.";
+                    r.Planned = true;
                 }
                 res[Modelling] = r;
             });
 
+            // Categories and data (the BEP's LOD 300): each element a family type of its real category (eLOD: not a
+            // Generic Model unless the rules allow it, not in-place, not an imported shape), its type's Assembly Code
+            // filled, and the information the LOI matrix asks for its code filled (iLOD), on its type or on the element.
             reading.Once(CategoryData + "|" + key, () =>
             {
                 if (inBerth is null) return;
-                var r = new AreaResult { Total = mine.Count };
+                var matrix = ChecklistMath.ParseLoi(ChecklistMath.Rule(def, "loimatrix"));
+                var codes = ChecklistMath.RuleList(ChecklistMath.Rule(def, "classification")) is { Count: > 0 } c ? c : ["Assembly Code"];
+                var allowed = ChecklistMath.RuleList(ChecklistMath.Rule(def, "genericok"));
+                var counted = mine.Where(i => !IsVoid(i)).ToList();
+                var r = new AreaResult { Total = counted.Count };
                 var bad = new List<(Item Item, string Problems)>();
-                foreach (var i in mine)
+                var kinds = new Dictionary<string, int>(StringComparer.Ordinal);
+                void Count(string kind) => kinds[kind] = kinds.TryGetValue(kind, out var n) ? n + 1 : 1;
+                foreach (var i in counted)
                 {
                     var problems = new List<string>();
-                    if (i.Bic == BuiltInCategory.OST_GenericModel) problems.Add("Generic Models: put it on its real category");
-                    if (i.InPlace) problems.Add("In-place family: make it a loadable family so it schedules and counts");
-                    if (i.NoAssembly) problems.Add("Assembly Code empty: it won't land in the right bill item");
+                    if (i.Bic == BuiltInCategory.OST_GenericModel && !allowed.Any(a => ChecklistMath.Like(i.Family, a) || ChecklistMath.Like(i.Type, a)))
+                    { problems.Add("eLOD: Generic Model, give it its real category"); Count("generic"); }
+                    if (i.InPlace) { problems.Add("eLOD: in-place family, make it a loadable family"); Count("inplace"); }
+                    if (i.El is DirectShape) { problems.Add("eLOD: imported shape (DirectShape), model it as a family"); Count("directshape"); }
+                    if (i.NoAssembly) { problems.Add("Assembly Code empty"); Count("code"); }
+                    else if (matrix.Count > 0 && (ClashCats.Contains(i.Bic) || i.Bic is BuiltInCategory.OST_SpecialityEquipment or BuiltInCategory.OST_GenericModel))
+                    {
+                        var type = i.El.Document.GetElement(i.El.GetTypeId());
+                        var code = codes.Select(n => type?.LookupParameter(n)).Where(ChecklistFacts.Filled).Select(p => p!.AsString() ?? p.AsValueString() ?? "").FirstOrDefault() ?? "";
+                        var entry = matrix.FirstOrDefault(m => code.Length > 0 && ChecklistMath.Like(code, m.Key) || i.Category.Equals(m.Key, StringComparison.OrdinalIgnoreCase));
+                        var lacking = entry.Params?.Where(p => !ChecklistFacts.Filled(type?.LookupParameter(p)) && !ChecklistFacts.Filled(i.El.LookupParameter(p))).ToList() ?? [];
+                        if (lacking.Count > 0) { problems.Add($"iLOD {(code.Length > 0 ? code : i.Category)}: no {string.Join(", ", lacking)}"); Count("ilod"); }
+                    }
                     if (problems.Count == 0) { r.Done++; continue; }
                     bad.Add((i, string.Join("; ", problems)));
                 }
                 // One line per type and problem (not one per element): "Pile type: Assembly Code empty (120 elements)".
                 foreach (var g in bad.GroupBy(b => (b.Item.Describe, b.Problems)).OrderByDescending(g => g.Count()).Take(300))
                     r.Findings.Add(new Finding(CategoryData, g.Key.Describe, $"{g.Key.Problems} ({g.Count()} element{(g.Count() == 1 ? "" : "s")})",
-                        g.First().Item.Linked ? null : g.First().Item.Id, g.Key.Problems.Contains("Assembly Code") ? "uniformat" : null));
-                r.Percent = mine.Count == 0 ? null : Part(r.Done, r.Total);
-                r.Summary = mine.Count == 0 ? "No elements found for this berth." : $"{r.Total - r.Done} of {r.Total} elements need their category or data fixed.";
+                        g.First().Item.Linked ? null : g.First().Item.Id,
+                        g.Key.Problems.Contains("Assembly Code empty") ? "uniformat" : g.Key.Problems.Contains("iLOD") ? "loi" : null));
+                r.Percent = counted.Count == 0 ? null : Part(r.Done, r.Total);
+                r.Summary = counted.Count == 0 ? "No elements found for this berth." :
+                    $"{r.Total - r.Done} of {r.Total} elements need their category or data fixed." + CategoryHowTo(kinds);
                 res[CategoryData] = r;
             });
 
@@ -625,32 +620,24 @@ internal static class BerthStatusFacts
             });
         }
 
-        // Modelling against the submitted berths: what they have (piles, caps, beams, slabs, fenders, bollards...) is
-        // expected in each berth too. Without a submitted berth it stays the LOD 300 check.
-        reading.Once(Modelling + "|compare", () =>
-        {
-            var references = berths.Where(b => IsReference(setup, b) && kinds.ContainsKey(b.Key)).ToList();
-            foreach (var berth in berths)
-            {
-                if (!kinds.TryGetValue(berth.Key, out var have) || !reading.Results[berth.Key].TryGetValue(Modelling, out var r)) continue;
-                var others = references.Where(b => b.Key != berth.Key).ToList();
-                if (others.Count == 0) continue;
-                var cmp = CompareModelling(have, others.Select(b => kinds[b.Key]).ToList());
-                if (cmp.Percent is null) continue;
-                var lod = r.Summary;
-                r.Percent = cmp.Percent;
-                r.Done = cmp.Done;
-                r.Total = cmp.Total;
-                r.Findings.InsertRange(0, cmp.Short.Select(k => new Finding(Modelling, k.Kind,
-                    k.Have == 0 ? $"none here; the submitted berths have about {k.Expected:0} each" : $"{k.Have} here; the submitted berths have about {k.Expected:0} each")));
-                r.Summary = $"Against the submitted berths ({string.Join(", ", others.Select(b => b.Name))}): {cmp.Done} of about {cmp.Total} of their elements are here. {lod}";
-            }
-        });
         return reading;
     }
 
-    /// <summary>A berth whose package is submitted (all of its submissions): its modelling is the example for the others.</summary>
-    private static bool IsReference(Setup setup, Berth berth) => SubmissionsFor(setup, berth).Any(x => x.Submitted) && Next(setup, berth) is null;
+    /// <summary>Voids (families with VOID in their name) cut other elements: they are not modelled elements to count or check.</summary>
+    private static bool IsVoid(Item i) => i.Family.IndexOf("void", StringComparison.OrdinalIgnoreCase) >= 0 || i.Type.IndexOf("void", StringComparison.OrdinalIgnoreCase) >= 0;
+
+    /// <summary>How to fix each kind of problem found, in plain words, for the area's summary.</summary>
+    private static string CategoryHowTo(Dictionary<string, int> kinds)
+    {
+        var how = new List<string>();
+        if (kinds.ContainsKey("code")) how.Add("Assembly Code empty: press Fill the Assembly Codes (from the UniFormat rules of the project's checklist).");
+        if (kinds.ContainsKey("ilod")) how.Add("iLOD: press Fill the LOI data, or type the values in the checklist's BEP data Excel and import it.");
+        if (kinds.ContainsKey("generic")) how.Add("Generic Model: open the family, Family Category and Parameters, pick its real category (fenders, bollards and mooring rings: Specialty Equipment), load it back. " +
+                                                  "If it is right as a Generic Model (sand fill, say), add its family name to Generic Models allowed in the checklist's Checking rules.");
+        if (kinds.ContainsKey("inplace")) how.Add("In-place family: rebuild it as a loadable family of its category, or copy it into one (Edit In-Place, copy, paste in a new family).");
+        if (kinds.ContainsKey("directshape")) how.Add("Imported shape: model it as a family of its category.");
+        return how.Count == 0 ? "" : " How to fix: " + string.Join(" ", how);
+    }
 
     /// <summary>The built elements of each source (the model, then its included links), with link elements moved into the model's coordinates.</summary>
     private static IEnumerable<Item> Walk(List<(Document Doc, Transform? T, string Link)> sources)

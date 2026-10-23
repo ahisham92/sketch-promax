@@ -251,6 +251,10 @@ internal static class BerthStatusMath
         public int Total { get; set; }
         public string Summary { get; set; } = "";
         public List<Finding> Findings { get; set; } = [];
+        /// <summary>Modelling: what the berth has (category: family, how many), held against the submitted berths' (<see cref="CompareModelling(Setup, State)"/>).</summary>
+        public Dictionary<string, int>? Kinds { get; set; }
+        /// <summary>Modelling measured against the planned counts (not the submitted berths).</summary>
+        public bool Planned { get; set; }
     }
 
     /// <summary>A percentage typed by hand (replaces what the model says) and a comment.</summary>
@@ -439,6 +443,59 @@ internal static class BerthStatusMath
             shortList.OrderBy(k => k.Item2 / k.Item3).ThenByDescending(k => k.Item3).ToList());
     }
 
+    /// <summary>A berth whose package is submitted (all of its submissions): its modelling is the example for the others.</summary>
+    public static bool IsReference(Setup setup, Berth berth) => SubmissionsFor(setup, berth).Any(x => x.Submitted) && Next(setup, berth) is null;
+
+    /// <summary>
+    /// Modelling of every berth from what each has (its saved category: family counts): held against the submitted berths
+    /// of its model (about as many of what they have); a submitted berth with no other to compare is the example (100%);
+    /// a whole-model package (the BIM model) is the average of its model's berths. Planned counts, when set, stay as read.
+    /// </summary>
+    public static void CompareModelling(Setup setup, State state)
+    {
+        AreaResult? Res(Berth b) => state.Berths.TryGetValue(b.Key, out var st) && st.Results.TryGetValue(Modelling, out var r) ? r : null;
+        foreach (var model in setup.Models)
+        {
+            var units = Units(BerthsOf(setup, model));
+            var whole = units.Where(b => b.FindBy == FindBy.WholeModel).ToList();
+            var parts = units.Where(b => b.FindBy != FindBy.WholeModel).ToList();
+            var refs = parts.Where(b => IsReference(setup, b) && Res(b) is { Kinds.Count: > 0 }).ToList();
+            foreach (var b in parts)
+            {
+                if (Res(b) is not { Kinds: { } have, Planned: false } r) continue;
+                var others = refs.Where(x => x.Key != b.Key).ToList();
+                var count = have.Values.Sum();
+                if (others.Count == 0)
+                {
+                    r.Findings = [];
+                    r.Done = r.Total = count;
+                    r.Percent = IsReference(setup, b) ? 100 : null;
+                    r.Summary = IsReference(setup, b)
+                        ? $"Submitted, with {count} elements: the example the other berths are held against."
+                        : $"{count} elements modelled. No submitted berth to compare with yet: mark a submitted package in the setup Excel, or plan the counts (Planned sheet).";
+                    continue;
+                }
+                var cmp = CompareModelling(have, others.Select(x => Res(x)!.Kinds!).ToList());
+                r.Percent = cmp.Percent;
+                r.Done = cmp.Done;
+                r.Total = cmp.Total;
+                r.Findings = cmp.Short.Select(k => new Finding(Modelling, k.Kind,
+                    k.Have == 0 ? $"none here; the submitted berths have about {k.Expected:0} each" : $"{k.Have} here; the submitted berths have about {k.Expected:0} each")).ToList();
+                r.Summary = $"{count} elements modelled. Against the submitted berths ({string.Join(", ", others.Select(x => x.Name))}): {cmp.Done} of about {cmp.Total} of what they have is here" +
+                            (cmp.Short.Count > 0 ? "; below, what is missing or much less." : ".");
+            }
+            foreach (var w in whole)
+            {
+                if (Res(w) is not { Planned: false } r) continue;
+                var read = parts.Select(p => (Berth: p, R: Res(p))).Where(p => p.R?.Percent is not null).ToList();
+                r.Percent = read.Count == 0 ? null : read.Average(p => p.R!.Percent!.Value);
+                r.Findings = read.Where(p => p.R!.Percent < 100).SelectMany(p => p.R!.Findings.Take(5).Select(f => f with { Item = p.Berth.Name + ": " + f.Item })).ToList();
+                r.Summary = read.Count == 0 ? "The BIM model follows its berths' modelling: none is read yet." :
+                    $"The average of the berths' modelling ({string.Join(", ", read.Select(p => $"{p.Berth.Name} {Pct(p.R!.Percent)}"))}).";
+            }
+        }
+    }
+
     /// <summary>The overview's short status of a package or berth.</summary>
     public enum Stage { NotStarted, InProgress, Overdue, Submitted }
 
@@ -621,6 +678,15 @@ internal static class BerthStatusMath
         b.Results = new Dictionary<string, AreaResult>(results, StringComparer.Ordinal);
         b.ReadAt = now;
         b.ReadFrom = model;
+        // Modelling is held against the submitted berths (saved), and a whole-model package follows its berths.
+        CompareModelling(setup, state);
+        AddSnapshot(setup, berth, state, now);
+    }
+
+    /// <summary>The berth's percentage in its history (one point per hour: a newer one replaces it).</summary>
+    public static void AddSnapshot(Setup setup, Berth berth, State state, DateTime now)
+    {
+        var b = state.For(berth.Key);
         if (Overall(Scores(setup, berth, b)) is { } p)
         {
             b.History.RemoveAll(h => h.At > now.AddHours(-1) && h.At <= now);
