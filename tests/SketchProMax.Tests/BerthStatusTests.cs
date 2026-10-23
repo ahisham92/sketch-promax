@@ -100,6 +100,18 @@ internal static class BerthStatusTests
         check("assembly codes: written in Revit's table format and read back", table.StartsWith("A\tSUBSTRUCTURE\t1\t\r\n", StringComparison.Ordinal)
             && SketchProMax.Tools.AssemblyCodeText.FromTable(table).SequenceEqual(codes), table.Split('\n')[0]);
 
+        // The BEP data Excel read back: rows from the Type id header on; only filled, writable cells go back to the model.
+        var bepSheets = new Dictionary<string, List<(int Row, Dictionary<int, string> Cells)>>
+        {
+            ["BEP data"] = [(1, new() { [0] = "BEP data of M" }), (3, new() { [0] = "Type id", [1] = "Category", [5] = "Assembly Code", [6] = "Suggested code", [7] = "Material" }),
+                (4, new() { [0] = "123", [1] = "Floors", [5] = "B1010.20", [6] = "B1010.20", [7] = "n/a" }), (5, new() { [1] = "no id" })],
+        };
+        var bep = SketchProMax.Tools.BepSheetText.Table(bepSheets);
+        check("BEP data: the sheet reads back by column name", bep.Count == 1 && bep[0]["Type id"] == "123" && bep[0]["Assembly Code"] == "B1010.20" && bep[0]["Material"] == "n/a", "");
+        check("BEP data: only filled cells of parameter columns are written", SketchProMax.Tools.BepSheetText.Writable("Assembly Code", "B1010.20")
+            && !SketchProMax.Tools.BepSheetText.Writable("Suggested code", "B1010") && !SketchProMax.Tools.BepSheetText.Writable("Material", "n/a")
+            && !SketchProMax.Tools.BepSheetText.Writable("Material", "(varies)") && !SketchProMax.Tools.BepSheetText.Writable("Material", " ") && !SketchProMax.Tools.BepSheetText.Writable("Type", "X"), "");
+
         // Tagging: only the views the rules name need tags (a piles plan tags its piles); others need dimensions only.
         var tagSetup = new Setup();
         check("berth status: a piles plan must tag its piles", TagCategoriesFor(tagSetup, "BERTH 9 - PART 2 PILES PLAN", []).SequenceEqual(["Structural Columns"])
