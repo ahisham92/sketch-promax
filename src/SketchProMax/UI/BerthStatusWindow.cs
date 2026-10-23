@@ -64,10 +64,10 @@ internal sealed class BerthStatusWindow : Window
         var file = doc is null || doc.IsFamilyDocument ? "" : DocName(doc);
         if (_open is { IsLoaded: true })
         {
-            if (_open._project == project || project.Length == 0) { _open._file = file.Length > 0 ? file : _open._file; _open.Refresh(); _open.Activate(); return Result.Succeeded; }
+            if (_open._project == project || project.Length == 0) { _open._file = file.Length > 0 ? file : _open._file; if (_open._reading) _open.Refresh(); else _open.Build(); _open.Activate(); return Result.Succeeded; }
             _open.Close();
         }
-        var window = new BerthStatusWindow(project) { _file = file };
+        var window = new BerthStatusWindow(project, file);
         _open = window;
         window.Closed += (_, _) => { if (_open == window) _open = null; };
         window.Show();
@@ -80,9 +80,11 @@ internal sealed class BerthStatusWindow : Window
         catch (Exception) { return doc.Title; }
     }
 
-    private BerthStatusWindow(string project)
+    private BerthStatusWindow(string project, string file)
     {
         _project = project;
+        // Before Build: the first drawing already shows only the open model's submissions (set after the constructor, it showed every model).
+        _file = file;
         Title = "Sketch ProMax submissions status";
         var area = SystemParameters.WorkArea;
         Width = Math.Min(1440, Math.Floor(area.Width * 0.92));
