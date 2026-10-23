@@ -303,7 +303,14 @@ public sealed class ArrangeTagsTool : IRevitTool
             }
             elements = collector.ToList();
         }
-        if (elements.Count == 0) return ToolResult.Error("No tags found in that view. Check the view and tag_category (e.g. 'Door Tags', 'Room Tags').");
+        if (elements.Count == 0)
+        {
+            // Level marks on piles are often spot elevations, and notes are text: say what the view has instead of tags.
+            var spots = new FilteredElementCollector(doc, view.Id).OfClass(typeof(SpotDimension)).GetElementCount();
+            var notes = new FilteredElementCollector(doc, view.Id).OfClass(typeof(TextNote)).GetElementCount();
+            var other = spots + notes == 0 ? "" : $" The view has {spots} spot elevation(s)/coordinate(s) and {notes} text note(s), which arrange_tags doesn't move; move those with run_revit_code.";
+            return ToolResult.Error($"No tags found in '{view.Name}'. Check the view and tag_category (e.g. 'Door Tags', 'Room Tags').{other}");
+        }
         var tags = elements.Select(e => new TagRef(e)).ToList();
 
         XYZ right = view.RightDirection, up = view.UpDirection;

@@ -574,6 +574,11 @@ internal static class FieldTestCoverage
         new(38, ["issue.gate"], "export_pdf with check_print isn't stopped by the issue check"),
         new(39, ["bug#39"], "export_pdf looks a saved View/Sheet Set up by name"),
         new(40, ["chat.tools_ready"], "a new chat process has the Revit tools before its first message"),
+        new(41, ["tool:query_elements"], "a family asked in the wrong category names the categories where it is"),
+        new(42, ["tool:list_types"], "Detail Groups and Slab Edges are known categories"),
+        new(43, ["tool:capture_view_image"], "zoom to elements in a section or detail view"),
+        new(44, ["tool:duplicate_view_to_location"], "a copied dimension that loses its references is left out, not the whole copy"),
+        new(45, ["tool:arrange_tags"], "a view with no tags says what it has instead"),
     ];
 
     /// <summary>

@@ -31,7 +31,11 @@ internal static class Drafting
     /// <summary>Places the view on the sheet: the first goes top left, later ones to its right, wrapping down.</summary>
     public static long? Place(Document doc, ViewSheet? sheet, View view, int index)
     {
-        if (sheet is null || !Viewport.CanAddViewToSheet(doc, sheet.Id, view.Id)) return null;
+        if (sheet is null) return null;
+        // A view whose only contents were made in this same transaction counts as empty until Revit regenerates, and
+        // Revit won't put an empty view on a sheet (the field test's probe view was refused, bug log rows 28 and 38).
+        doc.Regenerate();
+        if (!Viewport.CanAddViewToSheet(doc, sheet.Id, view.Id)) return null;
         // A sheet with no title block can have no outline (or an empty one): lay out on an A1 sheet then.
         var o = sheet.Outline;
         double minU = 0, maxU = Mm(841), minV = 0, maxV = Mm(594);

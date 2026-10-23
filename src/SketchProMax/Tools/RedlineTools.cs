@@ -346,15 +346,23 @@ internal static class Redlines
 
     // ---- Where each markup is ---------------------------------------------------------------------------------------------
 
-    /// <summary>The sheet's drawing border in sheet coordinates: its title block's extent, else the sheet outline.</summary>
+    /// <summary>
+    /// The sheet's drawing border in sheet coordinates: its title block's extent; with no title block (or a token one,
+    /// under 100 mm), what the page shows: the viewports' extent, else the sheet outline. The outline of a sheet with no
+    /// title block doesn't hold its viewports, so markups mapped through it came out past the page and were read as
+    /// percentages (the field test's redlines, bug log row 29).
+    /// </summary>
     public static LayoutMath.Rect Frame(ViewSheet sheet)
     {
         var doc = sheet.Document;
         var tb = new FilteredElementCollector(doc, sheet.Id).OfCategory(BuiltInCategory.OST_TitleBlocks).WhereElementIsNotElementType().FirstElement();
-        if (tb?.get_BoundingBox(sheet) is { } bb && bb.Max.X - bb.Min.X > 1e-6 && bb.Max.Y - bb.Min.Y > 1e-6)
+        if (tb?.get_BoundingBox(sheet) is { } bb && bb.Max.X - bb.Min.X > 100 / 304.8 && bb.Max.Y - bb.Min.Y > 100 / 304.8)
             return new LayoutMath.Rect(bb.Min.X, bb.Min.Y, bb.Max.X, bb.Max.Y);
-        var o = sheet.Outline;
-        return new LayoutMath.Rect(o.Min.U, o.Min.V, o.Max.U, o.Max.V);
+        var boxes = sheet.GetAllViewports().Select(doc.GetElement).OfType<Viewport>().Select(v => v.GetBoxOutline()).Where(o => o is not null).ToList();
+        if (boxes.Count > 0)
+            return new LayoutMath.Rect(boxes.Min(o => o.MinimumPoint.X), boxes.Min(o => o.MinimumPoint.Y), boxes.Max(o => o.MaximumPoint.X), boxes.Max(o => o.MaximumPoint.Y));
+        var outline = sheet.Outline;
+        return new LayoutMath.Rect(outline.Min.U, outline.Min.V, outline.Max.U, outline.Max.V);
     }
 
     /// <summary>

@@ -2854,7 +2854,9 @@ internal static partial class FieldTest
                 var view = Drafting.Create(doc, "Issue check probe view " + Guid.NewGuid().ToString("N").Substring(0, 6), 50);
                 // Revit won't put an empty view on a sheet.
                 TextNote.Create(doc, view.Id, XYZ.Zero, "Issue check probe", doc.GetDefaultElementTypeId(ElementTypeGroup.TextNoteType));
-                if (Drafting.Place(doc, x, view, 0) is null) problems.Add("the probe's drafting view could not be placed on the sheet");
+                if (Drafting.Place(doc, x, view, 0) is null)
+                    problems.Add($"the probe's drafting view could not be placed on the sheet (Revit allows it: {Viewport.CanAddViewToSheet(doc, x.Id, view.Id)}; " +
+                                 $"the view holds {new FilteredElementCollector(doc, view.Id).GetElementCount()} element(s))");
             });
             step = "4. re-check after the fix";
             run = IssueGate.Check(app, [sheet], null, null, reports);
