@@ -36,6 +36,10 @@ internal sealed class BerthStatusWindow : Window
     private string _selected = "";
     private bool _reading, _stop, _closed;
     private string _savedText = "";
+    private string _file = "";
+
+    /// <summary>The setup's model of the open file, or null to show every model.</summary>
+    private Model? ShownModel => _setup is null || _file.Length == 0 ? null : ModelFor(_setup, _file);
 
     private readonly TextBlock _status = Brand.Text("", Brand.K.Muted);
     private readonly StackPanel _list = new() { Margin = new Thickness(14, 12, 14, 14) };
@@ -54,12 +58,14 @@ internal sealed class BerthStatusWindow : Window
     {
         var doc = app.ActiveUIDocument?.Document;
         var project = doc is null || doc.IsFamilyDocument ? Projects().FirstOrDefault() ?? "" : ChecklistProjects.ProjectKey(DocName(doc));
+        // Each model shows its own packages: the open model's file name picks it (none matching: every model).
+        var file = doc is null || doc.IsFamilyDocument ? "" : DocName(doc);
         if (_open is { IsLoaded: true })
         {
-            if (_open._project == project || project.Length == 0) { _open.Activate(); return Result.Succeeded; }
+            if (_open._project == project || project.Length == 0) { _open._file = file.Length > 0 ? file : _open._file; _open.Refresh(); _open.Activate(); return Result.Succeeded; }
             _open.Close();
         }
-        var window = new BerthStatusWindow(project);
+        var window = new BerthStatusWindow(project) { _file = file };
         _open = window;
         window.Closed += (_, _) => { if (_open == window) _open = null; };
         window.Show();
@@ -303,7 +309,8 @@ internal sealed class BerthStatusWindow : Window
     private List<Summary> Summaries()
     {
         var now = DateTime.Now;
-        return _setup!.Berths.Select(b => Summarize(_setup, b, _state, now)).ToList();
+        var model = ShownModel;
+        return _setup!.Berths.Where(b => model is null || Same(b.Model, model.Name)).Select(b => Summarize(_setup, b, _state, now)).ToList();
     }
 
     /// <summary>Redraws the list and the selected berth's details from the setup and the saved results.</summary>
@@ -311,6 +318,7 @@ internal sealed class BerthStatusWindow : Window
     {
         if (_setup is null) return;
         var all = Summaries();
+        var children = new List<Summary>();
         _list.Children.Clear();
         var known = all.Where(s => s.Percent is not null).ToList();
         double? overall = known.Count == 0 ? null : known.Average(s => s.Percent!.Value);
@@ -320,10 +328,21 @@ internal sealed class BerthStatusWindow : Window
             var title = Brand.Text(model.Key, Brand.K.Muted, 12, bold: true);
             title.Margin = new Thickness(2, _list.Children.Count == 0 ? 0 : 14, 0, 6);
             _list.Children.Add(title);
-            foreach (var s in model) _list.Children.Add(Card(s));
+            foreach (var s in model)
+            {
+                _list.Children.Add(Card(s));
+                // Each berth of a package of several, on its own under it.
+                foreach (var child in ChildrenOf(s.Berth))
+                {
+                    var c = Summarize(_setup, child, _state, DateTime.Now);
+                    children.Add(c);
+                    _list.Children.Add(ChildCard(c));
+                }
+            }
         }
-        if (_selected.Length == 0 || all.All(s => s.Berth.Key != _selected)) _selected = all.FirstOrDefault()?.Berth.Key ?? "";
-        ShowDetail(all.FirstOrDefault(s => s.Berth.Key == _selected));
+        var every = all.Concat(children).ToList();
+        if (_selected.Length == 0 || every.All(s => s.Berth.Key != _selected)) _selected = all.FirstOrDefault()?.Berth.Key ?? "";
+        ShowDetail(every.FirstOrDefault(s => s.Berth.Key == _selected));
     }
 
     private FrameworkElement Card(Summary s)
@@ -360,6 +379,33 @@ internal sealed class BerthStatusWindow : Window
         return card;
     }
 
+    /// <summary>One berth of a package: a smaller card under the package's, with its own status.</summary>
+    private FrameworkElement ChildCard(Summary s)
+    {
+        var selected = s.Berth.Key == _selected;
+        var grid = new Grid();
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        grid.Children.Add(new StackPanel { Children = { Brand.Text(s.Berth.Name, size: 13, bold: true), Small(s.State.ReadAt is { } at ? $"read {at:dd-MMM HH:mm}" : "not read yet") } });
+        var pct = Brand.Text(Pct(s.Percent).Replace("not measured", "–"), PercentKey(s.Percent), 16, bold: true);
+        pct.VerticalAlignment = VerticalAlignment.Center;
+        Grid.SetColumn(pct, 1);
+        grid.Children.Add(pct);
+        var card = new Border
+        {
+            Padding = new Thickness(10, 6, 10, 6), Margin = new Thickness(22, -4, 0, 8), CornerRadius = new CornerRadius(6),
+            BorderThickness = new Thickness(selected ? 2 : 1), Child = grid, Cursor = Cursors.Hand, Focusable = true,
+            ToolTip = $"{s.Berth.Name} of {s.Berth.Parent}: its own status. Click for its areas and what to fix.",
+        };
+        card.SetResourceReference(Border.BackgroundProperty, Brand.K.Bg);
+        card.SetResourceReference(Border.BorderBrushProperty, selected ? Brand.K.Accent : Brand.K.Border);
+        AutomationProperties.SetName(card, $"{s.Berth.Name} of {s.Berth.Parent}, {Pct(s.Percent)}");
+        void Pick() { _selected = s.Berth.Key; Refresh(); }
+        card.MouseLeftButtonUp += (_, _) => Pick();
+        card.KeyDown += (_, e) => { if (e.Key is Key.Enter or Key.Space) { Pick(); e.Handled = true; } };
+        return card;
+    }
+
     private static string PercentKey(double? p) => p is null ? Brand.K.Muted : p >= 90 ? Brand.K.SuccessText : p >= 60 ? Brand.K.WarningText : Brand.K.DangerText;
 
     private static FrameworkElement Chip(Verdict v)
@@ -384,6 +430,8 @@ internal sealed class BerthStatusWindow : Window
         _detail.Content = page;
         if (s is null) { page.Children.Add(Para("The setup has no berths.")); return; }
         var b = s.State;
+        // What is typed here is kept on the berth's own state (a package's status shown is put together from its berths).
+        var own = _state.For(s.Berth.Key);
         var title = new DockPanel();
         var pct = Brand.Text(Pct(s.Percent), PercentKey(s.Percent), 26, bold: true);
         DockPanel.SetDock(pct, Dock.Right);
@@ -412,14 +460,14 @@ internal sealed class BerthStatusWindow : Window
         AutomationProperties.SetName(handTime, "Time");
         void SetHand()
         {
-            b.FinishByHand = byHand.SelectedDate is { } d ? d.Date + (ParseTime(handTime.Text) ?? TimeSpan.FromHours(17)) : null;
+            own.FinishByHand = byHand.SelectedDate is { } d ? d.Date + (ParseTime(handTime.Text) ?? TimeSpan.FromHours(17)) : null;
             Save();
             Refresh();
         }
         byHand.SelectedDateChanged += (_, _) => SetHand();
         handTime.LostFocus += (_, _) => { if (byHand.SelectedDate is not null) SetHand(); };
         var clear = RichUi.Button(RichUi.Icon.Undo, "Use the readings");
-        clear.Click += (_, _) => { b.FinishByHand = null; Save(); Refresh(); };
+        clear.Click += (_, _) => { own.FinishByHand = null; Save(); Refresh(); };
         var ask = RichUi.Button(RichUi.Icon.Ask, "Ask Sketch ProMax for an estimate");
         AutomationProperties.SetHelpText(ask, "Sends this berth's status, schedule and history to the Sketch ProMax chat, which estimates the finish. Type its date by hand if you agree.");
         ask.Click += (_, _) =>
@@ -450,7 +498,7 @@ internal sealed class BerthStatusWindow : Window
         page.Children.Add(Section("Comments"));
         var comment = new TextBox { Text = b.Comment, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, MinHeight = 60 };
         AutomationProperties.SetName(comment, "Comment on the berth");
-        comment.LostFocus += (_, _) => { if (b.Comment != comment.Text) { b.Comment = comment.Text; Save(); } };
+        comment.LostFocus += (_, _) => { if (own.Comment != comment.Text) { own.Comment = comment.Text; Save(); } };
         page.Children.Add(comment);
         var export = RichUi.Button(RichUi.Icon.Export, "Export this berth to Excel", Brand.Weight.Primary);
         AutomationProperties.SetHelpText(export, "Status of every area, submissions, deliverables, what to fix per area, comments and history, one sheet each.");
@@ -470,7 +518,10 @@ internal sealed class BerthStatusWindow : Window
         row.Children.Add(top);
         row.Children.Add(new ProgressBar { Height = 5, Minimum = 0, Maximum = 100, Value = a.Percent ?? 0, Margin = new Thickness(0, 5, 0, 2) });
         row.Children.Add(Small(a.Result?.Summary is { Length: > 0 } sum ? sum : a.Area.Measures));
+        // What the area measures shows when the pointer is on it, so the page stays light.
+        row.ToolTip = a.Area.Measures;
         AutomationProperties.SetName(row, $"{a.Area.Name}: {Pct(a.Percent)}");
+        AutomationProperties.SetHelpText(row, a.Area.Measures);
 
         // Hand entry: a percentage that replaces the model's, and a comment.
         var hand = s.State.HandFor(a.Area.Key);
@@ -488,7 +539,9 @@ internal sealed class BerthStatusWindow : Window
         };
         note.LostFocus += (_, _) => { if (hand.Comment != note.Text) { hand.Comment = note.Text; Save(); } };
         var handRow = new DockPanel { Margin = new Thickness(0, 6, 0, 0) };
-        var label = Small("By hand %:");
+        var label = Small("Set % myself:");
+        label.ToolTip = "Type your own percentage for this area when the model can't measure it or you know better (for example design sections done). It replaces the one read from the model; empty it to go back.";
+        pct.ToolTip = label.ToolTip;
         label.VerticalAlignment = VerticalAlignment.Center;
         label.Margin = new Thickness(0, 0, 6, 0);
         DockPanel.SetDock(label, Dock.Left);
@@ -503,10 +556,20 @@ internal sealed class BerthStatusWindow : Window
         handRow.Children.Add(note);
         row.Children.Add(handRow);
 
-        // What to fix, folded.
+        // What to fix, folded; a Fix for everything that can be fixed in one go.
         if (a.Result is { Findings.Count: > 0 } r && a.Area.Key != Deliverables)
         {
             var list = new StackPanel { Margin = new Thickness(0, 4, 0, 0) };
+            var fixable = r.Findings.Where(f => f.Fix is not null).ToList();
+            if (fixable.Count > 0)
+            {
+                var all = RichUi.Button(RichUi.Icon.Fix, FixAllText(fixable), Brand.Weight.Primary);
+                all.Margin = new Thickness(0, 2, 0, 6);
+                all.HorizontalAlignment = HorizontalAlignment.Left;
+                AutomationProperties.SetHelpText(all, "Fixes what can be fixed in the model for this area. Ctrl+Z in Revit undoes it.");
+                all.Click += async (_, _) => await Fix(s, all, fixable);
+                list.Children.Add(all);
+            }
             foreach (var f in r.Findings.Take(40)) list.Children.Add(FindingRow(s, f));
             if (r.Findings.Count > 40) list.Children.Add(Small($"…and {r.Findings.Count - 40} more in the Excel export."));
             var fold = new Expander { Header = $"What to fix ({r.Findings.Count})", Content = list, Margin = new Thickness(0, 6, 0, 0) };
@@ -515,9 +578,24 @@ internal sealed class BerthStatusWindow : Window
         return Box(row, top: 8);
     }
 
+    private static string FixAllText(List<Finding> fixes) =>
+        fixes.All(f => f.Fix == "uniformat") ? "Fill the Assembly Codes" :
+        fixes.All(f => f.Fix!.StartsWith("tag:", StringComparison.Ordinal)) ? $"Tag what is missing ({fixes.Count} views)" :
+        fixes.All(f => f.Fix!.StartsWith("join:", StringComparison.Ordinal)) ? $"Join them ({fixes.Count})" : $"Fix all ({fixes.Count})";
+
     private FrameworkElement FindingRow(Summary s, Finding f)
     {
         var line = new DockPanel { Margin = new Thickness(0, 2, 0, 2) };
+        if (f.Fix is { } fix && fix != "uniformat")
+        {
+            var button = new Button { Content = "Fix", Padding = new Thickness(8, 1, 8, 1), Margin = new Thickness(8, 0, 0, 0) };
+            button.SetResourceReference(StyleProperty, "SpmSecondaryButton");
+            AutomationProperties.SetHelpText(button, fix.StartsWith("tag:", StringComparison.Ordinal) ? "Tags the untagged elements in this view with their category's tag." : "Joins the two elements so they no longer clash.");
+            button.ToolTip = AutomationProperties.GetHelpText(button);
+            button.Click += async (_, _) => await Fix(s, button, [f]);
+            DockPanel.SetDock(button, Dock.Right);
+            line.Children.Add(button);
+        }
         if (f.Id is { } id)
         {
             var show = new Button { Content = "Show", Padding = new Thickness(8, 1, 8, 1), Margin = new Thickness(8, 0, 0, 0) };
@@ -549,7 +627,8 @@ internal sealed class BerthStatusWindow : Window
             Source.Files => $"Not in {d.Deliverable.Folder} yet.",
             _ => "Type its percentage (no folder set for it in the setup).",
         }));
-        var hand = s.State.DeliveredFor(d.Deliverable.Name);
+        // Deliverables belong to the package: a berth of it edits the package's.
+        var hand = (s.Berth.Parent.Length > 0 ? _state.For(KeyOf(s.Berth.Model, s.Berth.Parent)) : _state.For(s.Berth.Key)).DeliveredFor(d.Deliverable.Name);
         var pct = new TextBox { Text = hand.Percent?.ToString("0", CultureInfo.InvariantCulture) ?? "", Width = 52, Margin = new Thickness(0, 0, 8, 0) };
         AutomationProperties.SetName(pct, d.Deliverable.Name + " percentage");
         var note = new TextBox { Text = hand.Comment, MinWidth = 260 };
@@ -574,6 +653,45 @@ internal sealed class BerthStatusWindow : Window
         handRow.Children.Add(note);
         row.Children.Add(handRow);
         return Box(row, top: 8);
+    }
+
+    /// <summary>
+    /// Fixes findings in the model the results were read from (it must be in front): fills the Assembly Codes from the
+    /// project checklist's UniFormat rules, tags the missing elements in a view, or joins two clashing elements.
+    /// </summary>
+    private async Task Fix(Summary s, Button button, List<Finding> fixes)
+    {
+        if (Brand.IsBusy(button) || fixes.Count == 0) return;
+        var from = s.State.ReadFrom;
+        var what = FixAllText(fixes);
+        var question = $"{what} in {from}?\n\nThis changes the model. Ctrl+Z in Revit undoes it." +
+                       (from.IndexOf("detached", StringComparison.OrdinalIgnoreCase) >= 0 ? "" : "\n\nThis doesn't look like a detached copy: fixes are meant for the copy you submit.");
+        if (MessageBox.Show(this, question, "Sketch ProMax: fix it", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes) return;
+        Brand.SetBusy(button, true, "Fixing…");
+        var project = _project;
+        try
+        {
+            var said = new List<string>();
+            foreach (var group in fixes.GroupBy(f => f.Fix!.Split(':')[0] == "uniformat" ? "uniformat" : f.Fix!))
+            {
+                if (_closed) break;
+                said.Add(await App.Dispatcher.InvokeAsync(app =>
+                {
+                    var ui = app.ActiveUIDocument;
+                    if (ui is null || !string.Equals(ui.Document.Title, from, StringComparison.OrdinalIgnoreCase))
+                        return $"Bring {from} to the front in Revit first: these results were read from it.";
+                    return BerthStatusFacts.RunFix(app, group.Key, ChecklistStore.Load(Settings.AgentSettings.Load(), project).Def);
+                }));
+                if (said[^1].StartsWith("Bring ", StringComparison.Ordinal)) break;
+            }
+            var text = string.Join(" ", said.Distinct().Take(6)) + (said.Count > 6 ? $" (and {said.Count - 6} more)." : "");
+            ActivityLog.Note("berth_status_fix", $"{what}: {text}");
+            _status.Text = text + " Press Update status to see the new status.";
+            button.Content = "Done";
+            button.IsEnabled = false;
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException) { _status.Text = $"Couldn't fix it ({ex.Message})."; }
+        finally { if (button.IsEnabled) Brand.SetBusy(button, false); }
     }
 
     /// <summary>Opens the view or sheet, or selects the element, when the berth's model is the one in front.</summary>
@@ -637,6 +755,7 @@ internal sealed class BerthStatusWindow : Window
                 var now = DateTime.Now;
                 foreach (var berth in plan.Berths)
                     Record(setup, berth, _state, plan.Results[berth.Key], plan.Model, now);
+                RecordPackages(setup, _state, now);
                 read.Add($"{plan.Model} ({plan.Berths.Count} berths)");
             }
             if (_closed) return;

@@ -28,6 +28,35 @@ internal static class BerthStatusTests
         check("berth status: a parameter value matches any of the berth's", ValueMatches("10", ["9", "10"]) && ValueMatches("9", ["BERTH 9"]) && ValueMatches("Berth 9", ["9"])
             && !ValueMatches("1", ["10"]) && !ValueMatches("", ["9"]) && !ValueMatches("19", ["BERTH 9"]), "");
 
+        // A package of several berths: each berth read and shown on its own, the package puts them together.
+        var package = new Berth("Port A", "P1 Berths 5, 6", FindBy.Parameter, "5; 6", "Berth Number", "-A-05-; -A-06-");
+        var kids = ChildrenOf(package);
+        check("berth status: a package of two berths has two berths", kids.Count == 2 && kids[0].Name == "Berth 5" && kids[1].Value == "6" && kids[1].Sheets == "-A-06-"
+            && kids[0].Parent == package.Name && kids[0].ScheduleTexts.SequenceEqual(["Berth 5"]) && kids[0].Key != package.Key, string.Join("|", kids.Select(k => k.Key + "/" + k.Sheets)));
+        check("berth status: a package of one, a whole model and a workset have no berths under them",
+            ChildrenOf(package with { Value = "5" }).Count == 0 && ChildrenOf(package with { FindBy = FindBy.WholeModel }).Count == 0 && ChildrenOf(package with { FindBy = FindBy.Workset }).Count == 0, "");
+        check("berth status: a package of one berth finds its schedules by its number", (package with { Value = "4" }).ScheduleTexts.SequenceEqual(["Berth 4"])
+            && (package with { FindBy = FindBy.WholeModel, Value = "" }).ScheduleTexts.SequenceEqual([package.Name]), "");
+        check("berth status: what is read is each berth of a package", Units([package, package with { Name = "P2", Value = "7" }]).Select(u => u.Name).SequenceEqual(["Berth 5", "Berth 6", "P2"]), "");
+        var pSetup = new Setup { Berths = [package], Submissions = [new("Port A", package.Name, "P1", new DateTime(2026, 11, 5))] };
+        check("berth status: a berth has its package's submission", SubmissionsFor(pSetup, kids[0]).Count == 1 && PackageOf(pSetup, kids[1]) == package, "");
+        check("berth status: a berth of a package is found by its name or the package's code", FindBerth(pSetup, "Berth 6")?.Key == kids[1].Key && FindBerth(pSetup, "P1 Berth 5")?.Key == kids[0].Key, "");
+        var pState = new State();
+        pState.For(kids[0].Key).Results[Drawings] = new AreaResult { Percent = 80, Done = 4, Total = 5, Findings = [new Finding(Drawings, "Sheet 1", "No views")] };
+        pState.For(kids[1].Key).Results[Drawings] = new AreaResult { Percent = 40, Done = 2, Total = 5 };
+        pState.For(package.Key).Comment = "package note";
+        var merged = Merged(package, pState);
+        check("berth status: a package's area is the average of its berths", merged.Results[Drawings].Percent == 60 && merged.Results[Drawings].Total == 10
+            && merged.Results[Drawings].Findings.Single().Item == "Berth 5 · Sheet 1" && merged.Comment == "package note", merged.Results[Drawings].Summary);
+        RecordPackages(pSetup, pState, new DateTime(2026, 10, 23, 12, 0, 0));
+        check("berth status: the package gets a history point from its berths", pState.For(package.Key).History.Count == 1, "");
+
+        // Tagging: only the views the rules name need tags (a piles plan tags its piles); others need dimensions only.
+        var tagSetup = new Setup();
+        check("berth status: a piles plan must tag its piles", TagCategoriesFor(tagSetup, "BERTH 9 - PART 2 PILES PLAN", []).SequenceEqual(["Structural Columns"])
+            && TagCategoriesFor(tagSetup, "Plan 1", ["BERTH 9 PILES PLAN - PART 2"]).Count == 1, "");
+        check("berth status: an overall or framing plan needs no tags", TagCategoriesFor(tagSetup, "BERTH 9 OVERALL PLAN", []).Count == 0 && TagCategoriesFor(tagSetup, "BERTH 9 - PART 2 FRAMING PLAN", []).Count == 0, "");
+
         var week = new BerthStatusMath.Calendar();
         // Thursday 2026-10-29: due at 08:00 that day, so Wednesday's working day is the last before it.
         var thu = new DateTime(2026, 10, 29);
@@ -59,6 +88,7 @@ internal static class BerthStatusTests
             example.Weights[Drawings] = 30;
             example.Week.Due = TimeSpan.FromHours(9);
             example.ClashToleranceMm = 40;
+            example.TagRules = [new("Piles plan", "Structural Columns, Structural Foundations"), new("Section", "Structural Columns")];
             var xlsx = Path.Combine(temp, "setup.xlsx");
             OfficeXlsx.Write(xlsx, "setup", SetupSheets(example));
             var back = ReadSetup(xlsx);
@@ -68,7 +98,8 @@ internal static class BerthStatusTests
                 && back.Submissions.Count == 2 && back.Submissions[0].Date == example.Submissions[0].Date && back.Submissions[1].Berth == ""
                 && back.Planned.Count == 5 && back.Planned[0].What == "Structural Columns / Pile" && back.Planned[0].Count == 120
                 && back.Deliverables.Count == 4 && back.WeightOf(Drawings) == 30 && back.Week.Due == TimeSpan.FromHours(9) && back.Week.Days.Count == 5
-                && back.ClashToleranceMm == 40 && new Setup().ClashToleranceMm == 50 && back.SourcePath == xlsx && back.SourceStamp.Length > 0,
+                && back.ClashToleranceMm == 40 && new Setup().ClashToleranceMm == 50
+                && back.TagRules.Count == 2 && back.TagRules[0].Categories == "Structural Columns, Structural Foundations" && back.TagRules[1].ViewContains == "Section" && back.SourcePath == xlsx && back.SourceStamp.Length > 0,
                 $"{back.Berths.Count} berths, {back.Submissions.Count} submissions, due {back.Week.Due}");
 
             var bad = new Setup { Models = [new("Port A", "PORTA")], Berths = [new("Port C", "Berth 9", FindBy.WholeModel)], Submissions = [new("Port A", "", "x", thu)] };
