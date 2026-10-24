@@ -296,6 +296,13 @@ internal static class BerthCostMath
         public string Exclude { get; set; } = "";
         /// <summary>Why: shown in the comparison's Remarks, the back-up note and the berth's name ("excl. RoRo").</summary>
         public string ExcludeNote { get; set; } = "";
+        /// <summary>Scope boxes its elements must be inside (a left-out part costed on its own: the RoRo part of Berth 9).</summary>
+        public string Only { get; set; } = "";
+        /// <summary>For a left-out part: the berth it is left out of (its key) and its short name ("RoRo").</summary>
+        public string PartOf { get; set; } = "";
+        public string Part { get; set; } = "";
+        /// <summary>A left-out part counts in the totals only while this is on.</summary>
+        public bool Counted { get; set; } = true;
         public double? Length { get; set; }
         public Dictionary<string, double> Params { get; set; } = new(StringComparer.Ordinal);
         /// <summary>Quantities typed by hand, by item number: they replace what the model says.</summary>
@@ -310,7 +317,10 @@ internal static class BerthCostMath
             (FindBy == BerthStatusMath.FindBy.Parameter && Value.Trim().Length > 0 && Value.Trim().All(char.IsDigit) ? Value.Trim() : Regex.Match(Name, @"\d+") is { Success: true } m ? m.Value : "")
             is { Length: > 0 } digits ? digits.TrimStart('0') is { Length: > 0 } n ? n : "0" : "";
         /// <summary>The berth's name in the files: "Berth 09 (excl. RoRo)".</summary>
-        public string Title => (Number.Length > 0 ? "Berth " + Number.PadLeft(2, '0') : Name) + (ExcludeNote.Trim().Length > 0 ? $" ({ExcludeNote.Trim()})" : "");
+        public string Title => (Number.Length > 0 ? "Berth " + Number.PadLeft(2, '0') : Name) +
+            (Part.Length > 0 ? " " + Part : ExcludeNote.Trim().Length > 0 ? $" ({ExcludeNote.Trim()})" : "");
+        /// <summary>Whether it counts in the totals: every berth, and a left-out part while Counted is on.</summary>
+        public bool Counts => PartOf.Length == 0 || Counted;
         public double Param(string key) => Params.TryGetValue(key, out var v) ? v : 0;
     }
 
@@ -424,7 +434,38 @@ internal static class BerthCostMath
                 b.Name = unit.Name; b.Site = unit.Model; b.Package = unit.Parent.Length > 0 ? unit.Parent : unit.Name;
                 b.FindBy = unit.FindBy; b.Parameter = unit.Parameter; b.Value = unit.Value;
             }
-        return p.Berths.Values.OrderBy(b => b.Site, StringComparer.OrdinalIgnoreCase).ThenBy(b => int.TryParse(b.Number, out var n) ? n : 999).ThenBy(b => b.Name).ToList();
+        SyncParts(p);
+        return p.Berths.Values.OrderBy(b => b.Site, StringComparer.OrdinalIgnoreCase).ThenBy(b => int.TryParse(b.Number, out var n) ? n : 999)
+            .ThenBy(b => b.PartOf.Length > 0).ThenBy(b => b.Name).ToList();
+    }
+
+    /// <summary>
+    /// Each berth that leaves scope boxes out (Berth 9 without its RoRo part) gets that part as a berth of its own, listed
+    /// under it: the same elements, only those inside the left-out scope boxes. It goes when the berth leaves nothing out.
+    /// </summary>
+    public static void SyncParts(Project p)
+    {
+        foreach (var b in p.Berths.Values.Where(x => x.PartOf.Length == 0).ToList())
+        {
+            var key = PartKey(b);
+            if (b.Exclude.Trim().Length == 0) { p.Berths.Remove(key); continue; }
+            if (!p.Berths.TryGetValue(key, out var part)) p.Berths[key] = part = new Berth { Key = key };
+            part.Name = b.Name; part.Site = b.Site; part.Package = b.Package;
+            part.FindBy = b.FindBy; part.Parameter = b.Parameter; part.Value = b.Value;
+            part.Exclude = ""; part.ExcludeNote = ""; part.Only = b.Exclude.Trim();
+            part.PartOf = b.Key; part.Part = PartName(b.ExcludeNote);
+            foreach (var kv in b.Params) if (!part.Params.ContainsKey(kv.Key)) part.Params[kv.Key] = kv.Value;
+        }
+        foreach (var orphan in p.Berths.Values.Where(x => x.PartOf.Length > 0 && !p.Berths.ContainsKey(x.PartOf)).ToList()) p.Berths.Remove(orphan.Key);
+    }
+
+    public static string PartKey(Berth b) => b.Key + " | left-out part";
+
+    /// <summary>The left-out part's short name from what the berth calls it: "excl. RoRo" is RoRo.</summary>
+    public static string PartName(string note)
+    {
+        var n = Regex.Replace(note.Trim(), @"^(excl\.?|excluding|without|less|minus|w/o)\s+", "", RegexOptions.IgnoreCase).Trim();
+        return n.Length > 0 ? n : "left-out part";
     }
 
     /// <summary>A berth added by hand (no berth status setup): found by the parameter's value.</summary>
@@ -774,7 +815,8 @@ internal static class BerthCostMath
         if (DeliverableFor(setup, made) is not { } name) return null;
         foreach (var b in berths)
         {
-            var entry = state.For(b.Key).DeliveredFor(name);
+            // A left-out part's files are its berth's deliverable.
+            var entry = state.For(b.PartOf.Length > 0 ? b.PartOf : b.Key).DeliveredFor(name);
             entry.Percent = 100;
             entry.Comment = $"Made by Berth costing {when.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture)}: {Path.GetFileName(file)}";
         }

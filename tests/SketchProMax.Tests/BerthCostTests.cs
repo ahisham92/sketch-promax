@@ -89,6 +89,23 @@ internal static class BerthCostTests
         check("berth costing: before a reading nothing is 'not found', and no unit costs is one line",
             !said.Any(x => x.Contains("not found")) && said.Count(x => x.Contains("unit cost")) == 1, string.Join("; ", said));
 
+        // A berth that leaves a part out gets that part as its own berth, under it, that counts or not.
+        var withPart = new Project();
+        var nine = AddBerth(withPart, "Port A", "Berth Number", "9");
+        AddBerth(withPart, "Port A", "Berth Number", "10");
+        nine.Exclude = "BERTH 9 - PART 1";
+        nine.ExcludeNote = "excl. RoRo";
+        var order = SyncBerths(withPart, null);
+        var part = order.SingleOrDefault(x => x.PartOf == nine.Key);
+        check("berth costing: a left-out part is a berth of its own, listed under its berth",
+            part is not null && part.Title == "Berth 09 RoRo" && part.Only == "BERTH 9 - PART 1" && part.Exclude == "" && part.Value == "9" &&
+            order.Select(x => x.Title).SequenceEqual(["Berth 09 (excl. RoRo)", "Berth 09 RoRo", "Berth 10"]), string.Join(", ", order.Select(x => x.Title)));
+        part!.Counted = false;
+        check("berth costing: a part switched off doesn't count, its berth still does", !part.Counts && nine.Counts, "");
+        nine.Exclude = "";
+        check("berth costing: the part goes when its berth leaves nothing out", SyncBerths(withPart, null).All(x => x.PartOf.Length == 0), "");
+        check("berth costing: the part's name comes from what its berth calls it", PartName("excl. RoRo") == "RoRo" && PartName("") == "left-out part", PartName("excl. RoRo"));
+
         var p = Sample(out var b);
         check("berth costing: a berth is Berth 09 with its exclusion", b.Number == "9" && b.Title == "Berth 09 (excl. RoRo)", b.Title);
         var (infill, from) = Quantity(p, b, InfillRebar);

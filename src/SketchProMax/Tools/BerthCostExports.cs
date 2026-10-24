@@ -58,7 +58,9 @@ internal static class BerthCostExports
         {
             isNew = false;
             for (var c = FirstCol; c <= LastCol; c++)
-                if (Same(book.Text(Sheet, c, Site), b.Site) && Same(book.Text(Sheet, c, Stage), stage) && NumberOf(book.Text(Sheet, c, Name)) is { Length: > 0 } n && n == b.Number) return c;
+                if (Same(book.Text(Sheet, c, Site), b.Site) && Same(book.Text(Sheet, c, Stage), stage) && NumberOf(book.Text(Sheet, c, Name)) is { Length: > 0 } n && n == b.Number &&
+                    // A left-out part (Berth 9 RoRo) only takes a column named for it.
+                    (b.Part.Length == 0 || book.Text(Sheet, c, Name).IndexOf(b.Part, StringComparison.OrdinalIgnoreCase) >= 0)) return c;
             isNew = true;
             for (var c = FirstCol; c <= LastCol; c++)
             {

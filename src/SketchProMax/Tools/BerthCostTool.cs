@@ -65,7 +65,8 @@ public sealed class BerthCostTool : IRevitTool
             var t = text.Trim();
             var num = System.Text.RegularExpressions.Regex.Match(t, @"\d+").Value.TrimStart('0');
             var hits = berths.Where(b => string.Equals(b.Name, t, StringComparison.OrdinalIgnoreCase) || string.Equals(b.Title, t, StringComparison.OrdinalIgnoreCase)).ToList();
-            if (hits.Count == 0 && num.Length > 0) hits = berths.Where(b => b.Number == num).ToList();
+            // "9" is Berth 9 itself, not its left-out part (that one goes by its title, "Berth 09 RoRo").
+            if (hits.Count == 0 && num.Length > 0) hits = berths.Where(b => b.Number == num && b.PartOf.Length == 0).ToList();
             if (hits.Count > 1 && doc is not null && setup is not null && BerthStatusMath.ModelFor(setup, file) is { } m) hits = hits.Where(b => string.Equals(b.Site, m.Name, StringComparison.OrdinalIgnoreCase)).ToList();
             return hits.Count == 1 ? hits[0] : throw new ArgumentException($"No single berth matches '{t}'. Berths: {string.Join("; ", berths.Select(b => b.Title + " (" + b.Site + ")"))}.");
         }
