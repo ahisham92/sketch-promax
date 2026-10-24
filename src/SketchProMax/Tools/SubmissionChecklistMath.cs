@@ -9,7 +9,8 @@ namespace SketchProMax.Tools;
 /// The technical submission checklist (opened from Submissions status and the Model checklist; UI/SubmissionChecklistWindow):
 /// short questions an engineer answers Yes, No or N/A for each submission, which a group leader then approves or returns.
 /// The project picks its structure types once (deck on piles, gravity blocks, sheet piles…), so only the questions for
-/// those types are asked; anyone can add a question. The BIM part is the Model checklist, shown beside it as a percentage.
+/// those types are asked. The questions come from the questions template (SubmissionChecklistTemplate), which only its
+/// owner can change; it travels in the records too, so everyone on a model asks the same questions. The BIM part is the Model checklist, shown beside it as a percentage.
 ///
 /// Sharing goes through the model: each person's answers, approvals and added questions are one record (one DataStorage
 /// element each, Revit/SubmissionChecklistStore), so two people never fight over the same element; Synchronize with
@@ -32,14 +33,15 @@ internal static class SubmissionChecklistMath
         new("piled-deck", "Deck on piles", "Open piled wharf or jetty head: deck slab and beams on vertical and raked piles, slope under the deck."),
         new("gravity-blocks", "Gravity blocks", "Blockwork quay wall: precast blocks stacked on a rubble bed, backfilled."),
         new("caissons", "Caissons", "Floated-in concrete caissons on a rubble bed, filled and backfilled."),
-        new("sheet-piles", "Sheet pile quay", "Anchored sheet pile or combi-wall with tie rods to an anchor wall, cope beam on top."),
-        new("retaining-wall", "Retaining walls", "Cantilever or L-shaped reinforced concrete walls holding back fill."),
-        new("revetment", "Revetments and breakwaters", "Rock or concrete armour on a slope with filter layers and a toe."),
+        new("sheet-piles", "Sheet pile quay", "Anchored steel sheet pile wall with tie rods to an anchor wall, cope beam on top."),
+        new("combi-wall", "Combi-wall quay", "Tubular or H king piles with shorter infill sheet piles between them, anchored, cope beam on top."),
+        new("relieving-platform", "Relieving platform quay", "Front sheet or combi-wall with a concrete platform on bearing piles behind it, carrying the fill and surcharge."),
+        new("retaining-wall", "Retaining walls", "Cantilever, L-shaped or counterfort reinforced concrete walls holding back fill."),
         new("dolphins", "Dolphins", "Mooring and breasting dolphins: pile groups with a cap, fenders, hooks or bollards, walkways."),
         new("trestle", "Approach trestle", "Piled approach bridge or trestle carrying traffic and pipelines to the berth."),
         new("roro", "Ro-Ro ramp", "Linkspan or fixed ramp for roll-on roll-off vessels."),
         new("pontoon", "Floating pontoon", "Floating pontoon held by guide piles, with a gangway to the quay."),
-        new("diaphragm-wall", "Diaphragm or secant pile wall", "Cast in place concrete wall panels or secant piles, anchored or propped."),
+        new("diaphragm-wall", "Diaphragm or secant pile wall", "Cast in place concrete wall panels, or secant or contiguous bored piles, anchored or propped."),
         new("dredging", "Dredging and reclamation", "Dredged basin or channel, side slopes, and reclaimed land behind the quay."),
         new("crane-rails", "Crane rails", "Ship-to-shore or rail-mounted crane rails, rail beams and fixings."),
         new("pavement", "Yard, pavement and drainage", "Quay apron and yard pavement, falls and drainage behind the quay."),
@@ -98,15 +100,16 @@ internal static class SubmissionChecklistMath
     /// The questions a project asks, page by page: the built-in ones for its structure types, then those added on the
     /// project (deleted ones left out). The structure page lists each type's questions in the order the types were picked.
     /// </summary>
-    public static List<Question> QuestionsFor(Setup setup, IEnumerable<AddedQuestion> added)
+    public static List<Question> QuestionsFor(Setup setup, IEnumerable<AddedQuestion> added, IReadOnlyList<Question>? template = null)
     {
+        template ??= SubmissionChecklistBank.Questions;
         var types = setup.Types.Where(t => TypeOf(t) is not null).ToList();
         var mine = added.Where(a => !a.Deleted && a.Text.Trim().Length > 0)
             .Select(a => new Question(a.Id, TopicOf(a.Topic).Key, a.Text.Trim(), a.Details.Trim(), a.Types, a.Teams) { Added = true }).ToList();
         var list = new List<Question>();
         foreach (var topic in Topics)
         {
-            var here = SubmissionChecklistBank.Questions.Where(q => q.Topic == topic.Key && q.AppliesTo(types)).ToList();
+            var here = template.Where(q => q.Topic == topic.Key && q.AppliesTo(types)).ToList();
             if (topic.Key == TopicTypes)
                 here = types.SelectMany(t => here.Where(q => TypeOfQuestion(q, types) == t)).ToList();
             list.AddRange(here.Where(q => !setup.Skipped.Contains(q.Id)));
@@ -175,6 +178,12 @@ internal static class SubmissionChecklistMath
         public DateTime? Due { get; set; }
         public bool Deleted { get; set; }
         public DateTime At { get; set; }
+        /// <summary>0: the first issue; 1, 2…: resubmitted after comments (see <see cref="StartRevision"/>).</summary>
+        public int Revision { get; set; }
+        /// <summary>The key of the revision this one replaces ("" for the first issue).</summary>
+        public string Of { get; set; } = "";
+        /// <summary>Why it was resubmitted: the comments it answers.</summary>
+        public string Reason { get; set; } = "";
         public Dictionary<string, Answer> Answers { get; set; } = new(StringComparer.Ordinal);
         public Dictionary<string, Review> Reviews { get; set; } = new(StringComparer.Ordinal);
         /// <summary>The Model checklist's score (answers Yes or N/A out of all) on the PC of whoever saved it, and when.</summary>
@@ -190,6 +199,8 @@ internal static class SubmissionChecklistMath
         public Setup? Setup { get; set; }
         public List<AddedQuestion> Added { get; set; } = [];
         public Dictionary<string, SubmissionRecord> Submissions { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+        /// <summary>The questions template this person's checklist uses, when it isn't the built-in one (the newest in the model wins).</summary>
+        public SubmissionChecklistTemplate.Template? Template { get; set; }
 
         public SubmissionRecord For(string key, string name = "", string package = "")
         {
@@ -202,6 +213,33 @@ internal static class SubmissionChecklistMath
     public static string KeyOf(string package, string name) =>
         Regex.Replace(((package ?? "").Trim() + " | " + (name ?? "").Trim()).ToLowerInvariant(), @"\s+", " ");
 
+    /// <summary>
+    /// The key of a submission as the schedule names it: "T3 Rev 1", "T3 (Rev B)" or "T3 resubmission" is revision 1
+    /// (B: 2) of T3, kept apart from T3 itself.
+    /// </summary>
+    public static string KeyFor(string package, string name)
+    {
+        var (bare, revision) = SplitRevision(name);
+        return RevisionKey(KeyOf(package, bare), revision);
+    }
+
+    public static string RevisionKey(string firstKey, int revision) => revision <= 0 ? firstKey : firstKey + " | rev " + revision.ToString(CultureInfo.InvariantCulture);
+
+    /// <summary>A submission's name without its revision, and the revision (0: the first issue). Rev A is 1, Rev 2 is 2, "resubmission" is 1.</summary>
+    public static (string Name, int Revision) SplitRevision(string? name)
+    {
+        var text = (name ?? "").Trim();
+        var m = Regex.Match(text, @"^(?<n>.*?)[\s\-_,]*\(?\s*(?<![A-Za-z])(?:rev(?:ision)?\.?\s*(?<r>\d{1,3}|[A-Za-z])|re-?submission(?:\s*(?<s>\d{1,3}))?)\s*\)?$", RegexOptions.IgnoreCase);
+        if (!m.Success || m.Groups["n"].Value.Trim().Length == 0) return (text, 0);
+        var bare = m.Groups["n"].Value.Trim();
+        if (m.Groups["r"].Success)
+        {
+            var r = m.Groups["r"].Value;
+            return (bare, char.IsDigit(r[0]) ? int.Parse(r, CultureInfo.InvariantCulture) : char.ToUpperInvariant(r[0]) - 'A' + 1);
+        }
+        return (bare, m.Groups["s"].Success ? Math.Max(1, int.Parse(m.Groups["s"].Value, CultureInfo.InvariantCulture)) : 1);
+    }
+
     /// <summary>A submission as everyone sees it after the records are put together.</summary>
     public sealed class Submission
     {
@@ -209,12 +247,20 @@ internal static class SubmissionChecklistMath
         public string Name { get; set; } = "";
         public string Package { get; set; } = "";
         public DateTime? Due { get; set; }
+        public int Revision { get; set; }
+        public string Of { get; set; } = "";
+        public string Reason { get; set; } = "";
+        /// <summary>The key of the revision that replaced this one ("" while it is the latest): kept as the record, not changed any more.</summary>
+        public string SupersededBy { get; set; } = "";
+        public bool Superseded => SupersededBy.Length > 0;
         public Dictionary<string, Answer> Answers { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, Review> Reviews { get; } = new(StringComparer.Ordinal);
         public int? Bim { get; set; }
         public DateTime? BimAt { get; set; }
 
-        public string Title => Package.Trim().Length == 0 ? Name : Name.Trim().Length == 0 ? Package : Package.Trim() + " · " + Name.Trim();
+        /// <summary>The name with its revision, as the schedule would write it ("T3 Rev 1").</summary>
+        public string FullName => Revision > 0 ? $"{Name.Trim()} Rev {Revision}".Trim() : Name.Trim();
+        public string Title => Package.Trim().Length == 0 ? FullName : FullName.Length == 0 ? Package : Package.Trim() + " · " + FullName;
     }
 
     /// <summary>The project as everyone sees it.</summary>
@@ -225,6 +271,8 @@ internal static class SubmissionChecklistMath
         public List<Submission> Submissions { get; } = [];
         /// <summary>Who has a record in the model, with when they last saved it.</summary>
         public List<(string User, DateTime Saved)> People { get; } = [];
+        /// <summary>The newest questions template anyone's record carries; null: the built-in questions.</summary>
+        public SubmissionChecklistTemplate.Template? Template { get; set; }
 
         public bool IsLead(string user) => Setup.Leads.Any(l => Same(l, user));
         public Submission? Find(string key) => Submissions.FirstOrDefault(s => string.Equals(s.Key, key, StringComparison.OrdinalIgnoreCase));
@@ -248,6 +296,7 @@ internal static class SubmissionChecklistMath
         foreach (var s in all.Select(r => r.Setup).Where(s => s is not null).OrderBy(s => s!.At))
             if (setup is null || setup.Leads.Count == 0 || setup.Leads.Any(l => Same(l, s!.By))) setup = s;
         shared.Setup = Copy(setup) ?? new Setup();
+        shared.Template = SubmissionChecklistTemplate.Newest(all.Select(r => r.Template).ToArray());
 
         foreach (var g in all.SelectMany(r => r.Added).Where(a => a.Id.Length > 0).GroupBy(a => a.Id, StringComparer.Ordinal))
             shared.Added.Add(g.OrderBy(a => a.At).Last());
@@ -256,7 +305,7 @@ internal static class SubmissionChecklistMath
         {
             var newest = g.OrderBy(x => x.Record.At).Last().Record;
             if (newest.Deleted) continue;
-            var sub = new Submission { Key = g.Key, Name = newest.Name, Package = newest.Package, Due = newest.Due };
+            var sub = new Submission { Key = g.Key, Name = newest.Name, Package = newest.Package, Due = newest.Due, Revision = newest.Revision, Of = newest.Of, Reason = newest.Reason };
             foreach (var answer in g.SelectMany(x => x.Record.Answers).GroupBy(kv => kv.Key, StringComparer.Ordinal))
                 sub.Answers[answer.Key] = answer.Select(kv => kv.Value).OrderBy(a => a.At).Last();
             foreach (var review in g.SelectMany(x => x.Record.Reviews).Where(kv => shared.IsLead(kv.Value.By)).GroupBy(kv => kv.Key, StringComparer.Ordinal))
@@ -265,6 +314,9 @@ internal static class SubmissionChecklistMath
             if (bim is not null) { sub.Bim = bim.Bim; sub.BimAt = bim.BimAt; }
             shared.Submissions.Add(sub);
         }
+        foreach (var sub in shared.Submissions.Where(x => x.Of.Length > 0))
+            if (shared.Find(sub.Of) is { } older && (older.SupersededBy.Length == 0 || (shared.Find(older.SupersededBy)?.Revision ?? 0) < sub.Revision))
+                older.SupersededBy = sub.Key;
         shared.Submissions.Sort((a, b) => (a.Due ?? DateTime.MaxValue).CompareTo(b.Due ?? DateTime.MaxValue) is var c && c != 0 ? c : string.Compare(a.Title, b.Title, StringComparison.OrdinalIgnoreCase));
         return shared;
     }
@@ -426,6 +478,59 @@ internal static class SubmissionChecklistMath
         return key;
     }
 
+    /// <summary>
+    /// Starts the next revision of a submission resubmitted after comments: a checklist of its own that starts from the
+    /// last revision's answers and comments, with no approvals (the group leader approves each answer again, as the
+    /// comments may have changed it). The last revision stays as it was, as the record of what was submitted. Returns
+    /// the new revision's key (the existing one when it was started already).
+    /// </summary>
+    public static string StartRevision(UserRecord mine, Shared shared, Submission last, string reason, DateTime? due, DateTime now, int? revision = null)
+    {
+        var number = Math.Max(revision ?? 0, last.Revision + 1);
+        var first = RevisionKey(KeyOf(last.Package, last.Name), 0);
+        var key = RevisionKey(first, number);
+        if (shared.Find(key) is not null) return key;
+        var rec = mine.For(key, last.Name.Trim(), last.Package.Trim());
+        rec.Name = last.Name.Trim();
+        rec.Package = last.Package.Trim();
+        rec.Revision = number;
+        rec.Of = last.Key;
+        rec.Reason = (reason ?? "").Trim();
+        rec.Due = due ?? last.Due;
+        rec.Deleted = false;
+        rec.At = now;
+        foreach (var kv in last.Answers)
+            rec.Answers[kv.Key] = new Answer { Value = kv.Value.Value, Note = kv.Value.Note, By = kv.Value.By, At = now };
+        mine.Saved = now;
+        return key;
+    }
+
+    /// <summary>The latest revision of a submission named as the schedule names it, before <paramref name="revision"/> (null when none was started).</summary>
+    public static Submission? LastBefore(Shared shared, string package, string name, int revision) =>
+        shared.Submissions.Where(x => Same(x.Package, package) && Same(x.Name, name) && x.Revision < revision).OrderBy(x => x.Revision).LastOrDefault();
+
+    /// <summary>
+    /// Starts a submission named as the schedule names it: a revision ("T3 Rev 1") starts from the latest earlier one
+    /// that has a checklist (its answers carried, approvals cleared); anything else starts empty. Returns its key.
+    /// </summary>
+    public static string StartNamed(UserRecord mine, Shared shared, string package, string name, DateTime? due, DateTime now, string reason = "")
+    {
+        var (bare, revision) = SplitRevision(name);
+        if (revision > 0 && LastBefore(shared, package, bare, revision) is { } last)
+            return StartRevision(mine, shared, last, reason.Length > 0 ? reason : "Resubmitted after comments", due, now, revision);
+        if (revision == 0) return AddSubmission(mine, package, bare, due, now);
+        var key = KeyFor(package, name);
+        var rec = mine.For(key, bare, package.Trim());
+        rec.Name = bare;
+        rec.Package = package.Trim();
+        rec.Revision = revision;
+        if (due is not null) rec.Due = due;
+        rec.Deleted = false;
+        rec.At = now;
+        mine.Saved = now;
+        return key;
+    }
+
     public static void SetBim(UserRecord mine, Submission s, int? percent, DateTime now)
     {
         if (percent is null || s.Bim == percent) return;
@@ -466,7 +571,7 @@ internal static class SubmissionChecklistMath
         var p = Count(questions, s);
         return new Summary
         {
-            Model = model, Package = s.Package, Name = s.Name, Checked = p.CheckedPercent, Approved = p.ApprovedPercent, Total = p.Total,
+            Model = model, Package = s.Package, Name = s.FullName, Checked = p.CheckedPercent, Approved = p.ApprovedPercent, Total = p.Total,
             No = p.No, Returned = p.Returned, Bim = s.Bim, Status = StatusText(p), At = now,
         };
     }
@@ -474,7 +579,7 @@ internal static class SubmissionChecklistMath
     /// <summary>The summary for a package's submission: by its key, else the package's newest one (null when none).</summary>
     public static Summary? Find(IReadOnlyDictionary<string, Summary> summaries, string package, string submission)
     {
-        if (summaries.TryGetValue(KeyOf(package, submission), out var exact)) return exact;
+        if (summaries.TryGetValue(KeyFor(package, submission), out var exact)) return exact;
         return summaries.Values.Where(s => Same(s.Package, package)).OrderBy(s => s.At).LastOrDefault();
     }
 
@@ -525,7 +630,7 @@ internal static class SubmissionChecklistMath
     public static void SaveSummaries(IEnumerable<Summary> summaries)
     {
         var all = LoadSummaries();
-        foreach (var s in summaries) all[KeyOf(s.Package, s.Name)] = s;
+        foreach (var s in summaries) all[KeyFor(s.Package, s.Name)] = s;
         try { SafeFile.Write(SummaryPath, ToJson(all)); }
         catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException) { }
     }
@@ -554,8 +659,11 @@ internal static class SubmissionChecklistMath
         {
             s.Answers = new Dictionary<string, Answer>(s.Answers ?? new(), StringComparer.Ordinal);
             s.Reviews = new Dictionary<string, Review>(s.Reviews ?? new(), StringComparer.Ordinal);
+            s.Of ??= "";
+            s.Reason ??= "";
         }
         if (r.Setup is { } setup) { setup.Types ??= []; setup.Leads ??= []; setup.Skipped ??= []; }
+        if (r.Template is not null) r.Template = SubmissionChecklistTemplate.Read(ToJson(r.Template));
         return r;
     }
 }

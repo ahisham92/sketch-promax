@@ -179,6 +179,8 @@ public sealed class App : IExternalApplication
             throw;
         }
         _started = true;
+        // The TritoRevit tab next to Sketch ProMax's (else SketchPro's, else first of the add-ins), with either add-in.
+        try { UI.TritoTabOrder.Start(); } catch (Exception) { /* cosmetic: the tab stays where Revit put it */ }
         if (!shared)
         {
             // The chat's own connection, inside Revit (no helper program to start): a new port and token for each core.

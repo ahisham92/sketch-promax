@@ -13,15 +13,15 @@ internal static class SubmissionChecklistBank
 
     // Short names for the type keys, so the lists below stay readable.
     private const string Piled = "piled-deck", Blocks = "gravity-blocks", Caissons = "caissons", Sheets = "sheet-piles", Walls = "retaining-wall",
-        Revet = "revetment", Dolphins = "dolphins", Trestle = "trestle", RoRo = "roro", Pontoon = "pontoon", DWall = "diaphragm-wall",
+        Combi = "combi-wall", Relief = "relieving-platform", Dolphins = "dolphins", Trestle = "trestle", RoRo = "roro", Pontoon = "pontoon", DWall = "diaphragm-wall",
         Dredge = "dredging", Rails = "crane-rails", Yard = "pavement";
 
-    private const string Quays = Piled + "," + Blocks + "," + Caissons + "," + Sheets + "," + DWall;
-    private const string Piles = Piled + "," + Dolphins + "," + Trestle + "," + Pontoon + "," + RoRo;
+    private const string Quays = Piled + "," + Blocks + "," + Caissons + "," + Sheets + "," + Combi + "," + Relief + "," + DWall;
+    private const string Piles = Piled + "," + Dolphins + "," + Trestle + "," + Pontoon + "," + RoRo + "," + Relief;
     private const string GravityLike = Blocks + "," + Caissons + "," + Walls;
-    private const string Embedded = Sheets + "," + DWall;
-    private const string InWater = Piled + "," + Blocks + "," + Caissons + "," + Sheets + "," + Revet + "," + Dolphins + "," + Trestle + "," + RoRo + "," + Pontoon + "," + DWall;
-    private const string Berths = Piled + "," + Blocks + "," + Caissons + "," + Sheets + "," + Dolphins + "," + DWall + "," + Pontoon + "," + RoRo;
+    private const string Embedded = Sheets + "," + Combi + "," + Relief + "," + DWall;
+    private const string InWater = Piled + "," + Blocks + "," + Caissons + "," + Sheets + "," + Combi + "," + Relief + "," + Dolphins + "," + Trestle + "," + RoRo + "," + Pontoon + "," + DWall;
+    private const string Berths = Piled + "," + Blocks + "," + Caissons + "," + Sheets + "," + Combi + "," + Relief + "," + Dolphins + "," + DWall + "," + Pontoon + "," + RoRo;
 
     public static readonly SubmissionChecklistMath.Question[] Questions =
     [
@@ -119,13 +119,13 @@ internal static class SubmissionChecklistBank
         Q("geo.bearing", "geotech", "Bearing capacity and settlement under the base checked?",
             "Bearing pressure against the allowable, with eccentric and inclined loads; settlement within the limits.", GravityLike, "Geotechnical"),
         Q("geo.global", "geotech", "Overall slope stability (deep slip) checked?",
-            "Slip circles through and under the structure, for each load case and water level.", GravityLike + "," + Embedded + "," + Revet + "," + Piled + "," + Dredge, "Geotechnical"),
+            "Slip circles through and under the structure, for each load case and water level.", GravityLike + "," + Embedded + "," + Piled + "," + Dredge, "Geotechnical"),
         Q("geo.liquefaction", "geotech", "Liquefaction of fill and soils checked?",
             "Where the seismic design applies: liquefaction potential and the measures taken.", Quays + "," + Dredge + "," + Yard, "Geotechnical"),
         Q("geo.improvement", "geotech", "Ground improvement or soil replacement designed where needed?",
-            "Dredging of soft soils, replacement, vibro or drains, with their limits shown.", GravityLike + "," + Dredge + "," + Yard + "," + Revet, "Geotechnical"),
+            "Dredging of soft soils, replacement, vibro or drains, with their limits shown.", GravityLike + "," + Dredge + "," + Yard, "Geotechnical"),
         Q("geo.drivability", "geotech", "Pile or sheet drivability checked?",
-            "Hammer, refusal criteria and stresses while driving; pre-boring where needed.", Piles + "," + Sheets, "Geotechnical"),
+            "Hammer, refusal criteria and stresses while driving; pre-boring where needed.", Piles + "," + Sheets + "," + Combi, "Geotechnical"),
 
         // ---- Structure checks: deck on piles
         Q("piled.layout", TopicsTypes, "Pile layout, sizes and rakes as the calculation?", "Bents, spacing, rakes and pile sizes on the drawings match the analysis model.", Piled, diagram: Piled),
@@ -133,7 +133,7 @@ internal static class SubmissionChecklistBank
         Q("piled.deck", TopicsTypes, "Deck slab and beams designed for every load case?", "Bending, shear and punching under wheel and outrigger loads; crack width as the exposure.", Piled, diagram: Piled),
         Q("piled.connection", TopicsTypes, "Pile to deck connection detailed?", "Embedment, dowels or plug and its reinforcement, for compression, tension and moment.", Piled, diagram: Piled),
         Q("piled.uplift", TopicsTypes, "Deck soffit above wave crest, or designed for uplift?", "Air gap between the extreme wave crest and the soffit; otherwise uplift and slamming loads.", Piled, "Marine", "levels"),
-        Q("piled.slope", TopicsTypes, "Slope under the deck stable and protected?", "Armour and filter under the deck; slope stability with the piles.", Piled + "," + Revet, "Geotechnical, Marine", Piled),
+        Q("piled.slope", TopicsTypes, "Slope under the deck stable and protected?", "Armour and filter under the deck; slope stability with the piles.", Piled, "Geotechnical, Marine", Piled),
         Q("piled.joints", TopicsTypes, "Expansion joints spaced and detailed?", "Joint spacing from temperature and shrinkage; the joint detail carries the shear across.", Piled + "," + Trestle, diagram: Piled),
         Q("piled.precast", TopicsTypes, "Precast elements and their lifting checked?", "Precast beams or slabs: lifting, temporary stages and stitch details.", Piled + "," + Trestle + "," + Dolphins),
 
@@ -144,7 +144,7 @@ internal static class SubmissionChecklistBank
         Q("blocks.bed", TopicsTypes, "Rubble bed thickness, levelling and tolerance shown?", "Bedding layer, screeding tolerance and the toe of the bed.", Blocks + "," + Caissons, "Marine", Blocks),
         Q("blocks.backfill", TopicsTypes, "Backfill and filter behind the wall stop loss of fines?", "Graded filter or geotextile behind the joints between blocks.", Blocks + "," + Caissons, diagram: Blocks),
         Q("blocks.weight", TopicsTypes, "Heaviest block within the placing crane's capacity?", "Block weights listed with the crane and radius they need.", Blocks, diagram: Blocks),
-        Q("blocks.cope", TopicsTypes, "Cope beam designed for fender, bollard and crane loads?", "Cope beam reinforcement and its joints with the blocks.", Blocks + "," + Caissons + "," + Sheets + "," + DWall, diagram: Blocks),
+        Q("blocks.cope", TopicsTypes, "Cope beam designed for fender, bollard and crane loads?", "Cope beam reinforcement and its joints with the blocks.", Blocks + "," + Caissons + "," + Sheets + "," + Combi + "," + Relief + "," + DWall, diagram: Blocks),
         Q("blocks.toe", TopicsTypes, "Toe protection against scour shown?", "Rock or mattress at the toe, its extent and grading.", Blocks + "," + Caissons + "," + Walls, "Marine", Blocks),
 
         // ---- Structure checks: caissons
@@ -155,27 +155,35 @@ internal static class SubmissionChecklistBank
         Q("caissons.fill", TopicsTypes, "Cell fill material, density and placing specified?", "Fill weight used in the stability calculation is the one specified.", Caissons, diagram: Caissons),
 
         // ---- Structure checks: sheet pile quay
-        Q("sheets.embedment", TopicsTypes, "Embedment depth with its factor of safety?", "Free or fixed earth support, with the factor or partial factors in the design basis.", Sheets, "Geotechnical", Sheets),
-        Q("sheets.section", TopicsTypes, "Section and steel grade enough after corrosion?", "Bending and shear on the section left at the end of the design life.", Sheets, diagram: Sheets),
-        Q("sheets.corrosion", TopicsTypes, "Corrosion allowance or protection per zone?", "Loss rates for the splash, tidal, low water and buried zones; coating or cathodic protection.", Sheets + "," + Piled + "," + Dolphins + "," + Trestle, diagram: "levels"),
-        Q("sheets.anchor", TopicsTypes, "Tie rods and anchor wall designed and placed outside the active wedge?", "Tie rod force, size, spacing and the anchor wall far enough back.", Sheets + "," + DWall, "Geotechnical", Sheets),
-        Q("sheets.waling", TopicsTypes, "Waling and tie rod connections detailed?", "Waling size, bolts, and the connection at the anchor wall.", Sheets, diagram: Sheets),
-        Q("sheets.tielevel", TopicsTypes, "Tie rod level workable above the tide?", "Tie rods installed in the dry, or the method for installing them below water.", Sheets, "Marine", "levels"),
-        Q("sheets.combi", TopicsTypes, "Combi-wall king piles and infill sheets checked?", "Where a combi-wall is used: king pile capacity and the infill sheets' arching.", Sheets, diagram: Sheets),
+        Q("sheets.embedment", TopicsTypes, "Embedment depth with its factor of safety?", "Free or fixed earth support, with the factor or partial factors in the design basis.", Sheets + "," + Combi + "," + Relief, "Geotechnical", Sheets),
+        Q("sheets.section", TopicsTypes, "Section and steel grade enough after corrosion?", "Bending and shear on the section left at the end of the design life.", Sheets + "," + Relief, diagram: Sheets),
+        Q("sheets.corrosion", TopicsTypes, "Corrosion allowance or protection per zone?", "Loss rates for the splash, tidal, low water and buried zones; coating or cathodic protection.", Sheets + "," + Combi + "," + Relief + "," + Piled + "," + Dolphins + "," + Trestle, diagram: "levels"),
+        Q("sheets.anchor", TopicsTypes, "Tie rods and anchor wall designed and placed outside the active wedge?", "Tie rod force, size, spacing and the anchor wall far enough back.", Sheets + "," + Combi + "," + DWall, "Geotechnical", Sheets),
+        Q("sheets.waling", TopicsTypes, "Waling and tie rod connections detailed?", "Waling size, bolts, and the connection at the anchor wall.", Sheets + "," + Combi, diagram: Sheets),
+        Q("sheets.tielevel", TopicsTypes, "Tie rod level workable above the tide?", "Tie rods installed in the dry, or the method for installing them below water.", Sheets + "," + Combi, "Marine", "levels"),
+        Q("sheets.combi", TopicsTypes, "Combi-wall king piles and infill sheets checked?", "Where a combi-wall is used: king pile capacity and the infill sheets' arching.", Combi, diagram: Sheets),
+
+        // ---- Structure checks: combi-wall quay
+        Q("combi.kingpile", TopicsTypes, "King piles checked for bending, axial load and buckling after corrosion?", "Tube or H king pile section left at the end of the design life, with the axial load from the cope and cranes.", Combi, diagram: Combi),
+        Q("combi.infill", TopicsTypes, "Infill sheets checked for arching and their shorter embedment?", "Infill sheet section between the king piles, its toe above the king pile toe, and soil arching between them.", Combi, "Geotechnical", Combi),
+        Q("combi.connectors", TopicsTypes, "Connectors between king piles and infill sheets specified?", "Connector type and strength, welded or loose, and the declutching risk while driving.", Combi, diagram: Combi),
+        Q("combi.toe", TopicsTypes, "King pile toe level and plugging from the geotechnical report?", "Toe level for the axial and lateral capacity, with open-ended tube plugging assumed or checked.", Combi, "Geotechnical", "levels"),
+        Q("combi.driving", TopicsTypes, "Driving sequence, guide frames and tolerances set?", "King piles first with a template, then infills; verticality and position tolerances on the drawings.", Combi, diagram: Combi),
+
+        // ---- Structure checks: relieving platform quay
+        Q("relief.platform", TopicsTypes, "Platform slab designed for the fill, surcharge and crane loads?", "Bending and shear in the platform with the fill above it, the yard surcharge and crane rail loads.", Relief, diagram: Relief),
+        Q("relief.piles", TopicsTypes, "Bearing piles under the platform checked (capacity, rake, drag load)?", "Vertical and raked piles carrying the platform, with negative skin friction from the fill.", Relief, "Geotechnical", Relief),
+        Q("relief.frontwall", TopicsTypes, "Front wall designed for the reduced earth pressure under the platform?", "Earth pressure shielded by the platform over the front wall's height, and the full pressure below.", Relief, "Geotechnical", Relief),
+        Q("relief.connection", TopicsTypes, "Connection between the front wall and the platform detailed?", "How the platform holds the front wall's top: dowels, embedded head or bearing.", Relief, diagram: Relief),
+        Q("relief.level", TopicsTypes, "Platform level workable above the tide?", "Platform cast in the dry at a level above the working tide, or the method below it.", Relief, "Marine", "levels"),
 
         // ---- Structure checks: retaining walls
         Q("walls.stability", TopicsTypes, "Sliding, overturning and bearing checked?", "With surcharge and water behind, and the passive resistance taken only where it is safe.", Walls, "Geotechnical", Walls),
         Q("walls.stem", TopicsTypes, "Stem, heel and toe designed for bending, shear and cracks?", "Crack width as the exposure; the starter bars at the base.", Walls, diagram: Walls),
         Q("walls.drainage", TopicsTypes, "Drainage behind the wall (weep holes, drain, filter)?", "So water can't build up behind the wall beyond what the design takes.", Walls + "," + Yard, "Civil", Walls),
         Q("walls.joints", TopicsTypes, "Movement joints and waterstops spaced and detailed?", "Joint spacing and the waterstop where water must not pass.", Walls, diagram: Walls),
+        Q("walls.backfill", TopicsTypes, "Backfill material, compaction and surcharge behind the wall specified?", "Backfill type and compaction, with the surcharge used in the design shown on the drawings.", Walls, "Geotechnical", Walls),
 
-        // ---- Structure checks: revetments and breakwaters
-        Q("revet.armour", TopicsTypes, "Armour unit size from the design wave (Hudson or Van der Meer)?", "Armour weight and grading, with the damage level allowed.", Revet, "Marine", Revet),
-        Q("revet.filter", TopicsTypes, "Under-layers and filter rules met?", "Each layer's grading against the one under it, or the geotextile chosen.", Revet, diagram: Revet),
-        Q("revet.toe", TopicsTypes, "Toe designed against scour and sliding?", "Toe berm or key, its level and width.", Revet, "Marine", Revet),
-        Q("revet.crest", TopicsTypes, "Crest level for the overtopping allowed?", "Overtopping rate at the design storm against what the area behind can take.", Revet, "Marine", "levels"),
-        Q("revet.slope", TopicsTypes, "Slope angle and stability agreed?", "Slope stability with the soils, and the armour stable at that angle.", Revet, "Geotechnical", Revet),
-        Q("revet.overtopping", TopicsTypes, "Wave overtopping at the crest within the limits?", "Overtopping rate for the design storm against the limit for the use behind, and the crest drainage.", Revet + "," + Walls, "Marine", Revet),
 
         // ---- Structure checks: dolphins
         Q("dolphins.layout", TopicsTypes, "Dolphin layout fits the design vessels?", "Breasting dolphins within the parallel body of the smallest and largest vessel; mooring lines at good angles.", Dolphins, "Marine", Dolphins),
@@ -202,7 +210,8 @@ internal static class SubmissionChecklistBank
         // ---- Structure checks: diaphragm or secant pile wall
         Q("dwall.embedment", TopicsTypes, "Embedment and anchor or prop forces checked?", "With the construction stages (excavation, anchors, dredging).", DWall, "Geotechnical", DWall),
         Q("dwall.panels", TopicsTypes, "Panel or pile overlap, joints and waterstops detailed?", "Overlap with the verticality tolerance at the toe.", DWall, diagram: DWall),
-        Q("dwall.stages", TopicsTypes, "Every construction stage checked?", "Each excavation, anchor and dredging stage, not only the final one.", DWall + "," + Sheets, diagram: DWall),
+        Q("dwall.stages", TopicsTypes, "Every construction stage checked?", "Each excavation, anchor and dredging stage, not only the final one.", DWall + "," + Sheets + "," + Combi, diagram: DWall),
+        Q("dwall.secant", TopicsTypes, "Secant or contiguous piles: overlap, reinforcement and gaps checked?", "Primary and secondary piles, overlap with the drilling tolerance at the toe, and grouting of gaps.", DWall, diagram: DWall),
 
         // ---- Structure checks: dredging and reclamation
         Q("dredge.slopes", TopicsTypes, "Dredged side slopes stable and agreed?", "Side slopes per soil layer, with the quay's toe kept clear.", Dredge, "Geotechnical, Marine", Dredge),
@@ -229,7 +238,7 @@ internal static class SubmissionChecklistBank
         Q("dur.cracks", "durability", "Crack width limits checked?", "Crack width against the exposure limit in each element."),
         Q("dur.steel", "durability", "Steel grades and their protection specified?", "Structural steel, piles and fittings: grade, coating, galvanising or cathodic protection.", Piles + "," + Sheets + "," + Rails),
         Q("dur.cathodic", "durability", "Cathodic protection designed where the steel needs it?", "Anodes or impressed current: design life, current density per zone, anode positions and bonding.", Piles + "," + Sheets, "Electrical", "levels"),
-        Q("dur.rock", "durability", "Rock and fill quality and grading specified?", "Density, strength and grading of armour, core and filter rock.", Revet + "," + Blocks + "," + Caissons + "," + Dredge),
+        Q("dur.rock", "durability", "Rock and fill quality and grading specified?", "Density, strength and grading of armour, core and filter rock.", Piled + "," + Blocks + "," + Caissons + "," + Dredge),
 
         // ---- Marine furniture and safety
         Q("furn.fenders", "furniture", "Fenders chosen, spaced and checked for hull pressure?", "Energy, reaction, hull pressure, spacing and the panel; works at every tide.", Berths, "Marine", "levels"),
@@ -266,7 +275,7 @@ internal static class SubmissionChecklistBank
         Q("bills.model", "bills", "Quantities taken from the model and reconciled?", "Model quantities against the bills, with the differences explained."),
         Q("bills.backup", "bills", "Back-up calculations for every bill item?", "Each quantity traced to its drawing or model, with the measurement shown."),
         Q("bills.rates", "bills", "Rates and costing updated for this submission?", "Rates source and date; the costing matches the bills."),
-        Q("bills.marine", "bills", "Dredging, rock and fill volumes in the bills?", "Volumes as measured, with bulking and overdredge as the contract.", Dredge + "," + Revet + "," + Blocks + "," + Caissons + "," + Yard),
+        Q("bills.marine", "bills", "Dredging, rock and fill volumes in the bills?", "Volumes as measured, with bulking and overdredge as the contract.", Dredge + "," + Relief + "," + Blocks + "," + Caissons + "," + Yard),
         Q("bills.steel", "bills", "Reinforcement and steel tonnages checked?", "Rebar and steel tonnages against the drawings and a rate per cubic metre check."),
         Q("bills.piles", "bills", "Piles measured with their lengths and toe levels?", "Number, diameter and length per pile, including cut-off and the driven length.", Piles + "," + Sheets),
 

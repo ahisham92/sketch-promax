@@ -82,6 +82,7 @@
     <Compile Include="../../src/SketchProMax/Tools/BimReadyPlan.cs" Link="BimReadyPlan.cs" />
     <Compile Include="../../src/SketchProMax/Tools/BerthStatusReport.cs" Link="BerthStatusReport.cs" />
     <Compile Include="../../src/SketchProMax/Tools/SubmissionChecklistMath.cs" Link="SubmissionChecklistMath.cs" />
+    <Compile Include="../../src/SketchProMax/Tools/SubmissionChecklistTemplate.cs" Link="SubmissionChecklistTemplate.cs" />
     <Compile Include="../../src/SketchProMax/Tools/SubmissionChecklistBank.cs" Link="SubmissionChecklistBank.cs" />
     <Compile Include="../../src/SketchProMax/Tools/SubmissionChecklistDiagrams.cs" Link="SubmissionChecklistDiagrams.cs" />
     <Compile Include="../../src/SketchProMax/Tools/SubmissionChecklistDocx.cs" Link="SubmissionChecklistDocx.cs" />
@@ -104,6 +105,7 @@
     <Compile Include="../../src/SketchProMax/Tools/FieldTestJournal.cs" Link="FieldTestJournal.cs" />
     <EmbeddedResource Include="../../src/SketchProMax/Data/field-test-proven.json" LogicalName="SketchProMax.field-test-proven.json" />
     <Compile Include="../../src/SketchProMax/Sharing/SharedPackMath.cs" Link="SharedPackMath.cs" />
+    <Compile Include="../../src/SketchProMax/Sharing/TritoTabMath.cs" Link="TritoTabMath.cs" />
     <Compile Include="../../src/TritoRevit/PackButtons.cs" Link="PackButtons.cs" />
     <Compile Include="../../src/SketchProMax/Bridge/JobControl.cs" Link="JobControl.cs" />
     <Compile Include="../../src/SketchProMax/Chat/JobCardModel.cs" Link="JobCardModel.cs" />

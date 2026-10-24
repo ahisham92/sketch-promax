@@ -12,7 +12,7 @@ using TextBox = System.Windows.Controls.TextBox;
 namespace SketchProMax.UI;
 
 /// <summary>
-/// The guided test checklist (ribbon Help > Test checklist, and the pane's Bugs section): the items the field test
+/// The guided test checklist (the pane's Bugs section; on the ribbon's Help menu until 0.35.1): the items the field test
 /// leaves to a person (FieldTestCoverage's manual features) and one step per fixed bug row of the bug log, each with
 /// what to do and why it is manual. The user marks each pass or fail with an optional note while working in Revit (the
 /// window doesn't block Revit); marks are kept as a draft between openings, and Save results writes a short Markdown

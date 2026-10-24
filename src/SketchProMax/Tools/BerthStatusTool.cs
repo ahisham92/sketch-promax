@@ -109,7 +109,7 @@ public sealed class BerthStatusTool : IRevitTool
         model = s.Berth.Model,
         status = Pct(s.Percent),
         verdict = Text(s.Verdict),
-        next = s.Next is null ? null : new { s.Next.Name, due = s.Due?.ToString("ddd dd-MMM-yyyy HH:mm", CultureInfo.InvariantCulture), workingHoursLeft = Math.Round(s.HoursLeft, 1) },
+        next = s.Next is null ? null : new { s.Next.Name, due = s.Due?.ToString("ddd dd-MMM-yyyy HH:mm", CultureInfo.InvariantCulture), workingHoursLeft = Math.Round(s.HoursLeft, 1), start = s.Effort?.Start?.ToString("dd-MMM-yyyy", CultureInfo.InvariantCulture), hoursWorkedOnModel = s.Effort is { } e ? Math.Round(e.Worked, 1) : (double?)null, hoursExpectedLeft = s.Effort?.Left is { } l ? Math.Round(l, 1) : (double?)null, hoursNeededPerDay = s.Effort?.PerDay is { } pd ? Math.Round(pd, 1) : (double?)null },
         submitted = s.Last is { } last ? last.Name + When(last, "dd-MMM-yyyy", ", ") : null,
         expectedFinish = s.Finish?.ToString("ddd dd-MMM-yyyy HH:mm", CultureInfo.InvariantCulture),
         finishByHand = s.FinishByHand,

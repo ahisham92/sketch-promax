@@ -3360,7 +3360,7 @@ internal static partial class FieldTest
         var md = new StringBuilder("## Coverage\n\n");
         int Count(string s) => rows.Count(x => x.Status == s);
         md.Append($"{rows.Count(x => x.Kind == "tool")} tools and {rows.Count(x => x.Kind == "feature")} features: {Count("tested") + Count("tested: FAIL")} tested " +
-                  $"({Count("tested: FAIL")} failing), {Count("proven earlier")} proven earlier (not run again), {Count("manual (checklist)")} manual (checklist: Sketch ProMax tab > Help > Test checklist), " +
+                  $"({Count("tested: FAIL")} failing), {Count("proven earlier")} proven earlier (not run again), {Count("manual (checklist)")} manual (checklist: Sketch ProMax pane > Bugs > Test checklist), " +
                   $"{Count("manual, unchanged")} manual but unchanged since {FieldTestProven.Load().Version} (not asked again), {Count("not run")} not run in this report.\n\n");
         md.Append("| Tool or feature | Kind | Coverage | Detail |\n|---|---|---|---|\n");
         foreach (var row in rows.OrderBy(x => x.Status == "tested: FAIL" ? 0 : x.Status == "not run" ? 1 : x.Status.StartsWith("manual", StringComparison.Ordinal) ? 2 : 3).ThenBy(x => x.Kind).ThenBy(x => x.Name))

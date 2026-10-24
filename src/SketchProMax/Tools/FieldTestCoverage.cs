@@ -126,7 +126,7 @@ internal static class FieldTestCoverage
         new("ribbon.result_page", RibbonArea, "Tool results show as a page", How.Probe, "", "a model check's result shows its figures, the warnings as a bar chart, rows with Select in Revit, and the full text folded under Full details"),
         new("favourites", RibbonArea, "A favourite added and removed", How.Probe, "", "a ribbon tool is pinned to My tools, found there, and unpinned again"),
         new("ribbon.ui", RibbonArea, "Ribbon look and favourites in use", How.Manual, "", "button labels, icons and the My tools slots are judged by eye",
-            "On the Sketch ProMax tab (restart Revit once after the 0.35 update so the new layout is in order), check every panel shows its labels and icons (narrow the Revit window too): Assistant has Chat, Model checklist, Submissions status and Costing large; Model, Documents and Check are small stacked buttons; the Issue panel is titled Submit; Under development holds embodied carbon and value engineering. " +
+            "On the Sketch ProMax tab (restart Revit once after the 0.35 update so the new layout is in order), check every panel shows its labels and icons (narrow the Revit window too): Assistant has Chat, Model checklist, Submissions status, Submission checklist and Costing large; Model, Documents and Check are small stacked buttons; the Issue panel is titled Submit; Under development holds embodied carbon and value engineering. " +
             "Run Columns from Model > Structure: the window's first line is one short sentence, the levels and column types are lists from the model, hover a label for its help, and empty options fold under More options. Run Model check: the result shows figures, a chart and rows with Select in Revit. Open Favourites, pin two tools, reorder them and run one from My tools. Unpin them."),
         new("settings.tabs", RibbonArea, "Settings: every setting on its tab, and the window fits the screen", How.Probe, "", "the Settings window builds with its six tabs, every setting it saves sits on the tab the layout names (and no tab is empty), and its size stays within 85 % of this monitor's work area and of a 1080p screen at 100 % and 150 % scale; nothing is saved"),
         new("settings.ui", RibbonArea, "Settings: tabs, size and keys", How.Manual, "", "whether the window fits and reads well is judged on screen",
@@ -220,13 +220,32 @@ internal static class FieldTestCoverage
         new("subcheck.store", Issue, "Submission checklist: everyone's answers kept in the model", How.Probe, "",
             "an engineer's and a group leader's records are written into the test project (one element each), written again, read back and merged: the approval counts, the approved N/A is hidden, only the group leader is a group leader, the questions follow the structure types; the Word file is made; rolled back"),
         new("subcheck.ui", Issue, "The submission checklist window, shared between two people", How.Manual, "", "two people on a workshared model, the pages, the sketches and the Word file are judged by people",
-            "On a _detached copy (or a test central with two users): Submissions status > a package > Open the submission checklist (or Model checklist > Submission checklist). " +
+            "On a _detached copy (or a test central with two users): click Submission checklist on the ribbon (also from Submissions status > a package, or Model checklist > Submission checklist). " +
             "Project setup: tick Deck on piles and Gravity blocks (each tile has its sketch), keep yourself as group leader, Start the checklist. Pages appear on the left with counts; the header shows Checked, Approved and BIM checklist rings. " +
             "Answer a few questions Yes, one No and one N/A: the comment box opens for No and N/A; Details shows what to check and a sketch (the levels sketch on Levels checked with the grading team). Click a question's Yes, then press N, Y and A: each answers the question in focus and moves to the next; Ctrl+Tab and Ctrl+Shift+Tab change page; Esc closes. " +
             "As group leader press Approve on a Yes and Approve N/A on the N/A: the N/A leaves the page into the folded 'not applicable (agreed)' list; Put back shows it again. Return a Yes with a reason: it turns red with the reason. " +
-            "Change an approved answer: it waits for a new look. Add a question to a page: it shows on every submission. Review and export: what is left goes to its question; Word file and PDF open (cover with the status, three bars, summary, sketches, questions, agreed N/A, sign-off). " +
+            "Change an approved answer: it waits for a new look. On your own PC only: Add a question to a page shows it on every submission; on another PC there is no Add a question, no Questions button and no Delete or Don't ask links. Review and export: what is left goes to its question; Word file and PDF open (cover with the status, three bars, summary, sketches, questions, agreed N/A, sign-off). " +
             "Two people: the engineer (not in the group leaders) answers and Synchronizes; the group leader Reloads Latest, comes back to the window: the answers show; approves, Synchronizes; the engineer Reloads Latest: approved. The engineer can't change Project setup. " +
             "Submissions status shows the package's Checked / BIM line, the checklist box in its details and the CHECKED / BIM column."),
+        new("subcheck.template", Issue, "Submission checklist questions template (owner's PC only)", How.Manual, "",
+            "editing questions, Excel round trips and the template reaching another PC through the model and a shared pack are judged by a person",
+            "On your own PC (the one the license exempts), on a _detached copy: Submission checklist > Questions. Pick Levels and coordination, Add a question, type it, tick no type, Save: it is asked on that page at once. " +
+            "Questions again: delete a question, change another's wording, Save: the deleted one is gone, the changed one keeps its answer. Export to Excel…, change a question and add a row with no Id in Excel, Import from Excel…: " +
+            "the change and the new question are there, anything wrong is listed (row and why); Save. Synchronize, then on another PC (or Windows user) Reload Latest and open the checklist: it asks your questions, and it has no Questions button. " +
+            "Share tools with Submission checklist ticked: a colleague who installs the pack gets your questions too. Questions > Use the built-in questions: back to the questions that come with Sketch ProMax, everywhere after a sync."),
+        new("subcheck.revisions", Issue, "Submission checklist per scheduled submission, and resubmissions after comments", How.Manual, "",
+            "which checklists start from the schedule, and how a resubmission carries answers and asks for approval again, are judged by a person",
+            "On a _detached copy with a Submissions status schedule of several submissions: Submission checklist > Project setup: From the schedule lists every submission to come; + All starts a checklist for each (T1, T2, T3…), each with its own answers. " +
+            "Answer a few on T3, have the group leader approve one. Then Resubmit after comments on T3, type the comments and a due date, Start Rev 1: T3 Rev 1 opens with T3's answers and comments, nothing approved, and a note with the comments. " +
+            "T3 shows \"replaced by T3 Rev 1 (kept as the record)\", and its answers can't be changed. A schedule row named \"T3 Rev 2\" started from the schedule carries T3 Rev 1's answers. Submissions status shows the Rev 1 checklist's Checked / BIM line."),
+        new("berth.schedule", Issue, "Submissions schedule edited in Revit, with start dates and hours", How.Manual, "",
+            "editing the schedule, its Excel and the hours worked and left are judged by a person",
+            "On a _detached copy: Submissions status > Setup > Edit the schedule (or Edit the schedule over Coming submissions). Add a submission, change a due date, set a start date, tick Submitted on one, Resubmit on berth 9's T3 (a T3 Rev 1 row under it, starting today: set its due date), delete one, Save. " +
+            "The window shows the new schedule at once, and the setup Excel has it too (with the file closed; with it open, the status says so and the window still keeps it). " +
+            "Work in the model for a while, then Update status: the berth's details show STARTED, HOURS WORKED and HOURS LEFT, and Coming submissions shows HOURS EACH / DAY (red when more than a working day)."),
+        new("trito.tab", Issue, "TritoRevit tab placed next to Sketch ProMax", How.Manual, "", "the order of Revit's ribbon tabs is judged by eye after a restart",
+            "With Sketch ProMax and TritoRevit installed, restart Revit: the TritoRevit tab is right after the Sketch ProMax tab. On a PC with SketchPro but not Sketch ProMax: right after SketchPro's tab. " +
+            "With neither: it is the first add-in tab, right after Add-Ins. Open a model and switch tabs a few times: the order stays."),
         new("checklist.views", Issue, "Pre-submission checklist: Show in Revit's checking views are made and deleted", How.Probe, "",
             "a plan with the grids and schedules of sheets, views and title blocks are made in the test project, named Sketch ProMax check - …, found by name and all deleted (rolled back)"),
         new("checklist.show", Issue, "Pre-submission checklist: Show in Revit and the automatic model check", How.Manual, "",
@@ -480,7 +499,7 @@ internal static class FieldTestCoverage
         ["open-claude"] = "claude.open", ["pane"] = "ribbon.status", ["export-pack"] = "pack.export", ["job-button"] = "ribbon.job",
         ["update-button"] = "ribbon.job", ["report-bug"] = "bugs.ui", ["split-pdf"] = "chat.split_ui", ["bug-folder"] = "bugs.ui", ["export-chats-bugs"] = "bugs.export", ["license"] = "license.ui",
         ["settings"] = "settings.ui", ["help"] = "help", ["self-test"] = "diagnostics", ["field-test"] = "diagnostics",
-        ["test-checklist"] = "diagnostics", ["time-saved"] = "time.ui", ["issue-check"] = "issue.ui", ["pre-submission"] = "checklist.ui", ["berth-status"] = "berth.ui", ["berth-costing"] = "costing.ui", ["cleanup"] = "cleanup.ui", ["share-tools"] = "share.ui", ["favourites"] = "favourites", ["fav:*"] = "favourites", ["tab:notes"] = "chat.notes",
+        ["test-checklist"] = "diagnostics", ["time-saved"] = "time.ui", ["issue-check"] = "issue.ui", ["pre-submission"] = "checklist.ui", ["berth-status"] = "berth.ui", ["submission-checklist"] = "subcheck.ui", ["berth-costing"] = "costing.ui", ["cleanup"] = "cleanup.ui", ["share-tools"] = "share.ui", ["favourites"] = "favourites", ["fav:*"] = "favourites", ["tab:notes"] = "chat.notes",
     };
 
     /// <summary>The coverage key of a manifest line, or null when it runs nothing (drop-downs, hidden items, tool entries).</summary>
@@ -697,7 +716,7 @@ internal static class FieldTestCoverage
     {
         var sb = new StringBuilder("## Bug log\n\n");
         sb.Append("Each fixed row of the bug log with the check that fails if the bug comes back. Passed: the row can be marked Confirmed. " +
-                  "A checklist step is in Sketch ProMax tab > Help > Test checklist.\n\n");
+                  "A checklist step is in the Sketch ProMax pane > Bugs > Test checklist.\n\n");
         sb.Append("| # | What happened | Checked by | Result | The row |\n|---|---|---|---|---|\n");
         foreach (var bug in fixedRows)
         {

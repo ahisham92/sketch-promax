@@ -41,7 +41,8 @@ internal static class SubmissionChecklistDiagrams
         new("caissons", "Caisson", Caisson()),
         new("sheet-piles", "Anchored sheet pile wall", SheetPiles()),
         new("retaining-wall", "Retaining wall", RetainingWall()),
-        new("revetment", "Revetment", Revetment()),
+        new("combi-wall", "Combi-wall quay", CombiWall()),
+        new("relieving-platform", "Relieving platform quay", ReliefPlatform()),
         new("dolphins", "Breasting dolphin", Dolphin()),
         new("trestle", "Approach trestle", Trestle()),
         new("roro", "Ro-Ro ramp", RoRo()),
@@ -137,7 +138,7 @@ internal static class SubmissionChecklistDiagrams
         Rect(Look.Concrete, 188, 36, 26, 20),
         Line(Look.Dash, 204, 170, 330, 40),
         Level(Cope, "Cope level"), Level(64, "Tie rod level"), Level(Hw, "MHWS"), Level(Cd, "CD"), Level(170, "Dredge level"), Level(208, "Sheet pile toe"),
-        Text(345, 92, "Anchor wall"), Text(250, 140, "Active wedge"),
+        Text(296, 100, "Anchor wall"), Text(250, 140, "Active wedge"),
     ];
 
     private static List<Shape> RetainingWall() =>
@@ -154,16 +155,34 @@ internal static class SubmissionChecklistDiagrams
         Text(250, 120, "Drain + filter"), Text(310, 80, "Surcharge"),
     ];
 
-    private static List<Shape> Revetment() =>
+    private static List<Shape> CombiWall() =>
     [
-        Poly(Look.Water, 0, Hw, 212, Hw, 90, 190, 0, 190),
-        Poly(Look.Soil, 0, 190, 400, 190, 400, 220, 0, 220),
-        Poly(Look.Fill, 120, 190, 300, 54, 400, 54, 400, 190),
-        Poly(Look.Rock, 70, 190, 90, 176, 300, 40, 330, 40, 330, 54, 300, 54, 120, 190),
-        Poly(Look.Rock, 40, 190, 70, 172, 110, 172, 110, 190),
-        Line(Look.Dash, 104, 190, 300, 64),
-        Level(40, "Crest level"), Level(Hw, "Design water level"), Level(Cd, "CD"), Level(172, "Toe level"),
-        Text(200, 160, "Armour, under-layer, filter"),
+        Poly(Look.Water, 0, Hw, 196, Hw, 196, 170, 0, 170),
+        Poly(Look.Soil, 0, 170, 196, 170, 196, 220, 0, 220),
+        Poly(Look.Fill, 210, Cope, 400, Cope, 400, 220, 210, 220),
+        Rect(Look.Steel, 196, 50, 14, 162),
+        Line(Look.Dash, 203, 50, 203, 212),
+        Rect(Look.Steel, 214, 50, 4, 136),
+        Rect(Look.Steel, 320, 50, 6, 60),
+        Line(Look.Steel, 210, 64, 320, 64),
+        Rect(Look.Concrete, 186, 34, 38, 22),
+        Level(Cope, "Cope level"), Level(64, "Tie rod level"), Level(Hw, "MHWS"), Level(Cd, "CD"), Level(170, "Dredge level"),
+        Level(186, "Infill sheet toe"), Level(212, "King pile toe"),
+        Text(230, 140, "King pile + infill"), Text(296, 100, "Anchor wall"),
+    ];
+
+    private static List<Shape> ReliefPlatform() =>
+    [
+        Poly(Look.Water, 0, Hw, 196, Hw, 196, 172, 0, 172),
+        Poly(Look.Soil, 0, 172, 196, 172, 196, 220, 0, 220),
+        Poly(Look.Fill, 202, Cope, 400, Cope, 400, 220, 202, 220),
+        Rect(Look.Steel, 196, 56, 6, 154),
+        Rect(Look.Concrete, 190, 40, 150, 22),
+        Poly(Look.Steel, 240, 62, 246, 62, 270, 206, 264, 206),
+        Rect(Look.Steel, 290, 62, 6, 144),
+        Rect(Look.Steel, 324, 62, 6, 140),
+        Level(40, "Platform top"), Level(62, "Platform soffit"), Level(Hw, "MHWS"), Level(Cd, "CD"), Level(172, "Dredge level"), Level(206, "Pile toe"),
+        Text(232, 30, "Relieving platform"), Text(300, 130, "Bearing piles"),
     ];
 
     private static List<Shape> Dolphin() =>
