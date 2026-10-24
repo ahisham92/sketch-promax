@@ -136,7 +136,7 @@ internal static class CoreRibbonManifest
             "Edit any PDF: see every page, then delete, turn, move or replace pages, add PDFs to merge, extract or split.",
             "Opens a PDF of any size with a picture of each page. Click pages to pick them (Ctrl or Shift for more), then delete, " +
             "turn, drag to a new place, or replace them with pages of another PDF. Add PDFs or blank pages, save picked pages as a " +
-            "new PDF, or split it every few pages, at the picked pages or by size. Ctrl+Z undoes; Save keeps the old file as a backup.",
+            "new PDF, or split it every few pages, at the picked pages or by size. Nothing is kept in the model: Save as writes the PDF to the folder and name you choose.",
             small: true, breakBefore: true)),
 
         // ---- Check: small buttons, stacked three and two high (0.35 redesign).

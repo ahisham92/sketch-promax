@@ -12,6 +12,7 @@ namespace SketchProMax;
 internal static class Smoke
 {
     public static bool Dark;
+    private static readonly string[] Print = ["merged-light", "small-dark", "split", "preview"];
     private const BindingFlags Any = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Static;
 
     [STAThread]
@@ -136,5 +137,14 @@ internal static class Smoke
         Directory.CreateDirectory(dir);
         File.WriteAllBytes(Path.Combine(dir, name + ".jpg"), ms.ToArray());
         Console.WriteLine($"shot {name} {width}x{height} {ms.Length / 1024} KB");
+        if (Array.IndexOf(Print, name) < 0) return;
+        // Smaller copy, printed in the log (artifacts can't be fetched from where this is read).
+        var small = new TransformedBitmap(rtb, new ScaleTransform(0.75, 0.75));
+        var enc2 = new JpegBitmapEncoder { QualityLevel = 55 };
+        enc2.Frames.Add(BitmapFrame.Create(small));
+        using var ms2 = new MemoryStream();
+        enc2.Save(ms2);
+        var b64 = Convert.ToBase64String(ms2.ToArray());
+        for (var i = 0; i < b64.Length; i += 6000) Console.WriteLine($"B64 {name} {b64.Substring(i, Math.Min(6000, b64.Length - i))}");
     }
 }

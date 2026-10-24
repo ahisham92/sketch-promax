@@ -25,7 +25,8 @@ namespace SketchProMax.UI;
 /// The PDF editor (Documents panel): every page of a PDF as a picture, to pick with a click (Ctrl and Shift for more)
 /// and then delete, turn, move (drag, or Earlier and Later), replace with pages of another PDF, add a PDF or a blank
 /// page, extract, or split. Several PDFs merge by adding one to another, or by dropping them on the window. Nothing is
-/// written until Save (which keeps the old file in Documents\Sketch ProMax\PDF backups) or Save as; Ctrl+Z undoes.
+/// stored in the model and nothing is written until Save as (a folder and name you pick) or Save over (which keeps the
+/// old file in Documents\Sketch ProMax\PDF backups); Ctrl+Z undoes.
 /// Pages are drawn by PDFium off Revit's thread, only those in view, so a PDF of thousands of pages opens at once.
 /// The window is modeless; nothing in the model is read or changed.
 /// </summary>
@@ -149,11 +150,12 @@ internal sealed class PdfEditorWindow : Window
         _show = RichUi.Button(RichUi.Icon.Folder, "Show in folder");
         _show.Visibility = Visibility.Collapsed;
         _show.Click += (_, _) => ShowOutput();
-        _saveAs = RichUi.Button(RichUi.Icon.Save, "Save as…");
-        _saveAs.ToolTip = "Saves the document under a new name (Ctrl+Shift+S).";
+        // Save as is the main action: it asks for the folder and the name every time. Save writes over the file opened.
+        _saveAs = RichUi.Button(RichUi.Icon.Save, "Save as…", Brand.Weight.Primary);
+        _saveAs.ToolTip = "Saves the PDF in a folder and under a name you choose (Ctrl+Shift+S). The files you opened don't change.";
         _saveAs.Click += async (_, _) => await SaveDoc(saveAs: true);
-        _save = RichUi.Button(RichUi.Icon.Save, "Save", Brand.Weight.Primary);
-        _save.ToolTip = "Saves over the file (Ctrl+S). The old file is kept in Documents\\Sketch ProMax\\PDF backups.";
+        _save = RichUi.Button(RichUi.Icon.Save, "Save over");
+        _save.ToolTip = "Saves over the file you opened (Ctrl+S). The old file is kept in Documents\\Sketch ProMax\\PDF backups.";
         _save.Click += async (_, _) => await SaveDoc(saveAs: false);
         _needsDoc.AddRange([_saveAs, _save]);
         var texts = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
@@ -163,8 +165,8 @@ internal sealed class PdfEditorWindow : Window
         texts.Children.Add(_note);
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
         buttons.Children.Add(_show);
-        buttons.Children.Add(_saveAs);
         buttons.Children.Add(_save);
+        buttons.Children.Add(_saveAs);
         var footer = new DockPanel { Margin = new Thickness(14, 8, 18, 12) };
         DockPanel.SetDock(buttons, Dock.Right);
         DockPanel.SetDock(_bar, Dock.Right);
@@ -816,14 +818,14 @@ internal sealed class PdfEditorWindow : Window
     private bool AskToSave()
     {
         if (_doc is not { Changed: true }) return true;
-        var answer = MessageBox.Show(this, $"Save the changes to {(_doc.File is { } f ? Path.GetFileName(f) : "the merged PDF")} first?", "Sketch ProMax: PDF editor",
+        var answer = MessageBox.Show(this, $"Save the changes to {(_doc.File is { } f ? Path.GetFileName(f) : "the merged PDF")} first? You pick the folder and the name.", "Sketch ProMax: PDF editor",
             MessageBoxButton.YesNoCancel, MessageBoxImage.Question, MessageBoxResult.Yes);
         if (answer == MessageBoxResult.Cancel) return false;
         if (answer == MessageBoxResult.No) return true;
         // Saving runs off this thread; wait for it here with the window still responding.
         var frame = new DispatcherFrame();
         var saved = false;
-        _ = SaveDoc(saveAs: false).ContinueWith(t => { saved = t.Status == TaskStatus.RanToCompletion && t.Result; frame.Continue = false; }, TaskScheduler.FromCurrentSynchronizationContext());
+        _ = SaveDoc(saveAs: true).ContinueWith(t => { saved = t.Status == TaskStatus.RanToCompletion && t.Result; frame.Continue = false; }, TaskScheduler.FromCurrentSynchronizationContext());
         Dispatcher.PushFrame(frame);
         return saved;
     }
