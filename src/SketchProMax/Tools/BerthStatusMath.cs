@@ -158,9 +158,13 @@ internal static class BerthStatusMath
         var a = actual.Trim();
         if (a.Length == 0) return false;
         static string Last(string t) => t.Split([' '], StringSplitOptions.RemoveEmptyEntries).LastOrDefault() ?? "";
-        return values.Any(v => string.Equals(a, v, StringComparison.OrdinalIgnoreCase)
-            || (v.Contains(' ') && !a.Contains(' ') && string.Equals(Last(v), a, StringComparison.OrdinalIgnoreCase))
-            || (a.Contains(' ') && !v.Contains(' ') && string.Equals(Last(a), v, StringComparison.OrdinalIgnoreCase)));
+        // "09" is berth 9: numbers compare as numbers.
+        static bool Eq(string x, string y) => string.Equals(x, y, StringComparison.OrdinalIgnoreCase)
+            || x.Length > 0 && y.Length > 0 && x.All(char.IsDigit) && y.All(char.IsDigit) && x.TrimStart('0') == y.TrimStart('0');
+        return values.Any(v => Eq(a, v)
+            || (v.Contains(' ') && !a.Contains(' ') && Eq(Last(v), a))
+            || (a.Contains(' ') && !v.Contains(' ') && Eq(Last(a), v))
+            || (a.Contains(' ') && v.Contains(' ') && Eq(Last(a), Last(v)) && string.Equals(a.Substring(0, a.LastIndexOf(' ')).Trim(), v.Substring(0, v.LastIndexOf(' ')).Trim(), StringComparison.OrdinalIgnoreCase)));
     }
 
     /// <summary>A submission: for one berth, or every berth of the model when Berth is empty. Due at Time (default 08:00) on Date.</summary>
@@ -324,8 +328,16 @@ internal static class BerthStatusMath
         if (folder.Length == 0 || !Directory.Exists(folder)) return "";
         var text = (d.Contains.Trim().Length > 0 ? d.Contains : "{berth}").Replace("{berth}", berth.Name.Trim());
         return Directory.EnumerateFiles(folder, "*", SearchOption.AllDirectories)
-            .Where(f => !Path.GetFileName(f).StartsWith("~$", StringComparison.Ordinal) && Path.GetFileName(f).IndexOf(text, StringComparison.OrdinalIgnoreCase) >= 0)
+            .Where(f => !Path.GetFileName(f).StartsWith("~$", StringComparison.Ordinal) && NameHas(Path.GetFileName(f), text))
             .OrderByDescending(File.GetLastWriteTimeUtc).FirstOrDefault() ?? "";
+    }
+
+    /// <summary>Whether a file name has the text, a number in it not part of a longer one ("Berth 1" is not in "Berth 10 BOQ").</summary>
+    public static bool NameHas(string name, string text)
+    {
+        if (text.Length == 0) return true;
+        var rx = (char.IsDigit(text[0]) ? @"(?<!\d)" : "") + Regex.Escape(text) + (char.IsDigit(text[text.Length - 1]) ? @"(?!\d)" : "");
+        return Regex.IsMatch(name, rx, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     }
 
     public static List<AreaScore> Scores(Setup setup, Berth berth, BerthState state, IReadOnlyList<DeliverableScore>? deliverables = null)

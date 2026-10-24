@@ -618,6 +618,8 @@ internal static class FieldTestCoverage
         new(47, ["berth.read"], "a pair Revit cannot intersect is skipped, the clash area still gets its result"),
         new(48, ["berth.ui"], "opened on one model, only that model's submissions show (not every model of the setup)"),
         new(49, ["checklist.bep"], "Load and fill the Assembly Codes loads the Excel's codes, lists every type in use without a code and fills the ones kept; the dialog says how many"),
+        new(50, ["costing.berth"], "berth costing measures tubes, raked piles and design options right, and names elements counted twice and missing kg/m³"),
+        new(51, ["berth.read"], "Berth 1 doesn't count Berth 10's sheets, views or files, and a value 09 is berth 9"),
     ];
 
     /// <summary>

@@ -311,7 +311,6 @@ internal static class BerthCostMath
         /// <summary>When each file was last made: comparison, boq, backup.</summary>
         public Dictionary<string, DateTime> Made { get; set; } = new(StringComparer.Ordinal);
 
-        /// <summary>The berth's number ("Berth 9" is 9), or "" when it has none.</summary>
         /// <summary>The berth's number: its single value (a package "A6 Berths 4" of one berth is berth 4), else the first number in its name.</summary>
         public string Number =>
             (FindBy == BerthStatusMath.FindBy.Parameter && Value.Trim().Length > 0 && Value.Trim().All(char.IsDigit) ? Value.Trim() : Regex.Match(Name, @"\d+") is { Success: true } m ? m.Value : "")
@@ -686,10 +685,19 @@ internal static class BerthCostMath
             var (q, _) = Quantity(p, b, i.No);
             // Before a reading nothing is "not found": the model hasn't been read for this berth yet.
             if (b.Measured is not null && i.Rule.Trim().Length > 0 && q is null) list.Add($"{i.Name}: not found in the model" + (b.Measured?.Notes.TryGetValue(i.No, out var why) == true ? $" ({why})" : ""));
+            // Concrete with no kg/m³ would put 0 t of reinforcement in the cost without a word.
+            if (q is > 0 && KgOf(i.No) is { } kg && b.Param(kg) <= 0) list.Add($"{i.Name}: reinforcement kg/m³ ({Params.First(x => x.Key == kg).Label})");
             if (!noRates && q is > 0 && RateFor(p, b, i) <= 0) list.Add($"{i.Name}: no unit cost" + (i.RateCode.StartsWith("pile:", StringComparison.Ordinal) ? " (pile diameter and kg/m³, and the pile, concrete and rebar rates)" : ""));
         }
         return list;
     }
+
+    /// <summary>The kg/m³ parameter an item's reinforcement is worked out with (concrete items and bored piles), or null.</summary>
+    public static string? KgOf(int no) => no switch
+    {
+        3 => "InfillKg", 5 => "MiddleKg", 6 => "RearKg", 7 => "BarretteKg",
+        _ => RebarOf.Where(x => x.No == no).Select(x => x.Kg).FirstOrDefault(),
+    };
 
     /// <summary>The reinforcement of each concrete element of a berth (the back-up's last table and the BOQ's "(866 Ton)").</summary>
     public sealed record RebarRow(string Name, double Kg, double Volume, double Weight, int No);

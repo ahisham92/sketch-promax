@@ -108,6 +108,8 @@ internal static class CostTests
         check("per unit: nothing measured, no rate", Cost.UnitRates([], Cost.Apply(0, new Cost.AddOns()), new Cost.Basis()).Count == 0, "");
         check("groups by unit and words", Cost.GroupOf("Concrete in slabs", "m3") == "concrete" && Cost.GroupOf("Blockwork walls", "m3") == "other" && Cost.GroupOf("Rebar to beams", "t") == "rebar"
             && Cost.GroupOf("Steel sections", "kg") == "steel" && Cost.GroupOf("Formwork to soffits", "m2") == "formwork" && Cost.GroupOf("Tiling", "m2") == "other", "");
+        check("fill, sand and stone in m³ are not concrete (else the rate per m³ of concrete is off)", Cost.GroupOf("Cement stabilised sand filling", "m3") == "other"
+            && Cost.GroupOf("Recycled aggregate concrete filling", "m3") == "other" && Cost.GroupOf("Rock armour stone", "m3") == "other" && Cost.GroupOf("Concrete in deck slab", "m3") == "concrete", "");
         check("kinds by category", Cost.KindOf("Walls") == "wall" && Cost.KindOf("Structural Framing") == "beam" && Cost.KindOf("Structural Foundations", pile: true) == "pile"
             && Cost.KindOf("Railings") == "railing" && Cost.KindOf("Floors") == "slab" && Cost.KindOf("Furniture") == "other", "");
         var square = new List<(double, double)> { (0, 0), (10, 0), (10, 10), (0, 10) };

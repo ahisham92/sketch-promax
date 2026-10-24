@@ -308,7 +308,7 @@ internal static class Cost
         return unit switch
         {
             "kg" or "t" => Has(RebarWords) ? "rebar" : "steel",
-            "m3" => Has(@"block|masonry|brick|excavat|\bfill\b|backfill|screed|asphalt|timber") ? "other" : "concrete",
+            "m3" => Has(@"block|masonry|brick|excavat|\bfill(ing)?\b|backfill|screed|asphalt|timber|\bsand\b|gravel|aggregate(?! concrete)|\brock\b|\bstone\b|\bsoil\b|earth|insulation|polystyrene") ? "other" : "concrete",
             "m2" => Has(@"formwork|shuttering|\bforms?\b") ? "formwork" : "other",
             _ => "other",
         };
