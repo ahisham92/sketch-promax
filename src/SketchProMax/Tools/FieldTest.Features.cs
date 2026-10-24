@@ -504,6 +504,7 @@ internal static partial class FieldTest
         await Probe(s, "berth.read", app => BerthStatusProbe(app, s)).ConfigureAwait(false);
         await Probe(s, "costing.berth", app => BerthCostProbe(app, s)).ConfigureAwait(false);
         await Probe(s, "checklist.views", app => ChecklistViewsProbe(app, s)).ConfigureAwait(false);
+        await Probe(s, "subcheck.store", app => SubmissionChecklistProbe(app, s)).ConfigureAwait(false);
         await Probe(s, "checklist.fix", app => ChecklistFixProbe(app, s)).ConfigureAwait(false);
         await Probe(s, "checklist.fix_more", app => ChecklistFixMoreProbe(app, s)).ConfigureAwait(false);
         await Probe(s, "checklist.fix_standards", app => ChecklistFixStandardsProbe(app, s)).ConfigureAwait(false);
@@ -2481,6 +2482,58 @@ internal static partial class FieldTest
     }
 
     /// <summary>Show in Revit's checking views are made (plan with grids, schedules) and all deleted again; rolled back at the end.</summary>
+    /// <summary>
+    /// The submission checklist through the model: an engineer's and a group leader's records are written into the test
+    /// project (each its own element), read back and merged (answers, approval, the N/A hidden once approved, the setup
+    /// only the group leader can change), and the Word file is made from them. Rolled back.
+    /// </summary>
+    private static (string, string) SubmissionChecklistProbe(UIApplication app, State s)
+    {
+        if (TestDoc(app, s, out var why) is not { } doc) return Fail(why);
+        var problems = new List<string>();
+        var now = DateTime.UtcNow;
+        var lead = new SubmissionChecklistMath.UserRecord { User = "Field test group leader" };
+        lead.Setup = new SubmissionChecklistMath.Setup { Types = ["piled-deck", "gravity-blocks"], Leads = [lead.User], By = lead.User, At = now };
+        var key = SubmissionChecklistMath.AddSubmission(lead, "FT1", "Field test", DateTime.Today.AddDays(7), now);
+        var eng = new SubmissionChecklistMath.UserRecord { User = "Field test engineer" };
+        var sub = SubmissionChecklistMath.Merge([lead]).Find(key)!;
+        SubmissionChecklistMath.SetAnswer(eng, sub, "basis.dbr", "Y", "", now.AddSeconds(1));
+        SubmissionChecklistMath.SetAnswer(eng, sub, "basis.seismic", "NA", "Not a seismic zone", now.AddSeconds(2));
+        SubmissionChecklistMath.SetReview(lead, sub, "basis.dbr", SubmissionChecklistMath.Approved, "", now.AddSeconds(3));
+        SubmissionChecklistMath.SetReview(lead, sub, "basis.seismic", SubmissionChecklistMath.Approved, "", now.AddSeconds(4));
+        using var group = new TransactionGroup(doc, "Field test: submission checklist");
+        group.Start();
+        try
+        {
+            var before = Revit.SubmissionChecklistStore.ReadAll(doc).Count;
+            foreach (var r in new[] { lead, eng })
+                if (Revit.SubmissionChecklistStore.Write(doc, r) is { } failed) problems.Add($"writing {r.User}: {failed}");
+            // Writing again with no change leaves the element alone; a change replaces the record, not adds one.
+            SubmissionChecklistMath.SetAnswer(eng, sub, "basis.codes", "N", "Waiting for the client", now.AddSeconds(5));
+            if (Revit.SubmissionChecklistStore.Write(doc, eng) is { } again) problems.Add("writing again: " + again);
+            var records = Revit.SubmissionChecklistStore.ReadAll(doc);
+            if (records.Count != before + 2) problems.Add($"{records.Count - before} records read back, not 2");
+            var shared = SubmissionChecklistMath.Merge(records);
+            var back = shared.Find(key);
+            if (back is null) problems.Add("the submission isn't read back");
+            else
+            {
+                var questions = SubmissionChecklistMath.QuestionsFor(shared.Setup, shared.Added);
+                if (SubmissionChecklistMath.StateOf(back, "basis.dbr") != SubmissionChecklistMath.ItemState.Approved) problems.Add("the approved Yes isn't approved");
+                if (SubmissionChecklistMath.StateOf(back, "basis.seismic") != SubmissionChecklistMath.ItemState.Hidden) problems.Add("the approved N/A isn't hidden");
+                if (SubmissionChecklistMath.StateOf(back, "basis.codes") != SubmissionChecklistMath.ItemState.No) problems.Add("the second write's No is missing");
+                if (!shared.IsLead(lead.User) || shared.IsLead(eng.User)) problems.Add("the group leader is wrong");
+                if (!questions.Any(q => q.Id == "blocks.keys") || questions.Any(q => q.Id == "caissons.float")) problems.Add("the questions don't follow the structure types");
+                var docx = Path.Combine(s.Folder, "Submission checklist field test.docx");
+                SubmissionChecklistDocx.Write(docx, shared, back, questions, new SubmissionChecklistDocx.Info(doc.Title, Update.Updater.CurrentText, DateTime.Now, new Dictionary<string, ChecklistDocx.Image>()));
+                if (!File.Exists(docx) || new FileInfo(docx).Length < 4000) problems.Add("the Word file wasn't made");
+                else File.Delete(docx);
+            }
+        }
+        finally { RollBack(group); }
+        return problems.Count == 0 ? Pass("an engineer's and a group leader's records written into the model, read back and merged; the Word file made; rolled back") : Fail(string.Join("; ", problems));
+    }
+
     private static (string, string) ChecklistViewsProbe(UIApplication app, State s)
     {
         if (TestDoc(app, s, out var why) is not { } doc) return Fail(why);

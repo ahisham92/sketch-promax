@@ -111,6 +111,8 @@ public static class CoreEntry
             "issue-check" => IssueGateWindow.Command(app),
             // The pre-submission checklist (0.35+): the office's checklist in stages, ending in a signed Word file.
             "pre-submission" => ChecklistWindow.Command(app),
+            // The technical submission checklist (0.35+): per submission, shared through the model; opened from Submissions status and the Model checklist.
+            "submission-checklist" => SubmissionChecklistWindow.Command(app),
             // Berth status (0.35+): each berth's status for its next submission, read from the model only when asked.
             "berth-status" => BerthStatusWindow.Command(app),
             // Berth costing (0.35+ on the ribbon; also opened from Submissions status).

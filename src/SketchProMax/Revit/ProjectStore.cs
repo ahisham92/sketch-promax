@@ -87,7 +87,7 @@ internal static class ProjectStore
     }
 
     /// <summary>Why another user's hold on the element keeps this user from changing it, or null when it can be changed.</summary>
-    private static string? Blocked(Document doc, ElementId id)
+    internal static string? Blocked(Document doc, ElementId id)
     {
         if (!doc.IsWorkshared) return null;
         try
@@ -103,7 +103,7 @@ internal static class ProjectStore
         return null;
     }
 
-    private sealed class RollBackOnError(List<string> errors) : IFailuresPreprocessor
+    internal sealed class RollBackOnError(List<string> errors) : IFailuresPreprocessor
     {
         public FailureProcessingResult PreprocessFailures(FailuresAccessor accessor)
         {

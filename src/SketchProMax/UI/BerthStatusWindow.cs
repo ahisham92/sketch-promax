@@ -41,6 +41,8 @@ internal sealed class BerthStatusWindow : Window
     private readonly List<(Autodesk.Revit.DB.Document Doc, Revit.ChangeTracker.Changes Changes)> taken = [];
     private string _savedText = "";
     private string _file = "";
+    /// <summary>Each submission's technical checklist, as this PC last saw it (SubmissionChecklistWindow keeps it).</summary>
+    private Dictionary<string, SubmissionChecklistMath.Summary> _checks = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>The setup's model of the open file, or null to show every model.</summary>
     private Model? ShownModel => _setup is null || _file.Length == 0 ? null : ModelFor(_setup, _file);
@@ -109,6 +111,8 @@ internal sealed class BerthStatusWindow : Window
         {
             if (_reading || _project.Length == 0 || _setup is null) return;
             if (StateText(_project) is { Length: > 0 } text && text != _savedText) { _state = LoadState(_project); _savedText = text; Refresh(); }
+            // Back from the submission checklist: its new scores show.
+            else if (SubmissionChecklistMath.ToJson(SubmissionChecklistMath.LoadSummaries()) != SubmissionChecklistMath.ToJson(_checks)) Refresh();
         };
         Load();
         Build();
@@ -379,6 +383,7 @@ internal sealed class BerthStatusWindow : Window
         if (_setup is null) return;
         var now = DateTime.Now;
         var all = Summaries();
+        _checks = SubmissionChecklistMath.LoadSummaries();
         _list.Children.Clear();
         var known = all.Where(s => s.Percent is not null).ToList();
         double? overall = known.Count == 0 ? null : known.Average(s => s.Percent!.Value);
@@ -404,6 +409,32 @@ internal sealed class BerthStatusWindow : Window
         ShowDetail(selected);
     }
 
+    /// <summary>The submission a package's (or berth's) checklist is for: its next one, else its last.</summary>
+    private static (string Package, string Name, DateTime? Due) SubmissionOf(Summary s)
+    {
+        var package = s.Berth.Parent.Length > 0 ? s.Berth.Parent : s.Berth.Name;
+        var sub = s.Next ?? s.Last;
+        return (package, sub?.Name ?? "", sub is null || sub.Date == NoDate ? null : sub.Date);
+    }
+
+    private SubmissionChecklistMath.Summary? CheckOf(Summary s)
+    {
+        var (package, name, _) = SubmissionOf(s);
+        return SubmissionChecklistMath.Find(_checks, package, name);
+    }
+
+    /// <summary>Opens the technical submission checklist on the package's submission (needs the model open in Revit).</summary>
+    private async Task OpenChecklist(Summary s)
+    {
+        var (package, name, due) = SubmissionOf(s);
+        try
+        {
+            var r = await App.Dispatcher.InvokeAsync(app => SubmissionChecklistWindow.Command(app, package, name.Length > 0 ? name : "Submission", due));
+            if (r != Result.Succeeded) _status.Text = "Open the model in Revit first: the submission checklist is kept in the model.";
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException) { _status.Text = "The submission checklist couldn't open now (" + ex.Message + "). Finish what Revit is doing, then try again."; }
+    }
+
     /// <summary>The package a berth belongs to (itself when it is a package).</summary>
     private static string PackageKey(Berth b) => b.Parent.Length > 0 ? KeyOf(b.Model, b.Parent) : b.Key;
 
@@ -424,7 +455,15 @@ internal sealed class BerthStatusWindow : Window
         var chip = StageChip(StageOf(s));
         chip.HorizontalAlignment = HorizontalAlignment.Center;
         stack.Children.Add(chip);
-        var tip = $"{s.Berth.Name} · {Pct(s.Percent)} · {DueText(s)}" + (ChildrenOf(s.Berth).Count > 0 ? ". Click to see its berths." : ". Click for its details.");
+        var check = CheckOf(s);
+        if (check is not null)
+        {
+            var line = Small($"Checked {check.Checked}% · BIM {(check.Bim is { } bim ? bim + "%" : "–")}");
+            line.TextAlignment = TextAlignment.Center;
+            line.Margin = new Thickness(0, 4, 0, 0);
+            stack.Children.Add(line);
+        }
+        var tip = $"{s.Berth.Name} · {Pct(s.Percent)} · {DueText(s)}" + (check is null ? "" : $" · submission checklist {check.Checked}% checked, {check.Approved}% approved, BIM checklist {(check.Bim is { } b2 ? b2 + "%" : "not filled in")}") + (ChildrenOf(s.Berth).Count > 0 ? ". Click to see its berths." : ". Click for its details.");
         return Tile(stack, on, tip, $"{s.Berth.Name}, {Pct(s.Percent)}, {Text(StageOf(s))}", () => { _selected = s.Berth.Key; Refresh(); }, new Thickness(8, 8, 8, 8));
     }
 
@@ -465,10 +504,10 @@ internal sealed class BerthStatusWindow : Window
         var coming = all.Where(s => s.Next is not null).OrderBy(s => s.Due).ToList();
         if (coming.Count == 0) { page.Children.Add(Para("None: every package is submitted or has no date in the Submissions sheet.", Brand.K.Muted)); return Box(page, top: 12); }
         var grid = new Grid { Margin = new Thickness(0, 8, 0, 0) };
-        foreach (var w in new[] { 1.4, 0.8, 1.4, 1.1, 1.3, 1.2 }) grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(w, GridUnitType.Star) });
+        foreach (var w in new[] { 1.4, 0.8, 1.4, 1.1, 1.3, 1.2, 1.1 }) grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(w, GridUnitType.Star) });
         void Cell(UIElement e, int row, int col) { Grid.SetRow(e, row); Grid.SetColumn(e, col); grid.Children.Add(e); }
         grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        string[] heads = ["PACKAGE", "STATUS", "DUE", "TIME LEFT", "ENGINEERS", "EACH / DAY"];
+        string[] heads = ["PACKAGE", "STATUS", "DUE", "TIME LEFT", "ENGINEERS", "EACH / DAY", "CHECKED / BIM"];
         for (var i = 0; i < heads.Length; i++) Cell(Brand.Text(heads[i], Brand.K.Muted, 10.5, bold: true), 0, i);
         var row = 1;
         foreach (var s in coming)
@@ -487,6 +526,10 @@ internal sealed class BerthStatusWindow : Window
             var need = Brand.Text(each is { } e ? $"{e:0.#}% a day" : "–", each > 10 ? Brand.K.DangerText : Brand.K.Text, 12, bold: each > 10);
             need.ToolTip = "The progress each engineer must add every working day to finish by the due time: what is left, over the working days left, shared between the engineers.";
             Cell(need, row, 5);
+            var c = CheckOf(s);
+            var checkedText = Brand.Text(c is null ? "–" : $"{c.Checked}% / {(c.Bim is { } bim ? bim + "%" : "–")}", c is null ? Brand.K.Muted : PercentKey(c.Checked), 12, bold: c is not null);
+            checkedText.ToolTip = "The submission checklist answered (Yes or N/A) / the BIM checklist's score.";
+            Cell(checkedText, row, 6);
             foreach (var cell in grid.Children.OfType<FrameworkElement>().Where(c => Grid.GetRow(c) == row)) { cell.Margin = new Thickness(0, 4, 6, 0); cell.VerticalAlignment = VerticalAlignment.Center; }
             row++;
         }
@@ -595,6 +638,9 @@ internal sealed class BerthStatusWindow : Window
         facts.Children.Add(FactBox(engineers, "Engineers on the package: the progress needed per working day is shared between them"));
         page.Children.Add(facts);
 
+        // The submission's technical checklist and the BIM checklist, side by side, with the button that opens it.
+        page.Children.Add(ChecklistBox(s));
+
         // The expected finish by hand or asked of the AI, folded.
         var byHand = new DatePicker { SelectedDate = b.FinishByHand?.Date, Width = 140, Margin = new Thickness(0, 0, 8, 0) };
         AutomationProperties.SetName(byHand, "Expected finish set by you");
@@ -668,6 +714,40 @@ internal sealed class BerthStatusWindow : Window
         export.Click += (_, _) => Export(s, open: true);
         var actions = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 14, 0, 0), Children = { export } };
         page.Children.Add(actions);
+    }
+
+    private FrameworkElement ChecklistBox(Summary s)
+    {
+        var check = CheckOf(s);
+        var (package, name, _) = SubmissionOf(s);
+        var row = new DockPanel();
+        var open = RichUi.Button(RichUi.Icon.Open, check is null ? "Start the submission checklist" : "Open the submission checklist", check is null ? Brand.Weight.Secondary : Brand.Weight.Primary);
+        AutomationProperties.SetHelpText(open, "The technical checklist of this submission: the engineer answers, the group leader approves; kept in the model so both see it after a sync.");
+        open.VerticalAlignment = VerticalAlignment.Center;
+        open.Click += async (_, _) => await OpenChecklist(s);
+        DockPanel.SetDock(open, Dock.Right);
+        row.Children.Add(open);
+        var rings = new StackPanel { Orientation = Orientation.Horizontal };
+        foreach (var (label, value) in new[] { ("Checked", (double?)check?.Checked), ("Approved", check?.Approved), ("BIM checklist", check?.Bim) })
+        {
+            var one = new StackPanel { Margin = new Thickness(0, 0, 14, 0) };
+            one.Children.Add(new PercentRing(check is null ? null : value, 50, 6, 12) { HorizontalAlignment = HorizontalAlignment.Center });
+            var l = Small(label);
+            l.TextAlignment = TextAlignment.Center;
+            one.Children.Add(l);
+            rings.Children.Add(one);
+        }
+        var texts = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+        texts.Children.Add(Brand.Text("SUBMISSION CHECKLIST", Brand.K.Muted, 10.5, bold: true));
+        texts.Children.Add(Brand.Text(check is null ? "Not started" : check.Status, check is null ? Brand.K.Muted : check.No + check.Returned > 0 ? Brand.K.DangerText : check.Approved >= 100 ? Brand.K.SuccessText : Brand.K.Text, 13, bold: true));
+        texts.Children.Add(Small(check is null ? $"{package}{(name.Length > 0 ? " · " + name : "")}: technical questions and the BIM checklist score"
+            : $"{check.Total} questions{(check.At > DateTime.MinValue ? " · as of " + check.At.ToString("ddd dd-MMM HH:mm", CultureInfo.CurrentCulture) : "")}"));
+        texts.Margin = new Thickness(4, 0, 12, 0);
+        rings.Children.Add(texts);
+        row.Children.Add(rings);
+        var box = FactBox(row, "The submission's technical checklist: Checked = answered Yes or N/A, Approved = by the group leader; BIM checklist = the Model checklist's score");
+        box.Margin = new Thickness(0, 10, 0, 0);
+        return box;
     }
 
     private static Border Fact(string label, string value, string sub, string tip)

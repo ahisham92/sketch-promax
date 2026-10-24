@@ -172,6 +172,30 @@ internal sealed class ChecklistWindow : Window
         return (window, window._draftPath);
     }
 
+    /// <summary>Where the answers for a model are kept on this PC (by its working name, so the _detached copy shares them).</summary>
+    internal static string DraftPathFor(string modelFile) =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SketchProMax", "checklists",
+            ChecklistMath.SafeName(Path.GetFileNameWithoutExtension(ChecklistMath.WorkingName(modelFile))) + ".json");
+
+    /// <summary>
+    /// The Model checklist's score for a model on this PC: checks answered Yes or N/A out of those kept (N/A ones removed),
+    /// as the window's Your answers ring shows it. Null when it was never filled in here or can't be read.
+    /// </summary>
+    internal static int? BimScore(string modelFile, string project)
+    {
+        try
+        {
+            var path = DraftPathFor(modelFile);
+            if (!File.Exists(path) || ChecklistMath.FromJson<ChecklistMath.State>(File.ReadAllText(path)) is not { } state) return null;
+            state.Answers ??= new(StringComparer.Ordinal);
+            if (state.Answers.Count == 0) return null;
+            if (ChecklistStore.Load(AgentSettings.Load(), project).Def is not { } def) return null;
+            var kept = ChecklistMath.WithoutRemoved(def, state);
+            return ChecklistMath.Percent(ChecklistMath.Count(kept.Items, state));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException) { return null; }
+    }
+
     private static string DocKey(Autodesk.Revit.DB.Document doc)
     {
         try { return string.IsNullOrEmpty(doc.PathName) ? doc.Title : doc.PathName; }
@@ -185,8 +209,7 @@ internal sealed class ChecklistWindow : Window
         _def = def;
         _loadError = error;
         _facts = facts;
-        _draftPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SketchProMax", "checklists",
-            ChecklistMath.SafeName(Path.GetFileNameWithoutExtension(ChecklistMath.WorkingName(facts.Model))) + ".json");
+        _draftPath = DraftPathFor(facts.Model);
 
         Title = "Sketch ProMax pre-submission checklist";
         var area = SystemParameters.WorkArea;
@@ -244,7 +267,7 @@ internal sealed class ChecklistWindow : Window
         var subtitle = _def is null ? "Pick your office's checklist to start" : $"{_def.Title} · {Shown(_facts.Model)}";
         // The header band, with the two scores always in view on the right (they follow every answer).
         var band = Brand.Header("Pre-submission checklist", subtitle);
-        band.Padding = new Thickness(16, 12, _def is null ? 16 : 470, 12);
+        band.Padding = new Thickness(16, 12, _def is null ? 16 : 640, 12);
         var header = new Grid();
         header.Children.Add(band);
         if (_def is not null)
@@ -262,6 +285,17 @@ internal sealed class ChecklistWindow : Window
             gear.VerticalAlignment = VerticalAlignment.Center;
             AutomationProperties.SetHelpText(gear, "Run all checks, the helper for hand checks, edit the checklist and its checking rules, signatures.");
             gear.Click += (_, _) => OpenSettings();
+            // The technical submission checklist (its BIM part is this checklist's score).
+            var technical = RichUi.Button(RichUi.Icon.Open, "Submission checklist");
+            technical.VerticalAlignment = VerticalAlignment.Center;
+            technical.Margin = new Thickness(0, 0, 8, 0);
+            AutomationProperties.SetHelpText(technical, "The technical checklist per submission (engineer answers, group leader approves). This checklist's score is its BIM part.");
+            technical.Click += async (_, _) =>
+            {
+                var said = await OnModel(ui => SubmissionChecklistWindow.Command(ui.Application) == Autodesk.Revit.UI.Result.Succeeded ? "" : "The submission checklist didn't open.");
+                if (said.Length > 0) _status.Text = said;
+            };
+            rings.Children.Add(technical);
             rings.Children.Add(run);
             rings.Children.Add(gear);
             rings.Children.Add(_answersRing);
@@ -2438,6 +2472,18 @@ internal sealed class ChecklistWindow : Window
     /// </summary>
     private void Styles()
     {
+        // A styling problem never stops the checklist: it falls back to stock controls (stages still on the left).
+        if (StageStyles() is { } dictionary)
+        {
+            Resources.MergedDictionaries.Add(dictionary);
+            _stages.Style = (Style)dictionary["SpmStages"];
+        }
+        else _stages.TabStripPlacement = Dock.Left;
+    }
+
+    /// <summary>The stage list, Yes / No / N/A segments and link button styles (the submission checklist uses them too); null when they can't be read.</summary>
+    internal static ResourceDictionary? StageStyles()
+    {
         static string Seg(string key, string on) => $$"""
               <Style x:Key="{{key}}" TargetType="RadioButton">
                 <Setter Property="Foreground" Value="{DynamicResource SpmText}"/>
@@ -2533,13 +2579,7 @@ internal sealed class ChecklistWindow : Window
               </Style>
             </ResourceDictionary>
             """;
-        // A styling problem never stops the checklist: it falls back to stock controls (stages still on the left).
-        try
-        {
-            var dictionary = (ResourceDictionary)XamlReader.Parse(xaml);
-            Resources.MergedDictionaries.Add(dictionary);
-            _stages.Style = (Style)dictionary["SpmStages"];
-        }
-        catch (Exception) { _stages.TabStripPlacement = Dock.Left; }
+        try { return (ResourceDictionary)XamlReader.Parse(xaml); }
+        catch (Exception) { return null; }
     }
 }
