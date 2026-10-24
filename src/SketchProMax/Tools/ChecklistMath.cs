@@ -90,7 +90,8 @@ internal static class ChecklistMath
         new("units", "Project units", "Length mm 0, Angle degrees 2", "The project units and decimal places Fix it sets: Length mm, cm or m and Angle degrees or radians, each with its decimals " +
             "(empty: not tested).", "units"),
         new("uniformatmap", "UniFormat code for each category or type", "", "What Fix it writes into the classification parameter of types that have none: Category>code or type name pattern>code, " +
-            "comma separated, e.g. Structural Foundations>A1020, Floors>B1010 (empty: nothing is filled).", "uniformat"),
+            "comma separated, e.g. Structural Foundations>A1020, Floors>B1010. Add a thickness range for layered types: Floors 1450-3200mm>B1010.10 gives floors that thick " +
+            "(beams modelled as floors) the beam code; a range or name rule wins over the plain category (empty: nothing is filled).", "uniformat"),
         new("templatemap", "View template for each view type", "", "What Fix it applies to views on sheets: View type>template name, comma separated, e.g. Floor Plan>ST_Plan, Section>ST_Section, 3D View>ST_3D " +
             "(empty: nothing is applied).", "viewtemplates"),
         new("typecodes", "Type codes in the file name", "RVT, C3D, DRW, RPT", "The type field of a file name is one of these; a Revit model must carry RVT (empty: not tested).", "typefield"),
@@ -273,6 +274,15 @@ internal static class ChecklistMath
     {
         var rx = "^" + Regex.Escape(pattern.Trim()).Replace("\\*", ".*").Replace("\\?", ".").Replace("\\#", "[0-9]").Replace("\\ ", "\\s+") + "$";
         return Regex.IsMatch((value ?? "").Trim(), rx, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    }
+
+    /// <summary>A UniFormat rule key with a thickness range, "Floors 1450-3200mm": its category or name pattern and the range in mm; null for a plain key.</summary>
+    public static (string Base, double Min, double Max)? ThickRange(string key)
+    {
+        var m = Regex.Match(key.Trim(), @"^(.*\S)\s+(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)\s*mm$", RegexOptions.IgnoreCase);
+        if (!m.Success) return null;
+        double a = double.Parse(m.Groups[2].Value, CultureInfo.InvariantCulture), b = double.Parse(m.Groups[3].Value, CultureInfo.InvariantCulture);
+        return (m.Groups[1].Value.Trim(), Math.Min(a, b), Math.Max(a, b));
     }
 
     /// <summary>Whether <paramref name="value"/> matches any pattern of the list.</summary>

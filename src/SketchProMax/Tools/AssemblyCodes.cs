@@ -112,13 +112,13 @@ internal static class AssemblyCodes
             if (group.Key.Length > 0)
             {
                 var n = group.Count();
-                var forCategory = map.Where(m => group.Key.Equals(m.Key, StringComparison.OrdinalIgnoreCase) || group.Key.StartsWith(m.Key, StringComparison.OrdinalIgnoreCase)).Select(m => m.Code).FirstOrDefault() ?? "";
+                var forCategory = map.Where(m => ChecklistMath.ThickRange(m.Key) is null && (group.Key.Equals(m.Key, StringComparison.OrdinalIgnoreCase) || group.Key.StartsWith(m.Key, StringComparison.OrdinalIgnoreCase))).Select(m => m.Code).FirstOrDefault() ?? "";
                 lines.Add($"{CategoryKey}{group.Key}\tALL {group.Key.ToUpperInvariant()}: {n} type{(n == 1 ? "" : "s")}, {group.Sum(x => x.Count)} elements (a type's own box below wins)\t{forCategory}");
             }
             foreach (var (type, count, now) in group.OrderBy(x => ChecklistFacts.TypeLabel(x.Type), StringComparer.OrdinalIgnoreCase))
             {
                 var unknown = now.Length > 0;
-                var suggested = ChecklistFixes.UniFormatFor("", type.FamilyName, type.Name, map) ?? "";
+                var suggested = ChecklistFixes.UniFormatFor(group.Key, type.FamilyName, type.Name, map, ChecklistFixes.ThickMm(type), plainCategory: false) ?? "";
                 var what = $"{ChecklistFacts.TypeLabel(type)} ({count} element{(count == 1 ? "" : "s")}{(unknown ? $", now {now}: not in the code list" : "")})";
                 types.Add((group.Key, $"{type.Id.Value}\t{what.Replace('\t', ' ')}\t{suggested}"));
             }

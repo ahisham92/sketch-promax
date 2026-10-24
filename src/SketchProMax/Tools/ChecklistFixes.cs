@@ -545,13 +545,27 @@ internal static class ChecklistFixes
             .Where(p => p.Length == 2 && p[0].Trim().Length > 0 && p[1].Trim().Length > 0).Select(p => (p[0].Trim(), p[1].Trim())).ToList();
 
     /// <summary>
-    /// The code for a type: a pair whose pattern matches its family or type name first (so *Beam*>B1010.10 gives beams
-    /// modelled as floors the beam code), else one naming its category (or the start of it).
+    /// The code for a type: a pair with a thickness range its category (or name) and thickness fall in first
+    /// ("Floors 1450-3200mm>B1010.10": beams modelled as floors), then one whose pattern matches its family or type name
+    /// (*Beam*>B1010.10), else one naming its category (or the start of it), unless <paramref name="plainCategory"/> is false.
     /// </summary>
-    internal static string? UniFormatFor(string category, string family, string type, List<(string Key, string Code)> map) =>
-        map.Where(m => ChecklistMath.Like(type, m.Key) || ChecklistMath.Like(family, m.Key) || ChecklistMath.Like(family + ": " + type, m.Key))
-            .Concat(map.Where(m => category.Length > 0 && (category.Equals(m.Key, StringComparison.OrdinalIgnoreCase) || category.StartsWith(m.Key, StringComparison.OrdinalIgnoreCase))))
-            .Select(m => m.Code).FirstOrDefault();
+    /// <param name="thickMm">The type's thickness (floors, walls, roofs), for the pairs with a thickness range.</param>
+    internal static string? UniFormatFor(string category, string family, string type, List<(string Key, string Code)> map, double? thickMm = null, bool plainCategory = true)
+    {
+        bool Named(string key) => ChecklistMath.Like(type, key) || ChecklistMath.Like(family, key) || ChecklistMath.Like(family + ": " + type, key);
+        bool OfCategory(string key) => category.Length > 0 && (category.Equals(key, StringComparison.OrdinalIgnoreCase) || category.StartsWith(key, StringComparison.OrdinalIgnoreCase));
+        foreach (var m in map)
+            if (ChecklistMath.ThickRange(m.Key) is { } r && thickMm is { } t && t >= r.Min - 0.5 && t <= r.Max + 0.5 && (OfCategory(r.Base) || Named(r.Base))) return m.Code;
+        var plain = map.Where(m => ChecklistMath.ThickRange(m.Key) is null).ToList();
+        return plain.Where(m => Named(m.Key)).Concat(plainCategory ? plain.Where(m => OfCategory(m.Key)) : []).Select(m => m.Code).FirstOrDefault();
+    }
+
+    /// <summary>The type's thickness in millimetres when it is layered (floors, walls, roofs).</summary>
+    internal static double? ThickMm(ElementType type)
+    {
+        try { return (type as HostObjAttributes)?.GetCompoundStructure() is { } cs ? cs.GetWidth() * 304.8 : null; }
+        catch (Exception ex) when (Revit(ex)) { return null; }
+    }
 
     private static string UniFormat(Document doc, ChecklistMath.Definition? def)
     {
@@ -568,7 +582,7 @@ internal static class ChecklistFixes
             t.Start();
             foreach (var type in types)
             {
-                var code = UniFormatFor(type.Category?.Name ?? "", type.FamilyName, type.Name, map);
+                var code = UniFormatFor(type.Category?.Name ?? "", type.FamilyName, type.Name, map, ThickMm(type));
                 var p = AssemblyCodes.CodeOf(type, names);
                 if (code is null || p is null || p.IsReadOnly || p.StorageType != StorageType.String) { left.Add(ChecklistFacts.TypeLabel(type)); continue; }
                 try { if (p.Set(code)) filled++; else failed++; }
