@@ -148,13 +148,13 @@ internal static class ChecklistDocx
 
     private static string Or(string value, string fallback) => string.IsNullOrWhiteSpace(value) ? fallback : value;
 
-    private static string Heading(string text) =>
+    internal static string Heading(string text) =>
         $"<w:p><w:pPr><w:keepNext/><w:spacing w:before=\"240\" w:after=\"80\"/></w:pPr>{Run(text, bold: true, size: 24, color: Accent)}</w:p>";
 
-    private static string Para(string runs, int after = 80, bool center = false, bool keep = false) =>
+    internal static string Para(string runs, int after = 80, bool center = false, bool keep = false) =>
         $"<w:p><w:pPr>{(keep ? "<w:keepNext/>" : "")}<w:spacing w:before=\"0\" w:after=\"{after}\"/>{(center ? "<w:jc w:val=\"center\"/>" : "")}</w:pPr>{runs}</w:p>";
 
-    private static string Run(string text, bool bold = false, int size = 20, string? color = null, bool italic = false)
+    internal static string Run(string text, bool bold = false, int size = 20, string? color = null, bool italic = false)
     {
         if (string.IsNullOrEmpty(text)) return "";
         var props = $"<w:rPr><w:rFonts w:ascii=\"{Font}\" w:hAnsi=\"{Font}\" w:cs=\"{Font}\"/>{(bold ? "<w:b/>" : "")}{(italic ? "<w:i/>" : "")}" +
@@ -169,7 +169,7 @@ internal static class ChecklistDocx
         return sb.Append("</w:r>").ToString();
     }
 
-    private static string Table(int[] widths, string rows)
+    internal static string Table(int[] widths, string rows)
     {
         var borders = string.Concat(new[] { "top", "left", "bottom", "right", "insideH", "insideV" }
             .Select(b => $"<w:{b} w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"{Grid}\"/>"));
@@ -178,10 +178,10 @@ internal static class ChecklistDocx
                $"<w:tblGrid>{string.Concat(widths.Select(w => $"<w:gridCol w:w=\"{w}\"/>"))}</w:tblGrid>{rows}</w:tbl>";
     }
 
-    private static string Row(string cells, bool header = false, int height = 0) =>
+    internal static string Row(string cells, bool header = false, int height = 0) =>
         $"<w:tr><w:trPr><w:cantSplit/>{(header ? "<w:tblHeader/>" : "")}{(height > 0 ? $"<w:trHeight w:val=\"{height}\" w:hRule=\"atLeast\"/>" : "")}</w:trPr>{cells}</w:tr>";
 
-    private static string Cell(int width, string content, string? fill = null, string? border = null)
+    internal static string Cell(int width, string content, string? fill = null, string? border = null)
     {
         var props = $"<w:tcW w:w=\"{width}\" w:type=\"dxa\"/>";
         if (border is not null)
@@ -192,13 +192,13 @@ internal static class ChecklistDocx
     }
 
     /// <summary>An inline picture, scaled to fit the box and keep its proportions.</summary>
-    private static string Drawing(string relId, int id, int pxW, int pxH, double maxWidthMm, double maxHeightMm)
+    internal static string Drawing(string relId, int id, int pxW, int pxH, double maxWidthMm, double maxHeightMm, string name = "Signature")
     {
         const long PerMm = 36000; // EMU
         var scale = Math.Min(maxWidthMm / pxW, maxHeightMm / pxH);
         long cx = (long)(pxW * scale * PerMm), cy = (long)(pxH * scale * PerMm);
         return "<w:r><w:drawing><wp:inline distT=\"0\" distB=\"0\" distL=\"0\" distR=\"0\">" +
-               $"<wp:extent cx=\"{cx}\" cy=\"{cy}\"/><wp:docPr id=\"{id}\" name=\"Signature {id}\" descr=\"Signature\"/>" +
+               $"<wp:extent cx=\"{cx}\" cy=\"{cy}\"/><wp:docPr id=\"{id}\" name=\"{Esc(name)} {id}\" descr=\"{Esc(name)}\"/>" +
                "<wp:cNvGraphicFramePr><a:graphicFrameLocks xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" noChangeAspect=\"1\"/></wp:cNvGraphicFramePr>" +
                "<a:graphic xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><a:graphicData uri=\"http://schemas.openxmlformats.org/drawingml/2006/picture\">" +
                "<pic:pic xmlns:pic=\"http://schemas.openxmlformats.org/drawingml/2006/picture\">" +
@@ -208,7 +208,7 @@ internal static class ChecklistDocx
                "</pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>";
     }
 
-    private const string Namespaces =
+    internal const string Namespaces =
         "xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" " +
         "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" " +
         "xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing\"";
@@ -241,7 +241,7 @@ internal static class ChecklistDocx
         "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><w:settings xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">" +
         "<w:updateFields w:val=\"false\"/><w:defaultTabStop w:val=\"720\"/><w:compat><w:compatSetting w:name=\"compatibilityMode\" w:uri=\"http://schemas.microsoft.com/office/word\" w:val=\"15\"/></w:compat></w:settings>";
 
-    private static void WritePackage(Stream output, string document, string footer, List<(string Name, string RelId, Image Image)> media)
+    internal static void WritePackage(Stream output, string document, string footer, List<(string Name, string RelId, Image Image)> media, string title = "Pre-submission checklist")
     {
         using var zip = new ZipArchive(output, ZipArchiveMode.Create, leaveOpen: true);
         void Add(string name, string text)
@@ -266,7 +266,7 @@ internal static class ChecklistDocx
         Add("docProps/core.xml",
             "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><cp:coreProperties xmlns:cp=\"http://schemas.openxmlformats.org/package/2006/metadata/core-properties\" " +
             "xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmlns:dcterms=\"http://purl.org/dc/terms/\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\">" +
-            "<dc:title>Pre-submission checklist</dc:title><dc:creator>Sketch ProMax</dc:creator></cp:coreProperties>");
+            $"<dc:title>{Esc(title)}</dc:title><dc:creator>Sketch ProMax</dc:creator></cp:coreProperties>");
         var rels = new StringBuilder("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">" +
             "<Relationship Id=\"rIdStyles\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles\" Target=\"styles.xml\"/>" +
             "<Relationship Id=\"rIdSettings\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings\" Target=\"settings.xml\"/>" +
