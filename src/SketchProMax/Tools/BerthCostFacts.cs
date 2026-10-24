@@ -23,6 +23,8 @@ internal static class BerthCostFacts
         public string Category = "", Type = "", Family = "";
         public ElementType? T;
         public double X, Y, MinX, MinY, MaxX, MaxY, Top, Bottom; // feet; Top/Bottom as Revit shows them (feet from the base)
+        /// <summary>Length along its axis (feet) when it has one (a raked pile, a beam), else 0.</summary>
+        public double Axis;
     }
 
     public sealed class Reading
@@ -88,6 +90,7 @@ internal static class BerthCostFacts
         var cats = new HashSet<string>(rules.Values.SelectMany(l => l).SelectMany(r => r.Categories), StringComparer.OrdinalIgnoreCase);
         var baseZ = Elevations.BaseZ(doc);
         var all = new List<El>();
+        var skipped = 0;
 
         // 1. The elements of the categories the rules use, a slice at a time.
         IEnumerator<Element>? walk = null;
@@ -99,6 +102,8 @@ internal static class BerthCostFacts
                 if (!walk.MoveNext()) return false;
                 var e = walk.Current;
                 if (e.Category is not { } cat || !cats.Contains(cat.Name)) continue;
+                // Only what gets built: not the other design options, not what a phase demolishes.
+                if (e.DesignOption is { IsPrimary: false } || e.get_Parameter(BuiltInParameter.PHASE_DEMOLISHED)?.AsElementId() is { } gone && gone != ElementId.InvalidElementId) { skipped++; continue; }
                 var box = e.get_BoundingBox(null);
                 if (box is null) continue;
                 var type = doc.GetElement(e.GetTypeId()) as ElementType;
@@ -107,9 +112,14 @@ internal static class BerthCostFacts
                     E = e, Id = e.Id.Value, Category = cat.Name, T = type, Type = type?.Name ?? "", Family = type?.FamilyName ?? "",
                     X = (box.Min.X + box.Max.X) / 2, Y = (box.Min.Y + box.Max.Y) / 2, MinX = box.Min.X, MinY = box.Min.Y, MaxX = box.Max.X, MaxY = box.Max.Y,
                     Top = box.Max.Z - baseZ, Bottom = box.Min.Z - baseZ,
+                    Axis = e.Location is LocationCurve { Curve: { IsBound: true } axis } ? axis.Length : 0,
                 });
             }
             return true;
+        });
+        reading.Once("Left out", () =>
+        {
+            if (skipped > 0) reading.Problems.Add($"{skipped} element{(skipped == 1 ? "" : "s")} in a secondary design option or demolished in a phase left out.");
         });
 
         // 2. Each berth: its elements, then each item's rules over them.
@@ -133,8 +143,12 @@ internal static class BerthCostFacts
                 reading.Once($"{b.Title}: {item.Name}", () =>
                 {
                     if (!reading.Results.ContainsKey(b.Key)) return;
-                    Measure(p, item, rules[item.No], mine, m);
+                    Measure(p, item, rules[item.No], mine, m, reading.Problems, b.Title);
                 });
+            reading.Once($"{b.Title}: counted twice", () =>
+            {
+                if (reading.Results.ContainsKey(b.Key)) reading.Problems.AddRange(Twice(p, rules, m).Select(t => $"{b.Title}: {t}"));
+            });
             reading.Once($"{b.Title}: pile sizes", () =>
             {
                 if (!reading.Results.ContainsKey(b.Key)) return;
@@ -283,9 +297,28 @@ internal static class BerthCostFacts
     // ---- Measuring an item -----------------------------------------------------------------------------------------------
 
     /// <summary>One element as measured: its row values before grouping.</summary>
-    private sealed record One(string Label, double Top, double Bottom, double D, double Inner, double Area, double Thick, double Volume, double Weight, double Length, long Id);
+    private sealed record One(string Label, double Top, double Bottom, double D, double Inner, double Area, double Thick, double Volume, double Weight, double Length, long Id, bool Solid = false);
 
-    private static void Measure(Project p, Item item, List<Rule> rules, List<El> mine, Measurement m)
+    /// <summary>
+    /// Elements measured in two items of the same unit (a beam over both pile rows in the front and the rear capping beam):
+    /// their quantity is in both. Counts (tests per pile) may overlap.
+    /// </summary>
+    internal static List<string> Twice(Project p, Dictionary<int, List<Rule>> rules, Measurement m)
+    {
+        var said = new List<string>();
+        var items = p.Items.Where(i => m.Ids.ContainsKey(i.No) && rules.TryGetValue(i.No, out var r) && r.All(x => x.Measure != "count")).ToList();
+        for (var a = 0; a < items.Count; a++)
+            for (var c = a + 1; c < items.Count; c++)
+            {
+                if (!string.Equals(items[a].Unit, items[c].Unit, StringComparison.OrdinalIgnoreCase)) continue;
+                var both = m.Ids[items[a].No].Intersect(m.Ids[items[c].No]).ToList();
+                if (both.Count > 0)
+                    said.Add($"{both.Count} element{(both.Count == 1 ? " is" : "s are")} in both {items[a].Name} and {items[c].Name}, so counted twice (ids {string.Join(", ", both.Take(5))}{(both.Count > 5 ? ", …" : "")}). Narrow one item's rule.");
+            }
+        return said;
+    }
+
+    private static void Measure(Project p, Item item, List<Rule> rules, List<El> mine, Measurement m, List<string> problems, string berth)
     {
         double? total = null;
         var lines = new List<Line>();
@@ -303,6 +336,8 @@ internal static class BerthCostFacts
             }
             if (hits.Count == 0) continue;
             var ones = hits.Select(e => Read1(p, r, e)).ToList();
+            if (r.Measure == "weight" && ones.Count(o => o.Solid) is > 0 and var solid)
+                problems.Add($"{berth}: {item.Name}: {solid} element{(solid == 1 ? "" : "s")} with no inner diameter (ID) or mass weighed from {(solid == 1 ? "its" : "their")} solid; check the family is modelled as a tube.");
             var q = r.Measure switch
             {
                 "count" => ones.Count,
@@ -328,8 +363,13 @@ internal static class BerthCostFacts
     {
         var top = Math.Round(e.Top * M, 3);
         var bottom = Math.Round(e.Bottom * M, 3);
+        // Along its axis when it has one (a raked pile is longer than the height it spans).
+        var length = e.Axis > 0 ? Math.Round(e.Axis * M, 3) : top - bottom;
+        var solid = false;
         var outer = Length(e, "OD", "Outer Diameter", "b", "d", "Diameter", "D");
         var inner = Length(e, "ID", "Inner Diameter");
+        // A tube family that gives its wall thickness instead of its inner diameter.
+        if (inner <= 0 && outer > 0 && Length(e, "t", "Wall Thickness", "Wall thickness", "tw") is > 0 and var wall && wall < outer / 2) inner = outer - 2 * wall;
         var thick = e.Category.Equals("Floors", StringComparison.OrdinalIgnoreCase) ? Thickness(e) : 0;
         double area, volume;
         if (thick > 0)
@@ -346,10 +386,18 @@ internal static class BerthCostFacts
             volume = tonnes / steel;
             outer = 0;
         }
+        else if (r.Measure == "weight" && inner <= 0 && Volume(e) is > 0 and var solidM3)
+        {
+            // Steel with no inner diameter and no mass: a full circle of its outer size would weigh it as solid steel
+            // (a 1.6 m tube about 20 times too heavy), so its own solid is the measure.
+            area = length > 0 ? solidM3 / length : 0;
+            volume = solidM3;
+            solid = true;
+        }
         else
         {
             area = outer > 0 ? Math.PI / 4 * (outer * outer - (inner > 0 && inner < outer ? inner * inner : 0)) : 0;
-            volume = area > 0 ? area * (top - bottom) : Volume(e);
+            volume = area > 0 ? area * length : Volume(e);
         }
         var label = r.Label.Length > 0 ? r.Label
             : r.Group.Equals("thickness", StringComparison.OrdinalIgnoreCase) ? ThickLabel(thick)
@@ -357,7 +405,7 @@ internal static class BerthCostFacts
             : r.Group.Equals("type", StringComparison.OrdinalIgnoreCase) || r.Group.Length == 0 ? e.Type
             : Text(e, r.Group) is { Length: > 0 } g ? g : e.Type;
         var density = r.Density > 0 ? r.Density : p.SteelDensity;
-        return new One(label, top, bottom, outer, inner, area, thick, volume, volume * density, top - bottom, e.Id);
+        return new One(label, top, bottom, outer, inner, area, thick, volume, volume * density, length, e.Id, solid);
     }
 
     /// <summary>The table lines of a rule's elements: one per label and size (slabs per label and thickness).</summary>

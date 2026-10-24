@@ -112,6 +112,13 @@ internal static class BerthCostTests
         check("berth costing: infill reinforcement is worked out from m³ × kg/m³", from == Source.Worked && Math.Abs(infill!.Value - 480) < 1e-9, infill.ToString());
         var (super, _) = Quantity(p, b, SuperRebar);
         check("berth costing: superstructure reinforcement sums the concrete items", Math.Abs(super!.Value - (2000 * 140 + 1500 * 150) / 1000.0) < 1e-9, super.ToString());
+        var noKg = Sample(out var bare);
+        bare.Params.Remove("DeckKg");
+        bare.Params.Remove("MiddleKg");
+        var gaps = Missing(noKg, bare);
+        check("berth costing: concrete or piles with no kg/m³ say so (else 0 t of reinforcement is costed silently)",
+            KgOf(12) == "DeckKg" && KgOf(5) == "MiddleKg" && KgOf(3) == "InfillKg" && KgOf(1) is null
+            && gaps.Any(g => g.StartsWith(noKg.ItemOf(12)!.Name) && g.Contains("kg/m³")) && !Missing(p, b).Any(g => g.Contains("reinforcement kg/m³") && g.StartsWith(p.ItemOf(9)!.Name)), string.Join("; ", gaps));
         b.Hand[2] = 300;
         check("berth costing: a hand quantity wins over the model", Quantity(p, b, 2) == (300, Source.Hand), "");
         // The reference pile (1.2 m, 165 kg/m³) comes back at the given rate.
