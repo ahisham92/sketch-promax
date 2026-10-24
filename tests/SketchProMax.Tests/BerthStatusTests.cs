@@ -27,6 +27,11 @@ internal static class BerthStatusTests
         check("berth status: a cell lists several values", Values(" 9; 10 ,BERTH 11;9").SequenceEqual(["9", "10", "BERTH 11"]), string.Join("|", Values(" 9; 10 ,BERTH 11;9")));
         check("berth status: a parameter value matches any of the berth's", ValueMatches("10", ["9", "10"]) && ValueMatches("9", ["BERTH 9"]) && ValueMatches("Berth 9", ["9"])
             && !ValueMatches("1", ["10"]) && !ValueMatches("", ["9"]) && !ValueMatches("19", ["BERTH 9"]), "");
+        check("berth status: berth 09 is berth 9 however it is written", ValueMatches("09", ["9"]) && ValueMatches("BERTH 09", ["9"]) && ValueMatches("9", ["BERTH 09"])
+            && ValueMatches("Berth 9", ["BERTH 09"]) && !ValueMatches("Berth 9", ["Quay 9"]) && !ValueMatches("90", ["9"]), "");
+        check("berth status: berth 1's files, sheets and views are not berth 10's", NameHas("Berth 1 BOQ.xlsx", "Berth 1") && NameHas("BERTH 1.pdf", "Berth 1")
+            && !NameHas("Berth 10 BOQ.xlsx", "Berth 1") && !NameHas("Berth 11", "Berth 1") && NameHas("Plan - Berth 10 - Deck", "Berth 10") && !NameHas("PRJ-A-110", "-A-1")
+            && NameHas("PRJ-A-1-01", "-A-1-"), "");
 
         // A package of several berths: each berth read and shown on its own, the package puts them together.
         var package = new Berth("Port A", "P1 Berths 5, 6", FindBy.Parameter, "5; 6", "Berth Number", "-A-05-; -A-06-");

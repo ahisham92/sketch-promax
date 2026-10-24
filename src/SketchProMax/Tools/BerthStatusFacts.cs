@@ -71,7 +71,7 @@ internal static class BerthStatusFacts
             {
                 if (sheetBerths.TryGetValue(view.Id.Value, out var onSheet)) touched.UnionWith(onSheet);
                 if (view is ViewSchedule)
-                    foreach (var b in berths.Where(b => b.ScheduleTexts.Any(t => view.Name.IndexOf(t, StringComparison.OrdinalIgnoreCase) >= 0))) touched.Add(b.Key);
+                    foreach (var b in berths.Where(b => b.ScheduleTexts.Any(t => BerthStatusMath.NameHas(view.Name, t)))) touched.Add(b.Key);
                 continue;
             }
             if (el.OwnerViewId != ElementId.InvalidElementId)
@@ -526,7 +526,7 @@ internal static class BerthStatusFacts
                 var text = Values(berth.Sheets).Append(berth.Name.Trim()).Where(t => t.Length > 0).ToList();
                 var detailViews = new FilteredElementCollector(doc).OfClass(typeof(View)).Cast<View>()
                     .Where(v => !v.IsTemplate && v.ViewType is ViewType.Detail or ViewType.DraftingView or ViewType.Section)
-                    .Where(v => onSheets.Contains(v.Id.Value) || (!viewSheets.ContainsKey(v.Id.Value) && text.Any(t => v.Name.IndexOf(t, StringComparison.OrdinalIgnoreCase) >= 0)))
+                    .Where(v => onSheets.Contains(v.Id.Value) || (!viewSheets.ContainsKey(v.Id.Value) && text.Any(t => BerthStatusMath.NameHas(v.Name, t))))
                     .ToList();
                 foreach (var v in detailViews)
                 {
@@ -605,7 +605,7 @@ internal static class BerthStatusFacts
                 var whole = berth.FindBy == FindBy.WholeModel && berth.Schedules.Trim().Length == 0;
                 var found = new FilteredElementCollector(doc).OfClass(typeof(ViewSchedule)).Cast<ViewSchedule>()
                     .Where(s => !s.IsTemplate && !s.IsTitleblockRevisionSchedule && !s.IsInternalKeynoteSchedule && !s.IsTitleblockRevisionSchedule
-                                && (whole || texts.Any(t => s.Name.IndexOf(t, StringComparison.OrdinalIgnoreCase) >= 0))).ToList();
+                                && (whole || texts.Any(t => BerthStatusMath.NameHas(s.Name, t)))).ToList();
                 foreach (var s in found)
                 {
                     int rows;
@@ -798,7 +798,7 @@ internal static class BerthStatusFacts
     {
         var texts = Values(berth.Sheets);
         if (texts.Count > 0)
-            return sheets.Where(s => texts.Any(text => s.SheetNumber.IndexOf(text, StringComparison.OrdinalIgnoreCase) >= 0 || s.Name.IndexOf(text, StringComparison.OrdinalIgnoreCase) >= 0)).ToList();
+            return sheets.Where(s => texts.Any(text => BerthStatusMath.NameHas(s.SheetNumber, text) || BerthStatusMath.NameHas(s.Name, text))).ToList();
         if (berth.FindBy == FindBy.WholeModel) return sheets;
         if (berth.FindBy == FindBy.ScopeBox)
         {
@@ -807,7 +807,7 @@ internal static class BerthStatusFacts
             return sheets.Where(s => s.GetAllPlacedViews().Select(doc.GetElement).OfType<View>()
                 .Any(v => v.get_Parameter(BuiltInParameter.VIEWER_VOLUME_OF_INTEREST_CROP)?.AsElementId() is { } id && ids.Contains(id))).ToList();
         }
-        return sheets.Where(s => s.SheetNumber.IndexOf(berth.Name, StringComparison.OrdinalIgnoreCase) >= 0 || s.Name.IndexOf(berth.Name, StringComparison.OrdinalIgnoreCase) >= 0).ToList();
+        return sheets.Where(s => BerthStatusMath.NameHas(s.SheetNumber, berth.Name) || BerthStatusMath.NameHas(s.Name, berth.Name)).ToList();
     }
 
     /// <summary>
