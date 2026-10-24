@@ -959,6 +959,9 @@ internal static class ChecklistFacts
                     if (top is null || bottom is null) { found.Add($"{label}: no top or base level"); ids.Add(f.Id.Value); continue; }
                     tops.Add(top.Value);
                     toes.Add(bottom.Value);
+                    // A column pile's cut-off and toe parameters must agree with where it really starts and ends.
+                    if (Height(Param(f, cutoff)) is { } colCut && !Near(top.Value, colCut)) { found.Add($"{label}: its top isn't at its {cutoff}"); ids.Add(f.Id.Value); }
+                    if (Height(Param(f, toe)) is { } colToe && !Near(bottom.Value, colToe)) { found.Add($"{label}: its bottom isn't at its {toe}"); ids.Add(f.Id.Value); }
                     continue;
                 }
                 if (f.get_BoundingBox(null) is not { } box) continue;
