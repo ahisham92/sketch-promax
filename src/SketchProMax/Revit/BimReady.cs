@@ -97,7 +97,7 @@ internal static class BimReady
             if (loi) lock (Pending) { (Pending.TryGetValue(doc.Title, out var set) ? set : Pending[doc.Title] = []).Add(type.Id.Value); _lastChange = DateTime.UtcNow; }
             var codeParam = codeNames.Select(x => type.LookupParameter(x)).FirstOrDefault(x => x is not null);
             if (codeParam is { IsReadOnly: false, StorageType: StorageType.String } && !ChecklistFacts.Filled(codeParam)
-                && ChecklistFixes.UniFormatFor(cat.Name, type.FamilyName, type.Name, codes) is { } code)
+                && ChecklistFixes.UniFormatFor(cat.Name, type.FamilyName, type.Name, codes, ChecklistFixes.ThickMm(type)) is { } code)
                 Try(() => codeParam.Set(code));
             var typeCode = codeParam?.AsString() ?? "";
             foreach (var (key, param, value) in values)

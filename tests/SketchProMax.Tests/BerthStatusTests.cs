@@ -118,6 +118,9 @@ internal static class BerthStatusTests
             && codes.First(c => c.Code == "A1020.15").Name == "Bored Piles" && codes.First(c => c.Code == "A").Name == "SUBSTRUCTURE" && codes.First(c => c.Code == "A1020").Name == "A1020"
             && codes.First(c => c.Code == "B1010.20").Name == "B1010.20" && SketchProMax.Tools.AssemblyCodeText.Level("A1020.15") == 4 && SketchProMax.Tools.AssemblyCodeText.Level("A10") == 2,
             string.Join("|", codes));
+        check("UniFormat rules: a key with a thickness range is read as its category and range in mm, a plain key isn't",
+            ChecklistMath.ThickRange("Floors 1450-3200mm") == ("Floors", 1450, 3200) && ChecklistMath.ThickRange(" *Slab* 3200 - 1450 MM") == ("*Slab*", 1450, 3200)
+            && ChecklistMath.ThickRange("Floors") is null && ChecklistMath.ThickRange("*Pile Cap*") is null, "");
         var picked = SketchProMax.Tools.AssemblyCodeText.Picked("cat:Floors\tB1010.20\n12\tA1020.15\r\n13\t \nx\tB1010\ncat:\tB10\n14\tB1010.20 \n15");
         check("Assembly Codes: the kept lines are read as a category or type id and a code, empty codes and bad keys skipped",
             picked.Count == 3 && picked[0] == ("cat:Floors", "B1010.20") && picked[1] == ("12", "A1020.15") && picked[2] == ("14", "B1010.20"), string.Join(",", picked));
