@@ -78,6 +78,7 @@ TimeTests.Run((name, ok, detail) => Check(name, ok, detail));
 IssueGateTests.Run((name, ok, detail) => Check(name, ok, detail));
 ChecklistTests.Run((name, ok, detail) => Check(name, ok, detail));
 ChecklistProjectTests.Run((name, ok, detail) => Check(name, ok, detail));
+PdfEditorTests.Run((name, ok, detail) => Check(name, ok, detail));
 BerthStatusTests.Run((name, ok, detail) => Check(name, ok, detail));
 SubmissionChecklistTests.Run((name, ok, detail) => Check(name, ok, detail));
 BerthCostTests.Run((name, ok, detail) => Check(name, ok, detail));

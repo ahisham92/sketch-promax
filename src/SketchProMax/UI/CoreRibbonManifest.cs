@@ -131,6 +131,14 @@ internal static class CoreRibbonManifest
         T("TitleBlocks", "set_sheet_revisions", "Revisions on sheets", "titleblock", "Sets which revisions show on sheets."),
         T("TitleBlocks", "cloud_elements", "Revision clouds", "titleblock", "Draws revision clouds around elements in a view."),
 
+        // PDF editor (0.35.3): every page as a picture, to delete, turn, move, replace, add, merge, extract and split (UI/PdfEditorWindow).
+        L(Button("Documents", "PdfEditor", "PDF editor", "pdf-editor", "pdf",
+            "Edit any PDF: see every page, then delete, turn, move or replace pages, add PDFs to merge, extract or split.",
+            "Opens a PDF of any size with a picture of each page. Click pages to pick them (Ctrl or Shift for more), then delete, " +
+            "turn, drag to a new place, or replace them with pages of another PDF. Add PDFs or blank pages, save picked pages as a " +
+            "new PDF, or split it every few pages, at the picked pages or by size. Nothing is kept in the model: Save as writes the PDF to the folder and name you choose.",
+            small: true, breakBefore: true)),
+
         // ---- Check: small buttons, stacked three and two high (0.35 redesign).
         S("Check", "check_model", "Model check", "check", "Checks the model is built correctly and scores it: warnings, duplicates, gaps, unsupported beams, off-grid columns."),
         S("Check", "find_clashes", "Clashes", "clash", "Finds clashes between two sets of elements, in this model or in linked models."),
@@ -193,11 +201,10 @@ internal static class CoreRibbonManifest
             "Builds a throwaway test project, runs every tool family on it and writes one report. Your open models are not changed.",
             needsModel: true)),
         L(Entry("HelpMenu", "ConnectionStatus", "Desktop app connection", "status", "logo",
-            "Whether the Claude desktop app is connected to this Revit window, the models it can see, and how to fix a missing connection.")),
+            "Whether the Claude desktop app is connected to this Revit window, the models it can see, how to fix a missing connection, and Open the Claude app.")),
+        // Open Claude app left the Help menu in 0.35.3 (Desktop app connection opens it) to free a loader slot for the PDF editor.
         L(Entry("HelpMenu", "TogglePane", "Show or hide pane", "pane", "pane",
             "Shows or hides the Sketch ProMax pane: chat, the running job with a Cancel button, the last result and your tools.")),
-        L(Entry("HelpMenu", "OpenClaude", "Open Claude app", "open-claude", "open",
-            "Starts the Claude desktop app, or brings it to the front. Works with the normal installer and the Microsoft Store version.")),
         L(Button("Sketch ProMax", "ReportBug", "Report bug", "report-bug", "bug",
             "Writes a bug report for Sketch ProMax with what just happened, ready to send.", small: true, breakBefore: true)),
         // Bug folder left the ribbon in 0.35 (still on the pane's Bugs section) to free a loader slot for Share tools.

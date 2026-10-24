@@ -101,6 +101,8 @@ public static class CoreEntry
             "update-button" => CoreCommands.UpdateButton(),
             "send-view" => SendView(),
             "split-pdf" => UI.SplitPdfWindow.Open(),
+            // The PDF editor (0.35.3+): pages as pictures; delete, turn, move, replace, add, merge, extract, split.
+            "pdf-editor" => UI.PdfEditorWindow.Open(),
             // Bug reports (0.30+): one small zip per report, in Documents\Sketch ProMax\Bugs.
             "report-bug" => Bugs.BugReport.Command(app),
             "bug-folder" => Bugs.BugReport.OpenFolder(),
