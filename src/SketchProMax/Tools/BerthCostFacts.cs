@@ -123,7 +123,9 @@ internal static class BerthCostFacts
                 if (member is null) { reading.Problems.Add($"{b.Title}: {why}"); return; }
                 var leave = Shapes(doc, b.Exclude, out var missing);
                 if (missing.Count > 0) reading.Problems.Add($"{b.Title}: no scope box named \"{string.Join("\", \"", missing)}\" to leave out.");
-                mine = all.Where(e => member(e) && !leave.Any(s => BerthStatusFacts.Inside(s, e.X, e.Y))).ToList();
+                var only = Shapes(doc, b.Only, out var gone);
+                if (gone.Count > 0) { reading.Problems.Add($"{b.Title}: no scope box named \"{string.Join("\", \"", gone)}\" for this part."); return; }
+                mine = all.Where(e => member(e) && !leave.Any(s => BerthStatusFacts.Inside(s, e.X, e.Y)) && (only.Count == 0 || only.Any(s => BerthStatusFacts.Inside(s, e.X, e.Y)))).ToList();
                 reading.Results[b.Key] = m;
                 if (mine.Count == 0) reading.Problems.Add($"{b.Title}: no elements found ({(b.FindBy == BerthStatusMath.FindBy.ScopeBox ? "scope box " : b.Parameter + " = ")}{b.Value}).");
             });

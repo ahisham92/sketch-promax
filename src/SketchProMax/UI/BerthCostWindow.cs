@@ -1,9 +1,11 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using Autodesk.Revit.UI;
@@ -21,11 +23,13 @@ using Visibility = System.Windows.Visibility;
 namespace SketchProMax.UI;
 
 /// <summary>
-/// Berth costing (Berth costing button, next to Berth status): every berth of the project with how complete its
-/// costing is (a ring), its cost and US$ per linear metre; click a berth for its costs by group and item, where each
-/// quantity came from (the model, by hand, worked out) and what is missing. The unit costs and the item rules are
-/// editable at any time. Measure reads the open model per berth in short steps (BerthCostFacts), leaving out what a
-/// berth excludes (Berth 9's RoRo part); while the window is open it measures again by itself a few seconds after the
+/// Berth costing (Berth costing button, next to Berth status): the project's figures across the top (total, average,
+/// highest and lowest US$/lm, how complete), then either every berth as a card (a ring for how complete its costing is,
+/// its cost, US$/lm, a bar of its cost groups) or every element across the berths as a table; click a berth for its
+/// costs by group and element, or an element for its cost and quantity per berth. Quantities come from the model; ✎
+/// types one by hand. The unit costs and the item rules are editable at any time. Measure reads the open model per
+/// berth in short steps (BerthCostFacts), leaving out what a berth excludes (Berth 9's RoRo part, which gets a card of
+/// its own under it that counts or not); while the window is open it measures again by itself a few seconds after the
 /// model changes, so the costs and US$/lm follow the model. The ticked berths go out as a costing workbook, a BOQ Excel
 /// each and one Word back-up calculation in the built-in formats (BerthCostDocs) with the ticked items, their
 /// descriptions filled from the model; a project can export a format, edit it in Excel or Word and import it back as its
@@ -42,12 +46,17 @@ internal sealed class BerthCostWindow : Window
     private BerthStatusMath.Setup? _setup;
     private string _selected = "";
     private readonly HashSet<string> _chosen = new(StringComparer.OrdinalIgnoreCase);
-    private string _page = "berth"; // berth, rates, items, details
+    private string _page = "berth"; // berth (the berth or element view), rates, items, details
     private bool _reading, _stop, _closed;
     private string _savedText = "";
 
     private readonly TextBlock _status = Brand.Text("", Brand.K.Muted);
-    private readonly StackPanel _list = new() { Margin = new Thickness(14, 12, 14, 14) };
+    private readonly StackPanel _list = new() { Margin = new Thickness(14, 12, 4, 14) };
+    private readonly ScrollViewer _listScroll = new() { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Focusable = false };
+    private readonly UniformGrid _kpis = new() { Rows = 1 };
+    private readonly DockPanel _bar = new() { LastChildFill = true };
+    private string _view = "berth"; // berth, element
+    private int _item = -1;
     private readonly ScrollViewer _detail = new() { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Padding = new Thickness(20, 14, 20, 20), Focusable = false };
     private readonly Border _runStrip = new() { BorderThickness = new Thickness(0, 0, 0, 1), Padding = new Thickness(18, 8, 18, 8), Visibility = Visibility.Collapsed };
     private readonly TextBlock _runText = Brand.Text("", size: 12.5, bold: true);
@@ -171,9 +180,41 @@ internal sealed class BerthCostWindow : Window
 
     // ---- Layout ---------------------------------------------------------------------------------------------------
 
+    /// <summary>The colour of each cost group (C1-C10) in the bars, the legend and the element table.</summary>
+    private static readonly SolidColorBrush[] GroupColors = new[]
+    {
+        (0x3B, 0x6F, 0xD8), (0x7F, 0xA3, 0xEE), (0x1F, 0x9E, 0x8F), (0x7B, 0x61, 0xE8), (0xB0, 0x72, 0xD6),
+        (0xE0, 0x8A, 0x2E), (0xC9, 0xA2, 0x27), (0x4B, 0xA3, 0xD9), (0x8A, 0x94, 0xA6), (0x9C, 0x6B, 0x4E),
+    }.Select(c => { var b = new SolidColorBrush(Color.FromRgb((byte)c.Item1, (byte)c.Item2, (byte)c.Item3)); b.Freeze(); return b; }).ToArray();
+
+    private static SolidColorBrush GroupColor(string code) =>
+        GroupColors[Math.Max(0, Array.FindIndex(Groups, g => g.Code == code)) % GroupColors.Length];
+
+    /// <summary>The small flat buttons (✎, ▸ BOQ description): no frame until hovered or focused.</summary>
+    private const string LinkStyle = """
+        <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+          <Style x:Key="SpmCostLink" TargetType="Button">
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Foreground" Value="{DynamicResource SpmLink}"/>
+            <Setter Property="Padding" Value="3,0,3,0"/>
+            <Setter Property="Template"><Setter.Value>
+              <ControlTemplate TargetType="Button">
+                <Border x:Name="b" Background="Transparent" BorderBrush="Transparent" BorderThickness="1" CornerRadius="3" Padding="{TemplateBinding Padding}">
+                  <ContentPresenter VerticalAlignment="Center"/>
+                </Border>
+                <ControlTemplate.Triggers>
+                  <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="b" Property="Background" Value="{DynamicResource SpmSurfaceHover}"/></Trigger>
+                  <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="b" Property="BorderBrush" Value="{DynamicResource SpmFocus}"/></Trigger>
+                </ControlTemplate.Triggers>
+              </ControlTemplate>
+            </Setter.Value></Setter>
+          </Style>
+        </ResourceDictionary>
+        """;
+
     private void Build()
     {
-        foreach (var reused in new FrameworkElement[] { _status, _list, _detail, _runStrip, _runText, _runBar, _measure, _stopButton, _subtitle, _live })
+        foreach (var reused in new FrameworkElement[] { _status, _list, _detail, _runStrip, _runText, _runBar, _measure, _stopButton, _subtitle, _live, _kpis, _bar })
             switch (reused.Parent)
             {
                 case Panel p: p.Children.Remove(reused); break;
@@ -181,6 +222,8 @@ internal sealed class BerthCostWindow : Window
                 case ContentControl c: c.Content = null; break;
             }
         Content = null;
+        try { Resources.MergedDictionaries.Add((ResourceDictionary)System.Windows.Markup.XamlReader.Parse(LinkStyle)); }
+        catch (System.Windows.Markup.XamlParseException) { /* the small buttons fall back to plain ones */ }
 
         var band = Brand.Header("Berth costing", null);
         if (band.Child is DockPanel row && row.Children.OfType<StackPanel>().LastOrDefault() is { } texts) texts.Children.Add(_subtitle);
@@ -198,18 +241,18 @@ internal sealed class BerthCostWindow : Window
             right.Children.Add(b);
             return b;
         }
+        _live.SetResourceReference(Control.ForegroundProperty, Brand.K.HeaderText);
+        _live.IsEnabled = _project.Length > 0;
+        right.Children.Add(_live);
         Top(RichUi.Icon.Edit, "Unit costs", "Change the unit costs and the pile rate basis; every berth's cost follows.", () => { _page = "rates"; ShowDetail(); });
         Top(RichUi.Icon.Settings, "Items", "Which items go in the files, how each is found in the model, its BOQ description and back-up section.", () => { _page = "items"; ShowDetail(); });
         Top(RichUi.Icon.Edit, "Project details", "The header lines, title and document number printed on the BOQ, typed once for the project.", () => { _page = "details"; ShowDetail(); });
         var files = Top(RichUi.Icon.Folder, "Templates", "Export a built-in format to edit in Excel or Word and import it back as this project's own template.", () => { });
         files.Click += (_, _) => TemplatesMenu(files);
-        _live.IsEnabled = _project.Length > 0;
-        right.Children.Add(_live);
         _measure.VerticalAlignment = VerticalAlignment.Center;
         _measure.IsEnabled = _project.Length > 0;
         right.Children.Add(_measure);
         header.Children.Add(right);
-        DockPanel.SetDock(header, Dock.Top);
 
         _runStrip.SetResourceReference(Border.BorderBrushProperty, Brand.K.Border);
         _runStrip.SetResourceReference(Border.BackgroundProperty, Brand.K.Surface);
@@ -221,7 +264,16 @@ internal sealed class BerthCostWindow : Window
         Grid.SetColumn(_stopButton, 1);
         runGrid.Children.Add(_stopButton);
         _runStrip.Child = runGrid;
-        DockPanel.SetDock(_runStrip, Dock.Top);
+
+        // The overview figures, then the view switch and the group colours.
+        var kpiBorder = new Border { BorderThickness = new Thickness(0, 0, 0, 1), Child = _kpis };
+        kpiBorder.SetResourceReference(Border.BorderBrushProperty, Brand.K.Border);
+        kpiBorder.SetResourceReference(Border.BackgroundProperty, Brand.K.Bg);
+        var barBorder = new Border { BorderThickness = new Thickness(0, 0, 0, 1), Child = _bar, Padding = new Thickness(18, 8, 18, 8) };
+        barBorder.SetResourceReference(Border.BorderBrushProperty, Brand.K.Border);
+        barBorder.SetResourceReference(Border.BackgroundProperty, Brand.K.Bg);
+        var top = new StackPanel { Children = { header, _runStrip, kpiBorder, barBorder } };
+        DockPanel.SetDock(top, Dock.Top);
 
         var close = RichUi.Button(RichUi.Icon.Close, "Close");
         close.Click += (_, _) => Close();
@@ -250,10 +302,12 @@ internal sealed class BerthCostWindow : Window
         DockPanel.SetDock(footBorder, Dock.Bottom);
 
         var body = new Grid();
-        body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(0.9, GridUnitType.Star), MinWidth = 380 });
-        body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.3, GridUnitType.Star), MinWidth = 480 });
-        var listScroll = new ScrollViewer { Content = _list, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Focusable = false };
-        var listBorder = new Border { BorderThickness = new Thickness(0, 0, 1, 0), Child = listScroll };
+        body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.25, GridUnitType.Star), MinWidth = 420 });
+        body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star), MinWidth = 440 });
+        _listScroll.Content = _list;
+        // The cards fill the width: as many columns as fit.
+        _listScroll.SizeChanged += (_, e) => { if (e.WidthChanged && Columns() != _columns) Refresh(detail: false); };
+        var listBorder = new Border { BorderThickness = new Thickness(0, 0, 1, 0), Child = _listScroll };
         listBorder.SetResourceReference(Border.BorderBrushProperty, Brand.K.Border);
         listBorder.SetResourceReference(Border.BackgroundProperty, Brand.K.Surface);
         body.Children.Add(listBorder);
@@ -261,24 +315,34 @@ internal sealed class BerthCostWindow : Window
         body.Children.Add(_detail);
 
         var root = new DockPanel();
-        root.Children.Add(header);
-        root.Children.Add(_runStrip);
+        root.Children.Add(top);
         root.Children.Add(footBorder);
         root.Children.Add(body);
         Content = root;
         Refresh();
     }
 
-    // ---- The berth list -------------------------------------------------------------------------------------------
+    private int _columns;
+
+    private int Columns() => Math.Max(1, (int)((_listScroll.ActualWidth > 0 ? _listScroll.ActualWidth : Width * 0.55) - 30) / 250);
+
+    // ---- The overview ---------------------------------------------------------------------------------------------
+
+    /// <summary>The berths that count in the totals: the shown ones, without a left-out part that is switched off.</summary>
+    private List<Berth> Counting() => Shown().Where(b => b.Counts).ToList();
 
     private void Refresh(bool detail = true)
     {
         var every = Berths();
         var berths = Shown();
+        var whole = berths.Count(b => b.PartOf.Length == 0);
         _subtitle.Text = _project.Length == 0 ? "Open a model of the project first"
-            : $"{_project} · " + (OpenSite.Length > 0 && !_allSites ? $"{OpenSite} model open · {berths.Count} berths" : $"{berths.Count} berths") + $" · {_p.Stage}";
-        if (_selected.Length == 0 || !berths.Any(b => b.Key == _selected)) _selected = berths.FirstOrDefault()?.Key ?? "";
+            : $"{_project} · " + (OpenSite.Length > 0 && !_allSites ? $"{OpenSite} model open · {whole} berths" : $"{whole} berths") + $" · {_p.Stage}";
+        if (_selected.Length == 0 || !berths.Any(b => b.Key == _selected)) _selected = berths.FirstOrDefault(b => b.PartOf.Length == 0)?.Key ?? "";
+        Kpis();
+        Bar(every);
         _list.Children.Clear();
+        _columns = Columns();
         if (every.Count == 0)
         {
             _list.Children.Add(Heading("No berths yet"));
@@ -289,83 +353,290 @@ internal sealed class BerthCostWindow : Window
             ShowDetail();
             return;
         }
-        // The overview: the whole project, then each site with its berths.
-        var known = berths.Select(b => Completeness(_p, b)).OfType<double>().ToList();
-        var top = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 6) };
-        top.Children.Add(new PercentRing(known.Count > 0 ? known.Average() : null, 76, 8, 17));
-        var sums = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(12, 0, 0, 0) };
-        var costed = berths.Where(b => b.Measured is not null || b.Hand.Count > 0).ToList();
-        var structural = costed.Sum(b => Total(_p, b).Structural);
-        var length = costed.Sum(b => b.Length ?? 0);
-        sums.Children.Add(Brand.Text(OpenSite.Length > 0 && !_allSites ? OpenSite : "All berths", size: 14, bold: true));
-        var noRates = _p.Rates.All(r => r.Value is null);
-        sums.Children.Add(Small(costed.Count == 0 ? "Nothing measured yet: press Measure the model with a model open." :
-            noRates ? $"{costed.Count} of {berths.Count} measured · no unit costs yet, so no cost: Unit costs, or Templates > Take the unit costs from a cost comparison workbook" :
-            $"{costed.Count} of {berths.Count} costed · {BerthCostMath.Money(structural, _p.Currency)}" + (length > 0 ? $" · {BerthCostMath.Money(structural / length, _p.Currency)} / lm" : " · type the quay lengths for US$ / lm")));
-        sums.Children.Add(Small($"Tick berths to make their files; {_chosen.Count} ticked." + (_p.Follow ? " Costs follow the model." : "")));
-        top.Children.Add(sums);
-        _list.Children.Add(top);
-        if (OpenSite.Length > 0 && every.Any(b => !Same(b.Site, OpenSite)))
+        if (_view == "element")
         {
-            var all = new CheckBox { Content = "Show the other sites' berths too", IsChecked = _allSites, Margin = new Thickness(2, 2, 0, 0) };
-            all.Checked += (_, _) => { _allSites = true; Refresh(); };
-            all.Unchecked += (_, _) => { _allSites = false; Refresh(); };
-            _list.Children.Add(all);
+            _listScroll.HorizontalScrollBarVisibility = ScrollBarVisibility.Auto;
+            _list.Children.Add(ElementTable());
         }
-
-        foreach (var site in berths.GroupBy(b => b.Site.Length > 0 ? b.Site : "Project"))
+        else
         {
-            var title = Brand.Text(site.Key.ToUpperInvariant() + (Same(site.Key, OpenSite) ? " · OPEN" : ""), Brand.K.Muted, 12, bold: true);
-            title.Margin = new Thickness(2, 14, 0, 6);
-            _list.Children.Add(title);
-            var tiles = new WrapPanel();
-            foreach (var b in site) tiles.Children.Add(BerthTile(b));
-            _list.Children.Add(tiles);
+            _listScroll.HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled;
+            foreach (var site in berths.GroupBy(b => b.Site.Length > 0 ? b.Site : "Project"))
+            {
+                if (_allSites || OpenSite.Length == 0)
+                {
+                    var title = Brand.Text(site.Key.ToUpperInvariant() + (Same(site.Key, OpenSite) ? " · OPEN" : ""), Brand.K.Muted, 11.5, bold: true);
+                    title.Margin = new Thickness(2, 4, 0, 6);
+                    _list.Children.Add(title);
+                }
+                var cards = new UniformGrid { Columns = _columns };
+                foreach (var b in site) cards.Children.Add(BerthCard(b));
+                _list.Children.Add(cards);
+            }
+            var add = new Button { Content = Brand.Text("+ Add a berth the berth status doesn't list", Brand.K.Link, 12), HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(0, 10, 0, 0) };
+            add.SetResourceReference(StyleProperty, "SpmCostLink");
+            var box = AddBerthBox();
+            box.Visibility = _adding ? Visibility.Visible : Visibility.Collapsed;
+            add.Click += (_, _) => { _adding = !_adding; box.Visibility = _adding ? Visibility.Visible : Visibility.Collapsed; };
+            _list.Children.Add(add);
+            _list.Children.Add(box);
         }
-        _list.Children.Add(AddBerthBox());
         if (detail) ShowDetail();
     }
 
-    private FrameworkElement BerthTile(Berth b)
+    private bool _adding;
+
+    /// <summary>The figures across the top: the total, the average, highest and lowest US$/lm, how complete it is.</summary>
+    private void Kpis()
+    {
+        _kpis.Children.Clear();
+        var berths = Counting();
+        var costed = berths.Where(b => b.Measured is not null || b.Hand.Count > 0).ToList();
+        var noRates = _p.Rates.All(r => r.Value is null);
+        var totals = costed.ToDictionary(b => b.Key, b => Total(_p, b));
+        var structural = totals.Values.Sum(t => t.Structural);
+        var withLength = costed.Where(b => b.Length is > 0 && totals[b.Key].Structural > 0).ToList();
+        var length = withLength.Sum(b => b.Length!.Value);
+        var perLm = withLength.Select(b => (Berth: b, PerLm: totals[b.Key].Structural / b.Length!.Value)).OrderByDescending(x => x.PerLm).ToList();
+        var known = berths.Select(b => Completeness(_p, b)).OfType<double>().ToList();
+        var noLength = berths.Where(b => b.Length is not > 0).Select(b => b.Title.Replace(" (" + b.ExcludeNote.Trim() + ")", "")).ToList();
+        var whole = berths.Count(b => b.PartOf.Length == 0);
+        var parts = berths.Where(b => b.PartOf.Length > 0).Select(b => b.Part).Distinct().ToList();
+        string Left(Berth b) => b.ExcludeNote.Trim().Length > 0 ? $" ({b.ExcludeNote.Trim()})" : "";
+        var cells = new List<(string Label, string Value, string Sub)>
+        {
+            ("STRUCTURAL WORKS", costed.Count == 0 ? "–" : noRates ? "no unit costs" : BerthCostMath.Money(structural, _p.Currency),
+                costed.Count == 0 ? "nothing measured yet: Measure the model" : noRates ? "Unit costs, or Templates > Take the unit costs from a workbook"
+                : $"{whole} berths" + (parts.Count > 0 ? " + " + string.Join(", ", parts) : "") + ", from the model"),
+            ("AVERAGE " + _p.Currency + " / LM", length > 0 ? Math.Round(withLength.Sum(b => totals[b.Key].Structural) / length).ToString("#,0", CultureInfo.InvariantCulture) : "–",
+                length > 0 ? $"{length.ToString("#,0", CultureInfo.InvariantCulture)} m of quay with a length" : "type the quay lengths on the cards"),
+            ("HIGHEST " + _p.Currency + " / LM", perLm.Count > 0 ? Short(perLm[0].Berth) : "–",
+                perLm.Count > 0 ? $"{_p.Currency} {Math.Round(perLm[0].PerLm).ToString("#,0", CultureInfo.InvariantCulture)} / lm{Left(perLm[0].Berth)}" : ""),
+            ("LOWEST " + _p.Currency + " / LM", perLm.Count > 1 ? Short(perLm[perLm.Count - 1].Berth) : "–",
+                perLm.Count > 1 ? $"{_p.Currency} {Math.Round(perLm[perLm.Count - 1].PerLm).ToString("#,0", CultureInfo.InvariantCulture)} / lm{Left(perLm[perLm.Count - 1].Berth)}" : ""),
+            ("COMPLETE", known.Count > 0 ? Math.Round(known.Average()).ToString(CultureInfo.InvariantCulture) + "%" : "–",
+                noLength.Count == 0 ? "every berth has a length" : Names(noLength) + (noLength.Count == 1 ? " needs a length" : " need lengths")),
+        };
+        _kpis.Columns = cells.Count;
+        for (var i = 0; i < cells.Count; i++)
+        {
+            var (label, value, sub) = cells[i];
+            var cell = new StackPanel();
+            cell.Children.Add(Brand.Text(label, Brand.K.Muted, 10.5, bold: true));
+            var v = Brand.Text(value, size: 21, bold: true);
+            v.Margin = new Thickness(0, 2, 0, 0);
+            cell.Children.Add(v);
+            cell.Children.Add(Small(sub));
+            var border = new Border { Child = cell, Padding = new Thickness(18, 10, 14, 10), BorderThickness = new Thickness(0, 0, i < cells.Count - 1 ? 1 : 0, 0) };
+            border.SetResourceReference(Border.BorderBrushProperty, Brand.K.BorderSubtle);
+            AutomationProperties.SetName(border, $"{label}: {value}. {sub}");
+            _kpis.Children.Add(border);
+        }
+    }
+
+    /// <summary>"Berth 09" for "Berth 09 (excl. RoRo)": the note goes in the line under it.</summary>
+    private static string Short(Berth b) => b.ExcludeNote.Trim().Length > 0 ? b.Title.Replace(" (" + b.ExcludeNote.Trim() + ")", "") : b.Title;
+
+    /// <summary>"Berth 01–04" for a run of berths, else the names with commas.</summary>
+    private static string Names(List<string> names)
+    {
+        var numbers = names.Select(n => Regex.Match(n, @"^Berth (\d+)$") is { Success: true } m ? int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture) : -1).ToList();
+        if (names.Count > 2 && numbers.All(n => n >= 0) && numbers.Zip(numbers.Skip(1), (a, b) => b - a).All(d => d == 1))
+            return $"Berths {numbers[0]:00}–{numbers[numbers.Count - 1]:00}";
+        return string.Join(", ", names);
+    }
+
+    /// <summary>The view switch (by berth / by element), the group colours and how many berths are ticked.</summary>
+    private void Bar(List<Berth> every)
+    {
+        _bar.Children.Clear();
+        var seg = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 16, 0) };
+        foreach (var (key, text, help) in new[] { ("berth", "By berth", "Each berth as a card; click one for its costs by group and element."), ("element", "By element", "Each element across the berths; click one for its cost and quantity per berth.") })
+        {
+            var b = Brand.Button(text, _view == key ? Brand.Weight.Primary : Brand.Weight.Secondary);
+            b.Margin = new Thickness(0, 0, 4, 0);
+            b.MinWidth = 96;
+            AutomationProperties.SetHelpText(b, help);
+            AutomationProperties.SetItemStatus(b, _view == key ? "shown" : "");
+            b.Click += (_, _) => { if (_view == key && _page == "berth") return; _view = key; _page = "berth"; Refresh(); };
+            seg.Children.Add(b);
+        }
+        DockPanel.SetDock(seg, Dock.Left);
+        _bar.Children.Add(seg);
+        var side = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+        if (OpenSite.Length > 0 && every.Any(b => !Same(b.Site, OpenSite)))
+        {
+            var all = new CheckBox { Content = "Other sites too", IsChecked = _allSites, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(12, 0, 0, 0) };
+            AutomationProperties.SetHelpText(all, "Show the other sites' berths too (their figures are from their last reading).");
+            all.Checked += (_, _) => { _allSites = true; Refresh(); };
+            all.Unchecked += (_, _) => { _allSites = false; Refresh(); };
+            side.Children.Add(all);
+        }
+        side.Children.Add(Brand.Text($"   {_chosen.Count} ticked for files", Brand.K.Muted, 11.5));
+        DockPanel.SetDock(side, Dock.Right);
+        _bar.Children.Add(side);
+        var legend = new WrapPanel { VerticalAlignment = VerticalAlignment.Center };
+        foreach (var (code, name) in Groups.Where(g => g.Code != "C10"))
+        {
+            var chip = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 2, 12, 2) };
+            chip.Children.Add(new Border { Width = 9, Height = 9, CornerRadius = new CornerRadius(2), Background = GroupColor(code), Margin = new Thickness(0, 0, 5, 0), VerticalAlignment = VerticalAlignment.Center });
+            chip.Children.Add(Brand.Text($"{code} {name}", Brand.K.Muted, 11));
+            legend.Children.Add(chip);
+        }
+        _bar.Children.Add(legend);
+    }
+
+    // ---- By berth: the cards ----------------------------------------------------------------------------------------
+
+    private FrameworkElement BerthCard(Berth b)
     {
         var done = Completeness(_p, b);
         var t = Total(_p, b);
-        var row = new StackPanel { Orientation = Orientation.Horizontal };
-        var tick = new CheckBox { IsChecked = _chosen.Contains(b.Key), VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, 2, 6, 0) };
-        AutomationProperties.SetName(tick, "Make files for " + b.Title);
-        tick.Checked += (_, _) => { _chosen.Add(b.Key); };
-        tick.Unchecked += (_, _) => { _chosen.Remove(b.Key); };
-        row.Children.Add(tick);
-        row.Children.Add(new PercentRing(done, 58, 7, 14));
-        var texts = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 4, 0), Width = 150 };
-        texts.Children.Add(Brand.Text(b.Title, size: 13, bold: true));
-        texts.Children.Add(Small(done is null ? "not measured" : t.Structural <= 0 && _p.Rates.All(r => r.Value is null) ? "measured · no unit costs" : BerthCostMath.Money(t.Structural, _p.Currency)));
-        if (t.PerLm > 0) texts.Children.Add(Small(BerthCostMath.Money(t.PerLm, _p.Currency) + " / lm"));
-        var made = b.Made.Count > 0 ? "made: " + string.Join(", ", b.Made.Keys) : "";
-        if (made.Length > 0) texts.Children.Add(Small(made));
-        row.Children.Add(texts);
-        var on = b.Key == _selected && _page == "berth";
-        var tile = new Border
+        var noRates = _p.Rates.All(r => r.Value is null);
+        var grid = new Grid();
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        Put(grid, new PercentRing(done, 54, 6, 12.5) { VerticalAlignment = VerticalAlignment.Center }, 0, 0);
+        var texts = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 4, 0) };
+        var name = Brand.Text(b.Title, size: 13, bold: true);
+        name.TextWrapping = TextWrapping.Wrap;
+        texts.Children.Add(name);
+        texts.Children.Add(Brand.Text(done is null ? "not measured" : noRates ? "no unit costs" : BerthCostMath.Money(t.Structural, _p.Currency), size: 15, bold: true));
+        // US$/lm, then the quay length with ✎ to type it (only the length is typed here: the rest comes from the model).
+        var meta = new WrapPanel();
+        if (t.PerLm > 0) meta.Children.Add(Brand.Text($"{Math.Round(t.PerLm).ToString("#,0", CultureInfo.InvariantCulture)} {_p.Currency}/lm · ", Brand.K.Muted, 11.5));
+        meta.Children.Add(Typed(b.Length is { } l ? l.ToString("0.##", CultureInfo.InvariantCulture) + " m" : "type the length", b.Length is { } k ? k.ToString("0.##", CultureInfo.InvariantCulture) : "",
+            b.Title + " quay length in m", text =>
+            {
+                if (text.Length == 0) b.Length = null;
+                else if (Num(text) is > 0 and var v) b.Length = v;
+                else { _status.Text = "Quay length: type the metres."; return false; }
+                return true;
+            }));
+        texts.Children.Add(meta);
+        if (b.PartOf.Length > 0)
         {
-            Padding = new Thickness(8, 8, 10, 8), Margin = new Thickness(0, 0, 8, 8), CornerRadius = new CornerRadius(10),
-            BorderThickness = new Thickness(on ? 2 : 1), Child = row, Cursor = Cursors.Hand, Focusable = true,
+            var count = new CheckBox { Content = Brand.Text($"Count the {b.Part} part in the totals", Brand.K.Muted, 11.5), IsChecked = b.Counted, Margin = new Thickness(0, 4, 0, 0) };
+            AutomationProperties.SetHelpText(count, $"Ticked: the {b.Part} part counts in the totals and the element table. It is measured either way.");
+            count.Checked += (_, _) => { b.Counted = true; Changed(); };
+            count.Unchecked += (_, _) => { b.Counted = false; Changed(); };
+            texts.Children.Add(count);
+        }
+        if (b.Made.Count > 0) texts.Children.Add(Small("made: " + string.Join(", ", b.Made.Keys)));
+        Put(grid, texts, 0, 1);
+        var tick = new CheckBox { IsChecked = _chosen.Contains(b.Key), VerticalAlignment = VerticalAlignment.Top, ToolTip = "Tick to make its files" };
+        AutomationProperties.SetName(tick, "Make files for " + b.Title);
+        tick.Checked += (_, _) => { _chosen.Add(b.Key); Bar(Berths()); };
+        tick.Unchecked += (_, _) => { _chosen.Remove(b.Key); Bar(Berths()); };
+        Put(grid, tick, 0, 2);
+        var stack = Stack(t);
+        stack.Margin = new Thickness(0, 10, 0, 0);
+        Grid.SetColumnSpan(stack, 3);
+        Put(grid, stack, 1, 0);
+        var on = b.Key == _selected && _page == "berth";
+        var card = new Border
+        {
+            Padding = new Thickness(12, 10, 10, 10), Margin = new Thickness(0, 0, 10, 10), CornerRadius = new CornerRadius(10),
+            BorderThickness = new Thickness(on ? 2 : 1), Child = grid, Cursor = Cursors.Hand, Focusable = true,
+            Opacity = b.Counts ? 1 : 0.6,
             ToolTip = $"{b.Title}: {(done is null ? "not measured" : Math.Round(done.Value) + "% complete")}. Click for its costs.",
         };
-        tile.SetResourceReference(Border.BackgroundProperty, on ? Brand.K.AccentSoft : Brand.K.Bg);
-        tile.SetResourceReference(Border.BorderBrushProperty, on ? Brand.K.Accent : Brand.K.Border);
-        AutomationProperties.SetName(tile, $"{b.Title}, {(done is null ? "not measured" : Math.Round(done.Value) + "%")}");
+        card.SetResourceReference(Border.BackgroundProperty, on ? Brand.K.AccentSoft : Brand.K.Bg);
+        card.SetResourceReference(Border.BorderBrushProperty, on ? Brand.K.Accent : Brand.K.Border);
+        AutomationProperties.SetName(card, $"{b.Title}, {(done is null ? "not measured" : Math.Round(done.Value) + "%")}");
         void Pick() { _selected = b.Key; _page = "berth"; Refresh(); }
-        tile.MouseLeftButtonUp += (_, e) => { if (e.OriginalSource is not CheckBox) Pick(); };
-        tile.KeyDown += (_, e) => { if (e.Key is Key.Enter or Key.Space && e.OriginalSource == tile) { Pick(); e.Handled = true; } };
-        return tile;
+        card.MouseLeftButtonUp += (_, e) => { if (!Inside<ButtonBase>(e.OriginalSource) && !Inside<TextBox>(e.OriginalSource)) Pick(); };
+        card.KeyDown += (_, e) => { if (e.Key is Key.Enter or Key.Space && e.OriginalSource == card) { Pick(); e.Handled = true; } };
+        return card;
+    }
+
+    private static bool Inside<T>(object source) where T : DependencyObject
+    {
+        for (var d = source as DependencyObject; d is not null; d = d is Visual or System.Windows.Media.Media3D.Visual3D ? VisualTreeHelper.GetParent(d) : LogicalTreeHelper.GetParent(d))
+            if (d is T) return true;
+        return false;
+    }
+
+    /// <summary>A thin bar split by the cost of each group.</summary>
+    private static FrameworkElement Stack(Totals t)
+    {
+        var grid = new Grid { Height = 7 };
+        var sum = t.ByGroup.Where(g => g.Key != "C10").Sum(g => g.Value);
+        if (sum <= 0)
+        {
+            var empty = new Border { CornerRadius = new CornerRadius(3.5) };
+            empty.SetResourceReference(Border.BackgroundProperty, Brand.K.BorderSubtle);
+            grid.Children.Add(empty);
+            return grid;
+        }
+        var col = 0;
+        foreach (var (code, gname) in Groups.Where(g => g.Code != "C10"))
+        {
+            var v = t.ByGroup.TryGetValue(code, out var x) ? x : 0;
+            if (v <= 0) continue;
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(v, GridUnitType.Star) });
+            var part = new Border { Background = GroupColor(code), ToolTip = $"{code} {gname}: {BerthCostMath.Money(v)}" };
+            Grid.SetColumn(part, col++);
+            grid.Children.Add(part);
+        }
+        grid.SizeChanged += (_, e) => grid.Clip = new RectangleGeometry(new Rect(e.NewSize), 3.5, 3.5);
+        return grid;
+    }
+
+    /// <summary>
+    /// A value shown as text with ✎ after it: clicking ✎ turns it into a box (Enter keeps it, Escape goes back, empty
+    /// clears it). <paramref name="set"/> says whether the text was taken.
+    /// </summary>
+    private FrameworkElement Typed(string shown, string value, string name, Func<string, bool> set, string key = Brand.K.Muted, double size = 11.5)
+    {
+        var holder = new Border();
+        var row = new StackPanel { Orientation = Orientation.Horizontal };
+        row.Children.Add(Brand.Text(shown, key, size));
+        var pen = Pencil("Type " + name);
+        row.Children.Add(pen);
+        holder.Child = row;
+        pen.Click += (_, e) =>
+        {
+            e.Handled = true;
+            var box = Field(value, name);
+            box.MinWidth = 70;
+            box.FontSize = size;
+            var finished = false;
+            void Done(bool keep)
+            {
+                if (finished) return;
+                finished = true;
+                if (keep && box.Text.Trim() != value) { if (set(box.Text.Trim())) { Changed(); return; } }
+                holder.Child = row;
+            }
+            box.PreviewKeyDown += (_, k) =>
+            {
+                if (k.Key == Key.Enter) { k.Handled = true; Done(true); }
+                else if (k.Key == Key.Escape) { k.Handled = true; Done(false); }
+            };
+            box.LostKeyboardFocus += (_, _) => Done(true);
+            holder.Child = box;
+            box.Loaded += (_, _) => { box.Focus(); box.SelectAll(); };
+        };
+        return holder;
+    }
+
+    private static Button Pencil(string name)
+    {
+        var pen = new Button { Content = new TextBlock { Text = RichUi.Icon.Edit, FontFamily = new FontFamily("Segoe Fluent Icons, Segoe MDL2 Assets"), FontSize = 11 }, Margin = new Thickness(4, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center, ToolTip = name };
+        pen.SetResourceReference(StyleProperty, "SpmCostLink");
+        AutomationProperties.SetName(pen, name);
+        return pen;
     }
 
     /// <summary>Adds a berth by hand: its site, the parameter that names it and its value.</summary>
     private FrameworkElement AddBerthBox()
     {
         var page = new StackPanel();
-        page.Children.Add(Brand.Text("Add a berth", size: 13, bold: true));
-        page.Children.Add(Small("For a berth the berth status doesn't list: its site (as on the comparison workbook), the parameter on its elements and the value."));
+        page.Children.Add(Small("Its site (as on the comparison workbook), the parameter on its elements and the value."));
         var site = Field(OpenSite.Length > 0 ? OpenSite : _p.Berths.Values.Select(b => b.Site).FirstOrDefault() ?? "", "Site");
         var parameter = Field(_p.Berths.Values.Select(b => b.Parameter).FirstOrDefault(x => x.Length > 0) ?? "Berth Number", "Parameter");
         var value = Field("", "Value");
@@ -375,6 +646,7 @@ internal sealed class BerthCostWindow : Window
             if (value.Text.Trim().Length == 0) { _status.Text = "Give the value that names the berth (for example 11)."; return; }
             var b = AddBerth(_p, site.Text.Trim(), parameter.Text.Trim(), value.Text.Trim());
             _selected = b.Key;
+            _adding = false;
             Save();
             Refresh();
         };
@@ -391,8 +663,94 @@ internal sealed class BerthCostWindow : Window
         add.Margin = new Thickness(0, 0, 0, 4);
         row.Children.Add(add);
         page.Children.Add(row);
-        return Box(page, top: 16);
+        return Box(page, top: 6);
     }
+
+    // ---- By element: the table --------------------------------------------------------------------------------------
+
+    /// <summary>The items with something in a counted berth, and whether the table shows costs (else quantities).</summary>
+    private (List<Item> Items, bool Costs) ElementRows(List<Berth> berths)
+    {
+        var lines = berths.ToDictionary(b => b.Key, b => Costs(_p, b));
+        var costs = !_p.Rates.All(r => r.Value is null);
+        var items = _p.Items.Where(i => i.Group != "C10" && berths.Any(b => lines[b.Key].First(l => l.Item.No == i.No) is var l && (costs ? l.Cost > 0 : l.Qty is > 0))).ToList();
+        return (items, costs);
+    }
+
+    private FrameworkElement ElementTable()
+    {
+        var berths = Counting();
+        var page = new StackPanel();
+        var (items, costs) = ElementRows(berths);
+        if (berths.Count == 0 || items.Count == 0)
+        {
+            page.Children.Add(Para(berths.Count == 0 ? "No berth counts in the totals." : "Nothing measured yet: press Measure the model with a model open.", Brand.K.Muted));
+            return page;
+        }
+        var lines = berths.ToDictionary(b => b.Key, b => Costs(_p, b).ToDictionary(l => l.Item.No));
+        double Value(Berth b, Item i) => lines[b.Key][i.No] is var l ? costs ? l.Cost : l.Qty ?? 0 : 0;
+        var grid = new Grid();
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Auto), MinWidth = 170 });
+        foreach (var _ in berths) grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto, MinWidth = 54 });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto, MinWidth = 64 });
+        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        Put(grid, Brand.Text("ELEMENT", Brand.K.Muted, 10.5, bold: true), 0, 0);
+        for (var c = 0; c < berths.Count; c++)
+        {
+            var head = Brand.Text(Column(berths[c]), Brand.K.Muted, 10.5, bold: true);
+            head.HorizontalAlignment = HorizontalAlignment.Center;
+            head.ToolTip = berths[c].Title;
+            Put(grid, head, 0, c + 1);
+        }
+        Put(grid, Right(Brand.Text("TOTAL", Brand.K.Muted, 10.5, bold: true)), 0, berths.Count + 1);
+        var max = items.Max(i => berths.Max(b => Value(b, i)));
+        var row = 1;
+        foreach (var item in items)
+        {
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            var on = item.No == _item && _page == "berth";
+            var back = new Border { CornerRadius = new CornerRadius(6), Cursor = Cursors.Hand, Focusable = true, Margin = new Thickness(-6, 1, -6, 1) };
+            back.SetResourceReference(Border.BackgroundProperty, on ? Brand.K.AccentSoft : Brand.K.Surface);
+            Grid.SetColumnSpan(back, berths.Count + 2);
+            AutomationProperties.SetName(back, item.Name);
+            var no = item.No;
+            void Pick() { _item = no; _page = "berth"; Refresh(); }
+            back.MouseLeftButtonUp += (_, _) => Pick();
+            back.KeyDown += (_, e) => { if (e.Key is Key.Enter or Key.Space) { Pick(); e.Handled = true; } };
+            Put(grid, back, row, 0);
+            var label = Brand.Text(item.Name, size: 12, bold: on);
+            label.Margin = new Thickness(0, 6, 10, 6);
+            label.IsHitTestVisible = false;
+            Put(grid, label, row, 0);
+            var brush = GroupColor(item.Group);
+            for (var c = 0; c < berths.Count; c++)
+            {
+                var v = Value(berths[c], item);
+                var heat = new Border { CornerRadius = new CornerRadius(4), Padding = new Thickness(6, 2, 6, 2), Margin = new Thickness(3, 2, 3, 2), IsHitTestVisible = false, HorizontalAlignment = HorizontalAlignment.Stretch };
+                var tint = brush.Clone();
+                tint.Opacity = max > 0 ? 0.08 + 0.5 * v / max : 0;
+                heat.Background = tint;
+                var text = Brand.Text(v <= 0 ? "–" : costs ? (v / 1e6).ToString("0.00", CultureInfo.InvariantCulture) : Qty(v), size: 11.5);
+                text.HorizontalAlignment = HorizontalAlignment.Center;
+                heat.Child = text;
+                Put(grid, heat, row, c + 1);
+            }
+            var sum = berths.Sum(b => Value(b, item));
+            var total = Right(Brand.Text(costs ? (sum / 1e6).ToString("0.00", CultureInfo.InvariantCulture) : Qty(sum) + " " + item.Unit, size: 12, bold: true));
+            total.IsHitTestVisible = false;
+            Put(grid, total, row, berths.Count + 1);
+            row++;
+        }
+        page.Children.Add(grid);
+        var note = costs ? $"{_p.Currency} million per berth." : "Quantities from the model (no unit costs yet).";
+        if (berths.FirstOrDefault(b => b.ExcludeNote.Trim().Length > 0) is { } left) note += $" * {Short(left)} {left.ExcludeNote.Trim()}" + (berths.Any(b => b.PartOf == left.Key) ? ", which has its own column." : ".");
+        page.Children.Add(Small(note));
+        return page;
+    }
+
+    /// <summary>A berth's short column head: B01, B09* (leaves a part out), B09 RoRo.</summary>
+    private static string Column(Berth b) =>
+        (b.Number.Length > 0 ? "B" + b.Number.PadLeft(2, '0') : b.Name) + (b.Part.Length > 0 ? " " + b.Part : b.ExcludeNote.Trim().Length > 0 ? "*" : "");
 
     // ---- The right side -----------------------------------------------------------------------------------------------
 
@@ -403,8 +761,52 @@ internal sealed class BerthCostWindow : Window
             "rates" => RatesPage(),
             "items" => ItemsPage(),
             "details" => DetailsPage(),
+            _ when _view == "element" => ElementPage(),
             _ => Selected is { } b ? BerthPage(b) : Para("Pick a berth on the left.", Brand.K.Muted),
         };
+    }
+
+    /// <summary>One element across the berths: its cost per berth and its quantity per berth with the per-metre figure.</summary>
+    private FrameworkElement ElementPage()
+    {
+        var page = new StackPanel();
+        var berths = Counting();
+        var (items, costs) = ElementRows(berths);
+        if (_p.ItemOf(_item) is not { } item || !items.Contains(item)) item = items.FirstOrDefault()!;
+        if (item is null) return Para("Pick an element on the left.", Brand.K.Muted);
+        _item = item.No;
+        var lines = berths.Select(b => (Berth: b, Line: Costs(_p, b).First(l => l.Item.No == item.No))).ToList();
+        var group = Groups.FirstOrDefault(g => g.Code == item.Group);
+        page.Children.Add(Heading(item.Name));
+        var rate = lines.Select(l => l.Line.Rate).FirstOrDefault(r => r > 0);
+        page.Children.Add(Para($"{group.Code} {group.Name}" + (rate > 0 ? $" · rate {rate.ToString("#,0.##", CultureInfo.InvariantCulture)} {_p.Currency}/{item.Unit}" : "") +
+            (costs ? $" · all berths {BerthCostMath.Money(lines.Sum(l => l.Line.Cost), _p.Currency)}" : ""), Brand.K.Muted, 2));
+        if (costs)
+        {
+            page.Children.Add(Section("Cost per berth"));
+            page.Children.Add(Bars(lines.Select(l => (l.Berth.Title, l.Line.Cost, BerthCostMath.Money(l.Line.Cost, _p.Currency), GroupColor(item.Group))).ToList()));
+        }
+        page.Children.Add(Section("Quantity per berth"));
+        var grid = new Grid { Margin = new Thickness(0, 4, 0, 0) };
+        foreach (var w in new[] { 1.6, 1.0, 0.8, 0.8 }) grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(w, GridUnitType.Star) });
+        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        string[] heads = ["BERTH", "QUANTITY", "FROM", $"{item.Unit} / LM"];
+        for (var i = 0; i < heads.Length; i++) Put(grid, i == 0 ? Brand.Text(heads[i], Brand.K.Muted, 10.5, bold: true) : Right(Brand.Text(heads[i], Brand.K.Muted, 10.5, bold: true)), 0, i);
+        var row = 1;
+        foreach (var (b, l) in lines)
+        {
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            Put(grid, Brand.Text(b.Title, size: 12), row, 0);
+            Put(grid, Right(Brand.Text(Qty(l.Qty) + " " + item.Unit, size: 12)), row, 1);
+            var badge = Badge(l.From);
+            badge.HorizontalAlignment = HorizontalAlignment.Right;
+            Put(grid, badge, row, 2);
+            Put(grid, Right(Brand.Text(b.Length is > 0 && l.Qty is { } q ? (q / b.Length.Value).ToString("#,0.00", CultureInfo.InvariantCulture) : "–", size: 12)), row, 3);
+            row++;
+        }
+        page.Children.Add(grid);
+        page.Children.Add(Small("Click a berth card (By berth) to type one of its quantities by hand."));
+        return page;
     }
 
     private FrameworkElement BerthPage(Berth b)
@@ -412,19 +814,224 @@ internal sealed class BerthCostWindow : Window
         var page = new StackPanel();
         var done = Completeness(_p, b);
         var t = Total(_p, b);
-        var head = new StackPanel { Orientation = Orientation.Horizontal };
-        head.Children.Add(new PercentRing(done, 104, 10, 22));
-        var texts = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(16, 0, 0, 0) };
+        var noRates = _p.Rates.All(r => r.Value is null);
+        var head = new DockPanel();
+        var ring = new PercentRing(done, 72, 8, 16) { VerticalAlignment = VerticalAlignment.Top };
+        DockPanel.SetDock(ring, Dock.Left);
+        head.Children.Add(ring);
+        var texts = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(14, 0, 0, 0) };
         texts.Children.Add(Heading(b.Title));
-        texts.Children.Add(Para($"{b.Site} · {b.Package}" + (b.Measured is { } m ? $" · measured {m.At:dd-MMM HH:mm} in {m.Model}" : " · not measured yet"), Brand.K.Muted, 2));
-        texts.Children.Add(Brand.Text($"{BerthCostMath.Money(t.Structural, _p.Currency)} structural works" + (t.PerLm > 0 ? $" · {BerthCostMath.Money(t.PerLm, _p.Currency)} / lm" : ""), size: 15, bold: true));
-        if (t.Prelims > 0) texts.Children.Add(Small($"Preliminaries and demolition as billed: {BerthCostMath.Money(t.Prelims, _p.Currency)}"));
+        texts.Children.Add(Brand.Text((noRates ? "no unit costs yet" : BerthCostMath.Money(t.Structural, _p.Currency)) +
+            (t.PerLm > 0 ? $" · {Math.Round(t.PerLm).ToString("#,0", CultureInfo.InvariantCulture)} {_p.Currency}/lm" : b.Length is > 0 ? "" : " · type the quay length on its card for /lm"), size: 14.5, bold: true));
+        texts.Children.Add(Small((b.Measured is { } m ? $"measured {m.At:dd-MMM HH:mm} in {m.Model}" : "not measured yet") +
+            (done is { } d ? $" · {Math.Round(d)}% complete" : "") + (t.Prelims > 0 ? $" · preliminaries as billed {BerthCostMath.Money(t.Prelims, _p.Currency)}" : "") +
+            (b.PartOf.Length > 0 && !b.Counted ? " · not counted in the totals" : "")));
         head.Children.Add(texts);
         page.Children.Add(head);
 
-        // What it is and what it leaves out.
-        page.Children.Add(Section("The berth"));
-        var grid = new WrapPanel();
+        if (!noRates && t.Structural > 0)
+        {
+            page.Children.Add(Section("Cost by group"));
+            page.Children.Add(Bars(Groups.Where(g => t.ByGroup[g.Code] > 0).Select(g => ($"{g.Code} {g.Name}", t.ByGroup[g.Code], BerthCostMath.Money(t.ByGroup[g.Code], _p.Currency), GroupColor(g.Code))).ToList()));
+        }
+
+        page.Children.Add(Section("Elements"));
+        page.Children.Add(Small("From the model. ✎ types a quantity by hand; ↺ goes back to the model's. The tick puts an item in the BOQ and the back-up."));
+        page.Children.Add(ElementsTable(b));
+
+        var missing = Missing(_p, b);
+        if (missing.Count > 0)
+        {
+            page.Children.Add(Section("To complete it"));
+            foreach (var what in missing.Take(8)) page.Children.Add(Small("• " + what));
+            if (missing.Count > 8) page.Children.Add(Small($"… and {missing.Count - 8} more."));
+        }
+
+        // The berth's settings, folded: what it leaves out and its design parameters.
+        var settings = BerthSettings(b);
+        settings.Visibility = _settingsOpen ? Visibility.Visible : Visibility.Collapsed;
+        var toggle = Fold(_settingsOpen, "Berth settings: what it leaves out, design parameters", open => { _settingsOpen = open; settings.Visibility = open ? Visibility.Visible : Visibility.Collapsed; }, 13);
+        toggle.Margin = new Thickness(-3, 18, 0, 0);
+        page.Children.Add(toggle);
+        page.Children.Add(settings);
+        return page;
+    }
+
+    private bool _settingsOpen;
+    private readonly HashSet<int> _folded = []; // the items whose BOQ description is open
+    private bool _everyItem;
+
+    /// <summary>A ▸ / ▾ button that shows or hides something.</summary>
+    private static Button Fold(bool open, string text, Action<bool> toggled, double size = 11.5)
+    {
+        var label = Brand.Text((open ? "▾ " : "▸ ") + text, Brand.K.Link, size, bold: size > 12);
+        var b = new Button { Content = label, HorizontalAlignment = HorizontalAlignment.Left };
+        b.SetResourceReference(StyleProperty, "SpmCostLink");
+        AutomationProperties.SetName(b, text);
+        AutomationProperties.SetItemStatus(b, open ? "open" : "closed");
+        b.Click += (_, e) =>
+        {
+            e.Handled = true;
+            open = !open;
+            label.Text = (open ? "▾ " : "▸ ") + text;
+            AutomationProperties.SetItemStatus(b, open ? "open" : "closed");
+            toggled(open);
+        };
+        return b;
+    }
+
+    private static FrameworkElement Badge(Source from)
+    {
+        var (text, key) = from switch
+        {
+            Source.Model => ("model", Brand.K.BadgeOk),
+            Source.Hand => ("by hand", Brand.K.BadgeWarn),
+            Source.Worked => ("worked out", Brand.K.BadgeMuted),
+            _ => ("–", Brand.K.BadgeMuted),
+        };
+        var badge = new Border { CornerRadius = new CornerRadius(8), Padding = new Thickness(6, 0, 6, 1), Margin = new Thickness(6, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center, Child = Brand.Text(text, size: 10.5) };
+        badge.SetResourceReference(Border.BackgroundProperty, key);
+        return badge;
+    }
+
+    /// <summary>Horizontal bars: a label, a bar as long as its share of the largest, the figure.</summary>
+    private static FrameworkElement Bars(List<(string Label, double Value, string Text, SolidColorBrush Color)> bars)
+    {
+        var grid = new Grid { Margin = new Thickness(0, 4, 0, 0) };
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star), MaxWidth = 210 });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.6, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto, MinWidth = 96 });
+        var max = bars.Count > 0 ? bars.Max(x => x.Value) : 0;
+        var row = 0;
+        foreach (var (label, value, text, color) in bars)
+        {
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            var name = Brand.Text(label, size: 12);
+            name.TextTrimming = TextTrimming.CharacterEllipsis;
+            name.ToolTip = label;
+            name.Margin = new Thickness(0, 3, 8, 3);
+            Put(grid, name, row, 0);
+            var track = new Grid { Height = 9, VerticalAlignment = VerticalAlignment.Center };
+            var back = new Border { CornerRadius = new CornerRadius(4.5) };
+            back.SetResourceReference(Border.BackgroundProperty, Brand.K.BorderSubtle);
+            track.Children.Add(back);
+            var share = max > 0 ? value / max : 0;
+            var fill = new Grid();
+            fill.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(Math.Max(share, 0.005), GridUnitType.Star) });
+            fill.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(Math.Max(1 - share, 0), GridUnitType.Star) });
+            fill.Children.Add(new Border { CornerRadius = new CornerRadius(4.5), Background = color });
+            track.Children.Add(fill);
+            Put(grid, track, row, 1);
+            Put(grid, Right(Brand.Text(text, size: 12)), row, 2);
+            row++;
+        }
+        return grid;
+    }
+
+    /// <summary>
+    /// The berth's elements: the name with where its quantity came from, its BOQ description folded under it, the quantity
+    /// (✎ to type it by hand), the cost, Show to select them in Revit. Items with nothing for this berth are folded away.
+    /// </summary>
+    private FrameworkElement ElementsTable(Berth b)
+    {
+        var page = new StackPanel();
+        var grid = new Grid { Margin = new Thickness(0, 6, 0, 0) };
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto, MinWidth = 110 });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto, MinWidth = 92 });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        var heads = new[] { "", "ELEMENT", "QUANTITY", "COST", "" };
+        for (var i = 0; i < heads.Length; i++) Put(grid, i is 2 or 3 ? Right(Brand.Text(heads[i], Brand.K.Muted, 10.5, bold: true)) : Brand.Text(heads[i], Brand.K.Muted, 10.5, bold: true), 0, i);
+        var row = 1;
+        var all = Costs(_p, b);
+        var shown = all.Where(l => _everyItem || l.Qty is > 0 || l.From == Source.Hand).ToList();
+        foreach (var line in shown)
+        {
+            var item = line.Item;
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            var rule = new Border { BorderThickness = new Thickness(0, 1, 0, 0) };
+            rule.SetResourceReference(Border.BorderBrushProperty, Brand.K.BorderSubtle);
+            Grid.SetColumnSpan(rule, 5);
+            Put(grid, rule, row, 0);
+            var inFiles = new CheckBox { IsChecked = item.InFiles, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(2, 8, 8, 0), ToolTip = "In the BOQ and the back-up calculation (for every berth)" };
+            AutomationProperties.SetName(inFiles, item.Name + " in the files");
+            inFiles.Checked += (_, _) => { item.InFiles = true; Changed(); };
+            inFiles.Unchecked += (_, _) => { item.InFiles = false; Changed(); };
+            Put(grid, inFiles, row, 0);
+            var name = new StackPanel { Margin = new Thickness(0, 6, 8, 6) };
+            var title = new WrapPanel();
+            var label = Brand.Text(item.Name, item.InFiles ? Brand.K.Text : Brand.K.Muted, 12.5);
+            label.TextWrapping = TextWrapping.Wrap;
+            title.Children.Add(label);
+            title.Children.Add(Badge(line.From));
+            name.Children.Add(title);
+            // Its BOQ description with the berth's numbers (pile lengths, tips, tonnage), folded until asked for.
+            if (item.BoqText.Length > 0 && line.Qty is > 0)
+            {
+                var desc = Small(Describe(_p, b, item));
+                desc.Visibility = _folded.Contains(item.No) ? Visibility.Visible : Visibility.Collapsed;
+                var no = item.No;
+                var fold = Fold(_folded.Contains(no), "BOQ description", open => { if (open) _folded.Add(no); else _folded.Remove(no); desc.Visibility = open ? Visibility.Visible : Visibility.Collapsed; }, 11);
+                fold.Margin = new Thickness(-3, 1, 0, 0);
+                name.Children.Add(fold);
+                name.Children.Add(desc);
+            }
+            Put(grid, name, row, 1);
+            // The model's quantity; ✎ types one by hand (an empty box goes back to the model's).
+            var qty = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, 6, 8, 0) };
+            var number = item.No;
+            qty.Children.Add(Typed(Qty(line.Qty) + " " + item.Unit, b.Hand.TryGetValue(number, out var h) ? h.ToString("0.###", CultureInfo.InvariantCulture) : line.Qty is { } q ? Math.Round(q, 3).ToString("0.###", CultureInfo.InvariantCulture) : "",
+                item.Name + " quantity by hand", text =>
+                {
+                    if (text.Length == 0) return b.Hand.Remove(number);
+                    if (Num(text) is not { } v) { _status.Text = $"{item.Name}: type a number, or leave it empty for the model's."; return false; }
+                    b.Hand[number] = v;
+                    return true;
+                }, Brand.K.Text, 12.5));
+            if (line.From == Source.Hand)
+            {
+                var back = new Button { Content = Brand.Text("↺", Brand.K.Link, 12.5), ToolTip = "Back to the model's quantity", Margin = new Thickness(2, 0, 0, 0) };
+                back.SetResourceReference(StyleProperty, "SpmCostLink");
+                AutomationProperties.SetName(back, item.Name + ": back to the model's quantity");
+                back.Click += (_, _) => { b.Hand.Remove(number); Changed(); };
+                qty.Children.Add(back);
+            }
+            Put(grid, qty, row, 2);
+            var cost = Right(Brand.Text(line.Cost > 0 ? BerthCostMath.Money(line.Cost, _p.Currency) : "–", size: 12.5));
+            cost.VerticalAlignment = VerticalAlignment.Top;
+            cost.Margin = new Thickness(0, 7, 8, 0);
+            if (line.Rate > 0) cost.ToolTip = $"{Qty(line.Qty)} {item.Unit} × {line.Rate.ToString("#,0.##", CultureInfo.InvariantCulture)} {_p.Currency}/{item.Unit}";
+            Put(grid, cost, row, 3);
+            if (b.Measured?.Ids.TryGetValue(item.No, out var ids) == true && ids.Count > 0)
+            {
+                var show = new Button { Content = Brand.Text("Show", Brand.K.Link, 11.5), Margin = new Thickness(0, 5, 0, 0), VerticalAlignment = VerticalAlignment.Top, ToolTip = $"Select the {ids.Count} elements in Revit" };
+                show.SetResourceReference(StyleProperty, "SpmCostLink");
+                AutomationProperties.SetName(show, $"Show the {item.Name} in Revit");
+                show.Click += async (_, _) => await ShowInRevit(ids);
+                Put(grid, show, row, 4);
+            }
+            row++;
+        }
+        page.Children.Add(grid);
+        var hidden = all.Count - shown.Count;
+        if (hidden > 0 || _everyItem)
+        {
+            var more = Fold(_everyItem, _everyItem ? "Hide the items with nothing in this berth" : $"{hidden} more items with nothing in this berth", open => { _everyItem = open; ShowDetail(); }, 11.5);
+            more.Margin = new Thickness(-3, 6, 0, 0);
+            page.Children.Add(more);
+        }
+        return page;
+    }
+
+    /// <summary>What the berth leaves out (or, for a part, where it is) and its design parameters.</summary>
+    private FrameworkElement BerthSettings(Berth b)
+    {
+        var page = new StackPanel();
+        page.Children.Add(Small(b.PartOf.Length > 0 ? $"The {b.Part} part: {(b.FindBy == BerthStatusMath.FindBy.ScopeBox ? $"scope box {b.Value}" : $"{b.Parameter} = {b.Value}")}, only inside {b.Only}. Change it on its berth."
+            : b.FindBy == BerthStatusMath.FindBy.ScopeBox ? $"Found by scope box {b.Value}." : $"Found by {b.Parameter} = {b.Value}."));
+        var grid = new WrapPanel { Margin = new Thickness(0, 6, 0, 0) };
         TextBox Labeled(string label, string text, double width, string help)
         {
             var cell = new StackPanel { Margin = new Thickness(0, 0, 12, 6) };
@@ -436,18 +1043,15 @@ internal sealed class BerthCostWindow : Window
             grid.Children.Add(cell);
             return box;
         }
-        var len = Labeled("Quay length (m)", b.Length is { } l ? l.ToString("0.##", CultureInfo.InvariantCulture) : "", 110, "The berth's quay length, for US$ per linear metre.");
-        len.LostFocus += (_, _) => { b.Length = Num(len.Text) is > 0 and var v ? v : null; Changed(); };
-        var exclude = Labeled("Leave out scope boxes", b.Exclude, 200, "Scope boxes whose elements are not this berth's (for example BERTH 9 - PART 1); several with ;");
-        exclude.LostFocus += (_, _) => { if (exclude.Text.Trim() != b.Exclude) { b.Exclude = exclude.Text.Trim(); Changed(); } };
-        var note = Labeled("Which is", b.ExcludeNote, 150, "A short name for what is left out (excl. RoRo); it goes in the berth's name in the files.");
-        note.LostFocus += (_, _) => { if (note.Text.Trim() != b.ExcludeNote) { b.ExcludeNote = note.Text.Trim(); Changed(); } };
-        page.Children.Add(grid);
-        page.Children.Add(Small(b.FindBy == BerthStatusMath.FindBy.ScopeBox ? $"Found by scope box {b.Value}." : $"Found by {b.Parameter} = {b.Value}."));
-
-        // Design parameters.
-        page.Children.Add(Section("Design parameters"));
-        page.Children.Add(Small("Pile sizes come from the model when it is measured; reinforcement rates (kg/m³) from the comparison workbook or typed here."));
+        if (b.PartOf.Length == 0)
+        {
+            var exclude = Labeled("Leave out scope boxes", b.Exclude, 200, "Scope boxes whose elements are not this berth's (for example BERTH 9 - PART 1); several with ;. The part left out gets a card of its own.");
+            exclude.LostFocus += (_, _) => { if (exclude.Text.Trim() != b.Exclude) { b.Exclude = exclude.Text.Trim(); Changed(); } };
+            var note = Labeled("Which is", b.ExcludeNote, 150, "A short name for what is left out (excl. RoRo); it goes in the berth's name in the files.");
+            note.LostFocus += (_, _) => { if (note.Text.Trim() != b.ExcludeNote) { b.ExcludeNote = note.Text.Trim(); Changed(); } };
+            page.Children.Add(grid);
+        }
+        page.Children.Add(Small("Design parameters: pile sizes come from the model when it is measured; reinforcement rates (kg/m³) from the comparison workbook or typed here."));
         var pars = new WrapPanel { Margin = new Thickness(0, 4, 0, 0) };
         foreach (var (key, label, unit) in BerthCostMath.Params)
         {
@@ -456,8 +1060,8 @@ internal sealed class BerthCostWindow : Window
             var box = Field(b.Params.TryGetValue(key, out var v) ? v.ToString("0.###", CultureInfo.InvariantCulture) : "", label);
             box.LostFocus += (_, _) =>
             {
-                if (box.Text.Trim().Length == 0) b.Params.Remove(key);
-                else if (Num(box.Text) is { } n) b.Params[key] = n;
+                if (box.Text.Trim().Length == 0) { if (!b.Params.Remove(key)) return; }
+                else if (Num(box.Text) is { } n) { if (b.Params.TryGetValue(key, out var old) && old == n) return; b.Params[key] = n; }
                 else { _status.Text = $"{label}: type a number."; return; }
                 Changed();
             };
@@ -465,111 +1069,7 @@ internal sealed class BerthCostWindow : Window
             pars.Children.Add(cell);
         }
         page.Children.Add(pars);
-
-        // Costs by group, then by item.
-        page.Children.Add(Section("Cost by group"));
-        var groups = new Grid { Margin = new Thickness(0, 4, 0, 0) };
-        groups.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(2, GridUnitType.Star) });
-        groups.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        var gr = 0;
-        foreach (var (code, name) in Groups)
-        {
-            groups.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            Put(groups, Brand.Text($"{code}  {name}", size: 12.5), gr, 0);
-            Put(groups, Right(Brand.Text(BerthCostMath.Money(t.ByGroup[code], _p.Currency), size: 12.5)), gr, 1);
-            gr++;
-        }
-        page.Children.Add(groups);
-
-        page.Children.Add(Section("Items"));
-        page.Children.Add(Small("Tick the items that go in the files. Type a quantity to set it by hand (empty: the model's). Worked-out items follow the concrete and the kg/m³. Under each item, its BOQ description with this berth's numbers. Show selects the elements in Revit."));
-        page.Children.Add(ItemsTable(b));
-
-        var missing = Missing(_p, b);
-        if (missing.Count > 0)
-        {
-            page.Children.Add(Section("To complete it"));
-            foreach (var what in missing.Take(30)) page.Children.Add(Para("• " + what, Brand.K.Text, 2));
-        }
-        if (b.Measured is { Notes.Count: > 0 } meas)
-            page.Children.Add(Small("Not found: " + string.Join("; ", meas.Notes.Select(n => (_p.ItemOf(n.Key)?.Name ?? n.Key.ToString(CultureInfo.InvariantCulture)) + " (" + n.Value + ")"))));
-        return page;
-    }
-
-    private FrameworkElement ItemsTable(Berth b)
-    {
-        var grid = new Grid { Margin = new Thickness(0, 6, 0, 0) };
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        foreach (var w in new[] { 0.35, 2.6, 1.0, 0.5, 0.8, 1.0, 1.1, 0.6 }) grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(w, GridUnitType.Star) });
-        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        string[] heads = ["IN FILES", "#", "ITEM", "QUANTITY", "UNIT", "FROM", "RATE", "COST", ""];
-        for (var i = 0; i < heads.Length; i++) Put(grid, Brand.Text(heads[i], Brand.K.Muted, 10.5, bold: true), 0, i);
-        var row = 1;
-        foreach (var line in Costs(_p, b))
-        {
-            var item = line.Item;
-            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            // Ticked items go in the BOQ and the back-up (for every berth of the project); the cost counts every item.
-            var inFiles = new CheckBox { IsChecked = item.InFiles, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(4, 4, 10, 0), ToolTip = "In the BOQ and the back-up calculation" };
-            AutomationProperties.SetName(inFiles, item.Name + " in the files");
-            inFiles.Checked += (_, _) => { item.InFiles = true; Changed(); };
-            inFiles.Unchecked += (_, _) => { item.InFiles = false; Changed(); };
-            Put(grid, inFiles, row, 0);
-            Put(grid, Brand.Text(item.No.ToString(CultureInfo.InvariantCulture), Brand.K.Muted, 12), row, 1);
-            var name = new StackPanel { Margin = new Thickness(0, 2, 8, 4) };
-            name.Children.Add(Brand.Text(item.Name, item.InFiles ? Brand.K.Text : Brand.K.Muted, 12));
-            // Its BOQ description with the berth's numbers (pile lengths, tips, tonnage) as it will be printed.
-            if (item.BoqText.Length > 0 && line.Qty is > 0) name.Children.Add(Small(Describe(_p, b, item)));
-            Put(grid, name, row, 2);
-            if (item.No is InfillRebar or SuperRebar && line.From != Source.Hand)
-                Put(grid, Brand.Text(Qty(line.Qty), size: 12), row, 3);
-            else
-            {
-                var box = Field(b.Hand.TryGetValue(item.No, out var h) ? h.ToString("0.###", CultureInfo.InvariantCulture) : "", item.Name + " quantity");
-                box.Margin = new Thickness(0, 1, 6, 1);
-                SetHint(box, line.From == Source.Model ? Qty(line.Qty) : "");
-                var no = item.No;
-                box.LostFocus += (_, _) =>
-                {
-                    var text = box.Text.Trim();
-                    if (text.Length == 0) { if (!b.Hand.Remove(no)) return; }
-                    else if (Num(text) is { } v) { if (b.Hand.TryGetValue(no, out var old) && old == v) return; b.Hand[no] = v; }
-                    else { _status.Text = $"{item.Name}: type a number, or leave it empty for the model's."; return; }
-                    Changed();
-                };
-                box.VerticalAlignment = VerticalAlignment.Top;
-                Put(grid, box, row, 3);
-            }
-            Put(grid, Brand.Text(item.Unit, Brand.K.Muted, 12), row, 4);
-            Put(grid, Brand.Text(line.From switch { Source.Model => "model", Source.Hand => "by hand", Source.Worked => "worked out", _ => "–" },
-                line.From == Source.Hand ? Brand.K.WarningText : Brand.K.Muted, 11.5), row, 5);
-            Put(grid, Right(Brand.Text(line.Rate > 0 ? line.Rate.ToString("#,0.##", CultureInfo.InvariantCulture) : "–", size: 12)), row, 6);
-            Put(grid, Right(Brand.Text(line.Cost > 0 ? Math.Round(line.Cost).ToString("#,0", CultureInfo.InvariantCulture) : "–", size: 12)), row, 7);
-            if (b.Measured?.Ids.TryGetValue(item.No, out var ids) == true && ids.Count > 0)
-            {
-                var show = new Button { Content = "Show", Padding = new Thickness(6, 1, 6, 1), Margin = new Thickness(6, 1, 0, 1), ToolTip = $"Select the {ids.Count} elements in Revit" };
-                show.Click += async (_, _) => await ShowInRevit(ids);
-                show.VerticalAlignment = VerticalAlignment.Top;
-                Put(grid, show, row, 8);
-            }
-            row++;
-        }
-        return grid;
-    }
-
-    /// <summary>The model's figure, shown greyed in the empty box (typing replaces it by hand).</summary>
-    private static void SetHint(TextBox box, string hint)
-    {
-        if (hint.Length == 0) return;
-        box.ToolTip = "The model gives " + hint + ". Type to set it by hand; empty it to use the model's again.";
-        AutomationProperties.SetHelpText(box, "The model gives " + hint);
-        var placeholder = new VisualBrush(new TextBlock { Text = hint, FontSize = 12, Margin = new Thickness(4, 0, 0, 0) })
-        { Stretch = Stretch.None, AlignmentX = AlignmentX.Left, Opacity = 0.55 };
-        void Update() => box.Background = box.Text.Length == 0 && !box.IsKeyboardFocused ? placeholder : null;
-        box.TextChanged += (_, _) => Update();
-        box.GotKeyboardFocus += (_, _) => Update();
-        box.LostKeyboardFocus += (_, _) => Update();
-        box.Loaded += (_, _) => Update();
+        return Box(page, top: 6);
     }
 
     // ---- Unit costs ---------------------------------------------------------------------------------------------------
