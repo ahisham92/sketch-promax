@@ -126,7 +126,7 @@ internal static class IssueGateMath
         var open = groups.SelectMany(g => g.Items.Where(i => i.Status == Status.Open).Select(i => $"{g.Title}: {i.Finding.Issue}")).ToList();
         var named = string.Join("; ", open.Take(maxNamed)) + (open.Count > maxNamed ? $"; and {open.Count - maxNamed} more" : "");
         return $"Not exported: the issue check has {open.Count} open item(s) for these sheets ({named}). Fix each one in the model, or accept it " +
-               "with the user's reason (issue_check accept), then call export_pdf again. The user can also open Issue > Issue check on the " +
+               "with the user's reason (issue_check accept), then call export_pdf again. The user can also open Submit > Submit check on the " +
                "ribbon to see them with Fix and Accept. Nothing was exported.";
     }
 

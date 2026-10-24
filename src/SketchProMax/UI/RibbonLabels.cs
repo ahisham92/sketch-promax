@@ -4,7 +4,7 @@ using Autodesk.Revit.UI;
 namespace SketchProMax.UI;
 
 /// <summary>
-/// Keeps the labels of the Sketch ProMax panel's buttons when the ribbon is narrow. Revit shrinks a crowded panel in
+/// Keeps the labels of the Sketch ProMax tab's buttons (every panel since 0.35, which stacks most of them) when the ribbon is narrow. Revit shrinks a crowded panel in
 /// steps, and one step hides the text of small stacked buttons, starting with the widest label of a stack and the
 /// stacks at the right of the panel (so "Export chats &amp; bugs", "Settings" and "Help" went icon-only while "Report bug"
 /// and "Bug folder" kept theirs). Its ribbon control (AdWindows) lets a button opt out of that step: this clears the
@@ -14,7 +14,7 @@ namespace SketchProMax.UI;
 /// </summary>
 internal static class RibbonLabels
 {
-    private const string Tab = "Sketch ProMax", Panel = "Sketch ProMax";
+    private const string Tab = "Sketch ProMax";
     private const int HideText = 2; // Autodesk.Windows.RibbonItemResizeStyles.HideText
 
     private static UIApplication? _app;
@@ -29,7 +29,7 @@ internal static class RibbonLabels
         {
             foreach (var panel in _app.GetRibbonPanels(Tab))
             {
-                if (panel is null || panel.Name != Panel) continue;
+                if (panel is null) continue;
                 foreach (var item in panel.GetItems())
                     if (item is not null) KeepText(item);
             }

@@ -18,7 +18,9 @@ internal static class RibbonTools
     {
         var registry = App.Bridge?.Registry ?? ToolRegistry.CreateDefault();
         var tool = registry.Find(name);
-        var title = ToolForm.Label(name);
+        // The ribbon's own name and one-line tip (0.35: short; the tool's full description is for the chat).
+        var ribbon = CoreRibbonManifest.Tools().FirstOrDefault(t => t.Tool == name);
+        var title = ribbon.Tool is null ? ToolForm.Label(name) : ribbon.Text;
         if (tool is null)
         {
             TaskDialog.Show("Sketch ProMax", $"This button runs '{name}', which this version of Sketch ProMax doesn't have. " +
@@ -54,13 +56,14 @@ internal static class RibbonTools
                 ? new InputsWindow.Field(f.Key, f.Label, (f.Help is null ? "" : f.Help + " ") + "Leave empty for the tool's default.", "string", false, ["yes", "no"], null)
                 : new InputsWindow.Field(f.Key, f.Label, f.Help, f.Type, f.Required, f.Choices, initial, f.ElementIds);
         }).ToList();
+        form = RibbonChoices.Add(doc, tool.Name, form);
         string selection;
         try { selection = string.Join(", ", app.ActiveUIDocument!.Selection.GetElementIds().Take(1000).Select(id => id.Value)); }
         catch (Exception) { selection = ""; }
 
         var window = new InputsWindow(title,
-            tool.ModifiesModel ? "Changes the model. Ctrl+Z undoes it." : "Reads the model. Nothing in it changes.",
-            Summary(tool.Description) + $"\n\nRuns on '{doc.Title}'." + (fields.Count == 0 ? " It needs no options." : " Fields marked * are needed; leave the others empty for the tool's defaults."),
+            (tool.ModifiesModel ? "Changes the model, Ctrl+Z undoes it" : "Reads the model only") + $" · {doc.Title}",
+            ribbon.Tool is null ? FirstSentence(tool.Description) : ribbon.Tip,
             [], form, "Run", selection: selection,
             favourite: FavouritesRibbon.CanPin(Favourites.Key("tool", tool.Name)) ? Favourites.Key("tool", tool.Name) : null)
         {
@@ -176,6 +179,15 @@ internal static class RibbonTools
         dialog.AddCommandLink(TaskDialogCommandLinkId.CommandLink2, "Close without deleting", "Nothing changes. The preview's list is in the result window.");
         dialog.DefaultButton = TaskDialogResult.CommandLink2;
         return dialog.Show() == TaskDialogResult.CommandLink1;
+    }
+
+    /// <summary>The first sentence of a tool's description (for a tool without a ribbon tip), 200 characters at most.</summary>
+    internal static string FirstSentence(string description)
+    {
+        var text = Summary(description);
+        var end = text.IndexOf(". ", StringComparison.Ordinal);
+        if (end > 0) text = text.Substring(0, end + 1);
+        return text.Length <= 200 ? text : text.Substring(0, 200).TrimEnd() + "…";
     }
 
     /// <summary>The first paragraph of a tool's description, cut at a sentence end near 400 characters.</summary>

@@ -127,6 +127,12 @@ internal static class ToolForm
     }
 
     /// <summary>"element_ids" → "Element ids".</summary>
+    /// <summary>base_level, top_level, level, levels... but not a level offset or a level count.</summary>
+    public static bool IsLevel(string key) =>
+        key.IndexOf("level", StringComparison.OrdinalIgnoreCase) >= 0
+        && !(key.IndexOf("offset", StringComparison.OrdinalIgnoreCase) >= 0 || key.IndexOf("count", StringComparison.OrdinalIgnoreCase) >= 0
+             || key.IndexOf("elevation", StringComparison.OrdinalIgnoreCase) >= 0);
+
     public static string Label(string key)
     {
         var text = key.Replace('_', ' ').Trim();

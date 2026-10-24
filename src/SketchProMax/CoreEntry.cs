@@ -113,6 +113,8 @@ public static class CoreEntry
             "pre-submission" => ChecklistWindow.Command(app),
             // Berth status (0.35+): each berth's status for its next submission, read from the model only when asked.
             "berth-status" => BerthStatusWindow.Command(app),
+            // Berth costing (0.35+ on the ribbon; also opened from Submissions status).
+            "berth-costing" => BerthCostWindow.Command(app),
             // Purge and cleanup (0.34+): pick one of the four cleanup tools; each previews, then asks before deleting.
             "cleanup" => RibbonTools.Cleanup(app),
             // Shared tools (0.35+): Share tools makes a TritoRevit zip; the TritoRevit tab's buttons and its Shared tools window.
@@ -269,6 +271,8 @@ public static class CoreEntry
             {
                 var f = JobLine().Split('\t');
                 var running = f[0] is "running" or "selftest";
+                // Asked every two seconds on Revit's thread (the Status button that did this left the ribbon in 0.35).
+                LoaderBrand.Pulse();
                 // While something runs, the button stops it: the red stop tile, and the tooltip says so.
                 // A large button: the tool's name and its running time on two lines.
                 return f.Length < 3 ? "" : CoreRibbonManifest.LiveLine(f[1],
@@ -281,7 +285,7 @@ public static class CoreEntry
             }
             case "update-first":
             {
-                // The Claude panel's copy of the badge; the Sketch ProMax panel's one also pumps the notice.
+                // The Claude panel's copy of the badge before 0.35 (from 0.35 that button asks for "update-badge").
                 var ((text, _), tip, glyph) = CoreCommands.BadgeWithTip();
                 return CoreRibbonManifest.LiveLine(text, tip, glyph);
             }

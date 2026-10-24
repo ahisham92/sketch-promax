@@ -85,6 +85,7 @@ ParallelJobTests.Run((name, ok, detail) => Check(name, ok, detail));
 RunningCallTests.Run((name, ok, detail) => Check(name, ok, detail));
 ScriptHintTests.Run((name, ok, detail) => Check(name, ok, detail));
 ChatMcpTests.Run((name, ok, detail) => Check(name, ok, detail));
+ResultViewTests.Run((name, ok, detail) => Check(name, ok, detail));
 ChatAutoTests.Run((name, ok, detail) => Check(name, ok, detail));
 PlanUsageTests.Run((name, ok, detail) => Check(name, ok, detail));
 PackageTests.Run((name, ok, detail) => Check(name, ok, detail));
