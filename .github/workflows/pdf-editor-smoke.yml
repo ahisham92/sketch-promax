@@ -1,0 +1,36 @@
+# Temporary (removed before merge): builds the PDF editor on Windows, runs the tests and opens its window for screenshots.
+name: PDF editor smoke
+on:
+  push:
+    branches: [claude/project-thread-5y0z9h]
+jobs:
+  smoke:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+      - name: Build the add-in for Revit 2024, 2025, 2026 and 2027
+        shell: pwsh
+        run: |
+          foreach ($v in 2024, 2025, 2026, 2027) {
+            dotnet build src/SketchProMax/SketchProMax.csproj -c Release -p:RevitVersion=$v
+            if ($LASTEXITCODE -ne 0) { throw "Build failed for $v" }
+            if (-not (Test-Path "src/SketchProMax/bin/Release/Revit$v/SketchProMax.pdfium.dll")) { throw "No SketchProMax.pdfium.dll for $v" }
+          }
+      - name: Tests
+        run: dotnet run --project tests/SketchProMax.Tests -c Release -- --addin src/SketchProMax/bin/Release/Revit2025
+      - name: Window smoke test with screenshots
+        shell: pwsh
+        run: |
+          $env:SHOTS = "$PWD\shots"
+          dotnet run --project scratch-ci/PdfEditorSmoke -c Release
+          if ($LASTEXITCODE -ne 0) { throw "Smoke test failed" }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: shots
+          path: shots

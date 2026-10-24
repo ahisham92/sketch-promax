@@ -41,6 +41,17 @@
     <PackageReference Include="PdfPig" Version="0.1.9" />
   </ItemGroup>
 
+  <!--
+    PDFium (BSD-3/Apache 2.0, Chrome's PDF engine) draws and writes pages for the PDF editor (Tools/PdfEngine). Only the
+    64-bit Windows library is shipped, renamed SketchProMax.pdfium.dll next to this DLL, so a pdfium.dll that Revit or
+    another add-in loaded is never taken for ours. The package's own build steps (x86/x64/arm64 folders) are not used.
+  -->
+  <ItemGroup>
+    <PackageReference Include="bblanchon.PDFium.Win32" Version="157.0.8086" ExcludeAssets="all" PrivateAssets="all" GeneratePathProperty="true" />
+    <None Include="$(Pkgbblanchon_PDFium_Win32)\runtimes\win-x64\native\pdfium.dll" Link="SketchProMax.pdfium.dll" CopyToOutputDirectory="PreserveNewest" Visible="false" />
+    <None Update="PDFium-LICENSE.txt" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <!-- .NET Framework 4.8 (Revit 2024): reference assemblies plus compiler polyfills for modern C#. -->
   <ItemGroup Condition="'$(TargetFramework)' == 'net48'">
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />

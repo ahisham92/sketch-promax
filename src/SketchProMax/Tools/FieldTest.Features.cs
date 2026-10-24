@@ -544,6 +544,7 @@ internal static partial class FieldTest
         await Probe(s, "chat.auto", ChatAutoProbe).ConfigureAwait(false);
         await Probe(s, "chat.usage", () => UsageProbe(s.Folder)).ConfigureAwait(false);
         await Probe(s, "chat.pdf", PdfAttach).ConfigureAwait(false);
+        await Probe(s, "pdf.editor", PdfEditor).ConfigureAwait(false);
         await Probe(s, "chat.office", OfficeAttach).ConfigureAwait(false);
         await Probe(s, "chat.documents", () => Documents(s.Folder)).ConfigureAwait(false);
         await Probe(s, "bugs.sync", () => BugSync(s.Folder)).ConfigureAwait(false);
@@ -1367,6 +1368,22 @@ internal static partial class FieldTest
         if (!BrandText.Clean(string.Join(" ", merged.Windows.Select(w => PlanUsage.Label(w.Key))) + " " + text)) problems.Add("the usage words aren't Sketch ProMax wording");
         return problems.Count == 0
             ? Pass($"Claude Code's rate_limit_event read as \"{parsed.Meter(now)}\", a weekly Opus limit merged in, the 80 % warning once and again when reached, reset limits without a figure, kept on disk (no plan use)")
+            : Fail(string.Join("; ", problems));
+    }
+
+    /// <summary>The PDF editor's engine on sample PDFs (PdfEditCheck, the same checks as the unit tests), with the window built.</summary>
+    private static (string, string) PdfEditor()
+    {
+        var problems = new List<string>();
+        var passed = 0;
+        var folder = Path.Combine(Path.GetTempPath(), "SketchProMax-field-pdfedit-" + Guid.NewGuid().ToString("N"));
+        try { PdfEditCheck.Run(folder, (name, ok, detail) => { if (ok) passed++; else problems.Add(name + (detail.Length > 0 ? ": " + detail : "")); }); }
+        catch (Exception ex) when (ex is not OutOfMemoryException) { problems.Add($"{ex.GetType().Name}: {ex.Message}"); }
+        finally { try { Directory.Delete(folder, true); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { } }
+        // The window (its page tile style is XAML read at run time): built on Revit's thread and closed unseen.
+        try { App.Dispatcher.InvokeAsync(_ => { UI.PdfEditorWindow.ForTest().Close(); return 0; }).GetAwaiter().GetResult(); }
+        catch (Exception ex) when (ex is not OutOfMemoryException) { problems.Add($"the window couldn't be built: {ex.GetType().Name}: {ex.Message}"); }
+        return problems.Count == 0 ? Pass($"{passed} checks and the window: open, draw, insert, delete, turn, move, replace, blank page, undo, extract, save with backup, three splits, refusals")
             : Fail(string.Join("; ", problems));
     }
 

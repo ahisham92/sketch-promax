@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Temporary: opens the PDF editor window on a Windows runner and prints screenshots. Not shipped. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>SketchProMax</RootNamespace>
+    <NoWarn>CS0436;CS8632</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../src/SketchProMax/Tools/PdfEngine.cs" Link="PdfEngine.cs" />
+    <Compile Include="../../src/SketchProMax/Tools/PdfEditSession.cs" Link="PdfEditSession.cs" />
+    <Compile Include="../../src/SketchProMax/Tools/PdfEditCheck.cs" Link="PdfEditCheck.cs" />
+    <Compile Include="../../src/SketchProMax/Tools/PdfFiles.cs" Link="PdfFiles.cs" />
+    <Compile Include="../../src/SketchProMax/UI/PdfEditorWindow.cs" Link="PdfEditorWindow.cs" />
+    <Compile Include="../../src/SketchProMax/UI/PdfEditorDialogs.cs" Link="PdfEditorDialogs.cs" />
+    <Compile Include="../../src/SketchProMax/UI/Brand.cs" Link="Brand.cs" />
+    <Compile Include="../../src/SketchProMax/UI/RichUi.cs" Link="RichUi.cs" />
+    <Compile Include="../../src/SketchProMax/Chat/MotionLevels.cs" Link="MotionLevels.cs" />
+    <EmbeddedResource Include="../../assets/logo/sketch-promax-64.png" LogicalName="SketchProMax.logo-64.png" />
+    <EmbeddedResource Include="../../assets/logo/sketch-promax.ico" LogicalName="SketchProMax.sketch-promax.ico" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="PdfPig" Version="0.1.9" />
+    <PackageReference Include="bblanchon.PDFium.Win32" Version="157.0.8086" />
+  </ItemGroup>
+</Project>
