@@ -49,7 +49,7 @@ internal static class SubmissionChecklistTests
             "walls.backfill", "dwall.secant", "piled.transverse", "piled.cantilever", "piled.longitudinal", "piled.beamjoint",
             "dwall.trench", "dwall.cages", "dwall.capping", "dwall.anchors", "dwall.leakage", "loads.temperature", "loads.modifiers", "loads.patterns",
             "loads.sls", "loads.construction", "loads.reactions", "steel.pipepile", "steel.localbuckling", "steel.infill", "steel.interlock",
-            "steel.welds", "steel.tierods", "steel.members", "steel.fatigue"
+            "steel.welds", "steel.tierods", "steel.members", "steel.fatigue", "basis.materials", "basis.criteria", "basis.changes", "levels.sealevel", "levels.structures", "loads.wheels", "loads.buoyancy", "geo.testing", "geo.gaps", "blocks.joints", "sheets.deflection", "dolphins.cap", "dredge.siltation", "dur.detailing", "dur.massconcrete", "furn.mooring", "calcs.robustness", "calcs.handcheck", "dwg.setout", "dwg.bbs", "bills.provisional", "bills.temporary", "spec.particular"
         ];
         // Retired with the revetment type (2026-10-24): never reuse these ids for another question.
         string[] retired = ["revet.armour", "revet.filter", "revet.toe", "revet.crest", "revet.slope", "revet.overtopping"];
@@ -60,6 +60,8 @@ internal static class SubmissionChecklistTests
         check("submission checklist: every question is on a page", badTopic.Count == 0, string.Join(", ", badTopic));
         var badType = bank.Where(q => q.TypeKeys.Any(k => TypeOf(k) is null)).Select(q => q.Id).ToList();
         check("submission checklist: every question names known structure types", badType.Count == 0, string.Join(", ", badType));
+        var twice = bank.Where(q => q.TypeKeys.Count != q.TypeKeys.Distinct().Count()).Select(q => q.Id).ToList();
+        check("submission checklist: no question names a structure type twice", twice.Count == 0, string.Join(", ", twice));
         var typePage = bank.Where(q => q.Topic == TopicTypes && q.TypeKeys.Count == 0).Select(q => q.Id).ToList();
         check("submission checklist: structure page questions name their type", typePage.Count == 0, string.Join(", ", typePage));
         var uncovered = Types.Where(t => bank.Count(q => q.Topic == TopicTypes && q.TypeKeys.FirstOrDefault() == t.Key) < 3).Select(t => t.Key).ToList();
