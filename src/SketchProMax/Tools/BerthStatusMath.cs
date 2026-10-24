@@ -167,8 +167,12 @@ internal static class BerthStatusMath
             || (a.Contains(' ') && v.Contains(' ') && Eq(Last(a), Last(v)) && string.Equals(a.Substring(0, a.LastIndexOf(' ')).Trim(), v.Substring(0, v.LastIndexOf(' ')).Trim(), StringComparison.OrdinalIgnoreCase)));
     }
 
-    /// <summary>A submission: for one berth, or every berth of the model when Berth is empty. Due at Time (default 08:00) on Date.</summary>
-    public sealed record Submission(string Model, string Berth, string Name, DateTime Date, TimeSpan? Time = null, bool Submitted = false);
+    /// <summary>
+    /// A submission: for one berth, or every berth of the model when Berth is empty. Due at Time (default 08:00) on Date;
+    /// work on it starts on Start (empty: when the berth's submission before it was due). A resubmission after comments
+    /// is a submission of its own, named with its revision ("T3 Rev 1").
+    /// </summary>
+    public sealed record Submission(string Model, string Berth, string Name, DateTime Date, TimeSpan? Time = null, bool Submitted = false, DateTime? Start = null);
 
     /// <summary>How many of something the berth should have when done: a category ("Structural Columns", "Structural Columns / Pile" for types containing Pile), Drawings, Details or Schedules.</summary>
     public sealed record Planned(string Model, string Berth, string What, int Count);
@@ -291,6 +295,8 @@ internal static class BerthStatusMath
     public sealed class State
     {
         public Dictionary<string, BerthState> Berths { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+        /// <summary>Per setup model: the working hours of everyone in it per day (yyyy-MM-dd), from its time records when it is read.</summary>
+        public Dictionary<string, Dictionary<string, double>> ModelHours { get; set; } = new(StringComparer.OrdinalIgnoreCase);
         public BerthState For(string key) => Berths.TryGetValue(key, out var b) ? b : Berths[key] = new BerthState();
     }
 
@@ -556,9 +562,100 @@ internal static class BerthStatusMath
         return (100 - Clamp(percent)) / hours * Math.Max(1, week.HoursPerDay);
     }
 
+    // ---- The schedule, changed in Revit ------------------------------------------------------------------------------
+
+    /// <summary>The name of a submission's resubmission after comments: "T3" gives "T3 Rev 1", "T3 Rev 1" gives "T3 Rev 2".</summary>
+    public static string ResubmissionName(string name)
+    {
+        var (bare, revision) = SubmissionChecklistMath.SplitRevision(name);
+        return $"{(bare.Length > 0 ? bare : "Submission")} Rev {revision + 1}";
+    }
+
+    /// <summary>A resubmission of <paramref name="s"/> after comments: same model and berths, the next revision, starting <paramref name="today"/>, due on <paramref name="due"/>.</summary>
+    public static Submission Resubmission(Submission s, DateTime today, DateTime due) =>
+        new(s.Model, s.Berth, ResubmissionName(s.Name), due.Date, s.Time, false, today.Date <= due.Date ? today.Date : null);
+
+    /// <summary>What is wrong with a schedule changed in Revit (empty: nothing). A row needs a name and a due date (unless submitted), and a start on or before it.</summary>
+    public static List<string> ScheduleProblems(IReadOnlyList<Submission> rows)
+    {
+        var problems = new List<string>();
+        for (var i = 0; i < rows.Count; i++)
+        {
+            var r = rows[i];
+            var name = r.Name.Trim().Length > 0 ? r.Name.Trim() : $"Row {i + 1}";
+            if (r.Name.Trim().Length == 0) problems.Add($"Row {i + 1}: give the submission a name (T3, Detailed design…).");
+            if (r.Date == NoDate && !r.Submitted) problems.Add($"{name}: set its due date (or tick Submitted).");
+            if (r.Start is { } st && r.Date != NoDate && st.Date > r.Date.Date) problems.Add($"{name}: it starts after it is due.");
+        }
+        foreach (var g in rows.Where(r => r.Name.Trim().Length > 0).GroupBy(r => r.Model.Trim().ToLowerInvariant() + "|" + r.Berth.Trim().ToLowerInvariant() + "|" + r.Name.Trim().ToLowerInvariant()).Where(g => g.Count() > 1))
+            problems.Add($"{g.First().Name.Trim()} is in the schedule twice for {(g.First().Berth.Trim().Length > 0 ? g.First().Berth.Trim() : "every berth")}.");
+        return problems;
+    }
+
+    // ---- Working hours on the model ----------------------------------------------------------------------------------
+
+    /// <summary>
+    /// The hours a submission takes: worked on the model since it started, the hours still expected (at the pace the
+    /// hours so far bought progress), and those hours per working day left before it is due (null when not known yet).
+    /// </summary>
+    public sealed record Effort(DateTime? Start, double Worked, double? Left, double? PerDay);
+
+    /// <summary>When work on a submission starts: its Start, else when the berth's submission before it was due, else null (from the first hours on record).</summary>
+    public static DateTime? StartOf(Setup setup, Berth berth, Submission s)
+    {
+        if (s.Start is { } start) return start.Date;
+        var due = DueAt(s, setup.Week);
+        return SubmissionsFor(setup, berth).Where(x => x != s && x.Date != NoDate && DueAt(x, setup.Week) < due).Select(x => (DateTime?)DueAt(x, setup.Week)).LastOrDefault();
+    }
+
+    /// <summary>Everyone's working hours in a model from <paramref name="from"/> (its day included; null: all) to <paramref name="to"/> (its day included).</summary>
+    public static double HoursWorked(State state, string model, DateTime? from, DateTime to)
+    {
+        var days = state.ModelHours.FirstOrDefault(kv => Same(kv.Key, model)).Value;
+        if (days is null) return 0;
+        double sum = 0;
+        foreach (var kv in days)
+            if (DateTime.TryParseExact(kv.Key, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var day) && (from is null || day >= from.Value.Date) && day <= to.Date)
+                sum += kv.Value;
+        return sum;
+    }
+
+    public static Effort EffortOf(Setup setup, Berth berth, BerthState b, State state, Submission? next, double? percent, DateTime now)
+    {
+        if (next is null) return new(null, 0, null, null);
+        var start = StartOf(setup, berth, next);
+        var worked = HoursWorked(state, berth.Model, start, now);
+        double? left = null;
+        if (percent is { } p)
+        {
+            if (p >= 100) left = 0;
+            else
+            {
+                // The progress the hours bought: from the reading at the start (or the first one after it, when the
+                // tracker started later; or 0 for a first submission with no start), to now.
+                var before = start is { } s0 ? b.History.Where(h => h.At <= s0).OrderBy(h => h.At).LastOrDefault() : null;
+                var after = start is { } s1 ? b.History.Where(h => h.At > s1).OrderBy(h => h.At).FirstOrDefault() : null;
+                var (from, basis) = before is not null ? (start, before.Percent) : after is not null ? ((DateTime?)after.At, after.Percent) : (start, 0.0);
+                var hours = HoursWorked(state, berth.Model, from, now);
+                var gained = p - basis;
+                if (gained >= 1 && hours > 0) left = hours / gained * (100 - Clamp(p));
+            }
+        }
+        double? perDay = null;
+        var due = DueAt(next, setup.Week);
+        if (left is { } l && setup.Week.HoursPerDay > 0 && WorkHours(now, due, setup.Week) is var h && h > 0)
+            perDay = l / Math.Max(h / setup.Week.HoursPerDay, 1.0 / setup.Week.HoursPerDay);
+        return new(start, worked, left, perDay);
+    }
+
+    /// <summary>One model's time records as working hours per day, all users together.</summary>
+    public static Dictionary<string, double> HoursPerDay(IEnumerable<(string Day, double Seconds)> rows) =>
+        rows.Where(r => r.Day.Length > 0).GroupBy(r => r.Day).ToDictionary(g => g.Key, g => Math.Round(g.Sum(r => r.Seconds) / 3600, 2));
+
     /// <summary>One line per berth for the overview and the AI question.</summary>
     /// <param name="Last">When every submission of the berth is made: the last one (its status still counts what is left to fix).</param>
-    public sealed record Summary(Berth Berth, double? Percent, Submission? Next, DateTime? Due, double HoursLeft, DateTime? Finish, bool FinishByHand, Verdict Verdict, List<AreaScore> Scores, List<DeliverableScore> Deliverables, BerthState State, Submission? Last = null);
+    /// <param name="Effort">The next submission's hours: worked on the model since it started, expected left, and per working day.</param>
+    public sealed record Summary(Berth Berth, double? Percent, Submission? Next, DateTime? Due, double HoursLeft, DateTime? Finish, bool FinishByHand, Verdict Verdict, List<AreaScore> Scores, List<DeliverableScore> Deliverables, BerthState State, Submission? Last = null, Effort? Effort = null);
 
     public static Summary Summarize(Setup setup, Berth berth, State state, DateTime now, Func<Deliverable, Berth, string>? findFile = null)
     {
@@ -575,7 +672,7 @@ internal static class BerthStatusMath
         // Submitted already: still checked, so what the BIM submission needs fixed stays in view.
         var last = next is null ? SubmissionsFor(setup, berth).LastOrDefault(x => x.Submitted) : null;
         var verdict = last is not null ? (percent >= 100 ? Verdict.Done : Verdict.Submitted) : Judge(percent, next, finish, now, setup.Week);
-        return new Summary(berth, percent, next, due, hours, finish, b.FinishByHand is not null, verdict, scores, deliverables, b, last);
+        return new Summary(berth, percent, next, due, hours, finish, b.FinishByHand is not null, verdict, scores, deliverables, b, last, EffortOf(setup, berth, b, state, next, percent, now));
     }
 
     /// <summary>
@@ -714,7 +811,7 @@ internal static class BerthStatusMath
         {
             $"Berth status tracker: estimate when {s.Berth.Name} ({s.Berth.Model}) will be ready for submission. Don't change the model.",
             $"Now: {now:ddd dd-MMM-yyyy HH:mm}. Working days: {string.Join(", ", setup.Week.Days.Select(d => d.ToString().Substring(0, 3)))}, {setup.Week.Start:hh\\:mm}-{setup.Week.End:hh\\:mm}. A submission is due at its time (default {setup.Week.Due:hh\\:mm}) on its day, with calculations, bills, their back-up calculations and costing.",
-            $"Status now: {Pct(s.Percent)}." + (s.Next is null ? (s.Last is { } last ? $" Already submitted ({last.Name}); estimate when what is left to fix will be done." : " No submission set.") : $" Next submission: {s.Next.Name}, due {s.Due:ddd dd-MMM-yyyy HH:mm} ({s.HoursLeft:0} working hours left)."),
+            $"Status now: {Pct(s.Percent)}." + (s.Next is null ? (s.Last is { } last ? $" Already submitted ({last.Name}); estimate when what is left to fix will be done." : " No submission set.") : $" Next submission: {s.Next.Name}, due {s.Due:ddd dd-MMM-yyyy HH:mm} ({s.HoursLeft:0} working hours left)." + (s.Effort is { } e ? $" Worked on the model since {(e.Start is { } st ? st.ToString("dd-MMM", CultureInfo.InvariantCulture) : "the first record")}: {e.Worked:0.#} h; expected left: {(e.Left is { } l ? l.ToString("0.#", CultureInfo.InvariantCulture) + " h" : "not known yet")}." : "")),
         };
         foreach (var a in s.Scores) lines.Add($"- {a.Area.Name}: {Pct(a.Percent)}" + (a.Result?.Summary is { Length: > 0 } sum ? $" ({sum})" : "") + (a.Hand?.Comment is { Length: > 0 } c ? $" Comment: {c}" : ""));
         foreach (var d in s.Deliverables) lines.Add($"- Deliverable {d.Deliverable.Name}: {Pct(d.Percent)}" + (d.Comment.Length > 0 ? $" ({d.Comment})" : ""));
@@ -797,7 +894,7 @@ internal static class BerthStatusMath
 
     private static readonly string[] ModelCols = ["Model", "File name contains", "Linked models to include", "Clash report"];
     private static readonly string[] BerthCols = ["Model", "Berth", "Find elements by", "Value", "Parameter", "Sheets contain", "Schedules contain"];
-    private static readonly string[] SubmissionCols = ["Model", "Berth", "Submission", "Date", "Time", "Submitted"];
+    private static readonly string[] SubmissionCols = ["Model", "Berth", "Submission", "Start", "Date", "Time", "Submitted"];
     private static readonly string[] PlannedCols = ["Model", "Berth", "What", "Planned"];
     private static readonly string[] DeliverableCols = ["Deliverable", "Folder", "File name contains"];
     private static readonly string[] WeightCols = ["Area", "Weight", "What it measures"];
@@ -816,8 +913,8 @@ internal static class BerthStatusMath
                 s.Models.Select(m => new object?[] { m.Name, m.FileContains, m.Links, m.ClashReport }), [18, 26, 30, 50]),
             Sheet("Berths", "Berths: Find elements by is Scope box, Parameter, Workset or Whole model; list several values with ; (a package of berths 9 and 10: 9; 10)", BerthCols,
                 s.Berths.Select(b => new object?[] { b.Model, b.Name, b.FindBy, b.Value, b.Parameter, b.Sheets, b.Schedules }), [18, 18, 18, 22, 18, 18, 18]),
-            Sheet("Submissions", "Submissions: Berth empty means every berth of the model; Time empty means the due time (08:00)", SubmissionCols,
-                s.Submissions.Select(x => new object?[] { x.Model, x.Berth, x.Name, x.Date == NoDate ? "" : x.Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), x.Time is { } t ? t.ToString(@"hh\:mm", CultureInfo.InvariantCulture) : "", x.Submitted ? "Yes" : "" }), [18, 18, 34, 14, 10, 12]),
+            Sheet("Submissions", "Submissions: Berth empty means every berth of the model; Start empty means when the one before was due; Date is the due date; Time empty means the due time (08:00); a resubmission after comments is its own row (T3 Rev 1)", SubmissionCols,
+                s.Submissions.Select(x => new object?[] { x.Model, x.Berth, x.Name, x.Start is { } st ? st.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) : "", x.Date == NoDate ? "" : x.Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), x.Time is { } t ? t.ToString(@"hh\:mm", CultureInfo.InvariantCulture) : "", x.Submitted ? "Yes" : "" }), [18, 18, 34, 14, 14, 10, 12]),
             Sheet("Planned", "Planned: a category (Structural Columns / Pile for its types with Pile), or Drawings, Details, Schedules", PlannedCols,
                 s.Planned.Select(p => new object?[] { p.Model, p.Berth, p.What, p.Count.ToString(CultureInfo.InvariantCulture) }), [18, 18, 34, 12]),
             Sheet("Deliverables", "Deliverables of every berth: done by hand, or when a file with the text ({berth} = the berth's name) is in the folder", DeliverableCols,
@@ -932,7 +1029,13 @@ internal static class BerthStatusMath
             }
             if (ParseDate(V(r, "Date")) is not { } date) { problems.Add($"submission \"{V(r, "Submission")}\": \"{V(r, "Date")}\" isn't a date"); continue; }
             var time = ParseTime(V(r, "Time"));
-            s.Submissions.Add(new(V(r, "Model"), V(r, "Berth"), V(r, "Submission").Length > 0 ? V(r, "Submission") : "Submission", date, time, IsYes(V(r, "Submitted"))));
+            DateTime? start = null;
+            if (V(r, "Start").Length > 0)
+            {
+                if (ParseDate(V(r, "Start")) is { } st && st.Date <= date.Date) start = st.Date;
+                else problems.Add($"submission \"{V(r, "Submission")}\": start \"{V(r, "Start")}\" isn't a date before its due date");
+            }
+            s.Submissions.Add(new(V(r, "Model"), V(r, "Berth"), V(r, "Submission").Length > 0 ? V(r, "Submission") : "Submission", date, time, IsYes(V(r, "Submitted")), start));
         }
         foreach (var r in Table("Planned", PlannedCols))
             if (V(r, "What").Length > 0 && double.TryParse(V(r, "Planned"), NumberStyles.Float, CultureInfo.InvariantCulture, out var n))
@@ -1046,8 +1149,13 @@ internal static class BerthStatusMath
         status.Add(new(["Due", "", "", "", "", "", s.Due is { } due ? due.ToString("ddd dd-MMM-yyyy HH:mm", CultureInfo.InvariantCulture) : "", ""]));
         status.Add(new(["Working hours left", "", "", "", "", "", s.Due is null ? "" : Math.Round(s.HoursLeft, 1).ToString(CultureInfo.InvariantCulture), ""]));
         status.Add(new(["Expected finish", "", "", s.FinishByHand ? "By hand" : "From the readings", "", "", s.Finish is { } f ? f.ToString("ddd dd-MMM-yyyy HH:mm", CultureInfo.InvariantCulture) : "Needs two readings", ""]));
-        if (s.Percent is { } pc && s.Due is { } d2 && NeededPerDay(pc, d2, now, setup.Week) is { } need)
-            status.Add(new(["Needed per working day", Math.Round(need / 100, 3), "", "", "", "", "", ""]));
+        if (s.Effort is { } e && s.Next is not null)
+        {
+            status.Add(new(["Start", "", "", "", "", "", e.Start is { } st ? st.ToString("ddd dd-MMM-yyyy", CultureInfo.InvariantCulture) : "From the first hours on record", ""]));
+            status.Add(new(["Hours worked on the model", "", "", "", "", "", Math.Round(e.Worked, 1).ToString(CultureInfo.InvariantCulture), "Everyone's working hours in the model since the start (all its berths)"]));
+            status.Add(new(["Hours expected left", "", "", "", "", "", e.Left is { } l ? Math.Round(l, 1).ToString(CultureInfo.InvariantCulture) : "Needs hours and progress", ""]));
+            status.Add(new(["Hours needed per working day", "", "", "", "", "", e.PerDay is { } pd ? Math.Round(pd, 1).ToString(CultureInfo.InvariantCulture) : "", b.Engineers is { } n && e.PerDay is { } pd2 ? $"{pd2 / Math.Max(1, n):0.#} h each ({n} engineers)" : ""]));
+        }
         status.Add(new(["Model read", "", "", "", "", "", b.ReadAt is { } r ? r.ToString("dd-MMM-yyyy HH:mm", CultureInfo.InvariantCulture) + " from " + b.ReadFrom : "Not read yet", ""]));
         sheets.Add(new("Status", $"{s.Berth.Name} ({s.Berth.Model}) status, {now:dd-MMM-yyyy HH:mm}",
             ["Area", "Status", "Weight", "From", "Done", "Of", "What the model shows", "Comment"], status,

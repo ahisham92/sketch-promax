@@ -164,6 +164,13 @@ internal static class BerthStatusTests
         check("berth status: an overall or framing plan needs no tags", TagCategoriesFor(tagSetup, "BERTH 9 OVERALL PLAN", []).Count == 0 && TagCategoriesFor(tagSetup, "BERTH 9 - PART 2 FRAMING PLAN", []).Count == 0, "");
 
         var week = new BerthStatusMath.Calendar();
+        check("berth status: a resubmission is the next revision", ResubmissionName("T3") == "T3 Rev 1" && ResubmissionName("T3 Rev 1") == "T3 Rev 2" && ResubmissionName("T3 (Rev B)") == "T3 Rev 3", ResubmissionName("T3 Rev 1"));
+        check("berth status: the schedule needs names and due dates, and starts before due",
+            ScheduleProblems([new("M", "Berth 9", "T3", new DateTime(2026, 11, 5), Start: new DateTime(2026, 11, 1))]).Count == 0
+            && ScheduleProblems([new("M", "Berth 9", "", new DateTime(2026, 11, 5))]).Count == 1
+            && ScheduleProblems([new("M", "Berth 9", "T3", NoDate)]).Count == 1 && ScheduleProblems([new("M", "Berth 9", "T3", NoDate, Submitted: true)]).Count == 0
+            && ScheduleProblems([new("M", "Berth 9", "T3", new DateTime(2026, 11, 5), Start: new DateTime(2026, 11, 6))]).Count == 1
+            && ScheduleProblems([new("M", "Berth 9", "T3", new DateTime(2026, 11, 5)), new("m", "berth 9", "t3", new DateTime(2026, 11, 6))]).Count == 1, "");
         // Thursday 2026-10-29: due at 08:00 that day, so Wednesday's working day is the last before it.
         var thu = new DateTime(2026, 10, 29);
         var sub = new Submission("Port A", "Berth 1", "Stage 2", thu);
@@ -207,12 +214,21 @@ internal static class BerthStatusTests
                 && back.ClashToleranceMm == 40 && new Setup().ClashToleranceMm == 50
                 && back.TagRules.Count == 2 && back.TagRules[0].Categories == "Structural Columns, Structural Foundations" && back.TagRules[1].ViewContains == "Section" && back.SourcePath == xlsx && back.SourceStamp.Length > 0,
                 $"{back.Berths.Count} berths, {back.Submissions.Count} submissions, due {back.Week.Due}");
+            // The schedule changed in Revit: a start date and a resubmission row read back from the Excel it writes.
+            var withStart = ReadSetup(xlsx);
+            withStart.Submissions = [.. withStart.Submissions, Resubmission(withStart.Submissions[0], new DateTime(2026, 11, 1), new DateTime(2026, 11, 20))];
+            var resub = withStart.Submissions[^1];
+            OfficeXlsx.Write(xlsx, "setup", SetupSheets(withStart));
+            var startBack = ReadSetup(xlsx);
+            check("berth status: a start date and a resubmission read back from the setup Excel",
+                startBack.Submissions.Count == 3 && startBack.Submissions[2].Start == new DateTime(2026, 11, 1) && startBack.Submissions[2].Name == resub.Name
+                && startBack.Submissions[2].Berth == withStart.Submissions[0].Berth && startBack.Submissions[0].Start is null, resub.Name);
 
             var bad = new Setup { Models = [new("Port A", "PORTA")], Berths = [new("Port C", "Berth 9", FindBy.WholeModel)], Submissions = [new("Port A", "", "x", thu)] };
             var badFile = Path.Combine(temp, "bad.xlsx");
             var sheets = SetupSheets(bad);
             // A date that isn't one.
-            sheets[2] = sheets[2] with { Rows = [new OfficeXlsx.Row(["Port A", "", "x", "next week", "", ""])] };
+            sheets[2] = sheets[2] with { Rows = [new OfficeXlsx.Row(["Port A", "", "x", "", "next week", "", ""])] };
             OfficeXlsx.Write(badFile, "bad", sheets);
             string? error = null;
             try { ReadSetup(badFile); } catch (InvalidDataException ex) { error = ex.Message; }
@@ -266,6 +282,21 @@ internal static class BerthStatusTests
             // The submissions of a berth: its own and its model's, the next one not submitted.
             setup.Submissions = [new("Port A", "Berth 1", "Old", thu.AddDays(-7), null, true), new("Port A", "", "All berths", thu.AddDays(7)), new("Port A", "Berth 1", "Mine", thu), new("Port B", "", "Other", thu)];
             check("berth status: the next submission is the berth's or its model's, not submitted yet", Next(setup, berth)?.Name == "Mine" && SubmissionsFor(setup, berth).Count == 3, Next(setup, berth)?.Name ?? "none");
+            // Hours: everyone's working hours in the model since the submission started, and the hours still expected.
+            var hoursState = new State();
+            hoursState.ModelHours["port a"] = HoursPerDay([("2026-10-25", 6 * 3600.0), ("2026-10-25", 4 * 3600.0), ("2026-10-26", 8 * 3600.0), ("2026-10-20", 5 * 3600.0)]);
+            var hoursBerth = new BerthState { History = [new(new DateTime(2026, 10, 25, 9, 0, 0), 40)] };
+            var mine = setup.Submissions[2] with { Start = new DateTime(2026, 10, 25) };
+            var hoursSetup = new Setup { Week = setup.Week, Submissions = [setup.Submissions[0], mine] };
+            var effort = EffortOf(hoursSetup, berth, hoursBerth, hoursState, mine, 58, tue);
+            check("berth status: hours worked on the model since the submission started", effort.Start == new DateTime(2026, 10, 25) && Math.Abs(effort.Worked - 18) < 1e-9, effort.ToString());
+            check("berth status: hours left at the pace the hours bought progress (18 h for 18%: 42 h left)", effort.Left is { } left && Math.Abs(left - 42) < 1e-9, effort.ToString());
+            check("berth status: hours needed per working day before it is due (42 h over 17 working hours)", effort.PerDay is { } perDay && Math.Abs(perDay - 42 / (17.0 / 9)) < 1e-6, effort.ToString());
+            check("berth status: with no start, work starts when the submission before it was due",
+                StartOf(hoursSetup, berth, setup.Submissions[2]) == DueAt(setup.Submissions[0], week) && HoursWorked(hoursState, "Port A", new DateTime(2026, 10, 26), tue) == 8
+                && HoursWorked(hoursState, "Port B", null, tue) == 0, "");
+            check("berth status: hours left aren't guessed without progress", EffortOf(hoursSetup, berth, new BerthState { History = [new(new DateTime(2026, 10, 25, 9, 0, 0), 58)] }, hoursState, mine, 58, tue).Left is null
+                && EffortOf(hoursSetup, berth, hoursBerth, new State(), mine, 58, tue).Left is null, "");
             check("berth status: the open model picks its setup model", ModelFor(setup, @"C:\x\PORTB-DOC-001.rvt")?.Name == "Port B" && ModelFor(setup, "PORTA-001_detached.rvt")?.Name == "Port A" && ModelFor(setup, "other.rvt") is null, "");
 
             // The berth's Excel, and the AI question.

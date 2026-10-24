@@ -28,7 +28,8 @@ namespace SketchProMax.UI;
 /// one checklist per submission, page by page. The engineer answers each short question Yes, No or N/A (details and a
 /// sketch on demand, a comment where it helps); the group leader approves or returns each answer. An N/A stays in view
 /// until the group leader approves it, then it is hidden. The project's structure types (Project setup) decide which
-/// questions are asked; anyone can add a question. The BIM part is the Model checklist, shown as its score.
+/// questions are asked. The questions come from the questions template, which only its owner's PC can change (the
+/// Questions button, SubmissionChecklistTemplateWindow); it travels in the model. The BIM part is the Model checklist, shown as its score.
 ///
 /// Shared through the model (Revit/SubmissionChecklistStore, one record per person): changes are saved into the model a
 /// moment after they are made, and Synchronize with Central shares them; coming back to the window after Reload Latest
@@ -48,6 +49,10 @@ internal sealed class SubmissionChecklistWindow : Window
     private DateTime _readAt = DateTime.Now;
     private bool _closed, _dirty, _writing, _loading;
     private string _lastFile = "";
+    // The questions template's owner (the owner's PC, the one the license exempts) is the only one who changes questions:
+    // the template, and questions added or left out on a project. Everyone else answers.
+    private readonly bool _owner = OwnerPc();
+    private SubmissionChecklistTemplate.Template? _pcTemplate = SubmissionChecklistTemplate.LoadPc();
 
     private readonly TabControl _pages = new();
     private readonly TextBlock _status = Brand.Text("", Brand.K.Muted);
@@ -123,8 +128,8 @@ internal sealed class SubmissionChecklistWindow : Window
         _others = records.Where(r => !Same(r.User, _user)).ToList();
         _othersStamp = Stamp(_others);
         Remerge();
-        if (name.Trim().Length > 0 && _shared.Find(KeyOf(package, name)) is null) { AddSubmission(_mine, package, name, due, DateTime.UtcNow); _dirty = true; Remerge(); }
-        _selected = name.Trim().Length > 0 ? KeyOf(package, name) : _shared.Submissions.FirstOrDefault()?.Key ?? "";
+        if (name.Trim().Length > 0 && _shared.Find(KeyFor(package, name)) is null) { StartNamed(_mine, _shared, package, name, due, DateTime.UtcNow); _dirty = true; Remerge(); }
+        _selected = name.Trim().Length > 0 ? KeyFor(package, name) : _shared.Submissions.FirstOrDefault(x => !x.Superseded)?.Key ?? "";
 
         Title = "Sketch ProMax submission checklist";
         var area = SystemParameters.WorkArea;
@@ -160,14 +165,47 @@ internal sealed class SubmissionChecklistWindow : Window
     private void Remerge()
     {
         _shared = Merge(_others.Concat([_mine]));
-        _questions = QuestionsFor(_shared.Setup, _shared.Added);
+        // The newest questions template (this PC's or one a record in the model carries) is everyone's: kept in this
+        // user's record, so it reaches the model, and on this PC, so it reaches the next model.
+        var template = SubmissionChecklistTemplate.Newest(_pcTemplate, _shared.Template);
+        if (template is not null && (_mine.Template is null || _mine.Template.At < template.At))
+        {
+            _mine.Template = SubmissionChecklistTemplate.Copy(template);
+            _mine.Saved = DateTime.UtcNow;
+            _dirty = true;
+            SaveOwn(ChecklistMath.WorkingName(_model), _mine);
+            _saveSoon.Stop();
+            _saveSoon.Start();
+            _shared.Template = _mine.Template;
+        }
+        if (template is not null && (_pcTemplate is null || _pcTemplate.At < template.At) && SubmissionChecklistTemplate.TakeIfNewer(template)) _pcTemplate = template;
+        _questions = QuestionsFor(_shared.Setup, _shared.Added, SubmissionChecklistTemplate.QuestionsOf(template));
+    }
+
+    private static bool OwnerPc()
+    {
+        try { return Licensing.LicenseState.IsOwnerPc; }
+        catch (Exception ex) when (ex is not OutOfMemoryException) { return false; }
+    }
+
+    /// <summary>The owner's Questions button: edits the template; the new questions apply here at once and travel with the model.</summary>
+    private void EditTemplate()
+    {
+        if (!_owner) return;
+        var current = SubmissionChecklistTemplate.Newest(_pcTemplate, _shared.Template);
+        if (SubmissionChecklistTemplateWindow.Edit(this, current, _user) is not { } saved) return;
+        _pcTemplate = saved;
+        Remerge();
+        Changed();
+        Build();
+        _status.Text = $"Questions saved: {SubmissionChecklistTemplate.QuestionsOf(saved).Count} in the template. Synchronize with Central so the others ask them too.";
     }
 
     /// <summary>Opens on a submission (started in the user's record when new), from Submissions status.</summary>
     private void Pick(string package, string name, DateTime? due)
     {
-        var key = KeyOf(package, name);
-        if (_shared.Find(key) is null) { AddSubmission(_mine, package, name, due, DateTime.UtcNow); Remerge(); Changed(); }
+        var key = KeyFor(package, name);
+        if (_shared.Find(key) is null) { key = StartNamed(_mine, _shared, package, name, due, DateTime.UtcNow); Remerge(); Changed(); }
         _selected = key;
         UpdateBim();
         Build();
@@ -227,10 +265,19 @@ internal sealed class SubmissionChecklistWindow : Window
         refresh.Click += async (_, _) => await ReadAgain(quiet: false);
         var left = new StackPanel { Orientation = Orientation.Horizontal };
         left.Children.Add(Brand.Text("Submission", Brand.K.Muted, 12, bold: true));
+        Button? questions = null;
+        if (_owner)
+        {
+            questions = RichUi.Button(RichUi.Icon.Edit, "Questions");
+            questions.Margin = new Thickness(8, 0, 0, 0);
+            AutomationProperties.SetHelpText(questions, "The questions template: add, change or delete questions, or export them to Excel and import them back. Only you see this.");
+            questions.Click += (_, _) => EditTemplate();
+        }
         left.Children[0].SetValue(MarginProperty, new Thickness(0, 0, 8, 0));
         ((FrameworkElement)left.Children[0]).VerticalAlignment = VerticalAlignment.Center;
         left.Children.Add(subs);
         left.Children.Add(add);
+        if (questions is not null) left.Children.Add(questions);
         DockPanel.SetDock(left, Dock.Left);
         bar.Children.Add(left);
         var right = new StackPanel { Orientation = Orientation.Horizontal };
@@ -453,26 +500,48 @@ internal sealed class SubmissionChecklistWindow : Window
         // Submissions.
         page.Children.Add(Para("Submissions", size: 14, top: 22));
         ((TextBlock)page.Children[page.Children.Count - 1]).FontWeight = FontWeights.SemiBold;
-        page.Children.Add(Para("Each submission has its own checklist. Opening it from Submissions status starts it for you.", Brand.K.Muted, 11.5));
+        page.Children.Add(Para("Each submission has its own checklist (T1, T2, T3…). A submission resubmitted after comments gets a new revision: it starts from the last one's answers, and the group leader approves them again. The last revision stays as the record.", Brand.K.Muted, 11.5));
         foreach (var sub in _shared.Submissions)
         {
             var p = Count(_questions, sub);
             var row = new DockPanel { Margin = new Thickness(0, 6, 0, 0) };
+            var actions = new StackPanel { Orientation = Orientation.Horizontal };
             var open = Link(sub.Key == _selected ? "Open (shown)" : "Open");
             open.Click += (_, _) => { _selected = sub.Key; UpdateBim(); Build(); GoTo(1); };
-            DockPanel.SetDock(open, Dock.Right);
-            row.Children.Add(open);
-            row.Children.Add(Brand.Text($"{sub.Title}{(sub.Due is { } d ? " · due " + d.ToString("ddd dd MMM", CultureInfo.CurrentCulture) : "")} · {p.CheckedPercent}% checked · {p.ApprovedPercent}% approved · {StatusText(p)}", size: 12.5));
+            actions.Children.Add(open);
+            StackPanel? resubmit = null;
+            if (!sub.Superseded)
+            {
+                var again = Link("Resubmit after comments", "Starts the next revision of this submission: its answers and comments are carried over, approvals start again.");
+                again.Margin = new Thickness(12, 0, 0, 0);
+                resubmit = ResubmitBox(sub);
+                resubmit.Visibility = Visibility.Collapsed;
+                again.Click += (_, _) => resubmit.Visibility = resubmit.Visibility == Visibility.Visible ? Visibility.Collapsed : Visibility.Visible;
+                actions.Children.Add(again);
+            }
+            DockPanel.SetDock(actions, Dock.Right);
+            row.Children.Add(actions);
+            var state = sub.Superseded ? $"replaced by {_shared.Find(sub.SupersededBy)?.FullName ?? "a later revision"} (kept as the record)" : StatusText(p);
+            var line = Brand.Text($"{sub.Title}{(sub.Due is { } d ? " · due " + d.ToString("ddd dd MMM", CultureInfo.CurrentCulture) : "")} · {p.CheckedPercent}% checked · {p.ApprovedPercent}% approved · {state}", sub.Superseded ? Brand.K.Muted : Brand.K.Text, 12.5);
+            if (sub.Reason.Length > 0) line.ToolTip = "Resubmitted: " + sub.Reason;
+            row.Children.Add(line);
             page.Children.Add(row);
+            if (resubmit is not null) page.Children.Add(resubmit);
         }
-        // Submissions the Submissions status setup knows for this model, one click to start.
-        var known = KnownSubmissions().Where(k => _shared.Find(KeyOf(k.Package, k.Name)) is null).Take(12).ToList();
+        // Submissions the Submissions status schedule has for this model: one click each, or all at once.
+        var known = KnownSubmissions().Where(k => _shared.Find(KeyFor(k.Package, k.Name)) is null).ToList();
         if (known.Count > 0)
         {
             var quick = new WrapPanel { Margin = new Thickness(0, 8, 0, 0) };
-            quick.Children.Add(Brand.Text("From Submissions status:", Brand.K.Muted, 12));
+            quick.Children.Add(Brand.Text("From the schedule:", Brand.K.Muted, 12));
             ((FrameworkElement)quick.Children[0]).Margin = new Thickness(0, 4, 8, 0);
-            foreach (var k in known)
+            if (known.Count > 1)
+            {
+                var all = Link($"+ All {known.Count}", "Starts a checklist for every submission still to come in the Submissions status schedule.");
+                all.Click += (_, _) => StartAll(known);
+                quick.Children.Add(all);
+            }
+            foreach (var k in known.Take(16))
             {
                 var b = Link($"+ {k.Package} · {k.Name}");
                 b.Click += (_, _) => { StartSubmission(k.Package, k.Name, k.Due); };
@@ -506,6 +575,7 @@ internal sealed class SubmissionChecklistWindow : Window
         how.Children.Add(Para("Answers, approvals and added questions are kept in the model, one record per person, so nobody waits for anybody. " +
                               "Everything you change is saved into the model a moment later; Synchronize with Central sends it. To see the others' work, Reload Latest (or Synchronize), then come back to this window or press Show the latest.", Brand.K.Muted, 12));
         how.Children.Add(Para("Engineers answer Yes, No or N/A. The group leader approves Yes and N/A, or returns any answer with a reason. An N/A is hidden only once the group leader approves it. Changing an answer after it was approved asks for a new approval.", Brand.K.Muted, 12));
+        how.Children.Add(Para("The questions come from one questions template, which only its owner changes; the template travels in the model, so everyone on it asks the same questions.", Brand.K.Muted, 12));
         page.Children.Add(new Expander { Header = "How sharing and approval work", Content = how, Margin = new Thickness(0, 18, 0, 0) });
         return page;
     }
@@ -518,9 +588,52 @@ internal sealed class SubmissionChecklistWindow : Window
         return s;
     }
 
+    /// <summary>The inline form that starts a submission's next revision: what the comments were, and when it is due.</summary>
+    private StackPanel ResubmitBox(Submission sub)
+    {
+        var box = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(16, 4, 0, 4) };
+        var reason = new TextBox { Width = 320, Margin = new Thickness(0, 0, 8, 4) };
+        var dueBox = new DatePicker { Width = 140, Margin = new Thickness(0, 0, 8, 4) };
+        AutomationProperties.SetName(reason, "Comments it answers");
+        AutomationProperties.SetName(dueBox, "Due date");
+        var start = RichUi.Button(RichUi.Icon.Add, $"Start Rev {sub.Revision + 1}", Brand.Weight.Primary);
+        start.VerticalAlignment = VerticalAlignment.Bottom;
+        start.Margin = new Thickness(0, 0, 0, 4);
+        start.Click += (_, _) =>
+        {
+            _selected = StartRevision(_mine, _shared, sub, reason.Text.Trim().Length > 0 ? reason.Text : "Resubmitted after comments", dueBox.SelectedDate, DateTime.UtcNow);
+            Remerge();
+            Changed();
+            UpdateBim();
+            Build();
+            _status.Text = $"{Current?.Title} started from {sub.FullName}: its answers are carried over; the group leader approves them again.";
+            if (_shared.Setup.Done) GoTo(1);
+        };
+        box.Children.Add(Labelled("Comments it answers (e.g. client comments of 20 Oct)", reason));
+        box.Children.Add(Labelled("Due", dueBox));
+        box.Children.Add(start);
+        return box;
+    }
+
+    private void StartAll(List<(string Package, string Name, DateTime? Due)> known)
+    {
+        var now = DateTime.UtcNow;
+        // In due order, so a revision in the schedule starts from the one before it.
+        foreach (var k in known.OrderBy(k => SplitRevision(k.Name).Revision).ThenBy(k => k.Due ?? DateTime.MaxValue))
+        {
+            StartNamed(_mine, _shared, k.Package, k.Name, k.Due, now);
+            Remerge();
+        }
+        _selected = KeyFor(known[0].Package, known[0].Name);
+        Changed();
+        UpdateBim();
+        Build();
+        _status.Text = $"Started {known.Count} checklists from the schedule.";
+    }
+
     private void StartSubmission(string package, string name, DateTime? due)
     {
-        _selected = AddSubmission(_mine, package, name, due, DateTime.UtcNow);
+        _selected = StartNamed(_mine, _shared, package, name, due, DateTime.UtcNow);
         Remerge();
         Changed();
         UpdateBim();
@@ -536,7 +649,7 @@ internal sealed class SubmissionChecklistWindow : Window
             if (BerthStatusMath.LoadSetup(_project) is not { } setup) return [];
             var model = BerthStatusMath.ModelFor(setup, _model);
             return setup.Berths.Where(b => model is null || BerthStatusMath.Same(b.Model, model.Name))
-                .SelectMany(b => BerthStatusMath.SubmissionsFor(setup, b).Where(x => !x.Submitted).Take(1).Select(x => (b.Name, x.Name, (DateTime?)x.Date)))
+                .SelectMany(b => BerthStatusMath.SubmissionsFor(setup, b).Where(x => !x.Submitted).Select(x => (b.Name, x.Name, (DateTime?)x.Date)))
                 .Distinct().ToList();
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException) { return []; }
@@ -550,6 +663,8 @@ internal sealed class SubmissionChecklistWindow : Window
         page.Children.Add(Heading(topic.Title));
         page.Children.Add(Para(topic.About, Brand.K.Muted));
         page.Children.Add(Para("Keys: Y yes, N no, A not applicable on the question in focus (it moves on to the next); Ctrl+Tab next page.", Brand.K.Muted, 11));
+        if (s.Superseded) page.Children.Add(Box(Para($"{s.FullName} was resubmitted as {_shared.Find(s.SupersededBy)?.FullName ?? "a later revision"}: this revision is kept as the record of what was submitted and can't be changed.", Brand.K.Text, 12.5, 0), top: 8, bg: Brand.K.AccentSoft));
+        else if (s.Reason.Length > 0) page.Children.Add(Box(Para($"Rev {s.Revision}, resubmitted: {s.Reason}. Answers came from the last revision; check each against the comments.", Brand.K.Text, 12.5, 0), top: 8, bg: Brand.K.AccentSoft));
         var types = ProjectTypes;
         string? group = null;
         var number = _questions.IndexOf(items[0]);
@@ -592,7 +707,7 @@ internal sealed class SubmissionChecklistWindow : Window
             }
             page.Children.Add(new Expander { Header = $"{hidden.Count} not applicable (agreed by the group leader)", Content = list, Margin = new Thickness(0, 18, 0, 0) });
         }
-        page.Children.Add(AddQuestionBox(topic));
+        if (_owner) page.Children.Add(AddQuestionBox(topic));
         return page;
     }
 
@@ -692,13 +807,13 @@ internal sealed class SubmissionChecklistWindow : Window
                 d.Children.Add(Para(diagram.Title + ": typical, not to scale.", Brand.K.Muted, 11, 2));
             }
             var manage = new WrapPanel { Margin = new Thickness(0, 6, 0, 0) };
-            if (q.Added && (IsLead || _shared.Added.FirstOrDefault(x => x.Id == q.Id)?.By is { } by && Same(by, _user)))
+            if (q.Added && _owner)
             {
                 var del = Link("Delete this question", "Takes it off every submission of the project.");
                 del.Click += (_, _) => DeleteQuestion(q);
                 manage.Children.Add(del);
             }
-            else if (!q.Added && IsLead)
+            else if (!q.Added && IsLead && _owner)
             {
                 var skip = Link("Don't ask this on this project", "Leaves it out of every submission of the project. Project setup can't put it back yet, so ask Sketch ProMax to.");
                 skip.Click += (_, _) => SkipQuestion(q);
@@ -716,7 +831,7 @@ internal sealed class SubmissionChecklistWindow : Window
             box.ToolTip = hint;
             box.LostFocus += (_, _) =>
             {
-                if (box.Text == noteText) return;
+                if (box.Text == noteText || s.Superseded) return;
                 SetNote(_mine, s, q.Id, box.Text, DateTime.UtcNow);
                 noteText = box.Text;
                 Changed();
@@ -803,6 +918,7 @@ internal sealed class SubmissionChecklistWindow : Window
     private void Answer(Question q, string value)
     {
         if (Current is not { } s) return;
+        if (s.Superseded) { _status.Text = "This revision was resubmitted: answer the latest one."; return; }
         if (Normal(value) == Normal(s.Answers.TryGetValue(q.Id, out var a) ? a.Value : "") && value.Length > 0) return;
         SetAnswer(_mine, s, q.Id, value, null, DateTime.UtcNow);
         if (Normal(value) is No or NotApplicable) _openComments.Add(q.Id);
@@ -865,6 +981,7 @@ internal sealed class SubmissionChecklistWindow : Window
     private void Review(Question q, string verdict, string note)
     {
         if (Current is not { } s || !IsLead) return;
+        if (s.Superseded) { _status.Text = "This revision was resubmitted: review the latest one."; return; }
         SetReview(_mine, s, q.Id, verdict, note, DateTime.UtcNow);
         Changed();
         // An approved N/A leaves the page: rebuild it so it moves into the agreed list.

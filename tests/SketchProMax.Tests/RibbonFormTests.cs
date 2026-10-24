@@ -118,7 +118,7 @@ internal static class RibbonFormTests
         var units = RibbonManifest.Units(all.Controls.Where(c => c.Group == "Sketch ProMax")).Select(u => u.Count).ToList();
         check("ribbon: Sketch ProMax panel is Under development, then two stacks of three (0.35 redesign)", units.SequenceEqual([1, 3, 3]), string.Join(",", units));
         var claudeUnits = RibbonManifest.Units(all.Controls.Where(c => c.Group == "Claude")).Select(u => u.Count).ToList();
-        check("ribbon: Claude panel is Chat, Model checklist, Submissions status and Costing large, then Update, Job and Send view stacked", claudeUnits.SequenceEqual([1, 1, 1, 1, 3]), string.Join(",", claudeUnits));
+        check("ribbon: Claude panel is Chat, Model checklist, Submissions status, Submission checklist and Costing large, then Update, Job and Send view stacked", claudeUnits.SequenceEqual([1, 1, 1, 1, 1, 3]), string.Join(",", claudeUnits));
         // The 0.35 redesign: a short ribbon. Model, Documents and Check are stacks of small buttons and drop-downs only.
         var stacked = all.Controls.Where(c => c.Group is "Model" or "Documents" or "Check").ToList();
         check("ribbon: Model, Documents and Check are all small, stacked controls", stacked.Count > 0 && stacked.All(c => c.Small), string.Join(",", stacked.Where(c => !c.Small).Select(c => c.Id)));

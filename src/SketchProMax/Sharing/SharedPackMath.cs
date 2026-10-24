@@ -16,13 +16,15 @@ namespace SketchProMax.Sharing;
 ///   buttons.txt    the same tools as ribbon lines for the TritoRevit add-in (<see cref="ButtonsText"/>), which has
 ///                  no JSON reader on Revit 2024; it reads them with TritoRevit's PackButtons;
 ///   learned\*.json, recipes\*.json  the learned tools and recipes in it, as Sketch ProMax saves them;
-///   checklist.json the pre-submission checklist in use when it was shared, when that tool is in it.
+///   checklist.json the pre-submission checklist in use when it was shared, when that tool is in it;
+///   submission-template.json  the sharer's submission checklist questions template, when that tool is in it and the
+///                  sharer changed the questions (colleagues take it when it is newer than theirs).
 /// A ribbon tool travels as its command only: its code is in the add-in, which updates itself from the releases.
 /// </summary>
 internal static class SharedPackMath
 {
     public const int Format = 1;
-    public const string PackFile = "pack.json", ButtonsFile = "buttons.txt", ChecklistFile = "checklist.json";
+    public const string PackFile = "pack.json", ButtonsFile = "buttons.txt", ChecklistFile = "checklist.json", SubmissionTemplateFile = "submission-template.json";
     public const string LearnedFolder = "learned", RecipesFolder = "recipes";
 
     /// <summary>The checklist's source when a pack put it there, so a later version of the pack may replace it.</summary>
@@ -42,6 +44,7 @@ internal static class SharedPackMath
         [JsonPropertyName("note")] public string Note { get; set; } = "";
         [JsonPropertyName("tools")] public List<Tool> Tools { get; set; } = [];
         [JsonPropertyName("checklist")] public string? Checklist { get; set; }
+        [JsonPropertyName("submissionTemplate")] public string? SubmissionTemplate { get; set; }
     }
 
     public sealed class Tool
@@ -266,6 +269,8 @@ internal static class SharedPackMath
     [
         ("pre-submission", "Pre-submission checklist", "list",
             "Goes through the office's pre-submission checklist stage by stage, with hints from the model, and makes the signed Word file. Colleagues start from the built-in checklist, or from yours when you tick Include my checklist."),
+        ("submission-checklist", "Submission checklist", "check",
+            "The technical checklist of each submission: the engineer answers, the group leader approves, shared through the model. Carries your questions template when you changed it."),
         ("issue-check", "Submit check", "check",
             "Drawing, spec, BOQ and model checks together on the issue set, pass or fail per sheet. Reads the model only."),
         ("cleanup", "Purge & cleanup", "refresh",

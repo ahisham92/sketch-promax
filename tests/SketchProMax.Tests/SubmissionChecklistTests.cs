@@ -33,7 +33,6 @@ internal static class SubmissionChecklistTests
             "blocks.toe", "caissons.float", "caissons.stability", "caissons.walls", "caissons.joints", "caissons.fill",
             "sheets.embedment", "sheets.section", "sheets.corrosion", "sheets.anchor", "sheets.waling",
             "sheets.tielevel", "sheets.combi", "walls.stability", "walls.stem", "walls.drainage", "walls.joints",
-            "revet.armour", "revet.filter", "revet.toe", "revet.crest", "revet.slope", "revet.overtopping",
             "dolphins.layout", "dolphins.deflection", "dolphins.hooks", "dolphins.access", "trestle.spans",
             "trestle.pipes", "trestle.traffic", "trestle.abutment", "roro.gradient", "roro.loads", "roro.hinge",
             "pontoon.freeboard", "pontoon.guides", "pontoon.gangway", "dwall.embedment", "dwall.panels", "dwall.stages",
@@ -45,8 +44,13 @@ internal static class SubmissionChecklistTests
             "calcs.construction", "calcs.risks", "calcs.inspection", "dwg.list", "dwg.notes", "dwg.levels",
             "dwg.sections", "dwg.rebar", "dwg.clouds", "dwg.titleblock", "dwg.markups", "bills.method", "bills.model",
             "bills.backup", "bills.rates", "bills.marine", "bills.steel", "bills.piles", "spec.cover", "spec.match",
-            "spec.marine", "spec.testing"
+            "spec.marine", "spec.testing", "combi.kingpile", "combi.infill", "combi.connectors", "combi.toe",
+            "combi.driving", "relief.platform", "relief.piles", "relief.frontwall", "relief.connection", "relief.level",
+            "walls.backfill", "dwall.secant"
         ];
+        // Retired with the revetment type (2026-10-24): never reuse these ids for another question.
+        string[] retired = ["revet.armour", "revet.filter", "revet.toe", "revet.crest", "revet.slope", "revet.overtopping"];
+        check("submission checklist: retired question ids are not reused", bank.All(q => !retired.Contains(q.Id)), "");
         var lost = released.Where(id => bank.All(q => q.Id != id)).ToList();
         check("submission checklist: released question ids are all still asked", lost.Count == 0, string.Join(", ", lost));
         var badTopic = bank.Where(q => Topics.All(t => t.Key != q.Topic)).Select(q => q.Id).ToList();
@@ -91,8 +95,9 @@ internal static class SubmissionChecklistTests
         var structure = both.Where(q => q.Topic == TopicTypes).Select(q => TypeOfQuestion(q, ["gravity-blocks", "piled-deck"])).ToList();
         check("submission checklist: the structure page follows the order the types were picked",
             structure.Count > 0 && structure.TakeWhile(t => t == "gravity-blocks").Count() + structure.SkipWhile(t => t == "gravity-blocks").Count(t => t == "piled-deck") == structure.Count, string.Join(",", structure.Distinct()));
-        var revetOnly = QuestionsFor(new Setup { Types = ["revetment"] }, []);
-        check("submission checklist: a question for two types shows when only the second is picked", revetOnly.Any(q => q.Id == "piled.slope"), "");
+        var combiOnly = QuestionsFor(new Setup { Types = ["combi-wall"] }, []);
+        check("submission checklist: a question for two types shows when only the second is picked", combiOnly.Any(q => q.Id == "sheets.tielevel") && combiOnly.Any(q => q.Id == "combi.kingpile"), "");
+        check("submission checklist: quay wall types are offered", TypeOf("combi-wall") is not null && TypeOf("relieving-platform") is not null && TypeOf("diaphragm-wall") is not null && TypeOf("revetment") is null, "");
         var pages = both.Select(q => q.Topic).Distinct().ToList();
         check("submission checklist: pages come in their order", pages.SequenceEqual(Topics.Select(t => t.Key).Where(pages.Contains)), string.Join(",", pages));
         var skipped = QuestionsFor(new Setup { Types = ["piled-deck"], Skipped = ["piled.precast"] }, []);
@@ -212,6 +217,147 @@ internal static class SubmissionChecklistTests
             xml.Contains("TECHNICAL SUBMISSION CHECKLIST") && xml.Contains("P1 · Detailed design") && xml.Contains("BIM checklist") && xml.Contains("Design basis report is the latest")
             && xml.Contains("Not applicable (agreed by the group leader)") && xml.Contains("Group leader") && xml.Contains("Sign-off"), "");
         check("submission checklist: the Word file says it isn't ready while answers are No", xml.Contains("NOT READY"), "");
+
+        Template(check, t0);
+        Revisions(check, t0);
+    }
+
+    // ---- A checklist per scheduled submission, and resubmissions after comments
+    private static void Revisions(Action<string, bool, string> check, DateTime t0)
+    {
+        check("submission revisions: names with their revision",
+            SplitRevision("T3") == ("T3", 0) && SplitRevision("T3 Rev 1") == ("T3", 1) && SplitRevision("T3 (Rev B)") == ("T3", 2) && SplitRevision("T3 - rev.2") == ("T3", 2)
+            && SplitRevision("T3 resubmission") == ("T3", 1) && SplitRevision("T3 Resubmission 2") == ("T3", 2) && SplitRevision("Preview") == ("Preview", 0)
+            && SplitRevision("Detailed design Rev 0") == ("Detailed design", 0) && SplitRevision("Rev 1") == ("Rev 1", 0), SplitRevision("T3 (Rev B)").ToString());
+        check("submission revisions: a revision has a key of its own, the first issue keeps the old key",
+            KeyFor("Berth 9", "T3") == KeyOf("Berth 9", "T3") && KeyFor("Berth 9", "T3 Rev 1") != KeyOf("Berth 9", "T3") && KeyFor("BERTH 9", "t3 resubmission") == KeyFor("Berth 9", "T3 Rev 1"), "");
+
+        var lead = new UserRecord { User = "Lead" };
+        lead.Setup = new Setup { Types = ["combi-wall"], Leads = ["Lead"], By = "Lead", At = t0 };
+        var eng = new UserRecord { User = "Engineer" };
+        // Every submission of the schedule gets its own checklist.
+        var shared = Merge([lead, eng]);
+        var t3 = StartNamed(eng, shared, "Berth 9", "T3", new DateTime(2026, 11, 5), t0);
+        var t4 = StartNamed(eng, shared, "Berth 9", "T4", new DateTime(2026, 12, 5), t0);
+        shared = Merge([lead, Copy(eng)]);
+        check("submission revisions: one checklist per scheduled submission", shared.Submissions.Count == 2 && t3 != t4 && shared.Find(t3)!.Revision == 0, shared.Submissions.Count.ToString());
+        var first = shared.Find(t3)!;
+        SetAnswer(eng, first, "basis.dbr", "Yes", "DBR rev 2", t0.AddMinutes(1));
+        SetAnswer(eng, first, "basis.codes", "No", "Waiting", t0.AddMinutes(2));
+        shared = Merge([lead, Copy(eng)]);
+        SetReview(lead, shared.Find(t3)!, "basis.dbr", Approved, "", t0.AddMinutes(3));
+        shared = Merge([Copy(lead), Copy(eng)]);
+        // Comments came back: the engineer starts Rev 1.
+        var rev1 = StartRevision(eng, shared, shared.Find(t3)!, "Client comments of 20 Nov", new DateTime(2026, 11, 25), t0.AddMinutes(10));
+        shared = Merge([Copy(lead), Copy(eng)]);
+        var r1 = shared.Find(rev1)!;
+        var old = shared.Find(t3)!;
+        check("submission revisions: a resubmission is the next revision of the same submission",
+            r1.Revision == 1 && r1.Name == "T3" && r1.FullName == "T3 Rev 1" && r1.Title == "Berth 9 · T3 Rev 1" && r1.Of == t3 && r1.Reason == "Client comments of 20 Nov" && r1.Due == new DateTime(2026, 11, 25), r1.Title);
+        check("submission revisions: it starts from the last revision's answers and comments", r1.Answers["basis.dbr"].Value == Yes && r1.Answers["basis.dbr"].Note == "DBR rev 2" && r1.Answers["basis.codes"].Value == No, "");
+        check("submission revisions: approvals start again", StateOf(r1, "basis.dbr") == ItemState.Answered && r1.Reviews.Count == 0, "");
+        check("submission revisions: the last revision is kept as the record", old.Superseded && old.SupersededBy == rev1 && StateOf(old, "basis.dbr") == ItemState.Approved && !r1.Superseded, "");
+        check("submission revisions: starting the same revision twice gives the same one", StartRevision(eng, shared, old, "", null, t0.AddMinutes(11)) == rev1, "");
+        // A resubmission in the schedule (T3 Rev 2) starts from the latest revision with a checklist.
+        var rev2 = StartNamed(lead, shared, "Berth 9", "T3 Rev 2", new DateTime(2026, 12, 10), t0.AddMinutes(20));
+        shared = Merge([Copy(lead), Copy(eng)]);
+        var r2 = shared.Find(rev2)!;
+        check("submission revisions: a scheduled resubmission starts from the revision before it",
+            r2.Revision == 2 && r2.Of == rev1 && r2.Answers.ContainsKey("basis.dbr") && shared.Find(rev1)!.SupersededBy == rev2 && shared.Find(t3)!.SupersededBy == rev1, r2.Of);
+        check("submission revisions: the summary names the revision as the schedule does",
+            SummaryOf("M", r2, QuestionsFor(shared.Setup, shared.Added), t0).Name == "T3 Rev 2"
+            && Find(new Dictionary<string, Summary>(StringComparer.OrdinalIgnoreCase) { [KeyFor("Berth 9", "T3 Rev 2")] = new Summary { Package = "Berth 9", Name = "T3 Rev 2" } }, "Berth 9", "T3 resubmission 2") is not null, "");
+        var back = ReadRecord(ToJson(eng));
+        check("submission revisions: a revision reads back", back is not null && back.For(rev1).Revision == 1 && back.For(rev1).Of == t3, "");
+    }
+
+    // ---- The questions template, the shared pack and the TritoRevit tab
+    private static void Template(Action<string, bool, string> check, DateTime t0)
+    {
+        var builtIn = SubmissionChecklistTemplate.BuiltIn();
+        check("submission template: the built-in template is the question bank", builtIn.BuiltIn && SubmissionChecklistTemplate.QuestionsOf(builtIn).Count == SubmissionChecklistBank.Questions.Length
+            && ReferenceEquals(SubmissionChecklistTemplate.QuestionsOf(null), SubmissionChecklistBank.Questions), "");
+
+        // The owner deletes one question, rewords one and adds one.
+        var mine = SubmissionChecklistTemplate.Copy(builtIn);
+        mine.At = t0.AddHours(1);
+        mine.By = "Owner";
+        mine.Questions.RemoveAll(i => i.Id == "basis.dbr");
+        mine.Questions.First(i => i.Id == "basis.codes").Text = "Codes as the design basis?";
+        var newId = SubmissionChecklistTemplate.NewId(t0, mine.Questions.Select(i => i.Id));
+        mine.Questions.Insert(1, new SubmissionChecklistTemplate.Item { Id = newId, Topic = "levels", Text = "Levels agreed with the port authority?", Teams = "Port" });
+        var asked = SubmissionChecklistTemplate.QuestionsOf(mine);
+        var setup = new Setup { Types = ["piled-deck"], Leads = ["Lead"] };
+        var list = QuestionsFor(setup, [], asked);
+        check("submission template: a deleted question isn't asked, a new one is, a reworded one keeps its id",
+            list.All(q => q.Id != "basis.dbr") && list.Any(q => q.Id == newId && q.Topic == "levels") && list.First(q => q.Id == "basis.codes").Text == "Codes as the design basis?", "");
+        check("submission template: questions stay in page order", list.FindIndex(q => q.Id == newId) > list.FindIndex(q => q.Topic == "basis"), "");
+        check("submission template: new ids are unique", SubmissionChecklistTemplate.NewId(t0, [newId]) != newId, "");
+
+        // It travels in the records: the newest wins, the built-in one never does.
+        var lead = new UserRecord { User = "Lead", Template = mine };
+        var older = SubmissionChecklistTemplate.Copy(mine);
+        older.At = t0;
+        older.Questions.RemoveAll(i => i.Id == newId);
+        var eng = new UserRecord { User = "Engineer", Template = older };
+        var shared = Merge([ReadRecord(ToJson(eng))!, ReadRecord(ToJson(lead))!]);
+        check("submission template: the newest template in the model wins", shared.Template?.At == mine.At && shared.Template.Questions.Any(i => i.Id == newId), "");
+        check("submission template: no template in the model is the built-in questions", Merge([new UserRecord { User = "A" }]).Template is null
+            && SubmissionChecklistTemplate.Newest(null, builtIn) is null, "");
+
+        // Excel: written, read back, edited.
+        var temp = Path.Combine(Path.GetTempPath(), "spmx-subtemplate-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(temp);
+        try
+        {
+            var file = Path.Combine(temp, "questions.xlsx");
+            using (var f = File.Create(file)) SubmissionChecklistTemplate.WriteXlsx(f, mine, t0);
+            var (back, notes, error) = SubmissionChecklistTemplate.ReadXlsx(file, t0.AddHours(2), "Owner");
+            check("submission template: the Excel file reads back the same questions", back is not null && error.Length == 0 && notes.Count == 0
+                && back.Questions.Select(i => i.Id + "|" + i.Topic + "|" + i.Text + "|" + i.Details + "|" + i.Types + "|" + i.Teams + "|" + i.Diagram).OrderBy(x => x, StringComparer.Ordinal)
+                    .SequenceEqual(mine.Questions.Select(i => i.Id + "|" + i.Topic + "|" + i.Text + "|" + i.Details + "|" + i.Types + "|" + i.Teams + "|" + i.Diagram).OrderBy(x => x, StringComparer.Ordinal))
+                && back.Questions.FindIndex(i => i.Id == newId) > back.Questions.FindLastIndex(i => i.Topic == "basis"),
+                error + string.Join("; ", notes));
+            check("submission template: an imported template is newer, by its importer", back?.At == t0.AddHours(2) && back.By == "Owner", "");
+
+            var SubmissionTemplatePc = SubmissionChecklistMath.FolderForTests;
+            SubmissionChecklistMath.FolderForTests = temp;
+            try
+            {
+                check("submission template: kept on the PC when newer, not when older", SubmissionChecklistTemplate.TakeIfNewer(older) && SubmissionChecklistTemplate.TakeIfNewer(mine)
+                    && !SubmissionChecklistTemplate.TakeIfNewer(older) && SubmissionChecklistTemplate.LoadPc()?.At == mine.At, "");
+            }
+            finally { SubmissionChecklistMath.FolderForTests = SubmissionTemplatePc; }
+        }
+        finally { try { Directory.Delete(temp, true); } catch (IOException) { } }
+
+        // Rows as an owner edits them in Excel: names for pages and types, a new row with no id, mistakes set aside.
+        var cells = new List<(int, int, string)>();
+        void Row(int r, params string[] v) { for (var c = 0; c < v.Length; c++) if (v[c].Length > 0) cells.Add((c, r, v[c])); }
+        Row(1, "Title");
+        Row(3, "Id", "Page", "Question", "Details", "Structure types", "Agree with (teams)", "Sketch");
+        Row(4, "levels.grading", "Levels and coordination", "Levels with grading?", "", "", "Grading", "Design levels");
+        Row(5, "", "Structure checks", "Pile cut-off level shown?", "", "Deck on piles", "", "");
+        Row(6, "", "Structure checks", "No type here?", "", "", "", "");
+        Row(7, "levels.grading", "Nowhere", "Same id again?", "", "Spaceship", "", "");
+        Row(8, "", "", "", "a details cell with no question", "", "", "");
+        var (edited, setAside, err) = SubmissionChecklistTemplate.FromCells(cells, t0, "Owner");
+        check("submission template: Excel rows by page and type names, new rows get ids", edited is not null && err.Length == 0
+            && edited.Questions.Count == 4 && edited.Questions.Any(i => i.Text == "Pile cut-off level shown?" && i.Topic == "types" && i.Types == "piled-deck" && i.Id.StartsWith("tpl."))
+            && edited.Questions.First(i => i.Id == "levels.grading").Diagram is { Length: > 0 }, err);
+        check("submission template: Excel mistakes are set aside with the row", setAside.Count >= 4 && setAside.Any(n => n.StartsWith("Row 6")) && setAside.Any(n => n.Contains("Spaceship"))
+            && setAside.Any(n => n.Contains("used above")) && setAside.Any(n => n.StartsWith("Row 8")), string.Join("; ", setAside));
+        check("submission template: a sheet with no heading row is refused", SubmissionChecklistTemplate.FromCells([(0, 1, "hello")], t0, "x").Error.Length > 0, "");
+
+        // Share tools and the TritoRevit tab.
+        check("submission template: the submission checklist can be shared", SketchProMax.Sharing.SharedPackMath.Shareable("submission-checklist"), "");
+        (string, string)[] Tabs(params string[] t) => t.Select(x => (x, x)).ToArray();
+        int T(params string[] t) => SketchProMax.Sharing.TritoTabMath.Target(Tabs(t));
+        check("tritorevit tab: right after Sketch ProMax", T("Manage", "Add-Ins", "Sketch ProMax", "Other", "TritoRevit") == 3 && T("Manage", "TritoRevit", "Sketch ProMax", "Other") == 2
+            && T("Add-Ins", "Sketch ProMax", "TritoRevit") == -1, "");
+        check("tritorevit tab: after SketchPro without Sketch ProMax", T("Manage", "Add-Ins", "SketchPro", "Other", "TritoRevit") == 3 && T("Add-Ins", "Sketch Pro 2", "TritoRevit") == -1, "");
+        check("tritorevit tab: first add-in tab without either", T("Manage", "Add-Ins", "Other", "TritoRevit") == 2 && T("Manage", "Other", "TritoRevit") == 1
+            && T("Manage", "Add-Ins", "Other") == -1, "");
     }
 
     private static UserRecord Copy(UserRecord r) => ReadRecord(ToJson(r))!;

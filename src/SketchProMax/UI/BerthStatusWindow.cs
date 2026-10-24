@@ -317,6 +317,7 @@ internal sealed class BerthStatusWindow : Window
             menu.Items.Add(mi);
             return mi;
         }
+        Item("Edit the schedule…", EditSchedule, _setup is not null);
         Item("Import the setup Excel…", ImportSetup, _project.Length > 0);
         Item("Open the setup Excel", () => Shell(_setup!.SourcePath), _setup is { SourcePath.Length: > 0 } s && File.Exists(s.SourcePath));
         Item("Save the setup to a new Excel", () => WriteSetupExcel(_setup!, open: true), _setup is not null);
@@ -345,6 +346,32 @@ internal sealed class BerthStatusWindow : Window
             if (open) Shell(path);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { _status.Text = "Couldn't write the setup Excel (" + ex.Message + ")."; }
+    }
+
+    /// <summary>The submissions schedule changed in Revit: kept here and written into the setup Excel, so the next import doesn't undo it.</summary>
+    private void EditSchedule()
+    {
+        if (_setup is null || SubmissionScheduleWindow.Edit(this, _setup) is not { } rows) return;
+        _setup.Submissions = rows;
+        var note = "";
+        if (_setup.SourcePath is { Length: > 0 } path && File.Exists(path))
+        {
+            try
+            {
+                OfficeXlsx.Write(path, "Berth status setup", SetupSheets(_setup));
+                _setup.SourceStamp = ChecklistMath.Stamp(path);
+                note = $" and in {Path.GetFileName(path)}";
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                note = $". {Path.GetFileName(path)} is open in Excel, so it still has the old schedule: close it, then Setup > Save the setup to a new Excel (don't save the open one over it)";
+            }
+        }
+        try { SaveSetup(_project, _setup); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { _status.Text = "Couldn't save the schedule (" + ex.Message + ")."; return; }
+        ActivityLog.Note("berth_status_schedule", $"{_project}: {rows.Count} submissions");
+        Build();
+        _status.Text = $"Schedule saved: {rows.Count} submissions, here{note}.";
     }
 
     private void ImportSetup()
@@ -498,7 +525,14 @@ internal sealed class BerthStatusWindow : Window
     private FrameworkElement Coming(List<Summary> all, DateTime now)
     {
         var page = new StackPanel();
-        page.Children.Add(Brand.Text("Coming submissions", size: 14, bold: true));
+        var title = new DockPanel();
+        var edit = RichUi.Button(RichUi.Icon.Edit, "Edit the schedule");
+        AutomationProperties.SetHelpText(edit, "Add, re-date, resubmit after comments or remove submissions, here in Revit.");
+        edit.Click += (_, _) => EditSchedule();
+        DockPanel.SetDock(edit, Dock.Right);
+        title.Children.Add(edit);
+        title.Children.Add(Brand.Text("Coming submissions", size: 14, bold: true));
+        page.Children.Add(title);
         var week = _setup!.Week;
         page.Children.Add(Small($"Due {week.Due:hh\\:mm} on the day unless the setup says otherwise · working days {string.Join(", ", week.Days.Select(d => d.ToString().Substring(0, 3)))}, {week.Start:hh\\:mm}-{week.End:hh\\:mm}"));
         var coming = all.Where(s => s.Next is not null).OrderBy(s => s.Due).ToList();
@@ -507,7 +541,7 @@ internal sealed class BerthStatusWindow : Window
         foreach (var w in new[] { 1.4, 0.8, 1.4, 1.1, 1.3, 1.2, 1.1 }) grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(w, GridUnitType.Star) });
         void Cell(UIElement e, int row, int col) { Grid.SetRow(e, row); Grid.SetColumn(e, col); grid.Children.Add(e); }
         grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        string[] heads = ["PACKAGE", "STATUS", "DUE", "TIME LEFT", "ENGINEERS", "EACH / DAY", "CHECKED / BIM"];
+        string[] heads = ["PACKAGE", "STATUS", "DUE", "TIME LEFT", "ENGINEERS", "HOURS EACH / DAY", "CHECKED / BIM"];
         for (var i = 0; i < heads.Length; i++) Cell(Brand.Text(heads[i], Brand.K.Muted, 10.5, bold: true), 0, i);
         var row = 1;
         foreach (var s in coming)
@@ -522,9 +556,11 @@ internal sealed class BerthStatusWindow : Window
             var late = s.Due <= now;
             Cell(Brand.Text(late ? "Overdue" : $"{s.HoursLeft:0} h · {s.HoursLeft / Math.Max(1, week.HoursPerDay):0.0} days", late ? Brand.K.DangerText : Brand.K.Text, 12, bold: late), row, 3);
             Cell(Engineers(s), row, 4);
-            var each = PerEngineer(s.Percent is { } p && s.Due is { } due ? NeededPerDay(p, due, now, week) : null, _state.For(s.Berth.Key).Engineers);
-            var need = Brand.Text(each is { } e ? $"{e:0.#}% a day" : "–", each > 10 ? Brand.K.DangerText : Brand.K.Text, 12, bold: each > 10);
-            need.ToolTip = "The progress each engineer must add every working day to finish by the due time: what is left, over the working days left, shared between the engineers.";
+            var each = PerEngineer(s.Effort?.PerDay, _state.For(s.Berth.Key).Engineers);
+            var over = each > week.HoursPerDay;
+            var need = Brand.Text(each is { } e ? $"{e:0.#} h a day" : "–", over ? Brand.K.DangerText : Brand.K.Text, 12, bold: over);
+            need.ToolTip = "The hours each engineer must work on the model every working day to finish by the due time: the hours expected left (at the pace of the hours worked so far), over the working days left, shared between the engineers." +
+                           (s.Effort is { } ef ? $"\nWorked since the start: {ef.Worked:0.#} h · expected left: {(ef.Left is { } l ? l.ToString("0.#", CultureInfo.CurrentCulture) + " h" : "not known yet")}" : "");
             Cell(need, row, 5);
             var c = CheckOf(s);
             var checkedText = Brand.Text(c is null ? "–" : $"{c.Checked}% / {(c.Bim is { } bim ? bim + "%" : "–")}", c is null ? Brand.K.Muted : PercentKey(c.Checked), 12, bold: c is not null);
@@ -632,11 +668,27 @@ internal sealed class BerthStatusWindow : Window
         var stepper = Engineers(s);
         stepper.Margin = new Thickness(0, 4, 0, 2);
         engineers.Children.Add(stepper);
-        var perDay = s.Percent is { } pc && s.Due is { } due ? NeededPerDay(pc, due, now, _setup!.Week) : null;
+        var perDay = s.Effort?.PerDay;
         var each = PerEngineer(perDay, _state.For(PackageKey(s.Berth)).Engineers);
-        engineers.Children.Add(Small(perDay is { } pd ? $"{pd:0.#}% a day in all · {each:0.#}% each" : s.Next is null ? "Nothing due" : "Measure it first"));
-        facts.Children.Add(FactBox(engineers, "Engineers on the package: the progress needed per working day is shared between them"));
+        engineers.Children.Add(Small(perDay is { } pd ? $"{pd:0.#} h a day in all · {each:0.#} h each" : s.Next is null ? "Nothing due" : "Needs hours and progress first"));
+        facts.Children.Add(FactBox(engineers, "Engineers on the package: the hours needed per working day are shared between them"));
         page.Children.Add(facts);
+
+        // The submission's hours: when it started, worked on the model since, and expected left.
+        if (s.Next is not null && s.Effort is { } effort)
+        {
+            var hours = new UniformGrid { Columns = 3, Margin = new Thickness(0, 10, 0, 0) };
+            hours.Children.Add(Fact("STARTED", effort.Start is { } st ? $"{st:ddd dd-MMM}" : "–",
+                s.Next.Start is not null ? "Start date in the schedule" : effort.Start is not null ? "When the submission before it was due" : "From the first hours on record",
+                "Set the start in the schedule (Setup > Edit the schedule)"));
+            hours.Children.Add(Fact("HOURS WORKED", $"{effort.Worked:0.#} h",
+                _state.ModelHours.Keys.Any(k => Same(k, s.Berth.Model)) ? "Everyone, in the model since the start" : "Open the model and press Update status",
+                "Everyone's working hours in the model (all its berths), from Sketch ProMax's time records"));
+            hours.Children.Add(Fact("HOURS LEFT", effort.Left is { } left ? $"{left:0.#} h" : "–",
+                effort.Left is not null ? "At the pace of the hours worked so far" : "Needs hours worked and progress since the start",
+                "The hours worked so far, over the progress they bought, times what is left"));
+            page.Children.Add(hours);
+        }
 
         // The submission's technical checklist and the BIM checklist, side by side, with the button that opens it.
         page.Children.Add(ChecklistBox(s));
@@ -1043,6 +1095,9 @@ internal sealed class BerthStatusWindow : Window
                 foreach (Autodesk.Revit.DB.Document d in app.Application.Documents)
                 {
                     if (d.IsFamilyDocument || d.IsLinked || ModelFor(setup, DocName(d)) is not { } m) continue;
+                    // Everyone's working hours in the model per day (its time records): hours worked and left per submission.
+                    try { state.ModelHours[m.Name] = HoursPerDay(Revit.TimeLog.Report(d).Sheets.SelectMany(x => x.Rows.Values).Select(r => (r.Day, r.Ai + r.ByHand))); }
+                    catch (Exception ex) when (ex is not OutOfMemoryException) { Debug.WriteLine(ex); }
                     var changes = Revit.ChangeTracker.Take(d);
                     taken.Add((d, changes));
                     var units = Units(BerthsOf(setup, m));
@@ -1060,6 +1115,8 @@ internal sealed class BerthStatusWindow : Window
             });
             if (plans.Count == 0 && unchanged.Count > 0)
             {
+                Save();
+                Refresh();
                 _status.Text = $"No changes in {string.Join(", ", unchanged)} since the last reading: the status is current. (Setup > Read every berth again reads them all.)";
                 return;
             }

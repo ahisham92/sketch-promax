@@ -45,6 +45,13 @@ internal static class CoreRibbonManifest
             "Each berth's percentage done for its next submission, and the expected finish.",
             "A percentage from modelling, coordination, clashes, drawings, details, annotation, schedules and deliverables. Set up once from an Excel file (models, berths, submission schedule, planned counts, deliverables, working week). Click a berth for its areas, " +
             "what to fix, hand entries and comments, and export its Excel. The model is read only when you press Update status, in short steps, so Revit never freezes.")),
+        // Submission checklist (0.35.1, the owner asked: a tool of its own, not only inside Submissions status and the Model checklist):
+        // the technical checklist of each submission, shared through the model (UI/SubmissionChecklistWindow).
+        L(Button("Claude", "SubmissionChecklist", "Submission\nchecklist", "submission-checklist", "check",
+            "The technical checklist of each submission: the engineer answers, the group leader approves.",
+            "Short questions page by page for the structures the project has (deck on piles, gravity blocks, sheet piles and more), " +
+            "with details and a sketch on demand. The engineer answers Yes, No or N/A; the group leader approves or returns each answer; " +
+            "an N/A is hidden once approved. Kept in the model, so Synchronize with Central shares it. Ends in a Word file or PDF.", needsModel: true)),
         // Costing (0.35): the berth costing window, also opened from Submissions status (UI/BerthCostWindow).
         L(Button("Claude", "BerthCosting", "Costing", "berth-costing", "boq",
             "Bills, back-up and costing per berth, measured from the open model.",
@@ -203,9 +210,8 @@ internal static class CoreRibbonManifest
             "Working time in this model (AI and by hand) and the time Sketch ProMax saved, per tool and per day. Exports to Excel.",
             "All users' totals are kept in the model (Project Information shows them too). Rates and the idle threshold are in Settings.",
             needsModel: true, small: true)),
-        L(Entry("HelpMenu", "TestChecklist", "Test checklist", "test-checklist", "check",
-            "Walks you through what the field test can't check by itself (chat, ribbon, carbon, VE, 2D rebar, Report bug, " +
-            "exports and the fixed bugs), on a _detached copy. Mark each pass or fail; the result is saved in the Bugs folder.")),
+        // Test checklist left the Help menu in 0.35.1 (still on the pane's Bugs section) to free a loader slot for the
+        // Submission checklist button.
 
         // ---- The pane
         L(Pane("Claude app", "CopyPrompt", "Copy prompt", "copy-prompt",
