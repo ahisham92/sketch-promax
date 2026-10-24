@@ -46,7 +46,10 @@ internal static class SubmissionChecklistTests
             "bills.backup", "bills.rates", "bills.marine", "bills.steel", "bills.piles", "spec.cover", "spec.match",
             "spec.marine", "spec.testing", "combi.kingpile", "combi.infill", "combi.connectors", "combi.toe",
             "combi.driving", "relief.platform", "relief.piles", "relief.frontwall", "relief.connection", "relief.level",
-            "walls.backfill", "dwall.secant"
+            "walls.backfill", "dwall.secant", "piled.transverse", "piled.cantilever", "piled.longitudinal", "piled.beamjoint",
+            "dwall.trench", "dwall.cages", "dwall.capping", "dwall.anchors", "dwall.leakage", "loads.temperature", "loads.modifiers", "loads.patterns",
+            "loads.sls", "loads.construction", "loads.reactions", "steel.pipepile", "steel.localbuckling", "steel.infill", "steel.interlock",
+            "steel.welds", "steel.tierods", "steel.members", "steel.fatigue"
         ];
         // Retired with the revetment type (2026-10-24): never reuse these ids for another question.
         string[] retired = ["revet.armour", "revet.filter", "revet.toe", "revet.crest", "revet.slope", "revet.overtopping"];
