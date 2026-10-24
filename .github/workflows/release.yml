@@ -88,6 +88,10 @@ jobs:
 
           If Install.cmd says Windows cannot access the file: Properties > Unblock on the zip, or use the PowerShell line. Installed copies update themselves.
           "@
+          # A version's own words (such as "restart Revit once"), when docs/release-notes/<version>.md exists, come first:
+          # the in-app notice shows the notes' top lines.
+          $own = "docs/release-notes/$v.md"
+          if (Test-Path $own) { $notes = (Get-Content $own -Raw).Trim() + "`n`n" + $notes }
           gh release create "v$v" "SketchProMax-$v.zip" --repo "${{ github.repository }}" --target "${{ github.sha }}" --title "Sketch ProMax $v" --generate-notes --notes $notes
 
       - name: Keep the package (manual runs)
