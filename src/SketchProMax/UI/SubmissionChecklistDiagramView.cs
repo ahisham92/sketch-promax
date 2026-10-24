@@ -84,13 +84,13 @@ internal static class SubmissionChecklistDiagramView
     {
         try
         {
-            var canvas = Canvas(d);
-            canvas.LayoutTransform = new ScaleTransform(2, 2);
-            canvas.Measure(new Size(Width * 2, Height * 2));
-            canvas.Arrange(new Rect(0, 0, Width * 2, Height * 2));
-            canvas.UpdateLayout();
+            // Scaled by a Viewbox, not a transform on the canvas itself, which RenderTargetBitmap would offset.
+            var box = new Viewbox { Child = Canvas(d), Width = Width * 2, Height = Height * 2, Stretch = Stretch.Uniform };
+            box.Measure(new Size(Width * 2, Height * 2));
+            box.Arrange(new Rect(0, 0, Width * 2, Height * 2));
+            box.UpdateLayout();
             var bmp = new RenderTargetBitmap((int)(Width * 2), (int)(Height * 2), 96, 96, PixelFormats.Pbgra32);
-            bmp.Render(canvas);
+            bmp.Render(box);
             var encoder = new PngBitmapEncoder();
             encoder.Frames.Add(BitmapFrame.Create(bmp));
             using var ms = new MemoryStream();
