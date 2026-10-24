@@ -38,7 +38,7 @@ internal sealed class IssueGateWindow : Window
     private readonly TextBlock _verdict = Brand.Text("", bold: true, size: 13);
     private readonly TextBlock _status = Brand.Text("", Brand.K.Muted);
     private readonly TextBox _reason = new() { MinHeight = 28 };
-    private readonly CheckBox _override = new() { Content = "Issue with open items (recorded in the issue record with the reason)", Margin = new Thickness(0, 6, 0, 0) };
+    private readonly CheckBox _override = new() { Content = "Submit with open items (recorded in the submission record with the reason)", Margin = new Thickness(0, 6, 0, 0) };
     private readonly Button _accept = Brand.Button("_Accept ticked");
     private readonly Button _recheckButton = Brand.Button("_Re-check");
     private readonly Button _issue;
@@ -56,7 +56,7 @@ internal sealed class IssueGateWindow : Window
         _overrideAllowed = IssueGate.OverrideAllowed;
         _issue = Brand.Button(primary, Brand.Weight.Primary);
 
-        Title = "Sketch ProMax: issue check";
+        Title = "Sketch ProMax: submit check";
         Width = 760;
         Height = 680;
         MinWidth = 520;
@@ -68,7 +68,7 @@ internal sealed class IssueGateWindow : Window
         var top = new StackPanel();
         AutomationProperties.SetLiveSetting(_verdict, AutomationLiveSetting.Assertive);
         top.Children.Add(_verdict);
-        var help = Brand.Text("Fix takes you to the item in Revit and closes this window: fix it, then click Issue check again. " +
+        var help = Brand.Text("Fix takes you to the item in Revit and closes this window: fix it, then click Submit check again. " +
                               "Or tick items and accept them with a reason; they won't be asked again for this model unless the finding changes.", Brand.K.Muted);
         help.Margin = new Thickness(0, 4, 0, 0);
         top.Children.Add(help);
@@ -79,12 +79,12 @@ internal sealed class IssueGateWindow : Window
         var reasonLabel = Brand.Text("Reason (for Accept, and for issuing with open items)");
         foot.Children.Add(reasonLabel);
         AutomationProperties.SetName(_reason, "Reason");
-        AutomationProperties.SetHelpText(_reason, "Why the ticked items are acceptable. Kept with the model and shown in the issue record.");
+        AutomationProperties.SetHelpText(_reason, "Why the ticked items are acceptable. Kept with the model and shown in the submission record.");
         _reason.TextChanged += (_, _) => Refresh();
         foot.Children.Add(_reason);
         if (_overrideAllowed)
         {
-            AutomationProperties.SetHelpText(_override, "Allowed in Settings. The issue record says it was issued with open items, and why.");
+            AutomationProperties.SetHelpText(_override, "Allowed in Settings. The submission record says it went with open items, and why.");
             _override.Checked += (_, _) => Refresh();
             _override.Unchecked += (_, _) => Refresh();
             foot.Children.Add(_override);
@@ -94,15 +94,15 @@ internal sealed class IssueGateWindow : Window
         foot.Children.Add(_status);
 
         _accept.ToolTip = "Accept every ticked item with the reason above.";
-        AutomationProperties.SetHelpText(_accept, "Accepts the ticked items with the reason. They stop blocking the issue.");
+        AutomationProperties.SetHelpText(_accept, "Accepts the ticked items with the reason. They stop blocking the submission.");
         _accept.Click += (_, _) => AcceptTicked();
         _recheckButton.ToolTip = "Run the four checks again.";
-        AutomationProperties.SetHelpText(_recheckButton, "Runs check_drawings, spec_check, boq_check and check_model again on the issue set.");
+        AutomationProperties.SetHelpText(_recheckButton, "Runs check_drawings, spec_check, boq_check and check_model again on the sheets to submit.");
         _recheckButton.Click += (_, _) => Recheck();
         var close = Brand.Button("Close");
         close.IsCancel = true;
         close.Click += (_, _) => Close();
-        AutomationProperties.SetHelpText(_issue, "Goes on with the issue. Off while any item is open.");
+        AutomationProperties.SetHelpText(_issue, "Goes on with the submission. Off while any item is open.");
         _issue.Click += (_, _) => Issue();
         foot.Children.Add(Brand.ButtonRow(_accept, _recheckButton, close, _issue));
         DockPanel.SetDock(foot, Dock.Bottom);
@@ -116,7 +116,7 @@ internal sealed class IssueGateWindow : Window
         });
 
         var root = new DockPanel();
-        var header = Brand.Header("Issue check", $"{run.Sheets.Count} sheet(s) of '{run.Model}': drawings, spec, BOQ and model");
+        var header = Brand.Header("Submit check", $"{run.Sheets.Count} sheet(s) of '{run.Model}': drawings, spec, BOQ and model");
         DockPanel.SetDock(header, Dock.Top);
         root.Children.Add(header);
         root.Children.Add(body);
@@ -214,7 +214,7 @@ internal sealed class IssueGateWindow : Window
             fix.MinHeight = 24;
             fix.Padding = new Thickness(8, 0, 8, 0);
             fix.VerticalAlignment = VerticalAlignment.Top;
-            fix.ToolTip = "Select it and show it in Revit. This window closes; click Issue check again after fixing it.";
+            fix.ToolTip = "Select it and show it in Revit. This window closes; click Submit check again after fixing it.";
             AutomationProperties.SetName(fix, $"Fix: {f.Issue}");
             fix.Click += (_, _) => { FixId = target; Result = Choice.Fix; Close(); };
             Grid.SetColumn(fix, 2);
@@ -260,11 +260,11 @@ internal sealed class IssueGateWindow : Window
         // Going ahead with open items is the risky path: red, never the default (Enter doesn't do it).
         _issue.SetResourceReference(StyleProperty, overriding ? "SpmDangerButton" : "SpmPrimaryButton");
         _issue.IsDefault = !blocked;
-        _status.Text = !blocked ? "Nothing is open. Issue goes on with the issue."
+        _status.Text = !blocked ? "Nothing is open. Submit goes on with the submission."
             : ticked > 0 && !reason ? "Type a reason, then Accept."
-            : overriding && !reason ? "Type why the issue goes ahead with open items; it goes into the issue record."
-            : $"{_run.Open.Count()} open: fix each one (Fix, then Issue check again) or tick it and accept it with a reason."
-              + (_overrideAllowed ? "" : " Issuing with open items is off in Settings.");
+            : overriding && !reason ? "Type why the submission goes ahead with open items; it goes into the submission record."
+            : $"{_run.Open.Count()} open: fix each one (Fix, then Submit check again) or tick it and accept it with a reason."
+              + (_overrideAllowed ? "" : " Submitting with open items is off in Settings.");
     }
 
     // ---- Actions -----------------------------------------------------------------------------------------------------
@@ -320,7 +320,7 @@ internal sealed class IssueGateWindow : Window
         var doc = app.ActiveUIDocument?.Document;
         if (doc is null || doc.IsFamilyDocument)
         {
-            TaskDialog.Show("Sketch ProMax", "Open a project model first, then click Issue check again.");
+            TaskDialog.Show("Sketch ProMax", "Open a project model first, then click Submit check again.");
             return Autodesk.Revit.UI.Result.Cancelled;
         }
         if (Jobs.Running is { } running)
@@ -331,7 +331,7 @@ internal sealed class IssueGateWindow : Window
         var (numbers, prefix) = RememberedSet();
         var run = RunGate(app, numbers, prefix, null, null);
         if (run is null) return Autodesk.Revit.UI.Result.Cancelled;
-        var window = new IssueGateWindow(app, run, () => RunGate(app, numbers, prefix, null, null), "_Issue…");
+        var window = new IssueGateWindow(app, run, () => RunGate(app, numbers, prefix, null, null), "_Submit…");
         window.ShowDialog();
         switch (window.Result)
         {
@@ -385,7 +385,7 @@ internal sealed class IssueGateWindow : Window
             if (tool == "issue_drawings") IssueGate.Clear(run, null);
             return true;
         }
-        var window = new IssueGateWindow(app, run, () => RunGate(app, set, null, spec, boq), tool == "export_pdf" ? "_Export…" : "_Issue…");
+        var window = new IssueGateWindow(app, run, () => RunGate(app, set, null, spec, boq), tool == "export_pdf" ? "_Export…" : "_Submit…");
         window.ShowDialog();
         switch (window.Result)
         {
@@ -408,11 +408,11 @@ internal sealed class IssueGateWindow : Window
         var dict = json.EnumerateObject().ToDictionary(p => p.Name, p => p.Value.Clone());
         IssueGate.Last = null;
         ToolResult result;
-        using (PackProgress.Show("Issue check", $"Issue check on '{app.ActiveUIDocument.Document.Title}'"))
+        using (PackProgress.Show("Submit check", $"Submit check on '{app.ActiveUIDocument.Document.Title}'"))
             result = QuickTools.Execute(app, "issue_check", dict);
         if (result.IsError || IssueGate.Last is null)
         {
-            QuickTools.Show("Issue check", result, result.Text.StartsWith("Stopped", StringComparison.Ordinal) ? "Stopped; nothing was issued" : "The issue check did not run");
+            QuickTools.Show("Submit check", result, result.Text.StartsWith("Stopped", StringComparison.Ordinal) ? "Stopped; nothing was submitted" : "The submit check did not run");
             return null;
         }
         return IssueGate.Last;
@@ -448,7 +448,7 @@ internal sealed class IssueGateWindow : Window
         }
         catch (Autodesk.Revit.Exceptions.ApplicationException ex)
         {
-            TaskDialog.Show("Sketch ProMax", $"Couldn't show element {id} ({ex.Message}). Find it with Manage > Select by ID, fix it, then click Issue check again.");
+            TaskDialog.Show("Sketch ProMax", $"Couldn't show element {id} ({ex.Message}). Find it with Manage > Select by ID, fix it, then click Submit check again.");
         }
         return Autodesk.Revit.UI.Result.Succeeded;
     }

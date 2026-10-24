@@ -10,15 +10,15 @@ namespace SketchProMax.UI;
 
 /// <summary>
 /// Puts the assistant's name (<see cref="BrandText"/>) on what the loader draws itself: the pane's header line
-/// ("Claude: connected" → "Sketch ProMax: connected"), its tab and Activity texts, and the ribbon's first panel title and
-/// tooltips. The loader doesn't change between releases, so the core rewrites the text where it shows: the header line
+/// ("Claude: connected" → "Sketch ProMax: connected"), its tab and Activity texts, and the ribbon's panel titles
+/// (<see cref="CoreRibbonManifest.PanelTitles"/>: Assistant, Submit) and tooltips. The loader doesn't change between releases, so the core rewrites the text where it shows: the header line
 /// as soon as the loader sets it (no flicker), the rest of the pane once a second while it is shown, and the ribbon
 /// after every manifest and now and then while Revit runs. Elements that belong to the core (the chat and notes tabs)
 /// are skipped. Cosmetic: never throws; a loader that changed its layout simply keeps its own words.
 /// </summary>
 internal static class LoaderBrand
 {
-    private const string Tab = "Sketch ProMax", FirstPanel = "Claude";
+    private const string Tab = "Sketch ProMax";
 
     private static UIApplication? _app;
     private static DispatcherTimer? _timer;
@@ -81,7 +81,7 @@ internal static class LoaderBrand
             foreach (var panel in _app.GetRibbonPanels(Tab))
             {
                 if (panel is null) continue;
-                if (panel.Name == FirstPanel && panel.Title != BrandText.PanelTitle) panel.Title = BrandText.PanelTitle;
+                if (CoreRibbonManifest.PanelTitles.TryGetValue(panel.Name, out var title) && panel.Title != title) panel.Title = title;
                 foreach (var item in panel.GetItems())
                 {
                     if (item is null) continue;

@@ -266,7 +266,7 @@ internal static class SharedPackMath
     [
         ("pre-submission", "Pre-submission checklist", "list",
             "Goes through the office's pre-submission checklist stage by stage, with hints from the model, and makes the signed Word file. Colleagues start from the built-in checklist, or from yours when you tick Include my checklist."),
-        ("issue-check", "Issue check", "check",
+        ("issue-check", "Submit check", "check",
             "Drawing, spec, BOQ and model checks together on the issue set, pass or fail per sheet. Reads the model only."),
         ("cleanup", "Purge & cleanup", "refresh",
             "Purge unused, delete unused views, clean up imports or a model health clean. Each shows a preview first and asks before it deletes."),

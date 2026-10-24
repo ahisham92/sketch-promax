@@ -470,6 +470,7 @@ internal static partial class FieldTest
         await Probe(s, "ribbon.registered", app => RibbonRegistered(app, s.Registry)).ConfigureAwait(false);
         await Probe(s, "brand.ribbon", app => BrandRibbon(app)).ConfigureAwait(false);
         await Probe(s, "ribbon.dialogs", _ => Dialogs(s.Registry, s.Folder)).ConfigureAwait(false);
+        await Probe(s, "ribbon.result_page", _ => ResultPage()).ConfigureAwait(false);
         await Probe(s, "settings.tabs", _ => SettingsTabs()).ConfigureAwait(false);
         await Probe(s, "favourites", _ => FavouriteRoundTrip()).ConfigureAwait(false);
         await Probe(s, "chat.history", _ => ChatHistoryRoundTrip(s.Folder)).ConfigureAwait(false);
@@ -623,7 +624,7 @@ internal static partial class FieldTest
         LoaderBrand.Attach(app);
         LoaderBrand.Ribbon();
         var bad = new List<string>();
-        var title = "";
+        var titles = new Dictionary<string, string>(StringComparer.Ordinal);
         void Look(Autodesk.Revit.UI.RibbonItem item)
         {
             var more = item is Autodesk.Revit.UI.RibbonButton b ? b.LongDescription : item is PulldownButton p ? p.LongDescription : "";
@@ -634,13 +635,14 @@ internal static partial class FieldTest
         foreach (var panel in app.GetRibbonPanels("Sketch ProMax"))
         {
             if (panel is null) continue;
-            if (panel.Name == "Claude") title = panel.Title;
+            titles[panel.Name] = panel.Title;
             foreach (var item in panel.GetItems())
                 if (item is not null) Look(item);
         }
-        if (title != BrandText.PanelTitle) bad.Insert(0, $"the first panel's title is \"{title}\", not \"{BrandText.PanelTitle}\"");
+        foreach (var pair in CoreRibbonManifest.PanelTitles)
+            if (titles.TryGetValue(pair.Key, out var title) && title != pair.Value) bad.Insert(0, $"the {pair.Key} panel's title is \"{title}\", not \"{pair.Value}\"");
         return bad.Count == 0
-            ? Pass($"the first panel is titled {BrandText.PanelTitle}; no button text or tooltip on the tab names the model except as a product to act on")
+            ? Pass($"the panels are titled {string.Join(" and ", CoreRibbonManifest.PanelTitles.Values)}; no button text or tooltip on the tab names the model except as a product to act on")
             : Fail(string.Join("; ", bad.Take(10)) + (bad.Count > 10 ? $" (+{bad.Count - 10} more)" : ""));
     }
 
@@ -680,6 +682,36 @@ internal static partial class FieldTest
         return problems.Count == 0
             ? Pass($"{tools.Count} option windows built; {saved}.")
             : Fail($"{tools.Count - problems.Count} of {tools.Count} option windows built. " + string.Join("; ", problems.Take(10)));
+    }
+
+    /// <summary>A tool's JSON result shows as a page (figures, chart, rows with Select in Revit), its raw text folded under it.</summary>
+    private static (string, string) ResultPage()
+    {
+        const string sample = """{"overallScore":82,"findings":149,"warningTypes":[{"warning":"Walls overlap","count":61},{"warning":"Duplicate Mark","count":38}],"sample":[{"check":"duplicates","id":1,"what":"Wall"}]}""";
+        var window = new ResultWindow("Model check", true, "Done", sample);
+        try
+        {
+            var texts = new HashSet<string>(StringComparer.Ordinal);
+            void Walk(object node)
+            {
+                switch (node)
+                {
+                    case string text: texts.Add(text); break;
+                    case System.Windows.Controls.TextBlock block: texts.Add(block.Text); break;
+                    case System.Windows.Controls.HeaderedContentControl headed when headed.Header is string header: texts.Add(header); break;
+                }
+                if (node is System.Windows.DependencyObject d)
+                    foreach (var child in System.Windows.LogicalTreeHelper.GetChildren(d)) Walk(child);
+                if (node is System.Windows.Controls.HeaderedContentControl { Header: System.Windows.DependencyObject h }) Walk(h);
+            }
+            if (window.Content is { } content) Walk(content);
+            var want = new[] { "Overall score", "82", "Warning types", "Walls overlap", "Select in Revit", "Full details (for a bug report)" };
+            var missing = want.Where(w => !texts.Contains(w)).ToList();
+            return missing.Count == 0
+                ? Pass("a model check's result shows its figures, the warnings chart, a row with Select in Revit and the folded full details")
+                : Fail("the result page is missing: " + string.Join(", ", missing));
+        }
+        finally { window.Close(); }
     }
 
     /// <summary>

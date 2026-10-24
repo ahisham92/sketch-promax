@@ -298,7 +298,7 @@ public sealed class ExportPdfTool : IRevitTool
             {
                 // Each check, and then the export, is its own Revit API call, so Revit stays responsive between them.
                 job.Continuation = CheckThenExport(job, call.Chat, sheets.Select(s => s.Id).ToList(), args, checkFolder);
-                Bridge.Jobs.Report($"Issue check before the export ({sheets.Count} sheet(s))");
+                Bridge.Jobs.Report($"Submit check before the export ({sheets.Count} sheet(s))");
                 return ToolResult.Ok(new
                 {
                     status = "issue check first", job = job.Id, sheets = sheets.Count,
@@ -372,7 +372,7 @@ public sealed class ExportPdfTool : IRevitTool
             }).ConfigureAwait(false);
             for (var i = 0; i < checking.Count; i++)
             {
-                CancelPoint.Stop("Issue check", i, checking.Count);
+                CancelPoint.Stop("Submit check", i, checking.Count);
                 if (Stopping()) return ToolResult.Error($"{CancelPoint.Stopped}. The issue check did not finish; nothing was exported.");
                 var step = i;
                 await App.Dispatcher.InvokeAsync(app => { checking.Step(app, step); return true; }).ConfigureAwait(false);
