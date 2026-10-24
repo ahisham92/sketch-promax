@@ -24,7 +24,7 @@ internal abstract class PdfDialog : Window
     protected PdfDialog(Window owner, string title, string heading)
     {
         Title = "Sketch ProMax: " + title;
-        Width = 440;
+        Width = 500;
         SizeToContent = SizeToContent.Height;
         ResizeMode = ResizeMode.NoResize;
         Owner = owner;
@@ -138,11 +138,15 @@ internal sealed class SplitChoiceWindow : PdfDialog
     {
         _folder = folder;
         _every.Content = Row("Every", _n, "pages (1: each page its own PDF)");
-        _picked.Content = picked.Count > 0 && !(picked.Count == 1 && picked[0] == 0)
-            ? $"At the picked pages: each one starts a new PDF ({PdfEditSession.Describe(picked)})"
-            : "At the picked pages (pick the first page of each part first)";
+        _picked.Content = new TextBlock
+        {
+            Text = picked.Any(p => p > 0) ? $"At the picked pages: each starts a new PDF (pages {PdfEditSession.Describe(picked)})"
+                : "At the picked pages (pick the first page of each part first)",
+            TextWrapping = TextWrapping.Wrap,
+            MaxWidth = 430,
+        };
         _picked.IsEnabled = picked.Any(p => p > 0);
-        _size.Content = Row("Parts up to", _mb, "MB each (small enough to email or attach)");
+        _size.Content = Row("Parts up to", _mb, "MB each, to email or attach");
         foreach (var r in new[] { _every, _picked, _size }) { Brand.Fg(r, Brand.K.Text); Page.Children.Add(r); }
         (_picked.IsEnabled ? _picked : _every).IsChecked = true;
         _n.GotFocus += (_, _) => _every.IsChecked = true;

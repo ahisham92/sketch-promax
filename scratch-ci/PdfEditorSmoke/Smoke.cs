@@ -12,7 +12,7 @@ namespace SketchProMax;
 internal static class Smoke
 {
     public static bool Dark;
-    private static readonly string[] Print = ["merged-light", "small-dark", "split", "preview"];
+    private static readonly string[] Print = ["split", "pages"];
     private const BindingFlags Any = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Static;
 
     [STAThread]
