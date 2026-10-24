@@ -17,6 +17,38 @@ internal static class SubmissionChecklistTests
         var bank = SubmissionChecklistBank.Questions;
         var dupes = bank.GroupBy(q => q.Id).Where(g => g.Count() > 1).Select(g => g.Key).ToList();
         check("submission checklist: question ids are unique", dupes.Count == 0, string.Join(", ", dupes));
+        // Answers are kept by question id: a released id must stay in the bank (reword it, don't rename it).
+        string[] released =
+        [
+            "basis.dbr", "basis.codes", "basis.life", "basis.survey", "basis.geotech", "basis.metocean", "basis.vessel",
+            "basis.seismic", "basis.comments", "basis.scope", "basis.assumptions", "basis.environment", "levels.grading",
+            "levels.marine", "levels.datum", "levels.cope", "levels.dredge", "levels.scour", "levels.grid",
+            "levels.civil", "levels.electrical", "levels.mechanical", "levels.neighbours", "levels.existing",
+            "loads.dead", "loads.live", "loads.equipment", "loads.cranes", "loads.berthing", "loads.mooring",
+            "loads.wind", "loads.impact", "loads.waves", "loads.earth", "loads.water", "loads.seismic", "loads.thermal",
+            "loads.combinations", "geo.profile", "geo.capacity", "geo.toe", "geo.negative", "geo.bearing", "geo.global",
+            "geo.liquefaction", "geo.improvement", "geo.drivability", "piled.layout", "piled.model", "piled.deck",
+            "piled.connection", "piled.uplift", "piled.slope", "piled.joints", "piled.precast", "blocks.stability",
+            "blocks.friction", "blocks.keys", "blocks.bed", "blocks.backfill", "blocks.weight", "blocks.cope",
+            "blocks.toe", "caissons.float", "caissons.stability", "caissons.walls", "caissons.joints", "caissons.fill",
+            "sheets.embedment", "sheets.section", "sheets.corrosion", "sheets.anchor", "sheets.waling",
+            "sheets.tielevel", "sheets.combi", "walls.stability", "walls.stem", "walls.drainage", "walls.joints",
+            "revet.armour", "revet.filter", "revet.toe", "revet.crest", "revet.slope", "revet.overtopping",
+            "dolphins.layout", "dolphins.deflection", "dolphins.hooks", "dolphins.access", "trestle.spans",
+            "trestle.pipes", "trestle.traffic", "trestle.abutment", "roro.gradient", "roro.loads", "roro.hinge",
+            "pontoon.freeboard", "pontoon.guides", "pontoon.gangway", "dwall.embedment", "dwall.panels", "dwall.stages",
+            "dredge.slopes", "dredge.volumes", "dredge.disposal", "dredge.reclamation", "rails.gauge", "rails.beam",
+            "rails.fixings", "rails.stops", "rails.power", "yard.pavement", "yard.falls", "yard.joint", "yard.services",
+            "dur.exposure", "dur.cover", "dur.cracks", "dur.steel", "dur.cathodic", "dur.rock", "furn.fenders",
+            "furn.bollards", "furn.ladders", "furn.lifesaving", "furn.navaids", "furn.edges", "furn.services",
+            "furn.maintenance", "calcs.index", "calcs.checked", "calcs.software", "calcs.match", "calcs.report",
+            "calcs.construction", "calcs.risks", "calcs.inspection", "dwg.list", "dwg.notes", "dwg.levels",
+            "dwg.sections", "dwg.rebar", "dwg.clouds", "dwg.titleblock", "dwg.markups", "bills.method", "bills.model",
+            "bills.backup", "bills.rates", "bills.marine", "bills.steel", "bills.piles", "spec.cover", "spec.match",
+            "spec.marine", "spec.testing"
+        ];
+        var lost = released.Where(id => bank.All(q => q.Id != id)).ToList();
+        check("submission checklist: released question ids are all still asked", lost.Count == 0, string.Join(", ", lost));
         var badTopic = bank.Where(q => Topics.All(t => t.Key != q.Topic)).Select(q => q.Id).ToList();
         check("submission checklist: every question is on a page", badTopic.Count == 0, string.Join(", ", badTopic));
         var badType = bank.Where(q => q.TypeKeys.Any(k => TypeOf(k) is null)).Select(q => q.Id).ToList();
