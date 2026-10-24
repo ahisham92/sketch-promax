@@ -48,6 +48,8 @@ internal static class SubmissionChecklistBank
             "What this submission covers (berths, structures, stage) is what the schedule and the scope of work ask for."),
         Q("basis.assumptions", "basis", "Assumptions and open items listed?",
             "Anything assumed (missing data, client decisions) is listed in the report and on the drawings' notes."),
+        Q("basis.environment", "basis", "Environmental permit conditions reflected in the design?",
+            "Limits from the permit or the environmental study (dredging windows, turbidity, piling noise, disposal) are on the drawings and in the specification.", teams: "Marine, Environmental"),
 
         // ---- Levels and coordination
         Q("levels.grading", "levels", "Levels checked with the grading team?",
@@ -88,6 +90,10 @@ internal static class SubmissionChecklistBank
             "Energy from the design vessel (factors for mass, eccentricity, softness, berth configuration) and the abnormal factor; reactions from the chosen fender.", Berths, "Marine"),
         Q("loads.mooring", "loads", "Mooring loads (bollard or hook pull) applied?",
             "Bollard rating for the largest vessel, pulled at the governing angles.", Berths, "Marine"),
+        Q("loads.wind", "loads", "Wind loads on the structure, cranes and moored vessels?",
+            "Wind speed and return period from the design basis; on the moored vessel it sets the bollard and fender loads.", Quays + "," + Dolphins + "," + Trestle + "," + Rails, "Marine"),
+        Q("loads.impact", "loads", "Accidental vessel impact on exposed piles or structures checked?",
+            "Where a vessel can strike piles, dolphins or a trestle outside the fender line: impact energy and the protection or the damage accepted.", Piles, "Marine"),
         Q("loads.waves", "loads", "Wave and current loads applied?",
             "Wave forces, uplift and slamming under decks, current drag on piles.", InWater, "Marine"),
         Q("loads.earth", "loads", "Earth pressures with surcharge (active, at rest, passive)?",
@@ -146,6 +152,7 @@ internal static class SubmissionChecklistBank
         Q("caissons.stability", TopicsTypes, "Sliding, overturning and bearing checked in place?", "With the cell fill, the backfill and the residual water.", Caissons, diagram: Caissons),
         Q("caissons.walls", TopicsTypes, "Cell walls and base slab designed for every stage?", "Casting, launching, towing, sinking, filling and in service.", Caissons, diagram: Caissons),
         Q("caissons.joints", TopicsTypes, "Joints between caissons sealed against loss of fill?", "Joint detail, its filter and how it is closed after placing.", Caissons, diagram: Caissons),
+        Q("caissons.fill", TopicsTypes, "Cell fill material, density and placing specified?", "Fill weight used in the stability calculation is the one specified.", Caissons, diagram: Caissons),
 
         // ---- Structure checks: sheet pile quay
         Q("sheets.embedment", TopicsTypes, "Embedment depth with its factor of safety?", "Free or fixed earth support, with the factor or partial factors in the design basis.", Sheets, "Geotechnical", Sheets),
@@ -168,6 +175,7 @@ internal static class SubmissionChecklistBank
         Q("revet.toe", TopicsTypes, "Toe designed against scour and sliding?", "Toe berm or key, its level and width.", Revet, "Marine", Revet),
         Q("revet.crest", TopicsTypes, "Crest level for the overtopping allowed?", "Overtopping rate at the design storm against what the area behind can take.", Revet, "Marine", "levels"),
         Q("revet.slope", TopicsTypes, "Slope angle and stability agreed?", "Slope stability with the soils, and the armour stable at that angle.", Revet, "Geotechnical", Revet),
+        Q("revet.overtopping", TopicsTypes, "Wave overtopping at the crest within the limits?", "Overtopping rate for the design storm against the limit for the use behind, and the crest drainage.", Revet + "," + Walls, "Marine", Revet),
 
         // ---- Structure checks: dolphins
         Q("dolphins.layout", TopicsTypes, "Dolphin layout fits the design vessels?", "Breasting dolphins within the parallel body of the smallest and largest vessel; mooring lines at good angles.", Dolphins, "Marine", Dolphins),
@@ -207,17 +215,20 @@ internal static class SubmissionChecklistBank
         Q("rails.beam", TopicsTypes, "Rail beams designed for wheel loads and deflection limits?", "Bending, shear and deflection under the wheel groups.", Rails, diagram: Rails),
         Q("rails.fixings", TopicsTypes, "Rail type, fixings, pads and tolerances specified?", "Rail section, clips, elastomeric pad and the alignment tolerances.", Rails, diagram: Rails),
         Q("rails.stops", TopicsTypes, "Stoppers, tie-downs and stowage pins placed and designed?", "Positions and their loads from the crane maker.", Rails, diagram: Rails),
+        Q("rails.power", TopicsTypes, "Crane power supply, cable trench and earthing coordinated?", "Cable trench or festoon, pits, rail bonding and earthing agreed with the electrical team.", Rails, "Electrical", Rails),
 
         // ---- Structure checks: yard, pavement and drainage
         Q("yard.pavement", TopicsTypes, "Pavement designed for the equipment and the subgrade?", "Layers from the design wheel loads and the CBR of the fill.", Yard, "Civil", Yard),
         Q("yard.falls", TopicsTypes, "Falls and drainage agreed with the grading team?", "Falls, channel positions and outfalls through the quay.", Yard, "Grading, Civil", Yard),
         Q("yard.joint", TopicsTypes, "Joint between pavement and quay detailed?", "Transition slab or joint where the yard meets the quay.", Yard, "Civil", Yard),
+        Q("yard.services", TopicsTypes, "Ducts, pits, lighting masts and reefer points coordinated?", "Positions and covers in the pavement agreed with the electrical and mechanical teams.", Yard, "Electrical, Mechanical"),
 
         // ---- Durability and materials
         Q("dur.exposure", "durability", "Exposure class per zone (splash, tidal, submerged, buried)?", "Each element's exposure class as the code and the design life.", diagram: "levels"),
         Q("dur.cover", "durability", "Concrete grade, cover and cement as the exposure?", "Grade, nominal cover, cement type and the w/c ratio per element."),
         Q("dur.cracks", "durability", "Crack width limits checked?", "Crack width against the exposure limit in each element."),
         Q("dur.steel", "durability", "Steel grades and their protection specified?", "Structural steel, piles and fittings: grade, coating, galvanising or cathodic protection.", Piles + "," + Sheets + "," + Rails),
+        Q("dur.cathodic", "durability", "Cathodic protection designed where the steel needs it?", "Anodes or impressed current: design life, current density per zone, anode positions and bonding.", Piles + "," + Sheets, "Electrical", "levels"),
         Q("dur.rock", "durability", "Rock and fill quality and grading specified?", "Density, strength and grading of armour, core and filter rock.", Revet + "," + Blocks + "," + Caissons + "," + Dredge),
 
         // ---- Marine furniture and safety
@@ -227,6 +238,8 @@ internal static class SubmissionChecklistBank
         Q("furn.lifesaving", "furniture", "Life-saving equipment and kerbs shown?", "Life buoys, kerbs or wheel stops along the edge.", Berths + "," + Trestle),
         Q("furn.navaids", "furniture", "Navigation lights and marks coordinated?", "Positions and supports agreed with the marine team.", InWater, "Marine"),
         Q("furn.edges", "furniture", "Cope edge protection and nosing detailed?", "Steel nosing or chamfers where equipment and mooring lines work.", Quays),
+        Q("furn.services", "furniture", "Ship services (water, power, fuel) pits and ducts coordinated?", "Service pits in the cope, ducts through the deck or wall, agreed with the mechanical and electrical teams.", Berths, "Mechanical, Electrical"),
+        Q("furn.maintenance", "furniture", "Fenders and fittings can be inspected and replaced?", "Access for inspection, fender and anode replacement, and the bolts' design life.", Berths),
 
         // ---- Calculations and reports
         Q("calcs.index", "calcs", "Calculation package complete, with an index?", "Every element on the drawings has its calculation, listed in the index."),
@@ -236,6 +249,7 @@ internal static class SubmissionChecklistBank
         Q("calcs.report", "calcs", "Design report summarises the design and its results?", "Short report: description, criteria, results and open items."),
         Q("calcs.construction", "calcs", "Construction stages and temporary works checked?", "Stages, temporary loads and the sequence on the drawings."),
         Q("calcs.risks", "calcs", "Design risks and safety in design recorded?", "Risk register or safety in design notes for this submission."),
+        Q("calcs.inspection", "calcs", "Inspection and maintenance needs recorded?", "What must be inspected or replaced in the design life (fenders, anodes, coatings, joints), for the owner's manual."),
 
         // ---- Drawings
         Q("dwg.list", "drawings", "Drawing list matches the drawings issued?", "Numbers, titles and revisions on the list are those on the sheets."),
@@ -260,6 +274,7 @@ internal static class SubmissionChecklistBank
         Q("spec.cover", "specs", "Specification covers every material and work on the drawings?", "Concrete, steel, piling, dredging, rock, fenders, coatings and testing."),
         Q("spec.match", "specs", "Specification, drawings and bills agree?", "Grades, tolerances and testing are the same in all three."),
         Q("spec.marine", "specs", "Marine works, tolerances and testing specified?", "Placing tolerances, pile driving records, dredging survey and acceptance.", InWater + "," + Dredge),
+        Q("spec.testing", "specs", "Testing and acceptance criteria specified?", "Pile load and integrity tests, concrete tests, rock tests and fender tests, with the pass criteria."),
     ];
 
     // The structure page's key, spelled here so the list above stays short.

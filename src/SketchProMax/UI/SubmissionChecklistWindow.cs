@@ -147,7 +147,7 @@ internal sealed class SubmissionChecklistWindow : Window
         _checkedRing.Clicked = () => GoTo(_pages.Items.Count - 1);
         _saveSoon.Tick += async (_, _) => { _saveSoon.Stop(); await SaveNow(); };
         Activated += async (_, _) => await ReadAgain(quiet: true);
-        PreviewKeyDown += (_, e) => { if (e.Key == Key.Escape) Close(); };
+        PreviewKeyDown += OnKey;
         Closed += (_, _) => { _closed = true; _saveSoon.Stop(); if (_dirty) { SaveOwn(ChecklistMath.WorkingName(_model), _mine); _ = SaveNow(); } };
         UpdateBim();
         Build();
@@ -549,6 +549,7 @@ internal sealed class SubmissionChecklistWindow : Window
         var page = new StackPanel();
         page.Children.Add(Heading(topic.Title));
         page.Children.Add(Para(topic.About, Brand.K.Muted));
+        page.Children.Add(Para("Keys: Y yes, N no, A not applicable on the question in focus (it moves on to the next); Ctrl+Tab next page.", Brand.K.Muted, 11));
         var types = ProjectTypes;
         string? group = null;
         var number = _questions.IndexOf(items[0]);
@@ -815,6 +816,50 @@ internal sealed class SubmissionChecklistWindow : Window
             NotApplicable => "N/A: say why in the comment; it hides once the group leader approves it.",
             _ => "Answer cleared.",
         };
+    }
+
+    /// <summary>Esc closes; Ctrl+Tab / Ctrl+Shift+Tab (or Ctrl+PageDown / PageUp) change page; Y, N, A answer the question in focus and move on.</summary>
+    private void OnKey(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Escape) { Close(); e.Handled = true; return; }
+        if ((Keyboard.Modifiers & ModifierKeys.Control) != 0 && e.Key is Key.Tab or Key.PageDown or Key.PageUp)
+        {
+            var back = e.Key == Key.PageUp || e.Key == Key.Tab && (Keyboard.Modifiers & ModifierKeys.Shift) != 0;
+            var next = _pages.SelectedIndex + (back ? -1 : 1);
+            if (next >= 0 && next < _pages.Items.Count) GoTo(next);
+            e.Handled = true;
+            return;
+        }
+        if (Keyboard.Modifiers != ModifierKeys.None || Keyboard.FocusedElement is TextBox or ComboBox) return;
+        var value = e.Key switch { Key.Y => Yes, Key.N => No, Key.A => NotApplicable, _ => "" };
+        if (value.Length == 0) return;
+        for (var node = Keyboard.FocusedElement as DependencyObject; node is not null; node = VisualTreeHelper.GetParent(node))
+        {
+            if (node is not Border card || _cards.FirstOrDefault(c => c.Value == card).Key is not { } id) continue;
+            if (_questions.FirstOrDefault(q => q.Id == id) is not { } question) return;
+            Answer(question, value);
+            e.Handled = true;
+            // The next question on the same page takes the focus.
+            var after = card.Parent is Panel panel ? panel.Children.OfType<Border>().SkipWhile(b => b != card).Skip(1).FirstOrDefault(b => _cards.ContainsValue(b)) : null;
+            var target = after ?? card;
+            Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() =>
+            {
+                target.BringIntoView();
+                FirstRadio(target)?.Focus();
+            }));
+            return;
+        }
+    }
+
+    private static RadioButton? FirstRadio(DependencyObject root)
+    {
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+            if (child is RadioButton r) return r;
+            if (FirstRadio(child) is { } found) return found;
+        }
+        return null;
     }
 
     private void Review(Question q, string verdict, string note)
