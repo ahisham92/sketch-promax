@@ -142,7 +142,7 @@ internal static class FieldTestCoverage
             "Start a long tool (e.g. Model check), watch the Job button show progress, click it and stop the job. Click Update: the update window opens on Checking, then says up to date (or installs the newer version in place); no browser or folder opens."),
         new("help", RibbonArea, "Help page", How.Manual, "", "opens a web page in your browser", "Help > Help and getting started: the guide opens in the browser."),
         new("folders.ui", RibbonArea, "Help > Open folders", How.Manual, "", "opens Explorer and the clipboard",
-            "Help > Open folders: the window lists Bugs, Learned tools, Recipes, Chats, Checklists, PDF backups, Field tests and Settings with their paths. Press Open on Learned tools: Explorer opens it (made if it wasn't there). Press Copy path on Bugs and paste it in Explorer's address bar: it opens. Everything reads well in the light and dark themes."),
+            "Help > Open folders: the window lists Bugs, Learned tools, Recipes, Chats, Checklists, PDF backups, Change files, Field tests and Settings with their paths. Press Open on Learned tools: Explorer opens it (made if it wasn't there). Press Copy path on Bugs and paste it in Explorer's address bar: it opens. Everything reads well in the light and dark themes."),
         new("diagnostics.journal", RibbonArea, "The field test's breadcrumbs when Revit closes", How.Probe, "", "in a temporary folder, a breadcrumb journal written as a run writes it, stopped as if Revit closed during a step: the next start finds it (its Revit is gone), its rows end with a crash row naming that step, Continue carries the steps that ended and doesn't run the crashed one (nor one remembered from an earlier crash), and a run that ends by itself leaves no journal"),
         new("diagnostics.running_call", RibbonArea, "Which call Revit closed during", How.Probe, "", "in a temporary folder, the running-call file of a Revit that is gone is read back at the next start as which call was running, with its arguments, and removed (once)"),
         new("diagnostics.crash_ui", RibbonArea, "After Revit closed during the field test", How.Manual, "", "it needs Revit to close during a run",
@@ -485,6 +485,18 @@ internal static class FieldTestCoverage
         new("central.real", Central, "Fewer \"Unable to Access the Model\" dialogs on a shared model", How.Manual, "", "needs a real central model and a colleague (or a second Revit) synchronizing at the same moment",
             "On a workshared test model (not the live project): open a local copy in two Revit sessions. In the first, start Synchronize with Central; while it runs, ask the chat in the second to rename a few doors (or run any batch edit on elements nobody owns). Revit shows \"Unable to Access the Model\" at most once: press Cancel. The result says the central model didn't answer and when Sketch ProMax will ask again, and no more dialogs follow. Run the same edit again before that time: it stops at once with the same message and no dialog. After that time it runs normally."),
 
+        // ---- Shared models: the change file and Recover (Revit/ChangeFile, Revit/ChangeReplay, UI/RecoverWindow)
+        new("recovery.file", Central, "The change file follows each change and clears at save", How.Probe, "",
+            "in the test project, with the change file sent to a temporary folder: a new wall, a moved and renamed column type change and a deleted element each reach the file within a few idle moments as one line per element (UniqueId, type, level, place and values), and saving the project moves the file to \"before last save\" and starts it empty; nothing in the model is changed by the file itself"),
+        new("recovery.replay", Central, "Replay puts the changes back", How.Probe, "",
+            "in the test project: a change file with a wall moved and its comment changed, a column made after the save and an element deleted is played onto it; the wall goes back to the file's place and comment, the column is made again on its level with its type, the deleted element goes, an element the file can't make is listed to redo by hand, and Ctrl+Z (rolling the groups back) leaves the project as it was"),
+        new("recovery.ui", Central, "Recover after Revit closes by itself, on a real shared model", How.Manual, "", "needs Revit to close by itself and a real central model",
+            "On a workshared test model (a new local of a test central, never the live project): move two columns, change a wall's type and comment, add a beam and delete a door, without saving. " +
+            "Open Documents\\Sketch ProMax\\Change files\\<model>\\changes since last save.txt in Notepad: it lists those elements. End Revit in Task Manager. Start Revit and open the same local: " +
+            "the Recover window opens by itself and says the model has changes that weren't saved. Press Replay…: the preview says what it will set back, make again and delete. Press Replay now: " +
+            "the columns, wall, beam and door are as before the crash; the report lists anything to redo by hand. Synchronize with central: the changes reach central. Save: the change file is empty again. " +
+            "Also from the pane's Files section: Recover > Replay a file from disk… with a change file copied elsewhere."),
+
         // ---- Bug fixes checked by a person (the rest are field-test cases named "tool bug#N", see BugChecks)
         new("bug.titleblock_params", BugFixes, "Bug #7: a copied title block fills its fields", How.Manual, "", "needs the office's own title block family, whose labels use shared parameters",
             "On a _detached copy of a model without your title block: ask in the chat to copy the title block from your template (copy_from_file). Put it on a new sheet and fill the sheet's drawn by, checked by and other fields: the title block shows them (the shared parameters were added to Sheets)."),
@@ -513,7 +525,7 @@ internal static class FieldTestCoverage
         ["chat"] = "chat.ui", ["status"] = "ribbon.status", ["send-view"] = "ribbon.status", ["copy-prompt"] = "ribbon.status",
         ["open-claude"] = "claude.open", ["pane"] = "ribbon.status", ["export-pack"] = "pack.export", ["job-button"] = "ribbon.job",
         ["update-button"] = "ribbon.job", ["report-bug"] = "bugs.ui", ["split-pdf"] = "chat.split_ui", ["pdf-editor"] = "pdf.editor_ui", ["bug-folder"] = "bugs.ui", ["export-chats-bugs"] = "bugs.export", ["license"] = "license.ui",
-        ["settings"] = "settings.ui", ["help"] = "help", ["user-folders"] = "folders.ui", ["self-test"] = "diagnostics", ["field-test"] = "diagnostics",
+        ["settings"] = "settings.ui", ["help"] = "help", ["user-folders"] = "folders.ui", ["recover"] = "recovery.ui", ["self-test"] = "diagnostics", ["field-test"] = "diagnostics",
         ["test-checklist"] = "diagnostics", ["time-saved"] = "time.ui", ["issue-check"] = "issue.ui", ["pre-submission"] = "checklist.ui", ["berth-status"] = "berth.ui", ["submission-checklist"] = "subcheck.ui", ["berth-costing"] = "costing.ui", ["cleanup"] = "cleanup.ui", ["share-tools"] = "share.ui", ["favourites"] = "favourites", ["fav:*"] = "favourites", ["tab:notes"] = "chat.notes",
     };
 

@@ -24,6 +24,7 @@ internal static class UserFolders
         new("Chats", System.IO.Path.Combine(Local, "chat", "conversations"), "The saved chats of every model."),
         new("Checklists", System.IO.Path.Combine(Documents, "Sketch ProMax", "Checklists"), "The checklist Word files and PDFs."),
         new("PDF backups", System.IO.Path.Combine(Documents, "Sketch ProMax", "PDF backups"), "The old file each time the PDF editor saves over a PDF."),
+        new("Change files", System.IO.Path.Combine(Documents, "Sketch ProMax", "Change files"), "Each model's changes since its last save, to replay after a crash (Recover)."),
         new("Field tests", System.IO.Path.Combine(Local, "field-tests"), "Field test reports."),
         new("Settings", Roaming, "Settings, license and everything above that is saved per user."),
     ];

@@ -235,6 +235,9 @@ internal static class CoreRibbonManifest
         // Split PDF (0.34.29): a pane button (the ribbon's command slots are kept free). The chat splits a large PDF by itself.
         L(Pane("Files", "SplitPdf", "Split PDF", "split-pdf",
             "Cuts a large PDF into parts of at most 18 MB (or the size you set), in page order, so each part can be attached in the chat and read whole. The original is not changed.")),
+        // Recover: the change file of each model, replayed onto a good copy after a crash or a damaged file (UI/RecoverWindow).
+        L(Pane("Files", "Recover", "Recover", "recover",
+            "Your changes since the last save, kept in a text file per model: replay them onto the open model after Revit closed by itself or the file was damaged.")),
         L(Tab("notes", "Notes", "Notes for this model")),
     ];
 

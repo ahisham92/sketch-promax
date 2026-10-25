@@ -53,6 +53,7 @@
     <Compile Include="../../src/SketchProMax/Chat/MemoryNotes.cs" Link="MemoryNotes.cs" />
     <Compile Include="../../src/SketchProMax/Bugs/BugLog.cs" Link="BugLog.cs" />
     <Compile Include="../../src/SketchProMax/Bugs/UserFolders.cs" Link="UserFolders.cs" />
+    <Compile Include="../../src/SketchProMax/Revit/ChangeFileMath.cs" Link="ChangeFileMath.cs" />
     <Compile Include="../../src/SketchProMax/Tools/LayoutMath.cs" Link="LayoutMath.cs" />
     <Compile Include="../../src/SketchProMax/Tools/ToolForm.cs" Link="ToolForm.cs" />
     <Compile Include="../../src/SketchProMax/UI/UpdateBadge.cs" Link="UpdateBadge.cs" />

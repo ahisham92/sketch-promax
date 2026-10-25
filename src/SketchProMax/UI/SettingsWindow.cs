@@ -37,6 +37,7 @@ public sealed class SettingsWindow : Window
     private readonly TextBlock _error = Brand.Text("", Brand.K.DangerText);
     private readonly CheckBox _timeOn = Check("Count working time and time saved in each model");
     private readonly TextBox _idle = new() { Width = 56, MinHeight = 26, Margin = new Thickness(6, 0, 6, 0) };
+    private readonly CheckBox _changeFile = Check("Keep a change file for each model (cleared at every save)");
     private readonly TextBox _sigName = new() { MinHeight = 26 };
     private readonly ComboBox _sigRole = new() { IsEditable = true, MinHeight = 26 };
     private readonly System.Windows.Controls.Image _sigPreview = new() { MaxHeight = 70, MaxWidth = 260, Stretch = System.Windows.Media.Stretch.Uniform, HorizontalAlignment = HorizontalAlignment.Left };
@@ -67,6 +68,7 @@ public sealed class SettingsWindow : Window
         _timeOn.IsChecked = _settings.TimeTracking;
         _idle.Text = _settings.IdleMinutes.ToString("0.#", System.Globalization.CultureInfo.CurrentCulture);
         _rates = _settings.TimeRates;
+        _changeFile.IsChecked = _settings.ChangeFile;
         _sigName.Text = _settings.SignatureName ?? "";
         _sigRole.Text = _settings.SignatureRole ?? "";
         _sigImage = _settings.SignatureImage ?? "";
@@ -95,6 +97,7 @@ public sealed class SettingsWindow : Window
                 SettingsLayout.Time => TimePage(),
                 SettingsLayout.Issue => IssuePage(),
                 SettingsLayout.SignOff => SignOffPage(),
+                SettingsLayout.Recovery => RecoveryPage(),
                 _ => UpdatesPage(),
             };
             page.Children.Insert(0, Heading(tab.Name));
@@ -593,6 +596,22 @@ public sealed class SettingsWindow : Window
             : "This picture goes on checklists that are ready to submit (nothing No, nothing unanswered).";
     }
 
+    /// <summary>The change file (Revit/ChangeFile): on or off, and Recover.</summary>
+    private StackPanel RecoveryPage()
+    {
+        var page = new StackPanel();
+        page.Children.Add(Place("ChangeFile", _changeFile));
+        page.Children.Add(Hint("A text file in Documents\\Sketch ProMax\\Change files lists every element you add, move, change or delete, a few seconds after you do it. " +
+                               "Saving or synchronizing clears it. If the model is lost or damaged, open the last good copy and replay the file onto it. It never saves or changes the model by itself."));
+        var recover = Brand.Button("Recover…");
+        recover.HorizontalAlignment = HorizontalAlignment.Left;
+        recover.Margin = new Thickness(0, 10, 0, 0);
+        AutomationProperties.SetHelpText(recover, "Opens the Recover window: each model's change file, and Replay onto the open model. It doesn't save the settings here.");
+        recover.Click += (_, _) => RecoverWindow.Open();
+        page.Children.Add(recover);
+        return page;
+    }
+
     /// <summary>Automatic updates, the version installed and the last check, and Check now.</summary>
     private StackPanel UpdatesPage()
     {
@@ -812,6 +831,7 @@ public sealed class SettingsWindow : Window
             ShowOnTab(SettingsLayout.Time, _idle);
             return;
         }
+        _settings.ChangeFile = _changeFile.IsChecked == true;
         _settings.TimeTracking = _timeOn.IsChecked == true;
         var motion = _motion.FirstOrDefault(m => m.Button.IsChecked == true).Level;
         _settings.ChatAnimations = Chat.MotionLevels.Store(motion);
@@ -848,6 +868,7 @@ public sealed class SettingsWindow : Window
             return;
         }
         Revit.TimeLog.ReadSettings();
+        Revit.ChangeFile.ReadSettings();
         Bridge.Approvals.RaiseLevelChanged();
         Chat.ChatUi.SetMotion(motion);
         DialogResult = true;
