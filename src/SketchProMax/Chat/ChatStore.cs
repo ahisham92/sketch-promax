@@ -136,8 +136,7 @@ internal static class ChatStore
                 conversation.Updated = conversation.File.Length > 0 && File.Exists(conversation.File) ? File.GetLastWriteTimeUtc(conversation.File) : DateTime.UtcNow;
             var legacy = conversation.Id.Length == 0 ? FileFor(conversation) : null;
             if (conversation.Id.Length == 0) conversation.Id = MigratedId(conversation.Key);
-            if (conversation.Name.Length == 0)
-                conversation.Name = ChatHistory.AutoTitle(conversation.Items.FirstOrDefault(i => i.Kind == "user")?.Text);
+            conversation.Name = ChatHistory.NameFor(conversation);
             var file = FileFor(conversation);
             var json = JsonSerializer.Serialize(conversation);
             if (json == conversation.SavedJson && string.Equals(file, conversation.File, StringComparison.OrdinalIgnoreCase) && File.Exists(file)) return;

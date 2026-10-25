@@ -145,6 +145,21 @@ internal static class ChatHistory
         return char.ToUpperInvariant(line[0]) + line.Substring(1) + "…";
     }
 
+    /// <summary>
+    /// The name a chat keeps: its own, else one made from its first request, else "" while it has none yet. A chat saved
+    /// before its first request (a coordinator chat's session starts first) stays unnamed, so that request names it; one
+    /// an earlier version saved as "New chat" that way is named from its first request too.
+    /// </summary>
+    public static string NameFor(Conversation conv)
+    {
+        if (conv.Name.Length > 0 && conv.Name != Untitled) return conv.Name;
+        return conv.Items.FirstOrDefault(i => i.Kind == "user" && (i.Text.Trim().Length > 0 || i.Name.Length > 0)) is { } first
+            ? AutoTitle(first.Text.Trim().Length > 0 ? first.Text : first.Name) : "";
+    }
+
+    /// <summary>What an unnamed chat is called.</summary>
+    public const string Untitled = "New chat";
+
     /// <summary>The date group of a chat last updated at <paramref name="updatedLocal"/>.</summary>
     public static string GroupOf(DateTime updatedLocal, DateTime nowLocal)
     {
@@ -187,7 +202,7 @@ internal static class ChatHistory
             if (search.Length > 4000) break;
             if (item.Kind is "user" or "assistant") search.Append(item.Text.Length > 600 ? item.Text.Substring(0, 600) : item.Text).Append('\n');
         }
-        var name = conv.Name.Length > 0 ? conv.Name : AutoTitle(conv.Items.FirstOrDefault(i => i.Kind == "user")?.Text);
+        var name = NameFor(conv) is { Length: > 0 } named ? named : Untitled;
         return new ChatSummary(conv.File, conv.Key, conv.Title, name, conv.Pinned, conv.Updated, conv.Items.Count, search.ToString(), ChatTypes.Of(conv));
     }
 }
