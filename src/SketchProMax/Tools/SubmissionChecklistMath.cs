@@ -133,6 +133,8 @@ internal static class SubmissionChecklistMath
         public List<string> Skipped { get; set; } = [];
         public string By { get; set; } = "";
         public DateTime At { get; set; }
+        /// <summary>One person does the whole checklist: a group leader's own Yes or N/A counts as approved at once.</summary>
+        public bool Solo { get; set; }
 
         [JsonIgnore]
         public bool Done => Types.Count > 0 && Leads.Count > 0;
@@ -321,7 +323,7 @@ internal static class SubmissionChecklistMath
         return shared;
     }
 
-    private static Setup? Copy(Setup? s) => s is null ? null : new Setup { Types = s.Types.ToList(), Leads = s.Leads.ToList(), Skipped = s.Skipped.ToList(), By = s.By, At = s.At };
+    private static Setup? Copy(Setup? s) => s is null ? null : new Setup { Types = s.Types.ToList(), Leads = s.Leads.ToList(), Skipped = s.Skipped.ToList(), By = s.By, At = s.At, Solo = s.Solo };
 
     // ---- Where each question stands ---------------------------------------------------------------------------------
 
@@ -452,6 +454,17 @@ internal static class SubmissionChecklistMath
         rec.At = Max(rec.At, now);
         s.Answers[id] = answer;
         mine.Saved = now;
+    }
+
+    /// <summary>
+    /// Answers a question; working alone (<see cref="Setup.Solo"/>), a group leader's Yes or N/A is approved with it, as
+    /// there is nobody else to approve it. A No stays open until it becomes a Yes.
+    /// </summary>
+    public static void AnswerAs(UserRecord mine, Shared shared, Submission s, string id, string value, DateTime now)
+    {
+        SetAnswer(mine, s, id, value, null, now);
+        if (shared.Setup.Solo && shared.IsLead(mine.User) && Normal(value) is Yes or NotApplicable)
+            SetReview(mine, s, id, Approved, "", now);
     }
 
     public static void SetReview(UserRecord mine, Submission s, string id, string verdict, string note, DateTime now)

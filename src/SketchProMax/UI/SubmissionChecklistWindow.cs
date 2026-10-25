@@ -130,6 +130,7 @@ internal sealed class SubmissionChecklistWindow : Window
         Remerge();
         if (name.Trim().Length > 0 && _shared.Find(KeyFor(package, name)) is null) { StartNamed(_mine, _shared, package, name, due, DateTime.UtcNow); _dirty = true; Remerge(); }
         _selected = name.Trim().Length > 0 ? KeyFor(package, name) : _shared.Submissions.FirstOrDefault(x => !x.Superseded)?.Key ?? "";
+        if (EnsureSubmission().Length > 0) _dirty = true;
 
         Title = "Sketch ProMax submission checklist";
         var area = SystemParameters.WorkArea;
@@ -424,7 +425,7 @@ internal sealed class SubmissionChecklistWindow : Window
         page.Children.Add(Heading("Project setup"));
         page.Children.Add(Para(_shared.Setup.Done
             ? $"Set by {_shared.Setup.By}" + (_shared.Setup.At > DateTime.MinValue ? $" on {_shared.Setup.At.ToLocalTime():dd MMM yyyy}" : "") + (SetupEditable ? ". You can change it." : ". Only a group leader can change it.")
-            : "Once per project: pick its structures so only their questions are asked, and say who approves.", Brand.K.Muted));
+            : "Once per project: pick its structures and press Start the checklist (at the bottom of this page). The question pages then appear on the left.", Brand.K.Muted));
 
         // Structures.
         var picked = new HashSet<string>(_shared.Setup.Types, StringComparer.Ordinal);
@@ -469,10 +470,19 @@ internal sealed class SubmissionChecklistWindow : Window
         // Who approves.
         page.Children.Add(Para("Who approves the answers (group leaders)?", size: 14, top: 10));
         ((TextBlock)page.Children[page.Children.Count - 1]).FontWeight = FontWeights.SemiBold;
+        var solo = new CheckBox { IsChecked = _shared.Setup.Solo || !_shared.Setup.Done, IsEnabled = SetupEditable, Margin = new Thickness(0, 6, 0, 0), Content = Brand.Text("I'm working alone: my answers count as approved", size: 12.5, bold: true) };
+        AutomationProperties.SetName(solo, "I'm working alone");
+        AutomationProperties.SetHelpText(solo, "No group leader step: your Yes and N/A are approved as you answer. Untick it when engineers answer and a group leader approves.");
+        page.Children.Add(solo);
         var leads = new TextBox { Text = _shared.Setup.Leads.Count > 0 ? string.Join(", ", _shared.Setup.Leads) : _user, IsEnabled = SetupEditable, MaxWidth = 520, HorizontalAlignment = HorizontalAlignment.Left, Width = 420, Margin = new Thickness(0, 6, 0, 0) };
         AutomationProperties.SetName(leads, "Group leaders");
+        var leadsNote = Para($"Their Revit user names, comma separated (Revit: Options > General > Username). Yours is \"{_user}\". Everyone else answers as an engineer.", Brand.K.Muted, 11.5);
+        void ShowLeads() { leads.Visibility = leadsNote.Visibility = solo.IsChecked == true ? Visibility.Collapsed : Visibility.Visible; }
+        solo.Checked += (_, _) => ShowLeads();
+        solo.Unchecked += (_, _) => ShowLeads();
+        ShowLeads();
         page.Children.Add(leads);
-        page.Children.Add(Para($"Their Revit user names, comma separated (Revit: Options > General > Username). Yours is \"{_user}\". Everyone else answers as an engineer.", Brand.K.Muted, 11.5));
+        page.Children.Add(leadsNote);
         if (SetupEditable)
         {
             var save = RichUi.Button(RichUi.Icon.Save, _shared.Setup.Done ? "Save the setup" : "Start the checklist", Brand.Weight.Primary);
@@ -481,17 +491,21 @@ internal sealed class SubmissionChecklistWindow : Window
             save.Click += (_, _) =>
             {
                 var types = boxes.Where(b => b.Box.IsChecked == true).Select(b => b.Key).ToList();
-                var names = Split(leads.Text);
+                var alone = solo.IsChecked == true;
+                var names = alone ? [_user] : Split(leads.Text);
                 if (types.Count == 0) { _status.Text = "Pick at least one structure."; return; }
                 if (names.Count == 0) { _status.Text = "Name at least one group leader."; return; }
                 // Keep the order types were first picked in (the structure page follows it).
                 var ordered = _shared.Setup.Types.Where(types.Contains).Concat(types.Where(t => !_shared.Setup.Types.Contains(t))).ToList();
-                _mine.Setup = new Setup { Types = ordered, Leads = names, Skipped = _shared.Setup.Skipped.ToList(), By = _user, At = DateTime.UtcNow };
+                _mine.Setup = new Setup { Types = ordered, Leads = names, Skipped = _shared.Setup.Skipped.ToList(), By = _user, At = DateTime.UtcNow, Solo = alone };
                 _mine.Saved = DateTime.UtcNow;
                 Remerge();
+                // The questions show for a submission: start one when there is none yet.
+                var started = EnsureSubmission();
+                UpdateBim();
                 Changed();
-                _status.Text = $"Setup saved: {ordered.Count} structure types, {_questions.Count} questions.";
                 Build();
+                _status.Text = $"Setup saved: {ordered.Count} structure types, {_questions.Count} questions" + (started.Length > 0 ? $", on {started}." : ".");
                 if (Current is not null) GoTo(1);
             };
             page.Children.Add(save);
@@ -629,6 +643,21 @@ internal sealed class SubmissionChecklistWindow : Window
         UpdateBim();
         Build();
         _status.Text = $"Started {known.Count} checklists from the schedule.";
+    }
+
+    /// <summary>
+    /// With the setup done and no submission picked: picks the next one not replaced, else starts the schedule's next
+    /// submission, else "Submission 1", so the questions always show. Returns what it started ("" when nothing).
+    /// </summary>
+    private string EnsureSubmission()
+    {
+        if (!_shared.Setup.Done || Current is not null) return "";
+        if (_shared.Submissions.FirstOrDefault(x => !x.Superseded) is { } open) { _selected = open.Key; return ""; }
+        var next = KnownSubmissions().OrderBy(k => k.Due ?? DateTime.MaxValue).FirstOrDefault();
+        var (package, name, due) = next.Name is { Length: > 0 } ? next : ("", "Submission 1", (DateTime?)null);
+        _selected = StartNamed(_mine, _shared, package, name, due, DateTime.UtcNow);
+        Remerge();
+        return Current?.Title ?? name;
     }
 
     private void StartSubmission(string package, string name, DateTime? due)
@@ -920,10 +949,14 @@ internal sealed class SubmissionChecklistWindow : Window
         if (Current is not { } s) return;
         if (s.Superseded) { _status.Text = "This revision was resubmitted: answer the latest one."; return; }
         if (Normal(value) == Normal(s.Answers.TryGetValue(q.Id, out var a) ? a.Value : "") && value.Length > 0) return;
-        SetAnswer(_mine, s, q.Id, value, null, DateTime.UtcNow);
+        AnswerAs(_mine, _shared, s, q.Id, value, DateTime.UtcNow);
         if (Normal(value) is No or NotApplicable) _openComments.Add(q.Id);
         Changed();
+        var solo = _shared.Setup.Solo && IsLead;
+        // Working alone, an N/A is approved at once and leaves the page (it is listed on Review and export).
+        if (solo && Normal(value) == NotApplicable) { Build(); _status.Text = "N/A, approved: it moved to the agreed N/A list on Review and export. Say why in its comment there."; return; }
         Redraw(q);
+        if (solo) { _status.Text = Normal(value) switch { Yes => "Yes, approved.", No => "No: add what is missing in the comment.", _ => "Answer cleared." }; return; }
         var lead = IsLead && Normal(value) == Yes ? " As group leader, approve it too when you are happy." : "";
         _status.Text = Normal(value) switch
         {
@@ -1061,7 +1094,7 @@ internal sealed class SubmissionChecklistWindow : Window
     {
         if (MessageBox.Show(this, $"Stop asking \"{q.Text}\" on this project (every submission)?", "Sketch ProMax", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes) return;
         var s = _shared.Setup;
-        _mine.Setup = new Setup { Types = s.Types.ToList(), Leads = s.Leads.ToList(), Skipped = s.Skipped.Concat([q.Id]).Distinct().ToList(), By = _user, At = DateTime.UtcNow };
+        _mine.Setup = new Setup { Types = s.Types.ToList(), Leads = s.Leads.ToList(), Skipped = s.Skipped.Concat([q.Id]).Distinct().ToList(), By = _user, At = DateTime.UtcNow, Solo = s.Solo };
         _mine.Saved = DateTime.UtcNow;
         Remerge();
         Changed();

@@ -236,6 +236,11 @@ internal static class FieldTestCoverage
             "Questions again: delete a question, change another's wording, Save: the deleted one is gone, the changed one keeps its answer. Export to Excel…, change a question and add a row with no Id in Excel, Import from Excel…: " +
             "the change and the new question are there, anything wrong is listed (row and why); Save. Synchronize, then on another PC (or Windows user) Reload Latest and open the checklist: it asks your questions, and it has no Questions button. " +
             "Share tools with Submission checklist ticked: a colleague who installs the pack gets your questions too. Questions > Use the built-in questions: back to the questions that come with Sketch ProMax, everywhere after a sync."),
+        new("subcheck.solo", Issue, "Submission checklist working alone", How.Manual, "",
+            "doing the whole checklist alone (questions showing at once, answers approved as given) is judged by a person",
+            "On a _detached copy with no checklist yet: Submission checklist. Project setup has \"I'm working alone\" ticked: pick the structures, Start the checklist. " +
+            "The question pages appear on the left at once (a submission is started for you: the schedule's next one, or Submission 1). Answer Y on a question: it shows Approved straight away. " +
+            "Answer A: it leaves the page and is in the agreed N/A list on Review and export. Answer N: it stays, waiting for the comment. Export Word: approved, no group leader step left."),
         new("subcheck.revisions", Issue, "Submission checklist per scheduled submission, and resubmissions after comments", How.Manual, "",
             "which checklists start from the schedule, and how a resubmission carries answers and asks for approval again, are judged by a person",
             "On a _detached copy with a Submissions status schedule of several submissions: Submission checklist > Project setup: From the schedule lists every submission to come; + All starts a checklist for each (T1, T2, T3…), each with its own answers. " +

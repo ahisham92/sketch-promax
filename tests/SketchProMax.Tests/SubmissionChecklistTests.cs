@@ -225,6 +225,41 @@ internal static class SubmissionChecklistTests
 
         Template(check, t0);
         Revisions(check, t0);
+        Solo(check, t0);
+    }
+
+    // ---- Working alone: one person answers and approves
+    private static void Solo(Action<string, bool, string> check, DateTime t0)
+    {
+        var me = new UserRecord { User = "Me" };
+        me.Setup = new Setup { Types = ["piled-deck"], Leads = ["Me"], By = "Me", At = t0, Solo = true };
+        var key = StartNamed(me, Merge([me]), "", "Submission 1", null, t0);
+        var shared = Merge([me]);
+        var sub = shared.Find(key)!;
+        AnswerAs(me, shared, sub, "basis.dbr", "Yes", t0.AddMinutes(1));
+        AnswerAs(me, shared, sub, "basis.seismic", "N/A", t0.AddMinutes(2));
+        AnswerAs(me, shared, sub, "basis.codes", "No", t0.AddMinutes(3));
+        shared = Merge([Copy(me)]);
+        sub = shared.Find(key)!;
+        check("submission checklist alone: my Yes and N/A are approved as I answer, a No stays open",
+            shared.Setup.Solo && StateOf(sub, "basis.dbr") == ItemState.Approved && StateOf(sub, "basis.seismic") == ItemState.Hidden && StateOf(sub, "basis.codes") == ItemState.No, "");
+        AnswerAs(me, shared, sub, "basis.codes", "Yes", t0.AddMinutes(4));
+        check("submission checklist alone: a No changed to Yes is approved", StateOf(Merge([Copy(me)]).Find(key)!, "basis.codes") == ItemState.Approved, "");
+        // Not alone: a group leader's answer still waits for an approval, and an engineer's never approves itself.
+        var team = new UserRecord { User = "Lead" };
+        team.Setup = new Setup { Types = ["piled-deck"], Leads = ["Lead"], By = "Lead", At = t0 };
+        var eng = new UserRecord { User = "Engineer" };
+        var tkey = StartNamed(team, Merge([team]), "", "T1", null, t0);
+        var ts = Merge([team, eng]);
+        AnswerAs(team, ts, ts.Find(tkey)!, "basis.dbr", "Yes", t0.AddMinutes(1));
+        AnswerAs(eng, ts, ts.Find(tkey)!, "basis.life", "Yes", t0.AddMinutes(1));
+        var back = Merge([Copy(team), Copy(eng)]).Find(tkey)!;
+        check("submission checklist: with a team, answers wait for the group leader", StateOf(back, "basis.dbr") == ItemState.Answered && StateOf(back, "basis.life") == ItemState.Answered, "");
+        var alone = new UserRecord { User = "Engineer" };
+        var mixed = Merge([me, alone]);
+        AnswerAs(alone, mixed, mixed.Find(key)!, "basis.life", "Yes", t0.AddMinutes(5));
+        check("submission checklist alone: someone who isn't the group leader doesn't approve themselves", StateOf(Merge([Copy(me), Copy(alone)]).Find(key)!, "basis.life") == ItemState.Answered, "");
+        check("submission checklist alone: the setup keeps working alone when read back", ReadRecord(ToJson(me))?.Setup?.Solo == true, "");
     }
 
     // ---- A checklist per scheduled submission, and resubmissions after comments
