@@ -237,7 +237,7 @@ internal static class SubmissionChecklistTemplate
         SubmissionChecklistMath.Topics.FirstOrDefault(t => Plain(t.Title) == Plain(text) || Plain(t.Key) == Plain(text))?.Key;
 
     /// <summary>
-    /// The structure types named in a cell: full names first (a name may hold a comma, as "Yard, pavement and drainage"),
+    /// The structure types named in a cell: full names first (a name may hold a comma),
     /// then keys or names separated by commas or semicolons. Returns the keys found, in the cell's order, and what is left unknown.
     /// </summary>
     public static (List<string> Keys, List<string> Unknown) TypesIn(string cell)

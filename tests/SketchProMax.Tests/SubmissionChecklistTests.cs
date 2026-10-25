@@ -21,38 +21,40 @@ internal static class SubmissionChecklistTests
         string[] released =
         [
             "basis.dbr", "basis.codes", "basis.life", "basis.survey", "basis.geotech", "basis.metocean", "basis.vessel",
-            "basis.seismic", "basis.comments", "basis.scope", "basis.assumptions", "basis.environment", "levels.grading",
-            "levels.marine", "levels.datum", "levels.cope", "levels.dredge", "levels.scour", "levels.grid",
+            "basis.seismic", "basis.comments", "basis.scope", "basis.assumptions", "levels.grading",
+            "levels.marine", "levels.datum", "levels.cope", "levels.dredge", "levels.grid",
             "levels.civil", "levels.electrical", "levels.mechanical", "levels.neighbours", "levels.existing",
             "loads.dead", "loads.live", "loads.equipment", "loads.cranes", "loads.berthing", "loads.mooring",
             "loads.wind", "loads.impact", "loads.waves", "loads.earth", "loads.water", "loads.seismic", "loads.thermal",
-            "loads.combinations", "geo.profile", "geo.capacity", "geo.toe", "geo.negative", "geo.bearing", "geo.global",
-            "geo.liquefaction", "geo.improvement", "geo.drivability", "piled.layout", "piled.model", "piled.deck",
+            "loads.combinations", "geo.profile", "geo.capacity", "geo.toe", "geo.bearing", "geo.global",
+            "piled.layout", "piled.model", "piled.deck",
             "piled.connection", "piled.uplift", "piled.slope", "piled.joints", "piled.precast", "blocks.stability",
             "blocks.friction", "blocks.keys", "blocks.bed", "blocks.backfill", "blocks.weight", "blocks.cope",
-            "blocks.toe", "caissons.float", "caissons.stability", "caissons.walls", "caissons.joints", "caissons.fill",
-            "sheets.embedment", "sheets.section", "sheets.corrosion", "sheets.anchor", "sheets.waling",
-            "sheets.tielevel", "sheets.combi", "walls.stability", "walls.stem", "walls.drainage", "walls.joints",
+            "blocks.toe", "caissons.stability", "caissons.joints", "caissons.fill",
+            "sheets.embedment", "sheets.section", "sheets.corrosion", "sheets.anchor",
+            "sheets.tielevel", "walls.stability", "walls.joints",
             "dolphins.layout", "dolphins.deflection", "dolphins.hooks", "dolphins.access", "trestle.spans",
             "trestle.pipes", "trestle.traffic", "trestle.abutment", "roro.gradient", "roro.loads", "roro.hinge",
             "pontoon.freeboard", "pontoon.guides", "pontoon.gangway", "dwall.embedment", "dwall.panels", "dwall.stages",
-            "dredge.slopes", "dredge.volumes", "dredge.disposal", "dredge.reclamation", "rails.gauge", "rails.beam",
-            "rails.fixings", "rails.stops", "rails.power", "yard.pavement", "yard.falls", "yard.joint", "yard.services",
-            "dur.exposure", "dur.cover", "dur.cracks", "dur.steel", "dur.cathodic", "dur.rock", "furn.fenders",
-            "furn.bollards", "furn.ladders", "furn.lifesaving", "furn.navaids", "furn.edges", "furn.services",
+            "rails.gauge", "rails.beam",
+            "rails.fixings", "rails.stops", "yard.joint",
+            "dur.exposure", "dur.cover", "dur.steel", "dur.rock", "furn.fenders",
+            "furn.bollards", "furn.ladders", "furn.lifesaving", "furn.edges",
             "furn.maintenance", "calcs.index", "calcs.checked", "calcs.software", "calcs.match", "calcs.report",
-            "calcs.construction", "calcs.risks", "calcs.inspection", "dwg.list", "dwg.notes", "dwg.levels",
-            "dwg.sections", "dwg.rebar", "dwg.clouds", "dwg.titleblock", "dwg.markups", "bills.method", "bills.model",
-            "bills.backup", "bills.rates", "bills.marine", "bills.steel", "bills.piles", "spec.cover", "spec.match",
+            "calcs.risks", "calcs.inspection", "dwg.list", "dwg.notes", "dwg.levels",
+            "dwg.sections", "dwg.clouds", "dwg.titleblock", "dwg.markups", "bills.method", "bills.model",
+            "bills.backup", "bills.rates", "bills.steel", "bills.piles", "spec.match",
             "spec.marine", "spec.testing", "combi.kingpile", "combi.infill", "combi.connectors", "combi.toe",
             "combi.driving", "relief.platform", "relief.piles", "relief.frontwall", "relief.connection", "relief.level",
             "walls.backfill", "dwall.secant", "piled.transverse", "piled.cantilever", "piled.longitudinal", "piled.beamjoint",
-            "dwall.trench", "dwall.cages", "dwall.capping", "dwall.anchors", "dwall.leakage", "loads.temperature", "loads.modifiers", "loads.patterns",
-            "loads.sls", "loads.construction", "loads.reactions", "steel.pipepile", "steel.localbuckling", "steel.infill", "steel.interlock",
-            "steel.welds", "steel.tierods", "steel.members", "steel.fatigue", "basis.materials", "basis.criteria", "basis.changes", "levels.sealevel", "levels.structures", "loads.wheels", "loads.buoyancy", "geo.testing", "geo.gaps", "blocks.joints", "sheets.deflection", "dolphins.cap", "dredge.siltation", "dur.detailing", "dur.massconcrete", "furn.mooring", "calcs.robustness", "calcs.handcheck", "dwg.setout", "dwg.bbs", "bills.provisional", "bills.temporary", "spec.particular"
+            "dwall.cages", "dwall.capping", "dwall.anchors", "dwall.leakage", "loads.temperature", "loads.modifiers", "loads.patterns",
+            "loads.sls", "loads.construction", "loads.reactions", "steel.pipepile", "steel.infill", "steel.interlock",
+            "steel.welds", "steel.tierods", "steel.members", "steel.fatigue", "basis.materials", "basis.criteria", "basis.changes", "levels.structures", "loads.wheels", "loads.buoyancy", "blocks.joints", "sheets.deflection", "dolphins.cap", "dur.detailing", "dur.massconcrete", "furn.mooring", "calcs.robustness", "calcs.handcheck", "dwg.setout", "bills.provisional", "spec.particular"
         ];
-        // Retired with the revetment type (2026-10-24): never reuse these ids for another question.
-        string[] retired = ["revet.armour", "revet.filter", "revet.toe", "revet.crest", "revet.slope", "revet.overtopping"];
+        // Retired: never reuse these ids for another question. The revetment type went 2026-10-24; on 2026-10-25 the owner's
+        // review removed questions (dredging and reclamation, pile testing, pavement and others) and their duplicates.
+        string[] retired = ["revet.armour", "revet.filter", "revet.toe", "revet.crest", "revet.slope", "revet.overtopping",
+            "basis.environment", "levels.scour", "levels.sealevel", "geo.negative", "geo.liquefaction", "geo.improvement", "geo.drivability", "geo.testing", "geo.gaps", "steel.localbuckling", "caissons.float", "caissons.walls", "walls.stem", "walls.drainage", "dwall.trench", "dredge.slopes", "dredge.volumes", "dredge.disposal", "dredge.reclamation", "dredge.siltation", "yard.pavement", "dur.cathodic", "furn.navaids", "dwg.bbs", "bills.marine", "bills.temporary", "yard.services", "furn.services", "yard.falls", "rails.power", "calcs.construction", "dur.cracks", "sheets.waling", "sheets.combi", "dwg.rebar", "spec.cover"];
         check("submission checklist: retired question ids are not reused", bank.All(q => !retired.Contains(q.Id)), "");
         var lost = released.Where(id => bank.All(q => q.Id != id)).ToList();
         check("submission checklist: released question ids are all still asked", lost.Count == 0, string.Join(", ", lost));
@@ -93,7 +95,7 @@ internal static class SubmissionChecklistTests
         var both = QuestionsFor(new Setup { Types = ["gravity-blocks", "piled-deck"] }, []);
         check("submission checklist: a project with no type gets only the general questions", none.All(q => q.TypeKeys.Count == 0) && none.Count > 30, none.Count.ToString());
         check("submission checklist: picking deck on piles adds its questions, not the block ones",
-            piled.Any(q => q.Id == "piled.uplift") && piled.Any(q => q.Id == "geo.capacity") && piled.All(q => q.Id != "blocks.stability") && piled.All(q => q.Id != "caissons.float"), "");
+            piled.Any(q => q.Id == "piled.uplift") && piled.Any(q => q.Id == "geo.capacity") && piled.All(q => q.Id != "blocks.stability") && piled.All(q => q.Id != "caissons.stability"), "");
         check("submission checklist: gravity blocks don't ask about piles", blocks.All(q => q.Id != "geo.capacity" && q.Id != "piled.deck") && blocks.Any(q => q.Id == "blocks.keys"), "");
         check("submission checklist: two types ask both, each question once", both.Count == both.Select(q => q.Id).Distinct().Count()
             && both.Any(q => q.Id == "blocks.keys") && both.Any(q => q.Id == "piled.deck"), both.Count.ToString());
@@ -102,7 +104,7 @@ internal static class SubmissionChecklistTests
             structure.Count > 0 && structure.TakeWhile(t => t == "gravity-blocks").Count() + structure.SkipWhile(t => t == "gravity-blocks").Count(t => t == "piled-deck") == structure.Count, string.Join(",", structure.Distinct()));
         var combiOnly = QuestionsFor(new Setup { Types = ["combi-wall"] }, []);
         check("submission checklist: a question for two types shows when only the second is picked", combiOnly.Any(q => q.Id == "sheets.tielevel") && combiOnly.Any(q => q.Id == "combi.kingpile"), "");
-        check("submission checklist: quay wall types are offered", TypeOf("combi-wall") is not null && TypeOf("relieving-platform") is not null && TypeOf("diaphragm-wall") is not null && TypeOf("revetment") is null, "");
+        check("submission checklist: quay wall types are offered", TypeOf("combi-wall") is not null && TypeOf("relieving-platform") is not null && TypeOf("diaphragm-wall") is not null && TypeOf("revetment") is null && TypeOf("dredging") is null && TypeOf("pavement") is null, "");
         var pages = both.Select(q => q.Topic).Distinct().ToList();
         check("submission checklist: pages come in their order", pages.SequenceEqual(Topics.Select(t => t.Key).Where(pages.Contains)), string.Join(",", pages));
         var skipped = QuestionsFor(new Setup { Types = ["piled-deck"], Skipped = ["piled.precast"] }, []);
@@ -226,6 +228,7 @@ internal static class SubmissionChecklistTests
         Template(check, t0);
         Revisions(check, t0);
         Solo(check, t0);
+        Review(check);
     }
 
     // ---- Working alone: one person answers and approves
@@ -401,4 +404,36 @@ internal static class SubmissionChecklistTests
     }
 
     private static UserRecord Copy(UserRecord r) => ReadRecord(ToJson(r))!;
+
+    /// <summary>All the questions as Word and PDF for a manager to comment on, short and long with sketches.</summary>
+    private static void Review(Action<string, bool, string> check)
+    {
+        var bank = SubmissionChecklistBank.Questions;
+        var shortMd = SubmissionChecklistReview.Markdown(bank, false, _ => null, "Made today.");
+        var sketch = Path.Combine(Path.GetTempPath(), "spm-review-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(sketch);
+        // A tiny PNG stands in for each sketch the window draws.
+        var png = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==");
+        string? Pic(string key) { var f = Path.Combine(sketch, key + ".png"); File.WriteAllBytes(f, png); return f; }
+        var longMd = SubmissionChecklistReview.Markdown(bank, true, Pic, "Made today.");
+        var numbers = Regex.Matches(shortMd, @"(?m)^\| (\d+) \|").Count;
+        check("submission checklist review: every question is listed once, numbered", numbers == bank.Length && Regex.Matches(longMd, @"(?m)^\| (\d+) \|").Count == bank.Length, numbers.ToString());
+        check("submission checklist review: short has no details or sketches, long has both",
+            !shortMd.Contains(bank[0].Details) && !shortMd.Contains("![") && longMd.Contains(bank[0].Details) && longMd.Contains("![Deck on piles]") && longMd.Contains("![Design levels]"), "");
+        check("submission checklist review: each sketch shows once", Regex.Matches(longMd, @"!\[Deck on piles\]").Count == 1, "");
+        check("submission checklist review: structures and teams are named, with a Comments column",
+            shortMd.Contains("| Comments |") && shortMd.Contains("All structures") && shortMd.Contains("### Gravity blocks") && shortMd.Contains("Geotechnical"), "");
+        check("submission checklist review: most of the list reads as all except",
+            SubmissionChecklistReview.AppliesTo(new Question("x", "loads", "X?", "", string.Join(",", Types.Skip(1).Select(t => t.Key)))) == "All except " + Types[0].Name, "");
+        try
+        {
+            var (docx, pdf) = SubmissionChecklistReview.Write(sketch, "review", bank, true, Pic, "Made today.");
+            using var zip = ZipFile.OpenRead(docx);
+            var xml = new StreamReader(zip.GetEntry("word/document.xml")!.Open()).ReadToEnd();
+            var head = File.ReadAllBytes(pdf).Take(5).ToArray();
+            check("submission checklist review: makes the Word file and the PDF", xml.Contains("Submission checklist questions") && zip.Entries.Any(e => e.FullName.StartsWith("word/media/"))
+                && System.Text.Encoding.ASCII.GetString(head) == "%PDF-", "");
+        }
+        finally { try { Directory.Delete(sketch, true); } catch (IOException) { } }
+    }
 }

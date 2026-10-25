@@ -79,17 +79,17 @@ internal static class SubmissionChecklistDiagramView
         return t;
     }
 
-    /// <summary>The sketch as a PNG at twice its size (null when WPF can't draw it here).</summary>
-    public static byte[]? Png(Diagram d)
+    /// <summary>The sketch as a PNG at <paramref name="scale"/> times its size, twice by default (null when WPF can't draw it here).</summary>
+    public static byte[]? Png(Diagram d, double scale = 2)
     {
         try
         {
             // Scaled by a Viewbox, not a transform on the canvas itself, which RenderTargetBitmap would offset.
-            var box = new Viewbox { Child = Canvas(d), Width = Width * 2, Height = Height * 2, Stretch = Stretch.Uniform };
-            box.Measure(new Size(Width * 2, Height * 2));
-            box.Arrange(new Rect(0, 0, Width * 2, Height * 2));
+            var box = new Viewbox { Child = Canvas(d), Width = Width * scale, Height = Height * scale, Stretch = Stretch.Uniform };
+            box.Measure(new Size(Width * scale, Height * scale));
+            box.Arrange(new Rect(0, 0, Width * scale, Height * scale));
             box.UpdateLayout();
-            var bmp = new RenderTargetBitmap((int)(Width * 2), (int)(Height * 2), 96, 96, PixelFormats.Pbgra32);
+            var bmp = new RenderTargetBitmap((int)(Width * scale), (int)(Height * scale), 96, 96, PixelFormats.Pbgra32);
             bmp.Render(box);
             var encoder = new PngBitmapEncoder();
             encoder.Frames.Add(BitmapFrame.Create(bmp));

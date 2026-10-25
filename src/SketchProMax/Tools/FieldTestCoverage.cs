@@ -241,6 +241,10 @@ internal static class FieldTestCoverage
             "On a _detached copy with no checklist yet: Submission checklist. Project setup has \"I'm working alone\" ticked: pick the structures, Start the checklist. " +
             "The question pages appear on the left at once (a submission is started for you: the schedule's next one, or Submission 1). Answer Y on a question: it shows Approved straight away. " +
             "Answer A: it leaves the page and is in the agreed N/A list on Review and export. Answer N: it stays, waiting for the comment. Export Word: approved, no group leader step left."),
+        new("subcheck.review", Issue, "Submission checklist questions for review (Word and PDF)", How.Manual, "",
+            "whether the review documents read well for a manager is judged by a person",
+            "On the owner's PC: Submission checklist > Questions > For review (Word, PDF). A folder opens in Documents\\Sketch ProMax\\Submission checklists with four files: the short version (questions, applies to, agree with, a Comments column) " +
+            "and the long one (landscape, with details and the section sketches), each in Word and PDF. The numbers are the same in both; every page of questions is there."),
         new("subcheck.revisions", Issue, "Submission checklist per scheduled submission, and resubmissions after comments", How.Manual, "",
             "which checklists start from the schedule, and how a resubmission carries answers and asks for approval again, are judged by a person",
             "On a _detached copy with a Submissions status schedule of several submissions: Submission checklist > Project setup: From the schedule lists every submission to come; + All starts a checklist for each (T1, T2, T3…), each with its own answers. " +

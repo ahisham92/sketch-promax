@@ -199,6 +199,9 @@ internal sealed class SubmissionChecklistTemplateWindow : Window
         var import = RichUi.Button(RichUi.Icon.Import, "Import from Excel…");
         AutomationProperties.SetHelpText(import, "Replaces the questions here with an Excel file (as Export writes it). Nothing is kept until you Save.");
         import.Click += (_, _) => Import();
+        var review = RichUi.Button(RichUi.Icon.Word, "For review (Word, PDF)");
+        AutomationProperties.SetHelpText(review, "Makes the questions as they are here into Word and PDF files for someone to comment on: a short version (questions only) and a long one with details and sketches.");
+        review.Click += async (_, _) => await ReviewDocs(review);
         var reset = RichUi.Button(RichUi.Icon.Reset, "Use the built-in questions", Brand.Weight.Danger);
         AutomationProperties.SetHelpText(reset, "Drops your changes and goes back to the questions that come with Sketch ProMax.");
         reset.Click += (_, _) => ResetToBuiltIn();
@@ -206,7 +209,7 @@ internal sealed class SubmissionChecklistTemplateWindow : Window
         cancel.IsCancel = true;
         var save = RichUi.Button(RichUi.Icon.Save, "Save", Brand.Weight.Primary);
         save.Click += (_, _) => Save();
-        var leftButtons = new WrapPanel { Children = { export, import, reset }, VerticalAlignment = VerticalAlignment.Center };
+        var leftButtons = new WrapPanel { Children = { export, import, review, reset }, VerticalAlignment = VerticalAlignment.Center };
         var rightButtons = Brand.ButtonRow(cancel, save);
         rightButtons.Margin = new Thickness(0);
         var footGrid = new Grid();
@@ -386,6 +389,38 @@ internal sealed class SubmissionChecklistTemplateWindow : Window
         {
             ShowError($"Couldn't write the Excel file ({ex.Message}). If it is open in Excel, close it and try again.");
         }
+    }
+
+    /// <summary>The questions as they are here, short and long, in Word and PDF, in a dated folder that then opens.</summary>
+    private async Task ReviewDocs(Button button)
+    {
+        if (Build() is not { } template) return;
+        var questions = QuestionsOf(template);
+        var folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Sketch ProMax", "Submission checklists",
+            "Questions for review " + DateTime.Now.ToString("yyyy-MM-dd HHmm", CultureInfo.InvariantCulture));
+        Brand.SetBusy(button, true, "Making the files…");
+        try
+        {
+            // The sketches as pictures for the long version, a little over their size on screen so they stay sharp but small.
+            var sketches = Path.Combine(folder, "sketches");
+            Directory.CreateDirectory(sketches);
+            var paths = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var d in SubmissionChecklistDiagrams.All)
+                if (SubmissionChecklistDiagramView.Png(d, 1.4) is { } png) File.WriteAllBytes(paths[d.Key] = Path.Combine(sketches, d.Key + ".png"), png);
+            var made = "Made " + DateTime.Now.ToString("dd MMM yyyy", CultureInfo.InvariantCulture) + " with Sketch ProMax " + Update.Updater.CurrentText + ".";
+            await Task.Run(() =>
+            {
+                SubmissionChecklistReview.Write(folder, "Submission checklist questions - short", questions, false, _ => null, made);
+                SubmissionChecklistReview.Write(folder, "Submission checklist questions - long with sketches", questions, true, k => paths.TryGetValue(k, out var p) ? p : null, made);
+            });
+            _error.Visibility = Visibility.Collapsed;
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(folder) { UseShellExecute = true })?.Dispose();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
+        {
+            ShowError($"Couldn't make the files ({ex.Message}). If one is open in Word or a PDF reader, close it and try again.");
+        }
+        finally { Brand.SetBusy(button, false); }
     }
 
     private void Import()

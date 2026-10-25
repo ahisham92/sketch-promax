@@ -37,14 +37,12 @@ internal static class SubmissionChecklistMath
         new("combi-wall", "Combi-wall quay", "Tubular or H king piles with shorter infill sheet piles between them, anchored, cope beam on top."),
         new("relieving-platform", "Relieving platform quay", "Front sheet or combi-wall with a concrete platform on bearing piles behind it, carrying the fill and surcharge."),
         new("retaining-wall", "Retaining walls", "Cantilever, L-shaped or counterfort reinforced concrete walls holding back fill."),
-        new("dolphins", "Dolphins", "Mooring and breasting dolphins: pile groups with a cap, fenders, hooks or bollards, walkways."),
+        new("dolphins", "Dolphins", "Mooring and breasting dolphins: pile groups with a cap, fenders, mooring rings or bollards, walkways."),
         new("trestle", "Approach trestle", "Piled approach bridge or trestle carrying traffic and pipelines to the berth."),
         new("roro", "Ro-Ro ramp", "Linkspan or fixed ramp for roll-on roll-off vessels."),
         new("pontoon", "Floating pontoon", "Floating pontoon held by guide piles, with a gangway to the quay."),
         new("diaphragm-wall", "Diaphragm or secant pile wall", "Cast in place concrete wall panels, or secant or contiguous bored piles, anchored or propped."),
-        new("dredging", "Dredging and reclamation", "Dredged basin or channel, side slopes, and reclaimed land behind the quay."),
         new("crane-rails", "Crane rails", "Ship-to-shore or rail-mounted crane rails, rail beams and fixings."),
-        new("pavement", "Yard, pavement and drainage", "Quay apron and yard pavement, falls and drainage behind the quay."),
     ];
 
     public static StructureType? TypeOf(string key) => Types.FirstOrDefault(t => t.Key == key);
