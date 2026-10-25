@@ -54,6 +54,8 @@ internal static class SubmissionChecklistBank
             "Limits for deck and wall deflection, crane rail tolerances, settlement and crack width, with their source."),
         Q("basis.changes", "basis", "Changes since the last submission listed?",
             "What changed in the design, the inputs or the scope since the last submission, and where it shows."),
+        Q("basis.joints", "basis", "Expansion joint spacing and type stated in the design basis?",
+            "The joint spacing from temperature and shrinkage, and the joint type, are in the design basis, and the drawings follow it."),
 
         // ---- Levels and coordination
         Q("levels.grading", "levels", "Levels checked with the grading team?",
@@ -116,6 +118,8 @@ internal static class SubmissionChecklistBank
             "Temperature rise and fall from the installation temperature, and the top-to-soffit gradient, with the restraint of the raked piles.", Piled + "," + Relief + "," + Trestle + "," + RoRo + "," + Caissons + "," + DWall),
         Q("loads.modifiers", "loads", "Stiffness modifiers for cracked concrete set in the analysis model?",
             "Cracked-section factors on beams, slabs, walls and piles as the code (one set for strength, one for deflection and drift), shown in the calculation."),
+        Q("loads.thermalarea", "loads", "Area multiplier checked for the thermal analysis?",
+            "Axial area (stiffness) multiplier used for the temperature and shrinkage cases, as the code, so the restraint forces are not over- or underestimated."),
         Q("loads.patterns", "loads", "Live and crane loads patterned for the worst effect?",
             "Yard load on alternate spans, crane positions and outrigger cases moved along the berth for the worst moment, shear and pile load."),
         Q("loads.sls", "loads", "SLS combinations run for crack width, deflection and settlement?",
@@ -174,6 +178,7 @@ internal static class SubmissionChecklistBank
         Q("blocks.cope", TopicsTypes, "Cope beam designed for fender, bollard and crane loads?", "Cope beam reinforcement and its joints with the blocks.", Blocks + "," + Caissons + "," + Sheets + "," + Combi + "," + Relief + "," + DWall, diagram: Blocks),
         Q("blocks.toe", TopicsTypes, "Toe protection against scour shown?", "Rock or mattress at the toe, its extent and grading.", Blocks + "," + Caissons + "," + Walls, "Marine", Blocks),
         Q("blocks.joints", TopicsTypes, "Vertical joints staggered between block layers?", "Joints offset from layer to layer, and the joint width that stops fill washing through.", Blocks, diagram: Blocks),
+        Q("blocks.serration", TopicsTypes, "Serration used on the bottom block, and shown on the drawings?", "Serrated or keyed underside of the bottom block for friction on the bed, as the sliding check takes it, shown on the block drawings.", Blocks, diagram: Blocks),
 
         // ---- Structure checks: caissons
         Q("caissons.stability", TopicsTypes, "Sliding, overturning and bearing checked in place?", "With the cell fill, the backfill and the residual water.", Caissons, diagram: Caissons),

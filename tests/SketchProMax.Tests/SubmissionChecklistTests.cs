@@ -49,7 +49,8 @@ internal static class SubmissionChecklistTests
             "walls.backfill", "dwall.secant", "piled.transverse", "piled.cantilever", "piled.longitudinal", "piled.beamjoint",
             "dwall.cages", "dwall.capping", "dwall.anchors", "dwall.leakage", "loads.temperature", "loads.modifiers", "loads.patterns",
             "loads.sls", "loads.construction", "loads.reactions", "steel.pipepile", "steel.infill", "steel.interlock",
-            "steel.welds", "steel.tierods", "steel.members", "steel.fatigue", "basis.materials", "basis.criteria", "basis.changes", "levels.structures", "loads.wheels", "loads.buoyancy", "blocks.joints", "sheets.deflection", "dolphins.cap", "dur.detailing", "dur.massconcrete", "furn.mooring", "calcs.robustness", "calcs.handcheck", "dwg.setout", "bills.provisional", "spec.particular"
+            "steel.welds", "steel.tierods", "steel.members", "steel.fatigue", "basis.materials", "basis.criteria", "basis.changes", "levels.structures", "loads.wheels", "loads.buoyancy", "blocks.joints", "sheets.deflection", "dolphins.cap", "dur.detailing", "dur.massconcrete", "furn.mooring", "calcs.robustness", "calcs.handcheck", "dwg.setout", "bills.provisional", "spec.particular",
+            "basis.joints", "loads.thermalarea", "blocks.serration"
         ];
         // Retired: never reuse these ids for another question. The revetment type went 2026-10-24; on 2026-10-25 the owner's
         // review removed questions (dredging and reclamation, pile testing, pavement and others) and their duplicates.
