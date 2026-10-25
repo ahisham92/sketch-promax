@@ -487,6 +487,11 @@ public static class Updater
         Directory.CreateDirectory(updatesFolder);
         var zip = Path.Combine(updatesFolder, $"SketchProMax-{release.Version}.zip");
 
+        // Only the files that changed, when the release lists its files and no zip download is under way already.
+        if (!File.Exists(zip) && UpdateResume.Downloaded(zip) == 0
+            && await TryChangedFilesAsync(release, target, versionsFolder, progress, ct).ConfigureAwait(false))
+            return target;
+
         // A complete download from an earlier try is checked rather than fetched again; a damaged one is fetched afresh.
         string? sha = null;
         if (File.Exists(zip))
@@ -534,6 +539,68 @@ public static class Updater
         TryDelete(() => Directory.Delete(temp, true));
         TryDelete(() => File.Delete(zip));
         return target;
+    }
+
+    /// <summary>
+    /// Builds &lt;versions&gt;\&lt;version&gt; from the installed files that are unchanged and downloads only the rest
+    /// (<see cref="DeltaUpdate"/>). False when that isn't possible (an older release without a file list, a failed
+    /// download, a file that doesn't match its checksum): the whole zip is downloaded instead.
+    /// </summary>
+    private static async Task<bool> TryChangedFilesAsync(Release release, string target, string versionsFolder, UpdateProgress progress, CancellationToken ct)
+    {
+        var v = release.Version;
+        var temp = target + ".delta";
+        try
+        {
+            using var http = CreateClient();
+            string json;
+            using (var r = await http.GetAsync(DeltaUpdate.ManifestUrl(release.ZipUrl), ct).ConfigureAwait(false))
+            {
+                if (!r.IsSuccessStatusCode) return false;
+                json = await r.Content.ReadAsStringAsync().ConfigureAwait(false);
+            }
+            if (DeltaUpdate.Parse(json) is not { } files) return false;
+            progress.Report(UpdateStage.Downloading, "Finding the files that changed…", v);
+            var local = DeltaUpdate.LocalCopies(files, InstalledVersionFolders(versionsFolder, target), McpFolder);
+            var changed = files.Where(e => !local.ContainsKey(e.Path)).GroupBy(e => e.Sha256).Sum(g => g.First().Size);
+            progress.Report(UpdateStage.Downloading,
+                $"Downloading only the files that changed in Sketch ProMax {v} ({UpdateSnapshot.Megabytes(changed)} before compression)…", v);
+            await DeltaUpdate.AssembleAsync(files, local, temp, release.ZipUrl, async (url, t) =>
+            {
+                var resp = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, t).ConfigureAwait(false);
+                resp.EnsureSuccessStatusCode();
+                return await resp.Content.ReadAsStreamAsync().ConfigureAwait(false);
+            }, progress.ReportBytes, ct).ConfigureAwait(false);
+            progress.Report(UpdateStage.Unpacking, $"Putting Sketch ProMax {v} together…");
+            if (Directory.Exists(target)) UpdateResume.WithRetry(() => Directory.Delete(target, true));
+            UpdateResume.WithRetry(() => Directory.Move(temp, target));
+            foreach (var file in Directory.GetFiles(target, "*", SearchOption.AllDirectories)) ClearDownloadMark(file);
+            UpdateResume.MarkComplete(target, v);
+            return true;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            LogWarning($"Downloading only the changed files of {v} failed, downloading the whole package instead: {ex.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>Version folders whose files can be reused: the running one first, then every complete one.</summary>
+    private static IEnumerable<string> InstalledVersionFolders(string versionsFolder, string target)
+    {
+        // The running core's Revit20xx folder sits in its version's folder (empty Location: loaded from bytes).
+        var location = typeof(Updater).Assembly.Location;
+        if (location.Length > 0 && Path.GetDirectoryName(Path.GetDirectoryName(location)!) is { Length: > 0 } running) yield return running;
+        foreach (var root in new[] { versionsFolder, VersionsFolder }.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (!Directory.Exists(root)) continue;
+            foreach (var folder in Directory.GetDirectories(root).OrderByDescending(f => f, StringComparer.OrdinalIgnoreCase))
+                if (!folder.Equals(target, StringComparison.OrdinalIgnoreCase) && UpdateResume.IsComplete(folder)) yield return folder;
+        }
     }
 
     /// <summary>
@@ -610,6 +677,7 @@ public static class Updater
         var latest = saved.Latest is { } l && Parse(l) > Current ? l : null;
         if (latest is not null) keep.Add(latest);
         if (latest is not null) keep.Add(latest + ".partial");
+        if (latest is not null) keep.Add(latest + ".delta");
         // Downloads (whole or partial) of any other version are no longer wanted.
         if (Directory.Exists(UpdatesFolder))
             foreach (var file in Directory.GetFiles(UpdatesFolder, "SketchProMax-*"))

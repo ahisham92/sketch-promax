@@ -73,6 +73,23 @@ jobs:
           Get-ChildItem $pkg -Recurse -Filter *.pdb | Remove-Item
           Copy-Item install.ps1, Install.cmd, README.md $pkg
           Compress-Archive -Path $pkg -DestinationPath "SketchProMax-${{ steps.version.outputs.version }}.zip"
+          # Changed-files updates: a list of every dist file (path, size, SHA-256) and each file gzipped under its hash.
+          # Installed copies reuse their unchanged files and download only the rest (Update/DeltaUpdate.cs).
+          $v = "${{ steps.version.outputs.version }}"
+          $dist = (Resolve-Path "$pkg\dist").Path
+          New-Item -ItemType Directory -Force delta | Out-Null
+          $files = foreach ($f in Get-ChildItem $dist -Recurse -File) {
+            $sha = (Get-FileHash $f.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            $gz = "delta\$sha.gz"
+            if (-not (Test-Path $gz)) {
+              $in = [IO.File]::OpenRead($f.FullName); $out = [IO.File]::Create($gz)
+              $z = New-Object IO.Compression.GZipStream($out, [IO.Compression.CompressionLevel]::Optimal)
+              $in.CopyTo($z); $z.Dispose(); $out.Dispose(); $in.Dispose()
+            }
+            [ordered]@{ path = $f.FullName.Substring($dist.Length + 1).Replace('\', '/'); size = $f.Length; sha256 = $sha }
+          }
+          [ordered]@{ version = $v; files = @($files) } | ConvertTo-Json -Depth 4 | Set-Content "SketchProMax-$v.files.json" -Encoding utf8
+          Write-Host "Changed-files update: $(@($files).Count) files, $((Get-ChildItem delta\*.gz).Count) unique"
 
       - name: Publish release
         if: steps.version.outputs.exists == 'false'
@@ -92,7 +109,8 @@ jobs:
           # the in-app notice shows the notes' top lines.
           $own = "docs/release-notes/$v.md"
           if (Test-Path $own) { $notes = (Get-Content $own -Raw).Trim() + "`n`n" + $notes }
-          gh release create "v$v" "SketchProMax-$v.zip" --repo "${{ github.repository }}" --target "${{ github.sha }}" --title "Sketch ProMax $v" --generate-notes --notes $notes
+          $assets = @("SketchProMax-$v.zip", "SketchProMax-$v.files.json") + (Get-ChildItem delta\*.gz).FullName
+          gh release create "v$v" @assets --repo "${{ github.repository }}" --target "${{ github.sha }}" --title "Sketch ProMax $v" --generate-notes --notes $notes
 
       - name: Keep the package (manual runs)
         if: github.event_name == 'workflow_dispatch'
