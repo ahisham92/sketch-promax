@@ -178,14 +178,6 @@ internal static class BerthStatusFacts
         }
     }
 
-    /// <summary>Reads everything in one call (field test and tests only: the window uses <see cref="Plan"/> and steps).</summary>
-    public static Reading Read(Document doc, Setup setup, Model model)
-    {
-        var r = Plan(doc, setup, model);
-        while (r.Next()) { }
-        return r;
-    }
-
     /// <summary>The reading of <paramref name="model"/>'s berths in <paramref name="doc"/>, as steps. Revit API context for this call and each step.</summary>
     /// <param name="def">The project's pre-submission checklist: its LOI matrix and classification parameter measure the modelling (LOD 300).</param>
     public static Reading Plan(Document doc, Setup setup, Model model, IReadOnlyCollection<string>? onlyBerths = null, ChecklistMath.Definition? def = null)

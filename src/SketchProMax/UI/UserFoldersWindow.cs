@@ -4,7 +4,6 @@ using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
 using SketchProMax.Bugs;
-using Button = System.Windows.Controls.Button;
 
 namespace SketchProMax.UI;
 
@@ -29,9 +28,6 @@ internal sealed class UserFoldersWindow : Window
         _open.Show();
         return Autodesk.Revit.UI.Result.Succeeded;
     }
-
-    /// <summary>The window, not shown (the field test builds it).</summary>
-    internal static Window ForTest() => new UserFoldersWindow();
 
     private UserFoldersWindow()
     {

@@ -60,7 +60,6 @@ internal static class TimeLog
     private static readonly string Pc = Environment.MachineName;
     private static Run? _tool, _chat;
     private static TimeUpdater? _updater;
-    private static UIApplication? _ui;
     private static int _lastIdle, _lastInput, _lastSave = Environment.TickCount, _lastSettings = Environment.TickCount;
 
     /// <summary>The line for the tool run that ended last ("Done in X. By hand: about Y. Saved: Z."), for the ribbon's result.</summary>
@@ -86,7 +85,6 @@ internal static class TimeLog
     {
         if (_started) return;
         _started = true;
-        _ui = app;
         try { _user = app.Application.Username ?? ""; } catch (Exception) { _user = ""; }
         if (_user.Length == 0) _user = Environment.UserName;
         ReadSettings();
@@ -116,7 +114,6 @@ internal static class TimeLog
             _updater = null;
         }
         Shutdown();
-        _ui = null;
     }
 
     /// <summary>Revit is closing (or the core stopping): what is counted so far goes to the PC log.</summary>

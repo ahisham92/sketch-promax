@@ -1,9 +1,7 @@
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
-using System.Windows.Input;
 using SketchProMax.Tools;
-using Button = System.Windows.Controls.Button;
 using CheckBox = System.Windows.Controls.CheckBox;
 using TextBox = System.Windows.Controls.TextBox;
 

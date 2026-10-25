@@ -15,9 +15,6 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using Autodesk.Revit.UI.Events;
-using TaskDialog = Autodesk.Revit.UI.TaskDialog;
-using TaskDialogCommonButtons = Autodesk.Revit.UI.TaskDialogCommonButtons;
-using TaskDialogResult = Autodesk.Revit.UI.TaskDialogResult;
 using UIApplication = Autodesk.Revit.UI.UIApplication;
 using SketchProMax.Bridge;
 using SketchProMax.Tools;
@@ -173,7 +170,6 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     }
 
     private const int MaxImages = 8, MaxResult = 3000, MaxIdLinks = 20;
-    private static readonly FontFamily Icons = ChatUi.Icons;
 
     private Conversation _conv;
     private ChatEngine? _engine;

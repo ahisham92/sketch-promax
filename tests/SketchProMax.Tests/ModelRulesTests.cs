@@ -1,4 +1,3 @@
-using SketchProMax.Tools;
 using static SketchProMax.Tools.ModelRules;
 
 /// <summary>Rules behind arch_to_structure, create_raft, link_model and check_model, which need no Revit.</summary>

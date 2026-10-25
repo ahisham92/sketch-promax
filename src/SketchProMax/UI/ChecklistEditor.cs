@@ -261,16 +261,7 @@ internal sealed class ChecklistEditor : Window
         // A project checklist is deleted from the checklist settings, not reset here.
         if (_project is not null) reset.Visibility = Visibility.Collapsed;
         var leftButtons = new WrapPanel { Children = { export, import, reset }, VerticalAlignment = VerticalAlignment.Center };
-        var rightButtons = Brand.ButtonRow(cancel, save);
-        rightButtons.Margin = new Thickness(0);
-        var footGrid = new Grid();
-        footGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        footGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        footGrid.Children.Add(leftButtons);
-        Grid.SetColumn(rightButtons, 1);
-        footGrid.Children.Add(rightButtons);
-        var foot = new Border { BorderThickness = new Thickness(0, 1, 0, 0), Padding = new Thickness(18, 10, 18, 12), Margin = new Thickness(0, 12, 0, 0), Child = footGrid };
-        foot.SetResourceReference(Border.BorderBrushProperty, Brand.K.Border);
+        var foot = Footer(leftButtons, cancel, save);
 
         var bottom = new StackPanel { Children = { meta, _error, foot } };
         DockPanel.SetDock(bottom, Dock.Bottom);
@@ -280,6 +271,22 @@ internal sealed class ChecklistEditor : Window
         root.Children.Add(body);
         root.SetResourceReference(Panel.BackgroundProperty, Brand.K.Bg);
         return root;
+    }
+
+    /// <summary>An editor window's footer: <paramref name="left"/> on the left, Cancel / Save on the right, under a rule.</summary>
+    internal static Border Footer(UIElement left, Button cancel, Button save)
+    {
+        var rightButtons = Brand.ButtonRow(cancel, save);
+        rightButtons.Margin = new Thickness(0);
+        var footGrid = new Grid();
+        footGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        footGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        footGrid.Children.Add(left);
+        Grid.SetColumn(rightButtons, 1);
+        footGrid.Children.Add(rightButtons);
+        var foot = new Border { BorderThickness = new Thickness(0, 1, 0, 0), Padding = new Thickness(18, 10, 18, 12), Margin = new Thickness(0, 12, 0, 0), Child = footGrid };
+        foot.SetResourceReference(Border.BorderBrushProperty, Brand.K.Border);
+        return foot;
     }
 
     private static FrameworkElement Column(string heading, FrameworkElement main, FrameworkElement? under, params FrameworkElement[] after)

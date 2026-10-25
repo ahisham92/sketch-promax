@@ -210,16 +210,7 @@ internal sealed class SubmissionChecklistTemplateWindow : Window
         var save = RichUi.Button(RichUi.Icon.Save, "Save", Brand.Weight.Primary);
         save.Click += (_, _) => Save();
         var leftButtons = new WrapPanel { Children = { export, import, review, reset }, VerticalAlignment = VerticalAlignment.Center };
-        var rightButtons = Brand.ButtonRow(cancel, save);
-        rightButtons.Margin = new Thickness(0);
-        var footGrid = new Grid();
-        footGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        footGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        footGrid.Children.Add(leftButtons);
-        Grid.SetColumn(rightButtons, 1);
-        footGrid.Children.Add(rightButtons);
-        var foot = new Border { BorderThickness = new Thickness(0, 1, 0, 0), Padding = new Thickness(18, 10, 18, 12), Margin = new Thickness(0, 12, 0, 0), Child = footGrid };
-        foot.SetResourceReference(Border.BorderBrushProperty, Brand.K.Border);
+        var foot = ChecklistEditor.Footer(leftButtons, cancel, save);
         var bottom = new StackPanel { Children = { _error, foot } };
         DockPanel.SetDock(bottom, Dock.Bottom);
 

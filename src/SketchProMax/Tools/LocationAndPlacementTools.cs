@@ -1,7 +1,4 @@
 using System.IO;
-using System.IO.Compression;
-using System.Text;
-using System.Xml.Linq;
 using Autodesk.Revit.DB;
 using Autodesk.Revit.DB.Structure;
 using Autodesk.Revit.UI;
@@ -207,20 +204,7 @@ internal static class Table
         var sep = new[] { ',', ';', '\t' }.OrderByDescending(ch => header.Count(x => x == ch)).First();
         separator = sep;
         foreach (var line in lines)
-        {
-            var cells = new List<string>();
-            var cell = new StringBuilder();
-            var quoted = false;
-            for (var i = 0; i < line.Length; i++)
-            {
-                var ch = line[i];
-                if (ch == '"') { if (quoted && i + 1 < line.Length && line[i + 1] == '"') { cell.Append('"'); i++; } else quoted = !quoted; }
-                else if (ch == sep && !quoted) { cells.Add(cell.ToString()); cell.Clear(); }
-                else cell.Append(ch);
-            }
-            cells.Add(cell.ToString());
-            rows.Add(cells);
-        }
+            rows.Add(Carbon.CsvCells(line, sep));
         return rows;
     }
 

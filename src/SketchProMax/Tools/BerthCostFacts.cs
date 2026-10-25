@@ -1,4 +1,3 @@
-using System.Globalization;
 using Autodesk.Revit.DB;
 using static SketchProMax.Tools.BerthCostMath;
 using Line = SketchProMax.Tools.BerthCostMath.Line;

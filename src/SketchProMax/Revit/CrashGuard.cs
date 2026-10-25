@@ -1,4 +1,3 @@
-using System.Threading.Tasks;
 using System.Windows.Threading;
 
 namespace SketchProMax.Revit;

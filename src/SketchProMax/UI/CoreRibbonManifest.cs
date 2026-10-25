@@ -312,10 +312,6 @@ internal static class CoreRibbonManifest
     private static (string, string?) T(string dropDown, string tool, string text, string glyph, string tip) =>
         (Entry(dropDown, "Tool." + tool, text, "tool:" + tool, glyph, tip, needsModel: true), tool);
 
-    /// <summary>A large button that runs <paramref name="tool"/> through its options window.</summary>
-    private static (string, string?) B(string panel, string tool, string text, string glyph, string tip) =>
-        (Button(panel, "Tool." + tool, text, "tool:" + tool, glyph, tip, needsModel: true), tool);
-
     /// <summary>A small (stacked) button that runs <paramref name="tool"/> through its options window.</summary>
     private static (string, string?) S(string panel, string tool, string text, string glyph, string tip, bool breakBefore = false) =>
         (Button(panel, "Tool." + tool, text, "tool:" + tool, glyph, tip, needsModel: true, small: true, breakBefore: breakBefore), tool);

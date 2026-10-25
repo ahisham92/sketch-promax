@@ -214,6 +214,14 @@ internal static class Cleanup
     private static bool Halted(string? error) =>
         error is { } e && (e.StartsWith("not done", StringComparison.Ordinal) || e == JobControl.RolledBack);
 
+    /// <summary>A tool call of one sweep: what <paramref name="spec"/> finds in the active model, deleted when applying.</summary>
+    public static ToolResult Run(UIApplication app, Spec spec, ToolArgs args)
+    {
+        var doc = app.ActiveUIDocument.Document;
+        var apply = Applying(args);
+        return Result(doc, spec, Sweep(doc, spec, apply), apply, args);
+    }
+
     /// <summary>The tool's result: the chat line, counts by group and reason, a page of the list, before/after and the file size.</summary>
     public static ToolResult Result(Document doc, Spec spec, Outcome o, bool apply, ToolArgs args, object? extra = null)
     {
@@ -288,7 +296,7 @@ internal static class Cleanup
         var name = SafeName(e);
         var group = e switch
         {
-            Family f => "families",
+            Family => "families",
             FamilySymbol => "family types",
             View { IsTemplate: true } => "view templates",
             View v => ViewGroup(v.ViewType),
@@ -440,13 +448,7 @@ public sealed class PurgeUnusedTool : IRevitTool
             args.StringList("keep"), args.StringList("only"));
     }
 
-    public ToolResult Execute(UIApplication app, ToolArgs args)
-    {
-        var doc = app.ActiveUIDocument.Document;
-        var spec = Spec(app, args);
-        var apply = Cleanup.Applying(args);
-        return Cleanup.Result(doc, spec, Cleanup.Sweep(doc, spec, apply), apply, args);
-    }
+    public ToolResult Execute(UIApplication app, ToolArgs args) => Cleanup.Run(app, Spec(app, args), args);
 }
 
 public sealed class DeleteUnusedViewsTool : IRevitTool
@@ -536,13 +538,7 @@ public sealed class DeleteUnusedViewsTool : IRevitTool
         return new Cleanup.Spec("Delete unused views", 1, Collect, Protect, keep, args.StringList("only"));
     }
 
-    public ToolResult Execute(UIApplication app, ToolArgs args)
-    {
-        var doc = app.ActiveUIDocument.Document;
-        var spec = Spec(app, args);
-        var apply = Cleanup.Applying(args);
-        return Cleanup.Result(doc, spec, Cleanup.Sweep(doc, spec, apply), apply, args);
-    }
+    public ToolResult Execute(UIApplication app, ToolArgs args) => Cleanup.Run(app, Spec(app, args), args);
 }
 
 public sealed class CleanupImportsTool : IRevitTool
@@ -602,13 +598,7 @@ public sealed class CleanupImportsTool : IRevitTool
         return new Cleanup.Spec("Clean up imports", 3, Collect, null, args.StringList("keep"), args.StringList("only"));
     }
 
-    public ToolResult Execute(UIApplication app, ToolArgs args)
-    {
-        var doc = app.ActiveUIDocument.Document;
-        var spec = Spec(app, args);
-        var apply = Cleanup.Applying(args);
-        return Cleanup.Result(doc, spec, Cleanup.Sweep(doc, spec, apply), apply, args);
-    }
+    public ToolResult Execute(UIApplication app, ToolArgs args) => Cleanup.Run(app, Spec(app, args), args);
 }
 
 public sealed class CleanupModelTool : IRevitTool

@@ -113,7 +113,6 @@ internal static class BerthStatusMath
     public sealed record Berth(string Model, string Name, string FindBy, string Value = "", string Parameter = "", string Sheets = "", string Schedules = "", string Parent = "")
     {
         public string Key => KeyOf(Model, Parent.Length > 0 ? Parent + " / " + Name : Name);
-        public string ScheduleText => ScheduleTexts.FirstOrDefault() ?? Name.Trim();
 
         /// <summary>The texts the berth's schedule names contain: the Schedules cell, else "Berth 9" for a berth found by its number, else its name.</summary>
         public List<string> ScheduleTexts =>

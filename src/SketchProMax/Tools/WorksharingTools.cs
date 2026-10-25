@@ -45,12 +45,6 @@ internal static class Workshare
         _ => s.ToString(),
     };
 
-    public static string WorksetName(Document doc, Element e)
-    {
-        try { return doc.GetWorksetTable().GetWorkset(e.WorksetId)?.Name ?? ""; }
-        catch (Autodesk.Revit.Exceptions.ApplicationException) { return ""; }
-    }
-
     /// <summary>Revit's message for a central-model error, with what the user can do about it.</summary>
     public static string Explain(Exception ex)
     {

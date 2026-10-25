@@ -1,4 +1,3 @@
-using SketchProMax.Tools;
 using static SketchProMax.Tools.LayoutMath;
 
 /// <summary>Sheet drawing areas, tag spots, slab points and image regions: the plain geometry, without Revit.</summary>

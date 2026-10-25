@@ -518,7 +518,7 @@ public sealed class AddLegendComponentsTool : IRevitTool
         if (doc.IsFamilyDocument) return ToolResult.Error("Legends live in projects; switch to a project model.");
         var legends = LegendSeeds.Legends(doc);
         if (legends.Count == 0) throw ManualSteps.NoLegend(doc, "this model (create_legend can also copy one from another open model or a legend seed)");
-        var target = Legend(doc, legends, args.OptString("legend"), app.ActiveUIDocument.ActiveView);
+        var target = Legend(legends, args.OptString("legend"), app.ActiveUIDocument.ActiveView);
         var types = args.StringList("types").Select(t => FindType(doc, t)).ToList();
         if (types.Count == 0) throw new ArgumentException("Give at least one type in types.");
         if (types.Count > 200) throw new ArgumentException($"{types.Count} types in one call; the limit is 200.");
@@ -605,7 +605,7 @@ public sealed class AddLegendComponentsTool : IRevitTool
         return Handoff.Finish(Name, result, batch.Handoffs);
     }
 
-    private static View Legend(Document doc, List<View> legends, string? wanted, View active)
+    private static View Legend(List<View> legends, string? wanted, View active)
     {
         if (string.IsNullOrWhiteSpace(wanted))
             return active.ViewType == ViewType.Legend ? active

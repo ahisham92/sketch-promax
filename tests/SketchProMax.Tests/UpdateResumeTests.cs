@@ -1,6 +1,5 @@
 using System.IO.Compression;
 using System.Net;
-using System.Net.Http;
 using SketchProMax.Update;
 
 /// <summary>An update that stopped part way continues from there: the download from its last byte, the unpack from its last file.</summary>

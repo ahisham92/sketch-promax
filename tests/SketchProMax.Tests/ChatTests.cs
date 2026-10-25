@@ -82,9 +82,6 @@ internal static class ChatTests
         try { SketchProMax.Tools.OutputPaths.Checked(@"\\server\share"); } catch (ArgumentException) { threw = true; }
         check("paths: Checked throws ArgumentException", threw && SketchProMax.Tools.OutputPaths.Checked(@"C:\a") == @"C:\a", "");
 
-        // Which chat calls Revit always asks about.
-        Dictionary<string, JsonElement> Args(string json) =>
-            JsonDocument.Parse(json).RootElement.EnumerateObject().ToDictionary(p => p.Name, p => p.Value.Clone());
         check("chat approval: relative paths shown in full", SketchProMax.Tools.OutputPaths.FullPath("out") == Path.GetFullPath("out"), "");
 
         // What the pane writes.

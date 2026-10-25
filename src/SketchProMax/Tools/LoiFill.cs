@@ -104,7 +104,7 @@ internal static class LoiFill
     /// <summary>The value for one parameter: the loivalues rule, else the model; per element when the elements differ.</summary>
     private static (string Value, bool PerElement, string Source) Resolve(Document doc, ElementType t, List<Element> lacking, string param, string code, Spec spec, double baseZ)
     {
-        if (Fixed(doc, t, lacking.FirstOrDefault(), param, code, spec) is { } set) return (set.Text, false, "Checking rules");
+        if (Fixed(t, lacking.FirstOrDefault(), param, code, spec) is { } set) return (set.Text, false, "Checking rules");
         var kind = ChecklistMath.LoiSource(param);
         if (kind.Length == 0) return ("", false, "nothing in the model gives it: type it, or leave it empty");
         var got = (lacking.Count == 0 ? [Get(doc, kind, t, null, spec, baseZ)] : lacking.Select(e => Get(doc, kind, t, e, spec, baseZ))).ToList();
@@ -118,7 +118,7 @@ internal static class LoiFill
     }
 
     /// <summary>A value the loivalues rule sets for this code or category, with {Parameter} copied from the type or the element.</summary>
-    private static V? Fixed(Document doc, ElementType t, Element? e, string param, string code, Spec spec)
+    private static V? Fixed(ElementType t, Element? e, string param, string code, Spec spec)
     {
         var category = t.Category?.Name ?? "";
         var hit = spec.Values.FirstOrDefault(v => v.Param.Equals(param, StringComparison.OrdinalIgnoreCase) &&

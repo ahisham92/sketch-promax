@@ -1,4 +1,3 @@
-using SketchProMax.Revit;
 using M = SketchProMax.Revit.ChangeFileMath;
 
 /// <summary>The change file (Revit/ChangeFileMath): reading back, merging later lines, play order, small lines, and the wiring.</summary>

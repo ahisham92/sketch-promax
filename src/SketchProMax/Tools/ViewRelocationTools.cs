@@ -604,7 +604,7 @@ public sealed class CopyViewDetailingTool : IRevitTool
 
         var fs = ViewFrame.Of(src);
         var ft = ViewFrame.Of(dst);
-        var desired = Desired(doc, args, src, dst, fs, ft, notes, out var fit);
+        var desired = Desired(doc, args, src, fs, ft, notes, out var fit);
 
         // Extra rotation / offset, in the target frame, about the centre of what is copied.
         var box = ViewKit.Extents(doc, ids.Select(i => doc.GetElement(i)).Where(e => e != null), src);
@@ -721,7 +721,7 @@ public sealed class CopyViewDetailingTool : IRevitTool
     }
 
     /// <summary>The wanted map from source view coordinates to target view coordinates.</summary>
-    private static Rigid2 Desired(Document doc, ToolArgs args, View src, View dst, ViewFrame fs, ViewFrame ft, List<string> notes, out object? fit)
+    private static Rigid2 Desired(Document doc, ToolArgs args, View src, ViewFrame fs, ViewFrame ft, List<string> notes, out object? fit)
     {
         fit = null;
         switch (args.OptString("align") ?? "view_frame")

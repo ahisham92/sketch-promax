@@ -414,14 +414,6 @@ internal static class SharedPacks
         SafeFile.Write(Path.Combine(RecordsFolder, record.Id + ".json"), SerializeRecord(record));
     }
 
-    /// <summary>Forgets a pack this PC shared (the zips and the published copy stay where they are).</summary>
-    public static void Forget(string id)
-    {
-        if (!ValidId(id)) return;
-        var file = Path.Combine(RecordsFolder, id + ".json");
-        if (File.Exists(file)) File.Delete(file);
-    }
-
     /// <summary>What Share tools is asked to share.</summary>
     public sealed record Request(string Name, IReadOnlyList<string> Items, string UpdateFrom, string Note, string ZipFolder, bool AutoPublish,
         bool IncludeChecklist = false);
