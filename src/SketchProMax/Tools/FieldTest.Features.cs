@@ -525,6 +525,7 @@ internal static partial class FieldTest
         // Saving the test project is refused in other event handlers: from the external event.
         await ProbeCore(s, "recovery.file", () => App.Dispatcher.InvokeFromEventAsync(app => RecoveryFile(app, s))).ConfigureAwait(false);
         await Probe(s, "recovery.replay", app => RecoveryReplay(app, s)).ConfigureAwait(false);
+        await ProbeCore(s, "recovery.shapes", () => App.Dispatcher.InvokeFromEventAsync(app => RecoveryShapes(app, s))).ConfigureAwait(false);
         // Off Revit's thread: processes, files and the network.
         await Probe(s, "chat.cli", () => { cli = new ClaudeCliInstall(Chat.ClaudeCli.Find()); return cli.Row(); }).ConfigureAwait(false);
         await Probe(s, "chat.signin", () => SignIn(cli)).ConfigureAwait(false);

@@ -26,6 +26,8 @@ internal static class ChangeReplay
         public readonly List<string> NotDone = [];
         /// <summary>Old UniqueId to the element made again for it, so what it hosts (later in the file) finds it.</summary>
         public readonly Dictionary<string, ElementId> MadeFor = new(StringComparer.Ordinal);
+        /// <summary>Sketches to redraw after the chunk's transactions (a sketch edit scope can't sit inside one); Counted: already counted as set back.</summary>
+        public readonly List<(ElementId Sketch, ElementId Owner, M.Line Line, bool Counted)> Sketches = [];
     }
 
     /// <summary>What each line of the file will do to <paramref name="doc"/> (read only).</summary>
@@ -67,10 +69,11 @@ internal static class ChangeReplay
     {
         "level" when line.Elevation is not null => null,
         "grid" when line.P is not null && line.Q is not null => null,
-        "wall" when line.P is not null && line.Q is not null && line.Type is not null => null,
+        "wall" when (line.Loops is { Count: > 0 } || (line.P is not null && line.Q is not null)) && line.Type is not null => null,
         "instance" when line.P is not null && line.Type is not null => null,
         "wall" or "instance" => "made after the last save, but its shape isn't a point or a straight line: make it again by hand",
         "type" => "a type made after the last save: duplicate it again by hand",
+        "floor" or "ceiling" or "topo" or "region" or "railing" or "roof" or "roof-other" or "opening" or "modelcurve" or "detailcurve" => ChangeShapes.CanMake(line),
         _ => "made after the last save; this kind of element can't be made from the file: make it again by hand",
     };
 
@@ -91,18 +94,33 @@ internal static class ChangeReplay
                         outcome.Deleted++;
                         break;
                     case Act.Set:
-                        if (SetState(doc, Find(doc, s.Line)!, s.Line, outcome)) outcome.Set++; else outcome.Same++;
+                        var sketches = outcome.Sketches.Count;
+                        var set = SetState(doc, Find(doc, s.Line)!, s.Line, outcome);
+                        if (set) outcome.Set++; else outcome.Same++;
+                        if (outcome.Sketches.Count > sketches) outcome.Sketches[outcome.Sketches.Count - 1] = outcome.Sketches[outcome.Sketches.Count - 1] with { Counted = set };
                         break;
                     case Act.Make:
                         var made = Make(doc, s.Line, outcome);
                         if (s.Line.Unique is { } u) outcome.MadeFor[u] = made.Id;
                         SetState(doc, made, s.Line, outcome);
                         outcome.Made++;
+                        if (s.Line.SlopeArrow) outcome.NotDone.Add($"{M.Describe(s.Line)}: made again without its slope arrow: add the slope by hand");
                         break;
                 }
                 return null;
             });
         foreach (var f in result.Failed) outcome.NotDone.Add($"{f.Item}: {f.Error}");
+        foreach (var s in work.Where(s => s.Line.Approx && s.Act != Act.Delete))
+            outcome.NotDone.Add($"{M.Describe(s.Line)}: its curved edges (a spline or ellipse) came back as short straight lines: check its shape");
+
+        // Changed sketches, each in a sketch edit scope of its own, after the chunk's transactions.
+        foreach (var (sketch, owner, line, counted) in outcome.Sketches)
+        {
+            var why = doc.GetElement(owner) is { } element ? ChangeShapes.EditSketch(doc, sketch, element, line) : "it isn't in the model any more";
+            if (why is not null) outcome.NotDone.Add($"{M.Describe(line)}: the outline didn't come back: {why}");
+            else if (!counted) { outcome.Same--; outcome.Set++; }
+        }
+        outcome.Sketches.Clear();
     }
 
     // ---- Setting an element to its state --------------------------------------------------------------------------------
@@ -147,11 +165,19 @@ internal static class ChangeReplay
                         }
                     }
                 }
-                else if (element.Location is LocationCurve lc && line.P is { } a && line.Q is { } b && lc.Curve is Line l)
+                else if (element.Location is LocationCurve lc && line.P is { } a && line.Q is { } b && lc.Curve is Line or Arc)
                 {
-                    if (!M.Same(P(l.GetEndPoint(0)), a) || !M.Same(P(l.GetEndPoint(1)), b)) { lc.Curve = Line.CreateBound(X(a), X(b)); changed = true; }
+                    var approx = false;
+                    var now = ChangeShapes.Segs(lc.Curve, ref approx).ToList();
+                    var want = new M.Seg(a, b, line.M);
+                    if (now.Count != 1 || !M.SameLoops([now], [[want]])) { lc.Curve = ChangeShapes.ToCurve(want); changed = true; }
                 }
                 break;
+        }
+        if (line.Loops is not null || line.Points is not null)
+        {
+            changed |= ChangeShapes.Set(doc, element, line, out var sketch);
+            if (sketch is { } id) outcome.Sketches.Add((id, element.Id, line, false));
         }
         if (element is FamilyInstance fi)
         {
@@ -199,6 +225,8 @@ internal static class ChangeReplay
 
     private static Element Make(Document doc, M.Line line, Outcome outcome)
     {
+        Element? Known(string? unique) => unique is null ? null : outcome.MadeFor.TryGetValue(unique, out var id) ? doc.GetElement(id) : doc.GetElement(unique);
+        if (ChangeShapes.Make(doc, line, Type(doc, line), LevelOf(doc, line), Known) is { } shaped) return shaped;
         switch (line.What)
         {
             case "level":
@@ -210,7 +238,9 @@ internal static class ChangeReplay
             {
                 var type = Type(doc, line) ?? throw new InvalidOperationException($"the wall type {line.Type} isn't in this model");
                 var lvl = LevelOf(doc, line) ?? throw new InvalidOperationException("its level isn't in this model");
-                return Wall.Create(doc, Line.CreateBound(X(line.P!), X(line.Q!)), type.Id, lvl.Id, 10, 0, false, false);
+                if (line.Loops is { Count: > 0 } profile)
+                    return Wall.Create(doc, profile[0].Select(ChangeShapes.ToCurve).ToList(), type.Id, lvl.Id, false);
+                return Wall.Create(doc, ChangeShapes.ToCurve(new M.Seg(line.P!, line.Q!, line.M)), type.Id, lvl.Id, 10, 0, false, false);
             }
             default:
             {
@@ -221,7 +251,7 @@ internal static class ChangeReplay
                 if (line.Q is { } q)
                 {
                     if (lvl is null) throw new InvalidOperationException("its level isn't in this model");
-                    return doc.Create.NewFamilyInstance(Line.CreateBound(X(line.P!), X(q)), symbol, lvl, structural);
+                    return doc.Create.NewFamilyInstance(ChangeShapes.ToCurve(new M.Seg(line.P!, q, line.M)), symbol, lvl, structural);
                 }
                 var host = line.Host is { } h ? (outcome.MadeFor.TryGetValue(h, out var madeHost) ? doc.GetElement(madeHost) : doc.GetElement(h)) : null;
                 if (host is not null && lvl is not null) return doc.Create.NewFamilyInstance(X(line.P!), symbol, host, lvl, structural);
