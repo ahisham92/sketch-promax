@@ -108,6 +108,7 @@ public static class CoreEntry
             "bug-folder" => Bugs.BugReport.OpenFolder(),
             // Help > Open folders (after 0.35.5): bugs, learned tools, recipes, chats... each with Open and Copy path.
             "user-folders" => UserFoldersWindow.Open(),
+            "recover" => RecoverWindow.Open(),
             "export-chats-bugs" => QuickTools.ExportChatsAndBugs(app),
             // Time saved and working time for the active model (0.32+).
             "time-saved" => TimeSavedWindow.Command(app),

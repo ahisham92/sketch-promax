@@ -522,6 +522,9 @@ internal static partial class FieldTest
         await Probe(s, "cleanup.passes", app => CleanupPasses(app, s)).ConfigureAwait(false);
         await Probe(s, "cleanup.workshared", app => CleanupWorkshared(app, s)).ConfigureAwait(false);
         await Probe(s, "central.once", app => CentralOnce(app, s)).ConfigureAwait(false);
+        // Saving the test project is refused in other event handlers: from the external event.
+        await ProbeCore(s, "recovery.file", () => App.Dispatcher.InvokeFromEventAsync(app => RecoveryFile(app, s))).ConfigureAwait(false);
+        await Probe(s, "recovery.replay", app => RecoveryReplay(app, s)).ConfigureAwait(false);
         // Off Revit's thread: processes, files and the network.
         await Probe(s, "chat.cli", () => { cli = new ClaudeCliInstall(Chat.ClaudeCli.Find()); return cli.Row(); }).ConfigureAwait(false);
         await Probe(s, "chat.signin", () => SignIn(cli)).ConfigureAwait(false);

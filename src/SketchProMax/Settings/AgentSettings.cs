@@ -113,6 +113,12 @@ public sealed class AgentSettings
     /// </summary>
     public string ChecklistHelper { get; set; } = "promax";
 
+    /// <summary>
+    /// Keep a change file for each model (Revit/ChangeFile): what changed since the last save, cleared at every save, to
+    /// play onto the model again if it is lost or damaged (Recover > Replay a change file).
+    /// </summary>
+    public bool ChangeFile { get; set; } = true;
+
     public static string FilePath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "SketchProMax", "settings.json");
 
