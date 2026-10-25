@@ -545,20 +545,38 @@ internal static class ChecklistFixes
             .Where(p => p.Length == 2 && p[0].Trim().Length > 0 && p[1].Trim().Length > 0).Select(p => (p[0].Trim(), p[1].Trim())).ToList();
 
     /// <summary>
-    /// The code for a type: a pair with a thickness range its category (or name) and thickness fall in first
-    /// ("Floors 1450-3200mm>B1010.10": beams modelled as floors), then one whose pattern matches its family or type name
-    /// (*Beam*>B1010.10), else one naming its category (or the start of it), unless <paramref name="plainCategory"/> is false.
+    /// The code for a type: first a pair with a parameter condition its elements all meet ("Floors [DAR_MARK=B*]>B1010.10":
+    /// beams modelled as floors, told by a parameter) or a thickness range it falls in ("Floors 1450-3200mm>B1010.10"),
+    /// then one whose pattern matches its family or type name (*Beam*>B1010.10), else one naming its category (or the
+    /// start of it), unless <paramref name="plainCategory"/> is false.
     /// </summary>
     /// <param name="thickMm">The type's thickness (floors, walls, roofs), for the pairs with a thickness range.</param>
-    internal static string? UniFormatFor(string category, string family, string type, List<(string Key, string Code)> map, double? thickMm = null, bool plainCategory = true)
+    /// <param name="valuesOf">The values a parameter has on the type or its elements (ValuesOf), for the pairs with a parameter condition.</param>
+    internal static string? UniFormatFor(string category, string family, string type, List<(string Key, string Code)> map, double? thickMm = null, bool plainCategory = true,
+        Func<string, IReadOnlyCollection<string>>? valuesOf = null)
     {
         bool Named(string key) => ChecklistMath.Like(type, key) || ChecklistMath.Like(family, key) || ChecklistMath.Like(family + ": " + type, key);
         bool OfCategory(string key) => category.Length > 0 && (category.Equals(key, StringComparison.OrdinalIgnoreCase) || category.StartsWith(key, StringComparison.OrdinalIgnoreCase));
+        bool Base(string key) => key.Length == 0 || OfCategory(key) || Named(key);
         foreach (var m in map)
-            if (ChecklistMath.ThickRange(m.Key) is { } r && thickMm is { } t && t >= r.Min - 0.5 && t <= r.Max + 0.5 && (OfCategory(r.Base) || Named(r.Base))) return m.Code;
-        var plain = map.Where(m => ChecklistMath.ThickRange(m.Key) is null).ToList();
+        {
+            if (ChecklistMath.ParamRule(m.Key) is { } p && valuesOf is not null && Base(p.Base) && valuesOf(p.Param) is { Count: > 0 } values && values.All(v => ChecklistMath.Like(v, p.Pattern))) return m.Code;
+            if (ChecklistMath.ThickRange(m.Key) is { } r && thickMm is { } t && t >= r.Min - 0.5 && t <= r.Max + 0.5 && Base(r.Base)) return m.Code;
+        }
+        var plain = map.Where(m => ChecklistMath.ThickRange(m.Key) is null && ChecklistMath.ParamRule(m.Key) is null).ToList();
         return plain.Where(m => Named(m.Key)).Concat(plainCategory ? plain.Where(m => OfCategory(m.Key)) : []).Select(m => m.Code).FirstOrDefault();
     }
+
+    /// <summary>The values a parameter has: the type's own when it has the parameter filled, else the distinct values on its elements.</summary>
+    internal static Func<string, IReadOnlyCollection<string>> ValuesOf(ElementType type, IEnumerable<Element> elements) => name =>
+    {
+        static string Text(Parameter? p) => p is null || !p.HasValue ? "" : (p.StorageType == StorageType.String ? p.AsString() : p.AsValueString())?.Trim() ?? "";
+        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var own = Text(type.LookupParameter(name));
+        if (own.Length > 0) { set.Add(own); return set; }
+        foreach (var e in elements) if (Text(e.LookupParameter(name)) is { Length: > 0 } v) set.Add(v);
+        return set;
+    };
 
     /// <summary>The type's thickness in millimetres when it is layered (floors, walls, roofs).</summary>
     internal static double? ThickMm(ElementType type)
@@ -573,16 +591,16 @@ internal static class ChecklistFixes
         var map = UniFormatMap(def);
         if (map.Count == 0) return "Set UniFormat code for each category or type in Checking rules first (e.g. Structural Foundations>A1020, Floors>B1010).";
         // The same types Submissions status counts: every model type in use with a code to write, not only those with material quantities.
-        var types = AssemblyCodes.TypesInUse(doc, names).Select(x => x.Type).Where(t => !ChecklistFacts.Filled(AssemblyCodes.CodeOf(t, names))).ToList();
+        var types = AssemblyCodes.Placed(doc, names).Where(x => !ChecklistFacts.Filled(AssemblyCodes.CodeOf(x.Type, names))).ToList();
         if (types.Count == 0) return $"Every model type in use has {names[0]} filled: nothing to fill.";
         int filled = 0, failed = 0;
         var left = new List<string>();
         using (var t = new Transaction(doc, "Sketch ProMax: fill the UniFormat codes"))
         {
             t.Start();
-            foreach (var type in types)
+            foreach (var (type, elements) in types)
             {
-                var code = UniFormatFor(type.Category?.Name ?? "", type.FamilyName, type.Name, map, ThickMm(type));
+                var code = UniFormatFor(type.Category?.Name ?? "", type.FamilyName, type.Name, map, ThickMm(type), valuesOf: ValuesOf(type, elements));
                 var p = AssemblyCodes.CodeOf(type, names);
                 if (code is null || p is null || p.IsReadOnly || p.StorageType != StorageType.String) { left.Add(ChecklistFacts.TypeLabel(type)); continue; }
                 try { if (p.Set(code)) filled++; else failed++; }

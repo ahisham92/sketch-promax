@@ -42,7 +42,7 @@ internal static class BepSheet
             if (code.Length == 0) missing.Add(codeParam);
             var cells = new List<object?> { t.Id.Value.ToString(CultureInfo.InvariantCulture), category, t.FamilyName, t.Name, elements.Count, code,
                 t.LookupParameter("Assembly Description")?.AsString() ?? "",
-                code.Length == 0 ? ChecklistFixes.UniFormatFor(category, t.FamilyName, t.Name, map, ChecklistFixes.ThickMm(t)) ?? "" : "" };
+                code.Length == 0 ? ChecklistFixes.UniFormatFor(category, t.FamilyName, t.Name, map, ChecklistFixes.ThickMm(t), valuesOf: ChecklistFixes.ValuesOf(t, elements)) ?? "" : "" };
             foreach (var p in loiParams)
             {
                 var v = Value(doc, t, elements, p);

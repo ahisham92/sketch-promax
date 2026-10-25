@@ -126,6 +126,9 @@ internal static class BerthStatusTests
         check("UniFormat rules: a key with a thickness range is read as its category and range in mm, a plain key isn't",
             ChecklistMath.ThickRange("Floors 1450-3200mm") == ("Floors", 1450, 3200) && ChecklistMath.ThickRange(" *Slab* 3200 - 1450 MM") == ("*Slab*", 1450, 3200)
             && ChecklistMath.ThickRange("Floors") is null && ChecklistMath.ThickRange("*Pile Cap*") is null, "");
+        check("UniFormat rules: a key with a parameter condition is read as its category, parameter and value pattern",
+            ChecklistMath.ParamRule("Floors [Mark=B*]") == ("Floors", "Mark", "B*") && ChecklistMath.ParamRule("[Usage = Beam]") == ("", "Usage", "Beam")
+            && ChecklistMath.ParamRule("Floors") is null && ChecklistMath.ParamRule("Floors [Mark=]") is null && ChecklistMath.ParamRule("Floors 1450-3200mm") is null, "");
         var picked = SketchProMax.Tools.AssemblyCodeText.Picked("cat:Floors\tB1010.20\n12\tA1020.15\r\n13\t \nx\tB1010\ncat:\tB10\n14\tB1010.20 \n15");
         check("Assembly Codes: the kept lines are read as a category or type id and a code, empty codes and bad keys skipped",
             picked.Count == 3 && picked[0] == ("cat:Floors", "B1010.20") && picked[1] == ("12", "A1020.15") && picked[2] == ("14", "B1010.20"), string.Join(",", picked));
