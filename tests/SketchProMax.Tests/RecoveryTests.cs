@@ -56,6 +56,22 @@ internal static class RecoveryTests
         check("recovery: a four-edge floor's line stays small", floorText.Length < 600, floorText.Length + " bytes");
         check("recovery: replay can redraw sketches", Src("Revit", "ChangeShapes.cs").Contains("SketchEditScope") && Src("Revit", "ChangeShapes.cs").Contains("Floor.Create"), "");
 
+        // Annotations and reinforcement: references follow elements made again; tags and dimensions play after what they point at.
+        const string oldWall = "6a1f2b3c-0000-4000-8000-000000000001-0004d2a1", newWall = "9b2e4d5f-0000-4000-8000-000000000002-0004d2b7";
+        check("recovery: a dimension's reference follows its wall made again", M.Remap(oldWall + ":0:SURFACE", new Dictionary<string, string> { [oldWall] = newWall }) == newWall + ":0:SURFACE", "");
+        check("recovery: a reference to an element not made again stays", M.Remap("abc:0:SURFACE", new Dictionary<string, string> { [oldWall] = newWall }) == "abc:0:SURFACE", "");
+        var tag = new M.Line { Kind = M.Kinds.State, At = at, Unique = "t1", What = "tag", Refs = ["w2:0"] };
+        var wall2 = new M.Line { Kind = M.Kinds.State, At = at.AddMinutes(1), Unique = "w2", What = "instance", Type = "Beam: 300x600", P = new(0, 0, 0), Q = new(5, 0, 0) };
+        var noteOrder = M.PlayOrder(M.Read([M.Write(tag), M.Write(wall2)])).Select(l => l.Unique).ToList();
+        check("recovery: a tag plays after what it tags", noteOrder.SequenceEqual(["w2", "t1"]), string.Join(",", noteOrder));
+        var bars = new M.Line { Kind = M.Kinds.State, At = at, Unique = "r1", What = "rebar", Host = "w2", Type = "Rebar Bar: 16M", PlaneNormal = new(0, 1, 0), Loops = [[new(new(0, 0, 0), new(5, 0, 0))]],
+            Bar = new M.Bar { Rule = "MaximumSpacing", N = 12, Spacing = 0.65617, Length = 7.2, HookStart = "h1", OrientStart = -1 } };
+        var barsBack = M.Read([M.Write(bars)]).Elements.Single();
+        check("recovery: a rebar set's layout and hooks read back", barsBack.Bar is { Rule: "MaximumSpacing", N: 12, OrientStart: -1, HookStart: "h1" } b && M.Same(b.Spacing, 0.65617) && barsBack.Host == "w2", M.Write(bars));
+        check("recovery: a rebar set's line stays small", M.Write(bars).Length < 600, M.Write(bars).Length + " bytes");
+        check("recovery: replay makes annotations and rebar", Src("Revit", "ChangeNotes.cs").Contains("TextNote.Create") && Src("Revit", "ChangeNotes.cs").Contains("IndependentTag.Create")
+            && Src("Revit", "ChangeNotes.cs").Contains("NewDimension") && Src("Revit", "ChangeNotes.cs").Contains("Rebar.CreateFromCurves") && Src("Revit", "ChangeReplay.cs").Contains("NewFamilyInstance(X(line.P!), symbol, view)"), "");
+
         // Files and names.
         check("recovery: folder names keep same-named models apart", M.FolderName(@"C:\A\Port.rvt") != M.FolderName(@"C:\B\Port.rvt") && M.FolderName(@"C:\A\Port.rvt").StartsWith("Port ("), M.FolderName(@"C:\A\Port.rvt"));
         var leftovers = Enumerable.Range(0, 8).Select(i => M.LeftoverName(at.AddHours(i))).Append(M.CurrentName).Append("notes.txt").ToList();

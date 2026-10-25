@@ -418,12 +418,12 @@ internal static class ChangeFile
     {
         var category = element.Category;
         if (category is null && element is not ElementType) return null;
-        if (element is View || element is ElementType { Category: null } || ChangeShapes.IsSketchLine(element)) return null;
+        if (element is View || element is ElementType { Category: null } || ChangeShapes.IsSketchLine(element) || ChangeNotes.IsPart(element)) return null;
         var line = new M.Line
         {
             Kind = M.Kinds.State, At = Now, Id = element.Id.Value, Unique = element.UniqueId,
             Category = category?.Name, CategoryId = category?.Id.Value ?? 0,
-            What = ChangeShapes.Kind(element) ?? element switch { Level => "level", Grid => "grid", ElementType => "type", Wall => "wall", FamilyInstance => "instance", _ => "other" },
+            What = ChangeShapes.Kind(element) ?? ChangeNotes.Kind(element) ?? element switch { Level => "level", Grid => "grid", ElementType => "type", Wall => "wall", FamilyInstance => "instance", _ => "other" },
         };
         try { line.Name = element.Name; } catch (Exception) { }
         if (element is not ElementType && doc.GetElement(element.GetTypeId()) is ElementType type)
@@ -467,6 +467,8 @@ internal static class ChangeFile
         }
         // Sketches (floors, ceilings, roofs, openings, regions, toposolids, edited wall profiles), paths and shape points.
         try { ChangeShapes.Read(doc, element, line); } catch (Exception) { }
+        // Annotations, rooms and reinforcement: what they point at, their text, bars and the view they are drawn in.
+        try { ChangeNotes.Read(doc, element, line); } catch (Exception) { }
         var values = new List<M.Value>();
         foreach (Parameter p in element.Parameters)
         {
