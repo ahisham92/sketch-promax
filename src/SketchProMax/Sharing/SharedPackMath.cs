@@ -279,6 +279,8 @@ internal static class SharedPackMath
             "Writes one small zip describing this project (data, quantities, sheets, revisions, schedules, check results). Read-only."),
         ("time-saved", "Time saved", "job",
             "Working time in this model and the time saved, per tool and per day. Exports to Excel."),
+        ("pdf-editor", "PDF editor", "pdf",
+            "Edit any PDF: see every page, then delete, turn, move or replace pages, add PDFs to merge, extract or split. Nothing is kept in the model."),
     ];
 
     /// <summary>Whether a ribbon command may go in a pack (a "tool:" one whose tool runs without the AI, or one of <see cref="Commands"/>).</summary>

@@ -106,6 +106,8 @@ public static class CoreEntry
             // Bug reports (0.30+): one small zip per report, in Documents\Sketch ProMax\Bugs.
             "report-bug" => Bugs.BugReport.Command(app),
             "bug-folder" => Bugs.BugReport.OpenFolder(),
+            // Help > Open folders (after 0.35.5): bugs, learned tools, recipes, chats... each with Open and Copy path.
+            "user-folders" => UserFoldersWindow.Open(),
             "export-chats-bugs" => QuickTools.ExportChatsAndBugs(app),
             // Time saved and working time for the active model (0.32+).
             "time-saved" => TimeSavedWindow.Command(app),
