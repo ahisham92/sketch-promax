@@ -70,29 +70,33 @@ internal static class AssemblyCodes
     /// Every type of a built element placed in the model that has a code parameter it can write, with how many elements
     /// use it: the elements Submissions status counts (not sheets, views, levels, grids, rooms, scope boxes or lines).
     /// </summary>
-    public static List<(ElementType Type, int Count)> TypesInUse(Document doc, IReadOnlyList<string> names)
+    public static List<(ElementType Type, int Count)> TypesInUse(Document doc, IReadOnlyList<string> names) =>
+        Placed(doc, names).Select(x => (x.Type, x.Elements.Count)).ToList();
+
+    /// <summary>TypesInUse with the elements of each type (what parameter rules such as Floors [DAR_MARK=B*] read).</summary>
+    public static List<(ElementType Type, List<Element> Elements)> Placed(Document doc, IReadOnlyList<string> names)
     {
         var cats = new List<ElementId>();
         foreach (Category c in doc.Settings.Categories)
             if (c.CategoryType == CategoryType.Model && !BerthStatusFacts.IsNotBuilt(c.BuiltInCategory)) cats.Add(c.Id);
         if (cats.Count == 0) return [];
-        var counts = new Dictionary<long, int>();
+        var byType = new Dictionary<long, List<Element>>();
         foreach (var e in new FilteredElementCollector(doc).WherePasses(new ElementMulticategoryFilter(cats)).WhereElementIsNotElementType().WhereElementIsViewIndependent())
         {
             var id = e.GetTypeId();
             if (id == ElementId.InvalidElementId || e is View) continue;
-            counts[id.Value] = counts.TryGetValue(id.Value, out var n) ? n + 1 : 1;
+            (byType.TryGetValue(id.Value, out var list) ? list : byType[id.Value] = []).Add(e);
         }
-        var list = new List<(ElementType, int)>();
-        foreach (var pair in counts)
+        var result = new List<(ElementType, List<Element>)>();
+        foreach (var pair in byType)
             if (doc.GetElement(new ElementId(pair.Key)) is ElementType type && CodeOf(type, names) is { IsReadOnly: false, StorageType: StorageType.String })
-                list.Add((type, pair.Value));
-        return list;
+                result.Add((type, pair.Value));
+        return result;
     }
 
     /// <summary>The types in use that need a code: none yet, or one that isn't in the model's table when it has one.</summary>
-    private static List<(ElementType Type, int Count, string Now)> Needing(Document doc, IReadOnlyList<string> names, HashSet<string> table) =>
-        TypesInUse(doc, names).Select(x => (x.Type, x.Count, Now: (CodeOf(x.Type, names)?.AsString() ?? "").Trim()))
+    private static List<(ElementType Type, int Count, string Now, List<Element> Elements)> Needing(Document doc, IReadOnlyList<string> names, HashSet<string> table) =>
+        Placed(doc, names).Select(x => (x.Type, x.Elements.Count, Now: (CodeOf(x.Type, names)?.AsString() ?? "").Trim(), x.Elements))
             .Where(x => x.Now.Length == 0 || table.Count > 0 && !table.Contains(x.Now)).ToList();
 
     /// <summary>
@@ -112,14 +116,19 @@ internal static class AssemblyCodes
             if (group.Key.Length > 0)
             {
                 var n = group.Count();
-                var forCategory = map.Where(m => ChecklistMath.ThickRange(m.Key) is null && (group.Key.Equals(m.Key, StringComparison.OrdinalIgnoreCase) || group.Key.StartsWith(m.Key, StringComparison.OrdinalIgnoreCase))).Select(m => m.Code).FirstOrDefault() ?? "";
+                var forCategory = map.Where(m => ChecklistMath.ThickRange(m.Key) is null && ChecklistMath.ParamRule(m.Key) is null && (group.Key.Equals(m.Key, StringComparison.OrdinalIgnoreCase) || group.Key.StartsWith(m.Key, StringComparison.OrdinalIgnoreCase))).Select(m => m.Code).FirstOrDefault() ?? "";
                 lines.Add($"{CategoryKey}{group.Key}\tALL {group.Key.ToUpperInvariant()}: {n} type{(n == 1 ? "" : "s")}, {group.Sum(x => x.Count)} elements (a type's own box below wins)\t{forCategory}");
             }
-            foreach (var (type, count, now) in group.OrderBy(x => ChecklistFacts.TypeLabel(x.Type), StringComparer.OrdinalIgnoreCase))
+            foreach (var (type, count, now, elements) in group.OrderBy(x => ChecklistFacts.TypeLabel(x.Type), StringComparer.OrdinalIgnoreCase))
             {
                 var unknown = now.Length > 0;
-                var suggested = ChecklistFixes.UniFormatFor(group.Key, type.FamilyName, type.Name, map, ChecklistFixes.ThickMm(type), plainCategory: false) ?? "";
-                var what = $"{ChecklistFacts.TypeLabel(type)} ({count} element{(count == 1 ? "" : "s")}{(unknown ? $", now {now}: not in the code list" : "")})";
+                var valuesOf = ChecklistFixes.ValuesOf(type, elements);
+                var suggested = ChecklistFixes.UniFormatFor(group.Key, type.FamilyName, type.Name, map, ChecklistFixes.ThickMm(type), plainCategory: false, valuesOf) ?? "";
+                // A parameter rule's parameter with different values on the type's elements (beams and deck on one floor type): the code is per type, so say so.
+                var mixed = map.Select(m => ChecklistMath.ParamRule(m.Key)).OfType<(string Base, string Param, string Pattern)>().Select(r => r.Param).Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Select(n => (Name: n, Values: valuesOf(n))).FirstOrDefault(x => x.Values.Count > 1);
+                var what = $"{ChecklistFacts.TypeLabel(type)} ({count} element{(count == 1 ? "" : "s")}{(unknown ? $", now {now}: not in the code list" : "")}" +
+                           (mixed.Name is not null ? $"; {mixed.Name} differs on its elements: {string.Join(", ", mixed.Values.Take(4))}, give them separate types" : "") + ")";
                 types.Add((group.Key, $"{type.Id.Value}\t{what.Replace('\t', ' ')}\t{suggested}"));
             }
         }
@@ -143,7 +152,7 @@ internal static class AssemblyCodes
         if (byCategory.Count > 0)
         {
             var own = new HashSet<long>(wanted.Select(w => w.Id));
-            foreach (var (type, _, _) in Needing(doc, names, table))
+            foreach (var (type, _, _, _) in Needing(doc, names, table))
                 if (!own.Contains(type.Id.Value) && byCategory.TryGetValue(type.Category?.Name ?? "", out var code)) wanted.Add((type.Id.Value, code));
         }
         int filled = 0, failed = 0;

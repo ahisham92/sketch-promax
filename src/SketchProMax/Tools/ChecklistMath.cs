@@ -90,8 +90,8 @@ internal static class ChecklistMath
         new("units", "Project units", "Length mm 0, Angle degrees 2", "The project units and decimal places Fix it sets: Length mm, cm or m and Angle degrees or radians, each with its decimals " +
             "(empty: not tested).", "units"),
         new("uniformatmap", "UniFormat code for each category or type", "", "What Fix it writes into the classification parameter of types that have none: Category>code or type name pattern>code, " +
-            "comma separated, e.g. Structural Foundations>A1020, Floors>B1010. Add a thickness range for layered types: Floors 1450-3200mm>B1010.10 gives floors that thick " +
-            "(beams modelled as floors) the beam code; a range or name rule wins over the plain category (empty: nothing is filled).", "uniformat"),
+            "comma separated, e.g. Structural Foundations>A1020, Floors>B1010. Add a thickness range for layered types (Floors 1450-3200mm>B1010.10) or a parameter " +
+            "condition (Floors [Mark=B*]>B1010.10: every element of the type has that value) to give beams modelled as floors the beam code; these and name rules win over the plain category (empty: nothing is filled).", "uniformat"),
         new("templatemap", "View template for each view type", "", "What Fix it applies to views on sheets: View type>template name, comma separated, e.g. Floor Plan>ST_Plan, Section>ST_Section, 3D View>ST_3D " +
             "(empty: nothing is applied).", "viewtemplates"),
         new("typecodes", "Type codes in the file name", "RVT, C3D, DRW, RPT", "The type field of a file name is one of these; a Revit model must carry RVT (empty: not tested).", "typefield"),
@@ -274,6 +274,13 @@ internal static class ChecklistMath
     {
         var rx = "^" + Regex.Escape(pattern.Trim()).Replace("\\*", ".*").Replace("\\?", ".").Replace("\\#", "[0-9]").Replace("\\ ", "\\s+") + "$";
         return Regex.IsMatch((value ?? "").Trim(), rx, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    }
+
+    /// <summary>A UniFormat rule key with a parameter condition, "Floors [DAR_MARK=B*]": its category or name pattern (may be empty), the parameter and the value pattern; null for other keys.</summary>
+    public static (string Base, string Param, string Pattern)? ParamRule(string key)
+    {
+        var m = Regex.Match(key.Trim(), @"^(.*?)\s*\[\s*([^=\]]+?)\s*=\s*([^\]]*?)\s*\]$");
+        return m.Success && m.Groups[3].Value.Length > 0 ? (m.Groups[1].Value.Trim(), m.Groups[2].Value.Trim(), m.Groups[3].Value) : null;
     }
 
     /// <summary>A UniFormat rule key with a thickness range, "Floors 1450-3200mm": its category or name pattern and the range in mm; null for a plain key.</summary>
