@@ -22,6 +22,8 @@ jobs:
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the last release's tag, to see whether the connector's code changed since
 
       - name: Read version and check for an existing release
         id: version
@@ -63,6 +65,32 @@ jobs:
           $pkg = "package\SketchProMax"
           New-Item -ItemType Directory -Force $pkg | Out-Null
           Copy-Item dist $pkg -Recurse
+          # The desktop-app connector is the biggest file (about 30 MB compressed). When its code hasn't changed since the
+          # last release, that release's exact exe is reused, so changed-files updates don't download it again.
+          try {
+            $prev = gh release view --repo "${{ github.repository }}" --json tagName -q .tagName
+            $csproj = "src/SketchProMax.Mcp/SketchProMax.Mcp.csproj"
+            $others = @(git ls-files src/SketchProMax.Mcp | Where-Object { $_ -ne $csproj }) + "build.ps1" +
+              @(([xml](git show "HEAD:$csproj" | Out-String)).Project.ItemGroup.Compile.Include | Where-Object { $_ } |
+                ForEach-Object { "src/" + $_.Replace('..\', '').Replace('\', '/') })
+            $noVersion = { param($rev) (git show "${rev}:$csproj" | Where-Object { $_ -notmatch '<Version>' }) -join "`n" }
+            git diff --quiet $prev HEAD -- @others
+            $same = $LASTEXITCODE -eq 0 -and (& $noVersion $prev) -eq (& $noVersion "HEAD")
+            if ($same) {
+              New-Item -ItemType Directory -Force prevrel | Out-Null
+              gh release download $prev --repo "${{ github.repository }}" --pattern "*.files.json" -D prevrel --clobber
+              $entry = (Get-Content (Get-ChildItem prevrel\*.files.json).FullName -Raw | ConvertFrom-Json).files | Where-Object { $_.path -eq "mcp/SketchProMax.Mcp.exe" }
+              if (-not $entry) { throw "the last release lists no connector" }
+              gh release download $prev --repo "${{ github.repository }}" --pattern "$($entry.sha256).gz" -D prevrel --clobber
+              $in = [IO.File]::OpenRead((Resolve-Path "prevrel\$($entry.sha256).gz").Path); $out = [IO.File]::Create("prevrel\SketchProMax.Mcp.exe")
+              $z = New-Object IO.Compression.GZipStream($in, [IO.Compression.CompressionMode]::Decompress)
+              $z.CopyTo($out); $z.Dispose(); $out.Dispose(); $in.Dispose()
+              if ((Get-FileHash prevrel\SketchProMax.Mcp.exe -Algorithm SHA256).Hash -ne $entry.sha256.ToUpperInvariant()) { throw "checksum mismatch" }
+              Copy-Item prevrel\SketchProMax.Mcp.exe "$pkg\dist\mcp\SketchProMax.Mcp.exe" -Force
+              Write-Host "Connector unchanged since ${prev}: reusing its SketchProMax.Mcp.exe"
+            } else { Write-Host "Connector code changed since $prev (or no earlier release): using the new build" }
+          } catch { Write-Host "Could not reuse the last release's connector, using the new build: $_" }
+          $global:LASTEXITCODE = 0
           # Every Revit build must carry the loader the manifest names, or installed copies couldn't update in place.
           foreach ($v in 2024, 2025, 2026, 2027) {
             foreach ($f in "SketchProMax.dll", "SketchProMax.Loader.dll", "SketchProMax.addin", "UglyToad.PdfPig.dll", "SketchProMax.pdfium.dll", "TritoRevit\TritoRevit.dll", "TritoRevit\TritoRevit.addin") {
