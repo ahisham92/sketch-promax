@@ -201,7 +201,7 @@ public sealed class App : IExternalApplication
             catch (Exception) { /* the License button still opens it */ }
         }
         // Lifeline's change file, for everyone: with Sketch ProMax and with TritoRevit alone (shared packs), licensed or not.
-        try { StartupTimings.Time("change file", () => ChangeFile.Start(app)); } catch (Exception) { /* no change file is kept */ }
+        try { StartupTimings.Time("change file", () => ChangeFile.Start(app)); } catch (Exception ex) { Revit.LifelineBugs.Note("start", "Lifeline didn't start: no change file is kept", null, ex); }
         CentralAccess.Watch(app);
         // Our exceptions that reach Revit's UI thread are caught and logged; one on a background thread is logged before Revit closes.
         if (!shared) CrashGuard.Start(Ui);

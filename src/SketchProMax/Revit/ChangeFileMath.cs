@@ -305,6 +305,36 @@ internal static class ChangeFileMath
         return result;
     }
 
+    // ---- Lifeline's bug list (Revit/LifelineBugs) ----------------------------------------------------------------------
+
+    public const string BugsFolderName = "Lifeline bugs", BugsFileName = "Lifeline bugs.txt";
+    public const int MaxBugLines = 2000, MaxBugsPerSession = 300;
+
+    public const string BugsHeader = "# Sketch ProMax Lifeline: problems on this PC, newest last. Each line: when | add-in version | Revit | model | where | what went wrong. " +
+                                     "Send it to the BIM lead now and then; it is safe to delete.";
+
+    /// <summary>One line of the bug list, on one line whatever the message holds, and not too long.</summary>
+    public static string BugLine(DateTime at, string version, string revit, string? model, string where, string what)
+    {
+        var flat = string.Join(" ", (what ?? "").Split(['\r', '\n', '\t'], StringSplitOptions.RemoveEmptyEntries)).Trim();
+        if (flat.Length > 600) flat = flat.Substring(0, 600) + "…";
+        return $"{at:yyyy-MM-dd HH:mm} | {(version is { Length: > 0 } ? version : "?")} | Revit {(revit is { Length: > 0 } ? revit : "?")} | {model ?? "-"} | {where} | {flat}";
+    }
+
+    /// <summary>What a report line says went wrong, without which element ("17:42 Walls: W1 (added or changed): why" → "why"), so one example of each reason is kept.</summary>
+    public static string Reason(string reportLine)
+    {
+        var at = reportLine.IndexOf("): ", StringComparison.Ordinal);
+        return at >= 0 ? reportLine.Substring(at + 3) : reportLine;
+    }
+
+    /// <summary>The header and the newest <paramref name="max"/> lines.</summary>
+    public static List<string> TrimBugs(List<string> lines, int max)
+    {
+        var body = lines.Where(l => !l.StartsWith("#", StringComparison.Ordinal) && l.Length > 0).ToList();
+        return [BugsHeader, .. body.Skip(Math.Max(0, body.Count - max))];
+    }
+
     /// <summary>Tags, dimensions and spots point at other elements: they are played after everything they could point at.</summary>
     public static bool IsNote(Line l) => l.What is "tag" or "roomtag" or "dimension" or "spot";
 

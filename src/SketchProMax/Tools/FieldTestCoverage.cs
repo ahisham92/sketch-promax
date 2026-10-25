@@ -494,6 +494,8 @@ internal static class FieldTestCoverage
             "in the test project: a floor whose outline was changed after the save is redrawn from the file's outline, and a floor deleted after the save is made again on its level with its type and outline; what the test made is deleted afterwards"),
         new("recovery.notes", Central, "Replay puts annotations back", How.Probe, "",
             "in a plan view of the test project: a text note whose text changed after the save gets its text back, and a text note and a dimension between two grids deleted after the save are made again in the same view (the dimension on the same grids); what the test made is deleted afterwards"),
+        new("recovery.bugs", Central, "Lifeline keeps a list of its problems", How.Probe, "",
+            "with the list sent to a test folder: a problem noted twice is written once, as one line (when, version, Revit, model, where, what) under the file's header"),
         new("recovery.ui", Central, "Recover after Revit closes by itself, on a real shared model", How.Manual, "", "needs Revit to close by itself and a real central model",
             "On a workshared test model (a new local of a test central, never the live project): move two columns, change a wall's type and comment, add a beam and delete a door, edit a floor's outline, draw a new floor and a footprint roof with a sloped edge, add a text note, a tag, a dimension, a detail item and a rebar set in a concrete beam, without saving. " +
             "Open Documents\\Sketch ProMax\\Change files\\<model>\\changes since last save.txt in Notepad: it lists those elements. End Revit in Task Manager. Start Revit and open the same local: " +

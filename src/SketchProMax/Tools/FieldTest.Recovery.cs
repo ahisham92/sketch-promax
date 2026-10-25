@@ -297,4 +297,26 @@ internal static partial class FieldTest
             t.Commit();
         }
     }
+
+    /// <summary>Lifeline's bug list: a problem noted twice is one line under the header, in a test folder.</summary>
+    private static (string, string) RecoveryBugs(State s)
+    {
+        LifelineBugs.FolderForTest = Path.Combine(s.Folder, "lifeline-bugs");
+        try
+        {
+            LifelineBugs.ForgetForTest();
+            if (File.Exists(LifelineBugs.FilePath)) File.Delete(LifelineBugs.FilePath);
+            LifelineBugs.Note("field test", "a test problem", "Test model", new InvalidOperationException("test"));
+            LifelineBugs.Note("field test", "a test problem", "Test model", new InvalidOperationException("test"));
+            var lines = File.Exists(LifelineBugs.FilePath) ? File.ReadAllLines(LifelineBugs.FilePath) : [];
+            return lines.Length == 2 && lines[0] == M.BugsHeader && lines[1].Contains("| field test | a test problem: InvalidOperationException: test")
+                ? Pass("a problem noted twice is one line under the header in Lifeline bugs.txt")
+                : Fail($"Lifeline bugs.txt has {lines.Length} lines: {string.Join(" / ", lines)}");
+        }
+        finally
+        {
+            LifelineBugs.FolderForTest = null;
+            LifelineBugs.ForgetForTest();
+        }
+    }
 }
