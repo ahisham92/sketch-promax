@@ -418,12 +418,12 @@ internal static class ChangeFile
     {
         var category = element.Category;
         if (category is null && element is not ElementType) return null;
-        if (element is View || element is ElementType { Category: null }) return null;
+        if (element is View || element is ElementType { Category: null } || ChangeShapes.IsSketchLine(element)) return null;
         var line = new M.Line
         {
             Kind = M.Kinds.State, At = Now, Id = element.Id.Value, Unique = element.UniqueId,
             Category = category?.Name, CategoryId = category?.Id.Value ?? 0,
-            What = element switch { Level => "level", Grid => "grid", ElementType => "type", Wall => "wall", FamilyInstance => "instance", _ => "other" },
+            What = ChangeShapes.Kind(element) ?? element switch { Level => "level", Grid => "grid", ElementType => "type", Wall => "wall", FamilyInstance => "instance", _ => "other" },
         };
         try { line.Name = element.Name; } catch (Exception) { }
         if (element is not ElementType && doc.GetElement(element.GetTypeId()) is ElementType type)
@@ -457,13 +457,16 @@ internal static class ChangeFile
                     line.P = P(lp.Point);
                     try { line.Rotation = M.Round(lp.Rotation); } catch (Exception) { }
                 }
-                else if (element.Location is LocationCurve { Curve: Line cl })
+                else if (element.Location is LocationCurve { Curve: Line or Arc } lc)
                 {
-                    line.P = P(cl.GetEndPoint(0));
-                    line.Q = P(cl.GetEndPoint(1));
+                    var approx = false;
+                    var seg = ChangeShapes.Segs(lc.Curve, ref approx).First();
+                    (line.P, line.Q, line.M) = (seg.P, seg.Q, seg.M);
                 }
                 break;
         }
+        // Sketches (floors, ceilings, roofs, openings, regions, toposolids, edited wall profiles), paths and shape points.
+        try { ChangeShapes.Read(doc, element, line); } catch (Exception) { }
         var values = new List<M.Value>();
         foreach (Parameter p in element.Parameters)
         {

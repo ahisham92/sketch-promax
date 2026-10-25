@@ -40,6 +40,22 @@ internal static class RecoveryTests
         check("recovery: a moved element's line is a few hundred bytes", lineSize < 500, lineSize + " bytes");
         check("recovery: numbers are rounded short", M.Round(1.0 / 3) == 0.3333333, M.Round(1.0 / 3).ToString());
 
+        string Src(params string[] parts) => File.ReadAllText(Path.Combine([repoRoot, "src", "SketchProMax", .. parts]));
+        // Sketches: a floor's outline is kept as loops of edges; drawn in another order or direction it's the same outline.
+        List<M.Seg> Rect(double x1, double y1) => [new(new(0, 0, 0), new(x1, 0, 0)), new(new(x1, 0, 0), new(x1, y1, 0)), new(new(x1, y1, 0), new(0, y1, 0)), new(new(0, y1, 0), new(0, 0, 0))];
+        var outline = Rect(20, 10);
+        var turned = Enumerable.Reverse(outline).Select(g => new M.Seg(g.Q, g.P)).ToList();
+        check("recovery: an outline drawn in another order or direction is the same", M.SameLoops([outline], [turned]), "");
+        check("recovery: a bigger outline is a change", !M.SameLoops([outline], [Rect(20, 12)]), "");
+        check("recovery: a slope on a roof edge is a change", !M.SameLoops([outline], [[outline[0] with { Slope = 0.5 }, .. outline.Skip(1)]]), "");
+        check("recovery: shape points compare by place", M.SamePoints([new(1, 2, 3)], [new(1, 2, 3)]) && !M.SamePoints([new(1, 2, 3)], [new(1, 2, 4)]), "");
+        var floor = new M.Line { Kind = M.Kinds.State, At = at, Unique = "f1", What = "floor", Category = "Floors", Type = "Floor: 250", Level = "Level 1", Loops = [outline] };
+        var floorText = M.Write(floor);
+        var floorBack = M.Read([floorText]).Elements.Single();
+        check("recovery: a floor's outline reads back", M.SameLoops(floorBack.Loops, [outline]) && floorBack.What == "floor", floorText);
+        check("recovery: a four-edge floor's line stays small", floorText.Length < 600, floorText.Length + " bytes");
+        check("recovery: replay can redraw sketches", Src("Revit", "ChangeShapes.cs").Contains("SketchEditScope") && Src("Revit", "ChangeShapes.cs").Contains("Floor.Create"), "");
+
         // Files and names.
         check("recovery: folder names keep same-named models apart", M.FolderName(@"C:\A\Port.rvt") != M.FolderName(@"C:\B\Port.rvt") && M.FolderName(@"C:\A\Port.rvt").StartsWith("Port ("), M.FolderName(@"C:\A\Port.rvt"));
         var leftovers = Enumerable.Range(0, 8).Select(i => M.LeftoverName(at.AddHours(i))).Append(M.CurrentName).Append("notes.txt").ToList();
@@ -49,7 +65,6 @@ internal static class RecoveryTests
         check("recovery: one millimetre is a change, a hundredth of one isn't", !M.Same(0, 0.00328) && M.Same(0, 0.00001), "");
 
         // Wiring: started with the core, in the ribbon and pane, the setting on the Recovery tab, the folder listed.
-        string Src(params string[] parts) => File.ReadAllText(Path.Combine([repoRoot, "src", "SketchProMax", .. parts]));
         check("recovery: the change file starts and stops with the core", Src("App.cs").Contains("ChangeFile.Start(app)") && Src("App.cs").Contains("ChangeFile.Stop()"), "");
         check("recovery: Recover is on the pane", SketchProMax.UI.CoreRibbonManifest.Text.Split('\n').Count(l => l.StartsWith("pane\t") && l.Contains("\trecover\t")) == 1
             && Src("CoreEntry.cs").Contains("\"recover\" => RecoverWindow.Open()"), "");

@@ -490,11 +490,13 @@ internal static class FieldTestCoverage
             "in the test project, with the change file sent to a temporary folder: a new wall, a moved and renamed column type change and a deleted element each reach the file within a few idle moments as one line per element (UniqueId, type, level, place and values), and saving the project moves the file to \"before last save\" and starts it empty; nothing in the model is changed by the file itself"),
         new("recovery.replay", Central, "Replay puts the changes back", How.Probe, "",
             "in the test project: a change file with a wall moved and its comment changed, a column made after the save and an element deleted is played onto it; the wall goes back to the file's place and comment, the column is made again on its level with its type, the deleted element goes, an element the file can't make is listed to redo by hand, and Ctrl+Z (rolling the groups back) leaves the project as it was"),
+        new("recovery.shapes", Central, "Replay puts floors and other sketches back", How.Probe, "",
+            "in the test project: a floor whose outline was changed after the save is redrawn from the file's outline, and a floor deleted after the save is made again on its level with its type and outline; what the test made is deleted afterwards"),
         new("recovery.ui", Central, "Recover after Revit closes by itself, on a real shared model", How.Manual, "", "needs Revit to close by itself and a real central model",
-            "On a workshared test model (a new local of a test central, never the live project): move two columns, change a wall's type and comment, add a beam and delete a door, without saving. " +
+            "On a workshared test model (a new local of a test central, never the live project): move two columns, change a wall's type and comment, add a beam and delete a door, edit a floor's outline, draw a new floor and a footprint roof with a sloped edge, without saving. " +
             "Open Documents\\Sketch ProMax\\Change files\\<model>\\changes since last save.txt in Notepad: it lists those elements. End Revit in Task Manager. Start Revit and open the same local: " +
             "the Recover window opens by itself and says the model has changes that weren't saved. Press Replay…: the preview says what it will set back, make again and delete. Press Replay now: " +
-            "the columns, wall, beam and door are as before the crash; the report lists anything to redo by hand. Synchronize with central: the changes reach central. Save: the change file is empty again. " +
+            "the columns, wall, beam, door, floors and roof (with its slope) are as before the crash; the report lists anything to redo by hand. Synchronize with central: the changes reach central. Save: the change file is empty again. " +
             "Also from the pane's Files section: Recover > Replay a file from disk… with a change file copied elsewhere."),
 
         // ---- Bug fixes checked by a person (the rest are field-test cases named "tool bug#N", see BugChecks)

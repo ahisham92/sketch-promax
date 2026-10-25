@@ -92,6 +92,17 @@ internal static class ChangeFileMath
         [property: JsonPropertyName("z")] double Z);
 
     /// <summary>
+    /// One edge of a sketch or path: a straight line from P to Q, or an arc through M. Roof edges also say whether they
+    /// set the slope and at what angle. Curves of other kinds (splines, ellipses) are written as short straight lines
+    /// (the line's Approx says so).
+    /// </summary>
+    public sealed record Seg(
+        [property: JsonPropertyName("p")] Xyz P,
+        [property: JsonPropertyName("q")] Xyz Q,
+        [property: JsonPropertyName("m"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] Xyz? M = null,
+        [property: JsonPropertyName("s"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? Slope = null);
+
+    /// <summary>
     /// One value from the element's properties. Found again by its built-in id (Bip), else its shared parameter's GUID,
     /// else its name. Kind: d (number, internal units), i (whole number), s (text), e (another element, by UniqueId in
     /// Ref, or Ref empty for none).
@@ -138,6 +149,24 @@ internal static class ChangeFileMath
         /// <summary>Facing and hand flipped (doors and windows).</summary>
         [JsonPropertyName("ff"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public bool FacingFlipped { get; set; }
         [JsonPropertyName("hf"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public bool HandFlipped { get; set; }
+        /// <summary>A location curve's arc: a point on it between P and Q.</summary>
+        [JsonPropertyName("m"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public Xyz? M { get; set; }
+        /// <summary>
+        /// The sketch (floors, ceilings, roofs, openings, filled regions, toposolids, walls with an edited profile) as
+        /// loops of edges, a railing's path as one loop, and points of a shape-edited floor, roof or toposolid.
+        /// </summary>
+        [JsonPropertyName("loops"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public List<List<Seg>>? Loops { get; set; }
+        [JsonPropertyName("pts"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public List<Xyz>? Points { get; set; }
+        [JsonPropertyName("approx"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public bool Approx { get; set; }
+        /// <summary>The sketch also had a slope arrow (not in the loops: redone by hand when the element is made again).</summary>
+        [JsonPropertyName("arrow"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public bool SlopeArrow { get; set; }
+        /// <summary>Filled regions and detail lines: the view they are drawn in; model and detail lines: their line style, and a model line's plane.</summary>
+        [JsonPropertyName("view"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? View { get; set; }
+        [JsonPropertyName("ls"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? LineStyle { get; set; }
+        [JsonPropertyName("po"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public Xyz? PlaneOrigin { get; set; }
+        [JsonPropertyName("pn"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public Xyz? PlaneNormal { get; set; }
+        /// <summary>Openings: the top level of a shaft (by UniqueId).</summary>
+        [JsonPropertyName("top"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? TopLevel { get; set; }
         /// <summary>Level: its elevation (internal units).</summary>
         [JsonPropertyName("elev"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public double? Elevation { get; set; }
         [JsonPropertyName("v"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public List<Value>? Values { get; set; }
@@ -247,6 +276,36 @@ internal static class ChangeFileMath
 
     /// <summary>Two numbers are the same value (lengths in feet, angles in radians): a hundredth of a millimetre.</summary>
     public static bool Same(double a, double b) => Math.Abs(a - b) < 3.3e-5;
+
+    /// <summary>
+    /// Two sketches are the same shape: the same number of loops, and every edge of one in the other (either direction,
+    /// in any order), so a sketch is only edited when it really changed.
+    /// </summary>
+    public static bool SameLoops(List<List<Seg>>? a, List<List<Seg>>? b)
+    {
+        if (a is null || b is null) return a is null && b is null;
+        if (a.Count != b.Count || a.Sum(l => l.Count) != b.Sum(l => l.Count)) return false;
+        var left = b.SelectMany(l => l).ToList();
+        foreach (var seg in a.SelectMany(l => l))
+        {
+            var match = left.FindIndex(o => SameSeg(seg, o));
+            if (match < 0) return false;
+            left.RemoveAt(match);
+        }
+        return true;
+    }
+
+    // An arc's M is its middle point (half way along it), the same whichever way round it was drawn.
+    private static bool SameSeg(Seg a, Seg b) =>
+        ((Same(a.P, b.P) && Same(a.Q, b.Q)) || (Same(a.P, b.Q) && Same(a.Q, b.P))) && Same(a.M, b.M)
+        && (a.Slope is null ? b.Slope is null : b.Slope is { } s && Same(a.Slope.Value, s));
+
+    /// <summary>Two point sets of a shape-edited slab are the same (in any order).</summary>
+    public static bool SamePoints(List<Xyz>? a, List<Xyz>? b)
+    {
+        if (a is null || b is null) return (a?.Count ?? 0) == (b?.Count ?? 0);
+        return a.Count == b.Count && a.All(p => b.Any(q => Same(p, q)));
+    }
 
     public static bool Same(Xyz? a, Xyz? b) => a is null || b is null ? a is null && b is null : Same(a.X, b.X) && Same(a.Y, b.Y) && Same(a.Z, b.Z);
 }

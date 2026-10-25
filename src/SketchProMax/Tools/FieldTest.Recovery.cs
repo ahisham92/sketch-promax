@@ -158,4 +158,78 @@ internal static partial class FieldTest
             if (group.HasStarted()) group.RollBack();
         }
     }
+
+    /// <summary>
+    /// Floors, the main sketch case: a floor whose outline changed after the save is redrawn from the file (in a sketch
+    /// edit scope, so not inside a transaction group), a floor deleted after the save is made again from its outline
+    /// with its type and level. What it made is deleted afterwards.
+    /// </summary>
+    private static (string, string) RecoveryShapes(UIApplication app, State s)
+    {
+        if (TestDoc(app, s, out var why) is not { } doc) return Fail(why);
+        if (new FilteredElementCollector(doc).OfClass(typeof(FloorType)).Cast<FloorType>().FirstOrDefault(t => !t.IsFoundationSlab) is not { } floorType) return Fail("the test project has no floor type");
+        if (new FilteredElementCollector(doc).OfClass(typeof(Level)).FirstElement() is not Level level) return Fail("the test project has no level");
+        var z = level.Elevation;
+        List<M.Seg> Rect(double x0, double y0, double x1, double y1) =>
+        [
+            new(new(x0, y0, z), new(x1, y0, z)), new(new(x1, y0, z), new(x1, y1, z)),
+            new(new(x1, y1, z), new(x0, y1, z)), new(new(x0, y1, z), new(x0, y0, z)),
+        ];
+        var problems = new List<string>();
+        var made = new List<ElementId>();
+        try
+        {
+            Floor edited, gone;
+            using (var t = new Transaction(doc, "Field test: replay floors"))
+            {
+                t.Start();
+                edited = Floor.Create(doc, ChangeShapes.CurveLoops([Rect(100, 0, 120, 20)]), floorType.Id, level.Id);
+                gone = Floor.Create(doc, ChangeShapes.CurveLoops([Rect(130, 0, 140, 10)]), floorType.Id, level.Id);
+                t.Commit();
+            }
+            made.Add(edited.Id);
+            // The file: the first floor with a bigger outline (an L), the second as it was before it was deleted.
+            var lineEdited = ChangeFile.Capture(doc, edited)!;
+            if (lineEdited.Loops is not { Count: 1 } || lineEdited.Loops[0].Count != 4) problems.Add("a floor's outline isn't read as one loop of four edges");
+            var l = new List<M.Seg>
+            {
+                new(new(100, 0, z), new(130, 0, z)), new(new(130, 0, z), new(130, 10, z)), new(new(130, 10, z), new(110, 10, z)),
+                new(new(110, 10, z), new(110, 20, z)), new(new(110, 20, z), new(100, 20, z)), new(new(100, 20, z), new(100, 0, z)),
+            };
+            lineEdited.Loops = [l];
+            var lineGone = ChangeFile.Capture(doc, gone)!;
+            var goneUnique = gone.UniqueId;
+            using (var t = new Transaction(doc, "Field test: replay delete floor"))
+            {
+                t.Start();
+                doc.Delete(gone.Id);
+                t.Commit();
+            }
+            var parsed = M.Read([M.Write(lineEdited), M.Write(lineGone)]);
+            var outcome = new ChangeReplay.Outcome();
+            ChangeReplay.Apply(doc, ChangeReplay.Plan(doc, parsed), outcome);
+            if (outcome.MadeFor.TryGetValue(goneUnique, out var again)) made.Add(again);
+            var now = new M.Line();
+            ChangeShapes.Read(doc, edited, now);
+            if (!M.SameLoops(now.Loops, [l])) problems.Add("the edited floor's outline didn't come back (" + string.Join("; ", outcome.NotDone) + ")");
+            if (doc.GetElement(again) is not Floor remade || remade.FloorType.Id != floorType.Id || remade.LevelId != level.Id)
+                problems.Add("the deleted floor wasn't made again with its type on its level (" + string.Join("; ", outcome.NotDone) + ")");
+            else
+            {
+                var remadeLine = new M.Line();
+                ChangeShapes.Read(doc, remade, remadeLine);
+                if (!M.SameLoops(remadeLine.Loops, lineGone.Loops)) problems.Add("the floor made again doesn't have its outline");
+            }
+            return problems.Count == 0
+                ? Pass($"a floor's changed outline redrawn and a deleted floor made again from its outline ({outcome.Set} set back, {outcome.Made} made again)")
+                : Fail(string.Join("; ", problems));
+        }
+        finally
+        {
+            using var t = new Transaction(doc, "Field test: replay floors tidy up");
+            t.Start();
+            foreach (var id in made) try { if (doc.GetElement(id) is not null) doc.Delete(id); } catch (Exception) { }
+            t.Commit();
+        }
+    }
 }
