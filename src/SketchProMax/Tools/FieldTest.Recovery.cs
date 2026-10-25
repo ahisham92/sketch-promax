@@ -232,4 +232,69 @@ internal static partial class FieldTest
             t.Commit();
         }
     }
+
+    /// <summary>
+    /// Annotations: in a plan view of the test project, a text note whose text changed after the save is set back, and
+    /// a dimension between two grids and a text note deleted after the save are made again (the dimension on the same
+    /// grids). What it made is deleted afterwards.
+    /// </summary>
+    private static (string, string) RecoveryNotes(UIApplication app, State s)
+    {
+        if (TestDoc(app, s, out var why) is not { } doc) return Fail(why);
+        if (new FilteredElementCollector(doc).OfClass(typeof(ViewPlan)).Cast<ViewPlan>().FirstOrDefault(v => !v.IsTemplate && v.GenLevel is not null) is not { } plan) return Fail("the test project has no plan view");
+        if (new FilteredElementCollector(doc).OfClass(typeof(TextNoteType)).FirstElementId() is not { } textType || textType == ElementId.InvalidElementId) return Fail("the test project has no text type");
+        var problems = new List<string>();
+        var made = new List<ElementId>();
+        try
+        {
+            TextNote edited, goneText;
+            Dimension goneDim;
+            Grid a, b;
+            using (var t = new Transaction(doc, "Field test: replay notes"))
+            {
+                t.Start();
+                a = Grid.Create(doc, Line.CreateBound(new XYZ(200, 0, 0), new XYZ(200, 40, 0)));
+                b = Grid.Create(doc, Line.CreateBound(new XYZ(230, 0, 0), new XYZ(230, 40, 0)));
+                edited = TextNote.Create(doc, plan.Id, new XYZ(200, 50, 0), "Field test note", textType);
+                goneText = TextNote.Create(doc, plan.Id, new XYZ(200, 60, 0), "Field test note made again", textType);
+                var refs = new ReferenceArray();
+                refs.Append(new Reference(a));
+                refs.Append(new Reference(b));
+                goneDim = doc.Create.NewDimension(plan, Line.CreateBound(new XYZ(200, 20, 0), new XYZ(230, 20, 0)), refs);
+                t.Commit();
+            }
+            made.AddRange([a.Id, b.Id, edited.Id]);
+            var lineEdited = ChangeFile.Capture(doc, edited)!;
+            var lineText = ChangeFile.Capture(doc, goneText)!;
+            var lineDim = ChangeFile.Capture(doc, goneDim)!;
+            if (lineDim.Refs is not { Count: 2 }) problems.Add("a dimension's two grids aren't in its line");
+            using (var t = new Transaction(doc, "Field test: replay notes change"))
+            {
+                t.Start();
+                edited.Text = "Changed after the save";
+                doc.Delete(goneText.Id);
+                doc.Delete(goneDim.Id);
+                t.Commit();
+            }
+            var parsed = M.Read([M.Write(lineEdited), M.Write(lineText), M.Write(lineDim)]);
+            var outcome = new ChangeReplay.Outcome();
+            ChangeReplay.Apply(doc, ChangeReplay.Plan(doc, parsed), outcome);
+            made.AddRange(outcome.MadeFor.Values);
+            if (!edited.Text.StartsWith("Field test note", StringComparison.Ordinal)) problems.Add("the text note's text didn't come back (" + string.Join("; ", outcome.NotDone) + ")");
+            if (!outcome.MadeFor.TryGetValue(lineText.Unique!, out var textAgain) || doc.GetElement(textAgain) is not TextNote again || !again.Text.StartsWith("Field test note made again", StringComparison.Ordinal) || again.OwnerViewId != plan.Id)
+                problems.Add("the deleted text note wasn't made again in its view (" + string.Join("; ", outcome.NotDone) + ")");
+            if (!outcome.MadeFor.TryGetValue(lineDim.Unique!, out var dimAgain) || doc.GetElement(dimAgain) is not Dimension dim || dim.References.Size != 2)
+                problems.Add("the deleted dimension wasn't made again between its grids (" + string.Join("; ", outcome.NotDone) + ")");
+            return problems.Count == 0
+                ? Pass($"a text note's text set back, a deleted text note and dimension made again ({outcome.Set} set back, {outcome.Made} made again)")
+                : Fail(string.Join("; ", problems));
+        }
+        finally
+        {
+            using var t = new Transaction(doc, "Field test: replay notes tidy up");
+            t.Start();
+            foreach (var id in made) try { if (doc.GetElement(id) is not null) doc.Delete(id); } catch (Exception) { }
+            t.Commit();
+        }
+    }
 }

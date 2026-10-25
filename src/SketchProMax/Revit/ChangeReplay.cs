@@ -74,6 +74,7 @@ internal static class ChangeReplay
         "wall" or "instance" => "made after the last save, but its shape isn't a point or a straight line: make it again by hand",
         "type" => "a type made after the last save: duplicate it again by hand",
         "floor" or "ceiling" or "topo" or "region" or "railing" or "roof" or "roof-other" or "opening" or "modelcurve" or "detailcurve" => ChangeShapes.CanMake(line),
+        _ when ChangeNotes.Owns(line) => ChangeNotes.CanMake(line),
         _ => "made after the last save; this kind of element can't be made from the file: make it again by hand",
     };
 
@@ -174,7 +175,12 @@ internal static class ChangeReplay
                 }
                 break;
         }
-        if (line.Loops is not null || line.Points is not null)
+        if (ChangeNotes.Owns(line))
+        {
+            changed |= ChangeNotes.Set(doc, element, line, Remap(doc, outcome), outcome.NotDone, out var noteSketch);
+            if (noteSketch is { } id) outcome.Sketches.Add((id, element.Id, line, false));
+        }
+        else if (line.Loops is not null || line.Points is not null)
         {
             changed |= ChangeShapes.Set(doc, element, line, out var sketch);
             if (sketch is { } id) outcome.Sketches.Add((id, element.Id, line, false));
@@ -227,6 +233,7 @@ internal static class ChangeReplay
     {
         Element? Known(string? unique) => unique is null ? null : outcome.MadeFor.TryGetValue(unique, out var id) ? doc.GetElement(id) : doc.GetElement(unique);
         if (ChangeShapes.Make(doc, line, Type(doc, line), LevelOf(doc, line), Known) is { } shaped) return shaped;
+        if (ChangeNotes.Make(doc, line, Type(doc, line), LevelOf(doc, line), Known, Remap(doc, outcome), outcome.NotDone) is { } note) return note;
         switch (line.What)
         {
             case "level":
@@ -246,6 +253,12 @@ internal static class ChangeReplay
             {
                 if (Type(doc, line) is not FamilySymbol symbol) throw new InvalidOperationException($"the type {line.Type} isn't loaded in this model");
                 if (!symbol.IsActive) symbol.Activate();
+                // Detail items and other families drawn in a view.
+                if (line.View is not null)
+                {
+                    if (Known(line.View) is not View view) throw new InvalidOperationException("the view it was drawn in isn't in this model");
+                    return line.Q is { } vq ? doc.Create.NewFamilyInstance(Line.CreateBound(X(line.P!), X(vq)), symbol, view) : doc.Create.NewFamilyInstance(X(line.P!), symbol, view);
+                }
                 var lvl = LevelOf(doc, line);
                 var structural = Enum.TryParse<StructuralType>(line.Structural, out var st) ? st : StructuralType.NonStructural;
                 if (line.Q is { } q)
@@ -260,6 +273,15 @@ internal static class ChangeReplay
                 return lvl is not null ? doc.Create.NewFamilyInstance(X(line.P!), symbol, lvl, structural) : doc.Create.NewFamilyInstance(X(line.P!), symbol, structural);
             }
         }
+    }
+
+    /// <summary>Points a stable reference at the elements made again so far in this replay.</summary>
+    private static Func<string, string> Remap(Document doc, Outcome outcome)
+    {
+        var now = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var made in outcome.MadeFor)
+            if (doc.GetElement(made.Value)?.UniqueId is { } unique) now[made.Key] = unique;
+        return r => M.Remap(r, now);
     }
 
     private static ElementType? Type(Document doc, M.Line line)

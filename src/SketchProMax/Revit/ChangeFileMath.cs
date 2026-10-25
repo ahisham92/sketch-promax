@@ -119,6 +119,32 @@ internal static class ChangeFileMath
         [JsonPropertyName("r"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? Ref { get; set; }
     }
 
+    /// <summary>
+    /// Reinforcement details. Rebar: style (0 standard, 1 stirrup/tie), hooks at each end (type UniqueId and orientation,
+    /// 1 left, -1 right) and layout (Rule: Single, FixedNumber, MaximumSpacing, NumberWithSpacing, MinimumClearSpacing;
+    /// N bars, Spacing, Length of the set, bars on the normal's side, first and last bar shown). Area reinforcement: its
+    /// major direction (Dir). Area and path reinforcement: bar type (BarType); path: flipped.
+    /// </summary>
+    public sealed class Bar
+    {
+        [JsonPropertyName("sty"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public int Style { get; set; }
+        [JsonPropertyName("h0"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? HookStart { get; set; }
+        [JsonPropertyName("h1"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? HookEnd { get; set; }
+        [JsonPropertyName("o0"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public int OrientStart { get; set; }
+        [JsonPropertyName("o1"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public int OrientEnd { get; set; }
+        [JsonPropertyName("rule"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? Rule { get; set; }
+        [JsonPropertyName("n"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public int N { get; set; }
+        [JsonPropertyName("s"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public double Spacing { get; set; }
+        [JsonPropertyName("len"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public double Length { get; set; }
+        [JsonPropertyName("side"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public bool NormalSide { get; set; }
+        [JsonPropertyName("nf"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public bool NoFirst { get; set; }
+        [JsonPropertyName("nl"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public bool NoLast { get; set; }
+        [JsonPropertyName("free"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public bool FreeForm { get; set; }
+        [JsonPropertyName("dir"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public Xyz? Dir { get; set; }
+        [JsonPropertyName("bt"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? BarType { get; set; }
+        [JsonPropertyName("flip"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public bool Flip { get; set; }
+    }
+
     /// <summary>One line of the file.</summary>
     public sealed class Line
     {
@@ -167,6 +193,20 @@ internal static class ChangeFileMath
         [JsonPropertyName("pn"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public Xyz? PlaneNormal { get; set; }
         /// <summary>Openings: the top level of a shaft (by UniqueId).</summary>
         [JsonPropertyName("top"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? TopLevel { get; set; }
+        /// <summary>
+        /// Annotations: what a tag, dimension or spot points at, as Revit's stable references (they name the element by
+        /// its UniqueId, so one made again is found by swapping in its new UniqueId).
+        /// </summary>
+        [JsonPropertyName("refs"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public List<string>? Refs { get; set; }
+        /// <summary>A text note's text and width; a tag's or spot's leader and a tag's orientation (0 horizontal, 1 vertical, 2 model).</summary>
+        [JsonPropertyName("txt"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? Text { get; set; }
+        [JsonPropertyName("w"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public double? Width { get; set; }
+        [JsonPropertyName("ldr"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public bool Leader { get; set; }
+        [JsonPropertyName("or"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public int Orientation { get; set; }
+        /// <summary>A revision cloud's revision (by UniqueId).</summary>
+        [JsonPropertyName("rev"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? Revision { get; set; }
+        /// <summary>Reinforcement: bar layout, hooks and bar type (the bar's or system's shape is in Loops).</summary>
+        [JsonPropertyName("bar"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public Bar? Bar { get; set; }
         /// <summary>Level: its elevation (internal units).</summary>
         [JsonPropertyName("elev"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public double? Elevation { get; set; }
         [JsonPropertyName("v"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public List<Value>? Values { get; set; }
@@ -249,7 +289,7 @@ internal static class ChangeFileMath
     /// </summary>
     public static List<Line> PlayOrder(Parsed file)
     {
-        int Rank(Line l) => l.Kind == Kinds.Deleted ? 9 : l.What switch { "level" => 0, "grid" => 1, "type" => 2, "wall" => 3, _ => 4 };
+        int Rank(Line l) => l.Kind == Kinds.Deleted ? 9 : l.What switch { "level" => 0, "grid" => 1, "type" => 2, "wall" => 3, _ when IsNote(l) => 5, _ => 4 };
         var ranked = file.Elements.Select((l, i) => (Line: l, Index: i)).OrderBy(x => Rank(x.Line)).ThenBy(x => x.Index).Select(x => x.Line).ToList();
         // Hosted instances after their host, when the host is in the file.
         var position = ranked.Select((l, i) => (l.Unique, i)).Where(x => x.Unique is not null).GroupBy(x => x.Unique!).ToDictionary(g => g.Key, g => g.First().i);
@@ -263,6 +303,20 @@ internal static class ChangeFileMath
         }
         foreach (var l in ranked) Place(l, 0);
         return result;
+    }
+
+    /// <summary>Tags, dimensions and spots point at other elements: they are played after everything they could point at.</summary>
+    public static bool IsNote(Line l) => l.What is "tag" or "roomtag" or "dimension" or "spot";
+
+    /// <summary>
+    /// A stable reference with the UniqueIds of elements made again swapped for their new ones (Revit's stable reference
+    /// starts with the element's UniqueId, and a linked one has it after a colon).
+    /// </summary>
+    public static string Remap(string reference, IReadOnlyDictionary<string, string> madeAgain)
+    {
+        foreach (var part in reference.Split(':'))
+            if (part.Length >= 36 && madeAgain.TryGetValue(part, out var now)) reference = reference.Replace(part, now);
+        return reference;
     }
 
     /// <summary>A line as the Replay window lists it: "17:42 Structural Columns: C 600x600 (moved or changed)".</summary>
