@@ -9,6 +9,17 @@ internal static class ChatHistoryTests
         check("history: title without markdown", ChatHistory.AutoTitle("**Check** the `beams` on level 2.") == "Check the beams on level 2", ChatHistory.AutoTitle("**Check** the `beams` on level 2."));
         var longTitle = ChatHistory.AutoTitle("please go through every sheet in the set and renumber the drawings so they follow the new scheme");
         check("history: long title cut at a word", longTitle.EndsWith("…") && longTitle.Length <= 49 && !longTitle.Contains("  "), longTitle);
+        // A coordinator chat is saved once its session starts, before any request: it stays unnamed until the first one.
+        var early = new Conversation { SessionId = "s", Items = [new ChatItem { Kind = "note", Text = "Automatic picked Opus" }] };
+        check("history: a chat saved before its first request stays unnamed", ChatHistory.NameFor(early) == "", ChatHistory.NameFor(early));
+        early.Items.Add(new ChatItem { Kind = "user", Text = "check the beams on level 2" });
+        check("history: the first request names it", ChatHistory.NameFor(early) == "Check the beams on level 2", ChatHistory.NameFor(early));
+        early.Name = ChatHistory.Untitled;
+        check("history: a chat saved as New chat earlier is named from its first request", ChatHistory.NameFor(early) == "Check the beams on level 2", ChatHistory.NameFor(early));
+        early.Name = "Beams";
+        check("history: a chat's own name stays", ChatHistory.NameFor(early) == "Beams", ChatHistory.NameFor(early));
+        var picture = new Conversation { Items = [new ChatItem { Kind = "user", Text = "", Name = "screenshot.png" }] };
+        check("history: a picture-only request names it by the file", ChatHistory.NameFor(picture) == "Screenshot.png", ChatHistory.NameFor(picture));
         check("history: empty request is New chat", ChatHistory.AutoTitle("  \n ") == "New chat" && ChatHistory.AutoTitle(null) == "New chat", "");
 
         var now = new DateTime(2026, 10, 16, 12, 0, 0);

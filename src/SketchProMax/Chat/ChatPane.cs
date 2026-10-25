@@ -1057,7 +1057,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
 
     private void ShowTitle()
     {
-        _chatName.Text = _conv.Name.Length > 0 ? _conv.Name : _conv.Items.Count == 0 ? "New chat" : ChatHistory.AutoTitle(_conv.Items.FirstOrDefault(i => i.Kind == "user")?.Text);
+        _chatName.Text = ChatHistory.NameFor(_conv) is { Length: > 0 } name ? name : ChatHistory.Untitled;
         _chatName.ToolTip = _chatName.Text;
         _modelLine.Text = (_conv.Pinned ? "\u2605 Pinned · " : "") + _conv.Title;
         _modelLine.ToolTip = "Each Revit model keeps its own chats, also after Revit restarts; open the others from the menu at the top left. " + _conv.Key;
@@ -2019,7 +2019,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         _pending.Clear();
         ShowChips();
         Add(new ChatItem { Kind = "user", Text = text, Name = string.Join(", ", attachments.Select(a => a.Name)), Files = attachments.Select(a => a.Path).ToList() });
-        if (_conv.Name.Length == 0) _conv.Name = ChatHistory.AutoTitle(text.Length > 0 ? text : string.Join(", ", attachments.Select(a => a.Name)));
+        _conv.Name = ChatHistory.NameFor(_conv);
         Save(); // the request is on disk before Claude Code starts on it
         ShowTitle();
         SupersedeBriefs();
