@@ -134,10 +134,10 @@ internal static class SharingTests
         check("sharing: readme gives the one-line install for PCs that block .cmd files", readme.Contains("cannot access the specified device") && readme.Contains(InstallLine), readme);
         check("sharing: readme without an update folder", Readme(new Pack { Id = "a", Name = "A" }).Contains("install a newer zip"), "");
 
-        // ---- Sketch ProMax's ribbon (0.35 redesign): Share tools heads a stack on the Sketch ProMax panel, after Under development
-        var shipped = SketchProMax.Loader.RibbonManifest.Parse(CoreRibbonManifest.Text).Controls.Where(c => c.Group == "Sketch ProMax").ToList();
+        // ---- Sketch ProMax's ribbon (0.35.14, the owner asked for it to be clear): Share tools is a large button in the first panel, after Lifeline
+        var shipped = SketchProMax.Loader.RibbonManifest.Parse(CoreRibbonManifest.Text).Controls.Where(c => c.Group == "Claude").ToList();
         var at = shipped.FindIndex(c => c.Command == "share-tools");
-        check("sharing: Share tools follows Under development on the Sketch ProMax panel", at > 0 && shipped[at - 1].Id == "UnderDevelopment" && shipped[at].Small,
+        check("sharing: Share tools is large in the first panel, after Lifeline", at > 0 && shipped[at - 1].Command == "recover" && !shipped[at].Small && !shipped[at - 1].Small,
             string.Join(",", shipped.Select(c => c.Id)));
 
         // ---- Files that ship
