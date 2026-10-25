@@ -10,15 +10,27 @@
   <ItemGroup>
     <Compile Include="../../src/SketchProMax/Tools/ScriptSource.cs" Link="ScriptSource.cs" />
     <Compile Include="../../src/SketchProMax/Chat/StreamJson.cs" Link="StreamJson.cs" />
+    <Compile Include="../../src/SketchProMax/Chat/PlanUsage.cs" Link="PlanUsage.cs" />
     <Compile Include="../../src/SketchProMax/Chat/PdfAttachment.cs" Link="PdfAttachment.cs" />
     <Compile Include="../../src/SketchProMax/Chat/OfficeText.cs" Link="OfficeText.cs" />
     <Compile Include="../../src/SketchProMax/Tools/PdfFiles.cs" Link="PdfFiles.cs" />
+    <Compile Include="../../src/SketchProMax/Tools/PdfEngine.cs" Link="PdfEngine.cs" />
+    <Compile Include="../../src/SketchProMax/Tools/PdfEditSession.cs" Link="PdfEditSession.cs" />
+    <Compile Include="../../src/SketchProMax/Tools/PdfEditCheck.cs" Link="PdfEditCheck.cs" />
     <Compile Include="../../src/SketchProMax/Chat/Markdown.cs" Link="Markdown.cs" />
     <Compile Include="../../src/SketchProMax/Chat/StreamRender.cs" Link="StreamRender.cs" />
     <Compile Include="../../src/SketchProMax/Chat/Greeting.cs" Link="Greeting.cs" />
     <Compile Include="../../src/SketchProMax/Chat/ChatStyles.cs" Link="ChatStyles.cs" />
     <Compile Include="../../src/SketchProMax/Chat/ChatModels.cs" Link="ChatModels.cs" />
     <Compile Include="../../src/SketchProMax/Chat/ChatHistory.cs" Link="ChatHistory.cs" />
+    <Compile Include="../../src/SketchProMax/Chat/JobBoard.cs" Link="JobBoard.cs" />
+    <Compile Include="../../src/SketchProMax/Chat/ChatAuto.cs" Link="ChatAuto.cs" />
+    <Compile Include="../../src/SketchProMax/Bridge/JobTurns.cs" Link="JobTurns.cs" />
+    <Compile Include="../../src/SketchProMax/Bridge/McpHttp.cs" Link="McpHttp.cs" />
+    <Compile Include="../../src/SketchProMax/Bridge/ConnectorTools.cs" Link="ConnectorTools.cs" />
+    <Compile Include="../../src/SketchProMax/Bridge/RevitTargets.cs" Link="RevitTargets.cs" />
+    <Compile Include="../../src/SketchProMax/Bridge/PdfPartReader.cs" Link="PdfPartReader.cs" />
+    <Compile Include="../../src/SketchProMax/Chat/ToolsNote.cs" Link="ToolsNote.cs" />
     <Compile Include="../../src/SketchProMax/Chat/ChatStore.cs" Link="ChatStore.cs" />
     <Compile Include="../../src/SketchProMax/Chat/ChatRecall.cs" Link="ChatRecall.cs" />
     <Compile Include="../../src/SketchProMax/Chat/ChatHandover.cs" Link="ChatHandover.cs" />
@@ -33,17 +45,21 @@
     <Compile Include="../../src/SketchProMax/Tools/ModelRules.cs" Link="ModelRules.cs" />
     <Compile Include="../../src/SketchProMax.Loader/RibbonManifest.cs" Link="RibbonManifest.cs" />
     <Compile Include="../../src/SketchProMax/UI/CoreRibbonManifest.cs" Link="CoreRibbonManifest.cs" />
+    <Compile Include="../../src/SketchProMax/UI/ResultView.cs" Link="ResultView.cs" />
     <Compile Include="../../src/SketchProMax/UI/Favourites.cs" Link="Favourites.cs" />
     <Compile Include="../../src/SketchProMax/UI/LoaderCompat.cs" Link="LoaderCompat.cs" />
     <Compile Include="../../src/SketchProMax/Revit/RevitBlock.cs" Link="RevitBlock.cs" />
+    <Compile Include="../../src/SketchProMax/Revit/RunningCall.cs" Link="RunningCall.cs" />
     <Compile Include="../../src/SketchProMax/Chat/MemoryNotes.cs" Link="MemoryNotes.cs" />
     <Compile Include="../../src/SketchProMax/Bugs/BugLog.cs" Link="BugLog.cs" />
+    <Compile Include="../../src/SketchProMax/Bugs/UserFolders.cs" Link="UserFolders.cs" />
     <Compile Include="../../src/SketchProMax/Tools/LayoutMath.cs" Link="LayoutMath.cs" />
     <Compile Include="../../src/SketchProMax/Tools/ToolForm.cs" Link="ToolForm.cs" />
     <Compile Include="../../src/SketchProMax/UI/UpdateBadge.cs" Link="UpdateBadge.cs" />
     <Compile Include="../../src/SketchProMax/UI/UpdateNoticeRules.cs" Link="UpdateNoticeRules.cs" />
     <Compile Include="../../src/SketchProMax/Update/AddinFiles.cs" Link="AddinFiles.cs" />
     <Compile Include="../../src/SketchProMax/Update/ReleaseSource.cs" Link="ReleaseSource.cs" />
+    <Compile Include="../../src/SketchProMax/Update/UpdateResume.cs" Link="UpdateResume.cs" />
     <Compile Include="../../src/SketchProMax/Tools/TypeCatalog.cs" Link="TypeCatalog.cs" />
     <Compile Include="../../src/SketchProMax/Tools/CarbonMath.cs" Link="CarbonMath.cs" />
     <Compile Include="../../src/SketchProMax/Tools/VeMath.cs" Link="VeMath.cs" />
@@ -53,20 +69,48 @@
     <Compile Include="../../src/SketchProMax/Tools/ChecklistMath.cs" Link="ChecklistMath.cs" />
     <Compile Include="../../src/SketchProMax/Tools/ChecklistDocx.cs" Link="ChecklistDocx.cs" />
     <Compile Include="../../src/SketchProMax/Tools/ChecklistXlsx.cs" Link="ChecklistXlsx.cs" />
+    <Compile Include="../../src/SketchProMax/Tools/OfficeDocs.cs" Link="OfficeDocs.cs" />
+    <Compile Include="../../src/SketchProMax/Tools/OfficeDocx.cs" Link="OfficeDocx.cs" />
+    <Compile Include="../../src/SketchProMax/Tools/OfficePptx.cs" Link="OfficePptx.cs" />
+    <Compile Include="../../src/SketchProMax/Tools/OfficePdf.cs" Link="OfficePdf.cs" />
+    <Compile Include="../../src/SketchProMax/Chat/ChatFiles.cs" Link="ChatFiles.cs" />
     <Compile Include="../../src/SketchProMax/Tools/ChecklistHelper.cs" Link="ChecklistHelper.cs" />
     <Compile Include="../../src/SketchProMax/Tools/ChecklistProjects.cs" Link="ChecklistProjects.cs" />
+    <Compile Include="../../src/SketchProMax/Tools/BerthStatusMath.cs" Link="BerthStatusMath.cs" />
+    <Compile Include="../../src/SketchProMax/Tools/BerthCostMath.cs" Link="BerthCostMath.cs" />
+    <Compile Include="../../src/SketchProMax/Tools/XlsxBook.cs" Link="XlsxBook.cs" />
+    <Compile Include="../../src/SketchProMax/Tools/BerthCostExports.cs" Link="BerthCostExports.cs" />
+    <Compile Include="../../src/SketchProMax/Tools/BerthCostDocs.cs" Link="BerthCostDocs.cs" />
+    <Compile Include="../../src/SketchProMax/Tools/AssemblyCodeText.cs" Link="AssemblyCodeText.cs" />
+    <Compile Include="../../src/SketchProMax/Tools/BepSheetText.cs" Link="BepSheetText.cs" />
+    <Compile Include="../../src/SketchProMax/Tools/BimReadyPlan.cs" Link="BimReadyPlan.cs" />
+    <Compile Include="../../src/SketchProMax/Tools/BerthStatusReport.cs" Link="BerthStatusReport.cs" />
+    <Compile Include="../../src/SketchProMax/Tools/SubmissionChecklistMath.cs" Link="SubmissionChecklistMath.cs" />
+    <Compile Include="../../src/SketchProMax/Tools/SubmissionChecklistTemplate.cs" Link="SubmissionChecklistTemplate.cs" />
+    <Compile Include="../../src/SketchProMax/Tools/SubmissionChecklistBank.cs" Link="SubmissionChecklistBank.cs" />
+    <Compile Include="../../src/SketchProMax/Tools/SubmissionChecklistDiagrams.cs" Link="SubmissionChecklistDiagrams.cs" />
+    <Compile Include="../../src/SketchProMax/Tools/SubmissionChecklistDocx.cs" Link="SubmissionChecklistDocx.cs" />
+    <Compile Include="../../src/SketchProMax/Tools/SubmissionChecklistReview.cs" Link="SubmissionChecklistReview.cs" />
     <EmbeddedResource Include="../../src/SketchProMax/Data/pre-submission-checklist.json" LogicalName="SketchProMax.pre-submission-checklist.json" />
     <Compile Include="../../src/SketchProMax/Tools/DrawingPackageMath.cs" Link="DrawingPackageMath.cs" />
     <Compile Include="../../src/SketchProMax/Tools/RedlineMath.cs" Link="RedlineMath.cs" />
     <Compile Include="../../src/SketchProMax/Tools/RecentRuns.cs" Link="RecentRuns.cs" />
     <EmbeddedResource Include="../../src/SketchProMax/Data/carbon-factors.csv" LogicalName="SketchProMax.carbon-factors.csv" />
     <Compile Include="../../src/SketchProMax/Revit/StartupTimings.cs" Link="StartupTimings.cs" />
+    <Compile Include="../../src/SketchProMax/Licensing/LicenseKey.cs" Link="LicenseKey.cs" />
+    <Compile Include="../../src/SketchProMax/Licensing/LicenseState.cs" Link="LicenseState.cs" />
+    <Compile Include="../../src/SketchProMax/Licensing/IssuedList.cs" Link="IssuedList.cs" />
+    <Compile Include="../../src/SketchProMax/Licensing/ChangesPublisher.cs" Link="ChangesPublisher.cs" />
     <Compile Include="../../src/SketchProMax/Tools/HandoffCore.cs" Link="HandoffCore.cs" />
     <Compile Include="../../src/SketchProMax/Tools/HelpGuides.cs" Link="HelpGuides.cs" />
     <Compile Include="../../src/SketchProMax/Tools/StaticDimensionText.cs" Link="StaticDimensionText.cs" />
     <EmbeddedResource Include="../../docs/guides/*.md" LogicalName="SketchProMax.guides.%(Filename).md" />
     <Compile Include="../../src/SketchProMax/Tools/FieldTestCoverage.cs" Link="FieldTestCoverage.cs" />
+    <Compile Include="../../src/SketchProMax/Tools/FieldTestProven.cs" Link="FieldTestProven.cs" />
+    <Compile Include="../../src/SketchProMax/Tools/FieldTestJournal.cs" Link="FieldTestJournal.cs" />
+    <EmbeddedResource Include="../../src/SketchProMax/Data/field-test-proven.json" LogicalName="SketchProMax.field-test-proven.json" />
     <Compile Include="../../src/SketchProMax/Sharing/SharedPackMath.cs" Link="SharedPackMath.cs" />
+    <Compile Include="../../src/SketchProMax/Sharing/TritoTabMath.cs" Link="TritoTabMath.cs" />
     <Compile Include="../../src/TritoRevit/PackButtons.cs" Link="PackButtons.cs" />
     <Compile Include="../../src/SketchProMax/Bridge/JobControl.cs" Link="JobControl.cs" />
     <Compile Include="../../src/SketchProMax/Chat/JobCardModel.cs" Link="JobCardModel.cs" />
@@ -78,5 +122,8 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.8.0" />
     <PackageReference Include="PdfPig" Version="0.1.9" />
+    <!-- PDFium for the PDF editor's engine (the add-in ships the Windows one as SketchProMax.pdfium.dll). -->
+    <PackageReference Include="bblanchon.PDFium.Win32" Version="157.0.8086" />
+    <PackageReference Include="bblanchon.PDFium.Linux" Version="157.0.8086" />
   </ItemGroup>
 </Project>

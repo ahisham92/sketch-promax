@@ -307,22 +307,18 @@ public sealed class DeleteElementsTool : IRevitTool
         if (ids.Count == 0)
             return ToolResult.Error(locked.Count > 0 ? $"Nothing deleted: {string.Join("; ", locked.Values.Take(10))}" : "None of those elements exist.");
 
-        // Dry run (rolled back) to learn what Revit will cascade-delete, while the elements still exist to be described.
+        // What Revit will cascade-delete, read while the elements still exist to be described (nothing is deleted to find
+        // out: deleting in a rolled-back transaction can close Revit, see DeleteSafety).
         var preview = new Dictionary<long, (string category, string name)>();
-        using (var dry = new Transaction(doc, "Sketch ProMax: preview delete"))
+        try
         {
-            dry.Start();
-            try
+            foreach (var id in ids.Concat(DeleteSafety.Dependents(doc, ids)))
             {
-                foreach (var id in doc.Delete(ids))
-                {
-                    var e = doc.GetElement(id);
-                    preview[id.Value] = (e?.Category?.Name ?? e?.GetType().Name ?? "Unknown", SafeName(e));
-                }
+                var e = doc.GetElement(id);
+                preview[id.Value] = (e?.Category?.Name ?? e?.GetType().Name ?? "Unknown", SafeName(e));
             }
-            catch (Autodesk.Revit.Exceptions.ApplicationException) { /* described one by one below */ }
-            dry.RollBack();
         }
+        catch (Autodesk.Revit.Exceptions.ApplicationException) { /* described one by one below */ }
 
         // All together first (fast); if Revit refuses that, each element on its own so only the refused ones stay.
         var failures = new List<object>();

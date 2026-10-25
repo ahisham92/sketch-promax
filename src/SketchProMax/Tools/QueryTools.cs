@@ -108,6 +108,19 @@ public sealed class QueryElementsTool : IRevitTool
     public string[] Required => ["category"];
     public bool ModifiesModel => false;
 
+    /// <summary>
+    /// Where types named like <paramref name="family"/> are when not in the asked category (chats asked Structural Columns
+    /// for sheet piles and casings, and Generic Models for manholes that are groups), or "".
+    /// </summary>
+    private static string ElsewhereNote(Document doc, string family, BuiltInCategory asked)
+    {
+        var found = DetailTypes.Matching(new FilteredElementCollector(doc).WhereElementIsElementType().Cast<ElementType>()
+                .Where(t => t.Category is { } c && c.Id.Value != (long)asked), family)
+            .GroupBy(t => t.Category!.Name).OrderByDescending(g => g.Count()).Take(4)
+            .Select(g => $"{g.Key} ({string.Join(", ", g.Take(3).Select(TypeMatch.Label))}{(g.Count() > 3 ? $", +{g.Count() - 3} more" : "")})").ToList();
+        return found.Count == 0 ? "" : $" Types matching it are in: {string.Join("; ", found)}. Ask that category instead.";
+    }
+
     public ToolResult Execute(UIApplication app, ToolArgs args)
     {
         var doc = app.ActiveUIDocument.Document;
@@ -128,7 +141,7 @@ public sealed class QueryElementsTool : IRevitTool
         if (args.OptString("family") is { Length: > 0 } family)
         {
             var types = DetailTypes.Matching(new FilteredElementCollector(doc).OfCategory(bic).WhereElementIsElementType().Cast<ElementType>(), family);
-            if (types.Count == 0) return ToolResult.Error($"No {args.String("category")} type matches '{family}'. Use list_types to see the loaded ones.");
+            if (types.Count == 0) return ToolResult.Error($"No {args.String("category")} type matches '{family}'.{ElsewhereNote(doc, family, bic)} Use list_types to see the loaded ones.");
             matchedTypes = types.Select(TypeMatch.Label).ToList();
             var typeIds = new HashSet<long>(types.Select(t => t.Id.Value));
             elements = elements.Where(e => typeIds.Contains(e.GetTypeId().Value));

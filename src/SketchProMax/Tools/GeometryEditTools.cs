@@ -143,12 +143,13 @@ internal static class VoidSolids
                 }
                 famDoc.Regenerate();
                 local = [];
-                foreach (var form in new FilteredElementCollector(famDoc).OfClass(typeof(GenericForm)).Cast<GenericForm>().Where(f => !f.IsSolid))
+                var voids = new FilteredElementCollector(famDoc).OfClass(typeof(GenericForm)).Cast<GenericForm>().Where(f => !f.IsSolid).ToList();
+                foreach (var form in voids)
                 {
                     var g = form.get_Geometry(new Options { DetailLevel = ViewDetailLevel.Fine });
                     if (g is null) continue;
                     foreach (var o in g)
-                        if (o is Solid s && Math.Abs(s.Volume) > 1e-9) local.Add(SolidUtils.Clone(s));
+                        if (o is Solid s && Math.Abs(s.Volume) > 1e-9) local.Add(Outward(form, s) is { } solid ? solid : SolidUtils.Clone(s));
                 }
                 t.RollBack();
                 if (local.Count == 0) { failure = "no void forms found in the family (voids in nested families aren't read)"; local = null; }
@@ -168,6 +169,41 @@ internal static class VoidSolids
         var placed = local.Select(s => SolidUtils.CreateTransformed(s, tr)).Where(s => s.Volume > 1e-9).ToList();
         if (placed.Count == 0) { why = "rebuilt solids came out inside-out (mirrored instance?)"; return null; }
         return placed;
+    }
+
+    /// <summary>
+    /// A void's own geometry comes inside out (a negative volume), so it came back as "inside-out" and was never used
+    /// (the field test's void family, bug log row 27). An extruded void is built again from its profile as an ordinary
+    /// solid of the same shape; other forms keep their geometry (null).
+    /// </summary>
+    private static Solid? Outward(GenericForm form, Solid solid)
+    {
+        if (solid.Volume > 0 || form is not Extrusion extrusion) return null;
+        try
+        {
+            var normal = extrusion.Sketch.SketchPlane.GetPlane().Normal;
+            double start = extrusion.StartOffset, end = extrusion.EndOffset;
+            var depth = Math.Abs(end - start);
+            if (depth < 1e-9) return null;
+            var shift = Transform.CreateTranslation(normal * Math.Min(start, end));
+            var loops = new List<CurveLoop>();
+            foreach (CurveArray array in extrusion.Sketch.Profile)
+            {
+                var loop = new CurveLoop();
+                foreach (Curve curve in array) loop.Append(curve.CreateTransformed(shift));
+                loops.Add(loop);
+            }
+            Solid built;
+            try { built = GeometryCreationUtilities.CreateExtrusionGeometry(loops, normal, depth); }
+            catch (Autodesk.Revit.Exceptions.ArgumentException)
+            {
+                // The profile drawn the other way round: the loops reversed.
+                foreach (var loop in loops) loop.Flip();
+                built = GeometryCreationUtilities.CreateExtrusionGeometry(loops, normal, depth);
+            }
+            return built.Volume > 1e-9 ? built : null;
+        }
+        catch (Exception ex) when (ex is Autodesk.Revit.Exceptions.ApplicationException or ArgumentException or InvalidOperationException) { return null; }
     }
 
     /// <summary>The type plus the values of the family's geometry-driving parameters, so instances that differ only in

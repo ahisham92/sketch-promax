@@ -31,6 +31,8 @@ internal static class SharingTests
             && CommandFor(new Tool { Kind = "command", Name = "a\tb" }) is null && CommandFor(new Tool { Kind = "other", Name = "x" }) is null, "");
         check("sharing: shareable commands", Shareable("pre-submission") && Shareable("tool:check_model") && !Shareable("tool:redline_apply")
             && !Shareable("tool:") && !Shareable("chat") && !Shareable("settings") && !Shareable("update"), "");
+        check("sharing: the PDF editor can be shared", Shareable("pdf-editor") && CommandFor(new Tool { Kind = "command", Name = "pdf-editor" }) == "pdf-editor"
+            && Commands.Any(c => c.Command == "pdf-editor" && c.Glyph == "pdf"), "");
         check("sharing: the pre-submission checklist is offered first", Commands[0].Command == "pre-submission", Commands[0].Command);
 
         // ---- pack.json
@@ -131,13 +133,29 @@ internal static class SharingTests
             && readme.Contains(pack.UpdateFrom) && readme.Contains("no restart"), readme);
         check("sharing: readme without an update folder", Readme(new Pack { Id = "a", Name = "A" }).Contains("install a newer zip"), "");
 
-        // ---- Sketch ProMax's ribbon: Share tools is a large button in the first panel, right after the checklist
-        var shipped = SketchProMax.Loader.RibbonManifest.Parse(CoreRibbonManifest.Text).Controls.Where(c => c.Group == "Claude").Select(c => c.Command).ToList();
-        var at = shipped.IndexOf("share-tools");
-        check("sharing: Share tools follows the pre-submission checklist", at > 0 && shipped[at - 1] == "pre-submission", string.Join(",", shipped));
-        check("sharing: Share tools is a large button", CoreRibbonManifest.Text.Split('\n').Any(l => l.Contains("\tShareTools\t") && !l.Contains("\tsmall")), "");
+        // ---- Sketch ProMax's ribbon (0.35 redesign): Share tools heads a stack on the Sketch ProMax panel, after Under development
+        var shipped = SketchProMax.Loader.RibbonManifest.Parse(CoreRibbonManifest.Text).Controls.Where(c => c.Group == "Sketch ProMax").ToList();
+        var at = shipped.FindIndex(c => c.Command == "share-tools");
+        check("sharing: Share tools follows Under development on the Sketch ProMax panel", at > 0 && shipped[at - 1].Id == "UnderDevelopment" && shipped[at].Small,
+            string.Join(",", shipped.Select(c => c.Id)));
 
         // ---- Files that ship
+        // ---- Help > Open folders: the same folders the add-in writes to
+        var folders = SketchProMax.Bugs.UserFolders.List();
+        string Src(params string[] parts) => Read(Path.Combine([root, "src", "SketchProMax", .. parts]));
+        check("folders: every folder has a title, a path and a tip, none twice", folders.Count >= 8
+            && folders.All(f => f.Title.Length > 0 && f.Path.Length > 0 && f.Tip.Length > 0)
+            && folders.Select(f => f.Path).Distinct(StringComparer.OrdinalIgnoreCase).Count() == folders.Count, string.Join(" | ", folders.Select(f => f.Path)));
+        bool Ends(string title, params string[] tail) => folders.Any(f => f.Title == title && f.Path.EndsWith(Path.Combine(tail), StringComparison.Ordinal));
+        check("folders: the paths match the add-in's own", Ends("Bugs", "Sketch ProMax", "Bugs") && Ends("Learned tools", "SketchProMax", "learned-tools")
+            && Ends("Recipes", "SketchProMax", "recipes") && Ends("Chats", "SketchProMax", "chat", "conversations")
+            && Ends("PDF backups", "Sketch ProMax", "PDF backups") && Ends("Field tests", "SketchProMax", "field-tests") && Ends("Checklists", "Sketch ProMax", "Checklists")
+            && Src("Tools", "LearnedTools.cs").Contains("\"SketchProMax\", \"learned-tools\"") && Src("Tools", "RecipeTools.cs").Contains("\"SketchProMax\", \"recipes\"")
+            && Src("Chat", "ChatStore.cs").Contains("\"SketchProMax\", \"chat\", \"conversations\"") && Src("Tools", "FieldTest.cs").Contains("\"SketchProMax\", \"field-tests\"")
+            && Src("UI", "PdfEditorWindow.cs").Contains("\"Sketch ProMax\", \"PDF backups\"") && Src("Sharing", "UserFolder.cs").Contains("\"Sketch ProMax\", \"Checklists\""), "");
+        check("folders: Help > Open folders runs the folders window", CoreRibbonManifest.Text.Contains("\tuser-folders\t")
+            && Src("CoreEntry.cs").Contains("\"user-folders\" => UserFoldersWindow.Open()"), "");
+
         var trito = Path.Combine(root, "src", "TritoRevit");
         var addin = Read(Path.Combine(trito, "TritoRevit.addin"));
         check("sharing: TritoRevit manifest", addin.Contains(@"<Assembly>TritoRevit\TritoRevit.dll</Assembly>") && addin.Contains("<FullClassName>TritoRevit.TritoApp</FullClassName>")

@@ -4,8 +4,9 @@ using System.Text.RegularExpressions;
 namespace SketchProMax.Chat;
 
 /// <summary>
-/// The Claude models the chat offers (passed to Claude Code with --model), the remembered choice, and how a model the
-/// user's plan doesn't allow is recognised. The last choice is kept in %LOCALAPPDATA%\SketchProMax\chat\model.txt.
+/// The models the chat offers, as Claude Code's aliases (passed with --model), so each follows the latest of its family;
+/// the remembered choice; and how a model the user's plan doesn't allow is recognised. Each chat keeps its own choice
+/// (Automatic or one of these, ChatAuto); model.txt in %LOCALAPPDATA%\SketchProMax\chat is what older versions kept.
 /// </summary>
 internal static class ChatModels
 {
@@ -13,17 +14,28 @@ internal static class ChatModels
 
     public static readonly IReadOnlyList<Choice> All =
     [
-        new("claude-opus-5-5", "Opus 5.5", "Best for big packages and multi-step work"),
-        new("claude-sonnet-5-5", "Sonnet 5.5", "The everyday default"),
-        new("claude-haiku-5-5", "Haiku 5.5", "Quick queries"),
-        new("claude-fable-5-1", "Fable 5.1", "Available on plans that include it"),
+        new("opus", "Opus", "Hard reasoning: specs against the model, redlines, tricky modelling"),
+        new("sonnet", "Sonnet", "Most everyday Revit work"),
+        new("haiku", "Haiku", "Quick, simple work: rename, tag, list"),
+        new("fable", "Fable", "Available on plans that include it"),
     ];
 
-    public const string DefaultId = "claude-sonnet-5-5";
+    public const string DefaultId = "sonnet";
 
-    /// <summary>The choice with this id; the default for an unknown or empty id.</summary>
-    public static Choice Find(string? id) =>
-        All.FirstOrDefault(c => string.Equals(c.Id, id?.Trim(), StringComparison.OrdinalIgnoreCase)) ?? All.First(c => c.Id == DefaultId);
+    /// <summary>
+    /// The alias <paramref name="id"/> names: the alias itself, or a full model name that contains it (what older
+    /// versions saved); null when it names none.
+    /// </summary>
+    public static string? Known(string? id)
+    {
+        var text = id?.Trim() ?? "";
+        if (text.Length == 0) return null;
+        return All.FirstOrDefault(c => string.Equals(c.Id, text, StringComparison.OrdinalIgnoreCase))?.Id
+            ?? All.FirstOrDefault(c => text.IndexOf(c.Id, StringComparison.OrdinalIgnoreCase) >= 0)?.Id;
+    }
+
+    /// <summary>The choice with this id (an alias, or a full name containing one); the default for an unknown or empty id.</summary>
+    public static Choice Find(string? id) => All.First(c => c.Id == (Known(id) ?? DefaultId));
 
     // Claude Code's own words when the plan or account can't use the model asked for, and nothing looser (a Revit tool's
     // "model ... not found" must not count): "There's an issue with the selected model (…). It may not exist or you may

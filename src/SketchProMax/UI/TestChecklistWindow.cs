@@ -12,7 +12,7 @@ using TextBox = System.Windows.Controls.TextBox;
 namespace SketchProMax.UI;
 
 /// <summary>
-/// The guided test checklist (ribbon Help > Test checklist, and the pane's Bugs section): the items the field test
+/// The guided test checklist (the pane's Bugs section; on the ribbon's Help menu until 0.35.1): the items the field test
 /// leaves to a person (FieldTestCoverage's manual features) and one step per fixed bug row of the bug log, each with
 /// what to do and why it is manual. The user marks each pass or fail with an optional note while working in Revit (the
 /// window doesn't block Revit); marks are kept as a draft between openings, and Save results writes a short Markdown
@@ -108,20 +108,44 @@ internal sealed class TestChecklistWindow : Window
 
         var list = new StackPanel();
         AutomationProperties.SetName(list, "Checklist items");
-        string? area = null;
-        foreach (var item in _items)
+        void AddItems(StackPanel into, IEnumerable<FieldTestCoverage.CheckItem> items)
         {
-            if (item.Area != area)
+            string? area = null;
+            foreach (var item in items)
             {
-                area = item.Area;
-                var heading = Brand.Text(area, bold: true, size: 14);
-                heading.Margin = new Thickness(0, list.Children.Count == 0 ? 0 : 14, 0, 4);
+                if (item.Area != area)
+                {
+                    area = item.Area;
+                    var heading = Brand.Text(area, bold: true, size: 14);
+                    heading.Margin = new Thickness(0, into.Children.Count == 0 ? 0 : 14, 0, 4);
 #if !NETFRAMEWORK
-                AutomationProperties.SetHeadingLevel(heading, AutomationHeadingLevel.Level2);
+                    AutomationProperties.SetHeadingLevel(heading, AutomationHeadingLevel.Level2);
 #endif
-                list.Children.Add(heading);
+                    into.Children.Add(heading);
+                }
+                into.Children.Add(Card(item));
             }
-            list.Children.Add(Card(item));
+        }
+        AddItems(list, _items.Where(i => i.Unchanged.Length == 0));
+        // Items whose code hasn't changed since the last full run: not asked again, listed apart and hidden until asked for.
+        var unchanged = _items.Where(i => i.Unchanged.Length > 0).ToList();
+        if (unchanged.Count > 0)
+        {
+            var more = new StackPanel { Visibility = Visibility.Collapsed };
+            AutomationProperties.SetName(more, "Items unchanged since the last full run");
+            AddItems(more, unchanged);
+            var show = Brand.Button($"Show the {unchanged.Count} items unchanged since {FieldTestProven.Load().Version}");
+            AutomationProperties.SetHelpText(show, "Their code hasn't changed since the last full run, so they are not asked again. You can still mark them.");
+            show.Margin = new Thickness(0, 14, 0, 6);
+            show.HorizontalAlignment = HorizontalAlignment.Left;
+            show.Click += (_, _) =>
+            {
+                var open = more.Visibility != Visibility.Visible;
+                more.Visibility = open ? Visibility.Visible : Visibility.Collapsed;
+                show.Content = $"{(open ? "Hide" : "Show")} the {unchanged.Count} items unchanged since {FieldTestProven.Load().Version}";
+            };
+            list.Children.Add(show);
+            list.Children.Add(more);
         }
         var scroll = new ScrollViewer
         {
@@ -131,7 +155,8 @@ internal sealed class TestChecklistWindow : Window
         body.Children.Add(scroll);
 
         var root = new DockPanel();
-        var header = Brand.Header("Test checklist", $"{_items.Count} checks only you can do, on a _detached copy");
+        var header = Brand.Header("Test checklist", $"{ToCheck} checks only you can do, on a _detached copy" +
+                                                    (ToCheck < _items.Count ? $" (new or changed since {FieldTestProven.Load().Version})" : ""));
         DockPanel.SetDock(header, Dock.Top);
         root.Children.Add(header);
         root.Children.Add(body);
@@ -180,6 +205,9 @@ internal sealed class TestChecklistWindow : Window
         return card;
     }
 
+    /// <summary>The items to check: new or changed since the last full run (the unchanged ones are listed apart).</summary>
+    private int ToCheck => _items.Count(i => i.Unchanged.Length == 0);
+
     private Dictionary<string, FieldTestCoverage.Mark> Marks() =>
         _rows.ToDictionary(r => r.Key, r => new FieldTestCoverage.Mark(r.Key,
             r.Value.Result.SelectedIndex switch { 1 => "pass", 2 => "fail", _ => "" }, r.Value.Note.Text.Trim()));
@@ -195,7 +223,7 @@ internal sealed class TestChecklistWindow : Window
     {
         var marks = Marks();
         int pass = marks.Values.Count(m => m.Result == "pass"), fail = marks.Values.Count(m => m.Result == "fail");
-        var left = _items.Count - pass - fail;
+        var left = _items.Count(i => i.Unchanged.Length == 0 && !(marks.TryGetValue(i.Id, out var m) && m.Result.Length > 0));
         _status.Text = $"{pass} pass, {fail} fail, {left} still to check." +
                        (left == 0 ? " All checked: click Save results." : " Save results any time; unchecked items are saved as \"not checked\".");
     }
@@ -286,8 +314,15 @@ internal sealed class TestChecklistWindow : Window
         }
     }
 
-    /// <summary>The checklist's items as the window lists them: the manual features and tools, then the fixed bug rows.</summary>
-    internal static List<FieldTestCoverage.CheckItem> Items() => FieldTestCoverage.Checklist(FieldTestCoverage.FixedBugs(BugLogText()));
+    /// <summary>
+    /// The checklist's items as the window lists them: the manual features and tools, then the fixed bug rows; the manual
+    /// features whose code is unchanged since the last full run (FieldTestProven) last, marked as such.
+    /// </summary>
+    internal static List<FieldTestCoverage.CheckItem> Items()
+    {
+        var proven = FieldTestProven.Load();
+        return FieldTestCoverage.Checklist(FieldTestCoverage.FixedBugs(BugLogText()), proven.ManualUnchanged, FieldTestProven.ManualNote(proven));
+    }
 
     /// <summary>Writes the result file into <paramref name="folder"/> (Save results; the field test, in a temporary folder). Returns its path.</summary>
     internal static string SaveTo(string folder, IReadOnlyList<FieldTestCoverage.CheckItem> items, IReadOnlyDictionary<string, FieldTestCoverage.Mark> marks,

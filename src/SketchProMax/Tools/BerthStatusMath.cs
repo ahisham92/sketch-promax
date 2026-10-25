@@ -1,0 +1,1197 @@
+using System.Globalization;
+using System.IO;
+using System.Text.Json;
+using System.Text.RegularExpressions;
+
+namespace SketchProMax.Tools;
+
+/// <summary>
+/// The berth status tracker (Berth status button): for a project with several models and berths, how far each berth is
+/// towards its next submission, as a percentage made of areas (modelling, categories and data, coordination, clashes,
+/// drawings, details, annotation, schedules and bills, deliverables such as calculations and costing), with the
+/// expected finish against the submission's due time (08:00 on the submission day, counting only working hours).
+///
+/// The setup (models, berths and how to find them in the model, the submission schedule, planned counts, deliverables,
+/// weights and the working week) comes from an Excel file the user keeps, imported once (Setup > Import); nothing of a
+/// project is in this code. The model is read only when the user presses Update status (BerthStatusFacts, in short
+/// steps); the window otherwise shows the last saved results. Results, hand entries, comments and history are kept per
+/// project in %APPDATA%\SketchProMax\berth status. No Revit or WPF here, so the tests compile it.
+/// </summary>
+internal static class BerthStatusMath
+{
+    // ---- Areas ------------------------------------------------------------------------------------------------------
+
+    /// <summary>An area of a berth's status: its key, its name and what it measures (shown in the window and the Excel).</summary>
+    public sealed record Area(string Key, string Name, string Measures, double Weight);
+
+    public const string Modelling = "modelling", CategoryData = "categories", Coordination = "coordination", Clashes = "clashes",
+        Drawings = "drawings", Details = "details", Annotation = "annotation", Schedules = "schedules", Deliverables = "deliverables";
+
+    public static readonly Area[] Areas =
+    [
+        new(Modelling, "Modelling", "Elements modelled in the berth against the planned counts (Planned sheet).", 20),
+        new(CategoryData, "Categories and data", "Elements on the right category and ready for the bills: no Generic Models, no in-place families, Assembly Code filled.", 10),
+        new(Coordination, "Services and openings", "Pipes, conduits, cable trays and ducts (in this model and every loaded link) that pass through the berth's structure with no opening, deeper than the clash tolerance; open clashes in the Navisworks clash report when one is set; links not loaded.", 15),
+        new(Clashes, "Structural clashes", "Structural elements in the berth that run into each other (not joined), deeper than the clash tolerance.", 10),
+        new(Drawings, "Drawings", "The berth's sheets against the planned drawings: each with views and a title block.", 20),
+        new(Details, "Details", "Detail and section views placed on the berth's sheets, empty drafting views, details not on a sheet.", 10),
+        new(Annotation, "Annotation", "On the berth's sheets: elements without a tag, and views without dimensions.", 10),
+        new(Schedules, "Schedules and bills", "The berth's schedules exist and are not empty.", 5),
+        new(Deliverables, "Deliverables", "Calculations, bills, back-up calculations of the bills, costing and the rest of the Deliverables sheet: by hand, or done when the file is in its folder.", 15),
+    ];
+
+    public static Area AreaOf(string key) => Areas.FirstOrDefault(a => a.Key == key) ?? new Area(key, key, "", 0);
+
+    // ---- The setup (from the user's Excel) --------------------------------------------------------------------------
+
+    public sealed class Setup
+    {
+        public string Title { get; set; } = "";
+        public List<Model> Models { get; set; } = [];
+        public List<Berth> Berths { get; set; } = [];
+        public List<Submission> Submissions { get; set; } = [];
+        public List<Planned> Planned { get; set; } = [];
+        public List<Deliverable> Deliverables { get; set; } = [];
+        /// <summary>Weight per area key; an area missing here keeps its default weight.</summary>
+        public Dictionary<string, double> Weights { get; set; } = new(StringComparer.Ordinal);
+        public Calendar Week { get; set; } = new();
+        /// <summary>Old setups: the categories once tagged in every view (replaced by <see cref="TagRules"/>; kept so old files still read).</summary>
+        public List<string> TagCategories { get; set; } = [];
+        /// <summary>
+        /// Which elements a view on the berth's sheets must tag: the first rule whose text is in the view's or its sheet's
+        /// name. A view no rule names needs no tags (an overall plan or a framing plan labelled with notes), only dimensions.
+        /// </summary>
+        public List<TagRule> TagRules { get; set; } = DefaultTagRules();
+        /// <summary>Overlaps thinner than this (mm) are not clashes: below it the fix isn't buildable or worth doing.</summary>
+        public double ClashToleranceMm { get; set; } = 50;
+        public string SourcePath { get; set; } = "";
+        public string SourceStamp { get; set; } = "";
+
+        public double WeightOf(string area) => Weights.TryGetValue(area, out var w) ? w : AreaOf(area).Weight;
+    }
+
+    /// <summary>A tagging rule: views (or sheets) whose name has <paramref name="ViewContains"/> tag every element of <paramref name="Categories"/> (comma separated).</summary>
+    public sealed record TagRule(string ViewContains, string Categories);
+
+    /// <summary>Piles plans tag every pile (with its type mark); other plans are labelled with notes and dimensions.</summary>
+    public static List<TagRule> DefaultTagRules() => [new("Piles plan", "Structural Columns"), new("Pile plan", "Structural Columns")];
+
+    /// <summary>The categories a view must tag (none when no rule names the view or its sheets).</summary>
+    public static List<string> TagCategoriesFor(Setup setup, string view, IEnumerable<string> sheets)
+    {
+        var names = new[] { view }.Concat(sheets).ToList();
+        var rule = setup.TagRules.FirstOrDefault(r => r.ViewContains.Trim().Length > 0 && names.Any(n => n.IndexOf(r.ViewContains.Trim(), StringComparison.OrdinalIgnoreCase) >= 0));
+        return rule is null ? [] : Values(rule.Categories);
+    }
+
+    /// <summary>A model of the project: matched to the open file by text in its file name.</summary>
+    /// <param name="Links">Linked models whose elements count for this model's berths (text in the link's name, comma separated): a documentation model issued from linked modelling models.</param>
+    /// <param name="ClashReport">The Navisworks clash report (XML), or the folder it is saved in (the newest report).</param>
+    public sealed record Model(string Name, string FileContains, string Links = "", string ClashReport = "");
+
+    public static class FindBy
+    {
+        public const string ScopeBox = "Scope box", Parameter = "Parameter", Workset = "Workset", WholeModel = "Whole model";
+        public static readonly string[] All = [ScopeBox, Parameter, Workset, WholeModel];
+
+        public static string Parse(string text)
+        {
+            var t = (text ?? "").Trim().ToLowerInvariant();
+            if (t.Contains("scope")) return ScopeBox;
+            if (t.Contains("param")) return Parameter;
+            if (t.Contains("workset")) return Workset;
+            return WholeModel;
+        }
+    }
+
+    /// <summary>A berth: which model it is in, and how its elements, sheets and schedules are found there.</summary>
+    /// <param name="Value">The scope box name, the parameter value or the text in the workset name; a package of several berths lists them with ";" or ",".</param>
+    /// <param name="Parameter">The parameter holding the berth (FindBy Parameter).</param>
+    /// <param name="Sheets">Text in the sheet number or name of the berth's sheets (empty: sheets showing the scope box, or every sheet for a whole model).</param>
+    /// <param name="Schedules">Text in the names of the berth's schedules (empty: the berth's name; "Berth 9" for a berth found by the value 9).</param>
+    /// <param name="Parent">For one berth of a package of several (see <see cref="ChildrenOf"/>): the package's name.</param>
+    public sealed record Berth(string Model, string Name, string FindBy, string Value = "", string Parameter = "", string Sheets = "", string Schedules = "", string Parent = "")
+    {
+        public string Key => KeyOf(Model, Parent.Length > 0 ? Parent + " / " + Name : Name);
+        public string ScheduleText => ScheduleTexts.FirstOrDefault() ?? Name.Trim();
+
+        /// <summary>The texts the berth's schedule names contain: the Schedules cell, else "Berth 9" for a berth found by its number, else its name.</summary>
+        public List<string> ScheduleTexts =>
+            Schedules.Trim().Length > 0 ? Values(Schedules)
+            : FindBy is BerthStatusMath.FindBy.Parameter or BerthStatusMath.FindBy.ScopeBox && Values(Value) is [var v] ? [ChildName(v)]
+            : [Name.Trim()];
+    }
+
+    /// <summary>A berth's name from its value: "9" is "Berth 9", "BERTH 9" stays as written.</summary>
+    public static string ChildName(string value) => value.Trim().All(char.IsDigit) ? "Berth " + value.Trim() : value.Trim();
+
+    /// <summary>
+    /// A package of several berths (Value "5; 6") read and shown one berth at a time: one berth per value, with the sheet
+    /// text at the same place in Sheets contain (or the package's), and its own schedules. Empty for a package of one.
+    /// </summary>
+    public static List<Berth> ChildrenOf(Berth package)
+    {
+        var values = Values(package.Value);
+        if (package.Parent.Length > 0 || values.Count < 2 || package.FindBy is not (BerthStatusMath.FindBy.Parameter or BerthStatusMath.FindBy.ScopeBox)) return [];
+        var sheets = Values(package.Sheets);
+        var schedules = Values(package.Schedules);
+        return values.Select((v, i) => new Berth(package.Model, ChildName(v), package.FindBy, v, package.Parameter,
+            sheets.Count == values.Count ? sheets[i] : package.Sheets, schedules.Count == values.Count ? schedules[i] : "", package.Name)).ToList();
+    }
+
+    /// <summary>What is read from the model: each berth of a package of several, and each package of one.</summary>
+    public static List<Berth> Units(IEnumerable<Berth> packages) => packages.SelectMany(b => ChildrenOf(b) is { Count: > 0 } c ? c : [b]).ToList();
+
+    /// <summary>The package a berth belongs to (itself for a package).</summary>
+    public static Berth PackageOf(Setup setup, Berth berth) =>
+        berth.Parent.Length == 0 ? berth : setup.Berths.FirstOrDefault(b => Same(b.Model, berth.Model) && Same(b.Name, berth.Parent)) ?? berth;
+
+    public static string KeyOf(string model, string berth) => model.Trim() + " | " + berth.Trim();
+
+    /// <summary>The texts of a setup cell that may list several (a package of berths 9 and 10: "9; 10" or "BERTH 9, BERTH 10").</summary>
+    public static List<string> Values(string cell) =>
+        cell.Split([';', ',', '\n'], StringSplitOptions.RemoveEmptyEntries).Select(v => v.Trim()).Where(v => v.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+
+    /// <summary>Whether an element's parameter value is one of the berth's values ("9" also matches a value written "BERTH 9", and the other way).</summary>
+    public static bool ValueMatches(string actual, IReadOnlyCollection<string> values)
+    {
+        var a = actual.Trim();
+        if (a.Length == 0) return false;
+        static string Last(string t) => t.Split([' '], StringSplitOptions.RemoveEmptyEntries).LastOrDefault() ?? "";
+        // "09" is berth 9: numbers compare as numbers.
+        static bool Eq(string x, string y) => string.Equals(x, y, StringComparison.OrdinalIgnoreCase)
+            || x.Length > 0 && y.Length > 0 && x.All(char.IsDigit) && y.All(char.IsDigit) && x.TrimStart('0') == y.TrimStart('0');
+        return values.Any(v => Eq(a, v)
+            || (v.Contains(' ') && !a.Contains(' ') && Eq(Last(v), a))
+            || (a.Contains(' ') && !v.Contains(' ') && Eq(Last(a), v))
+            || (a.Contains(' ') && v.Contains(' ') && Eq(Last(a), Last(v)) && string.Equals(a.Substring(0, a.LastIndexOf(' ')).Trim(), v.Substring(0, v.LastIndexOf(' ')).Trim(), StringComparison.OrdinalIgnoreCase)));
+    }
+
+    /// <summary>
+    /// A submission: for one berth, or every berth of the model when Berth is empty. Due at Time (default 08:00) on Date;
+    /// work on it starts on Start (empty: when the berth's submission before it was due). A resubmission after comments
+    /// is a submission of its own, named with its revision ("T3 Rev 1").
+    /// </summary>
+    public sealed record Submission(string Model, string Berth, string Name, DateTime Date, TimeSpan? Time = null, bool Submitted = false, DateTime? Start = null);
+
+    /// <summary>How many of something the berth should have when done: a category ("Structural Columns", "Structural Columns / Pile" for types containing Pile), Drawings, Details or Schedules.</summary>
+    public sealed record Planned(string Model, string Berth, string What, int Count);
+
+    /// <summary>A deliverable every berth has: done by hand, or when a file whose name has <see cref="Contains"/> ({berth}: the berth's name) is in <see cref="Folder"/>.</summary>
+    public sealed record Deliverable(string Name, string Folder = "", string Contains = "");
+
+    /// <summary>The working week: which days, the working hours, and when a submission is due on its day.</summary>
+    public sealed class Calendar
+    {
+        public List<DayOfWeek> Days { get; set; } = [DayOfWeek.Sunday, DayOfWeek.Monday, DayOfWeek.Tuesday, DayOfWeek.Wednesday, DayOfWeek.Thursday];
+        public TimeSpan Start { get; set; } = TimeSpan.FromHours(8);
+        public TimeSpan End { get; set; } = TimeSpan.FromHours(17);
+        public TimeSpan Due { get; set; } = TimeSpan.FromHours(8);
+
+        public double HoursPerDay => Math.Max(0, (End - Start).TotalHours);
+    }
+
+    // ---- The working calendar ---------------------------------------------------------------------------------------
+
+    /// <summary>The date of a submission made with no date noted.</summary>
+    public static readonly DateTime NoDate = DateTime.MinValue;
+
+    /// <summary>The submission's date as text after <paramref name="lead"/>, or "" when it has none.</summary>
+    public static string When(Submission s, string format, string lead = " ") => s.Date == NoDate ? "" : lead + s.Date.ToString(format, CultureInfo.InvariantCulture);
+
+    /// <summary>When a submission is due: its time (or the calendar's due time, 08:00) on its date.</summary>
+    public static DateTime DueAt(Submission s, Calendar week) => s.Date.Date + (s.Time ?? week.Due);
+
+    /// <summary>Working hours from <paramref name="from"/> to <paramref name="to"/> (0 when to is earlier): only the working days, between start and end.</summary>
+    public static double WorkHours(DateTime from, DateTime to, Calendar week)
+    {
+        if (to <= from || week.HoursPerDay <= 0) return 0;
+        double hours = 0;
+        for (var day = from.Date; day <= to.Date; day = day.AddDays(1))
+        {
+            if (!week.Days.Contains(day.DayOfWeek)) continue;
+            var a = day + week.Start;
+            var b = day + week.End;
+            var s = from > a ? from : a;
+            var e = to < b ? to : b;
+            if (e > s) hours += (e - s).TotalHours;
+        }
+        return hours;
+    }
+
+    /// <summary>The moment <paramref name="hours"/> working hours after <paramref name="from"/>.</summary>
+    public static DateTime AddWorkHours(DateTime from, double hours, Calendar week)
+    {
+        if (week.Days.Count == 0 || week.HoursPerDay <= 0) return from.AddHours(hours);
+        var at = from;
+        var left = Math.Max(0, hours);
+        for (var guard = 0; guard < 3700; guard++)
+        {
+            var day = at.Date;
+            if (week.Days.Contains(day.DayOfWeek))
+            {
+                var a = day + week.Start;
+                var b = day + week.End;
+                if (at < a) at = a;
+                if (at < b)
+                {
+                    var room = (b - at).TotalHours;
+                    if (left <= room) return at.AddHours(left);
+                    left -= room;
+                }
+            }
+            at = day.AddDays(1);
+        }
+        return at;
+    }
+
+    // ---- Results, hand entries and history (saved per project) ------------------------------------------------------
+
+    /// <summary>Something to fix found in the model: the area, what (sheet, view, element), the problem, and its element id when it has one.</summary>
+    /// <param name="Fix">What the Fix button does: "uniformat" (fill the Assembly Codes), "tag:viewId:category" (tag the missing), "join:idA:idB" (join the clash).</param>
+    public sealed record Finding(string Area, string Item, string Problem, long? Id = null, string? Fix = null);
+
+    /// <summary>What the model reading measured for one area of a berth. Percent null: not measured (no rule or plan for it).</summary>
+    public sealed class AreaResult
+    {
+        public double? Percent { get; set; }
+        public int Done { get; set; }
+        public int Total { get; set; }
+        public string Summary { get; set; } = "";
+        public List<Finding> Findings { get; set; } = [];
+        /// <summary>Modelling: what the berth has (category: family, how many), held against the submitted berths' (<see cref="CompareModelling(Setup, State)"/>).</summary>
+        public Dictionary<string, int>? Kinds { get; set; }
+        /// <summary>Modelling measured against the planned counts (not the submitted berths).</summary>
+        public bool Planned { get; set; }
+    }
+
+    /// <summary>A percentage typed by hand (replaces what the model says) and a comment.</summary>
+    public sealed class HandEntry
+    {
+        public double? Percent { get; set; }
+        public string Comment { get; set; } = "";
+    }
+
+    public sealed record Snapshot(DateTime At, double Percent);
+
+    public sealed class BerthState
+    {
+        public DateTime? ReadAt { get; set; }
+        public string ReadFrom { get; set; } = "";
+        public Dictionary<string, AreaResult> Results { get; set; } = new(StringComparer.Ordinal);
+        public Dictionary<string, HandEntry> Hand { get; set; } = new(StringComparer.Ordinal);
+        /// <summary>Per deliverable name: its percentage by hand and comment.</summary>
+        public Dictionary<string, HandEntry> Delivered { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+        public DateTime? FinishByHand { get; set; }
+        public string Comment { get; set; } = "";
+        /// <summary>Engineers working on the package: the progress needed per working day is shared between them.</summary>
+        public int? Engineers { get; set; }
+        public List<Snapshot> History { get; set; } = [];
+
+        public HandEntry HandFor(string area) => Hand.TryGetValue(area, out var h) ? h : Hand[area] = new HandEntry();
+        public HandEntry DeliveredFor(string name) => Delivered.TryGetValue(name, out var h) ? h : Delivered[name] = new HandEntry();
+    }
+
+    public sealed class State
+    {
+        public Dictionary<string, BerthState> Berths { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+        /// <summary>Per setup model: the working hours of everyone in it per day (yyyy-MM-dd), from its time records when it is read.</summary>
+        public Dictionary<string, Dictionary<string, double>> ModelHours { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+        public BerthState For(string key) => Berths.TryGetValue(key, out var b) ? b : Berths[key] = new BerthState();
+    }
+
+    // ---- Scores ---------------------------------------------------------------------------------------------------------
+
+    /// <summary>Where an area's percentage came from.</summary>
+    public enum Source { Model, Hand, Files, None }
+
+    public sealed record AreaScore(Area Area, double? Percent, Source From, double Weight, AreaResult? Result, HandEntry? Hand);
+
+    /// <summary>A deliverable's state: by hand, else 100 when its file is found, else 0 (or not known when it has no folder).</summary>
+    public sealed record DeliverableScore(Deliverable Deliverable, double? Percent, Source From, string File, string Comment);
+
+    public static List<DeliverableScore> DeliverableScores(Setup setup, Berth berth, BerthState state, Func<Deliverable, Berth, string>? findFile = null)
+    {
+        findFile ??= FindDeliverable;
+        var list = new List<DeliverableScore>();
+        foreach (var d in setup.Deliverables)
+        {
+            var hand = state.Delivered.TryGetValue(d.Name, out var h) ? h : null;
+            var file = "";
+            try { file = findFile(d, berth); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException) { }
+            if (hand?.Percent is { } p) list.Add(new(d, Clamp(p), Source.Hand, file, hand.Comment));
+            else if (file.Length > 0) list.Add(new(d, 100, Source.Files, file, hand?.Comment ?? ""));
+            else if (d.Folder.Trim().Length > 0) list.Add(new(d, 0, Source.Files, "", hand?.Comment ?? ""));
+            else list.Add(new(d, null, Source.None, "", hand?.Comment ?? ""));
+        }
+        return list;
+    }
+
+    /// <summary>The newest file in the deliverable's folder (and its subfolders) whose name has its text, with {berth} as the berth's name; "" when none.</summary>
+    public static string FindDeliverable(Deliverable d, Berth berth)
+    {
+        var folder = d.Folder.Trim().Trim('"');
+        if (folder.Length == 0 || !Directory.Exists(folder)) return "";
+        var text = (d.Contains.Trim().Length > 0 ? d.Contains : "{berth}").Replace("{berth}", berth.Name.Trim());
+        return Directory.EnumerateFiles(folder, "*", SearchOption.AllDirectories)
+            .Where(f => !Path.GetFileName(f).StartsWith("~$", StringComparison.Ordinal) && NameHas(Path.GetFileName(f), text))
+            .OrderByDescending(File.GetLastWriteTimeUtc).FirstOrDefault() ?? "";
+    }
+
+    /// <summary>Whether a file name has the text, a number in it not part of a longer one ("Berth 1" is not in "Berth 10 BOQ").</summary>
+    public static bool NameHas(string name, string text)
+    {
+        if (text.Length == 0) return true;
+        var rx = (char.IsDigit(text[0]) ? @"(?<!\d)" : "") + Regex.Escape(text) + (char.IsDigit(text[text.Length - 1]) ? @"(?!\d)" : "");
+        return Regex.IsMatch(name, rx, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    }
+
+    public static List<AreaScore> Scores(Setup setup, Berth berth, BerthState state, IReadOnlyList<DeliverableScore>? deliverables = null)
+    {
+        var list = new List<AreaScore>();
+        foreach (var area in Areas)
+        {
+            var weight = setup.WeightOf(area.Key);
+            var hand = state.Hand.TryGetValue(area.Key, out var h) ? h : null;
+            state.Results.TryGetValue(area.Key, out var result);
+            if (hand?.Percent is { } p) { list.Add(new(area, Clamp(p), Source.Hand, weight, result, hand)); continue; }
+            if (area.Key == Deliverables)
+            {
+                var known = (deliverables ?? DeliverableScores(setup, berth, state)).Where(d => d.Percent is not null).ToList();
+                list.Add(new(area, known.Count == 0 ? null : known.Average(d => d.Percent!.Value), known.Count == 0 ? Source.None : Source.Files, weight, null, hand));
+                continue;
+            }
+            list.Add(new(area, result?.Percent is { } m ? Clamp(m) : null, result?.Percent is null ? Source.None : Source.Model, weight, result, hand));
+        }
+        return list;
+    }
+
+    /// <summary>The berth's status: the weighted average of the areas that have a percentage (null when none has).</summary>
+    public static double? Overall(IEnumerable<AreaScore> scores)
+    {
+        var known = scores.Where(s => s.Percent is not null && s.Weight > 0).ToList();
+        var weights = known.Sum(s => s.Weight);
+        return weights <= 0 ? null : known.Sum(s => s.Percent!.Value * s.Weight) / weights;
+    }
+
+    public static double Clamp(double p) => Math.Max(0, Math.Min(100, p));
+
+    /// <summary>A part of a whole as a percentage: 100 when there is nothing to have.</summary>
+    public static double Part(double done, double total) => total <= 0 ? 100 : Clamp(100.0 * done / total);
+
+    // ---- Schedule, forecast and verdict -----------------------------------------------------------------------------
+
+    /// <summary>The submissions for a berth (its own, and the model's for every berth), by due time.</summary>
+    public static List<Submission> SubmissionsFor(Setup setup, Berth berth) =>
+        setup.Submissions.Where(s => Same(s.Model, berth.Model) && (s.Berth.Trim().Length == 0 || Same(s.Berth, berth.Name) || (berth.Parent.Length > 0 && Same(s.Berth, berth.Parent))))
+            .OrderBy(s => DueAt(s, setup.Week)).ToList();
+
+    /// <summary>The next submission not yet made (an overdue one first), or null.</summary>
+    public static Submission? Next(Setup setup, Berth berth) => SubmissionsFor(setup, berth).FirstOrDefault(s => !s.Submitted);
+
+    /// <summary>
+    /// When the berth should reach 100% at the pace of its readings: the rate between the oldest reading of the last
+    /// <paramref name="days"/> days that was lower and now, in working hours. Null without two readings that moved forward.
+    /// </summary>
+    public static DateTime? Forecast(IReadOnlyList<Snapshot> history, double percent, DateTime now, Calendar week, int days = 21)
+    {
+        if (percent >= 100) return now;
+        var from = history.Where(h => h.At >= now.AddDays(-days) && h.At < now && h.Percent < percent).OrderBy(h => h.At).FirstOrDefault();
+        if (from is null) return null;
+        var hours = WorkHours(from.At, now, week);
+        if (hours < 1) return null;
+        var rate = (percent - from.Percent) / hours;
+        if (rate <= 0) return null;
+        return AddWorkHours(now, (100 - percent) / rate, week);
+    }
+
+    public enum Verdict { Done, OnTrack, AtRisk, Behind, Overdue, NotKnown, NoSubmission, Submitted }
+
+    /// <summary>
+    /// How the berth stands for its next submission: Done at 100% (or submitted), Overdue when the due time has passed,
+    /// On track when the expected finish is before it, At risk when it is less than a working day late, Behind otherwise,
+    /// and Not known without an expected finish.
+    /// </summary>
+    public static Verdict Judge(double? percent, Submission? next, DateTime? finish, DateTime now, Calendar week)
+    {
+        if (next is null) return percent >= 100 ? Verdict.Done : Verdict.NoSubmission;
+        if (percent >= 100) return Verdict.Done;
+        var due = DueAt(next, week);
+        if (due <= now) return Verdict.Overdue;
+        if (finish is null) return Verdict.NotKnown;
+        if (finish <= due) return Verdict.OnTrack;
+        return WorkHours(due, finish.Value, week) <= Math.Max(1, week.HoursPerDay) ? Verdict.AtRisk : Verdict.Behind;
+    }
+
+    public static string Text(Verdict v) => v switch
+    {
+        Verdict.Done => "Done",
+        Verdict.OnTrack => "On track",
+        Verdict.AtRisk => "At risk",
+        Verdict.Behind => "Behind",
+        Verdict.Overdue => "Overdue",
+        Verdict.NoSubmission => "No submission set",
+        Verdict.Submitted => "Submitted, fixes open",
+        _ => "Needs two readings",
+    };
+
+    /// <summary>The percentage needed per working day from now to finish by the due time (null when due has passed).</summary>
+    /// <summary>
+    /// A berth's modelling against submitted berths: each kind of element (category: family) they have is expected here
+    /// at their average count per berth; the percentage is how much of that is here (more than expected counts as full).
+    /// Short lists the kinds at under half what is expected, the emptiest first.
+    /// </summary>
+    public static (double? Percent, int Done, int Total, List<(string Kind, int Have, double Expected)> Short) CompareModelling(
+        Dictionary<string, int> have, List<Dictionary<string, int>> references)
+    {
+        var expected = references.SelectMany(r => r.Keys).Distinct(StringComparer.OrdinalIgnoreCase)
+            .Select(k => (Kind: k, Expected: references.Sum(r => r.TryGetValue(k, out var n) ? n : 0) / (double)references.Count))
+            .Where(k => k.Expected >= 1).ToList();
+        if (expected.Count == 0) return (null, 0, 0, []);
+        double want = 0, got = 0;
+        var shortList = new List<(string, int, double)>();
+        foreach (var (kind, exp) in expected)
+        {
+            var n = have.TryGetValue(kind, out var c) ? c : 0;
+            want += exp;
+            got += Math.Min(n, exp);
+            if (n < exp / 2) shortList.Add((kind, n, exp));
+        }
+        return (Part(got, want), (int)Math.Round(got), (int)Math.Round(want),
+            shortList.OrderBy(k => k.Item2 / k.Item3).ThenByDescending(k => k.Item3).ToList());
+    }
+
+    /// <summary>A berth whose package is submitted (all of its submissions): its modelling is the example for the others.</summary>
+    public static bool IsReference(Setup setup, Berth berth) => SubmissionsFor(setup, berth).Any(x => x.Submitted) && Next(setup, berth) is null;
+
+    /// <summary>
+    /// Modelling of every berth from what each has (its saved category: family counts): held against the submitted berths
+    /// of its model (about as many of what they have); a submitted berth with no other to compare is the example (100%);
+    /// a whole-model package (the BIM model) is the average of its model's berths. Planned counts, when set, stay as read.
+    /// </summary>
+    public static void CompareModelling(Setup setup, State state)
+    {
+        AreaResult? Res(Berth b) => state.Berths.TryGetValue(b.Key, out var st) && st.Results.TryGetValue(Modelling, out var r) ? r : null;
+        foreach (var model in setup.Models)
+        {
+            var units = Units(BerthsOf(setup, model));
+            var whole = units.Where(b => b.FindBy == FindBy.WholeModel).ToList();
+            var parts = units.Where(b => b.FindBy != FindBy.WholeModel).ToList();
+            var refs = parts.Where(b => IsReference(setup, b) && Res(b) is { Kinds.Count: > 0 }).ToList();
+            foreach (var b in parts)
+            {
+                if (Res(b) is not { Kinds: { } have, Planned: false } r) continue;
+                var others = refs.Where(x => x.Key != b.Key).ToList();
+                var count = have.Values.Sum();
+                if (others.Count == 0)
+                {
+                    r.Findings = [];
+                    r.Done = r.Total = count;
+                    r.Percent = IsReference(setup, b) ? 100 : null;
+                    r.Summary = IsReference(setup, b)
+                        ? $"Submitted, with {count} elements: the example the other berths are held against."
+                        : $"{count} elements modelled. No submitted berth to compare with yet: mark a submitted package in the setup Excel, or plan the counts (Planned sheet).";
+                    continue;
+                }
+                var cmp = CompareModelling(have, others.Select(x => Res(x)!.Kinds!).ToList());
+                r.Percent = cmp.Percent;
+                r.Done = cmp.Done;
+                r.Total = cmp.Total;
+                r.Findings = cmp.Short.Select(k => new Finding(Modelling, k.Kind,
+                    k.Have == 0 ? $"none here; the submitted berths have about {k.Expected:0} each" : $"{k.Have} here; the submitted berths have about {k.Expected:0} each")).ToList();
+                r.Summary = $"{count} elements modelled. Against the submitted berths ({string.Join(", ", others.Select(x => x.Name))}): {cmp.Done} of about {cmp.Total} of what they have is here" +
+                            (cmp.Short.Count > 0 ? "; below, what is missing or much less." : ".");
+            }
+            foreach (var w in whole)
+            {
+                if (Res(w) is not { Planned: false } r) continue;
+                var read = parts.Select(p => (Berth: p, R: Res(p))).Where(p => p.R?.Percent is not null).ToList();
+                r.Percent = read.Count == 0 ? null : read.Average(p => p.R!.Percent!.Value);
+                r.Findings = read.Where(p => p.R!.Percent < 100).SelectMany(p => p.R!.Findings.Take(5).Select(f => f with { Item = p.Berth.Name + ": " + f.Item })).ToList();
+                r.Summary = read.Count == 0 ? "The BIM model follows its berths' modelling: none is read yet." :
+                    $"The average of the berths' modelling ({string.Join(", ", read.Select(p => $"{p.Berth.Name} {Pct(p.R!.Percent)}"))}).";
+            }
+        }
+    }
+
+    /// <summary>The overview's short status of a package or berth.</summary>
+    public enum Stage { NotStarted, InProgress, Overdue, Submitted }
+
+    public static Stage StageOf(Summary s) =>
+        s.Next is null && s.Last is not null ? Stage.Submitted :
+        s.Verdict == Verdict.Overdue ? Stage.Overdue :
+        s.Percent is null or <= 0 ? Stage.NotStarted : Stage.InProgress;
+
+    public static string Text(Stage s) => s switch
+    {
+        Stage.Submitted => "Submitted",
+        Stage.Overdue => "Overdue",
+        Stage.InProgress => "In progress",
+        _ => "Not started",
+    };
+
+    /// <summary>
+    /// The ring colour of a percentage: red at 0, through orange to yellow at 50, to green at 90 and over (hue 0-125).
+    /// Unknown: grey.
+    /// </summary>
+    public static (byte R, byte G, byte B) RingColor(double? percent)
+    {
+        if (percent is not { } p) return (0x9C, 0xA3, 0xAF);
+        p = Clamp(p);
+        var hue = p < 50 ? p : p >= 90 ? 125 : 50 + (p - 50) / 40 * 75;
+        return Hsl(hue, 0.78, 0.44);
+    }
+
+    private static (byte, byte, byte) Hsl(double h, double s, double l)
+    {
+        var c = (1 - Math.Abs(2 * l - 1)) * s;
+        var x = c * (1 - Math.Abs(h / 60 % 2 - 1));
+        var m = l - c / 2;
+        var (r, g, b) = h < 60 ? (c, x, 0.0) : h < 120 ? (x, c, 0.0) : h < 180 ? (0.0, c, x) : (0.0, x, c);
+        static byte B(double v) => (byte)Math.Round(Math.Max(0, Math.Min(1, v)) * 255);
+        return (B(r + m), B(g + m), B(b + m));
+    }
+
+    /// <summary>What each engineer must add a working day: the package's need shared between its engineers.</summary>
+    public static double? PerEngineer(double? perDay, int? engineers) => perDay is { } d ? d / Math.Max(1, engineers ?? 1) : null;
+
+    public static double? NeededPerDay(double percent, DateTime due, DateTime now, Calendar week)
+    {
+        var hours = WorkHours(now, due, week);
+        if (hours <= 0) return null;
+        return (100 - Clamp(percent)) / hours * Math.Max(1, week.HoursPerDay);
+    }
+
+    // ---- The schedule, changed in Revit ------------------------------------------------------------------------------
+
+    /// <summary>The name of a submission's resubmission after comments: "T3" gives "T3 Rev 1", "T3 Rev 1" gives "T3 Rev 2".</summary>
+    public static string ResubmissionName(string name)
+    {
+        var (bare, revision) = SubmissionChecklistMath.SplitRevision(name);
+        return $"{(bare.Length > 0 ? bare : "Submission")} Rev {revision + 1}";
+    }
+
+    /// <summary>A resubmission of <paramref name="s"/> after comments: same model and berths, the next revision, starting <paramref name="today"/>, due on <paramref name="due"/>.</summary>
+    public static Submission Resubmission(Submission s, DateTime today, DateTime due) =>
+        new(s.Model, s.Berth, ResubmissionName(s.Name), due.Date, s.Time, false, today.Date <= due.Date ? today.Date : null);
+
+    /// <summary>What is wrong with a schedule changed in Revit (empty: nothing). A row needs a name and a due date (unless submitted), and a start on or before it.</summary>
+    public static List<string> ScheduleProblems(IReadOnlyList<Submission> rows)
+    {
+        var problems = new List<string>();
+        for (var i = 0; i < rows.Count; i++)
+        {
+            var r = rows[i];
+            var name = r.Name.Trim().Length > 0 ? r.Name.Trim() : $"Row {i + 1}";
+            if (r.Name.Trim().Length == 0) problems.Add($"Row {i + 1}: give the submission a name (T3, Detailed design…).");
+            if (r.Date == NoDate && !r.Submitted) problems.Add($"{name}: set its due date (or tick Submitted).");
+            if (r.Start is { } st && r.Date != NoDate && st.Date > r.Date.Date) problems.Add($"{name}: it starts after it is due.");
+        }
+        foreach (var g in rows.Where(r => r.Name.Trim().Length > 0).GroupBy(r => r.Model.Trim().ToLowerInvariant() + "|" + r.Berth.Trim().ToLowerInvariant() + "|" + r.Name.Trim().ToLowerInvariant()).Where(g => g.Count() > 1))
+            problems.Add($"{g.First().Name.Trim()} is in the schedule twice for {(g.First().Berth.Trim().Length > 0 ? g.First().Berth.Trim() : "every berth")}.");
+        return problems;
+    }
+
+    // ---- Working hours on the model ----------------------------------------------------------------------------------
+
+    /// <summary>
+    /// The hours a submission takes: worked on the model since it started, the hours still expected (at the pace the
+    /// hours so far bought progress), and those hours per working day left before it is due (null when not known yet).
+    /// </summary>
+    public sealed record Effort(DateTime? Start, double Worked, double? Left, double? PerDay);
+
+    /// <summary>When work on a submission starts: its Start, else when the berth's submission before it was due, else null (from the first hours on record).</summary>
+    public static DateTime? StartOf(Setup setup, Berth berth, Submission s)
+    {
+        if (s.Start is { } start) return start.Date;
+        var due = DueAt(s, setup.Week);
+        return SubmissionsFor(setup, berth).Where(x => x != s && x.Date != NoDate && DueAt(x, setup.Week) < due).Select(x => (DateTime?)DueAt(x, setup.Week)).LastOrDefault();
+    }
+
+    /// <summary>Everyone's working hours in a model from <paramref name="from"/> (its day included; null: all) to <paramref name="to"/> (its day included).</summary>
+    public static double HoursWorked(State state, string model, DateTime? from, DateTime to)
+    {
+        var days = state.ModelHours.FirstOrDefault(kv => Same(kv.Key, model)).Value;
+        if (days is null) return 0;
+        double sum = 0;
+        foreach (var kv in days)
+            if (DateTime.TryParseExact(kv.Key, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var day) && (from is null || day >= from.Value.Date) && day <= to.Date)
+                sum += kv.Value;
+        return sum;
+    }
+
+    public static Effort EffortOf(Setup setup, Berth berth, BerthState b, State state, Submission? next, double? percent, DateTime now)
+    {
+        if (next is null) return new(null, 0, null, null);
+        var start = StartOf(setup, berth, next);
+        var worked = HoursWorked(state, berth.Model, start, now);
+        double? left = null;
+        if (percent is { } p)
+        {
+            if (p >= 100) left = 0;
+            else
+            {
+                // The progress the hours bought: from the reading at the start (or the first one after it, when the
+                // tracker started later; or 0 for a first submission with no start), to now.
+                var before = start is { } s0 ? b.History.Where(h => h.At <= s0).OrderBy(h => h.At).LastOrDefault() : null;
+                var after = start is { } s1 ? b.History.Where(h => h.At > s1).OrderBy(h => h.At).FirstOrDefault() : null;
+                var (from, basis) = before is not null ? (start, before.Percent) : after is not null ? ((DateTime?)after.At, after.Percent) : (start, 0.0);
+                var hours = HoursWorked(state, berth.Model, from, now);
+                var gained = p - basis;
+                if (gained >= 1 && hours > 0) left = hours / gained * (100 - Clamp(p));
+            }
+        }
+        double? perDay = null;
+        var due = DueAt(next, setup.Week);
+        if (left is { } l && setup.Week.HoursPerDay > 0 && WorkHours(now, due, setup.Week) is var h && h > 0)
+            perDay = l / Math.Max(h / setup.Week.HoursPerDay, 1.0 / setup.Week.HoursPerDay);
+        return new(start, worked, left, perDay);
+    }
+
+    /// <summary>One model's time records as working hours per day, all users together.</summary>
+    public static Dictionary<string, double> HoursPerDay(IEnumerable<(string Day, double Seconds)> rows) =>
+        rows.Where(r => r.Day.Length > 0).GroupBy(r => r.Day).ToDictionary(g => g.Key, g => Math.Round(g.Sum(r => r.Seconds) / 3600, 2));
+
+    /// <summary>One line per berth for the overview and the AI question.</summary>
+    /// <param name="Last">When every submission of the berth is made: the last one (its status still counts what is left to fix).</param>
+    /// <param name="Effort">The next submission's hours: worked on the model since it started, expected left, and per working day.</param>
+    public sealed record Summary(Berth Berth, double? Percent, Submission? Next, DateTime? Due, double HoursLeft, DateTime? Finish, bool FinishByHand, Verdict Verdict, List<AreaScore> Scores, List<DeliverableScore> Deliverables, BerthState State, Submission? Last = null, Effort? Effort = null);
+
+    public static Summary Summarize(Setup setup, Berth berth, State state, DateTime now, Func<Deliverable, Berth, string>? findFile = null)
+    {
+        var b = Merged(berth, state);
+        // The deliverables (calculations, bills, costing) are set per berth; a package of several shows their average.
+        var deliverables = DeliverableScores(setup, berth, b, findFile);
+        var scores = Scores(setup, berth, b, deliverables);
+        var percent = Overall(scores);
+        var next = Next(setup, berth);
+        DateTime? due = next is null ? null : DueAt(next, setup.Week);
+        var hours = due is null ? 0 : WorkHours(now, due.Value, setup.Week);
+        var forecast = percent is null ? null : Forecast(b.History, percent.Value, now, setup.Week);
+        var finish = b.FinishByHand ?? forecast;
+        // Submitted already: still checked, so what the BIM submission needs fixed stays in view.
+        var last = next is null ? SubmissionsFor(setup, berth).LastOrDefault(x => x.Submitted) : null;
+        var verdict = last is not null ? (percent >= 100 ? Verdict.Done : Verdict.Submitted) : Judge(percent, next, finish, now, setup.Week);
+        return new Summary(berth, percent, next, due, hours, finish, b.FinishByHand is not null, verdict, scores, deliverables, b, last, EffortOf(setup, berth, b, state, next, percent, now));
+    }
+
+    /// <summary>
+    /// The berth's state; for a package of several berths, its own (hand entries, comment, history) with the model results
+    /// of its berths put together: each area's percentage is their average, and what to fix names the berth.
+    /// </summary>
+    public static BerthState Merged(Berth berth, State state)
+    {
+        var own = state.For(berth.Key);
+        var children = ChildrenOf(berth);
+        if (children.Count == 0) return own;
+        var parts = children.Select(c => (c, s: state.Berths.TryGetValue(c.Key, out var x) ? x : null)).Where(p => p.s is not null).ToList();
+        var merged = new BerthState
+        {
+            Hand = own.Hand, Delivered = MergedDelivered(own, parts.Select(p => p.s!).ToList(), children.Count), FinishByHand = own.FinishByHand, Comment = own.Comment, History = own.History, Engineers = own.Engineers,
+            ReadAt = parts.Select(p => p.s!.ReadAt).Max(), ReadFrom = parts.Select(p => p.s!.ReadFrom).FirstOrDefault(f => f.Length > 0) ?? "",
+        };
+        foreach (var key in parts.SelectMany(p => p.s!.Results.Keys).Distinct())
+        {
+            var each = parts.Where(p => p.s!.Results.ContainsKey(key)).Select(p => (p.c, r: p.s!.Results[key])).ToList();
+            var known = each.Where(e => e.r.Percent is not null).ToList();
+            merged.Results[key] = new AreaResult
+            {
+                Percent = known.Count == 0 ? null : known.Average(e => e.r.Percent!.Value),
+                Done = each.Sum(e => e.r.Done), Total = each.Sum(e => e.r.Total),
+                Summary = string.Join(" · ", each.Select(e => $"{e.c.Name}: {Pct(e.r.Percent)}")),
+                Findings = each.SelectMany(e => e.r.Findings.Select(f => f with { Item = $"{e.c.Name} · {f.Item}" })).ToList(),
+            };
+        }
+        return merged;
+    }
+
+    /// <summary>
+    /// A package's deliverables from its berths: a deliverable set on any berth is the average over all its berths (one
+    /// not set counts 0); one set on no berth keeps the package's own entry (set before the berths were split, or by the chat).
+    /// </summary>
+    private static Dictionary<string, HandEntry> MergedDelivered(BerthState own, List<BerthState> parts, int berths)
+    {
+        var merged = new Dictionary<string, HandEntry>(own.Delivered, StringComparer.OrdinalIgnoreCase);
+        foreach (var name in parts.SelectMany(p => p.Delivered.Where(d => d.Value.Percent is not null).Select(d => d.Key)).Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            var set = parts.Select(p => p.Delivered.TryGetValue(name, out var h) ? h : null).Where(h => h?.Percent is not null).ToList();
+            merged[name] = new HandEntry
+            {
+                Percent = set.Sum(h => h!.Percent!.Value) / Math.Max(berths, set.Count),
+                Comment = string.Join(" · ", set.Select(h => h!.Comment).Where(c => c.Trim().Length > 0)),
+            };
+        }
+        return merged;
+    }
+
+    /// <summary>After a reading: a history point for each package of several berths, from its berths' results.</summary>
+    public static void RecordPackages(Setup setup, State state, DateTime now)
+    {
+        foreach (var package in setup.Berths.Where(b => ChildrenOf(b).Count > 0))
+        {
+            var b = state.For(package.Key);
+            if (Overall(Scores(setup, package, Merged(package, state))) is not { } p) continue;
+            b.History.RemoveAll(h => h.At > now.AddHours(-1) && h.At <= now);
+            b.History.Add(new Snapshot(now, Math.Round(p, 1)));
+            if (b.History.Count > 400) b.History.RemoveRange(0, b.History.Count - 400);
+        }
+    }
+
+    /// <summary>The berth a text names: its name, its code (the first word, such as T3), its key, or the only one containing the text.</summary>
+    public static Berth? FindBerth(Setup setup, string text)
+    {
+        var t = (text ?? "").Trim();
+        if (t.Length == 0) return null;
+        var exact = setup.Berths.Where(b => Same(b.Name, t) || Same(b.Key, t) || Same(b.Name.Split(' ')[0], t)).ToList();
+        if (exact.Count == 1) return exact[0];
+        // One berth of a package: "Berth 9", or with its package's code ("T3 Berth 9").
+        var units = Units(setup.Berths).Where(b => b.Parent.Length > 0).ToList();
+        var one = units.Where(b => Same(b.Name, t) || Same(b.Key, t) || Same(b.Parent.Split(' ')[0] + " " + b.Name, t)).ToList();
+        if (one.Count == 1) return one[0];
+        var part = setup.Berths.Where(b => b.Name.IndexOf(t, StringComparison.OrdinalIgnoreCase) >= 0 || b.Key.IndexOf(t, StringComparison.OrdinalIgnoreCase) >= 0).ToList();
+        return part.Count == 1 ? part[0] : null;
+    }
+
+    /// <summary>
+    /// Sets a percentage (null: back to the model or the files) and/or a comment on an area or a deliverable of a berth,
+    /// as typed in the window or told to the chat. Returns what was set, or throws ArgumentException naming the choices.
+    /// </summary>
+    public static string SetByHand(Setup setup, State state, Berth berth, string what, double? percent, string? comment, bool clearPercent = false)
+    {
+        var b = state.For(berth.Key);
+        var w = (what ?? "").Trim();
+        HandEntry entry;
+        string name;
+        if (Same(w, "berth") || Same(w, "comment") || w.Length == 0)
+        {
+            if (comment is null) throw new ArgumentException("Give the comment for the berth.");
+            b.Comment = comment;
+            return $"{berth.Name}: comment saved.";
+        }
+        var area = Areas.FirstOrDefault(a => Same(a.Key, w) || Same(a.Name, w)) ?? Areas.FirstOrDefault(a => a.Name.IndexOf(w, StringComparison.OrdinalIgnoreCase) >= 0);
+        var deliverable = setup.Deliverables.FirstOrDefault(d => Same(d.Name, w)) ?? setup.Deliverables.FirstOrDefault(d => d.Name.IndexOf(w, StringComparison.OrdinalIgnoreCase) >= 0);
+        if (deliverable is not null && (area is null || Same(deliverable.Name, w))) { entry = b.DeliveredFor(deliverable.Name); name = deliverable.Name; }
+        else if (area is not null) { entry = b.HandFor(area.Key); name = area.Name; }
+        else throw new ArgumentException($"\"{w}\" is not an area or a deliverable. Areas: {string.Join(", ", Areas.Select(a => a.Name))}. Deliverables: {string.Join(", ", setup.Deliverables.Select(d => d.Name))}.");
+        if (clearPercent) entry.Percent = null;
+        else if (percent is { } p) entry.Percent = Clamp(p);
+        if (comment is not null) entry.Comment = comment;
+        return $"{berth.Name}, {name}: " + (entry.Percent is { } now ? $"{now:0}% by hand" : "from the model or files") + (entry.Comment.Length > 0 ? $"; comment: {entry.Comment}" : "") + ".";
+    }
+
+    /// <summary>Saves a reading's results for the berth and adds its percentage to the history (one point per hour at most).</summary>
+    public static void Record(Setup setup, Berth berth, State state, Dictionary<string, AreaResult> results, string model, DateTime now)
+    {
+        var b = state.For(berth.Key);
+        // A new reading replaces the last one whole: an area it couldn't measure now isn't kept from before.
+        b.Results = new Dictionary<string, AreaResult>(results, StringComparer.Ordinal);
+        b.ReadAt = now;
+        b.ReadFrom = model;
+        // Modelling is held against the submitted berths (saved), and a whole-model package follows its berths.
+        CompareModelling(setup, state);
+        AddSnapshot(setup, berth, state, now);
+    }
+
+    /// <summary>The berth's percentage in its history (one point per hour: a newer one replaces it).</summary>
+    public static void AddSnapshot(Setup setup, Berth berth, State state, DateTime now)
+    {
+        var b = state.For(berth.Key);
+        if (Overall(Scores(setup, berth, b)) is { } p)
+        {
+            b.History.RemoveAll(h => h.At > now.AddHours(-1) && h.At <= now);
+            b.History.Add(new Snapshot(now, Math.Round(p, 1)));
+            if (b.History.Count > 400) b.History.RemoveRange(0, b.History.Count - 400);
+        }
+    }
+
+    /// <summary>The question the Ask button sends to the chat for an expected finish (the AI estimate).</summary>
+    public static string Question(Setup setup, Summary s, DateTime now)
+    {
+        var lines = new List<string>
+        {
+            $"Berth status tracker: estimate when {s.Berth.Name} ({s.Berth.Model}) will be ready for submission. Don't change the model.",
+            $"Now: {now:ddd dd-MMM-yyyy HH:mm}. Working days: {string.Join(", ", setup.Week.Days.Select(d => d.ToString().Substring(0, 3)))}, {setup.Week.Start:hh\\:mm}-{setup.Week.End:hh\\:mm}. A submission is due at its time (default {setup.Week.Due:hh\\:mm}) on its day, with calculations, bills, their back-up calculations and costing.",
+            $"Status now: {Pct(s.Percent)}." + (s.Next is null ? (s.Last is { } last ? $" Already submitted ({last.Name}); estimate when what is left to fix will be done." : " No submission set.") : $" Next submission: {s.Next.Name}, due {s.Due:ddd dd-MMM-yyyy HH:mm} ({s.HoursLeft:0} working hours left)." + (s.Effort is { } e ? $" Worked on the model since {(e.Start is { } st ? st.ToString("dd-MMM", CultureInfo.InvariantCulture) : "the first record")}: {e.Worked:0.#} h; expected left: {(e.Left is { } l ? l.ToString("0.#", CultureInfo.InvariantCulture) + " h" : "not known yet")}." : "")),
+        };
+        foreach (var a in s.Scores) lines.Add($"- {a.Area.Name}: {Pct(a.Percent)}" + (a.Result?.Summary is { Length: > 0 } sum ? $" ({sum})" : "") + (a.Hand?.Comment is { Length: > 0 } c ? $" Comment: {c}" : ""));
+        foreach (var d in s.Deliverables) lines.Add($"- Deliverable {d.Deliverable.Name}: {Pct(d.Percent)}" + (d.Comment.Length > 0 ? $" ({d.Comment})" : ""));
+        if (s.State.History.Count > 0) lines.Add("Readings: " + string.Join(", ", s.State.History.Skip(Math.Max(0, s.State.History.Count - 12)).Select(h => $"{h.At:dd-MMM HH:mm} {h.Percent:0}%")));
+        if (s.State.Comment.Length > 0) lines.Add("Berth comment: " + s.State.Comment);
+        lines.Add("Use the model to judge what is left where it helps (sheets, views, tags, schedules). Answer with the expected finish date and time on the first line, then the reasons and the three things that would bring it forward most.");
+        return string.Join("\n", lines);
+    }
+
+    public static string Pct(double? p) => p is null ? "not measured" : Math.Round(p.Value).ToString(CultureInfo.InvariantCulture) + "%";
+
+    public static bool Same(string a, string b) => string.Equals((a ?? "").Trim(), (b ?? "").Trim(), StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>The setup's model whose file-name text is in <paramref name="file"/> (the longest text wins), or null.</summary>
+    public static Model? ModelFor(Setup setup, string file)
+    {
+        var name = Path.GetFileName(file ?? "");
+        return setup.Models.Where(m => m.FileContains.Trim().Length > 0 && name.IndexOf(m.FileContains.Trim(), StringComparison.OrdinalIgnoreCase) >= 0)
+            .OrderByDescending(m => m.FileContains.Trim().Length).FirstOrDefault();
+    }
+
+    public static List<Berth> BerthsOf(Setup setup, Model model) => setup.Berths.Where(b => Same(b.Model, model.Name)).ToList();
+
+    /// <summary>The planned count of <paramref name="what"/> for the berth, or null.</summary>
+    public static int? PlannedCount(Setup setup, Berth berth, string what) =>
+        setup.Planned.Where(p => Same(p.Model, berth.Model) && Same(p.Berth, berth.Name) && Same(p.What, what)).Select(p => (int?)p.Count).FirstOrDefault();
+
+    /// <summary>The berth's planned element counts (not Drawings, Details or Schedules), split into category and type text.</summary>
+    public static List<(string Category, string Type, int Count, string What)> PlannedElements(Setup setup, Berth berth) =>
+        setup.Planned.Where(p => Same(p.Model, berth.Model) && Same(p.Berth, berth.Name) && !IsPlanKind(p.What))
+            .Select(p =>
+            {
+                var parts = p.What.Split(['/'], 2);
+                return (parts[0].Trim(), parts.Length > 1 ? parts[1].Trim() : "", p.Count, p.What.Trim());
+            }).ToList();
+
+    private static bool IsPlanKind(string what) => Same(what, "Drawings") || Same(what, "Details") || Same(what, "Schedules");
+
+    // ---- Storage ------------------------------------------------------------------------------------------------------
+
+    /// <summary>The tests point this at a temporary folder.</summary>
+    [ThreadStatic] internal static string? FolderForTests;
+
+    public static string Folder => FolderForTests ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "SketchProMax", "berth status");
+
+    private static string ProjectFolder(string project) => Path.Combine(Folder, ChecklistProjects.CleanName(project.Length == 0 ? "Project" : project));
+
+    private static readonly JsonSerializerOptions Json = new() { WriteIndented = true };
+
+    public static Setup? LoadSetup(string project)
+    {
+        var file = Path.Combine(ProjectFolder(project), "setup.json");
+        try { return SafeFile.Read(file) is { } text ? JsonSerializer.Deserialize<Setup>(text) : null; }
+        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException or NotSupportedException) { return null; }
+    }
+
+    public static void SaveSetup(string project, Setup setup) => SafeFile.Write(Path.Combine(ProjectFolder(project), "setup.json"), JsonSerializer.Serialize(setup, Json));
+
+    /// <summary>The saved results' file text (to notice a change made elsewhere, such as by the chat), or "".</summary>
+    public static string StateText(string project)
+    {
+        try { return SafeFile.Read(Path.Combine(ProjectFolder(project), "status.json")) ?? ""; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return ""; }
+    }
+
+    public static State LoadState(string project)
+    {
+        var file = Path.Combine(ProjectFolder(project), "status.json");
+        try { return SafeFile.Read(file) is { } text ? JsonSerializer.Deserialize<State>(text) ?? new State() : new State(); }
+        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException or NotSupportedException) { return new State(); }
+    }
+
+    public static void SaveState(string project, State state) => SafeFile.Write(Path.Combine(ProjectFolder(project), "status.json"), JsonSerializer.Serialize(state, Json));
+
+    /// <summary>The projects set up on this PC.</summary>
+    public static List<string> Projects() =>
+        !Directory.Exists(Folder) ? [] : Directory.GetDirectories(Folder).Where(d => File.Exists(Path.Combine(d, "setup.json"))).Select(Path.GetFileName).OfType<string>().OrderBy(n => n).ToList();
+
+    // ---- The setup Excel ----------------------------------------------------------------------------------------------
+
+    private static readonly string[] ModelCols = ["Model", "File name contains", "Linked models to include", "Clash report"];
+    private static readonly string[] BerthCols = ["Model", "Berth", "Find elements by", "Value", "Parameter", "Sheets contain", "Schedules contain"];
+    private static readonly string[] SubmissionCols = ["Model", "Berth", "Submission", "Start", "Date", "Time", "Submitted"];
+    private static readonly string[] PlannedCols = ["Model", "Berth", "What", "Planned"];
+    private static readonly string[] DeliverableCols = ["Deliverable", "Folder", "File name contains"];
+    private static readonly string[] WeightCols = ["Area", "Weight", "What it measures"];
+    private static readonly string[] WeekCols = ["Setting", "Value"];
+    private static readonly string[] TagCols = ["View or sheet name contains", "Tag these categories"];
+
+    /// <summary>The setup as an Excel workbook to fill in or change, and import back.</summary>
+    public static List<OfficeXlsx.Sheet> SetupSheets(Setup s)
+    {
+        OfficeXlsx.Sheet Sheet(string name, string title, string[] cols, IEnumerable<object?[]> rows, double[] widths) =>
+            new(name, title, cols, rows.Select(r => new OfficeXlsx.Row(r)).ToList(), cols.Select(_ => "text").ToArray(), widths, true);
+        var week = s.Week;
+        return
+        [
+            Sheet("Models", "Models: one row per model; File name contains matches the open file", ModelCols,
+                s.Models.Select(m => new object?[] { m.Name, m.FileContains, m.Links, m.ClashReport }), [18, 26, 30, 50]),
+            Sheet("Berths", "Berths: Find elements by is Scope box, Parameter, Workset or Whole model; list several values with ; (a package of berths 9 and 10: 9; 10)", BerthCols,
+                s.Berths.Select(b => new object?[] { b.Model, b.Name, b.FindBy, b.Value, b.Parameter, b.Sheets, b.Schedules }), [18, 18, 18, 22, 18, 18, 18]),
+            Sheet("Submissions", "Submissions: Berth empty means every berth of the model; Start empty means when the one before was due; Date is the due date; Time empty means the due time (08:00); a resubmission after comments is its own row (T3 Rev 1)", SubmissionCols,
+                s.Submissions.Select(x => new object?[] { x.Model, x.Berth, x.Name, x.Start is { } st ? st.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) : "", x.Date == NoDate ? "" : x.Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), x.Time is { } t ? t.ToString(@"hh\:mm", CultureInfo.InvariantCulture) : "", x.Submitted ? "Yes" : "" }), [18, 18, 34, 14, 14, 10, 12]),
+            Sheet("Planned", "Planned: a category (Structural Columns / Pile for its types with Pile), or Drawings, Details, Schedules", PlannedCols,
+                s.Planned.Select(p => new object?[] { p.Model, p.Berth, p.What, p.Count.ToString(CultureInfo.InvariantCulture) }), [18, 18, 34, 12]),
+            Sheet("Deliverables", "Deliverables of every berth: done by hand, or when a file with the text ({berth} = the berth's name) is in the folder", DeliverableCols,
+                s.Deliverables.Select(d => new object?[] { d.Name, d.Folder, d.Contains }), [34, 50, 26]),
+            Sheet("Weights", "Weights: how much each area counts in a berth's status", WeightCols,
+                Areas.Select(a => new object?[] { a.Name, s.WeightOf(a.Key).ToString(CultureInfo.InvariantCulture), a.Measures }), [22, 10, 90]),
+            Sheet("Week", "Working week", WeekCols,
+            [
+                ["Title", s.Title],
+                ["Working days", string.Join(", ", week.Days.Select(d => d.ToString()))],
+                ["Start", week.Start.ToString(@"hh\:mm", CultureInfo.InvariantCulture)],
+                ["End", week.End.ToString(@"hh\:mm", CultureInfo.InvariantCulture)],
+                ["Due time", week.Due.ToString(@"hh\:mm", CultureInfo.InvariantCulture)],
+                ["Clash tolerance (mm)", s.ClashToleranceMm.ToString(CultureInfo.InvariantCulture)],
+            ], [22, 70]),
+            Sheet("Tagging", "Tagging: views (or sheets) whose name has the text must tag every element of these categories; other views need dimensions only", TagCols,
+                s.TagRules.Select(r => new object?[] { r.ViewContains, r.Categories }), [34, 50]),
+        ];
+    }
+
+    /// <summary>A setup to start from, with made-up names (the user replaces them with the project's).</summary>
+    public static Setup Example() => new()
+    {
+        Title = "Submissions status",
+        Models = [new("Port A", "PORTA"), new("Port B", "PORTB-DOC", "PORTB")],
+        Berths =
+        [
+            new("Port A", "Berth 1", FindBy.ScopeBox, "SB_Berth 1", "", "B01"),
+            new("Port A", "Berth 2", FindBy.Parameter, "Berth 2", "Zone", "B02"),
+            new("Port B", "Berth 3", FindBy.WholeModel),
+        ],
+        Submissions =
+        [
+            new("Port A", "Berth 1", "Stage 2 submission", DateTime.Today.AddDays(14)),
+            new("Port B", "", "Stage 2 submission", DateTime.Today.AddDays(21)),
+        ],
+        Planned =
+        [
+            new("Port A", "Berth 1", "Structural Columns / Pile", 120),
+            new("Port A", "Berth 1", "Structural Framing", 60),
+            new("Port A", "Berth 1", "Drawings", 25),
+            new("Port A", "Berth 1", "Details", 12),
+            new("Port A", "Berth 1", "Schedules", 4),
+        ],
+        Deliverables =
+        [
+            new("Calculations"), new("Bills of quantities"), new("Back-up calculations of the bills"), new("Costing"),
+        ],
+    };
+
+    /// <summary>Reads the setup Excel. Throws InvalidDataException with a plain reason.</summary>
+    public static Setup ReadSetup(string path)
+    {
+        Dictionary<string, List<(int Row, Dictionary<int, string> Cells)>> sheets;
+        try
+        {
+            using var stream = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            sheets = ChecklistMath.ReadSheets(stream);
+        }
+        catch (Exception ex) when (ex is InvalidDataException or System.Xml.XmlException or NotSupportedException)
+        {
+            throw new InvalidDataException("it isn't an Excel workbook (.xlsx) Sketch ProMax can read. Save it from Excel as .xlsx and pick it again.", ex);
+        }
+        var setup = FromSheets(sheets);
+        setup.SourcePath = path;
+        setup.SourceStamp = ChecklistMath.Stamp(path);
+        return setup;
+    }
+
+    internal static Setup FromSheets(Dictionary<string, List<(int Row, Dictionary<int, string> Cells)>> sheets)
+    {
+        var s = new Setup { Title = "Submissions status" };
+        var problems = new List<string>();
+        List<Dictionary<string, string>> Table(string sheet, string[] cols)
+        {
+            var list = new List<Dictionary<string, string>>();
+            if (!sheets.TryGetValue(sheet, out var rows)) return list;
+            Dictionary<int, string>? map = null;
+            foreach (var (_, cells) in rows)
+            {
+                if (map is null)
+                {
+                    // The heading row: the first that names the first two columns.
+                    var named = cells.Where(c => cols.Any(h => Same(h, c.Value))).ToDictionary(c => c.Key, c => cols.First(h => Same(h, c.Value)));
+                    if (named.Count >= Math.Min(2, cols.Length)) map = named;
+                    continue;
+                }
+                var row = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var pair in map) row[pair.Value] = cells.TryGetValue(pair.Key, out var v) ? v.Trim() : "";
+                if (row.Values.Any(v => v.Length > 0)) list.Add(row);
+            }
+            return list;
+        }
+        string V(Dictionary<string, string> r, string k) => r.TryGetValue(k, out var v) ? v : "";
+
+        foreach (var r in Table("Models", ModelCols))
+            if (V(r, "Model").Length > 0) s.Models.Add(new(V(r, "Model"), V(r, "File name contains").Length > 0 ? V(r, "File name contains") : V(r, "Model"), V(r, "Linked models to include"), V(r, "Clash report")));
+        foreach (var r in Table("Berths", BerthCols))
+        {
+            if (V(r, "Berth").Length == 0) continue;
+            var model = V(r, "Model").Length > 0 ? V(r, "Model") : s.Models.FirstOrDefault()?.Name ?? "";
+            if (s.Models.Count > 0 && !s.Models.Any(m => Same(m.Name, model))) problems.Add($"berth {V(r, "Berth")}: model \"{model}\" isn't on the Models sheet");
+            s.Berths.Add(new(model, V(r, "Berth"), FindBy.Parse(V(r, "Find elements by")), V(r, "Value"), V(r, "Parameter"), V(r, "Sheets contain"), V(r, "Schedules contain")));
+        }
+        foreach (var r in Table("Submissions", SubmissionCols))
+        {
+            // A package submitted before its date was noted: Submitted with no date.
+            if (V(r, "Date").Length == 0)
+            {
+                if (IsYes(V(r, "Submitted"))) s.Submissions.Add(new(V(r, "Model"), V(r, "Berth"), V(r, "Submission").Length > 0 ? V(r, "Submission") : "Submission", NoDate, null, true));
+                continue;
+            }
+            if (ParseDate(V(r, "Date")) is not { } date) { problems.Add($"submission \"{V(r, "Submission")}\": \"{V(r, "Date")}\" isn't a date"); continue; }
+            var time = ParseTime(V(r, "Time"));
+            DateTime? start = null;
+            if (V(r, "Start").Length > 0)
+            {
+                if (ParseDate(V(r, "Start")) is { } st && st.Date <= date.Date) start = st.Date;
+                else problems.Add($"submission \"{V(r, "Submission")}\": start \"{V(r, "Start")}\" isn't a date before its due date");
+            }
+            s.Submissions.Add(new(V(r, "Model"), V(r, "Berth"), V(r, "Submission").Length > 0 ? V(r, "Submission") : "Submission", date, time, IsYes(V(r, "Submitted")), start));
+        }
+        foreach (var r in Table("Planned", PlannedCols))
+            if (V(r, "What").Length > 0 && double.TryParse(V(r, "Planned"), NumberStyles.Float, CultureInfo.InvariantCulture, out var n))
+                s.Planned.Add(new(V(r, "Model"), V(r, "Berth"), V(r, "What"), (int)Math.Round(n)));
+        foreach (var r in Table("Deliverables", DeliverableCols))
+            if (V(r, "Deliverable").Length > 0) s.Deliverables.Add(new(V(r, "Deliverable"), V(r, "Folder"), V(r, "File name contains")));
+        foreach (var r in Table("Weights", WeightCols))
+        {
+            var area = Areas.FirstOrDefault(a => Same(a.Name, V(r, "Area")) || Same(a.Key, V(r, "Area")));
+            if (area is not null && double.TryParse(V(r, "Weight"), NumberStyles.Float, CultureInfo.InvariantCulture, out var w)) s.Weights[area.Key] = Math.Max(0, w);
+        }
+        foreach (var r in Table("Week", WeekCols))
+        {
+            var value = V(r, "Value");
+            switch (V(r, "Setting").ToLowerInvariant())
+            {
+                case "title": if (value.Length > 0) s.Title = value; break;
+                case "working days": if (ParseDays(value) is { Count: > 0 } days) s.Week.Days = days; break;
+                case "start": if (ParseTime(value) is { } a) s.Week.Start = a; break;
+                case "end": if (ParseTime(value) is { } b) s.Week.End = b; break;
+                case "due time": if (ParseTime(value) is { } d) s.Week.Due = d; break;
+                case "clash tolerance (mm)":
+                case "clash tolerance":
+                    if (double.TryParse(value.Replace("mm", "").Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var tol) && tol >= 0) s.ClashToleranceMm = tol;
+                    break;
+                case "tag categories": s.TagCategories = value.Split([',', ';'], StringSplitOptions.RemoveEmptyEntries).Select(x => x.Trim()).Where(x => x.Length > 0).ToList(); break;
+            }
+        }
+        // The Tagging sheet replaces the defaults (empty: no view needs tags); an older file without it keeps them.
+        if (sheets.ContainsKey("Tagging"))
+            s.TagRules = Table("Tagging", TagCols).Where(r => V(r, "View or sheet name contains").Length > 0)
+                .Select(r => new TagRule(V(r, "View or sheet name contains"), V(r, "Tag these categories"))).ToList();
+        if (s.Berths.Count == 0) problems.Insert(0, "the Berths sheet has no berths (it needs the columns Model and Berth)");
+        if (problems.Count > 0) throw new InvalidDataException(string.Join("; ", problems) + ".");
+        return s;
+    }
+
+    private static bool IsYes(string v) => v.Trim().ToLowerInvariant() is "yes" or "y" or "x" or "done" or "submitted" or "true" or "1";
+
+    /// <summary>A date from the sheet: an Excel date number, or text such as 2026-10-29, 29/10/2026 or 29-Oct-2026.</summary>
+    public static DateTime? ParseDate(string text)
+    {
+        var t = (text ?? "").Trim();
+        if (t.Length == 0) return null;
+        if (double.TryParse(t, NumberStyles.Float, CultureInfo.InvariantCulture, out var serial) && serial > 20000 && serial < 80000)
+            return DateTime.FromOADate(Math.Floor(serial)).Date;
+        string[] formats = ["yyyy-MM-dd", "yyyy-MM-dd HH:mm", "dd/MM/yyyy", "d/M/yyyy", "dd-MMM-yyyy", "d-MMM-yyyy", "dd MMM yyyy", "d MMM yyyy", "dd-MMM-yy", "d MMMM yyyy", "dddd d MMMM yyyy", "ddd dd-MMM-yyyy", "yyyy/MM/dd", "dd.MM.yyyy"];
+        if (DateTime.TryParseExact(t, formats, CultureInfo.InvariantCulture, DateTimeStyles.AllowWhiteSpaces, out var d)) return d.Date;
+        return DateTime.TryParse(t, CultureInfo.InvariantCulture, DateTimeStyles.AllowWhiteSpaces, out d) ? d.Date : null;
+    }
+
+    /// <summary>A time: 08:00, 8:00 AM, 8 am, or an Excel time fraction (0.333).</summary>
+    public static TimeSpan? ParseTime(string text)
+    {
+        var t = (text ?? "").Trim();
+        if (t.Length == 0) return null;
+        if (double.TryParse(t, NumberStyles.Float, CultureInfo.InvariantCulture, out var f) && f >= 0 && f < 1) return TimeSpan.FromMinutes(Math.Round(f * 24 * 60));
+        var m = Regex.Match(t, @"^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$", RegexOptions.IgnoreCase);
+        if (!m.Success) return null;
+        var h = int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture);
+        var min = m.Groups[2].Success ? int.Parse(m.Groups[2].Value, CultureInfo.InvariantCulture) : 0;
+        if (m.Groups[3].Success)
+        {
+            var pm = m.Groups[3].Value.Equals("pm", StringComparison.OrdinalIgnoreCase);
+            if (h == 12) h = pm ? 12 : 0;
+            else if (pm) h += 12;
+        }
+        return h < 24 && min < 60 ? new TimeSpan(h, min, 0) : null;
+    }
+
+    /// <summary>Days from "Sunday, Monday" or "Sun-Thu".</summary>
+    public static List<DayOfWeek> ParseDays(string text)
+    {
+        static DayOfWeek? Day(string s)
+        {
+            s = s.Trim().ToLowerInvariant();
+            if (s.Length < 2) return null;
+            foreach (DayOfWeek d in Enum.GetValues(typeof(DayOfWeek)))
+                if (d.ToString().ToLowerInvariant().StartsWith(s.Length >= 3 ? s.Substring(0, 3) : s, StringComparison.Ordinal)) return d;
+            return null;
+        }
+        var days = new List<DayOfWeek>();
+        foreach (var part in (text ?? "").Split([',', ';'], StringSplitOptions.RemoveEmptyEntries))
+        {
+            var range = part.Split(['-', '–'], 2);
+            if (range.Length == 2 && Day(range[0]) is { } a && Day(range[1]) is { } b)
+            {
+                for (var d = (int)a; ; d = (d + 1) % 7) { if (!days.Contains((DayOfWeek)d)) days.Add((DayOfWeek)d); if (d == (int)b) break; }
+            }
+            else if (Day(part) is { } one && !days.Contains(one)) days.Add(one);
+        }
+        return days;
+    }
+
+    // ---- The berth's Excel status file ------------------------------------------------------------------------------
+
+    /// <summary>The berth's status workbook: Status, Submissions, Deliverables, one sheet per area with what to fix, Comments and History.</summary>
+    public static List<OfficeXlsx.Sheet> BerthSheets(Setup setup, Summary s, DateTime now)
+    {
+        var sheets = new List<OfficeXlsx.Sheet>();
+        var b = s.State;
+        string From(Source f) => f switch { Source.Model => "Model", Source.Hand => "By hand", Source.Files => "Files", _ => "Not measured" };
+        object? P(double? p) => p is null ? "" : Math.Round(p.Value / 100, 3);
+
+        var status = new List<OfficeXlsx.Row>();
+        foreach (var a in s.Scores)
+            status.Add(new([a.Area.Name, P(a.Percent), a.Weight, From(a.From), a.Result?.Done.ToString(CultureInfo.InvariantCulture) ?? "", a.Result?.Total.ToString(CultureInfo.InvariantCulture) ?? "", a.Result?.Summary ?? "", a.Hand?.Comment ?? ""]));
+        status.Add(new(["Overall", P(s.Percent), s.Scores.Where(x => x.Percent is not null).Sum(x => x.Weight), "", "", "", Text(s.Verdict), b.Comment], Bold: true));
+        status.Add(new(["", "", "", "", "", "", "", ""]));
+        status.Add(new(["Next submission", "", "", "", "", "", s.Next?.Name ?? (s.Last is { } last ? $"All submitted (last: {last.Name}{When(last, "dd-MMM-yyyy", ", ")}); what is left to fix still counts" : "None set"), ""]));
+        status.Add(new(["Due", "", "", "", "", "", s.Due is { } due ? due.ToString("ddd dd-MMM-yyyy HH:mm", CultureInfo.InvariantCulture) : "", ""]));
+        status.Add(new(["Working hours left", "", "", "", "", "", s.Due is null ? "" : Math.Round(s.HoursLeft, 1).ToString(CultureInfo.InvariantCulture), ""]));
+        status.Add(new(["Expected finish", "", "", s.FinishByHand ? "By hand" : "From the readings", "", "", s.Finish is { } f ? f.ToString("ddd dd-MMM-yyyy HH:mm", CultureInfo.InvariantCulture) : "Needs two readings", ""]));
+        if (s.Effort is { } e && s.Next is not null)
+        {
+            status.Add(new(["Start", "", "", "", "", "", e.Start is { } st ? st.ToString("ddd dd-MMM-yyyy", CultureInfo.InvariantCulture) : "From the first hours on record", ""]));
+            status.Add(new(["Hours worked on the model", "", "", "", "", "", Math.Round(e.Worked, 1).ToString(CultureInfo.InvariantCulture), "Everyone's working hours in the model since the start (all its berths)"]));
+            status.Add(new(["Hours expected left", "", "", "", "", "", e.Left is { } l ? Math.Round(l, 1).ToString(CultureInfo.InvariantCulture) : "Needs hours and progress", ""]));
+            status.Add(new(["Hours needed per working day", "", "", "", "", "", e.PerDay is { } pd ? Math.Round(pd, 1).ToString(CultureInfo.InvariantCulture) : "", b.Engineers is { } n && e.PerDay is { } pd2 ? $"{pd2 / Math.Max(1, n):0.#} h each ({n} engineers)" : ""]));
+        }
+        status.Add(new(["Model read", "", "", "", "", "", b.ReadAt is { } r ? r.ToString("dd-MMM-yyyy HH:mm", CultureInfo.InvariantCulture) + " from " + b.ReadFrom : "Not read yet", ""]));
+        sheets.Add(new("Status", $"{s.Berth.Name} ({s.Berth.Model}) status, {now:dd-MMM-yyyy HH:mm}",
+            ["Area", "Status", "Weight", "From", "Done", "Of", "What the model shows", "Comment"], status,
+            ["text", "percent", "decimal", "text", "text", "text", "text", "text"], [24, 10, 9, 14, 8, 8, 60, 40], true));
+
+        var subs = SubmissionsFor(setup, s.Berth).Select(x =>
+        {
+            var due = DueAt(x, setup.Week);
+            return new OfficeXlsx.Row([x.Name, x.Date == NoDate ? "" : due.ToString("ddd dd-MMM-yyyy HH:mm", CultureInfo.InvariantCulture), x.Submitted ? "" : Math.Round(WorkHours(now, due, setup.Week), 1).ToString(CultureInfo.InvariantCulture), x.Submitted ? "Submitted" : due <= now ? "Overdue" : "To come"]);
+        }).ToList();
+        sheets.Add(new("Submissions", "Submissions (due at their time on the day; working hours only)", ["Submission", "Due", "Working hours left", "State"], subs, ["text", "text", "text", "text"], [34, 24, 18, 14], false));
+
+        var dels = s.Deliverables.Select(x => new OfficeXlsx.Row([x.Deliverable.Name, P(x.Percent), From(x.From), x.File, x.Comment])).ToList();
+        sheets.Add(new("Deliverables", "Calculations, bills, back-up calculations, costing", ["Deliverable", "Status", "From", "File", "Comment"], dels, ["text", "percent", "text", "text", "text"], [36, 10, 12, 60, 40], true));
+
+        foreach (var a in s.Scores.Where(x => x.Result?.Findings.Count > 0))
+            sheets.Add(new(a.Area.Name, $"{a.Area.Name}: what to fix ({a.Result!.Findings.Count})", ["Item", "Problem", "Element id", "Comment"],
+                a.Result.Findings.Select(f => new OfficeXlsx.Row([f.Item, f.Problem, f.Id?.ToString(CultureInfo.InvariantCulture) ?? "", ""])).ToList(),
+                ["text", "text", "text", "text"], [44, 60, 14, 40], true));
+
+        var comments = new List<OfficeXlsx.Row>();
+        if (b.Comment.Length > 0) comments.Add(new(["Berth", b.Comment]));
+        foreach (var a in s.Scores.Where(x => x.Hand?.Comment.Length > 0)) comments.Add(new([a.Area.Name, a.Hand!.Comment]));
+        foreach (var x in s.Deliverables.Where(x => x.Comment.Length > 0)) comments.Add(new([x.Deliverable.Name, x.Comment]));
+        sheets.Add(new("Comments", "Comments", ["About", "Comment"], comments, ["text", "text"], [30, 90], false));
+
+        sheets.Add(new("History", "Status at each reading", ["Read at", "Status"],
+            b.History.Select(h => new OfficeXlsx.Row([h.At.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture), Math.Round(h.Percent / 100, 3)])).ToList(), ["text", "percent"], [20, 10], false));
+        return sheets;
+    }
+
+    /// <summary>Where the berth's Excel goes: Documents\Sketch ProMax\Berth status\Project, named by berth and time.</summary>
+    public static string ExportPath(string project, Berth berth, DateTime now)
+    {
+        var folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Sketch ProMax", "Berth status", ChecklistProjects.CleanName(project.Length == 0 ? "Project" : project));
+        Directory.CreateDirectory(folder);
+        return OfficeDocs.FreePath(folder, OfficeDocs.SafeName($"{berth.Name} {berth.Model} status {now:yyyy-MM-dd HHmm}"), ".xlsx");
+    }
+}

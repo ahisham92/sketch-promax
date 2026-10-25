@@ -403,8 +403,9 @@ internal static partial class SelfTest
         // So do the cost tools' remembered rate table, add-ons and what-if results (the cases run on the user's model).
         var costFolder = CostRun.StoreOverride;
         CostRun.StoreOverride ??= Path.Combine(ctx.Temp, "cost");
+        Revit.RunningCall.Begin("the self-test", tool.Name, app.ActiveUIDocument?.Document?.Title, args);
         try { return Revit.FailureGuard.Run(() => tool.Execute(app, new ToolArgs(args))); }
-        finally { IssueGate.TestOverride = false; IssueGate.FolderOverride = gateFolder; CostRun.StoreOverride = costFolder; }
+        finally { Revit.RunningCall.End(); IssueGate.TestOverride = false; IssueGate.FolderOverride = gateFolder; CostRun.StoreOverride = costFolder; }
     }
 
     private static IEnumerable<Case> AllCases() => ReadOnlyCases().Concat(FileCases()).Concat(ChangeCases()).Concat(RegressionCases()).Concat(RealModelCases());
@@ -524,8 +525,18 @@ internal static partial class SelfTest
         new("convert_coordinates", _ => new { points = new[] { new[] { 0.0, 0.0, 0.0 } }, from = "internal" }),
         new("get_activity_log", _ => new { limit = 5 }),
         new("memory_note", _ => new { action = "list" }),
+        // A project that isn't set up is refused by name; on a PC with exactly one set up, that one is listed instead.
+        new("berth_costing", _ => new { action = "list", project = "SELFTEST-NONE" }) { ExpectError = "No berths to cost" },
+        new("berth_status", _ => new { action = "list", project = "SELFTEST-NONE" }) { ExpectError = "berth status", ExpectErrorIf = _ => BerthStatusMath.Projects().Count != 1 },
         new("recall_chats", _ => new { action = "search", query = "walls levels" })
             { Expect = r => r.TryGetProperty("chats", out var c) && c.ValueKind == System.Text.Json.JsonValueKind.Array ? null : "no list of chats: " + r.GetRawText() },
+        new("make_document", c => new
+        {
+            format = "excel", title = "Self-test bill", folder = c.Temp,
+            sheets = new[] { new { name = "Bill", columns = new[] { "Item", "Qty", "Rate", "Amount" }, rows = new object[] { new object[] { "Concrete C40", 12.5, 950, "=B2*C2" } } } },
+        }) { Expect = r => Zip(r, "file", 1, "xl/workbook.xml", "xl/worksheets/sheet1.xml") },
+        // Outside the pane's main chat a job is never started (it would use the plan): the refusal is the check.
+        new("chat_jobs", _ => new { action = "start", title = "Self-test job", task = "Nothing: this job must not start." }) { ExpectError = "only from the main chat" },
         new("list_recipes", _ => new { }),
         new("list_learned_tools", _ => new { }),
         new("list_steel_connection_types", _ => new { }),
@@ -733,6 +744,12 @@ internal static partial class SelfTest
         }),
         new("general_notes", _ => new { values = new { codes = "Self-test code" } }),
         new("typical_details", _ => new { kinds = new[] { "lap_schedule", "cover_schedule" } }),
+        // A matrix on walls: Comments from the values rule, a new parameter filled from the walls' material.
+        new("fill_loi_data", c =>
+        {
+            _ = c.Wall ?? throw new Skip("the model has no walls");
+            return new { matrix = "Walls>Comments, ZZ Self-test LOI Material", values = "Walls>Comments=Self-test LOI", apply = true };
+        }) { Expect = r => r.GetProperty("summary").GetString() is { } said && (said.StartsWith("Filled LOI data", StringComparison.Ordinal) || said.StartsWith("Nothing to fill", StringComparison.Ordinal)) ? null : "not filled: " + r },
         new("issue_check", c => new { folder = Path.Combine(c.Temp, "issue check") }) { Heavy = true, Expect = r => r.TryGetProperty("gate", out var g) && g.TryGetProperty("verdict", out _) ? null : "no pass/fail verdict" },
         // The throwaway sheet has empty title block fields, so the issue check blocks it: let it through (as the setting would) to run the exports.
         new("issue_drawings", c => new { sheet_numbers = new[] { "ST-999" }, revision_description = "Self-test issue", folder = Path.Combine(c.Temp, "issue"), allow_open_items = true, open_items_reason = "Self-test" }, Setup: ["create_sheets"])
@@ -1305,6 +1322,9 @@ internal static partial class SelfTest
         }, Setup: ["cut_geometry#2"]) { Heavy = true },
         new("find_clashes", c => new { set_a = new { categories = new[] { "Floors", "Structural Framing", "Generic Models" } }, limit = 50, folder = c.Temp, voids = "rebuild" },
             Setup: ["cut_geometry#2", "place_void_cuts#2"]) { Heavy = true, Expect = VoidsRebuilt, Bug = 27 },
+        // #39: export_pdf looks a saved View/Sheet Set up by name, and one that isn't there is named with the saved ones.
+        new("export_pdf", c => new { sheet_set = "Self-test set that isn't there", folder = c.Temp, file_name = "set", check_print = true })
+            { Heavy = true, Bug = 39, ExpectError = "No View/Sheet Set is called" },
         // Workshared: target copy is refused with the reason; not workshared: the copy is made, changed, saved and closed.
         new("ve_apply", c => new
         {

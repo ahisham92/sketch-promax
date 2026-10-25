@@ -31,8 +31,18 @@ internal static class ChatStore
     private static string FileFor(Conversation conv) =>
         Path.Combine(Folder, Hash(conv.Key) + (conv.Id.Length > 0 ? "-" + conv.Id : "") + ".json");
 
-    /// <summary>A new, empty chat for a model.</summary>
-    public static Conversation New(string key, string title) => new() { Key = key, Title = title, Id = NewId() };
+    /// <summary>The kind a new chat gets (ChatTypes): the Settings default, which the pane keeps up to date.</summary>
+    internal static volatile string NewType = ChatTypes.Coordinator;
+
+    /// <summary>The model and effort a new chat starts on (ChatAuto; Settings, Chat tab): Automatic unless changed there.</summary>
+    internal static volatile string NewModel = ChatAuto.Automatic, NewEffort = ChatAuto.Automatic;
+
+    /// <summary>A new, empty chat for a model, of <paramref name="type"/> (the default kind when null).</summary>
+    public static Conversation New(string key, string title, string? type = null) => new()
+    {
+        Key = key, Title = title, Id = NewId(), Type = ChatTypes.Parse(type ?? NewType),
+        Model = ChatAuto.ParseModel(NewModel), Effort = ChatAuto.ParseEffort(NewEffort),
+    };
 
     private static string NewId() => Guid.NewGuid().ToString("N").Substring(0, 12);
 

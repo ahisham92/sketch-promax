@@ -85,7 +85,7 @@ internal static class FieldTestCoverageTests
         // Gaps: a fixed row without a check, a tag no case has, a feature that isn't one.
         var bugGaps = FieldTestCoverage.BugGaps([new(99, "x", "Fixed in 1"), new(3, "y", "Fixed in 1")], [3], ["ve_apply"]);
         check("bug log gaps: a row without a check", bugGaps.Any(g => g.StartsWith("bug #99")), string.Join("; ", bugGaps));
-        check("bug log gaps: a tag no case carries", bugGaps.Any(g => g.Contains("Bug = 2")) && !bugGaps.Any(g => g.Contains("Bug = 3")), string.Join("; ", bugGaps));
+        check("bug log gaps: a tag no case carries", bugGaps.Any(g => g.EndsWith("Bug = 2", StringComparison.Ordinal)) && !bugGaps.Any(g => g.EndsWith("Bug = 3", StringComparison.Ordinal)), string.Join("; ", bugGaps));
         check("bug log gaps: a tool with no case", bugGaps.Any(g => g.Contains("tool:ve_register")) && !bugGaps.Any(g => g.Contains("tool:ve_apply")), "");
         check("bug log gaps: every feature reference is a feature", !bugGaps.Any(g => g.Contains("is not a feature")), string.Join("; ", bugGaps.Where(g => g.Contains("is not a feature"))));
 

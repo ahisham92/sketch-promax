@@ -42,7 +42,7 @@ internal sealed partial class ChatPane
             > Widths are read from each wall's type.
             """;
 
-        /// <summary>A conversation with each kind of card: your message, steps (done, failed), a Markdown answer, a brief.</summary>
+        /// <summary>A conversation with each kind of card: your message, steps (done, failed), a Markdown answer, a file, a brief.</summary>
         public static Conversation Sample()
         {
             var t = DateTime.UtcNow.AddMinutes(-3);
@@ -62,6 +62,7 @@ internal sealed partial class ChatPane
                     new ChatItem { Kind = "tool", Name = "get_elements", State = "done", Text = "Walls on Level 1", Input = "{\n  \"category\": \"Walls\"\n}", Result = "12 walls: 310452, 310457, 310460", Time = t },
                     new ChatItem { Kind = "tool", Name = "get_parameters", State = "failed", Text = "Width", Result = "The parameter Width was not found on 2 walls.", Time = t },
                     new ChatItem { Kind = "assistant", Text = Reply, Time = t },
+                    new ChatItem { Kind = "file", Name = "make_document", Files = [System.IO.Path.Combine(System.IO.Path.GetTempPath(), "Walls on Level 1.xlsx")], Time = t },
                     new ChatItem { Kind = "user", Text = "Make the thick walls 200 mm", Time = t.AddMinutes(1) },
                     new ChatItem { Kind = "brief", State = "pending", Brief = PromptBriefs.ToJson(brief), Text = PromptBriefs.Compose(brief), Time = t.AddMinutes(1) },
                     new ChatItem { Kind = "job", Job = SampleJob(t.AddMinutes(2)).ToJson(), Time = t.AddMinutes(2) },

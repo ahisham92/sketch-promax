@@ -26,47 +26,49 @@ internal static class CoreRibbonManifest
     // have is left out, and a drop-down left empty goes with it, so tools are matched by name each time Revit asks.
     private static readonly (string Line, string? Tool)[] Items =
     [
-        // ---- Claude
+        // ---- Claude (titled Assistant, see LoaderBrand): Chat, then the three project windows as large icons (0.35 redesign:
+        // the ribbon is short; everything else stacks three high in small drop-downs), then Update, Job and Send view stacked.
         L(Button("Claude", "Chat", "Chat", "chat", "chat",
             "Chat with Sketch ProMax about this model, inside Revit.",
             "Opens the Sketch ProMax pane on its Chat tab. Replies stream in with every Sketch ProMax tool; attach images, PDFs " +
             "and drawings, or send the current view. The first time, it helps you install Claude Code and sign in.")),
-        // Update (0.33.1): also in the first panel, which Revit never folds away on a narrow ribbon, so updating is always one click.
-        L(Button("Claude", "UpdateClaude", "Update", "update-button", "version",
-            "The installed version and updates: Update ready (click to install now), Updated to <version> (click to check again), Up to date " +
-            "with the time of the last check (click to check now), Couldn't check (why, in this tooltip).", live: "update-first")),
-        // Pre-submission checklist (0.34.12: next to Chat and Update, large, so it is always in view): the office's checklist Excel in stages, ending in a signed Word file (UI/ChecklistWindow).
-        L(Button("Claude", "PreSubmission", "Pre-submission\nchecklist", "pre-submission", "field",
-            "Goes through the office's pre-submission checklist stage by stage, with hints from the model, and makes the signed Word file to print.",
+        // Model checklist (the pre-submission checklist; 0.34.12: next to Chat, large, so it is always in view; named Model checklist in 0.35): the office's checklist Excel in stages, ending in a signed Word file (UI/ChecklistWindow).
+        L(Button("Claude", "PreSubmission", "Model\nchecklist", "pre-submission", "field",
+            "The office's pre-submission checklist, stage by stage, ending in the signed Word file.",
+            "Goes through the office's pre-submission checklist stage by stage, with hints from the model, and makes the signed Word file to print. " +
             "Stages from your checklist Excel: project details, one per section, then review and sign. Each check has how to check it, " +
             "where it came from and what the model shows; answer Yes, No or N/A with a comment. The Word file carries the signatures " +
             "only when nothing is No or unanswered. Reads the model only; answers are kept per model.", needsModel: true)),
-        // Share tools (0.35): large, after the checklist. Makes a zip that installs the chosen tools on the TritoRevit tab for
-        // colleagues with or without Sketch ProMax (Sharing/ShareWindow).
-        L(Button("Claude", "ShareTools", "Share\ntools", "share-tools", "pack",
-            "Share any of your tools with colleagues, with or without Sketch ProMax: one zip installs them on the TritoRevit tab, and they update by themselves.",
-            "Pick tools (the pre-submission checklist, ribbon tools, learned tools, recipes), name the pack and, optionally, a folder everyone can reach. " +
-            "Colleagues extract the zip and double-click Install TritoRevit.cmd; it installs the TritoRevit add-in when they don't have it. Only the first " +
-            "install needs a Revit restart: later changes reach them from that folder while Revit is open.")),
-        L(Button("Claude", "ClaudeStatus", "Status", "status", "logo:gray",
-            "Whether the Claude desktop app is connected to this Revit window: green connected, amber ready, gray not running, red no link. Click for details.",
-            "Green: the desktop app has talked to this Revit window in the last few minutes. Amber: ready, waiting for the app. Gray: the " +
-            "Claude desktop app is not running or can't reach Revit.\n\nClick for details, the models the app can see, and how to fix a missing connection.",
-            small: true, live: "status")),
+        // Submissions status (0.35, named Berth status until 0.34.60; id and command kept so the live ribbon renames it): next to the checklist. Each berth's status for its next submission (UI/BerthStatusWindow); the
+        // model is read only when the user presses Update status there, in short steps.
+        L(Button("Claude", "BerthStatus", "Submissions\nstatus", "berth-status", "list",
+            "Each berth's percentage done for its next submission, and the expected finish.",
+            "A percentage from modelling, coordination, clashes, drawings, details, annotation, schedules and deliverables. Set up once from an Excel file (models, berths, submission schedule, planned counts, deliverables, working week). Click a berth for its areas, " +
+            "what to fix, hand entries and comments, and export its Excel. The model is read only when you press Update status, in short steps, so Revit never freezes.")),
+        // Submission checklist (0.35.1, the owner asked: a tool of its own, not only inside Submissions status and the Model checklist):
+        // the technical checklist of each submission, shared through the model (UI/SubmissionChecklistWindow).
+        L(Button("Claude", "SubmissionChecklist", "Submission\nchecklist", "submission-checklist", "check",
+            "The technical checklist of each submission: the engineer answers, the group leader approves.",
+            "Short questions page by page for the structures the project has (deck on piles, gravity blocks, sheet piles and more), " +
+            "with details and a sketch on demand. The engineer answers Yes, No or N/A; the group leader approves or returns each answer; " +
+            "an N/A is hidden once approved. Kept in the model, so Synchronize with Central shares it. Ends in a Word file or PDF.", needsModel: true)),
+        // Costing (0.35): the berth costing window, also opened from Submissions status (UI/BerthCostWindow).
+        L(Button("Claude", "BerthCosting", "Costing", "berth-costing", "boq",
+            "Bills, back-up and costing per berth, measured from the open model.",
+            "Quantities follow the model as it changes; type a value by hand where the model can't say. Makes the BOQ Excel, the Word " +
+            "back-up and the costing workbook in the built-in formats or your project's own templates.", needsModel: true)),
+        // Update (0.33.1): in the first panel, which Revit never folds away on a narrow ribbon, so updating is always one click.
+        // The only Update button since 0.35: its live label also pumps the update notice (CoreEntry.LiveLabel "update-badge").
+        L(Button("Claude", "UpdateClaude", "Update", "update-button", "version",
+            "The installed version and updates: Update ready (click to install now), Updated to <version> (click to check again), Up to date " +
+            "with the time of the last check (click to check now), Couldn't check (why, in this tooltip).", small: true, live: "update-badge")),
+        L(Button("Claude", "JobLive", "No job", "job-button", "job",
+            "The tool running in Revit and its progress. While one runs, click to ask it to stop.", small: true, live: "job")),
         L(Button("Claude", "SendView", "Send view", "send-view", "view",
             "Attaches a picture of the active view to the chat, as Revit shows it now, ready to ask about.", needsModel: true, small: true)),
-        L(Button("Claude", "CopyPrompt", "Copy prompt", "copy-prompt", "copy",
-            "Copies a good first message to the clipboard, to paste into a new chat in the Claude desktop app.",
-            "The prompt names the open model and asks for a look at it and suggestions of what Sketch ProMax can do for you.", small: true, breakBefore: true)),
-        L(Pulldown("Claude", "ClaudeMore", "More", "more", "Open the Claude desktop app, or show or hide the Sketch ProMax pane.", small: true)),
-        L(Entry("ClaudeMore", "OpenClaude", "Open Claude app", "open-claude", "open",
-            "Starts the Claude desktop app, or brings it to the front. Works with the normal installer and the Microsoft Store version.")),
-        L(Entry("ClaudeMore", "TogglePane", "Show or hide pane", "pane", "pane",
-            "Shows or hides the Sketch ProMax pane: chat, the running job with its steps and a Cancel button, the last result " +
-            "with clickable element ids, and your tools.")),
 
         // ---- Model
-        L(Pulldown("Model", "Structure", "Structure", "structure", "Model the structure: columns, beams, slabs, raft, piles and walls, each with its options.")),
+        L(Pulldown("Model", "Structure", "Structure", "structure", "Columns, beams, slabs, raft, piles and walls.", small: true)),
         T("Structure", "place_columns", "Columns", "column", "Places structural columns at points or grid intersections."),
         T("Structure", "place_beams", "Beams", "beam", "Places beams between points or along grid lines."),
         T("Structure", "create_floors", "Slabs", "slab", "Creates floor slabs from outlines or rooms."),
@@ -74,41 +76,12 @@ internal static class CoreRibbonManifest
         T("Structure", "create_raft", "Raft", "raft", "Models a raft foundation under a floor, following its outer edge."),
         T("Structure", "create_piles", "Piles", "pile", "Places piles at points, as a grid over an area, or in rows along an alignment."),
         T("Structure", "create_walls", "Walls", "wall", "Creates straight walls from segments on a level."),
-        L(Pulldown("Model", "Steel", "Steel", "steel", "Steel members and connections: sections, bracing, connections and the steel takeoff.")),
+        L(Pulldown("Model", "Steel", "Steel", "steel", "Steel sections, bracing, connections and the steel takeoff.", small: true)),
         T("Steel", "load_steel_sections", "Steel sections", "steel", "Loads steel section families and types into the model."),
         T("Steel", "place_bracing", "Bracing", "steel", "Places steel bracing between columns and beams."),
         T("Steel", "create_steel_connections", "Connections", "steel", "Adds steel connections where members meet."),
         T("Steel", "export_steel_takeoff", "Steel takeoff", "boq", "Steel tonnage per section size: count, length and weight."),
-        L(Pulldown("Model", "Marine", "Marine &\ninfrastructure", "marine", "Quays, jetties, port furniture and design vessels.")),
-        T("Marine", "marine_structure", "Marine structure", "marine", "Models revetments, quays and other marine structures along an alignment."),
-        T("Marine", "port_furniture", "Port furniture", "marine", "Places bollards, fenders, ladders and other port furniture along an edge."),
-        T("Marine", "design_vessel", "Design vessel", "marine", "Models a design vessel at a berth or in a channel for layout and clearance checks."),
-        T("Marine", "vessel_collision_check", "Vessel collision check", "clash", "Screens piles, piers and dolphins next to a channel or berth for vessel impact."),
-        L(Pulldown("Model", "ArchToStructure", "Arch to\nstructure", "arch", "Turn an architect's model into a structural model: link it, convert it, monitor changes.")),
-        T("ArchToStructure", "link_model", "Link a model", "arch", "Links an architect's or another discipline's Revit model."),
-        T("ArchToStructure", "arch_to_structure", "Arch to structure", "arch", "Creates structural walls, slabs and columns from the architectural ones."),
-        T("ArchToStructure", "copy_monitor", "Copy and monitor", "arch", "Copies grids and levels from a linked model and watches them for changes."),
-
-        // ---- Documents
-        L(Pulldown("Documents", "SheetsViews", "Sheets &\nviews", "sheet", "Create views and sheets and put views on sheets.")),
-        T("SheetsViews", "drawing_package", "Drawing package", "sheet", "From one sentence, makes the views, grid dimensions, tags, sheets with title blocks and a drawing register, checked after each stage. Shows the plan with its counts first."),
-        T("SheetsViews", "create_plan_views", "Plan views", "sheet", "Creates floor or structural plans for levels."),
-        T("SheetsViews", "create_section", "Section", "sheet", "Creates a section view along a line drawn in plan."),
-        T("SheetsViews", "create_elevations", "Elevations", "sheet", "Creates elevation views."),
-        T("SheetsViews", "create_3d_view", "3D view", "sheet", "Creates a 3D view, optionally boxed around elements or one level."),
-        T("SheetsViews", "duplicate_views", "Duplicate views", "sheet", "Duplicates views, with or without detailing."),
-        T("SheetsViews", "apply_view_template", "Apply view template", "sheet", "Applies a view template to views."),
-        T("SheetsViews", "create_sheets", "Sheets", "sheet", "Creates sheets with a title block, numbers and names."),
-        T("SheetsViews", "place_views_on_sheet", "Place views on sheets", "sheet", "Places views on sheets."),
-        L(Pulldown("Documents", "TagsDims", "Tags &\ndimensions", "tag", "Tag elements and dimension grids, walls and openings.")),
-        T("TagsDims", "tag_elements_in_view", "Tag elements", "tag", "Tags every untagged element of a category in a plan view."),
-        T("TagsDims", "arrange_tags", "Arrange tags", "tag", "Tidies tags in a view: moves overlapping tags apart, or aligns them."),
-        T("TagsDims", "add_keynote_tags", "Keynote tags", "tag", "Adds keynote tags to elements in a view."),
-        T("TagsDims", "dimension_grids", "Dimension grids", "tag", "Dimensions the grids in a view."),
-        T("TagsDims", "dimension_walls", "Dimension walls", "tag", "Adds dimension strings across parallel walls in a plan view."),
-        T("TagsDims", "dimension_openings", "Dimension openings", "tag", "Locates doors and windows along each wall with a dimension string."),
-        T("TagsDims", "add_spot_elevations", "Spot elevations", "tag", "Adds spot elevations to slabs, beams or other elements."),
-        L(Pulldown("Documents", "Reinforcement", "Reinforce-\nment", "rebar", "Reinforcement in 3D (rebar in beams, columns, footings, slabs and walls) and in 2D (detail families, symbols and sections).")),
+        L(Pulldown("Model", "Reinforcement", "Reinforcement", "rebar", "Rebar in 3D (beams, columns, footings, slabs, walls) and 2D details.", small: true)),
         T("Reinforcement", "reinforce_beam", "Reinforce beams (3D)", "rebar", "Places 3D rebar in beams."),
         T("Reinforcement", "reinforce_column", "Reinforce columns (3D)", "rebar", "Places 3D rebar in columns."),
         T("Reinforcement", "reinforce_footing", "Reinforce footings (3D)", "rebar", "Places 3D rebar in footings."),
@@ -121,7 +94,36 @@ internal static class CoreRibbonManifest
         T("Reinforcement", "place_additional_reinforcement", "Additional bars (2D)", "rebar", "Draws additional top or bottom bars on a slab plan with the office's 2D bar family."),
         T("Reinforcement", "place_mesh_symbols", "Mesh symbols (2D)", "rebar", "Places mesh reinforcement symbols on slabs in a plan view."),
         T("Reinforcement", "place_column_section_details", "Column sections (2D)", "rebar", "Fills column schedule cells with the office's column section reinforcement detail."),
-        L(Pulldown("Documents", "TitleBlocks", "Title blocks &\nrevisions", "titleblock", "Fill title blocks and manage revisions and clouds.")),
+        L(Pulldown("Model", "Marine", "Marine", "marine", "Quays, jetties, port furniture and design vessels.", small: true, breakBefore: true)),
+        T("Marine", "marine_structure", "Marine structure", "marine", "Models revetments, quays and other marine structures along an alignment."),
+        T("Marine", "port_furniture", "Port furniture", "marine", "Places bollards, fenders, ladders and other port furniture along an edge."),
+        T("Marine", "design_vessel", "Design vessel", "marine", "Models a design vessel at a berth or in a channel for layout and clearance checks."),
+        T("Marine", "vessel_collision_check", "Vessel collision check", "clash", "Screens piles, piers and dolphins next to a channel or berth for vessel impact."),
+        L(Pulldown("Model", "ArchToStructure", "From architect", "arch", "Turn an architect's model into a structural one: link it, convert it, monitor changes.", small: true)),
+        T("ArchToStructure", "link_model", "Link a model", "arch", "Links an architect's or another discipline's Revit model."),
+        T("ArchToStructure", "arch_to_structure", "Arch to structure", "arch", "Creates structural walls, slabs and columns from the architectural ones."),
+        T("ArchToStructure", "copy_monitor", "Copy and monitor", "arch", "Copies grids and levels from a linked model and watches them for changes."),
+
+        // ---- Documents
+        L(Pulldown("Documents", "SheetsViews", "Sheets & views", "sheet", "Create views and sheets and put views on sheets.", small: true)),
+        T("SheetsViews", "drawing_package", "Drawing package", "sheet", "From one sentence, makes the views, grid dimensions, tags, sheets with title blocks and a drawing register, checked after each stage. Shows the plan with its counts first."),
+        T("SheetsViews", "create_plan_views", "Plan views", "sheet", "Creates floor or structural plans for levels."),
+        T("SheetsViews", "create_section", "Section", "sheet", "Creates a section view along a line drawn in plan."),
+        T("SheetsViews", "create_elevations", "Elevations", "sheet", "Creates elevation views."),
+        T("SheetsViews", "create_3d_view", "3D view", "sheet", "Creates a 3D view, optionally boxed around elements or one level."),
+        T("SheetsViews", "duplicate_views", "Duplicate views", "sheet", "Duplicates views, with or without detailing."),
+        T("SheetsViews", "apply_view_template", "Apply view template", "sheet", "Applies a view template to views."),
+        T("SheetsViews", "create_sheets", "Sheets", "sheet", "Creates sheets with a title block, numbers and names."),
+        T("SheetsViews", "place_views_on_sheet", "Place views on sheets", "sheet", "Places views on sheets."),
+        L(Pulldown("Documents", "TagsDims", "Tags & dimensions", "tag", "Tag elements and dimension grids, walls and openings.", small: true)),
+        T("TagsDims", "tag_elements_in_view", "Tag elements", "tag", "Tags every untagged element of a category in a plan view."),
+        T("TagsDims", "arrange_tags", "Arrange tags", "tag", "Tidies tags in a view: moves overlapping tags apart, or aligns them."),
+        T("TagsDims", "add_keynote_tags", "Keynote tags", "tag", "Adds keynote tags to elements in a view."),
+        T("TagsDims", "dimension_grids", "Dimension grids", "tag", "Dimensions the grids in a view."),
+        T("TagsDims", "dimension_walls", "Dimension walls", "tag", "Adds dimension strings across parallel walls in a plan view."),
+        T("TagsDims", "dimension_openings", "Dimension openings", "tag", "Locates doors and windows along each wall with a dimension string."),
+        T("TagsDims", "add_spot_elevations", "Spot elevations", "tag", "Adds spot elevations to slabs, beams or other elements."),
+        L(Pulldown("Documents", "TitleBlocks", "Title blocks", "titleblock", "Fill title blocks and manage revisions and clouds.", small: true)),
         T("TitleBlocks", "fill_title_blocks", "Fill title blocks", "titleblock", "Fills title block fields on sheets."),
         T("TitleBlocks", "set_sheet_title_block", "Change title block", "titleblock", "Changes the title block family or type on sheets."),
         T("TitleBlocks", "title_block_from_cad", "Title block from CAD", "titleblock", "Makes a title block family from a DWG or DXF title block."),
@@ -129,65 +131,68 @@ internal static class CoreRibbonManifest
         T("TitleBlocks", "set_sheet_revisions", "Revisions on sheets", "titleblock", "Sets which revisions show on sheets."),
         T("TitleBlocks", "cloud_elements", "Revision clouds", "titleblock", "Draws revision clouds around elements in a view."),
 
-        // ---- Check
-        B("Check", "check_model", "Model\ncheck", "check", "Checks that the model is built correctly and scores it: warnings, duplicates, wall gaps, unsupported beams, off-grid columns, levels, empty parameters."),
-        B("Check", "find_clashes", "Clashes", "clash", "Finds clashes between two sets of elements, in this model or in linked models."),
-        B("Check", "check_drawings", "Drawing\ncheck", "drawing-check", "Looks for mistakes across the drawings, such as grids and levels that differ from the links and overridden dimensions."),
-        B("Check", "boq_check", "BOQ\ncheck", "boq", "Checks a bill of quantities against the model."),
-        L(Pulldown("Check", "Carbon", "Embodied\ncarbon", "boq", "Embodied carbon (A1-A3, optional A4/A5) from the model's quantities: assessment, comparing options, colour-coded 3D view.")),
-        T("Carbon", "embodied_carbon", "Embodied carbon", "boq", "Total tCO2e and kgCO2e/m² with breakdowns, top contributors and assumptions, to Excel and CSV. Reads the model only."),
-        T("Carbon", "carbon_compare", "Compare options", "boq", "Compares two options or snapshots (e.g. cement replacement or a grade swap) and shows the saving."),
-        T("Carbon", "carbon_view", "Carbon 3D view", "boq", "Makes a new 3D view coloured green to red by carbon intensity. Existing views are not changed."),
-        L(Pulldown("Check", "ValueEng", "Value\nengineering", "boq", "Value engineering screening: where cost and carbon could be saved, structural options compared, changes tried on a copy, and the VE register. An engineer confirms every item.")),
-        T("ValueEng", "ve_opportunities", "VE opportunities", "check", "Ranks where cost or material could be saved (depths, sizes, grades, rebar, steel, formwork, spec), to Excel. Reads the model only."),
-        T("ValueEng", "ve_compare_options", "Compare systems", "structure", "Flat slab, beam and slab, PT, hollow-core, steel; raft or piles: quantities, cost, carbon, programme and risks side by side."),
-        T("ValueEng", "ve_view", "VE 3D view", "view", "Makes a new 3D view coloured by the ranked VE items. Existing views are not changed."),
-        T("ValueEng", "ve_apply", "Apply to a copy", "bolt", "Applies chosen VE changes to a saved copy or a design option, with before and after cost and carbon."),
-        T("ValueEng", "cost_estimate", "Cost plan", "boq", "Cost plan from the firm's rate table: total, rates per m² GFA, per m, per m³ and per tonne, add-ons, options side by side, to Excel. Reads the model only."),
-        T("ValueEng", "what_if", "What if", "bolt", "Tries a slab thickness, column size, grade or grid spacing on a copy and compares quantities, cost, carbon and the drawings affected. Previews first."),
-        T("ValueEng", "ve_register", "VE register", "list", "Exports the VE register and sets each item's status (proposed, accepted, rejected) and owner."),
+        // PDF editor (0.35.3): every page as a picture, to delete, turn, move, replace, add, merge, extract and split (UI/PdfEditorWindow).
+        L(Button("Documents", "PdfEditor", "PDF editor", "pdf-editor", "pdf",
+            "Edit any PDF: see every page, then delete, turn, move or replace pages, add PDFs to merge, extract or split.",
+            "Opens a PDF of any size with a picture of each page. Click pages to pick them (Ctrl or Shift for more), then delete, " +
+            "turn, drag to a new place, or replace them with pages of another PDF. Add PDFs or blank pages, save picked pages as a " +
+            "new PDF, or split it every few pages, at the picked pages or by size. Nothing is kept in the model: Save as writes the PDF to the folder and name you choose.",
+            small: true, breakBefore: true)),
 
-        // Purge and cleanup (0.34): one button (the loader's command slots are nearly all used) that asks which cleanup to
-        // run; each shows its preview first and asks before deleting (RibbonTools.Cleanup, RibbonTools.AskApply).
-        L(Button("Check", "Cleanup", "Purge &\ncleanup", "cleanup", "refresh",
+        // ---- Check: small buttons, stacked three and two high (0.35 redesign).
+        S("Check", "check_model", "Model check", "check", "Checks the model is built correctly and scores it: warnings, duplicates, gaps, unsupported beams, off-grid columns."),
+        S("Check", "find_clashes", "Clashes", "clash", "Finds clashes between two sets of elements, in this model or in linked models."),
+        S("Check", "check_drawings", "Drawing check", "drawing-check", "Looks for mistakes across the drawings, such as grids that differ from the links and overridden dimensions."),
+        S("Check", "boq_check", "BOQ check", "boq", "Checks a bill of quantities against the model.", breakBefore: true),
+        L(Button("Check", "Cleanup", "Purge & cleanup", "cleanup", "refresh",
             "Purge unused families, types and materials, delete views on no sheet, remove imported CAD, or a model health clean. Each shows a preview first and asks before it deletes.",
             "Pick one of the four: Purge unused (repeated until nothing new is unused), Delete unused views (keeps WORKING and _keep views, open views and views others depend on), " +
             "Clean up imports (imported CAD and IMPORT- line styles), Model health clean (unused view templates, unplaced rooms, unused groups and filters, warnings by type). " +
-            "Its options open, then the preview: nothing changes until you press Delete them, and Ctrl+Z undoes it in one step.", needsModel: true)),
+            "Its options open, then the preview: nothing changes until you press Delete them, and Ctrl+Z undoes it in one step.", needsModel: true, small: true)),
 
-        // ---- Issue (0.33: the issue check gates Issue drawings and Export PDF of sheets, see UI/IssueGateWindow)
-        L(Button("Issue", "IssueCheck", "Issue\ncheck", "issue-check", "check",
-            "The zero-mistake check before an issue: drawing, spec, BOQ and model checks together, pass or fail per sheet.",
-            "Runs check_drawings, spec_check, boq_check and check_model on the issue set and lists each finding under its sheet " +
-            "(model-wide ones under Model). Fix an item (it takes you there) or accept it with a reason; Issue stays off until " +
+        // ---- Issue (titled Submit, see LoaderBrand; 0.33: the submit check gates Submit drawings and Export PDF of sheets, see UI/IssueGateWindow)
+        L(Button("Issue", "IssueCheck", "Submit\ncheck", "issue-check", "check",
+            "The zero-mistake check before a submission: pass or fail per sheet.",
+            "Drawing, spec, BOQ and model checks together. " +
+            "It runs check_drawings, spec_check, boq_check and check_model on the issue set and lists each finding under its sheet " +
+            "(model-wide ones under Model). Fix an item (it takes you there) or accept it with a reason; Submit stays off until " +
             "nothing is open. Reads the model only.", needsModel: true)),
-        B("Issue", "issue_drawings", "Issue\ndrawings", "pdf", "Issues sheets end to end after the issue check: revision, PDF/DWG, list of drawings and the transmittal."),
-        B("Issue", "redline_apply", "Redlines\nto sheets", "titleblock", "Applies a marked-up PDF or photo: each markup matched to its sheet and element, applied (asked one by one when Settings asks for every change), clouded under a new revision, the revised sheets exported, and a done / not done report."),
-        B("Issue", "export_pdf", "Export\nPDF", "pdf", "Prints sheets or views to PDF, as one combined file by default."),
-        B("Issue", "export_drawing_list", "List of\ndrawings", "list", "Writes the list of drawings (sheet numbers, names, current revisions) to a CSV that opens in Excel."),
-        B("Issue", "export_quantities", "Quantities\n/ BOQ", "boq", "Writes quantities per category and type (count, length, area, volume) to a CSV that opens in Excel."),
-        L(Button("Issue", "ExportPack", "Export\nproject pack", "export-pack", "pack",
+        S("Issue", "issue_drawings", "Submit drawings", "pdf", "Submits sheets end to end after the submit check: revision, PDF/DWG, list of drawings and transmittal."),
+        S("Issue", "redline_apply", "Redlines", "titleblock", "Applies a marked-up PDF or photo: each markup matched to its sheet and element, then clouded."),
+        L(Pulldown("Issue", "Export", "Export", "download", "PDF, list of drawings, quantities and the project pack.", small: true)),
+        T("Export", "export_pdf", "Export PDF", "pdf", "Prints sheets or views to PDF, as one combined file by default."),
+        T("Export", "export_drawing_list", "List of drawings", "list", "Writes the list of drawings (numbers, names, current revisions) to a CSV that opens in Excel."),
+        T("Export", "export_quantities", "Quantities / BOQ", "boq", "Writes quantities per category and type (count, length, area, volume) to a CSV that opens in Excel."),
+        L(Entry("Export", "ExportPack", "Project pack", "export-pack", "pack",
             "Writes one small zip describing this project (data, quantities, sheets, revisions, schedules, the latest check " +
             "results) to upload to an AI chat to prepare a report.",
             "Read-only: nothing in the model changes. Runs here without the AI; usually a few MB at most. The folder opens " +
             "with the zip selected when it is done.", needsModel: true)),
 
-        // ---- Sketch ProMax: Job and Update large and labelled, then stacks of two and three short labels. A
-        // stack's widest label is the first Revit hides when the ribbon is narrow, so the labels are short and of a
-        // length; RibbonLabels then asks Revit to keep them (it shrinks the panel by other means).
-        L(Button("Sketch ProMax", "JobLive", "No job", "job-button", "job",
-            "The tool running in Revit and its progress. While one runs, click to ask it to stop.", live: "job")),
-        L(Button("Sketch ProMax", "UpdateLive", "Updates", "update-button", "version",
-            "The installed version and updates: Update ready (install it now), Updated to <version> (click to check again), Up to date " +
-            "with the time of the last check, Couldn't check (why, in this tooltip).", live: "update-badge")),
-        // Bug reports (0.30): CoreEntry.Command "report-bug" / "bug-folder" / "export-chats-bugs"; the notes tab by PaneContent("notes").
-        L(Button("Sketch ProMax", "ReportBug", "Report bug", "report-bug", "bug",
-            "Writes a bug report for Sketch ProMax with what just happened, ready to send.", small: true, breakBefore: true)),
-        // Bug folder left the ribbon in 0.35 (still on the pane's Bugs section) to free a loader slot for Share tools.
-        L(Button("Sketch ProMax", "ExportChatsBugs", "Export chats", "export-chats-bugs", "pack",
-            "Writes one zip with the chats of every model, all bug reports, the tool-call log and the versions, to send to the developer.", small: true)),
+        // ---- Sketch ProMax: Under development (tools that work but are still being proven), then stacks of three short
+        // labels. A stack's widest label is the first Revit hides when the ribbon is narrow, so the labels are short and of
+        // a length; RibbonLabels then asks Revit to keep them (it shrinks the panel by other means).
+        L(Pulldown("Sketch ProMax", "UnderDevelopment", "Under\ndevelopment", "test",
+            "Tools still being proven: embodied carbon and value engineering. Check their results before you use them.")),
+        T("UnderDevelopment", "embodied_carbon", "Embodied carbon", "boq", "Total tCO2e and kgCO2e/m² with breakdowns, top contributors and assumptions, to Excel and CSV. Reads the model only."),
+        T("UnderDevelopment", "carbon_compare", "Compare options", "boq", "Compares two options or snapshots (e.g. cement replacement or a grade swap) and shows the saving."),
+        T("UnderDevelopment", "carbon_view", "Carbon 3D view", "boq", "Makes a new 3D view coloured green to red by carbon intensity. Existing views are not changed."),
+        T("UnderDevelopment", "ve_opportunities", "VE opportunities", "check", "Ranks where cost or material could be saved (depths, sizes, grades, rebar, steel, formwork, spec), to Excel. Reads the model only."),
+        T("UnderDevelopment", "ve_compare_options", "Compare systems", "structure", "Flat slab, beam and slab, PT, hollow-core, steel; raft or piles: quantities, cost, carbon, programme and risks side by side."),
+        T("UnderDevelopment", "ve_view", "VE 3D view", "view", "Makes a new 3D view coloured by the ranked VE items. Existing views are not changed."),
+        T("UnderDevelopment", "ve_apply", "Apply to a copy", "bolt", "Applies chosen VE changes to a saved copy or a design option, with before and after cost and carbon."),
+        T("UnderDevelopment", "cost_estimate", "Cost plan", "boq", "Cost plan from the firm's rate table: total, rates per m² GFA, per m, per m³ and per tonne, add-ons, options side by side, to Excel. Reads the model only."),
+        T("UnderDevelopment", "what_if", "What if", "bolt", "Tries a slab thickness, column size, grade or grid spacing on a copy and compares quantities, cost, carbon and the drawings affected. Previews first."),
+        T("UnderDevelopment", "ve_register", "VE register", "list", "Exports the VE register and sets each item's status (proposed, accepted, rejected) and owner."),
+        // Share tools (0.35): makes a zip that installs the chosen tools on the TritoRevit tab for colleagues with or without
+        // Sketch ProMax (Sharing/ShareWindow).
+        L(Button("Sketch ProMax", "ShareTools", "Share tools", "share-tools", "pack",
+            "Share your tools with colleagues: one zip installs them on the TritoRevit tab, and they update by themselves.",
+            "Pick tools (the checklist, ribbon tools, learned tools, recipes), name the pack and, optionally, a folder everyone can reach. " +
+            "Colleagues extract the zip and double-click Install TritoRevit.cmd; it installs the TritoRevit add-in when they don't have it. Only the first " +
+            "install needs a Revit restart: later changes reach them from that folder while Revit is open.", small: true, breakBefore: true)),
         L(Button("Sketch ProMax", "SettingsButton", "Settings", "settings", "settings",
-            "Firm standards, whether Revit asks before Sketch ProMax changes the model, and automatic updates.", small: true, breakBefore: true)),
+            "Firm standards, whether Revit asks before Sketch ProMax changes the model, and automatic updates.", small: true)),
         L(Pulldown("Sketch ProMax", "HelpMenu", "Help", "help", "How to use Sketch ProMax, and diagnostics that test its tools.", small: true)),
         L(Entry("HelpMenu", "HelpPage", "Help and getting started", "help", "help", "Opens the guide: how to use Sketch ProMax, what it can do and what to try first.")),
         L(Entry("HelpMenu", "SelfTest", "Diagnostics: self-test", "self-test", "test",
@@ -195,16 +200,32 @@ internal static class CoreRibbonManifest
         L(Entry("HelpMenu", "FieldTest", "Diagnostics: field test", "field-test", "field",
             "Builds a throwaway test project, runs every tool family on it and writes one report. Your open models are not changed.",
             needsModel: true)),
+        L(Entry("HelpMenu", "ConnectionStatus", "Desktop app connection", "status", "logo",
+            "Whether the Claude desktop app is connected to this Revit window, the models it can see, how to fix a missing connection, and Open the Claude app.")),
+        // Open Claude app left the Help menu in 0.35.3 (Desktop app connection opens it) to free a loader slot for the PDF editor.
+        L(Entry("HelpMenu", "UserFolders", "Open folders", "user-folders", "folder",
+            "Opens the folders where Sketch ProMax keeps your bug reports, learned tools, recipes, chats and checklists.",
+            "Each folder has Open and Copy path. To learn from a colleague's PC, copy these folders from there.")),
+        // Show or hide pane left the Help menu after 0.35.5 (Chat shows the pane, its own X hides it) to free a loader slot for
+        // Open folders (UI/UserFoldersWindow).
+        L(Button("Sketch ProMax", "ReportBug", "Report bug", "report-bug", "bug",
+            "Writes a bug report for Sketch ProMax with what just happened, ready to send.", small: true, breakBefore: true)),
+        // Bug folder left the ribbon in 0.35 (still on the pane's Bugs section) to free a loader slot for Share tools.
+        // License (0.35) took Export chats' place, which stays on the pane's Bugs section, to keep the loader's free slots:
+        // this PC's license, or on the owner's PC the License manager (UI/LicenseWindow, UI/LicenseManagerWindow).
+        L(Button("Sketch ProMax", "License", "License", "license", "settings",
+            "This PC's license, and its PC code to send for a key. On the owner's PC: the License manager, to make keys, change their dates and cancel them.", small: true)),
         // Time saved (0.32): CoreEntry.Command "time-saved" opens the summary for the active model (UI/TimeSavedWindow).
         L(Button("Sketch ProMax", "TimeSaved", "Time saved", "time-saved", "job",
             "Working time in this model (AI and by hand) and the time Sketch ProMax saved, per tool and per day. Exports to Excel.",
             "All users' totals are kept in the model (Project Information shows them too). Rates and the idle threshold are in Settings.",
             needsModel: true, small: true)),
-        L(Entry("HelpMenu", "TestChecklist", "Test checklist", "test-checklist", "check",
-            "Walks you through what the field test can't check by itself (chat, ribbon, carbon, VE, 2D rebar, Report bug, " +
-            "exports and the fixed bugs), on a _detached copy. Mark each pass or fail; the result is saved in the Bugs folder.")),
+        // Test checklist left the Help menu in 0.35.1 (still on the pane's Bugs section) to free a loader slot for the
+        // Submission checklist button.
 
         // ---- The pane
+        L(Pane("Claude app", "CopyPrompt", "Copy prompt", "copy-prompt",
+            "Copies a good first message to the clipboard, to paste into a new chat in the Claude desktop app.")),
         L(Pane("Bugs", "ReportBug", "Report bug", "report-bug", "Writes a bug report for Sketch ProMax with what just happened, ready to send.")),
         L(Pane("Bugs", "BugFolder", "Open bug folder", "bug-folder", "Opens the folder with the bug reports written so far.")),
         L(Pane("Bugs", "ExportChatsBugs", "Export chats & bugs", "export-chats-bugs",
@@ -217,6 +238,16 @@ internal static class CoreRibbonManifest
         L(Tab("notes", "Notes", "Notes for this model")),
     ];
 
+
+    /// <summary>
+    /// Panel titles that differ from the loader's fixed panel names (the loader and the manifest find panels by name; the
+    /// core retitles them while Revit runs, see LoaderBrand): Claude is shown as Assistant, Issue as Submit (0.35).
+    /// </summary>
+    internal static readonly IReadOnlyDictionary<string, string> PanelTitles = new Dictionary<string, string>(StringComparer.Ordinal)
+    {
+        ["Claude"] = BrandText.PanelTitle,
+        ["Issue"] = "Submit",
+    };
 
     /// <summary>Every line, whether or not this core has the tools (for the tests).</summary>
     public static string Text => Build(_ => "");
@@ -275,6 +306,10 @@ internal static class CoreRibbonManifest
     /// <summary>A large button that runs <paramref name="tool"/> through its options window.</summary>
     private static (string, string?) B(string panel, string tool, string text, string glyph, string tip) =>
         (Button(panel, "Tool." + tool, text, "tool:" + tool, glyph, tip, needsModel: true), tool);
+
+    /// <summary>A small (stacked) button that runs <paramref name="tool"/> through its options window.</summary>
+    private static (string, string?) S(string panel, string tool, string text, string glyph, string tip, bool breakBefore = false) =>
+        (Button(panel, "Tool." + tool, text, "tool:" + tool, glyph, tip, needsModel: true, small: true, breakBefore: breakBefore), tool);
 
     internal static string Button(string panel, string id, string text, string command, string glyph, string tip, string more = "",
         bool needsModel = false, bool small = false, string? live = null, bool breakBefore = false) =>

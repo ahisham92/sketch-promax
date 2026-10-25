@@ -43,8 +43,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     private static string _modelKey = "", _modelTitle = "";
     private static EventHandler<ViewActivatedEventArgs>? _viewActivated;
 
-    /// <summary>True while a turn runs: switching to a new core version waits for it.</summary>
-    public static bool IsBusy => _instance?._turn is not null;
+    /// <summary>True while a turn or a parallel job runs: switching to a new core version waits for it.</summary>
+    public static bool IsBusy => _instance is { } pane && (pane._turn is not null || pane.JobsOpen);
 
     /// <summary>The pane's chat element (created on first use).</summary>
     public static FrameworkElement Get() => _instance ??= new ChatPane();
@@ -84,6 +84,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             pane._idle.Start();
             Brand.UseTheme(pane);
             pane.ShowStatus();
+            pane.HookJobs();
             pane.ModelChanged();
         }
     }
@@ -101,6 +102,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     public static void Shutdown()
     {
         if (_instance is not { } pane) return;
+        pane.CloseBig();
+        pane.EndRuns("Revit closed, so this job stopped. Send it a message to carry on.", now: true);
         pane.Save();
         pane._engine?.KillNow();
         pane._engine = null;
@@ -128,6 +131,9 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     // ---- State ----------------------------------------------------------------------------------------------------
 
     private enum Setup { Checking, Missing, Installing, SignedOut, SigningIn, Ready, Failed }
+
+    /// <summary>Why Revit couldn't open PowerShell to install Claude Code, once it couldn't: the user pastes the line instead.</summary>
+    private string? _installBlocked;
 
     private sealed class Turn
     {
@@ -205,7 +211,9 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     private readonly TextBlock _modelLabel = new() { FontSize = ChatUi.SmallSize, VerticalAlignment = VerticalAlignment.Center };
     private bool _refreshAsked;
     private DateTime _modelMenuClosed;
-    private string _model = ChatModels.Load(ClaudeCli.Folder), _lastWorkingModel = "";
+    // The model and effort the main chat's next process runs with: the chat's own choice, or what Automatic picked for
+    // the latest request (ChatAuto; see PickFor).
+    private string _model = ChatModels.DefaultId, _effort = "", _lastWorkingModel = "";
     private readonly Border _setupCard = new() { Visibility = Visibility.Collapsed };
     private readonly StackPanel _messages = new();
     private readonly ScrollViewer _scroll;
@@ -280,9 +288,12 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         LastChildFill = true;
         // After an in-session update: the chat the previous version had open, with its unsent message (ChatHandover).
         var handover = sample is null ? ChatHandover.Take() : null;
+        if (sample is null) DefaultType();
         _conv = sample ?? ChatHandover.Open(handover, ConversationKey, ConversationTitle);
 
-        // Top: the history menu, this chat's name with the Revit model as a muted caption, then New chat and Refresh.
+        // Top: the history menu, this chat's name with its type and the Revit model as a muted caption, its effort and
+        // the plan's usage; on the right Shrink, New chat (one button: its menu picks the type), the large window and,
+        // only while the setup needs it, Check again. A narrow pane shortens the words (Narrow).
         var top = new DockPanel { Margin = new Thickness(ChatUi.S2, ChatUi.S2, ChatUi.S2, ChatUi.S2) };
         _menu = ChatUi.IconButton(ChatUi.Paths.Menu, "Chat history", "Your chats: search, open, rename, pin, export or delete them.");
         _menu.Margin = new Thickness(0, 0, ChatUi.S1, 0);
@@ -290,6 +301,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         DockPanel.SetDock(_menu, Dock.Left);
         top.Children.Add(_menu);
         _refresh = ChatUi.IconButton(ChatUi.Paths.Refresh, "Check the setup again", "Checks again that the chat is installed and signed in.");
+        _refresh.Visibility = Visibility.Collapsed; // ShowSetup shows it while the chat isn't ready
         _refresh.Click += (_, _) =>
         {
             _refreshAsked = true;
@@ -298,21 +310,48 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         };
         DockPanel.SetDock(_refresh, Dock.Right);
         top.Children.Add(_refresh);
-        _newChat = ChatUi.IconButton(ChatUi.Paths.Plus, "New chat", "New chat. This one stays in the history (the menu at the top left).");
+        // The large window (and back to the side).
+        BuildBigButton();
+        DockPanel.SetDock(_bigButton, Dock.Right);
+        top.Children.Add(_bigButton);
+        // New chat: one button whose menu starts a chat With coordinator or a Simple one, your default (Settings, Chat
+        // tab) first and marked.
+        BuildTypeControls();
+        _newChat = ChatUi.IconButton(ChatUi.Paths.Plus, "New chat", "New chat: pick With coordinator or Simple chat (your default is marked, Settings > Chat). This one stays in the history (the menu at the top left).");
         _newChat.Margin = new Thickness(ChatUi.S1, 0, 0, 0);
-        _newChat.Click += (_, _) => NewChat();
+        _newChat.Click += (_, _) => ToggleChoice(_newChat, NewChoices());
+        AutomationProperties.SetItemStatus(_newChat, "Collapsed");
         DockPanel.SetDock(_newChat, Dock.Right);
         top.Children.Add(_newChat);
+        DockPanel.SetDock(_choiceMenu, Dock.Right);
+        top.Children.Add(_choiceMenu);
+        // The plan's usage (5-hour and weekly limits), as Claude Code reports it with each answer.
+        BuildUsageMeter();
+        DockPanel.SetDock(_usageMenu, Dock.Right);
+        top.Children.Add(_usageMenu);
         _shrink = ShrinkButton();
         DockPanel.SetDock(_shrink, Dock.Right);
         top.Children.Add(_shrink);
         var names = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(ChatUi.S1, 0, 0, 0) };
         _chatName = ChatUi.Small("", Brand.K.Text, bold: true);
         _chatName.FontSize = ChatUi.BodySize;
+        _chatName.TextTrimming = TextTrimming.CharacterEllipsis;
         names.Children.Add(_chatName);
         _modelLine = ChatUi.Small("");
         _modelLine.FontSize = ChatUi.SmallSize;
-        names.Children.Add(_modelLine);
+        _modelLine.TextTrimming = TextTrimming.CharacterEllipsis;
+        _modelLine.VerticalAlignment = VerticalAlignment.Center;
+        // The chat's type (a pill that switches it), then the Revit model.
+        var caption = new DockPanel();
+        DockPanel.SetDock(_typePill, Dock.Left);
+        caption.Children.Add(_typePill);
+        caption.Children.Add(_modelLine);
+        names.Children.Add(caption);
+        // The chat's effort (Automatic unless picked here) and the plan's usage. The model is picked by the message box.
+        var pickers = new WrapPanel();
+        pickers.Children.Add(_effortPick);
+        pickers.Children.Add(_usagePill);
+        names.Children.Add(pickers);
         top.Children.Add(names);
         SetDock(top, Dock.Top);
         KeyboardNavigation.SetTabIndex(top, 0);
@@ -568,18 +607,32 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         _jumpText.Text = "Jump to latest";
         AutomationProperties.SetName(_jump, "Jump to latest");
         _center.Children.Add(_scroll);
+        // A job's own chat takes the conversation's place; the switcher and the job's bar sit above it.
+        var jobTop = BuildJobView();
+        _center.Children.Add(_jobScroll!);
         _center.Children.Add(_jump);
         // The history drawer slides over the conversation; the dimmed rest closes it when clicked.
         _scrim.Background = Brand.Brush(Color.FromArgb(0x55, 0, 0, 0));
         _scrim.MouseDown += (_, _) => CloseDrawer();
         _center.Children.Add(_scrim);
+        SetDock(jobTop, Dock.Top);
+        KeyboardNavigation.SetTabIndex(jobTop, 3);
+        Children.Add(jobTop);
         KeyboardNavigation.SetTabIndex(_center, 3);
         Children.Add(_center);
 
-        // Escape stops Claude from anywhere in the chat (the message box handles it itself first).
+        // Escape stops Claude from anywhere in the chat (the message box handles it itself first); in a job's view it goes
+        // back to the coordinator.
         KeyDown += (_, e) =>
         {
-            if (e.Key != Key.Escape || e.Handled || _turn is null) return;
+            if (e.Key != Key.Escape || e.Handled) return;
+            if (_viewJob is not null)
+            {
+                e.Handled = true;
+                ShowCoordinator(focus: true);
+                return;
+            }
+            if (_turn is null) return;
             e.Handled = true;
             StopTurn();
         };
@@ -602,6 +655,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         _render.Tick += (_, _) => RenderDirty();
         _poll.Tick += (_, _) => Check(quiet: true);
         _idle.Tick += (_, _) => IdleCheck();
+        _idle.Tick += (_, _) => ShowUsage(); // a limit's reset time passing
         _saveSoon.Tick += (_, _) =>
         {
             _saveSoon.Stop();
@@ -690,13 +744,14 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         // A click on the pill while the menu is open first closes it (it closes on any click outside): don't reopen it.
         if (DateTime.UtcNow - _modelMenuClosed < TimeSpan.FromMilliseconds(250)) return;
         _modelList.Children.Clear();
-        var heading = Brand.Text("Model for your next message", Brand.K.Muted, ChatUi.SmallSize, bold: true);
+        var heading = Brand.Text("Model for this chat", Brand.K.Muted, ChatUi.SmallSize, bold: true);
         heading.Margin = new Thickness(10, 6, 10, 4);
         _modelList.Children.Add(heading);
         Button? chosen = null;
-        foreach (var choice in ChatModels.All)
+        var current = ChatAuto.ParseModel(_conv.Model);
+        foreach (var choice in ModelChoices())
         {
-            var selected = choice.Id == ChatModels.Find(_model).Id;
+            var selected = choice.Id == current;
             var text = new StackPanel();
             text.Children.Add(Brand.Text(choice.Label, Brand.K.Text, ChatUi.BodySize, bold: selected));
             var line = Brand.Text(choice.Hint, Brand.K.Muted, ChatUi.SmallSize);
@@ -740,22 +795,21 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         if (focusPill) _modelPill.Focus();
     }
 
-    private void PickModel(string id)
-    {
-        if (id == _model) return;
-        _model = id;
-        ChatModels.Save(ClaudeCli.Folder, id);
-        ShowModelChoice(); // the pill says where the next message goes
-    }
+    private void PickModel(string id) => SetChatModel(id);
 
-    /// <summary>Shows the chosen model on the pill, with its hint as the tooltip.</summary>
+    /// <summary>Shows the chat's model on the pill (Auto, with what it picked last), with its hint as the tooltip.</summary>
     private void ShowModelChoice()
     {
-        var choice = ChatModels.Find(_model);
-        _modelLabel.Text = choice.Label;
-        _modelPill.ToolTip = $"Model: {choice.Label}. {choice.Hint}. Used from the next message on; click to change.";
-        AutomationProperties.SetName(_modelPill, "Model: " + choice.Label);
+        var chosen = ChatAuto.ParseModel(_conv.Model);
+        var auto = ChatAuto.IsAuto(chosen);
+        var label = auto ? "Auto" + (_lastPick is { } p ? " · " + ChatModels.Find(p.Model).Label : "") : ChatModels.Find(chosen).Label;
+        _modelLabel.Text = label;
+        _modelPill.ToolTip = auto
+            ? "Model: Automatic. Each request gets Haiku, Sonnet or Opus by the kind of work (Settings > Chat). Click to pick one for this chat."
+            : $"Model: {ChatModels.Find(chosen).Label} for this chat and its new jobs, until you set it back to Automatic. Click to change.";
+        AutomationProperties.SetName(_modelPill, "Model: " + (auto ? "Automatic" : ChatModels.Find(chosen).Label));
         AutomationProperties.SetHelpText(_modelPill, _modelPill.ToolTip as string ?? "");
+        ShowPickers();
     }
 
     /// <summary>Shows the brief setting on its pill: Brief: Always, Changes or Off.</summary>
@@ -763,6 +817,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     {
         var label = _briefMode switch { BriefMode.Always => "Always", BriefMode.Off => "Off", _ => "Changes" };
         _briefLabel.Text = "Brief: " + label;
+        _briefLabel.Visibility = _narrow ? Visibility.Collapsed : Visibility.Visible; // a narrow pane: the icon, with the tooltip
         _briefPill.ToolTip = "Brief before running: " + PromptBriefs.Label(_briefMode) + ". " + PromptBriefs.Hint(_briefMode) + ". Click to change.";
         AutomationProperties.SetName(_briefPill, "Brief before running: " + PromptBriefs.Label(_briefMode));
         AutomationProperties.SetHelpText(_briefPill, _briefPill.ToolTip as string ?? "");
@@ -855,6 +910,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
 
     private void ShowSetup()
     {
+        // Check again is in the header only while the setup needs it (the card has its own too).
+        _refresh.Visibility = _setup == Setup.Ready ? Visibility.Collapsed : Visibility.Visible;
         if (_setup == Setup.Ready)
         {
             _setupCard.Visibility = Visibility.Collapsed;
@@ -908,6 +965,20 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
                 Add("Install Claude Code", Brand.Weight.Primary, () => Launch(Setup.Installing));
                 Add("Check again", Brand.Weight.Secondary, () => Check(quiet: false));
                 break;
+            case Setup.Installing when _installBlocked is not null:
+                // Some company PCs don't let Revit start PowerShell; the user's own PowerShell window usually still works.
+                Title("Install Claude Code from your own PowerShell");
+                Para("This PC didn't let Sketch ProMax open PowerShell (" + _installBlocked + "). Open PowerShell yourself " +
+                     "(Start menu, type PowerShell), paste this line and press Enter:");
+                var line = Brand.Text(ClaudeCli.InstallCommand, Brand.K.Text, ChatUi.SmallSize);
+                line.FontFamily = new FontFamily("Consolas, Courier New");
+                line.Margin = new Thickness(0, 2, 0, 0);
+                panel.Children.Add(line);
+                Waiting("Waiting for Claude Code to be installed…");
+                Para("If PowerShell says it can't run it, ask IT to install Claude Code for you.", Brand.K.Muted);
+                row.Children.Add(ChatUi.CopyButton(() => ClaudeCli.InstallCommand, "the install line", "Copy the line"));
+                Add("Check again", Brand.Weight.Secondary, () => Check(quiet: false));
+                break;
             case Setup.Installing:
                 Title("Installing Claude Code");
                 Waiting("Waiting for the installer in the PowerShell window to finish…");
@@ -955,6 +1026,17 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             else if (_install is { } install) ClaudeCli.StartSignIn(install);
             else { Check(quiet: false); return; }
         }
+        catch (Exception ex) when (next == Setup.Installing && ex is System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            // Blocked by a company policy, most often: ask for the line to be pasted into the user's own PowerShell.
+            _installBlocked = ex.Message.TrimEnd('.');
+            _setup = Setup.Installing;
+            _waitingSince = DateTime.UtcNow;
+            _poll.Start();
+            ShowSetup();
+            ShowStatus();
+            return;
+        }
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
         {
             _setup = Setup.Failed;
@@ -979,10 +1061,16 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         _modelLine.ToolTip = "Each Revit model keeps its own chats, also after Revit restarts; open the others from the menu at the top left. " + _conv.Key;
         AutomationProperties.SetName(_chatName, "Chat: " + _chatName.Text);
         AutomationProperties.SetName(_modelLine, "Revit model: " + _conv.Title);
+        _modelLine.Text = " · " + _modelLine.Text;
+        ShowType();
+        ShowModelChoice();
     }
 
     private void ShowConversation()
     {
+        ShowCoordinator(focus: false);
+        _lastPick = null;
+        AttachJobs();
         ShowTitle();
         // Another chat: the saved prompts and the model menu open only on request, so they start closed.
         if (_promptPanel.Visibility == Visibility.Visible) TogglePrompts();
@@ -1000,6 +1088,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         for (var k = _firstShown; k < _conv.Items.Count; k++) _messages.Children.Add(Build(k));
         ShowEarlierButton();
         _empty.Visibility = _conv.Items.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        ShowSwitcher();
         ScrollToEnd(force: true, instant: true);
     }
 
@@ -1024,16 +1113,18 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     private UIElement Build(int index)
     {
         var item = _conv.Items[index];
-        var first = index == 0 || _conv.Items[index - 1].Kind is not ("assistant" or "tool");
+        var first = index == 0 || _conv.Items[index - 1].Kind is not ("assistant" or "tool" or "file");
         return item.Kind switch
         {
             "user" => UserMessage(item),
             "assistant" => AssistantMessage(item, first),
             "tool" => ToolCard(item, first),
+            "file" => FileCard(item),
             "error" => ErrorBox(item),
             "handoff" => HandoffCard.Build(item, Tools.Handoff.Find(item.Name)),
             "brief" => BriefCard(item),
             "job" => JobCard(item),
+            "pjob" => ParallelJobCardFor(item),
             "note" when item.Name.StartsWith("ack:", StringComparison.Ordinal) => AckLine(item),
             _ => NoteLine(item),
         };
@@ -1083,7 +1174,9 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             head.Children.Add(copy);
             head.Children.Add(MoreButton(item, more));
         }
-        var who = ChatUi.Small("You" + When(item));
+        // In a job's view, what the coordinator (the main chat) sent the job is marked as such.
+        var fromCoordinator = item.State == JobBoard.FromCoordinator;
+        var who = ChatUi.Small((fromCoordinator ? "From the coordinator" : "You") + When(item));
         who.ToolTip = WhenLong(item);
         who.Margin = new Thickness(ChatUi.S1, 0, 0, 0);
         head.Children.Add(who);
@@ -1131,7 +1224,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         });
         bubble.SetResourceReference(Border.BackgroundProperty, Brand.K.AccentSoft);
         panel.Children.Add(bubble);
-        AutomationProperties.SetName(panel, "You" + When(item) + ": " + item.Text + (item.Name.Length > 0 ? ". Attached: " + item.Name : ""));
+        if (fromCoordinator) bubble.SetResourceReference(Border.BackgroundProperty, Brand.K.Raised);
+        AutomationProperties.SetName(panel, (fromCoordinator ? "From the coordinator" : "You") + When(item) + ": " + item.Text + (item.Name.Length > 0 ? ". Attached: " + item.Name : ""));
         return panel;
     }
 
@@ -1532,7 +1626,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     {
         var list = string.Join(",", ids.Select(i => i.ToString(CultureInfo.InvariantCulture)));
         try { await App.Dispatcher.InvokeAsync(app => UI.Pane.Select(app, list)); }
-        catch (Exception ex) when (ex is InvalidOperationException or OperationCanceledException or Autodesk.Revit.Exceptions.ApplicationException)
+        // async void: nothing may escape to Revit's UI dispatcher.
+        catch (Exception ex)
         {
             Status("Revit couldn't select the elements now: " + ex.Message, spin: false);
         }
@@ -1739,7 +1834,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
 
     private void ShowStatus(string? text = null)
     {
-        var busy = _turn is not null;
+        // In a job's view Send stays: it talks to the job, whatever the main chat is doing.
+        var busy = _turn is not null && _viewJob is null;
         // While Claude works, Stop takes Send's place (Send isn't greyed out: the pane is working, not disabled).
         var sendHadFocus = _send.IsKeyboardFocused;
         var stopHadFocus = _stop.IsKeyboardFocused;
@@ -1752,7 +1848,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         if (!busy) Brand.SetBusy(_stop, false);
         if (busy && sendHadFocus) _stop.Focus();
         if (!busy && stopHadFocus) _input.Focus();
-        _newChat.IsEnabled = !_stopped;
+        _newChat.IsEnabled = _typePill.IsEnabled = _effortPick.IsEnabled = !_stopped;
         ShowShrink();
         _send.IsEnabled = _attach.IsEnabled = _view.IsEnabled = _prompts.IsEnabled = !_stopped;
         if (_stopped)
@@ -1765,6 +1861,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             Status(text ?? (_turn!.Stopping ? "Stopping…" : "Sketch ProMax is thinking…"), spin: true);
             return;
         }
+        if (_viewJob is not null && _setup == Setup.Ready) return; // the job view's own line stays
         Status(_setup switch
         {
             Setup.Ready => "", // the box's hint and tooltip say how to send; the model pill says where it goes
@@ -1779,7 +1876,9 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     /// </summary>
     private void Status(string text, bool spin)
     {
-        var working = _turn is not null && !_stopped;
+        // The main chat's progress isn't shown in a job's view (it shows again on the way back).
+        if (_viewJob is not null && spin && _turn is not null && !_stopped) return;
+        var working = _turn is not null && !_stopped && _viewJob is null;
         var wasWorking = _workingShown;
         // The typing line eases open and closed, so the list doesn't jump when a turn starts or ends; the shimmer
         // stands in for the answer until its first words or step.
@@ -1824,6 +1923,11 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             e.Handled = true;
             Send();
         }
+        else if (e.Key == Key.Escape && _viewJob is not null)
+        {
+            e.Handled = true;
+            ShowCoordinator(focus: true);
+        }
         else if (e.Key == Key.Escape && _turn is not null)
         {
             e.Handled = true;
@@ -1852,9 +1956,35 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         return "";
     }
 
+    /// <summary>
+    /// The Send button and Enter. async void: an exception would reach Revit's UI dispatcher and could close Revit, so
+    /// whatever <see cref="SendAsync"/> throws ends here, said in the status line.
+    /// </summary>
     private async void Send()
     {
+        try { await SendAsync(); }
+        catch (Exception ex)
+        {
+            try { Status($"The message couldn't be sent ({ex.GetType().Name}: {ex.Message}). Try again.", spin: false); }
+            catch (Exception) { /* the pane is closing */ }
+        }
+    }
+
+    private async Task SendAsync()
+    {
         if (_stopped) return;
+        // A PC without a valid key: the License window, and nothing is sent.
+        if (UI.LicenseWindow.BlockIfLocked())
+        {
+            Status("Sketch ProMax needs a license for this PC. Send the PC code in the License window for a key.", spin: false);
+            return;
+        }
+        // In a job's view the message goes to that job, also while the main chat answers.
+        if (_viewJob is { } shownJob)
+        {
+            SendToJob(shownJob);
+            return;
+        }
         if (_turn is not null)
         {
             // While a task runs the box stays open: the message reaches Claude at the next step boundary.
@@ -1905,6 +2035,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             return;
         }
         var turn = _turn = new Turn { Brief = brief };
+        // Automatic model and effort: picked for this request by its kind of work, and said in the chat when it changes.
+        PickFor(text, attachments.Any(a => System.IO.Path.GetExtension(a.Path).ToLowerInvariant() is ".pdf" or ".docx" or ".pptx" or ".doc"));
         Revit.TimeLog.BeginChat(brief);
         BeginJob(plan);
         _lastActivity = DateTime.UtcNow;
@@ -1940,7 +2072,11 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     {
         try
         {
-            if (_engine is { IsAlive: true } engine && engine.Model == _model)
+            var effort = ClaudeCli.EffortRefused ? "" : _effort;
+            // A process started for another model, kind or effort needs a new one, and so does one whose Revit tools are at
+            // an address that changed (a new core while Revit runs, or the connection inside Revit started after a fallback).
+            if (_engine is { IsAlive: true } engine && engine.Model == _model && engine.Coordinator == IsCoordinator && engine.Effort == effort
+                && engine.McpAddress == ClaudeCli.McpAddress)
             {
                 ShowStatus();
                 await engine.SendAsync(turn.Line);
@@ -1955,7 +2091,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
                 if (_turn != turn) return;
             }
             // A new model needs a new Claude Code process; it resumes the same conversation.
-            var fresh = new ChatEngine(Dispatcher, _install!, resume, _model);
+            var fresh = new ChatEngine(Dispatcher, _install!, resume, _model, coordinator: IsCoordinator, effort: effort);
             fresh.Event += e => { if (_engine == fresh) OnEvent(e); };
             fresh.Exited += tail => { if (_engine == fresh) OnExited(fresh, tail); };
             _engine = fresh;
@@ -2055,8 +2191,9 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
                    ", included in full with this message: read it from there, not with the Read tool";
         }
         if (check.Verdict == PdfAttachment.Verdict.NotPdf) return PdfAttachment.Note(check, null, false);
-        // Split by itself into parts its helpers read whole (read_pdf_part, in a connector as new as this add-in).
-        if (check.Verdict != PdfAttachment.Verdict.Locked && !ClaudeCli.ConnectorIsOlder())
+        // Split by itself into parts its helpers read whole (read_pdf_part: always in the connection inside Revit, and in a
+        // connector program as new as this add-in).
+        if (check.Verdict != PdfAttachment.Verdict.Locked && !ClaudeCli.OlderConnectorInUse)
         {
             try
             {
@@ -2201,10 +2338,16 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
                     SaveSoon();
                 }
                 var server = init.Servers.FirstOrDefault(s => s.Name == ClaudeCli.ServerName);
+                var address = _engine?.McpAddress ?? ClaudeCli.McpAddress;
                 if (server.Name is null)
-                    Note("The Revit tools didn't load in this chat. Run Install.cmd from the Sketch ProMax download again, then press New chat.");
+                    Note(ToolsNote.Missing(inside: address.Length > 0));
                 else if (server.Status is not ("connected" or "pending" or ""))
-                    Note($"The Revit tools didn't connect ({server.Status}). Check that Sketch ProMax is installed (Install.cmd), then press New chat.");
+                {
+                    // Whether the PC blocks it takes a look at Claude Code's log and perhaps starting the connector: off the UI thread.
+                    var status = server.Status;
+                    _ = Task.Run(() => ClaudeCli.ToolsFailed(status, address))
+                        .ContinueWith(t => Dispatcher.BeginInvoke(new Action(() => { if (!_stopped) Note(t.Result); })), TaskContinuationOptions.OnlyOnRanToCompletion);
+                }
                 if (turn is not null && !turn.Stopping) ShowStatus(turn.Shrinking ? "Shrinking this chat…" : null);
                 break;
             case TextStartEvent start:
@@ -2264,7 +2407,11 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             }
             case ToolResultEvent result:
                 if (_tools.TryGetValue(result.ToolUseId, out var done))
+                {
                     SetTool(done, result.IsError ? "failed" : "done", done.Item.Text, result.Text);
+                    // A file the step made (a workbook, a report, a presentation…): a card to open or save it.
+                    if (!result.IsError && FilesItem(done.Item.Name, result.Text) is { } files) Add(files);
+                }
                 JobToolEnded(result.ToolUseId, result.Text, result.IsError);
                 if (turn is { Stopping: false }) ShowStatus("Sketch ProMax is thinking…");
                 break;
@@ -2279,6 +2426,9 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
                 break;
             case CompactedEvent compacted:
                 Compacted(compacted, turn);
+                break;
+            case UsageEvent usage:
+                OnUsage(usage.Usage);
                 break;
             case ContextEvent context:
                 // The summarising request of a shrink is not what later messages send.
@@ -2361,7 +2511,9 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         _engine?.Kill();
         _engine = null;
         _model = back;
-        ChatModels.Save(ClaudeCli.Folder, back);
+        // Automatic skips the refused model from now on; a model picked by hand goes back to the one that worked.
+        _refusedModels.Add(ChatModels.Find(refused).Id);
+        if (!ChatAuto.IsAuto(_conv.Model)) _conv.Model = back;
         ShowModelChoice();
         Error($"{ChatModels.Find(refused).Label} isn't available with your plan, so the chat went back to {ChatModels.Find(back).Label} " +
               $"and sent your message again. The reply was: {said.Trim()}");
@@ -2396,6 +2548,14 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             return;
         }
         if (ChatModels.IsRejection(tail) && FallBack(turn, engine.Model, Last(tail, 300))) return;
+        if (!engine.Initialized && engine.Effort.Length > 0 && ChatAuto.IsEffortRefusal(tail) && !ClaudeCli.EffortRefused)
+        {
+            // An older Claude Code without --effort: the same message again without it.
+            ClaudeCli.EffortRefused = true;
+            Note("This Claude Code doesn't take an effort setting, so the chat runs at its default effort. Update Claude Code (claude update) to use the effort picker.");
+            _ = Deliver(turn);
+            return;
+        }
         MarkRunningTools("stopped");
         EndTurn();
         var detail = Last(tail, 500);
@@ -2448,7 +2608,9 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         SendLeftover(left, stopped || _pendingModel is not null);
         ShrinkIfLong(ended, stopped || left.Count > 0);
         if (ended is { Planning: false, Shrinking: false } && !stopped && ended.Outcome == "done") Finished(ended);
-        if (_pendingModel is { } next)
+        // Jobs that finished while the main chat answered report back now.
+        Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(FlushReports));
+        if (_pendingModel is { } next && !JobsOpen)
         {
             _pendingModel = null;
             SwitchTo(next.Key, next.Title);
@@ -2516,7 +2678,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         turn.KillTimer.Start();
     }
 
-    private void NewChat()
+    /// <summary>A new chat, of <paramref name="type"/> (ChatTypes) or the Settings' default type.</summary>
+    private void NewChat(string? type = null)
     {
         if (_stopped) return;
         // The chat shown stays in the history; a running answer is stopped (the chat resumes when reopened).
@@ -2531,11 +2694,12 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         _turn = null;
         _engine?.Kill();
         _engine = null;
+        EndRuns("A new chat was started, so this job stopped. Open this chat again and send it a message to carry on.");
         Save();
         Remember(_conv);
         _contextTokens = 0;
         if (left.Count > 0 && _input.Text.Trim().Length == 0) _input.Text = string.Join("\n\n", left.Select(n => n.Text));
-        _conv = ChatStore.New(ConversationKey, ConversationTitle);
+        _conv = ChatStore.New(ConversationKey, ConversationTitle, type ?? DefaultType());
         ShowConversation();
         ShowStatus();
         CloseDrawer();
@@ -2605,6 +2769,12 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             CloseDrawer();
             return;
         }
+        if (JobsOpen)
+        {
+            Status("Jobs are still working in this chat. Wait for them, or press Stop on their cards, then open the other chat.", spin: false);
+            CloseDrawer();
+            return;
+        }
         if (ChatStore.Read(chat.File) is not { } conv)
         {
             Status("That chat couldn't be read. Open the history again and press Refresh.", spin: false);
@@ -2639,7 +2809,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     bool IHistoryHost.DeleteChat(string file)
     {
         var current = string.Equals(file, _conv.File, StringComparison.OrdinalIgnoreCase);
-        if (current && _turn is not null) return false;
+        if (current && (_turn is not null || JobsOpen)) return false;
         if (!ChatStore.Delete(file)) return false;
         if (current)
         {
@@ -2656,7 +2826,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     private void ModelChanged()
     {
         if (_stopped) return;
-        if (_turn is not null) _pendingModel = (ConversationKey, ConversationTitle);
+        // Not while the chat answers or its jobs work: the switch happens when they are done.
+        if (_turn is not null || JobsOpen) _pendingModel = (ConversationKey, ConversationTitle);
         else SwitchTo(ConversationKey, ConversationTitle);
     }
 
@@ -2697,7 +2868,9 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         if (_sample || _handedOver) return; // the DPI snapshot's and frame test's stand-alone pane keeps nothing; nor a retired one
         _saveSoon.Stop();
         var old = _conv.Items.ToList();
-        ChatStore.Save(_conv);
+        // The bridge may change a job meanwhile (a chat_jobs call): the jobs are written as one consistent state.
+        if (_board is { } board) lock (board.Gate) ChatStore.Save(_conv);
+        else ChatStore.Save(_conv);
         // The store keeps the latest items only: let go of the drawn ones it dropped too.
         var removed = old.Count - _conv.Items.Count;
         if (removed <= 0) return;
@@ -2714,6 +2887,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     /// </summary>
     private void Retire()
     {
+        // Large: back in the dock first, so the next core (or this one, revived) finds the pane where Revit shows it.
+        CloseBig();
         _stopped = true;
         _poll.Stop();
         // Nothing may keep a retired pane alive after a hot swap: timers (rooted by the dispatcher while running) and static events.
@@ -2739,6 +2914,9 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
                 EndJob("stopped", null);
             }
             _undoTimer?.Stop();
+            _reportTimer?.Stop();
+            EndRuns("Sketch ProMax updated, so this job stopped. Send it a message to carry on.");
+            if (ChatJobs.Board == _board) { ChatJobs.Board = null; ChatJobs.Changed = null; }
         }
         catch (Exception) { /* whatever failed above, the chat is saved and handed over below */ }
         finally
@@ -2923,7 +3101,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             AddFiles(new[] { SaveAttachment(png, name) });
             ShowStatus();
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or OperationCanceledException)
+        // async void: nothing may escape to Revit's UI dispatcher.
+        catch (Exception ex)
         {
             Status("The view couldn't be captured: " + ex.Message, spin: false);
         }

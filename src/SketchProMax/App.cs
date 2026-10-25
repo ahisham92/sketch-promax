@@ -179,13 +179,30 @@ public sealed class App : IExternalApplication
             throw;
         }
         _started = true;
+        // The TritoRevit tab next to Sketch ProMax's (else SketchPro's, else first of the add-ins), with either add-in.
+        try { UI.TritoTabOrder.Start(); } catch (Exception) { /* cosmetic: the tab stays where Revit put it */ }
         if (!shared)
         {
+            // The chat's own connection, inside Revit (no helper program to start): a new port and token for each core.
+            try { StartupTimings.Time("chat connection", () => ChatMcp.Start(Bridge!)); } catch (Exception) { /* the chat uses the connector program */ }
             try { StartupTimings.Time("chat hooks", () => Chat.ChatPane.Start(app)); } catch (Exception) { /* the chat tab says what is wrong when it is opened */ }
             try { StartupTimings.Time("restart note", () => UI.RestartNote.AfterStart(Ui)); } catch (Exception) { /* the chat and the Version button still say it */ }
             try { StartupTimings.Time("time log", () => TimeLog.Start(app)); } catch (Exception) { /* tasks still run; time is not counted */ }
+            try { StartupTimings.Time("bim ready", () => BimReady.Start(app)); } catch (Exception) { /* models are only kept ready by the checklist's Fix buttons */ }
+            try { StartupTimings.Time("change tracker", () => ChangeTracker.Start(app)); } catch (Exception) { /* Update status then reads every berth */ }
+            // This PC's license (Licensing/LicenseState): without a valid key the License window opens at the first idle moment.
+            try
+            {
+                StartupTimings.Time("license", () =>
+                {
+                    if (!Licensing.LicenseState.Allowed) Dispatcher.Later(() => UI.LicenseWindow.Open());
+                });
+            }
+            catch (Exception) { /* the License button still opens it */ }
         }
         CentralAccess.Watch(app);
+        // Our exceptions that reach Revit's UI thread are caught and logged; one on a background thread is logged before Revit closes.
+        if (!shared) CrashGuard.Start(Ui);
 
         var token = _life.Token;
         _ = Task.Run(() => shared ? SharedBackgroundAsync(token) : BackgroundStartAsync(token));
@@ -193,6 +210,13 @@ public sealed class App : IExternalApplication
         // The loader's ribbon queries follow in this same Idling; the line goes to the log at the next one.
         Dispatcher.Later(() => ActivityLog.Note("startup_timing",
             $"Sketch ProMax {Updater.CurrentText} in Revit {RevitYear}: {StartupTimings.StartLine()}; first Idling {StartupTimings.SinceStart} ms after start"));
+        if (!shared)
+        {
+            // A Revit that closed by itself mid-call left that call behind: the log says which, with its arguments.
+            RunningCall.Version = Updater.CurrentText;
+            RunningCall.Enabled = true;
+            _ = Task.Run(() => { foreach (var line in RunningCall.Recover()) ActivityLog.Note("revit_closed_during", line); });
+        }
     }
 
     /// <summary>How long after start the network and install work waits, so it doesn't compete with Revit opening a model.</summary>
@@ -211,7 +235,11 @@ public sealed class App : IExternalApplication
             for (var i = 0; i < 300 && StartupTimings.IsOpening; i++) await Task.Delay(2000, stop).ConfigureAwait(false);
         }
         catch (OperationCanceledException) { return; }
+        // Revit closed during a field test last time: its report of what ran, then the user is told once.
+        try { Tools.FieldTest.AfterStart(); } catch (Exception) { }
         try { ClaudeRegistration.Ensure(); } catch (Exception) { }
+        // The owner's changes to keys given out (a shorter date, a cancelled key), kept for offline days.
+        try { await Licensing.LicenseState.RefreshChangesAsync(stop).ConfigureAwait(false); } catch (Exception) { }
         // Moves a manifest from an older release onto the one fixed loader path, once; writes nothing when settled.
         try { Updater.SettleInstall(); } catch (Exception) { }
         if (stop.IsCancellationRequested) return;
@@ -304,7 +332,10 @@ public sealed class App : IExternalApplication
         try { Chat.ChatPane.Stop(app); } catch (Exception) { }
         try { Chat.NotesView.Stop(); } catch (Exception) { }
         try { TimeLog.Stop(app); } catch (Exception) { }
+        try { BimReady.Stop(); } catch (Exception) { }
+        try { ChangeTracker.Stop(); } catch (Exception) { }
         CentralAccess.Unwatch(app);
+        ChatMcp.Stop();
         // A shared-mode core never opened the connection point, and the session file named after this Revit is Sketch ProMax's.
         if (!Shared) Bridge?.Stop(keepSession: true);
         Bridge = null;
@@ -313,6 +344,7 @@ public sealed class App : IExternalApplication
         try { app.Application.DocumentOpened -= OnDocumentOpened; } catch (Exception) { }
         try { UI.UpdateNotice.Stop(); } catch (Exception) { }
         Bugs.BugReport.Unwatch();
+        CrashGuard.Stop();
         UI.LoaderBrand.Stop();
         UI.LazyPane.Forget();
         Dispatcher.Shutdown(app);
@@ -326,8 +358,10 @@ public sealed class App : IExternalApplication
     {
         _life?.Cancel();
         if (Shared) return;
+        RunningCall.Clear();
         try { Chat.ChatPane.Shutdown(); } catch (Exception) { }
         try { TimeLog.Shutdown(); } catch (Exception) { }
+        ChatMcp.Stop();
         Bridge?.Stop();
 #if NETFRAMEWORK
         DependencyResolver.Unregister();

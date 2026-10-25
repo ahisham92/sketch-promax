@@ -16,7 +16,7 @@
     <LangVersion>latest</LangVersion>
     <RootNamespace>SketchProMax</RootNamespace>
     <AssemblyName>SketchProMax</AssemblyName>
-    <Version>0.34.30</Version>
+    <Version>0.35.7</Version>
     <!-- Copy NuGet dependencies (System.Text.Json on Revit 2024) next to the add-in DLL. -->
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
@@ -39,6 +39,17 @@
   <!-- PdfPig (Apache 2.0) reads and splits PDFs: the text of PDFs too large for the chat, and Split PDF. -->
   <ItemGroup>
     <PackageReference Include="PdfPig" Version="0.1.9" />
+  </ItemGroup>
+
+  <!--
+    PDFium (BSD-3/Apache 2.0, Chrome's PDF engine) draws and writes pages for the PDF editor (Tools/PdfEngine). Only the
+    64-bit Windows library is shipped, renamed SketchProMax.pdfium.dll next to this DLL, so a pdfium.dll that Revit or
+    another add-in loaded is never taken for ours. The package's own build steps (x86/x64/arm64 folders) are not used.
+  -->
+  <ItemGroup>
+    <PackageReference Include="bblanchon.PDFium.Win32" Version="157.0.8086" ExcludeAssets="all" PrivateAssets="all" GeneratePathProperty="true" />
+    <None Include="$(Pkgbblanchon_PDFium_Win32)\runtimes\win-x64\native\pdfium.dll" Link="SketchProMax.pdfium.dll" CopyToOutputDirectory="PreserveNewest" Visible="false" />
+    <None Update="PDFium-LICENSE.txt" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <!-- .NET Framework 4.8 (Revit 2024): reference assemblies plus compiler polyfills for modern C#. -->
@@ -82,6 +93,11 @@
   <!-- The office's pre-submission checklist, built in (names of people, the client and the project taken out). Edited copies live in %APPDATA%. -->
   <ItemGroup>
     <EmbeddedResource Include="Data\pre-submission-checklist.json" LogicalName="SketchProMax.pre-submission-checklist.json" />
+  </ItemGroup>
+
+  <!-- What the last full field test proved, per Revit year (scripts/field-test-proven.py): the field test skips those rows. -->
+  <ItemGroup>
+    <EmbeddedResource Include="Data\field-test-proven.json" LogicalName="SketchProMax.field-test-proven.json" />
   </ItemGroup>
 
   <!-- Step-by-step help guides (Tools/HelpGuides), the same files as docs/guides. -->

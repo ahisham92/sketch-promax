@@ -335,13 +335,19 @@ internal static class QuickTools
         try
         {
             TimeLog.BeginTool(app, tool, fromChat: false);
-            var result = FailureGuard.Run(() =>
+            RunningCall.Begin("the ribbon", tool.Name, app.ActiveUIDocument?.Document?.Title, args);
+            ToolResult result;
+            try
             {
-                try { return tool.Execute(app, new ToolArgs(args)); }
-                catch (ManualStepException manual) { return Handoff.FromException(tool, app, new ToolArgs(args), manual); }
-                catch (OperationCanceledException) when (job.CancelRequested) { return ToolResult.Error("Stopped on request. Steps already finished are kept; check the model."); }
-                catch (Exception ex) { return ToolResult.Error(BridgeServer.Describe(tool, ex)); }
-            });
+                result = FailureGuard.Run(() =>
+                {
+                    try { return tool.Execute(app, new ToolArgs(args)); }
+                    catch (ManualStepException manual) { return Handoff.FromException(tool, app, new ToolArgs(args), manual); }
+                    catch (OperationCanceledException) when (job.CancelRequested) { return ToolResult.Error("Stopped on request. Steps already finished are kept; check the model."); }
+                    catch (Exception ex) { return ToolResult.Error(BridgeServer.Describe(tool, ex)); }
+                });
+            }
+            finally { RunningCall.End(); }
             ActivityLog.Write(app.ActiveUIDocument?.Document?.Title ?? "", tool, args, result);
             TimeLog.EndTool(result);
             return result;

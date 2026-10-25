@@ -172,6 +172,30 @@ internal sealed class ChecklistWindow : Window
         return (window, window._draftPath);
     }
 
+    /// <summary>Where the answers for a model are kept on this PC (by its working name, so the _detached copy shares them).</summary>
+    internal static string DraftPathFor(string modelFile) =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SketchProMax", "checklists",
+            ChecklistMath.SafeName(Path.GetFileNameWithoutExtension(ChecklistMath.WorkingName(modelFile))) + ".json");
+
+    /// <summary>
+    /// The Model checklist's score for a model on this PC: checks answered Yes or N/A out of those kept (N/A ones removed),
+    /// as the window's Your answers ring shows it. Null when it was never filled in here or can't be read.
+    /// </summary>
+    internal static int? BimScore(string modelFile, string project)
+    {
+        try
+        {
+            var path = DraftPathFor(modelFile);
+            if (!File.Exists(path) || ChecklistMath.FromJson<ChecklistMath.State>(File.ReadAllText(path)) is not { } state) return null;
+            state.Answers ??= new(StringComparer.Ordinal);
+            if (state.Answers.Count == 0) return null;
+            if (ChecklistStore.Load(AgentSettings.Load(), project).Def is not { } def) return null;
+            var kept = ChecklistMath.WithoutRemoved(def, state);
+            return ChecklistMath.Percent(ChecklistMath.Count(kept.Items, state));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException) { return null; }
+    }
+
     private static string DocKey(Autodesk.Revit.DB.Document doc)
     {
         try { return string.IsNullOrEmpty(doc.PathName) ? doc.Title : doc.PathName; }
@@ -185,8 +209,7 @@ internal sealed class ChecklistWindow : Window
         _def = def;
         _loadError = error;
         _facts = facts;
-        _draftPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SketchProMax", "checklists",
-            ChecklistMath.SafeName(Path.GetFileNameWithoutExtension(ChecklistMath.WorkingName(facts.Model))) + ".json");
+        _draftPath = DraftPathFor(facts.Model);
 
         Title = "Sketch ProMax pre-submission checklist";
         var area = SystemParameters.WorkArea;
@@ -244,7 +267,7 @@ internal sealed class ChecklistWindow : Window
         var subtitle = _def is null ? "Pick your office's checklist to start" : $"{_def.Title} · {Shown(_facts.Model)}";
         // The header band, with the two scores always in view on the right (they follow every answer).
         var band = Brand.Header("Pre-submission checklist", subtitle);
-        band.Padding = new Thickness(16, 12, _def is null ? 16 : 470, 12);
+        band.Padding = new Thickness(16, 12, _def is null ? 16 : 640, 12);
         var header = new Grid();
         header.Children.Add(band);
         if (_def is not null)
@@ -262,6 +285,17 @@ internal sealed class ChecklistWindow : Window
             gear.VerticalAlignment = VerticalAlignment.Center;
             AutomationProperties.SetHelpText(gear, "Run all checks, the helper for hand checks, edit the checklist and its checking rules, signatures.");
             gear.Click += (_, _) => OpenSettings();
+            // The technical submission checklist (its BIM part is this checklist's score).
+            var technical = RichUi.Button(RichUi.Icon.Open, "Submission checklist");
+            technical.VerticalAlignment = VerticalAlignment.Center;
+            technical.Margin = new Thickness(0, 0, 8, 0);
+            AutomationProperties.SetHelpText(technical, "The technical checklist per submission (engineer answers, group leader approves). This checklist's score is its BIM part.");
+            technical.Click += async (_, _) =>
+            {
+                var said = await OnModel(ui => SubmissionChecklistWindow.Command(ui.Application) == Autodesk.Revit.UI.Result.Succeeded ? "" : "The submission checklist didn't open.");
+                if (said.Length > 0) _status.Text = said;
+            };
+            rings.Children.Add(technical);
             rings.Children.Add(run);
             rings.Children.Add(gear);
             rings.Children.Add(_answersRing);
@@ -459,7 +493,17 @@ internal sealed class ChecklistWindow : Window
         row.Children.Add(change);
         row.Children.Add(rules);
         row.Children.Add(reread);
+        // The doer next to the checker: Make it BIM-ready fixes what the BEP and LOI need, then this checklist checks it.
+        var ready = RichUi.Button(RichUi.Icon.Fix, "Make it BIM-ready", Brand.Weight.Primary);
+        ready.Margin = new Thickness(8, 0, 0, 0);
+        AutomationProperties.SetHelpText(ready, "Opens Make it BIM-ready: what the BEP and LOI still need, the warnings and the berths' clashes, and one button that fixes what the model can give. Run the checks again afterwards.");
+        ready.Click += async (_, _) =>
+        {
+            try { await App.Dispatcher.InvokeAsync(a => BimReadyWindow.Command(a)); }
+            catch (Exception ex) when (ex is not OutOfMemoryException) { _status.Text = $"Couldn't open Make it BIM-ready ({ex.Message}). Finish what Revit is doing, then try again."; }
+        };
         row.Children.Add(slowRun);
+        row.Children.Add(ready);
         var clearAll = RichUi.Button(RichUi.Icon.Close, "Clear all answers", Brand.Weight.Danger);
         clearAll.Margin = new Thickness(8, 0, 0, 0);
         AutomationProperties.SetHelpText(clearAll, "Takes back every Yes, No and N/A for this model. Comments, project details and signatures stay. Each check also has Clear answer.");
@@ -1431,6 +1475,36 @@ internal sealed class ChecklistWindow : Window
         finally { Brand.SetBusy(button, false); }
     }
 
+    /// <summary>
+    /// The LOI values to fill, read in steps: the types the matrix covers first, then a few types per Revit call, so
+    /// Revit never stops for long on a big model. Null when Revit couldn't read (the reason is shown).
+    /// </summary>
+    private async Task<string?> LoiPreview(Button button, TextBlock said, ChecklistMath.Definition? def)
+    {
+        const int perStep = 20;
+        var spec = LoiFill.SpecOf(def);
+        Brand.SetBusy(button, true, "Reading…");
+        try
+        {
+            var ids = await OnModel(ui => "ids:" + string.Join(",", LoiFill.TypeIds(ui.Document, spec)));
+            if (!ids.StartsWith("ids:", StringComparison.Ordinal)) { said.Text = ids; said.Visibility = Visibility.Visible; return null; }
+            var list = ids.Substring(4).Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries).Select(x => long.Parse(x, System.Globalization.CultureInfo.InvariantCulture)).ToList();
+            var lines = new List<string>();
+            said.Visibility = Visibility.Visible;
+            for (var i = 0; i < list.Count; i += perStep)
+            {
+                said.Text = $"Reading the LOI data: {i} of {list.Count} types…";
+                var batch = list.Skip(i).Take(perStep).ToList();
+                var part = await OnModel(ui => "rows:" + LoiFill.Suggest(ui.Document, spec, batch));
+                if (!part.StartsWith("rows:", StringComparison.Ordinal)) { said.Text = part; return null; }
+                if (part.Length > 5) lines.Add(part.Substring(5));
+            }
+            said.Visibility = Visibility.Collapsed;
+            return string.Join("\n", lines);
+        }
+        finally { Brand.SetBusy(button, false); }
+    }
+
     /// <summary>The Sketch ProMax pane (the loader registers it with this id; the chat is its Chat tab).</summary>
     private static readonly DockablePaneId ChatPaneId = new(new Guid("448734fe-1b1a-47e2-94a5-1fd138cb74e7"));
 
@@ -1438,6 +1512,19 @@ internal sealed class ChecklistWindow : Window
     private async Task FixInRevit(Button button, TextBlock said, string key, ChecklistFixes.Offer offer)
     {
         if (Brand.IsBusy(button)) return;
+        if (key == "assemblycodes")
+        {
+            Brand.SetBusy(button, true, "Working…");
+            string? done;
+            try { done = await AssemblyCodesFlow.Run(this, OnModel, _def); }
+            finally { Brand.SetBusy(button, false); }
+            if (done is null) return;
+            said.Text = done;
+            said.Visibility = Visibility.Visible;
+            OutOfDate("A fix changed the model.");
+            _status.Text = done + " Press Run this check (or Run checks) to see the result.";
+            return;
+        }
         var detached = _facts.Hints.TryGetValue("links", out var links) && links.Text.StartsWith("This copy is detached", StringComparison.Ordinal);
         var question = offer.Question + (!offer.ChangesModel ? "" :
                        "\n\nThis changes the model " + Shown(_facts.Model) + ". Ctrl+Z in Revit undoes it" + (key == "links" ? " (for links: reload them in Manage Links)" : "") + "." +
@@ -1446,13 +1533,32 @@ internal sealed class ChecklistWindow : Window
         if (MessageBox.Show(this, question, "Sketch ProMax: fix it", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes) return;
         string? answer = null;
         if (offer.Ask is { } ask && (answer = ChecklistProjectWindows.Ask(this, offer.Button, ask, "")) is null) return;
+        if (offer.PickFile is { } filter)
+        {
+            var pick = new Microsoft.Win32.OpenFileDialog { Title = offer.Button, Filter = filter + "|All files|*.*" };
+            if (pick.ShowDialog(this) != true) return;
+            answer = pick.FileName;
+        }
         if (offer.Preview)
         {
             var defNow = _def;
-            var suggested = await OnModel(ui => ChecklistFixes.Suggest(ui.Document, key, defNow));
+            var loi = key == "loi";
+            var suggested = loi ? await LoiPreview(button, said, defNow) : await OnModel(ui => ChecklistFixes.Suggest(ui.Document, key, defNow));
+            if (suggested is null) return;
             var rows = suggested.Split('\n').Select(l => l.Split('\t')).Where(p => p.Length == 3).Select(p => (Id: p[0], Old: p[1], New: p[2])).ToList();
-            if (rows.Count == 0) { said.Text = "Nothing to rename: every type in use is named like the rule (or no Type name pattern is set)."; said.Visibility = Visibility.Visible; return; }
-            if (ChecklistProjectWindows.EditNames(this, offer.Button, rows.Select(r => (r.Old, r.New)).ToList()) is not { } edited) return;
+            if (rows.Count == 0)
+            {
+                said.Text = loi ? "Nothing to fill: every type the LOI matrix covers has its parameters filled (or no LOI matrix is set in Checking rules)."
+                    : "Nothing to rename: every type in use is named like the rule (or no Type name pattern is set).";
+                said.Visibility = Visibility.Visible;
+                return;
+            }
+            var edited = loi
+                ? ChecklistProjectWindows.EditNames(this, offer.Button, rows.Select(r => (r.Old, r.New)).ToList(),
+                    $"{rows.Count} LOI values to fill. Change any value, or untick the ones to leave empty; an empty box is skipped. \"{LoiFill.EachOwn}\" fills each element from its own geometry. " +
+                    "Nothing changes until you press Fill; Ctrl+Z in Revit undoes it.", "Fill")
+                : ChecklistProjectWindows.EditNames(this, offer.Button, rows.Select(r => (r.Old, r.New)).ToList());
+            if (edited is null) return;
             answer = string.Join("\n", rows.Zip(edited, (r, n) => (r.Id, New: n)).Where(x => x.New is not null).Select(x => x.Id + "\t" + x.New));
         }
         Brand.SetBusy(button, true, offer.ChangesModel ? "Fixing…" : "Working…");
@@ -2366,6 +2472,18 @@ internal sealed class ChecklistWindow : Window
     /// </summary>
     private void Styles()
     {
+        // A styling problem never stops the checklist: it falls back to stock controls (stages still on the left).
+        if (StageStyles() is { } dictionary)
+        {
+            Resources.MergedDictionaries.Add(dictionary);
+            _stages.Style = (Style)dictionary["SpmStages"];
+        }
+        else _stages.TabStripPlacement = Dock.Left;
+    }
+
+    /// <summary>The stage list, Yes / No / N/A segments and link button styles (the submission checklist uses them too); null when they can't be read.</summary>
+    internal static ResourceDictionary? StageStyles()
+    {
         static string Seg(string key, string on) => $$"""
               <Style x:Key="{{key}}" TargetType="RadioButton">
                 <Setter Property="Foreground" Value="{DynamicResource SpmText}"/>
@@ -2461,13 +2579,7 @@ internal sealed class ChecklistWindow : Window
               </Style>
             </ResourceDictionary>
             """;
-        // A styling problem never stops the checklist: it falls back to stock controls (stages still on the left).
-        try
-        {
-            var dictionary = (ResourceDictionary)XamlReader.Parse(xaml);
-            Resources.MergedDictionaries.Add(dictionary);
-            _stages.Style = (Style)dictionary["SpmStages"];
-        }
-        catch (Exception) { _stages.TabStripPlacement = Dock.Left; }
+        try { return (ResourceDictionary)XamlReader.Parse(xaml); }
+        catch (Exception) { return null; }
     }
 }

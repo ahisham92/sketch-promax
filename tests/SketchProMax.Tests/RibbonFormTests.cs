@@ -116,9 +116,20 @@ internal static class RibbonFormTests
         check("ribbon: every control has a tooltip", all.Controls.Concat(all.Entries.Values.SelectMany(e => e)).All(c => c.Tip.Length > 20),
             string.Join(",", all.Controls.Concat(all.Entries.Values.SelectMany(e => e)).Where(c => c.Tip.Length <= 20).Select(c => c.Id)));
         var units = RibbonManifest.Units(all.Controls.Where(c => c.Group == "Sketch ProMax")).Select(u => u.Count).ToList();
-        check("ribbon: Sketch ProMax panel is Job and Update large, then stacks of 2 and 3 (Bug folder moved to the pane in 0.35)", units.SequenceEqual([1, 1, 2, 3]), string.Join(",", units));
+        check("ribbon: Sketch ProMax panel is Under development, then two stacks of three (0.35 redesign)", units.SequenceEqual([1, 3, 3]), string.Join(",", units));
         var claudeUnits = RibbonManifest.Units(all.Controls.Where(c => c.Group == "Claude")).Select(u => u.Count).ToList();
-        check("ribbon: Claude panel is Chat, Update, Pre-submission checklist and Share tools large, then two stacks of two", claudeUnits.SequenceEqual([1, 1, 1, 1, 2, 2]), string.Join(",", claudeUnits));
+        check("ribbon: Claude panel is Chat, Model checklist, Submissions status, Submission checklist and Costing large, then Update, Job and Send view stacked", claudeUnits.SequenceEqual([1, 1, 1, 1, 1, 3]), string.Join(",", claudeUnits));
+        // The 0.35 redesign: a short ribbon. Model, Documents and Check are stacks of small buttons and drop-downs only.
+        var stacked = all.Controls.Where(c => c.Group is "Model" or "Documents" or "Check").ToList();
+        check("ribbon: Model, Documents and Check are all small, stacked controls", stacked.Count > 0 && stacked.All(c => c.Small), string.Join(",", stacked.Where(c => !c.Small).Select(c => c.Id)));
+        var wide = all.Controls.GroupBy(c => c.Group).Where(g => g.Key != "My tools").Sum(g => RibbonManifest.Units(g).Count());
+        check("ribbon: at most 18 columns besides My tools (it had 36)", wide <= 18, wide.ToString());
+        check("ribbon: one Update button", all.Controls.Count(c => c.Command == "update-button") == 1, "");
+        check("ribbon: Issue is titled Submit, and nothing on the tab says Issue", CoreRibbonManifest.PanelTitles["Issue"] == "Submit"
+            && !all.Controls.Concat(all.Entries.Values.SelectMany(e => e)).Any(c => c.Text.Contains("Issue")), "");
+        check("ribbon: embodied carbon and value engineering are under Under development",
+            all.Entries.TryGetValue("UnderDevelopment", out var dev) && dev.Any(e => e.Command == "tool:embodied_carbon") && dev.Any(e => e.Command == "tool:ve_opportunities")
+            && !all.Entries.Where(e => e.Key != "UnderDevelopment").SelectMany(e => e.Value).Any(e => e.Command is "tool:embodied_carbon" or "tool:ve_opportunities"), "");
         var steelGone = RibbonManifest.Parse(CoreRibbonManifest.Build(t => t.Contains("steel") || t == "place_bracing" ? null : "Summary of " + t));
         check("ribbon: missing tools are left out, an emptied drop-down goes too", !steelGone.Controls.Any(c => c.Id == "Steel")
             && !steelGone.Entries.ContainsKey("Steel") && steelGone.Unknown.Count == 0

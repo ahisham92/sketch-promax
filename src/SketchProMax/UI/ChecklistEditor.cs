@@ -324,6 +324,12 @@ internal sealed class ChecklistEditor : Window
     /// <summary>List styles that follow Revit's theme (the selected line in the accent colour).</summary>
     private void Styles()
     {
+        if (ListStyles() is { } styles) Resources.MergedDictionaries.Add(styles);
+    }
+
+    /// <summary>The theme-following list styles (also used by the submission checklist's template editor); null when WPF rejects them.</summary>
+    internal static ResourceDictionary? ListStyles()
+    {
         const string xaml = """
             <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                                 xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
@@ -359,8 +365,8 @@ internal sealed class ChecklistEditor : Window
               </Style>
             </ResourceDictionary>
             """;
-        try { Resources.MergedDictionaries.Add((ResourceDictionary)XamlReader.Parse(xaml)); }
-        catch (XamlParseException) { /* plain lists still work */ }
+        try { return (ResourceDictionary)XamlReader.Parse(xaml); }
+        catch (XamlParseException) { return null; /* plain lists still work */ }
     }
 
     // ---- The model ------------------------------------------------------------------------------------------------

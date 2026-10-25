@@ -180,6 +180,7 @@ public sealed class ToolRegistry
         new GeneralNotesTool(),
         new TypicalDetailsTool(),
         new IssueCheckTool(),
+        new FillLoiDataTool(),
         new IssueDrawingsTool(),
         new GetDrawingPackagePlanTool(),
         new DrawingPackageTool(),
@@ -269,7 +270,14 @@ public sealed class ToolRegistry
         new SketchProMax.Bugs.ReportBugTool(),
         new SketchProMax.Bugs.ExportChatsAndBugsTool(),
         new MemoryNoteTool(),
+        // The berth status tracker: read it and record what the user reports (never reads the model)
+        new BerthStatusTool(),
+        // Berth costing: each berth's cost, the unit costs and quantities by hand, measuring the model
+        new BerthCostTool(),
         new RecallChatsTool(),
+        new ChatJobsTool(),
+        // Files for the user: Excel, Word, PowerPoint and PDF
+        new MakeDocumentTool(),
     ]);
         // Recipes replay other tools, so they need the registry itself.
         registry.Add(new SaveRecipeTool(registry));

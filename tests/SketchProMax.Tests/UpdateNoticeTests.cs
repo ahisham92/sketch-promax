@@ -73,27 +73,50 @@ internal static class UpdateNoticeTests
         var top = UpdateNotice.TopLines(notes);
         check("notice: top lines of the notes, as plain text", top.SequenceEqual(["What's new in 0.32.0",
             "Update notice: says when a new version is out, see the guide.", "Ribbon labels stay on narrow screens"]), string.Join(" | ", top));
+        const string releaseNotes = """
+            **Install:** extract the zip and double-click Install.cmd, or open PowerShell and paste this line (no .cmd needed):
+
+            ```
+            irm https://raw.githubusercontent.com/owner/repo/main/get.ps1 | iex
+            ```
+
+            If Install.cmd says Windows cannot access the file: Properties > Unblock on the zip, or use the PowerShell line.
+
+            ## What's Changed
+            * Berth status by someone in https://example.com/pull/35
+
+            **Full Changelog**: https://example.com/compare/v1...v2
+            """;
+        var changed = UpdateNotice.TopLines(releaseNotes);
+        check("notice: the install help and changelog link are left out", changed.SequenceEqual(["What's Changed",
+            "Berth status by someone in https://example.com/pull/35"]), string.Join(" | ", changed));
+        check("notice: an update applied in place with nothing to do shows no toast; one needing a restart does",
+            !UpdateNotice.WorthShowing(UpdateNotice.Kind.Updated, null) && !UpdateNotice.WorthShowing(UpdateNotice.Kind.Updated, " ")
+            && UpdateNotice.WorthShowing(UpdateNotice.Kind.Updated, "Restart Revit for the new ribbon.")
+            && UpdateNotice.WorthShowing(UpdateNotice.Kind.Available, null) && UpdateNotice.WorthShowing(UpdateNotice.Kind.Installed, null), "");
         check("notice: no notes, no lines; long lines cut", UpdateNotice.TopLines(null).Count == 0
             && UpdateNotice.TopLines(new string('x', 400))[0].Length == 140, "");
 
-        // ---- The Sketch ProMax panel: every control labelled, short labels in the stacks
+        // ---- Every control labelled, short labels in the stacks; Update and Job live in the first panel (0.35)
         var all = RibbonManifest.Parse(CoreRibbonManifest.Text);
-        var group = all.Controls.Where(c => c.Group == "Sketch ProMax").ToList();
-        check("ribbon: Job and Update are large, labelled live buttons", group.Take(2).All(c => !c.Small && c.LiveKey is not null && c.Text.Length > 0)
-            && group[0].Id == "JobLive" && group[1].Id == "UpdateLive", string.Join(",", group.Select(c => c.Id)));
-        check("ribbon: stacked labels are short", group.Where(c => c.Small).All(c => c.Text.Length <= 12 && !c.Text.Contains('\n')),
-            string.Join(",", group.Where(c => c.Small).Select(c => c.Text)));
+        var group = all.Controls.Where(c => c.Group == "Claude").ToList();
+        check("ribbon: Update and Job are labelled live buttons stacked in the first panel", group.Where(c => c.Id is "UpdateClaude" or "JobLive")
+            .Count(c => c.Small && c.LiveKey is not null && c.Text.Length > 0) == 2, string.Join(",", group.Select(c => c.Id)));
+        check("ribbon: the Update button pumps the update notice", group.Any(c => c.Id == "UpdateClaude" && c.LiveKey == "update-badge"), "");
+        var small = all.Controls.Where(c => c.Small).ToList();
+        check("ribbon: stacked labels are short, one line", small.All(c => c.Text.Length <= 18 && !c.Text.Contains('\n')),
+            string.Join(",", small.Where(c => c.Text.Length > 18 || c.Text.Contains('\n')).Select(c => c.Text)));
 
         // ---- A live switch: the loader keeps a control in place when its panel, kind and size are the same, else hides
         // it and makes it again (a new command slot); a slot is never reused in the session.
         var now32 = all;
-        var was31 = WithSmall(now32, "JobLive", "UpdateLive");
+        var was31 = WithLarge(now32, "JobLive", "UpdateClaude");
         var swap = Switch(was31, now32);
-        check("live switch from 0.31.0: Job and Update are made again large, the old ones hidden",
-            swap.Retired.OrderBy(x => x).SequenceEqual(["JobLive", "UpdateLive"]), string.Join(",", swap.Retired));
-        check("live switch from 0.31.0: the stacks stay where they are", swap.Made.OrderBy(x => x).SequenceEqual(["JobLive", "UpdateLive"]), string.Join(",", swap.Made));
+        check("live switch from a large Job and Update: they are made again small, the old ones hidden",
+            swap.Retired.OrderBy(x => x).SequenceEqual(["JobLive", "UpdateClaude"]), string.Join(",", swap.Retired));
+        check("live switch from a large Job and Update: the rest stays where it is", swap.Made.OrderBy(x => x).SequenceEqual(["JobLive", "UpdateClaude"]), string.Join(",", swap.Made));
         // 0.30.0 had no My tools favourites (0.30.1) nor the 0.31 carbon and value-engineering drop-downs.
-        var was30 = Without(was31, c => c.Group == "My tools" || c.Id is "Carbon" or "ValueEng");
+        var was30 = Without(was31, c => c.Group == "My tools" || c.Id is "UnderDevelopment");
         var from30 = Switch(was30, now32);
         check("live switch from 0.30.0: the Favourites button and its 12 slots are made on My tools",
             from30.Made.Contains("Favourites") && from30.Made.Count(id => id.StartsWith("FavouriteSlot", StringComparison.Ordinal)) == 12, string.Join(",", from30.Made));
@@ -104,9 +127,9 @@ internal static class UpdateNoticeTests
 
     private const int CoreRibbonSlots = 128;
 
-    private static RibbonManifest.Parsed WithSmall(RibbonManifest.Parsed m, params string[] ids) => m with
+    private static RibbonManifest.Parsed WithLarge(RibbonManifest.Parsed m, params string[] ids) => m with
     {
-        Controls = m.Controls.Select(c => ids.Contains(c.Id) ? c with { Flags = c.Flags + ",small" } : c).ToList(),
+        Controls = m.Controls.Select(c => ids.Contains(c.Id) ? c with { Flags = string.Join(",", c.Flags.Split(',').Where(f => f != "small")) } : c).ToList(),
     };
 
     private static RibbonManifest.Parsed Without(RibbonManifest.Parsed m, Func<RibbonManifest.Item, bool> drop) => m with

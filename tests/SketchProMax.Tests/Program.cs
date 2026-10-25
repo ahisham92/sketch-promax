@@ -67,6 +67,7 @@ RibbonFormTests.Run((name, ok, detail) => Check(name, ok, detail));
 FavouritesTests.Run((name, ok, detail) => Check(name, ok, detail));
 UpdateNoticeTests.Run((name, ok, detail) => Check(name, ok, detail));
 ReleaseSourceTests.Run((name, ok, detail) => Check(name, ok, detail));
+UpdateResumeTests.Run((name, ok, detail) => Check(name, ok, detail));
 TypeCatalogTests.Run((name, ok, detail) => Check(name, ok, detail));
 CarbonTests.Run((name, ok, detail) => Check(name, ok, detail));
 VeTests.Run((name, ok, detail) => Check(name, ok, detail));
@@ -77,18 +78,34 @@ TimeTests.Run((name, ok, detail) => Check(name, ok, detail));
 IssueGateTests.Run((name, ok, detail) => Check(name, ok, detail));
 ChecklistTests.Run((name, ok, detail) => Check(name, ok, detail));
 ChecklistProjectTests.Run((name, ok, detail) => Check(name, ok, detail));
+PdfEditorTests.Run((name, ok, detail) => Check(name, ok, detail));
+BerthStatusTests.Run((name, ok, detail) => Check(name, ok, detail));
+SubmissionChecklistTests.Run((name, ok, detail) => Check(name, ok, detail));
+BerthCostTests.Run((name, ok, detail) => Check(name, ok, detail));
 JobCardTests.Run((name, ok, detail) => Check(name, ok, detail));
+ParallelJobTests.Run((name, ok, detail) => Check(name, ok, detail));
+RunningCallTests.Run((name, ok, detail) => Check(name, ok, detail));
+ScriptHintTests.Run((name, ok, detail) => Check(name, ok, detail));
+ChatMcpTests.Run((name, ok, detail) => Check(name, ok, detail));
+ResultViewTests.Run((name, ok, detail) => Check(name, ok, detail));
+ChatAutoTests.Run((name, ok, detail) => Check(name, ok, detail));
+PlanUsageTests.Run((name, ok, detail) => Check(name, ok, detail));
 PackageTests.Run((name, ok, detail) => Check(name, ok, detail));
 ApprovalTests.Run((name, ok, detail) => Check(name, ok, detail));
 CleanupTests.Run((name, ok, detail) => Check(name, ok, detail));
+DocumentTests.Run((name, ok, detail) => Check(name, ok, detail));
 {
     var root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../.."));
     InstallTests.Run(File.Exists(Path.Combine(root, "README.md")) ? root : Directory.GetCurrentDirectory(), (name, ok, detail) => Check(name, ok, detail));
     StartupTests.Run(File.Exists(Path.Combine(root, "README.md")) ? root : Directory.GetCurrentDirectory(), (name, ok, detail) => Check(name, ok, detail));
     FieldTestCoverageTests.Run(File.Exists(Path.Combine(root, "README.md")) ? root : Directory.GetCurrentDirectory(), (name, ok, detail) => Check(name, ok, detail));
+    FieldTestProvenTests.Run(File.Exists(Path.Combine(root, "README.md")) ? root : Directory.GetCurrentDirectory(), (name, ok, detail) => Check(name, ok, detail));
     BrandTests.Run(File.Exists(Path.Combine(root, "README.md")) ? root : Directory.GetCurrentDirectory(), (name, ok, detail) => Check(name, ok, detail));
     SettingsTests.Run(File.Exists(Path.Combine(root, "README.md")) ? root : Directory.GetCurrentDirectory(), (name, ok, detail) => Check(name, ok, detail));
+    BerthStatusTests.RunSource(File.Exists(Path.Combine(root, "README.md")) ? root : Directory.GetCurrentDirectory(), (name, ok, detail) => Check(name, ok, detail));
     SharingTests.Run(File.Exists(Path.Combine(root, "README.md")) ? root : Directory.GetCurrentDirectory(), (name, ok, detail) => Check(name, ok, detail));
+    CrashSafetyTests.Run(File.Exists(Path.Combine(root, "README.md")) ? root : Directory.GetCurrentDirectory(), (name, ok, detail) => Check(name, ok, detail));
+    LicenseTests.Run(File.Exists(Path.Combine(root, "README.md")) ? root : Directory.GetCurrentDirectory(), (name, ok, detail) => Check(name, ok, detail));
 }
 
 // With --addin <folder of a built SketchProMax.dll>, also check the whole tool catalogue.

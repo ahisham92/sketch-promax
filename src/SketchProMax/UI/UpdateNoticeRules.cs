@@ -27,6 +27,12 @@ internal static partial class UpdateNotice
         };
     }
 
+    /// <summary>
+    /// Whether a notice is worth a toast at all. An update that applied in place with nothing for the user to do is
+    /// silent: the Update button already says "Updated to", and What's new is there for anyone who wants it.
+    /// </summary>
+    public static bool WorthShowing(Kind kind, string? note) => kind != Kind.Updated || !string.IsNullOrWhiteSpace(note);
+
     /// <summary>Whether the toast for <paramref name="version"/> shows now, later (something is running) or never (already shown).</summary>
     public static Decision Decide(string version, IEnumerable<string> shown, bool busy) =>
         shown.Contains(Plain(version), StringComparer.OrdinalIgnoreCase) ? Decision.Skip : busy ? Decision.Wait : Decision.Show;
@@ -57,11 +63,19 @@ internal static partial class UpdateNotice
             line = Markup.Replace(line, m => m.Groups["text"].Success ? m.Groups["text"].Value : "").Trim();
             if (line.Length == 0 || line.All(c => c is '-' or '=' or '*' or '_' or '|' or ' ' or ':')) continue;
             if (line.StartsWith("<!--", StringComparison.Ordinal)) continue;
+            if (InstallHelp(line)) continue;
             lines.Add(line.Length > 140 ? line.Substring(0, 139).TrimEnd() + "…" : line);
             if (lines.Count == max) break;
         }
         return lines;
     }
+
+    /// <summary>The install help every release's notes start with (fresh installs only), and the changelog link.</summary>
+    private static bool InstallHelp(string line) =>
+        line.StartsWith("Install:", StringComparison.OrdinalIgnoreCase)
+        || line.StartsWith("If Install.cmd", StringComparison.OrdinalIgnoreCase)
+        || line.IndexOf("get.ps1", StringComparison.OrdinalIgnoreCase) >= 0
+        || line.StartsWith("Full Changelog", StringComparison.OrdinalIgnoreCase);
 
     private static string Plain(string version) => System.Version.TryParse(version.Trim().TrimStart('v', 'V'), out var v)
         ? $"{v.Major}.{v.Minor}.{Math.Max(v.Build, 0)}"

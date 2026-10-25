@@ -67,7 +67,7 @@ internal static class IssueGate
         for (var i = 0; i < checking.Count; i++)
         {
             // Read-only: progress per check on the job card; a stop ends the run between checks (nothing to undo).
-            if (CancelPoint.Stop("Issue check", i, checking.Count)) CancelPoint.ThrowIfRequested("The issue check did not finish; nothing was issued.");
+            if (CancelPoint.Stop("Submit check", i, checking.Count)) CancelPoint.ThrowIfRequested("The submit check did not finish; nothing was submitted.");
             checking.Step(app, i);
         }
         return checking.Finish(app);
@@ -118,7 +118,7 @@ internal static class IssueGate
         /// <summary>Runs check <paramref name="i"/> (0-based, in <see cref="IssueGateMath.Tools"/> order). On Revit's thread.</summary>
         public void Step(UIApplication app, int i)
         {
-            Bridge.Jobs.Report($"Issue check: {IssueGateMath.Tools[i]} ({i + 1} of {Count})");
+            Bridge.Jobs.Report($"Submit check: {IssueGateMath.Tools[i]} ({i + 1} of {Count})");
             // One check crashing must not take the gate down: it shows as a check that could not run, which blocks.
             try
             {
@@ -160,7 +160,7 @@ internal static class IssueGate
         public Run Finish(UIApplication app)
         {
             var doc = app.ActiveUIDocument.Document;
-            Bridge.JobFeed.Item("Issue check", Count, Count, "");
+            Bridge.JobFeed.Item("Submit check", Count, Count, "");
             var where = SheetsByView(doc);
             var mapped = _findings.Select(f => f with { Sheets = SheetsOf(doc, where, f.ElementId) }).ToList();
             Run.Groups = IssueGateMath.Group(mapped, Run.Sheets, store.Accepted);

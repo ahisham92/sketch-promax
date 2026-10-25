@@ -22,14 +22,20 @@ internal static class ChecklistFixes
     /// <paramref name="Preview"/>: the window first shows what would change (Suggest) for the user to edit, and passes the
     /// edited list to Run. <paramref name="Fix"/>: the fix Run is called with, when not the check's own key.
     /// </summary>
-    public sealed record Offer(string Button, string Question, bool ChangesModel = true, string? Ask = null, bool Preview = false, string? Fix = null);
+    /// <param name="PickFile">A file to pick before it runs (an open-file filter); its path is the answer.</param>
+    public sealed record Offer(string Button, string Question, bool ChangesModel = true, string? Ask = null, bool Preview = false, string? Fix = null, string? PickFile = null);
 
     /// <summary>Every fix a check offers: its own, then any other (levels can also be named like the URS).</summary>
     public static List<Offer> Offers(string key, ChecklistMath.Definition? def = null)
     {
         var list = new List<Offer>();
-        if (For(key, def) is { } own) list.Add(own);
+        // The Assembly Codes in one button (load the Excel's code list, see every type without a code, fill): Fill the
+        // UniFormat codes alone filled only the types the rules name and said so in one line, which read as "nothing happened".
+        if (key == "uniformat") list.Add(For("assemblycodes", def)!);
+        else if (For(key, def) is { } own) list.Add(own);
         if (key == "levels" && For("scopeboxes", def) is { } urs) list.Add(urs);
+        if (key == "warnings") list.AddRange(new[] { For("offaxisclear", def), For("offaxis1", def), For("offaxis", def), For("unjoinapart", def) }.OfType<Offer>());
+        if (key is "uniformat" or "loi") list.AddRange(new[] { For("bepexport", def), For("bepimport", def) }.OfType<Offer>());
         return list;
     }
 
@@ -59,6 +65,25 @@ internal static class ChecklistFixes
         "uniformat" => new("Fill the UniFormat codes",
             $"Write the UniFormat code into {Named(ChecklistMath.RuleList(ChecklistMath.Rule(def, "classification")).FirstOrDefault() ?? "", "the classification parameter")} of every model type in use that has none, " +
             $"from {Named(ChecklistMath.Rule(def, "uniformatmap"), "UniFormat code for each category or type in Checking rules (set it first)")}? Types already filled are left alone."),
+        "assemblycodes" => new("Load and fill the Assembly Codes",
+            "Pick the Excel with the Assembly Codes (your LOI matrix): its codes are loaded into the model's Assembly Code table, then you see every type in use " +
+            "without a code (or with one that isn't in the list), with the code the UniFormat rules give it, and press Fill.", Fix: "assemblycodes"),
+        "assemblytable" => new("Import the Assembly Codes",
+            "Load the UniFormat codes and their names from your LOI matrix Excel (or a Revit assembly code .txt) into the model's Assembly Code table " +
+            "(Manage > Additional Settings > Assembly Code), so each code the types get, such as A1020.15 Bored Piles, is in the table with its name? " +
+            "You pick the file next. It replaces the model's table; the codes already on types stay. Then use Fill the UniFormat codes.",
+            Fix: "assemblytable", PickFile: "LOI matrix Excel or assembly code file|*.xlsx;*.txt"),
+        "bepexport" => new("Export the BEP data Excel",
+            "Write an Excel with one row per model type in use: its Assembly Code (and the code your UniFormat rules suggest), every parameter the LOI matrix asks for, " +
+            "and what is still missing? Fill it in Excel, then use Import the BEP data Excel.", ChangesModel: false, Fix: "bepexport"),
+        "bepimport" => new("Import the BEP data Excel",
+            "Write the values you filled in the BEP data Excel to the types (or to their elements, where the parameter is on the elements)? " +
+            "You pick the file next. Only cells that differ from the model are written; empty cells, n/a and (varies) are skipped.",
+            Fix: "bepimport", PickFile: "BEP data Excel|*.xlsx"),
+        "loi" => new("Fill the LOI data",
+            $"Fill the parameters the LOI matrix asks for ({Named(ChecklistMath.Rule(def, "loimatrix"), "set LOI matrix in Checking rules first")}) on every model type in use, and its elements, that has them empty? " +
+            "Values come from LOI values the model can't give (Checking rules), else from the model: material, sizes, length, levels, grade, cut-off and toe. A parameter the model doesn't have is added as a project parameter " +
+            "(from your shared parameter file when it has one of that name). Values already filled are left alone. Fill the UniFormat codes first: the matrix goes by code. You see each value first and can change or untick it.", Preview: true),
         "scopeboxes" => new("Name levels and scope boxes like the URS", 
             "Rename each level to the name of the URS link's level at the same height, and each scope box to the name of the URS link's scope box in the same place? " +
             "The URS link must be loaded. Ones with no match in the URS keep their names.", Fix: "scopeboxes"),
@@ -79,6 +104,20 @@ internal static class ChecklistFixes
         "parameters" => new("Delete the empty parameters",
             "Delete every project parameter that is empty on all its elements, and the empty copy of a parameter that is there twice? " +
             "Kept whatever they hold: Mark, Comments, the names in Checking rules (always kept, view folders, classification, IFC) and parameters used by schedules or view filters. Ctrl+Z undoes it."),
+        "offaxisclear" => new("Clear the off-axis warnings (nothing moves)",
+            "Clear every slightly off axis warning without changing the geometry? Each element is moved and moved straight back in one step, so Revit checks it again, " +
+            "and the off-axis warning is not kept. Every element ends exactly where it was. Pinned elements are left with their warning. Ctrl+Z undoes it.", Fix: "offaxisclear"),
+        // The order the BIM lead set: nothing moves (Clear the off-axis warnings), else 1 mm at most, else 2 mm at most.
+        "offaxis1" => new("Straighten the off-axis lines (1 mm at most)",
+            "For the off-axis warnings Clear the off-axis warnings left: turn each element about its middle onto the exact 0° or 90° direction, " +
+            "only where it is off by less than 0.2° and neither end moves more than 1 mm? Inclined elements, pinned ones and anything that would move more are left as they are. " +
+            "This moves geometry very slightly. Ctrl+Z undoes it.", Fix: "offaxis1"),
+        "offaxis" => new("Straighten the off-axis lines (2 mm at most)",
+            "The last step, for the off-axis warnings still left after 1 mm: turn each element about its middle onto the exact 0° or 90° direction, " +
+            "only where it is off by less than 0.2° and neither end moves more than 2 mm? Inclined elements, pinned ones and anything that would move more are left as they are. " +
+            "This moves geometry slightly. Ctrl+Z undoes it.", Fix: "offaxis"),
+        "unjoinapart" => new("Unjoin elements that don't touch",
+            "Unjoin every pair Revit warns is joined but doesn't intersect? Their geometry stays as it is.", Fix: "unjoinapart"),
         "landing" => new("Set the landing view as starting view", "Set the view with \"Landing\" in its name as the model's starting view?"),
         "nwcsettings" or "nwcdate" when !ChecklistExports.WantsIfc(def) => new("Export the NWC with the office settings",
             "Export the NWC from the 3D Navisworks Export view, named exactly like the model, into the NWC and IFC folder (Checking rules), else next to the model? " +
@@ -100,6 +139,10 @@ internal static class ChecklistFixes
             case "titleblock": return TitleBlocks(doc, def);
             case "levels": return Levels(doc, active);
             case "worksets": return Worksets(doc, def);
+            case "offaxis1": return WarningFixes.OffAxis(doc, maxMm: 1);
+            case "offaxis": return WarningFixes.OffAxis(doc);
+            case "offaxisclear": return WarningFixes.ClearOffAxis(doc);
+            case "unjoinapart": return WarningFixes.UnjoinApart(doc);
             case "backgrounds": return Backgrounds(doc);
             case "viewfolders": return ViewFolders(doc, def, answer);
             case "tbmodelname": return ModelName(doc, def);
@@ -107,9 +150,13 @@ internal static class ChecklistFixes
             case "submission": return Submission(doc, def);
             case "units": return Units(doc, def);
             case "uniformat": return UniFormat(doc, def);
+            case "assemblytable": return AssemblyTable(doc, answer);
+            case "bepexport": return BepSheet.Export(doc, def);
+            case "bepimport": return BepSheet.Import(doc, answer);
             case "scopeboxes": return UrsNames(doc);
             case "viewtemplates": return Templates(doc, def);
             case "familynames": return RenameTypes(doc, answer);
+            case "loi": return LoiFill.Apply(doc, LoiFill.SpecOf(def), answer);
             case "nwcsettings" or "ifcsettings" or "nwcdate":
                 return ChecklistExports.Export(doc, def);
             case "parameters":
@@ -497,29 +544,64 @@ internal static class ChecklistFixes
         ChecklistMath.RuleList(ChecklistMath.Rule(def, "uniformatmap")).Select(p => p.Split('>'))
             .Where(p => p.Length == 2 && p[0].Trim().Length > 0 && p[1].Trim().Length > 0).Select(p => (p[0].Trim(), p[1].Trim())).ToList();
 
-    /// <summary>The code for a type: a pair naming its category (or the start of it), else one whose pattern matches its family or type name.</summary>
-    internal static string? UniFormatFor(string category, string family, string type, List<(string Key, string Code)> map) =>
-        map.Where(m => category.Equals(m.Key, StringComparison.OrdinalIgnoreCase) || category.StartsWith(m.Key, StringComparison.OrdinalIgnoreCase))
-            .Concat(map.Where(m => ChecklistMath.Like(type, m.Key) || ChecklistMath.Like(family, m.Key) || ChecklistMath.Like(family + ": " + type, m.Key)))
-            .Select(m => m.Code).FirstOrDefault();
+    /// <summary>
+    /// The code for a type: first a pair with a parameter condition its elements all meet ("Floors [DAR_MARK=B*]>B1010.10":
+    /// beams modelled as floors, told by a parameter) or a thickness range it falls in ("Floors 1450-3200mm>B1010.10"),
+    /// then one whose pattern matches its family or type name (*Beam*>B1010.10), else one naming its category (or the
+    /// start of it), unless <paramref name="plainCategory"/> is false.
+    /// </summary>
+    /// <param name="thickMm">The type's thickness (floors, walls, roofs), for the pairs with a thickness range.</param>
+    /// <param name="valuesOf">The values a parameter has on the type or its elements (ValuesOf), for the pairs with a parameter condition.</param>
+    internal static string? UniFormatFor(string category, string family, string type, List<(string Key, string Code)> map, double? thickMm = null, bool plainCategory = true,
+        Func<string, IReadOnlyCollection<string>>? valuesOf = null)
+    {
+        bool Named(string key) => ChecklistMath.Like(type, key) || ChecklistMath.Like(family, key) || ChecklistMath.Like(family + ": " + type, key);
+        bool OfCategory(string key) => category.Length > 0 && (category.Equals(key, StringComparison.OrdinalIgnoreCase) || category.StartsWith(key, StringComparison.OrdinalIgnoreCase));
+        bool Base(string key) => key.Length == 0 || OfCategory(key) || Named(key);
+        foreach (var m in map)
+        {
+            if (ChecklistMath.ParamRule(m.Key) is { } p && valuesOf is not null && Base(p.Base) && valuesOf(p.Param) is { Count: > 0 } values && values.All(v => ChecklistMath.Like(v, p.Pattern))) return m.Code;
+            if (ChecklistMath.ThickRange(m.Key) is { } r && thickMm is { } t && t >= r.Min - 0.5 && t <= r.Max + 0.5 && Base(r.Base)) return m.Code;
+        }
+        var plain = map.Where(m => ChecklistMath.ThickRange(m.Key) is null && ChecklistMath.ParamRule(m.Key) is null).ToList();
+        return plain.Where(m => Named(m.Key)).Concat(plainCategory ? plain.Where(m => OfCategory(m.Key)) : []).Select(m => m.Code).FirstOrDefault();
+    }
+
+    /// <summary>The values a parameter has: the type's own when it has the parameter filled, else the distinct values on its elements.</summary>
+    internal static Func<string, IReadOnlyCollection<string>> ValuesOf(ElementType type, IEnumerable<Element> elements) => name =>
+    {
+        static string Text(Parameter? p) => p is null || !p.HasValue ? "" : (p.StorageType == StorageType.String ? p.AsString() : p.AsValueString())?.Trim() ?? "";
+        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var own = Text(type.LookupParameter(name));
+        if (own.Length > 0) { set.Add(own); return set; }
+        foreach (var e in elements) if (Text(e.LookupParameter(name)) is { Length: > 0 } v) set.Add(v);
+        return set;
+    };
+
+    /// <summary>The type's thickness in millimetres when it is layered (floors, walls, roofs).</summary>
+    internal static double? ThickMm(ElementType type)
+    {
+        try { return (type as HostObjAttributes)?.GetCompoundStructure() is { } cs ? cs.GetWidth() * 304.8 : null; }
+        catch (Exception ex) when (Revit(ex)) { return null; }
+    }
 
     private static string UniFormat(Document doc, ChecklistMath.Definition? def)
     {
-        var names = ChecklistMath.RuleList(ChecklistMath.Rule(def, "classification"));
-        if (names.Count == 0) return "No classification parameter is set in Checking rules.";
+        var names = AssemblyCodes.Names(def);
         var map = UniFormatMap(def);
         if (map.Count == 0) return "Set UniFormat code for each category or type in Checking rules first (e.g. Structural Foundations>A1020, Floors>B1010).";
-        var types = ChecklistFacts.TypesOf(doc, ChecklistFacts.Instances(doc)).Where(t => !names.Any(n => ChecklistFacts.Filled(t.LookupParameter(n)))).ToList();
+        // The same types Submissions status counts: every model type in use with a code to write, not only those with material quantities.
+        var types = AssemblyCodes.Placed(doc, names).Where(x => !ChecklistFacts.Filled(AssemblyCodes.CodeOf(x.Type, names))).ToList();
         if (types.Count == 0) return $"Every model type in use has {names[0]} filled: nothing to fill.";
         int filled = 0, failed = 0;
         var left = new List<string>();
         using (var t = new Transaction(doc, "Sketch ProMax: fill the UniFormat codes"))
         {
             t.Start();
-            foreach (var type in types)
+            foreach (var (type, elements) in types)
             {
-                var code = UniFormatFor(type.Category?.Name ?? "", type.FamilyName, type.Name, map);
-                var p = names.Select(n => type.LookupParameter(n)).FirstOrDefault(x => x is not null);
+                var code = UniFormatFor(type.Category?.Name ?? "", type.FamilyName, type.Name, map, ThickMm(type), valuesOf: ValuesOf(type, elements));
+                var p = AssemblyCodes.CodeOf(type, names);
                 if (code is null || p is null || p.IsReadOnly || p.StorageType != StorageType.String) { left.Add(ChecklistFacts.TypeLabel(type)); continue; }
                 try { if (p.Set(code)) filled++; else failed++; }
                 catch (Exception ex) when (Revit(ex)) { failed++; }
@@ -529,6 +611,8 @@ internal static class ChecklistFixes
         return $"Filled the UniFormat code of {Plural(filled, "type")}." +
                (left.Count > 0 ? $" {Plural(left.Count, "type")} got none (no code set for them in Checking rules): {string.Join(", ", left.Take(8))}{(left.Count > 8 ? " and more" : "")}." : "") + Failed(failed);
     }
+
+    private static string AssemblyTable(Document doc, string? path) => AssemblyCodes.Load(doc, path);
 
     /// <summary>Levels and scope boxes renamed like the URS link's: levels at the same height, scope boxes in the same place.</summary>
     private static string UrsNames(Document doc)
@@ -621,10 +705,12 @@ internal static class ChecklistFixes
 
     /// <summary>
     /// Suggested names for the model types in use not named like the typenames rule: one line each, "id\tfamily: old\tnew".
+    /// For loi, the LOI values to fill (LoiFill.Suggest), read in one go; the window reads them in steps.
     /// A suggestion keeps the old name's words, joined with _, behind the category's and the discipline's short codes.
     /// </summary>
     public static string Suggest(Document doc, string key, ChecklistMath.Definition? def)
     {
+        if (key == "loi") { var spec = LoiFill.SpecOf(def); return LoiFill.Suggest(doc, spec, LoiFill.TypeIds(doc, spec)); }
         if (key != "familynames") return "";
         var pattern = ChecklistMath.Rule(def, "typenames");
         if (pattern.Length == 0) return "";
@@ -639,9 +725,11 @@ internal static class ChecklistFixes
     internal static string SuggestName(string name, string category, string discipline, string pattern)
     {
         var words = System.Text.RegularExpressions.Regex.Replace(name.Trim(), @"[^A-Za-z0-9.]+", "_").Trim('_');
-        if (ChecklistMath.LikeAny(words, pattern)) return words;
         var parts = category.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
         var code = parts.Length > 1 ? string.Concat(parts.Take(2).Select(p => char.ToUpperInvariant(p[0]))) : category.Length >= 2 ? category.Substring(0, 2).ToUpperInvariant() : "XX";
+        // Only a name that already starts with its category's code is kept as it is (with underscores): a loose pattern
+        // such as *_*_* would otherwise pass "Concrete_Round_1200mm" without the code and discipline the standard asks for.
+        if (words.StartsWith(code + "_", StringComparison.OrdinalIgnoreCase) && ChecklistMath.LikeAny(words, pattern)) return words;
         var built = string.Join("_", new[] { code, discipline.ToUpperInvariant(), words }.Where(x => x.Length > 0));
         return built;
     }

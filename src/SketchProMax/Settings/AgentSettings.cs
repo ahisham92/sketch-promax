@@ -67,6 +67,33 @@ public sealed class AgentSettings
     /// <summary>How much the chat pane moves: full (the default), reduced or off (Chat.MotionLevels). Empty in older files: full.</summary>
     public string? ChatAnimations { get; set; }
 
+    /// <summary>
+    /// How many of a chat's parallel jobs run at once (each is a session on the user's plan): 3 by default, 1 to 6
+    /// (Chat.JobBoard). More wait to start until one finishes.
+    /// </summary>
+    public int ChatJobLimit { get; set; } = 3;
+
+    /// <summary>
+    /// The type a new chat starts as (Chat.ChatTypes): "coordinator" (it hands work to parallel jobs, the default) or
+    /// "simple" (one chat does everything itself). New chat's arrow picks the other type for one chat.
+    /// </summary>
+    public string ChatTypeDefault { get; set; } = "coordinator";
+
+    /// <summary>
+    /// The model and effort a new chat starts on (Chat.ChatAuto): "auto" (Automatic: picked per request and per job by
+    /// the kind of work) unless set here; a choice in the chat's pickers sticks for that chat.
+    /// </summary>
+    public string ChatModelDefault { get; set; } = "auto";
+    public string ChatEffortDefault { get; set; } = "auto";
+
+    /// <summary>What Automatic gives each kind of work (Chat.ChatAuto): simple, everyday and hard; model aliases and effort levels.</summary>
+    public string ChatModelSimple { get; set; } = "haiku";
+    public string ChatModelEveryday { get; set; } = "sonnet";
+    public string ChatModelHard { get; set; } = "opus";
+    public string ChatEffortSimple { get; set; } = "low";
+    public string ChatEffortEveryday { get; set; } = "medium";
+    public string ChatEffortHard { get; set; } = "high";
+
     /// <summary>Your name as it goes on a signed checklist (next to Chat).</summary>
     public string SignatureName { get; set; } = "";
 

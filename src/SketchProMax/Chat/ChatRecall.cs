@@ -29,7 +29,7 @@ internal static class ChatRecall
     public const int MaxSummary = 1500, MaxTranscript = 16_000, MaxPromptChats = 3, MaxPromptChars = 4500;
 
     /// <summary>The model the summaries are written with: the quickest, so remembering costs little of the plan.</summary>
-    public const string SummaryModel = "claude-haiku-5-5";
+    public const string SummaryModel = "haiku";
 
     /// <summary>What /compact keeps (Claude Code's own summary of the conversation, used from the next message on).</summary>
     public const string CompactInstructions =

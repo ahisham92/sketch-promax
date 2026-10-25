@@ -154,11 +154,11 @@ internal sealed class HistoryDrawer : Border
         var name = ChatUi.Small((chat.Pinned ? "★ " : "") + chat.Name, Brand.K.Text, bold: current);
         name.FontSize = ChatUi.SmallSize;
         text.Children.Add(name);
-        var sub = StreamRender.Stamp(chat.Updated.ToLocalTime(), DateTime.Now) + (!mine || _all.IsChecked == true ? " · " + chat.ModelTitle : "");
+        var sub = StreamRender.Stamp(chat.Updated.ToLocalTime(), DateTime.Now) + " · " + ChatTypes.Label(chat.Type) + (!mine || _all.IsChecked == true ? " · " + chat.ModelTitle : "");
         text.Children.Add(ChatUi.Small(sub));
         var open = new Button { Content = text, HorizontalContentAlignment = HorizontalAlignment.Left, Padding = new Thickness(ChatUi.S2, 4, ChatUi.S2, 4) };
         open.SetResourceReference(StyleProperty, "SpmChatGhost");
-        open.ToolTip = chat.Name + "\n" + chat.ModelTitle + "\n" + $"{chat.Count} messages and steps";
+        open.ToolTip = chat.Name + "\n" + ChatTypes.Label(chat.Type) + "\n" + chat.ModelTitle + "\n" + $"{chat.Count} messages and steps";
         AutomationProperties.SetName(open, $"{chat.Name}, {sub}{(current ? ", open now" : "")}{(chat.Pinned ? ", pinned" : "")}");
         AutomationProperties.SetHelpText(open, "Opens this chat; Sketch ProMax resumes it with what was said.");
         open.Click += (_, _) => _host.OpenChat(chat);

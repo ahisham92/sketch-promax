@@ -159,7 +159,7 @@ internal static class SharedPacks
     /// <summary>The files of a pack folder that belong to it (relative, "/"-separated): pack.json, buttons.txt, checklist.json and the tool files.</summary>
     private static IEnumerable<string> PackFiles(string folder)
     {
-        foreach (var name in new[] { PackFile, ButtonsFile, ChecklistFile })
+        foreach (var name in new[] { PackFile, ButtonsFile, ChecklistFile, SubmissionTemplateFile })
             if (File.Exists(Path.Combine(folder, name))) yield return name;
         foreach (var sub in new[] { LearnedFolder, RecipesFolder })
         {
@@ -262,6 +262,7 @@ internal static class SharedPacks
             }
             WriteLedger(ledger);
             if (ApplyChecklist(pack, folder) is { Length: > 0 } checklistNote) notes.Add(checklistNote);
+            ApplySubmissionTemplate(pack, folder);
             var text2 = string.Join("\n", notes);
             WriteApplied(folder, pack.Revision, text2);
             return text2;
@@ -314,6 +315,18 @@ internal static class SharedPacks
         {
             return "Pre-submission checklist: couldn't be saved (" + ex.Message + ")";
         }
+    }
+
+    /// <summary>The sharer's submission checklist questions, when the pack carries them: kept on this PC when newer than the ones here.</summary>
+    private static void ApplySubmissionTemplate(Pack pack, string folder)
+    {
+        if (pack.SubmissionTemplate is null || !pack.Tools.Any(t => t.Name == "submission-checklist")) return;
+        try
+        {
+            var file = Path.Combine(folder, pack.SubmissionTemplate.Replace('/', Path.DirectorySeparatorChar));
+            if (File.Exists(file)) SubmissionChecklistTemplate.TakeIfNewer(SubmissionChecklistTemplate.Read(File.ReadAllText(file)));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* the questions here are used */ }
     }
 
     /// <summary>Removes an installed pack: its buttons go from the tab, and the files it put in place (unless changed here).</summary>
@@ -465,10 +478,17 @@ internal static class SharedPacks
             }
             else notes.Add("Pre-submission checklist: " + (note.Length > 0 ? note : "no checklist could be read") + "; colleagues use the built-in one");
         }
+        // The submission checklist's questions travel with it when the sharer changed them (the template is theirs to change).
+        string? template = null;
+        if (tools.Any(t => t.Kind == "command" && t.Name == "submission-checklist") && SubmissionChecklistTemplate.LoadPc() is { BuiltIn: false } mine)
+        {
+            files[SubmissionTemplateFile] = SubmissionChecklistMath.ToJson(mine);
+            template = SubmissionTemplateFile;
+        }
         var pack = new Pack
         {
             Id = id, Name = request.Name.Trim(), UpdateFrom = request.UpdateFrom.Trim(), Note = request.Note.Trim(),
-            MinVersion = version, Tools = tools, Checklist = checklist,
+            MinVersion = version, Tools = tools, Checklist = checklist, SubmissionTemplate = template,
         };
         return (pack, files, notes);
     }

@@ -275,7 +275,18 @@ internal sealed partial class ChatPane
         _undoView = null;
     }
 
+    /// <summary>async void: an exception would reach Revit's UI dispatcher and could close Revit, so none leaves.</summary>
     private async void UndoJob(JobCardView view, ChatItem item, int task)
+    {
+        try { await UndoJobAsync(view, item, task); }
+        catch (Exception ex)
+        {
+            try { Status($"Undo all didn't work ({ex.GetType().Name}: {ex.Message}).", spin: false); }
+            catch (Exception) { /* the pane is closing */ }
+        }
+    }
+
+    private async Task UndoJobAsync(JobCardView view, ChatItem item, int task)
     {
         if (!view.CanUndo || _undoView != view) return;
         DropUndo();

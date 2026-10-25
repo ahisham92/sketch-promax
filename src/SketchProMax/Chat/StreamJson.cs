@@ -55,6 +55,9 @@ internal sealed record ContextEvent(long Tokens) : ChatEvent;
 
 internal sealed record ControlResponseEvent(string RequestId, bool Ok, string Error) : ChatEvent;
 
+/// <summary>Claude Code's report of the plan's usage limits (a rate_limit_event line): see <see cref="PlanUsage"/>.</summary>
+internal sealed record UsageEvent(PlanUsage Usage) : ChatEvent;
+
 /// <summary>
 /// Turns Claude Code's stream-json output (claude -p --output-format stream-json --verbose --include-partial-messages)
 /// into <see cref="ChatEvent"/>s. Lines that are not JSON, event types it doesn't know and fields that are missing are
@@ -126,6 +129,10 @@ internal sealed class StreamParser
                 break;
             case "result":
                 events.Add(Result(root));
+                break;
+            case "rate_limit_event":
+                if (root.TryGetProperty("rate_limit_info", out var limits) && PlanUsage.Parse(limits, DateTimeOffset.UtcNow) is { } usage)
+                    events.Add(new UsageEvent(usage));
                 break;
             case "control_response":
                 if (root.TryGetProperty("response", out var r) && r.ValueKind == JsonValueKind.Object)

@@ -22,17 +22,38 @@ internal sealed class ChatEngine : IDisposable
     private Process? _process;
     private StreamWriter? _stdin;
     private bool _disposed;
+    private readonly Func<ProcessStartInfo>? _start;
 
-    public ChatEngine(Dispatcher ui, ClaudeCli.Install install, string? resumeSessionId, string model)
+    /// <param name="start">How to start the process: the main chat's engine when null; a parallel job's own (ClaudeCli.JobStart).</param>
+    /// <param name="coordinator">The main chat's engine: true for a chat With coordinator (it gets chat_jobs and the
+    /// coordinator's instructions), false for a Simple chat.</param>
+    /// <param name="job">The parallel job this process is (its MCP config's job header), or null for the main chat.</param>
+    public ChatEngine(Dispatcher ui, ClaudeCli.Install install, string? resumeSessionId, string model, Func<ProcessStartInfo>? start = null, bool coordinator = true, string effort = "", string? job = null)
     {
+        Job = job;
+        Effort = effort;
         _ui = ui;
         _install = install;
         ResumedFrom = resumeSessionId;
         Model = model;
+        _start = start;
+        Coordinator = coordinator;
     }
+
+    /// <summary>The parallel job this process is, or null for the main chat.</summary>
+    public string? Job { get; }
+
+    /// <summary>The main chat's kind this process was started for (ChatTypes); switching the kind needs a new process.</summary>
+    public bool Coordinator { get; }
+
+    /// <summary>The effort this process runs at (--effort; "" for Claude Code's default); a different one needs a new process.</summary>
+    public string Effort { get; }
 
     /// <summary>The Claude model this process runs (--model); a different choice needs a new process.</summary>
     public string Model { get; }
+
+    /// <summary>Where this process reaches the Revit tools (ClaudeCli.McpAddress when it started).</summary>
+    public string McpAddress { get; private set; } = "";
 
     /// <summary>The session this engine was asked to resume, if any.</summary>
     public string? ResumedFrom { get; }
@@ -70,9 +91,12 @@ internal sealed class ChatEngine : IDisposable
     /// <summary>Starts the process off the UI thread and writes <paramref name="firstLine"/> to it.</summary>
     public Task StartAsync(string firstLine) => Task.Run(() =>
     {
-        var info = ClaudeCli.EngineStart(_install, ResumedFrom, Model);
+        var info = _start?.Invoke() ?? ClaudeCli.EngineStart(_install, ResumedFrom, Model, Coordinator, Effort);
+        McpAddress = ClaudeCli.McpAddress;
+        var started = DateTime.UtcNow;
         var process = new Process { StartInfo = info, EnableRaisingEvents = true };
-        process.Exited += (_, _) => OnExited();
+        // Raised on a thread-pool thread: an exception there would close Revit.
+        process.Exited += (_, _) => { try { OnExited(); } catch (Exception) { } };
         process.Start();
         lock (_gate)
         {
@@ -87,8 +111,45 @@ internal sealed class ChatEngine : IDisposable
         }
         new Thread(() => ReadOutput(process)) { IsBackground = true, Name = "Sketch ProMax chat output" }.Start();
         new Thread(() => ReadErrors(process)) { IsBackground = true, Name = "Sketch ProMax chat errors" }.Start();
+        WaitForTools(process, started);
         Write(firstLine);
     });
+
+    /// <summary>How long a new process may take to fetch the Revit tools before its first message goes anyway.</summary>
+    internal const int ToolsWaitMs = 15000;
+
+    /// <summary>
+    /// Set when a process didn't fetch the Revit tools within <see cref="ToolsWaitMs"/> (a Claude Code that connects only
+    /// once a message arrives, or a very slow start): later processes in this Revit session don't wait at all.
+    /// </summary>
+    internal static volatile bool ToolsWaitUseless;
+
+    /// <summary>
+    /// Claude Code connects to its MCP servers in the background and starts the first turn without waiting: a turn that
+    /// begins with a Revit call (after a brief, which also starts a new process for the model and effort it picked) failed
+    /// with "No such tool available" and had to try again (bug log row 40). So the first message waits until the chat's
+    /// connection inside Revit has sent this process the tool list, plus a moment for Claude Code to take it in. Nothing
+    /// to wait for with the connector program (it is outside Revit). Blocks: called from StartAsync's thread-pool task.
+    /// </summary>
+    private void WaitForTools(Process process, DateTime started)
+    {
+        if (ToolsWaitUseless || Bridge.ChatMcp.Current is not { } http || http.Url != McpAddress || McpAddress.Length == 0) return;
+        var until = started.AddMilliseconds(ToolsWaitMs);
+        while (!http.ToolsListedSince(Job, started))
+        {
+            bool gone;
+            lock (_gate) gone = _disposed;
+            try { gone |= process.HasExited; } catch (InvalidOperationException) { gone = true; }
+            if (gone) return;
+            if (DateTime.UtcNow >= until)
+            {
+                ToolsWaitUseless = true;
+                return;
+            }
+            Thread.Sleep(100);
+        }
+        Thread.Sleep(300);
+    }
 
     /// <summary>Writes one stream-json line (a user message or a control request) off the UI thread.</summary>
     public Task SendAsync(string line) => Task.Run(() => Write(line));
@@ -140,6 +201,8 @@ internal sealed class ChatEngine : IDisposable
             }
         }
         catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException) { }
+        // Its own thread: anything else escaping it (the parser, a dispatcher that shut down) would close Revit.
+        catch (Exception) { }
     }
 
     private void ReadErrors(Process process)
@@ -157,6 +220,7 @@ internal sealed class ChatEngine : IDisposable
             }
         }
         catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException) { }
+        catch (Exception) { /* its own thread: nothing may escape */ }
     }
 
     private void OnExited()
@@ -168,7 +232,11 @@ internal sealed class ChatEngine : IDisposable
             lock (_gate) disposed = _disposed;
             if (disposed) return;
             var tail = ErrorTail;
-            _ui.BeginInvoke(new Action(() => Exited?.Invoke(tail)));
+            _ui.BeginInvoke(new Action(() =>
+            {
+                try { Exited?.Invoke(tail); }
+                catch (Exception) { /* a UI problem must not reach Revit's dispatcher */ }
+            }));
         });
     }
 

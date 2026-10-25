@@ -90,13 +90,17 @@ internal static class ChecklistMath
         new("units", "Project units", "Length mm 0, Angle degrees 2", "The project units and decimal places Fix it sets: Length mm, cm or m and Angle degrees or radians, each with its decimals " +
             "(empty: not tested).", "units"),
         new("uniformatmap", "UniFormat code for each category or type", "", "What Fix it writes into the classification parameter of types that have none: Category>code or type name pattern>code, " +
-            "comma separated, e.g. Structural Foundations>A1020, Floors>B1010 (empty: nothing is filled).", "uniformat"),
+            "comma separated, e.g. Structural Foundations>A1020, Floors>B1010. Add a thickness range for layered types (Floors 1450-3200mm>B1010.10) or a parameter " +
+            "condition (Floors [Mark=B*]>B1010.10: every element of the type has that value) to give beams modelled as floors the beam code; these and name rules win over the plain category (empty: nothing is filled).", "uniformat"),
         new("templatemap", "View template for each view type", "", "What Fix it applies to views on sheets: View type>template name, comma separated, e.g. Floor Plan>ST_Plan, Section>ST_Section, 3D View>ST_3D " +
             "(empty: nothing is applied).", "viewtemplates"),
         new("typecodes", "Type codes in the file name", "RVT, C3D, DRW, RPT", "The type field of a file name is one of these; a Revit model must carry RVT (empty: not tested).", "typefield"),
         new("revitversion", "The project's Revit version", "", "The Revit version every model is saved in, e.g. 2024; Revit open now and the file's saved version are compared with it (empty: not tested).", "version"),
         new("loimatrix", "LOI matrix (parameters each code needs)", "", "UniFormat code or category>parameters it must have filled, entries separated by ; e.g. A1020*>Material, Length, Diameter; B1010*>Material, Thickness. " +
             "In-place families, Generic Models and DirectShapes are listed for the geometry (eLOD) too (empty: only those).", "loi"),
+        new("loivalues", "LOI values the model can't give", "", "What Fill the LOI data writes where the model has no value: code or category>Parameter=value, entries separated by ; " +
+            "e.g. A1020*>Status=For construction, Fire Rating=N/A; *>Phase=New. {Parameter} copies another parameter, e.g. Description={Type Name}. Material, length, diameter, thickness, " +
+            "width, height, depth, volume, area, level, grade, cut-off (top) and toe (bottom) are read from the model (empty: only those).", "loi"),
         new("pileparameters", "Pile parameters (cut-off, toe, diameter)", "Cut-off Level, Toe Level, Diameter", "The pile parameters holding its cut-off level, toe level and diameter, in that order; " +
             "leave a slot empty to skip it (e.g. , , b). Piles modelled as columns use their top and base levels and offsets for cut-off and toe, and the diameter is looked for in the type " +
             "(this name, else b, Diameter, d or D). Piles are the types named by Columns that bear on the ground (piles).", "pilerun"),
@@ -106,6 +110,10 @@ internal static class ChecklistMath
             "(empty: not tested). It doesn't replace a review against the design.", "mustexist"),
         new("approvedworksets", "Approved worksets", "", "Every workset matches one of these (empty: not tested). Workset1 and Shared Levels and Grids are always allowed.", "newworksets"),
         new("columns", "Column levels tested", "yes", "yes: a column that runs past the next level up is flagged (list the double-height ones in the comment). no: not tested.", "columns"),
+        new("genericok", "Generic Models allowed", "", "Family names (wildcards allowed) that may stay Generic Models, comma separated, e.g. *Stabilized Sand*, Connector*. " +
+            "Submissions status doesn't list them as eLOD problems. Families with VOID in the name are never checked (empty: every Generic Model is listed).", "uniformat"),
+        new("autoready", "Keep the model BIM-ready while you model", "", "yes: as you place elements (or change their type), their type gets its UniFormat code from the rules above when it has none, " +
+            "the fixed LOI values (LOI values the model can't give) where empty, and elements on Workset1 go to their category's workset. Inside your own edit (Ctrl+Z undoes both); nothing filled is overwritten. Empty or no: off.", "uniformat"),
         new("classification", "Classification parameter", "Assembly Code", "The type parameter holding the UniFormat code; every model type in use must have it filled.", "uniformat"),
         new("ifc", "IFC entity parameter", "IfcExportAs", "The type or instance parameter holding the IFC entity; every model type in use must have it filled.", "ifc"),
         new("keepparameters", "Project parameters always kept", "Mark, Comments", "Project parameters with these names are never offered for deleting, even when empty. " +
@@ -182,6 +190,62 @@ internal static class ChecklistMath
         (rule ?? "").Split(';').Select(e => e.Split('>')).Where(p => p.Length == 2 && p[0].Trim().Length > 0)
             .Select(p => (p[0].Trim(), RuleList(p[1]))).Where(e => e.Item2.Count > 0).ToList();
 
+    /// <summary>The loivalues rule, "code or category>Parameter=value, Parameter=value; ...", as (key, parameter, value) entries.</summary>
+    public static List<(string Key, string Param, string Value)> ParseLoiValues(string rule)
+    {
+        var list = new List<(string, string, string)>();
+        foreach (var entry in (rule ?? "").Split(';'))
+        {
+            var at = entry.IndexOf('>');
+            if (at <= 0) continue;
+            var key = entry.Substring(0, at).Trim();
+            foreach (var pair in entry.Substring(at + 1).Split(','))
+            {
+                var eq = pair.IndexOf('=');
+                if (eq <= 0) continue;
+                var (name, value) = (pair.Substring(0, eq).Trim(), pair.Substring(eq + 1).Trim());
+                if (key.Length > 0 && name.Length > 0 && value.Length > 0) list.Add((key, name, value));
+            }
+        }
+        return list;
+    }
+
+    /// <summary>
+    /// What the model gives an LOI parameter, from its name: material, diameter, thickness, top (cut-off), bottom (toe),
+    /// length, width, height, depth, volume, area, level or grade; "" when the model can't give it.
+    /// </summary>
+    public static string LoiSource(string param)
+    {
+        var n = " " + Regex.Replace((param ?? "").ToLowerInvariant(), "[^a-z0-9]+", " ").Trim() + " ";
+        bool Has(params string[] words) => words.Any(w => n.Contains(" " + w + " "));
+        if (Has("grade", "strength") && !Has("fire")) return "grade";
+        if (Has("material", "materials")) return "material";
+        if (Has("diameter", "dia")) return "diameter";
+        if (Has("thickness", "thk")) return "thickness";
+        if (Has("cut off", "cutoff", "top")) return "top";
+        if (Has("toe", "bottom", "founding")) return "bottom";
+        if (Has("length")) return "length";
+        if (Has("width")) return "width";
+        if (Has("height")) return "height";
+        if (Has("depth")) return "depth";
+        if (Has("volume")) return "volume";
+        if (Has("area")) return "area";
+        if (Has("level")) return "level";
+        return "";
+    }
+
+    /// <summary>A concrete or steel grade in a material or type name: C40/50, 40 MPa (from 40MPa or 40 N/mm2), S355; "" when it has none.</summary>
+    public static string GradeIn(string text)
+    {
+        text ??= "";
+        var m = Regex.Match(text, @"(?<![A-Za-z0-9])C\d{2,3}/\d{2,3}(?![0-9])", RegexOptions.IgnoreCase);
+        if (m.Success) return m.Value.ToUpperInvariant();
+        m = Regex.Match(text, @"(?<![\d.])(\d{2,3})\s*(MPa|N/mm2|N/mm²)", RegexOptions.IgnoreCase);
+        if (m.Success) return m.Groups[1].Value + " MPa";
+        m = Regex.Match(text, @"(?<![A-Za-z0-9])S(235|275|355|420|460)(?![0-9])", RegexOptions.IgnoreCase);
+        return m.Success ? "S" + m.Groups[1].Value : "";
+    }
+
     /// <summary>"Category>pattern" pairs, comma separated; a pair without > is a category with any type.</summary>
     public static List<(string Category, string Pattern)> ParsePairs(string rule) =>
         RuleList(rule).Select(e => e.Split('>')).Where(p => p.Length <= 2 && p[0].Trim().Length > 0)
@@ -210,6 +274,22 @@ internal static class ChecklistMath
     {
         var rx = "^" + Regex.Escape(pattern.Trim()).Replace("\\*", ".*").Replace("\\?", ".").Replace("\\#", "[0-9]").Replace("\\ ", "\\s+") + "$";
         return Regex.IsMatch((value ?? "").Trim(), rx, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    }
+
+    /// <summary>A UniFormat rule key with a parameter condition, "Floors [DAR_MARK=B*]": its category or name pattern (may be empty), the parameter and the value pattern; null for other keys.</summary>
+    public static (string Base, string Param, string Pattern)? ParamRule(string key)
+    {
+        var m = Regex.Match(key.Trim(), @"^(.*?)\s*\[\s*([^=\]]+?)\s*=\s*([^\]]*?)\s*\]$");
+        return m.Success && m.Groups[3].Value.Length > 0 ? (m.Groups[1].Value.Trim(), m.Groups[2].Value.Trim(), m.Groups[3].Value) : null;
+    }
+
+    /// <summary>A UniFormat rule key with a thickness range, "Floors 1450-3200mm": its category or name pattern and the range in mm; null for a plain key.</summary>
+    public static (string Base, double Min, double Max)? ThickRange(string key)
+    {
+        var m = Regex.Match(key.Trim(), @"^(.*\S)\s+(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)\s*mm$", RegexOptions.IgnoreCase);
+        if (!m.Success) return null;
+        double a = double.Parse(m.Groups[2].Value, CultureInfo.InvariantCulture), b = double.Parse(m.Groups[3].Value, CultureInfo.InvariantCulture);
+        return (m.Groups[1].Value.Trim(), Math.Min(a, b), Math.Max(a, b));
     }
 
     /// <summary>Whether <paramref name="value"/> matches any pattern of the list.</summary>

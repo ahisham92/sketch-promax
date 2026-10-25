@@ -331,7 +331,7 @@ public sealed class FindClashesTool : IRevitTool
     }
 
     /// <summary>Hosted in, joined to, or the same family nest as each other: overlap there is by design.</summary>
-    private static bool Related(Placed a, Placed b)
+    internal static bool Related(Placed a, Placed b)
     {
         if (a.Element.Document != b.Element.Document) return false;
         if (a.Element.Id == b.Element.Id) return true; // an element and its own rebuilt void
@@ -350,7 +350,7 @@ public sealed class FindClashesTool : IRevitTool
         catch (Autodesk.Revit.Exceptions.ArgumentException) { return false; }
     }
 
-    private static (bool hit, double depth, XYZ at, bool failed) Hard(Placed a, Placed b, double minOverlap)
+    internal static (bool hit, double depth, XYZ at, bool failed) Hard(Placed a, Placed b, double minOverlap)
     {
         var minVolume = Math.Pow(minOverlap, 3);
         int tried = 0, failed = 0;

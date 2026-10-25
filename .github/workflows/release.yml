@@ -65,7 +65,7 @@ jobs:
           Copy-Item dist $pkg -Recurse
           # Every Revit build must carry the loader the manifest names, or installed copies couldn't update in place.
           foreach ($v in 2024, 2025, 2026, 2027) {
-            foreach ($f in "SketchProMax.dll", "SketchProMax.Loader.dll", "SketchProMax.addin", "UglyToad.PdfPig.dll", "TritoRevit\TritoRevit.dll", "TritoRevit\TritoRevit.addin") {
+            foreach ($f in "SketchProMax.dll", "SketchProMax.Loader.dll", "SketchProMax.addin", "UglyToad.PdfPig.dll", "SketchProMax.pdfium.dll", "TritoRevit\TritoRevit.dll", "TritoRevit\TritoRevit.addin") {
               if (-not (Test-Path "$pkg\dist\Revit$v\$f")) { throw "Package is missing dist\Revit$v\$f" }
             }
           }
@@ -79,7 +79,20 @@ jobs:
         shell: pwsh
         run: |
           $v = "${{ steps.version.outputs.version }}"
-          gh release create "v$v" "SketchProMax-$v.zip" --repo "${{ github.repository }}" --target "${{ github.sha }}" --title "Sketch ProMax $v" --generate-notes
+          $notes = @"
+          **Install:** extract the zip and double-click Install.cmd, or open PowerShell and paste this line (no .cmd needed):
+
+          ``````
+          irm https://raw.githubusercontent.com/${{ github.repository }}/main/get.ps1 | iex
+          ``````
+
+          If Install.cmd says Windows cannot access the file: Properties > Unblock on the zip, or use the PowerShell line. Installed copies update themselves.
+          "@
+          # A version's own words (such as "restart Revit once"), when docs/release-notes/<version>.md exists, come first:
+          # the in-app notice shows the notes' top lines.
+          $own = "docs/release-notes/$v.md"
+          if (Test-Path $own) { $notes = (Get-Content $own -Raw).Trim() + "`n`n" + $notes }
+          gh release create "v$v" "SketchProMax-$v.zip" --repo "${{ github.repository }}" --target "${{ github.sha }}" --title "Sketch ProMax $v" --generate-notes --notes $notes
 
       - name: Keep the package (manual runs)
         if: github.event_name == 'workflow_dispatch'

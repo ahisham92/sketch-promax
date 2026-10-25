@@ -397,7 +397,13 @@ internal static class Redline
     {
         var near = candidates.Select(c => (c, d: Distance(at, c.Box))).Where(t => t.d <= radius)
             .OrderByDescending(t => t.c.Hint).ThenBy(t => t.d).ThenBy(t => t.c.Box.Area).ToList();
-        if (near.Count == 0) return (null, candidates.Count == 0 ? "nothing of that kind in that part of the sheet" : "nothing of that kind close enough to the markup");
+        if (near.Count == 0)
+        {
+            if (candidates.Count == 0) return (null, "nothing of that kind in that part of the sheet");
+            // Say how far the nearest is, so a markup drawn a little off (or a mapping that is off) shows as a distance.
+            var nearest = candidates.Select(c => (c, d: Distance(at, c.Box))).OrderBy(t => t.d).First();
+            return (null, $"nothing of that kind close enough to the markup (the nearest, {nearest.c.Label}, is {nearest.d * 304.8:0} mm away on the sheet; within {radius * 304.8:0} mm counts)");
+        }
         var best = near[0];
         if (near.Count == 1) return (best.c, null);
         var second = near[1];

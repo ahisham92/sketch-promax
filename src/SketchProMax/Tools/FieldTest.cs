@@ -50,6 +50,9 @@ internal static partial class SelfTest
         return new FieldSession(run, registry);
     }
 
+    /// <summary>The field test's steps without a model (tool and bug row of every case, in order), for its time estimate.</summary>
+    internal static List<FieldTestProven.Step> FieldCases() => AllCases().Select(c => new FieldTestProven.Step(c.Tool, c.Bug)).ToList();
+
     private sealed class FieldSession(Run run, ToolRegistry registry) : IFieldSession
     {
         public IReadOnlyList<FieldStep> Steps { get; } = run.Steps.Select((c, i) => new FieldStep(i, c.Tool, c.Heavy, c.Bug)).ToList();
@@ -85,6 +88,17 @@ internal static partial class FieldTest
         public int ToolCapSeconds = 120;
         /// <summary>What the run is called in its report and file name ("test before sharing" for Test before sharing).</summary>
         public string Title = "field test";
+        /// <summary>
+        /// Don't run again what the last full field test in this Revit year proved with code unchanged since
+        /// (Data/field-test-proven.json): those rows say "proven". False runs everything (run_field_test full, the ribbon's Run everything).
+        /// </summary>
+        public bool SkipProven = true;
+        /// <summary>
+        /// Continue after a crash (<see cref="FieldTestJournal"/>): the steps that ended before Revit closed are not run again
+        /// (their rows are carried into this report), and the step that closed Revit, with any other that did in this Revit
+        /// year, is a "crash" row instead of running. Null: a normal run, which runs everything.
+        /// </summary>
+        public FieldTestJournal.Resume? Resume;
     }
 
     internal sealed record Row(string Family, string Tool, string Status, long Ms, string Message);
@@ -110,30 +124,47 @@ internal static partial class FieldTest
         public HashSet<string> CaseTools = [];
         /// <summary>What the time-tracking probe counted in the test project, for the report's "Time saved" section.</summary>
         public string? TimeSaved;
+        /// <summary>The baseline the "proven" rows come from (null: a full run, or no baseline for this Revit year).</summary>
+        public FieldTestProven.Baseline? Baseline;
+        /// <summary>Why nothing was skipped as proven, when skipping was asked for (no baseline for this Revit year).</summary>
+        public string? BaselineNote;
+        /// <summary>Rows the baseline proved that still ran, because a step that runs needs them.</summary>
+        public List<string> Forced = [];
+        /// <summary>Written at the next start from the journal of a run Revit closed in the middle of.</summary>
+        public bool Interrupted;
+        /// <summary>A run that continues one Revit closed during: which step, and when.</summary>
+        public string? ContinuedFrom;
 
-        public int Count(string status) => Rows.Count(r => r.Status == status);
+        /// <summary>Rows with that status; "fail" counts the "crash" rows too (a step that closed Revit is a failure).</summary>
+        public int Count(string status) => status == "fail" ? Rows.Count(r => IsFail(r.Status)) : Rows.Count(r => r.Status == status);
 
         public string Summary()
         {
             var sb = new StringBuilder();
             if (Fatal is not null) sb.Append($"The field test could not run: {Fatal}\n");
             sb.Append($"{char.ToUpperInvariant(Title[0])}{Title.Substring(1)} in Revit {RevitVersion} ({RevitBuild}), Sketch ProMax {AddinVersion}: {Count("pass")} passed, " +
-                      $"{Count("fail")} failed, {Count("manual")} manual (checklist), {Count("skip")} not run in {Jobs.Duration(Took)}.");
+                      $"{Count("fail")} failed, " + (Count("proven") > 0 ? $"{Count("proven")} proven earlier, " : "") +
+                      $"{Count("manual")} manual (checklist), {Count("skip")} not run in {Jobs.Duration(Took)}.");
+            if (Baseline is not null) sb.Append($" Proven earlier: not run again, from {Baseline.Describe}.");
             if (StoppedBecause is not null) sb.Append($" Stopped early: {StoppedBecause}.");
             foreach (var g in Groups.Where(g => Rows.Any(r => r.Family == g.Key)))
             {
                 var rows = Rows.Where(r => r.Family == g.Key).ToList();
-                sb.Append($"\n{g.Title}: {rows.Count(r => r.Status == "pass")} pass, {rows.Count(r => r.Status == "fail")} fail" +
+                sb.Append($"\n{g.Title}: {rows.Count(r => r.Status == "pass")} pass, {rows.Count(r => IsFail(r.Status))} fail" +
+                          (rows.Any(r => r.Status == "proven") ? $", {rows.Count(r => r.Status == "proven")} proven" : "") +
                           (rows.Any(r => r.Status == "manual") ? $", {rows.Count(r => r.Status == "manual")} manual" : "") +
                           (rows.Any(r => r.Status == "skip") ? $", {rows.Count(r => r.Status == "skip")} not run" : ""));
             }
-            var failures = Rows.Where(r => r.Status == "fail").ToList();
+            var failures = Rows.Where(r => IsFail(r.Status)).ToList();
             foreach (var f in failures.Take(15)) sb.Append($"\n• {f.Tool}: {Short(f.Message, 200)}");
             if (failures.Count > 15) sb.Append($"\n• … and {failures.Count - 15} more in the report");
             if (StillOpen is not null) sb.Append($"\n{StillOpen}");
             return sb.ToString();
         }
     }
+
+    /// <summary>A failed row: "fail", or "crash" (Revit closed while it ran).</summary>
+    internal static bool IsFail(string status) => status is "fail" or "crash";
 
     /// <summary>The families the report groups tools into, in report order.</summary>
     internal static readonly (string Key, string Title, string[] Aliases)[] Groups =
@@ -163,7 +194,7 @@ internal static partial class FieldTest
         ["clashes"] = ["find_clashes", "create_mep_openings", "sleeve_schedule", "place_void_cuts", "verify_void_cut", "cut_openings_in_joined", "export_bcf", "coordination_progress"],
         ["arch_to_structure"] = ["arch_to_structure", "create_ramp", "equipment_pads", "create_floors_from_faces", "copy_monitor", "link_model"],
         ["marine"] = ["create_piles", "marine_structure", "port_furniture", "design_vessel", "vessel_collision_check", "progressive_collapse_check", "create_toposolid", "create_raft"],
-        ["checkers"] = ["check_drawings", "check_code_rules", "check_model", "find_missing_items", "run_model_audit", "model_snapshot", "check_schedule", "spec_check", "issue_check"],
+        ["checkers"] = ["check_drawings", "check_code_rules", "check_model", "find_missing_items", "run_model_audit", "model_snapshot", "check_schedule", "spec_check", "issue_check", "fill_loi_data"],
         ["boq"] = ["boq_check", "boq_item_breakdown", "cost_estimate", "export_quantities", "work_progress", "construction_sequence", "embodied_carbon", "carbon_compare", "carbon_view"],
         ["ve"] = ["ve_opportunities", "ve_compare_options", "ve_register", "ve_view", "ve_apply", "what_if"],
         ["analytical"] = ["analytical_check", "export_analytical", "loading_plan"],
@@ -204,7 +235,23 @@ internal static partial class FieldTest
     /// <summary>A tool with no self-test case, no field-test step and no ManualTools row: a gap the unit tests also catch.</summary>
     private const string NoCase = "no field-test coverage: add a self-test case (SelfTest.cs) or a ManualTools row (FieldTestCoverage.cs)";
 
-    internal const string Estimate = "about 5 to 15 minutes";
+    /// <summary>The steps a run has, from the self-test's case list and the field test's own probes, and how many are proven.</summary>
+    internal static (int Steps, int Proven) StepCount(bool skipProven, string revitYear)
+    {
+        var cases = SelfTest.FieldCases();
+        var proven = skipProven ? FieldTestProven.PlanFor(cases, FieldTestProven.Load().For(revitYear)).Proven.Count : 0;
+        return (cases.Count + OwnSteps, proven);
+    }
+
+    /// <summary>About how many rows the field test adds itself (probes, the batch on copies, the sharing checks).</summary>
+    private const int OwnSteps = 110;
+
+    /// <summary>How long a run takes, for the ribbon's question and run_field_test's note.</summary>
+    internal static string Estimate(bool skipProven, string revitYear)
+    {
+        var (steps, proven) = StepCount(skipProven, revitYear);
+        return FieldTestProven.Estimate(steps - proven);
+    }
 
     /// <summary>Everything one run carries from one Revit API call to the next.</summary>
     private sealed class State(Job job, ToolRegistry registry, Options o)
@@ -213,6 +260,8 @@ internal static partial class FieldTest
         public readonly ToolRegistry Registry = registry;
         public readonly Options O = o;
         public readonly RunReport Result = new() { Families = o.Families, Title = o.Title };
+        /// <summary>What the last full field test in this Revit year proved (null: run everything).</summary>
+        public FieldTestProven.Baseline? Baseline;
         public readonly Stopwatch Watch = Stopwatch.StartNew();
         public string Folder = "";
         public Document? Original, Built, Test;
@@ -225,6 +274,9 @@ internal static partial class FieldTest
         /// <summary>The brief brief.plan made, for brief.choose.</summary>
         public Chat.PromptBrief? Brief;
         public bool KeepFolder = o.KeepProject;
+        /// <summary>The breadcrumbs on disk (null when they couldn't be written) and the steps begun so far.</summary>
+        public FieldTestJournal.Writer? Journal;
+        public int StepIndex;
     }
 
     /// <summary>
@@ -245,9 +297,14 @@ internal static partial class FieldTest
             ToolResult? final = null;
             // The test project's open is timed like any other; its first-Idling time includes the test's own steps.
             SketchProMax.Revit.StartupTimings.TestRunning = true;
+            var state = new State(job, registry, o);
+            if (o.Resume is { } resume)
+                state.Result.ContinuedFrom = $"after Revit closed while {resume.From} ran (the run of {resume.When:yyyy-MM-dd HH:mm}): " +
+                                             $"{resume.Carried.Count} steps that ran then are carried, not run again; {resume.Crashed.Count} step(s) that closed Revit are not run (crash rows)";
             try
             {
-                report = await RunSteps(new State(job, registry, o)).ConfigureAwait(false);
+                state.Journal = OpenJournal(o);
+                report = await RunSteps(state).ConfigureAwait(false);
                 final = ToToolResult(report, o);
             }
             catch (Exception ex)
@@ -256,6 +313,9 @@ internal static partial class FieldTest
             }
             finally
             {
+                // Ended by itself (finished, stopped or failed): the breadcrumbs go, and steps that closed Revit before and
+                // ended normally now are no longer remembered as crashes.
+                CloseJournal(state, o);
                 SketchProMax.Revit.StartupTimings.TestRunning = false;
                 job.Finished = DateTime.UtcNow;
                 if (Jobs.Running == job) Jobs.Running = null;
@@ -285,7 +345,7 @@ internal static partial class FieldTest
         }
         try
         {
-            await OnRevit(app =>
+            await Setup(s, "the architectural link model", () => OnRevit(app =>
             {
                 var a = app.Application;
                 result.RevitVersion = a.VersionNumber;
@@ -299,24 +359,30 @@ internal static partial class FieldTest
                 s.Lib = new Library(a);
                 s.Templates = new FamilyTemplates(a);
                 s.LinkPath = BuildArchLink(a, s, result);
-            }).ConfigureAwait(false);
+            })).ConfigureAwait(false);
+            if (s.O.SkipProven)
+            {
+                s.Baseline = FieldTestProven.Load().For(result.RevitVersion);
+                if (s.Baseline is null) result.BaselineNote = $"no earlier full run is recorded for Revit {result.RevitVersion}, so every step ran";
+            }
+            s.Journal?.Note("project", s.Folder);
             if (!Cancelled())
-                await OnRevit(app =>
+                await Setup(s, "building the test project", () => OnRevit(app =>
                 {
                     Jobs.Report("Field test: building the test project");
                     s.Built = NewProject(app.Application, result);
                     Build(app.Application, s.Built, s, result);
-                }).ConfigureAwait(false);
+                })).ConfigureAwait(false);
             if (!Cancelled())
-                await OnRevit(app =>
+                await Setup(s, "saving the test project", () => OnRevit(app =>
                 {
                     Jobs.Report("Field test: saving the test project");
                     s.ProjectFile = SaveForTest(s.Built!, s.Folder, s.O.Workshared, result);
                     result.ProjectPath = s.ProjectFile;
                     MakeCopies(s, result);
-                }).ConfigureAwait(false);
+                })).ConfigureAwait(false);
             if (!Cancelled())
-                await OnRevit(app => OpenTest(app, s)).ConfigureAwait(false);
+                await Setup(s, "opening the test project", () => OnRevit(app => OpenTest(app, s))).ConfigureAwait(false);
             if (!Cancelled())
                 await RunCases(s).ConfigureAwait(false);
             if (!Cancelled())
@@ -327,7 +393,7 @@ internal static partial class FieldTest
             result.Fatal = $"{ex.GetType().Name}: {ex.Message}";
         }
 
-        try { await OnRevit(app => Finish(app, s)).ConfigureAwait(false); }
+        try { await Setup(s, "closing the test project and writing the report", () => OnRevit(app => Finish(app, s))).ConfigureAwait(false); }
         catch (Exception ex)
         {
             // Revit could not run the clean-up (Sketch ProMax was stopped or updated meanwhile): still write the report.
@@ -402,21 +468,32 @@ internal static partial class FieldTest
         var o = s.O;
         var result = s.Result;
         var toRun = (s.Session?.Steps ?? []).Where(st => Wanted(o, st.Tool)).ToList();
-        var counts = new Dictionary<string, int>();
+        // Labels count every case of a tool (the families filter keeps a tool's cases together), as the baseline's report did.
+        var steps = toRun.Select(st => new FieldTestProven.Step(st.Tool, st.Bug)).ToList();
+        var labels = FieldTestProven.Labels(steps);
+        var plan = FieldTestProven.PlanFor(steps, s.Baseline);
+        result.Forced = plan.Forced;
+        if (toRun.Count > 0) result.Baseline = s.Baseline;
+        var running = toRun.Count - plan.Proven.Count;
         var done = 0;
-        foreach (var step in toRun)
+        for (var i = 0; i < toRun.Count; i++)
         {
-            done++;
+            var step = toRun[i];
             var family = FamilyOf(step.Tool);
-            counts[step.Tool] = counts.TryGetValue(step.Tool, out var n) ? n + 1 : 1;
-            var label = counts[step.Tool] == 1 ? step.Tool : $"{step.Tool} #{counts[step.Tool]}";
+            var label = labels[i];
             // A case that guards a bug log row says so, for the report's Bug log section.
             if (step.Bug > 0) label += $" {FieldTestCoverage.BugTag(step.Bug)}";
+            // Passed in the last full run of this Revit year, and its code hasn't changed since: not run again.
+            if (plan.Proven.Contains(i)) { result.Rows.Add(new(family, label, "proven", 0, s.Baseline!.Message)); continue; }
+            // Continuing after Revit closed: done before the crash, or the step that closed it.
+            if (FromEarlier(s, family, label)) continue;
+            done++;
             if (result.StoppedBecause is null && s.Job.CancelRequested) result.StoppedBecause = "stopped on request (cancel_job or Cancel in Revit)";
             if (result.StoppedBecause is not null) { result.Rows.Add(new(family, label, "skip", 0, "not reached: " + result.StoppedBecause)); continue; }
             if (step.Heavy && !o.IncludeHeavy) { result.Rows.Add(new(family, label, "skip", 0, "slow tool; run with include_heavy to test it")); continue; }
 
-            Jobs.Report($"Field test {done} of {toRun.Count}: {label} ({Title(family)})");
+            Jobs.Report($"Field test {done} of {running}: {label} ({Title(family)})");
+            Begin(s, family, label);
             StepRun run;
             try { run = await App.Dispatcher.InvokeAsync(app => RunOne(app, s, step)).ConfigureAwait(false); }
             catch (Exception ex) { run = new(new(step.Tool, "fail", 0, $"{ex.GetType().Name}: {ex.Message}"), false, 0, false); }
@@ -430,6 +507,7 @@ internal static partial class FieldTest
             {
                 result.StoppedBecause = outcome.Message;
                 result.Rows.Add(new(family, label, "skip", 0, "not reached: " + outcome.Message));
+                End(s, label, "stop");
                 continue;
             }
             // Skipped for want of something the API can't make (a legend component): the checklist covers it.
@@ -441,6 +519,7 @@ internal static partial class FieldTest
                 message = $"manual (checklist: \"{manual.Title}\"): {message}";
             }
             result.Rows.Add(new(family, label, status, outcome.Ms, message));
+            End(s, label, status);
 
             // A tool that leaves a transaction open would block every tool after it (and switching away at the end).
             if (run.LeftOpen)
@@ -511,11 +590,13 @@ internal static partial class FieldTest
         var payload = new
         {
             summary = result.Summary(),
-            passed = result.Count("pass"), failed = result.Count("fail"), manual = result.Count("manual"), skipped = result.Count("skip"),
+            passed = result.Count("pass"), failed = result.Count("fail"), proven = result.Count("proven"), manual = result.Count("manual"), skipped = result.Count("skip"),
+            baseline = result.Baseline?.Describe ?? result.BaselineNote,
             report = result.ReportPath, report_json = result.JsonPath,
             kept_project = o.KeepProject ? result.ProjectPath : null,
             still_open = result.StillOpen,
-            next = result.ReportPath is null ? null : "Read the report for every tool's detail; fix failures family by family.",
+            next = result.ReportPath is null ? null : "Read the report for every tool's detail; fix failures family by family." +
+                (result.Count("proven") > 0 ? " Rows marked proven passed in the last full run with code unchanged since; run_field_test with full true runs them too." : ""),
         };
         return result.Fatal is not null && result.Rows.Count(r => r.Status != "skip") == 0
             ? ToolResult.Error(JsonSerializer.Serialize(payload))
@@ -1206,42 +1287,56 @@ internal static partial class FieldTest
 
             var md = new StringBuilder();
             md.AppendLine($"# Sketch ProMax {r.Title}").AppendLine();
-            md.AppendLine($"- Revit: {r.RevitName} ({r.RevitVersion}, build {r.RevitBuild})");
+            md.AppendLine(r.RevitName.Length > 0 ? $"- Revit: {r.RevitName} ({r.RevitVersion}, build {r.RevitBuild})" : $"- Revit: {r.RevitVersion}");
             md.AppendLine($"- Sketch ProMax: {r.AddinVersion}");
             md.AppendLine($"- Date: {r.Started:yyyy-MM-dd HH:mm}, took {Jobs.Duration(r.Took)}");
             md.AppendLine($"- Template: {r.Template}");
             md.AppendLine($"- Test project workshared: {(r.Workshared ? "yes (central + local in a temp folder)" : "no")}");
             if (r.Families is not null) md.AppendLine($"- Families tested: {string.Join(", ", r.Families.Select(Title))}");
-            md.AppendLine($"- Result: **{r.Count("pass")} passed, {r.Count("fail")} failed, {r.Count("manual")} manual (checklist), {r.Count("skip")} not run**");
+            md.AppendLine($"- Result: **{r.Count("pass")} passed, {r.Count("fail")} failed, " + (r.Count("proven") > 0 ? $"{r.Count("proven")} proven earlier, " : "") +
+                         $"{r.Count("manual")} manual (checklist), {r.Count("skip")} not run**");
+            if (r.Baseline is not null)
+                md.AppendLine($"- Baseline: {r.Baseline.Describe}. Rows marked proven passed there and their code has not changed since " +
+                              "(inferred file by file), so they were not run again. Run everything (run_field_test full, or the ribbon's Run everything) to run them too." +
+                              (r.Forced.Count > 0 ? $" Still run because steps that run need them: {string.Join(", ", r.Forced)}." : ""));
+            else if (whole) md.AppendLine($"- Baseline: none used{(r.BaselineNote is null ? " (full run: every step ran)" : $" ({r.BaselineNote})")}");
+            if (r.Interrupted) md.AppendLine("- **Interrupted: Revit closed during this run.** The rows below are what ran before it closed; the crash row is the step that was running.");
+            if (r.ContinuedFrom is not null) md.AppendLine($"- Continued: {r.ContinuedFrom}");
             if (r.StoppedBecause is not null) md.AppendLine($"- Stopped early: {r.StoppedBecause}");
             if (r.Fatal is not null) md.AppendLine($"- Could not run: {r.Fatal}");
             if (r.StillOpen is not null) md.AppendLine($"- {r.StillOpen}");
             md.AppendLine();
 
-            md.AppendLine("## By family").AppendLine().AppendLine("| Family | Pass | Fail | Manual | Not run |").AppendLine("|---|---:|---:|---:|---:|");
+            md.AppendLine("## By family").AppendLine().AppendLine("| Family | Pass | Fail | Proven | Manual | Not run |").AppendLine("|---|---:|---:|---:|---:|---:|");
+            // Fail counts the crash rows too.
             foreach (var g in Groups.Where(g => r.Rows.Any(x => x.Family == g.Key)))
             {
                 var rows = r.Rows.Where(x => x.Family == g.Key).ToList();
-                md.AppendLine($"| {g.Title} | {rows.Count(x => x.Status == "pass")} | {rows.Count(x => x.Status == "fail")} | {rows.Count(x => x.Status == "manual")} | {rows.Count(x => x.Status == "skip")} |");
+                md.AppendLine($"| {g.Title} | {rows.Count(x => x.Status == "pass")} | {rows.Count(x => IsFail(x.Status))} | {rows.Count(x => x.Status == "proven")} | " +
+                              $"{rows.Count(x => x.Status == "manual")} | {rows.Count(x => x.Status == "skip")} |");
             }
             md.AppendLine();
 
             foreach (var g in Groups.Where(g => r.Rows.Any(x => x.Family == g.Key)))
             {
                 md.AppendLine($"## {g.Title}").AppendLine().AppendLine("| Tool | Status | Time | Detail |").AppendLine("|---|---|---:|---|");
-                foreach (var row in r.Rows.Where(x => x.Family == g.Key).OrderBy(x => x.Status == "fail" ? 0 : x.Status == "pass" ? 1 : x.Status == "manual" ? 2 : 3).ThenBy(x => x.Tool))
-                    md.AppendLine($"| {row.Tool} | {(row.Status == "fail" ? "**fail**" : row.Status)} | {(row.Ms > 0 ? $"{row.Ms / 1000.0:0.0} s" : "")} | {Cell(row.Message)} |");
+                foreach (var row in r.Rows.Where(x => x.Family == g.Key).OrderBy(x => IsFail(x.Status) ? 0 : x.Status == "pass" ? 1 : x.Status == "proven" ? 2 : x.Status == "manual" ? 3 : 4).ThenBy(x => x.Tool))
+                    md.AppendLine($"| {row.Tool} | {(IsFail(row.Status) ? $"**{row.Status}**" : row.Status)} | {(row.Ms > 0 ? $"{row.Ms / 1000.0:0.0} s" : "")} | {Cell(row.Message)} |");
                 md.AppendLine();
             }
 
             md.AppendLine("## Test project").AppendLine();
             foreach (var note in r.Sample) md.AppendLine($"- {note}");
             md.AppendLine();
-            // How long Sketch ProMax took to start, and what opening models cost while it ran (bug #18).
-            md.AppendLine(SketchProMax.Revit.StartupTimings.Describe());
-            // Which copies of the shared libraries (System.Memory, Roslyn, System.Text.Json) this Revit really uses.
-            try { md.AppendLine(SketchProMax.Revit.AssemblyReport.Describe()); }
-            catch (Exception ex) { md.AppendLine("## Assemblies").AppendLine().AppendLine("Could not be read: " + ex.Message); }
+            // How long Sketch ProMax took to start, and what opening models cost while it ran (bug #18). Not for an
+            // interrupted run: written later, these would describe the session that wrote it.
+            if (!r.Interrupted)
+            {
+                md.AppendLine(SketchProMax.Revit.StartupTimings.Describe());
+                // Which copies of the shared libraries (System.Memory, Roslyn, System.Text.Json) this Revit really uses.
+                try { md.AppendLine(SketchProMax.Revit.AssemblyReport.Describe()); }
+                catch (Exception ex) { md.AppendLine("## Assemblies").AppendLine().AppendLine("Could not be read: " + ex.Message); }
+            }
             if (r.TimeSaved is not null) md.AppendLine("## Time saved").AppendLine().AppendLine(r.TimeSaved).AppendLine();
             // Last, so it is easy to find: every tool and feature, tested or manual (the checklist's source).
             // Each fixed bug log row with the check that fails if it comes back: which rows can be marked Confirmed.
@@ -1269,8 +1364,11 @@ internal static partial class FieldTest
                 template = r.Template,
                 workshared = r.Workshared,
                 families_tested = r.Families,
-                passed = r.Count("pass"), failed = r.Count("fail"), manual = r.Count("manual"), skipped = r.Count("skip"),
+                passed = r.Count("pass"), failed = r.Count("fail"), proven = r.Count("proven"), manual = r.Count("manual"), skipped = r.Count("skip"),
+                baseline = r.Baseline is null ? null : new { revit = r.Baseline.Revit, date = r.Baseline.Date, version = r.Baseline.Version, rows = r.Baseline.Labels.Count, still_run = r.Forced },
                 stopped_early = r.StoppedBecause,
+                interrupted = r.Interrupted ? true : (bool?)null,
+                continued = r.ContinuedFrom,
                 could_not_run = r.Fatal,
                 still_open = r.StillOpen,
                 kept_project = r.ProjectPath,
@@ -1278,13 +1376,14 @@ internal static partial class FieldTest
                 {
                     family = g.Key, title = g.Title,
                     pass = r.Rows.Count(x => x.Family == g.Key && x.Status == "pass"),
-                    fail = r.Rows.Count(x => x.Family == g.Key && x.Status == "fail"),
+                    fail = r.Rows.Count(x => x.Family == g.Key && IsFail(x.Status)),
+                    proven = r.Rows.Count(x => x.Family == g.Key && x.Status == "proven"),
                     manual = r.Rows.Count(x => x.Family == g.Key && x.Status == "manual"),
                     skip = r.Rows.Count(x => x.Family == g.Key && x.Status == "skip"),
                     tools = r.Rows.Where(x => x.Family == g.Key).Select(x => new { tool = x.Tool, status = x.Status, ms = x.Ms, detail = x.Message }),
                 }),
                 test_project = r.Sample,
-                startup = new { start = SketchProMax.Revit.StartupTimings.StartLine(), opens = SketchProMax.Revit.StartupTimings.OpenLines() },
+                startup = r.Interrupted ? null : new { start = SketchProMax.Revit.StartupTimings.StartLine(), opens = SketchProMax.Revit.StartupTimings.OpenLines() },
                 bug_log = BugLogJson(r),
                 coverage = coverage.Select(c => new { name = c.Name, kind = c.Kind, coverage = c.Status, detail = c.Detail }),
             }, new JsonSerializerOptions { WriteIndented = true }));
@@ -1326,22 +1425,47 @@ internal static partial class FieldTest
             TaskDialog.Show("Sketch ProMax field test", SelfTest.IsRunning ? "A self-test is running. Wait for it to finish, then try again." : Jobs.Busy(Jobs.Running).Text);
             return Autodesk.Revit.UI.Result.Cancelled;
         }
+        var year = app.Application.VersionNumber;
+        // Revit closed during an earlier run and the user hasn't been told: that comes first, with its own choices.
+        ReportCrashes();
+        if (Untold() is { } untold) return ShowCrash(app, untold);
+        var crash = FieldTestJournal.LastCrash(year) is { } last && FieldTestJournal.CanContinue(last) ? last : null;
+        var baseline = FieldTestProven.Load().For(year);
+        var (steps, proven) = StepCount(true, year);
         var ask = new TaskDialog("Sketch ProMax field test")
         {
             MainInstruction = "Run the field test?",
             MainContent =
                 "Sketch ProMax creates a new throwaway project (levels, grids, concrete and steel columns and beams, walls, a floor " +
                 "with a slab edge, foundations, a linked architectural model, views and a sheet), opens it in its own window and " +
-                "runs every tool family against it, one tool at a time. Then it closes that project without saving and writes " +
+                "runs the tool families against it, one tool at a time. Then it closes that project without saving and writes " +
                 "one report.\n\nThe models you have open are not changed: Revit only switches back to your model at the end. " +
                 "Save your open models first all the same, since Revit switches windows while it runs.\n\n" +
-                $"It takes {Estimate}. Revit stays responsive between tools, but leave the test project's window active until it " +
-                "finishes. Click Field test again to see progress or stop it (Cancel job and the pane's Cancel also stop it before the next tool).",
-            CommonButtons = TaskDialogCommonButtons.Yes | TaskDialogCommonButtons.No,
-            DefaultButton = TaskDialogResult.Yes,
+                "Revit stays responsive between tools, but leave the test project's window active until it finishes. Click Field " +
+                "test again to see progress or stop it (Cancel job and the pane's Cancel also stop it before the next tool).",
+            CommonButtons = TaskDialogCommonButtons.Cancel,
+            DefaultButton = TaskDialogResult.Cancel,
         };
-        if (ask.Show() != TaskDialogResult.Yes) return Autodesk.Revit.UI.Result.Cancelled;
+        if (baseline is not null && proven > 0)
+        {
+            ask.AddCommandLink(TaskDialogCommandLinkId.CommandLink1, "Run only what's new or changed",
+                $"About {steps - proven} steps, {FieldTestProven.Estimate(steps - proven)}. The {proven} steps that passed in the full run of " +
+                $"Sketch ProMax {baseline.Version} in Revit {year} on {baseline.Date}, with code unchanged since, are marked proven and not run again.");
+            ask.DefaultButton = TaskDialogResult.CommandLink1;
+        }
+        ask.AddCommandLink(TaskDialogCommandLinkId.CommandLink2, "Run everything",
+            $"About {steps} steps, {FieldTestProven.Estimate(steps)}. Nothing is taken as proven.");
+        if (baseline is null || proven == 0) ask.DefaultButton = TaskDialogResult.CommandLink2;
+        if (crash is not null) ask.AddCommandLink(TaskDialogCommandLinkId.CommandLink3, ContinueLabel, ContinueText(crash));
+        var choice = ask.Show();
+        if (choice == TaskDialogResult.CommandLink3 && crash is not null) return StartRibbonRun(Continuing(crash, year));
+        if (choice != TaskDialogResult.CommandLink1 && choice != TaskDialogResult.CommandLink2) return Autodesk.Revit.UI.Result.Cancelled;
+        return StartRibbonRun(new Options { SkipProven = choice == TaskDialogResult.CommandLink1 });
+    }
 
+    /// <summary>Starts a run from the ribbon as a job; its result is shown when it ends.</summary>
+    private static Autodesk.Revit.UI.Result StartRibbonRun(Options o)
+    {
         var job = Jobs.TryCreate("run_field_test", out var inTheWay);
         if (job is null)
         {
@@ -1351,7 +1475,7 @@ internal static partial class FieldTest
         job.TryStart();
         Jobs.Running = job;
         job.StartedSignal.TrySetResult(true);
-        job.Task = Start(job, App.Bridge?.Registry ?? ToolRegistry.CreateDefault(), new Options(), ShowResult);
+        job.Task = Start(job, App.Bridge?.Registry ?? ToolRegistry.CreateDefault(), o, o.Title == SharingTitle ? ShowBeforeSharing : ShowResult);
         return Autodesk.Revit.UI.Result.Succeeded;
     }
 
@@ -1378,13 +1502,13 @@ internal static partial class FieldTest
     private static void ShowBeforeSharing(RunReport? result, ToolResult outcome)
     {
         ActivityLog.Note("test_before_sharing", result is null ? Short(outcome.Text, 900)
-            : $"{result.Summary()} Failed: {string.Join("; ", result.Rows.Where(x => x.Status == "fail").Select(x => x.Tool))}. Report: {result.ReportPath}");
+            : $"{result.Summary()} Failed: {string.Join("; ", result.Rows.Where(x => IsFail(x.Status)).Select(x => x.Tool))}. Report: {result.ReportPath}");
         if (result is null)
         {
             TaskDialog.Show("Sketch ProMax test before sharing", Short(outcome.Text, 1800));
             return;
         }
-        var failed = result.Rows.Where(x => x.Status == "fail").ToList();
+        var failed = result.Rows.Where(x => IsFail(x.Status)).ToList();
         var show = new TaskDialog("Sketch ProMax test before sharing")
         {
             MainInstruction = result.Fatal is not null ? "The test could not run"
@@ -1426,7 +1550,8 @@ internal static partial class FieldTest
             MainInstruction = result.Fatal is not null ? "The field test could not run"
                 : result.Count("fail") == 0 ? "No tool failed" : $"{result.Count("fail")} tool(s) failed",
             MainContent = Short(result.Summary(), 1800),
-            FooterText = result.ReportPath is null ? "" : "Attach the report to a chat to get the failures fixed.",
+            FooterText = (result.ReportPath is null ? "" : "Attach the report to a chat to get the failures fixed.") +
+                         (result.Count("proven") > 0 ? $" {result.Count("proven")} steps proven earlier were not run again; Field test > Run everything runs them too." : ""),
             CommonButtons = TaskDialogCommonButtons.Close,
         };
         if (result.ReportPath is not null)
@@ -1456,7 +1581,8 @@ public sealed class RunFieldTestTool : IRevitTool
         "Test every Sketch ProMax tool family in real Revit without touching the user's models: creates a throwaway project " +
         "(levels, grids, concrete and steel columns and beams, walls, a floor with a slab edge, foundations, a linked " +
         "architectural model, plan, section, 3D view, schedule and sheet), opens it in its own window, runs every self-test " +
-        "case against it, then batch_run_recipe on two copies, the self-test in safe mode and the non-tool features (ribbon, " +
+        "case against it (except steps the last full run in this Revit year proved with code unchanged since, reported as " +
+        "proven, unless full is true), then batch_run_recipe on two copies, the self-test in safe mode and the non-tool features (ribbon, " +
         "option windows, favourites, chat, bug log, exports, updates), closes it without saving and switches back to the user's " +
         "model. Writes a Markdown + JSON report (per-family pass/fail counts, per-tool status, error and time, and a coverage " +
         "section listing every tool and feature as tested or manual) and returns a summary and the report path. Takes " +
@@ -1469,7 +1595,10 @@ public sealed class RunFieldTestTool : IRevitTool
       "workshared": {"type": "boolean", "description": "Make the test project workshared (central + local) so worksharing tools run. Default true."},
       "chat_round_trip": {"type": "boolean", "description": "Also send one short message through the in-Revit chat's Claude Code (uses the user's Claude plan). Default false: the checklist covers it."},
       "report_folder": {"type": "string", "description": "Folder for the report. Default %LOCALAPPDATA%\\SketchProMax\\field-tests."},
-      "tool_time_cap_seconds": {"type": "integer", "description": "Ask a tool to stop after this long (tools that support cancel stop; others run to the end). Default 120."}
+      "tool_time_cap_seconds": {"type": "integer", "description": "Ask a tool to stop after this long (tools that support cancel stop; others run to the end). Default 120."},
+      "full": {"type": "boolean", "description": "Run every step. Default false: steps that passed in the last full field test in this Revit year, with code unchanged since, are reported as proven and not run again (the report names the baseline)."},
+      "skip_proven": {"type": "boolean", "description": "The opposite of full: false runs every step. Default true."},
+      "continue_after_crash": {"type": "boolean", "description": "Revit closed during the last field test in this Revit year: continue after the step it closed during, with that run's options. The steps that ran are carried into the new report; the step that closed Revit (and any other that did before) is not run again and counts as a failure. Default false."}
     }
     """;
     public string[] Required => [];
@@ -1491,7 +1620,16 @@ public sealed class RunFieldTestTool : IRevitTool
             ChatRoundTrip = args.OptBool("chat_round_trip"),
             ReportFolder = OutputPaths.Checked(args.OptString("report_folder")),
             ToolCapSeconds = (int)Math.Max(10, Math.Min(1800, args.OptLong("tool_time_cap_seconds") ?? 120)),
+            SkipProven = !args.OptBool("full") && args.OptBool("skip_proven", true),
         };
+        if (args.OptBool("continue_after_crash"))
+        {
+            FieldTest.ReportCrashes();
+            var year = app.Application.VersionNumber;
+            if (FieldTestJournal.LastCrash(year) is not { } crash || !FieldTestJournal.CanContinue(crash))
+                return ToolResult.Error($"No field test in Revit {year} was interrupted by Revit closing during a step that can be continued after; run it normally.");
+            options = FieldTest.Continuing(crash, year);
+        }
         if (Jobs.CanContinue(Name) is not { } job)
             return ToolResult.Error("run_field_test runs only when Claude calls it directly or from the ribbon's Field test button, not from a recipe or quick tool.");
         // Each tool then runs in its own Revit API call, so Revit stays responsive; the job's result arrives through wait_for_job.
@@ -1499,7 +1637,9 @@ public sealed class RunFieldTestTool : IRevitTool
         return ToolResult.Ok(new
         {
             status = "started", job = job.Id,
-            note = $"The field test runs one tool at a time ({FieldTest.Estimate}). Call wait_for_job (job_id {job.Id}) for progress and the " +
+            note = $"The field test runs one tool at a time ({FieldTest.Estimate(options.SkipProven, app.Application.VersionNumber)}" +
+                   (options.SkipProven ? "; steps proven in the last full run with code unchanged are not run again, full true runs them" : "") +
+                   $"). Call wait_for_job (job_id {job.Id}) for progress and the " +
                    "result; cancel_job stops it before the next tool. Don't send other model work meanwhile.",
         });
     }

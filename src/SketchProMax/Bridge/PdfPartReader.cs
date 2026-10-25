@@ -1,74 +1,61 @@
 using System.Diagnostics;
+using System.IO;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using ModelContextProtocol.Protocol;
+
+namespace SketchProMax.Bridge;
 
 /// <summary>
 /// read_pdf_part: one part of a large PDF that the Revit chat split by itself (each at most 18 MB and 100 pages), read in
 /// full by its own hidden Claude Code chat, which answers the main chat's question about it. The part's chat is kept
 /// (its session id in the parts folder's sessions.json), so a follow-up about the same part doesn't send the part again.
-/// It runs here, in the connector, so Revit is never held while a part is read. The pane writes "parts.json" next to the
-/// parts: the original file, its page count, and each part's pages.
+/// It runs in the connector, never on Revit's thread, so Revit is never held while a part is read: in the connector
+/// program for the desktop app, and in the chat's connection inside Revit (ChatMcp). The pane writes "parts.json" next to
+/// the parts: the original file, its page count, and each part's pages. No Revit and no MCP library here.
 /// </summary>
-internal static class PdfParts
+internal static class PdfPartReader
 {
     public const string ToolName = "read_pdf_part";
-
-    public static readonly Tool Definition = new()
-    {
-        Name = ToolName,
-        Description = "Reads one part of a large PDF the user attached (the chat split it into parts that can be read whole) and answers a question " +
-                      "about it: the part is read in full, text and drawings, by a helper that holds only that part, and its answer gives the page " +
-                      "numbers of the original PDF. Call it with a part file the attachment note lists and the user's question in your own clear " +
-                      "words; ask several parts at once (parallel calls) when the question spans them. A follow-up about the same part is quicker.",
-        InputSchema = JsonDocument.Parse("""
-            {"type":"object","properties":{
-              "file":{"type":"string","description":"The part's full path, as the attachment note lists it."},
-              "question":{"type":"string","description":"What to find or answer from this part, in full (the helper doesn't see the chat)."},
-              "description":{"type":"string","description":"One short line the user sees, such as 'Part 2, pages 41-80: pile sizes'."}},
-             "required":["file","question"]}
-            """).RootElement,
-    };
 
     private static readonly SemaphoreSlim SessionsLock = new(1, 1);
 
     private sealed record PartInfo(string Source, int Total, int First, int Last, int Number, int Count);
 
-    public static async Task<CallToolResult> CallAsync(IDictionary<string, JsonElement>? arguments, CancellationToken ct)
+    /// <param name="claude">The Claude Code the chat runs (it reads the part); null when the caller isn't the chat.</param>
+    /// <param name="model">The chat's model, used for the part too; null for Claude Code's default.</param>
+    public static async Task<ConnectorResult> CallAsync(IDictionary<string, JsonElement>? arguments, string? claude, string? model, CancellationToken ct)
     {
         var file = Arg(arguments, "file").Trim().Trim('"');
         var question = Arg(arguments, "question").Trim();
-        if (file.Length == 0 || question.Length == 0) return Text("Give file (a part listed in the attachment note) and question.", true);
-        if (!File.Exists(file)) return Text($"{file} was not found. Use a part file exactly as the attachment note lists it.", true);
+        if (file.Length == 0 || question.Length == 0) return new("Give file (a part listed in the attachment note) and question.", true);
+        if (!File.Exists(file)) return new($"{file} was not found. Use a part file exactly as the attachment note lists it.", true);
         var folder = Path.GetDirectoryName(Path.GetFullPath(file))!;
         var info = Info(folder, Path.GetFileName(file));
-        var claude = Environment.GetEnvironmentVariable("SKETCHPROMAX_CLAUDE");
         if (string.IsNullOrEmpty(claude) || !File.Exists(claude))
-            return Text("The part can't be read here: Claude Code wasn't passed to the Sketch ProMax connector (only the chat in Revit reads parts). " +
-                        "Answer from the text file instead.", true);
+            return new("The part can't be read here: Claude Code wasn't passed to the Sketch ProMax connector (only the chat in Revit reads parts). " +
+                       "Answer from the text file instead.", true);
 
         var key = Path.GetFileName(file);
-        var session = await SessionAsync(folder, key, null, ct);
-        var (answer, newSession, error) = await AskAsync(claude, folder, file, info, question, session, ct);
+        var session = await SessionAsync(folder, key, null, ct).ConfigureAwait(false);
+        var (answer, newSession, error) = await AskAsync(claude!, model, folder, file, info, question, session, ct).ConfigureAwait(false);
         if (error is not null && session is not null)
         {
             // The part's chat couldn't be reopened (deleted, or from another PC): read the part again in a new one.
-            (answer, newSession, error) = await AskAsync(claude, folder, file, info, question, null, ct);
+            (answer, newSession, error) = await AskAsync(claude!, model, folder, file, info, question, null, ct).ConfigureAwait(false);
         }
-        if (error is not null) return Text($"The part couldn't be read ({error}). Answer from the text file, or try once more.", true);
-        if (newSession is not null && newSession != session) await SessionAsync(folder, key, newSession, ct);
+        if (error is not null) return new($"The part couldn't be read ({error}). Answer from the text file, or try once more.", true);
+        if (newSession is not null && newSession != session) await SessionAsync(folder, key, newSession, ct).ConfigureAwait(false);
         var head = info is null ? Path.GetFileName(file)
             : $"Part {info.Number} of {info.Count} of {info.Source} (pages {info.First}-{info.Last} of {info.Total})";
-        return Text(head + ":\n" + answer, false);
+        return new(head + ":\n" + answer, false);
     }
 
-    private static async Task<(string Answer, string? Session, string? Error)> AskAsync(string claude, string folder, string file, PartInfo? info,
+    private static async Task<(string Answer, string? Session, string? Error)> AskAsync(string claude, string? model, string folder, string file, PartInfo? info,
         string question, string? session, CancellationToken ct)
     {
         var args = new List<string> { "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--tools", "",
                                       "--strict-mcp-config", "--permission-mode", "dontAsk" };
-        var model = Environment.GetEnvironmentVariable("SKETCHPROMAX_MODEL");
         if (!string.IsNullOrEmpty(model)) { args.Add("--model"); args.Add(model!); }
         // Its own session id, always: a Claude Code started from inside another can otherwise carry on the parent's session.
         if (session is not null) { args.Add("--resume"); args.Add(session); }
@@ -76,12 +63,15 @@ internal static class PdfParts
 
         var content = new JsonArray();
         if (session is null)
+        {
+            var bytes = await Task.Run(() => File.ReadAllBytes(file), ct).ConfigureAwait(false);
             content.Add(new JsonObject
             {
                 ["type"] = "document",
-                ["source"] = new JsonObject { ["type"] = "base64", ["media_type"] = "application/pdf", ["data"] = Convert.ToBase64String(await File.ReadAllBytesAsync(file, ct)) },
+                ["source"] = new JsonObject { ["type"] = "base64", ["media_type"] = "application/pdf", ["data"] = Convert.ToBase64String(bytes) },
                 ["title"] = Path.GetFileName(file),
             });
+        }
         var where = info is null ? "" :
             $" It is part {info.Number} of {info.Count} of {info.Source}: pages {info.First} to {info.Last} of {info.Total}. Page n of this part is page {info.First} + n - 1 of the original; always give the original's page numbers.";
         content.Add(new JsonObject
@@ -112,7 +102,9 @@ internal static class PdfParts
         start.StandardOutputEncoding = Encoding.UTF8;
         start.WorkingDirectory = folder;
         // The helper is a chat of its own, not one of Revit's: it gets no Revit tools and no instructions to ask in Revit.
+        // It runs on the user's Claude plan, like the chat: an API key in the environment would bill the API instead.
         start.Environment.Remove("SKETCHPROMAX_CHAT");
+        start.Environment.Remove("ANTHROPIC_API_KEY");
         foreach (var name in start.Environment.Keys.Where(k => k == "CLAUDECODE" || k.StartsWith("CLAUDE_CODE_", StringComparison.Ordinal) && k.Contains("SESSION")).ToList())
             start.Environment.Remove(name);
 
@@ -121,21 +113,21 @@ internal static class PdfParts
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException) { return ("", null, ex.Message); }
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(ct);
         stop.CancelAfter(TimeSpan.FromMinutes(10));
-        using var kill = stop.Token.Register(() => { try { process.Kill(entireProcessTree: true); } catch (Exception) { } });
+        using var kill = stop.Token.Register(() => KillTree(process));
         var errors = process.StandardError.ReadToEndAsync();
         try
         {
             var stdin = new StreamWriter(process.StandardInput.BaseStream, new UTF8Encoding(false));
-            await stdin.WriteLineAsync(line);
-            await stdin.FlushAsync();
+            await stdin.WriteLineAsync(line).ConfigureAwait(false);
+            await stdin.FlushAsync().ConfigureAwait(false);
             stdin.Close();
         }
         catch (IOException) { /* it ended at once; the output says why */ }
 
         string? answer = null, newSession = null, failure = null;
-        while (await process.StandardOutput.ReadLineAsync() is { } output)
+        while (await process.StandardOutput.ReadLineAsync().ConfigureAwait(false) is { } output)
         {
-            if (!output.StartsWith("{", StringComparison.Ordinal) || !output.Contains("\"result\"", StringComparison.Ordinal)) continue;
+            if (!output.StartsWith("{", StringComparison.Ordinal) || output.IndexOf("\"result\"", StringComparison.Ordinal) < 0) continue;
             try
             {
                 using var doc = JsonDocument.Parse(output);
@@ -150,12 +142,28 @@ internal static class PdfParts
             }
             catch (JsonException) { }
         }
-        await process.WaitForExitAsync(CancellationToken.None);
+        await Task.Run(() => process.WaitForExit()).ConfigureAwait(false);
         ct.ThrowIfCancellationRequested();
         if (stop.IsCancellationRequested) return ("", null, "it took more than 10 minutes");
         if (answer is { Length: > 0 }) return (answer, newSession, null);
-        var why = failure ?? Last((await errors).Trim(), 300);
+        var why = failure ?? Last((await errors.ConfigureAwait(false)).Trim(), 300);
         return ("", null, why.Length > 0 ? why : "the helper gave no answer");
+    }
+
+    private static void KillTree(Process process)
+    {
+        try
+        {
+#if NETFRAMEWORK
+            if (process.HasExited) return;
+            using var kill = Process.Start(new ProcessStartInfo("taskkill.exe", "/PID " + process.Id + " /T /F") { UseShellExecute = false, CreateNoWindow = true });
+            kill?.WaitForExit(5000);
+            if (!process.HasExited) process.Kill();
+#else
+            process.Kill(entireProcessTree: true);
+#endif
+        }
+        catch (Exception) { }
     }
 
     private static PartInfo? Info(string folder, string name)
@@ -178,15 +186,15 @@ internal static class PdfParts
     private static async Task<string?> SessionAsync(string folder, string key, string? set, CancellationToken ct)
     {
         var file = Path.Combine(folder, "sessions.json");
-        await SessionsLock.WaitAsync(ct);
+        await SessionsLock.WaitAsync(ct).ConfigureAwait(false);
         try
         {
             JsonObject map;
-            try { map = File.Exists(file) ? JsonNode.Parse(await File.ReadAllTextAsync(file, ct)) as JsonObject ?? [] : []; }
+            try { map = File.Exists(file) ? JsonNode.Parse(File.ReadAllText(file)) as JsonObject ?? [] : []; }
             catch (Exception ex) when (ex is IOException or JsonException) { map = []; }
             if (set is null) return map[key]?.GetValue<string>();
             map[key] = set;
-            try { await File.WriteAllTextAsync(file, map.ToJsonString(), ct); }
+            try { File.WriteAllText(file, map.ToJsonString()); }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
             return set;
         }
@@ -199,7 +207,5 @@ internal static class PdfParts
     private static string Quote(string s) =>
         s.Length > 0 && s.IndexOfAny([' ', '"', '\t']) < 0 ? s : "\"" + s.Replace("\"", "\\\"") + "\"";
 
-    private static string Last(string text, int max) => text.Length <= max ? text : "…" + text[^max..];
-
-    private static CallToolResult Text(string text, bool isError) => new() { Content = [new TextContentBlock { Text = text }], IsError = isError };
+    private static string Last(string text, int max) => text.Length <= max ? text : "…" + text.Substring(text.Length - max);
 }

@@ -136,14 +136,17 @@ internal static class ClaudeCli
     }
 
     /// <summary>
-    /// The engine's start info: Claude Code in print mode with stream-json in and out, our MCP server (the same command
-    /// the desktop app is given) and its tools allowed without prompts, Read, Glob and Grep for attached files, and
-    /// nothing else that could act on the PC. Anything that would need a permission prompt is denied (dontAsk), because
-    /// nobody can answer a prompt in a hidden process. The MCP server is told it serves the chat (SKETCHPROMAX_CHAT), so
-    /// Revit's own dialog asks before model changes (per the settings) and always before code, recipes and files written
-    /// to a folder Claude chose.
+    /// The engine's start info: Claude Code in print mode with stream-json in and out, our MCP server (the chat's own
+    /// connection inside Revit, or the connector the desktop app is given when that couldn't start) and its tools allowed
+    /// without prompts, Read, Glob and Grep for attached files, and nothing else that could act on the PC. Anything that
+    /// would need a permission prompt is denied (dontAsk), because nobody can answer a prompt in a hidden process. The MCP
+    /// server knows it serves the chat (inside Revit always; the connector by SKETCHPROMAX_CHAT), so Revit's own dialog
+    /// asks before model changes (per the settings) and always before code, recipes and files written to a folder Claude chose.
     /// </summary>
-    public static ProcessStartInfo EngineStart(Install install, string? resumeSessionId, string? model = null)
+    /// <param name="coordinator">A chat With coordinator (ChatTypes): it may start jobs with chat_jobs and is told how.
+    /// A Simple chat never gets chat_jobs or those instructions.</param>
+    /// <param name="effort">Claude Code's --effort level (ChatAuto.Efforts); left out when empty or this Claude Code doesn't take it.</param>
+    public static ProcessStartInfo EngineStart(Install install, string? resumeSessionId, string? model = null, bool coordinator = true, string? effort = null)
     {
         Directory.CreateDirectory(WorkFolder);
         var engine = Path.Combine(Folder, "engine");
@@ -153,7 +156,7 @@ internal static class ClaudeCli
         var mcpFile = WriteMcpConfig(engine, pid, claude: install.Path, model: model);
 
         var promptFile = Path.Combine(engine, "prompt-" + pid + ".md");
-        File.WriteAllText(promptFile, Prompt(), new UTF8Encoding(false));
+        File.WriteAllText(promptFile, Prompt(coordinator), new UTF8Encoding(false));
 
         var args = new List<string>
         {
@@ -164,17 +167,22 @@ internal static class ClaudeCli
             "--allowedTools", $"mcp__{ServerName},mcp__{ServerName}__*,Read,Glob,Grep",
             "--permission-mode", "dontAsk",
         };
-        // A connector older than this add-in may not pass SKETCHPROMAX_CHAT on, so Revit would not know to ask: then the
-        // code and recipe tools are left out of the chat altogether.
+        // A connector older than this add-in (only used when the connection inside Revit couldn't start) may not pass
+        // SKETCHPROMAX_CHAT on, so Revit would not know to ask: then the code and recipe tools are left out of the chat altogether.
         // Claude Code's own transcripts of earlier conversations (…\.claude\projects\…\<session>.jsonl): after a shrink
         // it is told it may read the full transcript, which would send the long conversation again and fill the chat with
         // file steps. The summary is what a shrink keeps; anything else is asked for or found with recall_chats.
         var denied = new List<string> { TranscriptRule };
-        if (ConnectorIsOlder()) denied.AddRange(SketchProMax.Tools.OutputPaths.CodeTools.Select(t => $"mcp__{ServerName}__{t}"));
+        if (OlderConnectorInUse) denied.AddRange(SketchProMax.Tools.OutputPaths.CodeTools.Select(t => $"mcp__{ServerName}__{t}"));
+        // Parallel jobs need the connection to pass the job on (so its changes take turns): the one inside Revit always
+        // does, the connector program when it is as new as this add-in. And a chat With coordinator: a Simple chat does
+        // everything itself.
+        if (!JobsAvailable || !coordinator) denied.Add($"mcp__{ServerName}__{SketchProMax.Tools.ChatJobsTool.ToolName}");
         args.Add("--disallowedTools");
         args.Add(string.Join(",", denied));
         if (!string.IsNullOrEmpty(resumeSessionId)) { args.Add("--resume"); args.Add(resumeSessionId!); }
         if (!string.IsNullOrEmpty(model)) { args.Add("--model"); args.Add(model!); }
+        AddEffort(args, effort);
 
         var command = string.Join(" ", args.Select(Quote));
         var cmdShim = install.Path.EndsWith(".cmd", StringComparison.OrdinalIgnoreCase);
@@ -195,28 +203,131 @@ internal static class ClaudeCli
         return info;
     }
 
-    /// <summary>Writes the MCP config: the connector the installer and ClaudeRegistration register for the desktop app.</summary>
-    private static string WriteMcpConfig(string engine, string pid, string name = "mcp-", string? claude = null, string? model = null)
+    /// <summary>
+    /// A parallel job's own Claude Code (Chat.JobBoard, ChatPane.Jobs): like the chat's engine, with the job's instructions,
+    /// the connector told which job it serves (SKETCHPROMAX_JOB, so its changes take turns with the other jobs'), no
+    /// chat_jobs (a job doesn't start jobs), whole messages rather than streamed words, and its own session: a new id
+    /// (<paramref name="newSession"/>) or the one it resumes, never the main chat's.
+    /// </summary>
+    public static ProcessStartInfo JobStart(Install install, string jobKey, string? resume, string? newSession, string? model, string? effort = null)
     {
-        var mcp = new JsonObject
+        Directory.CreateDirectory(WorkFolder);
+        var engine = Path.Combine(Folder, "engine");
+        Directory.CreateDirectory(engine);
+        var pid = Process.GetCurrentProcess().Id.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var mcpFile = WriteMcpConfig(engine, pid, "mcp-job-" + jobKey + "-", install.Path, model, jobKey);
+        var promptFile = Path.Combine(engine, "job-" + jobKey + "-" + pid + ".md");
+        File.WriteAllText(promptFile, JobPrompt(), new UTF8Encoding(false));
+        var args = new List<string>
         {
-            ["mcpServers"] = new JsonObject
-            {
-                [ServerName] = new JsonObject
-                {
-                    ["type"] = "stdio",
-                    ["command"] = ClaudeRegistration.ConnectorPath,
-                    ["args"] = new JsonArray(),
-                    // SKETCHPROMAX_CHAT: the bridge then asks in Revit before code, recipes and files written where Claude chose.
-                    // SKETCHPROMAX_CLAUDE and _MODEL: read_pdf_part reads a part of a large PDF with the same Claude Code and model.
-                    ["env"] = Env(pid, claude, model),
-                },
-            },
+            "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
+            "--mcp-config", mcpFile, "--strict-mcp-config",
+            "--append-system-prompt-file", promptFile,
+            "--tools", "Read,Glob,Grep",
+            "--allowedTools", $"mcp__{ServerName},mcp__{ServerName}__*,Read,Glob,Grep",
+            "--permission-mode", "dontAsk",
+            "--disallowedTools", string.Join(",", TranscriptRule, $"mcp__{ServerName}__{SketchProMax.Tools.ChatJobsTool.ToolName}"),
         };
+        if (!string.IsNullOrEmpty(resume)) { args.Add("--resume"); args.Add(resume!); }
+        else { args.Add("--session-id"); args.Add(newSession ?? Guid.NewGuid().ToString()); }
+        if (!string.IsNullOrEmpty(model)) { args.Add("--model"); args.Add(model!); }
+        AddEffort(args, effort);
+        var command = string.Join(" ", args.Select(Quote));
+        var info = install.Path.EndsWith(".cmd", StringComparison.OrdinalIgnoreCase)
+            ? new ProcessStartInfo("cmd.exe", "/d /s /c \"" + Quote(install.Path) + " " + command + "\"")
+            : new ProcessStartInfo(install.Path, command);
+        info.UseShellExecute = false;
+        info.CreateNoWindow = true;
+        info.RedirectStandardInput = true;
+        info.RedirectStandardOutput = true;
+        info.RedirectStandardError = true;
+        info.StandardOutputEncoding = Encoding.UTF8;
+        info.StandardErrorEncoding = Encoding.UTF8;
+        info.WorkingDirectory = WorkFolder;
+        info.EnvironmentVariables.Remove("ANTHROPIC_API_KEY");
+        // Its own session, always: nothing of a parent session carries over.
+        foreach (var name in info.EnvironmentVariables.Keys.Cast<string>().Where(k => k == "CLAUDECODE" || k.StartsWith("CLAUDE_CODE_", StringComparison.Ordinal) && k.Contains("SESSION")).ToList())
+            info.EnvironmentVariables.Remove(name);
+        info.EnvironmentVariables["SKETCHPROMAX_REVIT_PID"] = pid;
+        // A change may wait its turn behind other jobs' changes (BridgeServer.TurnWait): the call must not time out first.
+        info.EnvironmentVariables["MCP_TOOL_TIMEOUT"] = JobToolTimeoutMs.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        return info;
+    }
+
+    /// <summary>How long a job's tool call may take, its wait for its turn included (BridgeServer.TurnWait is 30 minutes).</summary>
+    private const int JobToolTimeoutMs = 2_400_000;
+
+    /// <summary>
+    /// True when the chat may run parallel jobs: always with the connection inside Revit; with the connector program
+    /// only when it is as new as this add-in (an older one doesn't pass the job on, so the job's changes couldn't take turns).
+    /// </summary>
+    public static bool JobsAvailable => !OlderConnectorInUse;
+
+    /// <summary>
+    /// True when the chat falls back to the connector program (the connection inside Revit couldn't start) and that is
+    /// older than this add-in, so it may lack newer connector tools (read_pdf_part) and the job key.
+    /// </summary>
+    internal static bool OlderConnectorInUse => Bridge.ChatMcp.Ensure() is null && ConnectorIsOlder();
+
+    /// <summary>
+    /// Set once Claude Code refused --effort (a version older than the option, ChatAuto.IsEffortRefusal): from then on
+    /// this Revit session starts it without, at its own default effort.
+    /// </summary>
+    public static volatile bool EffortRefused;
+
+    private static void AddEffort(List<string> args, string? effort)
+    {
+        if (EffortRefused || string.IsNullOrEmpty(effort) || !ChatAuto.Efforts.Contains(effort)) return;
+        args.Add("--effort");
+        args.Add(effort!);
+    }
+
+    /// <summary>
+    /// Writes the MCP config. Normally the chat's own connection inside Revit (Bridge.ChatMcp): its address, its token, and
+    /// headers naming the parallel job and the model. When that couldn't start, the connector program the installer and
+    /// ClaudeRegistration register for the desktop app, as before. Written at each start, so a new core's address is used.
+    /// </summary>
+    private static string WriteMcpConfig(string engine, string pid, string name = "mcp-", string? claude = null, string? model = null, string? job = null)
+    {
+        if (!string.IsNullOrEmpty(claude)) Bridge.ChatMcp.Claude = claude;
+        var mcp = new JsonObject { ["mcpServers"] = new JsonObject { [ServerName] = McpServer(pid, claude, model, job) } };
         var mcpFile = Path.Combine(engine, name + pid + ".json");
         File.WriteAllText(mcpFile, mcp.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
         return mcpFile;
     }
+
+    /// <summary>The config's entry for our server: the connection inside Revit, or the connector program.</summary>
+    internal static JsonObject McpServer(string pid, string? claude, string? model, string? job)
+    {
+        if (Bridge.ChatMcp.Ensure() is { } http)
+        {
+            var headers = new JsonObject { ["Authorization"] = "Bearer " + http.Token };
+            // The job this session is (its changes take turns with the other jobs'), and the model read_pdf_part reads with.
+            if (!string.IsNullOrEmpty(job)) headers[Bridge.McpHttpServer.JobHeader] = job;
+            if (!string.IsNullOrEmpty(model)) headers[Bridge.McpHttpServer.ModelHeader] = model;
+            // Claude Code gives up on an HTTP server's call that is silent for 5 minutes (30 for a program it started):
+            // a call may wait on an approval in Revit, and a job's change on its turn (BridgeServer.TurnWait). This
+            // server's own limit raises that wait, as long as a job's MCP_TOOL_TIMEOUT or the 30 minutes the connector had.
+            return new JsonObject
+            {
+                ["type"] = "http", ["url"] = http.Url, ["headers"] = headers,
+                ["timeout"] = string.IsNullOrEmpty(job) ? 1_800_000 : JobToolTimeoutMs,
+            };
+        }
+        return new JsonObject
+        {
+            ["type"] = "stdio",
+            ["command"] = ClaudeRegistration.ConnectorPath,
+            ["args"] = new JsonArray(),
+            // SKETCHPROMAX_CHAT: the bridge then asks in Revit before code, recipes and files written where Claude chose.
+            // SKETCHPROMAX_CLAUDE and _MODEL: read_pdf_part reads a part of a large PDF with the same Claude Code and model.
+            // SKETCHPROMAX_JOB: the parallel job this connector serves (its changes take turns with the other jobs').
+            ["env"] = Env(pid, claude, model, job),
+        };
+    }
+
+    /// <summary>The address the chat's Claude Code reaches the Revit tools at now: the connection inside Revit, or "" for the connector program.</summary>
+    internal static string McpAddress => Bridge.ChatMcp.Current?.Url ?? "";
 
     /// <summary>
     /// A one-shot run for the prompt enhancer (PromptBriefs): print mode, the message read from stdin, one JSON result
@@ -261,13 +372,71 @@ internal static class ClaudeCli
         return info;
     }
 
-    /// <summary>True when the installed connector's file version is known and older than this add-in.</summary>
-    private static JsonObject Env(string pid, string? claude, string? model)
+    private static JsonObject Env(string pid, string? claude, string? model, string? job = null)
     {
         var env = new JsonObject { ["SKETCHPROMAX_REVIT_PID"] = pid, ["SKETCHPROMAX_CHAT"] = "1" };
         if (!string.IsNullOrEmpty(claude)) env["SKETCHPROMAX_CLAUDE"] = claude;
         if (!string.IsNullOrEmpty(model)) env["SKETCHPROMAX_MODEL"] = model;
+        if (!string.IsNullOrEmpty(job)) env["SKETCHPROMAX_JOB"] = job;
         return env;
+    }
+
+    /// <summary>
+    /// What the chat says about Revit tools that didn't connect (<paramref name="status"/> from Claude Code), naming a PC
+    /// that blocks them: Claude Code's own log of the connection says EPERM or access denied, or, for the connector
+    /// program, Revit itself isn't allowed to start it. Reads files and may start the connector: call off the UI thread.
+    /// </summary>
+    internal static string ToolsFailed(string status, string address, bool job = false)
+    {
+        var inside = address.Length > 0;
+        var blocked = ToolsNote.IsBlocked(LastMcpError()) || !inside && ConnectorRefused();
+        return ToolsNote.Failed(status, inside, inside ? address : ClaudeRegistration.ConnectorPath, blocked, job);
+    }
+
+    /// <summary>The end of Claude Code's newest log of connecting to our server (its cache folder, the last few minutes), or "".</summary>
+    private static string LastMcpError()
+    {
+        try
+        {
+            var cache = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "claude-cli-nodejs", "Cache");
+            if (!Directory.Exists(cache)) return "";
+            var newest = Directory.GetDirectories(cache)
+                .Select(d => Path.Combine(d, "mcp-logs-" + ServerName))
+                .Where(Directory.Exists)
+                .SelectMany(d => new DirectoryInfo(d).GetFiles())
+                .Where(f => f.LastWriteTimeUtc > DateTime.UtcNow.AddMinutes(-10))
+                .OrderByDescending(f => f.LastWriteTimeUtc)
+                .FirstOrDefault();
+            if (newest is null) return "";
+            using var stream = new FileStream(newest.FullName, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            stream.Seek(Math.Max(0, stream.Length - 4000), SeekOrigin.Begin);
+            return new StreamReader(stream, Encoding.UTF8).ReadToEnd();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or System.Security.SecurityException) { return ""; }
+    }
+
+    /// <summary>True when Windows refuses to start the connector program for Revit too (a policy such as AppLocker), not when it is missing.</summary>
+    private static bool ConnectorRefused()
+    {
+        try
+        {
+            using var process = Process.Start(new ProcessStartInfo(ClaudeRegistration.ConnectorPath)
+            {
+                UseShellExecute = false, CreateNoWindow = true,
+                RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true,
+            });
+            if (process is null) return false;
+            // It started: with its input closed it ends by itself.
+            process.StandardInput.Close();
+            if (!process.WaitForExit(3000)) KillTree(process);
+            return false;
+        }
+        catch (System.ComponentModel.Win32Exception ex)
+        {
+            // 5 access denied, 1260 blocked by group policy, 4551 blocked by App Control; 2 (not found) is a broken install.
+            return ex.NativeErrorCode is 5 or 1260 or 4551 || ToolsNote.IsBlocked(ex.Message);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or IOException) { return false; }
     }
 
     /// <summary>True when the installed connector is older than this add-in (so it may lack newer connector tools, such as read_pdf_part).</summary>
@@ -283,13 +452,19 @@ internal static class ClaudeCli
     }
 
     /// <summary>Sketch ProMax's agent instructions (also sent by the MCP server) plus what is special about the pane.</summary>
-    private static string Prompt() => SketchProMax.Agent.SystemPrompt.Build(AgentSettings.Load().FirmStandards) + """
+    private static string Prompt(bool coordinator) => SketchProMax.Agent.SystemPrompt.Build(AgentSettings.Load().FirmStandards) + """
 
 
         You are chatting in the Sketch ProMax pane inside this Revit window. The person is a structural engineer.
         - The Revit tools come from the sketch-promax MCP server and act on this Revit window. Use them for anything about
           the model. Besides them you have only Read, Glob and Grep (to look at files on this PC); there is no shell, file
           editing or web access here.
+        - Call the Revit tools by their full names (mcp__sketch-promax__run_revit_query_code and so on). If a call says "No
+          such tool available", the tools are still connecting or listed by name only: if you have ToolSearch, load the
+          ones the task needs in one call (select:mcp__sketch-promax__run_revit_query_code,...); otherwise call it again once.
+        - Code (run_revit_query_code, run_revit_code) is the last resort: prefer a dedicated tool (export_pdf with
+          sheet_set, pdf_setup or check_print; export_files) over writing the same thing as code. When code fails, the
+          result names the closest real API members or a hint: use them rather than guessing again.
         - Revit asks the user to approve some calls before they run: always run_revit_query_code, run_revit_code, new
           recipes and learned tools, deletes that take other elements with them, and writing over existing files outside
           Sketch ProMax's own folders; other model changes only if the user set it to ask. Prefer the dedicated tools,
@@ -303,6 +478,20 @@ internal static class ClaudeCli
           with redline_read (file and page), which shows any PDF page as a picture, not only redlines. Read other files
           with the Read tool. For DWG or DXF files, pass the path to the Revit tools (for example import_cad); don't try to
           Read them.
+        - Files: when the user wants something to keep or send (an Excel sheet, a Word report or letter, a PowerPoint
+          presentation, a PDF; a bill of quantities, a cost plan, a schedule, a summary of the model), make it with
+          make_document. Get the facts first with the Revit tools, then write the whole file in one call, with formulas
+          for amounts and totals in Excel. For pictures of the model, take them with capture_view_image and give their
+          paths. The chat shows the file as a card with Open, Show in folder and Save a copy: say in a line or two what is
+          in it, without the path. The model's own priced quantities and cost plan come from export_quantities and
+          cost_estimate, which write their workbooks themselves.
+        - Do only what was asked. What the user said to keep stays: before hiding, deleting, unjoining or replacing
+          anything, check it against what they asked to keep in this chat. When a wider change (hiding a whole category,
+          a type change that reaches every element of that type) would also take away something they asked to keep or
+          didn't mention, leave that part out, or ask in one line first.
+        - When the user says a result is wrong ("no, that's wrong", "we are repeating the same mistakes"), stop. Undo it if
+          they ask, then say back in one sentence what they want, in their words, and wait for their yes before trying
+          again, rather than trying another variation.
         - Keep it easy: lead with the answer in a sentence or two of plain words, then only the detail that helps. No tool
           names, internal ids, element ids, JSON or API terms unless the user asks for them. Use the model's own units.
         - "What is in this model?" and other overview questions: a few lines only, such as the model's name, the levels,
@@ -315,6 +504,12 @@ internal static class ClaudeCli
         - When the user says "remember that ..." (or "from now on ..."), save it with memory_note action=remember: scope=global
           for habits and standards that hold for every model, scope=model for facts about this model. When they say
           "forget ...", use action=forget. Confirm in one line. They can see and edit the notes in the pane's Notes tab.
+        - When the user reports progress on a berth or package (sections designed, calculations, bills, costing, or any
+          area's status), record it with berth_status action=set (what = the deliverable or area, percent and/or comment)
+          and confirm in one line. berth_status action=list or details answers "where are we" questions; it never reads
+          the model, so for fresh model results ask them to press Update status in the Submissions status window.
+        - For a berth's cost, unit costs or quantities, use berth_costing (list, details, rates; set_rate, set_quantity and
+          set_berth when they ask to change one). The cost comparison, BOQ and back-up files are made in the Berth costing window.
         - When the user says something is a bug ("that's a bug", "report this"), call report_bug with one plain line you
           write from the conversation: what they did, what happened, what they expected, and the tool involved. Then say
           the report is saved in Documents\Sketch ProMax\Bugs\Reports.
@@ -325,7 +520,57 @@ internal static class ClaudeCli
         - When the chat was shrunk, the summary you have is what it keeps. Don't try to open the earlier conversation's
           file (the .jsonl transcript): it isn't allowed here, and it would cost far more than it saves. If a detail is
           missing, read it from the model or ask the user in one line.
-        """ + Notes() + Recall();
+        """ + (coordinator ? JobsPrompt() : SimplePrompt) + Notes() + Recall();
+
+    /// <summary>A Simple chat (ChatTypes): it may have used jobs before it was switched, so it is told it has none now.</summary>
+    private const string SimplePrompt = """
+
+        - This is a simple chat: there are no jobs here. Do all the work in this chat yourself, step by step, even if
+          earlier messages mention jobs.
+        """;
+
+    /// <summary>How the main chat coordinates parallel jobs (chat_jobs); nothing when jobs aren't available.</summary>
+    private static string JobsPrompt() => !JobsAvailable ? "" : $"""
+
+        - Jobs: you coordinate. When a request has separate parts that can go side by side ("make sheets for levels 1-5
+          and check the walls"), or is one long piece of model work, hand it to jobs with chat_jobs. Call action=list first;
+          a follow-up that belongs to an existing job ("also add level 6" after a sheets job) goes to that job with
+          action=message, never to a new job. Otherwise action=start, once per part: a short title, and the whole task in
+          full with every detail (the job doesn't see this chat), and its kind: simple (rename, tag, list, fill parameters,
+          short summaries), everyday (sheets, views, dimensions, checks, normal modelling) or hard (a spec or BEP against
+          the model, redlines, tricky modelling logic, costing decisions); the kind picks its model and effort. Up to {ChatJobs.Limit} jobs run at once; more wait to start.
+          Reads run in parallel; changes to the model take turns, one at a time. Answer quick questions and small single
+          changes yourself, without a job.
+        - After starting or messaging jobs, say in one line which jobs have it and end your turn: don't wait for them and
+          don't do their work. While jobs work, leave model changes to them (Revit may say it is busy). Each job reports
+          back when it finishes, in a message marked as a job report: then tell the user briefly. Stop a job with
+          action=stop when the user asks.
+        """;
+
+    /// <summary>A parallel job's instructions: Sketch ProMax's agent instructions plus what is special about a job.</summary>
+    private static string JobPrompt() => SketchProMax.Agent.SystemPrompt.Build(AgentSettings.Load().FirmStandards) + """
+
+
+        You are one job of the Sketch ProMax chat in this Revit window: the main chat gave you one task, and you work on it
+        in the background, perhaps alongside other jobs on the same model. The person is a structural engineer; they see
+        your progress in your own view of the chat (they open your card) and can send you messages there.
+        - Do your task completely with the Revit tools from the sketch-promax MCP server. Besides them you have only Read,
+          Glob and Grep (to look at files on this PC). Don't start other work. If a Revit call says "No such tool
+          available", the tools are still connecting: call it again once.
+        - Other jobs may work at the same time. Reads run at once; changes to the model take turns, one at a time, so a
+          change may wait a while before it runs: that is normal, don't send it again. Don't change or undo elements
+          outside your task.
+        - Revit asks the user to approve some calls; if they decline, leave that part and say so.
+        - When the task asks for a file (Excel, Word, PowerPoint or PDF), make it with make_document after getting the
+          facts, and name the file in your report.
+        - Messages that reach you later say who sent them: "The user says: …" (the person, typing in your view) or "The
+          main chat says: …" (the coordinator). Both count; the person's word wins if they disagree.
+        - If you need the person to decide something the model can't settle, end with one short question: they answer in
+          your view.
+        - End every run with a short report for the main chat, in plain words: what you did (with counts and names),
+          anything you couldn't do and why, and what the person should check. A few lines; no tool names, element ids or
+          JSON.
+        """ + Notes();
 
     /// <summary>The memory notes for this chat (global and the open model's), as a block at the end of the prompt.</summary>
     private static string Notes()

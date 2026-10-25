@@ -45,18 +45,24 @@ internal static partial class FieldTest
             using var p = JsonDocument.Parse(preview.Text);
             var problems = new List<string>();
             var total = p.RootElement.GetProperty("total").GetInt32();
-            var passes = p.RootElement.GetProperty("passes").GetInt32();
-            if (total != 2) problems.Add($"the preview found {total}, not the type and its material");
-            if (passes < 2) problems.Add($"the preview took {passes} pass(es): the material only goes unused once the type is gone");
+            var summary = p.RootElement.GetProperty("summary").GetString() ?? "";
+            // The preview deletes nothing, not even in a rolled-back transaction (Revit 2024 closed inside the old one):
+            // it lists what is unused now, the type; the material only goes unused once the type is gone, when applying.
+            if (total != 1) problems.Add($"the preview found {total}, not just the unused type");
+            if (!summary.Contains(CleanupMath.PreviewPassesNote)) problems.Add("the preview doesn't say applying finds more");
             if (doc.GetElement(typeId) is null || doc.GetElement(materialId) is null) problems.Add("the preview deleted something");
+            if (doc.IsModifiable) problems.Add("the preview left a transaction open");
             if (problems.Count > 0) return Fail(string.Join("; ", problems) + ". " + Short(preview.Text, 300));
 
             var applied = Call(app, s.Registry, "purge_unused", new { only, apply = true });
             if (applied.IsError) return Fail("apply: " + Short(applied.Text, 400));
+            using var a = JsonDocument.Parse(applied.Text);
+            var passes = a.RootElement.GetProperty("passes").GetInt32();
             if (doc.GetElement(typeId) is not null) problems.Add("the type is still there");
             if (doc.GetElement(materialId) is not null) problems.Add("the material is still there");
+            if (passes < 2) problems.Add($"applying took {passes} pass(es): the material only goes unused once the type is gone");
             return problems.Count == 0
-                ? Pass($"preview: 2 found in {passes} passes, nothing changed; apply deleted both ({Short(JsonDocument.Parse(applied.Text).RootElement.GetProperty("summary").GetString() ?? "", 160)}); rolled back")
+                ? Pass($"preview: the type found, nothing deleted and no transaction opened; apply deleted both in {passes} passes ({Short(a.RootElement.GetProperty("summary").GetString() ?? "", 160)}); rolled back")
                 : Fail(string.Join("; ", problems) + ". " + Short(applied.Text, 300));
         }
         finally
@@ -240,6 +246,79 @@ internal static partial class FieldTest
             ReleaseSource.ApiTimeout, CancellationToken.None).GetAwaiter().GetResult();
         if (why is null) return Fail("the failing API call was used instead of falling back");
         return tag is not null ? Pass($"the API failed ({why}); github.com named {tag}") : Fail($"the API failed ({why}) and {url} named no release either");
+    }
+
+    /// <summary>
+    /// An update stopped while unpacking continues on the next try: a small package is unpacked in a temp folder, one file
+    /// is taken away as if the unpack had stopped there, and unpacking again keeps the rest and puts that one back.
+    /// </summary>
+    private static (string, string) UpdateResumeProbe()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "SketchProMax-resume-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(dir);
+            var zip = Path.Combine(dir, "SketchProMax-0.0.1.zip");
+            using (var archive = System.IO.Compression.ZipFile.Open(zip, System.IO.Compression.ZipArchiveMode.Create))
+                foreach (var name in new[] { "a.dll", "b.dll", "c.dll" })
+                    using (var writer = new StreamWriter(archive.CreateEntry("pkg/dist/Revit" + App.RevitYear + "/" + name).Open()))
+                        writer.Write(name);
+            var sha = UpdateResume.Sha256Of(zip);
+            var folder = Path.Combine(dir, "0.0.1.partial");
+            UpdateResume.Extract(zip, folder, sha);
+            var missing = Path.Combine(folder, "pkg", "dist", "Revit" + App.RevitYear, "b.dll");
+            File.Delete(missing);
+            var kept = UpdateResume.Extract(zip, folder, sha);
+            if (kept != 2 || !File.Exists(missing)) return Fail($"unpacking again kept {kept} of 2 files and {(File.Exists(missing) ? "put back" : "did not put back")} the missing one");
+            UpdateResume.MarkComplete(folder, "0.0.1");
+            return UpdateResume.IsComplete(folder)
+                ? Pass($"unpacking again kept the 2 files already written and added the missing one, in {Path.GetTempPath()}")
+                : Fail("the finished version could not be marked as unpacked");
+        }
+        finally { try { Directory.Delete(dir, true); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { } }
+    }
+
+    /// <summary>
+    /// The field test's breadcrumbs, in a folder of the test folder: a run stopped as if Revit closed during a step is found
+    /// as left behind, its interrupted rows end with the crash row, Continue carries what ran and skips the crashed step.
+    /// </summary>
+    private static (string, string) JournalProbe(string testFolder)
+    {
+        var folder = Path.Combine(testFolder, "journal");
+        var problem = FieldTestJournal.SelfCheck(folder);
+        return problem is null
+            ? Pass($"a journal stopped as if Revit closed during purge_unused was found as left behind, its report rows end with \"{FieldTestJournal.CrashMessage}\", " +
+                   "Continue carries the step that ended and skips the crashed one, the crash is remembered until it runs normally, and a finished run leaves no journal")
+            : Fail(problem);
+    }
+
+    /// <summary>
+    /// The running-call file (bug #37): one left by a Revit that is gone is read back, at the next start, as which call
+    /// Revit closed during, with its arguments, and removed. In a folder of the test folder, with a process id that isn't running.
+    /// </summary>
+    private static (string, string) RunningCallProbe(string testFolder)
+    {
+        var folder = Path.Combine(testFolder, "running-call");
+        var saved = Revit.RunningCall.FolderOverride;
+        Revit.RunningCall.FolderOverride = folder;
+        try
+        {
+            Directory.CreateDirectory(folder);
+            const int gone = 999_999_003;
+            var file = Revit.RunningCall.FileOf(gone);
+            File.WriteAllText(file, JsonSerializer.Serialize(new Revit.RunningCall.Entry
+            {
+                Time = "2099-01-02T03:04:05", Where = "the chat", Tool = "run_revit_query_code", Model = "Field test", Version = "0.0.0", Arguments = "{\"code\":\"return 1;\"}",
+            }));
+            var lines = Revit.RunningCall.Recover(1, _ => false);
+            var line = lines.FirstOrDefault() ?? "";
+            if (lines.Count != 1 || !line.Contains("run_revit_query_code") || !line.Contains("return 1;")) return Fail("the call left behind wasn't read back with its arguments: " + string.Join(" | ", lines));
+            if (File.Exists(file)) return Fail("the call left behind was read back but not removed");
+            return Revit.RunningCall.Recover(1, _ => false).Count == 0
+                ? Pass("a call left behind by a Revit that is gone was read back at the next start with its tool and arguments, then removed: " + Short(line, 160))
+                : Fail("the call was reported twice");
+        }
+        finally { Revit.RunningCall.FolderOverride = saved; }
     }
 
     // ---- The report's Bug log section ----------------------------------------------------------------------------------------

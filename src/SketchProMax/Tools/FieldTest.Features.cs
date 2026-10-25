@@ -5,6 +5,7 @@ using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Xml.Linq;
 using System.Windows.Controls;
 using Autodesk.Revit.DB;
 using Autodesk.Revit.UI;
@@ -70,20 +71,25 @@ internal static partial class FieldTest
         var tool = registry.Find(name) ?? throw new InvalidOperationException($"{name} is not in the registry");
         var raw = JsonSerializer.SerializeToElement(args);
         var dict = raw.EnumerateObject().ToDictionary(p => p.Name, p => p.Value.Clone());
-        return Revit.FailureGuard.Run(() => tool.Execute(app, new ToolArgs(dict)));
+        Revit.RunningCall.Begin("the field test", name, app.ActiveUIDocument?.Document?.Title, dict);
+        try { return Revit.FailureGuard.Run(() => tool.Execute(app, new ToolArgs(dict))); }
+        finally { Revit.RunningCall.End(); }
     }
 
     // ---- batch_run_recipe and ve_apply on a copy ------------------------------------------------------------------------
 
     private static async Task BatchAndCopy(State s)
     {
+        if (FromEarlier(s, FamilyOf("batch_run_recipe"), "batch_run_recipe")) return;
         Jobs.Report("Field test: batch_run_recipe on two copies of the test project, then ve_apply on a copy");
+        Begin(s, FamilyOf("batch_run_recipe"), "batch_run_recipe");
         var watch = Stopwatch.StartNew();
         List<Row> rows;
         // Opens and closes documents: only from the external event.
         try { rows = await App.Dispatcher.InvokeFromEventAsync(app => BatchOnRevit(app, s)).ConfigureAwait(false); }
         catch (Exception ex) { rows = [new(FamilyOf("batch_run_recipe"), "batch_run_recipe", "fail", watch.ElapsedMilliseconds, $"{ex.GetType().Name}: {ex.Message}")]; }
         s.Result.Rows.AddRange(rows);
+        End(s, "batch_run_recipe", rows.Any(r => IsFail(r.Status)) ? "fail" : "pass");
         await Task.Delay(150).ConfigureAwait(false);
     }
 
@@ -413,7 +419,15 @@ internal static partial class FieldTest
     private static async Task SelfTestRun(State s)
     {
         var family = FamilyOf("run_self_test");
+        if (FromEarlier(s, family, "run_self_test")) return;
         Jobs.Report("Field test: run_self_test (safe mode) on the test project");
+        Begin(s, family, "run_self_test");
+        try { await SelfTestSteps(s, family).ConfigureAwait(false); }
+        finally { End(s, "run_self_test", "done"); }
+    }
+
+    private static async Task SelfTestSteps(State s, string family)
+    {
         var watch = Stopwatch.StartNew();
         ToolResult start;
         try { start = await App.Dispatcher.InvokeAsync(app => Call(app, s.Registry, "run_self_test", new { mode = "safe" })).ConfigureAwait(false); }
@@ -456,6 +470,7 @@ internal static partial class FieldTest
         await Probe(s, "ribbon.registered", app => RibbonRegistered(app, s.Registry)).ConfigureAwait(false);
         await Probe(s, "brand.ribbon", app => BrandRibbon(app)).ConfigureAwait(false);
         await Probe(s, "ribbon.dialogs", _ => Dialogs(s.Registry, s.Folder)).ConfigureAwait(false);
+        await Probe(s, "ribbon.result_page", _ => ResultPage()).ConfigureAwait(false);
         await Probe(s, "settings.tabs", _ => SettingsTabs()).ConfigureAwait(false);
         await Probe(s, "favourites", _ => FavouriteRoundTrip()).ConfigureAwait(false);
         await Probe(s, "chat.history", _ => ChatHistoryRoundTrip(s.Folder)).ConfigureAwait(false);
@@ -486,7 +501,10 @@ internal static partial class FieldTest
         await Probe(s, "time.queue", app => TimeQueue(app, s)).ConfigureAwait(false);
         await Probe(s, "issue.gate", app => IssueGateProbe(app, s)).ConfigureAwait(false);
         await Probe(s, "checklist.word", app => ChecklistProbe(app, s)).ConfigureAwait(false);
+        await Probe(s, "berth.read", app => BerthStatusProbe(app, s)).ConfigureAwait(false);
+        await Probe(s, "costing.berth", app => BerthCostProbe(app, s)).ConfigureAwait(false);
         await Probe(s, "checklist.views", app => ChecklistViewsProbe(app, s)).ConfigureAwait(false);
+        await Probe(s, "subcheck.store", app => SubmissionChecklistProbe(app, s)).ConfigureAwait(false);
         await Probe(s, "checklist.fix", app => ChecklistFixProbe(app, s)).ConfigureAwait(false);
         await Probe(s, "checklist.fix_more", app => ChecklistFixMoreProbe(app, s)).ConfigureAwait(false);
         await Probe(s, "checklist.fix_standards", app => ChecklistFixStandardsProbe(app, s)).ConfigureAwait(false);
@@ -509,6 +527,8 @@ internal static partial class FieldTest
         await Probe(s, "chat.signin", () => SignIn(cli)).ConfigureAwait(false);
         await Probe(s, "chat.roundtrip", () => RoundTrip(cli, s.O.ChatRoundTrip)).ConfigureAwait(false);
         await Probe(s, "chat.shrink", ShrinkProbe).ConfigureAwait(false);
+        await Probe(s, "chat.http_mcp", ChatHttpMcp).ConfigureAwait(false);
+        await Probe(s, "chat.tools_ready", ChatToolsReady).ConfigureAwait(false);
         await ProbeCore(s, "chat.recall_run", () => RecallRun(cli, s.O.ChatRoundTrip)).ConfigureAwait(false);
         await ProbeCore(s, "brief.plan", () => BriefPlan(s)).ConfigureAwait(false);
         await ProbeCore(s, "brief.choose", () => BriefChoose(s)).ConfigureAwait(false);
@@ -519,13 +539,22 @@ internal static partial class FieldTest
         await Probe(s, "chat.models", () => Models(s.Folder)).ConfigureAwait(false);
         await Probe(s, "chat.prompts", () => Prompts(s.Folder)).ConfigureAwait(false);
         await Probe(s, "chat.notes", Notes).ConfigureAwait(false);
+        await Probe(s, "chat.jobs", _ => ParallelJobs(s.Folder)).ConfigureAwait(false);
+        await Probe(s, "chat.types", () => ChatTypesProbe(s.Folder)).ConfigureAwait(false);
+        await Probe(s, "chat.auto", ChatAutoProbe).ConfigureAwait(false);
+        await Probe(s, "chat.usage", () => UsageProbe(s.Folder)).ConfigureAwait(false);
         await Probe(s, "chat.pdf", PdfAttach).ConfigureAwait(false);
+        await Probe(s, "pdf.editor", PdfEditor).ConfigureAwait(false);
         await Probe(s, "chat.office", OfficeAttach).ConfigureAwait(false);
+        await Probe(s, "chat.documents", () => Documents(s.Folder)).ConfigureAwait(false);
         await Probe(s, "bugs.sync", () => BugSync(s.Folder)).ConfigureAwait(false);
         string? latest = null;
         await Probe(s, "update.endpoint", () => { var (row, tag) = Endpoint(); latest = tag; return row; }).ConfigureAwait(false);
         await Probe(s, "update.version", () => VersionCompare(latest)).ConfigureAwait(false);
         await Probe(s, "update.fallback", UpdateFallback).ConfigureAwait(false);
+        await Probe(s, "update.resume", UpdateResumeProbe).ConfigureAwait(false);
+        await Probe(s, "diagnostics.journal", () => JournalProbe(s.Folder)).ConfigureAwait(false);
+        await Probe(s, "diagnostics.running_call", () => RunningCallProbe(s.Folder)).ConfigureAwait(false);
         await Probe(s, "claude.msix", Msix).ConfigureAwait(false);
         await Probe(s, "diagnostics", () => Diagnostics(s.Result)).ConfigureAwait(false);
     }
@@ -541,12 +570,15 @@ internal static partial class FieldTest
     private static async Task ProbeCore(State s, string key, Func<Task<(string Status, string Message)>> run, string family = "features")
     {
         if (StoppedOrCancelled(s)) { s.Result.Rows.Add(new(family, key, "skip", 0, "not reached: " + s.Result.StoppedBecause)); return; }
+        if (FromEarlier(s, family, key)) return;
         Jobs.Report($"Field test: feature {key}");
+        Begin(s, family, key);
         var watch = Stopwatch.StartNew();
         (string Status, string Message) outcome;
         try { outcome = await run().ConfigureAwait(false); }
         catch (Exception ex) { outcome = ("fail", $"{ex.GetType().Name}: {ex.Message}"); }
         s.Result.Rows.Add(new(family, key, outcome.Status, watch.ElapsedMilliseconds, outcome.Message));
+        End(s, key, outcome.Status);
     }
 
     private static (string, string) Pass(string message) => ("pass", message);
@@ -572,11 +604,14 @@ internal static partial class FieldTest
         foreach (var panel in app.GetRibbonPanels("Sketch ProMax"))
             foreach (var item in panel.GetItems())
                 if (item is not null) Add(item);
-        var missing = declared.Where(f => !found.TryGetValue(f[2], out var i) || !i.Visible).Select(f => f[2]).ToList();
+        // Empty favourite slots are hidden by the core on purpose (FavouritesRibbon): there but not shown is right for them.
+        var emptySlots = new HashSet<string>(Enumerable.Range(FavouritesRibbon.Shown.Count + 1, Math.Max(0, Favourites.Max - FavouritesRibbon.Shown.Count)).Select(Favourites.SlotId), StringComparer.Ordinal);
+        var missing = declared.Where(f => !found.TryGetValue(f[2], out var i) || (!i.Visible && !emptySlots.Contains(f[2]))).Select(f => f[2]).ToList();
         // Live buttons (Job, Update, the favourite slots) are greyed out on purpose when there is nothing to do.
         var disabled = declared.Where(f => !f[8].Contains("live:") && found.TryGetValue(f[2], out var i) && i.Visible && !i.Enabled).Select(f => f[2]).ToList();
         var summary = $"{declared.Count - missing.Count} of {declared.Count} declared buttons, drop-downs and entries are on the Sketch ProMax tab";
-        if (missing.Count == 0 && disabled.Count == 0) return Pass(summary + ", all enabled.");
+        if (missing.Count == 0 && disabled.Count == 0)
+            return Pass(summary + ", all enabled" + (emptySlots.Count > 0 ? $" ({emptySlots.Count} empty favourite slot(s) hidden, as they should be)." : "."));
         return Fail(summary + "." + (missing.Count > 0 ? $" Missing: {string.Join(", ", missing.Take(20))}." : "") +
                     (disabled.Count > 0 ? $" Disabled: {string.Join(", ", disabled.Take(20))}." : "") +
                     (UpdateWindowsOld() ? " The loader is older than 0.30, so new buttons need a Revit restart." : ""));
@@ -591,7 +626,7 @@ internal static partial class FieldTest
         LoaderBrand.Attach(app);
         LoaderBrand.Ribbon();
         var bad = new List<string>();
-        var title = "";
+        var titles = new Dictionary<string, string>(StringComparer.Ordinal);
         void Look(Autodesk.Revit.UI.RibbonItem item)
         {
             var more = item is Autodesk.Revit.UI.RibbonButton b ? b.LongDescription : item is PulldownButton p ? p.LongDescription : "";
@@ -602,13 +637,14 @@ internal static partial class FieldTest
         foreach (var panel in app.GetRibbonPanels("Sketch ProMax"))
         {
             if (panel is null) continue;
-            if (panel.Name == "Claude") title = panel.Title;
+            titles[panel.Name] = panel.Title;
             foreach (var item in panel.GetItems())
                 if (item is not null) Look(item);
         }
-        if (title != BrandText.PanelTitle) bad.Insert(0, $"the first panel's title is \"{title}\", not \"{BrandText.PanelTitle}\"");
+        foreach (var pair in CoreRibbonManifest.PanelTitles)
+            if (titles.TryGetValue(pair.Key, out var title) && title != pair.Value) bad.Insert(0, $"the {pair.Key} panel's title is \"{title}\", not \"{pair.Value}\"");
         return bad.Count == 0
-            ? Pass($"the first panel is titled {BrandText.PanelTitle}; no button text or tooltip on the tab names the model except as a product to act on")
+            ? Pass($"the panels are titled {string.Join(" and ", CoreRibbonManifest.PanelTitles.Values)}; no button text or tooltip on the tab names the model except as a product to act on")
             : Fail(string.Join("; ", bad.Take(10)) + (bad.Count > 10 ? $" (+{bad.Count - 10} more)" : ""));
     }
 
@@ -648,6 +684,36 @@ internal static partial class FieldTest
         return problems.Count == 0
             ? Pass($"{tools.Count} option windows built; {saved}.")
             : Fail($"{tools.Count - problems.Count} of {tools.Count} option windows built. " + string.Join("; ", problems.Take(10)));
+    }
+
+    /// <summary>A tool's JSON result shows as a page (figures, chart, rows with Select in Revit), its raw text folded under it.</summary>
+    private static (string, string) ResultPage()
+    {
+        const string sample = """{"overallScore":82,"findings":149,"warningTypes":[{"warning":"Walls overlap","count":61},{"warning":"Duplicate Mark","count":38}],"sample":[{"check":"duplicates","id":1,"what":"Wall"}]}""";
+        var window = new ResultWindow("Model check", true, "Done", sample);
+        try
+        {
+            var texts = new HashSet<string>(StringComparer.Ordinal);
+            void Walk(object node)
+            {
+                switch (node)
+                {
+                    case string text: texts.Add(text); break;
+                    case System.Windows.Controls.TextBlock block: texts.Add(block.Text); break;
+                    case System.Windows.Controls.HeaderedContentControl headed when headed.Header is string header: texts.Add(header); break;
+                }
+                if (node is System.Windows.DependencyObject d)
+                    foreach (var child in System.Windows.LogicalTreeHelper.GetChildren(d)) Walk(child);
+                if (node is System.Windows.Controls.HeaderedContentControl { Header: System.Windows.DependencyObject h }) Walk(h);
+            }
+            if (window.Content is { } content) Walk(content);
+            var want = new[] { "Overall score", "82", "Warning types", "Walls overlap", "Select in Revit", "Full details (for a bug report)" };
+            var missing = want.Where(w => !texts.Contains(w)).ToList();
+            return missing.Count == 0
+                ? Pass("a model check's result shows its figures, the warnings chart, a row with Select in Revit and the folded full details")
+                : Fail("the result page is missing: " + string.Join(", ", missing));
+        }
+        finally { window.Close(); }
     }
 
     /// <summary>
@@ -795,6 +861,113 @@ internal static partial class FieldTest
         return code == 0 && output.IndexOf("OK", StringComparison.OrdinalIgnoreCase) >= 0
             ? Pass("one short message answered: " + Short(output.Trim(), 120))
             : Fail($"no answer (exit {code}): {Short(output.Trim(), 300)}");
+    }
+
+    /// <summary>
+    /// The chat's connection inside Revit, without the plan: a server of its own on a free port of 127.0.0.1 answers
+    /// initialize, lists the Revit tools (with the connector's own: models, jobs, read_pdf_part) and runs list_revit_models
+    /// over real HTTP with its token, turns away a request without it, and the chat's config names the running one.
+    /// </summary>
+    private static (string, string) ChatHttpMcp()
+    {
+        if (App.Bridge is not { } bridge) return Fail("the bridge isn't running");
+        var problems = new List<string>();
+        using var server = ChatMcp.Create(bridge);
+        server.Start();
+        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(60) };
+        (System.Net.HttpStatusCode Status, string Body, string? Session) Post(string body, bool token = true, string? session = null)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, server.Url) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
+            request.Headers.TryAddWithoutValidation("Accept", "application/json, text/event-stream");
+            if (token) request.Headers.TryAddWithoutValidation("Authorization", "Bearer " + server.Token);
+            if (session is not null) request.Headers.TryAddWithoutValidation("Mcp-Session-Id", session);
+            using var answer = http.SendAsync(request).GetAwaiter().GetResult();
+            var text = answer.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+            // A tool call comes as an event stream: its answer is the last data line.
+            if (answer.Content.Headers.ContentType?.MediaType == "text/event-stream")
+                text = text.Split('\n').LastOrDefault(l => l.StartsWith("data: ", StringComparison.Ordinal))?.Substring(6) ?? "";
+            return (answer.StatusCode, text, answer.Headers.TryGetValues("Mcp-Session-Id", out var ids) ? ids.FirstOrDefault() : null);
+        }
+        const string init = """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"field-test","version":"1"}}}""";
+        if (Post(init, token: false).Status != System.Net.HttpStatusCode.Unauthorized) problems.Add("a request without the token wasn't turned away (401)");
+        var started = Post(init);
+        string? session = null;
+        if (started.Status != System.Net.HttpStatusCode.OK || started.Session is null) problems.Add($"initialize answered {(int)started.Status}");
+        else
+        {
+            session = started.Session;
+            using var doc = JsonDocument.Parse(started.Body);
+            if (doc.RootElement.GetProperty("result").GetProperty("protocolVersion").GetString() != "2025-06-18") problems.Add("the protocol version wasn't agreed");
+        }
+        var tools = 0;
+        var listed = Post("""{"jsonrpc":"2.0","id":2,"method":"tools/list"}""", session: session);
+        if (listed.Status == System.Net.HttpStatusCode.OK)
+        {
+            using var doc = JsonDocument.Parse(listed.Body);
+            var names = doc.RootElement.GetProperty("result").GetProperty("tools").EnumerateArray().Select(t => t.GetProperty("name").GetString()).ToList();
+            tools = names.Count;
+            foreach (var needed in new[] { "list_revit_models", "use_revit_model", "wait_for_job", PdfPartReader.ToolName, ChatJobsTool.ToolName })
+                if (!names.Contains(needed)) problems.Add($"tools/list lacks {needed}");
+            if (names.Count < bridge.Registry.All.Count) problems.Add($"tools/list has {names.Count} tools, fewer than the {bridge.Registry.All.Count} registered");
+        }
+        else problems.Add($"tools/list answered {(int)listed.Status}");
+        var called = Post("""{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_revit_models","arguments":{}}}""", session: session);
+        var models = "";
+        try
+        {
+            using var doc = JsonDocument.Parse(called.Body);
+            var result = doc.RootElement.GetProperty("result");
+            models = result.GetProperty("content")[0].GetProperty("text").GetString() ?? "";
+            if (!models.Contains("Revit " + App.RevitYear)) problems.Add("list_revit_models didn't find this Revit window: " + models);
+        }
+        catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException or IndexOutOfRangeException) { problems.Add("tools/call answered " + called.Body); }
+        var live = ChatMcp.Current;
+        if (live is null) problems.Add("the chat's own connection isn't running (" + (ChatMcp.StartError ?? "not started") + "), so the chat uses the connector program");
+        else if (ClaudeCli.McpServer("1", null, "sonnet", "abcdefabcdef") is not { } entry || entry["type"]?.ToString() != "http" || entry["url"]?.ToString() != live.Url
+                 || entry["headers"]?[McpHttpServer.JobHeader]?.ToString() != "abcdefabcdef" || (int?)entry["timeout"] < (int)BridgeServer.TurnWait.TotalMilliseconds)
+            problems.Add("a job's MCP config doesn't name the running connection with its job, or lets a call wait less than its turn may take");
+        return problems.Count == 0
+            ? Pass($"a server on 127.0.0.1:{server.Port} answered initialize, listed {tools} tools and ran list_revit_models with the token, and turned a request without it away; " +
+                   $"the chat's own connection runs at {live!.Url} (no helper program, no plan use)")
+            : Fail(string.Join("; ", problems));
+    }
+
+    /// <summary>
+    /// Bug log row 40: a new chat process (a new chat, or the model and effort a brief picked) sent its first message
+    /// before Claude Code had the Revit tools, so the first call failed with "No such tool available". The chat's
+    /// connection remembers who was sent the tool list and when; ChatEngine waits for it. A real HTTP round trip on a
+    /// server of its own, as a main chat and as a job.
+    /// </summary>
+    private static (string, string) ChatToolsReady()
+    {
+        if (App.Bridge is not { } bridge) return Fail("the bridge isn't running");
+        var problems = new List<string>();
+        using var server = ChatMcp.Create(bridge);
+        server.Start();
+        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(60) };
+        void Post(string body, string? job)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, server.Url) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
+            request.Headers.TryAddWithoutValidation("Accept", "application/json, text/event-stream");
+            request.Headers.TryAddWithoutValidation("Authorization", "Bearer " + server.Token);
+            if (job is not null) request.Headers.TryAddWithoutValidation(McpHttpServer.JobHeader, job);
+            using var answer = http.SendAsync(request).GetAwaiter().GetResult();
+            if (!answer.IsSuccessStatusCode) problems.Add($"{body.Substring(0, Math.Min(60, body.Length))} answered {(int)answer.StatusCode}");
+        }
+        var start = DateTime.UtcNow;
+        if (server.ToolsListedSince(null, start)) problems.Add("the main chat counted as having its tools before it asked");
+        Post("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"field-test","version":"1"}}}""", null);
+        if (server.ToolsListedSince(null, start)) problems.Add("initialize alone counted as the tool list");
+        Post("""{"jsonrpc":"2.0","id":2,"method":"tools/list"}""", null);
+        if (!server.ToolsListedSince(null, start)) problems.Add("the main chat's tool list wasn't remembered");
+        if (server.ToolsListedSince("abcdefabcdef", start)) problems.Add("a job counted as having its tools from the main chat's list");
+        Post("""{"jsonrpc":"2.0","id":3,"method":"tools/list"}""", "abcdefabcdef");
+        if (!server.ToolsListedSince("abcdefabcdef", start)) problems.Add("a job's tool list wasn't remembered");
+        if (server.ToolsListedSince(null, DateTime.UtcNow.AddMinutes(1))) problems.Add("an earlier tool list counted for a process started later");
+        if (Chat.ChatEngine.ToolsWaitUseless) problems.Add("a chat process in this Revit session didn't get its tools within 15 s, so new ones no longer wait (Claude Code may connect only once a message arrives)");
+        return problems.Count == 0
+            ? Pass("the tool list sent to the main chat and to a job is remembered for each, from that moment, so a new chat process waits for its Revit tools before its first message")
+            : Fail(string.Join("; ", problems));
     }
 
     /// <summary>
@@ -994,6 +1167,226 @@ internal static partial class FieldTest
             : Fail("a note written was not read back");
     }
 
+    /// <summary>
+    /// The chat's parallel jobs without starting one (no plan use): opening and routing, the limit, the queue changes take
+    /// turns in, the report, saving with the chat and sessions.json, and a card. On Revit's thread for the card.
+    /// </summary>
+    private static (string, string) ParallelJobs(string folder)
+    {
+        var problems = new List<string>();
+        var now = DateTime.UtcNow;
+        var conv = new Conversation { Key = "field test", Title = "Field test", Id = "fieldtestjobs" };
+        var board = new JobBoard(conv.Jobs);
+        var sheets = board.Start("Sheets for levels 1-5", "Create a sheet for each of levels 1 to 5 with its plan.", now, false, out _);
+        var walls = board.Start("Wall warnings", "Check the walls for warnings and list them.", now.AddSeconds(1), false, out _);
+        var views = board.Start("Section views", "Make a section through each core.", now.AddSeconds(2), false, out _);
+        if (sheets is null || walls is null || views is null) return Fail("three separate jobs weren't all opened");
+        if (board.Start("More sheets", "also add level 6", now, false, out var similar) is not null || similar?.Number != sheets.Number)
+            problems.Add("\"also add level 6\" wasn't routed to the sheets job");
+        if (JobRouting.Best(conv.Jobs, "check the roof drainage") is { } wrong) problems.Add($"an unrelated request was routed to job {wrong.Number}");
+        var first = board.ToStart(2, now);
+        if (first.Count != 2 || first[0].Job != sheets || board.ActiveCount != 2) problems.Add($"the limit of 2 started {first.Count} job(s)");
+        if (!first[0].Message.Text.Contains("level")) problems.Add("a new job's first message doesn't carry its task");
+        // The job's own chat: the task from the coordinator, then a message the user typed in the job's view, with a file.
+        var picture = Path.Combine(folder, "job-view.png");
+        File.WriteAllBytes(picture, [0x89, 0x50, 0x4E, 0x47]);
+        if (board.Message(sheets.Number, "also add level 6", now, fromUser: true, [picture]) != JobBoard.Delivery.Queued) problems.Add("a message to a running job wasn't queued");
+        var view = board.ItemsOf(sheets.Number);
+        if (view.Count != 2 || view[0].State != JobBoard.FromCoordinator || view[1].Kind != "user" || view[1].State == JobBoard.FromCoordinator || view[1].Files.FirstOrDefault() != picture)
+            problems.Add("the job's own chat doesn't show the coordinator's task and then the user's message with its file");
+        if (board.RunEnded(sheets, true, "Made 5 sheets.", now) is not { } next || !next.Text.StartsWith(JobBoard.UserSays + "also add level 6", StringComparison.Ordinal) || next.Files.FirstOrDefault() != picture)
+            problems.Add("a running job didn't carry on with the user's message (and its file) sent meanwhile");
+        board.RunEnded(sheets, true, "Made 6 sheets, A-101 to A-106.", now);
+        if (sheets.State != JobBoard.Done || board.ToStart(2, now).FirstOrDefault().Job != views) problems.Add("the next job didn't start when one ended");
+        if (board.Stop(walls.Number, now) != JobBoard.Running || walls.State != JobBoard.Stopped) problems.Add("Stop didn't stop a running job");
+        var report = JobBoard.Report([sheets], 1);
+        if (!report.Contains("Job 1") || !report.Contains("A-101") || !report.Contains("not typed by the user")) problems.Add("the report for the main chat is missing the job or its summary");
+
+        var turns = new JobTurns();
+        var a = turns.Enter(sheets.Key, "create_sheets");
+        var b = turns.Enter(views.Key, "create_section_views");
+        if (turns.Position(a) != 1 || turns.Position(b) != 2 || turns.WaitAsync(b, TimeSpan.FromMilliseconds(50), CancellationToken.None).Result)
+            problems.Add("the second change didn't wait behind the first");
+        var c = turns.Enter(views.Key, "create_section_views");
+        turns.Leave(a);
+        if (!turns.WaitAsync(c, TimeSpan.FromSeconds(1), CancellationToken.None).Result) problems.Add("the next change didn't get its turn when the first ended");
+        turns.Leave(c);
+
+        var jobsFolder = Path.Combine(folder, "jobs");
+        JobSessions.Set(jobsFolder, sheets.Key, "11111111-2222-3333-4444-555555555555");
+        var back = JsonSerializer.Deserialize<Conversation>(JsonSerializer.Serialize(conv))!;
+        var reloaded = new JobBoard(back.Jobs);
+        reloaded.AfterReload(now);
+        if (back.Jobs.Count != 3 || reloaded.Find(views.Number)?.State != JobBoard.Stopped || reloaded.Find(sheets.Number)?.Summary != sheets.Summary
+            || JobSessions.Get(jobsFolder, sheets.Key) != "11111111-2222-3333-4444-555555555555")
+            problems.Add("the jobs or their sessions weren't read back as saved (running ones stopped)");
+
+        var card = new ParallelJobCard(sheets.Number);
+        card.Render(board.Snapshot()[0], now, 3);
+        if (card.Headline != "Job 1 · Sheets for levels 1-5" || card.StateShown != "Done" || !BrandText.Clean(card.Headline + " " + card.StateShown))
+            problems.Add($"the card says \"{card.Headline}\", \"{card.StateShown}\"");
+        var opened = 0;
+        card.Opened += n => opened = n;
+        card.PressOpen();
+        if (opened != sheets.Number) problems.Add("Open job on the card doesn't ask for that job's view");
+        sheets.Model = "sonnet";
+        sheets.Effort = "medium";
+        card.Render(sheets, now, 3);
+        if (card.RunsOnShown != "Sonnet, medium effort" || !BrandText.Clean(card.RunsOnShown)) problems.Add($"the card says it runs on \"{card.RunsOnShown}\"");
+        // A job saved before 0.34.33 (detail lines) opens with them as its chat.
+        var old = new ChatJob { Number = 9, Key = "oldjob000001", Title = "Old", Task = "t", Log = [new JobLine { Kind = "you", Text = "t" }, new JobLine { Kind = "text", Text = "Done it." }] };
+        _ = new JobBoard([old]);
+        if (old.Log is not null || old.Items.Count != 2 || old.Items[1].Kind != "assistant") problems.Add("a job saved before its own chat existed didn't get its lines as chat items");
+        return problems.Count == 0
+            ? Pass("3 jobs opened, a follow-up routed to its job, 2 ran at once and the third started when one ended, changes took turns, a job's own chat holds the coordinator's task and the user's message with its file, Open job asks for its view, the card shows its model and effort, the report and the saved jobs read back (temporary folder)")
+            : Fail(string.Join("; ", problems));
+    }
+
+    /// <summary>
+    /// Chat types without a plan run: a new chat takes the Settings' default type, a chat saved before types is a Simple
+    /// chat unless it has jobs, the type is saved and read back, the switch is refused while jobs are open, and a Simple
+    /// chat's Claude Code gets neither chat_jobs nor the coordinator's instructions (a chat With coordinator gets both).
+    /// </summary>
+    private static (string, string) ChatTypesProbe(string folder)
+    {
+        var problems = new List<string>();
+        var before = Chat.ChatStore.NewType;
+        try
+        {
+            Chat.ChatStore.NewType = Chat.ChatTypes.Simple;
+            if (Chat.ChatStore.New("k", "t").Type != Chat.ChatTypes.Simple) problems.Add("a new chat didn't take the default type");
+            if (Chat.ChatStore.New("k", "t", Chat.ChatTypes.Coordinator).Type != Chat.ChatTypes.Coordinator) problems.Add("New chat with coordinator didn't make one");
+        }
+        finally { Chat.ChatStore.NewType = before; }
+        var legacy = JsonSerializer.Deserialize<Conversation>("""{"Key":"k","Items":[]}""")!;
+        var legacyJobs = JsonSerializer.Deserialize<Conversation>("""{"Key":"k","Items":[],"Jobs":[{"Number":1,"Key":"abcdefabcdef","Title":"x"}]}""")!;
+        if (Chat.ChatTypes.Of(legacy) != Chat.ChatTypes.Simple || Chat.ChatTypes.Of(legacyJobs) != Chat.ChatTypes.Coordinator)
+            problems.Add("chats saved before types don't default to Simple (or With coordinator when they have jobs)");
+        var typed = new Conversation { Key = "k", Type = Chat.ChatTypes.Simple };
+        if (Chat.ChatTypes.Of(JsonSerializer.Deserialize<Conversation>(JsonSerializer.Serialize(typed))!) != Chat.ChatTypes.Simple) problems.Add("the type isn't saved with the chat");
+        if (Chat.ChatTypes.WhyNotSwitch(jobsOpen: true, answering: false) is null || Chat.ChatTypes.WhyNotSwitch(false, false) is not null)
+            problems.Add("switching the type isn't refused only while jobs are open");
+        var install = new Chat.ClaudeCli.Install("claude.exe", "0.0.0");
+        var jobsTool = "mcp__" + Chat.ClaudeCli.ServerName + "__" + ChatJobsTool.ToolName;
+        string Args(System.Diagnostics.ProcessStartInfo i) => i.Arguments;
+        string PromptOf(string args)
+        {
+            var m = System.Text.RegularExpressions.Regex.Match(args, @"--append-system-prompt-file ""?([^""]+?\.md)""?(\s|$)");
+            return m.Success && File.Exists(m.Groups[1].Value) ? File.ReadAllText(m.Groups[1].Value) : "";
+        }
+        var simpleArgs = Args(Chat.ClaudeCli.EngineStart(install, null, "haiku", coordinator: false, effort: "low"));
+        var simplePrompt = PromptOf(simpleArgs);
+        var deniedSimple = System.Text.RegularExpressions.Regex.Match(simpleArgs, @"--disallowedTools ""?([^""\s]+)").Groups[1].Value;
+        if (!deniedSimple.Contains(jobsTool) || simplePrompt.Contains("chat_jobs") || !simplePrompt.Contains("simple chat"))
+            problems.Add("a Simple chat still gets chat_jobs or the coordinator's instructions");
+        if (!simpleArgs.Contains("--effort low") || !simpleArgs.Contains("--model haiku")) problems.Add("the chat's model and effort aren't passed to Claude Code");
+        var coordArgs = Args(Chat.ClaudeCli.EngineStart(install, null, "sonnet", coordinator: true));
+        var coordPrompt = PromptOf(coordArgs);
+        if (Chat.ClaudeCli.JobsAvailable && (System.Text.RegularExpressions.Regex.Match(coordArgs, @"--disallowedTools ""?([^""\s]+)").Groups[1].Value.Contains(jobsTool) || !coordPrompt.Contains("chat_jobs")))
+            problems.Add("a chat With coordinator doesn't get chat_jobs and its instructions");
+        if (!Chat.ChatTypes.All.Select(Chat.ChatTypes.Label).All(BrandText.Clean)) problems.Add("a type's name isn't Sketch ProMax wording");
+        return problems.Count == 0
+            ? Pass("new chats take the default type, older chats are Simple unless they have jobs, the type is saved, switching waits for open jobs, and a Simple chat gets no chat_jobs or coordinator instructions (no plan use)")
+            : Fail(string.Join("; ", problems));
+    }
+
+    /// <summary>
+    /// Automatic model and effort without a plan run: requests are sorted into simple, everyday and hard work, Automatic
+    /// gives each its model and effort, a model or effort picked by hand sticks (also for new jobs), a refused model is
+    /// skipped, and an older Claude Code's refusal of --effort is recognised.
+    /// </summary>
+    private static (string, string) ChatAutoProbe()
+    {
+        var problems = new List<string>();
+        void Kind(string text, string kind)
+        {
+            var got = Chat.ChatAuto.Classify(text).Kind;
+            if (got != kind) problems.Add($"\"{text}\" was sorted as {got}, not {kind}");
+        }
+        Kind("rename the level 2 views to the new standard", Chat.ChatAuto.Simple);
+        Kind("tag all the beams in this view", Chat.ChatAuto.Simple);
+        Kind("make sheets for levels 1 to 5 with their plans", Chat.ChatAuto.Everyday);
+        Kind("check the model against the BEP and list what doesn't comply", Chat.ChatAuto.Hard);
+        Kind("go through the redlines on this drawing and apply them", Chat.ChatAuto.Hard);
+        var auto = Chat.ChatAuto.Pick("rename the views", "auto", "auto");
+        if (auto.Model != "haiku" || auto.Effort != "low" || !auto.ModelAuto) problems.Add($"Automatic picked {auto.Label} for simple work");
+        var hard = Chat.ChatAuto.Pick("compare the spec with the model", "", "");
+        if (hard.Model != "opus" || hard.Effort != "high") problems.Add($"Automatic picked {hard.Label} for hard reasoning");
+        var stuck = Chat.ChatAuto.Pick("rename the views", "opus", "xhigh");
+        if (stuck.Model != "opus" || stuck.Effort != "xhigh" || stuck.ModelAuto || stuck.EffortAuto) problems.Add("a model and effort picked by hand didn't stick");
+        var job = new ChatJob { Title = "Tags", Task = "tag the doors" };
+        var (models, efforts) = (new Dictionary<string, string> { ["simple"] = "sonnet" }, new Dictionary<string, string>());
+        var edited = Chat.ChatAuto.Pick(job.Task, "auto", "auto", models, efforts);
+        if (edited.Model != "sonnet" || edited.Effort != "low") problems.Add("the Settings' model for a kind of work isn't used");
+        var skip = Chat.ChatAuto.Pick("compare the spec", "auto", "auto", refused: ["opus"]);
+        if (skip.Model == "opus") problems.Add("a model the plan refused was picked again");
+        if (Chat.ChatAuto.Pick("x", "auto", "auto", kind: "hard").Model != "opus") problems.Add("the coordinator's kind for a job isn't used");
+        if (!Chat.ChatAuto.IsEffortRefusal("error: unknown option '--effort'") || Chat.ChatAuto.IsEffortRefusal("Warning: Unknown --effort value 'x' — ignoring it"))
+            problems.Add("an older Claude Code's refusal of --effort isn't recognised (or a warning is taken for one)");
+        if (Chat.ChatModels.All.Any(m => m.Id.Contains('-'))) problems.Add("a model is a fixed version, not Claude Code's alias");
+        var said = Chat.ChatAuto.Said(auto);
+        if (!BrandText.Clean(said) || !said.Contains("Haiku")) problems.Add($"the chat's line says \"{said}\"");
+        return problems.Count == 0
+            ? Pass($"requests sorted into simple, everyday and hard work; Automatic picks Haiku/low, Sonnet/medium and Opus/high by default; a hand-picked model and effort stick; the chat says \"{said}\" (no plan use)")
+            : Fail(string.Join("; ", problems));
+    }
+
+    /// <summary>
+    /// The plan's usage meter without a plan run: a rate_limit_event line as Claude Code writes it is read into the
+    /// 5-hour and weekly limits (and a per-model weekly limit named as the one in force), later reports merge, the meter and
+    /// reset words, a limit that reset shows no figure, the 80 % warning comes once per limit and reset (again when
+    /// reached) and names the running jobs, and the last report is kept on disk.
+    /// </summary>
+    private static (string, string) UsageProbe(string folder)
+    {
+        var problems = new List<string>();
+        var now = DateTimeOffset.FromUnixTimeSeconds(1792600000);
+        var line = """{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","resetsAt":1792614600,"rateLimitType":"five_hour","overageStatus":"allowed","isUsingOverage":false,"unifiedWindows":{"five_hour":{"utilization":0.43,"resetsAt":1792614600},"seven_day":{"utilization":0.05,"resetsAt":1793192400}}},"uuid":"u","session_id":"s"}""";
+        var parsed = new StreamParser().ParseLine(line).OfType<UsageEvent>().SingleOrDefault()?.Usage;
+        if (parsed is null || parsed.Windows.Count != 2 || parsed.Windows[0].Key != PlanUsage.FiveHour || parsed.Windows[0].Used != 0.43 || parsed.Windows[1].Key != PlanUsage.Weekly)
+            return Fail("Claude Code's rate_limit_event line wasn't read into the 5-hour and weekly limits");
+        if (parsed.Meter(now) != "5h 43%, 4h 3m left · Week 5%") problems.Add($"the meter says \"{parsed.Meter(now)}\"");
+        if (PlanUsage.ResetText(parsed.Windows[0], now, TimeZoneInfo.Utc) != "Resets in 4 h 3 min (20:30)") problems.Add("the reset reads " + PlanUsage.ResetText(parsed.Windows[0], now, TimeZoneInfo.Utc));
+        var opus = PlanUsage.ParseLine("""{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","resetsAt":1793192400,"rateLimitType":"seven_day_opus","utilization":0.81}}""", now.AddMinutes(5))!;
+        var merged = PlanUsage.Merge(parsed, opus);
+        if (merged.Windows.Select(w => w.Key).SequenceEqual([PlanUsage.FiveHour, PlanUsage.Weekly, PlanUsage.WeeklyOpus]) is false || merged.Status != "allowed_warning")
+            problems.Add("a later report naming the weekly Opus limit wasn't merged with the earlier figures");
+        var warned = new HashSet<string>();
+        var first = merged.NewWarnings(warned, now);
+        var again = merged.NewWarnings(warned, now);
+        var text = PlanUsage.Warning(first, ["Job 2 · Sheets"], now, TimeZoneInfo.Utc);
+        if (first.Count != 1 || first[0].Window.Key != PlanUsage.WeeklyOpus || again.Count != 0 || !text.Contains("Weekly limit, Opus: 81% used") || !text.Contains("Running now: Job 2 · Sheets"))
+            problems.Add("the 80 % warning didn't come once, naming the limit and the running jobs: " + text);
+        var full = PlanUsage.Merge(merged, PlanUsage.ParseLine("""{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","rateLimitType":"seven_day_opus","utilization":1.0,"resetsAt":1793192400}}""", now)!);
+        if (full.NewWarnings(warned, now) is not [{ Reached: true }]) problems.Add("reaching a limit already warned at 80 % wasn't said");
+        if (PlanUsage.Current(parsed.Windows[0], now.AddHours(5)) is not null || !parsed.Meter(now.AddHours(5)).StartsWith("5h reset")) problems.Add("a limit that reset still shows its old figure");
+        var none = PlanUsage.ParseLine("""{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","rateLimitType":"five_hour","resetsAt":1792614600}}""", now)!;
+        if (none.Windows[0].Used is not null || !none.Meter(now).StartsWith("5h —")) problems.Add("a report without a figure got one");
+        var store = Path.Combine(folder, "usage-test");
+        merged.Save(store);
+        if (PlanUsage.Load(store) is not { } back || back.Meter(now) != merged.Meter(now) || back.Windows.Count != 3) problems.Add("the last report wasn't kept on disk");
+        if (!BrandText.Clean(string.Join(" ", merged.Windows.Select(w => PlanUsage.Label(w.Key))) + " " + text)) problems.Add("the usage words aren't Sketch ProMax wording");
+        return problems.Count == 0
+            ? Pass($"Claude Code's rate_limit_event read as \"{parsed.Meter(now)}\", a weekly Opus limit merged in, the 80 % warning once and again when reached, reset limits without a figure, kept on disk (no plan use)")
+            : Fail(string.Join("; ", problems));
+    }
+
+    /// <summary>The PDF editor's engine on sample PDFs (PdfEditCheck, the same checks as the unit tests), with the window built.</summary>
+    private static (string, string) PdfEditor()
+    {
+        var problems = new List<string>();
+        var passed = 0;
+        var folder = Path.Combine(Path.GetTempPath(), "SketchProMax-field-pdfedit-" + Guid.NewGuid().ToString("N"));
+        try { PdfEditCheck.Run(folder, (name, ok, detail) => { if (ok) passed++; else problems.Add(name + (detail.Length > 0 ? ": " + detail : "")); }); }
+        catch (Exception ex) when (ex is not OutOfMemoryException) { problems.Add($"{ex.GetType().Name}: {ex.Message}"); }
+        finally { try { Directory.Delete(folder, true); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { } }
+        // The window (its page tile style is XAML read at run time): built on Revit's thread and closed unseen.
+        try { App.Dispatcher.InvokeAsync(_ => { UI.PdfEditorWindow.ForTest().Close(); return 0; }).GetAwaiter().GetResult(); }
+        catch (Exception ex) when (ex is not OutOfMemoryException) { problems.Add($"the window couldn't be built: {ex.GetType().Name}: {ex.Message}"); }
+        return problems.Count == 0 ? Pass($"{passed} checks and the window: open, draw, insert, delete, turn, move, replace, blank page, undo, extract, save with backup, three splits, refusals")
+            : Fail(string.Join("; ", problems));
+    }
+
     private static (string, string) PdfAttach()
     {
         var problems = new List<string>();
@@ -1040,6 +1433,58 @@ internal static partial class FieldTest
         var book = Chat.OfficeText.Read(Chat.OfficeText.SampleWorkbook(), ".xlsx").Text;
         if (!book.Contains("| 2 | P-01 | 0.3 | 2025-01-01 | 85% |") || !book.Contains("Notes (hidden)")) problems.Add("the Excel text is wrong: " + book);
         return problems.Count == 0 ? Pass("Word text (headings, bullets, table rows, no deleted text), PowerPoint slides in order and Excel sheets as tables are read") : Fail(string.Join("; ", problems));
+    }
+
+    /// <summary>make_document: each kind of file is written to a temporary folder and read back; nothing is replaced.</summary>
+    private static (string, string) Documents(string folder)
+    {
+        var dir = Path.Combine(folder, "documents-" + Guid.NewGuid().ToString("N").Substring(0, 8));
+        var problems = new List<string>();
+        string? Make(string json)
+        {
+            var args = new ToolArgs(System.Text.Json.JsonDocument.Parse(json).RootElement.EnumerateObject().ToDictionary(p => p.Name, p => p.Value.Clone()));
+            var result = MakeDocumentTool.Make(args, dir);
+            if (result.IsError) { problems.Add(result.Text); return null; }
+            var files = Chat.ChatFiles.Find(result.Text);
+            if (files.Count != 1) { problems.Add("the chat doesn't find the file in the result: " + result.Text); return null; }
+            return files[0];
+        }
+        try
+        {
+            var bill = """{"format":"excel","title":"Field test bill","sheets":[{"name":"Bill","title":"Concrete","columns":["Item","Qty","Rate","Amount"],"rows":[["Columns C40",12.5,950,"=B4*C4"],{"cells":["Total",null,null,"=SUM(D4:D4)"],"bold":true}]}]}""";
+            if (Make(bill) is { } xlsx)
+            {
+                var rows = Xlsx.Read(xlsx);
+                if (rows.Count < 4 || rows[0][0] != "Concrete" || rows[1][1] != "Qty" || rows[2][1] != "12.5" || rows[3][0] != "Total") problems.Add("the workbook reads back wrong: " + string.Join(" / ", rows.Select(r => string.Join(",", r))));
+                using var zip = System.IO.Compression.ZipFile.OpenRead(xlsx);
+                using var reader = new StreamReader(zip.GetEntry("xl/worksheets/sheet1.xml")!.Open());
+                if (!reader.ReadToEnd().Contains("<f>B4*C4</f>")) problems.Add("the workbook has no formula for the amount");
+                if (Make(bill) is { } second && !Path.GetFileName(second).Equals("Field test bill (2).xlsx", StringComparison.Ordinal)) problems.Add("a second file of the same name is " + Path.GetFileName(second));
+            }
+            if (Make("""{"format":"word","title":"Field test report","content":"# Concrete\n\n- Columns: **C40**\n\n| Element | Grade |\n|---|---|\n| Columns | C40 |"}""") is { } docx)
+            {
+                var text = Chat.OfficeText.Read(File.ReadAllBytes(docx), word: true).Text;
+                if (!text.Contains("Concrete") || !text.Contains("| Columns | C40 |")) problems.Add("the Word document reads back wrong: " + text);
+            }
+            var rowsJson = string.Join(",", Enumerable.Range(1, 20).Select(i => $"[\"Pile {i}\",\"{i * 2}\"]"));
+            if (Make("""{"format":"powerpoint","title":"Field test deck","slides":[{"title":"Scope","bullets":["Piles","  Bored"]},{"title":"Piles","table":{"columns":["Pile","Load"],"rows":[""" + rowsJson + "]}}]}") is { } pptx)
+            {
+                var text = Chat.OfficeText.Read(File.ReadAllBytes(pptx), word: false).Text;
+                if (!text.Contains("=== Slide 4 of 4 ===") || !text.Contains("Scope") || !text.Contains("Piles (continued)")) problems.Add("the presentation reads back wrong: " + text);
+            }
+            if (Make("""{"format":"pdf","title":"Field test PDF","content":"# Concrete\n\nColumns are C40.\n\n[page break]\n\n## Piles\n\n| Pile | Load |\n|---|---:|\n| P1 | 1,200 |"}""") is { } pdf)
+            {
+                var check = Chat.PdfAttachment.Assess(File.ReadAllBytes(pdf));
+                if (check.Verdict != Chat.PdfAttachment.Verdict.Send || check.Pages != 2) problems.Add($"the PDF is {check.Verdict} with {check.Pages} pages (expected 2 to send)");
+            }
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        }
+        return problems.Count == 0
+            ? Pass("an Excel workbook (title, header, a number, the amount's formula, a bold total), a Word document, a 4-slide presentation (a long table carried over) and a 2-page PDF are made and read back; a second file of the same name gets (2); the chat finds each file for its card")
+            : Fail(string.Join("; ", problems));
     }
 
     // ---- Bug log, updates, the Claude app
@@ -1143,11 +1588,16 @@ internal static partial class FieldTest
     {
         var tool = registry.Find(name) ?? throw new InvalidOperationException($"{name} is not in the registry");
         var dict = JsonSerializer.SerializeToElement(args).EnumerateObject().ToDictionary(p => p.Name, p => p.Value.Clone());
-        return Revit.FailureGuard.Run(() =>
+        Revit.RunningCall.Begin("the field test", name, app.ActiveUIDocument?.Document?.Title, dict);
+        try
         {
-            try { return tool.Execute(app, new ToolArgs(dict)); }
-            catch (ManualStepException manual) { return Handoff.FromException(tool, app, new ToolArgs(dict), manual); }
-        });
+            return Revit.FailureGuard.Run(() =>
+            {
+                try { return tool.Execute(app, new ToolArgs(dict)); }
+                catch (ManualStepException manual) { return Handoff.FromException(tool, app, new ToolArgs(dict), manual); }
+            });
+        }
+        finally { Revit.RunningCall.End(); }
     }
 
     /// <summary>The result's "handoff" section, one (choice, done) per step; null when it has none.</summary>
@@ -1350,16 +1800,18 @@ internal static partial class FieldTest
             CopyDimensionsTool.CutEdgeForTest = dim => dim.Id == d.Dim.Id;
             var asked = 0;
             Handoff.TestResponder = (_, _) => { asked++; return HandoffChoice.Stop; };
+            // Detail lines have no Comments parameter in every Revit version, so the stand-in's lines are the ones it made.
+            int DetailLines() => new FilteredElementCollector(doc, target.Id).OfClass(typeof(CurveElement)).OfType<DetailCurve>().Count();
+            var linesBefore = DetailLines();
             var result = Call(app, s.Registry, "copy_dimensions",
                 new { source_view_id = d.Plan.Id.Value, target_view_ids = new[] { target.Id.Value }, dimension_ids = new[] { d.Dim.Id.Value }, static_fallback = true });
-            var lines = new FilteredElementCollector(doc, target.Id).OfClass(typeof(CurveElement)).OfType<DetailCurve>()
-                .Count(c => c.get_Parameter(BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS)?.AsString() == StaticDimensionText.Comment);
+            var lines = DetailLines() - linesBefore;
             var texts = new FilteredElementCollector(doc, target.Id).OfClass(typeof(TextNote)).Cast<TextNote>().Select(n => n.Text ?? "").ToList();
             var values = texts.Count(t => t.Contains("(static)"));
             var labelled = texts.Any(t => t.Contains("not a live dimension"));
             var problems = new List<string>();
             if (result.IsError) problems.Add("copy_dimensions failed: " + Short(result.Text, 300));
-            if (lines == 0) problems.Add("no detail line marked as a static stand-in in the target view");
+            if (lines < 3) problems.Add($"{lines} detail line(s) drawn in the target view, not the line and its two ticks");
             if (values == 0) problems.Add("no \"(static)\" value note in the target view");
             if (!labelled) problems.Add("no note saying it is not a live dimension");
             if (asked > 0) problems.Add("it handed the dimension over instead of drawing a stand-in");
@@ -1861,6 +2313,143 @@ internal static partial class FieldTest
     /// The pre-submission checklist on the test project: the hints for three checks the model can answer, then the Word
     /// file signed (everything Y or NA) and not ready (one N), opened again as a package to check what is in it.
     /// </summary>
+    /// <summary>Berth status: a whole-model berth read step by step, a berth whose scope box is missing, and its Excel.</summary>
+    private static (string, string) BerthStatusProbe(UIApplication app, State s)
+    {
+        if (TestDoc(app, s, out var why) is not { } doc) return Fail(why);
+        var problems = new List<string>();
+        var model = new BerthStatusMath.Model("Test", doc.Title);
+        var setup = new BerthStatusMath.Setup
+        {
+            Models = [model],
+            Berths = [new("Test", "Whole", BerthStatusMath.FindBy.WholeModel), new("Test", "Missing box", BerthStatusMath.FindBy.ScopeBox, "No such scope box")],
+            Submissions = [new("Test", "", "Field test submission", DateTime.Today.AddDays(7))],
+            Planned = [new("Test", "Whole", "Drawings", 3)],
+            Deliverables = [new("Calculations")],
+        };
+        var reading = BerthStatusFacts.Plan(doc, setup, model);
+        var steps = 0;
+        while (reading.Next()) steps++;
+        if (steps < reading.Total) problems.Add($"only {steps} steps for {reading.Total} parts");
+        var whole = reading.Results[setup.Berths[0].Key];
+        foreach (var area in new[] { BerthStatusMath.CategoryData, BerthStatusMath.Clashes, BerthStatusMath.Coordination, BerthStatusMath.Drawings, BerthStatusMath.Annotation, BerthStatusMath.Schedules })
+            if (!whole.TryGetValue(area, out var r)) problems.Add($"no {area} result");
+            else if (r.Summary.StartsWith("Couldn't", StringComparison.Ordinal)) problems.Add($"{area}: {r.Summary}");
+        var missing = reading.Results[setup.Berths[1].Key];
+        if (!missing.TryGetValue(BerthStatusMath.Modelling, out var m) || !m.Summary.Contains("No scope box")) problems.Add("the missing scope box wasn't reported");
+        var state = new BerthStatusMath.State();
+        BerthStatusMath.Record(setup, setup.Berths[0], state, whole, doc.Title, DateTime.Now);
+        var summary = BerthStatusMath.Summarize(setup, setup.Berths[0], state, DateTime.Now);
+        if (summary.Percent is null) problems.Add("the berth got no percentage");
+        var file = Path.Combine(s.Folder, "berth status", "Whole.xlsx");
+        Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+        OfficeXlsx.Write(file, "Whole status", BerthStatusMath.BerthSheets(setup, summary, DateTime.Now));
+        using (var zip = System.IO.Compression.ZipFile.OpenRead(file))
+            if (zip.GetEntry("xl/workbook.xml") is not { } wb || !new StreamReader(wb.Open()).ReadToEnd().Contains("Status")) problems.Add("the Excel has no Status sheet");
+        return problems.Count == 0
+            ? Pass($"{steps} steps; {BerthStatusMath.Pct(summary.Percent)} ({BerthStatusFacts.Describe(reading)}); Excel written")
+            : Fail(string.Join("; ", problems));
+    }
+
+    /// <summary>
+    /// Berth costing: the whole test model as one berth (columns counted, floors by volume) measured step by step, a scope
+    /// box to leave out that isn't there said, the three files in the built-in formats, and the same made from small
+    /// project templates written here.
+    /// </summary>
+    private static (string, string) BerthCostProbe(UIApplication app, State s)
+    {
+        if (TestDoc(app, s, out var why) is not { } doc) return Fail(why);
+        var problems = new List<string>();
+        var p = new BerthCostMath.Project
+        {
+            Items =
+            [
+                new() { No = 1, Group = "C1", Name = "Columns", Unit = "Nr", RateCode = "R_A", Rule = "cat=Structural Columns,Columns; measure=count; table=pile", Boq = "Columns", Backup = "Columns",
+                    Section = "STRUCTURAL ITEMS", BoqOrder = 1, BoqUnit = "Nr", BoqText = "Columns, {count} in all, typical height {height} m" },
+                new() { No = 12, Group = "C4", Name = "Floors", Unit = "m³", RateCode = "R_B", Rule = "cat=Floors; measure=volume; table=slab; group=thickness", Boq = "Floors", Backup = "Floors",
+                    Section = "STRUCTURAL ITEMS", BoqOrder = 2, BoqUnit = "m3", BoqText = "Floors {thicks}" },
+            ],
+        };
+        p.Rates = [new() { Code = "R_A", Name = "Column", Unit = "Nr", Value = 100 }, new() { Code = "R_B", Name = "Floor", Unit = "m³", Value = 200 }];
+        var berth = new BerthCostMath.Berth { Key = "Test|Berth 1", Name = "Berth 1", Site = "Test", FindBy = BerthStatusMath.FindBy.WholeModel, Exclude = "No such scope box", Length = 100 };
+        p.Berths[berth.Key] = berth;
+        var reading = BerthCostFacts.Plan(doc, p, [berth]);
+        var steps = 0;
+        while (reading.Next()) steps++;
+        if (steps < reading.Total) problems.Add($"only {steps} steps for {reading.Total} parts");
+        if (!reading.Problems.Any(x => x.Contains("No such scope box"))) problems.Add("the missing scope box to leave out wasn't said");
+        BerthCostFacts.Apply(p, reading);
+        if (berth.Measured is not { } m) return Fail("the berth wasn't measured: " + string.Join("; ", reading.Problems));
+        if (m.Quantities.Count == 0) problems.Add("nothing measured (the test model has columns and floors): " + string.Join("; ", m.Notes.Values));
+        var total = BerthCostMath.Total(p, berth);
+        if (m.Quantities.Count > 0 && total.Structural <= 0) problems.Add("no cost from the measured quantities");
+
+        var folder = Path.Combine(s.Folder, "berth costing");
+        Directory.CreateDirectory(folder);
+        OfficeXlsx.Row R(params object?[] cells) => new(cells);
+        var comparison = Path.Combine(folder, "comparison template.xlsx");
+        OfficeXlsx.Write(comparison, "Comparison", [new OfficeXlsx.Sheet("Quantities", "", [],
+            [R("", "Stage", "", ""), R("", "Site", "", ""), R("", "Bill / Berth", "", "Spare - new berth"), R("", "Quay length (m)", "", ""), R("", "Remarks", "", ""), R(1, "Columns", "Nr", ""), R(12, "Floors", "m³", "")],
+            [], [], false)]);
+        var boq = Path.Combine(folder, "BOQ-Berth 5-ST.xlsx");
+        OfficeXlsx.Write(boq, "BOQ", [new OfficeXlsx.Sheet("ST", "", [], [R("", "BERTH 5 - LENGTH 50 METER", "", ""), R("A", "Columns", 1, "Nr"), R("B", "Floors", 1, "m³")], [], [], false)]);
+        var backup = Path.Combine(folder, "backup template.docx");
+        XNamespace w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+        XElement P(string text, bool list = false) => new(w + "p", list ? new XElement(w + "pPr", new XElement(w + "numPr", new XElement(w + "numId", new XAttribute(w + "val", "5")))) : null, new XElement(w + "r", new XElement(w + "t", text)));
+        XElement Tbl(params string[] head) => new(w + "tbl", new XElement(w + "tr", head.Select(h => new XElement(w + "tc", P(h)))), new XElement(w + "tr", head.Select(_ => new XElement(w + "tc", P("")))));
+        if (File.Exists(backup)) File.Delete(backup);
+        using (var zip = ZipFile.Open(backup, ZipArchiveMode.Create))
+        using (var stream = zip.CreateEntry("word/document.xml").Open())
+            new XDocument(new XElement(w + "document", new XAttribute(XNamespace.Xmlns + "w", w), new XElement(w + "body",
+                P("BACKUP CALCULATION"), P("This document provides the backup calculation of the bill quantities for Berth 5. Each element is shown."),
+                P("Floors", list: true), P("How it is billed."), P("Berth 5"),
+                Tbl("Item", "Pile Diameter (m)", "Top Level (mCD)", "Bottom Level (mCD)", "Height (m)", "Count", "Quantity (m)"),
+                Tbl("Item", "Area (m²)", "Thickness (m)", "Volume (m³)"),
+                Tbl("Item", "Rate (kg/m³)", "Volume (m³)", "Reinforcement Weight (Ton)")))).Save(stream);
+        try
+        {
+            var outC = Path.Combine(folder, "comparison.xlsx");
+            BerthCostExports.WriteComparison(p, [berth], comparison, outC, _ => "field test");
+            using (var book = XlsxBook.Read(outC))
+                if (book.Text("Quantities", 3, 3) != berth.Title) problems.Add("the comparison has no column for the berth");
+            var outB = Path.Combine(folder, BerthCostExports.BoqName(boq, berth) + ".xlsx");
+            BerthCostExports.WriteBoq(p, berth, boq, outB);
+            using (var book = XlsxBook.Read(outB))
+                if (!book.Text("ST", 1, 1).Contains("BERTH 1 - LENGTH 100")) problems.Add("the BOQ title isn't the berth's: " + book.Text("ST", 1, 1));
+            var outW = Path.Combine(folder, "backup.docx");
+            BerthCostExports.WriteBackup(p, [berth], backup, outW);
+            using (var zip = ZipFile.OpenRead(outW))
+            using (var r = new StreamReader(zip.GetEntry("word/document.xml")!.Open()))
+                if (!r.ReadToEnd().Contains("Berth 01")) problems.Add("the back-up doesn't name the berth");
+
+            // The built-in formats: no files needed.
+            string Sheet1(string path)
+            {
+                using var zip = ZipFile.OpenRead(path);
+                using var r = new StreamReader(zip.GetEntry("xl/worksheets/sheet1.xml")!.Open());
+                return r.ReadToEnd();
+            }
+            var baseBoq = Path.Combine(folder, "built-in BOQ.xlsx");
+            BerthCostDocs.WriteBoq(p, berth, baseBoq);
+            var boqXml = Sheet1(baseBoq);
+            if (m.Quantities.ContainsKey(1) && !boqXml.Contains("Columns, " + berth.Measured.Lines.Where(l => l.No == 1).Sum(l => l.Count) + " in all"))
+                problems.Add("the built-in BOQ's description doesn't have the model's column count");
+            if (!boqXml.Contains("To Summary")) problems.Add("the built-in BOQ has no summary line");
+            var baseCost = Path.Combine(folder, "built-in costing.xlsx");
+            BerthCostDocs.WriteCosting(p, [berth], baseCost);
+            if (!Sheet1(baseCost).Contains("Berth 1")) problems.Add("the built-in costing doesn't list the berth");
+            var baseDoc = Path.Combine(folder, "built-in back-up.docx");
+            BerthCostDocs.WriteBackup(p, [berth], baseDoc);
+            using (var zip = ZipFile.OpenRead(baseDoc))
+            using (var r = new StreamReader(zip.GetEntry("word/document.xml")!.Open()))
+                if (!r.ReadToEnd().Contains("<w:tbl>")) problems.Add("the built-in back-up has no table");
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or System.Xml.XmlException) { problems.Add("making the files: " + ex.Message); }
+        return problems.Count == 0
+            ? Pass($"{steps} steps; {string.Join(", ", m.Quantities.Select(q => $"item {q.Key} = {q.Value:0.##}"))}; {BerthCostMath.Money(total.Structural)}; three built-in files and three from templates made")
+            : Fail(string.Join("; ", problems));
+    }
+
     private static (string, string) ChecklistProbe(UIApplication app, State s)
     {
         if (TestDoc(app, s, out var why) is not { } doc) return Fail(why);
@@ -1912,6 +2501,58 @@ internal static partial class FieldTest
     }
 
     /// <summary>Show in Revit's checking views are made (plan with grids, schedules) and all deleted again; rolled back at the end.</summary>
+    /// <summary>
+    /// The submission checklist through the model: an engineer's and a group leader's records are written into the test
+    /// project (each its own element), read back and merged (answers, approval, the N/A hidden once approved, the setup
+    /// only the group leader can change), and the Word file is made from them. Rolled back.
+    /// </summary>
+    private static (string, string) SubmissionChecklistProbe(UIApplication app, State s)
+    {
+        if (TestDoc(app, s, out var why) is not { } doc) return Fail(why);
+        var problems = new List<string>();
+        var now = DateTime.UtcNow;
+        var lead = new SubmissionChecklistMath.UserRecord { User = "Field test group leader" };
+        lead.Setup = new SubmissionChecklistMath.Setup { Types = ["piled-deck", "gravity-blocks"], Leads = [lead.User], By = lead.User, At = now };
+        var key = SubmissionChecklistMath.AddSubmission(lead, "FT1", "Field test", DateTime.Today.AddDays(7), now);
+        var eng = new SubmissionChecklistMath.UserRecord { User = "Field test engineer" };
+        var sub = SubmissionChecklistMath.Merge([lead]).Find(key)!;
+        SubmissionChecklistMath.SetAnswer(eng, sub, "basis.dbr", "Y", "", now.AddSeconds(1));
+        SubmissionChecklistMath.SetAnswer(eng, sub, "basis.seismic", "NA", "Not a seismic zone", now.AddSeconds(2));
+        SubmissionChecklistMath.SetReview(lead, sub, "basis.dbr", SubmissionChecklistMath.Approved, "", now.AddSeconds(3));
+        SubmissionChecklistMath.SetReview(lead, sub, "basis.seismic", SubmissionChecklistMath.Approved, "", now.AddSeconds(4));
+        using var group = new TransactionGroup(doc, "Field test: submission checklist");
+        group.Start();
+        try
+        {
+            var before = Revit.SubmissionChecklistStore.ReadAll(doc).Count;
+            foreach (var r in new[] { lead, eng })
+                if (Revit.SubmissionChecklistStore.Write(doc, r) is { } failed) problems.Add($"writing {r.User}: {failed}");
+            // Writing again with no change leaves the element alone; a change replaces the record, not adds one.
+            SubmissionChecklistMath.SetAnswer(eng, sub, "basis.codes", "N", "Waiting for the client", now.AddSeconds(5));
+            if (Revit.SubmissionChecklistStore.Write(doc, eng) is { } again) problems.Add("writing again: " + again);
+            var records = Revit.SubmissionChecklistStore.ReadAll(doc);
+            if (records.Count != before + 2) problems.Add($"{records.Count - before} records read back, not 2");
+            var shared = SubmissionChecklistMath.Merge(records);
+            var back = shared.Find(key);
+            if (back is null) problems.Add("the submission isn't read back");
+            else
+            {
+                var questions = SubmissionChecklistMath.QuestionsFor(shared.Setup, shared.Added);
+                if (SubmissionChecklistMath.StateOf(back, "basis.dbr") != SubmissionChecklistMath.ItemState.Approved) problems.Add("the approved Yes isn't approved");
+                if (SubmissionChecklistMath.StateOf(back, "basis.seismic") != SubmissionChecklistMath.ItemState.Hidden) problems.Add("the approved N/A isn't hidden");
+                if (SubmissionChecklistMath.StateOf(back, "basis.codes") != SubmissionChecklistMath.ItemState.No) problems.Add("the second write's No is missing");
+                if (!shared.IsLead(lead.User) || shared.IsLead(eng.User)) problems.Add("the group leader is wrong");
+                if (!questions.Any(q => q.Id == "blocks.keys") || questions.Any(q => q.Id == "caissons.float")) problems.Add("the questions don't follow the structure types");
+                var docx = Path.Combine(s.Folder, "Submission checklist field test.docx");
+                SubmissionChecklistDocx.Write(docx, shared, back, questions, new SubmissionChecklistDocx.Info(doc.Title, Update.Updater.CurrentText, DateTime.Now, new Dictionary<string, ChecklistDocx.Image>()));
+                if (!File.Exists(docx) || new FileInfo(docx).Length < 4000) problems.Add("the Word file wasn't made");
+                else File.Delete(docx);
+            }
+        }
+        finally { RollBack(group); }
+        return problems.Count == 0 ? Pass("an engineer's and a group leader's records written into the model, read back and merged; the Word file made; rolled back") : Fail(string.Join("; ", problems));
+    }
+
     private static (string, string) ChecklistViewsProbe(UIApplication app, State s)
     {
         if (TestDoc(app, s, out var why) is not { } doc) return Fail(why);
@@ -2109,7 +2750,7 @@ internal static partial class FieldTest
         if (TestDoc(app, s, out var why) is not { } doc) return Fail(why);
         var problems = new List<string>();
         var said = new List<string>();
-        foreach (var key in new[] { "units", "uniformat", "scopeboxes", "viewtemplates", "familynames" })
+        foreach (var key in new[] { "units", "uniformat", "scopeboxes", "viewtemplates", "familynames", "loi" })
             if (ChecklistFixes.For(key) is not { } offer || offer.Button.Length == 0) problems.Add(key + ": no Fix button");
         if (ChecklistFixes.Offers("levels").Count != 2) problems.Add("levels: not both fixes (delete unused, name like the URS)");
         if (ChecklistMath.ParseUnits("Length mm 0, Angle degrees 2") is not { Count: 2 } units || units[0].Unit != "mm" || units[1].Decimals != 2) problems.Add("units: the rule reads wrong");
@@ -2140,6 +2781,19 @@ internal static partial class FieldTest
             var empty = ChecklistFacts.TypesOf(doc, ChecklistFacts.Instances(doc))
                 .Count(t => t.LookupParameter("Assembly Code") is { IsReadOnly: false, StorageType: StorageType.String } p && !ChecklistFacts.Filled(p));
             if (empty > 0) problems.Add($"uniformat: {empty} types still have no Assembly Code");
+
+            // LOI data: Comments from the values rule on every coded type, a new parameter filled from the material.
+            def.Rules["loimatrix"] = "*>Comments, ZZ Test LOI Material";
+            def.Rules["loivalues"] = "*>Comments=Field test LOI";
+            var loi = ChecklistFixes.Suggest(doc, "loi", def).Split('\n').Select(l => l.Split('\t')).Where(p => p.Length == 3).ToList();
+            if (loi.Count == 0) said.Add("loi: nothing to fill in the test project");
+            else
+            {
+                said.Add("loi: " + ChecklistFixes.Run(doc, "loi", null, def: def, answer: string.Join("\n", loi.Where(r => r[2].Length > 0).Select(r => r[0] + "\t" + r[2]))));
+                if (ChecklistFacts.Read(doc, def).Hints.TryGetValue("loi", out var loiHint) && loiHint.Items.FirstOrDefault(i => i.StartsWith("iLOD", StringComparison.Ordinal) && i.Contains("Comments")) is { } still)
+                    problems.Add("loi: still empty after the fill: " + still);
+                if (loi.Any(r => r[1].Contains("ZZ Test LOI Material") && r[2].Length > 0) && !said[said.Count - 1].Contains("ZZ Test LOI Material")) problems.Add("loi: the missing parameter wasn't added: " + said[said.Count - 1]);
+            }
 
             // A template for floor plans, then every floor plan on a sheet gets it.
             var plan = new FilteredElementCollector(doc).OfClass(typeof(Viewport)).Cast<Viewport>().Select(vp => doc.GetElement(vp.ViewId) as ViewPlan).FirstOrDefault(v => v is { ViewType: ViewType.FloorPlan });
@@ -2374,6 +3028,14 @@ internal static partial class FieldTest
             if (export.IsError || !export.Text.Contains("Not exported")) problems.Add("export_pdf from the chat was not stopped: " + Short(export.Text, 200));
             if (File.Exists(Path.Combine(exportFolder, "gated.pdf"))) problems.Add("export_pdf from the chat wrote the PDF while blocked");
 
+            // 2c. A check print (check_print true) is for looking at, not an issue: the gate doesn't stop it.
+            step = "2c. export_pdf check print while blocked";
+            Bridge.Approvals.Call = new Bridge.Approvals.CallState(ApprovalDecision.No, null, Asked: false);
+            try { export = Call(app, s.Registry, "export_pdf", new { view_ids = new[] { sheet.Id.Value }, folder = exportFolder, file_name = "check print", check_print = true }); }
+            finally { Bridge.Approvals.Call = null; }
+            if (export.Text.Contains("Not exported")) problems.Add("export_pdf with check_print was stopped by the issue check: " + Short(export.Text, 200));
+            else if (!export.IsError && !export.Text.Contains("check print for review")) problems.Add("export_pdf with check_print didn't say the issue check was skipped: " + Short(export.Text, 200));
+
             // 3. Accept the title block item, then change the finding (one field filled): it must come back open.
             step = "3. accept, then change the finding";
             IssueGate.Accept(doc, run, Mine(run).Items.Where(i => i.Finding.Check == "sheet_fields"), "Field test: filled at issue");
@@ -2400,7 +3062,9 @@ internal static partial class FieldTest
                 var view = Drafting.Create(doc, "Issue check probe view " + Guid.NewGuid().ToString("N").Substring(0, 6), 50);
                 // Revit won't put an empty view on a sheet.
                 TextNote.Create(doc, view.Id, XYZ.Zero, "Issue check probe", doc.GetDefaultElementTypeId(ElementTypeGroup.TextNoteType));
-                if (Drafting.Place(doc, x, view, 0) is null) problems.Add("the probe's drafting view could not be placed on the sheet");
+                if (Drafting.Place(doc, x, view, 0) is null)
+                    problems.Add($"the probe's drafting view could not be placed on the sheet (Revit allows it: {Viewport.CanAddViewToSheet(doc, x.Id, view.Id)}; " +
+                                 $"the view holds {new FilteredElementCollector(doc, view.Id).GetElementCount()} element(s))");
             });
             step = "4. re-check after the fix";
             run = IssueGate.Check(app, [sheet], null, null, reports);
@@ -2417,7 +3081,7 @@ internal static partial class FieldTest
             if (!File.Exists(IssueGate.StorePath(doc))) problems.Add("no per-model file with the acceptances");
 
             return problems.Count == 0
-                ? Pass($"blocked on the seeded sheet ({string.Join(", ", new[] { "empty_sheets", "sheet_fields" })}) and issue_drawings refused with no revision, as did export_pdf from the chat with no PDF; an accepted item came back when its text changed; " +
+                ? Pass($"blocked on the seeded sheet ({string.Join(", ", new[] { "empty_sheets", "sheet_fields" })}) and issue_drawings refused with no revision, as did export_pdf from the chat with no PDF (a check print was not stopped); an accepted item came back when its text changed; " +
                        $"the fixed sheet passed on re-check; {rest.Count} other item(s) accepted with a reason cleared the gate and stayed accepted; report {Path.GetFileName(again.Report ?? "")}")
                 : Fail(string.Join("; ", problems));
         }
@@ -2643,7 +3307,8 @@ internal static partial class FieldTest
     {
         var items = TestChecklistWindow.Items();
         var manual = FieldTestCoverage.Features.Count(f => f.How == FieldTestCoverage.How.Manual) + FieldTestCoverage.ManualTools.Count;
-        var bugs = items.Count(i => i.Area == FieldTestCoverage.BugFixes);
+        // The bug log's rows are "bug:N"; the manual checks filed under Bug fixes (bug.titleblock_params…) are manual items.
+        var bugs = items.Count(i => i.Id.StartsWith("bug:", StringComparison.Ordinal));
         var problems = new List<string>();
         if (items.Count - bugs != manual) problems.Add($"{items.Count - bugs} manual items, the coverage table has {manual}");
         if (bugs == 0) problems.Add("no fixed bug rows (the bug log built into this version was not read)");
@@ -2657,9 +3322,12 @@ internal static partial class FieldTest
         };
         var path = TestChecklistWindow.SaveTo(Path.Combine(folder, "checklist"), items, marks, Update.Updater.CurrentText, "field test", "Field test project", DateTime.Now);
         var text = File.Exists(path) ? File.ReadAllText(path) : "";
-        if (!text.Contains($"1 pass, 1 fail, {items.Count - 2} not checked") || !text.Contains("field test / note")) problems.Add($"the saved file {path} doesn't hold the marks");
+        // Items unchanged since the last full run and not marked are saved as "unchanged", not "not checked".
+        var unchanged = items.Count(i => i.Unchanged.Length > 0 && !marks.ContainsKey(i.Id));
+        if (!text.Contains($"1 pass, 1 fail, {items.Count - 2 - unchanged} not checked") || !text.Contains("field test / note")) problems.Add($"the saved file {path} doesn't hold the marks");
         return problems.Count == 0
-            ? Pass($"{items.Count} items: {manual} manual steps and {bugs} fixed bug rows; a result with one pass and one fail was saved to {path}")
+            ? Pass($"{items.Count} items: {manual} manual steps ({items.Count(i => i.Unchanged.Length > 0)} unchanged since the last full run, not asked again) " +
+                   $"and {bugs} fixed bug rows; a result with one pass and one fail was saved to {path}")
             : Fail(string.Join("; ", problems));
     }
 
@@ -2671,12 +3339,14 @@ internal static partial class FieldTest
     private static List<CoverageRow> Coverage(RunReport r)
     {
         var list = new List<CoverageRow>();
+        var proven = FieldTestProven.Load();
         string Of(IEnumerable<Row> rows, string missing)
         {
             var mine = rows.ToList();
             if (mine.Count == 0) return missing;
             if (mine.Any(x => x.Status == "fail")) return "tested: FAIL";
             if (mine.Any(x => x.Status == "pass")) return "tested";
+            if (mine.Any(x => x.Status == "proven")) return "proven earlier";
             if (mine.Any(x => x.Status == "manual")) return "manual (checklist)";
             return "not run";
         }
@@ -2696,8 +3366,10 @@ internal static partial class FieldTest
                 FieldTestCoverage.How.Case => r.Rows.Where(x => x.Tool == f.By || x.Tool.StartsWith(f.By + " ", StringComparison.Ordinal)),
                 _ => [],
             };
-            var status = f.How == FieldTestCoverage.How.Manual ? "manual (checklist)" : Of(rows, "not run");
-            list.Add(new(f.Key, "feature", status, f.How == FieldTestCoverage.How.Case ? $"{f.Reason} (by {f.By})" : f.Reason));
+            var unchanged = f.How == FieldTestCoverage.How.Manual && proven.ManualUnchanged.Contains(f.Key);
+            var status = unchanged ? "manual, unchanged" : f.How == FieldTestCoverage.How.Manual ? "manual (checklist)" : Of(rows, "not run");
+            list.Add(new(f.Key, "feature", status, f.How == FieldTestCoverage.How.Case ? $"{f.Reason} (by {f.By})"
+                : unchanged ? $"{FieldTestProven.ManualNote(proven)} ({f.Reason})" : f.Reason));
         }
         return list;
     }
@@ -2707,7 +3379,8 @@ internal static partial class FieldTest
         var md = new StringBuilder("## Coverage\n\n");
         int Count(string s) => rows.Count(x => x.Status == s);
         md.Append($"{rows.Count(x => x.Kind == "tool")} tools and {rows.Count(x => x.Kind == "feature")} features: {Count("tested") + Count("tested: FAIL")} tested " +
-                  $"({Count("tested: FAIL")} failing), {Count("manual (checklist)")} manual (checklist: Sketch ProMax tab > Help > Test checklist), {Count("not run")} not run in this report.\n\n");
+                  $"({Count("tested: FAIL")} failing), {Count("proven earlier")} proven earlier (not run again), {Count("manual (checklist)")} manual (checklist: Sketch ProMax pane > Bugs > Test checklist), " +
+                  $"{Count("manual, unchanged")} manual but unchanged since {FieldTestProven.Load().Version} (not asked again), {Count("not run")} not run in this report.\n\n");
         md.Append("| Tool or feature | Kind | Coverage | Detail |\n|---|---|---|---|\n");
         foreach (var row in rows.OrderBy(x => x.Status == "tested: FAIL" ? 0 : x.Status == "not run" ? 1 : x.Status.StartsWith("manual", StringComparison.Ordinal) ? 2 : 3).ThenBy(x => x.Kind).ThenBy(x => x.Name))
             md.Append($"| {row.Name} | {row.Kind} | {(row.Status == "tested" ? "tested" : "**" + row.Status + "**")} | {Cell(row.Detail)} |\n");

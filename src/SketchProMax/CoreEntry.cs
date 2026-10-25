@@ -67,10 +67,19 @@ public static class CoreEntry
         }
     }
 
+    /// <summary>What still works on a PC without a valid key: the license itself, updates, help, settings and bug reports.</summary>
+    internal static readonly HashSet<string> WithoutLicense = new(StringComparer.Ordinal)
+    {
+        "license", "status", "update-info", "update-check", "update-button", "whats-new", "help", "settings", "pane", "chat",
+        "report-bug", "bug-folder", "export-chats-bugs",
+    };
+
     private static int Run(string name, UIApplication app)
     {
+        if (!App.Shared && !WithoutLicense.Contains(name) && LicenseWindow.BlockIfLocked()) return 1;
         var result = name switch
         {
+            "license" => LicenseWindow.Command(),
             "status" => CoreCommands.Status(app),
             "copy-prompt" => CoreCommands.CopyPrompt(app),
             "open-claude" => CoreCommands.OpenClaude(),
@@ -92,9 +101,13 @@ public static class CoreEntry
             "update-button" => CoreCommands.UpdateButton(),
             "send-view" => SendView(),
             "split-pdf" => UI.SplitPdfWindow.Open(),
+            // The PDF editor (0.35.3+): pages as pictures; delete, turn, move, replace, add, merge, extract, split.
+            "pdf-editor" => UI.PdfEditorWindow.Open(),
             // Bug reports (0.30+): one small zip per report, in Documents\Sketch ProMax\Bugs.
             "report-bug" => Bugs.BugReport.Command(app),
             "bug-folder" => Bugs.BugReport.OpenFolder(),
+            // Help > Open folders (after 0.35.5): bugs, learned tools, recipes, chats... each with Open and Copy path.
+            "user-folders" => UserFoldersWindow.Open(),
             "export-chats-bugs" => QuickTools.ExportChatsAndBugs(app),
             // Time saved and working time for the active model (0.32+).
             "time-saved" => TimeSavedWindow.Command(app),
@@ -102,6 +115,12 @@ public static class CoreEntry
             "issue-check" => IssueGateWindow.Command(app),
             // The pre-submission checklist (0.35+): the office's checklist in stages, ending in a signed Word file.
             "pre-submission" => ChecklistWindow.Command(app),
+            // The technical submission checklist (0.35+): per submission, shared through the model; opened from Submissions status and the Model checklist.
+            "submission-checklist" => SubmissionChecklistWindow.Command(app),
+            // Berth status (0.35+): each berth's status for its next submission, read from the model only when asked.
+            "berth-status" => BerthStatusWindow.Command(app),
+            // Berth costing (0.35+ on the ribbon; also opened from Submissions status).
+            "berth-costing" => BerthCostWindow.Command(app),
             // Purge and cleanup (0.34+): pick one of the four cleanup tools; each previews, then asks before deleting.
             "cleanup" => RibbonTools.Cleanup(app),
             // Shared tools (0.35+): Share tools makes a TritoRevit zip; the TritoRevit tab's buttons and its Shared tools window.
@@ -211,6 +230,8 @@ public static class CoreEntry
             case "announce":
                 // Started by the loader after an automatic update, one this window followed from another Revit window, or
                 // one whose window was hidden: a toast that doesn't take the focus, and the band at the top of the chat.
+                // Nothing to do after an update that applied in place: no toast (the Update button says "Updated to").
+                if (!UpdateNotice.WorthShowing(UpdateNotice.Kind.Updated, RestartNote.Text)) return "quiet";
                 UpdateNotice.Offer(new UpdateNotice.Notice(UpdateNotice.Kind.Updated, Updater.CurrentText,
                     UpdateNotice.TopLines(Updater.NotesFor(Updater.CurrentText)), RestartNote.Text));
                 return "shown";
@@ -256,6 +277,8 @@ public static class CoreEntry
             {
                 var f = JobLine().Split('\t');
                 var running = f[0] is "running" or "selftest";
+                // Asked every two seconds on Revit's thread (the Status button that did this left the ribbon in 0.35).
+                LoaderBrand.Pulse();
                 // While something runs, the button stops it: the red stop tile, and the tooltip says so.
                 // A large button: the tool's name and its running time on two lines.
                 return f.Length < 3 ? "" : CoreRibbonManifest.LiveLine(f[1],
@@ -268,7 +291,7 @@ public static class CoreEntry
             }
             case "update-first":
             {
-                // The Claude panel's copy of the badge; the Sketch ProMax panel's one also pumps the notice.
+                // The Claude panel's copy of the badge before 0.35 (from 0.35 that button asks for "update-badge").
                 var ((text, _), tip, glyph) = CoreCommands.BadgeWithTip();
                 return CoreRibbonManifest.LiveLine(text, tip, glyph);
             }
