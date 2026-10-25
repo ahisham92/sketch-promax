@@ -273,7 +273,8 @@ internal sealed class ShareWindow : Window
         {
             MainInstruction = $"'{pack.Name}' is ready to share (revision {pack.Revision}, {pack.Tools.Count} tool(s))",
             MainContent = $"Send {Path.GetFileName(result.Zip)} to colleagues. They extract it and double-click Install TritoRevit.cmd; " +
-                          "the tools are on the TritoRevit tab (after one Revit restart the first time)." +
+                          "the tools are on the TritoRevit tab (after one Revit restart the first time). If their PC blocks .cmd files, README.txt in the zip " +
+                          "has a one-line install to paste into PowerShell." +
                           (result.Published is not null
                               ? $"\n\nPublished to {result.Published}. Everyone who installed this pack gets this revision within a few minutes, with Revit open. A copy of the zip is there too, for new colleagues."
                               : pack.UpdateFrom.Length == 0 ? "\n\nNo update folder: to send changes later, share this pack again and send the new zip." : "") +

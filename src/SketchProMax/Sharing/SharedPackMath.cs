@@ -338,6 +338,10 @@ internal static class SharedPackMath
         return $"TritoRevit - {safe}.zip";
     }
 
+    /// <summary>Installs from PowerShell opened in the extracted folder when the PC won't run Install TritoRevit.cmd. The script
+    /// is read as text, so neither a policy on .cmd files nor one that allows only signed scripts stops it.</summary>
+    public const string InstallLine = "iex (Get-Content -Raw .\\install-tritorevit.ps1)";
+
     /// <summary>The readme in the zip: what it is and how to install it, in plain words.</summary>
     public static string Readme(Pack pack) =>
         $"TritoRevit: {pack.Name}\r\n" +
@@ -349,6 +353,9 @@ internal static class SharedPackMath
         "1. Extract this zip (right-click > Extract All).\r\n" +
         "2. Double-click \"Install TritoRevit.cmd\". No admin rights are needed.\r\n" +
         "3. The first time only, close and reopen Revit. The tools are on the TritoRevit tab.\r\n\r\n" +
+        "If Windows says it \"cannot access the specified device, path or file\" (company PCs that block .cmd files):\r\n" +
+        "  a. Open the extracted folder, click its address bar, type powershell and press Enter.\r\n" +
+        $"  b. Paste this line and press Enter:\r\n     {InstallLine}\r\n\r\n" +
         "If TritoRevit is already installed, the tools appear on its tab within a few seconds, with Revit open.\r\n" +
         "The first install downloads the TritoRevit add-in (about 40 MB) from GitHub, so it needs internet once.\r\n" +
         (pack.UpdateFrom.Length > 0
