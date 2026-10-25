@@ -217,7 +217,7 @@ internal static class ChangeFileMath
     private static readonly JsonSerializerOptions Json = new();
 
     public const string HeaderComment = "# Sketch ProMax change file: what changed in this model since it was last saved, one element per line. " +
-                                        "It is cleared each time the model is saved. To put these changes into a model, open the model and use Recover > Replay a change file.";
+                                        "It is cleared each time the model is saved. To put these changes into a model, open the model and use Lifeline > Replay a file from disk.";
 
     public static string Write(Line line) => JsonSerializer.Serialize(line, Json);
 

@@ -603,10 +603,10 @@ public sealed class SettingsWindow : Window
         page.Children.Add(Place("ChangeFile", _changeFile));
         page.Children.Add(Hint("A text file in Documents\\Sketch ProMax\\Change files lists every element you add, move, change or delete, a few seconds after you do it. " +
                                "Saving or synchronizing clears it. If the model is lost or damaged, open the last good copy and replay the file onto it. It never saves or changes the model by itself."));
-        var recover = Brand.Button("Recover…");
+        var recover = Brand.Button("Lifeline…");
         recover.HorizontalAlignment = HorizontalAlignment.Left;
         recover.Margin = new Thickness(0, 10, 0, 0);
-        AutomationProperties.SetHelpText(recover, "Opens the Recover window: each model's change file, and Replay onto the open model. It doesn't save the settings here.");
+        AutomationProperties.SetHelpText(recover, "Opens the Lifeline window: each model's change file, and Replay onto the open model. It doesn't save the settings here.");
         recover.Click += (_, _) => RecoverWindow.Open();
         page.Children.Add(recover);
         return page;

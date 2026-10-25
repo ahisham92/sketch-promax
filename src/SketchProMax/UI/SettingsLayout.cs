@@ -19,7 +19,7 @@ internal static class SettingsLayout
         new(Time, "Time tracking", "Working time and time saved, kept in each model."),
         new(Issue, "Issue & drawings", "What the issue check lets through."),
         new(SignOff, "Sign-off", "Your signature and the checklist used by the Pre-submission checklist button."),
-        new(Recovery, "Recovery", "A record of your changes since the last save, to put them back if the model is lost or damaged."),
+        new(Recovery, "Lifeline", "A record of your changes since the last save, to put them back if the model is lost or damaged."),
         new(Updates, "Updates", "Keeping Sketch ProMax up to date."),
     ];
 

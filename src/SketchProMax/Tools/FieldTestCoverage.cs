@@ -497,9 +497,10 @@ internal static class FieldTestCoverage
         new("recovery.ui", Central, "Recover after Revit closes by itself, on a real shared model", How.Manual, "", "needs Revit to close by itself and a real central model",
             "On a workshared test model (a new local of a test central, never the live project): move two columns, change a wall's type and comment, add a beam and delete a door, edit a floor's outline, draw a new floor and a footprint roof with a sloped edge, add a text note, a tag, a dimension, a detail item and a rebar set in a concrete beam, without saving. " +
             "Open Documents\\Sketch ProMax\\Change files\\<model>\\changes since last save.txt in Notepad: it lists those elements. End Revit in Task Manager. Start Revit and open the same local: " +
-            "the Recover window opens by itself and says the model has changes that weren't saved. Press Replay…: the preview says what it will set back, make again and delete. Press Replay now: " +
+            "the Lifeline window opens by itself and says the model has changes that weren't saved. Press Replay…: the preview says what it will set back, make again and delete. Press Replay now: " +
             "the columns, wall, beam, door, floors, roof (with its slope), text, tag, dimension, detail item and rebar are as before the crash; the report lists anything to redo by hand. Synchronize with central: the changes reach central. Save: the change file is empty again. " +
-            "Also from the pane's Files section: Recover > Replay a file from disk… with a change file copied elsewhere."),
+            "Also from the pane's Files section: Lifeline > Replay a file from disk… with a change file copied elsewhere. " +
+            "On a colleague's PC with only TritoRevit installed from a pack that includes Lifeline: open a model, move a column, and see Documents\\Sketch ProMax\\Change files\\<model> get its file at once; the pack's Lifeline button opens the same window."),
 
         // ---- Bug fixes checked by a person (the rest are field-test cases named "tool bug#N", see BugChecks)
         new("bug.titleblock_params", BugFixes, "Bug #7: a copied title block fills its fields", How.Manual, "", "needs the office's own title block family, whose labels use shared parameters",
