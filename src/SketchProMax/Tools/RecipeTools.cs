@@ -204,7 +204,7 @@ internal static class Placeholders
         return result;
     }
 
-    private static JsonElement Element(Action<Utf8JsonWriter> write)
+    internal static JsonElement Element(Action<Utf8JsonWriter> write)
     {
         using var stream = new MemoryStream();
         using (var w = new Utf8JsonWriter(stream)) write(w);

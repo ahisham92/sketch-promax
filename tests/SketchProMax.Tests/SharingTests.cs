@@ -1,4 +1,3 @@
-using SketchProMax.Sharing;
 using SketchProMax.UI;
 using static SketchProMax.Sharing.SharedPackMath;
 

@@ -1,7 +1,5 @@
 using System.Diagnostics;
 using System.IO;
-using System.Threading;
-using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
@@ -34,9 +32,6 @@ internal sealed class SplitPdfWindow : Window
         new SplitPdfWindow(file).Show();
         return Autodesk.Revit.UI.Result.Succeeded;
     }
-
-    /// <summary>The window, not shown (Test before sharing and the field test build it).</summary>
-    internal static Window ForTest() => new SplitPdfWindow(null);
 
     private SplitPdfWindow(string? file)
     {

@@ -50,9 +50,6 @@ internal sealed class LicenseWindow : Window
         return true;
     }
 
-    /// <summary>The window, not shown (the field test builds it).</summary>
-    internal static Window ForTest() => new LicenseWindow();
-
     private LicenseWindow()
     {
         Title = "Sketch ProMax: License";

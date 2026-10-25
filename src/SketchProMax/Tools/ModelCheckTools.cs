@@ -338,9 +338,6 @@ public sealed class FindMissingItemsTool : IRevitTool
     public string[] Required => [];
     public bool ModifiesModel => false;
 
-    /// <summary>Every finding of the last run (the result shows a sample), for the issue gate.</summary>
-    internal List<IssueGateMath.Finding>? Found { get; private set; }
-
     public ToolResult Execute(UIApplication app, ToolArgs args)
     {
         var doc = app.ActiveUIDocument.Document;

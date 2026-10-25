@@ -1,7 +1,6 @@
 using System.Collections.Concurrent;
 using System.IO;
 using System.Runtime.InteropServices;
-using System.Threading;
 #if NET
 using ULong = System.Runtime.InteropServices.CULong;
 #else

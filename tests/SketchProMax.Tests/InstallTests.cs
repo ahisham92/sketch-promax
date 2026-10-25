@@ -1,5 +1,4 @@
 using System.Xml.Linq;
-using SketchProMax.Update;
 using static SketchProMax.Update.AddinFiles;
 
 /// <summary>What Revit sees of the add-in stays put between releases: the fixed loader path, one entry, no needless writes.</summary>

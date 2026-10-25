@@ -131,7 +131,7 @@ internal static class QuickTools
         if (window.ShowDialog() != true) return Result.Cancelled;
         LastValues[key] = new Dictionary<string, string>(window.Values);
 
-        var values = Element(w =>
+        var values = Placeholders.Element(w =>
         {
             w.WriteStartObject();
             foreach (var kv in window.Values) w.WriteString(kv.Key, kv.Value);
@@ -139,9 +139,9 @@ internal static class QuickTools
         });
         var args = new Dictionary<string, JsonElement>
         {
-            ["name"] = Element(w => w.WriteStringValue(name)),
+            ["name"] = Placeholders.Element(w => w.WriteStringValue(name)),
             ["values"] = values,
-            ["continue_on_error"] = Element(w => w.WriteBooleanValue(window.OptionChecked)),
+            ["continue_on_error"] = Placeholders.Element(w => w.WriteBooleanValue(window.OptionChecked)),
         };
         var result = Execute(app, "run_recipe", args);
         Show($"Recipe: {recipe.Name}", result, RecipeSummary(result));
@@ -274,7 +274,7 @@ internal static class QuickTools
         var period = window.Values.TryGetValue("period", out var p) && p == "Last day" ? "day" : p == "Everything" ? "all" : "week";
         ToolResult result;
         using (PackProgress.Show("Export chats & bugs", "Collecting chats and bug reports"))
-            result = Execute(app, "export_chats_and_bugs", new Dictionary<string, JsonElement> { ["period"] = Element(w => w.WriteStringValue(period)) });
+            result = Execute(app, "export_chats_and_bugs", new Dictionary<string, JsonElement> { ["period"] = Placeholders.Element(w => w.WriteStringValue(period)) });
         if (result.IsError)
         {
             Show("Export chats & bugs", result, "The zip was not written");
@@ -395,17 +395,17 @@ internal static class QuickTools
         switch (type)
         {
             case "integer":
-                return Element(w => w.WriteNumberValue(long.Parse(text, NumberStyles.Integer, CultureInfo.InvariantCulture)));
+                return Placeholders.Element(w => w.WriteNumberValue(long.Parse(text, NumberStyles.Integer, CultureInfo.InvariantCulture)));
             case "number":
-                return Element(w => w.WriteNumberValue(ParseNumber(text)));
+                return Placeholders.Element(w => w.WriteNumberValue(ParseNumber(text)));
             case "boolean":
-                return Element(w => w.WriteBooleanValue(text is "true" or "True" or "yes" or "1"));
+                return Placeholders.Element(w => w.WriteBooleanValue(text is "true" or "True" or "yes" or "1"));
             case "object":
                 return Parsed(text);
             case "array":
                 if (text.TrimStart().StartsWith("[")) return Parsed(text);
                 var parts = text.Split(',').Select(p => p.Trim()).Where(p => p.Length > 0).ToList();
-                return Element(w =>
+                return Placeholders.Element(w =>
                 {
                     w.WriteStartArray();
                     foreach (var p in parts)
@@ -417,7 +417,7 @@ internal static class QuickTools
                     w.WriteEndArray();
                 });
             default:
-                return Element(w => w.WriteStringValue(text));
+                return Placeholders.Element(w => w.WriteStringValue(text));
         }
     }
 
@@ -430,16 +430,6 @@ internal static class QuickTools
     {
         using var doc = JsonDocument.Parse(json);
         return doc.RootElement.Clone();
-    }
-
-    private static JsonElement Element(Action<Utf8JsonWriter> write)
-    {
-        using var stream = new MemoryStream();
-        using (var w = new Utf8JsonWriter(stream)) write(w);
-        // Parsed from a string: JsonDocument.Parse(byte[]) binds the ReadOnlyMemory<byte> overload, which names
-        // System.Memory in this DLL and fails when Revit 2024 hands this DLL and System.Text.Json different copies of it.
-        using var parsed = JsonDocument.Parse(System.Text.Encoding.UTF8.GetString(stream.ToArray()));
-        return parsed.RootElement.Clone();
     }
 
     private static string Pretty(string name)

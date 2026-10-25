@@ -741,15 +741,4 @@ internal static class ChatUi
         t.VerticalAlignment = VerticalAlignment.Center;
         return t;
     }
-
-    /// <summary>Adds plain text with line breaks to an inline collection.</summary>
-    public static void AddLines(InlineCollection inlines, string text)
-    {
-        var parts = text.Replace("\r", "").Split('\n');
-        for (var k = 0; k < parts.Length; k++)
-        {
-            if (k > 0) inlines.Add(new LineBreak());
-            if (parts[k].Length > 0) inlines.Add(new Run(parts[k]));
-        }
-    }
 }

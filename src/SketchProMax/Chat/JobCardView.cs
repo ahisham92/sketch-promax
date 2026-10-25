@@ -3,7 +3,6 @@ using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Documents;
-using System.Windows.Media;
 using System.Windows.Shapes;
 using SketchProMax.Bridge;
 using SketchProMax.UI;
@@ -138,7 +137,8 @@ internal sealed class JobCardView : ContentControl
         Render(null, DateTime.UtcNow, "");
     }
 
-    private static Button Pill(string text, string style, string help)
+    /// <summary>A card's button (also the parallel job card's).</summary>
+    internal static Button Pill(string text, string style, string help)
     {
         var b = new Button { Content = text, Margin = new Thickness(0, 0, ChatUi.S2, ChatUi.S1), ToolTip = help, MinWidth = 64 };
         b.SetResourceReference(StyleProperty, style);

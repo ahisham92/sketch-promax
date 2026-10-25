@@ -1,4 +1,3 @@
-using System.Net.Http;
 using SketchProMax.Update;
 
 /// <summary>Where the updater reads the latest release: GitHub's API first, the github.com release page on any failure of it.</summary>

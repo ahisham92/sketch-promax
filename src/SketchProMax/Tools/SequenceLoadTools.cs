@@ -635,7 +635,7 @@ internal static class SlabZones
         var failedRooms = 0;
         foreach (var loops in drawnRooms)
         {
-            var cutter = RoomCutter(loops, z);
+            var cutter = RoomCutter(loops);
             if (cutter is null) { failedRooms++; continue; }
             for (var i = 0; i < solids.Count; i++)
             {
@@ -689,7 +689,7 @@ internal static class SlabZones
     }
 
     /// <summary>The room's outer loop grown outward, extruded a little taller than the slabs so the cut is clean.</summary>
-    private static Solid? RoomCutter(List<CurveLoop> loops, double z)
+    private static Solid? RoomCutter(List<CurveLoop> loops)
     {
         var outer = loops.OrderByDescending(l => Math.Abs(Signed(Ring(l)))).FirstOrDefault();
         if (outer is null) return null;

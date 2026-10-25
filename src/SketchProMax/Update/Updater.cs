@@ -60,9 +60,6 @@ public static class Updater
     /// </summary>
     public static string? Latest => LoadState().Latest is { } l && Parse(l) > Current ? l : null;
 
-    /// <summary>The release notes of <see cref="Latest"/> (GitHub's text, Markdown), when the check could read them.</summary>
-    public static string? LatestNotes => Latest is null ? null : LoadState().Notes;
-
     /// <summary>The release notes the last check read for <paramref name="version"/>, or null.</summary>
     public static string? NotesFor(string version) => LoadState() is { Latest: { } l, Notes: { } n } && Parse(l) == Parse(version) ? n : null;
 

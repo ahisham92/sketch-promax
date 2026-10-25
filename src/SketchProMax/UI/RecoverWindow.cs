@@ -5,7 +5,6 @@ using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
 using SketchProMax.Revit;
-using Button = System.Windows.Controls.Button;
 using M = SketchProMax.Revit.ChangeFileMath;
 
 namespace SketchProMax.UI;
@@ -40,9 +39,6 @@ internal sealed class RecoverWindow : Window
         _open.Activate();
         return Autodesk.Revit.UI.Result.Succeeded;
     }
-
-    /// <summary>The window, not shown (the field test builds it).</summary>
-    internal static Window ForTest() => new RecoverWindow();
 
     private RecoverWindow()
     {

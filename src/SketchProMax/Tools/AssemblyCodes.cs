@@ -67,13 +67,10 @@ internal static class AssemblyCodes
         ChecklistMath.RuleList(ChecklistMath.Rule(def, "classification")) is { Count: > 0 } names ? names : ["Assembly Code"];
 
     /// <summary>
-    /// Every type of a built element placed in the model that has a code parameter it can write, with how many elements
-    /// use it: the elements Submissions status counts (not sheets, views, levels, grids, rooms, scope boxes or lines).
+    /// Every type of a built element placed in the model that has a code parameter it can write, with its elements: the
+    /// elements Submissions status counts (not sheets, views, levels, grids, rooms, scope boxes or lines), and what
+    /// parameter rules such as Floors [DAR_MARK=B*] read.
     /// </summary>
-    public static List<(ElementType Type, int Count)> TypesInUse(Document doc, IReadOnlyList<string> names) =>
-        Placed(doc, names).Select(x => (x.Type, x.Elements.Count)).ToList();
-
-    /// <summary>TypesInUse with the elements of each type (what parameter rules such as Floors [DAR_MARK=B*] read).</summary>
     public static List<(ElementType Type, List<Element> Elements)> Placed(Document doc, IReadOnlyList<string> names)
     {
         var cats = new List<ElementId>();

@@ -184,9 +184,19 @@ internal static class ClaudeCli
         if (!string.IsNullOrEmpty(model)) { args.Add("--model"); args.Add(model!); }
         AddEffort(args, effort);
 
+        var info = CliStart(install, args);
+        info.EnvironmentVariables["SKETCHPROMAX_REVIT_PID"] = pid;
+        return info;
+    }
+
+    /// <summary>
+    /// Claude Code run with <paramref name="args"/> (through cmd.exe for an npm .cmd shim), its output read as UTF-8, in
+    /// the chat's work folder, on the user's Claude plan.
+    /// </summary>
+    private static ProcessStartInfo CliStart(Install install, List<string> args)
+    {
         var command = string.Join(" ", args.Select(Quote));
-        var cmdShim = install.Path.EndsWith(".cmd", StringComparison.OrdinalIgnoreCase);
-        var info = cmdShim
+        var info = install.Path.EndsWith(".cmd", StringComparison.OrdinalIgnoreCase)
             ? new ProcessStartInfo("cmd.exe", "/d /s /c \"" + Quote(install.Path) + " " + command + "\"")
             : new ProcessStartInfo(install.Path, command);
         info.UseShellExecute = false;
@@ -199,7 +209,6 @@ internal static class ClaudeCli
         info.WorkingDirectory = WorkFolder;
         // The chat runs on the user's Claude plan: an API key in the environment would bill the API instead.
         info.EnvironmentVariables.Remove("ANTHROPIC_API_KEY");
-        info.EnvironmentVariables["SKETCHPROMAX_REVIT_PID"] = pid;
         return info;
     }
 
@@ -232,19 +241,7 @@ internal static class ClaudeCli
         else { args.Add("--session-id"); args.Add(newSession ?? Guid.NewGuid().ToString()); }
         if (!string.IsNullOrEmpty(model)) { args.Add("--model"); args.Add(model!); }
         AddEffort(args, effort);
-        var command = string.Join(" ", args.Select(Quote));
-        var info = install.Path.EndsWith(".cmd", StringComparison.OrdinalIgnoreCase)
-            ? new ProcessStartInfo("cmd.exe", "/d /s /c \"" + Quote(install.Path) + " " + command + "\"")
-            : new ProcessStartInfo(install.Path, command);
-        info.UseShellExecute = false;
-        info.CreateNoWindow = true;
-        info.RedirectStandardInput = true;
-        info.RedirectStandardOutput = true;
-        info.RedirectStandardError = true;
-        info.StandardOutputEncoding = Encoding.UTF8;
-        info.StandardErrorEncoding = Encoding.UTF8;
-        info.WorkingDirectory = WorkFolder;
-        info.EnvironmentVariables.Remove("ANTHROPIC_API_KEY");
+        var info = CliStart(install, args);
         // Its own session, always: nothing of a parent session carries over.
         foreach (var name in info.EnvironmentVariables.Keys.Cast<string>().Where(k => k == "CLAUDECODE" || k.StartsWith("CLAUDE_CODE_", StringComparison.Ordinal) && k.Contains("SESSION")).ToList())
             info.EnvironmentVariables.Remove(name);
@@ -355,19 +352,7 @@ internal static class ClaudeCli
             args.AddRange(new[] { "--strict-mcp-config", "--max-turns", "1" });
         }
         if (!string.IsNullOrEmpty(model)) { args.Add("--model"); args.Add(model!); }
-        var command = string.Join(" ", args.Select(Quote));
-        var info = install.Path.EndsWith(".cmd", StringComparison.OrdinalIgnoreCase)
-            ? new ProcessStartInfo("cmd.exe", "/d /s /c \"" + Quote(install.Path) + " " + command + "\"")
-            : new ProcessStartInfo(install.Path, command);
-        info.UseShellExecute = false;
-        info.CreateNoWindow = true;
-        info.RedirectStandardInput = true;
-        info.RedirectStandardOutput = true;
-        info.RedirectStandardError = true;
-        info.StandardOutputEncoding = Encoding.UTF8;
-        info.StandardErrorEncoding = Encoding.UTF8;
-        info.WorkingDirectory = WorkFolder;
-        info.EnvironmentVariables.Remove("ANTHROPIC_API_KEY");
+        var info = CliStart(install, args);
         info.EnvironmentVariables["SKETCHPROMAX_REVIT_PID"] = pid;
         return info;
     }

@@ -4,7 +4,6 @@ using System.IO;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
-using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
@@ -48,7 +47,6 @@ internal sealed class SubmissionChecklistWindow : Window
     private string _othersStamp;
     private DateTime _readAt = DateTime.Now;
     private bool _closed, _dirty, _writing, _loading;
-    private string _lastFile = "";
     // The questions template's owner (the owner's PC, the one the license exempts) is the only one who changes questions:
     // the template, and questions added or left out on a project. Everyone else answers.
     private readonly bool _owner = OwnerPc();
@@ -1259,7 +1257,6 @@ internal sealed class SubmissionChecklistWindow : Window
                     file = docx;
                 }
             }
-            _lastFile = file;
             if (file.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase) || !pdf) _status.Text = $"Made {Path.GetFileName(file)} in Documents\\Sketch ProMax\\Submission checklists.";
             Shell(file, null);
         }

@@ -141,11 +141,6 @@ internal static class ChecklistFacts
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException) { }
 
         var wanted = new HashSet<string>(def?.Items.Select(i => i.Auto).Where(a => a.Length > 0) ?? ChecklistMath.AutoRules.Select(a => a.Key), StringComparer.Ordinal);
-        // Each hint's check text and example (the expected names: link worksets, the title block file).
-        var example = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var item in def?.Items ?? [])
-            if (item.Auto.Length > 0 && !example.ContainsKey(item.Auto)) example[item.Auto] = item.Example + "\n" + item.Check;
-        string Ex(string key) => example.TryGetValue(key, out var e) ? e : "";
 
         Views? views = null;
         Views V() => views ??= new Views(doc);

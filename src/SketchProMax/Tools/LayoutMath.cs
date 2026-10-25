@@ -227,17 +227,7 @@ internal static class LayoutMath
         return result.OrderByDescending(p => p.clearance).ToList();
     }
 
-    public static bool InPolygon(IReadOnlyList<(double x, double y)> poly, double x, double y)
-    {
-        var inside = false;
-        for (int i = 0, j = poly.Count - 1; i < poly.Count; j = i++)
-        {
-            var (xi, yi) = poly[i];
-            var (xj, yj) = poly[j];
-            if ((yi > y) != (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) inside = !inside;
-        }
-        return inside;
-    }
+    public static bool InPolygon(IReadOnlyList<(double x, double y)> poly, double x, double y) => Cost.Inside(x, y, poly);
 
     private static double DistanceToRing(IReadOnlyList<(double x, double y)> ring, double x, double y)
     {

@@ -34,9 +34,6 @@ internal sealed partial class ChatPane
     private Panel? _switcherHome;
     private bool _jobsSide;
 
-    /// <summary>True while the chat shows in its large window.</summary>
-    internal bool IsBig => _big is not null;
-
     /// <summary>The header's expand button (back to the side once large), and the narrow pane's shorter words.</summary>
     private void BuildBigButton()
     {

@@ -8,7 +8,6 @@ using System.Text;
 using System.Text.Json;
 using Autodesk.Revit.UI;
 using SketchProMax.Revit;
-using SketchProMax.Settings;
 using SketchProMax.Tools;
 
 namespace SketchProMax.Bridge;

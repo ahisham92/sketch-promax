@@ -68,11 +68,11 @@ public sealed class BerthStatusTool : IRevitTool
                 return ToolResult.Ok(new
                 {
                     project,
-                    berths = setup.Berths.Select(b => Line(setup, Summarize(setup, b, state, now), detail: false)),
+                    berths = setup.Berths.Select(b => Line(Summarize(setup, b, state, now), detail: false)),
                     note = "Model results are from each berth's last Update status (readAt). Press Update status in the Berth status window to read the model again.",
                 });
             case "details":
-                return ToolResult.Ok(Line(setup, Summarize(setup, Pick(), state, now), detail: true));
+                return ToolResult.Ok(Line(Summarize(setup, Pick(), state, now), detail: true));
             case "set":
             {
                 var berth = Pick();
@@ -103,7 +103,7 @@ public sealed class BerthStatusTool : IRevitTool
         }
     }
 
-    private static object Line(Setup setup, Summary s, bool detail) => new
+    private static object Line(Summary s, bool detail) => new
     {
         berth = s.Berth.Name,
         model = s.Berth.Model,

@@ -4,7 +4,6 @@ using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
-using SketchProMax.Tools;
 using static SketchProMax.Tools.SubmissionChecklistDiagrams;
 
 namespace SketchProMax.UI;

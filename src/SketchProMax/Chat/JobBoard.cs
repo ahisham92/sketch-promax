@@ -142,11 +142,6 @@ internal sealed class JobBoard
         lock (Gate) return _jobs.FirstOrDefault(j => j.Number == number);
     }
 
-    public ChatJob? FindKey(string key)
-    {
-        lock (Gate) return _jobs.FirstOrDefault(j => j.Key == key);
-    }
-
     /// <summary>Jobs running or waiting their turn now.</summary>
     public int ActiveCount
     {

@@ -195,7 +195,7 @@ internal static class SubmissionChecklistDocx
             case ItemState.Approved: gl = $"Approved\n{live!.By}, {Date(live.At)}"; glColor = OkText; glFill = OkFill; break;
             case ItemState.Returned: gl = $"Returned: {live!.Note}\n{live.By}, {Date(live.At)}"; glColor = BadText; glFill = BadFill; break;
             default:
-                gl = value.Length == 0 ? "" : review is { Verdict.Length: > 0 } old && live is null ? "Answer changed after review: look again" : "Waiting";
+                gl = value.Length == 0 ? "" : review is { Verdict.Length: > 0 } && live is null ? "Answer changed after review: look again" : "Waiting";
                 if (gl.Length > 0) { glColor = WarnText; glFill = WarnFill; }
                 break;
         }

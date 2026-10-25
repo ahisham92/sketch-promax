@@ -24,11 +24,6 @@ internal sealed partial class ChatPane
     /// <summary>Test hook (BriefTest): when set, a turn's text goes here instead of to Claude Code.</summary>
     private static Action<string>? DeliveryCapture;
 
-    /// <summary>
-    /// The brief the running task was started from ("" when it runs as typed, had no brief, or nothing runs).
-    /// </summary>
-    internal static string ActiveBrief => _instance?._turn?.Brief ?? "";
-
     // ---- Planning -------------------------------------------------------------------------------------------------
 
     /// <summary>Starts the planning run when the setting says so; false when the message should run as typed.</summary>

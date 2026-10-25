@@ -26,37 +26,6 @@ internal sealed class HandoffWindow : Window
         window.Activate();
     }
 
-    /// <summary>
-    /// For <see cref="Handoff.Ask"/>: a modal window whose Continue runs the step's re-check here (on Revit's thread),
-    /// and stays open with what is missing until it passes.
-    /// </summary>
-    public static HandoffChoice AskModal(HandoffStep step)
-    {
-        var request = new HandoffRequest(step, 1, 1);
-        var choice = HandoffChoice.Stop;
-        var window = new HandoffWindow(request);
-        request.Changed += r =>
-        {
-            if (r.State != HandoffState.Checking) return;
-            // Continue was pressed: check now, on this thread, then close or ask again.
-            window.Dispatcher.BeginInvoke(new Action(() =>
-            {
-                bool done;
-                try { done = step.Recheck?.Invoke() ?? true; }
-                catch (Exception ex) { done = false; step.Why = step.Why.TrimEnd('.') + ". The check failed: " + ex.Message; }
-                if (done) { choice = HandoffChoice.Continue; request.Close("Done"); }
-                else _ = request.Wait("Not done yet: " + step.What + ".");
-            }));
-        };
-        request.Changed += r =>
-        {
-            if (r.State == HandoffState.Closed && r.Outcome is "Skipped") choice = HandoffChoice.Skip;
-        };
-        _ = request.Wait(null);
-        window.ShowDialog();
-        return choice;
-    }
-
     private HandoffWindow(HandoffRequest request)
     {
         _request = request;

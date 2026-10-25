@@ -15,7 +15,6 @@ namespace SketchProMax.Tools;
 internal static class Carbon
 {
     public const string ResourceName = "SketchProMax.carbon-factors.csv";
-    public static readonly string[] Classes = ["concrete", "rebar", "steel", "aluminium", "timber", "masonry", "glass", "insulation", "plasterboard", "mortar", "tile", "aggregate", "stone", "air"];
 
     /// <summary>One row of a factor table: kgCO2e per unit of a material (or a transport mode, distance or waste rate).</summary>
     public sealed class Factor
@@ -96,21 +95,7 @@ internal static class Carbon
         var list = lines.ToList();
         if (list.Count < 2) return [];
         var sep = new[] { ',', ';', '\t' }.OrderByDescending(ch => list[0].Count(x => x == ch)).First();
-        List<string> Cells(string line)
-        {
-            var cells = new List<string>();
-            var cell = new StringBuilder();
-            var quoted = false;
-            for (var i = 0; i < line.Length; i++)
-            {
-                var ch = line[i];
-                if (ch == '"') { if (quoted && i + 1 < line.Length && line[i + 1] == '"') { cell.Append('"'); i++; } else quoted = !quoted; }
-                else if (ch == sep && !quoted) { cells.Add(cell.ToString()); cell.Clear(); }
-                else cell.Append(ch);
-            }
-            cells.Add(cell.ToString());
-            return cells;
-        }
+        List<string> Cells(string line) => CsvCells(line, sep);
         var header = Cells(list[0]).Select(h => h.Trim().ToLowerInvariant()).ToList();
         return list.Skip(1).Select(l =>
         {
@@ -119,6 +104,23 @@ internal static class Carbon
             for (var i = 0; i < header.Count && i < c.Count; i++) d[header[i]] = c[i].Trim();
             return d;
         }).ToList();
+    }
+
+    /// <summary>The cells of one CSV line split at <paramref name="sep"/> (quoted cells may hold it, and "" inside them is a quote).</summary>
+    public static List<string> CsvCells(string line, char sep)
+    {
+        var cells = new List<string>();
+        var cell = new StringBuilder();
+        var quoted = false;
+        for (var i = 0; i < line.Length; i++)
+        {
+            var ch = line[i];
+            if (ch == '"') { if (quoted && i + 1 < line.Length && line[i + 1] == '"') { cell.Append('"'); i++; } else quoted = !quoted; }
+            else if (ch == sep && !quoted) { cells.Add(cell.ToString()); cell.Clear(); }
+            else cell.Append(ch);
+        }
+        cells.Add(cell.ToString());
+        return cells;
     }
 
     /// <summary>

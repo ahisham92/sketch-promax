@@ -38,8 +38,8 @@ internal sealed class ParallelJobCard : ContentControl
         Focusable = false;
         Margin = new Thickness(0, ChatUi.S3, 0, ChatUi.S1);
 
-        _open = Pill(OpenText, "SpmChatPill", $"Shows job {number}'s own chat: everything it was asked and did. Messages you send there go to this job; Back to coordinator returns.");
-        _stop = Pill("Stop", "SpmChatDanger", "Stops this job. A change it already started in Revit finishes on its own; send it a message later to carry on.");
+        _open = JobCardView.Pill(OpenText, "SpmChatPill", $"Shows job {number}'s own chat: everything it was asked and did. Messages you send there go to this job; Back to coordinator returns.");
+        _stop = JobCardView.Pill("Stop", "SpmChatDanger", "Stops this job. A change it already started in Revit finishes on its own; send it a message later to carry on.");
         AutomationProperties.SetName(_open, $"Open job {number}");
         AutomationProperties.SetName(_stop, $"Stop job {number}");
         _open.Click += (_, _) => Opened?.Invoke(Number);
@@ -77,15 +77,6 @@ internal sealed class ParallelJobCard : ContentControl
         frame.Padding = new Thickness(ChatUi.S3 + 2, ChatUi.S3, ChatUi.S3 + 2, ChatUi.S2);
         Content = card;
         AutomationProperties.SetName(this, $"Job {number}");
-    }
-
-    private static Button Pill(string text, string style, string help)
-    {
-        var b = new Button { Content = text, Margin = new Thickness(0, 0, ChatUi.S2, ChatUi.S1), ToolTip = help, MinWidth = 64 };
-        b.SetResourceReference(StyleProperty, style);
-        AutomationProperties.SetName(b, text);
-        AutomationProperties.SetHelpText(b, help);
-        return b;
     }
 
     /// <summary>The headline as shown (for the field test).</summary>

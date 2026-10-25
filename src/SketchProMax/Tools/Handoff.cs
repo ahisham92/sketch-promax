@@ -128,27 +128,6 @@ public static class Handoff
     }
 
     /// <summary>
-    /// A modal question for a step done outside Revit (a file to copy into place, a network drive to connect): Continue
-    /// runs <see cref="HandoffStep.Recheck"/> and asks again until it passes. Call on Revit's thread, from a tool.
-    /// </summary>
-    public static HandoffChoice Ask(HandoffStep step)
-    {
-        var respond = TestResponder;
-        List<HandoffOutcome> outcomes;
-        if (respond is not null || App.Ui is null)
-            outcomes = HandoffLoop.RunAsync([new HandoffItem(step, null)], null, respond ?? ((_, _) => HandoffChoice.Stop),
-                work => Task.FromResult(work()), () => Jobs.CancelRequested).GetAwaiter().GetResult();
-        else
-        {
-            var choice = UI.HandoffWindow.AskModal(step);
-            outcomes = [new(step.Item ?? step.What, step.What, choice switch { HandoffChoice.Continue => "continued", HandoffChoice.Skip => "skipped", _ => "stopped" },
-                choice == HandoffChoice.Continue, null, null)];
-        }
-        Remember(outcomes);
-        return outcomes[0] switch { { Done: true } => HandoffChoice.Continue, { Choice: "skipped" } => HandoffChoice.Skip, _ => HandoffChoice.Stop };
-    }
-
-    /// <summary>
     /// From the bridge, off Revit's thread: a call Revit didn't take (an edit mode, a dialog). The user finishes it and
     /// presses Continue (true: the caller sends the call again) or Skip/Stop (false).
     /// </summary>

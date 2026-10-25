@@ -1,6 +1,5 @@
 using System.IO;
 using System.Text;
-using System.Threading;
 using UglyToad.PdfPig;
 using UglyToad.PdfPig.DocumentLayoutAnalysis.TextExtractor;
 using UglyToad.PdfPig.Writer;

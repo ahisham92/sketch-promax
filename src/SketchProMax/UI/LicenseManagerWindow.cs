@@ -49,9 +49,6 @@ internal sealed class LicenseManagerWindow : Window
         return Autodesk.Revit.UI.Result.Succeeded;
     }
 
-    /// <summary>The window, not shown (the field test builds it).</summary>
-    internal static Window ForTest() => new LicenseManagerWindow();
-
     private LicenseManagerWindow()
     {
         Title = "Sketch ProMax: License manager";

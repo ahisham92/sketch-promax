@@ -1,5 +1,4 @@
 using System.Text;
-using System.Text.Json;
 using Autodesk.Revit.UI;
 using SketchProMax.Tools;
 
