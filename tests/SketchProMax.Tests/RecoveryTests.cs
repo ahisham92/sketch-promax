@@ -86,6 +86,12 @@ internal static class RecoveryTests
             && Src("CoreEntry.cs").Contains("\"recover\" => RecoverWindow.Open()"), "");
         check("recovery: the window warns to check every change after a replay", Src("UI", "RecoverWindow.cs").Contains("check in the model that every change"), "");
         check("recovery: the change file never saves the model", !Src("Revit", "ChangeFile.cs").Contains(".Save(") && !Src("Revit", "ChangeFile.cs").Contains("SynchronizeWithCentral"), "");
+        check("lifeline: named Lifeline on the pane and in Settings", SketchProMax.UI.CoreRibbonManifest.Text.Contains("\tLifeline\t") && Src("UI", "SettingsLayout.cs").Contains("\"Lifeline\""), "");
+        check("lifeline: can go in a shared pack for colleagues", SketchProMax.Sharing.SharedPackMath.Shareable("recover"), "");
+        check("lifeline: works without a license", Src("CoreEntry.cs").Contains("\"export-chats-bugs\", \"recover\","), "");
+        var app = Src("App.cs");
+        var startAt = app.IndexOf("ChangeFile.Start(app)", StringComparison.Ordinal);
+        check("lifeline: the change file starts with TritoRevit alone too (outside the Sketch ProMax-only block)", startAt > app.IndexOf("Licensing.LicenseState.Allowed", StringComparison.Ordinal), "");
         check("recovery: Help > Open folders lists the change files", SketchProMax.Bugs.UserFolders.List().Any(f => f.Title == "Change files" && f.Path.EndsWith(Path.Combine("Sketch ProMax", "Change files"))), "");
     }
 }

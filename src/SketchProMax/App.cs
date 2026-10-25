@@ -190,7 +190,6 @@ public sealed class App : IExternalApplication
             try { StartupTimings.Time("time log", () => TimeLog.Start(app)); } catch (Exception) { /* tasks still run; time is not counted */ }
             try { StartupTimings.Time("bim ready", () => BimReady.Start(app)); } catch (Exception) { /* models are only kept ready by the checklist's Fix buttons */ }
             try { StartupTimings.Time("change tracker", () => ChangeTracker.Start(app)); } catch (Exception) { /* Update status then reads every berth */ }
-            try { StartupTimings.Time("change file", () => ChangeFile.Start(app)); } catch (Exception) { /* no change file is kept */ }
             // This PC's license (Licensing/LicenseState): without a valid key the License window opens at the first idle moment.
             try
             {
@@ -201,6 +200,8 @@ public sealed class App : IExternalApplication
             }
             catch (Exception) { /* the License button still opens it */ }
         }
+        // Lifeline's change file, for everyone: with Sketch ProMax and with TritoRevit alone (shared packs), licensed or not.
+        try { StartupTimings.Time("change file", () => ChangeFile.Start(app)); } catch (Exception) { /* no change file is kept */ }
         CentralAccess.Watch(app);
         // Our exceptions that reach Revit's UI thread are caught and logged; one on a background thread is logged before Revit closes.
         if (!shared) CrashGuard.Start(Ui);

@@ -279,6 +279,8 @@ internal static class SharedPackMath
             "Writes one small zip describing this project (data, quantities, sheets, revisions, schedules, check results). Read-only."),
         ("time-saved", "Time saved", "job",
             "Working time in this model and the time saved, per tool and per day. Exports to Excel."),
+        ("recover", "Lifeline", "refresh",
+            "Keeps a small text file of each model's changes since its last save, and puts them back after Revit closes by itself or the file is damaged. Works as soon as TritoRevit is installed."),
         ("pdf-editor", "PDF editor", "pdf",
             "Edit any PDF: see every page, then delete, turn, move or replace pages, add PDFs to merge, extract or split. Nothing is kept in the model."),
     ];

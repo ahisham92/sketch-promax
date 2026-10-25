@@ -8,7 +8,7 @@ internal static class SettingsTests
     {
         var keys = SettingsLayout.Tabs.Select(t => t.Key).ToList();
         check("settings: eight tabs, each once", keys.Count == 8 && keys.Distinct().Count() == 8
-            && SettingsLayout.Tabs.Select(t => t.Name).SequenceEqual(["Approvals", "Chat", "Firm standards", "Time tracking", "Issue & drawings", "Sign-off", "Recovery", "Updates"]),
+            && SettingsLayout.Tabs.Select(t => t.Name).SequenceEqual(["Approvals", "Chat", "Firm standards", "Time tracking", "Issue & drawings", "Sign-off", "Lifeline", "Updates"]),
             string.Join(", ", SettingsLayout.Tabs.Select(t => t.Name)));
         check("settings: every setting is on a tab that exists", SettingsLayout.Settings.Values.All(keys.Contains), "");
         var empty = keys.Where(k => !SettingsLayout.Settings.Values.Contains(k)).ToList();

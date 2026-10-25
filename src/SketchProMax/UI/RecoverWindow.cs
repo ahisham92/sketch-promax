@@ -46,7 +46,7 @@ internal sealed class RecoverWindow : Window
 
     private RecoverWindow()
     {
-        Title = "Sketch ProMax: Recover";
+        Title = "Sketch ProMax: Lifeline";
         Width = 640;
         SizeToContent = SizeToContent.Height;
         MaxHeight = Math.Max(480, SystemParameters.WorkArea.Height * 0.9);
@@ -75,7 +75,7 @@ internal sealed class RecoverWindow : Window
         page.Children.Add(Brand.ButtonRow(pick, folder, close));
 
         var root = new DockPanel();
-        var header = Brand.Header("Recover", "Put your changes back from the change file");
+        var header = Brand.Header("Lifeline", "Bring back changes lost when Revit closed or the file was damaged");
         DockPanel.SetDock(header, Dock.Top);
         root.Children.Add(header);
         root.Children.Add(new ScrollViewer { Content = page, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Focusable = false });

@@ -71,7 +71,7 @@ public static class CoreEntry
     internal static readonly HashSet<string> WithoutLicense = new(StringComparer.Ordinal)
     {
         "license", "status", "update-info", "update-check", "update-button", "whats-new", "help", "settings", "pane", "chat",
-        "report-bug", "bug-folder", "export-chats-bugs",
+        "report-bug", "bug-folder", "export-chats-bugs", "recover",
     };
 
     private static int Run(string name, UIApplication app)
