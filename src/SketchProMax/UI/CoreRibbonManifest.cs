@@ -57,6 +57,19 @@ internal static class CoreRibbonManifest
             "Bills, back-up and costing per berth, measured from the open model.",
             "Quantities follow the model as it changes; type a value by hand where the model can't say. Makes the BOQ Excel, the Word " +
             "back-up and the costing workbook in the built-in formats or your project's own templates.", needsModel: true)),
+        // Lifeline (0.35.14, the owner asked for it on the ribbon, clear): each model's change file, replayed onto a good copy
+        // after Revit closed by itself or the file was damaged (UI/RecoverWindow). Also on the pane's Files section.
+        L(Button("Claude", "Lifeline", "Lifeline", "recover", "refresh",
+            "Bring back your changes after Revit closed by itself or the file was damaged.",
+            "Lifeline keeps a small text file of each model's changes since its last save, by itself. After a crash, open the model " +
+            "(or a new local) and press Replay: it puts the changes back and lists anything to redo by hand. Problems go to Documents\\Sketch ProMax\\Lifeline bugs.")),
+        // Share tools (0.35; a large button in the first panel since 0.35.14, the owner asked for it to be clear): makes a zip that installs the chosen tools on the TritoRevit tab for colleagues with or without
+        // Sketch ProMax (Sharing/ShareWindow).
+        L(Button("Claude", "ShareTools", "Share\ntools", "share-tools", "pack",
+            "Share your tools with colleagues: one zip installs them on the TritoRevit tab, and they update by themselves.",
+            "Pick tools (the checklist, ribbon tools, learned tools, recipes), name the pack and, optionally, a folder everyone can reach. " +
+            "Colleagues extract the zip and double-click Install TritoRevit.cmd; it installs the TritoRevit add-in when they don't have it. Only the first " +
+            "install needs a Revit restart: later changes reach them from that folder while Revit is open. Only on the owner's PC.")),
         // Update (0.33.1): in the first panel, which Revit never folds away on a narrow ribbon, so updating is always one click.
         // The only Update button since 0.35: its live label also pumps the update notice (CoreEntry.LiveLabel "update-badge").
         L(Button("Claude", "UpdateClaude", "Update", "update-button", "version",
@@ -172,8 +185,10 @@ internal static class CoreRibbonManifest
         // ---- Sketch ProMax: Under development (tools that work but are still being proven), then stacks of three short
         // labels. A stack's widest label is the first Revit hides when the ribbon is narrow, so the labels are short and of
         // a length; RibbonLabels then asks Revit to keep them (it shrinks the panel by other means).
-        L(Pulldown("Sketch ProMax", "UnderDevelopment", "Under\ndevelopment", "test",
-            "Tools still being proven: embodied carbon and value engineering. Check their results before you use them.")),
+        // 0.35.14: Under development, Settings and Help are one stack of three, so the first panel could take Lifeline and
+        // Share tools as large buttons without widening the tab; License and Time saved moved into Help, Report bug to the pane.
+        L(Pulldown("Sketch ProMax", "UnderDevelopment", "Under development", "test",
+            "Tools still being proven: embodied carbon and value engineering. Check their results before you use them.", small: true)),
         T("UnderDevelopment", "embodied_carbon", "Embodied carbon", "boq", "Total tCO2e and kgCO2e/m² with breakdowns, top contributors and assumptions, to Excel and CSV. Reads the model only."),
         T("UnderDevelopment", "carbon_compare", "Compare options", "boq", "Compares two options or snapshots (e.g. cement replacement or a grade swap) and shows the saving."),
         T("UnderDevelopment", "carbon_view", "Carbon 3D view", "boq", "Makes a new 3D view coloured green to red by carbon intensity. Existing views are not changed."),
@@ -184,16 +199,9 @@ internal static class CoreRibbonManifest
         T("UnderDevelopment", "cost_estimate", "Cost plan", "boq", "Cost plan from the firm's rate table: total, rates per m² GFA, per m, per m³ and per tonne, add-ons, options side by side, to Excel. Reads the model only."),
         T("UnderDevelopment", "what_if", "What if", "bolt", "Tries a slab thickness, column size, grade or grid spacing on a copy and compares quantities, cost, carbon and the drawings affected. Previews first."),
         T("UnderDevelopment", "ve_register", "VE register", "list", "Exports the VE register and sets each item's status (proposed, accepted, rejected) and owner."),
-        // Share tools (0.35): makes a zip that installs the chosen tools on the TritoRevit tab for colleagues with or without
-        // Sketch ProMax (Sharing/ShareWindow).
-        L(Button("Sketch ProMax", "ShareTools", "Share tools", "share-tools", "pack",
-            "Share your tools with colleagues: one zip installs them on the TritoRevit tab, and they update by themselves.",
-            "Pick tools (the checklist, ribbon tools, learned tools, recipes), name the pack and, optionally, a folder everyone can reach. " +
-            "Colleagues extract the zip and double-click Install TritoRevit.cmd; it installs the TritoRevit add-in when they don't have it. Only the first " +
-            "install needs a Revit restart: later changes reach them from that folder while Revit is open. Only on the owner's PC.", small: true, breakBefore: true)),
         L(Button("Sketch ProMax", "SettingsButton", "Settings", "settings", "settings",
             "Firm standards, whether Revit asks before Sketch ProMax changes the model, and automatic updates.", small: true)),
-        L(Pulldown("Sketch ProMax", "HelpMenu", "Help", "help", "How to use Sketch ProMax, and diagnostics that test its tools.", small: true)),
+        L(Pulldown("Sketch ProMax", "HelpMenu", "Help", "help", "How to use Sketch ProMax, your license, time saved, folders and diagnostics.", small: true)),
         L(Entry("HelpMenu", "HelpPage", "Help and getting started", "help", "help", "Opens the guide: how to use Sketch ProMax, what it can do and what to try first.")),
         L(Entry("HelpMenu", "SelfTest", "Diagnostics: self-test", "self-test", "test",
             "Runs every Sketch ProMax tool once on the open model and reports what works. The quick check is read-only.")),
@@ -206,20 +214,18 @@ internal static class CoreRibbonManifest
         L(Entry("HelpMenu", "UserFolders", "Open folders", "user-folders", "folder",
             "Opens the folders where Sketch ProMax keeps your bug reports, learned tools, recipes, chats and checklists.",
             "Each folder has Open and Copy path. To learn from a colleague's PC, copy these folders from there.")),
-        // Show or hide pane left the Help menu after 0.35.5 (Chat shows the pane, its own X hides it) to free a loader slot for
-        // Open folders (UI/UserFoldersWindow).
-        L(Button("Sketch ProMax", "ReportBug", "Report bug", "report-bug", "bug",
-            "Writes a bug report for Sketch ProMax with what just happened, ready to send.", small: true, breakBefore: true)),
-        // Bug folder left the ribbon in 0.35 (still on the pane's Bugs section) to free a loader slot for Share tools.
-        // License (0.35) took Export chats' place, which stays on the pane's Bugs section, to keep the loader's free slots:
-        // this PC's license, or on the owner's PC the License manager (UI/LicenseWindow, UI/LicenseManagerWindow).
-        L(Button("Sketch ProMax", "License", "License", "license", "settings",
-            "This PC's license, and its PC code to send for a key. On the owner's PC: the License manager, to make keys, change their dates and cancel them.", small: true)),
-        // Time saved (0.32): CoreEntry.Command "time-saved" opens the summary for the active model (UI/TimeSavedWindow).
-        L(Button("Sketch ProMax", "TimeSaved", "Time saved", "time-saved", "job",
+        // License (0.35, in Help since 0.35.14): this PC's license, or on the owner's PC the License manager (UI/LicenseWindow, UI/LicenseManagerWindow).
+        L(Entry("HelpMenu", "License", "License", "license", "settings",
+            "This PC's license, and its PC code to send for a key. On the owner's PC: the License manager, to make keys, change their dates and cancel them.")),
+        // Time saved (0.32, in Help since 0.35.14): CoreEntry.Command "time-saved" opens the summary for the active model (UI/TimeSavedWindow).
+        L(Entry("HelpMenu", "TimeSaved", "Time saved", "time-saved", "job",
             "Working time in this model (AI and by hand) and the time Sketch ProMax saved, per tool and per day. Exports to Excel.",
             "All users' totals are kept in the model (Project Information shows them too). Rates and the idle threshold are in Settings.",
-            needsModel: true, small: true)),
+            needsModel: true)),
+        // Show or hide pane left the Help menu after 0.35.5 (Chat shows the pane, its own X hides it) to free a loader slot for
+        // Open folders (UI/UserFoldersWindow).
+        // Report bug left the ribbon in 0.35.14 (still on the pane's Bugs section) to free a loader slot for Lifeline.
+        // Bug folder left the ribbon in 0.35 (still on the pane's Bugs section) to free a loader slot for Share tools.
         // Test checklist left the Help menu in 0.35.1 (still on the pane's Bugs section) to free a loader slot for the
         // Submission checklist button.
 
