@@ -341,17 +341,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         _modelLine.FontSize = ChatUi.SmallSize;
         _modelLine.TextTrimming = TextTrimming.CharacterEllipsis;
         _modelLine.VerticalAlignment = VerticalAlignment.Center;
-        // The chat's type (a pill that switches it), then the Revit model.
-        var caption = new DockPanel();
-        DockPanel.SetDock(_typePill, Dock.Left);
-        caption.Children.Add(_typePill);
-        caption.Children.Add(_modelLine);
-        names.Children.Add(caption);
-        // The chat's effort (Automatic unless picked here) and the plan's usage. The model is picked by the message box.
-        var pickers = new WrapPanel();
-        pickers.Children.Add(_effortPick);
-        pickers.Children.Add(_usagePill);
-        names.Children.Add(pickers);
+        // The Revit model. The chat's type, effort and the plan's usage sit under the message box, to keep this short.
+        names.Children.Add(_modelLine);
         top.Children.Add(names);
         SetDock(top, Dock.Top);
         KeyboardNavigation.SetTabIndex(top, 0);
@@ -538,6 +529,17 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             e.Handled = true;
         }));
         composer.Children.Add(card);
+        // Under the message box: the chat's type (a pill that switches it) and effort (Automatic unless picked here) on
+        // the left, the plan's usage on the right. The model is picked on the pill in the box.
+        var settings = new DockPanel { Margin = new Thickness(ChatUi.S2, ChatUi.S1, 0, 0) };
+        DockPanel.SetDock(_usagePill, Dock.Right);
+        _usagePill.Margin = new Thickness(ChatUi.S1, 0, -ChatUi.S1, 0);
+        settings.Children.Add(_usagePill);
+        var pickers = new WrapPanel();
+        pickers.Children.Add(_typePill);
+        pickers.Children.Add(_effortPick);
+        settings.Children.Add(pickers);
+        composer.Children.Add(settings);
         composer.Children.Add(_statusRow);
         composer.Children.Add(_modelMenu);
         SetDock(composer, Dock.Bottom);
@@ -1061,7 +1063,6 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         _modelLine.ToolTip = "Each Revit model keeps its own chats, also after Revit restarts; open the others from the menu at the top left. " + _conv.Key;
         AutomationProperties.SetName(_chatName, "Chat: " + _chatName.Text);
         AutomationProperties.SetName(_modelLine, "Revit model: " + _conv.Title);
-        _modelLine.Text = " · " + _modelLine.Text;
         ShowType();
         ShowModelChoice();
     }

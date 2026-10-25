@@ -8,8 +8,8 @@ using SketchProMax.UI;
 namespace SketchProMax.Chat;
 
 /// <summary>
-/// The plan's usage in the chat's header, the way the Claude app shows it: a small meter ("Usage: 5h 43% · Week 5%", or
-/// "5h 43% · Wk 5%" in a narrow pane) whose hover gives the session's time left and each reset, and a click opens a detail with each limit Claude Code reported (the current 5-hour session, the weekly limits), how much is used
+/// The plan's usage under the chat's message box, the way the Claude app shows it: a small meter ("Usage: 5h 43%, 2h 10m
+/// left · Week 5%", or "5h 43%, 2h 10m left · Wk 5%" in a narrow pane) whose hover gives the session's time left and each reset, and a click opens a detail with each limit Claude Code reported (the current 5-hour session, the weekly limits), how much is used
 /// and when it resets. The figures are only what Claude Code reports with each answer (rate_limit_event, PlanUsage):
 /// nothing is estimated. Near a limit (80 %) the chat says so once per limit and reset, naming the jobs running then.
 /// </summary>
@@ -21,7 +21,7 @@ internal sealed partial class ChatPane
     private static readonly HashSet<string> _usageWarned = new(StringComparer.Ordinal);
     private static bool _usageLoaded;
 
-    private readonly Popup _usageMenu = new() { StaysOpen = false, AllowsTransparency = true, Placement = PlacementMode.Bottom };
+    private readonly Popup _usageMenu = new() { StaysOpen = false, AllowsTransparency = true, Placement = PlacementMode.Top };
     private readonly StackPanel _usageList = new() { Margin = new Thickness(ChatUi.S3) };
     private readonly TextBlock _usageText = new() { FontSize = ChatUi.SmallSize, VerticalAlignment = VerticalAlignment.Center };
     private readonly Border _usageBar = new() { Height = 4, Width = 28, CornerRadius = new CornerRadius(2), VerticalAlignment = VerticalAlignment.Center };
@@ -77,8 +77,8 @@ internal sealed partial class ChatPane
         if (_usagePill is null) return;
         var now = DateTimeOffset.UtcNow;
         var meter = _usage?.Meter(now) ?? "";
-        // The header keeps it short: the session's time left and each reset show on hover (and in the detail).
-        var shown = _usage?.Meter(now, timeLeft: false, narrow: _narrow) ?? "";
+        // The session's time left counts down on the meter itself; each reset shows on hover (and in the detail).
+        var shown = _usage?.Meter(now, timeLeft: true, narrow: _narrow) ?? "";
         _usageText.Text = shown.Length > 0 ? (_narrow ? shown : "Usage: " + shown) : _narrow ? "Usage" : "Usage: not reported yet";
         var high = _usage?.Highest(now);
         var key = high >= 1 ? Brand.K.DangerText : high >= PlanUsage.WarnAt ? Brand.K.WarningText : Brand.K.Muted;

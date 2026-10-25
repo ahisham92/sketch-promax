@@ -64,7 +64,7 @@ internal sealed partial class ChatPane
         ShowModelChoice();
     }
 
-    /// <summary>The kind pill (under the chat's name) and the effort picker, and the menu they share with New chat.</summary>
+    /// <summary>The kind pill and the effort picker (under the message box), and the menu they share with New chat.</summary>
     private void BuildTypeControls()
     {
         var row = new StackPanel { Orientation = Orientation.Horizontal };
@@ -229,6 +229,8 @@ internal sealed partial class ChatPane
             if (chosen || first is null) first = chosen ? item : first ?? item;
         }
         _choiceMenu.PlacementTarget = anchor;
+        // New chat is in the header (the menu drops down); the type and effort pills are under the message box (it opens up).
+        _choiceMenu.Placement = anchor == _newChat ? PlacementMode.Bottom : PlacementMode.Top;
         _choiceMenu.IsOpen = true;
         AutomationProperties.SetItemStatus(anchor, "Expanded");
         Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() => first?.Focus()));
