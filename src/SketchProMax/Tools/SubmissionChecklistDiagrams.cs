@@ -48,9 +48,7 @@ internal static class SubmissionChecklistDiagrams
         new("roro", "Ro-Ro ramp", RoRo()),
         new("pontoon", "Floating pontoon", Pontoon()),
         new("diaphragm-wall", "Anchored diaphragm wall", DiaphragmWall()),
-        new("dredging", "Dredging and reclamation", Dredging()),
         new("crane-rails", "Crane rails", CraneRails()),
-        new("pavement", "Yard pavement", Pavement()),
     ];
 
     public static Diagram? Find(string key) => All.FirstOrDefault(d => d.Key == key);
@@ -253,17 +251,6 @@ internal static class SubmissionChecklistDiagrams
         Text(260, 150, "Ground anchor"),
     ];
 
-    private static List<Shape> Dredging() =>
-    [
-        Poly(Look.Water, 0, Hw, 300, Hw, 260, 140, 210, 175, 90, 175, 40, 140, 0, 140),
-        Poly(Look.Soil, 0, 140, 40, 140, 90, 175, 210, 175, 260, 140, 300, 140, 400, 140, 400, 220, 0, 220),
-        Poly(Look.Fill, 300, Hw, 330, Cope, 400, Cope, 400, 140, 260, 140),
-        Line(Look.Dash, 40, 140, 260, 140),
-        Line(Look.Dash, 84, 187, 216, 187),
-        Level(Cope, "Reclamation level"), Level(Hw, "MHWS"), Level(Cd, "CD"), Level(140, "Existing seabed"), Level(175, "Dredge level"), Level(187, "Overdredge"),
-        Text(120, 160, "Side slope"),
-    ];
-
     private static List<Shape> CraneRails() =>
     [
         Poly(Look.Fill, 0, 75, 400, 75, 400, 220, 0, 220),
@@ -275,20 +262,6 @@ internal static class SubmissionChecklistDiagrams
         Line(Look.Accent, 90, 140, 310, 140),
         Text(170, 136, "Rail gauge"), Text(30, 30, "Boom"),
         Level(60, "Top of rail"), Level(110, "Rail beam soffit"),
-    ];
-
-    private static List<Shape> Pavement() =>
-    [
-        Rect(Look.Concrete, 0, 50, 400, 7),
-        Rect(Look.Rock, 0, 57, 400, 14),
-        Rect(Look.Fill, 0, 71, 400, 22),
-        Rect(Look.Soil, 0, 93, 400, 127),
-        Rect(Look.Concrete, 180, 46, 26, 26),
-        Circle(Look.Steel, 193, 120, 9),
-        Line(Look.Accent, 60, 36, 160, 44), Line(Look.Accent, 330, 36, 226, 44),
-        Text(20, 32, "Fall"), Text(340, 32, "Fall"), Text(215, 124, "Drain to outfall"),
-        Level(50, "Finished level"), Level(93, "Formation"),
-        Text(300, 67, "Base"), Text(300, 86, "Sub-base"), Text(300, 112, "Subgrade (CBR)"),
     ];
 
     /// <summary>The diagram as an SVG (for checks and anything outside WPF), in the same colours as the window.</summary>
