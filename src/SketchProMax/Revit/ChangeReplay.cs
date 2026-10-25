@@ -24,6 +24,8 @@ internal static class ChangeReplay
     {
         public int Set, Made, Deleted, Same;
         public readonly List<string> NotDone = [];
+        /// <summary>Changes Revit refused with an error (also in NotDone): bugs to look at, not just limits.</summary>
+        public readonly List<string> Errors = [];
         /// <summary>Old UniqueId to the element made again for it, so what it hosts (later in the file) finds it.</summary>
         public readonly Dictionary<string, ElementId> MadeFor = new(StringComparer.Ordinal);
         /// <summary>Sketches to redraw after the chunk's transactions (a sketch edit scope can't sit inside one); Counted: already counted as set back.</summary>
@@ -110,7 +112,7 @@ internal static class ChangeReplay
                 }
                 return null;
             });
-        foreach (var f in result.Failed) outcome.NotDone.Add($"{f.Item}: {f.Error}");
+        foreach (var f in result.Failed) { outcome.NotDone.Add($"{f.Item}: {f.Error}"); outcome.Errors.Add($"{f.Item}: {f.Error}"); }
         foreach (var s in work.Where(s => s.Line.Approx && s.Act != Act.Delete))
             outcome.NotDone.Add($"{M.Describe(s.Line)}: its curved edges (a spline or ellipse) came back as short straight lines: check its shape");
 

@@ -92,6 +92,16 @@ internal static class RecoveryTests
         var app = Src("App.cs");
         var startAt = app.IndexOf("ChangeFile.Start(app)", StringComparison.Ordinal);
         check("lifeline: the change file starts with TritoRevit alone too (outside the Sketch ProMax-only block)", startAt > app.IndexOf("Licensing.LicenseState.Allowed", StringComparison.Ordinal), "");
+        // Lifeline's bug list: one line per problem, readable in Notepad, trimmed to the newest.
+        var bug = M.BugLine(at, "0.35.13", "2025", "Port_local", "capture", "floor (Floors) couldn't be read\r\nInvalidOperationException: bad");
+        check("lifeline bugs: a problem is one line with when, version, Revit, model and where", bug == "2026-10-25 17:40 | 0.35.13 | Revit 2025 | Port_local | capture | floor (Floors) couldn't be read InvalidOperationException: bad", bug);
+        var many = Enumerable.Range(0, 2500).Select(i => "line " + i).Prepend(M.BugsHeader).ToList();
+        var kept = M.TrimBugs(many, M.MaxBugLines);
+        check("lifeline bugs: the file keeps its header and the newest lines", kept.Count == M.MaxBugLines + 1 && kept[0] == M.BugsHeader && kept[^1] == "line 2499" && kept[1] == "line 500", kept.Count.ToString());
+        check("lifeline bugs: one example per reason a replay couldn't do", M.Reason("17:42 Walls: Basic Wall: 200 (added or changed, Move): its host isn't in this model") == "its host isn't in this model", "");
+        check("lifeline bugs: in Documents, listed in Help > Open folders", SketchProMax.Bugs.UserFolders.List().Any(f => f.Title == "Lifeline bugs" && f.Path.EndsWith(Path.Combine("Sketch ProMax", M.BugsFolderName))), "");
+        check("lifeline bugs: capture, write, start and replay problems are noted", Src("Revit", "ChangeFile.cs").Contains("LifelineBugs.Note(\"capture\"") && Src("Revit", "ChangeFile.cs").Contains("LifelineBugs.Note(\"write\"")
+            && Src("App.cs").Contains("LifelineBugs.Note(\"start\"") && Src("UI", "RecoverWindow.cs").Contains("LifelineBugs.Note(\"replay error\""), "");
         check("recovery: Help > Open folders lists the change files", SketchProMax.Bugs.UserFolders.List().Any(f => f.Title == "Change files" && f.Path.EndsWith(Path.Combine("Sketch ProMax", "Change files"))), "");
     }
 }

@@ -25,6 +25,7 @@ internal static class UserFolders
         new("Checklists", System.IO.Path.Combine(Documents, "Sketch ProMax", "Checklists"), "The checklist Word files and PDFs."),
         new("PDF backups", System.IO.Path.Combine(Documents, "Sketch ProMax", "PDF backups"), "The old file each time the PDF editor saves over a PDF."),
         new("Change files", System.IO.Path.Combine(Documents, "Sketch ProMax", "Change files"), "Each model's changes since its last save, to replay after a crash (Lifeline)."),
+        new("Lifeline bugs", System.IO.Path.Combine(Documents, "Sketch ProMax", "Lifeline bugs"), "Lifeline bugs.txt: every problem Lifeline had on this PC, one line each, to fix now and then."),
         new("Field tests", System.IO.Path.Combine(Local, "field-tests"), "Field test reports."),
         new("Settings", Roaming, "Settings, license and everything above that is saved per user."),
     ];

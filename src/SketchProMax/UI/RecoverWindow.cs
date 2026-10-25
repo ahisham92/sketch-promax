@@ -245,10 +245,13 @@ internal sealed class RecoverWindow : Window
                 });
                 if (why is not null) { stoppedBecause = why; break; }
             }
-            catch (Exception ex) { stoppedBecause = ex.Message; break; }
+            catch (Exception ex) { stoppedBecause = ex.Message; Revit.LifelineBugs.Note("replay", "the replay stopped", modelPath, ex); break; }
             done += chunk.Count;
         }
         var report = WriteReport(file, modelPath, outcome, done, steps.Count, stoppedBecause);
+        // Lifeline's bug list: Revit's errors first, then what replay can't put back yet (what to build next).
+        foreach (var error in outcome.Errors) Revit.LifelineBugs.Note("replay error", error, modelPath);
+        foreach (var n in outcome.NotDone.Except(outcome.Errors)) Revit.LifelineBugs.Note("replay couldn't", n, modelPath, key: M.Reason(n));
         var line = $"Replayed {done} of {steps.Count}: {outcome.Set} set back, {outcome.Made} made again, {outcome.Deleted} deleted" +
                    (outcome.Same > 0 ? $", {outcome.Same} already right" : "") + ". " +
                    (outcome.NotDone.Count > 0 ? $"{Plural(outcome.NotDone.Count, "change")} to redo by hand are in the report." : "") +

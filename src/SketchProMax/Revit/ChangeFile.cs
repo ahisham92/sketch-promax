@@ -57,7 +57,7 @@ internal static class ChangeFile
         ReadSettings();
         if (_writer is not { IsAlive: true })
         {
-            _writer = new Thread(() => { foreach (var write in Disk.GetConsumingEnumerable()) { try { write(); } catch (Exception) { } } })
+            _writer = new Thread(() => { foreach (var write in Disk.GetConsumingEnumerable()) { try { write(); } catch (Exception ex) { LifelineBugs.Note("write", "a change couldn't be written to the change file", null, ex); } } })
             { IsBackground = true, Name = "Sketch ProMax change file", Priority = ThreadPriority.BelowNormal };
             _writer.Start();
         }
@@ -354,7 +354,7 @@ internal static class ChangeFile
             }
             Append(model, lines);
         }
-        catch (Exception) { /* this change is missing from the file; the model is not affected */ }
+        catch (Exception ex) { LifelineBugs.Note("capture", "deleted elements couldn't be noted", Safe(() => e.GetDocument().PathName), ex); /* this change is missing from the file; the model is not affected */ }
     }
 
     /// <summary>At Revit's idle moments: the elements changed since the last look are read and written.</summary>
@@ -397,7 +397,7 @@ internal static class ChangeFile
                 }
                 lines.Add(line);
             }
-            catch (Exception) { }
+            catch (Exception ex) { LifelineBugs.Note("capture", $"an element couldn't be read ({Safe(() => doc.GetElement(new ElementId(id))?.Category?.Name) ?? "no category"})", doc.PathName, ex); }
         }
         Append(model, lines);
     }
@@ -466,9 +466,9 @@ internal static class ChangeFile
                 break;
         }
         // Sketches (floors, ceilings, roofs, openings, regions, toposolids, edited wall profiles), paths and shape points.
-        try { ChangeShapes.Read(doc, element, line); } catch (Exception) { }
+        try { ChangeShapes.Read(doc, element, line); } catch (Exception ex) { LifelineBugs.Note("capture", $"the shape of {line.What} ({line.Category}) couldn't be read", doc.PathName, ex); }
         // Annotations, rooms and reinforcement: what they point at, their text, bars and the view they are drawn in.
-        try { ChangeNotes.Read(doc, element, line); } catch (Exception) { }
+        try { ChangeNotes.Read(doc, element, line); } catch (Exception ex) { LifelineBugs.Note("capture", $"{line.What} ({line.Category}) couldn't be read in full", doc.PathName, ex); }
         var values = new List<M.Value>();
         foreach (Parameter p in element.Parameters)
         {
@@ -502,6 +502,8 @@ internal static class ChangeFile
     }
 
     private static M.Xyz P(XYZ p) => new(M.Round(p.X), M.Round(p.Y), M.Round(p.Z));
+
+    private static string? Safe(Func<string?> get) { try { return get(); } catch (Exception) { return null; } }
 
     /// <summary>The time on a line, to the second (shorter lines).</summary>
     private static DateTime Now => new(DateTime.Now.Ticks / TimeSpan.TicksPerSecond * TimeSpan.TicksPerSecond, DateTimeKind.Unspecified);
