@@ -190,7 +190,7 @@ internal static class CoreRibbonManifest
             "Share your tools with colleagues: one zip installs them on the TritoRevit tab, and they update by themselves.",
             "Pick tools (the checklist, ribbon tools, learned tools, recipes), name the pack and, optionally, a folder everyone can reach. " +
             "Colleagues extract the zip and double-click Install TritoRevit.cmd; it installs the TritoRevit add-in when they don't have it. Only the first " +
-            "install needs a Revit restart: later changes reach them from that folder while Revit is open.", small: true, breakBefore: true)),
+            "install needs a Revit restart: later changes reach them from that folder while Revit is open. Only on the owner's PC.", small: true, breakBefore: true)),
         L(Button("Sketch ProMax", "SettingsButton", "Settings", "settings", "settings",
             "Firm standards, whether Revit asks before Sketch ProMax changes the model, and automatic updates.", small: true)),
         L(Pulldown("Sketch ProMax", "HelpMenu", "Help", "help", "How to use Sketch ProMax, and diagnostics that test its tools.", small: true)),

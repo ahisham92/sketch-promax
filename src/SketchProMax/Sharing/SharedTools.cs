@@ -102,6 +102,11 @@ internal static class SharedTools
     public static Result Share(UIApplication app)
     {
         if (App.Shared) return Result.Cancelled;
+        if (!OwnerPc())
+        {
+            TaskDialog.Show(Product, "Only the owner of Sketch ProMax can share tools. Ask them for the tools you need.");
+            return Result.Cancelled;
+        }
         var window = new ShareWindow(Catalog());
         window.ShowDialog();
         return window.Made ? Result.Succeeded : Result.Cancelled;
@@ -147,10 +152,17 @@ internal static class SharedTools
     /// <summary>Publishes the packs this PC shared again when a tool in them changed (background, every few minutes).</summary>
     public static void AutoPublish()
     {
-        if (App.Shared) return;
+        if (App.Shared || !OwnerPc()) return;
         if (!Directory.Exists(SharedPacks.RecordsFolder)) return;
         var published = SharedPacks.AutoPublish(RibbonTool, Updater.CurrentText);
         foreach (var line in published) ActivityLogNote(line);
+    }
+
+    /// <summary>Sharing tools (Share tools, and publishing a pack's next revision) is for the owner's PC only (the owner's rule, 2026-10-25).</summary>
+    private static bool OwnerPc()
+    {
+        try { return Licensing.LicenseState.IsOwnerPc; }
+        catch (Exception ex) when (ex is not OutOfMemoryException) { return false; }
     }
 
     private static void ActivityLogNote(string line)

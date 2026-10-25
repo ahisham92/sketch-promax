@@ -140,6 +140,12 @@ internal static class SharingTests
             string.Join(",", shipped.Select(c => c.Id)));
 
         // ---- Files that ship
+        // ---- Only the owner's PC shares tools (Share tools and the automatic next revision)
+        var sharedTools = Src("Sharing", "SharedTools.cs");
+        check("sharing: only the owner's PC can share tools or publish a pack's next revision",
+            sharedTools.Contains("if (!OwnerPc())") && sharedTools.Contains("if (App.Shared || !OwnerPc()) return;")
+            && sharedTools.Contains("LicenseState.IsOwnerPc"), "");
+
         // ---- Help > Open folders: the same folders the add-in writes to
         var folders = SketchProMax.Bugs.UserFolders.List();
         string Src(params string[] parts) => Read(Path.Combine([root, "src", "SketchProMax", .. parts]));
