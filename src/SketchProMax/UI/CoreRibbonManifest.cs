@@ -203,8 +203,11 @@ internal static class CoreRibbonManifest
         L(Entry("HelpMenu", "ConnectionStatus", "Desktop app connection", "status", "logo",
             "Whether the Claude desktop app is connected to this Revit window, the models it can see, how to fix a missing connection, and Open the Claude app.")),
         // Open Claude app left the Help menu in 0.35.3 (Desktop app connection opens it) to free a loader slot for the PDF editor.
-        L(Entry("HelpMenu", "TogglePane", "Show or hide pane", "pane", "pane",
-            "Shows or hides the Sketch ProMax pane: chat, the running job with a Cancel button, the last result and your tools.")),
+        L(Entry("HelpMenu", "UserFolders", "Open folders", "user-folders", "folder",
+            "Opens the folders where Sketch ProMax keeps your bug reports, learned tools, recipes, chats and checklists.",
+            "Each folder has Open and Copy path. To learn from a colleague's PC, copy these folders from there.")),
+        // Show or hide pane left the Help menu after 0.35.5 (Chat shows the pane, its own X hides it) to free a loader slot for
+        // Open folders (UI/UserFoldersWindow).
         L(Button("Sketch ProMax", "ReportBug", "Report bug", "report-bug", "bug",
             "Writes a bug report for Sketch ProMax with what just happened, ready to send.", small: true, breakBefore: true)),
         // Bug folder left the ribbon in 0.35 (still on the pane's Bugs section) to free a loader slot for Share tools.
