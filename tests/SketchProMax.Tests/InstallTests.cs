@@ -19,6 +19,13 @@ internal static class InstallTests
         check("loader: an older core never puts back an older loader", DecideLoader("AB", v30, "CD", v31) == LoaderAction.KeepNewer, "");
         check("loader: nothing to copy", DecideLoader(null, null, "CD", v30) == LoaderAction.Keep, "");
 
+        // The PDF engine on Revit 2024 (.NET Framework): LoadLibrary adds ".dll" only to a name with no extension, so the
+        // DllImport name must end in .dll there ("Unable to load DLL 'SketchProMax.pdfium'" on 0.35.3 to 0.35.5).
+        var engine = repoRoot is null ? "" : File.ReadAllText(Path.Combine(repoRoot, "src", "SketchProMax", "Tools", "PdfEngine.cs"));
+        check("pdf engine: the .NET Framework build imports SketchProMax.pdfium.dll by its full file name",
+            System.Text.RegularExpressions.Regex.IsMatch(engine, @"#else\s+internal const string Library = ""SketchProMax\.pdfium\.dll"";")
+            && engine.Contains("internal const string FileName = \"SketchProMax.pdfium.dll\";") && engine.Contains("Path.Combine(folder, FileName)"), "");
+
         // The shipped manifest is the settled one: one entry, the fixed loader path, the ClientId Revit trusts it under.
         var shippedPath = repoRoot is null ? null : Path.Combine(repoRoot, "src", "SketchProMax", ManifestName);
         if (shippedPath is not null && File.Exists(shippedPath))

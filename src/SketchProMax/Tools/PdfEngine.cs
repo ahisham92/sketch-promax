@@ -19,7 +19,15 @@ namespace SketchProMax.Tools;
 /// </summary>
 internal static class PdfEngine
 {
+    // .NET Framework (Revit 2024) passes the DllImport name to LoadLibrary as it is, and LoadLibrary adds ".dll" only to a
+    // name with no extension: "SketchProMax.pdfium" reads as a file with the extension ".pdfium", so it was never found
+    // (bug: "Unable to load DLL 'SketchProMax.pdfium'"). With ".dll" it binds to the copy Load() loaded from our folder.
+#if NET
     internal const string Library = "SketchProMax.pdfium";
+#else
+    internal const string Library = "SketchProMax.pdfium.dll";
+#endif
+    internal const string FileName = "SketchProMax.pdfium.dll";
 
     private static readonly BlockingCollection<Action> Now = new(), Queue = new();
     private static readonly object Gate = new();
@@ -90,7 +98,7 @@ internal static class PdfEngine
     private static void Load()
     {
         var folder = Path.GetDirectoryName(typeof(PdfEngine).Assembly.Location) ?? "";
-        var file = Path.Combine(folder, Library + ".dll");
+        var file = Path.Combine(folder, FileName);
 #if NET
         try
         {
