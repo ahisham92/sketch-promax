@@ -409,7 +409,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         _input.SetResourceReference(StyleProperty, "SpmChatBare");
         AutomationProperties.SetName(_input, "Message to Sketch ProMax");
         AutomationProperties.SetHelpText(_input, "Type your question or request here. Enter sends, Shift+Enter starts a new line, Escape stops the answer. Paste a picture or a file to attach it.");
-        _input.ToolTip = "Type here. Enter sends. Shift+Enter: new line. Paste or drop pictures, PDFs, Word and PowerPoint files and drawings to attach them.";
+        _input.ToolTip = "Type here. Enter sends. Shift+Enter: new line. Paste or drop pictures, PDFs, Word, PowerPoint and Excel files and drawings to attach them.";
         _input.PreviewKeyDown += OnInputKey;
         // A click in the box: once WPF has placed the caret, check Windows' keyboard focus followed (see TakeKeyboard).
         _input.PreviewMouseLeftButtonDown += (_, _) => Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(TakeKeyboard));
@@ -440,7 +440,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         _input.IsKeyboardFocusedChanged += (_, _) => ShowFieldState();
 
         var buttons = new DockPanel { Margin = new Thickness(ChatUi.S1, 0, ChatUi.S2, ChatUi.S2) };
-        _attach = ChatUi.IconButton(ChatUi.Paths.Plus, "Attach files", "Attach pictures, PDFs, Word and PowerPoint files, or drawings (DWG, DXF). You can also paste or drop them here.");
+        _attach = ChatUi.IconButton(ChatUi.Paths.Plus, "Attach files", "Attach pictures, PDFs, Word, PowerPoint and Excel files, or drawings (DWG, DXF). You can also paste or drop them here.");
         _attach.Click += (_, _) => PickFiles();
         _prompts = ChatUi.IconButton(ChatUi.Paths.Bookmark, "Saved prompts", "Your saved prompts: pick one to put it in the message box. Save one from any message with ⋯ › Save prompt.");
         _prompts.Click += (_, _) => TogglePrompts();
@@ -2123,13 +2123,13 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         public int Pages;
     }
 
-    /// <summary>Longer text from a Word or PowerPoint file goes to a text file named in the message instead.</summary>
+    /// <summary>Longer text from a Word, PowerPoint or Excel file goes to a text file named in the message instead.</summary>
     private const int MaxInlineText = 60_000;
 
     /// <summary>
     /// The stream-json line for a turn: text with notes on attached files, pictures as image blocks, PDFs that fit what
-    /// the chat already carries (<paramref name="used"/>, updated) as document blocks, and the text of Word and
-    /// PowerPoint files. A PDF too large to send whole has its text written to a file the note names.
+    /// the chat already carries (<paramref name="used"/>, updated) as document blocks, and the text of Word,
+    /// PowerPoint and Excel files. A PDF too large to send whole has its text written to a file the note names.
     /// </summary>
     private static string BuildMessage(string text, List<Attachment> attachments, AttachedSoFar used)
     {
@@ -2161,7 +2161,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
                 ".doc" or ".ppt" => "older Word or PowerPoint file, which can't be read here. Ask the user to save it as .docx or .pptx (File > Save As) and attach that",
                 ".dwg" or ".dxf" => "CAD drawing; use this path with the Revit tools, e.g. import_cad. It can't be read as text",
                 ".rvt" or ".rfa" => "Revit file; use this path with the Revit tools (e.g. link_model or copy_from_file)",
-                ".xlsx" or ".xls" or ".csv" => "spreadsheet; the Revit tools that take a file (e.g. place_many, boq_check) accept this path",
+                ".xls" or ".xlsb" => "older or binary Excel file, which can't be read here. Ask the user to save it as .xlsx (File > Save As) and attach that; the Revit tools that take a file (e.g. place_many, boq_check) accept this path",
+                ".csv" => "spreadsheet as plain text; read it with the Read tool. The Revit tools that take a file (e.g. place_many, boq_check) accept this path",
                 _ when ImageType(a.Path) is not null => "image (more than " + MaxImages + " images: read it with the Read tool)",
                 _ => "file; read it with the Read tool if it is text",
             };
@@ -2207,16 +2208,17 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         return PdfAttachment.Note(check, result.Error is null ? target : null, result.MostlyPictures);
     }
 
-    /// <summary>A Word or PowerPoint file: its text in the message (or in a file when long), and its larger pictures while there is room.</summary>
+    /// <summary>A Word, PowerPoint or Excel file: its text in the message (or in a file when long), and its larger pictures while there is room.</summary>
     private static string OfficeNote(Attachment a, StringBuilder contents, int imagesSoFar, Action<string, string> addImage)
     {
-        var word = System.IO.Path.GetExtension(a.Path).Equals(".docx", StringComparison.OrdinalIgnoreCase);
-        var what = word ? "Word document" : "PowerPoint file";
+        var ext = System.IO.Path.GetExtension(a.Path).ToLowerInvariant();
+        var workbook = OfficeText.IsWorkbook(a.Path);
+        var what = ext == ".docx" ? "Word document" : workbook ? "Excel workbook" : "PowerPoint file";
         OfficeText.Content content;
         try { content = OfficeText.Read(a.Path); }
         catch (Exception ex) when (ex is InvalidDataException or System.Xml.XmlException)
         {
-            return $"{what} that couldn't be read ({ex.Message}). Ask the user to save it again as .docx or .pptx, or to export it to PDF and attach that";
+            return $"{what} that couldn't be read ({ex.Message}). Ask the user to save it again as {(workbook ? ".xlsx" : ".docx or .pptx")}, or to export it to PDF and attach that";
         }
         string where;
         if (content.Text.Length == 0) where = "it has no text";
@@ -2246,7 +2248,9 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         var pictures = content.Pictures.Count == 0 ? "" :
             shown == content.Pictures.Count ? $"; its {shown} picture{(shown == 1 ? " is" : "s are")} attached" :
             $"; {shown} of its {content.Pictures.Count} pictures {(shown == 1 ? "is" : "are")} attached (the limit is {MaxImages} pictures a message)";
-        return $"{what}; {where}{pictures}";
+        var sheets = workbook ? "; each sheet is a table headed by its column letters, each row led by its row number, so name cells like B12. " +
+                                "Values are what Excel last showed (formula results; a formula saved without one shows as =formula). The Revit tools that take a file (e.g. place_many, boq_check) accept this path" : "";
+        return $"{what}; {where}{pictures}{sheets}";
     }
 
     /// <summary>
@@ -2940,7 +2944,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         {
             Title = "Attach files for Sketch ProMax",
             Multiselect = true,
-            Filter = "Pictures, PDFs, Word, PowerPoint and drawings|*.png;*.jpg;*.jpeg;*.gif;*.webp;*.bmp;*.tif;*.tiff;*.pdf;*.docx;*.pptx;*.dwg;*.dxf|All files|*.*",
+            Filter = "Pictures, PDFs, Office files and drawings|*.png;*.jpg;*.jpeg;*.gif;*.webp;*.bmp;*.tif;*.tiff;*.pdf;*.docx;*.pptx;*.xlsx;*.xlsm;*.csv;*.dwg;*.dxf|All files|*.*",
         };
         var owner = Window.GetWindow(this);
         if ((owner is null ? dialog.ShowDialog() : dialog.ShowDialog(owner)) == true) AddFiles(dialog.FileNames);
