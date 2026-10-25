@@ -349,7 +349,8 @@ internal static class FieldTestCoverage
         new("share.ui", Issue, "Share tools and TritoRevit on a PC without Sketch ProMax", How.Manual, "",
             "installing on another Windows user or PC, restarting Revit, the TritoRevit tab and an update arriving with Revit open are judged by a person",
             "On your PC: My tools > Share tools. Name the pack QA tools, keep Pre-submission checklist ticked, tick Model check and one learned tool, pick a folder everyone can reach as the update folder, and Make zip. " +
-            "On a PC (or Windows user) without Sketch ProMax and with Revit closed: extract the zip, double-click Install TritoRevit.cmd; it downloads TritoRevit and lists the tools. Open Revit and a _detached copy: " +
+            "On a PC (or Windows user) without Sketch ProMax and with Revit closed: extract the zip, double-click Install TritoRevit.cmd; it downloads TritoRevit and lists the tools. On a PC whose policy blocks .cmd files (\"Windows cannot access the specified device\"), " +
+            "type powershell in the extracted folder's address bar and paste the line from README.txt instead: the same install runs. Open Revit and a _detached copy: " +
             "the TritoRevit tab has a QA tools panel with the three buttons; each runs (the learned tool asks once to approve its code) and the checklist is the built-in one, not yours. " +
             "Share again with Include my checklist ticked: within a few minutes the other PC's checklist is yours; edit yours (add a check) and it follows there too. " +
             "On the other PC edit its checklist, then edit yours again: theirs is kept. " +

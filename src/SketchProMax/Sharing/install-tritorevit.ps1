@@ -8,9 +8,14 @@
 # The first install needs Revit to be restarted once; after that, new packs and updates appear with Revit open.
 $ErrorActionPreference = "Stop"
 $repository = "ahisham92/sketch-promax"
-$here = $PSScriptRoot
+# Run as a file (Install TritoRevit.cmd) or pasted as text in the extracted folder ("iex (Get-Content -Raw .\install-tritorevit.ps1)"),
+# for PCs whose policy blocks .cmd files or scripts: then there is no script path and the current folder is the zip's.
+$here = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).ProviderPath }
 $packSource = Join-Path $here "pack"
-if (-not (Test-Path (Join-Path $packSource "pack.json"))) { throw "There is no pack folder next to this script. Extract the whole zip first (right-click > Extract All), then run Install TritoRevit.cmd from the extracted folder." }
+if (-not (Test-Path (Join-Path $packSource "pack.json"))) { throw "There is no pack folder in $here. Extract the whole zip first (right-click > Extract All), then run the installer from the extracted folder (see README.txt)." }
+if ($ExecutionContext.SessionState.LanguageMode -ne "FullLanguage") {
+    throw "This PC's PowerShell is locked down by company policy (Constrained Language mode), so TritoRevit can't be installed by its user. Ask IT to install it, or to allow PowerShell for this folder."
+}
 
 # Files from a downloaded zip carry a "came from the internet" mark that makes Windows and Revit 2024 refuse to load them.
 function Clear-DownloadMark($path) {

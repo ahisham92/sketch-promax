@@ -81,6 +81,14 @@ At the first three levels Revit always asks before code Claude wrote (run_revit_
 
 The colleague extracts the zip and double-clicks **Install TritoRevit.cmd** (no admin rights). When they don't have it, it installs **TritoRevit**, a small add-in with its own tab, downloading the add-in from this repository's releases (about 40 MB, once). Only that first install needs a Revit restart. With TritoRevit (or Sketch ProMax) already installed, a new pack's buttons appear on the TritoRevit tab within a few seconds, with Revit open.
 
+On company PCs that block .cmd files, double-clicking it says "Windows cannot access the specified device, path or file". Then open the extracted folder, click its address bar, type `powershell` and press Enter, and paste the line from the zip's README.txt:
+
+```powershell
+iex (Get-Content -Raw .\install-tritorevit.ps1)
+```
+
+It reads the installer as text in that PowerShell window, so neither the .cmd block nor a signed-scripts-only policy stops it.
+
 Updates need no restart either: with an update folder set, Sketch ProMax republishes the pack there by itself when a tool in it changes, and every TritoRevit picks it up within a few minutes. TritoRevit updates its own engine from the same releases as Sketch ProMax and switches to it the next time Revit is idle. A learned tool or recipe a colleague already has under the same name, or edited after it arrived, is never overwritten, and a learned tool still asks once before its code runs. **Shared tools** on the TritoRevit tab lists the installed packs, adds one from a zip, checks for updates now and removes a pack. When both add-ins are installed, Sketch ProMax runs the TritoRevit tab's tools itself. The TritoRevit tab sits right after the Sketch ProMax tab; without Sketch ProMax, right after SketchPro's; without either, it is the first add-in tab.
 
 Problem reports come back to you: on a colleague's PC TritoRevit makes **Documents\TritoRevit - <pack name>** (for example TritoRevit - Pre Submission Checklist) with a **Bugs** folder and a short how-to. **Report a problem** (at the bottom of the checklist window, or in **Shared tools**) saves one small zip there with a picture of Revit, the versions, the pack revision and what failed; TritoRevit also saves one by itself when a shared tool fails. A copy goes to **Bug reports** in the pack's update folder when their PC can reach it, so you get it without asking; otherwise they send you the zip. Their checklist Word files and PDFs are saved in the same folder.

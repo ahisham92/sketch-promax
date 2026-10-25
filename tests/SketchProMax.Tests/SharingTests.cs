@@ -131,6 +131,7 @@ internal static class SharingTests
         var readme = Readme(pack);
         check("sharing: readme says how to install and update", readme.Contains("Install TritoRevit.cmd") && readme.Contains("first time only") && readme.Contains("Model check")
             && readme.Contains(pack.UpdateFrom) && readme.Contains("no restart"), readme);
+        check("sharing: readme gives the one-line install for PCs that block .cmd files", readme.Contains("cannot access the specified device") && readme.Contains(InstallLine), readme);
         check("sharing: readme without an update folder", Readme(new Pack { Id = "a", Name = "A" }).Contains("install a newer zip"), "");
 
         // ---- Sketch ProMax's ribbon (0.35 redesign): Share tools heads a stack on the Sketch ProMax panel, after Under development
@@ -184,6 +185,10 @@ internal static class SharingTests
         check("sharing: installer never touches Sketch ProMax's own manifest", ps1.Contains("SketchProMax.addin"), "");
         var cmd = Read(Path.Combine(root, "src", "SketchProMax", "Sharing", "install-tritorevit.cmd"));
         check("sharing: the install command needs no admin", cmd.Contains("-ExecutionPolicy Bypass") && !cmd.Contains("runas", StringComparison.OrdinalIgnoreCase), "");
+        check("sharing: the .cmd reads the installer as text (no -File, so signed-only policies don't stop it)",
+            cmd.Contains("iex (Get-Content -Raw") && !cmd.Contains("-File") && cmd.Contains("cd /d \"%~dp0\""), cmd);
+        check("sharing: the installer also runs pasted, from the current folder",
+            ps1.Contains("if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).ProviderPath }") && ps1.Contains("LanguageMode"), "");
         var build = Read(Path.Combine(root, "build.ps1"));
         check("sharing: build puts TritoRevit in every version", build.Contains("TritoRevit.csproj") && build.Contains("TritoRevit.addin"), "");
         var release = Read(Path.Combine(root, ".github", "workflows", "release.yml"));
