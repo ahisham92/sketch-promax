@@ -117,6 +117,9 @@ internal sealed class RecoverWindow : System.Windows.Window
         var title = Brand.Text(target.Title, Brand.K.Text, 14, bold: true);
         _body.Children.Add(title);
         _body.Children.Add(Wrap(Brand.Text(CountText(parsed), Brand.K.WarningText)));
+        if (string.Equals(Path.GetFileName(file), M.LastSaveName, StringComparison.OrdinalIgnoreCase))
+            _body.Children.Add(Wrap(Brand.Text("These were cleared when the model was " + (parsed.ClearedBy is { Length: > 0 } by ? by.Split(' ')[0] : "saved") +
+                                               (parsed.ClearedAt is { } when ? $" at {when:HH:mm}" : "") + ". Replay brings back only what is missing or different; the rest is left as it is.", Brand.K.Muted, 11)));
         if (parsed.Model is { } from && !string.Equals(from, target.Path, StringComparison.OrdinalIgnoreCase)
             && !(parsed.Central is { Length: > 0 } c && string.Equals(c, target.Central, StringComparison.OrdinalIgnoreCase)))
             _body.Children.Add(Wrap(Brand.Text($"This file is from {M.FileStem(from)}. Only elements of the same model match.", Brand.K.Muted, 11)));

@@ -92,6 +92,8 @@ internal static class ChangeFileMath
         public const string Model = "model", State = "state", Deleted = "deleted";
         /// <summary>The views open in the model (UniqueIds in Open, the active one in View), written when they change.</summary>
         public const string Views = "views";
+        /// <summary>Written as the file is cleared: the Revit event that cleared it (in Text).</summary>
+        public const string Cleared = "cleared";
     }
 
     /// <summary>A point in Revit's internal units (feet), as stored.</summary>
@@ -334,6 +336,9 @@ internal static class ChangeFileMath
         public string? Active { get; init; }
         /// <summary>The file marks what was made in the session (New), so a missing element without the mark was deleted by someone else.</summary>
         public bool MarksNew { get; init; }
+        /// <summary>A file cleared at a save: the Revit event that cleared it, and when.</summary>
+        public string? ClearedBy { get; init; }
+        public DateTime? ClearedAt { get; init; }
 
         /// <summary>Anything to bring back: changed elements, or views that were open.</summary>
         public bool Any => Elements.Count > 0 || Open.Count > 0;
@@ -348,11 +353,13 @@ internal static class ChangeFileMath
         List<string> open = [];
         string? active = null;
         var marks = false;
+        Line? cleared = null;
         foreach (var text in lines)
         {
             if (Parse(text) is not { } line) continue;
             if (line.Kind == Kinds.Model) { model ??= line.Path; central ??= line.Central; marks |= line.Format >= FormatNew; continue; }
             if (line.Kind == Kinds.Views) { open = line.Open ?? []; active = line.View; continue; }
+            if (line.Kind == Kinds.Cleared) { cleared = line; continue; }
             var key = line.Unique ?? (line.Id != 0 ? "#" + line.Id.ToString(CultureInfo.InvariantCulture) : null);
             if (key is null) continue;
             first ??= line.At;
@@ -368,7 +375,7 @@ internal static class ChangeFileMath
             if (before is not null) line.New |= before.New;
             latest[key] = line;
         }
-        return new Parsed(model, central, first, last, order.Select(k => latest[k]).ToList()) { Open = open, Active = active, MarksNew = marks };
+        return new Parsed(model, central, first, last, order.Select(k => latest[k]).ToList()) { Open = open, Active = active, MarksNew = marks, ClearedBy = cleared?.Text, ClearedAt = cleared?.At };
     }
 
     /// <summary>A value's key: its built-in id, else its shared GUID, else its name.</summary>

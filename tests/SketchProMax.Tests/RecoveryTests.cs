@@ -153,6 +153,9 @@ internal static class RecoveryTests
             && Src("Revit", "ChangeViews.cs").Contains("ElevationMarker.CreateElevationMarker") && Src("Revit", "ChangeViews.cs").Contains("ViewDuplicateOption.Duplicate")
             && Src("Revit", "ChangeViews.cs").Contains("OST_LegendComponents") && Src("Revit", "ChangeStairs.cs").Contains("StairsRun.CreateStraightRun"), "");
         check("lifeline: stairs made again bring their railings (the railings' lines aren't played)", Src("Revit", "ChangeReplay.cs").Contains("stairsMade.Contains(onStairs)"), "");
+        var clearedFile = M.Read([model2, M.Write(made), M.Write(new M.Line { Kind = M.Kinds.Cleared, At = at.AddMinutes(5), Text = "synchronized" })]);
+        check("lifeline: a cleared file says which Revit event cleared it, and when", clearedFile.ClearedBy == "synchronized" && clearedFile.ClearedAt == at.AddMinutes(5) && clearedFile.Elements.Count == 1, "");
+        check("lifeline: the window also offers the file cleared at the last save, newest first", Src("Revit", "ChangeFile.cs").Contains("M.LastSaveName, StringComparison.OrdinalIgnoreCase)) continue;") && Src("Revit", "ChangeFile.cs").Contains("OrderByDescending(File.GetLastWriteTime)"), "");
         check("lifeline: the window shows only the open model's unsaved file", !Src("UI", "RecoverWindow.cs").Contains("Changes before the last save") && !Src("UI", "RecoverWindow.cs").Contains("Changes since the last save"), "");
         check("recovery: Help > Open folders lists the change files", SketchProMax.Bugs.UserFolders.List().Any(f => f.Title == "Change files" && f.Path.EndsWith(Path.Combine("Sketch ProMax", "Change files"))), "");
     }
