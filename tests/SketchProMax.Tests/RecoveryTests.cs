@@ -156,6 +156,7 @@ internal static class RecoveryTests
         var clearedFile = M.Read([model2, M.Write(made), M.Write(new M.Line { Kind = M.Kinds.Cleared, At = at.AddMinutes(5), Text = "synchronized" })]);
         check("lifeline: a cleared file says which Revit event cleared it, and when", clearedFile.ClearedBy == "synchronized" && clearedFile.ClearedAt == at.AddMinutes(5) && clearedFile.Elements.Count == 1, "");
         check("lifeline: the window also offers the file cleared at the last save, newest first", Src("Revit", "ChangeFile.cs").Contains("M.LastSaveName, StringComparison.OrdinalIgnoreCase)) continue;") && Src("Revit", "ChangeFile.cs").Contains("OrderByDescending(File.GetLastWriteTime)"), "");
+        check("update: a click while the automatic update runs follows it instead of saying another window is updating", Src("Update", "Updater.cs").Contains("Follow(running, progress)") && !Src("Update", "Updater.cs").Contains("Another Revit window is updating"), "");
         check("lifeline: the window lists the open model's files, each with View and Replay, nothing to pick", Src("UI", "RecoverWindow.cs").Contains("Brand.Button(\"View\")") && Src("UI", "RecoverWindow.cs").Contains("ChangeFile.CurrentFor(target.Path)") && !Src("UI", "RecoverWindow.cs").Contains("OpenFileDialog"), "");
         check("recovery: Help > Open folders lists the change files", SketchProMax.Bugs.UserFolders.List().Any(f => f.Title == "Change files" && f.Path.EndsWith(Path.Combine("Sketch ProMax", "Change files"))), "");
     }
