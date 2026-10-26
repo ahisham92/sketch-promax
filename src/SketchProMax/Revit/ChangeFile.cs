@@ -210,8 +210,9 @@ internal static class ChangeFile
     }
 
     /// <summary>
-    /// The files not saved for a model (its own folder, and other locals of the same central), newest first. Files already
-    /// replayed are left out.
+    /// The files a model's changes may need bringing back from (its own folder, and other locals of the same central): those
+    /// left when it closed without saving, and the one cleared at the last save, newest first. Files already replayed are
+    /// left out.
     /// </summary>
     public static List<string> LeftoversFor(string modelPath, string central)
     {
@@ -223,9 +224,9 @@ internal static class ChangeFile
             foreach (var dir in Directory.GetDirectories(Root))
             {
                 var mine = string.Equals(dir, own, StringComparison.OrdinalIgnoreCase);
-                foreach (var file in Directory.GetFiles(dir, M.LeftoverPrefix + "*.txt"))
+                foreach (var file in Directory.GetFiles(dir, "*.txt"))
                 {
-                    if (M.LeftoverTime(file) is null) continue;
+                    if (M.LeftoverTime(file) is null && !string.Equals(System.IO.Path.GetFileName(file), M.LastSaveName, StringComparison.OrdinalIgnoreCase)) continue;
                     if (mine) { found.Add(file); continue; }
                     if (central.Length == 0) break;
                     var head = M.Read(ReadLines(file));
@@ -235,15 +236,15 @@ internal static class ChangeFile
             }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
-        return found.OrderByDescending(f => M.LeftoverTime(f)).ToList();
+        return found.OrderByDescending(File.GetLastWriteTime).ToList();
     }
 
-    /// <summary>A file replayed in full: renamed so it isn't offered again (still in the folder, as "replayed ...").</summary>
+    /// <summary>A file replayed in full: renamed so it isn't offered again (still in the folder, as "replayed ...", with its time).</summary>
     public static void MarkReplayed(string file)
     {
         try
         {
-            if (M.LeftoverTime(file) is not { } at) return;
+            var at = M.LeftoverTime(file) ?? File.GetLastWriteTime(file);
             var to = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(file)!, M.ReplayedName(at));
             if (File.Exists(to)) File.Delete(to);
             File.Move(file, to);
@@ -263,7 +264,7 @@ internal static class ChangeFile
     }
 
     /// <summary>Saved or synchronized: the file is cleared, the one cleared kept as "before last save".</summary>
-    private static void Cleared(Document doc)
+    private static void Cleared(Document doc, string why)
     {
         if (For(doc) is not { } model) return;
         lock (Gate) { model.Pending.Clear(); model.Written.Clear(); model.Added.Clear(); model.Started = false; }
@@ -272,6 +273,8 @@ internal static class ChangeFile
             var current = System.IO.Path.Combine(model.Folder, M.CurrentName);
             if (!File.Exists(current)) return;
             var last = System.IO.Path.Combine(model.Folder, M.LastSaveName);
+            // Which Revit event cleared it, so a file cleared when nothing was really saved can be told apart.
+            try { File.AppendAllText(current, M.Write(new M.Line { Kind = M.Kinds.Cleared, At = Now, Text = why }) + Environment.NewLine); } catch (IOException) { }
             if (File.Exists(last)) File.Delete(last);
             File.Move(current, last);
         });
@@ -355,7 +358,7 @@ internal static class ChangeFile
 
     private static void OnSaved(object? sender, DocumentSavedEventArgs e)
     {
-        try { if (e.Status == RevitAPIEventStatus.Succeeded) Cleared(e.Document); } catch (Exception) { }
+        try { if (e.Status == RevitAPIEventStatus.Succeeded) Cleared(e.Document, "saved"); } catch (Exception) { }
     }
 
     /// <summary>
@@ -372,7 +375,7 @@ internal static class ChangeFile
             lock (Gate) watched = e.OriginalPath is { Length: > 0 } before && Models.ContainsKey(before);
             if (!watched) { Track(doc, opened: true); return; }
             Track(doc, opened: false);
-            Cleared(doc);
+            Cleared(doc, "saved as " + e.OriginalPath);
         }
         catch (Exception) { }
     }
@@ -382,7 +385,7 @@ internal static class ChangeFile
     private static void OnSynced(object? sender, DocumentSynchronizedWithCentralEventArgs e)
     {
         Incoming(e.Document, false);
-        try { if (e.Status == RevitAPIEventStatus.Succeeded) Cleared(e.Document); } catch (Exception) { }
+        try { if (e.Status == RevitAPIEventStatus.Succeeded) Cleared(e.Document, "synchronized"); } catch (Exception) { }
     }
 
     private static void OnReloading(object? sender, DocumentReloadingLatestEventArgs e) => Incoming(e.Document, true);
