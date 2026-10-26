@@ -30,19 +30,35 @@ internal static class ChangeReplay
         public readonly Dictionary<string, ElementId> MadeFor = new(StringComparer.Ordinal);
         /// <summary>Sketches to redraw after the chunk's transactions (a sketch edit scope can't sit inside one); Counted: already counted as set back.</summary>
         public readonly List<(ElementId Sketch, ElementId Owner, M.Line Line, bool Counted)> Sketches = [];
+        /// <summary>The line each NotDone entry is about (by its place in NotDone), so the window can take you to it.</summary>
+        public readonly Dictionary<int, M.Line> Place = [];
+
+        public void Missed(M.Line line, string text)
+        {
+            Place[NotDone.Count] = line;
+            NotDone.Add(text);
+        }
     }
 
     /// <summary>What each line of the file will do to <paramref name="doc"/> (read only).</summary>
     public static List<Step> Plan(Document doc, M.Parsed file)
     {
         var steps = new List<Step>();
-        foreach (var line in M.PlayOrder(file))
+        var ordered = M.PlayOrder(file);
+        // Groups made again bring their members: the members' own lines aren't played.
+        var groupsMade = new HashSet<string>(ordered.Where(l => l.What == "group" && l.Kind != M.Kinds.Deleted && l.Unique is not null && (l.New || !file.MarksNew)
+            && Find(doc, l) is null && CanMake(l) is null).Select(l => l.Unique!), StringComparer.Ordinal);
+        foreach (var line in ordered)
         {
             var found = Find(doc, line);
             if (line.Kind == M.Kinds.Deleted)
                 steps.Add(found is null ? new(line, Act.Skip, "already not in the model") : new(line, Act.Delete, ""));
             else if (found is not null)
                 steps.Add(new(line, Act.Set, ""));
+            else if (line.Group is { } group && groupsMade.Contains(group))
+                continue;
+            else if (file.MarksNew && !line.New)
+                steps.Add(new(line, Act.Skip, doc.IsWorkshared ? "deleted from the central model by someone else since: left deleted" : "not in the model any more: left as it is"));
             else if (CanMake(line) is { } why)
                 steps.Add(new(line, Act.Skip, why));
             else
@@ -77,6 +93,7 @@ internal static class ChangeReplay
         "type" => "a type made after the last save: duplicate it again by hand",
         "floor" or "ceiling" or "topo" or "region" or "railing" or "roof" or "roof-other" or "opening" or "modelcurve" or "detailcurve" => ChangeShapes.CanMake(line),
         _ when ChangeNotes.Owns(line) => ChangeNotes.CanMake(line),
+        _ when ChangeViews.Owns(line) => ChangeViews.CanMake(line),
         _ => "made after the last save; this kind of element can't be made from the file: make it again by hand",
     };
 
@@ -84,12 +101,15 @@ internal static class ChangeReplay
     public static void Apply(Document doc, IReadOnlyList<Step> steps, Outcome outcome)
     {
         var work = steps.Where(s => s.Act != Act.Skip).ToList();
-        foreach (var s in steps.Where(s => s.Act == Act.Skip)) outcome.NotDone.Add($"{M.Describe(s.Line)}: {s.Why}");
+        foreach (var s in steps.Where(s => s.Act == Act.Skip)) outcome.Missed(s.Line, $"{M.Describe(s.Line)}: {s.Why}");
         if (work.Count == 0) return;
+        var byLabel = new Dictionary<string, M.Line>();
+        foreach (var s in work) byLabel[M.Describe(s.Line)] = s.Line;
         var result = ItemBatch.Run(doc, "Replay change file", work, s => M.Describe(s.Line),
             s => Find(doc, s.Line) is { } e ? [e.Id] : [],
             s =>
             {
+                var notes = outcome.NotDone.Count;
                 switch (s.Act)
                 {
                     case Act.Delete:
@@ -110,17 +130,23 @@ internal static class ChangeReplay
                         if (s.Line.SlopeArrow) outcome.NotDone.Add($"{M.Describe(s.Line)}: made again without its slope arrow: add the slope by hand");
                         break;
                 }
+                for (var i = notes; i < outcome.NotDone.Count; i++) outcome.Place[i] = s.Line;
                 return null;
             });
-        foreach (var f in result.Failed) { outcome.NotDone.Add($"{f.Item}: {f.Error}"); outcome.Errors.Add($"{f.Item}: {f.Error}"); }
+        foreach (var f in result.Failed)
+        {
+            if (byLabel.TryGetValue(f.Item, out var failed)) outcome.Place[outcome.NotDone.Count] = failed;
+            outcome.NotDone.Add($"{f.Item}: {f.Error}");
+            outcome.Errors.Add($"{f.Item}: {f.Error}");
+        }
         foreach (var s in work.Where(s => s.Line.Approx && s.Act != Act.Delete))
-            outcome.NotDone.Add($"{M.Describe(s.Line)}: its curved edges (a spline or ellipse) came back as short straight lines: check its shape");
+            outcome.Missed(s.Line, $"{M.Describe(s.Line)}: its curved edges (a spline or ellipse) came back as short straight lines: check its shape");
 
         // Changed sketches, each in a sketch edit scope of its own, after the chunk's transactions.
         foreach (var (sketch, owner, line, counted) in outcome.Sketches)
         {
             var why = doc.GetElement(owner) is { } element ? ChangeShapes.EditSketch(doc, sketch, element, line) : "it isn't in the model any more";
-            if (why is not null) outcome.NotDone.Add($"{M.Describe(line)}: the outline didn't come back: {why}");
+            if (why is not null) outcome.Missed(line, $"{M.Describe(line)}: the outline didn't come back: {why}");
             else if (!counted) { outcome.Same--; outcome.Set++; }
         }
         outcome.Sketches.Clear();
@@ -139,6 +165,9 @@ internal static class ChangeReplay
         }
         switch (element)
         {
+            case not null when ChangeViews.Owns(line):
+                changed |= ChangeViews.Set(doc, element, line, outcome.NotDone);
+                break;
             case Level level when line.Elevation is { } elevation && !M.Same(level.Elevation, elevation):
                 level.Elevation = elevation;
                 changed = true;
@@ -236,6 +265,7 @@ internal static class ChangeReplay
         Element? Known(string? unique) => unique is null ? null : outcome.MadeFor.TryGetValue(unique, out var id) ? doc.GetElement(id) : doc.GetElement(unique);
         if (ChangeShapes.Make(doc, line, Type(doc, line), LevelOf(doc, line), Known) is { } shaped) return shaped;
         if (ChangeNotes.Make(doc, line, Type(doc, line), LevelOf(doc, line), Known, Remap(doc, outcome), outcome.NotDone) is { } note) return note;
+        if (ChangeViews.Make(doc, line, Type(doc, line), LevelOf(doc, line), Known, outcome.NotDone) is { } viewed) return viewed;
         switch (line.What)
         {
             case "level":

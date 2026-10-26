@@ -527,6 +527,7 @@ internal static partial class FieldTest
         await Probe(s, "recovery.replay", app => RecoveryReplay(app, s)).ConfigureAwait(false);
         await ProbeCore(s, "recovery.shapes", () => App.Dispatcher.InvokeFromEventAsync(app => RecoveryShapes(app, s))).ConfigureAwait(false);
         await Probe(s, "recovery.notes", app => RecoveryNotes(app, s)).ConfigureAwait(false);
+        await Probe(s, "recovery.views", app => RecoveryViews(app, s)).ConfigureAwait(false);
         await Probe(s, "recovery.bugs", () => RecoveryBugs(s)).ConfigureAwait(false);
         // Off Revit's thread: processes, files and the network.
         await Probe(s, "chat.cli", () => { cli = new ClaudeCliInstall(Chat.ClaudeCli.Find()); return cli.Row(); }).ConfigureAwait(false);

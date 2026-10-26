@@ -28,6 +28,9 @@ internal static class ChangeFileMath
     public const string LeftoverPrefix = "not saved ";
     public const int KeepLeftovers = 5;
 
+    /// <summary>The format from which elements made in the session are marked New.</summary>
+    public const int FormatNew = 2;
+
     /// <summary>Elements read per idle moment (the rest wait for the next), so Revit never stalls on a big change.</summary>
     public const int ReadPerIdle = 200;
 
@@ -67,6 +70,10 @@ internal static class ChangeFileMath
 
     public static string LeftoverName(DateTime at) => LeftoverPrefix + at.ToString(Stamp, CultureInfo.InvariantCulture) + ".txt";
 
+    public const string ReplayedPrefix = "replayed ";
+
+    public static string ReplayedName(DateTime at) => ReplayedPrefix + at.ToString(Stamp, CultureInfo.InvariantCulture) + ".txt";
+
     public static DateTime? LeftoverTime(string fileName)
     {
         var stem = Path.GetFileNameWithoutExtension(fileName);
@@ -83,6 +90,8 @@ internal static class ChangeFileMath
     public static class Kinds
     {
         public const string Model = "model", State = "state", Deleted = "deleted";
+        /// <summary>The views open in the model (UniqueIds in Open, the active one in View), written when they change.</summary>
+        public const string Views = "views";
     }
 
     /// <summary>A point in Revit's internal units (feet), as stored.</summary>
@@ -145,6 +154,36 @@ internal static class ChangeFileMath
         [JsonPropertyName("flip"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public bool Flip { get; set; }
     }
 
+    /// <summary>
+    /// A box in a view's or link's own axes: Origin and the three axes (BasisX, BasisY, BasisZ), then Min and Max in those
+    /// axes (a section's or plan's crop, a 3D view's section box). A 3D view's eye, up and forward go in Origin, BasisY
+    /// and BasisZ with Eye set.
+    /// </summary>
+    public sealed class Box
+    {
+        [JsonPropertyName("o")] public Xyz Origin { get; set; } = new(0, 0, 0);
+        [JsonPropertyName("bx"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public Xyz? BasisX { get; set; }
+        [JsonPropertyName("by"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public Xyz? BasisY { get; set; }
+        [JsonPropertyName("bz"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public Xyz? BasisZ { get; set; }
+        [JsonPropertyName("min"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public Xyz? Min { get; set; }
+        [JsonPropertyName("max"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public Xyz? Max { get; set; }
+        [JsonPropertyName("eye"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public bool Eye { get; set; }
+        /// <summary>A 3D view's section box (Min, Max in model axes) next to its eye.</summary>
+        [JsonPropertyName("sb"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public Box? SectionBox { get; set; }
+    }
+
+    /// <summary>A text note's leader: where it points (End), its elbow, arc or straight, and the side of the text it leaves.</summary>
+    public sealed class Lead
+    {
+        [JsonPropertyName("e")] public Xyz End { get; set; } = new(0, 0, 0);
+        [JsonPropertyName("k"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public Xyz? Elbow { get; set; }
+        [JsonPropertyName("arc"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public bool Arc { get; set; }
+        [JsonPropertyName("r"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public bool Right { get; set; }
+    }
+
+    public static bool SameLeads(List<Lead>? a, List<Lead>? b) =>
+        (a ?? []).Count == (b ?? []).Count && (a ?? []).Zip(b ?? [], (x, y) => Same(x.End, y.End) && Same(x.Elbow, y.Elbow) && x.Arc == y.Arc).All(same => same);
+
     /// <summary>One line of the file.</summary>
     public sealed class Line
     {
@@ -202,11 +241,28 @@ internal static class ChangeFileMath
         [JsonPropertyName("txt"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? Text { get; set; }
         [JsonPropertyName("w"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public double? Width { get; set; }
         [JsonPropertyName("ldr"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public bool Leader { get; set; }
+        /// <summary>A text note's leaders.</summary>
+        [JsonPropertyName("lds"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public List<Lead>? Leads { get; set; }
         [JsonPropertyName("or"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public int Orientation { get; set; }
         /// <summary>A revision cloud's revision (by UniqueId).</summary>
         [JsonPropertyName("rev"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? Revision { get; set; }
         /// <summary>Reinforcement: bar layout, hooks and bar type (the bar's or system's shape is in Loops).</summary>
         [JsonPropertyName("bar"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public Bar? Bar { get; set; }
+        /// <summary>Made in this session, after the last save: only such an element is made again when it is missing (one that
+        /// was there before and is gone now was deleted, by someone else in a shared model, and is left so).</summary>
+        [JsonPropertyName("new"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public bool New { get; set; }
+        /// <summary>Model line: the file's format (2: elements made in the session are marked New).</summary>
+        [JsonPropertyName("fmt"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public int Format { get; set; }
+        /// <summary>A group member: its group (by UniqueId); a group made again brings its members with it.</summary>
+        [JsonPropertyName("grp"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? Group { get; set; }
+        /// <summary>Views: the kind of view (FloorPlan, Section, ThreeD, DraftingView, Schedule...), its box and a schedule's
+        /// category and fields; links: their placement (Box.Origin and BasisX).</summary>
+        [JsonPropertyName("vt"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? ViewKind { get; set; }
+        [JsonPropertyName("box"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public Box? Box { get; set; }
+        [JsonPropertyName("sc"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public long ScheduleCategory { get; set; }
+        [JsonPropertyName("fields"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public List<long>? Fields { get; set; }
+        /// <summary>Views line: the views open (UniqueIds); the active one is in View.</summary>
+        [JsonPropertyName("open"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public List<string>? Open { get; set; }
         /// <summary>Level: its elevation (internal units).</summary>
         [JsonPropertyName("elev"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public double? Elevation { get; set; }
         [JsonPropertyName("v"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public List<Value>? Values { get; set; }
@@ -230,7 +286,17 @@ internal static class ChangeFileMath
     }
 
     /// <summary>A read file: the model it is for, and each element's latest line in the order elements first changed.</summary>
-    public sealed record Parsed(string? Model, string? Central, DateTime? First, DateTime? Last, List<Line> Elements);
+    public sealed record Parsed(string? Model, string? Central, DateTime? First, DateTime? Last, List<Line> Elements)
+    {
+        /// <summary>The views that were open (UniqueIds, newest views line) and the active one.</summary>
+        public List<string> Open { get; init; } = [];
+        public string? Active { get; init; }
+        /// <summary>The file marks what was made in the session (New), so a missing element without the mark was deleted by someone else.</summary>
+        public bool MarksNew { get; init; }
+
+        /// <summary>Anything to bring back: changed elements, or views that were open.</summary>
+        public bool Any => Elements.Count > 0 || Open.Count > 0;
+    }
 
     public static Parsed Read(IEnumerable<string> lines)
     {
@@ -238,11 +304,14 @@ internal static class ChangeFileMath
         DateTime? first = null, last = null;
         var order = new List<string>();
         var latest = new Dictionary<string, Line>(StringComparer.Ordinal);
-        var added = new HashSet<string>(StringComparer.Ordinal);
+        List<string> open = [];
+        string? active = null;
+        var marks = false;
         foreach (var text in lines)
         {
             if (Parse(text) is not { } line) continue;
-            if (line.Kind == Kinds.Model) { model ??= line.Path; central ??= line.Central; continue; }
+            if (line.Kind == Kinds.Model) { model ??= line.Path; central ??= line.Central; marks |= line.Format >= FormatNew; continue; }
+            if (line.Kind == Kinds.Views) { open = line.Open ?? []; active = line.View; continue; }
             var key = line.Unique ?? (line.Id != 0 ? "#" + line.Id.ToString(CultureInfo.InvariantCulture) : null);
             if (key is null) continue;
             first ??= line.At;
@@ -255,9 +324,10 @@ internal static class ChangeFileMath
                 foreach (var v in line.Values ?? []) merged[KeyOf(v)] = v;
                 line.Values = merged.Values.ToList();
             }
+            if (before is not null) line.New |= before.New;
             latest[key] = line;
         }
-        return new Parsed(model, central, first, last, order.Select(k => latest[k]).ToList());
+        return new Parsed(model, central, first, last, order.Select(k => latest[k]).ToList()) { Open = open, Active = active, MarksNew = marks };
     }
 
     /// <summary>A value's key: its built-in id, else its shared GUID, else its name.</summary>
@@ -289,7 +359,7 @@ internal static class ChangeFileMath
     /// </summary>
     public static List<Line> PlayOrder(Parsed file)
     {
-        int Rank(Line l) => l.Kind == Kinds.Deleted ? 9 : l.What switch { "level" => 0, "grid" => 1, "type" => 2, "wall" => 3, _ when IsNote(l) => 5, _ => 4 };
+        int Rank(Line l) => l.Kind == Kinds.Deleted ? 9 : l.What switch { "level" => 0, "grid" => 1, "type" => 2, "wall" or "view" or "sheet" or "group" or "link" => 3, _ when IsNote(l) => 5, _ => 4 };
         var ranked = file.Elements.Select((l, i) => (Line: l, Index: i)).OrderBy(x => Rank(x.Line)).ThenBy(x => x.Index).Select(x => x.Line).ToList();
         // Hosted instances after their host, when the host is in the file.
         var position = ranked.Select((l, i) => (l.Unique, i)).Where(x => x.Unique is not null).GroupBy(x => x.Unique!).ToDictionary(g => g.Key, g => g.First().i);
@@ -336,7 +406,7 @@ internal static class ChangeFileMath
     }
 
     /// <summary>Tags, dimensions and spots point at other elements: they are played after everything they could point at.</summary>
-    public static bool IsNote(Line l) => l.What is "tag" or "roomtag" or "dimension" or "spot";
+    public static bool IsNote(Line l) => l.What is "tag" or "roomtag" or "dimension" or "spot" or "viewport" or "schedule-on-sheet";
 
     /// <summary>
     /// A stable reference with the UniqueIds of elements made again swapped for their new ones (Revit's stable reference

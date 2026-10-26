@@ -101,6 +101,44 @@ internal static class RecoveryTests
         check("lifeline bugs: in Documents, listed in Help > Open folders", SketchProMax.Bugs.UserFolders.List().Any(f => f.Title == "Lifeline bugs" && f.Path.EndsWith(Path.Combine("Sketch ProMax", M.BugsFolderName))), "");
         check("lifeline bugs: capture, write, start and replay problems are noted", Src("Revit", "ChangeFile.cs").Contains("LifelineBugs.Note(\"capture\"") && Src("Revit", "ChangeFile.cs").Contains("LifelineBugs.Note(\"write\"")
             && Src("App.cs").Contains("LifelineBugs.Note(\"start\"") && Src("UI", "RecoverWindow.cs").Contains("LifelineBugs.Note(\"replay error\""), "");
+        // Central models: what others deleted stays deleted; a new local keeps last time's file; views, groups, links, CAD, leaders.
+        var model2 = M.Write(new M.Line { Kind = M.Kinds.Model, At = at, Path = @"C:\Work\Port_local.rvt", Central = @"\\server\Port.rvt", Format = M.FormatNew });
+        var made = new M.Line { Kind = M.Kinds.State, At = at, Unique = "n1", What = "detailcurve", New = true };
+        var madeLater = new M.Line { Kind = M.Kinds.State, At = at.AddMinutes(1), Unique = "n1", What = "detailcurve" };
+        var views = new M.Line { Kind = M.Kinds.Views, At = at.AddMinutes(2), Open = ["v1", "v2"], View = "v2" };
+        var marked = M.Read([model2, M.Write(made), M.Write(madeLater), M.Write(views)]);
+        check("lifeline: a file of this format marks what was made in the session", marked.MarksNew && !M.Read(lines).MarksNew, "");
+        check("lifeline: made in the session stays marked on later lines", marked.Elements.Single().New, M.Write(madeLater));
+        check("lifeline: the views that were open read back, with the active one", marked.Open.SequenceEqual(["v1", "v2"]) && marked.Active == "v2" && marked.Elements.Count == 1, string.Join(",", marked.Open));
+        check("lifeline: open views alone are something to bring back", M.Read([model2, M.Write(views)]) is { Any: true, Elements.Count: 0 }, "");
+        check("lifeline: a replayed file isn't offered again", M.LeftoverTime(M.ReplayedName(at)) is null && M.ReplayedName(at).StartsWith(M.ReplayedPrefix), M.ReplayedName(at));
+        var sheet = new M.Line { Kind = M.Kinds.State, At = at, Unique = "s1", What = "sheet", New = true };
+        var titleBlock = new M.Line { Kind = M.Kinds.State, At = at, Unique = "tb1", What = "instance", View = "s1", Type = "A1: A1", P = new(0, 0, 0), New = true };
+        var viewport = new M.Line { Kind = M.Kinds.State, At = at, Unique = "vp1", What = "viewport", Host = "v1", View = "s1", P = new(1, 1, 0), New = true };
+        var plan = new M.Line { Kind = M.Kinds.State, At = at.AddMinutes(1), Unique = "v1", What = "view", ViewKind = "FloorPlan", LevelUnique = "l1", Box = new M.Box { Origin = new(0, 0, 0), Min = new(-5, -5, 0), Max = new(5, 5, 0) }, New = true };
+        var sheetOrder = M.PlayOrder(M.Read([model2, M.Write(viewport), M.Write(titleBlock), M.Write(sheet), M.Write(plan)])).Select(l => l.Unique).ToList();
+        check("lifeline: sheets and views are made before their title blocks and viewports", sheetOrder.IndexOf("s1") < sheetOrder.IndexOf("tb1") && sheetOrder.IndexOf("v1") < sheetOrder.IndexOf("vp1"), string.Join(",", sheetOrder));
+        var planBack = M.Read([M.Write(plan)]).Elements.Single();
+        check("lifeline: a view's kind and crop read back", planBack is { ViewKind: "FloorPlan", Box.Min.X: -5, Box.Max.Y: 5, New: true }, M.Write(plan));
+        var schedule = new M.Line { Kind = M.Kinds.State, At = at, Unique = "sc1", What = "view", ViewKind = "Schedule", ScheduleCategory = -2001330, Fields = [-1002050, -1010106] };
+        check("lifeline: a schedule's category and columns read back", M.Read([M.Write(schedule)]).Elements.Single() is { ScheduleCategory: -2001330, Fields.Count: 2 }, M.Write(schedule));
+        var cad = new M.Line { Kind = M.Kinds.State, At = at, Unique = "c1", What = "cad", Text = "linked", Name = @"C:\CAD\site.dwg", Box = new M.Box { Origin = new(10, 20, 0), BasisX = new(0, 1, 0) } };
+        check("lifeline: a CAD link's file and placement read back", M.Read([M.Write(cad)]).Elements.Single() is { Text: "linked", Name: @"C:\CAD\site.dwg", Box.BasisX.Y: 1, Box.Origin.X: 10 }, M.Write(cad));
+        var member = new M.Line { Kind = M.Kinds.State, At = at, Unique = "m1", What = "wall", Group = "g1" };
+        check("lifeline: a group member names its group", M.Read([M.Write(member)]).Elements.Single().Group == "g1", "");
+        var text = new M.Line { Kind = M.Kinds.State, At = at, Unique = "tx1", What = "text", Text = "NOTE", Leader = true,
+            Leads = [new M.Lead { End = new(1, 2, 0), Elbow = new(0.5, 1, 0), Right = true }, new M.Lead { End = new(-1, -1, 0), Arc = true }] };
+        var textBack = M.Read([M.Write(text)]).Elements.Single();
+        check("lifeline: a text note's leaders read back", M.SameLeads(textBack.Leads, text.Leads) && textBack.Leads![0].Right && textBack.Leads[1].Arc && textBack.Leads[1].Elbow is null, M.Write(text));
+        check("lifeline: a moved leader is a change", !M.SameLeads(text.Leads, [new M.Lead { End = new(1, 2.1, 0), Elbow = new(0.5, 1, 0) }, text.Leads![1]]) && !M.SameLeads(text.Leads, []), "");
+        check("lifeline: what others deleted in central is skipped, not made again", Src("Revit", "ChangeReplay.cs").Contains("file.MarksNew && !line.New") && Src("Revit", "ChangeReplay.cs").Contains("deleted from the central model by someone else"), "");
+        check("lifeline: a group made again brings its members (their lines aren't played)", Src("Revit", "ChangeReplay.cs").Contains("groupsMade.Contains(group)"), "");
+        check("lifeline: a new local saved as it opens keeps last time's file", Src("Revit", "ChangeFile.cs").Contains("e.OriginalPath") && Src("Revit", "ChangeFile.cs").Contains("if (!watched) { Track(doc, opened: true); return; }"), "");
+        check("lifeline: other locals of the same central are found", Src("Revit", "ChangeFile.cs").Contains("head.Central, model.Central") && Src("UI", "RecoverWindow.cs").Contains("ChangeFile.LeftoversFor(target.Path, target.Central)"), "");
+        check("lifeline: replay makes views, sheets, viewports, groups, links and CAD", new[] { "ViewPlan.Create", "ViewSection.CreateSection", "View3D.CreateIsometric", "ViewDrafting.Create", "ViewSchedule.CreateSchedule", "ViewSheet.Create", "Viewport.Create", "ScheduleSheetInstance.Create", "PlaceGroup", "RevitLinkInstance.Create", "doc.Link(", "doc.Import(" }.All(Src("Revit", "ChangeViews.cs").Contains), "");
+        check("lifeline: text leaders come back", Src("Revit", "ChangeNotes.cs").Contains("text.AddLeader(") && Src("Revit", "ChangeNotes.cs").Contains("text.RemoveLeaders()"), "");
+        check("lifeline: what wasn't done has Show, and the views that were open open again", Src("UI", "RecoverWindow.cs").Contains("Brand.Button(\"Show\")") && Src("UI", "RecoverWindow.cs").Contains("ShowElements") && Src("UI", "RecoverWindow.cs").Contains("ZoomAndCenterRectangle") && Src("UI", "RecoverWindow.cs").Contains("OpenViews(parsed"), "");
+        check("lifeline: the window shows only the open model's unsaved file", !Src("UI", "RecoverWindow.cs").Contains("Changes before the last save") && !Src("UI", "RecoverWindow.cs").Contains("Changes since the last save"), "");
         check("recovery: Help > Open folders lists the change files", SketchProMax.Bugs.UserFolders.List().Any(f => f.Title == "Change files" && f.Path.EndsWith(Path.Combine("Sketch ProMax", "Change files"))), "");
     }
 }
