@@ -12,9 +12,9 @@ namespace SketchProMax.UI;
 
 /// <summary>
 /// Lifeline (the ribbon, Settings > Lifeline, the pane, and by itself when a model opens with changes that weren't saved
-/// last time): the open model's changes that weren't saved (Revit/ChangeFile), how many, and one Replay that plays them
-/// onto the open model (Revit/ChangeReplay) and opens the views that were open. What it couldn't do is listed at the
-/// end, each with Show to go to the place. Any change file can be picked from disk too, such as one copied from another PC.
+/// last time): the open model's change files (Revit/ChangeFile: since the last save, before the last save, not saved when
+/// it closed), newest first, each with how many changes, View and Replay, which plays it onto the open model
+/// (Revit/ChangeReplay) and opens the views that were open. What it couldn't do is listed at the end, each with Show.
 /// </summary>
 internal sealed class RecoverWindow : System.Windows.Window
 {
@@ -24,6 +24,7 @@ internal sealed class RecoverWindow : System.Windows.Window
     private readonly TextBlock _result = Brand.Text("", Brand.K.Muted, 12);
     private CancellationTokenSource? _stop;
     private bool _busy;
+    private readonly Button _stopButton = Brand.Button("Stop");
 
     public static Autodesk.Revit.UI.Result Open() => Show(null);
 
@@ -62,13 +63,12 @@ internal sealed class RecoverWindow : System.Windows.Window
         page.Children.Add(_result);
         page.Children.Add(_results);
 
-        var pick = Brand.Button("Pick a file…");
-        AutomationProperties.SetHelpText(pick, "Pick any Sketch ProMax change file (.txt), such as one copied from another PC, to replay onto the open model.");
-        pick.Click += (_, _) => PickFile();
+        _stopButton.Visibility = System.Windows.Visibility.Collapsed;
+        _stopButton.Click += (_, _) => _stop?.Cancel();
         var close = Brand.Button("Close");
         close.IsCancel = true;
         close.Click += (_, _) => Close();
-        page.Children.Add(Brand.ButtonRow(pick, close));
+        page.Children.Add(Brand.ButtonRow(_stopButton, close));
 
         var root = new DockPanel();
         var header = Brand.Header("Lifeline", "Bring back changes that weren't saved");
@@ -92,76 +92,84 @@ internal sealed class RecoverWindow : System.Windows.Window
         catch (Exception) { return null; }
     }
 
-    /// <summary>The open model's newest file that wasn't saved (or <paramref name="file"/>), with its count and Replay.</summary>
-    private async Task Fill(string? file)
+    /// <summary>The open model's change files, newest first, each with View and Replay (<paramref name="highlight"/>: the one offered at open).</summary>
+    private async Task Fill(string? highlight)
     {
         _body.Children.Clear();
         _results.Children.Clear();
         Say("", Brand.K.Muted);
         var target = await OpenModel();
         if (target is null) { _body.Children.Add(Wrap(Brand.Text("Open a model first, then open Lifeline again."))); return; }
-        file ??= target.Path.Length > 0 ? ChangeFile.LeftoversFor(target.Path, target.Central).FirstOrDefault() : null;
-        var parsed = file is null ? null : M.Read(ChangeFile.ReadLines(file));
-        if (file is null || parsed is not { Any: true })
-        {
-            _body.Children.Add(Wrap(Brand.Text($"{target.Title}: nothing to bring back. Every change was saved.")));
-            return;
-        }
-        Ready(file, parsed, target);
+        var files = target.Path.Length > 0 ? ChangeFile.LeftoversFor(target.Path, target.Central) : [];
+        var current = target.Path.Length > 0 ? ChangeFile.CurrentFor(target.Path) : "";
+        if (File.Exists(current)) files.Add(current);
+        if (highlight is not null && !files.Contains(highlight, StringComparer.OrdinalIgnoreCase)) files.Add(highlight);
+        var items = files.Select(f => (File: f, Parsed: M.Read(ChangeFile.ReadLines(f)))).Where(i => i.Parsed.Any)
+            .OrderByDescending(i => File.GetLastWriteTime(i.File)).Take(6).ToList();
+        _body.Children.Add(Brand.Text(target.Title, Brand.K.Text, 14, bold: true));
+        if (items.Count == 0) { _body.Children.Add(Wrap(Brand.Text("Nothing to bring back: no changes recorded since the model was last saved."))); return; }
+        highlight ??= items[0].File;
+        foreach (var (file, parsed) in items) _body.Children.Add(Row(file, parsed, target, string.Equals(file, highlight, StringComparison.OrdinalIgnoreCase)));
     }
 
-    private void Ready(string file, M.Parsed parsed, Target target)
+    /// <summary>What a file is, in a few words: "Since the last save", "Before the last save (saved 13:38)", "Not saved, closed 26 Oct 14:30".</summary>
+    private static string Label(string file, M.Parsed parsed)
     {
-        _body.Children.Clear();
-        _results.Children.Clear();
-        var title = Brand.Text(target.Title, Brand.K.Text, 14, bold: true);
-        _body.Children.Add(title);
-        _body.Children.Add(Wrap(Brand.Text(CountText(parsed), Brand.K.WarningText)));
-        if (string.Equals(Path.GetFileName(file), M.LastSaveName, StringComparison.OrdinalIgnoreCase))
-            _body.Children.Add(Wrap(Brand.Text("These were cleared when the model was " + (parsed.ClearedBy is { Length: > 0 } by ? by.Split(' ')[0] : "saved") +
-                                               (parsed.ClearedAt is { } when ? $" at {when:HH:mm}" : "") + ". Replay brings back only what is missing or different; the rest is left as it is.", Brand.K.Muted, 11)));
-        if (parsed.Model is { } from && !string.Equals(from, target.Path, StringComparison.OrdinalIgnoreCase)
-            && !(parsed.Central is { Length: > 0 } c && string.Equals(c, target.Central, StringComparison.OrdinalIgnoreCase)))
-            _body.Children.Add(Wrap(Brand.Text($"This file is from {M.FileStem(from)}. Only elements of the same model match.", Brand.K.Muted, 11)));
-        var replay = Brand.Button("Replay", Brand.Weight.Primary);
-        replay.IsDefault = true;
-        var stop = Brand.Button("Stop");
-        stop.Visibility = System.Windows.Visibility.Collapsed;
-        stop.Click += (_, _) => _stop?.Cancel();
+        var name = Path.GetFileName(file);
+        if (string.Equals(name, M.CurrentName, StringComparison.OrdinalIgnoreCase)) return "Since the last save";
+        if (string.Equals(name, M.LastSaveName, StringComparison.OrdinalIgnoreCase))
+            return "Before the last save" + (parsed.ClearedAt is { } when ? $" ({(parsed.ClearedBy is { Length: > 0 } by ? by.Split(' ')[0] : "saved")} {when:HH:mm})" : "");
+        return M.LeftoverTime(name) is { } at ? $"Not saved, closed {at:dd MMM HH:mm}" : Path.GetFileNameWithoutExtension(name);
+    }
+
+    private UIElement Row(string file, M.Parsed parsed, Target target, bool primary)
+    {
+        var label = Label(file, parsed);
+        var view = Brand.Button("View");
+        AutomationProperties.SetName(view, "View " + label);
+        view.Click += (_, _) => Explore(file);
+        var replay = Brand.Button("Replay", primary ? Brand.Weight.Primary : Brand.Weight.Secondary);
+        if (primary) replay.IsDefault = true;
+        AutomationProperties.SetName(replay, "Replay " + label);
         replay.Click += async (_, _) =>
         {
-            replay.IsEnabled = false;
-            stop.Visibility = System.Windows.Visibility.Visible;
+            if (_busy) return;
             _busy = true;
+            replay.IsEnabled = false;
+            _stopButton.Visibility = System.Windows.Visibility.Visible;
             try { await Replay(file, parsed, target); }
-            finally { _busy = false; stop.Visibility = System.Windows.Visibility.Collapsed; }
+            finally { _busy = false; replay.IsEnabled = true; _stopButton.Visibility = System.Windows.Visibility.Collapsed; }
         };
-        var row = Brand.ButtonRow(stop, replay);
-        row.HorizontalAlignment = HorizontalAlignment.Left;
-        row.Margin = new Thickness(0, 8, 0, 0);
-        _body.Children.Add(row);
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+        buttons.Children.Add(view);
+        buttons.Children.Add(replay);
+        var text = new StackPanel();
+        text.Children.Add(Brand.Text(label, Brand.K.Text, 12, bold: primary));
+        text.Children.Add(Brand.Text(CountText(parsed), Brand.K.Muted, 11));
+        var row = new DockPanel { Margin = new Thickness(0, 8, 0, 0) };
+        DockPanel.SetDock(buttons, Dock.Right);
+        row.Children.Add(buttons);
+        row.Children.Add(text);
+        return row;
     }
 
-    /// <summary>"23 changes weren't saved (14:02 to 16:40), and 5 views were open."</summary>
+    private void Explore(string file)
+    {
+        try { Process.Start(new ProcessStartInfo("notepad.exe", $"\"{file}\"") { UseShellExecute = true })?.Dispose(); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            Say($"Couldn't open {file}: {ex.Message}", Brand.K.DangerText);
+        }
+    }
+
+    /// <summary>"23 changes (14:02 to 16:40), 5 views open".</summary>
     internal static string CountText(M.Parsed p)
     {
         var parts = new List<string>();
         if (p.Elements.Count > 0)
-            parts.Add($"{Plural(p.Elements.Count, "change")} {(p.Elements.Count == 1 ? "wasn't" : "weren't")} saved" + (p.First is { } a && p.Last is { } b ? $" ({a:HH:mm} to {b:HH:mm})" : ""));
-        if (p.Open.Count > 0) parts.Add($"{Plural(p.Open.Count, "view")} {(p.Open.Count == 1 ? "was" : "were")} open");
-        return string.Join(", and ", parts) + ".";
-    }
-
-    private async void PickFile()
-    {
-        if (_busy) return;
-        var dialog = new Microsoft.Win32.OpenFileDialog { Title = "Pick a change file", Filter = "Change files|*.txt|All files|*.*" };
-        try { if (Directory.Exists(ChangeFile.Root)) dialog.InitialDirectory = ChangeFile.Root; } catch (Exception) { }
-        if (dialog.ShowDialog(this) != true) return;
-        var parsed = M.Read(ChangeFile.ReadLines(dialog.FileName));
-        if (!parsed.Any) { Say("That file has no changes Sketch ProMax can read.", Brand.K.DangerText); return; }
-        if (await OpenModel() is not { } target) { Say("Open the model to put the changes into first.", Brand.K.DangerText); return; }
-        Ready(dialog.FileName, parsed, target);
+            parts.Add(Plural(p.Elements.Count, "change") + (p.First is { } a && p.Last is { } b ? $" ({a:HH:mm} to {b:HH:mm})" : ""));
+        if (p.Open.Count > 0) parts.Add($"{Plural(p.Open.Count, "view")} open");
+        return string.Join(", ", parts);
     }
 
     // ---- Replay ---------------------------------------------------------------------------------------------------------

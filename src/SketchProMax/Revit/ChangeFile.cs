@@ -244,6 +244,8 @@ internal static class ChangeFile
     {
         try
         {
+            // The file being written now stays where it is.
+            if (string.Equals(System.IO.Path.GetFileName(file), M.CurrentName, StringComparison.OrdinalIgnoreCase)) return;
             var at = M.LeftoverTime(file) ?? File.GetLastWriteTime(file);
             var to = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(file)!, M.ReplayedName(at));
             if (File.Exists(to)) File.Delete(to);
