@@ -48,6 +48,9 @@ internal static class ChangeReplay
         // Groups made again bring their members: the members' own lines aren't played.
         var groupsMade = new HashSet<string>(ordered.Where(l => l.What == "group" && l.Kind != M.Kinds.Deleted && l.Unique is not null && (l.New || !file.MarksNew)
             && Find(doc, l) is null && CanMake(l) is null).Select(l => l.Unique!), StringComparer.Ordinal);
+        // Stairs made again bring their own railings.
+        var stairsMade = new HashSet<string>(ordered.Where(l => l.What == "stairs" && l.Kind != M.Kinds.Deleted && l.Unique is not null && (l.New || !file.MarksNew)
+            && Find(doc, l) is null && CanMake(l) is null).Select(l => l.Unique!), StringComparer.Ordinal);
         foreach (var line in ordered)
         {
             var found = Find(doc, line);
@@ -56,6 +59,8 @@ internal static class ChangeReplay
             else if (found is not null)
                 steps.Add(new(line, Act.Set, ""));
             else if (line.Group is { } group && groupsMade.Contains(group))
+                continue;
+            else if (line.What == "railing" && line.Host is { } onStairs && stairsMade.Contains(onStairs))
                 continue;
             else if (file.MarksNew && !line.New)
                 steps.Add(new(line, Act.Skip, doc.IsWorkshared ? "deleted from the central model by someone else since: left deleted" : "not in the model any more: left as it is"));
@@ -90,7 +95,8 @@ internal static class ChangeReplay
         "wall" when (line.Loops is { Count: > 0 } || (line.P is not null && line.Q is not null)) && line.Type is not null => null,
         "instance" when line.P is not null && line.Type is not null => null,
         "wall" or "instance" => "made after the last save, but its shape isn't a point or a straight line: make it again by hand",
-        "type" => "a type made after the last save: duplicate it again by hand",
+        "type" => ChangeTypes.CanMake(line),
+        "stairs" => ChangeStairs.CanMake(line),
         "floor" or "ceiling" or "topo" or "region" or "railing" or "roof" or "roof-other" or "opening" or "modelcurve" or "detailcurve" => ChangeShapes.CanMake(line),
         _ when ChangeNotes.Owns(line) => ChangeNotes.CanMake(line),
         _ when ChangeViews.Owns(line) => ChangeViews.CanMake(line),
@@ -102,6 +108,25 @@ internal static class ChangeReplay
     {
         var work = steps.Where(s => s.Act != Act.Skip).ToList();
         foreach (var s in steps.Where(s => s.Act == Act.Skip)) outcome.Missed(s.Line, $"{M.Describe(s.Line)}: {s.Why}");
+        // Stairs first, each in a stairs edit scope of its own (it can't sit inside a transaction), so what is on them finds them.
+        foreach (var s in work.Where(s => s.Act == Act.Make && s.Line.What == "stairs").ToList())
+        {
+            work.Remove(s);
+            try
+            {
+                var id = ChangeStairs.Make(doc, s.Line, u => u is null ? null : outcome.MadeFor.TryGetValue(u, out var m) ? doc.GetElement(m) : doc.GetElement(u));
+                if (s.Line.Unique is { } u) outcome.MadeFor[u] = id;
+                outcome.Made++;
+                using var t = new Transaction(doc, "Sketch ProMax: Replay change file (stairs values)");
+                t.Start();
+                try { SetState(doc, doc.GetElement(id), s.Line, outcome); t.Commit(); } catch (Exception) { t.RollBack(); }
+            }
+            catch (Exception ex)
+            {
+                outcome.Missed(s.Line, $"{M.Describe(s.Line)}: {ex.Message}");
+                outcome.Errors.Add($"{M.Describe(s.Line)}: {ex.Message}");
+            }
+        }
         if (work.Count == 0) return;
         var byLabel = new Dictionary<string, M.Line>();
         foreach (var s in work) byLabel[M.Describe(s.Line)] = s.Line;
@@ -167,6 +192,12 @@ internal static class ChangeReplay
         {
             case not null when ChangeViews.Owns(line):
                 changed |= ChangeViews.Set(doc, element, line, outcome.NotDone);
+                break;
+            case ElementType elementType:
+                changed |= ChangeTypes.Set(doc, elementType, line, u => u is null ? null : doc.GetElement(u), outcome.NotDone);
+                break;
+            case Autodesk.Revit.DB.Architecture.Stairs stairs:
+                changed |= ChangeStairs.Set(doc, stairs, line, outcome.NotDone);
                 break;
             case Level level when line.Elevation is { } elevation && !M.Same(level.Elevation, elevation):
                 level.Elevation = elevation;
@@ -248,6 +279,7 @@ internal static class ChangeReplay
             }
             catch (Exception) { /* a value Revit won't take here (it depends on another one): left */ }
         }
+        changed |= ChangeViews.Settle(doc, element, line);
         return changed;
     }
 
@@ -266,6 +298,7 @@ internal static class ChangeReplay
         if (ChangeShapes.Make(doc, line, Type(doc, line), LevelOf(doc, line), Known) is { } shaped) return shaped;
         if (ChangeNotes.Make(doc, line, Type(doc, line), LevelOf(doc, line), Known, Remap(doc, outcome), outcome.NotDone) is { } note) return note;
         if (ChangeViews.Make(doc, line, Type(doc, line), LevelOf(doc, line), Known, outcome.NotDone) is { } viewed) return viewed;
+        if (line.What == "type") return ChangeTypes.Make(doc, line);
         switch (line.What)
         {
             case "level":

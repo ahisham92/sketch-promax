@@ -181,6 +181,40 @@ internal static class ChangeFileMath
         [JsonPropertyName("r"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public bool Right { get; set; }
     }
 
+    /// <summary>A layer of a wall, floor, roof or ceiling type: width, function (Revit's number) and material (UniqueId).</summary>
+    public sealed class Layer
+    {
+        [JsonPropertyName("w")] public double Width { get; set; }
+        [JsonPropertyName("f")] public int Function { get; set; }
+        [JsonPropertyName("m"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? Material { get; set; }
+    }
+
+    /// <summary>A straight stairs run: its path (P to Q), justification (Revit's number), width and base elevation.</summary>
+    public sealed class Run
+    {
+        [JsonPropertyName("p")] public Xyz P { get; set; } = new(0, 0, 0);
+        [JsonPropertyName("q")] public Xyz Q { get; set; } = new(0, 0, 0);
+        [JsonPropertyName("j"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public int Justify { get; set; }
+        [JsonPropertyName("w")] public double Width { get; set; }
+        [JsonPropertyName("b"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public double Base { get; set; }
+    }
+
+    public static bool SameLayers(List<Layer>? a, List<Layer>? b) =>
+        (a ?? []).Count == (b ?? []).Count && (a ?? []).Zip(b ?? [], (x, y) => Same(x.Width, y.Width) && x.Function == y.Function && x.Material == y.Material).All(same => same);
+
+    /// <summary>The move that takes runs <paramref name="now"/> to <paramref name="want"/> when they only moved; null when their shape changed.</summary>
+    public static Xyz? RunsShift(List<Run> now, List<Run> want)
+    {
+        if (now.Count != want.Count || now.Count == 0) return null;
+        var d = new Xyz(want[0].P.X - now[0].P.X, want[0].P.Y - now[0].P.Y, want[0].P.Z - now[0].P.Z);
+        for (var i = 0; i < now.Count; i++)
+        {
+            Xyz Moved(Xyz p) => new(p.X + d.X, p.Y + d.Y, p.Z + d.Z);
+            if (!Same(Moved(now[i].P), want[i].P) || !Same(Moved(now[i].Q), want[i].Q) || !Same(now[i].Width, want[i].Width)) return null;
+        }
+        return d;
+    }
+
     public static bool SameLeads(List<Lead>? a, List<Lead>? b) =>
         (a ?? []).Count == (b ?? []).Count && (a ?? []).Zip(b ?? [], (x, y) => Same(x.End, y.End) && Same(x.Elbow, y.Elbow) && x.Arc == y.Arc).All(same => same);
 
@@ -241,6 +275,13 @@ internal static class ChangeFileMath
         [JsonPropertyName("txt"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? Text { get; set; }
         [JsonPropertyName("w"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public double? Width { get; set; }
         [JsonPropertyName("ldr"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public bool Leader { get; set; }
+        /// <summary>Types: their class (WallType, FamilySymbol...) and the layers of a wall, floor, roof or ceiling type, with how
+        /// many are exterior and interior shell layers.</summary>
+        [JsonPropertyName("cls"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? Class { get; set; }
+        [JsonPropertyName("layers"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public List<Layer>? Layers { get; set; }
+        [JsonPropertyName("shells"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public List<int>? Shells { get; set; }
+        /// <summary>Stairs: their straight runs.</summary>
+        [JsonPropertyName("runs"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public List<Run>? Runs { get; set; }
         /// <summary>A text note's leaders.</summary>
         [JsonPropertyName("lds"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public List<Lead>? Leads { get; set; }
         [JsonPropertyName("or"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public int Orientation { get; set; }
@@ -359,7 +400,7 @@ internal static class ChangeFileMath
     /// </summary>
     public static List<Line> PlayOrder(Parsed file)
     {
-        int Rank(Line l) => l.Kind == Kinds.Deleted ? 9 : l.What switch { "level" => 0, "grid" => 1, "type" => 2, "wall" or "view" or "sheet" or "group" or "link" => 3, _ when IsNote(l) => 5, _ => 4 };
+        int Rank(Line l) => l.Kind == Kinds.Deleted ? 9 : l.What switch { "level" => 0, "grid" => 1, "type" => 2, "wall" or "view" or "sheet" or "group" or "link" or "stairs" => 3, _ when IsNote(l) => 5, _ => 4 };
         var ranked = file.Elements.Select((l, i) => (Line: l, Index: i)).OrderBy(x => Rank(x.Line)).ThenBy(x => x.Index).Select(x => x.Line).ToList();
         // Hosted instances after their host, when the host is in the file.
         var position = ranked.Select((l, i) => (l.Unique, i)).Where(x => x.Unique is not null).GroupBy(x => x.Unique!).ToDictionary(g => g.Key, g => g.First().i);

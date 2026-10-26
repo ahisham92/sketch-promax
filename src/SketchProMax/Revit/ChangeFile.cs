@@ -431,6 +431,11 @@ internal static class ChangeFile
                 foreach (var id in e.GetAddedElementIds()) { model.Pending.Add(id.Value); if (model.Added.Count < KnownCap) model.Added.Add(id.Value); }
                 foreach (var id in e.GetModifiedElementIds()) model.Pending.Add(id.Value);
             }
+            // A stairs run or landing changed: its stairs' line is written again (looked at only for edits of a few elements).
+            var touched = e.GetAddedElementIds().Concat(e.GetModifiedElementIds()).Take(501).ToList();
+            if (touched.Count <= 500)
+                foreach (var id in touched)
+                    if (ChangeStairs.StairsOf(doc.GetElement(id)) is { } stairs) lock (Gate) model.Pending.Add(stairs.Value);
             var deleted = e.GetDeletedElementIds();
             if (deleted.Count == 0) return;
             var tx = string.Join(", ", e.GetTransactionNames().Distinct());
@@ -538,12 +543,19 @@ internal static class ChangeFile
         var category = element.Category;
         var viewKind = ChangeViews.Kind(element);
         if (category is null && element is not ElementType && viewKind is null) return null;
-        if (ChangeViews.Ignored(element) || element is View { IsTemplate: true } || element is ElementType { Category: null } || ChangeShapes.IsSketchLine(element) || ChangeNotes.IsPart(element)) return null;
+        // Work plane grids and the marks of views (sections, callouts) change with the view or come with it: no line of their own.
+        if (category is not null && element is not View && category.Id.Value is (long)BuiltInCategory.OST_IOSSketchGrid or (long)BuiltInCategory.OST_Viewers or (long)BuiltInCategory.OST_Views) return null;
+        if (ChangeViews.Ignored(element) || element is View { IsTemplate: true } || element is ElementType { Category: null } || ChangeShapes.IsSketchLine(element) || ChangeNotes.IsPart(element)
+            || ChangeViews.IsPart(element) || ChangeStairs.IsPart(element)) return null;
         var line = new M.Line
         {
             Kind = M.Kinds.State, At = Now, Id = element.Id.Value, Unique = element.UniqueId,
             Category = category?.Name, CategoryId = category?.Id.Value ?? 0,
-            What = ChangeShapes.Kind(element) ?? ChangeNotes.Kind(element) ?? viewKind ?? element switch { Level => "level", Grid => "grid", ElementType => "type", Wall => "wall", FamilyInstance => "instance", _ => "other" },
+            What = ChangeShapes.Kind(element) ?? ChangeNotes.Kind(element) ?? viewKind ?? element switch
+            {
+                Level => "level", Grid => "grid", ElementType => "type", Wall => "wall", FamilyInstance => "instance",
+                Autodesk.Revit.DB.Architecture.Stairs => "stairs", _ => "other",
+            },
         };
         try { line.Name = element.Name; } catch (Exception) { }
         if (element is not ElementType && doc.GetElement(element.GetTypeId()) is ElementType type)
@@ -589,6 +601,13 @@ internal static class ChangeFile
         try { ChangeShapes.Read(doc, element, line); } catch (Exception ex) { LifelineBugs.Note("capture", $"the shape of {line.What} ({line.Category}) couldn't be read", doc.PathName, ex); }
         // Annotations, rooms and reinforcement: what they point at, their text, bars and the view they are drawn in.
         try { ChangeNotes.Read(doc, element, line); } catch (Exception ex) { LifelineBugs.Note("capture", $"{line.What} ({line.Category}) couldn't be read in full", doc.PathName, ex); }
+        // Types (and their layers) and stairs (and their runs).
+        try
+        {
+            if (element is ElementType asType) ChangeTypes.Read(doc, asType, line);
+            else if (element is Autodesk.Revit.DB.Architecture.Stairs stairs) ChangeStairs.Read(doc, stairs, line);
+        }
+        catch (Exception ex) { LifelineBugs.Note("capture", $"{line.What} ({line.Category}) couldn't be read in full", doc.PathName, ex); }
         // Views, sheets, what is placed on sheets, groups, links and CAD.
         try { ChangeViews.Read(doc, element, line); } catch (Exception ex) { LifelineBugs.Note("capture", $"{line.What} ({line.Category}) couldn't be read in full", doc.PathName, ex); }
         var values = new List<M.Value>();

@@ -138,6 +138,21 @@ internal static class RecoveryTests
         check("lifeline: replay makes views, sheets, viewports, groups, links and CAD", new[] { "ViewPlan.Create", "ViewSection.CreateSection", "View3D.CreateIsometric", "ViewDrafting.Create", "ViewSchedule.CreateSchedule", "ViewSheet.Create", "Viewport.Create", "ScheduleSheetInstance.Create", "PlaceGroup", "RevitLinkInstance.Create", "doc.Link(", "doc.Import(" }.All(Src("Revit", "ChangeViews.cs").Contains), "");
         check("lifeline: text leaders come back", Src("Revit", "ChangeNotes.cs").Contains("text.AddLeader(") && Src("Revit", "ChangeNotes.cs").Contains("text.RemoveLeaders()"), "");
         check("lifeline: what wasn't done has Show, and the views that were open open again", Src("UI", "RecoverWindow.cs").Contains("Brand.Button(\"Show\")") && Src("UI", "RecoverWindow.cs").Contains("ShowElements") && Src("UI", "RecoverWindow.cs").Contains("ZoomAndCenterRectangle") && Src("UI", "RecoverWindow.cs").Contains("OpenViews(parsed"), "");
+        check("lifeline: work plane grids and view marks get no line (they flooded a real file)", Src("Revit", "ChangeFile.cs").Contains("BuiltInCategory.OST_IOSSketchGrid") && Src("Revit", "ChangeFile.cs").Contains("BuiltInCategory.OST_Viewers"), "");
+        var wallType = new M.Line { Kind = M.Kinds.State, At = at, Unique = "wt1", What = "type", Name = "Wall 300", Class = "WallType", Type = "Basic Wall: Wall 300",
+            Layers = [new M.Layer { Width = 0.0656, Function = 4, Material = "mat1" }, new M.Layer { Width = 0.9186, Function = 1 }], Shells = [1, 0], New = true };
+        var typeBack = M.Read([M.Write(wallType)]).Elements.Single();
+        check("lifeline: a new type's kind and layers read back", typeBack is { Class: "WallType", Shells: [1, 0] } && M.SameLayers(typeBack.Layers, wallType.Layers), M.Write(wallType));
+        check("lifeline: a thicker layer is a change", !M.SameLayers(wallType.Layers, [new M.Layer { Width = 0.07, Function = 4, Material = "mat1" }, wallType.Layers![1]]), "");
+        List<M.Run> Runs(double dx) => [new M.Run { P = new(dx, 0, 0), Q = new(dx + 10, 0, 0), Width = 4 }, new M.Run { P = new(dx + 12, 2, 5), Q = new(dx + 2, 2, 5), Width = 4, Base = 5 }];
+        check("lifeline: stairs that only moved are moved back", M.RunsShift(Runs(0), Runs(3)) is { X: 3, Y: 0 }, "");
+        check("lifeline: stairs whose runs changed aren't moved", M.RunsShift(Runs(0), [Runs(3)[0], new M.Run { P = new(15, 2, 5), Q = new(8, 2, 5), Width = 4 }]) is null, "");
+        var stairsLine = new M.Line { Kind = M.Kinds.State, At = at, Unique = "st1", What = "stairs", Runs = Runs(0), LevelUnique = "l1", TopLevel = "l2" };
+        check("lifeline: stairs' runs read back", M.Read([M.Write(stairsLine)]).Elements.Single().Runs is [{ Width: 4 }, { Base: 5 }], M.Write(stairsLine));
+        check("lifeline: replay makes types, elevations, legends, legend components and stairs", Src("Revit", "ChangeTypes.cs").Contains(".Duplicate(name)") && Src("Revit", "ChangeTypes.cs").Contains("SetCompoundStructure")
+            && Src("Revit", "ChangeViews.cs").Contains("ElevationMarker.CreateElevationMarker") && Src("Revit", "ChangeViews.cs").Contains("ViewDuplicateOption.Duplicate")
+            && Src("Revit", "ChangeViews.cs").Contains("OST_LegendComponents") && Src("Revit", "ChangeStairs.cs").Contains("StairsRun.CreateStraightRun"), "");
+        check("lifeline: stairs made again bring their railings (the railings' lines aren't played)", Src("Revit", "ChangeReplay.cs").Contains("stairsMade.Contains(onStairs)"), "");
         check("lifeline: the window shows only the open model's unsaved file", !Src("UI", "RecoverWindow.cs").Contains("Changes before the last save") && !Src("UI", "RecoverWindow.cs").Contains("Changes since the last save"), "");
         check("recovery: Help > Open folders lists the change files", SketchProMax.Bugs.UserFolders.List().Any(f => f.Title == "Change files" && f.Path.EndsWith(Path.Combine("Sketch ProMax", "Change files"))), "");
     }
