@@ -2043,7 +2043,9 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             var used = _conv.SessionId.Length == 0 ? new AttachedSoFar()
                 : _conv.AttachedSession.Length == 0 || _conv.AttachedSession == _conv.SessionId ? new AttachedSoFar { Bytes = _conv.AttachedBytes, Pages = _conv.AttachedPages }
                 : new AttachedSoFar();
-            turn.Line = await Task.Run(() => BuildMessage(text, attachments, used));
+            // What changed since the last answer, the active view and the selection: a follow-up needn't read the model again to know.
+            var sent = text + Revit.ChatModelWatch.Note(_conv.Key);
+            turn.Line = await Task.Run(() => BuildMessage(sent, attachments, used));
             (_conv.AttachedBytes, _conv.AttachedPages, _conv.AttachedSession) = (used.Bytes, used.Pages, _conv.SessionId);
         }
         catch (Exception ex)
@@ -2584,6 +2586,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     {
         var ended = _turn;
         if (_turn?.KillTimer is { } timer) timer.Stop();
+        // An answer ended: the next message's model note counts changes from now (not after a brief's planning or a shrink).
+        if (ended is { Planning: false, Shrinking: false }) Revit.ChatModelWatch.Mark(_conv.Key);
         // "Done in X. By hand: about Y. Saved: Z." when the task's tools saved any time: on the job card when it has one.
         string? time = null;
         try { if (_turn is not null) time = Revit.TimeLog.EndChat(); } catch (Exception) { }

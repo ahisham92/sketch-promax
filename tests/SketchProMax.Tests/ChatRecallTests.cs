@@ -22,6 +22,27 @@ internal static class ChatRecallTests
         }
         check("shrink: automatic once the chat grew by the threshold", ChatRecall.ShouldAutoShrink(50_000 + ChatRecall.AutoShrinkTokens, 50_000) && !ChatRecall.ShouldAutoShrink(50_000 + ChatRecall.AutoShrinkTokens - 1, 50_000), "");
         check("shrink: automatic at the cap, whatever the floor", ChatRecall.ShouldAutoShrink(ChatRecall.AutoShrinkMaxTokens, 0) && !ChatRecall.ShouldAutoShrink(ChatRecall.AutoShrinkMaxTokens - 1, 0), "");
+        // A chat whose empty size is near the cap (all tool descriptions sent with every message) mustn't shrink after every answer.
+        check("shrink: not after every answer when the floor is near the cap", !ChatRecall.ShouldAutoShrink(165_000, 133_000) && !ChatRecall.ShouldAutoShrink(181_000, 133_000), "");
+        check("shrink: a big floor still shrinks once the conversation grew", ChatRecall.ShouldAutoShrink(133_000 + ChatRecall.MinShrinkGain, 133_000), "");
+        check("shrink: the summary keeps ids and model facts", ChatRecall.CompactInstructions.Contains("ids") && ChatRecall.CompactInstructions.Contains("facts read from the model"), "");
+
+        // The model note added to each message.
+        check("note: nothing known, no note", ModelNote.Text(new ModelNote.Facts()) == "" && ModelNote.Text(null) == "", "");
+        var facts = new ModelNote.Facts { Known = true, View = "PILES PLANS", ViewId = 3835479, SelectionKnown = true, SelectedCount = 70,
+            SelectedIds = Enumerable.Range(1, 60).Select(i => (long)i).ToList(), SelectedKinds = new() { ["Structural Columns"] = 62, ["Generic Models"] = 8 } };
+        var note = ModelNote.Text(facts);
+        check("note: unchanged, view and selection", note.StartsWith("\n\n" + ModelNote.Start) && note.Contains("has not changed") && note.Contains("PILES PLANS (id 3835479)")
+            && note.Contains("70 elements (Structural Columns 62, Generic Models 8)") && note.Contains("ids 1, 2,") && note.Contains("and 10 more"), note);
+        facts.Changed["Structural Columns"] = 5; facts.Changed["Dimensions"] = 2; facts.Deleted = 1;
+        note = ModelNote.Text(facts);
+        check("note: changes by category", note.Contains("7 elements added or changed (Structural Columns 5, Dimensions 2), 1 deleted") && !note.Contains("has not changed"), note);
+        check("note: a job's note has no change count", !ModelNote.Text(facts, changes: false).Contains("changed") && ModelNote.Text(facts, changes: false).Contains("selected in Revit"), "");
+        facts.SelectedCount = 0;
+        check("note: nothing selected said", ModelNote.Text(facts).Contains("nothing is selected"), "");
+        for (var i = 0; i < 9; i++) facts.Changed["Cat" + i] = 1;
+        check("note: long category lists end with other", ModelNote.Text(facts).Contains(" other)"), ModelNote.Text(facts));
+
         check("shrink: the floor is the least seen", ChatRecall.Floor(0, 52_000) == 52_000 && ChatRecall.Floor(52_000, 80_000) == 52_000 && ChatRecall.Floor(52_000, 9_000) == 9_000 && ChatRecall.Floor(52_000, 0) == 52_000, "");
 
         // When a chat is summarised.
@@ -85,5 +106,15 @@ internal static class ChatRecallTests
         check("recall: an empty search lists chats with a memory", ChatRecall.Search(all, "").Count == 5, "");
         var (summary, requests, steps) = ChatRecall.Details(b1);
         check("recall: open gives the summary and the steps with their settings", summary.Contains("1.5 m") && steps.Count == 1 && steps[0].Contains("create_foundations") && steps[0].Contains("1500"), string.Join(" | ", steps));
+    }
+
+    /// <summary>The chat, its jobs and the planner load the Revit tools on demand (ToolSearch), read from the source.</summary>
+    public static void RunSources(string root, Action<string, bool, string> check)
+    {
+        var src = File.ReadAllText(Path.Combine(root, "src", "SketchProMax", "Chat", "ClaudeCli.cs"));
+        check("chat: the chat, its jobs and the planner get ToolSearch", src.Contains("BuiltInTools = \"Read,Glob,Grep,ToolSearch\"") &&
+            System.Text.RegularExpressions.Regex.Matches(src, @"""--tools"", BuiltInTools").Count == 2 && src.Contains("readTools ? \"ToolSearch\""), "");
+        var pane = File.ReadAllText(Path.Combine(root, "src", "SketchProMax", "Chat", "ChatPane.cs"));
+        check("chat: each message carries the model note, marked when an answer ends", pane.Contains("ChatModelWatch.Note(_conv.Key)") && pane.Contains("ChatModelWatch.Mark(_conv.Key)"), "");
     }
 }

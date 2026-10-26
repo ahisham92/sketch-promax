@@ -18,10 +18,17 @@ namespace SketchProMax.Chat;
 internal static class ChatRecall
 {
     /// <summary>The chat shrinks itself after a turn whose conversation is this much above the chat's floor.</summary>
-    public const long AutoShrinkTokens = 60_000;
+    public const long AutoShrinkTokens = 100_000;
 
     /// <summary>...and in any case once a message sends this much (well before Claude Code's own near-full point).</summary>
     public const long AutoShrinkMaxTokens = 150_000;
+
+    /// <summary>
+    /// ...but only when the conversation itself is at least this big: a chat whose empty size is already near the cap (all
+    /// the Revit tools' descriptions sent with every message, before ToolSearch) would otherwise shrink after every
+    /// answer, forget what it had read and read the model again on the next task.
+    /// </summary>
+    public const long MinShrinkGain = 60_000;
 
     /// <summary>A chat is summarised again once this many items (messages, steps) were added since its last summary.</summary>
     public const int ItemsBeforeSummary = 4;
@@ -33,8 +40,10 @@ internal static class ChatRecall
 
     /// <summary>What /compact keeps (Claude Code's own summary of the conversation, used from the next message on).</summary>
     public const string CompactInstructions =
-        "Keep the decisions, the settings and standards used, the elements and views worked on, the steps that worked (with " +
-        "the values used) and what is still to do. Drop greetings, repeated tool output and anything already fixed.";
+        "Keep the decisions, the settings and standards used, the elements and views worked on (with their names and ids), " +
+        "the facts read from the model that the work relies on (positions, sizes, clearances, types, which link holds what), " +
+        "the steps and the method or code that worked (with the values used) and what is still to do, so a follow-up needs " +
+        "no new reading of the model. Drop greetings, repeated tool output and anything already fixed.";
 
     /// <summary>The instructions of the run that writes a chat's summary.</summary>
     public const string SummaryInstructions =
@@ -52,7 +61,8 @@ internal static class ChatRecall
     /// what its last request sent, <paramref name="floor"/> the least any request of this chat sent (0 when unknown).
     /// </summary>
     public static bool ShouldAutoShrink(long contextTokens, long floor) =>
-        contextTokens >= AutoShrinkMaxTokens || floor > 0 && contextTokens - floor >= AutoShrinkTokens;
+        floor > 0 && contextTokens - floor >= AutoShrinkTokens
+        || contextTokens >= AutoShrinkMaxTokens && (floor <= 0 || contextTokens - floor >= MinShrinkGain);
 
     /// <summary>The chat's floor after a request that sent <paramref name="contextTokens"/>.</summary>
     public static long Floor(long floor, long contextTokens) => contextTokens <= 0 ? floor : floor <= 0 ? contextTokens : Math.Min(floor, contextTokens);
