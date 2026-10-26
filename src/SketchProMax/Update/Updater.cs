@@ -100,11 +100,38 @@ public static class Updater
     /// newly staged version, or null when there is nothing new. With <paramref name="install"/> false (automatic updates
     /// off) a newer release is only recorded and reported as <see cref="UpdateStage.Available"/>; nothing is downloaded.
     /// </summary>
+    /// <summary>1 while this core runs <see cref="CheckAsync"/> (a second call, such as a click during the automatic check, waits for nothing).</summary>
+    private static int _running;
+    private static volatile UpdateProgress? _runningProgress;
+
+    /// <summary>Mirrors the run already going into <paramref name="mine"/> until it ends.</summary>
+    private static void Follow(UpdateProgress running, UpdateProgress mine)
+    {
+        Action<UpdateSnapshot>? copy = null;
+        copy = s =>
+        {
+            if (s.Bytes > 0) mine.ReportBytes(s.Bytes, s.Total);
+            mine.Report(s.Stage, s.Detail, s.Version);
+            if (s.IsFinal) running.Changed -= copy;
+        };
+        running.Changed += copy;
+        copy(running.Snapshot);
+    }
+
     public static async Task<string?> CheckAsync(bool force, UpdateProgress? progress = null, CancellationToken ct = default, bool install = true)
     {
         progress ??= new UpdateProgress();
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, progress.Cancellation.Token);
         ct = linked.Token;
+        // Already updating in this window (the automatic check at start or on the hour): it carries on by itself.
+        if (Interlocked.Exchange(ref _running, 1) == 1)
+        {
+            // The click shows the background run's progress instead of saying another window is updating.
+            if (_runningProgress is { } running && !ReferenceEquals(running, progress)) Follow(running, progress);
+            else progress.Report(UpdateStage.Applying, "Already updating in the background. It switches over by itself when Revit is idle.");
+            return null;
+        }
+        _runningProgress = progress;
         // Only one Revit window updates at a time. A lock file, because a mutex can't be released after an await.
         FileStream? gate;
         try
@@ -114,7 +141,9 @@ public static class Updater
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            progress.Report(UpdateStage.Failed, "Another Revit window is updating Sketch ProMax right now. This window follows it when it is done.");
+            _runningProgress = null;
+            Interlocked.Exchange(ref _running, 0);
+            progress.Report(UpdateStage.Failed, "Another open Revit is updating right now. This one follows it when it is done (or after a restart of Revit).");
             return null;
         }
 
@@ -195,6 +224,8 @@ public static class Updater
         finally
         {
             gate.Dispose();
+            _runningProgress = null;
+            Interlocked.Exchange(ref _running, 0);
         }
     }
 
