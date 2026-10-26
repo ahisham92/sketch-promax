@@ -23,6 +23,12 @@ internal static class ChangeFile
         public string Path = "", Folder = "", Central = "";
         public readonly HashSet<long> Pending = [];
         public bool Incoming;
+        /// <summary>Elements made since the last save (marked New, so only they are made again when missing).</summary>
+        public readonly HashSet<long> Added = [];
+        /// <summary>The views open, as last written (a line only when they change), and whether the file has lines since the last save.</summary>
+        public M.Line? Views;
+        public string? ViewsKey;
+        public bool Started;
         /// <summary>The values last written for each element, so a later line holds only what changed.</summary>
         public readonly Dictionary<long, Dictionary<string, string>> Written = [];
     }
@@ -37,7 +43,7 @@ internal static class ChangeFile
     private static Autodesk.Revit.ApplicationServices.Application? _app;
     private static UIApplication? _ui;
     private static bool _on = true;
-    private static int _lastSettings;
+    private static int _lastSettings, _lastViews;
 
     /// <summary>For the field test: where the folders go instead of Documents (and models in the temp folder count).</summary>
     internal static string? RootForTest;
@@ -154,36 +160,113 @@ internal static class ChangeFile
     private static void Track(Document doc, bool opened)
     {
         if (!Watched(doc, out var path)) return;
-        string central = "";
-        try
+        var central = CentralOf(doc);
+        Model model;
+        lock (Gate)
         {
-            if (doc.IsWorkshared && !doc.IsDetached) central = ModelPathUtils.ConvertModelPathToUserVisiblePath(doc.GetWorksharingCentralModelPath());
+            // Opened twice (a new local is saved as, then opened): the model watched already carries on.
+            if (opened && Models.TryGetValue(path, out var known)) model = known;
+            else Models[path] = model = new Model { Path = path, Folder = FolderFor(path), Central = central };
         }
-        catch (Exception) { }
-        var model = new Model { Path = path, Folder = FolderFor(path), Central = central };
-        lock (Gate) Models[path] = model;
         // Opened: a file left from before (Revit closed by itself, or closed without saving) is kept with its time.
         if (opened) Queue(() => KeepLeftover(model));
     }
 
     private static void KeepLeftover(Model model)
     {
-        var current = System.IO.Path.Combine(model.Folder, M.CurrentName);
-        if (!File.Exists(current)) return;
-        if (M.Read(ReadLines(current)).Elements.Count == 0) { File.Delete(current); return; }
-        var kept = System.IO.Path.Combine(model.Folder, M.LeftoverName(File.GetLastWriteTime(current)));
-        File.Move(current, kept);
-        foreach (var old in M.LeftoversToDelete(Directory.GetFiles(model.Folder, "*.txt")))
-            try { File.Delete(old); } catch (Exception) { }
+        var kept = new List<string>();
+        if (Keep(model.Folder) is { } own) kept.Add(own);
+        // A new local of the same central (another file name or folder): its file left from last time is this model's too.
+        if (model.Central.Length > 0 && Directory.Exists(Root))
+            foreach (var dir in Directory.GetDirectories(Root))
+            {
+                if (string.Equals(dir, model.Folder, StringComparison.OrdinalIgnoreCase)) continue;
+                var current = System.IO.Path.Combine(dir, M.CurrentName);
+                if (!File.Exists(current)) continue;
+                var head = M.Read(ReadLines(current));
+                if (!string.Equals(head.Central, model.Central, StringComparison.OrdinalIgnoreCase)) continue;
+                bool open;
+                lock (Gate) open = head.Model is { } other && Models.ContainsKey(other);
+                if (!open && Keep(dir) is { } theirs) kept.Add(theirs);
+            }
+        if (kept.Count == 0) return;
+        var newest = kept.OrderByDescending(File.GetLastWriteTime).First();
         // Shown once the model is open: Revit closed by itself last time, or the model was closed without saving.
-        App.Dispatcher.Later(() => UI.RecoverWindow.OfferLeftover(kept));
+        App.Dispatcher.Later(() => UI.RecoverWindow.OfferLeftover(newest));
+    }
+
+    /// <summary>The folder's file from last time, kept as "not saved" with its time (an empty one is deleted); null when there is none.</summary>
+    private static string? Keep(string folder)
+    {
+        var current = System.IO.Path.Combine(folder, M.CurrentName);
+        if (!File.Exists(current)) return null;
+        if (!M.Read(ReadLines(current)).Any) { File.Delete(current); return null; }
+        var kept = System.IO.Path.Combine(folder, M.LeftoverName(File.GetLastWriteTime(current)));
+        if (File.Exists(kept)) File.Delete(kept);
+        File.Move(current, kept);
+        foreach (var old in M.LeftoversToDelete(Directory.GetFiles(folder, "*.txt")))
+            try { File.Delete(old); } catch (Exception) { }
+        return kept;
+    }
+
+    /// <summary>
+    /// The files not saved for a model (its own folder, and other locals of the same central), newest first. Files already
+    /// replayed are left out.
+    /// </summary>
+    public static List<string> LeftoversFor(string modelPath, string central)
+    {
+        var found = new List<string>();
+        try
+        {
+            if (!Directory.Exists(Root)) return found;
+            var own = FolderFor(modelPath);
+            foreach (var dir in Directory.GetDirectories(Root))
+            {
+                var mine = string.Equals(dir, own, StringComparison.OrdinalIgnoreCase);
+                foreach (var file in Directory.GetFiles(dir, M.LeftoverPrefix + "*.txt"))
+                {
+                    if (M.LeftoverTime(file) is null) continue;
+                    if (mine) { found.Add(file); continue; }
+                    if (central.Length == 0) break;
+                    var head = M.Read(ReadLines(file));
+                    if (string.Equals(head.Central, central, StringComparison.OrdinalIgnoreCase)) found.Add(file);
+                    else break;
+                }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        return found.OrderByDescending(f => M.LeftoverTime(f)).ToList();
+    }
+
+    /// <summary>A file replayed in full: renamed so it isn't offered again (still in the folder, as "replayed ...").</summary>
+    public static void MarkReplayed(string file)
+    {
+        try
+        {
+            if (M.LeftoverTime(file) is not { } at) return;
+            var to = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(file)!, M.ReplayedName(at));
+            if (File.Exists(to)) File.Delete(to);
+            File.Move(file, to);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+    }
+
+    /// <summary>The open model's central, as the change file names it ("" when it isn't workshared).</summary>
+    public static string CentralOf(Document doc)
+    {
+        try
+        {
+            if (doc.IsWorkshared && !doc.IsDetached) return ModelPathUtils.ConvertModelPathToUserVisiblePath(doc.GetWorksharingCentralModelPath());
+        }
+        catch (Exception) { }
+        return "";
     }
 
     /// <summary>Saved or synchronized: the file is cleared, the one cleared kept as "before last save".</summary>
     private static void Cleared(Document doc)
     {
         if (For(doc) is not { } model) return;
-        lock (Gate) { model.Pending.Clear(); model.Written.Clear(); }
+        lock (Gate) { model.Pending.Clear(); model.Written.Clear(); model.Added.Clear(); model.Started = false; }
         Queue(() =>
         {
             var current = System.IO.Path.Combine(model.Folder, M.CurrentName);
@@ -194,12 +277,14 @@ internal static class ChangeFile
         });
     }
 
-    private static void Append(Model model, IEnumerable<M.Line> lines)
+    private static void Append(Model model, IReadOnlyCollection<M.Line> lines)
     {
         var text = string.Join(Environment.NewLine, lines.Select(M.Write));
         if (text.Length == 0) return;
         var path = model.Path;
         var central = model.Central;
+        var views = model.Views;
+        model.Started = true;
         Queue(() =>
         {
             Directory.CreateDirectory(model.Folder);
@@ -210,7 +295,8 @@ internal static class ChangeFile
             if (fresh)
             {
                 writer.WriteLine(M.HeaderComment);
-                writer.WriteLine(M.Write(new M.Line { Kind = M.Kinds.Model, At = Now, Path = path, Central = central.Length > 0 ? central : null }));
+                writer.WriteLine(M.Write(new M.Line { Kind = M.Kinds.Model, At = Now, Path = path, Central = central.Length > 0 ? central : null, Format = M.FormatNew }));
+                if (views is not null && !lines.Contains(views)) writer.WriteLine(M.Write(views));
             }
             writer.WriteLine(text);
         });
@@ -272,12 +358,19 @@ internal static class ChangeFile
         try { if (e.Status == RevitAPIEventStatus.Succeeded) Cleared(e.Document); } catch (Exception) { }
     }
 
-    /// <summary>Save As: the model now lives at a new path, with a file of its own that starts empty.</summary>
+    /// <summary>
+    /// Save As: the model now lives at a new path, with a file of its own that starts empty. A model that wasn't watched
+    /// before (Revit saving a new local copy of a central model as it opens it) is opened, not saved: its file left from
+    /// last time is kept, not cleared.
+    /// </summary>
     private static void OnSavedAs(object? sender, DocumentSavedAsEventArgs e)
     {
         try
         {
             if (e.Status != RevitAPIEventStatus.Succeeded || e.Document is not { } doc) return;
+            bool watched;
+            lock (Gate) watched = e.OriginalPath is { Length: > 0 } before && Models.ContainsKey(before);
+            if (!watched) { Track(doc, opened: true); return; }
             Track(doc, opened: false);
             Cleared(doc);
         }
@@ -335,7 +428,7 @@ internal static class ChangeFile
             if (For(doc) is not { } model || model.Incoming) return;
             lock (Gate)
             {
-                foreach (var id in e.GetAddedElementIds()) model.Pending.Add(id.Value);
+                foreach (var id in e.GetAddedElementIds()) { model.Pending.Add(id.Value); if (model.Added.Count < KnownCap) model.Added.Add(id.Value); }
                 foreach (var id in e.GetModifiedElementIds()) model.Pending.Add(id.Value);
             }
             var deleted = e.GetDeletedElementIds();
@@ -365,8 +458,33 @@ internal static class ChangeFile
             if (unchecked(Environment.TickCount - _lastSettings) > 60_000) ReadSettings();
             if (!On) return;
             foreach (Document doc in app.Application.Documents) ReadPending(doc, M.ReadPerIdle);
+            if (unchecked(Environment.TickCount - _lastViews) > 5000) { _lastViews = Environment.TickCount; NoteOpenViews(app); }
         }
         catch (Exception) { }
+    }
+
+    /// <summary>The views open in each model, written when they change (and at the top of each new file), so a replay opens them again.</summary>
+    private static void NoteOpenViews(UIApplication app)
+    {
+        Document? active = null;
+        try { active = app.ActiveUIDocument?.Document; } catch (Exception) { }
+        foreach (Document doc in app.Application.Documents)
+        {
+            if (For(doc) is not { } model) continue;
+            try
+            {
+                var open = new UIDocument(doc).GetOpenUIViews().Select(v => doc.GetElement(v.ViewId)?.UniqueId).OfType<string>().ToList();
+                if (open.Count == 0) continue;
+                var current = active is not null && active.Equals(doc) ? doc.ActiveView?.UniqueId : model.Views?.View;
+                var key = string.Join(",", open) + "|" + current;
+                if (key == model.ViewsKey) continue;
+                model.ViewsKey = key;
+                model.Views = new M.Line { Kind = M.Kinds.Views, At = Now, Open = open, View = current };
+                // Only into a file that has changes: open views alone don't make a file.
+                if (model.Started) Append(model, [model.Views]);
+            }
+            catch (Exception ex) { LifelineBugs.Note("capture", "the open views couldn't be read", Safe(() => doc.PathName), ex, "open views"); }
+        }
     }
 
     private static void ReadPending(Document doc, int max)
@@ -388,6 +506,7 @@ internal static class ChangeFile
                 Remember(model, id, element.UniqueId, element.Category?.Name);
                 lock (Gate)
                 {
+                    line.New = model.Added.Contains(id);
                     model.Written.TryGetValue(id, out var written);
                     var all = line.Values ?? [];
                     var changed = M.Changed(all, written);
@@ -417,13 +536,14 @@ internal static class ChangeFile
     internal static M.Line? Capture(Document doc, Element element)
     {
         var category = element.Category;
-        if (category is null && element is not ElementType) return null;
-        if (element is View || element is ElementType { Category: null } || ChangeShapes.IsSketchLine(element) || ChangeNotes.IsPart(element)) return null;
+        var viewKind = ChangeViews.Kind(element);
+        if (category is null && element is not ElementType && viewKind is null) return null;
+        if (ChangeViews.Ignored(element) || element is View { IsTemplate: true } || element is ElementType { Category: null } || ChangeShapes.IsSketchLine(element) || ChangeNotes.IsPart(element)) return null;
         var line = new M.Line
         {
             Kind = M.Kinds.State, At = Now, Id = element.Id.Value, Unique = element.UniqueId,
             Category = category?.Name, CategoryId = category?.Id.Value ?? 0,
-            What = ChangeShapes.Kind(element) ?? ChangeNotes.Kind(element) ?? element switch { Level => "level", Grid => "grid", ElementType => "type", Wall => "wall", FamilyInstance => "instance", _ => "other" },
+            What = ChangeShapes.Kind(element) ?? ChangeNotes.Kind(element) ?? viewKind ?? element switch { Level => "level", Grid => "grid", ElementType => "type", Wall => "wall", FamilyInstance => "instance", _ => "other" },
         };
         try { line.Name = element.Name; } catch (Exception) { }
         if (element is not ElementType && doc.GetElement(element.GetTypeId()) is ElementType type)
@@ -469,6 +589,8 @@ internal static class ChangeFile
         try { ChangeShapes.Read(doc, element, line); } catch (Exception ex) { LifelineBugs.Note("capture", $"the shape of {line.What} ({line.Category}) couldn't be read", doc.PathName, ex); }
         // Annotations, rooms and reinforcement: what they point at, their text, bars and the view they are drawn in.
         try { ChangeNotes.Read(doc, element, line); } catch (Exception ex) { LifelineBugs.Note("capture", $"{line.What} ({line.Category}) couldn't be read in full", doc.PathName, ex); }
+        // Views, sheets, what is placed on sheets, groups, links and CAD.
+        try { ChangeViews.Read(doc, element, line); } catch (Exception ex) { LifelineBugs.Note("capture", $"{line.What} ({line.Category}) couldn't be read in full", doc.PathName, ex); }
         var values = new List<M.Value>();
         foreach (Parameter p in element.Parameters)
         {

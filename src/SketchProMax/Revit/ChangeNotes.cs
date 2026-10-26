@@ -80,6 +80,7 @@ internal static class ChangeNotes
                 line.P = P(text.Coord);
                 line.Width = M.Round(text.Width);
                 line.Leader = text.LeaderCount > 0;
+                if (line.Leader) line.Leads = Leads(text);
                 if (doc.GetElement(text.OwnerViewId) is View tv) line.Rotation = M.Round(Angle(tv, text.BaseDirection));
                 break;
             case RevisionCloud cloud:
@@ -232,7 +233,8 @@ internal static class ChangeNotes
                 var note = line.Width is > 0 ? TextNote.Create(doc, view.Id, X(line.P!), line.Width.Value, line.Text!, TypeId()) : TextNote.Create(doc, view.Id, X(line.P!), line.Text!, TypeId());
                 if (line.Rotation is { } r && Math.Abs(r) > 1e-6)
                     ElementTransformUtils.RotateElement(doc, note.Id, Line.CreateBound(X(line.P!), X(line.P!) + view.ViewDirection), r);
-                if (line.Leader) notes.Add($"{label}: made again without its leaders: add them by hand");
+                if (line.Leads is { Count: > 0 } leads) AddLeads(note, leads, label, notes);
+                else if (line.Leader) notes.Add($"{label}: made again without its leaders: add them by hand");
                 return note;
             }
             case "cloud":
@@ -341,6 +343,15 @@ internal static class ChangeNotes
                 break;
             case TextNote text:
                 if (line.Text is { } t && text.Text.TrimEnd('\r', '\n') != t.TrimEnd('\r', '\n')) { text.Text = t; changed = true; }
+                if (line.Leads is not null || (!line.Leader && text.LeaderCount > 0))
+                {
+                    if (!M.SameLeads(line.Leads, now.Leads))
+                    {
+                        text.RemoveLeaders();
+                        AddLeads(text, line.Leads ?? [], label, notes);
+                        changed = true;
+                    }
+                }
                 if (line.P is { } c && !M.Same(c, now.P)) { text.Coord = X(c); changed = true; }
                 if (line.Width is { } w && now.Width is { } w0 && !M.Same(w, w0)) { try { text.Width = w; changed = true; } catch (Exception) { } }
                 if (line.Rotation is { } r && now.Rotation is { } r0 && !M.Same(r, r0) && doc.GetElement(text.OwnerViewId) is View tv)
@@ -364,6 +375,37 @@ internal static class ChangeNotes
                 break;
         }
         return changed;
+    }
+
+    private static List<M.Lead> Leads(TextNote text)
+    {
+        var leads = new List<M.Lead>();
+        foreach (Leader leader in text.GetLeaders())
+        {
+            var shape = leader.LeaderShape;
+            leads.Add(new M.Lead
+            {
+                End = P(leader.End), Arc = shape == LeaderShape.Arc, Elbow = shape == LeaderShape.Kinked ? P(leader.Elbow) : null,
+                Right = (leader.End - text.Coord).DotProduct(text.BaseDirection) > 0,
+            });
+        }
+        return leads;
+    }
+
+    private static void AddLeads(TextNote text, List<M.Lead> leads, string label, List<string> notes)
+    {
+        var missed = 0;
+        foreach (var lead in leads)
+        {
+            try
+            {
+                var leader = text.AddLeader(lead.Arc ? (lead.Right ? TextNoteLeaderTypes.TNLT_ARC_R : TextNoteLeaderTypes.TNLT_ARC_L) : (lead.Right ? TextNoteLeaderTypes.TNLT_STRAIGHT_R : TextNoteLeaderTypes.TNLT_STRAIGHT_L));
+                leader.End = X(lead.End);
+                if (lead.Elbow is { } elbow) try { leader.Elbow = X(elbow); } catch (Exception) { }
+            }
+            catch (Exception) { missed++; }
+        }
+        if (missed > 0) notes.Add($"{label}: {missed} of its leaders didn't come back: add them by hand");
     }
 
     /// <summary>The element as it is now, in the same terms as its line.</summary>

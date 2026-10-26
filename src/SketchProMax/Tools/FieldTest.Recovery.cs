@@ -298,6 +298,84 @@ internal static partial class FieldTest
         }
     }
 
+    /// <summary>
+    /// A drafting view on a new sheet and a text note with a leader, all made after the save and deleted: replay makes the
+    /// view, the sheet and the viewport again, and the note with its leader; a grid that was there before and is gone (as
+    /// if someone deleted it in central) is skipped and listed, not made again.
+    /// </summary>
+    private static (string, string) RecoveryViews(UIApplication app, State s)
+    {
+        if (TestDoc(app, s, out var why) is not { } doc) return Fail(why);
+        if (new FilteredElementCollector(doc).OfClass(typeof(ViewFamilyType)).Cast<ViewFamilyType>().FirstOrDefault(t => t.ViewFamily == ViewFamily.Drafting) is not { } draftingType) return Fail("the test project has no drafting view type");
+        if (new FilteredElementCollector(doc).OfClass(typeof(TextNoteType)).FirstElementId() is not { } textType || textType == ElementId.InvalidElementId) return Fail("the test project has no text type");
+        var problems = new List<string>();
+        var made = new List<ElementId>();
+        try
+        {
+            ViewDrafting drafting;
+            ViewSheet sheet;
+            Viewport viewport;
+            TextNote note;
+            Grid grid;
+            var name = "Field test drafting " + DateTime.Now.ToString("HHmmss");
+            using (var t = new Transaction(doc, "Field test: replay views"))
+            {
+                t.Start();
+                drafting = ViewDrafting.Create(doc, draftingType.Id);
+                drafting.Name = name;
+                note = TextNote.Create(doc, drafting.Id, new XYZ(0, 0, 0), "Field test leader note", textType);
+                var leader = note.AddLeader(TextNoteLeaderTypes.TNLT_STRAIGHT_R);
+                leader.End = new XYZ(3, -2, 0);
+                sheet = ViewSheet.Create(doc, ElementId.InvalidElementId);
+                viewport = Viewport.Create(doc, sheet.Id, drafting.Id, new XYZ(1, 1, 0));
+                grid = Grid.Create(doc, Line.CreateBound(new XYZ(300, 0, 0), new XYZ(300, 40, 0)));
+                t.Commit();
+            }
+            made.Add(grid.Id);
+            var lines = new List<M.Line>();
+            foreach (var e in new Element[] { drafting, sheet, viewport, note })
+            {
+                if (ChangeFile.Capture(doc, e) is not { } line) { problems.Add($"{e.GetType().Name} wasn't captured"); continue; }
+                line.New = true;
+                lines.Add(line);
+            }
+            var gridLine = ChangeFile.Capture(doc, grid)!;
+            lines.Add(gridLine);
+            if (lines.FirstOrDefault(l => l.What == "text") is not { Leads.Count: 1 }) problems.Add("the text note's leader isn't in its line");
+            using (var t = new Transaction(doc, "Field test: replay views change"))
+            {
+                t.Start();
+                doc.Delete(sheet.Id);
+                doc.Delete(drafting.Id);
+                doc.Delete(grid.Id);
+                t.Commit();
+            }
+            made.Remove(grid.Id);
+            var model = new M.Line { Kind = M.Kinds.Model, At = DateTime.Now, Path = doc.PathName, Format = M.FormatNew };
+            var parsed = M.Read(lines.Prepend(model).Select(M.Write));
+            var outcome = new ChangeReplay.Outcome();
+            ChangeReplay.Apply(doc, ChangeReplay.Plan(doc, parsed), outcome);
+            made.AddRange(outcome.MadeFor.Values);
+            var notDone = " (" + string.Join("; ", outcome.NotDone) + ")";
+            View? Again(Element e) => outcome.MadeFor.TryGetValue(e.UniqueId, out var id) ? doc.GetElement(id) as View : null;
+            if (Again(drafting) is not ViewDrafting draftingAgain || draftingAgain.Name != name) problems.Add("the drafting view wasn't made again with its name" + notDone);
+            if (Again(sheet) is not ViewSheet sheetAgain || sheetAgain.GetAllViewports().Count != 1) problems.Add("the sheet wasn't made again with its viewport" + notDone);
+            if (!outcome.MadeFor.TryGetValue(note.UniqueId, out var noteAgain) || doc.GetElement(noteAgain) is not TextNote noteBack || noteBack.LeaderCount != 1) problems.Add("the text note wasn't made again with its leader" + notDone);
+            if (outcome.MadeFor.ContainsKey(gridLine.Unique!)) problems.Add("a grid deleted by someone else was made again");
+            if (!outcome.NotDone.Any(n => n.Contains("by someone else") || n.Contains("not in the model any more"))) problems.Add("the grid deleted by someone else isn't listed" + notDone);
+            return problems.Count == 0
+                ? Pass($"a drafting view, a sheet with its viewport and a text note with its leader made again; a grid deleted by someone else left deleted and listed ({outcome.Made} made again)")
+                : Fail(string.Join("; ", problems));
+        }
+        finally
+        {
+            using var t = new Transaction(doc, "Field test: replay views tidy up");
+            t.Start();
+            foreach (var id in made) try { if (doc.GetElement(id) is not null) doc.Delete(id); } catch (Exception) { }
+            t.Commit();
+        }
+    }
+
     /// <summary>Lifeline's bug list: a problem noted twice is one line under the header, in a test folder.</summary>
     private static (string, string) RecoveryBugs(State s)
     {
