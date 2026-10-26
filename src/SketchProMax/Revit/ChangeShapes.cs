@@ -113,6 +113,7 @@ internal static class ChangeShapes
                 break;
             case Railing railing:
                 line.Loops = [Loop(railing.GetPath(), ref approx)];
+                if (railing.HostId != ElementId.InvalidElementId) line.Host = doc.GetElement(railing.HostId)?.UniqueId;
                 break;
             case FilledRegion region:
                 line.Loops = region.GetBoundaries().Select(l => Loop(l, ref approx)).ToList();
@@ -350,7 +351,7 @@ internal static class ChangeShapes
     }
 
     /// <summary>Warnings are dismissed; an error rolls the sketch edit back.</summary>
-    private sealed class Quiet : IFailuresPreprocessor
+    internal sealed class Quiet : IFailuresPreprocessor
     {
         public FailureProcessingResult PreprocessFailures(FailuresAccessor accessor)
         {

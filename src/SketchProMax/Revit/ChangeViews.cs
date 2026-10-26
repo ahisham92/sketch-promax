@@ -22,10 +22,14 @@ internal static class ChangeViews
         Group => "group",
         RevitLinkInstance => "link",
         ImportInstance => "cad",
+        _ when e.Category?.Id.Value == (long)BuiltInCategory.OST_LegendComponents => "legendcomponent",
         _ => null,
     };
 
-    public static bool Owns(M.Line line) => line.What is "sheet" or "view" or "viewport" or "schedule-on-sheet" or "group" or "link" or "cad";
+    /// <summary>Elevation markers come with their elevations: no line of their own.</summary>
+    public static bool IsPart(Element e) => e is ElevationMarker;
+
+    public static bool Owns(M.Line line) => line.What is "sheet" or "view" or "viewport" or "schedule-on-sheet" or "group" or "link" or "cad" or "legendcomponent";
 
     /// <summary>Views that are Revit's own (browsers, internal views) never get a line.</summary>
     public static bool Ignored(Element e) => e is View v && v.ViewType is ViewType.ProjectBrowser or ViewType.SystemBrowser or ViewType.Internal
@@ -52,9 +56,15 @@ internal static class ChangeViews
                     if (v3.IsPerspective) line.Text = "perspective";
                     if (v3.IsSectionBoxActive && v3.GetSectionBox() is { } sb) line.Box.SectionBox = BoxOf(sb);
                 }
-                else if (view.ViewType is ViewType.Section or ViewType.Detail or ViewType.FloorPlan or ViewType.CeilingPlan or ViewType.EngineeringPlan)
+                else if (view.ViewType is ViewType.Section or ViewType.Detail or ViewType.FloorPlan or ViewType.CeilingPlan or ViewType.EngineeringPlan or ViewType.Elevation)
                 {
                     try { if (view.CropBox is { } crop) line.Box = BoxOf(crop); } catch (Exception) { }
+                }
+                if (view.ViewType == ViewType.Elevation)
+                {
+                    // Where it looks from and which way: a marker made again is turned and moved to match.
+                    line.PlaneOrigin = P(view.Origin);
+                    line.PlaneNormal = P(view.ViewDirection);
                 }
                 if (view is ViewSchedule schedule)
                 {
@@ -79,6 +89,9 @@ internal static class ChangeViews
                 break;
             case Group group:
                 if (group.Location is LocationPoint gp) line.P = P(gp.Point);
+                break;
+            case not null when line.What == "legendcomponent":
+                if (doc.GetElement(e.OwnerViewId) is View legend && e.get_BoundingBox(legend) is { } bb) line.P = P((bb.Min + bb.Max) / 2);
                 break;
             case RevitLinkInstance link:
                 line.Box = Placement(link.GetTotalTransform());
@@ -118,8 +131,8 @@ internal static class ChangeViews
 
     public static string? CanMake(M.Line line) => line.What switch
     {
-        "view" when line.ViewKind is nameof(ViewType.Elevation) => "an elevation made after the last save: make it again by hand (its marker needs a plan)",
-        "view" when line.ViewKind is nameof(ViewType.Legend) => "a legend made after the last save: duplicate a legend and redo it by hand",
+        "view" when line.ViewKind is nameof(ViewType.Elevation) && (line.PlaneOrigin is null || line.PlaneNormal is null) => "an elevation made after the last save: make it again by hand",
+        "view" when line.ViewKind is nameof(ViewType.Elevation) or nameof(ViewType.Legend) => null,
         "view" when line.ViewKind is nameof(ViewType.AreaPlan) => "an area plan made after the last save: make it again by hand (it needs its area scheme)",
         "view" when line.Values?.Any(v => v.Bip == (int)BuiltInParameter.VIEW_TEMPLATE_FOR_SCHEDULE) == true && line.ViewKind is null => "a view template made after the last save: make it again by hand",
         "view" when line.Host is not null => null,
@@ -134,6 +147,7 @@ internal static class ChangeViews
         "link" when line.Type is not null => null,
         "cad" when line.Name is { Length: > 0 } => null,
         "cad" => "CAD made after the last save whose file isn't known: link or import it again by hand",
+        "legendcomponent" when line.View is not null && line.P is not null => null,
         _ => "made after the last save, but the file doesn't have all it needs: make it again by hand",
     };
 
@@ -161,6 +175,16 @@ internal static class ChangeViews
                 if (find(line.View) is not ViewSheet sheet) throw new InvalidOperationException("its sheet isn't in this model");
                 if (find(line.Host) is not ViewSchedule schedule) throw new InvalidOperationException("its schedule isn't in this model");
                 return ScheduleSheetInstance.Create(doc, sheet.Id, schedule.Id, X(line.P!));
+            }
+            case "legendcomponent":
+            {
+                // Revit has no call to place a legend component: one already in the model is copied into the legend, then
+                // set to the file's family type and view (its values) and moved into place.
+                if (find(line.View) is not View legend) throw new InvalidOperationException("its legend isn't in this model");
+                var source = new FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_LegendComponents).WhereElementIsNotElementType().FirstElement()
+                             ?? throw new InvalidOperationException("there is no legend component in the model to copy: place it by hand");
+                var copied = ElementTransformUtils.CopyElements(doc.GetElement(source.OwnerViewId) as View, [source.Id], legend, Transform.Identity, new CopyPasteOptions());
+                return doc.GetElement(copied.First());
             }
             case "group":
             {
@@ -224,6 +248,17 @@ internal static class ChangeViews
                 case nameof(ViewType.DraftingView):
                     view = ViewDrafting.Create(doc, typeId());
                     break;
+                case nameof(ViewType.Elevation):
+                    view = MakeElevation(doc, line, typeId());
+                    break;
+                case nameof(ViewType.Legend):
+                {
+                    // Revit has no call to make a legend: an empty copy of one already in the model.
+                    var any = new FilteredElementCollector(doc).OfClass(typeof(View)).Cast<View>().FirstOrDefault(v => v.ViewType == ViewType.Legend && !v.IsTemplate)
+                              ?? throw new InvalidOperationException("there is no legend in the model to start from: make one legend by hand, then replay again");
+                    view = (View)doc.GetElement(any.Duplicate(ViewDuplicateOption.Duplicate));
+                    break;
+                }
                 case nameof(ViewType.Schedule):
                 {
                     var schedule = ViewSchedule.CreateSchedule(doc, new ElementId(line.ScheduleCategory));
@@ -246,6 +281,49 @@ internal static class ChangeViews
         }
         if (line.Name is { Length: > 0 } name) try { view.Name = name; } catch (Exception) { notes.Add($"{label}: made again, but the name {name} is taken: rename it by hand"); }
         return view;
+    }
+
+    /// <summary>An elevation on a new marker, turned and moved so it looks from where the file says, with its crop.</summary>
+    private static View MakeElevation(Document doc, M.Line line, ElementId typeId)
+    {
+        var origin = X(line.PlaneOrigin!);
+        var plan = new FilteredElementCollector(doc).OfClass(typeof(ViewPlan)).Cast<ViewPlan>()
+                       .Where(v => !v.IsTemplate && v.ViewType == ViewType.FloorPlan && v.GenLevel is not null)
+                       .OrderBy(v => Math.Abs(v.GenLevel.Elevation - origin.Z)).FirstOrDefault()
+                   ?? throw new InvalidOperationException("there is no floor plan to put its marker in");
+        var at = new XYZ(origin.X, origin.Y, plan.GenLevel.Elevation);
+        var marker = ElevationMarker.CreateElevationMarker(doc, typeId, at, 100);
+        var view = marker.CreateElevation(doc, plan.Id, 0);
+        doc.Regenerate();
+        var want = new XYZ(line.PlaneNormal!.X, line.PlaneNormal.Y, 0);
+        var now = new XYZ(view.ViewDirection.X, view.ViewDirection.Y, 0);
+        if (want.GetLength() > 1e-6 && now.GetLength() > 1e-6)
+        {
+            var angle = now.AngleOnPlaneTo(want, XYZ.BasisZ);
+            if (Math.Abs(angle) > 1e-6 && Math.Abs(angle - 2 * Math.PI) > 1e-6)
+            {
+                ElementTransformUtils.RotateElement(doc, marker.Id, Line.CreateBound(at, at + XYZ.BasisZ), angle);
+                doc.Regenerate();
+            }
+        }
+        var move = origin - view.Origin;
+        move = new XYZ(move.X, move.Y, 0);
+        if (move.GetLength() > 3.3e-5) { ElementTransformUtils.MoveElement(doc, marker.Id, move); doc.Regenerate(); }
+        if (line.Box is { Min: not null, Max: not null } crop) try { view.CropBox = Bounding(crop); } catch (Exception) { }
+        return view;
+    }
+
+    /// <summary>After its values are set: a legend component moved to where it was in its legend. True when moved.</summary>
+    public static bool Settle(Document doc, Element e, M.Line line)
+    {
+        if (line.What != "legendcomponent" || line.P is not { } want || doc.GetElement(e.OwnerViewId) is not View legend) return false;
+        doc.Regenerate();
+        if (e.get_BoundingBox(legend) is not { } bb) return false;
+        var move = X(want) - (bb.Min + bb.Max) / 2;
+        move = new XYZ(move.X, move.Y, 0);
+        if (move.GetLength() < 3.3e-4) return false;
+        ElementTransformUtils.MoveElement(doc, e.Id, move);
+        return true;
     }
 
     /// <summary>A link or CAD to its place in the file (moved, then turned about its origin).</summary>

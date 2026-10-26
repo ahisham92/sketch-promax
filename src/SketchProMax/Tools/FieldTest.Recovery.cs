@@ -376,6 +376,102 @@ internal static partial class FieldTest
         }
     }
 
+    /// <summary>
+    /// A wall type duplicated with a changed layer, an elevation and straight stairs, all made after the save and deleted:
+    /// replay makes the type again with its layers, the elevation looking the same way, and the stairs with their run.
+    /// </summary>
+    private static (string, string) RecoveryTypes(UIApplication app, State s)
+    {
+        if (TestDoc(app, s, out var why) is not { } doc) return Fail(why);
+        if (BasicWallType(doc) is not { } wallType) return Fail("the test project has no basic wall type with layers");
+        if (new FilteredElementCollector(doc).OfClass(typeof(Level)).Cast<Level>().OrderBy(l => l.Elevation).FirstOrDefault() is not { } level) return Fail("the test project has no level");
+        if (new FilteredElementCollector(doc).OfClass(typeof(ViewFamilyType)).Cast<ViewFamilyType>().FirstOrDefault(t => t.ViewFamily == ViewFamily.Elevation) is not { } elevationType) return Fail("the test project has no elevation type");
+        if (new FilteredElementCollector(doc).OfClass(typeof(ViewPlan)).Cast<ViewPlan>().FirstOrDefault(v => !v.IsTemplate && v.ViewType == ViewType.FloorPlan && v.GenLevel is not null) is not { } plan) return Fail("the test project has no floor plan");
+        var problems = new List<string>();
+        var made = new List<ElementId>();
+        try
+        {
+            ElementType copy;
+            View elevation;
+            ElevationMarker marker;
+            Level top;
+            using (var t = new Transaction(doc, "Field test: replay types"))
+            {
+                t.Start();
+                copy = wallType.Duplicate("Field test type " + DateTime.Now.ToString("HHmmss"));
+                var cs = ((HostObjAttributes)copy).GetCompoundStructure();
+                cs.SetLayerWidth(0, cs.GetLayerWidth(0) + 0.1);
+                ((HostObjAttributes)copy).SetCompoundStructure(cs);
+                marker = ElevationMarker.CreateElevationMarker(doc, elevationType.Id, new XYZ(400, 0, level.Elevation), 100);
+                elevation = marker.CreateElevation(doc, plan.Id, 1);
+                top = Level.Create(doc, level.Elevation + 10);
+                t.Commit();
+            }
+            made.Add(top.Id);
+            ElementId stairsId;
+            using (var scope = new StairsEditScope(doc, "Field test: stairs"))
+            {
+                stairsId = scope.Start(level.Id, top.Id);
+                using (var t = new Transaction(doc, "Field test: stairs run"))
+                {
+                    t.Start();
+                    Autodesk.Revit.DB.Architecture.StairsRun.CreateStraightRun(doc, stairsId, Line.CreateBound(new XYZ(420, 0, level.Elevation), new XYZ(440, 0, level.Elevation)), Autodesk.Revit.DB.Architecture.StairsRunJustification.Center);
+                    t.Commit();
+                }
+                scope.Commit(new ChangeShapes.Quiet());
+            }
+            var stairs = doc.GetElement(stairsId);
+            var lines = new List<M.Line>();
+            foreach (var e in new Element[] { copy, elevation, stairs })
+            {
+                if (ChangeFile.Capture(doc, e) is not { } line) { problems.Add($"{e.GetType().Name} wasn't captured"); continue; }
+                line.New = true;
+                lines.Add(line);
+            }
+            if (lines.FirstOrDefault(l => l.What == "type") is not { Layers.Count: > 0 }) problems.Add("the type's layers aren't in its line");
+            if (lines.FirstOrDefault(l => l.What == "stairs") is not { Runs.Count: 1 }) problems.Add("the stairs' run isn't in its line");
+            var direction = elevation.ViewDirection;
+            var copyName = copy.Name;
+            var width = ((HostObjAttributes)copy).GetCompoundStructure().GetLayerWidth(0);
+            var uniques = new[] { copy.UniqueId, elevation.UniqueId, stairs.UniqueId };
+            using (var t = new Transaction(doc, "Field test: replay types change"))
+            {
+                t.Start();
+                doc.Delete(stairsId);
+                doc.Delete(marker.Id);
+                doc.Delete(copy.Id);
+                t.Commit();
+            }
+            var model = new M.Line { Kind = M.Kinds.Model, At = DateTime.Now, Path = doc.PathName, Format = M.FormatNew };
+            var parsed = M.Read(lines.Prepend(model).Select(M.Write));
+            var outcome = new ChangeReplay.Outcome();
+            ChangeReplay.Apply(doc, ChangeReplay.Plan(doc, parsed), outcome);
+            foreach (var id in outcome.MadeFor.Values) made.Add(id);
+            var notDone = " (" + string.Join("; ", outcome.NotDone) + ")";
+            Element? Again(string unique) => outcome.MadeFor.TryGetValue(unique, out var id) ? doc.GetElement(id) : null;
+            if (Again(uniques[0]) is not HostObjAttributes typeBack || ((ElementType)typeBack).Name != copyName || !M.Same(typeBack.GetCompoundStructure().GetLayerWidth(0), width))
+                problems.Add("the wall type wasn't made again with its layers" + notDone);
+            if (Again(uniques[1]) is not View elevationBack || !elevationBack.ViewDirection.IsAlmostEqualTo(direction))
+                problems.Add("the elevation wasn't made again looking the same way" + notDone);
+            if (Again(uniques[2]) is not Autodesk.Revit.DB.Architecture.Stairs stairsBack || stairsBack.GetStairsRuns().Count != 1)
+                problems.Add("the stairs weren't made again with their run" + notDone);
+            return problems.Count == 0
+                ? Pass($"a wall type with its layers, an elevation and stairs made again ({outcome.Made} made again)")
+                : Fail(string.Join("; ", problems));
+        }
+        finally
+        {
+            using var t = new Transaction(doc, "Field test: replay types tidy up");
+            t.Start();
+            // The elevations' markers first, then the rest (the type last, once nothing uses it).
+            foreach (var id in made.ToList())
+                if (doc.GetElement(id) is View v && new FilteredElementCollector(doc).OfClass(typeof(ElevationMarker)).Cast<ElevationMarker>().FirstOrDefault(m => Enumerable.Range(0, 4).Any(i => m.GetViewId(i) == v.Id)) is { } m)
+                    try { doc.Delete(m.Id); } catch (Exception) { }
+            foreach (var id in made.OrderBy(id => doc.GetElement(id) is ElementType ? 1 : 0).ToList()) try { if (doc.GetElement(id) is not null) doc.Delete(id); } catch (Exception) { }
+            t.Commit();
+        }
+    }
+
     /// <summary>Lifeline's bug list: a problem noted twice is one line under the header, in a test folder.</summary>
     private static (string, string) RecoveryBugs(State s)
     {

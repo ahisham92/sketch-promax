@@ -528,6 +528,8 @@ internal static partial class FieldTest
         await ProbeCore(s, "recovery.shapes", () => App.Dispatcher.InvokeFromEventAsync(app => RecoveryShapes(app, s))).ConfigureAwait(false);
         await Probe(s, "recovery.notes", app => RecoveryNotes(app, s)).ConfigureAwait(false);
         await Probe(s, "recovery.views", app => RecoveryViews(app, s)).ConfigureAwait(false);
+        // Stairs are made in a stairs edit scope, which needs the external event.
+        await ProbeCore(s, "recovery.types", () => App.Dispatcher.InvokeFromEventAsync(app => RecoveryTypes(app, s))).ConfigureAwait(false);
         await Probe(s, "recovery.bugs", () => RecoveryBugs(s)).ConfigureAwait(false);
         // Off Revit's thread: processes, files and the network.
         await Probe(s, "chat.cli", () => { cli = new ClaudeCliInstall(Chat.ClaudeCli.Find()); return cli.Row(); }).ConfigureAwait(false);
