@@ -87,6 +87,15 @@ internal static class PromptBriefTests
         var fallback = PromptBriefs.FallbackNote("add walls", before, after);
         check("brief: fallback note says what changed", fallback.StartsWith(PromptBriefs.NotePrefix) && fallback.Contains("250 mm") && fallback.Contains("200 mm"), fallback);
 
+        // A short follow-up that carries on with earlier work runs without a brief (the chat has the context already).
+        check("brief: a continuation runs as typed", !PromptBriefs.ShouldPlan(BriefMode.Always, "continue with the rest of the piles") && !PromptBriefs.ShouldPlan(BriefMode.ModelChanges, "finish the move")
+            && !PromptBriefs.ShouldPlan(BriefMode.ModelChanges, "do the same again for berth 10") && PromptBriefs.IsContinuation("Ok, repeat it on level 3"), "");
+        check("brief: a new request is still briefed", PromptBriefs.ShouldPlan(BriefMode.ModelChanges, "move the selected piles between the tie rods")
+            && PromptBriefs.ShouldPlan(BriefMode.ModelChanges, "finish the move and then add dimensions to every pile on berths 9 and 10, tag them all, and make a sheet for each berth with the colour legend"), "");
+        var noted = PromptBriefs.PlanMessage("move them too", [], [], "- 19 piles moved to their bay centres", "\n\n[Model note from Sketch ProMax, not typed by the user: nothing is selected in Revit.]");
+        check("brief: the planner gets the chat's memory and the model note", noted.StartsWith("What this chat remembers") && noted.Contains("19 piles moved") && noted.EndsWith("nothing is selected in Revit.]"), noted);
+        check("brief: the planner reads only what is missing", PromptBriefs.PlannerInstructions.Contains("Don't") && PromptBriefs.PlannerInstructions.Contains("ToolSearch"), "");
+
         // The planner's message carries the conversation's end
         var plan = PromptBriefs.PlanMessage("do the same on level 3", ["plan.pdf"], [("user", "add walls on level 2"), ("assistant", "Done: 12 walls.")]);
         check("brief: plan message has context, request and files", plan.IndexOf("User: add walls", StringComparison.Ordinal) < plan.IndexOf("Assistant: Done", StringComparison.Ordinal) && plan.Contains("do the same on level 3") && plan.Contains("plan.pdf"), plan);

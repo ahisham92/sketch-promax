@@ -163,7 +163,7 @@ internal static class ClaudeCli
             "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
             "--mcp-config", mcpFile, "--strict-mcp-config",
             "--append-system-prompt-file", promptFile,
-            "--tools", "Read,Glob,Grep",
+            "--tools", BuiltInTools,
             "--allowedTools", $"mcp__{ServerName},mcp__{ServerName}__*,Read,Glob,Grep",
             "--permission-mode", "dontAsk",
         };
@@ -213,6 +213,15 @@ internal static class ClaudeCli
     }
 
     /// <summary>
+    /// The built-in tools the chat and its jobs get: Read, Glob and Grep for files, and ToolSearch. ToolSearch matters for
+    /// speed: with it Claude Code lists the 200+ Revit tools by name and loads a tool's description only when it is used.
+    /// Without it every message carried all of them (about 130k tokens before a word of the conversation), so each task
+    /// went over the shrink size and the chat was shrunk after every answer, forgot what it had read, and read the model
+    /// again on the next task. ToolSearch only reads tool descriptions; an older Claude Code without it ignores the name.
+    /// </summary>
+    internal const string BuiltInTools = "Read,Glob,Grep,ToolSearch";
+
+    /// <summary>
     /// A parallel job's own Claude Code (Chat.JobBoard, ChatPane.Jobs): like the chat's engine, with the job's instructions,
     /// the connector told which job it serves (SKETCHPROMAX_JOB, so its changes take turns with the other jobs'), no
     /// chat_jobs (a job doesn't start jobs), whole messages rather than streamed words, and its own session: a new id
@@ -232,7 +241,7 @@ internal static class ClaudeCli
             "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
             "--mcp-config", mcpFile, "--strict-mcp-config",
             "--append-system-prompt-file", promptFile,
-            "--tools", "Read,Glob,Grep",
+            "--tools", BuiltInTools,
             "--allowedTools", $"mcp__{ServerName},mcp__{ServerName}__*,Read,Glob,Grep",
             "--permission-mode", "dontAsk",
             "--disallowedTools", string.Join(",", TranscriptRule, $"mcp__{ServerName}__{SketchProMax.Tools.ChatJobsTool.ToolName}"),
@@ -340,7 +349,8 @@ internal static class ClaudeCli
         var pid = Process.GetCurrentProcess().Id.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var promptFile = Path.Combine(engine, (readTools ? "brief-" : "distil-") + pid + ".md");
         File.WriteAllText(promptFile, instructions + Notes(), new UTF8Encoding(false));
-        var args = new List<string> { "-p", "--output-format", "json", "--append-system-prompt-file", promptFile, "--tools", "", "--permission-mode", "dontAsk" };
+        // With the Revit tools, ToolSearch too (see BuiltInTools): the planner loads only the few read tools it uses.
+        var args = new List<string> { "-p", "--output-format", "json", "--append-system-prompt-file", promptFile, "--tools", readTools ? "ToolSearch" : "", "--permission-mode", "dontAsk" };
         if (readTools)
         {
             args.AddRange(new[] { "--mcp-config", WriteMcpConfig(engine, pid, "mcp-brief-"), "--strict-mcp-config", "--max-turns", "12" });
@@ -444,9 +454,16 @@ internal static class ClaudeCli
         - The Revit tools come from the sketch-promax MCP server and act on this Revit window. Use them for anything about
           the model. Besides them you have only Read, Glob and Grep (to look at files on this PC); there is no shell, file
           editing or web access here.
-        - Call the Revit tools by their full names (mcp__sketch-promax__run_revit_query_code and so on). If a call says "No
-          such tool available", the tools are still connecting or listed by name only: if you have ToolSearch, load the
-          ones the task needs in one call (select:mcp__sketch-promax__run_revit_query_code,...); otherwise call it again once.
+        - The Revit tools are listed by name only, so every message stays small. Before using one, load it with ToolSearch,
+          all the ones the task needs in one call (select:mcp__sketch-promax__run_revit_query_code,mcp__sketch-promax__query_elements);
+          once loaded they stay loaded in this conversation. Call them by their full names. If a call says "No such tool
+          available", load it with ToolSearch (or, without ToolSearch, call it again once: the tools may still be connecting).
+        - Follow-ups: most messages carry on with earlier work in this chat ("move them too", "now the selected ones",
+          "finish it"). Use what you already found in this conversation (ids, positions, types, views, the method or code
+          that worked) instead of reading the model again. Each message ends with a model note from Sketch ProMax: what
+          changed in the model since your last answer, the active view, and what is selected (with ids). When it says the
+          model has not changed, what you read earlier still holds; when it lists changes, re-read only those. Read again
+          only what you don't have. Don't mention the note to the user.
         - Code (run_revit_query_code, run_revit_code) is the last resort: prefer a dedicated tool (export_pdf with
           sheet_set, pdf_setup or check_print; export_files) over writing the same thing as code. When code fails, the
           result names the closest real API members or a hint: use them rather than guessing again.
@@ -521,7 +538,8 @@ internal static class ClaudeCli
           and check the walls"), or is one long piece of model work, hand it to jobs with chat_jobs. Call action=list first;
           a follow-up that belongs to an existing job ("also add level 6" after a sheets job) goes to that job with
           action=message, never to a new job. Otherwise action=start, once per part: a short title, and the whole task in
-          full with every detail (the job doesn't see this chat), and its kind: simple (rename, tag, list, fill parameters,
+          full with every detail (the job doesn't see this chat), including the facts already found here that it needs
+          (element ids, names, positions, the method that worked), so it doesn't read the model again, and its kind: simple (rename, tag, list, fill parameters,
           short summaries), everyday (sheets, views, dimensions, checks, normal modelling) or hard (a spec or BEP against
           the model, redlines, tricky modelling logic, costing decisions); the kind picks its model and effort. Up to {ChatJobs.Limit} jobs run at once; more wait to start.
           Reads run in parallel; changes to the model take turns, one at a time. Answer quick questions and small single
@@ -540,8 +558,12 @@ internal static class ClaudeCli
         in the background, perhaps alongside other jobs on the same model. The person is a structural engineer; they see
         your progress in your own view of the chat (they open your card) and can send you messages there.
         - Do your task completely with the Revit tools from the sketch-promax MCP server. Besides them you have only Read,
-          Glob and Grep (to look at files on this PC). Don't start other work. If a Revit call says "No such tool
-          available", the tools are still connecting: call it again once.
+          Glob and Grep (to look at files on this PC). Don't start other work. The Revit tools are listed by name only:
+          load the ones you need with ToolSearch in one call (select:mcp__sketch-promax__query_elements,...) before using
+          them. If a Revit call says "No such tool available", load it with ToolSearch, or call it again once.
+        - Your task carries the facts the main chat already found (names, ids, sizes): use them rather than reading the
+          model again, and read only what you still need. A message may end with a model note from Sketch ProMax (the
+          active view and what is selected, with ids): use it, and don't mention it.
         - Other jobs may work at the same time. Reads run at once; changes to the model take turns, one at a time, so a
           change may wait a while before it runs: that is normal, don't send it again. Don't change or undo elements
           outside your task.

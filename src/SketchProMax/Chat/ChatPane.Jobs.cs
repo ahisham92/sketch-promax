@@ -189,8 +189,10 @@ internal sealed partial class ChatPane
     private static string JobLine(JobMessage message)
     {
         var files = message.Files.Where(File.Exists).Select(f => new Attachment { Path = f, Name = Path.GetFileName(f) }).ToList();
-        if (files.Count == 0) return StreamInput.UserMessage(message.Text, []);
-        try { return BuildMessage(message.Text, files, new AttachedSoFar()); }
+        // The active view and the selection (a job keeps no count of changes since an answer: its task says what is known).
+        var text = message.Text + Revit.ChatModelWatch.Note(CurrentModelKey, changes: false);
+        if (files.Count == 0) return StreamInput.UserMessage(text, []);
+        try { return BuildMessage(text, files, new AttachedSoFar()); }
         catch (Exception ex)
         {
             return StreamInput.UserMessage(message.Text + $"\n\n(The attached files couldn't be read here: {ex.Message} Their paths: " + string.Join("; ", message.Files) + ")", []);

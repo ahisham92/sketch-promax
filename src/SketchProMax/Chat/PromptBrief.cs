@@ -83,6 +83,22 @@ internal static class PromptBriefs
         @"^((yes|yep|yeah|no|nope|ok(ay)?|sure|please|go( ahead| on)?|do it|proceed|continue|carry on|thanks?( you)?|thx|stop|cancel|undo( that| it)?|retry|try again|again|perfect|great|good|fine|correct|right)\b[\s,.!]*){1,3}$",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
+    /// <summary>A follow-up that carries on with earlier work ("continue with the rest", "finish the move", "do it again"):
+    /// the chat already has what it needs, so a planning run would only read the model again.</summary>
+    private static readonly Regex Continuation = new(
+        @"^(please\s+|ok(ay)?[\s,]+|now\s+|so\s+)*(continue|carry on|go on|keep going|finish|complete|resume|repeat|redo|retry|try (it )?again|do (it|that|this|the same|them) again|proceed|go ahead|same (as before|again|way))\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    /// <summary>The longest continuation (in words) that runs without a brief; a longer message may add a new task.</summary>
+    public const int MaxContinuationWords = 15;
+
+    /// <summary>True for a short follow-up that carries on with earlier work.</summary>
+    public static bool IsContinuation(string text)
+    {
+        var t = text.Trim();
+        return t.Length > 0 && Continuation.IsMatch(t) && t.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length <= MaxContinuationWords;
+    }
+
     private static readonly Regex ChangeWord = new(
         @"\b(create|add|place|put|insert|delete|remove|erase|move|shift|copy|duplicate|rename|renumber|tag|dimension|annotate|change|modify|edit|update|replace|swap|apply|assign|make|draw|generate|build|fix|align|join|unjoin|split|trim|extend|load|import|link|rotate|mirror|offset|purge|clean ?up|hide|unhide|isolate|recolou?r|override|attach|detach|resize|adjust|convert|merge|reinforce|populate)\b",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -106,15 +122,15 @@ internal static class PromptBriefs
     }
 
     /// <summary>
-    /// Whether to make a brief before running <paramref name="text"/>: never when Off or for a short reply to Claude
-    /// ("yes", "continue": it answers what Claude proposed); always when Always; with Model changes only, not for a
+    /// Whether to make a brief before running <paramref name="text"/>: never when Off, for a short reply to Claude
+    /// ("yes", "continue": it answers what Claude proposed) or a short follow-up that carries on with earlier work; always when Always; with Model changes only, not for a
     /// plain question. Unsure counts as a model change.
     /// </summary>
     public static bool ShouldPlan(BriefMode mode, string text)
     {
         if (mode == BriefMode.Off) return false;
         var t = text.Trim();
-        if (t.Length == 0 || Confirmation.IsMatch(t)) return false;
+        if (t.Length == 0 || Confirmation.IsMatch(t) || IsContinuation(t)) return false;
         if (mode == BriefMode.Always) return true;
         // A word or two that asks for no change ("hi", "thanks a lot"): not worth a planning run of up to minutes.
         if (!ChangeWord.IsMatch(t) && t.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length <= 2) return false;
@@ -175,9 +191,13 @@ internal static class PromptBriefs
         You prepare a brief before Sketch ProMax works on a Revit model, so the user can check it before anything runs.
         You can only read the model now. Nothing you do may change it, and you must not do the task itself.
 
-        1. Call get_model_context first, then the other read-only Revit tools you need (list_types, list_views_and_sheets,
-           query_elements, list_view_templates ...) to find the exact levels, types, views, sheets and element counts the
-           request is about. Keep it to a few calls.
+        1. Start from what the message already gives you: the conversation so far, what this chat remembers, and the
+           model note (what changed since the last answer, the active view, the selected elements with their ids). Don't
+           read again what they already say. Read only what is missing with the read-only Revit tools (get_model_context,
+           list_types, list_views_and_sheets, query_elements, list_view_templates ...) to find the exact levels, types,
+           views, sheets and element counts the request is about: at most three calls, none for a follow-up that only
+           finishes or repeats earlier work. The Revit tools are listed by name only: load the ones you use with
+           ToolSearch in one call (select:mcp__sketch-promax__get_model_context,mcp__sketch-promax__query_elements).
         2. Answer with ONE JSON object and nothing else (no prose, no code fence):
            {"kind":"change","brief":"...","scope":[{"label":"Levels","value":"Level 1 (0 mm), Level 2 (3500 mm)"}],
             "units":"mm","tools":["create_walls"],"assumptions":["..."],
@@ -196,9 +216,11 @@ internal static class PromptBriefs
         """;
 
     /// <summary>The planning run's message: the request, its attachments, and the end of the conversation so far.</summary>
-    public static string PlanMessage(string request, IEnumerable<string> attachmentNames, IEnumerable<(string Kind, string Text)> recent)
+    public static string PlanMessage(string request, IEnumerable<string> attachmentNames, IEnumerable<(string Kind, string Text)> recent,
+        string remembered = "", string modelNote = "")
     {
         var sb = new StringBuilder();
+        if (remembered.Trim().Length > 0) sb.Append("What this chat remembers of its earlier work:\n").Append(Shorten(remembered, 1500)).Append("\n\n");
         var context = new StringBuilder();
         foreach (var (kind, text) in Enumerable.Reverse(recent.ToList()))
         {
@@ -210,6 +232,7 @@ internal static class PromptBriefs
         sb.Append("Make the brief for this request:\n").Append(request.Trim());
         var names = attachmentNames.Where(n => n.Length > 0).ToList();
         if (names.Count > 0) sb.Append("\n\nAttached files (the assistant will read them later): ").Append(string.Join(", ", names));
+        sb.Append(modelNote);
         return sb.ToString();
     }
 
