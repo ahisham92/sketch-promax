@@ -94,6 +94,8 @@ internal sealed partial class ChatPane
         public bool Resumed, Retried;
         public string LastText = "";
         public readonly Dictionary<string, ChatItem> Steps = new();
+        /// <summary>The whole input of each plan step under way (the item keeps a shortened copy), for JobPlan.</summary>
+        public readonly Dictionary<string, string> PlanInputs = new();
     }
 
     private JobBoard? _board;
@@ -281,6 +283,7 @@ internal sealed partial class ChatPane
                     Kind = "tool", Name = name, State = "running", Text = summary, Input = tool.InputJson.Length > 0 ? Pretty(tool.InputJson) : "",
                 }, now);
                 run.Job.Now = JobBoard.OneLine(StepNames.Line(name, summary), 120);
+                if (JobPlan.IsPlanTool(name)) run.PlanInputs[tool.Id] = tool.InputJson;
                 break;
             }
             case ToolResultEvent result when run.Steps.TryGetValue(result.ToolUseId, out var step):
@@ -293,6 +296,12 @@ internal sealed partial class ChatPane
                     if (result.Text.Length > 0) step.Result = result.Text.Length > MaxResult ? result.Text.Substring(0, MaxResult) + "…" : result.Text;
                 }
                 if (!result.IsError && FilesItem(step.Name, result.Text) is { } files) board.AddItem(run.Job, files, now);
+                // The plan moved on: the worker's progress in the crew strip follows.
+                if (run.PlanInputs.TryGetValue(result.ToolUseId, out var planInput))
+                {
+                    run.PlanInputs.Remove(result.ToolUseId);
+                    if (!result.IsError && board.UpdatePlan(run.Job, step.Name, planInput, result.Text)) ShowSwitcher();
+                }
                 break;
             }
             case ResultEvent end:

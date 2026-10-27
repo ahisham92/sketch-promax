@@ -1,3 +1,6 @@
+using System.Text.Json;
+using System.Text.RegularExpressions;
+
 namespace SketchProMax.Chat;
 
 /// <summary>
@@ -6,14 +9,18 @@ namespace SketchProMax.Chat;
 /// </summary>
 internal enum CrewMood { Thinking, Reading, Applying, Waiting, Resting, Done, Failed }
 
-/// <summary>Something the strip acts out once: a worker sits down, gets a new sheet from the coordinator, or leaves.</summary>
-internal enum CrewCue { Arrive, Handover, Leave }
+/// <summary>
+/// Something the strip acts out once: a worker sits down, gets a new sheet from the coordinator, or leaves; and the
+/// moments a worker says something short (a bubble): the plan is made, its turn at Revit came, the job finished.
+/// </summary>
+internal enum CrewCue { Arrive, Handover, Leave, Plan, Turn, Finish }
 
 /// <summary>
 /// A worker at work: the job, its mood, which worker has it (<paramref name="Slot"/>: the n-th name, its own desk) and
-/// its place in the line at the applier (<paramref name="Line"/>: 0 applying now, 1 next, …; -1 at the desk).
+/// its place in the line at the applier (<paramref name="Line"/>: 0 applying now, 1 next, …; -1 at the desk), and how
+/// far its plan is (<paramref name="Percent"/>, with <paramref name="Left"/> steps to go; -1 while it has no plan).
 /// </summary>
-internal sealed record CrewSeat(int Number, string Title, CrewMood Mood, int Slot = 0, int Line = -1);
+internal sealed record CrewSeat(int Number, string Title, CrewMood Mood, int Slot = 0, int Line = -1, int Percent = -1, int Left = -1);
 
 /// <summary>
 /// The names in the crew strip, from Settings > Chat: you, the coordinator, the workers (one per job that runs at once,
@@ -51,7 +58,85 @@ internal sealed record CrewNames(string You, string Coordinator, IReadOnlyList<s
     public static CrewNames Defaults { get; } = From(null, null, null, null, null);
 }
 
-internal sealed record CrewEvent(CrewCue Cue, int Number);
+/// <summary>Something to act out for job <paramref name="Number"/>, with what its worker says (<paramref name="Say"/>, "" for nothing).</summary>
+internal sealed record CrewEvent(CrewCue Cue, int Number, string Say = "");
+
+/// <summary>
+/// A job's plan, as its Claude Code keeps it: the steps it wrote with TodoWrite (the whole list each time) or with
+/// TaskCreate and TaskUpdate (one step each), by id, with each one's state (pending, in_progress or completed). The
+/// crew strip shows how far along it is from this (60% · 2 left).
+/// </summary>
+internal static class JobPlan
+{
+    public const string ToDo = "pending", Doing = "in_progress", Finished = "completed";
+
+    /// <summary>The Claude Code tools a job keeps its plan with.</summary>
+    public const string Tools = "TodoWrite,TaskCreate,TaskUpdate";
+
+    public static bool IsPlanTool(string tool) => tool is "TodoWrite" or "TaskCreate" or "TaskUpdate";
+
+    /// <summary>Takes a plan tool's call (its input, and the result it gave) into <paramref name="plan"/>; true when it changed.</summary>
+    public static bool Apply(Dictionary<string, string> plan, string tool, string input, string result)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(input) ? "{}" : input);
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object) return false;
+            switch (tool)
+            {
+                case "TodoWrite":
+                    if (!root.TryGetProperty("todos", out var todos) || todos.ValueKind != JsonValueKind.Array) return false;
+                    plan.Clear();
+                    var i = 0;
+                    foreach (var todo in todos.EnumerateArray())
+                        plan["t" + (i++).ToString(System.Globalization.CultureInfo.InvariantCulture)] = State(todo) ?? ToDo;
+                    return true;
+                case "TaskCreate":
+                    // "Task #3 created …": its id; else the next number.
+                    var id = Regex.Match(result ?? "", @"#(\d+)") is { Success: true } m ? m.Groups[1].Value : (plan.Count + 1).ToString(System.Globalization.CultureInfo.InvariantCulture);
+                    plan[id] = ToDo;
+                    return true;
+                case "TaskUpdate":
+                    var key = Text(root, "taskId") ?? Text(root, "id");
+                    var state = State(root);
+                    if (key is null || state is null) return false;
+                    if (state == "deleted") return plan.Remove(key);
+                    plan[key] = state;
+                    return true;
+            }
+        }
+        catch (JsonException) { }
+        return false;
+    }
+
+    private static string? State(JsonElement e) => Text(e, "status");
+
+    private static string? Text(JsonElement e, string name) =>
+        e.ValueKind == JsonValueKind.Object && e.TryGetProperty(name, out var v)
+            ? v.ValueKind == JsonValueKind.String ? v.GetString() : v.ValueKind == JsonValueKind.Number ? v.GetRawText() : null
+            : null;
+
+    /// <summary>Steps done, and in all.</summary>
+    public static (int Done, int Total) Count(IReadOnlyDictionary<string, string>? plan) =>
+        plan is null ? (0, 0) : (plan.Values.Count(v => v == Finished), plan.Count);
+
+    /// <summary>
+    /// How far along, 0-100 (a step under way counts half); -1 without a plan. A finished job is 100; one still at work
+    /// says 99 at most, even with every step ticked.
+    /// </summary>
+    public static int Percent(IReadOnlyDictionary<string, string>? plan, bool finished)
+    {
+        if (finished) return 100;
+        if (plan is null || plan.Count == 0) return -1;
+        var doing = plan.Values.Count(v => v == Doing);
+        var (done, total) = Count(plan);
+        return Math.Min(99, (int)Math.Round(100.0 * (done + 0.5 * doing) / total));
+    }
+
+    /// <summary>True when every step is done (a new run then starts a new plan).</summary>
+    public static bool AllDone(IReadOnlyDictionary<string, string>? plan) => plan is { Count: > 0 } && plan.Values.All(v => v == Finished);
+}
 
 /// <summary>
 /// The crew strip's rules, apart from its drawing (CrewStrip): which jobs have a worker at a desk and what just happened
@@ -68,6 +153,7 @@ internal sealed class CrewPlan
     private readonly Dictionary<int, int> _asked = new();
     private readonly Dictionary<int, DateTime> _leaving = new();
     private readonly Dictionary<int, int> _slots = new();
+    private readonly Dictionary<int, int> _planned = new();
     private List<CrewSeat> _seats = [];
     private bool _started;
 
@@ -94,6 +180,7 @@ internal sealed class CrewPlan
         var quiet = !_started;
         _started = true;
         var seated = _seats.ToDictionary(s => s.Number);
+        var before = _seats.ToDictionary(s => s.Number, s => s.Mood);
         var next = new List<(ChatJob Job, CrewMood Mood)>();
         var unassigned = 0;
         foreach (var job in jobs.OrderBy(j => j.Number))
@@ -123,12 +210,21 @@ internal sealed class CrewPlan
                 Forget(job.Number);
                 continue;
             }
+            var steps = job.Plan.Count;
             if (!quiet)
             {
-                if (!was) events.Add(new CrewEvent(CrewCue.Arrive, job.Number));
-                else if (_asked.TryGetValue(job.Number, out var before) && asked > before && m is not (CrewMood.Done or CrewMood.Failed))
-                    events.Add(new CrewEvent(CrewCue.Handover, job.Number));
+                var finished = m is CrewMood.Done or CrewMood.Failed;
+                if (!was) events.Add(new CrewEvent(CrewCue.Arrive, job.Number, Say(CrewCue.Arrive, job)));
+                else if (_asked.TryGetValue(job.Number, out var earlier) && asked > earlier && !finished)
+                    events.Add(new CrewEvent(CrewCue.Handover, job.Number, Say(CrewCue.Handover, job)));
+                else if (finished && before.TryGetValue(job.Number, out var had) && had is not (CrewMood.Done or CrewMood.Failed))
+                    events.Add(new CrewEvent(CrewCue.Finish, job.Number, Say(CrewCue.Finish, job)));
+                else if (m == CrewMood.Applying && before.TryGetValue(job.Number, out var had2) && had2 != CrewMood.Applying)
+                    events.Add(new CrewEvent(CrewCue.Turn, job.Number, Say(CrewCue.Turn, job)));
+                else if (steps > 0 && _planned.TryGetValue(job.Number, out var known) && known == 0)
+                    events.Add(new CrewEvent(CrewCue.Plan, job.Number, Say(CrewCue.Plan, job)));
             }
+            _planned[job.Number] = steps;
             _asked[job.Number] = asked;
             next.Add((job, m));
             seated.Remove(job.Number);
@@ -162,7 +258,12 @@ internal sealed class CrewPlan
         }
         Unassigned = unassigned;
         var ahead = next.ToDictionary(n => n.Job.Number, n => n.Job.Ahead);
-        var placed = next.Select(n => new CrewSeat(n.Job.Number, n.Job.Title, n.Mood, _slots[n.Job.Number])).ToList();
+        var placed = next.Select(n =>
+        {
+            var finished = n.Mood is CrewMood.Done;
+            var (done, total) = JobPlan.Count(n.Job.Plan);
+            return new CrewSeat(n.Job.Number, n.Job.Title, n.Mood, _slots[n.Job.Number], Percent: JobPlan.Percent(n.Job.Plan, finished), Left: total == 0 ? -1 : finished ? 0 : total - done);
+        }).ToList();
         // The line at the applier: the change being applied first, then the others in the order they asked.
         var line = placed.Where(s => s.Mood == CrewMood.Applying)
             .Concat(placed.Where(s => s.Mood == CrewMood.Waiting).OrderBy(s => ahead[s.Number] <= 0 ? int.MaxValue : ahead[s.Number]).ThenBy(s => s.Number))
@@ -176,6 +277,7 @@ internal sealed class CrewPlan
         _leaving.Remove(number);
         _asked.Remove(number);
         _slots.Remove(number);
+        _planned.Remove(number);
     }
 
     /// <summary>Starts over: the next update seats who is working without acting anything out.</summary>
@@ -184,6 +286,7 @@ internal sealed class CrewPlan
         _asked.Clear();
         _leaving.Clear();
         _slots.Clear();
+        _planned.Clear();
         _seats = [];
         Unassigned = 0;
         _started = false;
@@ -226,6 +329,48 @@ internal sealed class CrewPlan
         if (done > 0) parts.Add(done == 1 ? "1 just finished" : $"{done} just finished");
         if (queued.Length > 0) parts.Add(queued);
         return string.Join(" · ", parts);
+    }
+
+    /// <summary>
+    /// What a worker says in a bubble, a few friendly words: a long task is a big job, the plan says how big it is, the
+    /// turn at Revit is "My turn!", and a finished job says how it went (quick, hard or plain done).
+    /// </summary>
+    public static string Say(CrewCue cue, ChatJob job)
+    {
+        static string Pick(int n, params string[] said) => said[Math.Abs(n) % said.Length];
+        var steps = job.Plan.Count;
+        return cue switch
+        {
+            CrewCue.Arrive => job.Task.Length > 600 ? "Big job!" : Pick(job.Number, "On it!", "Got it!", "Let's go!"),
+            CrewCue.Handover => Pick(job.Items.Count, "Noted!", "On it!"),
+            CrewCue.Plan => steps >= 6 ? "Big job!" : steps <= 2 ? "Quick one!" : "Smart plan!",
+            CrewCue.Turn => "My turn!",
+            CrewCue.Finish when job.State == JobBoard.Failed => "Hit a snag",
+            CrewCue.Finish when job.Ended > job.Started && job.Started != default && job.Ended - job.Started < TimeSpan.FromSeconds(90) => "Quick job, done!",
+            CrewCue.Finish when steps >= 6 => "Hard job, done!",
+            CrewCue.Finish => "Job done!",
+            _ => "",
+        };
+    }
+
+    /// <summary>
+    /// The line under a worker's name: how far along and what is left ("60% · 2 left"), what it waits for, or, for a
+    /// worker without a job (<paramref name="seat"/> null), that they are ready for one.
+    /// </summary>
+    public static string Status(CrewSeat? seat, int slot)
+    {
+        if (seat is null) return (slot % 3) switch { 0 => "Ready for work", 1 => "Free for a job", _ => "Ready when you are" };
+        var far = seat.Percent < 0 ? "" : seat.Left > 0 ? $"{seat.Percent}% · {seat.Left} left" : $"{seat.Percent}%";
+        return seat.Mood switch
+        {
+            CrewMood.Done => "Job done!",
+            CrewMood.Failed => "Needs a look",
+            CrewMood.Resting => "Starting again soon",
+            CrewMood.Applying => far.Length > 0 ? $"{seat.Percent}% · applying" : "Applying",
+            CrewMood.Waiting => far.Length > 0 ? $"{seat.Percent}% · in line" : "In line",
+            CrewMood.Reading => far.Length > 0 ? far : "Reading the model",
+            _ => far.Length > 0 ? far : "Planning…",
+        };
     }
 
     /// <summary>The worker who has job <paramref name="number"/> now, or null when none has it.</summary>
