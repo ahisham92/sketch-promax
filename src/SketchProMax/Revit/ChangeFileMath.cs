@@ -74,6 +74,14 @@ internal static class ChangeFileMath
 
     public static string ReplayedName(DateTime at) => ReplayedPrefix + at.ToString(Stamp, CultureInfo.InvariantCulture) + ".txt";
 
+    /// <summary>The time a replayed file was from, else null.</summary>
+    public static DateTime? ReplayedTime(string fileName)
+    {
+        var stem = Path.GetFileNameWithoutExtension(fileName);
+        if (!stem.StartsWith(ReplayedPrefix, StringComparison.Ordinal)) return null;
+        return DateTime.TryParseExact(stem.Substring(ReplayedPrefix.Length), Stamp, CultureInfo.InvariantCulture, DateTimeStyles.None, out var at) ? at : null;
+    }
+
     public static DateTime? LeftoverTime(string fileName)
     {
         var stem = Path.GetFileNameWithoutExtension(fileName);
