@@ -88,6 +88,7 @@ internal sealed class CrewStrip : Border
         public int Number, Slot;
         public Figure Person = null!;
         public Canvas Desk = null!;
+        public Button Hit = null!;
         public readonly List<(Rectangle Line, ScaleTransform Scale)> Lines = [];
         public TextBlock Mark = null!;
         public CrewMood Mood;
@@ -104,7 +105,27 @@ internal sealed class CrewStrip : Border
     private readonly DispatcherTimer _typing;
     private readonly Random _random = new(7);
     private int? _applying = -1;
-    private int _tick;
+    private int _tick, _desks = 3;
+    private readonly Canvas _tray = new();
+    private readonly TextBlock _trayCount = new() { FontSize = 9, FontWeight = FontWeights.SemiBold };
+    private readonly ScaleTransform _scale = new(1, 1);
+
+    /// <summary>Worker <c>slot</c> was clicked (or pressed with the keyboard): the pane lists that worker's jobs.</summary>
+    public event Action<int, Button>? WorkerPicked;
+
+    /// <summary>The coordinator was clicked: the pane shows the coordinator's chat.</summary>
+    public event Action<Button>? CoordinatorPicked;
+
+    /// <summary>Smaller, for the chat in its pane at the side of Revit.</summary>
+    public bool Compact
+    {
+        get => _scale.ScaleX < 1;
+        set
+        {
+            _scale.ScaleX = _scale.ScaleY = value ? 0.72 : 1;
+            Height = StripHeight * _scale.ScaleY;
+        }
+    }
 
     public CrewStrip()
     {
@@ -114,13 +135,12 @@ internal sealed class CrewStrip : Border
         SetResourceReference(BackgroundProperty, Brand.K.Bg);
         Brand.Fg(_caption, Brand.K.Muted);
         AutomationProperties.SetLiveSetting(_caption, AutomationLiveSetting.Polite);
-        var grid = new Grid();
+        var grid = new Grid { LayoutTransform = _scale };
         grid.Children.Add(_stage);
         grid.Children.Add(_caption);
         Child = grid;
         AutomationProperties.SetName(this, "Who is working: you, the coordinator, its workers and who applies changes in Revit");
         Focusable = false;
-        _stage.IsHitTestVisible = false; // to look at only: the jobs column does the picking
 
         _you = Person(YouShirt, null, standing: true);
         _you.At.X = YouX;
@@ -133,8 +153,22 @@ internal sealed class CrewStrip : Border
         var tray = Bar(_coordinator.Root, 14, 50, 13, 6, Brand.K.Raised, null);
         tray.SetResourceReference(Shape.StrokeProperty, Brand.K.Border);
         tray.StrokeThickness = 1;
+        // The jobs waiting for a free worker: a little stack of sheets on the coordinator's desk, with their number.
+        for (var k = 0; k < 3; k++)
+        {
+            var sheet = Bar(_tray, 14 + k * 2, 45 - k * 3, 11, 13, Brand.K.Raised, null);
+            sheet.SetResourceReference(Shape.StrokeProperty, Brand.K.Accent);
+            sheet.StrokeThickness = 1;
+        }
+        Brand.Fg(_trayCount, Brand.K.Accent);
+        Canvas.SetLeft(_trayCount, 30);
+        Canvas.SetTop(_trayCount, 34);
+        _tray.Children.Add(_trayCount);
+        _tray.Visibility = Visibility.Collapsed;
+        _coordinator.Root.Children.Add(_tray);
         _coordinator.At.X = CoordX;
         _coordinator.At.Y = Top;
+        _coordinator.Root.Children.Add(HitArea(-14, 46, "Show the coordinator's chat", b => CoordinatorPicked?.Invoke(b)));
         _stage.Children.Add(_coordinator.Root);
 
         _applier = Person(ApplierShirt, null, standing: false);
@@ -160,9 +194,12 @@ internal sealed class CrewStrip : Border
     private double StationX => Math.Max(FirstDesk + MaxGap, _stage.ActualWidth - ApplierRoom);
 
     /// <summary>Shows the crew as the plan has it now and acts out what just happened.</summary>
-    public void Show(IReadOnlyList<CrewSeat> seats, IReadOnlyList<CrewEvent> events)
+    public void Show(IReadOnlyList<CrewSeat> seats, IReadOnlyList<CrewEvent> events, int workers, int unassigned)
     {
         var names = Names;
+        _desks = Math.Max(1, workers);
+        _tray.Visibility = unassigned > 0 ? Visibility.Visible : Visibility.Collapsed;
+        _trayCount.Text = unassigned.ToString(System.Globalization.CultureInfo.CurrentCulture);
         foreach (var gone in events.Where(e => e.Cue == CrewCue.Leave)) Leave(gone.Number);
         foreach (var seat in seats)
         {
@@ -174,6 +211,8 @@ internal sealed class CrewStrip : Border
             SetMood(worker, seat.Mood);
             worker.Line = seat.Line;
             worker.Person.Name.Text = names.Worker(seat.Slot);
+            worker.Hit.ToolTip = names.Worker(seat.Slot) + "'s jobs";
+            AutomationProperties.SetName(worker.Hit, $"{names.Worker(seat.Slot)}'s jobs (now job {seat.Number}, {Words(seat.Mood)})");
             AutomationProperties.SetName(worker.Person.Root, $"{names.Worker(seat.Slot)}, job {seat.Number}: {seat.Title}, {Words(seat.Mood)}");
         }
         // Anyone still here whom the plan no longer has (another chat): out.
@@ -187,7 +226,7 @@ internal sealed class CrewStrip : Border
         var applying = seats.FirstOrDefault(s => s.Mood == CrewMood.Applying);
         ShowNames();
         Apply(applying?.Number, applying is null ? "" : names.Worker(applying.Slot));
-        _caption.Text = CrewPlan.Caption(seats, names);
+        _caption.Text = CrewPlan.Caption(seats, names, unassigned);
         _caption.ToolTip = seats.Count == 0 ? null : string.Join("\n", seats.Select(s => $"{names.Worker(s.Slot)} · job {s.Number} · {s.Title}: {Words(s.Mood)}"));
         Pace();
     }
@@ -281,7 +320,7 @@ internal sealed class CrewStrip : Border
     /// <summary>The n-th worker's desk: after the coordinator, closer together when the window is narrow.</summary>
     private double DeskX(int slot)
     {
-        var desks = Math.Max(Names.Workers.Count, _workers.Values.Select(w => w.Slot + 1).DefaultIfEmpty(1).Max());
+        var desks = Math.Max(_desks, _workers.Values.Select(w => w.Slot + 1).DefaultIfEmpty(1).Max());
         var room = StationX - Math.Max(1, _workers.Count) * InLine - 24 - FirstDesk - 50;
         var gap = desks > 1 ? Math.Max(MinGap, Math.Min(MaxGap, room / (desks - 1))) : MaxGap;
         return FirstDesk + slot * gap;
@@ -309,6 +348,9 @@ internal sealed class CrewStrip : Border
         var w = new Worker { Number = number, Slot = slot };
         w.Person = Person(Shirts[slot % Shirts.Length], null, standing: false);
         w.Desk = Desk(w);
+        w.Hit = HitArea(-14, 66, Names.Worker(slot) + "'s jobs", b => WorkerPicked?.Invoke(slot, b));
+        w.Desk.Children.Add(w.Hit);
+        w.Person.Root.IsHitTestVisible = false; // the desk's button takes the click, wherever the worker stands
         _workers[number] = w;
         _stage.Children.Insert(0, w.Desk); // behind everyone
         _stage.Children.Add(w.Person.Root);
@@ -537,6 +579,28 @@ internal sealed class CrewStrip : Border
         Canvas.SetTop(f.Name, NameTop);
         f.Root.Children.Add(f.Name);
         return f;
+    }
+
+    /// <summary>
+    /// A see-through button over a person (and desk), so a click or the keyboard picks them; it shows only its focus
+    /// ring. Its name says what it does for screen readers.
+    /// </summary>
+    private static Button HitArea(double x, double width, string name, Action<Button> picked)
+    {
+        var border = new FrameworkElementFactory(typeof(Border));
+        border.SetValue(Border.BackgroundProperty, Brushes.Transparent);
+        border.SetValue(Border.CornerRadiusProperty, new CornerRadius(4));
+        var button = new Button
+        {
+            Width = width, Height = 74, Cursor = System.Windows.Input.Cursors.Hand, ToolTip = name,
+            Template = new ControlTemplate(typeof(Button)) { VisualTree = border },
+        };
+        button.SetResourceReference(FocusVisualStyleProperty, "SpmChatFocus");
+        AutomationProperties.SetName(button, name);
+        button.Click += (_, _) => picked(button);
+        Canvas.SetLeft(button, x);
+        Canvas.SetTop(button, 6);
+        return button;
     }
 
     private static Rectangle Bar(Canvas fig, double x, double y, double width, double height, string? key, Brush? fill)

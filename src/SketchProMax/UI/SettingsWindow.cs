@@ -368,8 +368,8 @@ public sealed class SettingsWindow : Window
         after.VerticalAlignment = VerticalAlignment.Center;
         jobRow.Children.Add(after);
         page.Children.Add(jobRow);
-        page.Children.Add(SubHeading("Names in the large chat"));
-        page.Children.Add(Hint("With the chat open large, a strip shows the work as people: you hand it to the coordinator, who gives each job to a worker; a worker with a change for the model queues for the one who applies changes in Revit, one at a time. Leave a name blank for its default.", 2));
+        page.Children.Add(SubHeading("Names of the crew"));
+        page.Children.Add(Hint("Over a chat With coordinator, a strip shows the work as people: you hand it to the coordinator, who gives each job to a worker; a worker with a change for the model queues for the one who applies changes in Revit, one at a time. Leave a name blank for its default.", 2));
         var names = Chat.CrewNames.From(_settings.ChatCrewYou, _settings.ChatCrewCoordinator, _settings.ChatCrewWorkers, _settings.ChatCrewApplier, Environment.UserName);
         var grid = new Grid { Margin = new Thickness(0, 8, 0, 0), MaxWidth = 520, HorizontalAlignment = HorizontalAlignment.Left };
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });

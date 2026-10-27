@@ -65,6 +65,28 @@ internal static class CrewTests
         board.SetActivity(started!.Key, JobBoard.Applying);
         check("crew: a board copy keeps what the job does now", JobBoard.ActivityOf(board.Snapshot()[0]) == JobBoard.Applying, JobBoard.ActivityOf(board.Snapshot()[0]));
 
+        // Three workers, one job each: a fourth job waits on the coordinator's desk; a finished worker's desk is taken at once.
+        var three = new CrewPlan();
+        three.Update([], t0);
+        three.Update([Job(1, JobBoard.Running), Job(2, JobBoard.Running), Job(3, JobBoard.Running), Job(4, JobBoard.Queued)], t0, null, 3);
+        check("crew: more jobs than workers wait for a free worker", three.Seats.Count == 3 && three.Unassigned == 1
+            && CrewPlan.Caption(three.Seats, CrewNames.Defaults, three.Unassigned).EndsWith("1 job waits for a free worker"), CrewPlan.Caption(three.Seats, CrewNames.Defaults, three.Unassigned));
+        three.Update([Job(1, JobBoard.Done), Job(2, JobBoard.Running), Job(3, JobBoard.Running), Job(4, JobBoard.Queued)], t0.AddSeconds(1), null, 3);
+        e = three.Update([Job(1, JobBoard.Done), Job(2, JobBoard.Running), Job(3, JobBoard.Running), Job(4, JobBoard.Running)], t0.AddSeconds(2), null, 3);
+        check("crew: the next job takes the finished worker's desk, who leaves", Cues(e) == "Leave:1,Arrive:4" && three.WorkerOf(4, CrewNames.Defaults) == "Nova"
+            && three.Seats.Count == 3 && three.Unassigned == 0, Cues(e));
+
+        // A job keeps its worker (saved with the chat) when that one is free.
+        var kept = new CrewPlan();
+        var again = Job(6, JobBoard.Running);
+        again.Worker = 2;
+        kept.Update([again], t0, null, 3);
+        check("crew: a job keeps the worker it had", kept.WorkerOf(6, CrewNames.Defaults) == "Pixel", kept.WorkerOf(6, CrewNames.Defaults) ?? "");
+        var copyBoard = new JobBoard([]);
+        var w = copyBoard.Start("Tag walls", "Tag the walls", t0, force: true, out _);
+        copyBoard.SetWorker(w!.Number, 1);
+        check("crew: the board keeps a job's worker in its copies", copyBoard.Snapshot()[0].Worker == 1, "");
+
         // The names: defaults, from Settings, and from the Windows account.
         var named = CrewNames.From(" Jane ", "", "Ann, Bo ,, Cy", null, "someone");
         check("crew: names from Settings, blanks get their defaults", named.You == "Jane" && named.Coordinator == "Atlas" && named.Applier == "Bolt"
