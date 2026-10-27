@@ -16,7 +16,8 @@ namespace SketchProMax.Revit;
 /// </summary>
 internal static class ChangeReplay
 {
-    public enum Act { Set, Make, Delete, Skip }
+    /// <summary>Done: already as the file has it (a deletion of what isn't in the model), counted as already right.</summary>
+    public enum Act { Set, Make, Delete, Skip, Done }
 
     public sealed record Step(M.Line Line, Act Act, string Why);
 
@@ -66,7 +67,7 @@ internal static class ChangeReplay
                 steps.Add(new(line, Act.Skip, $"deleted by a step Lifeline couldn't read; in the model now it is {what}: delete it by hand if you deleted it"));
             }
             else if (line.Kind == M.Kinds.Deleted)
-                steps.Add(found is null ? new(line, Act.Skip, "already not in the model") : new(line, Act.Delete, ""));
+                steps.Add(found is null ? new(line, Act.Done, "") : new(line, Act.Delete, ""));
             else if (found is not null)
                 steps.Add(new(line, Act.Set, ""));
             else if (line.Group is { } group && groupsMade.Contains(group))
@@ -115,7 +116,8 @@ internal static class ChangeReplay
     /// <summary>Plays <paramref name="steps"/> (one chunk) onto the model. Call with no transaction open.</summary>
     public static void Apply(Document doc, IReadOnlyList<Step> steps, Outcome outcome)
     {
-        var work = steps.Where(s => s.Act != Act.Skip).ToList();
+        var work = steps.Where(s => s.Act is not (Act.Skip or Act.Done)).ToList();
+        outcome.Same += steps.Count(s => s.Act == Act.Done);
         foreach (var s in steps.Where(s => s.Act == Act.Skip)) outcome.Missed(s.Line, $"{M.Describe(s.Line)}: {s.Why}");
         // Stairs first, each in a stairs edit scope of its own (it can't sit inside a transaction), so what is on them finds them.
         foreach (var s in work.Where(s => s.Act == Act.Make && s.Line.What == "stairs").ToList())

@@ -140,6 +140,8 @@ internal static class RecoveryTests
             && M.NextChunk(8, TimeSpan.FromMilliseconds(400)) == 8 && Src("UI", "RecoverWindow.cs").Contains("size = M.NextChunk(chunk.Count, clock.Elapsed)"), "");
         check("lifeline: a deletion named by id only is never played, only listed with Show", Src("Revit", "ChangeReplay.cs").Contains("line.Kind == M.Kinds.Deleted && found is not null && line.Unique is not { Length: > 0 }")
             && Src("UI", "RecoverWindow.cs").Contains("line.Id != 0 ? doc.GetElement(new ElementId(line.Id))"), "");
+        check("lifeline: a deletion of what is already gone counts as already right, not as not done", Src("Revit", "ChangeReplay.cs").Contains("found is null ? new(line, Act.Done, \"\")")
+            && Src("Revit", "ChangeReplay.cs").Contains("outcome.Same += steps.Count(s => s.Act == Act.Done)") && !Src("Revit", "ChangeReplay.cs").Contains("\"already not in the model\""), "");
         check("lifeline: Revit's energy model is never written or replayed", Src("Revit", "ChangeFile.cs").Contains("IsAnalysis(category.Id.Value)") && Src("Revit", "ChangeReplay.cs").Contains("ChangeFile.IsAnalysis(line.CategoryId)"), "");
         check("lifeline: lines marked new stay marked when a newer core carries on", Src("Revit", "ChangeFile.cs").Contains("else SeedAdded(model);"), "");
         check("lifeline: the replay alert shows already right and the commonest reasons", Src("UI", "RecoverWindow.cs").Contains("already right\" +") && Src("UI", "RecoverWindow.cs").Contains("TopReasons(outcome.NotDone)"), "");
