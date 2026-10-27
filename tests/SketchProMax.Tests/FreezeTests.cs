@@ -85,7 +85,7 @@ internal static class FreezeTests
             Math.Abs(working.CpuPercent - 12.5) < 0.1 && working.MemoryChange == 300 * Mb && FreezeCause.Figures(working) == "CPU 12.5% · memory 3.3 GB (+300 MB in 30 s)", FreezeCause.Figures(working));
         var files = FreezeCause.Judge(Run(40, i => (0.01, 3000 * Mb, i * 512 * 1024L, 100)), 8, t0.AddSeconds(40));
         check("activity: no processor but files moving is working on files", files.Progress == FreezeCause.Progress.Files && FreezeCause.Figures(files).Contains("files 15 MB in 30 s"), FreezeCause.Figures(files));
-        // Ahmed's screenshot: 1% of the PC and flat memory.
+        // The user's screenshot: 1% of the PC and flat memory.
         var idle = Run(170, i => (i < 20 ? 0.5 : 0.01, 3226 * Mb, 0, 100));
         var quiet = FreezeCause.Judge(idle.Take(80).ToList(), 8, t0.AddSeconds(80));
         check("activity: flat for a minute is quiet, not yet stuck", quiet.Progress == FreezeCause.Progress.Quiet && quiet.Quiet == TimeSpan.FromSeconds(61), quiet.ToString());
