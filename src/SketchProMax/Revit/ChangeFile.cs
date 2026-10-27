@@ -170,7 +170,31 @@ internal static class ChangeFile
         }
         // Opened: a file left from before (Revit closed by itself, or closed without saving) is kept with its time.
         if (opened) Queue(() => KeepLeftover(model));
+        // Carried on (a newer core while Revit runs): what the file marks as made in the session stays marked.
+        else SeedAdded(model);
     }
+
+    private static void SeedAdded(Model model)
+    {
+        try
+        {
+            var current = System.IO.Path.Combine(model.Folder, M.CurrentName);
+            if (!File.Exists(current)) return;
+            var ids = M.Read(ReadLines(current)).Elements.Where(l => l.New && l.Id != 0).Select(l => l.Id).ToList();
+            lock (Gate) foreach (var id in ids) if (model.Added.Count < KnownCap) model.Added.Add(id);
+        }
+        catch (Exception) { }
+    }
+
+    /// <summary>The energy model and analysis results (spaces, surfaces, constructions, display styles): Revit makes and
+    /// remakes thousands of them by itself, so they are never written or replayed.</summary>
+    internal static bool IsAnalysis(long categoryId) => AnalysisCategories.Contains(categoryId);
+
+    private static readonly HashSet<long> AnalysisCategories =
+    [
+        (long)BuiltInCategory.OST_AnalyticSpaces, (long)BuiltInCategory.OST_AnalyticSurfaces, (long)BuiltInCategory.OST_EAConstructions,
+        (long)BuiltInCategory.OST_AnalysisDisplayStyle, (long)BuiltInCategory.OST_AnalysisResults, (long)BuiltInCategory.OST_MassZone,
+    ];
 
     private static void KeepLeftover(Model model)
     {
@@ -550,6 +574,7 @@ internal static class ChangeFile
         if (category is null && element is not ElementType && viewKind is null) return null;
         // Work plane grids and the marks of views (sections, callouts) change with the view or come with it: no line of their own.
         if (category is not null && element is not View && category.Id.Value is (long)BuiltInCategory.OST_IOSSketchGrid or (long)BuiltInCategory.OST_Viewers or (long)BuiltInCategory.OST_Views) return null;
+        if (category is not null && IsAnalysis(category.Id.Value) || element.GetType().Namespace == "Autodesk.Revit.DB.Analysis") return null;
         if (ChangeViews.Ignored(element) || element is View { IsTemplate: true } || element is ElementType { Category: null } || ChangeShapes.IsSketchLine(element) || ChangeNotes.IsPart(element)
             || ChangeViews.IsPart(element) || ChangeStairs.IsPart(element)) return null;
         var line = new M.Line

@@ -46,13 +46,15 @@ internal static class ChangeReplay
         var steps = new List<Step>();
         var ordered = M.PlayOrder(file);
         // Groups made again bring their members: the members' own lines aren't played.
-        var groupsMade = new HashSet<string>(ordered.Where(l => l.What == "group" && l.Kind != M.Kinds.Deleted && l.Unique is not null && (l.New || !file.MarksNew)
+        var groupsMade = new HashSet<string>(ordered.Where(l => l.What == "group" && l.Kind != M.Kinds.Deleted && l.Unique is not null
             && Find(doc, l) is null && CanMake(l) is null).Select(l => l.Unique!), StringComparer.Ordinal);
         // Stairs made again bring their own railings.
-        var stairsMade = new HashSet<string>(ordered.Where(l => l.What == "stairs" && l.Kind != M.Kinds.Deleted && l.Unique is not null && (l.New || !file.MarksNew)
+        var stairsMade = new HashSet<string>(ordered.Where(l => l.What == "stairs" && l.Kind != M.Kinds.Deleted && l.Unique is not null
             && Find(doc, l) is null && CanMake(l) is null).Select(l => l.Unique!), StringComparer.Ordinal);
         foreach (var line in ordered)
         {
+            // Older files can hold Revit's energy model (thousands of lines): Revit makes it again by itself.
+            if (ChangeFile.IsAnalysis(line.CategoryId)) continue;
             var found = Find(doc, line);
             if (line.Kind == M.Kinds.Deleted)
                 steps.Add(found is null ? new(line, Act.Skip, "already not in the model") : new(line, Act.Delete, ""));
@@ -62,8 +64,6 @@ internal static class ChangeReplay
                 continue;
             else if (line.What == "railing" && line.Host is { } onStairs && stairsMade.Contains(onStairs))
                 continue;
-            else if (file.MarksNew && !line.New)
-                steps.Add(new(line, Act.Skip, doc.IsWorkshared ? "deleted from the central model by someone else since: left deleted" : "not in the model any more: left as it is"));
             else if (CanMake(line) is { } why)
                 steps.Add(new(line, Act.Skip, why));
             else

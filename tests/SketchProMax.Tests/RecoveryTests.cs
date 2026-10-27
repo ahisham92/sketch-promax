@@ -131,7 +131,10 @@ internal static class RecoveryTests
         var textBack = M.Read([M.Write(text)]).Elements.Single();
         check("lifeline: a text note's leaders read back", M.SameLeads(textBack.Leads, text.Leads) && textBack.Leads![0].Right && textBack.Leads[1].Arc && textBack.Leads[1].Elbow is null, M.Write(text));
         check("lifeline: a moved leader is a change", !M.SameLeads(text.Leads, [new M.Lead { End = new(1, 2.1, 0), Elbow = new(0.5, 1, 0) }, text.Leads![1]]) && !M.SameLeads(text.Leads, []), "");
-        check("lifeline: what others deleted in central is skipped, not made again", Src("Revit", "ChangeReplay.cs").Contains("file.MarksNew && !line.New") && Src("Revit", "ChangeReplay.cs").Contains("deleted from the central model by someone else"), "");
+        check("lifeline: a missing element is always made again, never skipped as deleted by someone else", !Src("Revit", "ChangeReplay.cs").Contains("file.MarksNew") && !Src("Revit", "ChangeReplay.cs").Contains("by someone else"), "");
+        check("lifeline: Revit's energy model is never written or replayed", Src("Revit", "ChangeFile.cs").Contains("IsAnalysis(category.Id.Value)") && Src("Revit", "ChangeReplay.cs").Contains("ChangeFile.IsAnalysis(line.CategoryId)"), "");
+        check("lifeline: lines marked new stay marked when a newer core carries on", Src("Revit", "ChangeFile.cs").Contains("else SeedAdded(model);"), "");
+        check("lifeline: the replay alert shows already right and the commonest reasons", Src("UI", "RecoverWindow.cs").Contains("already right\" +") && Src("UI", "RecoverWindow.cs").Contains("TopReasons(outcome.NotDone)"), "");
         check("lifeline: a group made again brings its members (their lines aren't played)", Src("Revit", "ChangeReplay.cs").Contains("groupsMade.Contains(group)"), "");
         check("lifeline: a new local saved as it opens keeps last time's file", Src("Revit", "ChangeFile.cs").Contains("e.OriginalPath") && Src("Revit", "ChangeFile.cs").Contains("if (!watched) { Track(doc, opened: true); return; }"), "");
         check("lifeline: other locals of the same central are found", Src("Revit", "ChangeFile.cs").Contains("head.Central, model.Central") && Src("UI", "RecoverWindow.cs").Contains("ChangeFile.LeftoversFor(target.Path, target.Central)"), "");
