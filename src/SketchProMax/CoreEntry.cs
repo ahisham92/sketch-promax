@@ -118,6 +118,8 @@ public static class CoreEntry
             "pre-submission" => ChecklistWindow.Command(app),
             // The technical submission checklist (0.35+): per submission, shared through the model; opened from Submissions status and the Model checklist.
             "submission-checklist" => SubmissionChecklistWindow.Command(app),
+            // Signature pages (0.36+): each submitted document's signature page, Word and PDF, signed by each person with their PIN.
+            "signature-pages" => SignaturePagesWindow.Command(app),
             // Berth status (0.35+): each berth's status for its next submission, read from the model only when asked.
             "berth-status" => BerthStatusWindow.Command(app),
             // Berth costing (0.35+ on the ribbon; also opened from Submissions status).

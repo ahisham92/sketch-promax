@@ -170,6 +170,13 @@ internal static class CoreRibbonManifest
             "It runs check_drawings, spec_check, boq_check and check_model on the issue set and lists each finding under its sheet " +
             "(model-wide ones under Model). Fix an item (it takes you there) or accept it with a reason; Submit stays off until " +
             "nothing is open. Reads the model only.", needsModel: true)),
+        // Signature pages (0.36, the owner asked for a quality tool): each submitted document's signature page, one Word file and
+        // one PDF each, from sheets picked in Revit or an Excel list; each person signs with their own PIN (UI/SignaturePagesWindow).
+        L(Button("Issue", "SignaturePages", "Signature\npages", "signature-pages", "drawing-check",
+            "The signature page of each document in a submission: one Word file and PDF each, signed and ready to upload.",
+            "Pick sheets in Revit or import an Excel list (number, revision, title, type), or type rows in. Each person who signs keeps their " +
+            "signature on this PC, locked with their own PIN, and puts it on the pages by typing it; a role left unsigned stays blank to sign by hand. " +
+            "Make writes each page in the office's layout to TYPE\\Word and TYPE\\PDF in a dated folder. Project details, form codes and the logo are set once per project.")),
         S("Issue", "issue_drawings", "Submit drawings", "pdf", "Submits sheets end to end after the submit check: revision, PDF/DWG, list of drawings and transmittal."),
         S("Issue", "redline_apply", "Redlines", "titleblock", "Applies a marked-up PDF or photo: each markup matched to its sheet and element, then clouded."),
         L(Pulldown("Issue", "Export", "Export", "download", "PDF, list of drawings, quantities and the project pack.", small: true)),
@@ -208,8 +215,8 @@ internal static class CoreRibbonManifest
         L(Entry("HelpMenu", "FieldTest", "Diagnostics: field test", "field-test", "field",
             "Builds a throwaway test project, runs every tool family on it and writes one report. Your open models are not changed.",
             needsModel: true)),
-        L(Entry("HelpMenu", "ConnectionStatus", "Desktop app connection", "status", "logo",
-            "Whether the Claude desktop app is connected to this Revit window, the models it can see, how to fix a missing connection, and Open the Claude app.")),
+        // Desktop app connection left the Help menu in 0.36 (now on the pane's Claude app section) to free a loader slot for
+        // Signature pages.
         // Open Claude app left the Help menu in 0.35.3 (Desktop app connection opens it) to free a loader slot for the PDF editor.
         L(Entry("HelpMenu", "UserFolders", "Open folders", "user-folders", "folder",
             "Opens the folders where Sketch ProMax keeps your bug reports, learned tools, recipes, chats and checklists.",
@@ -232,6 +239,8 @@ internal static class CoreRibbonManifest
         // ---- The pane
         L(Pane("Claude app", "CopyPrompt", "Copy prompt", "copy-prompt",
             "Copies a good first message to the clipboard, to paste into a new chat in the Claude desktop app.")),
+        L(Pane("Claude app", "ConnectionStatus", "Desktop app connection", "status",
+            "Whether the Claude desktop app is connected to this Revit window, the models it can see, how to fix a missing connection, and Open the Claude app.")),
         L(Pane("Bugs", "ReportBug", "Report bug", "report-bug", "Writes a bug report for Sketch ProMax with what just happened, ready to send.")),
         L(Pane("Bugs", "BugFolder", "Open bug folder", "bug-folder", "Opens the folder with the bug reports written so far.")),
         L(Pane("Bugs", "ExportChatsBugs", "Export chats & bugs", "export-chats-bugs",

@@ -556,6 +556,7 @@ internal static partial class FieldTest
         await Probe(s, "chat.usage", () => UsageProbe(s.Folder)).ConfigureAwait(false);
         await Probe(s, "chat.pdf", PdfAttach).ConfigureAwait(false);
         await Probe(s, "pdf.editor", PdfEditor).ConfigureAwait(false);
+        await Probe(s, "sigpages.files", () => SignaturePagesProbe(s.Folder)).ConfigureAwait(false);
         await Probe(s, "chat.office", OfficeAttach).ConfigureAwait(false);
         await Probe(s, "chat.documents", () => Documents(s.Folder)).ConfigureAwait(false);
         await Probe(s, "bugs.sync", () => BugSync(s.Folder)).ConfigureAwait(false);
@@ -1396,6 +1397,40 @@ internal static partial class FieldTest
         catch (Exception ex) when (ex is not OutOfMemoryException) { problems.Add($"the window couldn't be built: {ex.GetType().Name}: {ex.Message}"); }
         return problems.Count == 0 ? Pass($"{passed} checks and the window: open, draw, insert, delete, turn, move, replace, blank page, undo, extract, save with backup, three splits, refusals")
             : Fail(string.Join("; ", problems));
+    }
+
+    /// <summary>Signature pages: an Excel list read, each document's Word file and PDF written and read back, a PIN lock, the window built.</summary>
+    private static (string, string) SignaturePagesProbe(string folder)
+    {
+        var problems = new List<string>();
+        var dir = Path.Combine(folder, "signature-pages");
+        try
+        {
+            var setup = new SignaturePages.Setup { Project = "Test project", Discipline = "Structures", By = "T.E." };
+            var list = Path.Combine(dir, "list.xlsx");
+            Directory.CreateDirectory(dir);
+            SignaturePages.WriteTemplate(list);
+            var docs = SignaturePages.ReadList(setup, list);
+            if (docs.Count != 2 || docs[1].Rev != "1") problems.Add($"the Excel list read {docs.Count} documents");
+            docs.Add(new SignaturePages.Doc("", "PRJ1-FD-SITE-00-RPT-ST-01", "2", "Report"));
+            var png = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAgAAAAECAYAAACzzX7wAAAAFUlEQVR4nGMU0Zj2nwEPYMInSR0FAOw2Adm1N4jVAAAAAElFTkSuQmCC");
+            var person = SignaturePages.Lock("T.E.", "", png, "4826");
+            var sign = SignaturePages.Unlock(person, "4826");
+            if (sign is null || SignaturePages.Unlock(person, "0000") is not null) problems.Add("the PIN lock didn't open with its PIN only");
+            var common = new SignaturePages.Common(setup, DateTime.Today, null, sign, null, null);
+            var files = SignaturePages.Make(docs, Path.Combine(dir, "out"), common);
+            if (files.Count != docs.Count * 2 || !files.All(File.Exists)) problems.Add($"{files.Count} files written for {docs.Count} documents");
+            foreach (var pdf in files.Where(f => f.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase)))
+            {
+                using var read = UglyToad.PdfPig.PdfDocument.Open(pdf);
+                var text = string.Join(" ", read.GetPage(1).GetWords().Select(w => w.Text));
+                if (read.NumberOfPages != 1 || !text.Contains(" REV ")) problems.Add(Path.GetFileName(pdf) + " doesn't read back");
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException) { problems.Add($"{ex.GetType().Name}: {ex.Message}"); }
+        try { App.Dispatcher.InvokeAsync(_ => { UI.SignaturePagesWindow.ForTest().Close(); return 0; }).GetAwaiter().GetResult(); }
+        catch (Exception ex) when (ex is not OutOfMemoryException) { problems.Add($"the window couldn't be built: {ex.GetType().Name}: {ex.Message}"); }
+        return problems.Count == 0 ? Pass("Excel list read, a Word file and a PDF per document read back, PIN lock, window built") : Fail(string.Join("; ", problems));
     }
 
     private static (string, string) PdfAttach()
