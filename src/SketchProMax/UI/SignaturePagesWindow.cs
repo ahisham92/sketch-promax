@@ -16,6 +16,8 @@ using Button = System.Windows.Controls.Button;
 using CheckBox = System.Windows.Controls.CheckBox;
 using Color = System.Windows.Media.Color;
 using ComboBox = System.Windows.Controls.ComboBox;
+using ContextMenu = System.Windows.Controls.ContextMenu;
+using MenuItem = System.Windows.Controls.MenuItem;
 using Grid = System.Windows.Controls.Grid;
 using Image = System.Windows.Controls.Image;
 using Line = System.Windows.Shapes.Line;
@@ -41,11 +43,20 @@ internal sealed class SignaturePagesWindow : Window
     {
         public Doc Doc = new("", "", "0", "");
         public readonly CheckBox Use = new() { IsChecked = true, VerticalAlignment = VerticalAlignment.Center };
-        public readonly ComboBox Type = new() { IsEditable = true, Width = 74, MinHeight = 28, VerticalContentAlignment = VerticalAlignment.Center };
-        public readonly TextBox Number = Box(250);
-        public readonly TextBox Rev = Box(44);
+        public readonly ComboBox Type = new() { IsEditable = true, Width = 90, MinHeight = 28, VerticalContentAlignment = VerticalAlignment.Center };
+        public readonly TextBox Number = Box(0);
+        public readonly TextBox Rev = Box(60);
         public readonly TextBox Title = Box(0);
-        public Grid? Line;
+        // The card: what the page will say, read at a glance; the boxes above sit in Editor, shown by Edit.
+        public readonly Border Card = new() { BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(6), Padding = new Thickness(10, 8, 8, 8), Margin = new Thickness(0, 0, 0, 6), Cursor = Cursors.Hand };
+        public readonly Border Chip = new() { CornerRadius = new CornerRadius(4), Padding = new Thickness(7, 2, 7, 2), VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, 1, 10, 0), MinWidth = 46 };
+        public readonly TextBlock ChipText = new() { FontWeight = FontWeights.Bold, FontSize = 11.5, HorizontalAlignment = HorizontalAlignment.Center };
+        public readonly TextBlock TitleText = new() { FontSize = 13.5, FontWeight = FontWeights.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis };
+        public readonly TextBlock NumberText = new() { FontFamily = new FontFamily("Consolas, Cascadia Mono, Segoe UI"), FontSize = 12, Margin = new Thickness(0, 3, 0, 0), TextTrimming = TextTrimming.CharacterEllipsis };
+        public readonly TextBlock RevText = new() { FontWeight = FontWeights.SemiBold, FontSize = 11.5 };
+        public readonly TextBlock Outputs = new() { FontSize = 11, Margin = new Thickness(0, 4, 0, 0), HorizontalAlignment = HorizontalAlignment.Right };
+        public readonly Grid Editor = new() { Margin = new Thickness(56, 10, 0, 2), Visibility = Visibility.Collapsed };
+        public Button? EditButton;
     }
 
     private sealed class Role(string label)
@@ -83,6 +94,18 @@ internal sealed class SignaturePagesWindow : Window
     private readonly Button _openFolder = RichUi.Button(RichUi.Icon.Folder, "Open folder");
     private readonly (Border Circle, TextBlock Glyph)[] _steps = new (Border, TextBlock)[3];
     private Row? _focus;
+    private readonly WrapPanel _summary = new();
+    // The new-document panel: site, area, type, sequence and REV make the number; the title is suggested.
+    private readonly Border _builder = new() { BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8), Padding = new Thickness(14, 12, 14, 12), Margin = new Thickness(0, 0, 0, 10) };
+    private readonly WrapPanel _siteChips = new(), _typeChips = new();
+    private readonly StackPanel _siteRow = new() { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 18, 8) };
+    private readonly StackPanel _areaRow = new() { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 18, 8) };
+    private readonly TextBox _bArea = Box(52), _bSeq = Box(52), _bRev = Box(46), _bTitle = Box(0), _bNumber = Box(0);
+    private readonly TextBlock _bPreview = new() { FontFamily = new FontFamily("Consolas, Cascadia Mono, Segoe UI"), FontSize = 15, FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center };
+    private readonly TextBlock _bHint = Brand.Text("", Brand.K.Muted, 11.5);
+    private readonly Button _otherSite = RichUi.Button(RichUi.Icon.Refresh, "Same set for another site");
+    private string _bSite = "", _bType = "";
+    private bool _bSeqTyped, _bTitleTyped, _bQuiet;
     private string _lastFolder = "";
     private bool _loading;
 
@@ -173,30 +196,37 @@ internal sealed class SignaturePagesWindow : Window
         // Left: documents, then signing, then the page details (folded).
         var left = new StackPanel { Margin = new Thickness(18, 4, 12, 12) };
         left.Children.Add(Section("1", "Documents"));
-        var fromRevit = RichUi.Button(RichUi.Icon.Import, "Sheets from Revit");
+        var add = RichUi.Button(RichUi.Icon.Add, "New document", Brand.Weight.Primary);
+        AutomationProperties.SetHelpText(add, "Builds the number from site, area and type, and adds the document.");
+        add.ToolTip = AutomationProperties.GetHelpText(add);
+        add.Click += (_, _) => ShowBuilder(_builder.Visibility != Visibility.Visible);
+        var fromRevit = RichUi.Button(RichUi.Icon.Import, "Drawings from Revit");
         fromRevit.IsEnabled = _sheets.Count > 0;
-        AutomationProperties.SetHelpText(fromRevit, _sheets.Count > 0 ? "Pick sheets of the open model: one page per sheet, with its current revision." : "Open the model in Revit first.");
+        AutomationProperties.SetHelpText(fromRevit, _sheets.Count > 0 ? "Pick sheets of the open model: one page per drawing, with its current revision." : "Open the model in Revit first.");
         fromRevit.ToolTip = AutomationProperties.GetHelpText(fromRevit);
         fromRevit.Click += (_, _) => PickSheets();
         var excel = RichUi.Button(RichUi.Icon.Import, "Import Excel");
         AutomationProperties.SetHelpText(excel, "An Excel list (.xlsx or .csv) with Number, Rev, Title and Type columns.");
         excel.ToolTip = AutomationProperties.GetHelpText(excel);
         excel.Click += (_, _) => ImportExcel();
-        var add = RichUi.Button(RichUi.Icon.Add, "Add");
-        AutomationProperties.SetHelpText(add, "Adds an empty row to type in.");
-        add.Click += (_, _) => AddRow(new Doc("", "", "0", ""), focus: true);
-        var template = new Button { Content = "Excel template", Margin = new Thickness(8, 0, 0, 0), Padding = new Thickness(8, 2, 8, 2) };
-        template.SetResourceReference(StyleProperty, "SpmSecondaryButton");
-        AutomationProperties.SetHelpText(template, "Saves an empty Excel list with the right columns to fill.");
-        template.ToolTip = AutomationProperties.GetHelpText(template);
+        _otherSite.Visibility = Visibility.Collapsed;
+        _otherSite.Click += (_, _) => CopyForOtherSite();
+        var more = RichUi.Button(RichUi.Icon.Down, "More");
+        var menu = new ContextMenu();
+        var template = new MenuItem { Header = "Save the Excel template" };
         template.Click += (_, _) => SaveTemplate();
-        var clear = new Button { Content = "Clear", Margin = new Thickness(8, 0, 0, 0), Padding = new Thickness(8, 2, 8, 2) };
-        clear.SetResourceReference(StyleProperty, "SpmSecondaryButton");
+        var clear = new MenuItem { Header = "Clear the list" };
         clear.Click += (_, _) => { foreach (var r in _rows.ToList()) Remove(r); };
+        menu.Items.Add(template);
+        menu.Items.Add(clear);
+        more.ContextMenu = menu;
+        more.Click += (_, _) => { menu.PlacementTarget = more; menu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom; menu.IsOpen = true; };
         var tools = new WrapPanel { Margin = new Thickness(0, 6, 0, 8) };
-        foreach (var b in new[] { fromRevit, excel, add, template, clear }) { b.Margin = new Thickness(0, 0, 8, 4); tools.Children.Add(b); }
+        foreach (var b in new[] { add, fromRevit, excel, _otherSite, more }) { b.Margin = new Thickness(0, 0, 8, 4); tools.Children.Add(b); }
         left.Children.Add(tools);
-        left.Children.Add(Heads());
+        left.Children.Add(Builder());
+        _summary.Margin = new Thickness(0, 0, 0, 8);
+        left.Children.Add(_summary);
         _empty.Margin = new Thickness(4, 10, 0, 10);
         left.Children.Add(_empty);
         left.Children.Add(_list);
@@ -350,6 +380,8 @@ internal sealed class SignaturePagesWindow : Window
         _make.IsEnabled = n > 0;
         _empty.Visibility = _rows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         ShowSections();
+        ShowSummary();
+        ShowOtherSite();
     }
 
     private static FrameworkElement Section(string number, string title)
@@ -365,28 +397,6 @@ internal sealed class SignaturePagesWindow : Window
         t.Margin = new Thickness(left, 0, 8, 0);
         t.VerticalAlignment = VerticalAlignment.Center;
         return t;
-    }
-
-    private static readonly double[] Widths = [28, 82, 258, 52, 0, 32];
-
-    private static Grid Columns()
-    {
-        var g = new Grid();
-        foreach (var w in Widths) g.ColumnDefinitions.Add(new ColumnDefinition { Width = w > 0 ? new GridLength(w) : new GridLength(1, GridUnitType.Star), MinWidth = w > 0 ? 0 : 160 });
-        return g;
-    }
-
-    private static FrameworkElement Heads()
-    {
-        var g = Columns();
-        string[] names = ["", "TYPE", "NUMBER", "REV", "TITLE", ""];
-        for (var i = 0; i < names.Length; i++)
-        {
-            var t = Brand.Text(names[i], Brand.K.Muted, 10.5, bold: true);
-            Grid.SetColumn(t, i);
-            g.Children.Add(t);
-        }
-        return g;
     }
 
     private FrameworkElement RoleTile(Role role)
@@ -504,6 +514,9 @@ internal sealed class SignaturePagesWindow : Window
             ShowRole(r);
         }
         RefreshTypeLists();
+        foreach (var r in _rows) ShowCard(r);
+        FillChoices();
+        ShowOtherSite();
         ShowSections();
         Preview();
     }
@@ -597,40 +610,354 @@ internal sealed class SignaturePagesWindow : Window
         AutomationProperties.SetName(row.Number, "Document number");
         AutomationProperties.SetName(row.Rev, "Revision");
         AutomationProperties.SetName(row.Title, "Title");
-        var remove = new Button { Content = "", FontFamily = new FontFamily("Segoe Fluent Icons, Segoe MDL2 Assets"), Width = 28, Height = 28, Background = Brushes.Transparent, BorderThickness = new Thickness(0) };
-        remove.SetResourceReference(ForegroundProperty, Brand.K.Muted);
-        AutomationProperties.SetName(remove, "Remove this row");
-        remove.Click += (_, _) => Remove(row);
-        var g = Columns();
-        g.Margin = new Thickness(0, 2, 0, 2);
-        UIElement[] cells = [row.Use, row.Type, row.Number, row.Rev, row.Title, remove];
-        for (var i = 0; i < cells.Length; i++)
+        row.Use.Margin = new Thickness(0, 3, 10, 0);
+        row.Use.VerticalAlignment = VerticalAlignment.Top;
+
+        // The card: [tick] [TYPE] title over number ... REV 00 over what is made, then Edit and Remove.
+        row.Chip.SetResourceReference(Border.BackgroundProperty, Brand.K.AccentSoft);
+        row.ChipText.SetResourceReference(TextBlock.ForegroundProperty, Brand.K.Link);
+        row.Chip.Child = row.ChipText;
+        row.TitleText.SetResourceReference(TextBlock.ForegroundProperty, Brand.K.Text);
+        row.NumberText.SetResourceReference(TextBlock.ForegroundProperty, Brand.K.Muted);
+        row.RevText.SetResourceReference(TextBlock.ForegroundProperty, Brand.K.Text);
+        row.Outputs.SetResourceReference(TextBlock.ForegroundProperty, Brand.K.Muted);
+        var words = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+        words.Children.Add(row.TitleText);
+        words.Children.Add(row.NumberText);
+        var rev = new Border { BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(10), Padding = new Thickness(8, 1, 8, 1), HorizontalAlignment = HorizontalAlignment.Right, Child = row.RevText };
+        rev.SetResourceReference(Border.BorderBrushProperty, Brand.K.InputBorder);
+        var right = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(12, 0, 4, 0) };
+        right.Children.Add(rev);
+        right.Children.Add(row.Outputs);
+        Button IconButton(string glyph, string name)
         {
-            Grid.SetColumn(cells[i], i);
-            if (cells[i] is FrameworkElement f && i is > 0 and < 5) { f.Margin = new Thickness(0, 0, 6, 0); if (f is TextBox tb) tb.Width = double.NaN; }
-            g.Children.Add(cells[i]);
+            var b = new Button { Content = glyph, FontFamily = new FontFamily("Segoe Fluent Icons, Segoe MDL2 Assets"), Width = 30, Height = 30, Background = Brushes.Transparent, BorderThickness = new Thickness(0), VerticalAlignment = VerticalAlignment.Center, Cursor = Cursors.Arrow };
+            b.SetResourceReference(ForegroundProperty, Brand.K.Muted);
+            AutomationProperties.SetName(b, name);
+            b.ToolTip = name;
+            return b;
         }
-        row.Line = g;
-        void Changed() { if (!_loading) { ShowSteps(); if (_focus == row) Preview(); } }
+        var edit = IconButton(RichUi.Icon.Edit, "Edit this document");
+        var remove = IconButton("\uE711", "Remove this document");
+        row.EditButton = edit;
+        edit.Click += (_, _) => ShowEditor(row, row.Editor.Visibility != Visibility.Visible);
+        remove.Click += (_, _) => Remove(row);
+        var top = new Grid();
+        top.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        top.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        top.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        top.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        top.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        top.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        UIElement[] parts = [row.Use, row.Chip, words, right, edit, remove];
+        for (var i = 0; i < parts.Length; i++) { Grid.SetColumn(parts[i], i); top.Children.Add(parts[i]); }
+
+        // The editor under the card: labelled boxes, Number and Title wide.
+        var ed = row.Editor;
+        foreach (var w in new[] { 100.0, 0, 76 }) ed.ColumnDefinitions.Add(new ColumnDefinition { Width = w > 0 ? new GridLength(w) : new GridLength(1, GridUnitType.Star) });
+        for (var r = 0; r < 4; r++) ed.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        void Put(UIElement e, int r, int c, int span = 1) { Grid.SetRow(e, r); Grid.SetColumn(e, c); Grid.SetColumnSpan(e, span); ed.Children.Add(e); }
+        TextBlock Cap(string text) { var t = Brand.Text(text, Brand.K.Muted, 10.5, bold: true); t.Margin = new Thickness(0, 0, 0, 3); return t; }
+        Put(Cap("TYPE"), 0, 0); Put(Cap("DOCUMENT NUMBER"), 0, 1); Put(Cap("REV"), 0, 2);
+        row.Type.Margin = new Thickness(0, 0, 8, 0);
+        row.Number.Margin = new Thickness(0, 0, 8, 0);
+        row.Rev.Width = double.NaN;
+        Put(row.Type, 1, 0); Put(row.Number, 1, 1); Put(row.Rev, 1, 2);
+        var titleCap = Cap("TITLE ON THE PAGE");
+        titleCap.Margin = new Thickness(0, 8, 0, 3);
+        Put(titleCap, 2, 0, 3);
+        Put(row.Title, 3, 0, 3);
+
+        var body = new StackPanel();
+        body.Children.Add(top);
+        body.Children.Add(ed);
+        row.Card.Child = body;
+        row.Card.MouseLeftButtonUp += (_, _) => Select(row);
+        row.Card.MouseLeftButtonUp += (_, e) => { if (e.ClickCount == 2) ShowEditor(row, true); };
+        void Changed() { if (!_loading) { ShowCard(row); ShowSteps(); if (_focus == row) Preview(); } }
         row.Use.Click += (_, _) => Changed();
         row.Number.TextChanged += (_, _) => Changed();
         row.Rev.TextChanged += (_, _) => Changed();
         row.Title.TextChanged += (_, _) => Changed();
         row.Type.LostFocus += (_, _) => Changed();
         row.Type.SelectionChanged += (_, _) => Dispatcher.BeginInvoke(new Action(Changed));
-        g.IsKeyboardFocusWithinChanged += (_, e) => { if ((bool)e.NewValue) { _focus = row; Preview(); } };
+        row.Card.IsKeyboardFocusWithinChanged += (_, e) => { if ((bool)e.NewValue && _focus != row) Select(row); };
+        row.Card.KeyDown += (_, e) => { if (e.Key == Key.Enter && row.Editor.Visibility == Visibility.Visible && Keyboard.Modifiers == ModifierKeys.None) { ShowEditor(row, false); e.Handled = true; } };
         _rows.Add(row);
-        _list.Children.Add(g);
+        _list.Children.Add(row.Card);
         _focus ??= row;
+        ShowCard(row);
         ShowSteps();
-        if (focus) Dispatcher.BeginInvoke(new Action(() => row.Number.Focus()), System.Windows.Threading.DispatcherPriority.Input);
+        if (focus) { Select(row); ShowEditor(row, true); }
+    }
+
+    // ---- New document ---------------------------------------------------------------------------------------------------
+
+    private FrameworkElement Builder()
+    {
+        _builder.SetResourceReference(Border.BorderBrushProperty, Brand.K.Accent);
+        _builder.SetResourceReference(Border.BackgroundProperty, Brand.K.Raised);
+        _builder.Visibility = Visibility.Collapsed;
+        TextBlock Cap(string text) { var t = Brand.Text(text, Brand.K.Muted, 10.5, bold: true); t.Margin = new Thickness(0, 0, 8, 0); t.VerticalAlignment = VerticalAlignment.Center; return t; }
+        var stack = new StackPanel();
+        var parts = new WrapPanel();
+        _siteRow.Children.Add(Cap("SITE"));
+        _siteRow.Children.Add(_siteChips);
+        parts.Children.Add(_siteRow);
+        _areaRow.Children.Add(Cap("AREA / BERTH"));
+        _areaRow.Children.Add(_bArea);
+        parts.Children.Add(_areaRow);
+        var seqRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 18, 8) };
+        seqRow.Children.Add(Cap("NO."));
+        seqRow.Children.Add(_bSeq);
+        parts.Children.Add(seqRow);
+        var revRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 8) };
+        revRow.Children.Add(Cap("REV"));
+        revRow.Children.Add(_bRev);
+        parts.Children.Add(revRow);
+        var typeRow = new DockPanel { Margin = new Thickness(0, 0, 0, 8) };
+        var tc = Cap("TYPE");
+        DockPanel.SetDock(tc, Dock.Left);
+        typeRow.Children.Add(tc);
+        typeRow.Children.Add(_typeChips);
+        stack.Children.Add(typeRow);
+        stack.Children.Add(parts);
+        var numberRow = new DockPanel { Margin = new Thickness(0, 0, 0, 8) };
+        var nc = Cap("NUMBER");
+        DockPanel.SetDock(nc, Dock.Left);
+        numberRow.Children.Add(nc);
+        numberRow.Children.Add(_bNumber);
+        stack.Children.Add(numberRow);
+        var titleRow = new DockPanel { Margin = new Thickness(0, 0, 0, 10) };
+        var ttc = Cap("TITLE");
+        DockPanel.SetDock(ttc, Dock.Left);
+        titleRow.Children.Add(ttc);
+        titleRow.Children.Add(_bTitle);
+        stack.Children.Add(titleRow);
+        var addIt = RichUi.Button(RichUi.Icon.Add, "Add", Brand.Weight.Primary);
+        addIt.Click += (_, _) => AddFromBuilder();
+        var close = Brand.Button("Close");
+        close.Click += (_, _) => ShowBuilder(false);
+        var foot = new DockPanel();
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal };
+        buttons.Children.Add(close);
+        addIt.Margin = new Thickness(8, 0, 0, 0);
+        buttons.Children.Add(addIt);
+        DockPanel.SetDock(buttons, Dock.Right);
+        foot.Children.Add(buttons);
+        var preview = new StackPanel();
+        _bPreview.SetResourceReference(TextBlock.ForegroundProperty, Brand.K.Text);
+        preview.Children.Add(_bPreview);
+        _bHint.TextWrapping = TextWrapping.Wrap;
+        _bHint.Margin = new Thickness(0, 3, 0, 0);
+        preview.Children.Add(_bHint);
+        foot.Children.Add(preview);
+        stack.Children.Add(foot);
+        _builder.Child = stack;
+        AutomationProperties.SetName(_bArea, "Area or berth number");
+        AutomationProperties.SetName(_bSeq, "Sequence number");
+        AutomationProperties.SetName(_bRev, "Revision");
+        AutomationProperties.SetName(_bTitle, "Title on the page");
+        AutomationProperties.SetName(_bNumber, "Document number");
+        _bArea.TextChanged += (_, _) => BuilderChanged();
+        _bSeq.TextChanged += (_, _) => { if (!_bQuiet) _bSeqTyped = true; BuilderChanged(); };
+        _bTitle.TextChanged += (_, _) => { if (!_bQuiet) _bTitleTyped = true; };
+        _bNumber.TextChanged += (_, _) => BuilderChanged();
+        _bRev.Text = "0";
+        _builder.KeyDown += (_, e) => { if (e.Key == Key.Enter && Keyboard.Modifiers == ModifierKeys.None) { AddFromBuilder(); e.Handled = true; } };
+        return _builder;
+    }
+
+    /// <summary>A choice button (site or type): filled with the accent colour when picked.</summary>
+    private static Button Choice(string text, string help, bool picked)
+    {
+        var b = new Button { Content = text, MinWidth = 52, Padding = new Thickness(10, 3, 10, 3), Margin = new Thickness(0, 0, 6, 4), BorderThickness = new Thickness(1), FontWeight = FontWeights.SemiBold, Cursor = Cursors.Hand };
+        b.SetResourceReference(BackgroundProperty, picked ? Brand.K.Accent : Brand.K.Surface);
+        b.SetResourceReference(ForegroundProperty, picked ? Brand.K.OnAccent : Brand.K.Text);
+        b.SetResourceReference(BorderBrushProperty, picked ? Brand.K.Accent : Brand.K.Border);
+        b.ToolTip = help;
+        AutomationProperties.SetName(b, $"{text}{(picked ? ", picked" : "")}");
+        AutomationProperties.SetHelpText(b, help);
+        return b;
+    }
+
+    private bool HasPattern => _setup.NumberPattern.Contains("{TYPE}") && _setup.NumberPattern.Contains("{SEQ");
+
+    private void ShowBuilder(bool open)
+    {
+        _builder.Visibility = open ? Visibility.Visible : Visibility.Collapsed;
+        if (!open) return;
+        if (_bType.Length == 0 || TypeOf(_setup, _bType).Code.Length == 0) _bType = _setup.Types.FirstOrDefault(t => t.Code.Length > 0)?.Code ?? "";
+        if (_bSite.Length == 0 || !_setup.Sites.Any(x => x.Code == _bSite)) _bSite = _setup.Sites.FirstOrDefault()?.Code ?? "";
+        _bSeqTyped = _bTitleTyped = false;
+        FillChoices();
+        BuilderChanged();
+        Dispatcher.BeginInvoke(new Action(() => (HasPattern && _setup.NumberPattern.Contains("{AREA") ? _bArea : HasPattern ? _bTitle : _bNumber).Focus()), System.Windows.Threading.DispatcherPriority.Input);
+    }
+
+    private void FillChoices()
+    {
+        _siteChips.Children.Clear();
+        foreach (var site in _setup.Sites)
+        {
+            var b = Choice(site.Code, site.Name, site.Code == _bSite);
+            if (site.Name.Length > 0 && site.Name != site.Code) b.Content = $"{site.Code}  \u00B7  {site.Name}";
+            b.Click += (_, _) => { _bSite = site.Code; FillChoices(); BuilderChanged(); };
+            _siteChips.Children.Add(b);
+        }
+        _typeChips.Children.Clear();
+        foreach (var t in _setup.Types.Where(t => t.Code.Length > 0))
+        {
+            var b = Choice(t.Code, t.Heading, t.Code == _bType);
+            b.Click += (_, _) => { _bType = t.Code; _bTitleTyped = false; FillChoices(); BuilderChanged(); };
+            _typeChips.Children.Add(b);
+        }
+        var pattern = HasPattern;
+        _siteRow.Visibility = pattern && _setup.NumberPattern.Contains("{SITE}") && _setup.Sites.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        _areaRow.Visibility = pattern && _setup.NumberPattern.Contains("{AREA") ? Visibility.Visible : Visibility.Collapsed;
+        ((FrameworkElement)_bSeq.Parent).Visibility = pattern ? Visibility.Visible : Visibility.Collapsed;
+        ((FrameworkElement)_bNumber.Parent).Visibility = pattern ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    /// <summary>The number as it will be, the next free sequence, and a title suggested from the list.</summary>
+    private void BuilderChanged()
+    {
+        if (_bQuiet) return;
+        _bQuiet = true;
+        try
+        {
+            var numbers = _rows.Select(r => r.Number.Text.Trim()).ToList();
+            if (HasPattern && !_bSeqTyped) _bSeq.Text = NextSeq(_setup.NumberPattern, numbers, _bSite, _bArea.Text, _bType);
+            if (!_bTitleTyped) _bTitle.Text = SuggestTitle();
+        }
+        finally { _bQuiet = false; }
+        var number = BuilderNumber();
+        _bPreview.Text = number.Length > 0 ? number : "Type the number";
+        var listed = _rows.Any(r => string.Equals(r.Number.Text.Trim(), number, StringComparison.OrdinalIgnoreCase) && r.Rev.Text.Trim() == _bRev.Text.Trim());
+        _bHint.Text = listed ? "Already in the list." : HasPattern ? $"{TypeOf(_setup, _bType).Heading}: Word + PDF{(TypeOf(_setup, _bType).Idc ? " + IDC table" : "")}. Enter adds it."
+            : "Set the numbering once in Admin to build numbers from site, area and type.";
+        _bHint.SetResourceReference(TextBlock.ForegroundProperty, listed ? Brand.K.WarningText : Brand.K.Muted);
+    }
+
+    private string BuilderNumber() => HasPattern
+        ? ComposeNumber(_setup.NumberPattern, new NumberParts(_bSite, _bArea.Text, _bType, _bSeq.Text))
+        : _bNumber.Text.Trim();
+
+    /// <summary>The title of a listed document of the same type and area (any site), else the type's heading.</summary>
+    private string SuggestTitle()
+    {
+        if (HasPattern)
+            foreach (var r in _rows)
+                if (ReadNumber(_setup.NumberPattern, r.Number.Text) is { } p && p.Type.Equals(_bType, StringComparison.OrdinalIgnoreCase)
+                    && p.Area.TrimStart('0') == _bArea.Text.Trim().TrimStart('0') && r.Title.Text.Trim().Length > 0)
+                    return r.Title.Text.Trim();
+        return _rows.LastOrDefault(r => r.Type.Text.Trim().Equals(_bType, StringComparison.OrdinalIgnoreCase) && r.Title.Text.Trim().Length > 0)?.Title.Text.Trim()
+               ?? TypeOf(_setup, _bType).Heading;
+    }
+
+    private void AddFromBuilder()
+    {
+        var number = BuilderNumber();
+        if (number.Length == 0 || (HasPattern && _bSeq.Text.Trim().Length == 0)) { Say("Fill the number first.", Brand.K.WarningText); return; }
+        if (_bType.Length == 0) { Say("Pick a type.", Brand.K.WarningText); return; }
+        var doc = new Doc(_bType, number, CleanRev(_bRev.Text) is { Length: > 0 } r ? r : "0", _bTitle.Text.Trim());
+        if (AddAll([doc]) == 0) { Say($"{number} {RevText(doc.Rev, _setup.TwoDigitRev)} is already in the list.", Brand.K.WarningText); return; }
+        Select(_rows[^1]);
+        Say($"Added {number}.", Brand.K.SuccessText);
+        _bSeqTyped = _bTitleTyped = false;
+        if (!HasPattern) _bNumber.Clear();
+        BuilderChanged();
+    }
+
+    /// <summary>Adds the listed documents again for the other site (TIN to APA and so on), revisions and titles kept.</summary>
+    private void CopyForOtherSite()
+    {
+        var docs = Included();
+        var sites = docs.Select(d => ReadNumber(_setup.NumberPattern, d.Number)?.Site).Where(x => !string.IsNullOrEmpty(x)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var target = _setup.Sites.FirstOrDefault(x => !sites.Contains(x.Code, StringComparer.OrdinalIgnoreCase));
+        if (target is null) { Say("Every site is in the list already."); return; }
+        var added = AddAll(ForSite(_setup.NumberPattern, docs, target.Code));
+        Say(added == 0 ? "Nothing to copy: no number follows the numbering set in Admin." : $"Added {added} for {target.Name}. Check their revisions.", added == 0 ? Brand.K.WarningText : Brand.K.SuccessText);
+    }
+
+    private void ShowOtherSite()
+    {
+        var docs = Included();
+        var sites = docs.Select(d => ReadNumber(_setup.NumberPattern, d.Number)?.Site).Where(x => !string.IsNullOrEmpty(x)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var target = HasPattern && sites.Count > 0 ? _setup.Sites.FirstOrDefault(x => !sites.Contains(x.Code, StringComparer.OrdinalIgnoreCase)) : null;
+        _otherSite.Visibility = target is null ? Visibility.Collapsed : Visibility.Visible;
+        if (target is not null) RichUi.Set(_otherSite, RichUi.Icon.Refresh, $"Same set for {target.Code}");
+    }
+
+    /// <summary>Opens or closes a document's editor (a new or incomplete one opens on its first empty box).</summary>
+    private void ShowEditor(Row row, bool open)
+    {
+        row.Editor.Visibility = open ? Visibility.Visible : Visibility.Collapsed;
+        if (row.EditButton is { } b) { b.Content = open ? "\uE73E" : RichUi.Icon.Edit; b.ToolTip = open ? "Done" : "Edit this document"; AutomationProperties.SetName(b, (string)b.ToolTip); }
+        if (open)
+        {
+            TextBox first = row.Number.Text.Trim().Length == 0 ? row.Number : row.Title.Text.Trim().Length == 0 ? row.Title : row.Number;
+            Dispatcher.BeginInvoke(new Action(() => { first.Focus(); first.CaretIndex = first.Text.Length; }), System.Windows.Threading.DispatcherPriority.Input);
+        }
+        ShowCard(row);
+    }
+
+    private void Select(Row row)
+    {
+        _focus = row;
+        foreach (var r in _rows) ShowCard(r);
+        Preview();
+    }
+
+    /// <summary>The card as the page will be: type, title, number, REV as it is printed, and the files it makes.</summary>
+    private void ShowCard(Row row)
+    {
+        var d = Read(row);
+        var on = row.Use.IsChecked == true;
+        row.ChipText.Text = d.Type.Length > 0 ? d.Type : "?";
+        row.TitleText.Text = d.Title.Length > 0 ? d.Title : "No title yet";
+        row.TitleText.FontStyle = d.Title.Length > 0 ? FontStyles.Normal : FontStyles.Italic;
+        row.NumberText.Text = d.Number.Length > 0 ? d.Number : "No document number yet: Edit to add it";
+        row.NumberText.SetResourceReference(TextBlock.ForegroundProperty, d.Number.Length > 0 ? Brand.K.Muted : Brand.K.WarningText);
+        row.TitleText.ToolTip = d.Title.Length > 0 ? d.Title : null;
+        row.NumberText.ToolTip = d.Number.Length > 0 ? d.Number : null;
+        row.RevText.Text = RevText(d.Rev, _setup.TwoDigitRev);
+        row.Outputs.Text = !on ? "Skipped" : HasIdc(d) ? "Word + PDF + IDC table" : "Word + PDF";
+        var selected = _focus == row;
+        row.Card.SetResourceReference(Border.BorderBrushProperty, selected ? Brand.K.Accent : Brand.K.Border);
+        row.Card.BorderThickness = new Thickness(selected ? 2 : 1);
+        row.Card.Padding = selected ? new Thickness(9, 7, 7, 7) : new Thickness(10, 8, 8, 8);
+        row.Card.SetResourceReference(Border.BackgroundProperty, selected ? Brand.K.Raised : Brand.K.Surface);
+        row.Card.Opacity = on ? 1 : 0.6;
+        AutomationProperties.SetName(row.Card, $"{d.Type} {d.Number} {RevText(d.Rev, _setup.TwoDigitRev)}: {d.Title}");
+    }
+
+    /// <summary>What the list will make: a count per type and the number of files.</summary>
+    private void ShowSummary()
+    {
+        _summary.Children.Clear();
+        var docs = Included();
+        if (docs.Count == 0) return;
+        foreach (var g in docs.GroupBy(d => d.Type.Length > 0 ? d.Type : "?").OrderBy(g => g.Key))
+        {
+            var chip = new Border { CornerRadius = new CornerRadius(10), Padding = new Thickness(9, 2, 9, 2), Margin = new Thickness(0, 0, 6, 4) };
+            chip.SetResourceReference(Border.BackgroundProperty, Brand.K.AccentSoft);
+            var t = Brand.Text($"{g.Key}  {g.Count()}", Brand.K.Link, 11.5, bold: true);
+            chip.Child = t;
+            _summary.Children.Add(chip);
+        }
+        var files = docs.Sum(d => HasIdc(d) ? 4 : 2);
+        var total = Brand.Text($"{docs.Count} document{(docs.Count == 1 ? "" : "s")}, {files} files", Brand.K.Muted, 12);
+        total.Margin = new Thickness(6, 2, 0, 0);
+        _summary.Children.Add(total);
     }
 
     private void Remove(Row row)
     {
         _rows.Remove(row);
-        if (row.Line is not null) _list.Children.Remove(row.Line);
+        _list.Children.Remove(row.Card);
         if (_focus == row) _focus = _rows.FirstOrDefault();
+        if (_focus is { } f) ShowCard(f);
         ShowSteps();
         Preview();
     }

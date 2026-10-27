@@ -232,7 +232,10 @@ internal static class FieldTestCoverage
             "Press Signature pages in the Submit panel, then Admin: set an admin password (twice); the recovery code shows once with Copy, and Continue waits for I've written it down. " +
             "In Admin type the project, the discipline, each type's form code (SPC has IDC ticked), the IDC departments and form code, Pick the logo, and Add E.N. (initials and name): E.N. shows Needs set-up. Done. " +
             "Press Admin again: a wrong password is refused; Forgot it? with the recovery code sets a new password and shows a new code. " +
-            "Press Sheets from Revit and tick three sheets: three rows with their current revisions. Press Excel template, fill two rows (one Rev 0, one Rev 1, the SPC row) and Import Excel: they are added; a Spec sections line shows. " +
+            "In Admin under Numbering type two sites (AAA = Site A, BBB = Site B) and paste one real number: it shows how numbers are built. " +
+            "Press New document: pick a site, type the area, pick a type: the number shows with the next free sequence and a suggested title; Enter adds it as a card (title, full number, REV, files made). Click a card: the preview shows it; Edit opens its boxes. " +
+            "Press Same set for BBB: the list is added again with BBB numbers, revisions and titles kept. " +
+            "Press Drawings from Revit and tick three sheets: three DWG cards with their current revisions. Under More, save the Excel template, fill two rows (one Rev 0, one Rev 1, the SPC row) and Import Excel: they are added; a Spec sections line shows. " +
             "Press Spec sections, Import Excel (the template's second sheet): the sections are listed; Save. Click the SPC row: the preview switches between Signature page and IDC table. " +
             "Under Sign type E.N. for By and press Sign: E.N. draws a signature and chooses a PIN twice; the signature shows in the tile and the preview. Take off, Sign again: now it asks for the PIN, and a wrong PIN is refused. Initials no one added say to ask the admin. " +
             "In Admin, Change PIN for E.N. (old PIN, new twice), then Reset PIN: E.N. shows Needs set-up and their next Sign sets up again. " +

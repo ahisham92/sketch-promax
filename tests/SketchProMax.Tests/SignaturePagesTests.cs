@@ -24,6 +24,7 @@ internal static class SignaturePagesTests
             Kept(check);
             Idc(dir, check);
             Admin(check);
+            Numbering(check);
         }
         finally
         {
@@ -223,6 +224,23 @@ internal static class SignaturePagesTests
         check("sigpages: the PIN changes and the signature stays", ChangePin(person, "2468", "3579") && Unlock(person, "3579")?.Bytes.SequenceEqual(picture) == true && Unlock(person, "2468") is null, "");
         ResetPin(person);
         check("sigpages: a reset (lost PIN) removes the signature; the person sets it up again", !person.IsSetUp && Unlock(person, "3579") is null && person.Initials == "G.L.", "");
+    }
+
+    private static void Numbering(Action<string, bool, string> check)
+    {
+        var types = DefaultTypes().Select(t => t.Code).ToList();
+        var pattern = LearnPattern("PRJ1-0100D-FD-AAA-05-BOQ-15A-ST-01", ["AAA", "BBB"], types);
+        check("sigpages: the numbering is learned from one number", pattern == "PRJ1-0100D-FD-{SITE}-{AREA:2}-{TYPE}-15A-ST-{SEQ:2}", pattern ?? "null");
+        check("sigpages: a number is built from site, area, type and sequence", ComposeNumber(pattern!, new NumberParts("bbb", "6", "CAL", "3")) == "PRJ1-0100D-FD-BBB-06-CAL-15A-ST-03", ComposeNumber(pattern!, new NumberParts("bbb", "6", "CAL", "3")));
+        check("sigpages: a number is read back into its parts", ReadNumber(pattern!, "PRJ1-0100D-FD-BBB-00-SPC-15A-ST-12") == new NumberParts("BBB", "00", "SPC", "12")
+            && ReadNumber(pattern!, "OTHER-01") is null, "");
+        string[] have = ["PRJ1-0100D-FD-AAA-05-BOQ-15A-ST-01", "PRJ1-0100D-FD-AAA-05-BOQ-15A-ST-02", "PRJ1-0100D-FD-BBB-05-BOQ-15A-ST-07"];
+        check("sigpages: the next sequence is the next free one for that site, area and type", NextSeq(pattern!, have, "AAA", "5", "BOQ") == "03" && NextSeq(pattern!, have, "AAA", "06", "BOQ") == "01", NextSeq(pattern!, have, "AAA", "5", "BOQ"));
+        var other = ForSite(pattern!, [new Doc("BOQ", have[0], "1", "Berth 5 - Bill of Quantities"), new Doc("DWG", "X-1", "0", "")], "BBB");
+        check("sigpages: the same set for the other site keeps revisions and titles", other is [{ Number: "PRJ1-0100D-FD-BBB-05-BOQ-15A-ST-01", Rev: "1", Title: "Berth 5 - Bill of Quantities" }], string.Join(" | ", other));
+        check("sigpages: sites are typed as code = name", ParseSites("aaa = Site A, BBB=Site B; CCC") is [{ Code: "AAA", Name: "Site A" }, { Code: "BBB", Name: "Site B" }, { Code: "CCC" }]
+            && SitesText(ParseSites("AAA = Site A, CCC")) == "AAA = Site A, CCC", SitesText(ParseSites("aaa = Site A, BBB=Site B; CCC")));
+        check("sigpages: a number with no type or sequence teaches nothing", LearnPattern("ABC", ["AAA"], types) is null && LearnPattern("PRJ1-AAA-05-XYZ-AB", ["AAA"], types) is null, "");
     }
 
     /// <summary>A small RGBA PNG.</summary>

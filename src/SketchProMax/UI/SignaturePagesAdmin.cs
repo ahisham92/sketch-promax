@@ -124,6 +124,30 @@ internal sealed class SignaturePagesAdmin : Window
         two.SetResourceReference(ForegroundProperty, Brand.K.Text);
         two.Click += (_, _) => _setup.TwoDigitRev = two.IsChecked == true;
         stack.Children.Add(two);
+        // Numbering: learned from one example number, so a new document needs only site, area, type and number.
+        stack.Children.Add(Heading("Numbering", 18));
+        stack.Children.Add(Small("Type the sites, then paste one real document number. New documents are then built from site, area, type and sequence."));
+        var learned = Small("");
+        var exampleText = "";
+        stack.Children.Add(Field("Sites (code = name, comma between)", SitesText(_setup.Sites), v => { _setup.Sites = ParseSites(v); Learn(exampleText); }));
+        var example = _setup.NumberPattern.Length > 0
+            ? ComposeNumber(_setup.NumberPattern, new NumberParts(_setup.Sites.FirstOrDefault()?.Code ?? "", "1", _setup.Types.FirstOrDefault()?.Code ?? "", "1"))
+            : _setup.Docs.FirstOrDefault(d => d.Number.Length > 0)?.Number ?? "";
+        void Learn(string v)
+        {
+            exampleText = v;
+            if (v.Length == 0) { learned.Text = "No numbering set: numbers are typed in full."; learned.SetResourceReference(TextBlock.ForegroundProperty, Brand.K.Muted); return; }
+            var p = LearnPattern(v, _setup.Sites.Select(x => x.Code), _setup.Types.Select(t => t.Code));
+            if (p is null) { learned.Text = "Can't find the type code and a sequence number in it. Check the types below."; learned.SetResourceReference(TextBlock.ForegroundProperty, Brand.K.WarningText); return; }
+            _setup.NumberPattern = p;
+            learned.Text = "Numbers are built as  " + System.Text.RegularExpressions.Regex.Replace(p, @"\{(SITE|AREA|TYPE|SEQ)(?::\d+)?\}", m => m.Groups[1].Value switch
+                { "SITE" => "[site]", "AREA" => "[area]", "TYPE" => "[type]", _ => "[no.]" }) + (p.Contains("{SITE}") ? "" : "   (no site found: type the sites first)");
+            learned.SetResourceReference(TextBlock.ForegroundProperty, p.Contains("{SITE}") || _setup.Sites.Count == 0 ? Brand.K.SuccessText : Brand.K.WarningText);
+        }
+        stack.Children.Add(Field("One real document number", example, Learn));
+        stack.Children.Add(learned);
+        Learn(example);
+
         var typesHead = Brand.Text("TYPES: code, heading at the top, form code at the foot, IDC table", Brand.K.Muted, 10.5, bold: true);
         typesHead.Margin = new Thickness(0, 14, 0, 4);
         stack.Children.Add(typesHead);
