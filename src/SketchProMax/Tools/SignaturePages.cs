@@ -680,7 +680,7 @@ internal static class SignaturePages
 
     public static void SaveSigners(List<Signer> signers) => SafeFile.Write(SignersPath, JsonSerializer.Serialize(signers, Json));
 
-    /// <summary>The person with these initials (dots and spaces ignored: "O.A." is "OA"), or null.</summary>
+    /// <summary>The person with these initials (dots and spaces ignored: "E.N." is "EN"), or null.</summary>
     public static Signer? FindSigner(IEnumerable<Signer> signers, string initials)
     {
         static string Key(string s) => new string((s ?? "").Where(char.IsLetterOrDigit).ToArray()).ToUpperInvariant();

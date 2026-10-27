@@ -135,23 +135,23 @@ internal static class SignaturePagesTests
     private static void People(Action<string, bool, string> check)
     {
         var picture = DocumentTestsPng(30, 10);
-        var signer = Lock("O.A.", "Engineer", picture, "4821");
+        var signer = Lock("E.N.", "Engineer", picture, "4821");
         check("sigpages: the right PIN gives the signature back", Unlock(signer, "4821")?.Bytes.SequenceEqual(picture) == true, "");
         check("sigpages: a wrong PIN gives nothing", Unlock(signer, "4822") is null && Unlock(signer, "") is null, "");
         check("sigpages: the signature isn't kept readable on the PC", !Convert.FromBase64String(signer.Locked).Take(8).SequenceEqual(picture.Take(8)), "");
         check("sigpages: a PIN under 4 characters is refused", PinProblem("123") is not null && PinProblem("1234") is null, "");
-        check("sigpages: people are found by initials, dots ignored", FindSigner([signer], "oa")?.Name == "Engineer" && FindSigner([signer], "O.A") is not null && FindSigner([signer], "Y.E.") is null, "");
+        check("sigpages: people are found by initials, dots ignored", FindSigner([signer], "en")?.Name == "Engineer" && FindSigner([signer], "E.N") is not null && FindSigner([signer], "A.P.") is null, "");
     }
 
     private static void Kept(Action<string, bool, string> check)
     {
-        var setup = new Setup { Project = "Port works", Discipline = "Structures", By = "O.A." };
+        var setup = new Setup { Project = "Port works", Discipline = "Structures", By = "E.N." };
         setup.Docs.Add(new Doc("BOQ", "PRJ1-01", "0", "Bill"));
         SaveSetup("PRJ1", setup);
         var back = LoadSetup("PRJ1");
-        check("sigpages: the project's setup is kept on the PC", back.Project == "Port works" && back.By == "O.A." && back.Docs.Count == 1 && back.Docs[0].Number == "PRJ1-01" && Projects().Contains("PRJ1"), "");
-        SaveSigners([Lock("A.M.", "", DocumentTestsPng(10, 10), "9999")]);
-        check("sigpages: people are kept on the PC", LoadSigners() is [{ Initials: "A.M." } one] && Unlock(one, "9999") is not null, "");
+        check("sigpages: the project's setup is kept on the PC", back.Project == "Port works" && back.By == "E.N." && back.Docs.Count == 1 && back.Docs[0].Number == "PRJ1-01" && Projects().Contains("PRJ1"), "");
+        SaveSigners([Lock("C.K.", "", DocumentTestsPng(10, 10), "9999")]);
+        check("sigpages: people are kept on the PC", LoadSigners() is [{ Initials: "C.K." } one] && Unlock(one, "9999") is not null, "");
     }
 
     /// <summary>A small RGBA PNG.</summary>

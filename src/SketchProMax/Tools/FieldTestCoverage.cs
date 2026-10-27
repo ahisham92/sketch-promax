@@ -231,7 +231,7 @@ internal static class FieldTestCoverage
         new("sigpages.ui", Issue, "The signature pages window", How.Manual, "", "the pages are compared with the office's printed ones, and signing is done by people",
             "Press Signature pages in the Submit panel. Under Page details type the project, the discipline, each type's form code, and Pick the logo. Press Sheets from Revit and tick three sheets: three rows with their current revisions. " +
             "Press Excel template, fill two rows (one Rev 0, one Rev 1) and Import Excel: they are added. The preview shows the page of the row you click. " +
-            "Under Sign type O.A. for By and press Sign: it offers to add the person; draw a signature, choose a PIN twice, Save, then type the PIN: the signature shows in the tile and the preview. A wrong PIN is refused. " +
+            "Under Sign type E.N. for By and press Sign: it offers to add the person; draw a signature, choose a PIN twice, Save, then type the PIN: the signature shows in the tile and the preview. A wrong PIN is refused. " +
             "Leave CHK unsigned. Press Make: a dated folder has BOQ\\Word, BOQ\\PDF and so on, one Word file and one PDF per document; open one of each: they look like the office's pages, with the By signature and room to sign CHK by hand. " +
             "Close and open the window: the list and details are back. Everything reads well in the light and dark themes, and says Sketch ProMax, never Claude."),
         new("subcheck.ui", Issue, "The submission checklist window, shared between two people", How.Manual, "", "two people on a workshared model, the pages, the sketches and the Word file are judged by people",
