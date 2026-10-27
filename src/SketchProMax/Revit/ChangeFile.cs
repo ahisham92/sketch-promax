@@ -256,7 +256,7 @@ internal static class ChangeFile
                 var mine = string.Equals(dir, own, StringComparison.OrdinalIgnoreCase);
                 foreach (var file in Directory.GetFiles(dir, "*.txt"))
                 {
-                    if (M.LeftoverTime(file) is null && !string.Equals(System.IO.Path.GetFileName(file), M.LastSaveName, StringComparison.OrdinalIgnoreCase)) continue;
+                    if (M.LeftoverTime(file) is null && M.ReplayedTime(file) is null && !string.Equals(System.IO.Path.GetFileName(file), M.LastSaveName, StringComparison.OrdinalIgnoreCase)) continue;
                     if (mine) { found.Add(file); continue; }
                     if (central.Length == 0) break;
                     var head = M.Read(ReadLines(file));
@@ -274,8 +274,8 @@ internal static class ChangeFile
     {
         try
         {
-            // The file being written now stays where it is.
-            if (string.Equals(System.IO.Path.GetFileName(file), M.CurrentName, StringComparison.OrdinalIgnoreCase)) return;
+            // The file being written now stays where it is; one replayed already keeps its name (it can be replayed again).
+            if (string.Equals(System.IO.Path.GetFileName(file), M.CurrentName, StringComparison.OrdinalIgnoreCase) || M.ReplayedTime(file) is not null) return;
             var at = M.LeftoverTime(file) ?? File.GetLastWriteTime(file);
             var to = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(file)!, M.ReplayedName(at));
             if (File.Exists(to)) File.Delete(to);

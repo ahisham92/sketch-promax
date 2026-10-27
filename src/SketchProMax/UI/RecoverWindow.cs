@@ -119,6 +119,7 @@ internal sealed class RecoverWindow : System.Windows.Window
         if (string.Equals(name, M.CurrentName, StringComparison.OrdinalIgnoreCase)) return "Since the last save";
         if (string.Equals(name, M.LastSaveName, StringComparison.OrdinalIgnoreCase))
             return "Before the last save" + (parsed.ClearedAt is { } when ? $" ({(parsed.ClearedBy is { Length: > 0 } by ? by.Split(' ')[0] : "saved")} {when:HH:mm})" : "");
+        if (M.ReplayedTime(name) is { } was) return $"Replayed already, from {was:dd MMM HH:mm}";
         return M.LeftoverTime(name) is { } at ? $"Not saved, closed {at:dd MMM HH:mm}" : Path.GetFileNameWithoutExtension(name);
     }
 
