@@ -13,7 +13,7 @@ internal enum CrewMood { Thinking, Reading, Applying, Waiting, Resting, Done, Fa
 /// Something the strip acts out once: a worker sits down, gets a new sheet from the coordinator, or leaves; and the
 /// moments a worker says something short (a bubble): the plan is made, its turn at Revit came, the job finished.
 /// </summary>
-internal enum CrewCue { Arrive, Handover, Leave, Plan, Turn, Finish }
+internal enum CrewCue { Arrive, Handover, Leave, Plan, Turn, Finish, Huddle, Share }
 
 /// <summary>
 /// A worker at work: the job, its mood, which worker has it (<paramref name="Slot"/>: the n-th name, its own desk) and
@@ -58,8 +58,12 @@ internal sealed record CrewNames(string You, string Coordinator, IReadOnlyList<s
     public static CrewNames Defaults { get; } = From(null, null, null, null, null);
 }
 
-/// <summary>Something to act out for job <paramref name="Number"/>, with what its worker says (<paramref name="Say"/>, "" for nothing).</summary>
-internal sealed record CrewEvent(CrewCue Cue, int Number, string Say = "");
+/// <summary>
+/// Something to act out for job <paramref name="Number"/>, with what its worker says (<paramref name="Say"/>, "" for
+/// nothing). A huddle is the coordinator's (Number 0): several jobs handed out at once. A share is a call from the worker
+/// at desk <paramref name="From"/> (whose job finished) passing what it found to job <paramref name="Number"/>.
+/// </summary>
+internal sealed record CrewEvent(CrewCue Cue, int Number, string Say = "", int From = -1);
 
 /// <summary>
 /// A job's plan, as its Claude Code keeps it: the steps it wrote with TodoWrite (the whole list each time) or with
@@ -154,6 +158,7 @@ internal sealed class CrewPlan
     private readonly Dictionary<int, DateTime> _leaving = new();
     private readonly Dictionary<int, int> _slots = new();
     private readonly Dictionary<int, int> _planned = new();
+    private readonly Dictionary<int, int> _heard = new();
     private List<CrewSeat> _seats = [];
     private bool _started;
 
@@ -181,6 +186,7 @@ internal sealed class CrewPlan
         _started = true;
         var seated = _seats.ToDictionary(s => s.Number);
         var before = _seats.ToDictionary(s => s.Number, s => s.Mood);
+        var all = jobs.ToDictionary(j => j.Number);
         var next = new List<(ChatJob Job, CrewMood Mood)>();
         var unassigned = 0;
         foreach (var job in jobs.OrderBy(j => j.Number))
@@ -224,6 +230,12 @@ internal sealed class CrewPlan
                 else if (steps > 0 && _planned.TryGetValue(job.Number, out var known) && known == 0)
                     events.Add(new CrewEvent(CrewCue.Plan, job.Number, Say(CrewCue.Plan, job)));
             }
+            // It was given another job's report: a call between the two desks.
+            var heardBefore = _heard.TryGetValue(job.Number, out var h) ? h : 0;
+            if (!quiet && job.Heard.Count > heardBefore
+                && all.TryGetValue(job.Heard[job.Heard.Count - 1], out var from) && from.Worker >= 0 && from.Worker < workers)
+                events.Add(new CrewEvent(CrewCue.Share, job.Number, "Thanks for the notes!", from.Worker));
+            _heard[job.Number] = job.Heard.Count;
             _planned[job.Number] = steps;
             _asked[job.Number] = asked;
             next.Add((job, m));
@@ -257,6 +269,8 @@ internal sealed class CrewPlan
             _slots[job.Number] = slot;
         }
         Unassigned = unassigned;
+        // Several jobs handed out at once: the coordinator splits the work in a huddle.
+        if (events.Count(e => e.Cue == CrewCue.Arrive) >= 2) events.Insert(0, new CrewEvent(CrewCue.Huddle, 0, "Team, let's split this!"));
         var ahead = next.ToDictionary(n => n.Job.Number, n => n.Job.Ahead);
         var placed = next.Select(n =>
         {
@@ -278,6 +292,7 @@ internal sealed class CrewPlan
         _asked.Remove(number);
         _slots.Remove(number);
         _planned.Remove(number);
+        _heard.Remove(number);
     }
 
     /// <summary>Starts over: the next update seats who is working without acting anything out.</summary>
@@ -287,6 +302,7 @@ internal sealed class CrewPlan
         _leaving.Clear();
         _slots.Clear();
         _planned.Clear();
+        _heard.Clear();
         _seats = [];
         Unassigned = 0;
         _started = false;

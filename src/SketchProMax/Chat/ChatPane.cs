@@ -2395,6 +2395,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
                     JobToolStarted(tool.Id, item.Name, summary);
                 }
                 if (turn is not null) turn.SawTool = true;
+                CrewCoordinatorDoes(row.Item.Name);
                 if (tool.InputJson.Length > 0)
                 {
                     row.Item.Input = Pretty(tool.InputJson);
@@ -2598,6 +2599,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         else if (time is not null) Note(time);
         MarkRunningTools("stopped");
         _turn = null;
+        CrewCoordinatorDoes(null);
         // Idle now: the streaming keys and tool ids of the turn are no longer needed (the drawn items stay in _views/_rows).
         if (_dirty.Count > 0) RenderDirty();
         _texts.Clear();
@@ -2694,6 +2696,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         _control?.Apply(JobAction.Stop);
         var left = _control is not null ? EndJob("stopped", null) : new List<(string Id, string Text)>();
         _turn = null;
+        CrewCoordinatorDoes(null);
         _engine?.Kill();
         _engine = null;
         EndRuns("A new chat was started, so this job stopped. Open this chat again and send it a message to carry on.");
@@ -2924,6 +2927,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         finally
         {
             _turn = null;
+            CrewCoordinatorDoes(null);
             Save();
             _handedOver = true;
             ChatHandover.Leave(_conv, _input.Text, _pending.Select(p => p.Path));

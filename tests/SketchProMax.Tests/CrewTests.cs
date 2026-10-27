@@ -164,5 +164,36 @@ internal static class CrewTests
         check("crew: a quick job says so", CrewPlan.Say(CrewCue.Finish, big) == "Quick job, done!", CrewPlan.Say(CrewCue.Finish, big));
         big.State = JobBoard.Failed;
         check("crew: a failed job hit a snag", CrewPlan.Say(CrewCue.Finish, big) == "Hit a snag", "");
+
+        // The team: a job starting hears who else works on what, and what the finished jobs found, each report once.
+        var levels = Job(1, JobBoard.Done);
+        levels.Summary = "Levels: L1 0 mm, L2 3500 mm, L3 7000 mm.";
+        var sheets = Job(2, JobBoard.Running);
+        sheets.Task = "Sheets for levels 1-3";
+        var tags = Job(3, JobBoard.Running);
+        var team = JobBoard.Team(tags, [levels, sheets, tags], out var shared);
+        check("team: a new job hears the others' parts and the finished reports", team.Contains("Job 2 \"Job 2\" works alongside you on: Sheets for levels 1-3")
+            && team.Contains("L2 3500 mm") && shared.SequenceEqual([1]), team);
+        tags.Heard.AddRange(shared);
+        tags.HasSession = true;
+        check("team: a report reaches a job once", JobBoard.Team(tags, [levels, sheets, tags], out var none) == "" && none.Count == 0, "");
+        var teamBoard = new JobBoard([]);
+        teamBoard.Start("Read grids", "Read the grids", t0, force: true, out _);
+        teamBoard.Start("Tag walls", "Tag the walls", t0, force: true, out _);
+        var starting = teamBoard.ToStart(1, t0);
+        check("team: the board adds the team to a starting job's message", starting.Count == 1 && starting[0].Message.Text.Contains("From the team") && starting[0].Message.Text.Contains("Tag the walls"), starting.Count > 0 ? starting[0].Message.Text : "");
+        check("team: the job list says how many workers are free", teamBoard.Describe(3).Contains("1 worker(s) free now"), teamBoard.Describe(3));
+
+        // In the strip: several jobs handed out at once are a huddle; a report passed on is a call between desks.
+        var crew = new CrewPlan();
+        crew.Update([], t0);
+        e = crew.Update([Job(1, JobBoard.Running), Job(2, JobBoard.Running)], t0.AddSeconds(1), null, 3);
+        check("crew: two jobs at once start with a huddle", Cues(e) == "Huddle:0,Arrive:1,Arrive:2", Cues(e));
+        var done1 = Job(1, JobBoard.Done);
+        done1.Worker = 0;
+        var heard = Job(3, JobBoard.Running);
+        heard.Heard.Add(1);
+        e = crew.Update([done1, Job(2, JobBoard.Running), heard], t0.AddSeconds(2), null, 3);
+        check("crew: a job given another's report gets a call from that desk", e.Any(x => x.Cue == CrewCue.Share && x.Number == 3 && x.From == 0), Cues(e));
     }
 }

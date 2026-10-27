@@ -100,6 +100,12 @@ internal sealed partial class ChatPane
         ToggleChoice(anchor, new Choice($"{name}'s jobs", rows));
     }
 
+    /// <summary>The main chat runs <paramref name="tool"/> (null: its turn ended): the coordinator in the strip shows it.</summary>
+    private void CrewCoordinatorDoes(string? tool)
+    {
+        if (_crew is not null) _crew.CoordinatorDoes(CrewShown ? tool : null);
+    }
+
     /// <summary>You sent the coordinator a message: a sheet to the coordinator, who nods.</summary>
     private void CrewHeard()
     {
