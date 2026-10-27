@@ -22,6 +22,8 @@ internal static class SignaturePagesTests
             Files(dir, check);
             People(check);
             Kept(check);
+            Idc(dir, check);
+            Admin(check);
         }
         finally
         {
@@ -86,11 +88,14 @@ internal static class SignaturePagesTests
             new("BOQ", "PRJ1-FD-SITE-05-BOQ-ST-01", "0", "the same number again"),
             new("SPC", "PRJ1-FD-SITE-00-SPC-ST-01", "1", "Final Design Structures Specifications"),
         };
-        var plan = Plan(docs, dir, true);
+        var plan = Plan(docs, dir, new Setup());
         check("sigpages: each document has its Word file and PDF in TYPE\\Word and TYPE\\PDF", plan.Count == 3
             && plan[0].Word == Path.Combine(dir, "BOQ", "Word", "PRJ1-FD-SITE-05-BOQ-ST-01 REV 00 signature page.docx")
             && plan[0].Pdf == Path.Combine(dir, "BOQ", "PDF", "PRJ1-FD-SITE-05-BOQ-ST-01 REV 00 signature page.pdf")
             && plan[1].Word.EndsWith("signature page (2).docx") && plan[2].Pdf.Contains(Path.Combine("SPC", "PDF")), plan[1].Word);
+        check("sigpages: only specifications get an IDC table, next to their signature page", plan[0].IdcPdf == "" && plan[0].IdcWord == ""
+            && plan[2].IdcPdf == Path.Combine(dir, "SPC", "PDF", "PRJ1-FD-SITE-00-SPC-ST-01 REV 01 IDC table.pdf")
+            && plan[2].IdcWord == Path.Combine(dir, "SPC", "Word", "PRJ1-FD-SITE-00-SPC-ST-01 REV 01 IDC table.docx"), plan[2].IdcPdf);
         check("sigpages: file names are safe for Windows", FileName(new Doc("DWG", "A/B:C*01", "1", ""), true) == "A_B_C_01 REV 01 signature page", FileName(new Doc("DWG", "A/B:C*01", "1", ""), true));
 
         var setup = new Setup
@@ -103,7 +108,7 @@ internal static class SignaturePagesTests
         var common = new Common(setup, new DateTime(2026, 5, 14), sign, sign, null, null);
         var outDir = Path.Combine(dir, "out");
         var written = Make(docs, outDir, common);
-        check("sigpages: Make writes a Word file and a PDF per document", written.Count == 6 && written.All(File.Exists), string.Join(", ", written.Select(Path.GetFileName)));
+        check("sigpages: Make writes a Word file and a PDF per document, plus the IDC table for specifications", written.Count == 8 && written.All(File.Exists), string.Join(", ", written.Select(Path.GetFileName)));
 
         using (var pdf = PdfDocument.Open(plan[0].Pdf.Replace(dir, outDir)))
         {
@@ -152,6 +157,72 @@ internal static class SignaturePagesTests
         check("sigpages: the project's setup is kept on the PC", back.Project == "Port works" && back.By == "E.N." && back.Docs.Count == 1 && back.Docs[0].Number == "PRJ1-01" && Projects().Contains("PRJ1"), "");
         SaveSigners([Lock("C.K.", "", DocumentTestsPng(10, 10), "9999")]);
         check("sigpages: people are kept on the PC", LoadSigners() is [{ Initials: "C.K." } one] && Unlock(one, "9999") is not null, "");
+    }
+
+    private static void Idc(string dir, Action<string, bool, string> check)
+    {
+        var cells = new List<(int, int, string)>
+        {
+            (1, 1, "Ref"), (2, 1, "Division - section title"), (3, 1, "Lead"), (4, 1, "IDC"),
+            (1, 2, "032000"), (2, 2, "CONCRETE - CONCRETE REINFORCING"), (3, 2, "ST"), (4, 2, "GE"),
+            (1, 3, "355933"), (2, 3, "WATERWAYS AND MARINE WORKS - BOLLARDS"), (3, 3, "ST"),
+            (2, 4, "a title without a reference"),
+        };
+        var sections = SectionsFromCells(cells);
+        check("sigpages: spec sections read from Excel", sections.Count == 3 && sections[0] == new Section("032000", "CONCRETE - CONCRETE REINFORCING", "ST", "GE")
+            && sections[1].Idc == "" && sections[2].Ref == "", string.Join(" | ", sections));
+        var template = Path.Combine(dir, "sections.xlsx");
+        WriteTemplate(template);
+        check("sigpages: the Excel template has a spec sections sheet that reads back", ReadSections(template) is { Count: > 0 } back && back[0].Lead.Length > 0, "");
+
+        var setup = new Setup { IdcForm = "FORM-03 (F1A) REV 6" };
+        setup.Sections.AddRange(sections);
+        var doc = new Doc("SPC", "PRJ1-FD-SITE-00-SPC-ST-01", "1", "Specifications");
+        var common = new Common(setup, new DateTime(2026, 5, 14), null, null, null, null);
+        var pdfPath = Path.Combine(dir, "idc.pdf");
+        OfficeDocs.WriteFile(pdfPath, s => WriteIdcPdf(s, doc, common));
+        using (var pdf = PdfDocument.Open(pdfPath))
+        {
+            var text = string.Join(" ", pdf.GetPages().SelectMany(p => p.GetWords()).Select(w => w.Text));
+            check("sigpages: the IDC table PDF has the number, the sections, the departments and the form code", pdf.NumberOfPages == 1
+                && text.Contains("PRJ1-FD-SITE-00-SPC-ST-01 REV 01") && text.Contains("contents") && text.Contains("032000") && text.Contains("BOLLARDS")
+                && text.Contains("IDC department") && text.Contains("DSS") && text.Contains("S&B") && text.Contains("FORM-03") && text.Contains("page 1/1"), text);
+        }
+        var marks = IdcLayout(doc, common);
+        check("sigpages: the IDC table stays on the page", marks.All(m => m.Y < PageH - 20 && m.X + m.W <= PageW), "");
+        setup.Sections.AddRange(Enumerable.Range(0, 60).Select(i => new Section($"{i:000000}", "SECTION", "ST", "GE")));
+        check("sigpages: many sections still fit one page", IdcLayout(doc, common).All(m => m.Y < 760 || m.Text.Contains("REV") || m.Text.Contains("page") || m.Text.Contains("FORM")), "");
+
+        var wordPath = Path.Combine(dir, "idc.docx");
+        OfficeDocs.WriteFile(wordPath, s => WriteIdcWord(s, doc, common));
+        using var zip = ZipFile.OpenRead(wordPath);
+        var xml = new StreamReader(zip.GetEntry("word/document.xml")!.Open()).ReadToEnd();
+        System.Xml.Linq.XDocument.Parse(xml);
+        check("sigpages: the IDC table Word file has the table, the departments and the number", xml.Contains("032000") && xml.Contains("Design discipline") && xml.Contains("IDC department")
+            && xml.Contains("S&amp;B") && xml.Contains("PRJ1-FD-SITE-00-SPC-ST-01 REV 01") && xml.Contains("w:vMerge"), "");
+    }
+
+    private static void Admin(Action<string, bool, string> check)
+    {
+        check("sigpages: no admin until one is set", !HasAdmin() && !IsAdmin("anything"), "");
+        check("sigpages: an admin password under 6 characters is refused", AdminPasswordProblem("12345") is not null && AdminPasswordProblem("123456") is null, "");
+        var code = SetAdmin("admin-pass");
+        check("sigpages: setting the admin password gives a recovery code", HasAdmin() && System.Text.RegularExpressions.Regex.IsMatch(code, "^[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$"), code);
+        check("sigpages: only the admin password opens the admin panel", IsAdmin("admin-pass") && !IsAdmin("admin-pas") && !IsAdmin(""), "");
+        check("sigpages: the recovery code works typed any way, and nothing else does", IsRecoveryCode(code) && IsRecoveryCode(code.ToLowerInvariant().Replace("-", " ")) && !IsRecoveryCode("AAAA-BBBB-CCCC"), "");
+        var next = SetAdmin("new-password");
+        check("sigpages: a new admin password replaces the old one and the old recovery code", IsAdmin("new-password") && !IsAdmin("admin-pass") && !IsRecoveryCode(code) && IsRecoveryCode(next), "");
+        check("sigpages: the admin file holds no password or code", !File.ReadAllText(Path.Combine(Root, "admin.json")).Contains("new-password") && !File.ReadAllText(Path.Combine(Root, "admin.json")).Contains(next), "");
+
+        var person = NewPerson(" G.L. ", "Group leader");
+        check("sigpages: a person the admin adds isn't set up until they choose a PIN", !person.IsSetUp && person.Initials == "G.L." && Unlock(person, "1234") is null, "");
+        var picture = DocumentTestsPng(12, 6);
+        SetUp(person, picture, "2468");
+        check("sigpages: the person sets their own signature and PIN", person.IsSetUp && Unlock(person, "2468")?.Bytes.SequenceEqual(picture) == true, "");
+        check("sigpages: changing the PIN needs the old one", !ChangePin(person, "1111", "3579") && Unlock(person, "2468") is not null, "");
+        check("sigpages: the PIN changes and the signature stays", ChangePin(person, "2468", "3579") && Unlock(person, "3579")?.Bytes.SequenceEqual(picture) == true && Unlock(person, "2468") is null, "");
+        ResetPin(person);
+        check("sigpages: a reset (lost PIN) removes the signature; the person sets it up again", !person.IsSetUp && Unlock(person, "3579") is null && person.Initials == "G.L.", "");
     }
 
     /// <summary>A small RGBA PNG.</summary>

@@ -29,8 +29,9 @@ namespace SketchProMax.UI;
 /// Signature pages (Submit panel): the quality cover page of each document of a submission, one Word file and one PDF
 /// each, in the office's layout (Tools/SignaturePages). Three steps, drawn as a strip at the top: 1 Documents (sheets
 /// picked in Revit, an Excel list, or rows typed in), 2 Sign (each person puts on their own signature with their PIN;
-/// a role left unsigned stays blank to sign by hand), 3 Make. A preview shows the page of the row in focus. What a page
-/// says about the project (name, discipline, form codes, logo) is set once per project under Page details, on this PC.
+/// a role left unsigned stays blank to sign by hand), 3 Make. A preview shows the page of the row in focus (and a
+/// specification's IDC table). What a page says about the project (name, discipline, form codes, logo) and who may sign
+/// are set by the admin only (SignaturePagesAdmin), on this PC.
 /// </summary>
 internal sealed class SignaturePagesWindow : Window
 {
@@ -70,10 +71,12 @@ internal sealed class SignaturePagesWindow : Window
     private readonly DatePicker _date = new() { SelectedDate = DateTime.Today, Width = 130 };
     private readonly TextBox _description = Box(180);
     private readonly ComboBox _projectBox = new() { IsEditable = true, Width = 170, MinHeight = 28, VerticalContentAlignment = VerticalAlignment.Center };
-    private readonly TextBox _projectName = Box(0), _discipline = Box(0), _folder = Box(0);
-    private readonly CheckBox _twoDigits = new() { Content = "REV 01 after the number (two digits)", Margin = new Thickness(0, 8, 0, 0) };
-    private readonly StackPanel _types = new();
-    private readonly Image _logo = new() { Height = 30, MaxWidth = 120, Stretch = Stretch.Uniform, Margin = new Thickness(8, 0, 8, 0) };
+    private readonly TextBox _folder = Box(0);
+    private readonly Border _sectionsLine = new() { BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(6), Padding = new Thickness(10, 8, 10, 8), Margin = new Thickness(0, 8, 0, 0) };
+    private readonly TextBlock _sectionsText = Brand.Text("", Brand.K.Text, 12.5);
+    private readonly RadioButton _showPage = new() { Content = "Signature page", IsChecked = true, Margin = new Thickness(0, 0, 12, 0) };
+    private readonly RadioButton _showIdc = new() { Content = "IDC table" };
+    private readonly StackPanel _previewPick = new() { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 8) };
     private readonly Canvas _preview = new() { Width = PageW * Scale, Height = PageH * Scale, ClipToBounds = true };
     private readonly TextBlock _status = Brand.Text("", Brand.K.Muted, 12);
     private readonly Button _make = RichUi.Button(RichUi.Icon.Save, "Make", Brand.Weight.Primary);
@@ -197,6 +200,7 @@ internal sealed class SignaturePagesWindow : Window
         _empty.Margin = new Thickness(4, 10, 0, 10);
         left.Children.Add(_empty);
         left.Children.Add(_list);
+        left.Children.Add(SectionsLine());
 
         left.Children.Add(Section("2", "Sign"));
         var roles = new Grid { Margin = new Thickness(0, 6, 0, 0) };
@@ -209,12 +213,6 @@ internal sealed class SignaturePagesWindow : Window
             roles.Children.Add(tile);
         }
         left.Children.Add(roles);
-        var people = new TextBlock { Margin = new Thickness(2, 6, 0, 0) };
-        var link = new System.Windows.Documents.Hyperlink(new System.Windows.Documents.Run("People and their signatures"));
-        link.Click += (_, _) => ManagePeople();
-        people.Inlines.Add(link);
-        people.SetResourceReference(TextBlock.ForegroundProperty, Brand.K.Link);
-        left.Children.Add(people);
         var when = new WrapPanel { Margin = new Thickness(0, 10, 0, 0) };
         when.Children.Add(Label("Date"));
         when.Children.Add(_date);
@@ -222,11 +220,9 @@ internal sealed class SignaturePagesWindow : Window
         when.Children.Add(_description);
         AutomationProperties.SetName(_date, "Date on the pages");
         AutomationProperties.SetName(_description, "Description in the revision table");
+        _description.TextChanged += (_, _) => { if (!_loading) { Gather(); Preview(); } };
         left.Children.Add(when);
 
-        var details = new Expander { Header = "Page details (once per project)", Margin = new Thickness(0, 18, 0, 0), Content = Details() };
-        details.SetResourceReference(ForegroundProperty, Brand.K.Text);
-        left.Children.Add(details);
 
         var leftScroll = new ScrollViewer { Content = left, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Focusable = false };
 
@@ -238,6 +234,13 @@ internal sealed class SignaturePagesWindow : Window
         var right = new StackPanel { Margin = new Thickness(6, 10, 18, 12) };
         right.Children.Add(Brand.Text("PREVIEW", Brand.K.Muted, 10.5, bold: true));
         right.Children.Add(new Border { Height = 8 });
+        foreach (var r in new[] { _showPage, _showIdc })
+        {
+            r.SetResourceReference(ForegroundProperty, Brand.K.Text);
+            r.Checked += (_, _) => Preview();
+            _previewPick.Children.Add(r);
+        }
+        right.Children.Add(_previewPick);
         right.Children.Add(paper);
 
         var body = new Grid();
@@ -266,7 +269,13 @@ internal sealed class SignaturePagesWindow : Window
         _status.TextWrapping = TextWrapping.Wrap;
         _status.VerticalAlignment = VerticalAlignment.Center;
         AutomationProperties.SetLiveSetting(_status, AutomationLiveSetting.Polite);
+        var admin = RichUi.Button(RichUi.Icon.Settings, "Admin");
+        AutomationProperties.SetHelpText(admin, "Page details and the people who sign. Needs the admin password.");
+        admin.ToolTip = AutomationProperties.GetHelpText(admin);
+        admin.Margin = new Thickness(0, 0, 14, 0);
+        admin.Click += (_, _) => OpenAdmin();
         var where = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+        where.Children.Add(admin);
         where.Children.Add(Label("Project"));
         where.Children.Add(_projectBox);
         where.Children.Add(Label("Save in", 14));
@@ -340,6 +349,7 @@ internal sealed class SignaturePagesWindow : Window
         _make.Content = n == 1 ? "Make 1 page" : $"Make {n} pages";
         _make.IsEnabled = n > 0;
         _empty.Visibility = _rows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        ShowSections();
     }
 
     private static FrameworkElement Section(string number, string title)
@@ -440,69 +450,62 @@ internal sealed class SignaturePagesWindow : Window
 
     private static void Unsign(Role role) { role.Signature = null; role.SignedAs = null; }
 
-    private FrameworkElement Details()
+    /// <summary>Shown when a listed document has the IDC table (specifications): how many sections it lists, and Edit.</summary>
+    private FrameworkElement SectionsLine()
     {
-        var stack = new StackPanel { Margin = new Thickness(0, 8, 0, 0) };
-        void Field(string label, FrameworkElement box, string name)
+        _sectionsLine.SetResourceReference(Border.BorderBrushProperty, Brand.K.Border);
+        _sectionsLine.SetResourceReference(Border.BackgroundProperty, Brand.K.Surface);
+        var edit = RichUi.Button(RichUi.Icon.Edit, "Spec sections");
+        AutomationProperties.SetHelpText(edit, "The sections listed in the specification's IDC table: type them or import them from Excel.");
+        edit.ToolTip = AutomationProperties.GetHelpText(edit);
+        edit.Click += (_, _) =>
         {
-            var t = Brand.Text(label, Brand.K.Muted, 12);
-            t.Margin = new Thickness(0, 8, 0, 3);
-            stack.Children.Add(t);
-            AutomationProperties.SetName(box, name);
-            stack.Children.Add(box);
-        }
-        _projectName.TextWrapping = TextWrapping.Wrap;
-        _projectName.AcceptsReturn = false;
-        Field("Project", _projectName, "Project name on the pages");
-        Field("Discipline", _discipline, "Discipline on the pages");
-        var logoRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 8, 0, 0) };
-        logoRow.Children.Add(Label("Logo"));
-        logoRow.Children.Add(_logo);
-        var pick = RichUi.Button(RichUi.Icon.Picture, "Pick");
-        pick.Click += (_, _) => PickLogo();
-        var drop = new Button { Content = "Remove", Margin = new Thickness(8, 0, 0, 0), Padding = new Thickness(8, 2, 8, 2) };
-        drop.SetResourceReference(StyleProperty, "SpmSecondaryButton");
-        drop.Click += (_, _) => { SetLogo(_project, ""); ShowLogo(); Preview(); };
-        logoRow.Children.Add(pick);
-        logoRow.Children.Add(drop);
-        stack.Children.Add(logoRow);
-        stack.Children.Add(_twoDigits);
-        _twoDigits.Click += (_, _) => { _setup.TwoDigitRev = _twoDigits.IsChecked == true; Preview(); };
-        var t2 = Brand.Text("TYPES: code, heading at the top, form code at the foot", Brand.K.Muted, 10.5, bold: true);
-        t2.Margin = new Thickness(0, 12, 0, 4);
-        stack.Children.Add(t2);
-        stack.Children.Add(_types);
-        var addType = new Button { Content = "Add a type", HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(0, 4, 0, 0), Padding = new Thickness(8, 2, 8, 2) };
-        addType.SetResourceReference(StyleProperty, "SpmSecondaryButton");
-        addType.Click += (_, _) => { var t = new TypeDef(); _setup.Types.Add(t); AddType(t); };
-        stack.Children.Add(addType);
-        foreach (var box in new[] { _projectName, _discipline, _description })
-            box.TextChanged += (_, _) => { if (!_loading) { Gather(); Preview(); } };
-        return stack;
+            if (!SectionsDialog.Edit(this, _setup)) return;
+            Keep();
+            ShowSections();
+            Preview();
+        };
+        DockPanel.SetDock(edit, Dock.Right);
+        _sectionsText.VerticalAlignment = VerticalAlignment.Center;
+        _sectionsText.TextWrapping = TextWrapping.Wrap;
+        var line = new DockPanel();
+        line.Children.Add(edit);
+        line.Children.Add(_sectionsText);
+        _sectionsLine.Child = line;
+        _sectionsLine.Visibility = Visibility.Collapsed;
+        return _sectionsLine;
     }
 
-    private void AddType(TypeDef t)
+    private bool HasIdc(Doc d) => TypeOf(_setup, d.Type).Idc;
+
+    private void ShowSections()
     {
-        var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 2, 0, 2) };
-        var code = Box(64);
-        var heading = Box(230);
-        var form = Box(170);
-        code.Text = t.Code;
-        heading.Text = t.Heading;
-        form.Text = t.Form;
-        AutomationProperties.SetName(code, "Type code");
-        AutomationProperties.SetName(heading, "Heading at the top of the page");
-        AutomationProperties.SetName(form, "Form code at the foot of the page");
-        code.TextChanged += (_, _) => { t.Code = code.Text.Trim().ToUpperInvariant(); RefreshTypeLists(); Preview(); };
-        heading.TextChanged += (_, _) => { t.Heading = heading.Text.Trim(); Preview(); };
-        form.TextChanged += (_, _) => { t.Form = form.Text.Trim(); Preview(); };
-        foreach (var b in new[] { code, heading, form }) { b.Margin = new Thickness(0, 0, 6, 0); row.Children.Add(b); }
-        var remove = new Button { Content = "", FontFamily = new FontFamily("Segoe Fluent Icons, Segoe MDL2 Assets"), Width = 28, Background = Brushes.Transparent, BorderThickness = new Thickness(0) };
-        remove.SetResourceReference(ForegroundProperty, Brand.K.Muted);
-        AutomationProperties.SetName(remove, "Remove this type");
-        remove.Click += (_, _) => { _setup.Types.Remove(t); _types.Children.Remove(row); RefreshTypeLists(); Preview(); };
-        row.Children.Add(remove);
-        _types.Children.Add(row);
+        var idc = Included().Where(HasIdc).ToList();
+        _sectionsLine.Visibility = idc.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        var n = _setup.Sections.Count;
+        _sectionsText.Text = (idc.Count == 1 ? "1 specification gets an IDC table" : $"{idc.Count} specifications get an IDC table") +
+                             (n == 0 ? ": no sections listed yet." : $" listing {n} section{(n == 1 ? "" : "s")}.");
+        _sectionsText.SetResourceReference(TextBlock.ForegroundProperty, n == 0 ? Brand.K.WarningText : Brand.K.Text);
+    }
+
+    private void OpenAdmin()
+    {
+        Gather();
+        if (!SignaturePagesAdmin.Open(this, _project, _setup)) return;
+        Keep();
+        _people = LoadSigners();
+        foreach (var r in new[] { _by, _chk, _app })
+        {
+            var keep = r.Who.Text;
+            r.Who.Items.Clear();
+            foreach (var p in _people) r.Who.Items.Add(p.Initials);
+            r.Who.Text = keep;
+            if (r.SignedAs is { } was && FindSigner(_people, keep)?.Salt != was.Salt) Unsign(r);
+            ShowRole(r);
+        }
+        RefreshTypeLists();
+        ShowSections();
+        Preview();
     }
 
     // ---- Filling and keeping ------------------------------------------------------------------------------------------
@@ -515,13 +518,9 @@ internal sealed class SignaturePagesWindow : Window
             _projectBox.Items.Clear();
             foreach (var p in Projects().Append(_project).Distinct(StringComparer.OrdinalIgnoreCase)) _projectBox.Items.Add(p);
             _projectBox.Text = _project;
-            _projectName.Text = _setup.Project.Length > 0 ? _setup.Project : _modelProjectName;
-            _discipline.Text = _setup.Discipline;
+            if (_setup.Project.Length == 0) _setup.Project = _modelProjectName;
             _description.Text = _setup.Description;
-            _twoDigits.IsChecked = _setup.TwoDigitRev;
             _folder.Text = _setup.Folder.Length > 0 ? _setup.Folder : DefaultFolder();
-            _types.Children.Clear();
-            foreach (var t in _setup.Types) AddType(t);
             foreach (var r in _rows.ToList()) Remove(r);
             foreach (var d in _setup.Docs) AddRow(d);
             foreach (var (role, initials) in new[] { (_by, _setup.By), (_chk, _setup.Checked), (_app, _setup.Approved) })
@@ -532,9 +531,9 @@ internal sealed class SignaturePagesWindow : Window
                 role.Who.Text = initials;
                 ShowRole(role);
             }
-            ShowLogo();
         }
         finally { _loading = false; }
+        ShowSections();
         Gather();
         Preview();
     }
@@ -544,13 +543,10 @@ internal sealed class SignaturePagesWindow : Window
     /// <summary>Reads the window into the setup.</summary>
     private void Gather()
     {
-        _setup.Project = _projectName.Text.Trim();
-        _setup.Discipline = _discipline.Text.Trim();
         _setup.Description = _description.Text.Trim();
         _setup.By = _by.Who.Text.Trim();
         _setup.Checked = _chk.Who.Text.Trim();
         _setup.Approved = _app.Who.Text.Trim();
-        _setup.TwoDigitRev = _twoDigits.IsChecked == true;
         _setup.Folder = _folder.Text.Trim() == DefaultFolder() ? "" : _folder.Text.Trim();
         _setup.Docs = _rows.Select(Read).Where(d => d.Number.Length > 0 || d.Title.Length > 0).ToList();
     }
@@ -569,13 +565,6 @@ internal sealed class SignaturePagesWindow : Window
         _project = name;
         _setup = LoadSetup(name);
         Fill();
-    }
-
-    private void ShowLogo()
-    {
-        var logo = Logo(_project);
-        _logo.Source = logo is null ? null : ToBitmap(logo.Bytes);
-        _logo.Visibility = logo is null ? Visibility.Collapsed : Visibility.Visible;
     }
 
     // ---- The list -----------------------------------------------------------------------------------------------------
@@ -705,49 +694,25 @@ internal sealed class SignaturePagesWindow : Window
     {
         var initials = role.Who.Text.Trim();
         if (initials.Length == 0) { Say($"Type the {role.Label} initials first."); role.Who.Focus(); return; }
+        _people = LoadSigners();
         var person = FindSigner(_people, initials);
-        if (person is null)
+        if (person is null) { Say($"{initials} isn't on this PC. Ask the admin to add them, or leave {role.Label} to sign by hand.", Brand.K.WarningText); return; }
+        OfficeDocs.Picture? signature;
+        if (!person.IsSetUp)
         {
-            if (MessageBox.Show(this, $"{initials} has no signature on this PC yet. Add it now? They choose their own PIN.", "Sketch ProMax", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
-            if (PersonDialog.Add(this, initials) is not { } added) return;
-            _people = LoadSigners();
-            person = added;
-            foreach (var r in new[] { _by, _chk, _app }) { var keep = r.Who.Text; r.Who.Items.Clear(); foreach (var p in _people) r.Who.Items.Add(p.Initials); r.Who.Text = keep; }
+            // Added by the admin (or their PIN was reset): they draw their signature and choose their PIN now.
+            if (SetUpDialog.Run(this, person) is not { } picture) return;
+            signature = picture;
         }
-        if (PinDialog.Ask(this, person) is not { } signature) return;
+        else if (PinDialog.Ask(this, person) is not { } typed) return;
+        else signature = typed;
         role.Signature = signature;
-        role.SignedAs = person;
+        role.SignedAs = FindSigner(LoadSigners(), initials) ?? person;
         ShowRole(role);
         Preview();
     }
 
-    private void ManagePeople()
-    {
-        PeopleDialog.Show(this);
-        _people = LoadSigners();
-        foreach (var r in new[] { _by, _chk, _app })
-        {
-            var keep = r.Who.Text;
-            r.Who.Items.Clear();
-            foreach (var p in _people) r.Who.Items.Add(p.Initials);
-            r.Who.Text = keep;
-            if (r.SignedAs is { } was && FindSigner(_people, keep)?.Salt != was.Salt) Unsign(r);
-            ShowRole(r);
-        }
-        Preview();
-    }
-
-    // ---- Logo and folder --------------------------------------------------------------------------------------------
-
-    private void PickLogo()
-    {
-        var dialog = new Microsoft.Win32.OpenFileDialog { Title = "The logo for the foot of the pages", Filter = "Pictures (*.png;*.jpg;*.jpeg)|*.png;*.jpg;*.jpeg" };
-        if (dialog.ShowDialog(this) != true) return;
-        try { SetLogo(_project, dialog.FileName); }
-        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException) { Say(ex.Message); return; }
-        ShowLogo();
-        Preview();
-    }
+    // ---- Folder --------------------------------------------------------------------------------------------
 
     private void PickFolder()
     {
@@ -801,8 +766,10 @@ internal sealed class SignaturePagesWindow : Window
     {
         _preview.Children.Clear();
         var doc = _focus is { } f ? Read(f) : new Doc("BOQ", "PRJ1-FD-SITE-01-BOQ-ST-01", "0", "Document title");
+        var idc = HasIdc(doc);
+        _previewPick.Visibility = idc ? Visibility.Visible : Visibility.Collapsed;
         var ink = new SolidColorBrush(Color.FromRgb(0x11, 0x11, 0x11));
-        foreach (var m in Layout(doc, CommonNow()))
+        foreach (var m in idc && _showIdc.IsChecked == true ? IdcLayout(doc, CommonNow()) : Layout(doc, CommonNow()))
         {
             switch (m.Kind)
             {
@@ -918,7 +885,7 @@ internal sealed class SignaturePagesWindow : Window
     }
 
     /// <summary>Asks the person for their PIN; returns their signature when it is theirs.</summary>
-    private sealed class PinDialog : Window
+    internal sealed class PinDialog : Window
     {
         private OfficeDocs.Picture? _signature;
 
@@ -973,33 +940,31 @@ internal sealed class SignaturePagesWindow : Window
         }
     }
 
-    /// <summary>Adds a person: initials, name, their signature (a picture or drawn here) and a PIN they choose.</summary>
-    private sealed class PersonDialog : Window
+    /// <summary>
+    /// A person the admin added (or whose PIN was reset) sets up: draws their signature (or uses a picture) and chooses
+    /// their PIN, typed twice. Saved locked with that PIN; returns the signature.
+    /// </summary>
+    internal sealed class SetUpDialog : Window
     {
-        private Signer? _added;
+        private OfficeDocs.Picture? _done;
         private byte[]? _picture;
 
-        public static Signer? Add(Window owner, string initials = "")
+        public static OfficeDocs.Picture? Run(Window owner, Signer person)
         {
-            var w = new PersonDialog(initials) { Owner = owner };
+            var w = new SetUpDialog(person) { Owner = owner };
             w.ShowDialog();
-            return w._added;
+            return w._done;
         }
 
-        private PersonDialog(string initials)
+        private SetUpDialog(Signer person)
         {
-            Title = "Sketch ProMax: add a person";
+            Title = "Sketch ProMax: set up a signature";
             SizeToContent = SizeToContent.WidthAndHeight;
             ResizeMode = ResizeMode.NoResize;
             WindowStartupLocation = WindowStartupLocation.CenterOwner;
             Brand.Prepare(this);
-            var ini = Box(120);
-            ini.Text = initials;
-            var name = Box(260);
             var pin = new PasswordBox { Width = 160, MinHeight = 30, VerticalContentAlignment = VerticalAlignment.Center };
             var again = new PasswordBox { Width = 160, MinHeight = 30, VerticalContentAlignment = VerticalAlignment.Center };
-            AutomationProperties.SetName(ini, "Initials");
-            AutomationProperties.SetName(name, "Name (optional)");
             AutomationProperties.SetName(pin, "PIN");
             AutomationProperties.SetName(again, "PIN again");
             var pad = new InkCanvas { Width = 380, Height = 120, Background = Brushes.White };
@@ -1036,20 +1001,19 @@ internal sealed class SignaturePagesWindow : Window
             save.Click += async (_, _) =>
             {
                 var bytes = _picture ?? Drawn(pad);
-                if (ini.Text.Trim().Length == 0) { error.Text = "Type the initials as the table shows them."; ini.Focus(); return; }
                 if (bytes is null) { error.Text = "Draw the signature or use a picture."; return; }
                 if (PinProblem(pin.Password) is { } p) { error.Text = p; pin.Focus(); return; }
                 if (pin.Password != again.Password) { error.Text = "The two PINs are different."; again.Clear(); again.Focus(); return; }
-                var people = LoadSigners();
-                if (FindSigner(people, ini.Text) is not null) { error.Text = $"{ini.Text.Trim()} is already here: remove them first under People to change their signature."; return; }
                 save.IsEnabled = false;
-                string i = ini.Text, n = name.Text, code = pin.Password;
+                var code = pin.Password;
                 try
                 {
-                    var person = await Task.Run(() => Lock(i, n, bytes, code));
-                    people.Add(person);
+                    var people = LoadSigners();
+                    var me = FindSigner(people, person.Initials);
+                    if (me is null) { error.Text = $"{person.Initials} was removed by the admin."; save.IsEnabled = true; return; }
+                    await Task.Run(() => SignaturePages.SetUp(me, bytes, code));
                     SaveSigners(people);
-                    _added = person;
+                    _done = OfficeDocs.ReadPicture(bytes);
                     Close();
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or ArgumentException) { error.Text = ex.Message; save.IsEnabled = true; }
@@ -1062,8 +1026,6 @@ internal sealed class SignaturePagesWindow : Window
                 stack.Children.Add(t);
                 stack.Children.Add(box);
             }
-            Row("Initials", ini);
-            Row("Name (optional)", name);
             Row("Signature: draw it with the mouse or pen, or use a picture", new Border { BorderThickness = new Thickness(1), BorderBrush = Brushes.Gray, Child = new Grid { Children = { pad, picked } }, HorizontalAlignment = HorizontalAlignment.Left });
             var under = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 6, 0, 0) };
             under.Children.Add(fromFile);
@@ -1073,15 +1035,16 @@ internal sealed class SignaturePagesWindow : Window
             pins.Children.Add(pin);
             pins.Children.Add(new Border { Width = 10 });
             pins.Children.Add(again);
-            Row("PIN (at least 4 characters, twice). Only this person should know it.", pins);
+            Row("Your PIN (at least 4 characters, twice). Only you should know it.", pins);
             stack.Children.Add(error);
             stack.Children.Add(Brand.ButtonRow(cancel, save));
+            var who = string.IsNullOrWhiteSpace(person.Name) ? person.Initials : $"{person.Name} ({person.Initials})";
             var root = new StackPanel();
-            root.Children.Add(Brand.Header("Add a person", "Their signature is locked with their PIN on this PC."));
+            root.Children.Add(Brand.Header($"{who}: your signature", "Locked with your PIN on this PC. No one else can put it on a page."));
             root.Children.Add(stack);
             root.SetResourceReference(Panel.BackgroundProperty, Brand.K.Bg);
             Content = root;
-            Loaded += (_, _) => (ini.Text.Length > 0 ? (UIElement)name : ini).Focus();
+            Loaded += (_, _) => pad.Focus();
         }
 
         /// <summary>The drawn strokes as a transparent PNG cropped to them; null when nothing is drawn.</summary>
@@ -1108,73 +1071,129 @@ internal sealed class SignaturePagesWindow : Window
         }
     }
 
-    /// <summary>The people kept on this PC: add one, or remove one (with their PIN).</summary>
-    private sealed class PeopleDialog : Window
+    /// <summary>The specification sections in the IDC table: Ref, title, lead and IDC discipline; typed or from Excel.</summary>
+    private sealed class SectionsDialog : Window
     {
+        private readonly List<(TextBox Ref, TextBox Title, TextBox Lead, TextBox Idc, Grid Line)> _lines = [];
         private readonly StackPanel _list = new();
+        private bool _saved;
 
-        public static void Show(Window owner)
+        public static bool Edit(Window owner, Setup setup)
         {
-            var w = new PeopleDialog { Owner = owner };
+            var w = new SectionsDialog(setup) { Owner = owner };
             w.ShowDialog();
+            return w._saved;
         }
 
-        private PeopleDialog()
+        private static readonly double[] Cols = [90, 0, 60, 60, 32];
+
+        private static Grid Cells()
         {
-            Title = "Sketch ProMax: people";
-            Width = 520;
-            SizeToContent = SizeToContent.Height;
-            ResizeMode = ResizeMode.NoResize;
+            var g = new Grid { Margin = new Thickness(0, 2, 0, 2) };
+            foreach (var w in Cols) g.ColumnDefinitions.Add(new ColumnDefinition { Width = w > 0 ? new GridLength(w) : new GridLength(1, GridUnitType.Star) });
+            return g;
+        }
+
+        private SectionsDialog(Setup setup)
+        {
+            Title = "Sketch ProMax: spec sections";
+            Width = 760;
+            Height = 620;
             WindowStartupLocation = WindowStartupLocation.CenterOwner;
             Brand.Prepare(this);
-            var add = RichUi.Button(RichUi.Icon.Add, "Add a person");
-            add.Click += (_, _) => { PersonDialog.Add(this); Refresh(); };
-            var close = Brand.Button("Close", Brand.Weight.Primary);
-            close.IsCancel = true;
-            close.IsDefault = true;
-            var stack = new StackPanel { Margin = new Thickness(18, 10, 18, 14) };
-            stack.Children.Add(_list);
-            var foot = new DockPanel { Margin = new Thickness(0, 12, 0, 0) };
-            foot.Children.Add(add);
-            var right = Brand.ButtonRow(close);
-            right.Margin = new Thickness(0);
-            DockPanel.SetDock(right, Dock.Right);
-            foot.Children.Insert(0, right);
-            stack.Children.Add(foot);
-            var root = new StackPanel();
-            root.Children.Add(Brand.Header("People", "Each signature is locked with its owner's PIN."));
-            root.Children.Add(stack);
+            RichUi.Apply(this, RichUi.MotionOf(Settings.AgentSettings.Load()));
+            var status = Brand.Text("", Brand.K.Muted, 12);
+            status.TextWrapping = TextWrapping.Wrap;
+            var import = RichUi.Button(RichUi.Icon.Import, "Import Excel");
+            AutomationProperties.SetHelpText(import, "An Excel list with Ref and Title columns (Lead and IDC too). Replaces the list below.");
+            import.ToolTip = AutomationProperties.GetHelpText(import);
+            import.Click += (_, _) =>
+            {
+                var dialog = new Microsoft.Win32.OpenFileDialog { Title = "Excel list of the spec sections", Filter = "Excel or CSV (*.xlsx;*.csv;*.xls)|*.xlsx;*.csv;*.xls|All files (*.*)|*.*" };
+                if (dialog.ShowDialog(this) != true) return;
+                try
+                {
+                    var found = ReadSections(dialog.FileName);
+                    if (found.Count == 0) { status.Text = "No sections found: the sheet needs Ref and Title columns (the Excel template has them on its second sheet)."; return; }
+                    foreach (var l in _lines.ToList()) DropLine(l.Line);
+                    foreach (var sec in found) Add(sec);
+                    status.Text = $"{found.Count} sections from {Path.GetFileName(dialog.FileName)}.";
+                }
+                catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or System.Xml.XmlException)
+                {
+                    status.Text = ex is IOException and not FileNotFoundException ? $"{Path.GetFileName(dialog.FileName)} is open in Excel or can't be read: close it and try again." : ex.Message;
+                }
+            };
+            var add = RichUi.Button(RichUi.Icon.Add, "Add");
+            add.Click += (_, _) => { Add(new Section("", "", "", "")); _lines[^1].Ref.Focus(); };
+            var clear = Brand.Button("Clear");
+            clear.Click += (_, _) => { foreach (var l in _lines.ToList()) DropLine(l.Line); };
+            var tools = new WrapPanel { Margin = new Thickness(16, 10, 16, 6) };
+            foreach (var b in new[] { import, add, clear }) { b.Margin = new Thickness(0, 0, 8, 4); tools.Children.Add(b); }
+            var heads = Cells();
+            heads.Margin = new Thickness(16, 4, 16, 2);
+            string[] names = ["REF", "DIVISION \u2013 SECTION TITLE", "LEAD", "IDC", ""];
+            for (var i = 0; i < names.Length; i++) { var t = Brand.Text(names[i], Brand.K.Muted, 10.5, bold: true); Grid.SetColumn(t, i); heads.Children.Add(t); }
+            foreach (var sec in setup.Sections) Add(sec);
+            if (setup.Sections.Count == 0) Add(new Section("", "", "", ""));
+            var cancel = Brand.Button("Cancel");
+            cancel.IsCancel = true;
+            var save = Brand.Button("Save", Brand.Weight.Primary);
+            save.IsDefault = true;
+            save.Click += (_, _) =>
+            {
+                var list = _lines.Select(l => new Section(l.Ref.Text.Trim(), l.Title.Text.Trim(), l.Lead.Text.Trim().ToUpperInvariant(), l.Idc.Text.Trim().ToUpperInvariant()))
+                                 .Where(x => x.Ref.Length > 0 || x.Title.Length > 0).ToList();
+                if (list.Count > TocMaxRows) { status.Text = $"One page holds {TocMaxRows} sections; this list has {list.Count}."; status.SetResourceReference(TextBlock.ForegroundProperty, Brand.K.DangerText); return; }
+                setup.Sections = list;
+                _saved = true;
+                Close();
+            };
+            var foot = new DockPanel { Margin = new Thickness(16, 8, 16, 12) };
+            var buttons = Brand.ButtonRow(cancel, save);
+            buttons.Margin = new Thickness(0);
+            DockPanel.SetDock(buttons, Dock.Right);
+            foot.Children.Add(buttons);
+            status.VerticalAlignment = VerticalAlignment.Center;
+            foot.Children.Add(status);
+            var root = new DockPanel();
+            var header = Brand.Header("Spec sections", "The table of contents on the specification's IDC table page.");
+            foreach (var e in new FrameworkElement[] { header, tools, heads }) { DockPanel.SetDock(e, Dock.Top); root.Children.Add(e); }
+            DockPanel.SetDock(foot, Dock.Bottom);
+            root.Children.Add(foot);
+            root.Children.Add(new ScrollViewer { Content = _list, Padding = new Thickness(16, 0, 16, 0), VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Focusable = false });
             root.SetResourceReference(Panel.BackgroundProperty, Brand.K.Bg);
             Content = root;
-            Refresh();
         }
 
-        private void Refresh()
+        private void Add(Section sec)
         {
-            _list.Children.Clear();
-            var people = LoadSigners();
-            if (people.Count == 0) _list.Children.Add(Brand.Text("No one yet. Each person adds their own signature and PIN.", Brand.K.Muted, 12));
-            foreach (var p in people)
+            var g = Cells();
+            var r = Box(0); var t = Box(0); var l = Box(0); var i = Box(0);
+            (r.Text, t.Text, l.Text, i.Text) = (sec.Ref, sec.Title, sec.Lead, sec.Idc);
+            AutomationProperties.SetName(r, "Ref");
+            AutomationProperties.SetName(t, "Division - section title");
+            AutomationProperties.SetName(l, "Lead discipline");
+            AutomationProperties.SetName(i, "IDC discipline");
+            var remove = new Button { Content = "\uE711", FontFamily = new FontFamily("Segoe Fluent Icons, Segoe MDL2 Assets"), Width = 28, Height = 28, Background = Brushes.Transparent, BorderThickness = new Thickness(0) };
+            remove.SetResourceReference(ForegroundProperty, Brand.K.Muted);
+            AutomationProperties.SetName(remove, "Remove this section");
+            remove.Click += (_, _) => DropLine(g);
+            UIElement[] cells = [r, t, l, i, remove];
+            for (var k = 0; k < cells.Length; k++)
             {
-                var row = new DockPanel { Margin = new Thickness(0, 4, 0, 4) };
-                var remove = Brand.Button("Remove", Brand.Weight.Danger);
-                AutomationProperties.SetHelpText(remove, "Removes this person's signature from this PC. Needs their PIN.");
-                remove.Click += (_, _) =>
-                {
-                    if (PinDialog.Ask(this, p) is null) return;
-                    var all = LoadSigners();
-                    all.RemoveAll(x => x.Initials == p.Initials && x.Salt == p.Salt);
-                    try { SaveSigners(all); }
-                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { MessageBox.Show(this, ex.Message, "Sketch ProMax"); }
-                    Refresh();
-                };
-                DockPanel.SetDock(remove, Dock.Right);
-                row.Children.Add(remove);
-                var text = Brand.Text(string.IsNullOrWhiteSpace(p.Name) ? p.Initials : $"{p.Initials}   {p.Name}", Brand.K.Text, 13);
-                text.VerticalAlignment = VerticalAlignment.Center;
-                row.Children.Add(text);
-                _list.Children.Add(row);
+                Grid.SetColumn(cells[k], k);
+                if (cells[k] is TextBox tb) { tb.Width = double.NaN; tb.Margin = new Thickness(0, 0, 6, 0); }
+                g.Children.Add(cells[k]);
             }
+            _lines.Add((r, t, l, i, g));
+            _list.Children.Add(g);
+        }
+
+        private void DropLine(Grid line)
+        {
+            _lines.RemoveAll(l => l.Line == line);
+            _list.Children.Remove(line);
         }
     }
 }
