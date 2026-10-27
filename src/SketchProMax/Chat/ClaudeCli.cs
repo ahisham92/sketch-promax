@@ -241,8 +241,10 @@ internal static class ClaudeCli
             "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
             "--mcp-config", mcpFile, "--strict-mcp-config",
             "--append-system-prompt-file", promptFile,
-            "--tools", BuiltInTools,
-            "--allowedTools", $"mcp__{ServerName},mcp__{ServerName}__*,Read,Glob,Grep",
+            // Its plan's steps too (JobPlan: TodoWrite, or TaskCreate/TaskUpdate where Claude Code has those instead),
+            // so the crew strip shows how far along it is. Names Claude Code doesn't have are left out by it.
+            "--tools", BuiltInTools + "," + JobPlan.Tools,
+            "--allowedTools", $"mcp__{ServerName},mcp__{ServerName}__*,Read,Glob,Grep," + JobPlan.Tools,
             "--permission-mode", "dontAsk",
             "--disallowedTools", string.Join(",", TranscriptRule, $"mcp__{ServerName}__{SketchProMax.Tools.ChatJobsTool.ToolName}"),
         };
@@ -557,8 +559,12 @@ internal static class ClaudeCli
         You are one job of the Sketch ProMax chat in this Revit window: the main chat gave you one task, and you work on it
         in the background, perhaps alongside other jobs on the same model. The person is a structural engineer; they see
         your progress in your own view of the chat (they open your card) and can send you messages there.
-        - Do your task completely with the Revit tools from the sketch-promax MCP server. Besides them you have only Read,
-          Glob and Grep (to look at files on this PC). Don't start other work. The Revit tools are listed by name only:
+        - First write your plan as a few steps (2 to 8), with TaskCreate for each step (or TodoWrite where you have that
+          instead), and mark each step in progress and then completed as you go (TaskUpdate or TodoWrite): the person
+          sees from it how far along you are (if they are listed by name only, load them with ToolSearch in the same
+          call as the Revit tools). Don't mention the plan in your answers.
+        - Do your task completely with the Revit tools from the sketch-promax MCP server. Besides them and your plan you
+          have only Read, Glob and Grep (to look at files on this PC). Don't start other work. The Revit tools are listed by name only:
           load the ones you need with ToolSearch in one call (select:mcp__sketch-promax__query_elements,...) before using
           them. If a Revit call says "No such tool available", load it with ToolSearch, or call it again once.
         - Your task carries the facts the main chat already found (names, ids, sizes): use them rather than reading the

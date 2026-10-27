@@ -48,6 +48,8 @@ internal sealed class ChatJob
     [JsonIgnore] public string Activity { get; set; } = "";
     /// <summary>Which worker of the crew strip took it (0: the first name in Settings > Chat; -1: none yet). Saved.</summary>
     public int Worker { get; set; } = -1;
+    /// <summary>Its plan's steps by id, each pending, in_progress or completed (JobPlan), as its Claude Code keeps it. Saved.</summary>
+    public Dictionary<string, string> Plan { get; set; } = new();
     public DateTime Created { get; set; }
     public DateTime Started { get; set; }
     public DateTime Ended { get; set; }
@@ -280,6 +282,7 @@ internal sealed class JobBoard
                 job.Started = now;
                 job.Ended = default;
                 job.Now = "Starting…";
+                if (JobPlan.AllDone(job.Plan)) job.Plan.Clear(); // a new run after a finished plan makes its own
                 list.Add((job, NextMessage(job)));
             }
             return list;
@@ -393,6 +396,12 @@ internal sealed class JobBoard
             if (_jobs.FirstOrDefault(j => j.Number == number) is { } job) job.Worker = worker;
     }
 
+    /// <summary>A plan tool call of the job's (JobPlan) finished: its plan follows it. True when the plan changed.</summary>
+    public bool UpdatePlan(ChatJob job, string tool, string input, string result)
+    {
+        lock (Gate) return JobPlan.Apply(job.Plan, tool, input, result);
+    }
+
     /// <summary>What an active job is doing: thinking, reading, waiting (to apply) or applying; "" when it isn't active.</summary>
     public static string ActivityOf(ChatJob job) =>
         !job.Active ? "" : job.State == Waiting ? WaitingToApply : job.Activity is Reading or Applying or Syncing ? job.Activity : Thinking;
@@ -496,6 +505,7 @@ internal sealed class JobBoard
         Number = j.Number, Key = j.Key, Title = j.Title, Task = j.Task, State = j.State, Kind = j.Kind, Model = j.Model, Effort = j.Effort, Summary = j.Summary, Now = j.Now, Ahead = j.Ahead,
         Created = j.Created, Started = j.Started, Ended = j.Ended, HasSession = j.HasSession, Inbox = j.Inbox.ToList(),
         InboxFiles = j.InboxFiles.ToList(), Items = j.Items.ToList(), Activity = j.Activity, Worker = j.Worker,
+        Plan = new Dictionary<string, string>(j.Plan),
     };
 }
 

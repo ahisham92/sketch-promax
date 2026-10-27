@@ -59,7 +59,7 @@ internal static class CrewTests
 
         // Done: the worker lingers with a tick, then leaves; stopped leaves at once.
         e = plan.Update([Job(1, JobBoard.Done, asked: 2), Job(2, JobBoard.Stopped), Job(3, JobBoard.Running), Job(4, JobBoard.Running)], t0.AddSeconds(5));
-        check("crew: a stopped job's worker leaves at once", Cues(e) == "Leave:2", Cues(e));
+        check("crew: a stopped job's worker leaves at once, a done one says so", Cues(e) == "Finish:1,Leave:2", Cues(e));
         check("crew: a finished job's worker stays a moment", plan.Seats.Any(s => s.Number == 1 && s.Mood == CrewMood.Done) && plan.Lingering, "");
         e = plan.Update([Job(1, JobBoard.Done, asked: 2), Job(3, JobBoard.Running), Job(4, JobBoard.Running)], t0.AddSeconds(5) + CrewPlan.Linger);
         check("crew: ...then leaves", Cues(e) == "Leave:1" && !plan.Lingering, Cues(e));
@@ -116,5 +116,53 @@ internal static class CrewTests
         check("crew: after a reset the first look is quiet again", e.Count == 0 && plan.Seats.Count == 1, Cues(e));
         e = plan.Update([], t0.AddSeconds(31));
         check("crew: a job gone from the board leaves", Cues(e) == "Leave:7" && plan.Seats.Count == 0 && CrewPlan.Caption(plan.Seats, CrewNames.Defaults) == "Atlas is ready", Cues(e));
+
+        // A job's plan: TodoWrite gives the whole list, TaskCreate and TaskUpdate one step each.
+        var steps = new Dictionary<string, string>();
+        check("plan: TodoWrite gives the whole list", JobPlan.Apply(steps, "TodoWrite", """{"todos":[{"content":"a","status":"completed"},{"content":"b","status":"in_progress"},{"content":"c","status":"pending"},{"content":"d","status":"pending"}]}""", "")
+            && steps.Count == 4 && JobPlan.Count(steps) == (1, 4), string.Join(",", steps.Values));
+        check("plan: a step under way counts half", JobPlan.Percent(steps, finished: false) == 38, JobPlan.Percent(steps, false).ToString());
+        check("plan: no plan, no figure; a finished job is 100", JobPlan.Percent(new Dictionary<string, string>(), false) == -1 && JobPlan.Percent(steps, true) == 100, "");
+        var tasks = new Dictionary<string, string>();
+        JobPlan.Apply(tasks, "TaskCreate", """{"subject":"Read the walls"}""", "Task #4 created successfully: Read the walls");
+        JobPlan.Apply(tasks, "TaskCreate", """{"subject":"Tag them"}""", "created");
+        JobPlan.Apply(tasks, "TaskCreate", """{"subject":"Check"}""", "Task #6 created");
+        JobPlan.Apply(tasks, "TaskUpdate", """{"taskId":"4","status":"completed"}""", "");
+        JobPlan.Apply(tasks, "TaskUpdate", """{"taskId":"6","status":"deleted"}""", "");
+        check("plan: TaskCreate and TaskUpdate keep steps by id", tasks.Count == 2 && tasks["4"] == JobPlan.Finished && JobPlan.Count(tasks) == (1, 2), string.Join(",", tasks.Select(t => t.Key + "=" + t.Value)));
+        check("plan: every step ticked says 99 while it still works", JobPlan.Percent(new Dictionary<string, string> { ["1"] = "completed" }, false) == 99
+            && JobPlan.AllDone(new Dictionary<string, string> { ["1"] = "completed" }) && !JobPlan.AllDone(tasks), "");
+        check("plan: a broken call changes nothing", !JobPlan.Apply(tasks, "TaskUpdate", "{not json", "") && !JobPlan.Apply(tasks, "TodoWrite", "{}", "") && tasks.Count == 2, "");
+        var planBoard = new JobBoard([]);
+        var planned = planBoard.Start("Tag walls", "Tag the walls", t0, force: true, out _)!;
+        planBoard.UpdatePlan(planned, "TaskCreate", "{}", "Task #1 created");
+        check("plan: the board keeps a job's plan in its copies", planBoard.Snapshot()[0].Plan.Count == 1, "");
+
+        // What the workers show and say: how far along, ready for work, and a few friendly words.
+        var progress = new CrewPlan();
+        var p1 = Job(1, JobBoard.Running);
+        progress.Update([p1], t0);
+        check("crew: no plan yet says planning", CrewPlan.Status(progress.Seats[0], 0) == "Planning…", CrewPlan.Status(progress.Seats[0], 0));
+        p1.Plan = new() { ["1"] = "completed", ["2"] = "completed", ["3"] = "pending", ["4"] = "pending", ["5"] = "pending" };
+        e = progress.Update([p1], t0.AddSeconds(1));
+        check("crew: a new plan says how big the job is", Cues(e) == "Plan:1" && e[0].Say == "Smart plan!", Cues(e) + " " + (e.Count > 0 ? e[0].Say : ""));
+        check("crew: a worker shows how far along and what is left", progress.Seats[0].Percent == 40 && CrewPlan.Status(progress.Seats[0], 0) == "40% · 3 left", CrewPlan.Status(progress.Seats[0], 0));
+        e = progress.Update([p1], t0.AddSeconds(2), _ => JobBoard.Applying);
+        check("crew: its turn at Revit: My turn!", Cues(e) == "Turn:1" && e[0].Say == "My turn!" && CrewPlan.Status(progress.Seats[0], 0) == "40% · applying", CrewPlan.Status(progress.Seats[0], 0));
+        p1.State = JobBoard.Done;
+        p1.Started = t0;
+        p1.Ended = t0.AddMinutes(5);
+        e = progress.Update([p1], t0.AddSeconds(3));
+        check("crew: a finished job says so", Cues(e) == "Finish:1" && e[0].Say == "Job done!" && progress.Seats[0].Percent == 100 && CrewPlan.Status(progress.Seats[0], 0) == "Job done!", Cues(e));
+        check("crew: workers without a job are ready for work", CrewPlan.Status(null, 0) == "Ready for work" && CrewPlan.Status(null, 1).Length > 0, "");
+        var big = Job(9, JobBoard.Running);
+        big.Task = new string('x', 700);
+        check("crew: a long task is a big job", CrewPlan.Say(CrewCue.Arrive, big) == "Big job!", CrewPlan.Say(CrewCue.Arrive, big));
+        big.State = JobBoard.Done;
+        big.Started = t0;
+        big.Ended = t0.AddSeconds(40);
+        check("crew: a quick job says so", CrewPlan.Say(CrewCue.Finish, big) == "Quick job, done!", CrewPlan.Say(CrewCue.Finish, big));
+        big.State = JobBoard.Failed;
+        check("crew: a failed job hit a snag", CrewPlan.Say(CrewCue.Finish, big) == "Hit a snag", "");
     }
 }

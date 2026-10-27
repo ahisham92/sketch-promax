@@ -56,6 +56,8 @@ internal static class StepNames
         ["LS"] = "List a folder",
         ["Bash"] = "Run a command",
         ["TodoWrite"] = "Update the plan",
+        ["TaskCreate"] = "Add a step to the plan",
+        ["TaskUpdate"] = "Update the plan",
         ["WebFetch"] = "Read a web page",
         ["WebSearch"] = "Search the web",
         ["ToolSearch"] = "Look up tools",
@@ -152,7 +154,7 @@ internal static class StepNames
         tool = Short(tool);
         return tool is "run_revit_query_code" or "query_elements" or "query_linked_models" or "capture_view_image" or "select_elements"
                    or "wait_for_job" or "cancel_job" or "chat_jobs" or "help" or "features" or "memory_note" or "diagnostics" or "make_document"
-                   or "Read" or "Glob" or "Grep" or "LS" or "TodoWrite" or "WebFetch" or "WebSearch" or "ToolSearch"
+                   or "Read" or "Glob" or "Grep" or "LS" or "TodoWrite" or "TaskCreate" or "TaskUpdate" or "WebFetch" or "WebSearch" or "ToolSearch"
                || tool.StartsWith("get_", StringComparison.Ordinal) || tool.StartsWith("list_", StringComparison.Ordinal)
                || tool.StartsWith("find_", StringComparison.Ordinal) || tool.StartsWith("read_", StringComparison.Ordinal);
     }

@@ -12,7 +12,10 @@ namespace SketchProMax.Chat;
 /// <summary>
 /// The small strip over the large chat With coordinator, drawn as people (names from Settings > Chat, CrewNames): you
 /// on the left hand your requests to the coordinator at a desk, who gives each job to a worker at a computer of their
-/// own (CrewPlan says who has which job); a worker without a job is hidden. Workers think and read the model at their
+/// own (CrewPlan says who has which job). Every worker the chat may use (Settings: jobs at once) has a desk: one without
+/// a job sits back at a dark screen, "Ready for work" under the name; one with a job shows how far along its plan is
+/// under the name and as a bar on the screen ("60% · 2 left"), and says a few words in a bubble now and then (a big
+/// job, its turn at Revit, job done). Workers think and read the model at their
 /// desks all at once (typing; a magnifier while reading). A worker with a change for the model gets up and joins the
 /// line at the applier on the right, who takes one change at a time into Revit (the model block lights up and the
 /// applier's name says whose change it is); the next steps up, and each goes back to the desk after. A finished
@@ -25,7 +28,7 @@ namespace SketchProMax.Chat;
 /// </summary>
 internal sealed class CrewStrip : Border
 {
-    public const double StripHeight = 100;
+    public const double StripHeight = 104;
     private const double Top = 10, YouX = 22, CoordX = 82, FirstDesk = 158, MaxGap = 96, MinGap = 66, ApplierRoom = 74, InLine = 32, NameTop = 76;
     private static readonly Duration Move = new(TimeSpan.FromMilliseconds(450)), Walk = new(TimeSpan.FromMilliseconds(800)), Fly = new(TimeSpan.FromMilliseconds(800));
 
@@ -80,7 +83,7 @@ internal sealed class CrewStrip : Border
         public TranslateTransform At = null!, Head = null!;
         public RotateTransform Arm = null!;
         public UIElement Legs = null!;
-        public TextBlock Name = null!, Clock = null!, Look = null!;
+        public TextBlock Name = null!, Status = null!, Clock = null!, Look = null!;
     }
 
     private sealed class Worker
@@ -91,6 +94,7 @@ internal sealed class CrewStrip : Border
         public Button Hit = null!;
         public readonly List<(Rectangle Line, ScaleTransform Scale)> Lines = [];
         public TextBlock Mark = null!;
+        public Rectangle Progress = null!;
         public CrewMood Mood;
         public int Line = -1;
         public bool Leaving, Drawn;
@@ -99,12 +103,23 @@ internal sealed class CrewStrip : Border
     private readonly Canvas _stage = new() { ClipToBounds = true, Height = StripHeight };
     private readonly TextBlock _caption = new() { FontSize = ChatUi.SmallSize, VerticalAlignment = VerticalAlignment.Top, HorizontalAlignment = HorizontalAlignment.Left, TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(FirstDesk, 2, ChatUi.S3, 0) };
     private readonly Dictionary<int, Worker> _workers = new();
+    /// <summary>The workers without a job, by desk: sitting back, ready for one.</summary>
+    private readonly Dictionary<int, Worker> _idle = new();
+    /// <summary>Over everything (the caption too): what the workers say, by job.</summary>
+    private readonly Canvas _bubbles = new() { IsHitTestVisible = false };
+    private readonly Dictionary<int, Border> _said = new();
     private readonly Figure _you, _coordinator, _applier;
     private readonly Canvas _station = new();
     private readonly Path _modelTop = new(), _modelLeft = new(), _modelRight = new();
     private readonly DispatcherTimer _typing;
     private readonly Random _random = new(7);
     private int? _applying = -1;
+    /// <summary>How many changes the applier put into Revit while this strip watched (the line under the name).</summary>
+    private int _applied;
+    private int _inLine;
+    private string _applyingFor = "";
+    /// <summary>The path on the floor from the desks to the applier: where the changes go.</summary>
+    private readonly Line _path = new() { StrokeThickness = 1.5, StrokeDashArray = [3, 3], IsHitTestVisible = false };
     private int _tick, _desks = 3;
     private readonly Canvas _tray = new();
     private readonly TextBlock _trayCount = new() { FontSize = 9, FontWeight = FontWeights.SemiBold };
@@ -138,6 +153,7 @@ internal sealed class CrewStrip : Border
         var grid = new Grid { LayoutTransform = _scale };
         grid.Children.Add(_stage);
         grid.Children.Add(_caption);
+        grid.Children.Add(_bubbles);
         Child = grid;
         AutomationProperties.SetName(this, "Who is working: you, the coordinator, its workers and who applies changes in Revit");
         Focusable = false;
@@ -174,6 +190,9 @@ internal sealed class CrewStrip : Border
         _applier = Person(ApplierShirt, null, standing: false);
         _applier.At.Y = Top;
         BuildStation();
+        _path.SetResourceReference(Shape.StrokeProperty, Brand.K.BorderSubtle);
+        _path.Y1 = _path.Y2 = Top + 70;
+        _stage.Children.Add(_path);
         _stage.Children.Add(_station);
 
         ShowNames();
@@ -191,7 +210,19 @@ internal sealed class CrewStrip : Border
     }
 
     /// <summary>Where the applier sits (the model block is just right of them).</summary>
-    private double StationX => Math.Max(FirstDesk + MaxGap, _stage.ActualWidth - ApplierRoom);
+    /// <summary>
+    /// Where the applier sits (the model block is just right of them): close after the last desk, with room for the line
+    /// of workers in between, or at the right edge when the window is narrower than that.
+    /// </summary>
+    private double StationX
+    {
+        get
+        {
+            var desks = Math.Max(_desks, _workers.Values.Select(w => w.Slot + 1).DefaultIfEmpty(1).Max());
+            var close = FirstDesk + (desks - 1) * MaxGap + 102 + (desks - 1) * InLine;
+            return Math.Max(FirstDesk + MaxGap, Math.Min(close, _stage.ActualWidth - ApplierRoom));
+        }
+    }
 
     /// <summary>Shows the crew as the plan has it now and acts out what just happened.</summary>
     public void Show(IReadOnlyList<CrewSeat> seats, IReadOnlyList<CrewEvent> events, int workers, int unassigned)
@@ -211,23 +242,30 @@ internal sealed class CrewStrip : Border
             SetMood(worker, seat.Mood);
             worker.Line = seat.Line;
             worker.Person.Name.Text = names.Worker(seat.Slot);
+            var status = CrewPlan.Status(seat, seat.Slot);
+            worker.Person.Status.Text = status;
+            worker.Progress.Width = seat.Percent < 0 || seat.Mood is CrewMood.Done or CrewMood.Failed ? 0 : 26 * seat.Percent / 100.0;
             worker.Hit.ToolTip = names.Worker(seat.Slot) + "'s jobs";
-            AutomationProperties.SetName(worker.Hit, $"{names.Worker(seat.Slot)}'s jobs (now job {seat.Number}, {Words(seat.Mood)})");
-            AutomationProperties.SetName(worker.Person.Root, $"{names.Worker(seat.Slot)}, job {seat.Number}: {seat.Title}, {Words(seat.Mood)}");
+            AutomationProperties.SetName(worker.Hit, $"{names.Worker(seat.Slot)}'s jobs (now job {seat.Number}, {Words(seat.Mood)}, {status})");
+            AutomationProperties.SetName(worker.Person.Root, $"{names.Worker(seat.Slot)}, job {seat.Number}: {seat.Title}, {Words(seat.Mood)}, {status}");
         }
         // Anyone still here whom the plan no longer has (another chat): out.
         foreach (var stale in _workers.Values.Where(w => !w.Leaving && seats.All(s => s.Number != w.Number)).ToList()) Leave(stale.Number);
+        ShowIdle();
         Arrange(animate: true);
         foreach (var e in events)
         {
             if (e.Cue == CrewCue.Arrive && _workers.TryGetValue(e.Number, out var arriving)) Arrive(arriving);
             else if (e.Cue == CrewCue.Handover && _workers.TryGetValue(e.Number, out var given)) HandTo(given);
+            if (e.Cue != CrewCue.Leave && e.Say.Length > 0) Say(e.Number, e.Say, e.Cue is CrewCue.Arrive or CrewCue.Handover ? Fly.TimeSpan : TimeSpan.Zero);
         }
         var applying = seats.FirstOrDefault(s => s.Mood == CrewMood.Applying);
         ShowNames();
+        _inLine = seats.Count(s => s.Mood == CrewMood.Waiting);
         Apply(applying?.Number, applying is null ? "" : names.Worker(applying.Slot));
+        ShowApplier();
         _caption.Text = CrewPlan.Caption(seats, names, unassigned);
-        _caption.ToolTip = seats.Count == 0 ? null : string.Join("\n", seats.Select(s => $"{names.Worker(s.Slot)} · job {s.Number} · {s.Title}: {Words(s.Mood)}"));
+        _caption.ToolTip = seats.Count == 0 ? null : string.Join("\n", seats.Select(s => $"{names.Worker(s.Slot)} · job {s.Number} · {s.Title}: {Words(s.Mood)}, {CrewPlan.Status(s, s.Slot)}"));
         Pace();
     }
 
@@ -250,8 +288,16 @@ internal sealed class CrewStrip : Border
     public void Clear()
     {
         foreach (var worker in _workers.Values.ToList()) Remove(worker);
+        foreach (var bubble in _said.Values) bubble.BeginAnimation(OpacityProperty, null);
+        _said.Clear();
+        _bubbles.Children.Clear();
+        ShowIdle();
+        Arrange(animate: false);
         ShowNames();
+        _inLine = 0;
+        _applied = 0;
         Apply(null, "");
+        ShowApplier();
         _caption.Text = CrewPlan.Caption([], Names);
         _caption.ToolTip = null;
         Pace();
@@ -262,7 +308,7 @@ internal sealed class CrewStrip : Border
         var names = Names;
         _you.Name.Text = names.You;
         _coordinator.Name.Text = names.Coordinator;
-        if (_applying is null) _applier.Name.Text = names.Applier;
+        _applier.Name.Text = names.Applier;
         AutomationProperties.SetName(_you.Root, names.You + ", you");
         AutomationProperties.SetName(_coordinator.Root, names.Coordinator + ", the coordinator");
         AutomationProperties.SetName(_station, names.Applier + " applies changes in Revit, one at a time");
@@ -284,12 +330,13 @@ internal sealed class CrewStrip : Border
     /// <summary>The typing runs only while it can be seen, at Full, with someone thinking or reading at a desk.</summary>
     private void Pace()
     {
-        var run = IsVisible && ChatUi.Lively && _workers.Values.Any(w => !w.Leaving && w.Mood is CrewMood.Thinking or CrewMood.Reading);
+        var run = IsVisible && ChatUi.Lively && (_applying is not null || _workers.Values.Any(w => !w.Leaving && w.Mood is CrewMood.Thinking or CrewMood.Reading));
         if (run && !_typing.IsEnabled) _typing.Start();
         else if (!run && _typing.IsEnabled)
         {
             _typing.Stop();
             foreach (var w in _workers.Values) Rest(w);
+            _applier.Arm.Angle = 0;
         }
     }
 
@@ -302,6 +349,8 @@ internal sealed class CrewStrip : Border
             return;
         }
         _tick++;
+        // The applier works the change into the model: a hand on it, moving.
+        _applier.Arm.Angle = _applying is null ? 0 : _tick % 4 < 2 ? -24 : -12;
         foreach (var w in _workers.Values)
         {
             if (w.Leaving || w.Mood is not (CrewMood.Thinking or CrewMood.Reading)) continue;
@@ -329,6 +378,9 @@ internal sealed class CrewStrip : Border
     /// <summary>Each worker at their desk, or standing in the line at the applier (0: in front of the applier).</summary>
     private void Arrange(bool animate)
     {
+        Canvas.SetLeft(_station, StationX);
+        _path.X1 = FirstDesk - 4;
+        _path.X2 = StationX + 20;
         foreach (var w in _workers.Values.Where(w => !w.Leaving))
         {
             var desk = DeskX(w.Slot);
@@ -341,6 +393,106 @@ internal sealed class CrewStrip : Border
             w.Person.Legs.Visibility = standing ? Visibility.Visible : Visibility.Collapsed;
             w.Drawn = true;
         }
+        ArrangeIdle();
+    }
+
+    private void ArrangeIdle()
+    {
+        foreach (var idle in _idle.Values)
+        {
+            var desk = DeskX(idle.Slot);
+            Canvas.SetLeft(idle.Desk, desk);
+            Canvas.SetTop(idle.Desk, Top);
+            idle.Person.At.X = desk;
+            idle.Person.At.Y = Top;
+        }
+    }
+
+    /// <summary>
+    /// A desk for each worker the chat may use: one without a job (or whose job just left) sits back at a dark screen,
+    /// ready for work; a click lists the jobs they did.
+    /// </summary>
+    private void ShowIdle()
+    {
+        var names = Names;
+        foreach (var slot in _idle.Keys.Where(k => k >= _desks).ToList())
+        {
+            _stage.Children.Remove(_idle[slot].Desk);
+            _stage.Children.Remove(_idle[slot].Person.Root);
+            _idle.Remove(slot);
+        }
+        for (var slot = 0; slot < _desks; slot++)
+        {
+            if (!_idle.TryGetValue(slot, out var idle))
+            {
+                var at = slot;
+                idle = new Worker { Number = -1 - slot, Slot = slot, Mood = CrewMood.Resting };
+                idle.Person = Person(Shirts[slot % Shirts.Length], null, standing: false);
+                idle.Desk = Desk(idle);
+                foreach (var (line, _) in idle.Lines) line.Visibility = Visibility.Collapsed;
+                idle.Hit = HitArea(-14, 66, "", b => WorkerPicked?.Invoke(at, b));
+                idle.Desk.Children.Add(idle.Hit);
+                idle.Person.Root.IsHitTestVisible = false;
+                // Sitting back from the desk, a little faded: nothing to do yet.
+                idle.Person.Root.Opacity = 0.6;
+                idle.Person.Arm.Angle = 35;
+                _idle[slot] = idle;
+                _stage.Children.Insert(0, idle.Desk);
+                _stage.Children.Add(idle.Person.Root);
+            }
+            var busy = _workers.Values.Any(w => w.Slot == slot);
+            idle.Desk.Visibility = idle.Person.Root.Visibility = busy ? Visibility.Collapsed : Visibility.Visible;
+            idle.Person.Name.Text = names.Worker(slot);
+            idle.Person.Status.Text = CrewPlan.Status(null, slot);
+            idle.Hit.ToolTip = names.Worker(slot) + "'s jobs";
+            AutomationProperties.SetName(idle.Hit, $"{names.Worker(slot)}'s jobs ({CrewPlan.Status(null, slot).ToLowerInvariant()})");
+            AutomationProperties.SetName(idle.Person.Root, $"{names.Worker(slot)}, {CrewPlan.Status(null, slot).ToLowerInvariant()}");
+        }
+    }
+
+    /// <summary>
+    /// Job <paramref name="number"/>'s worker says a few words: a small bubble over the head, a couple of seconds, then
+    /// gone (at Off it just shows and goes). Over the caption, so it can be read.
+    /// </summary>
+    private void Say(int number, string words, TimeSpan delay)
+    {
+        if (_workers.TryGetValue(number, out var w)) SayAt(number, w.Person.At.X + 4, words, delay, w.Line >= 0 ? 2 : 4);
+    }
+
+    /// <summary>A bubble with <paramref name="words"/> centred on <paramref name="x"/>, for <paramref name="key"/> (a job, or the applier).</summary>
+    private void SayAt(int key, double x, string words, TimeSpan delay, double top = 4)
+    {
+        if (!IsVisible) return;
+        var number = key;
+        if (_said.TryGetValue(number, out var old))
+        {
+            old.BeginAnimation(OpacityProperty, null);
+            _bubbles.Children.Remove(old);
+        }
+        var text = Brand.Text(words, Brand.K.Text, 9);
+        text.FontWeight = FontWeights.SemiBold;
+        text.TextWrapping = TextWrapping.NoWrap;
+        var bubble = new Border { Child = text, CornerRadius = new CornerRadius(7), BorderThickness = new Thickness(1), Padding = new Thickness(5, 1, 5, 1), Opacity = 0 };
+        bubble.SetResourceReference(BackgroundProperty, Brand.K.Raised);
+        bubble.SetResourceReference(BorderBrushProperty, Brand.K.Accent);
+        bubble.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        Canvas.SetLeft(bubble, Math.Max(0, Math.Min(x - bubble.DesiredSize.Width / 2, _stage.ActualWidth - bubble.DesiredSize.Width - 2)));
+        Canvas.SetTop(bubble, top);
+        _bubbles.Children.Add(bubble);
+        _said[number] = bubble;
+        var show = new DoubleAnimationUsingKeyFrames { Duration = new Duration(delay + TimeSpan.FromMilliseconds(2600)) };
+        var soft = ChatUi.Animate;
+        show.KeyFrames.Add(new DiscreteDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.Zero)));
+        show.KeyFrames.Add(soft ? new LinearDoubleKeyFrame(1, KeyTime.FromTimeSpan(delay + TimeSpan.FromMilliseconds(200))) : new DiscreteDoubleKeyFrame(1, KeyTime.FromTimeSpan(delay)));
+        show.KeyFrames.Add(new DiscreteDoubleKeyFrame(1, KeyTime.FromTimeSpan(delay + TimeSpan.FromMilliseconds(2200))));
+        show.KeyFrames.Add(soft ? new LinearDoubleKeyFrame(0, KeyTime.FromTimeSpan(delay + TimeSpan.FromMilliseconds(2600))) : new DiscreteDoubleKeyFrame(0, KeyTime.FromTimeSpan(delay + TimeSpan.FromMilliseconds(2600))));
+        Timeline.SetDesiredFrameRate(show, 20);
+        show.Completed += (_, _) =>
+        {
+            _bubbles.Children.Remove(bubble);
+            if (_said.TryGetValue(number, out var now) && now == bubble) _said.Remove(number);
+        };
+        bubble.BeginAnimation(OpacityProperty, show);
     }
 
     private Worker Add(int number, int slot)
@@ -382,7 +534,7 @@ internal sealed class CrewStrip : Border
 
     private static void Reach(RotateTransform arm, double angle)
     {
-        var lift = new DoubleAnimationUsingKeyFrames { Duration = Fly };
+        var lift = new DoubleAnimationUsingKeyFrames { Duration = Fly, FillBehavior = FillBehavior.Stop };
         lift.KeyFrames.Add(new EasingDoubleKeyFrame(angle, KeyTime.FromPercent(0.2)));
         lift.KeyFrames.Add(new EasingDoubleKeyFrame(angle, KeyTime.FromPercent(0.6)));
         lift.KeyFrames.Add(new EasingDoubleKeyFrame(0, KeyTime.FromPercent(1)));
@@ -422,20 +574,40 @@ internal sealed class CrewStrip : Border
     private void Apply(int? number, string worker)
     {
         if (number == _applying) return;
+        var finished = _applying is >= 0 && _workers.ContainsKey(_applying.Value);
         _applying = number;
+        _applyingFor = worker;
         var lit = number is not null;
         _modelTop.BeginAnimation(OpacityProperty, null);
         _modelTop.SetResourceReference(Shape.FillProperty, lit ? Brand.K.Accent : Brand.K.Surface);
         _modelLeft.SetResourceReference(Shape.FillProperty, lit ? Brand.K.AccentHover : Brand.K.SurfaceHover);
         _modelRight.SetResourceReference(Shape.FillProperty, lit ? Brand.K.AccentPressed : Brand.K.Border);
-        _applier.Name.Text = lit ? $"{Names.Applier} · {worker}" : Names.Applier;
+        // The change before went in: the applier says so (and counts it).
+        if (finished)
+        {
+            _applied++;
+            SayAt(Applier, StationX + 10, _applied == 1 ? "In the model!" : _applied % 5 == 0 ? $"{_applied} changes in!" : "Applied!", TimeSpan.Zero);
+        }
         if (!lit || !ChatUi.Lively || !IsVisible) return;
         Reach(_applier.Arm, -30);
         Sheet(StationX - 30, StationX + 40, Top - 6);
-        // A slow, soft glow while the change goes in (stops by itself; a few seconds of frames at most).
-        var glow = new DoubleAnimation(1, 0.7, new Duration(TimeSpan.FromMilliseconds(700))) { AutoReverse = true, RepeatBehavior = new RepeatBehavior(3) };
+        // A slow, soft glow for as long as the change goes in (20 frames a second, only then).
+        var glow = new DoubleAnimation(1, 0.65, new Duration(TimeSpan.FromMilliseconds(700))) { AutoReverse = true, RepeatBehavior = RepeatBehavior.Forever };
         Timeline.SetDesiredFrameRate(glow, 20);
         _modelTop.BeginAnimation(OpacityProperty, glow);
+    }
+
+    private const int Applier = int.MinValue;
+
+    /// <summary>The line under the applier's name: whose change goes in, who waits, or how many went in.</summary>
+    private void ShowApplier()
+    {
+        var waiting = _inLine == 1 ? "1 waits" : $"{_inLine} wait";
+        _applier.Status.Text = _applying is not null
+            ? _inLine > 0 ? $"Applying {_applyingFor}'s · {waiting}" : $"Applying {_applyingFor}'s change"
+            : _inLine > 0 ? $"{waiting} in line"
+            : _applied > 0 ? $"{_applied} applied · ready" : "Ready for changes";
+        AutomationProperties.SetName(_station, $"{Names.Applier} applies changes in Revit, one at a time: {_applier.Status.Text}");
     }
 
     private void Leave(int number)
@@ -464,6 +636,14 @@ internal sealed class CrewStrip : Border
         _stage.Children.Remove(w.Person.Root);
         _stage.Children.Remove(w.Desk);
         if (_workers.TryGetValue(w.Number, out var now) && now == w) _workers.Remove(w.Number);
+        if (_said.TryGetValue(w.Number, out var bubble))
+        {
+            bubble.BeginAnimation(OpacityProperty, null);
+            _bubbles.Children.Remove(bubble);
+            _said.Remove(w.Number);
+        }
+        ShowIdle();
+        ArrangeIdle();
     }
 
     private void SetMood(Worker w, CrewMood mood)
@@ -531,6 +711,8 @@ internal sealed class CrewStrip : Border
             line.RenderTransform = scale;
             w.Lines.Add((line, scale));
         }
+        // How far along the job's plan is: a thin bar along the bottom of the screen.
+        w.Progress = Bar(desk, 19, 47, 0, 2, null, ScreenOk);
         w.Mark = new TextBlock { FontFamily = ChatUi.Icons, FontSize = 11, Visibility = Visibility.Collapsed };
         Canvas.SetLeft(w.Mark, 27);
         Canvas.SetTop(w.Mark, 34);
@@ -578,6 +760,15 @@ internal sealed class CrewStrip : Border
         Canvas.SetLeft(f.Name, -42);
         Canvas.SetTop(f.Name, NameTop);
         f.Root.Children.Add(f.Name);
+        // Under the name, for the workers: how far along, or ready for work.
+        f.Status = Brand.Text("", Brand.K.Muted, 9);
+        f.Status.TextWrapping = TextWrapping.NoWrap;
+        f.Status.TextTrimming = TextTrimming.CharacterEllipsis;
+        f.Status.Width = 84;
+        f.Status.TextAlignment = TextAlignment.Center;
+        Canvas.SetLeft(f.Status, -42);
+        Canvas.SetTop(f.Status, NameTop + 13);
+        f.Root.Children.Add(f.Status);
         return f;
     }
 
