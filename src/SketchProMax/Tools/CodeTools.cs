@@ -33,18 +33,31 @@ public abstract class RevitCodeToolBase : IRevitTool
 
     public string[] Required => ["code", "description"];
 
-    protected const string CodeGuidance =
+    protected static readonly string CodeGuidance =
         " Write a C# method body using the Revit API of the running Revit version. Use dedicated tools first when one fits; " +
         "use this for anything they can't do. If compilation fails, the errors come back with line numbers so you can fix and retry. " +
         "Big models (tens of thousands of elements): never collect a whole class or category unfiltered (all CurveElements includes every " +
         "sketch line and can freeze Revit for minutes); filter by category AND view, level or BoundingBoxIntersectsFilter/" +
-        "ElementIntersectsElementFilter, and use quick filters before slow ones. For long loops, call CheckCancel() each iteration so " +
-        "cancel_job can stop it, and log.AppendLine progress or partial results: wait_for_job shows the end of the log while it runs, " +
-        "and the log comes back even if the code stops early. A call that runs past about 45 s returns 'still running as job N'; " +
-        "collect the result with wait_for_job.";
+        "ElementIntersectsElementFilter, and use quick filters before slow ones. Revit is frozen for the user while the code runs, so " +
+        $"keep each call short: a call still running after {CapSeconds} s is stopped at its next loop step and everything it did is rolled " +
+        "back. Do big work in batches (for example 50 to 200 elements per call), one call after another, each one quick. log.AppendLine " +
+        "progress or partial results: wait_for_job shows the end of the log while it runs, and the log comes back even if the code stops " +
+        "early. A call that runs past about 45 s returns 'still running as job N'; collect the result with wait_for_job.";
+
+    /// <summary>
+    /// The longest one code call may hold Revit's thread. Past it the snippet stops at its next loop step (the checks are
+    /// added to every snippet, ScriptSource.Variants) and is rolled back, so no snippet keeps Revit frozen for minutes
+    /// (2026-10-27: a 12-minute dry run froze Revit until it was closed).
+    /// </summary>
+    internal const int CapSeconds = 90;
+
+    internal static string CapText(int seconds) =>
+        $"Stopped after {seconds} s so Revit doesn't stay frozen: while one call runs the user can't work in Revit. Nothing it did was " +
+        "kept. Do the work in smaller steps: fewer elements per call (for example 50 to 200), one call after another, each finishing well " +
+        "under a minute, and keep any whole-model collection filtered.";
 
     public virtual ToolResult Execute(UIApplication app, ToolArgs args) =>
-        RunScript(app, args.String("code"), args.String("description"), ModifiesModel, new Dictionary<string, object?>());
+        RunScript(app, args.String("code"), args.String("description"), ModifiesModel, new Dictionary<string, object?>(), capSeconds: CapSeconds);
 
     /// <summary>
     /// Compiles and runs a snippet, inside one transaction when it changes the model. Learned tools use this too.
@@ -53,7 +66,24 @@ public abstract class RevitCodeToolBase : IRevitTool
     /// atomic and makes it one Undo step.
     /// </summary>
     internal static ToolResult RunScript(UIApplication app, string code, string description, bool modifiesModel,
-        IDictionary<string, object?> values, bool ownTransactions = false)
+        IDictionary<string, object?> values, bool ownTransactions = false, int capSeconds = 0)
+    {
+        // The time cap, unless the caller set its own (the field test's per-step cap).
+        if (capSeconds <= 0 || Bridge.Jobs.Running is not { Limit: null } capped)
+            return RunScriptCore(app, code, description, modifiesModel, values, ownTransactions);
+        var limit = new Bridge.StepLimit { Reason = CapText(capSeconds) };
+        capped.Limit = limit;
+        using var timer = new Timer(_ => limit.TryHit(), null, capSeconds * 1000, Timeout.Infinite);
+        try { return RunScriptCore(app, code, description, modifiesModel, values, ownTransactions); }
+        finally
+        {
+            limit.Finish();
+            if (capped.Limit == limit) capped.Limit = null;
+        }
+    }
+
+    private static ToolResult RunScriptCore(UIApplication app, string code, string description, bool modifiesModel,
+        IDictionary<string, object?> values, bool ownTransactions)
     {
         var uidoc = app.ActiveUIDocument;
         var doc = uidoc.Document;
@@ -229,7 +259,8 @@ public sealed class RunRevitQueryCodeTool : RevitCodeToolBase
     """;
 
     public override ToolResult Execute(UIApplication app, ToolArgs args) =>
-        RunScript(app, args.String("code"), args.String("description"), false, new Dictionary<string, object?>(), args.OptBool("own_transactions"));
+        RunScript(app, args.String("code"), args.String("description"), false, new Dictionary<string, object?>(), args.OptBool("own_transactions"),
+            CapSeconds);
 }
 
 public sealed class RunRevitCodeTool : RevitCodeToolBase
@@ -254,7 +285,7 @@ public sealed class RunRevitCodeTool : RevitCodeToolBase
 
     public override ToolResult Execute(UIApplication app, ToolArgs args) =>
         RunScript(app, args.String("code"), args.String("description"), ModifiesModel, new Dictionary<string, object?>(),
-            args.OptBool("own_transactions"));
+            args.OptBool("own_transactions"), CapSeconds);
 }
 
 /// <summary>Compiles snippets with Roslyn, caching by source so a retried snippet doesn't compile twice.</summary>
@@ -267,10 +298,52 @@ internal static class ScriptCompiler
     private static readonly Dictionary<string, Entry> Cache = new();
     private static List<MetadataReference>? _references;
 
-    public static (Script? Run, string Errors) Compile(string code)
-    {
-        if (Cache.TryGetValue(code, out var cached)) return (cached.Run, "");
+    public static (Script? Run, string Errors) Compile(string code) => Compile(code, null, null);
 
+    /// <summary>
+    /// Compiles the snippet with stop checks added (ScriptSource.Variants: the most checked version that compiles; the
+    /// errors reported are those of the snippet as written). <paramref name="cancel"/> and <paramref name="reason"/>
+    /// replace the running job's stop request (the field test's probe); such a compile isn't cached.
+    /// </summary>
+    internal static (Script? Run, string Errors) Compile(string code, Func<bool>? cancel, Func<string?>? reason)
+    {
+        var shared = cancel is null;
+        if (shared && Cache.TryGetValue(code, out var cached)) return (cached.Run, "");
+
+        // The most checked version first. When it doesn't compile, the snippet as written is tried before the
+        // in-between one, so a snippet with a real mistake costs two compiles, not three, and its own errors come back.
+        var variants = ScriptSource.Variants(code);
+        var order = variants.Count == 3 ? new List<string> { variants[0], variants[2], variants[1] } : variants;
+        var errors = "";
+        for (var i = 0; i < order.Count; i++)
+        {
+            var (assembly, context, failed) = Emit(order[i]);
+            if (assembly is null)
+            {
+                if (order[i] == code) return (null, failed);
+                errors = failed;
+                continue;
+            }
+            // The snippet as written compiled after a checked version didn't: use the in-between one if it compiles.
+            if (order[i] == code && i + 1 < order.Count && Emit(order[i + 1]) is { Assembly: { } better } loops)
+                (assembly, context) = (better, loops.Context);
+            var type = assembly.GetType("SketchProMaxScript")!;
+            var method = type.GetMethod("Run")!;
+            // Lets a long snippet stop when the user asks (cancel_job, Stop, the Rescue window) or its time is up: the
+            // added checks and CheckCancel() throw, Cancelled() tells, and the message says why.
+            type.GetField("CancelProbe")?.SetValue(null, cancel ?? (() => Bridge.Jobs.CancelRequested));
+            type.GetField("StopReason")?.SetValue(null, reason is null ? () => Bridge.Jobs.StopReason : new Func<string?>(reason));
+            Script run = (app, uidoc, doc, log, args) => method.Invoke(null, [app, uidoc, doc, log, args]);
+            if (!shared) return (run, "");
+            if (Cache.Count > 50) Evict();
+            Cache[code] = new Entry(run, context);
+            return (run, "");
+        }
+        return (null, errors);
+    }
+
+    private static (Assembly? Assembly, object? Context, string Errors) Emit(string code)
+    {
         var tree = CSharpSyntaxTree.ParseText(ScriptSource.Wrap(code), new CSharpParseOptions(LanguageVersion.Latest));
         // No member whose signature names ImmutableArray (System.Collections.Immutable) is called from here: the
         // options come from Roslyn's own defaults via With*, and the diagnostics are read as a plain IEnumerable. On
@@ -291,18 +364,11 @@ internal static class ScriptCompiler
                 .Where(d => d.Severity == DiagnosticSeverity.Error)
                 .Take(15)
                 .Select(d => $"line {d.Location.GetMappedLineSpan().StartLinePosition.Line + 1}: {d.GetMessage()}{MemberHint(compilation, d)}");
-            return (null, string.Join("\n", errors));
+            return (null, null, string.Join("\n", errors));
         }
 
         var (assembly, context) = Load(pe.ToArray(), pdb.ToArray());
-        var type = assembly.GetType("SketchProMaxScript")!;
-        var method = type.GetMethod("Run")!;
-        // Lets a long snippet stop when the user asks (cancel_job): CheckCancel() throws, Cancelled() tells.
-        type.GetField("CancelProbe")?.SetValue(null, (Func<bool>)(() => Bridge.Jobs.CancelRequested));
-        Script run = (app, uidoc, doc, log, args) => method.Invoke(null, [app, uidoc, doc, log, args]);
-        if (Cache.Count > 50) Evict();
-        Cache[code] = new Entry(run, context);
-        return (run, "");
+        return (assembly, context, "");
     }
 
     /// <summary>

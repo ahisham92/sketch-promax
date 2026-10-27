@@ -102,6 +102,9 @@ internal sealed class StepLimit
 
     public bool Hit { get { lock (_gate) return _hit; } }
 
+    /// <summary>What a stopped snippet says when this cap stopped it (null: the plain "stopped on request").</summary>
+    public string? Reason { get; init; }
+
     /// <summary>From the timer: marks the cap as hit unless the step has already finished. True when it did.</summary>
     public bool TryHit() { lock (_gate) { if (_done) return false; _hit = true; return true; } }
 
@@ -123,6 +126,9 @@ public static class Jobs
     /// Long loops should check it.
     /// </summary>
     public static bool CancelRequested => Running is { } job && (job.CancelRequested || job.Limit?.Hit == true || JobControl.Tool?.Halting == true);
+
+    /// <summary>Why the running job is being stopped, when its time cap says so (null: stopped on request, or not at all).</summary>
+    public static string? StopReason => Running is { CancelRequested: false, Limit: { Hit: true, Reason: { } reason } } ? reason : null;
 
     /// <summary>
     /// From a tool's Execute: the running job when the tool may hand it on by setting <see cref="Job.Continuation"/> (each
@@ -266,7 +272,7 @@ public sealed class CancelJobTool : IRevitTool
     public string Description =>
         "Ask a long-running tool call to stop. A job still waiting for Revit is dropped. A running one stops at its next " +
         "check: batch tools stop between items (what is done so far is kept as one Undo step), and run_revit_code / " +
-        "run_revit_query_code stop where the code calls CheckCancel(). Revit itself can't be interrupted in the middle of " +
+        "run_revit_query_code stop at the next step of any loop or lambda (checks are added to the code by themselves). Revit itself can't be interrupted in the middle of " +
         "one API call (a regeneration, a big boolean), so that part always runs to the end.";
     public string PropertiesJson => """
     {

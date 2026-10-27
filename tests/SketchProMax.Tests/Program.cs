@@ -22,20 +22,73 @@ void Check(string name, bool ok, string detail = "")
     if (!ok) failures++;
 }
 
-(object? Result, string Errors) Run(string code, Dictionary<string, object>? args = null)
+// Like the add-in (ScriptCompiler.Compile): the snippet with stop checks added, the most checked version that compiles;
+// a snippet that doesn't compile as written reports its own errors.
+(Type? Type, string Errors) Build(string code)
 {
     var references = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!).Split(Path.PathSeparator)
-        .Select(p => MetadataReference.CreateFromFile(p));
-    var compilation = CSharpCompilation.Create("t" + Guid.NewGuid().ToString("N"),
-        [CSharpSyntaxTree.ParseText(RevitStubs), CSharpSyntaxTree.ParseText(ScriptSource.Wrap(code), new CSharpParseOptions(LanguageVersion.Latest))],
-        references, new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, nullableContextOptions: NullableContextOptions.Disable));
-    using var pe = new MemoryStream();
-    var emitted = compilation.Emit(pe);
-    if (!emitted.Success)
-        return (null, string.Join("\n", emitted.Diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error)
-            .Select(d => $"line {d.Location.GetMappedLineSpan().StartLinePosition.Line + 1}: {d.GetMessage()}")));
-    var method = Assembly.Load(pe.ToArray()).GetType("SketchProMaxScript")!.GetMethod("Run")!;
-    return (method.Invoke(null, [null, null, null, new StringBuilder(), args ?? new Dictionary<string, object>()]), "");
+        .Select(p => MetadataReference.CreateFromFile(p)).ToList();
+    (Type? Type, string Errors) One(string source)
+    {
+        var compilation = CSharpCompilation.Create("t" + Guid.NewGuid().ToString("N"),
+            [CSharpSyntaxTree.ParseText(RevitStubs), CSharpSyntaxTree.ParseText(ScriptSource.Wrap(source), new CSharpParseOptions(LanguageVersion.Latest))],
+            references, new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, nullableContextOptions: NullableContextOptions.Disable));
+        using var pe = new MemoryStream();
+        var emitted = compilation.Emit(pe);
+        if (!emitted.Success)
+            return (null, string.Join("\n", emitted.Diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error)
+                .Select(d => $"line {d.Location.GetMappedLineSpan().StartLinePosition.Line + 1}: {d.GetMessage()}")));
+        return (Assembly.Load(pe.ToArray()).GetType("SketchProMaxScript")!, "");
+    }
+    var variants = ScriptSource.Variants(code);
+    var full = One(variants[0]);
+    if (full.Type is not null || variants.Count == 1) return full;
+    var plain = One(code);
+    if (plain.Type is null || variants.Count < 3) return plain;
+    var loops = One(variants[1]);
+    return loops.Type is not null ? loops : plain;
+}
+
+(object? Result, string Errors) Run(string code, Dictionary<string, object>? args = null)
+{
+    var (type, errors) = Build(code);
+    if (type is null) return (null, errors);
+    return (type.GetMethod("Run")!.Invoke(null, [null, null, null, new StringBuilder(), args ?? new Dictionary<string, object>()]), "");
+}
+
+// ---- Stop checks added to every snippet (ScriptSource.Variants), so a long snippet stops when asked or out of time
+Check("checks: a loop's one-line body gets braces and a check on the same line",
+    ScriptSource.Checkpoints("for (var i = 0; i < 3; i++) n++;", false) == "for (var i = 0; i < 3; i++) { SpmCheckpoint(); n++; }",
+    ScriptSource.Checkpoints("for (var i = 0; i < 3; i++) n++;", false));
+Check("checks: blocks, lambdas and nested loops", ScriptSource.Checkpoints("foreach (var a in b) { while (x) y(); }\nvar f = items.Select(i => i * 2);\nAction g = () => { z(); };", true)
+    == "foreach (var a in b) { SpmCheckpoint(); while (x) { SpmCheckpoint(); y(); } }\nvar f = items.Select(i => SpmCheckpoint(i * 2));\nAction g = () => { SpmCheckpoint(); z(); };",
+    ScriptSource.Checkpoints("foreach (var a in b) { while (x) y(); }\nvar f = items.Select(i => i * 2);\nAction g = () => { z(); };", true));
+var lineCode = "var n = 0;\nfor (var i = 0; i < 3; i++)\n    n += i;\ndo n++; while (n < 10);\nreturn n;";
+Check("checks: no new lines, so errors keep the snippet's line numbers", ScriptSource.Variants(lineCode).All(v => v.Split('\n').Length == lineCode.Split('\n').Length));
+Check("checks: a checked snippet gives the same result", Equals(Run(lineCode).Result, 10), Run(lineCode).Errors);
+Check("checks: a lambda that returns nothing still compiles (loops-only version)",
+    Equals(Run("var l = new List<int>(); Enumerable.Range(0, 3).ToList().ForEach(i => l.Add(i)); return l.Count;").Result, 3),
+    Run("var l = new List<int>(); Enumerable.Range(0, 3).ToList().ForEach(i => l.Add(i)); return l.Count;").Errors);
+Check("checks: a mistake is reported on its own line", Run("var x = 1;\nfor (var i = 0; i < 3; i++) { x += i; }\nreturn y;").Errors.StartsWith("line 3"),
+    Run("var x = 1;\nfor (var i = 0; i < 3; i++) { x += i; }\nreturn y;").Errors);
+Check("checks: a snippet that can't be parsed is compiled as written", ScriptSource.Variants("return 1;").Last() == "return 1;");
+foreach (var (what, code) in new[]
+{
+    ("a loop", "var end = Environment.TickCount + 15000; long n = 0; while (Environment.TickCount - end < 0) { n++; } return n;"),
+    ("a LINQ lambda", "var end = Environment.TickCount + 15000; return Enumerable.Range(0, int.MaxValue).Select(i => (long)i).TakeWhile(i => Environment.TickCount - end < 0).Count();"),
+    ("a one-line loop body", "var end = Environment.TickCount + 15000; long n = 0; for (;;) if (Environment.TickCount - end < 0) n++; else break; return n;"),
+})
+{
+    var (type, errors) = Build(code);
+    var stopAt = Environment.TickCount + 300;
+    type?.GetField("CancelProbe")!.SetValue(null, (Func<bool>)(() => Environment.TickCount - stopAt >= 0));
+    type?.GetField("StopReason")!.SetValue(null, (Func<string>)(() => "out of time"));
+    var watch = System.Diagnostics.Stopwatch.StartNew();
+    string said = "";
+    try { type?.GetMethod("Run")!.Invoke(null, [null, null, null, new StringBuilder(), new Dictionary<string, object>()]); }
+    catch (TargetInvocationException ex) when (ex.InnerException is OperationCanceledException stop) { said = stop.Message; }
+    Check($"checks: {what} that would run 15 s stops when asked and says why", type is not null && said == "out of time" && watch.ElapsedMilliseconds < 3000,
+        $"{errors} said '{said}' after {watch.ElapsedMilliseconds} ms");
 }
 
 var one = Run("return 1 + 1;");

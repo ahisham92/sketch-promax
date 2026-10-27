@@ -148,6 +148,15 @@ internal static class ParallelJobTests
         turns.Leave(b);
         var d = turns.Enter("j5", "x");
         check("turns: an empty queue gives the turn at once", turns.WaitAsync(d, TimeSpan.FromMilliseconds(10), CancellationToken.None).Result && moved >= 8, moved.ToString());
+        var read = turns.Enter("j6", "query_elements");
+        check("turns: a read waits in the same line as the changes", turns.Position(read) == 2 && !turns.WaitAsync(read, TimeSpan.FromMilliseconds(30), CancellationToken.None).Result, "");
+        turns.Leave(d);
+        check("turns: Revit's breather is a tenth of the call, a quarter second to two seconds",
+            JobTurns.Breather(TimeSpan.FromMilliseconds(100)) == TimeSpan.FromMilliseconds(250) && JobTurns.Breather(TimeSpan.FromSeconds(5)) == TimeSpan.FromMilliseconds(500)
+            && JobTurns.Breather(TimeSpan.FromMinutes(5)) == TimeSpan.FromSeconds(2), "");
+        check("turns: no breather before any call", turns.RestLeft == TimeSpan.Zero, "");
+        turns.Rested(TimeSpan.FromSeconds(10));
+        check("turns: the next call waits for the breather after one ends", turns.RestLeft > TimeSpan.FromMilliseconds(800) && turns.RestLeft <= TimeSpan.FromSeconds(1), turns.RestLeft.ToString());
 
         // ---- Step rows for the main chat's job calls
         check("steps: chat_jobs in plain words", StepNames.Describe("chat_jobs", """{"action":"start","title":"Sheets for levels 1-5","task":"…"}""") == "Start a job: Sheets for levels 1-5"

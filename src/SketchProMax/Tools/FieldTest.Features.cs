@@ -552,6 +552,7 @@ internal static partial class FieldTest
         await Probe(s, "chat.prompts", () => Prompts(s.Folder)).ConfigureAwait(false);
         await Probe(s, "chat.notes", Notes).ConfigureAwait(false);
         await Probe(s, "chat.jobs", _ => ParallelJobs(s.Folder)).ConfigureAwait(false);
+        await Probe(s, "code.checkpoints", CodeCheckpoints).ConfigureAwait(false);
         await Probe(s, "chat.types", () => ChatTypesProbe(s.Folder)).ConfigureAwait(false);
         await Probe(s, "chat.auto", ChatAutoProbe).ConfigureAwait(false);
         await Probe(s, "chat.usage", () => UsageProbe(s.Folder)).ConfigureAwait(false);
@@ -1184,6 +1185,45 @@ internal static partial class FieldTest
     /// The chat's parallel jobs without starting one (no plan use): opening and routing, the limit, the queue changes take
     /// turns in, the report, saving with the chat and sessions.json, and a card. On Revit's thread for the card.
     /// </summary>
+    /// <summary>
+    /// The stop checks added to every snippet: a loop that would run 15 s, a LINQ lambda over many items and a loop with
+    /// a one-line body each stop within a second of being asked, saying why; a lambda that returns nothing still
+    /// compiles; a snippet with a mistake reports its own line. Compiled and run off Revit's thread, touching no model.
+    /// </summary>
+    private static (string, string) CodeCheckpoints()
+    {
+        var problems = new List<string>();
+        var asked = 0;
+        var watch = Stopwatch.StartNew();
+        string? Stop(string code)
+        {
+            var (run, errors) = ScriptCompiler.Compile(code, () => Volatile.Read(ref asked) == 1, () => "probe stop");
+            if (run is null) return "didn't compile: " + errors;
+            Volatile.Write(ref asked, 0);
+            using var timer = new Timer(_ => Volatile.Write(ref asked, 1), null, 300, Timeout.Infinite);
+            watch.Restart();
+            try { run(null!, null!, null!, new StringBuilder(), new Dictionary<string, object?>()); }
+            catch (System.Reflection.TargetInvocationException ex) when (ex.InnerException is OperationCanceledException stop)
+            {
+                return stop.Message == "probe stop" && watch.ElapsedMilliseconds < 3000 ? null : $"stopped after {watch.ElapsedMilliseconds} ms saying \"{stop.Message}\"";
+            }
+            return $"wasn't stopped (ran {watch.ElapsedMilliseconds} ms)";
+        }
+        var loop = "var end = Environment.TickCount + 15000; long n = 0; while (Environment.TickCount - end < 0) { n++; } return n;";
+        var linq = "var end = Environment.TickCount + 15000; return Enumerable.Range(0, int.MaxValue).Select(i => (long)i * 2).TakeWhile(i => Environment.TickCount - end < 0).Count();";
+        var oneLine = "var end = Environment.TickCount + 15000; long n = 0; for (;;) if (Environment.TickCount - end < 0) n++; else break; return n;";
+        foreach (var (name, code) in new[] { ("a loop", loop), ("a LINQ lambda", linq), ("a one-line loop body", oneLine) })
+            if (Stop(code) is { } why) problems.Add($"{name} {why}");
+        var quiet = ScriptCompiler.Compile("var l = new List<int>(); Enumerable.Range(0, 3).ToList().ForEach(i => l.Add(i));\nforeach (var i in l) log.Append(i);\nreturn l.Count;", () => false, () => null);
+        if (quiet.Run is null) problems.Add("a lambda that returns nothing no longer compiles: " + quiet.Errors);
+        else if (!Equals(quiet.Run(null!, null!, null!, new StringBuilder(), new Dictionary<string, object?>()), 3)) problems.Add("a checked snippet gave a different result");
+        var broken = ScriptCompiler.Compile("var x = 1;\nfor (var i = 0; i < 3; i++) { x += i; }\nreturn y;", () => false, () => null);
+        if (broken.Run is not null || !broken.Errors.Contains("line 3")) problems.Add("a mistake isn't reported on its own line: " + broken.Errors);
+        return problems.Count == 0
+            ? Pass("a 15 s loop, a LINQ lambda and a one-line loop body each stopped within a second, a lambda that returns nothing still compiles, and a mistake is reported on its own line")
+            : Fail(string.Join("; ", problems));
+    }
+
     private static (string, string) ParallelJobs(string folder)
     {
         var problems = new List<string>();
@@ -1221,9 +1261,14 @@ internal static partial class FieldTest
         if (turns.Position(a) != 1 || turns.Position(b) != 2 || turns.WaitAsync(b, TimeSpan.FromMilliseconds(50), CancellationToken.None).Result)
             problems.Add("the second change didn't wait behind the first");
         var c = turns.Enter(views.Key, "create_section_views");
+        var read = turns.Enter(walls.Key, "query_elements");
         turns.Leave(a);
         if (!turns.WaitAsync(c, TimeSpan.FromSeconds(1), CancellationToken.None).Result) problems.Add("the next change didn't get its turn when the first ended");
+        if (turns.Position(read) != 2) problems.Add("a read didn't take its turn in the same line as the changes");
         turns.Leave(c);
+        turns.Leave(read);
+        turns.Rested(TimeSpan.FromSeconds(10));
+        if (turns.RestLeft <= TimeSpan.Zero || turns.RestLeft > TimeSpan.FromSeconds(2)) problems.Add($"Revit's breather after a 10 s call is {turns.RestLeft.TotalMilliseconds:0} ms");
 
         var jobsFolder = Path.Combine(folder, "jobs");
         JobSessions.Set(jobsFolder, sheets.Key, "11111111-2222-3333-4444-555555555555");
