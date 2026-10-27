@@ -531,11 +531,14 @@ internal static class FieldTestCoverage
             "Revit's own journal is found and read while Revit writes it, and its last command is named (the Rescue window says this while Revit is frozen)"),
         new("rescue.warn", Rescue, "A warning before Run systems analysis", How.Probe, "",
             "Run systems analysis (which froze a port model with links on 27 Oct 2026) is bound by Sketch ProMax, so its warning shows before it runs"),
+        new("rescue.activity", Rescue, "The tray icon and the working-or-stuck readout", How.Probe, "",
+            "the Sketch ProMax tray icon is up (it opens the Rescue window at any time), and the readout has Revit's processor and memory figures"),
         new("rescue.ui", Rescue, "The Rescue window when Revit freezes", How.Manual, "", "needs Revit to really stop responding",
-            "On a _detached copy of a big model with links (never the live model), save first. Analyze > Run systems analysis: Sketch ProMax warns that it can freeze Revit; press Cancel and nothing runs. " +
-            "Click it again and press Run it anyway, then pick Create the Energy Analytical Model. After about 20 s of Revit not responding, the Sketch ProMax Rescue window opens by itself on top: it says Revit is busy with Run systems analysis (Create Energy Analysis Model), that this is Revit's own command, how long, and how many changes Lifeline keeps. " +
-            "Press Esc in Revit: if Revit stops, the window says Revit is responding again and closes. Otherwise, after a minute, the box Warn me before Run systems analysis next time is ticked; press Close Revit…, read the line about Lifeline, press Close Revit now: Revit ends. " +
-            "Start Revit and open the copy: the Lifeline window offers the changes since the save to Replay. Also: with a Revit dialog open (Manage > Purge Unused), click Revit's own window title so the dialog falls behind: after 20 s the Rescue window says Revit is waiting for a dialog; Show the dialog brings it to the middle of Revit's window."),
+            "On a _detached copy of a big model with links (never the live model), save first. Click the Sketch ProMax icon in the Windows tray: the Rescue window opens and says Revit is responding. " +
+            "Analyze > Run systems analysis: Sketch ProMax warns that it can freeze Revit; press Cancel and nothing runs. Click it again, press Run it anyway, then pick Create the Energy Analytical Model. " +
+            "After about 20 s of Revit not responding, the Rescue window opens by itself on top: a green Working line with CPU and memory figures (memory rising), Revit is busy with Run systems analysis (Create Energy Analysis Model), that this is Revit's own command, and how many changes Lifeline keeps. " +
+            "Press Esc in Revit: if Revit stops, the window says Revit is responding again and closes. Otherwise, after a minute, the box Warn me before Run systems analysis next time is ticked. Press Restart Revit…, read the line about Lifeline, press Restart Revit now: Revit ends, starts again and opens the copy, and the Lifeline window offers the changes since the save to Replay. " +
+            "Also: with a Revit dialog open (Manage > Purge Unused), click Revit's own window title so the dialog falls behind: after 20 s the Rescue window says Revit is waiting for a dialog; Show the dialog brings it to the middle of Revit's window."),
 
         // ---- Bug fixes checked by a person (the rest are field-test cases named "tool bug#N", see BugChecks)
         new("bug.titleblock_params", BugFixes, "Bug #7: a copied title block fills its fields", How.Manual, "", "needs the office's own title block family, whose labels use shared parameters",

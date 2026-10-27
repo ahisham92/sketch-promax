@@ -61,8 +61,41 @@ internal static class FreezeTests
         ]);
         check("freeze: a sync still running is named as synchronizing", sync.What == "Synchronizing with central", sync.ToString());
         check("freeze: never a warning for syncing", !FreezeCause.OfferWarning(sync, TimeSpan.FromMinutes(10)), "");
-        check("freeze: the window waits 5 min for a sync, 20 s for a command",
-            FreezeCause.OpenAfter(sync) == TimeSpan.FromMinutes(5) && FreezeCause.OpenAfter(busy) == TimeSpan.FromSeconds(20), "");
+        check("freeze: the window waits 1 min for a sync, 20 s for a command",
+            FreezeCause.OpenAfter(sync) == TimeSpan.FromMinutes(1) && FreezeCause.OpenAfter(busy) == TimeSpan.FromSeconds(20), "");
+
+        // Working or stuck, from samples a second apart (8 cores; memory in bytes).
+        const long Mb = 1024 * 1024;
+        var t0 = new DateTime(2026, 10, 27, 13, 0, 0);
+        List<FreezeCause.Sample> Run(int seconds, Func<int, (double cpu, long mem, long files, long journal)> at)
+        {
+            var list = new List<FreezeCause.Sample>();
+            double cpu = 0;
+            for (var i = 0; i <= seconds; i++)
+            {
+                var (c, m, f, j) = at(i);
+                cpu += c;
+                list.Add(new FreezeCause.Sample(t0.AddSeconds(i), TimeSpan.FromSeconds(cpu), m, f, j));
+            }
+            return list;
+        }
+        var working = FreezeCause.Judge(Run(40, i => (i == 0 ? 0 : 1.0, 3000 * Mb + i * 10 * Mb, 0, 100)), 8, t0.AddSeconds(40));
+        check("activity: one busy core and memory rising is Working", working.Progress == FreezeCause.Progress.Working && FreezeCause.Verdict(working) == "Working", working.ToString());
+        check("activity: CPU as Task Manager shows it, memory change over 30 s",
+            Math.Abs(working.CpuPercent - 12.5) < 0.1 && working.MemoryChange == 300 * Mb && FreezeCause.Figures(working) == "CPU 12.5% · memory 3.3 GB (+300 MB in 30 s)", FreezeCause.Figures(working));
+        var files = FreezeCause.Judge(Run(40, i => (0.01, 3000 * Mb, i * 512 * 1024L, 100)), 8, t0.AddSeconds(40));
+        check("activity: no processor but files moving is working on files", files.Progress == FreezeCause.Progress.Files && FreezeCause.Figures(files).Contains("files 15 MB in 30 s"), FreezeCause.Figures(files));
+        // Ahmed's screenshot: 1% of the PC and flat memory.
+        var idle = Run(170, i => (i < 20 ? 0.5 : 0.01, 3226 * Mb, 0, 100));
+        var quiet = FreezeCause.Judge(idle.Take(80).ToList(), 8, t0.AddSeconds(80));
+        check("activity: flat for a minute is quiet, not yet stuck", quiet.Progress == FreezeCause.Progress.Quiet && quiet.Quiet == TimeSpan.FromSeconds(61), quiet.ToString());
+        var stuck = FreezeCause.Judge(idle, 8, t0.AddSeconds(170));
+        check("activity: flat for 2 min looks stuck", stuck.Progress == FreezeCause.Progress.Stuck && FreezeCause.Verdict(stuck) == "Looks stuck", stuck.ToString());
+        check("activity: stuck advice says to close (Lifeline keeps changes)", FreezeCause.Advice(stuck, busy).Contains("close Revit (Lifeline keeps your changes)"), FreezeCause.Advice(stuck, busy));
+        check("activity: stuck during a sync says to give it more time", FreezeCause.Advice(stuck, sync).Contains("waiting for the central model"), FreezeCause.Advice(stuck, sync));
+        var journal = FreezeCause.Judge(Run(30, i => (0.0, 3000 * Mb, 0, 100 + i)), 8, t0.AddSeconds(30));
+        check("activity: a journal being written counts as working", journal.Progress == FreezeCause.Progress.Working, journal.ToString());
+        check("activity: one sample is not judged stuck", FreezeCause.Judge([new FreezeCause.Sample(t0, TimeSpan.Zero, 5, 0, 0)], 8, t0).Progress == FreezeCause.Progress.Working, "");
 
         var asking = FreezeCause.Read(
         [

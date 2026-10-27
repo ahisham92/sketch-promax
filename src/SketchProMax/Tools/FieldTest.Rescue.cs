@@ -30,4 +30,14 @@ internal static partial class FieldTest
             : command.HasBinding ? Fail("another add-in has bound Run systems analysis, so Sketch ProMax can't warn before it")
             : Fail("Run systems analysis isn't bound: the warning won't show");
     }
+
+    /// <summary>The tray icon is up and the working-or-stuck readout has figures (Revit's memory, processor). Off Revit's thread.</summary>
+    private static (string, string) RescueActivity()
+    {
+        if (!UI.RescueTray.Running) return Fail("the Sketch ProMax tray icon isn't running, so the Rescue window can't be opened by hand");
+        var a = FreezeWatch.Activity();
+        return a.Memory > 0
+            ? Pass($"tray icon up; Revit now: {FreezeCause.Verdict(a)} ({FreezeCause.Figures(a)})")
+            : Fail("the readout has no figures: Revit's memory and processor time couldn't be read");
+    }
 }

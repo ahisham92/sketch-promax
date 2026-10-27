@@ -173,10 +173,10 @@ internal static class FreezeCause
         busy.CommandId is { Length: > 0 } id && !busy.Ours && frozen >= WarnAfter && !NeverWarn.Contains(id);
 
     /// <summary>
-    /// How long Revit may be stuck before the Rescue window opens: 20 s, but 5 min for everyday long work (opening a model
-    /// or a link, syncing, saving), so the window doesn't open at every sync of a big model.
+    /// How long Revit may be stuck before the Rescue window opens: 20 s, but 1 min for everyday long work (opening a model
+    /// or a link, syncing, saving), so the window doesn't open at every short sync of a big model.
     /// </summary>
-    public static TimeSpan OpenAfter(Busy busy) => Routine.Contains(busy.What) ? TimeSpan.FromMinutes(5) : TimeSpan.FromSeconds(20);
+    public static TimeSpan OpenAfter(Busy busy) => Routine.Contains(busy.What) ? TimeSpan.FromMinutes(1) : TimeSpan.FromSeconds(20);
 
     private static readonly HashSet<string> Routine = new(Brackets.Values, StringComparer.Ordinal);
 
@@ -189,6 +189,93 @@ internal static class FreezeCause
         "ID_FILE_SAVE_TO_CENTRAL", "ID_FILE_SAVE", "ID_REVIT_FILE_SAVE", "ID_REVIT_FILE_OPEN", "ID_FILE_OPEN", "ID_EDIT_UNDO",
         "ID_EDIT_REDO", "ID_CANCEL_EDITOR", "ID_RELOAD_LATEST", "ID_FILE_SYNCHRONIZE_NOW",
     };
+
+    // ---- Working or stuck: Revit's processor, memory, file and journal activity -------------------------------------
+
+    /// <param name="Cpu">Revit's processor time so far (all threads).</param>
+    /// <param name="Memory">Revit's private memory, bytes.</param>
+    /// <param name="Files">Bytes Revit has read and written so far (models, links, central, the network).</param>
+    /// <param name="Journal">The journal's length, bytes (Revit writes it as it works).</param>
+    public sealed record Sample(DateTime At, TimeSpan Cpu, long Memory, long Files, long Journal);
+
+    public enum Progress { Working, Files, Quiet, Stuck }
+
+    /// <param name="CpuPercent">As Task Manager shows it (share of the whole PC), over the last 30 s.</param>
+    /// <param name="MemoryChange">Change over the last 30 s, bytes.</param>
+    /// <param name="FilesBytes">Read and written over the last 30 s.</param>
+    /// <param name="Quiet">Since the last activity of any kind.</param>
+    public sealed record Activity(Progress Progress, double CpuPercent, long Memory, long MemoryChange, long FilesBytes, TimeSpan Quiet);
+
+    /// <summary>No activity for this long: Revit is most likely stuck, not working.</summary>
+    public static readonly TimeSpan StuckAfter = TimeSpan.FromMinutes(2);
+
+    /// <summary>
+    /// Working (the processor busy on a quarter of one core or more: real work keeps a core busy, a stuck Revit that
+    /// only polls uses a few percent; memory moving; or the journal written), reading or
+    /// writing files, quiet for a while, or stuck (nothing at all for <see cref="StuckAfter"/>), from samples a second
+    /// apart, oldest first. Fewer than two samples: Working with no figures (nothing to judge yet).
+    /// </summary>
+    public static Activity Judge(IReadOnlyList<Sample> samples, int cores, DateTime now)
+    {
+        if (samples.Count < 2) return new Activity(Progress.Working, 0, samples.Count == 1 ? samples[0].Memory : 0, 0, 0, TimeSpan.Zero);
+        cores = Math.Max(1, cores);
+        DateTime? busy = null, files = null;
+        for (var i = 1; i < samples.Count; i++)
+        {
+            var a = samples[i - 1];
+            var b = samples[i];
+            var wall = (b.At - a.At).TotalSeconds;
+            if (wall <= 0) continue;
+            var core = (b.Cpu - a.Cpu).TotalSeconds / wall;
+            if (core >= 0.25 || Math.Abs(b.Memory - a.Memory) >= 2L * 1024 * 1024 || b.Journal > a.Journal) busy = b.At;
+            if (b.Files - a.Files >= 64L * 1024) files = b.At;
+        }
+        var last = samples[samples.Count - 1];
+        var from = samples.LastOrDefault(x => last.At - x.At >= TimeSpan.FromSeconds(30)) ?? samples[0];
+        var span = Math.Max(1e-6, (last.At - from.At).TotalSeconds);
+        var cpu = (last.Cpu - from.Cpu).TotalSeconds / span / cores * 100;
+        var any = new[] { busy, files }.Where(t => t is not null).Select(t => t!.Value).DefaultIfEmpty(samples[0].At).Max();
+        var quiet = now - any;
+        var progress = busy is { } w && now - w <= TimeSpan.FromSeconds(10) ? Progress.Working
+            : files is { } f && now - f <= TimeSpan.FromSeconds(10) ? Progress.Files
+            : quiet >= StuckAfter ? Progress.Stuck : Progress.Quiet;
+        return new Activity(progress, Math.Round(Math.Max(0, cpu), 1), last.Memory, last.Memory - from.Memory, Math.Max(0, last.Files - from.Files), quiet);
+    }
+
+    /// <summary>The verdict in a few words, for the window's coloured line.</summary>
+    public static string Verdict(Activity a) => a.Progress switch
+    {
+        Progress.Working => "Working",
+        Progress.Files => "Working on files",
+        Progress.Quiet => "No activity for " + Duration(a.Quiet),
+        _ => "Looks stuck",
+    };
+
+    /// <summary>What to do, for the verdict (and what Revit is busy with).</summary>
+    public static string Advice(Activity a, Busy busy) => a.Progress switch
+    {
+        Progress.Working => "Revit is using the processor and memory is changing, so it is still working. Waiting usually pays off.",
+        Progress.Files => "Revit is reading or writing files (the model, links or the central model). Wait while this goes on.",
+        Progress.Quiet => $"If nothing changes for {Duration(StuckAfter)}, Revit is most likely stuck.",
+        _ when busy.What == "Synchronizing with central" =>
+            $"Nothing has changed for {Duration(a.Quiet)}. Revit may be waiting for the central model on the network. Give it a few more minutes before closing it.",
+        _ => $"Nothing has changed for {Duration(a.Quiet)}, so waiting is unlikely to help. Try Press Esc in Revit; if that does nothing, close Revit (Lifeline keeps your changes).",
+    };
+
+    /// <summary>"CPU 6% · memory 9.1 GB (+420 MB in 30 s) · files 4 MB in 30 s".</summary>
+    public static string Figures(Activity a)
+    {
+        var parts = new List<string> { $"CPU {a.CpuPercent.ToString("0.#", CultureInfo.InvariantCulture)}%" };
+        if (a.Memory > 0)
+            parts.Add($"memory {Size(a.Memory)}" + (Math.Abs(a.MemoryChange) >= 1024 * 1024 ? $" ({(a.MemoryChange > 0 ? "+" : "−")}{Size(Math.Abs(a.MemoryChange))} in 30 s)" : ""));
+        if (a.FilesBytes >= 64 * 1024) parts.Add($"files {Size(a.FilesBytes)} in 30 s");
+        return string.Join(" · ", parts);
+    }
+
+    public static string Size(long bytes) =>
+        bytes >= 1L << 30 ? (bytes / (double)(1L << 30)).ToString("0.0", CultureInfo.InvariantCulture) + " GB"
+        : bytes >= 1L << 20 ? (bytes >> 20).ToString(CultureInfo.InvariantCulture) + " MB"
+        : (bytes >> 10).ToString(CultureInfo.InvariantCulture) + " KB";
 
     // ---- Commands to warn about before they run -------------------------------------------------------------------
 
