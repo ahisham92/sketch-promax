@@ -157,11 +157,16 @@ internal static class CoreRibbonManifest
         S("Check", "find_clashes", "Clashes", "clash", "Finds clashes between two sets of elements, in this model or in linked models."),
         S("Check", "check_drawings", "Drawing check", "drawing-check", "Looks for mistakes across the drawings, such as grids that differ from the links and overridden dimensions."),
         S("Check", "boq_check", "BOQ check", "boq", "Checks a bill of quantities against the model.", breakBefore: true),
-        L(Button("Check", "Cleanup", "Purge & cleanup", "cleanup", "refresh",
-            "Purge unused families, types and materials, delete views on no sheet, remove imported CAD, or a model health clean. Each shows a preview first and asks before it deletes.",
-            "Pick one of the four: Purge unused (repeated until nothing new is unused), Delete unused views (keeps WORKING and _keep views, open views and views others depend on), " +
-            "Clean up imports (imported CAD and IMPORT- line styles), Model health clean (unused view templates, unplaced rooms, unused groups and filters, warnings by type). " +
-            "Its options open, then the preview: nothing changes until you press Delete them, and Ctrl+Z undoes it in one step.", needsModel: true, small: true)),
+        // Model storage (0.36, in place of Purge & cleanup so no loader slot is spent): what makes the model heavy, heaviest first,
+        // against the size limit in Settings, like a phone's storage page; the four cleanups are on it (UI/ModelStorageWindow).
+        // "cleanup" (the old button's dialog) stays in CoreEntry for shared tool packs.
+        L(Button("Check", "ModelStorage", "Storage & cleanup", "model-storage", "refresh",
+            "What makes this model heavy, heaviest first, against your size limit, with the purge and cleanup tools to make it lighter.",
+            "A coloured bar shows the model's size against the limit (200 MB unless changed in Settings > Model size), split into families, " +
+            "imported CAD, images, in-place shapes, model elements, views, annotation and more. Below it: recommendations, the four cleanups " +
+            "(Purge unused, Delete unused views, Clean up imports, Model health clean; each previews first and asks before it deletes), the linked " +
+            "files, and every family, import and category with its size. Families are measured one by one; the rest is estimated and fitted to " +
+            "the file on disk. Reading changes nothing.", needsModel: true, small: true)),
 
         // ---- Issue (titled Submit, see LoaderBrand; 0.33: the submit check gates Submit drawings and Export PDF of sheets, see UI/IssueGateWindow)
         L(Button("Issue", "IssueCheck", "Submit\ncheck", "issue-check", "check",

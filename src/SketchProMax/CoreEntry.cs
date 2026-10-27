@@ -126,6 +126,8 @@ public static class CoreEntry
             "berth-costing" => BerthCostWindow.Command(app),
             // Purge and cleanup (0.34+): pick one of the four cleanup tools; each previews, then asks before deleting.
             "cleanup" => RibbonTools.Cleanup(app),
+            // Model storage (0.36+): what makes the model heavy, heaviest first, against the size limit (UI/ModelStorageWindow).
+            "model-storage" => ModelStorageWindow.Command(app),
             // Shared tools (0.35+): Share tools makes a TritoRevit zip; the TritoRevit tab's buttons and its Shared tools window.
             "share-tools" => Sharing.SharedTools.Share(app),
             "shared-manage" => Sharing.SharedTools.Manage(app),

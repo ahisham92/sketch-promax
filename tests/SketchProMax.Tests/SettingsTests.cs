@@ -7,8 +7,8 @@ internal static class SettingsTests
     public static void Run(string repoRoot, Action<string, bool, string> check)
     {
         var keys = SettingsLayout.Tabs.Select(t => t.Key).ToList();
-        check("settings: eight tabs, each once", keys.Count == 8 && keys.Distinct().Count() == 8
-            && SettingsLayout.Tabs.Select(t => t.Name).SequenceEqual(["Approvals", "Chat", "Firm standards", "Time tracking", "Issue & drawings", "Sign-off", "Lifeline", "Updates"]),
+        check("settings: nine tabs, each once", keys.Count == 9 && keys.Distinct().Count() == 9
+            && SettingsLayout.Tabs.Select(t => t.Name).SequenceEqual(["Approvals", "Chat", "Firm standards", "Time tracking", "Issue & drawings", "Sign-off", "Lifeline", "Model size", "Updates"]),
             string.Join(", ", SettingsLayout.Tabs.Select(t => t.Name)));
         check("settings: every setting is on a tab that exists", SettingsLayout.Settings.Values.All(keys.Contains), "");
         var empty = keys.Where(k => !SettingsLayout.Settings.Values.Contains(k)).ToList();
@@ -46,6 +46,6 @@ internal static class SettingsTests
 
         // The tab opened last, and Ctrl+Tab wrapping round.
         check("settings: opens on the tab left last", SettingsLayout.StartIndex("time\r\n") == 3 && SettingsLayout.StartIndex("gone") == 0 && SettingsLayout.StartIndex(null) == 0, "");
-        check("settings: Ctrl+Tab wraps both ways", SettingsLayout.Next(7, back: false) == 0 && SettingsLayout.Next(0, back: true) == 7 && SettingsLayout.Next(2, back: false) == 3, "");
+        check("settings: Ctrl+Tab wraps both ways", SettingsLayout.Next(8, back: false) == 0 && SettingsLayout.Next(0, back: true) == 8 && SettingsLayout.Next(2, back: false) == 3, "");
     }
 }

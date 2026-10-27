@@ -521,6 +521,8 @@ internal static partial class FieldTest
         await Probe(s, "whatif.preview", app => WhatIfPreview(app, s)).ConfigureAwait(false);
         await Probe(s, "cleanup.passes", app => CleanupPasses(app, s)).ConfigureAwait(false);
         await Probe(s, "cleanup.workshared", app => CleanupWorkshared(app, s)).ConfigureAwait(false);
+        // Measuring a family opens it (EditFamily): from the external event.
+        await ProbeCore(s, "storage.read", () => App.Dispatcher.InvokeFromEventAsync(app => StorageRead(app, s))).ConfigureAwait(false);
         await Probe(s, "central.once", app => CentralOnce(app, s)).ConfigureAwait(false);
         // Saving the test project is refused in other event handlers: from the external event.
         await ProbeCore(s, "recovery.file", () => App.Dispatcher.InvokeFromEventAsync(app => RecoveryFile(app, s))).ConfigureAwait(false);

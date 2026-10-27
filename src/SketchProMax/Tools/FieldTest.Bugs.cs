@@ -16,6 +16,40 @@ internal static partial class FieldTest
 {
     // ---- Purge and cleanup (in the test project, rolled back) ------------------------------------------------------------
 
+    /// <summary>
+    /// Model storage on the test project: read in steps, three families measured by saving them, then stopped; the rows
+    /// fit the total, heaviest first, and the model is unchanged.
+    /// </summary>
+    private static (string, string) StorageRead(UIApplication app, State s)
+    {
+        if (TestDoc(app, s, out var why) is not { } doc) return Fail(why);
+        var before = new FilteredElementCollector(doc).WhereElementIsNotElementType().GetElementCount();
+        var modified = doc.IsModified;
+        var reader = Revit.ModelStorageReader.Plan(doc, fresh: true);
+        var steps = 0;
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        while (reader.RunFor(TimeSpan.FromMilliseconds(200)))
+        {
+            steps++;
+            if (reader.QuickDone && reader.FamiliesTotal - reader.FamiliesLeft >= 3) reader.StopMeasuring();
+            if (watch.Elapsed > TimeSpan.FromMinutes(3)) return Fail($"still reading after 3 minutes ({steps} steps, {reader.StepsLeft} parts and {reader.FamiliesLeft} families left)");
+        }
+        var problems = new List<string>();
+        if (steps < 2) problems.Add($"read in {steps} step(s): expected several");
+        var report = ModelStorageMath.Balance(reader.FileBytes, reader.Rows());
+        if (report.Items.Count == 0) problems.Add("no rows");
+        if (report.Items.Sum(i => i.Bytes) != report.Total) problems.Add($"rows add up to {report.Items.Sum(i => i.Bytes)}, total {report.Total}");
+        for (var i = 1; i < report.Items.Count; i++)
+            if (report.Items[i].Bytes > report.Items[i - 1].Bytes) { problems.Add($"not heaviest first at row {i + 1}"); break; }
+        if (reader.FamiliesTotal > 0 && !report.Items.Any(i => i.Kind == ModelStorageMath.Families && i.Measured)) problems.Add("no family was measured");
+        if (!report.Items.Any(i => i.Kind == ModelStorageMath.Model)) problems.Add("no model elements counted");
+        var after = new FilteredElementCollector(doc).WhereElementIsNotElementType().GetElementCount();
+        if (after != before || doc.IsModified != modified) problems.Add($"the model changed ({before} elements before, {after} after)");
+        var heaviest = report.Items.Take(3).Select(i => $"{i.Name} {ModelStorageMath.Size(i.Bytes)}");
+        return problems.Count > 0 ? Fail(string.Join("; ", problems))
+            : Pass($"{steps} steps, {report.Items.Count} rows, total {ModelStorageMath.Size(report.Total)}{(report.OnDisk ? " on disk" : " estimated")}; heaviest: {string.Join(", ", heaviest)}");
+    }
+
     /// <summary>A new wall type that only a new material uses: one purge finds both (the material in a later pass).</summary>
     private static (string, string) CleanupPasses(UIApplication app, State s)
     {

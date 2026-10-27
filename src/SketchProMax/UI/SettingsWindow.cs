@@ -48,6 +48,7 @@ public sealed class SettingsWindow : Window
     private readonly ComboBox _jobLimit = new() { MinHeight = 26, MinWidth = 56, Margin = new Thickness(6, 0, 6, 0) };
     private readonly CheckBox _autoSync = Check("Synchronize with central after every");
     private readonly TextBox _syncChanges = new() { Width = 64, MinHeight = 26, Margin = new Thickness(6, 0, 6, 0) };
+    private readonly TextBox _sizeLimit = new() { Width = 72, MinHeight = 26, Margin = new Thickness(6, 0, 6, 0) };
     private string _sigImage = "";
     private readonly TabControl _tabs = new();
     private readonly List<(string Setting, FrameworkElement Control)> _placed = [];
@@ -82,6 +83,7 @@ public sealed class SettingsWindow : Window
         _jobLimit.SelectedIndex = Chat.JobBoard.ClampLimit(_settings.ChatJobLimit) - Chat.JobBoard.MinLimit;
         _autoSync.IsChecked = _settings.AutoSync;
         _syncChanges.Text = Revit.AutoSyncRule.Clamp(_settings.AutoSyncChanges).ToString(System.Globalization.CultureInfo.CurrentCulture);
+        _sizeLimit.Text = Tools.ModelStorageMath.ClampLimit(_settings.ModelSizeLimitMb).ToString(System.Globalization.CultureInfo.CurrentCulture);
 
         // One primary action: Save (Enter, except inside the standards box where Enter starts a new line). Esc cancels.
         var save = Brand.Button("Save", Brand.Weight.Primary);
@@ -103,6 +105,7 @@ public sealed class SettingsWindow : Window
                 SettingsLayout.Issue => IssuePage(),
                 SettingsLayout.SignOff => SignOffPage(),
                 SettingsLayout.Recovery => RecoveryPage(),
+                SettingsLayout.Storage => StoragePage(),
                 _ => UpdatesPage(),
             };
             page.Children.Insert(0, Heading(tab.Name));
@@ -660,6 +663,25 @@ public sealed class SettingsWindow : Window
         return page;
     }
 
+    /// <summary>The model size limit Model storage measures against.</summary>
+    private StackPanel StoragePage()
+    {
+        var page = new StackPanel();
+        var row = new WrapPanel { Margin = new Thickness(0, 8, 0, 0) };
+        var before = Brand.Text("Keep models under");
+        before.VerticalAlignment = VerticalAlignment.Center;
+        row.Children.Add(before);
+        AutomationProperties.SetName(_sizeLimit, "Model size limit in MB");
+        AutomationProperties.SetHelpText(_sizeLimit, $"From {Tools.ModelStorageMath.MinLimitMb} to {Tools.ModelStorageMath.MaxLimitMb:N0} MB; {Tools.ModelStorageMath.DefaultLimitMb} is the default.");
+        row.Children.Add(Place("ModelSizeLimitMb", _sizeLimit));
+        var after = Brand.Text("MB");
+        after.VerticalAlignment = VerticalAlignment.Center;
+        row.Children.Add(after);
+        page.Children.Add(row);
+        page.Children.Add(Hint("Storage & cleanup (Check panel) shows the model against this. A model can pass it: the bar fills and says by how much."));
+        return page;
+    }
+
     /// <summary>Automatic updates, the version installed and the last check, and Check now.</summary>
     private StackPanel UpdatesPage()
     {
@@ -887,6 +909,15 @@ public sealed class SettingsWindow : Window
             ShowOnTab(SettingsLayout.Chat, _syncChanges);
             return;
         }
+        if (!int.TryParse(_sizeLimit.Text.Trim(), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.CurrentCulture, out var sizeLimit)
+            || sizeLimit < Tools.ModelStorageMath.MinLimitMb || sizeLimit > Tools.ModelStorageMath.MaxLimitMb)
+        {
+            _error.Text = $"Type the model size limit (Model size tab) as a whole number of MB from {Tools.ModelStorageMath.MinLimitMb} to {Tools.ModelStorageMath.MaxLimitMb} ({Tools.ModelStorageMath.DefaultLimitMb} is the default), then press Save again.";
+            _error.Visibility = Visibility.Visible;
+            ShowOnTab(SettingsLayout.Storage, _sizeLimit);
+            return;
+        }
+        _settings.ModelSizeLimitMb = sizeLimit;
         _settings.AutoSync = _autoSync.IsChecked == true;
         _settings.AutoSyncChanges = syncChanges;
         _settings.ChangeFile = _changeFile.IsChecked == true;
