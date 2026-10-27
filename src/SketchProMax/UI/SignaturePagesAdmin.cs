@@ -32,13 +32,20 @@ internal sealed class SignaturePagesAdmin : Window
     private readonly TextBlock _note = Brand.Text("", Brand.K.Muted, 12);
 
     /// <summary>Asks for the admin password (or sets it the first time), then shows the panel. False when it wasn't given.</summary>
-    public static bool Open(Window owner, string project, Setup setup)
+    public static bool Open(Window owner, string project, Setup setup, string model)
     {
         if (!Gate.Pass(owner)) return false;
-        var w = new SignaturePagesAdmin(project, setup) { Owner = owner };
-        w.ShowDialog();
-        return true;
+        // An imported work instruction reopens the panel on its values (no password again).
+        while (true)
+        {
+            var w = new SignaturePagesAdmin(project, setup, model) { Owner = owner };
+            w.ShowDialog();
+            if (!w._reopen) return true;
+        }
     }
+
+    private bool _reopen;
+    private readonly string _model;
 
     private static TextBox Box(double width)
     {
@@ -69,10 +76,11 @@ internal sealed class SignaturePagesAdmin : Window
         return t;
     }
 
-    private SignaturePagesAdmin(string project, Setup setup)
+    private SignaturePagesAdmin(string project, Setup setup, string model)
     {
         _project = project;
         _setup = setup;
+        _model = model;
         Title = "Sketch ProMax: signature pages admin";
         var area = SystemParameters.WorkArea;
         Width = Math.Min(760, Math.Floor(area.Width * 0.9));
@@ -107,7 +115,22 @@ internal sealed class SignaturePagesAdmin : Window
         stack.Children.Add(_note);
 
         // The pages: what they say about the project.
-        stack.Children.Add(Heading($"Pages for {project}", 22));
+        stack.Children.Add(Heading($"Work instruction for {project}", 22));
+        stack.Children.Add(Small(model.Length > 0
+            ? $"Kept in the model {model} when you press Done, so everyone who opens it works the same way."
+            : "Open a model first to keep these in it; for now they are kept on this PC."));
+        var wiRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 4, 0, 0) };
+        var import = RichUi.Button(RichUi.Icon.Import, "Import");
+        AutomationProperties.SetHelpText(import, "Takes a work instruction file (.json) exported from another model or given to you.");
+        import.ToolTip = AutomationProperties.GetHelpText(import);
+        import.Click += (_, _) => ImportWi();
+        var export = RichUi.Button(RichUi.Icon.Export, "Export");
+        AutomationProperties.SetHelpText(export, "Saves this work instruction as a file to use in another model.");
+        export.ToolTip = AutomationProperties.GetHelpText(export);
+        export.Click += (_, _) => ExportWi();
+        wiRow.Children.Add(import);
+        wiRow.Children.Add(export);
+        stack.Children.Add(wiRow);
         stack.Children.Add(Field("Project", _setup.Project, v => _setup.Project = v, wrap: true));
         stack.Children.Add(Field("Discipline", _setup.Discipline, v => _setup.Discipline = v));
         var logoRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 10, 0, 0) };
@@ -148,7 +171,7 @@ internal sealed class SignaturePagesAdmin : Window
         stack.Children.Add(learned);
         Learn(example);
 
-        var typesHead = Brand.Text("TYPES: code, heading at the top, form code at the foot, IDC table", Brand.K.Muted, 10.5, bold: true);
+        var typesHead = Brand.Text("TYPES: code, heading at the top, form code at the foot, IDC table, register only", Brand.K.Muted, 10.5, bold: true);
         typesHead.Margin = new Thickness(0, 14, 0, 4);
         stack.Children.Add(typesHead);
         stack.Children.Add(_types);
@@ -327,8 +350,14 @@ internal sealed class SignaturePagesAdmin : Window
         heading.TextChanged += (_, _) => t.Heading = heading.Text.Trim();
         form.TextChanged += (_, _) => t.Form = form.Text.Trim();
         idc.Click += (_, _) => t.Idc = idc.IsChecked == true;
+        var only = new CheckBox { Content = "Register only", IsChecked = t.RegisterOnly, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) };
+        only.SetResourceReference(ForegroundProperty, Brand.K.Text);
+        AutomationProperties.SetHelpText(only, "Listed in the submission register, with no Word or PDF page (drawings).");
+        only.ToolTip = AutomationProperties.GetHelpText(only);
+        only.Click += (_, _) => t.RegisterOnly = only.IsChecked == true;
         foreach (var b in new[] { code, heading, form }) { b.Margin = new Thickness(0, 0, 6, 0); row.Children.Add(b); }
         row.Children.Add(idc);
+        row.Children.Add(only);
         var remove = new Button { Content = "", FontFamily = new FontFamily("Segoe Fluent Icons, Segoe MDL2 Assets"), Width = 28, Background = Brushes.Transparent, BorderThickness = new Thickness(0) };
         remove.SetResourceReference(ForegroundProperty, Brand.K.Muted);
         AutomationProperties.SetName(remove, "Remove this type");
@@ -351,6 +380,26 @@ internal sealed class SignaturePagesAdmin : Window
         try { SetLogo(_project, dialog.FileName); }
         catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException) { Note(ex.Message, Brand.K.DangerText); return; }
         ShowLogo();
+    }
+
+    private void ImportWi()
+    {
+        var dialog = new Microsoft.Win32.OpenFileDialog { Title = "Work instruction to import", Filter = "Work instruction (*.json)|*.json|All files (*.*)|*.*" };
+        if (dialog.ShowDialog(this) != true) return;
+        string json;
+        try { json = File.ReadAllText(dialog.FileName); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { Note(ex.Message, Brand.K.DangerText); return; }
+        if (!ApplyWi(_setup, json)) { Note("That file isn't a work instruction (no types in it).", Brand.K.DangerText); return; }
+        _reopen = true;
+        Close();
+    }
+
+    private void ExportWi()
+    {
+        var dialog = new Microsoft.Win32.SaveFileDialog { Title = "Save the work instruction", FileName = $"{_project} work instruction.json", Filter = "Work instruction (*.json)|*.json" };
+        if (dialog.ShowDialog(this) != true) return;
+        try { File.WriteAllText(dialog.FileName, WiJson(_setup)); Note($"Saved {Path.GetFileName(dialog.FileName)}.", Brand.K.SuccessText); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { Note(ex.Message, Brand.K.DangerText); }
     }
 
     // ---- Dialogs --------------------------------------------------------------------------------------------------------

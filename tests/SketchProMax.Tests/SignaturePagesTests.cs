@@ -25,6 +25,8 @@ internal static class SignaturePagesTests
             Idc(dir, check);
             Admin(check);
             Numbering(check);
+            Register(dir, check);
+            Wi(check);
         }
         finally
         {
@@ -241,6 +243,38 @@ internal static class SignaturePagesTests
         check("sigpages: sites are typed as code = name", ParseSites("aaa = Site A, BBB=Site B; CCC") is [{ Code: "AAA", Name: "Site A" }, { Code: "BBB", Name: "Site B" }, { Code: "CCC" }]
             && SitesText(ParseSites("AAA = Site A, CCC")) == "AAA = Site A, CCC", SitesText(ParseSites("aaa = Site A, BBB=Site B; CCC")));
         check("sigpages: a number with no type or sequence teaches nothing", LearnPattern("ABC", ["AAA"], types) is null && LearnPattern("PRJ1-AAA-05-XYZ-AB", ["AAA"], types) is null, "");
+    }
+
+    private static void Register(string dir, Action<string, bool, string> check)
+    {
+        var setup = new Setup();
+        var docs = new List<Doc> { new("BOQ", "PRJ1-BOQ-01", "0", "Bill"), new("DWG", "PRJ1-DWG-1001", "1", "General arrangement"), new("SPC", "PRJ1-SPC-01", "1", "Specs") };
+        check("sigpages: drawings go to the register only, with no page", Plan(docs, dir, setup).Select(p => p.Doc.Type).SequenceEqual(["BOQ", "SPC"])
+            && Outputs(setup, docs[1]) == "Register only" && Outputs(setup, docs[2]) == "Word + PDF + IDC table", "");
+        var path = RegisterPath(dir, new DateTime(2026, 10, 27));
+        WriteRegister(path, docs, setup, new DateTime(2026, 10, 27));
+        using var book = XlsxBook.Read(path);
+        var text = string.Join("|", book.Cells(book.SheetNames[0]).Select(c => c.Text));
+        check("sigpages: the submission register lists every document, drawings included", Path.GetFileName(path) == "Submission register 27-10-2026.xlsx"
+            && text.Contains("PRJ1-DWG-1001") && text.Contains("General arrangement") && text.Contains("Register only") && text.Contains("PRJ1-BOQ-01") && text.Contains("01"), text);
+        var old = new Setup { Version = 0 };
+        old.Types.First(t => t.Code == "DWG").RegisterOnly = false;
+        SaveSetup("OLD", old);
+        check("sigpages: an older setup's drawings move to the register only", LoadSetup("OLD") is { Version: 2 } s && s.Types.First(t => t.Code == "DWG").RegisterOnly, "");
+    }
+
+    private static void Wi(Action<string, bool, string> check)
+    {
+        var a = new Setup { Project = "Port works", Discipline = "Structures", IdcForm = "F-3", NumberPattern = "PRJ1-{SITE}-{TYPE}-{SEQ:2}", Sites = [new Site("AAA", "Site A")], By = "E.N." };
+        a.Docs.Add(new Doc("BOQ", "PRJ1-AAA-BOQ-01", "0", "Bill"));
+        a.Types[0].Form = "F-1";
+        var json = WiJson(a);
+        check("sigpages: the work instruction carries no list and no people", !json.Contains("PRJ1-AAA-BOQ-01") && !json.Contains("E.N."), json);
+        var b = new Setup { By = "C.K." };
+        check("sigpages: a model's work instruction sets the project's pages and numbering", ApplyWi(b, json) && b.Project == "Port works" && b.IdcForm == "F-3"
+            && b.NumberPattern == a.NumberPattern && b.Sites is [{ Code: "AAA" }] && b.Types[0].Form == "F-1" && b.By == "C.K." && b.Types.First(t => t.Code == "DWG").RegisterOnly, "");
+        var c = new Setup { Project = "Kept" };
+        check("sigpages: an unreadable work instruction changes nothing", !ApplyWi(c, "{nope") && !ApplyWi(c, "") && !ApplyWi(c, "{}") && c.Project == "Kept", "");
     }
 
     /// <summary>A small RGBA PNG.</summary>

@@ -232,6 +232,7 @@ internal static class FieldTestCoverage
             "Press Signature pages in the Submit panel, then Admin: set an admin password (twice); the recovery code shows once with Copy, and Continue waits for I've written it down. " +
             "In Admin type the project, the discipline, each type's form code (SPC has IDC ticked), the IDC departments and form code, Pick the logo, and Add E.N. (initials and name): E.N. shows Needs set-up. Done. " +
             "Press Admin again: a wrong password is refused; Forgot it? with the recovery code sets a new password and shows a new code. " +
+            "In Admin press Import and pick a work instruction file: the panel reopens with its pages, types and numbering; Done: the status says it is kept in the model. Close and reopen the window on that model: the same settings. Export saves it as a file. " +
             "In Admin under Numbering type two sites (AAA = Site A, BBB = Site B) and paste one real number: it shows how numbers are built. " +
             "Press New document: pick a site, type the area, pick a type: the number shows with the next free sequence and a suggested title; Enter adds it as a card (title, full number, REV, files made). Click a card: the preview shows it; Edit opens its boxes. " +
             "Press Same set for BBB: the list is added again with BBB numbers, revisions and titles kept. " +
@@ -239,7 +240,7 @@ internal static class FieldTestCoverage
             "Press Spec sections, Import Excel (the template's second sheet): the sections are listed; Save. Click the SPC row: the preview switches between Signature page and IDC table. " +
             "Under Sign type E.N. for By and press Sign: E.N. draws a signature and chooses a PIN twice; the signature shows in the tile and the preview. Take off, Sign again: now it asks for the PIN, and a wrong PIN is refused. Initials no one added say to ask the admin. " +
             "In Admin, Change PIN for E.N. (old PIN, new twice), then Reset PIN: E.N. shows Needs set-up and their next Sign sets up again. " +
-            "Leave CHK unsigned. Press Make: a dated folder has BOQ\\Word, BOQ\\PDF and so on, one Word file and one PDF per document, and the SPC folder also has the IDC table Word file and PDF; open one of each: they look like the office's pages, with the By signature and room to sign CHK by hand. " +
+            "Leave CHK unsigned. Press Make: a dated folder has BOQ\\Word, BOQ\\PDF and so on, one Word file and one PDF per document (none for drawings), the SPC folder also has the IDC table Word file and PDF, and the Submission register lists every document, drawings included; open one of each: they look like the office's pages, with the By signature and room to sign CHK by hand. " +
             "Close and open the window: the list and details are back. Everything reads well in the light and dark themes, and says Sketch ProMax, never Claude."),
         new("subcheck.ui", Issue, "The submission checklist window, shared between two people", How.Manual, "", "two people on a workshared model, the pages, the sketches and the Word file are judged by people",
             "On a _detached copy (or a test central with two users): click Submission checklist on the ribbon (also from Submissions status > a package, or Model checklist > Submission checklist). " +

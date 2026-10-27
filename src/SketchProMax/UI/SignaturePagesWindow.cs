@@ -125,7 +125,8 @@ internal sealed class SignaturePagesWindow : Window
         var doc = app.ActiveUIDocument?.Document;
         if (_open is { IsLoaded: true }) { _open.Activate(); return Result.Succeeded; }
         var (project, name, sheets) = doc is null || doc.IsFamilyDocument ? ("", "", new List<(string, string, string)>()) : Read(doc);
-        var window = new SignaturePagesWindow(project, name, sheets);
+        var wi = doc is null || doc.IsFamilyDocument ? null : Revit.ProjectStore.Get(doc, WiKey);
+        var window = new SignaturePagesWindow(project, name, sheets, wi, doc is null || doc.IsFamilyDocument ? "" : doc.Title);
         _open = window;
         window.Closed += (_, _) => { if (_open == window) _open = null; };
         window.Show();
@@ -156,14 +157,22 @@ internal sealed class SignaturePagesWindow : Window
     }
 
     /// <summary>The window, not shown (the field test builds it).</summary>
-    internal static Window ForTest() => new SignaturePagesWindow("", "", []);
+    internal static Window ForTest() => new SignaturePagesWindow("", "", [], null, "");
 
-    private SignaturePagesWindow(string project, string modelProjectName, List<(string, string, string)> sheets)
+    // The open model's work instruction: it sets its project's pages and numbering, and Admin's changes go back to it.
+    private string? _modelWi;
+    private readonly string _modelTitle, _modelProject;
+
+    private SignaturePagesWindow(string project, string modelProjectName, List<(string, string, string)> sheets, string? wi, string modelTitle)
     {
         _sheets = sheets;
         _modelProjectName = modelProjectName;
+        _modelWi = wi;
+        _modelTitle = modelTitle;
+        _modelProject = modelTitle.Length > 0 ? project : "";
         _project = project.Length > 0 ? project : Projects().FirstOrDefault() ?? "Default";
         _setup = LoadSetup(_project);
+        if (IsModelProject) ApplyWi(_setup, _modelWi);
         Title = "Sketch ProMax: signature pages";
         var area = SystemParameters.WorkArea;
         Width = Math.Min(1260, Math.Floor(area.Width * 0.92));
@@ -376,7 +385,8 @@ internal sealed class SignaturePagesWindow : Window
             glyph.SetResourceReference(TextBlock.ForegroundProperty, done[i] ? Brand.K.OnAccent : Brand.K.Text);
         }
         var n = Included().Count;
-        _make.Content = n == 1 ? "Make 1 page" : $"Make {n} pages";
+        var pages = Included().Count(d => !TypeOf(_setup, d.Type).RegisterOnly);
+        _make.Content = pages == n ? (n == 1 ? "Make 1 page" : $"Make {n} pages") : pages == 0 ? "Make the register" : $"Make {pages} page{(pages == 1 ? "" : "s")} + register";
         _make.IsEnabled = n > 0;
         _empty.Visibility = _rows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         ShowSections();
@@ -498,11 +508,30 @@ internal sealed class SignaturePagesWindow : Window
         _sectionsText.SetResourceReference(TextBlock.ForegroundProperty, n == 0 ? Brand.K.WarningText : Brand.K.Text);
     }
 
-    private void OpenAdmin()
+    private bool IsModelProject => _modelProject.Length > 0 && string.Equals(_project, _modelProject, StringComparison.OrdinalIgnoreCase);
+
+    private async void OpenAdmin()
     {
         Gather();
-        if (!SignaturePagesAdmin.Open(this, _project, _setup)) return;
+        if (!SignaturePagesAdmin.Open(this, _project, _setup, IsModelProject ? _modelTitle : "")) return;
         Keep();
+        if (IsModelProject && WiJson(_setup) is var json && json != _modelWi)
+        {
+            // Into the model (its own transaction, on Revit's thread), only when it is still the active one.
+            string? why;
+            try
+            {
+                why = await App.Dispatcher.InvokeAsync(app =>
+                {
+                    var doc = app.ActiveUIDocument?.Document;
+                    if (doc is null || doc.Title != _modelTitle) return $"{_modelTitle} isn't the active model";
+                    return Revit.ProjectStore.TryRemember(doc, [new KeyValuePair<string, string?>(WiKey, json)]);
+                });
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException) { why = ex.Message; }
+            if (why is null) { _modelWi = json; Say($"Work instruction kept in {_modelTitle}.", Brand.K.SuccessText); }
+            else Say($"Kept on this PC, not in the model: {why}.", Brand.K.WarningText);
+        }
         _people = LoadSigners();
         foreach (var r in new[] { _by, _chk, _app })
         {
@@ -577,6 +606,7 @@ internal sealed class SignaturePagesWindow : Window
         Keep();
         _project = name;
         _setup = LoadSetup(name);
+        if (IsModelProject) ApplyWi(_setup, _modelWi);
         Fill();
     }
 
@@ -827,7 +857,7 @@ internal sealed class SignaturePagesWindow : Window
         try
         {
             var numbers = _rows.Select(r => r.Number.Text.Trim()).ToList();
-            if (HasPattern && !_bSeqTyped) _bSeq.Text = NextSeq(_setup.NumberPattern, numbers, _bSite, _bArea.Text, _bType);
+            if (HasPattern && !_bSeqTyped) _bSeq.Text = NextSeq(PatternFor(_setup, _bType), numbers, _bSite, _bArea.Text, _bType);
             if (!_bTitleTyped) _bTitle.Text = SuggestTitle();
         }
         finally { _bQuiet = false; }
@@ -840,7 +870,7 @@ internal sealed class SignaturePagesWindow : Window
     }
 
     private string BuilderNumber() => HasPattern
-        ? ComposeNumber(_setup.NumberPattern, new NumberParts(_bSite, _bArea.Text, _bType, _bSeq.Text))
+        ? ComposeNumber(PatternFor(_setup, _bType), new NumberParts(_bSite, _bArea.Text, _bType, _bSeq.Text))
         : _bNumber.Text.Trim();
 
     /// <summary>The title of a listed document of the same type and area (any site), else the type's heading.</summary>
@@ -848,7 +878,7 @@ internal sealed class SignaturePagesWindow : Window
     {
         if (HasPattern)
             foreach (var r in _rows)
-                if (ReadNumber(_setup.NumberPattern, r.Number.Text) is { } p && p.Type.Equals(_bType, StringComparison.OrdinalIgnoreCase)
+                if (ReadNumber(PatternFor(_setup, r.Type.Text.Trim()), r.Number.Text) is { } p && p.Type.Equals(_bType, StringComparison.OrdinalIgnoreCase)
                     && p.Area.TrimStart('0') == _bArea.Text.Trim().TrimStart('0') && r.Title.Text.Trim().Length > 0)
                     return r.Title.Text.Trim();
         return _rows.LastOrDefault(r => r.Type.Text.Trim().Equals(_bType, StringComparison.OrdinalIgnoreCase) && r.Title.Text.Trim().Length > 0)?.Title.Text.Trim()
@@ -873,17 +903,17 @@ internal sealed class SignaturePagesWindow : Window
     private void CopyForOtherSite()
     {
         var docs = Included();
-        var sites = docs.Select(d => ReadNumber(_setup.NumberPattern, d.Number)?.Site).Where(x => !string.IsNullOrEmpty(x)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var sites = docs.Select(d => ReadNumber(PatternFor(_setup, d.Type), d.Number)?.Site).Where(x => !string.IsNullOrEmpty(x)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         var target = _setup.Sites.FirstOrDefault(x => !sites.Contains(x.Code, StringComparer.OrdinalIgnoreCase));
         if (target is null) { Say("Every site is in the list already."); return; }
-        var added = AddAll(ForSite(_setup.NumberPattern, docs, target.Code));
+        var added = AddAll(ForSite(t => PatternFor(_setup, t), docs, target.Code));
         Say(added == 0 ? "Nothing to copy: no number follows the numbering set in Admin." : $"Added {added} for {target.Name}. Check their revisions.", added == 0 ? Brand.K.WarningText : Brand.K.SuccessText);
     }
 
     private void ShowOtherSite()
     {
         var docs = Included();
-        var sites = docs.Select(d => ReadNumber(_setup.NumberPattern, d.Number)?.Site).Where(x => !string.IsNullOrEmpty(x)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var sites = docs.Select(d => ReadNumber(PatternFor(_setup, d.Type), d.Number)?.Site).Where(x => !string.IsNullOrEmpty(x)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         var target = HasPattern && sites.Count > 0 ? _setup.Sites.FirstOrDefault(x => !sites.Contains(x.Code, StringComparer.OrdinalIgnoreCase)) : null;
         _otherSite.Visibility = target is null ? Visibility.Collapsed : Visibility.Visible;
         if (target is not null) RichUi.Set(_otherSite, RichUi.Icon.Refresh, $"Same set for {target.Code}");
@@ -922,7 +952,7 @@ internal sealed class SignaturePagesWindow : Window
         row.TitleText.ToolTip = d.Title.Length > 0 ? d.Title : null;
         row.NumberText.ToolTip = d.Number.Length > 0 ? d.Number : null;
         row.RevText.Text = RevText(d.Rev, _setup.TwoDigitRev);
-        row.Outputs.Text = !on ? "Skipped" : HasIdc(d) ? "Word + PDF + IDC table" : "Word + PDF";
+        row.Outputs.Text = !on ? "Skipped" : Outputs(_setup, d);
         var selected = _focus == row;
         row.Card.SetResourceReference(Border.BorderBrushProperty, selected ? Brand.K.Accent : Brand.K.Border);
         row.Card.BorderThickness = new Thickness(selected ? 2 : 1);
@@ -946,7 +976,7 @@ internal sealed class SignaturePagesWindow : Window
             chip.Child = t;
             _summary.Children.Add(chip);
         }
-        var files = docs.Sum(d => HasIdc(d) ? 4 : 2);
+        var files = docs.Sum(d => TypeOf(_setup, d.Type).RegisterOnly ? 0 : HasIdc(d) ? 4 : 2) + 1;
         var total = Brand.Text($"{docs.Count} document{(docs.Count == 1 ? "" : "s")}, {files} files", Brand.K.Muted, 12);
         total.Margin = new Thickness(6, 2, 0, 0);
         _summary.Children.Add(total);
@@ -1072,17 +1102,23 @@ internal sealed class SignaturePagesWindow : Window
         var clock = Stopwatch.StartNew();
         try
         {
-            await Task.Run(() => SignaturePages.Make(docs, folder, common));
+            await Task.Run(() =>
+            {
+                SignaturePages.Make(docs, folder, common);
+                Directory.CreateDirectory(folder);
+                WriteRegister(RegisterPath(folder, date), docs, common.Setup, date);
+            });
             _lastFolder = folder;
             _openFolder.Visibility = Visibility.Visible;
             var blank = new[] { _by, _chk, _app }.Where(r => r.Signature is null && r.Who.Text.Trim().Length > 0).Select(r => r.Label).ToList();
-            Say($"Made {docs.Count} page{(docs.Count == 1 ? "" : "s")} (Word and PDF) in {clock.Elapsed.TotalSeconds:0.0} s." +
+            var pages = docs.Count(d => !TypeOf(_setup, d.Type).RegisterOnly);
+            Say($"Made {pages} page{(pages == 1 ? "" : "s")} (Word and PDF) and the register of {docs.Count} in {clock.Elapsed.TotalSeconds:0.0} s." +
                            (blank.Count > 0 ? $" {string.Join(" and ", blank)} left to sign by hand." : ""), Brand.K.SuccessText);
             Keep();
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            Say("Couldn't write the files: " + (ex is IOException and not DirectoryNotFoundException ? "a page is open in Word or a PDF reader; close it and press Make again." : ex.Message), Brand.K.DangerText);
+            Say("Couldn't write the files: " + (ex is IOException and not DirectoryNotFoundException ? "a page or the register is open in Word, Excel or a PDF reader; close it and press Make again." : ex.Message), Brand.K.DangerText);
         }
         finally { Brand.SetBusy(_make, false); ShowSteps(); }
     }
