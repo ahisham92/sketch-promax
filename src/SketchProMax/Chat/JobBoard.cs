@@ -40,6 +40,12 @@ internal sealed class ChatJob
     public string Now { get; set; } = "";
     /// <summary>How many changes are ahead of it while it waits its turn (0 when none).</summary>
     public int Ahead { get; set; }
+    /// <summary>
+    /// What it does right now in Revit, set by the bridge: reading (a read runs), waiting (its change waits its turn to be
+    /// applied), applying (its change runs); "" between calls, when it is thinking. Not saved. <see cref="JobBoard.ActivityOf"/>
+    /// gives the whole picture, for the card and its animation.
+    /// </summary>
+    [JsonIgnore] public string Activity { get; set; } = "";
     public DateTime Created { get; set; }
     public DateTime Started { get; set; }
     public DateTime Ended { get; set; }
@@ -81,6 +87,13 @@ internal sealed record JobMessage(string Text, List<string> Files);
 internal sealed class JobBoard
 {
     public const string Queued = "queued", Running = "running", Waiting = "waiting", Done = "done", Failed = "failed", Stopped = "stopped";
+
+    /// <summary>
+    /// What an active job is doing (<see cref="ActivityOf"/>): thinking (its Claude works on its own, in parallel with the
+    /// others), reading the model (reads run as soon as Revit is free, between other jobs' changes), waiting to apply (its
+    /// change waits its turn: changes are applied one at a time) and applying (its change runs in Revit).
+    /// </summary>
+    public const string Thinking = "thinking", Reading = "reading", WaitingToApply = "waiting", Applying = "applying";
 
     /// <summary>How many jobs may run at once (Settings, Chat tab): the default, and the range allowed.</summary>
     public const int DefaultLimit = 3, MinLimit = 1, MaxLimit = 6;
@@ -222,6 +235,7 @@ internal sealed class JobBoard
                 job.Ended = now;
                 job.Now = "";
                 job.Ahead = 0;
+                job.Activity = "";
                 job.Inbox.Clear();
                 job.InboxFiles.Clear();
                 AddItem(job, new ChatItem { Kind = "note", Text = "Stopped. Send it a message to carry on." }, now);
@@ -314,6 +328,7 @@ internal sealed class JobBoard
             job.Ended = now;
             job.Now = "";
             job.Ahead = 0;
+            job.Activity = "";
             return null;
         }
     }
@@ -331,6 +346,31 @@ internal sealed class JobBoard
         }
     }
 
+    /// <summary>
+    /// The bridge: what job <paramref name="key"/> does in Revit now (<see cref="Reading"/>, <see cref="WaitingToApply"/>
+    /// with <paramref name="ahead"/> changes before it counting itself, <see cref="Applying"/>, or "" when its call ended and
+    /// it thinks again). False when nothing changed or it isn't active.
+    /// </summary>
+    public bool SetActivity(string key, string activity, int ahead = 0)
+    {
+        lock (Gate)
+        {
+            var job = _jobs.FirstOrDefault(j => j.Key == key);
+            if (job is null || !job.Active) return false;
+            var state = activity == WaitingToApply ? Waiting : Running;
+            var count = activity == WaitingToApply ? Math.Max(1, ahead) : 0;
+            if (job.Activity == activity && job.State == state && job.Ahead == count) return false;
+            job.Activity = activity;
+            job.State = state;
+            job.Ahead = count;
+            return true;
+        }
+    }
+
+    /// <summary>What an active job is doing: thinking, reading, waiting (to apply) or applying; "" when it isn't active.</summary>
+    public static string ActivityOf(ChatJob job) =>
+        !job.Active ? "" : job.State == Waiting ? WaitingToApply : job.Activity is Reading or Applying ? job.Activity : Thinking;
+
     /// <summary>Jobs saved while running (Revit closed, the chat was left): stopped, so a message carries them on.</summary>
     public void AfterReload(DateTime now)
     {
@@ -341,6 +381,7 @@ internal sealed class JobBoard
                 job.Ended = now;
                 job.Now = "";
                 job.Ahead = 0;
+                job.Activity = "";
                 AddItem(job, new ChatItem { Kind = "note", Text = "It stopped when the chat closed. Send it a message to carry on." }, now);
             }
     }
@@ -377,8 +418,8 @@ internal sealed class JobBoard
     public static string StateLabel(ChatJob job) => job.State switch
     {
         Queued => "Waiting to start",
-        Waiting => job.Ahead > 1 ? $"Waiting its turn ({job.Ahead - 1} ahead)" : "Waiting its turn",
-        Running => "Working",
+        Waiting => job.Ahead > 1 ? $"Waiting to apply ({job.Ahead - 1} ahead)" : "Waiting to apply",
+        Running => ActivityOf(job) switch { Reading => "Reading the model", Applying => "Applying changes", _ => "Thinking" },
         Done => "Done",
         Failed => "Ended with a problem",
         Stopped => "Stopped",
@@ -391,7 +432,7 @@ internal sealed class JobBoard
         lock (Gate)
         {
             if (_jobs.Count == 0) return $"No jobs in this chat yet. Up to {ClampLimit(limit)} run at once.";
-            var sb = new StringBuilder($"Jobs in this chat (up to {ClampLimit(limit)} run at once; changes to the model take turns):\n");
+            var sb = new StringBuilder($"Jobs in this chat (up to {ClampLimit(limit)} run at once; changes to the model are applied one at a time; thinking and reading run in parallel):\n");
             foreach (var j in _jobs.OrderBy(j => j.Number))
             {
                 sb.Append($"- Job {j.Number} \"{j.Title}\": {StateLabel(j).ToLowerInvariant()}");
