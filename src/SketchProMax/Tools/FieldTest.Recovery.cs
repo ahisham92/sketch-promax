@@ -361,10 +361,10 @@ internal static partial class FieldTest
             if (Again(drafting) is not ViewDrafting draftingAgain || draftingAgain.Name != name) problems.Add("the drafting view wasn't made again with its name" + notDone);
             if (Again(sheet) is not ViewSheet sheetAgain || sheetAgain.GetAllViewports().Count != 1) problems.Add("the sheet wasn't made again with its viewport" + notDone);
             if (!outcome.MadeFor.TryGetValue(note.UniqueId, out var noteAgain) || doc.GetElement(noteAgain) is not TextNote noteBack || noteBack.LeaderCount != 1) problems.Add("the text note wasn't made again with its leader" + notDone);
-            if (outcome.MadeFor.ContainsKey(gridLine.Unique!)) problems.Add("a grid deleted by someone else was made again");
-            if (!outcome.NotDone.Any(n => n.Contains("by someone else") || n.Contains("not in the model any more"))) problems.Add("the grid deleted by someone else isn't listed" + notDone);
+            // Not marked as made in the session, yet gone: replay makes it again too (it never guesses someone else deleted it).
+            if (!outcome.MadeFor.ContainsKey(gridLine.Unique!)) problems.Add("a grid gone from the model (not marked new) wasn't made again" + notDone);
             return problems.Count == 0
-                ? Pass($"a drafting view, a sheet with its viewport and a text note with its leader made again; a grid deleted by someone else left deleted and listed ({outcome.Made} made again)")
+                ? Pass($"a drafting view, a sheet with its viewport, a text note with its leader and a grid not marked new made again ({outcome.Made} made again)")
                 : Fail(string.Join("; ", problems));
         }
         finally

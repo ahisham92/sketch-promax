@@ -291,8 +291,8 @@ internal static class ChangeFileMath
         [JsonPropertyName("rev"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? Revision { get; set; }
         /// <summary>Reinforcement: bar layout, hooks and bar type (the bar's or system's shape is in Loops).</summary>
         [JsonPropertyName("bar"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public Bar? Bar { get; set; }
-        /// <summary>Made in this session, after the last save: only such an element is made again when it is missing (one that
-        /// was there before and is gone now was deleted, by someone else in a shared model, and is left so).</summary>
+        /// <summary>Made in this session, after the last save. Replay makes any missing element again, marked or not: what
+        /// was done is played back as it was, never guessed away as deleted by someone else.</summary>
         [JsonPropertyName("new"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public bool New { get; set; }
         /// <summary>Model line: the file's format (2: elements made in the session are marked New).</summary>
         [JsonPropertyName("fmt"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public int Format { get; set; }
@@ -334,7 +334,7 @@ internal static class ChangeFileMath
         /// <summary>The views that were open (UniqueIds, newest views line) and the active one.</summary>
         public List<string> Open { get; init; } = [];
         public string? Active { get; init; }
-        /// <summary>The file marks what was made in the session (New), so a missing element without the mark was deleted by someone else.</summary>
+        /// <summary>The file marks what was made in the session (New), (kept for the report; replay makes every missing element again, marked or not).</summary>
         public bool MarksNew { get; init; }
         /// <summary>A file cleared at a save: the Revit event that cleared it, and when.</summary>
         public string? ClearedBy { get; init; }

@@ -219,17 +219,21 @@ internal sealed class RecoverWindow : System.Windows.Window
         foreach (var n in outcome.NotDone.Except(outcome.Errors)) LifelineBugs.Note("replay couldn't", n, target.Path, key: M.Reason(n));
         if (stoppedBecause is null) ChangeFile.MarkReplayed(file);
 
-        var line = $"Done: {outcome.Set} set back, {outcome.Made} made again, {outcome.Deleted} deleted" +
+        var line = $"Done: {outcome.Set} set back, {outcome.Made} made again, {outcome.Deleted} deleted, {outcome.Same} already right" +
                    (opened > 0 ? $", {Plural(opened, "view")} opened" : "") + "." +
                    (stoppedBecause is not null ? $" Stopped after {done} of {steps.Count} because {stoppedBecause}." : "");
         Say(line, stoppedBecause is null && outcome.NotDone.Count == 0 ? Brand.K.SuccessText : Brand.K.WarningText);
         ShowNotDone(outcome);
         // The owner asked for this alert: replay can't promise every change, so the user checks before saving.
         MessageBox.Show(this,
-            line + (outcome.NotDone.Count > 0 ? $"\n\n{Plural(outcome.NotDone.Count, "item")} weren't done: they are listed in the Lifeline window, each with Show." : "") +
+            line + (outcome.NotDone.Count > 0 ? $"\n\n{Plural(outcome.NotDone.Count, "item")} weren't done: they are listed in the Lifeline window, each with Show." + TopReasons(outcome.NotDone) : "") +
             "\n\nPlease check in the model that every change you made is there before you save or synchronize.",
             "Sketch ProMax: check the changes", MessageBoxButton.OK, MessageBoxImage.Warning);
     }
+
+    /// <summary>The three commonest reasons, with counts, so a long list is understood at a glance.</summary>
+    private static string TopReasons(List<string> notDone) =>
+        string.Concat(notDone.GroupBy(M.Reason).OrderByDescending(g => g.Count()).Take(3).Select(g => $"\n  {g.Count()}: {g.Key}"));
 
     /// <summary>What wasn't done, each with Show (to the element, or to where it was in its view).</summary>
     private void ShowNotDone(ChangeReplay.Outcome outcome)
