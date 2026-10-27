@@ -170,10 +170,12 @@ internal static class FreezeCause
 
     /// <summary>
     /// Offer "Warn me before this command next time" once Revit has been frozen a while by a command of its own that
-    /// isn't one people need every day (saving, syncing, opening, undo).
+    /// isn't one people need every day (saving, syncing, opening, undo). Never while Sketch ProMax work runs on Revit's
+    /// thread (<paramref name="ours"/>): then the journal's last command is only what was open, not what froze Revit
+    /// (27 Oct 2026: a chat task froze Revit during Create Spot Elevation, and the warning was offered for spot elevations).
     /// </summary>
-    public static bool OfferWarning(Busy busy, TimeSpan frozen) =>
-        busy.CommandId is { Length: > 0 } id && !busy.Ours && frozen >= WarnAfter && !NeverWarn.Contains(id);
+    public static bool OfferWarning(Busy busy, TimeSpan frozen, bool ours = false) =>
+        busy.CommandId is { Length: > 0 } id && !busy.Ours && !ours && frozen >= WarnAfter && !NeverWarn.Contains(id);
 
     /// <summary>
     /// How long Revit may be stuck before the Rescue window opens: 20 s, but 1 min for everyday long work (opening a model
@@ -299,8 +301,12 @@ internal static class FreezeCause
 
     internal static string? FileForTest;
 
+    /// <summary>2: commands learned before it may have been learned from Sketch ProMax's own freezes, and are dropped.</summary>
+    private const int Version = 2;
+
     private sealed class Saved
     {
+        public int Version { get; set; }
         public List<Warned> Warn { get; set; } = [];
         public List<string> Off { get; set; } = [];
     }
@@ -361,9 +367,12 @@ internal static class FreezeCause
         try
         {
             var text = SafeFile.Read(FileForTest ?? File);
-            return text is null ? new Saved() : JsonSerializer.Deserialize<Saved>(text) ?? new Saved();
+            var saved = text is null ? null : JsonSerializer.Deserialize<Saved>(text);
+            if (saved is null) return new Saved { Version = Version };
+            if (saved.Version < Version) { saved.Warn.Clear(); saved.Version = Version; }
+            return saved;
         }
-        catch (Exception) { return new Saved(); }
+        catch (Exception) { return new Saved { Version = Version }; }
     }
 
     private static void Write(Saved saved)

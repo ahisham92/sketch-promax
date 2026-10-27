@@ -43,6 +43,9 @@ internal static class FreezeTests
         check("freeze: the warning is offered after a minute, not before",
             FreezeCause.OfferWarning(busy, TimeSpan.FromSeconds(61)) && !FreezeCause.OfferWarning(busy, TimeSpan.FromSeconds(30)), "");
 
+        check("freeze: no warning is offered while work of ours runs on Revit's thread (the journal's command only was open)",
+            !FreezeCause.OfferWarning(busy, TimeSpan.FromMinutes(5), ours: true), "");
+
         // A Sketch ProMax step still in its transaction (no "Transaction Successful" for it yet).
         var ours = FreezeCause.Read(
         [
@@ -128,6 +131,13 @@ internal static class FreezeTests
             FreezeCause.Forget("ID_RUN_SYSTEMS_ANALYSIS");
             FreezeCause.Forget("ID_SOMETHING_SLOW");
             check("warn: Don't warn me again takes it off, built-in ones too", FreezeCause.Load().Count == 0, string.Join(",", FreezeCause.Load()));
+
+            // A list saved before version 2 may hold commands learned from our own freezes (Create Spot Elevation).
+            File.WriteAllText(file, "{\"Warn\":[{\"Id\":\"ID_SPOT_ELEVATION\",\"Name\":\"Create Spot Elevation\",\"Seconds\":75,\"On\":\"27 Oct\"}],\"Off\":[]}");
+            check("warn: commands learned by an older version are dropped, built-in ones stay",
+                FreezeCause.Load().Select(w => w.Id).SequenceEqual(["ID_RUN_SYSTEMS_ANALYSIS"]), string.Join(",", FreezeCause.Load()));
+            FreezeCause.Learn("ID_SOMETHING_SLOW", "Something slow", TimeSpan.FromSeconds(90), new DateTime(2026, 10, 28));
+            check("warn: a command learned now is kept", FreezeCause.Load().Any(w => w.Id == "ID_SOMETHING_SLOW"), File.ReadAllText(file));
         }
         finally
         {
