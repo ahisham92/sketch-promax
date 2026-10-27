@@ -37,6 +37,9 @@ internal static class FreezeTests
         check("freeze: the window's line", line == "Revit is busy with Run systems analysis (Create Energy Analysis Model). It hasn't responded for 6 min.", line);
         check("freeze: whose work", FreezeCause.Whose(busy, jobRunning: false) == "This is Revit's own command, not Sketch ProMax.", FreezeCause.Whose(busy, false));
         check("freeze: a running Sketch ProMax task is named as ours", FreezeCause.Whose(busy, jobRunning: true).StartsWith("This is a Sketch ProMax task"), "");
+        // A Lifeline replay after opening a model: the journal's last command is the open, but our call is what runs.
+        check("freeze: work of ours on Revit's thread is named as ours, not the journal's last command",
+            FreezeCause.Line(busy, TimeSpan.FromMinutes(1), ours: true) == "Revit is busy with a Sketch ProMax task. It hasn't responded for 1 min.", FreezeCause.Line(busy, TimeSpan.FromMinutes(1), ours: true));
         check("freeze: the warning is offered after a minute, not before",
             FreezeCause.OfferWarning(busy, TimeSpan.FromSeconds(61)) && !FreezeCause.OfferWarning(busy, TimeSpan.FromSeconds(30)), "");
 
