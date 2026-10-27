@@ -1261,12 +1261,14 @@ internal static partial class FieldTest
         if (turns.Position(a) != 1 || turns.Position(b) != 2 || turns.WaitAsync(b, TimeSpan.FromMilliseconds(50), CancellationToken.None).Result)
             problems.Add("the second change didn't wait behind the first");
         var c = turns.Enter(views.Key, "create_section_views");
-        var read = turns.Enter(walls.Key, "query_elements");
         turns.Leave(a);
         if (!turns.WaitAsync(c, TimeSpan.FromSeconds(1), CancellationToken.None).Result) problems.Add("the next change didn't get its turn when the first ended");
-        if (turns.Position(read) != 2) problems.Add("a read didn't take its turn in the same line as the changes");
+        if (turns.ChangeOverdue(TimeSpan.FromMinutes(1))) problems.Add("a read would wait behind a change that just got its turn");
+        Thread.Sleep(30);
+        if (!turns.ChangeOverdue(TimeSpan.FromMilliseconds(10))) problems.Add("a change waiting for Revit doesn't make reads let it go first");
+        turns.Began(c);
+        if (turns.ChangeOverdue(TimeSpan.FromMilliseconds(10))) problems.Add("reads still wait once the change got Revit");
         turns.Leave(c);
-        turns.Leave(read);
         turns.Rested(TimeSpan.FromSeconds(10));
         if (turns.RestLeft <= TimeSpan.Zero || turns.RestLeft > TimeSpan.FromSeconds(2)) problems.Add($"Revit's breather after a 10 s call is {turns.RestLeft.TotalMilliseconds:0} ms");
 

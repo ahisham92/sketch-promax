@@ -384,7 +384,7 @@ public sealed class BridgeServer
         }
         else
         {
-            // A parallel job waits instead: for its turn in the one line (the applier), then for Revit to be free and rested.
+            // A parallel job waits instead: a change for its turn in the one line (the applier), any call for Revit to be free and rested.
             (job, turn) = await TakeTurnAsync(jobKey, tool, ct).ConfigureAwait(false);
             if (job is null) return ToolResult.Error(ct.IsCancellationRequested ? "The call was cancelled while it waited its turn; nothing was run."
                 : $"{tool.Name} waited more than {(int)TurnWait.TotalMinutes} minutes for its turn in Revit, so nothing was run. Call it again to wait again.");
@@ -461,6 +461,7 @@ public sealed class BridgeServer
         {
             JobTurns.Shared.Rested(job.Elapsed);
             if (turn is not null) JobTurns.Shared.Leave(turn);
+            if (jobKey is not null) Chat.ChatJobs.SetActivity(jobKey, ""); // thinking again
         }, TaskScheduler.Default);
 
         // Revit picks work up within a second when idle. If it doesn't, it is showing a dialog (said within a few seconds,
@@ -489,25 +490,30 @@ public sealed class BridgeServer
     /// <summary>The longest a parallel job's call waits for its turn and for Revit (its session allows longer: ClaudeCli.JobStart).</summary>
     internal static readonly TimeSpan TurnWait = TimeSpan.FromMinutes(30);
 
+    /// <summary>A read lets the change at the front of the line go first once that change has waited this long for Revit.</summary>
+    private static readonly TimeSpan ReadYieldsAfter = TimeSpan.FromSeconds(2);
+
     /// <summary>
-    /// A parallel job's call waits its turn: every call (a change or a read) takes a ticket in the one line (JobTurns, the
-    /// applier) and waits to be at the front; then it waits for Revit to be free of other work and for Revit's breather
-    /// after the last call, and creates its Revit job. The job's card says "Waiting its turn" meanwhile. Returns the Revit
-    /// job and the ticket (the caller gives it back when the job ends); a null job when the wait was cancelled or too long
-    /// (no ticket is kept then).
+    /// A parallel job's call waits its turn. A change takes a ticket in the one line (JobTurns, the applier: changes are
+    /// applied one at a time) and waits to be at the front; a read takes none and runs between changes, unless the change at
+    /// the front has waited for Revit more than <see cref="ReadYieldsAfter"/>. Then any call waits for Revit to be free of
+    /// other work and for Revit's breather after the last call, and creates its Revit job. The job's card and animation
+    /// follow along (ChatJobs.SetActivity: waiting to apply, applying, reading; thinking again when the call ends). Returns
+    /// the Revit job and the ticket (the caller gives it back when the job ends); a null job when the wait was cancelled or
+    /// too long (no ticket is kept then).
     /// </summary>
     private async Task<(Job? Job, JobTurns.Ticket? Turn)> TakeTurnAsync(string jobKey, IRevitTool tool, CancellationToken ct)
     {
         var turns = JobTurns.Shared;
-        JobTurns.Ticket? ticket = turns.Enter(jobKey, tool.Name);
-        var waited = false;
+        var ticket = tool.ModifiesModel ? turns.Enter(jobKey, tool.Name) : null;
+        bool waited = false, got = false;
         var started = DateTime.UtcNow;
         try
         {
             if (ticket is not null && turns.Position(ticket) > 1)
             {
                 waited = true;
-                void Moved() => Chat.ChatJobs.SetWaiting(jobKey, Math.Max(1, turns.Position(ticket)));
+                void Moved() => Chat.ChatJobs.SetActivity(jobKey, Chat.JobBoard.WaitingToApply, Math.Max(1, turns.Position(ticket)));
                 turns.Changed += Moved;
                 try
                 {
@@ -519,17 +525,22 @@ public sealed class BridgeServer
             while (true)
             {
                 ct.ThrowIfCancellationRequested();
-                if (Jobs.Running is null && !_dispatcher.IsRunning && turns.RestLeft == TimeSpan.Zero && Jobs.TryCreate(tool.Name, out _) is { } job)
+                // A read lets a change that has waited for Revit a while go first; otherwise it runs between changes.
+                if (Jobs.Running is null && !_dispatcher.IsRunning && turns.RestLeft == TimeSpan.Zero
+                    && (ticket is not null || !turns.ChangeOverdue(ReadYieldsAfter)) && Jobs.TryCreate(tool.Name, out _) is { } job)
                 {
                     var keep = ticket;
+                    if (keep is not null) turns.Began(keep);
                     ticket = null; // handed to the caller
+                    got = true;
+                    Chat.ChatJobs.SetActivity(jobKey, keep is not null ? Chat.JobBoard.Applying : Chat.JobBoard.Reading);
                     return (job, keep);
                 }
                 if (DateTime.UtcNow - started > TurnWait) return (null, null);
-                if (!waited)
+                if (!waited && ticket is not null)
                 {
                     waited = true;
-                    Chat.ChatJobs.SetWaiting(jobKey, 1);
+                    Chat.ChatJobs.SetActivity(jobKey, Chat.JobBoard.WaitingToApply, 1);
                 }
                 await Task.Delay(Math.Max(50, Math.Min(400, (int)turns.RestLeft.TotalMilliseconds)), ct).ConfigureAwait(false);
             }
@@ -538,7 +549,8 @@ public sealed class BridgeServer
         finally
         {
             if (ticket is not null) turns.Leave(ticket);
-            if (waited) Chat.ChatJobs.SetWaiting(jobKey, null);
+            // Gave up waiting (cancelled or too long): back to thinking. A call that got Revit says so until it ends.
+            if (!got && waited) Chat.ChatJobs.SetActivity(jobKey, "");
         }
     }
 
