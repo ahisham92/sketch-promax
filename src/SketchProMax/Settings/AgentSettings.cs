@@ -74,6 +74,15 @@ public sealed class AgentSettings
     public int ChatJobLimit { get; set; } = 3;
 
     /// <summary>
+    /// The names in the large chat's crew strip (Chat.CrewNames): you, the coordinator, the workers (comma separated, one
+    /// per job at once) and the one who applies changes in Revit. Empty: the defaults (you: your Windows account's name).
+    /// </summary>
+    public string? ChatCrewYou { get; set; }
+    public string? ChatCrewCoordinator { get; set; }
+    public string? ChatCrewWorkers { get; set; }
+    public string? ChatCrewApplier { get; set; }
+
+    /// <summary>
     /// The type a new chat starts as (Chat.ChatTypes): "coordinator" (it hands work to parallel jobs, the default) or
     /// "simple" (one chat does everything itself). New chat's arrow picks the other type for one chat.
     /// </summary>

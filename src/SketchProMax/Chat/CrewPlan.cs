@@ -4,12 +4,52 @@ namespace SketchProMax.Chat;
 /// How a worker in the crew strip looks: thinking or reading the model at its own desk (several at once), applying a
 /// change at the one Revit station (one at a time), waiting its turn for it, or just finished.
 /// </summary>
-internal enum CrewMood { Thinking, Reading, Applying, Waiting, Done, Failed }
+internal enum CrewMood { Thinking, Reading, Applying, Waiting, Resting, Done, Failed }
 
 /// <summary>Something the strip acts out once: a worker sits down, gets a new sheet from the coordinator, or leaves.</summary>
 internal enum CrewCue { Arrive, Handover, Leave }
 
-internal sealed record CrewSeat(int Number, string Title, CrewMood Mood);
+/// <summary>
+/// A worker at work: the job, its mood, which worker has it (<paramref name="Slot"/>: the n-th name, its own desk) and
+/// its place in the line at the applier (<paramref name="Line"/>: 0 applying now, 1 next, …; -1 at the desk).
+/// </summary>
+internal sealed record CrewSeat(int Number, string Title, CrewMood Mood, int Slot = 0, int Line = -1);
+
+/// <summary>
+/// The names in the crew strip, from Settings > Chat: you, the coordinator, the workers (one per job that runs at once,
+/// in order; more jobs than names get "Worker 4", …) and the one who applies changes in Revit.
+/// </summary>
+internal sealed record CrewNames(string You, string Coordinator, IReadOnlyList<string> Workers, string Applier)
+{
+    public const string DefaultCoordinator = "Pitso", DefaultWorkers = "Ali, Carmen, Carla", DefaultApplier = "Dieng";
+
+    /// <summary>The settings' names, each blank one replaced by its default (you: the first part of the Windows account name).</summary>
+    public static CrewNames From(string? you, string? coordinator, string? workers, string? applier, string? account)
+    {
+        static string Clean(string? name, string fallback)
+        {
+            var t = (name ?? "").Trim();
+            return t.Length == 0 ? fallback : t.Length > 24 ? t.Substring(0, 24).TrimEnd() : t;
+        }
+        var list = (string.IsNullOrWhiteSpace(workers) ? DefaultWorkers : workers!)
+            .Split([',', ';', '\n'], StringSplitOptions.RemoveEmptyEntries).Select(w => Clean(w, "")).Where(w => w.Length > 0).Take(12).ToList();
+        if (list.Count == 0) list = DefaultWorkers.Split(',').Select(w => w.Trim()).ToList();
+        return new CrewNames(Clean(you, FromAccount(account)), Clean(coordinator, DefaultCoordinator), list, Clean(applier, DefaultApplier));
+    }
+
+    /// <summary>"jane.doe" or "DOMAIN\\jdoe" → "Jane" / "Jdoe"; "You" when there is none.</summary>
+    public static string FromAccount(string? account)
+    {
+        var name = (account ?? "").Split('\\').Last().Split(['.', '_', '-', ' ', '@'], StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? "";
+        if (name.Length == 0 || !name.Any(char.IsLetter)) return "You";
+        return char.ToUpperInvariant(name[0]) + name.Substring(1).ToLowerInvariant();
+    }
+
+    /// <summary>The worker at desk <paramref name="slot"/> (from 0).</summary>
+    public string Worker(int slot) => slot >= 0 && slot < Workers.Count ? Workers[slot] : $"Worker {slot + 1}";
+
+    public static CrewNames Defaults { get; } = From(null, null, null, null, null);
+}
 
 internal sealed record CrewEvent(CrewCue Cue, int Number);
 
@@ -27,6 +67,7 @@ internal sealed class CrewPlan
 
     private readonly Dictionary<int, int> _asked = new();
     private readonly Dictionary<int, DateTime> _leaving = new();
+    private readonly Dictionary<int, int> _slots = new();
     private List<CrewSeat> _seats = [];
     private bool _started;
 
@@ -48,6 +89,7 @@ internal sealed class CrewPlan
         _started = true;
         var seated = _seats.ToDictionary(s => s.Number);
         var next = new List<CrewSeat>();
+        var ahead = new Dictionary<int, int>();
         foreach (var job in jobs.OrderBy(j => j.Number))
         {
             var asked = Asked(job);
@@ -55,8 +97,8 @@ internal sealed class CrewPlan
             CrewMood? mood = job.State switch
             {
                 JobBoard.Running or JobBoard.Waiting => Mood(job, activity),
-                // Sent a message after it finished: the worker stays and waits for a free place to start again.
-                JobBoard.Queued when was => CrewMood.Waiting,
+                // Sent a message after it finished: the worker stays at the desk until a place is free to start again.
+                JobBoard.Queued when was => CrewMood.Resting,
                 JobBoard.Done when was => CrewMood.Done,
                 JobBoard.Failed when was => CrewMood.Failed,
                 _ => null,
@@ -73,6 +115,7 @@ internal sealed class CrewPlan
                 seated.Remove(job.Number);
                 _leaving.Remove(job.Number);
                 _asked.Remove(job.Number);
+                _slots.Remove(job.Number);
                 continue;
             }
             if (!quiet)
@@ -82,7 +125,15 @@ internal sealed class CrewPlan
                     events.Add(new CrewEvent(CrewCue.Handover, job.Number));
             }
             _asked[job.Number] = asked;
-            next.Add(new CrewSeat(job.Number, job.Title, m));
+            if (!_slots.TryGetValue(job.Number, out var slot))
+            {
+                // The first worker without a job takes it, and keeps it (and the desk) until the job's worker leaves.
+                slot = 0;
+                while (_slots.ContainsValue(slot)) slot++;
+                _slots[job.Number] = slot;
+            }
+            next.Add(new CrewSeat(job.Number, job.Title, m, slot));
+            ahead[job.Number] = job.Ahead;
             seated.Remove(job.Number);
         }
         // A job gone from the board altogether (a chat cleared): its worker leaves too.
@@ -91,8 +142,13 @@ internal sealed class CrewPlan
             if (!quiet) events.Add(new CrewEvent(CrewCue.Leave, gone));
             _leaving.Remove(gone);
             _asked.Remove(gone);
+            _slots.Remove(gone);
         }
-        _seats = next;
+        // The line at the applier: the change being applied first, then the others in the order they asked.
+        var line = next.Where(s => s.Mood == CrewMood.Applying)
+            .Concat(next.Where(s => s.Mood == CrewMood.Waiting).OrderBy(s => ahead[s.Number] <= 0 ? int.MaxValue : ahead[s.Number]).ThenBy(s => s.Number))
+            .Select(s => s.Number).ToList();
+        _seats = next.Select(s => line.IndexOf(s.Number) is var at and >= 0 ? s with { Line = at } : s).ToList();
         return events;
     }
 
@@ -101,6 +157,7 @@ internal sealed class CrewPlan
     {
         _asked.Clear();
         _leaving.Clear();
+        _slots.Clear();
         _seats = [];
         _started = false;
     }
@@ -118,21 +175,24 @@ internal sealed class CrewPlan
     /// <summary>How many messages the job has been given (its task and every message after it).</summary>
     private static int Asked(ChatJob job) => job.Items.Count(i => i.Kind == "user");
 
-    /// <summary>The line beside the strip: who is doing what, in a few words.</summary>
-    public static string Caption(IReadOnlyList<CrewSeat> seats)
+    /// <summary>The line over the strip: who is doing what, in a few words, by name.</summary>
+    public static string Caption(IReadOnlyList<CrewSeat> seats, CrewNames names)
     {
-        if (seats.Count == 0) return "Coordinator is ready";
+        if (seats.Count == 0) return $"{names.Coordinator} is ready";
         var applying = seats.FirstOrDefault(s => s.Mood == CrewMood.Applying);
         var thinking = seats.Count(s => s.Mood == CrewMood.Thinking);
         var reading = seats.Count(s => s.Mood == CrewMood.Reading);
         var waiting = seats.Count(s => s.Mood == CrewMood.Waiting);
         var done = seats.Count(s => s.Mood is CrewMood.Done or CrewMood.Failed);
         var parts = new List<string>();
-        if (applying is not null) parts.Add($"Job {applying.Number} in Revit");
+        if (applying is not null) parts.Add($"{names.Applier} applies {names.Worker(applying.Slot)}'s change");
         if (thinking > 0) parts.Add($"{thinking} thinking");
         if (reading > 0) parts.Add($"{reading} reading the model");
-        if (waiting > 0) parts.Add(waiting == 1 ? "1 waiting to apply" : $"{waiting} waiting to apply");
+        if (waiting > 0) parts.Add($"{waiting} in line");
         if (done > 0) parts.Add(done == 1 ? "1 just finished" : $"{done} just finished");
         return string.Join(" · ", parts);
     }
+
+    /// <summary>The worker who has job <paramref name="number"/> now, or null when none has it.</summary>
+    public string? WorkerOf(int number, CrewNames names) => _slots.TryGetValue(number, out var slot) ? names.Worker(slot) : null;
 }
