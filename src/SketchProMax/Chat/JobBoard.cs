@@ -93,9 +93,10 @@ internal sealed class JobBoard
     /// <summary>
     /// What an active job is doing (<see cref="ActivityOf"/>): thinking (its Claude works on its own, in parallel with the
     /// others), reading the model (reads run as soon as Revit is free, between other jobs' changes), waiting to apply (its
-    /// change waits its turn: changes are applied one at a time) and applying (its change runs in Revit).
+    /// change waits its turn: changes are applied one at a time), applying (its change runs in Revit) and synchronizing (auto
+    /// sync, Revit.AutoSyncRule: every job's Revit work waits while the model is synchronized with central).
     /// </summary>
-    public const string Thinking = "thinking", Reading = "reading", WaitingToApply = "waiting", Applying = "applying";
+    public const string Thinking = "thinking", Reading = "reading", WaitingToApply = "waiting", Applying = "applying", Syncing = "syncing";
 
     /// <summary>How many jobs may run at once (Settings, Chat tab): the default, and the range allowed.</summary>
     public const int DefaultLimit = 3, MinLimit = 1, MaxLimit = 6;
@@ -378,7 +379,7 @@ internal sealed class JobBoard
 
     /// <summary>What an active job is doing: thinking, reading, waiting (to apply) or applying; "" when it isn't active.</summary>
     public static string ActivityOf(ChatJob job) =>
-        !job.Active ? "" : job.State == Waiting ? WaitingToApply : job.Activity is Reading or Applying ? job.Activity : Thinking;
+        !job.Active ? "" : job.State == Waiting ? WaitingToApply : job.Activity is Reading or Applying or Syncing ? job.Activity : Thinking;
 
     /// <summary>Jobs saved while running (Revit closed, the chat was left): stopped, so a message carries them on.</summary>
     public void AfterReload(DateTime now)
@@ -428,7 +429,7 @@ internal sealed class JobBoard
     {
         Queued => "Waiting to start",
         Waiting => job.Ahead > 1 ? $"Waiting to apply ({job.Ahead - 1} ahead)" : "Waiting to apply",
-        Running => ActivityOf(job) switch { Reading => "Reading the model", Applying => "Applying changes", _ => "Thinking" },
+        Running => ActivityOf(job) switch { Reading => "Reading the model", Applying => "Applying changes", Syncing => "Synchronizing with central", _ => "Thinking" },
         Done => "Done",
         Failed => "Ended with a problem",
         Stopped => "Stopped",

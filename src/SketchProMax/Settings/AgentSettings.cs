@@ -74,6 +74,16 @@ public sealed class AgentSettings
     public int ChatJobLimit { get; set; } = 3;
 
     /// <summary>
+    /// Auto sync (Revit.AutoSyncRule): when Claude's work has made <see cref="AutoSyncChanges"/> changes to a local copy of
+    /// a central model since its last sync, every chat job pauses, the model is synchronized with central, and the work
+    /// carries on where it stopped; a step bigger than that is split across syncs. On by default.
+    /// </summary>
+    public bool AutoSync { get; set; } = true;
+
+    /// <summary>After how many changes auto sync synchronizes: 250 by default, 20 to 5000.</summary>
+    public int AutoSyncChanges { get; set; } = 250;
+
+    /// <summary>
     /// The names in the large chat's crew strip (Chat.CrewNames): you, the coordinator, the workers (comma separated, one
     /// per job at once) and the one who applies changes in Revit. Empty: the defaults (you: your Windows account's name).
     /// </summary>

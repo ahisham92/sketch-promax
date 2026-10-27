@@ -345,6 +345,7 @@ public sealed class BridgeServer
         if (name == "cancel_job") return CancelJobTool.Cancel(new ToolArgs(args));
         // The chat's parallel jobs: only the main chat of the pane manages them (not a job, not the desktop app).
         if (name == ChatJobsTool.ToolName) return ChatJobsTool.Answer(new ToolArgs(args), coordinator: fromChat && jobKey is null);
+        if (name == AutoSyncTool.ToolName) return AutoSyncTool.Answer(new ToolArgs(args));
         // A call of the main chat's task (its card, Pause, Skip step, Stop, Undo all and typed notes); a job's calls are its own.
         var task = fromChat && jobKey is null;
 
@@ -371,6 +372,13 @@ public sealed class BridgeServer
         }
         // The chat task's Pause, Skip step and Stop between steps: a pause waits here, off Revit's thread, so Revit stays free.
         if (task && JobControl.Current is { } control && await BeforeStep(control, tool.Name, ct).ConfigureAwait(false) is { } early) return early;
+
+        // Auto sync (Settings > Chat, Revit.AutoSync): while the model is synchronized every call waits, and a model that
+        // reached the set number of changes is synchronized before the next change; then the work carries on.
+        string? synced = null;
+        if (tool.ModifiesModel && Revit.AutoSync.MaybeDue()) synced = await SyncFirstAsync(jobKey, ct).ConfigureAwait(false);
+        else if (jobKey is null) await AfterSyncAsync(ct).ConfigureAwait(false);
+        ToolResult Noted(ToolResult r) => synced is null ? r : r with { Text = "Auto sync: " + synced + "\n\n" + r.Text };
 
         Job? job;
         JobTurns.Ticket? turn = null;
@@ -413,6 +421,9 @@ public sealed class BridgeServer
                 // Time saved and AI time: from here (the approval wait included) to the end of the run.
                 TimeLog.BeginTool(app, tool, fromChat);
                 if (app.ActiveUIDocument is null) return Ended(ToolResult.Error("No model is open in Revit. Ask the user to open one."));
+                // A batch of this call may stop at an item boundary to synchronize (auto sync); nothing else may.
+                Revit.AutoSync.Seen(app.ActiveUIDocument.Document);
+                Revit.AutoSync.InCallNow(true);
                 // Whether to ask first (Approvals, ApprovalPolicy): risky calls and the always-asked ones always; normal
                 // changes per the approval level, unless the task is approved or the user said not to ask about the tool
                 // again. From the chat this dialog is the only prompt the user sees (Claude Code runs there without its own).
@@ -434,6 +445,7 @@ public sealed class BridgeServer
                     });
                 }
                 finally { RunningCall.End(); }
+                result = Revit.AutoSync.Noted(result);
                 ActivityLog.Write(app.ActiveUIDocument?.Document?.Title ?? "", tool, args, result);
                 TimeLog.EndTool(result);
                 return Ended(Capped(result));
@@ -441,6 +453,7 @@ public sealed class BridgeServer
             finally
             {
                 TimeLog.EndTool(null); // rejected or no model: only the wait is counted (no-op once ended above)
+                Revit.AutoSync.InCallNow(false);
                 Approvals.Call = null;
                 if (task) JobUndo.EndTool();
                 JobControl.Tool = null;
@@ -459,6 +472,8 @@ public sealed class BridgeServer
         // and Revit gets its breather before the next job's call, after any call (the main chat's too).
         _ = job.Task.ContinueWith(_ =>
         {
+            // A change that brought the model to the auto-sync limit: synchronize now, before the next call of any job.
+            if (tool.ModifiesModel && Revit.AutoSync.MaybeDue()) _ = SyncFirstAsync(null, CancellationToken.None);
             JobTurns.Shared.Rested(job.Elapsed);
             if (turn is not null) JobTurns.Shared.Leave(turn);
             if (jobKey is not null) Chat.ChatJobs.SetActivity(jobKey, ""); // thinking again
@@ -483,8 +498,65 @@ public sealed class BridgeServer
         }
 
         await Task.WhenAny(job.Task, Task.Delay(InlineWaitMs, ct)).ConfigureAwait(false);
-        if (job.Task.IsCompleted) return job.Task.Status == TaskStatus.RanToCompletion ? job.Task.Result : Jobs.Status(job);
-        return StillRunning(job);
+        if (job.Task.IsCompleted) return Noted(job.Task.Status == TaskStatus.RanToCompletion ? job.Task.Result : Jobs.Status(job));
+        return Noted(StillRunning(job));
+    }
+
+    // ---- Auto sync ----------------------------------------------------------------------------------------------
+
+    private readonly SemaphoreSlim _syncGate = new(1, 1);
+    private int _syncWanted;
+
+    /// <summary>True from the moment a call decides the model is due a sync until the sync ended: no new Revit work starts.</summary>
+    private bool SyncPending => Volatile.Read(ref _syncWanted) > 0;
+
+    /// <summary>
+    /// Auto sync (Revit.AutoSync): pauses every job (no call starts Revit work while it is pending; one already running
+    /// ends first), synchronizes the model with central from Revit's external event, and lets the work carry on. One sync
+    /// at a time; a call that waited behind another's sync finds nothing due and goes on. The job's card says
+    /// Synchronizing with central meanwhile. What happened, for the call's result, or null when nothing was synchronized.
+    /// </summary>
+    private async Task<string?> SyncFirstAsync(string? jobKey, CancellationToken ct)
+    {
+        Interlocked.Increment(ref _syncWanted);
+        if (jobKey is not null) Chat.ChatJobs.SetActivity(jobKey, Chat.JobBoard.Syncing);
+        var entered = false;
+        try
+        {
+            await _syncGate.WaitAsync(ct).ConfigureAwait(false);
+            entered = true;
+            if (!Revit.AutoSync.MaybeDue()) return null;
+            var started = DateTime.UtcNow;
+            while (Jobs.Running is not null || _dispatcher.IsRunning)
+            {
+                if (DateTime.UtcNow - started > TurnWait) return null;
+                await Task.Delay(200, ct).ConfigureAwait(false);
+            }
+            return await _dispatcher.InvokeFromEventAsync(app => Revit.AutoSync.RunDue(app), ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) { return null; }
+        catch (Exception ex)
+        {
+            ActivityLog.Note("auto_sync", "didn't run: " + ex.Message);
+            return null;
+        }
+        finally
+        {
+            Interlocked.Decrement(ref _syncWanted);
+            if (entered) _syncGate.Release();
+            if (jobKey is not null) Chat.ChatJobs.SetActivity(jobKey, "");
+        }
+    }
+
+    /// <summary>A call of the main chat or the desktop app waits while a sync is pending instead of being told Revit is busy.</summary>
+    private async Task AfterSyncAsync(CancellationToken ct)
+    {
+        var started = DateTime.UtcNow;
+        try
+        {
+            while (SyncPending && DateTime.UtcNow - started < TurnWait) await Task.Delay(200, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) { }
     }
 
     /// <summary>The longest a parallel job's call waits for its turn and for Revit (its session allows longer: ClaudeCli.JobStart).</summary>
@@ -506,7 +578,7 @@ public sealed class BridgeServer
     {
         var turns = JobTurns.Shared;
         var ticket = tool.ModifiesModel ? turns.Enter(jobKey, tool.Name) : null;
-        bool waited = false, got = false;
+        bool waited = false, got = false, syncing = false;
         var started = DateTime.UtcNow;
         try
         {
@@ -526,7 +598,7 @@ public sealed class BridgeServer
             {
                 ct.ThrowIfCancellationRequested();
                 // A read lets a change that has waited for Revit a while go first; otherwise it runs between changes.
-                if (Jobs.Running is null && !_dispatcher.IsRunning && turns.RestLeft == TimeSpan.Zero
+                if (Jobs.Running is null && !_dispatcher.IsRunning && !SyncPending && turns.RestLeft == TimeSpan.Zero
                     && (ticket is not null || !turns.ChangeOverdue(ReadYieldsAfter)) && Jobs.TryCreate(tool.Name, out _) is { } job)
                 {
                     var keep = ticket;
@@ -537,6 +609,18 @@ public sealed class BridgeServer
                     return (job, keep);
                 }
                 if (DateTime.UtcNow - started > TurnWait) return (null, null);
+                // Every job pauses while the model is synchronized with central (auto sync).
+                if (SyncPending && !syncing)
+                {
+                    syncing = waited = true;
+                    Chat.ChatJobs.SetActivity(jobKey, Chat.JobBoard.Syncing);
+                }
+                else if (!SyncPending && syncing)
+                {
+                    syncing = false;
+                    if (ticket is not null) Chat.ChatJobs.SetActivity(jobKey, Chat.JobBoard.WaitingToApply, Math.Max(1, turns.Position(ticket)));
+                    else Chat.ChatJobs.SetActivity(jobKey, "");
+                }
                 if (!waited && ticket is not null)
                 {
                     waited = true;

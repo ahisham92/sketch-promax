@@ -14,7 +14,7 @@ internal static class SettingsLayout
     public static readonly Tab[] Tabs =
     [
         new(Approvals, "Approvals", "When Revit asks before Sketch ProMax changes the model."),
-        new(Chat, "Chat", "How the Chat pane looks and moves, the type, model and effort new chats start with, and how many jobs run at once."),
+        new(Chat, "Chat", "How the Chat pane looks and moves, the type, model and effort new chats start with, how many jobs run at once, and when to synchronize."),
         new(Standards, "Firm standards", "Your office's rules, followed in every conversation."),
         new(Time, "Time tracking", "Working time and time saved, kept in each model."),
         new(Issue, "Issue & drawings", "What the issue check lets through."),
@@ -37,6 +37,8 @@ internal static class SettingsLayout
         ["ChatCrewCoordinator"] = Chat,
         ["ChatCrewWorkers"] = Chat,
         ["ChatCrewApplier"] = Chat,
+        ["AutoSync"] = Chat,
+        ["AutoSyncChanges"] = Chat,
         ["ChatTypeDefault"] = Chat,
         ["ChatModelDefault"] = Chat,
         ["ChatEffortDefault"] = Chat,

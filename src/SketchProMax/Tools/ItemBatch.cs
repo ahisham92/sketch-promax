@@ -70,7 +70,7 @@ internal static class ItemBatch
         var seen = CentralAccess.Seen;
         string? stopped = null;
 
-        using var group = new TransactionGroup(doc, $"Sketch ProMax: {name}");
+        using var group = new Groups(doc, $"Sketch ProMax: {name}");
         group.Start();
         Revit.JobUndo.GroupOpened();
         var index = 0;
@@ -91,6 +91,7 @@ internal static class ItemBatch
             if (stopped is not null) { result.Items.Add(new(what, false, "not done: " + stopped, null)); continue; }
             if (cancellable && Jobs.CancelRequested) { result.Items.Add(new(what, false, "not done: stopped on request (cancel_job)", null)); continue; }
             if (list.Count > 20 && index % 10 == 0) Jobs.Report($"{name}: {index} of {list.Count}");
+            if (index > 1) group.SyncIfDue();
             if (central is not null && unborrowed is { Count: > 0 } && elements(item).Any(unborrowed.Contains))
             { result.Items.Add(new(what, false, "not done: " + central, null)); continue; }
             var locked = doc.IsWorkshared ? Locked(doc, elements(item)) : null;
@@ -169,7 +170,7 @@ internal static class ItemBatch
         if (doc.IsModifiable)
             throw new InvalidOperationException("ItemBatch needs to start its own transactions; a transaction is already open.");
 
-        using var group = new TransactionGroup(doc, $"Sketch ProMax: {name}");
+        using var group = new Groups(doc, $"Sketch ProMax: {name}");
         group.Start();
         Revit.JobUndo.GroupOpened();
         var kept = false;
@@ -193,6 +194,7 @@ internal static class ItemBatch
                 if (stopped is not null) { result.Items.Add(new(what, false, "not done: " + stopped, null)); continue; }
                 if (cancellable && Jobs.CancelRequested) { result.Items.Add(new(what, false, "not done: stopped on request (cancel_job)", null)); continue; }
                 if (list.Count > 20 && index % 10 == 0) Jobs.Report($"{name}: {index} of {list.Count}");
+                if (index > 1) group.SyncIfDue();
 
                 using var one = new TransactionGroup(doc, name);
                 one.Start();
@@ -242,6 +244,40 @@ internal static class ItemBatch
         if (ok) return null;
         return "the central model stopped answering during this batch (Revit showed \"Unable to Access the Model\"), so the rest " +
                "was not tried; the items done so far are kept. " + (CentralAccess.Waiting(doc) ?? "Run it again when the model is back.");
+    }
+
+    /// <summary>
+    /// The batch's transaction group, which auto sync (Revit.AutoSync, Settings > Chat) may split: when the model reaches the
+    /// set number of changes at an item boundary (a Claude call, no transaction open), the items so far are kept as one Undo
+    /// step, the model is synchronized with central, and the rest of the batch goes on in a new group. So a step of 500
+    /// changes with a limit of 250 is applied in two parts with a sync between them.
+    /// </summary>
+    private sealed class Groups(Document doc, string name) : IDisposable
+    {
+        private TransactionGroup _group = new(doc, name);
+
+        public void Start() => _group.Start();
+        public void Assimilate() => _group.Assimilate();
+        public void RollBack() => _group.RollBack();
+        public bool HasStarted() => _group.HasStarted();
+        public bool HasEnded() => _group.HasEnded();
+
+        public void SyncIfDue()
+        {
+            if (!_group.HasStarted() || _group.HasEnded() || doc.IsModifiable || !Revit.AutoSync.DueAtBoundary(doc)) return;
+            _group.Assimilate();
+            Revit.JobUndo.GroupClosed(true);
+            _group.Dispose();
+            try { Jobs.Report(Revit.AutoSync.AtBoundary(doc)); }
+            finally
+            {
+                _group = new TransactionGroup(doc, name);
+                _group.Start();
+                Revit.JobUndo.GroupOpened();
+            }
+        }
+
+        public void Dispose() => _group.Dispose();
     }
 
     /// <summary>An item a stop or skip ended the batch before (it never ran): not counted as finished in the progress.</summary>

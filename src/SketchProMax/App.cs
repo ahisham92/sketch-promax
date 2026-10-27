@@ -190,6 +190,7 @@ public sealed class App : IExternalApplication
             try { StartupTimings.Time("time log", () => TimeLog.Start(app)); } catch (Exception) { /* tasks still run; time is not counted */ }
             try { StartupTimings.Time("bim ready", () => BimReady.Start(app)); } catch (Exception) { /* models are only kept ready by the checklist's Fix buttons */ }
             try { StartupTimings.Time("change tracker", () => ChangeTracker.Start(app)); } catch (Exception) { /* Update status then reads every berth */ }
+            try { StartupTimings.Time("auto sync", () => AutoSync.Start(app)); } catch (Exception) { /* the chat's work isn't synchronized by itself */ }
             try { StartupTimings.Time("chat model note", () => ChatModelWatch.Start(app)); } catch (Exception) { /* chat messages then carry no model note */ }
             // The Rescue window when Revit freezes, and a warning before Revit commands known to freeze it.
             try { StartupTimings.Time("freeze watch", () => FreezeWatch.Start(app)); } catch (Exception) { /* no Rescue window this session */ }
@@ -340,6 +341,7 @@ public sealed class App : IExternalApplication
         try { TimeLog.Stop(app); } catch (Exception) { }
         try { BimReady.Stop(); } catch (Exception) { }
         try { ChangeTracker.Stop(); } catch (Exception) { }
+        try { AutoSync.Stop(); } catch (Exception) { }
         try { ChatModelWatch.Stop(); } catch (Exception) { }
         try { FreezeWatch.Stop(); } catch (Exception) { }
         try { HeavyCommands.Stop(); } catch (Exception) { }

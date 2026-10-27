@@ -2,7 +2,7 @@
 
 <p align="center"><img src="assets/logo/sketch-promax-wordmark.png" alt="Sketch ProMax" width="420"></p>
 
-An AI agent for Autodesk Revit 2024, 2025, 2026 and 2027, powered by Claude. Ask in plain language; it reads, documents, audits and edits the open model through 222 tools, and it learns new ones as you use it. Every change can be undone with Ctrl+Z, and it asks for your approval before anything risky (or before every change, if you prefer).
+An AI agent for Autodesk Revit 2024, 2025, 2026 and 2027, powered by Claude. Ask in plain language; it reads, documents, audits and edits the open model through 223 tools, and it learns new ones as you use it. Every change can be undone with Ctrl+Z, and it asks for your approval before anything risky (or before every change, if you prefer).
 
 See [docs/PLAN.md](docs/PLAN.md) for the comparison with SketchPro, the roadmap and the architecture.
 
@@ -68,6 +68,8 @@ At the first three levels Revit always asks before code Claude wrote (run_revit_
 - **Off**: every change shows at once and the taskbar never flashes. With Windows' Show animations off, the chat behaves as Off whatever you pick.
 
 **Parallel jobs** (in the Revit chat): the chat acts as coordinator. Ask for work with separate parts ("make sheets for levels 1-5 and check the walls") and it splits it into jobs, each its own hidden session with a card in the chat: its state (waiting to start, working, waiting its turn, done, stopped), what it is doing and, at the end, its report, which also goes back to the chat for a short wrap-up. **Open job** on a card (or the job's pill in the row above the conversation: Coordinator, Job 1, Job 2, each with its state) switches the pane to that job's own chat: everything it was asked and did, and the message box then talks to that job, attachments included. **Back to coordinator** (or Esc) returns to the main chat; **Stop** stops a job. A follow-up ("also add level 6") goes to the job it belongs to, not a new one. Reads run side by side; changes to the model take turns, one at a time. Up to 3 jobs run at once (Settings > Chat, 1 to 6), to keep within your plan's limits; jobs are saved with the chat. Jobs use the chat's connection inside Revit, so nothing extra needs installing (only if the chat had to fall back to the connector program does that need the same version as the add-in, which Install.cmd installs).
+
+**Auto sync** (Settings > Chat, on by default): in a local copy of a central model, when the chat's work reaches 250 changes since the last sync (20 to 5000, your choice), every job pauses, the model is synchronized with central (borrowed elements given back, like Synchronize Now), and the work carries on where it stopped. A step bigger than that is split across syncs at an item boundary. To do a big step in one go, say so in the chat ("do it in one step, don't sync"): the rule is skipped until your next message. Never for a detached copy or a model that isn't workshared.
 
 **Chat types**: each chat is **With coordinator** (it can hand work to parallel jobs) or a **Simple chat** (one chat does everything itself, step by step, with no jobs). The type shows under the chat's name and in the history; click it to switch while none of the chat's jobs is open. **New chat** starts your default type (Settings > Chat); the arrow beside it offers New chat with coordinator or New simple chat. Chats saved before types existed open as Simple chats, unless they already had jobs.
 
@@ -276,7 +278,7 @@ src/SketchProMax/            The Revit add-in core (net48 for Revit 2024, net8.0
   Bridge/ChatMcp, McpHttp    The chat's MCP server inside Revit (HTTP on 127.0.0.1 with a token), no connector program needed
   Bridge/ConnectorTools, RevitTargets, PdfPartReader  Tool list, Revit-window routing and read_pdf_part, shared with the connector
   Revit/                     Main-thread dispatcher (ExternalEvent), helpers, Revit 2024 dependency loader
-  Tools/                     The 220 IRevitTool implementations and the registry (CodeTools compiles C# with Roslyn)
+  Tools/                     The 221 IRevitTool implementations and the registry (CodeTools compiles C# with Roslyn)
   UI/                        Settings, update progress, quick-tool input and result windows
   Settings/                  Per-user settings (approval level, auto-update, firm standards)
   Update/Updater             Self-update from GitHub Releases, with progress, switched to without restarting Revit
