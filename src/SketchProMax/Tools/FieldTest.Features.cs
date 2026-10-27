@@ -1413,24 +1413,28 @@ internal static partial class FieldTest
             var docs = SignaturePages.ReadList(setup, list);
             if (docs.Count != 2 || docs[1].Rev != "1") problems.Add($"the Excel list read {docs.Count} documents");
             docs.Add(new SignaturePages.Doc("", "PRJ1-FD-SITE-00-RPT-ST-01", "2", "Report"));
+            setup.Sections = SignaturePages.ReadSections(list);
+            if (setup.Sections.Count != 2) problems.Add($"the spec sections read {setup.Sections.Count} rows");
+            var idc = docs.Count(d => SignaturePages.TypeOf(setup, d.Type).Idc);
             var png = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAgAAAAECAYAAACzzX7wAAAAFUlEQVR4nGMU0Zj2nwEPYMInSR0FAOw2Adm1N4jVAAAAAElFTkSuQmCC");
             var person = SignaturePages.Lock("T.E.", "", png, "4826");
             var sign = SignaturePages.Unlock(person, "4826");
             if (sign is null || SignaturePages.Unlock(person, "0000") is not null) problems.Add("the PIN lock didn't open with its PIN only");
             var common = new SignaturePages.Common(setup, DateTime.Today, null, sign, null, null);
             var files = SignaturePages.Make(docs, Path.Combine(dir, "out"), common);
-            if (files.Count != docs.Count * 2 || !files.All(File.Exists)) problems.Add($"{files.Count} files written for {docs.Count} documents");
+            if (idc != 1 || files.Count != (docs.Count + idc) * 2 || !files.All(File.Exists)) problems.Add($"{files.Count} files written for {docs.Count} documents ({idc} with an IDC table)");
             foreach (var pdf in files.Where(f => f.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase)))
             {
                 using var read = UglyToad.PdfPig.PdfDocument.Open(pdf);
                 var text = string.Join(" ", read.GetPage(1).GetWords().Select(w => w.Text));
                 if (read.NumberOfPages != 1 || !text.Contains(" REV ")) problems.Add(Path.GetFileName(pdf) + " doesn't read back");
+                if (pdf.Contains("IDC table") && !(text.Contains("department") && text.Contains("032000"))) problems.Add(Path.GetFileName(pdf) + " has no sections or departments");
             }
         }
         catch (Exception ex) when (ex is not OutOfMemoryException) { problems.Add($"{ex.GetType().Name}: {ex.Message}"); }
         try { App.Dispatcher.InvokeAsync(_ => { UI.SignaturePagesWindow.ForTest().Close(); return 0; }).GetAwaiter().GetResult(); }
         catch (Exception ex) when (ex is not OutOfMemoryException) { problems.Add($"the window couldn't be built: {ex.GetType().Name}: {ex.Message}"); }
-        return problems.Count == 0 ? Pass("Excel list read, a Word file and a PDF per document read back, PIN lock, window built") : Fail(string.Join("; ", problems));
+        return problems.Count == 0 ? Pass("Excel list and spec sections read, a Word file and a PDF per document and the IDC table read back, PIN lock, window built") : Fail(string.Join("; ", problems));
     }
 
     private static (string, string) PdfAttach()

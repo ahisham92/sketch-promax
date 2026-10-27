@@ -36,7 +36,12 @@ internal static class SignaturePages
         public string Code { get; set; } = "";
         public string Heading { get; set; } = "";
         public string Form { get; set; } = "";
+        /// <summary>Its documents also get the IDC table page (specifications): the sections and the departments that check them.</summary>
+        public bool Idc { get; set; }
     }
+
+    /// <summary>A specification section on the IDC table: its reference, title, lead discipline and the discipline that checks it.</summary>
+    internal sealed record Section(string Ref, string Title, string Lead, string Idc);
 
     /// <summary>What every page of a project shares. Kept on this PC per project (setup.json).</summary>
     internal sealed class Setup
@@ -53,6 +58,12 @@ internal static class SignaturePages
         /// <summary>The last list, so the window opens on it.</summary>
         public List<Doc> Docs { get; set; } = [];
         public string Folder { get; set; } = "";
+        /// <summary>The specification sections on the IDC table (the project's last list).</summary>
+        public List<Section> Sections { get; set; } = [];
+        /// <summary>The departments across the IDC table's foot, each with a box to approve and date.</summary>
+        public List<string> Departments { get; set; } = ["AR", "EL", "WE", "GE", "LS", "PMC", "ME", "MR", "S&B", "TR", "DSS"];
+        /// <summary>The office's form code at the foot of the IDC table page.</summary>
+        public string IdcForm { get; set; } = "";
     }
 
     /// <summary>The types every project starts with; headings as the office's pages say them, form codes left to fill.</summary>
@@ -60,7 +71,7 @@ internal static class SignaturePages
     [
         new() { Code = "BOQ", Heading = "Project bill of quantities" },
         new() { Code = "MOM", Heading = "Project method of measurement" },
-        new() { Code = "SPC", Heading = "Project specification" },
+        new() { Code = "SPC", Heading = "Project specification", Idc = true },
         new() { Code = "RPT", Heading = "Report" },
         new() { Code = "CAL", Heading = "Calculations" },
         new() { Code = "DWG", Heading = "Drawings" },
@@ -196,6 +207,55 @@ internal static class SignaturePages
         return first ?? [];
     }
 
+    /// <summary>
+    /// The specification sections of an Excel list: a header row with Ref (or Section / Code) and a title column (Title,
+    /// Division, Section title), and Lead and IDC columns when there. Rows without a reference are skipped.
+    /// </summary>
+    public static List<Section> SectionsFromCells(IEnumerable<(int Col, int Row, string Text)> cells)
+    {
+        var grid = new Dictionary<(int, int), string>();
+        foreach (var (c, r, t) in cells) grid[(c, r)] = (t ?? "").Trim();
+        string At(int c, int r) => grid.TryGetValue((c, r), out var t) ? t : "";
+        foreach (var r in grid.Keys.Select(k => k.Item2).Distinct().OrderBy(r => r).Take(15))
+        {
+            int refCol = -1, title = -1, lead = -1, idc = -1;
+            foreach (var c in grid.Keys.Where(k => k.Item2 == r).Select(k => k.Item1).OrderBy(c => c))
+            {
+                var h = Regex.Replace(At(c, r).ToLowerInvariant(), @"[^a-z]", "");
+                if (refCol < 0 && h is "ref" or "reference" or "section" or "sectionno" or "sectionnumber" or "code") refCol = c;
+                else if (title < 0 && (h is "title" or "sectiontitle" or "division" or "description" or "name" || h.StartsWith("division", StringComparison.Ordinal))) title = c;
+                else if (lead < 0 && h is "lead" or "leaddiscipline" or "discipline") lead = c;
+                else if (idc < 0 && h is "idc" or "checkedby" or "idcdiscipline") idc = c;
+            }
+            if (refCol < 0 || title < 0) continue;
+            var list = new List<Section>();
+            foreach (var row in grid.Keys.Select(k => k.Item2).Distinct().Where(x => x > r).OrderBy(x => x))
+            {
+                var reference = At(refCol, row);
+                if (reference.Length == 0 && At(title, row).Length == 0) continue;
+                list.Add(new Section(reference, At(title, row), lead >= 0 ? At(lead, row) : "", idc >= 0 ? At(idc, row) : ""));
+            }
+            return list;
+        }
+        return [];
+    }
+
+    /// <summary>The sections of the first sheet that has them (.xlsx or .csv); empty when none has a Ref and a title column.</summary>
+    public static List<Section> ReadSections(string path)
+    {
+        if (Path.GetExtension(path).Equals(".xls", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("This is an old Excel file (.xls). Open it in Excel and save it as .xlsx, then import that.");
+        if (Path.GetExtension(path).Equals(".csv", StringComparison.OrdinalIgnoreCase))
+        {
+            var lines = File.ReadAllLines(path);
+            return SectionsFromCells(lines.SelectMany((line, r) => SplitCsv(line).Select((t, c) => (c, r + 1, t))));
+        }
+        using var book = XlsxBook.Read(path);
+        foreach (var sheet in book.SheetNames)
+            if (SectionsFromCells(book.Cells(sheet).Select(c => (c.Col, c.Row, c.Text))) is { Count: > 0 } found) return found;
+        return [];
+    }
+
     private static List<string> SplitCsv(string line)
     {
         var parts = new List<string>();
@@ -220,11 +280,19 @@ internal static class SignaturePages
 
     /// <summary>The Excel template to fill: the four columns and two example rows with generic numbers.</summary>
     public static void WriteTemplate(string path) =>
-        OfficeXlsx.Write(path, "Signature pages", [new OfficeXlsx.Sheet("Documents", "", ExcelColumns,
+        OfficeXlsx.Write(path, "Signature pages",
+        [
+            new OfficeXlsx.Sheet("Documents", "", ExcelColumns,
             [
                 new OfficeXlsx.Row(["BOQ", "PRJ1-FD-SITE-01-BOQ-ST-01", "0", "Final Design Structures Berth 1 - Bill of Quantities"]),
                 new OfficeXlsx.Row(["SPC", "PRJ1-FD-SITE-00-SPC-ST-01", "1", "Final Design Structures Specifications"]),
-            ], ["text", "text", "text", "text"], [10, 44, 8, 60], false)]);
+            ], ["text", "text", "text", "text"], [10, 44, 8, 60], false),
+            new OfficeXlsx.Sheet("Spec sections", "", ["Ref", "Title", "Lead", "IDC"],
+            [
+                new OfficeXlsx.Row(["032000", "CONCRETE - CONCRETE REINFORCING", "ST", "GE"]),
+                new OfficeXlsx.Row(["033000", "CONCRETE - CAST-IN-PLACE CONCRETE", "ST", "GE"]),
+            ], ["text", "text", "text", "text"], [12, 64, 8, 8], false),
+        ]);
 
     // ---- Files ------------------------------------------------------------------------------------------------------
 
@@ -243,18 +311,24 @@ internal static class SignaturePages
         return clean.Length == 0 ? "Other" : clean.ToUpperInvariant();
     }
 
-    /// <summary>What Make writes for each document, in list order: its Word and PDF paths (a number listed twice gets (2)).</summary>
-    public static List<(Doc Doc, string Word, string Pdf)> Plan(IEnumerable<Doc> docs, string folder, bool twoDigits)
+    /// <summary>
+    /// What Make writes for each document, in list order: its Word and PDF paths (a number listed twice gets (2)), and for
+    /// a type with the IDC table (specifications) the IDC table's Word and PDF next to them ("" otherwise).
+    /// </summary>
+    public static List<(Doc Doc, string Word, string Pdf, string IdcWord, string IdcPdf)> Plan(IEnumerable<Doc> docs, string folder, Setup setup)
     {
         var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var list = new List<(Doc, string, string)>();
+        var list = new List<(Doc, string, string, string, string)>();
         foreach (var d in docs)
         {
             var type = TypeFolder(d.Type);
-            var name = FileName(d, twoDigits);
+            var name = FileName(d, setup.TwoDigitRev);
             var unique = name;
             for (var i = 2; !used.Add(type + "\\" + unique); i++) unique = $"{name} ({i})";
-            list.Add((d, Path.Combine(folder, type, "Word", unique + ".docx"), Path.Combine(folder, type, "PDF", unique + ".pdf")));
+            var idc = TypeOf(setup, d.Type).Idc;
+            var idcName = unique.Replace(" signature page", " IDC table");
+            list.Add((d, Path.Combine(folder, type, "Word", unique + ".docx"), Path.Combine(folder, type, "PDF", unique + ".pdf"),
+                idc ? Path.Combine(folder, type, "Word", idcName + ".docx") : "", idc ? Path.Combine(folder, type, "PDF", idcName + ".pdf") : ""));
         }
         return list;
     }
@@ -266,13 +340,18 @@ internal static class SignaturePages
     public static List<string> Make(IReadOnlyList<Doc> docs, string folder, Common common, CancellationToken ct = default)
     {
         var written = new List<string>();
-        foreach (var (doc, word, pdf) in Plan(docs, folder, common.Setup.TwoDigitRev))
+        foreach (var (doc, word, pdf, idcWord, idcPdf) in Plan(docs, folder, common.Setup))
         {
             ct.ThrowIfCancellationRequested();
             OfficeDocs.WriteFile(word, s => WriteWord(s, doc, common));
             written.Add(word);
             OfficeDocs.WriteFile(pdf, s => WritePdf(s, doc, common));
             written.Add(pdf);
+            if (idcWord.Length == 0) continue;
+            OfficeDocs.WriteFile(idcWord, s => WriteIdcWord(s, doc, common));
+            written.Add(idcWord);
+            OfficeDocs.WriteFile(idcPdf, s => WriteIdcPdf(s, doc, common));
+            written.Add(idcPdf);
         }
         return written;
     }
@@ -363,11 +442,100 @@ internal static class SignaturePages
         return (x, m.Y + (m.H - h) / 2, w, h);
     }
 
+    // ---- The IDC table page (specifications) ---------------------------------------------------------------------------
+
+    /// <summary>The IDC table's left edge and its columns: Ref, Division - section title, Lead, IDC.</summary>
+    public const double IdcLeft = 56.7;
+    public static readonly double[] TocX = [56.7, 121.7, 419.8, 456.5, 524.2];
+    public const double TocTop = 184, TocHead = 24, TocRow = 12.25, DeptRow = 20, DeptRight = 546.5, DeptLabel = 52.7;
+    /// <summary>At least this many rows in the table of contents (empty ones to write in), as on the office's page.</summary>
+    public const int TocMinRows = 13;
+    /// <summary>The most sections that fit on the page with the departments under them.</summary>
+    public const int TocMaxRows = 34;
+
+    /// <summary>Everything on a specification's IDC table page: its number, the table of contents, the departments' boxes, the foot.</summary>
+    public static List<Mark> IdcLayout(Doc doc, Common c)
+    {
+        var s = c.Setup;
+        var marks = new List<Mark>();
+        void Text(double x, double y, string text, double size, double w = 0, Align align = Align.Left)
+        {
+            if (text.Length > 0) marks.Add(new Mark(Kind.Text, x, y, w, 0, text, size, false, align));
+        }
+        void HLine(double x0, double x1, double y) => marks.Add(new Mark(Kind.Line, x0, y, x1 - x0, 0));
+        void VLine(double x, double y0, double y1) => marks.Add(new Mark(Kind.Line, x, y0, 0, y1 - y0));
+        var number = $"{doc.Number} {RevText(doc.Rev, s.TwoDigitRev)}";
+        Text(IdcLeft + 2, 137, number, 11);
+        Text(IdcLeft, 175, "Table of contents", 11);
+
+        // The table of contents: a two-level head (Design discipline over Lead and IDC), then a row per section.
+        var rows = Math.Max(TocMinRows, Math.Min(TocMaxRows, s.Sections.Count));
+        var bottom = TocTop + TocHead + rows * TocRow;
+        HLine(TocX[0], TocX[4], TocTop);
+        HLine(TocX[2], TocX[4], TocTop + TocHead / 2);
+        for (var r = 0; r <= rows; r++) HLine(TocX[0], TocX[4], TocTop + TocHead + r * TocRow);
+        VLine(TocX[0], TocTop, bottom);
+        VLine(TocX[1], TocTop, bottom);
+        VLine(TocX[2], TocTop, bottom);
+        VLine(TocX[3], TocTop + TocHead / 2, bottom);
+        VLine(TocX[4], TocTop, bottom);
+        Text(TocX[0], TocTop + TocHead / 2 + 3, "Ref", 8, TocX[1] - TocX[0], Align.Center);
+        Text(TocX[1], TocTop + TocHead / 2 + 3, "Division \u2013 section title", 8, TocX[2] - TocX[1], Align.Center);
+        Text(TocX[2], TocTop + 9, "Design discipline", 8, TocX[4] - TocX[2], Align.Center);
+        Text(TocX[2], TocTop + TocHead / 2 + 9, "Lead", 8, TocX[3] - TocX[2], Align.Center);
+        Text(TocX[3], TocTop + TocHead / 2 + 9, "IDC", 8, TocX[4] - TocX[3], Align.Center);
+        for (var i = 0; i < Math.Min(rows, s.Sections.Count); i++)
+        {
+            var sec = s.Sections[i];
+            var y = TocTop + TocHead + i * TocRow + 9;
+            string[] cells = [sec.Ref, sec.Title, sec.Lead, sec.Idc];
+            for (var k = 0; k < 4; k++)
+            {
+                var room = TocX[k + 1] - TocX[k] - 4;
+                Text(TocX[k] + 2, y, cells[k], FitSize(cells[k], 8, room));
+            }
+        }
+
+        // The departments: a box each to approve and date.
+        var top = bottom + 46;
+        Text(IdcLeft, top - 8, "IDC department", 11);
+        var depts = s.Departments.Where(d => d.Trim().Length > 0).ToList();
+        var n = Math.Max(1, depts.Count);
+        var x0 = IdcLeft + DeptLabel;
+        var cw = (DeptRight - x0) / n;
+        for (var r = 0; r <= 3; r++) HLine(IdcLeft, DeptRight, top + r * DeptRow);
+        VLine(IdcLeft, top, top + 3 * DeptRow);
+        for (var k = 0; k <= n; k++) VLine(x0 + k * cw, top, top + 3 * DeptRow);
+        string[] labels = ["Department", "Approved", "Date"];
+        for (var r = 0; r < 3; r++) Text(IdcLeft + 2, top + r * DeptRow + 13, labels[r], 8);
+        for (var k = 0; k < depts.Count; k++) Text(x0 + k * cw, top + 13, depts[k].Trim(), FitSize(depts[k].Trim(), 8, cw - 4), cw, Align.Center);
+
+        // The foot: the number again, the form code, page 1/1, the logo.
+        Text(IdcLeft, 767, number, 7.5);
+        Text(IdcLeft, 807, s.IdcForm, 7.5);
+        Text(IdcLeft, 807, "page 1/1", 7.5, 2 * (276 - IdcLeft), Align.Center);
+        if (c.Logo is { } logo) marks.Add(new Mark(Kind.Picture, 538 - 90, 768, 90, 38, Picture: logo, Align: Align.Right));
+        return marks;
+    }
+
+    /// <summary>The font size (at most <paramref name="size"/>, at least 5) at which <paramref name="text"/> fits <paramref name="width"/>.</summary>
+    public static double FitSize(string text, double size, double width)
+    {
+        var w = OfficePdf.TextWidth(text ?? "", false, size);
+        return w <= width || w == 0 ? size : Math.Max(5, Math.Floor(size * width / w * 10) / 10);
+    }
+
     // ---- PDF -------------------------------------------------------------------------------------------------------
 
-    public static void WritePdf(Stream output, Doc doc, Common c)
+    public static void WritePdf(Stream output, Doc doc, Common c) =>
+        WriteMarks(output, Layout(doc, c), $"{TypeOf(c.Setup, doc.Type).Heading} {doc.Number} {RevText(doc.Rev, c.Setup.TwoDigitRev)}");
+
+    public static void WriteIdcPdf(Stream output, Doc doc, Common c) =>
+        WriteMarks(output, IdcLayout(doc, c), $"IDC table {doc.Number} {RevText(doc.Rev, c.Setup.TwoDigitRev)}");
+
+    /// <summary>One A4 page with <paramref name="marks"/> on it.</summary>
+    private static void WriteMarks(Stream output, List<Mark> marks, string title)
     {
-        var marks = Layout(doc, c);
         var images = new List<OfficePdf.Image>();
         var content = new StringBuilder("0 0 0 RG 0 0 0 rg 0.6 w\n");
         foreach (var m in marks)
@@ -427,7 +595,6 @@ internal static class SignaturePages
         var stream = AddStream("/Filter /FlateDecode", OfficePdf.Deflate(OfficePdf.Bytes(content.ToString())));
         objects[2] = OfficePdf.Bytes($"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {OfficePdf.N(PageW)} {OfficePdf.N(PageH)}] /Contents {stream} 0 R " +
                                      $"/Resources << /Font << /F1 {regular} 0 R /F2 {bold} 0 R >>" + (images.Count > 0 ? $" /XObject << {xobjects}>>" : "") + " >> >>");
-        var title = $"{TypeOf(c.Setup, doc.Type).Heading} {doc.Number} {RevText(doc.Rev, c.Setup.TwoDigitRev)}";
         var info = Add($"<< /Title ({OfficePdf.Str(OfficePdf.Encode(title))}) /CreationDate (D:{DateTime.Now.ToString("yyyyMMddHHmmss", CultureInfo.InvariantCulture)}) >>");
 
         var offsets = new List<long>();
@@ -536,6 +703,86 @@ internal static class SignaturePages
         ChecklistDocx.WritePackage(output, document, footer, media, $"{type.Heading} {doc.Number} {RevText(doc.Rev, s.TwoDigitRev)}");
     }
 
+    /// <summary>A floating table at a fixed place on the page, with black single borders (or none).</summary>
+    private static string FloatTable(double x, double y, int[] widths, string rows, bool borders, int cellMargin = 40)
+    {
+        var lines = borders
+            ? string.Concat(new[] { "top", "left", "bottom", "right", "insideH", "insideV" }.Select(b => $"<w:{b} w:val=\"single\" w:sz=\"6\" w:space=\"0\" w:color=\"000000\"/>"))
+            : string.Concat(new[] { "top", "left", "bottom", "right", "insideH", "insideV" }.Select(b => $"<w:{b} w:val=\"nil\"/>"));
+        return $"<w:tbl><w:tblPr><w:tblpPr w:leftFromText=\"0\" w:rightFromText=\"0\" w:vertAnchor=\"page\" w:horzAnchor=\"page\" w:tblpX=\"{Tw(x)}\" w:tblpY=\"{Tw(y)}\"/>" +
+               $"<w:tblW w:w=\"{widths.Sum()}\" w:type=\"dxa\"/><w:tblLayout w:type=\"fixed\"/><w:tblBorders>{lines}</w:tblBorders>" +
+               $"<w:tblCellMar><w:top w:w=\"0\" w:type=\"dxa\"/><w:left w:w=\"{cellMargin}\" w:type=\"dxa\"/><w:bottom w:w=\"0\" w:type=\"dxa\"/><w:right w:w=\"{cellMargin}\" w:type=\"dxa\"/></w:tblCellMar></w:tblPr>" +
+               $"<w:tblGrid>{string.Concat(widths.Select(w => $"<w:gridCol w:w=\"{w}\"/>"))}</w:tblGrid>{rows}</w:tbl>";
+    }
+
+    private static string Tr(double height, string cells) =>
+        $"<w:tr><w:trPr><w:cantSplit/><w:trHeight w:val=\"{Tw(height)}\" w:hRule=\"exact\"/></w:trPr>{cells}</w:tr>";
+
+    /// <summary>A table cell; span &gt; 1 spans grid columns, merge is "restart" or "continue" for a cell merged with the one under or over it.</summary>
+    private static string Tc(int width, string content, int span = 1, string merge = "", string valign = "center") =>
+        $"<w:tc><w:tcPr><w:tcW w:w=\"{width}\" w:type=\"dxa\"/>{(span > 1 ? $"<w:gridSpan w:val=\"{span}\"/>" : "")}" +
+        $"{(merge.Length > 0 ? $"<w:vMerge w:val=\"{merge}\"/>" : "")}<w:vAlign w:val=\"{valign}\"/></w:tcPr>{(content.Length == 0 ? "<w:p/>" : content)}</w:tc>";
+
+    public static void WriteIdcWord(Stream output, Doc doc, Common c)
+    {
+        var s = c.Setup;
+        var media = new List<(string Name, string RelId, ChecklistDocx.Image Image)>();
+        var number = $"{doc.Number} {RevText(doc.Rev, s.TwoDigitRev)}";
+        var body = new StringBuilder();
+        body.Append(WPara(WRun(number, 11), before: Tw(52)));
+        body.Append(WPara(WRun("Table of contents", 11), before: Tw(26)));
+
+        var rows = Math.Max(TocMinRows, Math.Min(TocMaxRows, s.Sections.Count));
+        var w = Enumerable.Range(0, 4).Select(i => Tw(TocX[i + 1] - TocX[i])).ToArray();
+        var toc = new StringBuilder();
+        toc.Append(Tr(TocHead / 2, Tc(w[0], WPara(WRun("Ref", 8), jc: "center"), merge: "restart") + Tc(w[1], WPara(WRun("Division \u2013 section title", 8), jc: "center"), merge: "restart") +
+                                   Tc(w[2] + w[3], WPara(WRun("Design discipline", 8), jc: "center"), span: 2)));
+        toc.Append(Tr(TocHead / 2, Tc(w[0], "", merge: "continue") + Tc(w[1], "", merge: "continue") +
+                                   Tc(w[2], WPara(WRun("Lead", 8), jc: "center")) + Tc(w[3], WPara(WRun("IDC", 8), jc: "center"))));
+        for (var i = 0; i < rows; i++)
+        {
+            var sec = i < s.Sections.Count ? s.Sections[i] : new Section("", "", "", "");
+            string[] cells = [sec.Ref, sec.Title, sec.Lead, sec.Idc];
+            toc.Append(Tr(TocRow, string.Concat(cells.Select((t, k) => Tc(w[k], WPara(WRun(t, FitSize(t, 8, TocX[k + 1] - TocX[k] - 4))))))));
+        }
+        body.Append(FloatTable(TocX[0], TocTop, w, toc.ToString(), true));
+
+        var bottom = TocTop + TocHead + rows * TocRow;
+        var top = bottom + 46;
+        body.Append(FloatTable(IdcLeft, top - 22, [Tw(200)], Tr(18, Tc(Tw(200), WPara(WRun("IDC department", 11)), valign: "bottom")), false, 0));
+        var depts = s.Departments.Where(d => d.Trim().Length > 0).Select(d => d.Trim()).ToList();
+        var n = Math.Max(1, depts.Count);
+        var cw = Tw((DeptRight - IdcLeft - DeptLabel) / n);
+        var dw = new[] { Tw(DeptLabel) }.Concat(Enumerable.Repeat(cw, n)).ToArray();
+        var dept = new StringBuilder();
+        string[] labels = ["Department", "Approved", "Date"];
+        for (var r = 0; r < 3; r++)
+            dept.Append(Tr(DeptRow, Tc(dw[0], WPara(WRun(labels[r], 8))) +
+                string.Concat(Enumerable.Range(0, n).Select(k => Tc(cw, r == 0 && k < depts.Count ? WPara(WRun(depts[k], FitSize(depts[k], 8, cw / 20.0 - 4)), jc: "center") : "")))));
+        body.Append(FloatTable(IdcLeft, top, dw, dept.ToString(), true));
+
+        // The foot: the number, then the form code, page 1/1 and the logo.
+        // Columns: the form code, page 1/1 (centred on 276 as on the PDF), a gap, the logo's box (448 to 538).
+        int f1 = Tw(150), f2 = Tw(2 * (276 - IdcLeft - 150)), f3 = Tw(448 - IdcLeft) - f1 - f2, f4 = Tw(90);
+        string? logoRun = null;
+        if (c.Logo is { } logo)
+        {
+            var ext = logo.Ext == "png" ? "png" : "jpeg";
+            media.Add(($"image1.{ext}", "rIdImg1", new ChecklistDocx.Image(logo.Bytes, ext)));
+            const double MmPerPt = 25.4 / 72;
+            logoRun = ChecklistDocx.Drawing("rIdImg1", 1, logo.Width, logo.Height, 90 * MmPerPt, 38 * MmPerPt, "Logo");
+        }
+        var foot = Tr(14, Tc(f1 + f2 + f3, WPara(WRun(number, 7.5)), span: 3, valign: "bottom") + Tc(f4, logoRun is null ? "" : WPara(logoRun, jc: "right"), merge: "restart")) +
+                   Tr(36, Tc(f1, WPara(WRun(s.IdcForm, 7.5)), valign: "bottom") + Tc(f2, WPara(WRun("page 1/1", 7.5), jc: "center"), valign: "bottom") + Tc(f3, "") + Tc(f4, "", merge: "continue"));
+        body.Append(FloatTable(IdcLeft, 757, [f1, f2, f3, f4], foot, false, 0)).Append("<w:p/>");
+
+        var footer = $"<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><w:ftr {ChecklistDocx.Namespaces}><w:p/></w:ftr>";
+        var document = $"<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><w:document {ChecklistDocx.Namespaces}><w:body>{body}" +
+                       $"<w:sectPr><w:pgSz w:w=\"11906\" w:h=\"16838\"/>" +
+                       $"<w:pgMar w:top=\"1440\" w:right=\"{11906 - Tw(DeptRight)}\" w:bottom=\"360\" w:left=\"{Tw(IdcLeft)}\" w:header=\"708\" w:footer=\"360\" w:gutter=\"0\"/></w:sectPr></w:body></w:document>";
+        ChecklistDocx.WritePackage(output, document, footer, media, $"IDC table {number}");
+    }
+
     // ---- Kept on this PC ---------------------------------------------------------------------------------------------
 
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = true };
@@ -559,6 +806,8 @@ internal static class SignaturePages
             var setup = JsonSerializer.Deserialize<Setup>(File.ReadAllText(path), Json) ?? new Setup();
             setup.Types ??= DefaultTypes();
             setup.Docs ??= [];
+            setup.Sections ??= [];
+            setup.Departments ??= [];
             return setup;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException) { return new Setup(); }
@@ -617,6 +866,34 @@ internal static class SignaturePages
         public string Check { get; set; } = "";
         public string Iv { get; set; } = "";
         public string Locked { get; set; } = "";
+
+        /// <summary>The person has a signature and PIN (false after the admin added them or reset their PIN).</summary>
+        [System.Text.Json.Serialization.JsonIgnore]
+        public bool IsSetUp => Locked.Length > 0 && Salt.Length > 0;
+    }
+
+    /// <summary>A person the admin adds: initials and name, no signature yet (they set their signature and PIN at their first Sign).</summary>
+    public static Signer NewPerson(string initials, string name) => new() { Initials = initials.Trim(), Name = name.Trim() };
+
+    /// <summary>
+    /// Forgets the person's signature and PIN (a lost PIN can't be read back: the signature is locked with it). They set a
+    /// new signature and PIN at their next Sign.
+    /// </summary>
+    public static void ResetPin(Signer signer) => signer.Salt = signer.Check = signer.Iv = signer.Locked = "";
+
+    /// <summary>Gives the person <paramref name="picture"/> locked with a new <paramref name="pin"/>.</summary>
+    public static void SetUp(Signer signer, byte[] picture, string pin)
+    {
+        var locked = Lock(signer.Initials, signer.Name, picture, pin);
+        (signer.Salt, signer.Check, signer.Iv, signer.Locked) = (locked.Salt, locked.Check, locked.Iv, locked.Locked);
+    }
+
+    /// <summary>Changes the person's PIN, keeping their signature; false when <paramref name="oldPin"/> isn't theirs.</summary>
+    public static bool ChangePin(Signer signer, string oldPin, string newPin)
+    {
+        if (Unlock(signer, oldPin) is not { } picture) return false;
+        SetUp(signer, picture.Bytes, newPin);
+        return true;
     }
 
     private const int Rounds = 100_000;
@@ -679,6 +956,69 @@ internal static class SignaturePages
     }
 
     public static void SaveSigners(List<Signer> signers) => SafeFile.Write(SignersPath, JsonSerializer.Serialize(signers, Json));
+
+    // ---- The admin (the person who sets up the page details and the people) -----------------------------------------------
+
+    /// <summary>The admin password and the recovery code, each kept only as a salted check value.</summary>
+    internal sealed class AdminLock
+    {
+        public string Salt { get; set; } = "";
+        public string Check { get; set; } = "";
+        public string RecoverySalt { get; set; } = "";
+        public string RecoveryCheck { get; set; } = "";
+    }
+
+    private static string AdminPath => Path.Combine(Root, "admin.json");
+
+    private static AdminLock? LoadAdmin()
+    {
+        try { return File.Exists(AdminPath) ? JsonSerializer.Deserialize<AdminLock>(File.ReadAllText(AdminPath), Json) : null; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException) { return null; }
+    }
+
+    /// <summary>An admin password is set on this PC.</summary>
+    public static bool HasAdmin() => LoadAdmin() is { Check.Length: > 0 };
+
+    /// <summary>Why an admin password can't be used, or null: at least 6 characters.</summary>
+    public static string? AdminPasswordProblem(string password) => (password ?? "").Length < 6 ? "The admin password needs at least 6 characters." : null;
+
+    private static (string Salt, string Check) Seal(string secret)
+    {
+        var salt = new byte[16];
+        using (var rng = RandomNumberGenerator.Create()) rng.GetBytes(salt);
+        return (Convert.ToBase64String(salt), Convert.ToBase64String(Derive(secret, salt).Check));
+    }
+
+    private static bool Matches(string secret, string salt, string check)
+    {
+        try { return salt.Length > 0 && Derive(secret ?? "", Convert.FromBase64String(salt)).Check.SequenceEqual(Convert.FromBase64String(check)); }
+        catch (FormatException) { return false; }
+    }
+
+    /// <summary>
+    /// Sets the admin password (first time, or after the old one or the recovery code was checked) and returns a new
+    /// recovery code to write down: XXXX-XXXX-XXXX, letters and digits that can't be mixed up.
+    /// </summary>
+    public static string SetAdmin(string password)
+    {
+        if (AdminPasswordProblem(password) is { } problem) throw new ArgumentException(problem);
+        const string Chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+        var bytes = new byte[12];
+        using (var rng = RandomNumberGenerator.Create()) rng.GetBytes(bytes);
+        var code = string.Join("-", Enumerable.Range(0, 3).Select(g => new string(bytes.Skip(g * 4).Take(4).Select(b => Chars[b % Chars.Length]).ToArray())));
+        var (salt, check) = Seal(password);
+        var (rSalt, rCheck) = Seal(NormalCode(code));
+        SafeFile.Write(AdminPath, JsonSerializer.Serialize(new AdminLock { Salt = salt, Check = check, RecoverySalt = rSalt, RecoveryCheck = rCheck }, Json));
+        return code;
+    }
+
+    private static string NormalCode(string code) => new string((code ?? "").Where(char.IsLetterOrDigit).Select(char.ToUpperInvariant).ToArray());
+
+    /// <summary>The admin password is right.</summary>
+    public static bool IsAdmin(string password) => LoadAdmin() is { } a && Matches(password, a.Salt, a.Check);
+
+    /// <summary>The recovery code is right (to set a new admin password when the old one is lost).</summary>
+    public static bool IsRecoveryCode(string code) => LoadAdmin() is { } a && Matches(NormalCode(code), a.RecoverySalt, a.RecoveryCheck);
 
     /// <summary>The person with these initials (dots and spaces ignored: "E.N." is "EN"), or null.</summary>
     public static Signer? FindSigner(IEnumerable<Signer> signers, string initials)
