@@ -553,6 +553,7 @@ internal static partial class FieldTest
         await Probe(s, "chat.notes", Notes).ConfigureAwait(false);
         await Probe(s, "chat.jobs", _ => ParallelJobs(s.Folder)).ConfigureAwait(false);
         await Probe(s, "code.checkpoints", CodeCheckpoints).ConfigureAwait(false);
+        await Probe(s, "chat.auto_sync", AutoSyncProbe).ConfigureAwait(false);
         await Probe(s, "chat.types", () => ChatTypesProbe(s.Folder)).ConfigureAwait(false);
         await Probe(s, "chat.auto", ChatAutoProbe).ConfigureAwait(false);
         await Probe(s, "chat.usage", () => UsageProbe(s.Folder)).ConfigureAwait(false);
@@ -1190,6 +1191,74 @@ internal static partial class FieldTest
     /// a one-line body each stop within a second of being asked, saying why; a lambda that returns nothing still
     /// compiles; a snippet with a mistake reports its own line. Compiled and run off Revit's thread, touching no model.
     /// </summary>
+    /// <summary>
+    /// Auto sync with a stand-in for Revit's synchronize (the test project is never synchronized): with a limit of 20, a
+    /// batch of 30 new levels in a Claude call is split once at an item boundary and carries on to the end, the count starts
+    /// again after the sync, the call's result starts with what auto sync did, a skip lets the same batch run in one go,
+    /// and a model that isn't a local copy of a central model is never synchronized. Everything is rolled back.
+    /// </summary>
+    private static (string, string) AutoSyncProbe(UIApplication app)
+    {
+        if (app.ActiveUIDocument?.Document is not { } doc) return ("skip", "no model open");
+        var problems = new List<string>();
+        var rule = Revit.AutoSync.Rule;
+        var syncs = new List<bool>();
+        using var group = new TransactionGroup(doc, "Field test: auto sync");
+        group.Start();
+        try
+        {
+            Revit.AutoSync.SyncForTest = (_, keep) => { syncs.Add(keep); return null; };
+            Revit.AutoSync.SharedForTest = true;
+            Revit.AutoSync.ResetForTest();
+            rule.Configure(true, 20);
+            rule.Resume();
+            Revit.AutoSync.Seen(doc);
+            rule.Synced(Revit.AutoSync.Key(doc));
+            ItemBatch.Result Levels(string name)
+            {
+                Revit.AutoSync.InCallNow(true);
+                try { return ItemBatch.Run(doc, name, Enumerable.Range(1, 30), i => "level " + i, _ => [], i => Level.Create(doc, (5000 + i) * 0.01).Id.Value, borrow: false, cancellable: false); }
+                finally { Revit.AutoSync.InCallNow(false); }
+            }
+            var first = Levels("Field test: 30 levels");
+            var noted = Revit.AutoSync.Noted(new ToolResult("{}")).Text;
+            if (first.Done != 30) problems.Add($"split batch: {first.Done} of 30 done");
+            if (syncs.Count != 1 || !syncs[0]) problems.Add($"split batch: {syncs.Count} syncs (one, keeping what it borrowed, expected)");
+            if (!noted.StartsWith("Auto sync: Synchronized", StringComparison.Ordinal)) problems.Add("the call's result doesn't start with the sync: " + noted);
+            var after = rule.Count(Revit.AutoSync.Key(doc));
+            if (after is < 1 or >= 20) problems.Add($"after the sync the count is {after}, not the changes since it");
+
+            syncs.Clear();
+            rule.Synced(Revit.AutoSync.Key(doc));
+            rule.Skip(Revit.AutoSync.Task, DateTime.Now, "field test");
+            var skipped = Levels("Field test: 30 more levels");
+            if (skipped.Done != 30 || syncs.Count != 0) problems.Add($"skipped: {skipped.Done} of 30 done, {syncs.Count} syncs (none expected)");
+            if (!rule.Due(Revit.AutoSync.Key(doc), Revit.AutoSync.Task + 1, DateTime.Now)) problems.Add("the skip didn't end with the next task");
+            rule.Resume();
+
+            Revit.AutoSync.SharedForTest = false;
+            syncs.Clear();
+            if (!Revit.AutoSync.Shared(doc))
+            {
+                Levels("Field test: levels in a model that isn't shared");
+                if (syncs.Count != 0) problems.Add("a model that isn't a local copy of a central model was synchronized");
+            }
+        }
+        finally
+        {
+            Revit.AutoSync.SyncForTest = null;
+            Revit.AutoSync.SharedForTest = false;
+            Revit.AutoSync.ResetForTest();
+            rule.Resume();
+            if (group.HasStarted() && !group.HasEnded()) group.RollBack();
+            rule.Synced(Revit.AutoSync.Key(doc));
+            Revit.AutoSync.ReadSettings();
+        }
+        return problems.Count == 0
+            ? Pass("a batch of 30 changes with a limit of 20 was split by one sync and finished, the count started again, the result said so, a skip ran it in one go, and an unshared model wasn't synchronized")
+            : Fail(string.Join("; ", problems));
+    }
+
     private static (string, string) CodeCheckpoints()
     {
         var problems = new List<string>();

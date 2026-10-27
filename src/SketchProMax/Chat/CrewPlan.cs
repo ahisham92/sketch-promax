@@ -193,7 +193,7 @@ internal sealed class CrewPlan
     internal static CrewMood Mood(ChatJob job, Func<ChatJob, string>? activity) => (activity?.Invoke(job) ?? "") switch
     {
         "applying" => CrewMood.Applying,
-        "waiting" => CrewMood.Waiting,
+        "waiting" or "syncing" => CrewMood.Waiting,
         "reading" => CrewMood.Reading,
         "thinking" => CrewMood.Thinking,
         _ => job.State == JobBoard.Waiting ? CrewMood.Waiting : CrewMood.Thinking,

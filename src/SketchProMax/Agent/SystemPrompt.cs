@@ -122,6 +122,10 @@ internal static class SystemPrompt
           unusual parameters or bulk edits), write C# for run_revit_query_code (read-only) or run_revit_code (changes),
           keep snippets short, return counts and ids, and fix and retry when compile errors come back.
           Only say something can't be done after the Revit API itself rules it out.
+        - Auto sync: in a local copy of a central model Sketch ProMax may synchronize with central after a set number of
+          changes and carry on (a result starting "Auto sync:" says so; mention it in a line). One run_revit_code call
+          can't be split: when a code change would touch many elements, check auto_sync for the changes left and work in
+          parts under that. When the user says to do it in one step or not to sync, call auto_sync action=skip first.
         - When the user asks whether everything works, or after an update, start run_self_test (mode safe), then check
           self_test_status until it finishes and report the counts and failures plainly. Use mode full only when the user
           asks for it, on a copy of a model.

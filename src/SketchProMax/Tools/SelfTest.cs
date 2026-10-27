@@ -528,6 +528,8 @@ internal static partial class SelfTest
         }) { Expect = r => Zip(r, "file", 1, "xl/workbook.xml", "xl/worksheets/sheet1.xml") },
         // Outside the pane's main chat a job is never started (it would use the plan): the refusal is the check.
         new("chat_jobs", _ => new { action = "start", title = "Self-test job", task = "Nothing: this job must not start." }) { ExpectError = "only from the main chat" },
+        // Reads the rule only: a skip would change what the user's next chat task does.
+        new("auto_sync", _ => new { action = "status" }),
         new("list_recipes", _ => new { }),
         new("list_learned_tools", _ => new { }),
         new("list_steel_connection_types", _ => new { }),

@@ -46,6 +46,8 @@ public sealed class SettingsWindow : Window
     private readonly ComboBox _helper = new() { MinHeight = 26 };
     private readonly TextBox _crewYou = new() { MinHeight = 26 }, _crewCoordinator = new() { MinHeight = 26 }, _crewWorkers = new() { MinHeight = 26 }, _crewApplier = new() { MinHeight = 26 };
     private readonly ComboBox _jobLimit = new() { MinHeight = 26, MinWidth = 56, Margin = new Thickness(6, 0, 6, 0) };
+    private readonly CheckBox _autoSync = Check("Synchronize with central after every");
+    private readonly TextBox _syncChanges = new() { Width = 64, MinHeight = 26, Margin = new Thickness(6, 0, 6, 0) };
     private string _sigImage = "";
     private readonly TabControl _tabs = new();
     private readonly List<(string Setting, FrameworkElement Control)> _placed = [];
@@ -78,6 +80,8 @@ public sealed class SettingsWindow : Window
         _helper.SelectedIndex = Math.Max(0, Array.FindIndex(Tools.ChecklistHelper.Choices, c => c.Tag == Tools.ChecklistHelper.Parse(_settings.ChecklistHelper)));
         for (var n = Chat.JobBoard.MinLimit; n <= Chat.JobBoard.MaxLimit; n++) _jobLimit.Items.Add(new ComboBoxItem { Content = n.ToString(System.Globalization.CultureInfo.CurrentCulture), Tag = n });
         _jobLimit.SelectedIndex = Chat.JobBoard.ClampLimit(_settings.ChatJobLimit) - Chat.JobBoard.MinLimit;
+        _autoSync.IsChecked = _settings.AutoSync;
+        _syncChanges.Text = Revit.AutoSyncRule.Clamp(_settings.AutoSyncChanges).ToString(System.Globalization.CultureInfo.CurrentCulture);
 
         // One primary action: Save (Enter, except inside the standards box where Enter starts a new line). Esc cancels.
         var save = Brand.Button("Save", Brand.Weight.Primary);
@@ -368,6 +372,19 @@ public sealed class SettingsWindow : Window
         after.VerticalAlignment = VerticalAlignment.Center;
         jobRow.Children.Add(after);
         page.Children.Add(jobRow);
+        page.Children.Add(SubHeading("Synchronize with central"));
+        var syncRow = new WrapPanel { Margin = new Thickness(0, 8, 0, 0) };
+        _autoSync.VerticalAlignment = VerticalAlignment.Center;
+        _autoSync.Margin = new Thickness(0);
+        syncRow.Children.Add(Place("AutoSync", _autoSync));
+        AutomationProperties.SetName(_syncChanges, "Changes before each sync");
+        AutomationProperties.SetHelpText(_syncChanges, $"From {Revit.AutoSyncRule.MinLimit} to {Revit.AutoSyncRule.MaxLimit}; {Revit.AutoSyncRule.DefaultLimit} is usual.");
+        syncRow.Children.Add(Place("AutoSyncChanges", _syncChanges));
+        var changes = Brand.Text("changes");
+        changes.VerticalAlignment = VerticalAlignment.Center;
+        syncRow.Children.Add(changes);
+        page.Children.Add(syncRow);
+        page.Children.Add(Hint("For a local copy of a central model. When the chat's work reaches the number, every job pauses, the model is synchronized, and the work carries on where it stopped. A bigger step is split across syncs. To do one big step in one go, say so in the chat (for example \"do it in one step, don't sync\").", 2));
         page.Children.Add(SubHeading("Names of the crew"));
         page.Children.Add(Hint("Over a chat With coordinator, a strip shows the work as people: you hand it to the coordinator, who gives each job to a worker; a worker with a change for the model queues for the one who applies changes in Revit, one at a time. Leave a name blank for its default.", 2));
         var names = Chat.CrewNames.From(_settings.ChatCrewYou, _settings.ChatCrewCoordinator, _settings.ChatCrewWorkers, _settings.ChatCrewApplier, Environment.UserName);
@@ -862,6 +879,16 @@ public sealed class SettingsWindow : Window
             ShowOnTab(SettingsLayout.Time, _idle);
             return;
         }
+        if (!int.TryParse(_syncChanges.Text.Trim(), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.CurrentCulture, out var syncChanges)
+            || syncChanges < Revit.AutoSyncRule.MinLimit || syncChanges > Revit.AutoSyncRule.MaxLimit)
+        {
+            _error.Text = $"Type the number of changes before each sync (Chat tab) as a whole number from {Revit.AutoSyncRule.MinLimit} to {Revit.AutoSyncRule.MaxLimit} ({Revit.AutoSyncRule.DefaultLimit} is usual), then press Save again.";
+            _error.Visibility = Visibility.Visible;
+            ShowOnTab(SettingsLayout.Chat, _syncChanges);
+            return;
+        }
+        _settings.AutoSync = _autoSync.IsChecked == true;
+        _settings.AutoSyncChanges = syncChanges;
         _settings.ChangeFile = _changeFile.IsChecked == true;
         _settings.TimeTracking = _timeOn.IsChecked == true;
         var motion = _motion.FirstOrDefault(m => m.Button.IsChecked == true).Level;
@@ -904,6 +931,7 @@ public sealed class SettingsWindow : Window
         }
         Revit.TimeLog.ReadSettings();
         Revit.ChangeFile.ReadSettings();
+        Revit.AutoSync.ReadSettings();
         Bridge.Approvals.RaiseLevelChanged();
         Chat.ChatUi.SetMotion(motion);
         Chat.CrewStrip.ReloadNames();
