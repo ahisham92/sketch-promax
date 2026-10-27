@@ -17,7 +17,9 @@ public sealed class ChatJobsTool : IRevitTool
     public string Name => ToolName;
     public string Description =>
         "Jobs that work side by side in the Revit chat pane, each its own helper with a card the user sees. action=start opens a job: " +
-        "title (a few words) and task (everything it needs, in full: it doesn't see this chat). action=list shows every job with its " +
+        "title (a few words) and task (everything it needs, in full: it doesn't see this chat). To divide work across the free workers, " +
+        "give parts instead (one {title, task, kind} per part, which don't overlap) and facts (what you read that every part needs): they " +
+        "all start at once. action=list shows every job with its " +
         "state and report. action=message sends a follow-up to job (its number): a running job gets it when its current run ends; a " +
         "finished or stopped one carries on with it. action=stop stops job. Before starting a job, list the jobs: a follow-up that " +
         "belongs to an existing job goes there with action=message. start refuses a request that reads as a follow-up of an existing " +
@@ -29,6 +31,8 @@ public sealed class ChatJobsTool : IRevitTool
       "task": {"type": "string", "description": "start: the whole task for the job, with every detail it needs (names, levels, types, settings)."},
       "job": {"type": "integer", "description": "message and stop: the job's number."},
       "text": {"type": "string", "description": "message: what to tell the job, in full."},
+      "parts": {"type": "array", "description": "start: divide the work, one job per part, all started at once (each part's task in full; the parts must not overlap, e.g. levels 1-3 and 4-6).", "items": {"type": "object", "properties": {"title": {"type": "string"}, "task": {"type": "string"}, "kind": {"type": "string", "enum": ["simple", "everyday", "hard"]}}, "required": ["title", "task"]}},
+      "facts": {"type": "string", "description": "start with parts: what you already read from the model that every part needs (levels, grids, types, names, ids); each job gets it with its task."},
       "new": {"type": "boolean", "description": "start: true when it is separate work even though it resembles an existing job."},
       "kind": {"type": "string", "enum": ["simple", "everyday", "hard"], "description": "start: the kind of work, which picks the job's model and effort when the chat is on Automatic. simple: mechanical work (rename, tag, list, fill parameters, short summaries); everyday: most Revit work (sheets, views, dimensions, checks, normal modelling); hard: hard reasoning (a spec or BEP against the model, redlines, tricky modelling logic, costing decisions). Left out, it is judged from the task's words."}
     }
@@ -60,6 +64,8 @@ public sealed class ChatJobsTool : IRevitTool
         var now = DateTime.UtcNow;
         switch (action)
         {
+            case "start" when args.Raw.TryGetValue("parts", out var parts) && parts.ValueKind == JsonValueKind.Array && parts.GetArrayLength() > 0:
+                return StartParts(board, parts, (Str(args, "facts") ?? "").Trim(), limit, now);
             case "start":
             {
                 var task = (Str(args, "task") ?? "").Trim();
@@ -78,11 +84,16 @@ public sealed class ChatJobsTool : IRevitTool
                 lock (board.Gate) ChatJobs.Assign(job, kind is ChatAuto.Simple or ChatAuto.Everyday or ChatAuto.Hard ? kind : null);
                 ChatJobs.Changed?.Invoke();
                 var waiting = board.OpenCount > JobBoard.ClampLimit(limit);
+                var free = Math.Max(0, JobBoard.ClampLimit(limit) - board.OpenCount);
                 return ToolResult.Ok(new
                 {
                     started = true, job = job.Number, title = job.Title, model = ChatAuto.ModelLabel(job.Model), effort = job.Effort,
                     state = waiting ? "waiting to start (others are running)" : "starting",
-                    next = "The user sees its card. Tell them in one line which jobs started, then end your turn: each job reports back when it finishes.",
+                    free_workers = free,
+                    next = free > 0
+                        ? $"{free} worker(s) are still free. If this job's work can be divided (by level, zone, category, sheet range), divide it now: " +
+                          $"message job {job.Number} to keep only its share, and start the other shares with parts. Then tell the user in one line which jobs started and end your turn."
+                        : "The user sees its card. Tell them in one line which jobs started, then end your turn: each job reports back when it finishes.",
                 });
             }
             case "message":
@@ -118,6 +129,39 @@ public sealed class ChatJobsTool : IRevitTool
             }
         }
     }
+
+    /// <summary>start with parts: one job per part, all at once (they are separate work, so none is refused as a follow-up).</summary>
+    private static ToolResult StartParts(JobBoard board, JsonElement parts, string facts, int limit, DateTime now)
+    {
+        var list = parts.EnumerateArray().Where(p => p.ValueKind == JsonValueKind.Object).Select(p => (
+            Title: Prop(p, "title"), Task: Prop(p, "task"), Kind: Prop(p, "kind").ToLowerInvariant())).Where(p => p.Task.Length > 0).Take(12).ToList();
+        if (list.Count == 0) return ToolResult.Error("Each part needs its whole task in 'task' (and a short 'title').");
+        var titles = list.Select(p => p.Title.Length > 0 ? p.Title : JobBoard.OneLine(p.Task, 40)).ToList();
+        var started = new List<object>();
+        for (var i = 0; i < list.Count; i++)
+        {
+            var (title, task, kind) = list[i];
+            // Each part knows what was read for all of them and what the other parts are, so it leaves them alone.
+            var others = string.Join("; ", titles.Where((_, k) => k != i));
+            var full = task + (facts.Length > 0 ? "\n\nFacts the coordinator already read (use them; don't read them again):\n" + facts : "")
+                + (others.Length > 0 ? "\n\nThe other parts, done by other jobs at the same time (leave them alone): " + others + "." : "");
+            var job = board.Start(titles[i], full, now, force: true, out _);
+            if (job is null) continue;
+            lock (board.Gate) ChatJobs.Assign(job, kind is ChatAuto.Simple or ChatAuto.Everyday or ChatAuto.Hard ? kind : null);
+            started.Add(new { job = job.Number, title = job.Title, model = ChatAuto.ModelLabel(job.Model) });
+        }
+        ChatJobs.Changed?.Invoke();
+        var waiting = Math.Max(0, board.OpenCount - JobBoard.ClampLimit(limit));
+        return ToolResult.Ok(new
+        {
+            started,
+            state = waiting > 0 ? $"{waiting} wait to start until a worker is free" : "all starting",
+            next = "Tell the user in one line how you divided the work, then end your turn: each job reports back when it finishes.",
+        });
+    }
+
+    private static string Prop(JsonElement e, string name) =>
+        e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? (v.GetString() ?? "").Trim() : "";
 
     /// <summary>What start, message and stop say in a Simple chat (ChatTypes).</summary>
     internal const string SimpleChatRefusal =

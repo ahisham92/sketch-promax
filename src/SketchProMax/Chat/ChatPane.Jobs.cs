@@ -609,7 +609,7 @@ internal sealed partial class ChatPane
         _switcher.Visibility = listed.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
         ShowSideEmpty(jobs.Count);
         ShowCrew(jobs);
-        var key = (_viewJob?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "c") + "|" + string.Join("|", listed.Select(j => j.Number + j.Title + j.State + j.Ahead + CrewWorker(j)));
+        var key = (_viewJob?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "c") + "|" + string.Join("|", listed.Select(j => j.Number + j.Title + JobBoard.StateLabel(j) + j.Ahead + CrewWorker(j)));
         if (key == _switchShown) return;
         _switchShown = key;
         var focused = _switchList.Children.OfType<Button>().FirstOrDefault(b => b.IsKeyboardFocused) is { } had ? AutomationProperties.GetAutomationId(had) : null;
