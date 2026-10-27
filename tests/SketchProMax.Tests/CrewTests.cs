@@ -19,6 +19,21 @@ internal static class CrewTests
         check("crew: first look is quiet", first.Count == 0 && plan.Seats.Select(s => s.Number).SequenceEqual([1]), Cues(first));
         check("crew: a job waiting to start has no worker yet", plan.Seats.All(s => s.Number != 2), "");
 
+        // The job pills: the side pane lists only open jobs (and the one whose chat is open); the large window lists
+        // the open ones on top and the finished ones under them, the latest first. A finished job sent a message is open again.
+        List<ChatJob> pills = [Job(1, JobBoard.Done), Job(2, JobBoard.Running), Job(3, JobBoard.Failed), Job(4, JobBoard.Queued), Job(5, JobBoard.Stopped)];
+        string Numbers((List<ChatJob> Jobs, int Open) l) => string.Join(",", l.Jobs.Select(j => j.Number)) + "/" + l.Open;
+        var side = JobBoard.ForSwitcher(pills, all: false, shown: null);
+        check("jobs: the side pane lists only open jobs", Numbers(side) == "2,4/2", Numbers(side));
+        side = JobBoard.ForSwitcher(pills, all: false, shown: 3);
+        check("jobs: the side pane keeps the finished job whose chat is open", Numbers(side) == "2,4,3/2", Numbers(side));
+        var column = JobBoard.ForSwitcher(pills, all: true, shown: null);
+        check("jobs: the large window lists open jobs first, then finished", Numbers(column) == "2,4,5,3,1/2", Numbers(column));
+        pills[0].State = JobBoard.Queued;
+        side = JobBoard.ForSwitcher(pills, all: false, shown: null);
+        check("jobs: a finished job sent a message shows again", Numbers(side) == "1,2,4/3", Numbers(side));
+        check("jobs: nothing open, the side pane lists nothing", JobBoard.ForSwitcher([Job(1, JobBoard.Done)], false, null).Jobs.Count == 0, "");
+
         // A job starts: its worker arrives. A new message: a sheet is handed over.
         var e = plan.Update([Job(1, JobBoard.Running), Job(2, JobBoard.Running)], t0.AddSeconds(1));
         check("crew: a started job's worker arrives", Cues(e) == "Arrive:2", Cues(e));

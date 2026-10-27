@@ -595,15 +595,17 @@ internal sealed partial class ChatPane
     {
         var jobs = _board?.Snapshot() ?? [];
         if (_viewJob is { } shownJob && jobs.All(j => j.Number != shownJob)) ShowCoordinator(focus: false);
-        _switcher.Visibility = jobs.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        // The side pane lists only the open jobs; the large window's column lists the finished ones too, under them.
+        var (listed, open) = JobBoard.ForSwitcher(jobs, _jobsSide, _viewJob);
+        _switcher.Visibility = listed.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
         ShowSideEmpty(jobs.Count);
         ShowCrew(jobs);
-        var key = (_viewJob?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "c") + "|" + string.Join("|", jobs.Select(j => j.Number + j.Title + j.State + j.Ahead + CrewWorker(j)));
+        var key = (_viewJob?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "c") + "|" + string.Join("|", listed.Select(j => j.Number + j.Title + j.State + j.Ahead + CrewWorker(j)));
         if (key == _switchShown) return;
         _switchShown = key;
         var focused = _switchList.Children.OfType<Button>().FirstOrDefault(b => b.IsKeyboardFocused) is { } had ? AutomationProperties.GetAutomationId(had) : null;
         _switchList.Children.Clear();
-        if (jobs.Count == 0) return;
+        if (listed.Count == 0) return;
         Button Pill(string id, UIElement content, string name, string help, bool selected, Action click)
         {
             var b = new Button { Content = content, Margin = new Thickness(0, 0, ChatUi.S1, ChatUi.S1), Padding = new Thickness(ChatUi.S2, 2, ChatUi.S2, 2), ToolTip = help };
@@ -626,8 +628,16 @@ internal sealed partial class ChatPane
         var coordinator = new TextBlock { Text = CrewShown ? CrewStrip.Names.Coordinator + " · Coordinator" : "Coordinator", FontSize = ChatUi.SmallSize, FontWeight = _viewJob is null ? FontWeights.SemiBold : FontWeights.Normal, VerticalAlignment = VerticalAlignment.Center };
         Brand.Fg(coordinator, Brand.K.Text);
         Pill("switch-coordinator", coordinator, "Coordinator", "The main chat: it hands out the jobs and hears back from them.", _viewJob is null, () => ShowCoordinator(focus: true));
-        foreach (var job in jobs.OrderBy(j => j.Number))
+        for (var i = 0; i < listed.Count; i++)
         {
+            var job = listed[i];
+            if (i == open && _jobsSide)
+            {
+                var finished = Brand.Text("Finished", Brand.K.Muted, ChatUi.SmallSize);
+                finished.Width = SideWidth - 2 * ChatUi.S3 - ChatUi.S1;
+                finished.Margin = new Thickness(ChatUi.S1, ChatUi.S2, 0, ChatUi.S1);
+                _switchList.Children.Add(finished);
+            }
             var row = new StackPanel { Orientation = Orientation.Horizontal };
             var dot = ChatUi.Glyph(job.State switch { JobBoard.Done => ChatUi.GlyphCheck, JobBoard.Failed => ChatUi.GlyphError, JobBoard.Stopped => ChatUi.GlyphStop, _ => "●" }, StateColor(job), 10);
             dot.Margin = new Thickness(0, 0, ChatUi.S1, 0);
