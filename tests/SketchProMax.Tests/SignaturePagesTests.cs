@@ -26,6 +26,7 @@ internal static class SignaturePagesTests
             Admin(check);
             Numbering(check);
             Register(dir, check);
+            Wi(check);
         }
         finally
         {
@@ -260,6 +261,20 @@ internal static class SignaturePagesTests
         old.Types.First(t => t.Code == "DWG").RegisterOnly = false;
         SaveSetup("OLD", old);
         check("sigpages: an older setup's drawings move to the register only", LoadSetup("OLD") is { Version: 2 } s && s.Types.First(t => t.Code == "DWG").RegisterOnly, "");
+    }
+
+    private static void Wi(Action<string, bool, string> check)
+    {
+        var a = new Setup { Project = "Port works", Discipline = "Structures", IdcForm = "F-3", NumberPattern = "PRJ1-{SITE}-{TYPE}-{SEQ:2}", Sites = [new Site("AAA", "Site A")], By = "E.N." };
+        a.Docs.Add(new Doc("BOQ", "PRJ1-AAA-BOQ-01", "0", "Bill"));
+        a.Types[0].Form = "F-1";
+        var json = WiJson(a);
+        check("sigpages: the work instruction carries no list and no people", !json.Contains("PRJ1-AAA-BOQ-01") && !json.Contains("E.N."), json);
+        var b = new Setup { By = "C.K." };
+        check("sigpages: a model's work instruction sets the project's pages and numbering", ApplyWi(b, json) && b.Project == "Port works" && b.IdcForm == "F-3"
+            && b.NumberPattern == a.NumberPattern && b.Sites is [{ Code: "AAA" }] && b.Types[0].Form == "F-1" && b.By == "C.K." && b.Types.First(t => t.Code == "DWG").RegisterOnly, "");
+        var c = new Setup { Project = "Kept" };
+        check("sigpages: an unreadable work instruction changes nothing", !ApplyWi(c, "{nope") && !ApplyWi(c, "") && !ApplyWi(c, "{}") && c.Project == "Kept", "");
     }
 
     /// <summary>A small RGBA PNG.</summary>

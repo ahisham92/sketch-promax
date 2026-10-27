@@ -40,6 +40,8 @@ internal static class SignaturePages
         public bool Idc { get; set; }
         /// <summary>Listed in the submission register only, with no page of its own (drawings: their PDFs are issued already).</summary>
         public bool RegisterOnly { get; set; }
+        /// <summary>This type's own numbering when it differs from the project's (e.g. reports without the package code); empty: the project's.</summary>
+        public string NumberPattern { get; set; } = "";
     }
 
     /// <summary>A specification section on the IDC table: its reference, title, lead discipline and the discipline that checks it.</summary>
@@ -308,6 +310,54 @@ internal static class SignaturePages
             ], ["text", "text", "text", "text"], [12, 64, 8, 8], false),
         ]);
 
+    // ---- Work instruction (the project's settings, kept in each model) -----------------------------------------------
+
+    /// <summary>The key the work instruction is kept under in the model (Revit/ProjectStore).</summary>
+    public const string WiKey = "sigpages.wi";
+
+    /// <summary>
+    /// The project's work instruction: what every page says and how documents are numbered, without the list, the
+    /// people or anything of this PC. Kept in each model so everyone who opens it works the same way.
+    /// </summary>
+    internal sealed class WorkInstruction
+    {
+        public string Project { get; set; } = "";
+        public string Discipline { get; set; } = "";
+        public string Description { get; set; } = "Approved Issue";
+        public bool TwoDigitRev { get; set; } = true;
+        public List<TypeDef> Types { get; set; } = [];
+        public List<string> Departments { get; set; } = [];
+        public string IdcForm { get; set; } = "";
+        public string NumberPattern { get; set; } = "";
+        public List<Site> Sites { get; set; } = [];
+    }
+
+    public static string WiJson(Setup s) => JsonSerializer.Serialize(new WorkInstruction
+    {
+        Project = s.Project, Discipline = s.Discipline, Description = s.Description, TwoDigitRev = s.TwoDigitRev, Types = s.Types,
+        Departments = s.Departments, IdcForm = s.IdcForm, NumberPattern = s.NumberPattern, Sites = s.Sites,
+    }, Json);
+
+    /// <summary>Puts a work instruction (JSON) onto the setup; false (setup unchanged) when it can't be read or has no types.</summary>
+    public static bool ApplyWi(Setup s, string? json)
+    {
+        WorkInstruction? wi;
+        try { wi = string.IsNullOrWhiteSpace(json) ? null : JsonSerializer.Deserialize<WorkInstruction>(json!, Json); }
+        catch (JsonException) { return false; }
+        if (wi is null || wi.Types is not { Count: > 0 }) return false;
+        s.Project = wi.Project ?? "";
+        s.Discipline = wi.Discipline ?? "";
+        s.Description = wi.Description ?? "Approved Issue";
+        s.TwoDigitRev = wi.TwoDigitRev;
+        s.Types = wi.Types;
+        s.Departments = wi.Departments ?? [];
+        s.IdcForm = wi.IdcForm ?? "";
+        s.NumberPattern = wi.NumberPattern ?? "";
+        s.Sites = wi.Sites ?? [];
+        s.Version = 2;
+        return true;
+    }
+
     // ---- Numbering --------------------------------------------------------------------------------------------------
 
     /// <summary>The parts of a document number that change from one document to the next.</summary>
@@ -341,6 +391,10 @@ internal static class SignaturePages
         if (area >= 0) parts[area] = "{AREA:" + tokens[area].Length + "}";
         return string.Concat(parts);
     }
+
+    /// <summary>The numbering for a type: its own when set, else the project's.</summary>
+    public static string PatternFor(Setup setup, string type) =>
+        TypeOf(setup, type).NumberPattern is { Length: > 0 } own ? own : setup.NumberPattern;
 
     /// <summary>A number from the pattern and its parts; digits are padded to the example's width ("5" in a "05" part is "05").</summary>
     public static string ComposeNumber(string pattern, NumberParts p) =>
@@ -376,10 +430,13 @@ internal static class SignaturePages
     /// The same documents for another site: each number that follows the pattern gets <paramref name="site"/>; the
     /// revision and title stay. Documents whose number doesn't follow the pattern are left out.
     /// </summary>
-    public static List<Doc> ForSite(string pattern, IEnumerable<Doc> docs, string site) =>
-        docs.Select(d => (d, p: ReadNumber(pattern, d.Number)))
+    public static List<Doc> ForSite(string pattern, IEnumerable<Doc> docs, string site) => ForSite(_ => pattern, docs, site);
+
+    /// <summary>As above, each document read with its own type's numbering.</summary>
+    public static List<Doc> ForSite(Func<string, string> patternOf, IEnumerable<Doc> docs, string site) =>
+        docs.Select(d => (d, pattern: patternOf(d.Type), p: ReadNumber(patternOf(d.Type), d.Number)))
             .Where(x => x.p is { Site.Length: > 0 })
-            .Select(x => x.d with { Number = ComposeNumber(pattern, x.p! with { Site = site }) })
+            .Select(x => x.d with { Number = ComposeNumber(x.pattern, x.p! with { Site = site }) })
             .ToList();
 
     /// <summary>Sites typed as "TIN = Tincan, APA = Apapa" (or one per line); a code alone is its own name.</summary>
