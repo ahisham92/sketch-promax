@@ -165,6 +165,13 @@ internal static class CrewTests
         big.State = JobBoard.Failed;
         check("crew: a failed job hit a snag", CrewPlan.Say(CrewCue.Finish, big) == "Hit a snag", "");
 
+        // The card, pill and job list say how far along a working job is.
+        var carded = Job(4, JobBoard.Running);
+        carded.Plan = new() { ["1"] = "completed", ["2"] = "pending" };
+        check("plan: a working job's state says how far along it is", JobBoard.StateLabel(carded) == "Thinking · 50% · 1 left", JobBoard.StateLabel(carded));
+        carded.State = JobBoard.Done;
+        check("plan: a finished job's state is plain", JobBoard.StateLabel(carded) == "Done", JobBoard.StateLabel(carded));
+
         // The team: a job starting hears who else works on what, and what the finished jobs found, each report once.
         var levels = Job(1, JobBoard.Done);
         levels.Summary = "Levels: L1 0 mm, L2 3500 mm, L3 7000 mm.";

@@ -477,8 +477,10 @@ internal sealed class JobBoard
 
     // ---- Words ----------------------------------------------------------------------------------------------------
 
-    /// <summary>What the card says about the job's state.</summary>
-    public static string StateLabel(ChatJob job) => job.State switch
+    /// <summary>What the card says about the job's state, with how far along its plan is while it works ("Thinking · 40% · 3 left").</summary>
+    public static string StateLabel(ChatJob job) => JobPlan.Progress(job) is { Length: > 0 } far ? Bare(job) + " · " + far : Bare(job);
+
+    private static string Bare(ChatJob job) => job.State switch
     {
         Queued => "Waiting to start",
         Waiting => job.Ahead > 1 ? $"Waiting to apply ({job.Ahead - 1} ahead)" : "Waiting to apply",

@@ -138,6 +138,16 @@ internal static class JobPlan
         return Math.Min(99, (int)Math.Round(100.0 * (done + 0.5 * doing) / total));
     }
 
+    /// <summary>"40% · 3 left" for a job at work with a plan; "" otherwise (for its card, pill and the job list).</summary>
+    public static string Progress(ChatJob job)
+    {
+        if (!job.Active) return "";
+        var percent = Percent(job.Plan, finished: false);
+        if (percent < 0) return "";
+        var (done, total) = Count(job.Plan);
+        return total - done > 0 ? $"{percent}% · {total - done} left" : $"{percent}%";
+    }
+
     /// <summary>True when every step is done (a new run then starts a new plan).</summary>
     public static bool AllDone(IReadOnlyDictionary<string, string>? plan) => plan is { Count: > 0 } && plan.Values.All(v => v == Finished);
 }
