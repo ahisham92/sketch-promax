@@ -12,7 +12,9 @@ namespace SketchProMax.Revit;
 /// responding for <see cref="OpenAfter"/>, or when a dialog keeps Revit waiting while it can't be seen (Revit's window is
 /// disabled and in front, the dialog behind it or on another screen). The window runs on its own thread too, so its
 /// buttons work while Revit's thread is stuck: stop Sketch ProMax's task, bring the dialog to the front, press Esc in
-/// Revit, or close Revit (Lifeline keeps the unsaved changes; the model's Lifeline window offers Replay when it opens).
+/// Revit, restart Revit on the same model, or close it (Lifeline keeps the unsaved changes; the model's Lifeline window
+/// offers Replay when it opens). The tray icon (UI/RescueTray) opens the window at any time. Every second it samples
+/// Revit's processor time, memory, file traffic and journal length, so the window can say working or stuck.
 /// Only Win32 calls that send nothing to Revit's thread are used here, so the watch can't hang with Revit.
 /// Every freeze is written to the activity log with what Revit was busy with, read from the end of Revit's journal.
 /// </summary>
@@ -28,6 +30,16 @@ internal static class FreezeWatch
     private static IntPtr _main;
     private static string? _journal;
     private static bool _dark;
+    private static volatile string[] _models = [];
+    private static readonly object SampleGate = new();
+    private static readonly List<FreezeCause.Sample> Samples = [];
+    private static readonly Process Own = Process.GetCurrentProcess();
+
+    /// <summary>Revit's state now, and since when (read by the Rescue window and the tray icon). Any thread.</summary>
+    public static (Kind Kind, DateTime Since) Current { get; private set; } = (Kind.Responding, DateTime.Now);
+
+    /// <summary>Revit's theme as last read on Revit's thread.</summary>
+    public static bool Dark => _dark;
 
     /// <summary>The journal Revit is writing (for the field test).</summary>
     internal static string? Journal => _journal;
@@ -41,7 +53,9 @@ internal static class FreezeWatch
         _dark = UI.Brand.IsDark;
         if (_main == IntPtr.Zero) return;
         RevitDispatcher.Idle += OnIdle;
+        NoteModels(app);
         var stop = _stop = new CancellationTokenSource();
+        try { UI.RescueTray.Start(); } catch (Exception) { /* the window still opens by itself */ }
         _thread = new Thread(() => Run(stop.Token)) { IsBackground = true, Name = "Sketch ProMax freeze watch", Priority = ThreadPriority.AboveNormal };
         _thread.Start();
     }
@@ -53,16 +67,35 @@ internal static class FreezeWatch
         _stop = null;
         _thread = null;
         UI.RescueWindow.Close();
+        UI.RescueTray.Stop();
     }
 
     private static int _themeRead;
 
-    /// <summary>Revit's theme, read again on Revit's thread every 30 s (the window's thread can't read it).</summary>
+    /// <summary>
+    /// Revit's theme and the open models (active first, for Restart Revit), read again on Revit's thread every 10 s:
+    /// the watch's and the window's threads can't read them.
+    /// </summary>
     private static void OnIdle(UIApplication app)
     {
-        if (unchecked(Environment.TickCount - _themeRead) < 30_000) return;
+        if (unchecked(Environment.TickCount - _themeRead) < 10_000) return;
         _themeRead = Environment.TickCount;
         try { _dark = UI.Brand.IsDark; } catch (Exception) { }
+        NoteModels(app);
+    }
+
+    private static void NoteModels(UIApplication app)
+    {
+        try
+        {
+            var list = new List<string>();
+            if (app.ActiveUIDocument?.Document is { IsFamilyDocument: false, PathName: { Length: > 0 } active }) list.Add(active);
+            foreach (Autodesk.Revit.DB.Document doc in app.Application.Documents)
+                if (!doc.IsFamilyDocument && !doc.IsLinked && doc.PathName is { Length: > 0 } path && !list.Contains(path, StringComparer.OrdinalIgnoreCase))
+                    list.Add(path);
+            _models = list.ToArray();
+        }
+        catch (Exception) { }
     }
 
     private static void Run(CancellationToken stop)
@@ -74,31 +107,28 @@ internal static class FreezeWatch
         {
             try
             {
+                Sample();
                 var now = Read(_main);
                 if (now != kind)
                 {
-                    if (kind != Kind.Responding && shown) Ended(kind, DateTime.Now - since);
+                    if (kind != Kind.Responding && shown) Log(kind, DateTime.Now - since, opened: true);
+                    if (kind != Kind.Responding) UI.RescueWindow.Responding(DateTime.Now - since);
                     if (kind != Kind.Responding && !shown && DateTime.Now - since >= TimeSpan.FromSeconds(10)) Log(kind, DateTime.Now - since, opened: false);
                     kind = now;
                     since = DateTime.Now;
                     shown = false;
+                    Current = (kind, since);
                 }
                 else if (kind != Kind.Responding && !shown && DateTime.Now - since >= OpenAfter
                          && (kind == Kind.HiddenDialog || DateTime.Now - since >= FreezeCause.OpenAfter(Cause())))
                 {
                     shown = true;
-                    UI.RescueWindow.Open(kind, since, _dark);
+                    UI.RescueWindow.Open(automatic: true);
                 }
             }
             catch (Exception) { /* the watch must never take Revit down */ }
             if (stop.WaitHandle.WaitOne(1000)) break;
         }
-    }
-
-    private static void Ended(Kind kind, TimeSpan lasted)
-    {
-        Log(kind, lasted, opened: true);
-        UI.RescueWindow.Responding(lasted);
     }
 
     private static void Log(Kind kind, TimeSpan lasted, bool opened)
@@ -122,6 +152,33 @@ internal static class FreezeWatch
 
     /// <summary>What Revit is busy with, from the end of its journal. Any thread; never throws.</summary>
     public static FreezeCause.Busy Cause() => FreezeCause.Read(JournalTail(_journal));
+
+    /// <summary>Revit's processor time, memory, file traffic and journal length now, kept for the last 3 minutes.</summary>
+    private static void Sample()
+    {
+        try
+        {
+            Own.Refresh();
+            long files = GetProcessIoCounters(Own.Handle, out var io) ? (long)(io.ReadBytes + io.WriteBytes + io.OtherBytes) : 0;
+            long journal = 0;
+            try { if (_journal is { } j) journal = new FileInfo(j).Length; } catch (Exception) { }
+            var sample = new FreezeCause.Sample(DateTime.Now, Own.TotalProcessorTime, Own.PrivateMemorySize64, files, journal);
+            lock (SampleGate)
+            {
+                Samples.Add(sample);
+                if (Samples.Count > 180) Samples.RemoveAt(0);
+            }
+        }
+        catch (Exception) { }
+    }
+
+    /// <summary>Working or stuck, from the last samples. Any thread.</summary>
+    public static FreezeCause.Activity Activity()
+    {
+        List<FreezeCause.Sample> copy;
+        lock (SampleGate) copy = Samples.ToList();
+        return FreezeCause.Judge(copy, Environment.ProcessorCount, DateTime.Now);
+    }
 
     /// <summary>The journal's last lines (up to 512 KB), read while Revit keeps it open.</summary>
     internal static List<string> JournalTail(string? file, int bytes = 512 * 1024)
@@ -207,6 +264,32 @@ internal static class FreezeWatch
         try { Process.GetCurrentProcess().Kill(); } catch (Exception) { }
     }
 
+    /// <summary>The model Restart Revit opens again (the active one when Revit last answered), or null.</summary>
+    public static string? ModelToReopen => _models.FirstOrDefault(File.Exists);
+
+    /// <summary>
+    /// Ends this Revit and starts it again on the same model (the active one), without Task Manager: Lifeline's lines are
+    /// written out first, then a new Revit is started (it opens the model and Lifeline's window offers Replay), then this
+    /// one is ended. Without a model to open, Revit starts empty.
+    /// </summary>
+    public static void RestartRevit(string why)
+    {
+        try { ChangeFile.Flush(TimeSpan.FromSeconds(3)); } catch (Exception) { }
+        var model = ModelToReopen;
+        Tools.ActivityLog.NoteNow("rescue_restart", $"Revit restarted from the Rescue window ({why})" + (model is null ? "" : $", reopening {Path.GetFileName(model)}"));
+        try
+        {
+            var exe = Own.MainModule?.FileName;
+            if (exe is { Length: > 0 })
+                Process.Start(new ProcessStartInfo(exe, model is null ? "" : "\"" + model + "\"")
+                {
+                    UseShellExecute = false, WorkingDirectory = Path.GetDirectoryName(exe) ?? "",
+                });
+        }
+        catch (Exception) { /* Revit is still ended: the user starts it from the Start menu */ }
+        try { Own.Kill(); } catch (Exception) { }
+    }
+
     /// <summary>Lifeline's files for the open models: the model's name, the changes kept since its last save, and since when.</summary>
     public static List<(string Model, int Changes, DateTime? Since)> Lifeline()
     {
@@ -274,4 +357,9 @@ internal static class FreezeWatch
     [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint processId);
     [DllImport("user32.dll")] private static extern bool PostMessage(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam);
     [DllImport("user32.dll", SetLastError = true)] private static extern uint SendInput(uint count, Input[] inputs, int size);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct IoCounters { public ulong ReadOps, WriteOps, OtherOps, ReadBytes, WriteBytes, OtherBytes; }
+
+    [DllImport("kernel32.dll")] private static extern bool GetProcessIoCounters(IntPtr process, out IoCounters counters);
 }
