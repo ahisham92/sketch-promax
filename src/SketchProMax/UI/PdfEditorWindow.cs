@@ -25,7 +25,9 @@ namespace SketchProMax.UI;
 /// stored in the model and nothing is written until Save as (a folder and name you pick) or Save over (which keeps the
 /// old file in Documents\Sketch ProMax\PDF backups); Ctrl+Z undoes.
 /// Pages are drawn by PDFium off Revit's thread, only those in view, so a PDF of thousands of pages opens at once.
-/// The window is modeless; nothing in the model is read or changed.
+/// The window is modeless; nothing in the model is read or changed. Side by side opens a second editor next to this one:
+/// pages dragged from one window to the other (or "Copy to the other window") are copied there, so work moves from file 1
+/// to file 2 while both stay open.
 /// </summary>
 internal sealed class PdfEditorWindow : Window
 {
@@ -43,7 +45,7 @@ internal sealed class PdfEditorWindow : Window
     private readonly TextBlock _note = Brand.Text("", Brand.K.Text, 12);
     private readonly ProgressBar _bar = new() { Height = 6, Width = 160, Minimum = 0, Maximum = 1, Margin = new Thickness(12, 0, 0, 0), Visibility = Visibility.Collapsed, VerticalAlignment = VerticalAlignment.Center };
     private readonly ComboBox _zoom = new() { Width = 96, MinHeight = 28, VerticalContentAlignment = VerticalAlignment.Center };
-    private readonly Button _open, _add, _blank, _left, _right, _earlier, _later, _delete, _replace, _extract, _split, _undo, _redo, _save, _saveAs, _show;
+    private readonly Button _open, _side, _add, _blank, _left, _right, _earlier, _later, _delete, _replace, _extract, _split, _undo, _redo, _save, _saveAs, _show;
     private readonly List<Button> _needsDoc = [], _needsSelection = [];
     private readonly Border _header;
     private ScrollViewer? _scroller;
@@ -53,6 +55,11 @@ internal sealed class PdfEditorWindow : Window
     private bool _busy;
     private string? _lastOutput;
     private CancellationTokenSource? _running;
+
+    /// <summary>The editor windows open now, oldest first, for Side by side and copying pages between them.</summary>
+    private static readonly List<PdfEditorWindow> Windows = [];
+    private static int _nextId;
+    private readonly string _id = (++_nextId).ToString(System.Globalization.CultureInfo.InvariantCulture);
 
     public static Autodesk.Revit.UI.Result Open(string? file = null)
     {
@@ -80,6 +87,8 @@ internal sealed class PdfEditorWindow : Window
 
         // ---- Toolbar: groups of what you do to a document, then to the picked pages.
         _open = Tool(RichUi.Icon.Open, "Open", "Open a PDF (Ctrl+O). Several at once are merged into one.", () => _ = OpenPicked(), false);
+        _side = Tool(RichUi.Icon.Side, "Side by side", "Opens a second PDF editor next to this one (Ctrl+N), to work on two PDFs at once. " +
+            "Drag pages from one window to the other to copy them there.", SideBySide, false);
         _add = Tool(RichUi.Icon.Add, "Add PDF", "Adds the pages of other PDFs after the picked page, or at the end: merges PDFs.", () => _ = AddPdf(), true);
         _blank = Tool(Page, "Blank page", "Adds a blank page after the picked page, the size of its neighbour.", AddBlank, true);
         _left = Tool(Turn, "", "Turn the picked pages left (Ctrl+L).", () => Rotate(-1), true, true);
@@ -103,7 +112,7 @@ internal sealed class PdfEditorWindow : Window
         _zoom.SelectionChanged += (_, _) => Refresh(keepSelection: true);
 
         var bar = new WrapPanel { Margin = new Thickness(10, 8, 10, 4) };
-        foreach (var group in new[] { new[] { _open, _add, _blank }, [_left, _right, _earlier, _later], [_replace, _delete], [_extract, _split], [_undo, _redo] })
+        foreach (var group in new[] { new[] { _open, _side, _add, _blank }, [_left, _right, _earlier, _later], [_replace, _delete], [_extract, _split], [_undo, _redo] })
         {
             var g = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 14, 4) };
             foreach (var b in group) g.Children.Add(b);
@@ -183,12 +192,24 @@ internal sealed class PdfEditorWindow : Window
         Content = root;
 
         AllowDrop = true;
-        DragOver += (_, e) => { if (_doc is null) { e.Effects = Pdfs(e.Data).Count > 0 ? DragDropEffects.Copy : DragDropEffects.None; e.Handled = true; } };
-        Drop += (_, e) => { if (_doc is null && Pdfs(e.Data) is { Count: > 0 } files) { e.Handled = true; _ = OpenFiles(files); } };
+        DragOver += (_, e) =>
+        {
+            if (_doc is not null) return;
+            e.Effects = Pdfs(e.Data).Count > 0 || Dragged(e.Data) is { From: not null } ? DragDropEffects.Copy : DragDropEffects.None;
+            e.Handled = true;
+        };
+        Drop += (_, e) =>
+        {
+            if (_doc is not null) return;
+            if (Dragged(e.Data) is { From: { } from } dragged) { e.Handled = true; _ = CopyFrom(from, dragged.Positions, 0); }
+            else if (Pdfs(e.Data) is { Count: > 0 } files) { e.Handled = true; _ = OpenFiles(files); }
+        };
         PreviewKeyDown += OnKey;
         Closing += OnClosing;
+        Windows.Add(this);
         Closed += (_, _) =>
         {
+            Windows.Remove(this);
             _running?.Cancel();
             _viewTimer?.Stop();
             _doc?.Dispose();
@@ -770,6 +791,7 @@ internal sealed class PdfEditorWindow : Window
         foreach (var b in _needsDoc) b.IsEnabled = has && !_busy;
         foreach (var b in _needsSelection) b.IsEnabled = has && !_busy && picked > 0;
         _open.IsEnabled = !_busy;
+        _side.IsEnabled = !_busy;
         _undo.IsEnabled = has && !_busy && _doc!.CanUndo;
         _redo.IsEnabled = has && !_busy && _doc!.CanRedo;
         _zoom.IsEnabled = has;
@@ -793,6 +815,7 @@ internal sealed class PdfEditorWindow : Window
         Action? run = (e.Key, ctrl, shift) switch
         {
             (Key.O, true, _) => () => _ = OpenPicked(),
+            (Key.N, true, false) => SideBySide,
             (Key.S, true, false) => () => _ = SaveDoc(saveAs: false),
             (Key.S, true, true) => () => _ = SaveDoc(saveAs: true),
             (Key.Z, true, false) => Undo,
@@ -806,7 +829,7 @@ internal sealed class PdfEditorWindow : Window
             (Key.Enter, false, false) when _grid.IsKeyboardFocusWithin && _grid.SelectedItem is ListBoxItem { Tag: Tile t } => () => Preview(t),
             _ => null,
         };
-        if (run is null || _doc is null && e.Key != Key.O) return;
+        if (run is null || _doc is null && e.Key is not (Key.O or Key.N)) return;
         e.Handled = true;
         run();
     }
@@ -864,11 +887,23 @@ internal sealed class PdfEditorWindow : Window
         var positions = Picked();
         _pressed = null;
         _deferredPick = false;
-        DragDrop.DoDragDrop(_grid, new DataObject(PagesFormat, positions.ToArray()), DragDropEffects.Move);
+        var data = new DataObject(PagesFormat, positions.ToArray());
+        data.SetData(FromFormat, _id);
+        DragDrop.DoDragDrop(_grid, data, DragDropEffects.Move | DragDropEffects.Copy);
         Mark(null, false);
     }
 
-    private const string PagesFormat = "SketchProMax.PdfPages";
+    private const string PagesFormat = "SketchProMax.PdfPages", FromFormat = "SketchProMax.PdfPagesFrom";
+
+    /// <summary>Pages dragged from an editor window: their positions there, and the window when it isn't this one.</summary>
+    private (int[] Positions, PdfEditorWindow? From)? Dragged(IDataObject data)
+    {
+        if (data.GetData(PagesFormat) is not int[] positions) return null;
+        var id = data.GetData(FromFormat) as string;
+        var from = id is null || id == _id ? null : Windows.FirstOrDefault(w => w._id == id && w._doc is not null);
+        if (id is not null && id != _id && from is null) return null;
+        return (positions, from);
+    }
     private Tile? _marked;
 
     private void OnDragOver(object sender, DragEventArgs e)
@@ -877,7 +912,9 @@ internal sealed class PdfEditorWindow : Window
         var pages = e.Data.GetDataPresent(PagesFormat);
         var files = !pages && Pdfs(e.Data).Count > 0;
         if (_doc is null || !pages && !files) { e.Effects = DragDropEffects.None; return; }
-        e.Effects = pages ? DragDropEffects.Move : DragDropEffects.Copy;
+        var dragged = pages ? Dragged(e.Data) : null;
+        if (pages && dragged is null) { e.Effects = DragDropEffects.None; return; }
+        e.Effects = dragged is { From: null } ? DragDropEffects.Move : DragDropEffects.Copy;
         var (tile, after) = DropPlace(e);
         Mark(tile, after);
         // Scroll while dragging near the top or bottom edge.
@@ -896,7 +933,9 @@ internal sealed class PdfEditorWindow : Window
         Mark(null, false);
         if (_doc is null) return;
         var at = tile is null ? _doc.Pages.Count : tile.Position + (after ? 1 : 0);
-        if (e.Data.GetData(PagesFormat) is int[] moving)
+        var dragged = Dragged(e.Data);
+        if (dragged is { From: { } from }) _ = CopyFrom(from, dragged.Value.Positions, at);
+        else if (dragged is { Positions: var moving })
         {
             var first = _doc.MoveTo(moving, at);
             Refresh(select: Enumerable.Range(first, moving.Length));
@@ -956,14 +995,113 @@ internal sealed class PdfEditorWindow : Window
         Item("Add a blank page after this", "", AddBlank, needsPick: false);
         Item("Replace with pages of another PDF…", "", () => _ = ReplacePicked());
         Item("Save these pages as a new PDF…", "Ctrl+E", () => _ = Extract());
+        var copyOver = Item("Copy to the other window", "", () => _ = CopyToOther());
         menu.Items.Add(new Separator());
         Item("Delete", "Delete", DeletePicked);
         menu.Opened += (_, _) =>
         {
             var picked = _grid.SelectedItems.Count > 0;
             foreach (var m in menu.Items.OfType<MenuItem>()) m.IsEnabled = _doc is not null && !_busy && (!(bool)m.Tag || picked);
+            copyOver.Visibility = Other() is null ? Visibility.Collapsed : Visibility.Visible;
         };
         return menu;
+    }
+
+    // ---- Two windows side by side -------------------------------------------------------------------------------------
+
+    /// <summary>The other editor window to copy to or line up with: the newest one open besides this.</summary>
+    private PdfEditorWindow? Other() => Windows.LastOrDefault(w => !ReferenceEquals(w, this) && w.IsLoaded);
+
+    /// <summary>Side by side: opens a second editor (or takes the other one open) and puts this one left, that one right.</summary>
+    private void SideBySide()
+    {
+        var other = Other();
+        if (other is null)
+        {
+            other = new PdfEditorWindow { Owner = Owner };
+            other.Show();
+        }
+        var area = WorkArea();
+        var half = Math.Floor(area.Width / 2);
+        foreach (var (w, left) in new[] { (this, area.Left), (other, area.Left + half) })
+        {
+            w.WindowState = WindowState.Normal;
+            w.Left = left;
+            w.Top = area.Top;
+            w.Width = Math.Max(w.MinWidth, half);
+            w.Height = area.Height;
+        }
+        other.Activate();
+        Info(other._doc is null ? "Open the second PDF in the right window, then drag pages from one window to the other to copy them."
+            : "Drag pages from one window to the other to copy them there.");
+    }
+
+    /// <summary>The working area (no taskbar) of the screen this window is on, in device-independent pixels.</summary>
+    private Rect WorkArea()
+    {
+        var handle = new System.Windows.Interop.WindowInteropHelper(this).Handle;
+        var info = new MonitorInfo { Size = System.Runtime.InteropServices.Marshal.SizeOf<MonitorInfo>() };
+        var monitor = handle == IntPtr.Zero ? IntPtr.Zero : MonitorFromWindow(handle, 2 /* nearest */);
+        if (monitor == IntPtr.Zero || !GetMonitorInfo(monitor, ref info)) return SystemParameters.WorkArea;
+        var toDip = PresentationSource.FromVisual(this)?.CompositionTarget?.TransformFromDevice ?? Matrix.Identity;
+        return new Rect(toDip.Transform(new Point(info.Work.Left, info.Work.Top)), toDip.Transform(new Point(info.Work.Right, info.Work.Bottom)));
+    }
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    private struct Box { public int Left, Top, Right, Bottom; }
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    private struct MonitorInfo { public int Size; public Box Monitor, Work; public uint Flags; }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern IntPtr MonitorFromWindow(IntPtr window, uint flags);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool GetMonitorInfo(IntPtr monitor, ref MonitorInfo info);
+
+    /// <summary>Copy to the other window: the picked pages go after the other window's picked page, or at its end.</summary>
+    private async Task CopyToOther()
+    {
+        if (_doc is null || Other() is not { } other) return;
+        var positions = Picked();
+        if (positions.Count == 0) return;
+        await other.CopyFrom(this, positions.ToArray(), other.InsertAt());
+        other.Activate();
+    }
+
+    /// <summary>
+    /// Copies the pages at <paramref name="positions"/> of <paramref name="from"/>'s document into this one, before
+    /// <paramref name="at"/>; an empty window starts a new document of them. The other window doesn't change.
+    /// </summary>
+    private async Task CopyFrom(PdfEditorWindow from, int[] positions, int at)
+    {
+        if (_busy || from._doc is not { } source) return;
+        var pages = positions.Where(p => p >= 0 && p < source.Pages.Count).Distinct().OrderBy(p => p).Select(p => source.Pages[p]).ToList();
+        if (pages.Count == 0) return;
+        var target = _doc ?? new PdfEditSession();
+        List<PdfPage>? copied = null;
+        await Busy("Copying pages…", async _ => copied = await Task.Run(() => target.Import(source, pages)));
+        if (copied is null) { if (_doc is null) target.Dispose(); return; }
+        var name = source.File is { } f ? Path.GetFileName(f) : "the other window";
+        if (_doc is null)
+        {
+            target.StartMerge(copied);
+            _doc = target;
+            _cache.Clear();
+            _tiles.Clear();
+            _lastOutput = null;
+            _show.Visibility = Visibility.Collapsed;
+            Refresh(select: Enumerable.Range(0, copied.Count));
+            Info($"New PDF of {copied.Count} page{S(copied.Count)} from {name}. Save as when it's ready.");
+        }
+        else
+        {
+            at = Math.Max(0, Math.Min(_doc.Pages.Count, at));
+            _doc.Insert(at, copied);
+            Refresh(select: Enumerable.Range(at, copied.Count));
+            Info($"Copied {copied.Count} page{S(copied.Count)} from {name} as page{S(copied.Count)} {PdfEditSession.Describe(Enumerable.Range(at, copied.Count).ToList())}.");
+        }
+        _grid.Focus();
     }
 
     private void Preview(Tile tile)
