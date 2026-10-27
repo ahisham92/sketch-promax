@@ -199,9 +199,14 @@ internal static class FreezeWatch
 
     // ---- What the Rescue window's buttons do ------------------------------------------------------------------------
 
-    /// <summary>A Sketch ProMax task, tool call or self-test is running now.</summary>
-    public static bool OursRunning => Jobs.Running is { } job && job.Task is not { IsCompleted: true } || JobControl.Current is { Over: false }
-                                      || Tools.SelfTest.IsRunning;
+    /// <summary>
+    /// A Sketch ProMax task, tool call, self-test or any work of ours on Revit's thread (a Lifeline replay) is running now.
+    /// </summary>
+    public static bool OursRunning => OursCancellable || App.Dispatcher is { IsRunning: true };
+
+    /// <summary>A task, tool call or self-test the Stop button can stop.</summary>
+    public static bool OursCancellable => Jobs.Running is { } job && job.Task is not { IsCompleted: true } || JobControl.Current is { Over: false }
+                                          || Tools.SelfTest.IsRunning;
 
     /// <summary>Asks every Sketch ProMax task to stop at its next check (the item in progress is rolled back).</summary>
     public static void StopOurs()

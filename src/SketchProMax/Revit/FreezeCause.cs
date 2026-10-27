@@ -150,17 +150,20 @@ internal static class FreezeCause
         : $"{(int)t.TotalHours} h {t.Minutes} min";
 
     /// <summary>The window's main line: what Revit is busy with, and for how long.</summary>
-    public static string Line(Busy busy, TimeSpan frozen)
+    /// <param name="ours">A Sketch ProMax call is running on Revit's thread now (a task, a tool, a Lifeline replay): that, not
+    /// the journal's last command, is what keeps Revit busy (calls of ours don't show as commands in the journal).</param>
+    public static string Line(Busy busy, TimeSpan frozen, bool ours = false)
     {
-        var step = busy.Step is { Length: > 0 } s && !string.Equals(s, busy.What, StringComparison.OrdinalIgnoreCase) && !busy.Ours ? $" ({s})" : "";
-        var what = busy.Ours ? "a Sketch ProMax task" : busy.What + step;
+        ours |= busy.Ours;
+        var step = busy.Step is { Length: > 0 } s && !string.Equals(s, busy.What, StringComparison.OrdinalIgnoreCase) && !ours ? $" ({s})" : "";
+        var what = ours ? "a Sketch ProMax task" : busy.What + step;
         return $"Revit is busy with {what}. It hasn't responded for {Duration(frozen)}.";
     }
 
     /// <summary>Whose work it is, in one short line.</summary>
     public static string Whose(Busy busy, bool jobRunning) =>
         busy.Ours || jobRunning
-            ? "This is a Sketch ProMax task. Stop it below."
+            ? "This is a Sketch ProMax task, not Revit's own: a task, a tool or a Lifeline replay. Stop it below or in its own window, or let it finish."
             : busy.CommandId is null && busy.What == "something of its own"
                 ? "This is Revit's own work, not Sketch ProMax."
                 : "This is Revit's own command, not Sketch ProMax.";

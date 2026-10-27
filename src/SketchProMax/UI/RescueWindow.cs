@@ -229,7 +229,7 @@ internal static class RescueWindow
 
             line.Text = dialog
                 ? $"A Revit dialog has been waiting for {FreezeCause.Duration(length)} and may be behind a window or on another screen."
-                : frozen ? FreezeCause.Line(busy!, length)
+                : frozen ? FreezeCause.Line(busy!, length, ours)
                 : wasFrozen ? "Revit answers clicks again." : "";
             line.Visibility = line.Text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
             whose.Text = frozen && !dialog ? FreezeCause.Whose(busy!, ours) : "";
@@ -246,7 +246,7 @@ internal static class RescueWindow
             }
             lifeline.Text = lifelineText;
 
-            stopOurs.Visibility = ours ? Visibility.Visible : Visibility.Collapsed;
+            stopOurs.Visibility = FreezeWatch.OursCancellable ? Visibility.Visible : Visibility.Collapsed;
             show.Visibility = dialog ? Visibility.Visible : Visibility.Collapsed;
             esc.Visibility = frozen && !dialog ? Visibility.Visible : Visibility.Collapsed;
             restart.Visibility = frozen ? Visibility.Visible : Visibility.Collapsed;
