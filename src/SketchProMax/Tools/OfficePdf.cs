@@ -57,6 +57,9 @@ internal static class OfficePdf
         611, 611, 611, 611, 389, 556, 333, 611, 556, 778, 556, 556, 500, 389, 280, 389, 584,
     ];
 
+    /// <summary>The width in points of <paramref name="text"/> in Helvetica (or Helvetica-Bold) at <paramref name="size"/>.</summary>
+    internal static double TextWidth(string text, bool bold, double size) => Width(Encode(text), bold ? F.Bold : F.Regular, size);
+
     private static double Width(string encoded, F font, double size)
     {
         if (font == F.Mono) return encoded.Length * 0.6 * size;
@@ -792,16 +795,16 @@ internal static class OfficePdf
     }
 
     /// <summary>One byte per char (the text is WinAnsi already, or ASCII).</summary>
-    private static byte[] Bytes(string s)
+    internal static byte[] Bytes(string s)
     {
         var b = new byte[s.Length];
         for (var i = 0; i < s.Length; i++) b[i] = s[i] < 256 ? (byte)s[i] : (byte)'?';
         return b;
     }
 
-    private static string Str(string s) => s.Replace("\\", "\\\\").Replace("(", "\\(").Replace(")", "\\)").Replace("\r", "").Replace("\n", " ");
+    internal static string Str(string s) => s.Replace("\\", "\\\\").Replace("(", "\\(").Replace(")", "\\)").Replace("\r", "").Replace("\n", " ");
 
-    private static string N(double v) => Math.Round(v, 2).ToString("0.##", CultureInfo.InvariantCulture);
+    internal static string N(double v) => Math.Round(v, 2).ToString("0.##", CultureInfo.InvariantCulture);
 
     private static string Rgb(string hex)
     {

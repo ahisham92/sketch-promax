@@ -226,6 +226,14 @@ internal static class FieldTestCoverage
             "Close and reopen: everything is as you left it, and nothing is read until you press Update status."),
         new("subcheck.store", Issue, "Submission checklist: everyone's answers kept in the model", How.Probe, "",
             "an engineer's and a group leader's records are written into the test project (one element each), written again, read back and merged: the approval counts, the approved N/A is hidden, only the group leader is a group leader, the questions follow the structure types; the Word file is made; rolled back"),
+        new("sigpages.files", Issue, "Signature pages: the Word file and PDF of each document", How.Probe, "",
+            "in a temporary folder: an Excel list is read (header, REV after the number, type from the number), each document's Word file and PDF are written in TYPE\\Word and TYPE\\PDF and read back (one page, the number with its REV), a signature locked with a PIN opens only with that PIN, and the window is built; nothing in the model changes"),
+        new("sigpages.ui", Issue, "The signature pages window", How.Manual, "", "the pages are compared with the office's printed ones, and signing is done by people",
+            "Press Signature pages in the Submit panel. Under Page details type the project, the discipline, each type's form code, and Pick the logo. Press Sheets from Revit and tick three sheets: three rows with their current revisions. " +
+            "Press Excel template, fill two rows (one Rev 0, one Rev 1) and Import Excel: they are added. The preview shows the page of the row you click. " +
+            "Under Sign type O.A. for By and press Sign: it offers to add the person; draw a signature, choose a PIN twice, Save, then type the PIN: the signature shows in the tile and the preview. A wrong PIN is refused. " +
+            "Leave CHK unsigned. Press Make: a dated folder has BOQ\\Word, BOQ\\PDF and so on, one Word file and one PDF per document; open one of each: they look like the office's pages, with the By signature and room to sign CHK by hand. " +
+            "Close and open the window: the list and details are back. Everything reads well in the light and dark themes, and says Sketch ProMax, never Claude."),
         new("subcheck.ui", Issue, "The submission checklist window, shared between two people", How.Manual, "", "two people on a workshared model, the pages, the sketches and the Word file are judged by people",
             "On a _detached copy (or a test central with two users): click Submission checklist on the ribbon (also from Submissions status > a package, or Model checklist > Submission checklist). " +
             "Project setup: tick Deck on piles and Gravity blocks (each tile has its sketch), keep yourself as group leader, Start the checklist. Pages appear on the left with counts; the header shows Checked, Approved and BIM checklist rings. " +
@@ -540,7 +548,7 @@ internal static class FieldTestCoverage
         ["open-claude"] = "claude.open", ["pane"] = "ribbon.status", ["export-pack"] = "pack.export", ["job-button"] = "ribbon.job",
         ["update-button"] = "ribbon.job", ["report-bug"] = "bugs.ui", ["split-pdf"] = "chat.split_ui", ["pdf-editor"] = "pdf.editor_ui", ["bug-folder"] = "bugs.ui", ["export-chats-bugs"] = "bugs.export", ["license"] = "license.ui",
         ["settings"] = "settings.ui", ["help"] = "help", ["user-folders"] = "folders.ui", ["recover"] = "recovery.ui", ["self-test"] = "diagnostics", ["field-test"] = "diagnostics",
-        ["test-checklist"] = "diagnostics", ["time-saved"] = "time.ui", ["issue-check"] = "issue.ui", ["pre-submission"] = "checklist.ui", ["berth-status"] = "berth.ui", ["submission-checklist"] = "subcheck.ui", ["berth-costing"] = "costing.ui", ["cleanup"] = "cleanup.ui", ["share-tools"] = "share.ui", ["favourites"] = "favourites", ["fav:*"] = "favourites", ["tab:notes"] = "chat.notes",
+        ["test-checklist"] = "diagnostics", ["time-saved"] = "time.ui", ["issue-check"] = "issue.ui", ["pre-submission"] = "checklist.ui", ["berth-status"] = "berth.ui", ["submission-checklist"] = "subcheck.ui", ["signature-pages"] = "sigpages.ui", ["berth-costing"] = "costing.ui", ["cleanup"] = "cleanup.ui", ["share-tools"] = "share.ui", ["favourites"] = "favourites", ["fav:*"] = "favourites", ["tab:notes"] = "chat.notes",
     };
 
     /// <summary>The coverage key of a manifest line, or null when it runs nothing (drop-downs, hidden items, tool entries).</summary>
