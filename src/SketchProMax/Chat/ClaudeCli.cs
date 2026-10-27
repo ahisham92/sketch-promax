@@ -551,7 +551,8 @@ internal static class ClaudeCli
           into parts that don't overlap (by level, zone, category, sheet range, or reading vs. checking vs. changing), as
           many as there are free workers (action=list says how many), and start them in one call: action=start with parts
           and facts (what you read). Use one job only when the work truly can't be divided (one element, one sheet, one
-          short answer). Jobs also hear
+          short answer), and then say why in single: a start of one whole job while two or more workers are free is sent
+          back to be divided. Jobs also hear
           from Sketch ProMax what the jobs before them found. When a job reports something another open job needs, pass
           it on with action=message.
         - After starting or messaging jobs, say in one line which jobs have it and end your turn: don't wait for them and

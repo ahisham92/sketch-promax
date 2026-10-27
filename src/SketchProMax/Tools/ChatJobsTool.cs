@@ -33,6 +33,7 @@ public sealed class ChatJobsTool : IRevitTool
       "text": {"type": "string", "description": "message: what to tell the job, in full."},
       "parts": {"type": "array", "description": "start: divide the work, one job per part, all started at once (each part's task in full; the parts must not overlap, e.g. levels 1-3 and 4-6).", "items": {"type": "object", "properties": {"title": {"type": "string"}, "task": {"type": "string"}, "kind": {"type": "string", "enum": ["simple", "everyday", "hard"]}}, "required": ["title", "task"]}},
       "facts": {"type": "string", "description": "start with parts: what you already read from the model that every part needs (levels, grids, types, names, ids); each job gets it with its task."},
+      "single": {"type": "string", "description": "start without parts while two or more workers are free: why this work can't be divided (one element, one sheet, one short answer). Without it such a start is sent back to be divided."},
       "new": {"type": "boolean", "description": "start: true when it is separate work even though it resembles an existing job."},
       "kind": {"type": "string", "enum": ["simple", "everyday", "hard"], "description": "start: the kind of work, which picks the job's model and effort when the chat is on Automatic. simple: mechanical work (rename, tag, list, fill parameters, short summaries); everyday: most Revit work (sheets, views, dimensions, checks, normal modelling); hard: hard reasoning (a spec or BEP against the model, redlines, tricky modelling logic, costing decisions). Left out, it is judged from the task's words."}
     }
@@ -71,6 +72,16 @@ public sealed class ChatJobsTool : IRevitTool
                 var task = (Str(args, "task") ?? "").Trim();
                 var title = (Str(args, "title") ?? "").Trim();
                 if (task.Length == 0) return ToolResult.Error("Give the job's whole task in 'task' (and a short 'title').");
+                // Free workers: the work goes out divided, not to one worker (unless it can't be divided, and the coordinator says why).
+                var idle = Math.Max(0, JobBoard.ClampLimit(limit) - board.OpenCount);
+                if (JobBoard.MustDivide(idle, Str(args, "single")))
+                    return ToolResult.Ok(new
+                    {
+                        started = false, free_workers = idle,
+                        next = $"Not started: {idle} workers are free, so divide this work between them. Call start again with parts (one per worker, " +
+                               "not overlapping: by level, zone, category, sheet range, or reading / checking / changing) and facts (what you already read " +
+                               "that every part needs). Only if it truly can't be divided, call start again with the same task and single = why.",
+                    });
                 var job = board.Start(title, task, now, Bool(args, "new"), out var similar);
                 if (job is null)
                     return ToolResult.Ok(new

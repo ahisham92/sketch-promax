@@ -172,6 +172,10 @@ internal static class CrewTests
         carded.State = JobBoard.Done;
         check("plan: a finished job's state is plain", JobBoard.StateLabel(carded) == "Done", JobBoard.StateLabel(carded));
 
+        // A whole job to one worker while others are free goes back to be divided, unless it can't be.
+        check("divide: two free workers, one whole job: divide it", JobBoard.MustDivide(2, null) && JobBoard.MustDivide(3, " "), "");
+        check("divide: one free worker, or a reason it can't be divided: start it", !JobBoard.MustDivide(1, null) && !JobBoard.MustDivide(3, "one sheet"), "");
+
         // The team: a job starting hears who else works on what, and what the finished jobs found, each report once.
         var levels = Job(1, JobBoard.Done);
         levels.Summary = "Levels: L1 0 mm, L2 3500 mm, L3 7000 mm.";
