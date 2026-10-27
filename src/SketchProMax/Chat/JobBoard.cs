@@ -74,6 +74,9 @@ internal sealed class ChatJob
 
     /// <summary>True while it has (or is about to have) a Claude Code process: running or waiting its turn.</summary>
     [JsonIgnore] public bool Active => State is JobBoard.Running or JobBoard.Waiting;
+
+    /// <summary>True until it is finished: running, waiting its turn or waiting to start (a finished job sent a message is open again).</summary>
+    [JsonIgnore] public bool Open => Active || State == JobBoard.Queued;
 }
 
 /// <summary>What a job's run is sent: the text (its task, or the messages waiting for it) and the files attached to them.</summary>
@@ -167,7 +170,20 @@ internal sealed class JobBoard
     /// <summary>Jobs running, waiting their turn or waiting to start.</summary>
     public int OpenCount
     {
-        get { lock (Gate) return _jobs.Count(j => j.Active || j.State == Queued); }
+        get { lock (Gate) return _jobs.Count(j => j.Open); }
+    }
+
+    /// <summary>
+    /// The jobs the switcher lists, and how many of them are open (they come first, in job order). The side pane
+    /// (<paramref name="all"/> false) lists only open jobs, plus job <paramref name="shown"/> while its chat is open; the
+    /// large window's Jobs column lists the finished ones too, under the open ones, the latest first.
+    /// </summary>
+    public static (List<ChatJob> Jobs, int Open) ForSwitcher(IEnumerable<ChatJob> jobs, bool all, int? shown)
+    {
+        var open = jobs.Where(j => j.Open).OrderBy(j => j.Number).ToList();
+        var count = open.Count;
+        var finished = jobs.Where(j => !j.Open && (all || j.Number == shown)).OrderByDescending(j => j.Number);
+        return (open.Concat(finished).ToList(), count);
     }
 
     /// <summary>
