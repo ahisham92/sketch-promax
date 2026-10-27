@@ -531,6 +531,8 @@ internal static partial class FieldTest
         // Stairs are made in a stairs edit scope, which needs the external event.
         await ProbeCore(s, "recovery.types", () => App.Dispatcher.InvokeFromEventAsync(app => RecoveryTypes(app, s))).ConfigureAwait(false);
         await Probe(s, "recovery.bugs", () => RecoveryBugs(s)).ConfigureAwait(false);
+        await Probe(s, "rescue.cause", RescueCause).ConfigureAwait(false);
+        await Probe(s, "rescue.warn", RescueWarn).ConfigureAwait(false);
         // Off Revit's thread: processes, files and the network.
         await Probe(s, "chat.cli", () => { cli = new ClaudeCliInstall(Chat.ClaudeCli.Find()); return cli.Row(); }).ConfigureAwait(false);
         await Probe(s, "chat.signin", () => SignIn(cli)).ConfigureAwait(false);

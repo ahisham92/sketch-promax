@@ -273,7 +273,7 @@ internal static class JobWindow
         catch (Exception) { /* z-order is a nicety */ }
     }
 
-    private static void PlaceOnRevitMonitor(Window window, IntPtr revit)
+    internal static void PlaceOnRevitMonitor(Window window, IntPtr revit)
     {
         try
         {

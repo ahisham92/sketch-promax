@@ -86,6 +86,7 @@ BerthCostTests.Run((name, ok, detail) => Check(name, ok, detail));
 JobCardTests.Run((name, ok, detail) => Check(name, ok, detail));
 ParallelJobTests.Run((name, ok, detail) => Check(name, ok, detail));
 RunningCallTests.Run((name, ok, detail) => Check(name, ok, detail));
+FreezeTests.Run((name, ok, detail) => Check(name, ok, detail));
 ScriptHintTests.Run((name, ok, detail) => Check(name, ok, detail));
 ChatMcpTests.Run((name, ok, detail) => Check(name, ok, detail));
 ResultViewTests.Run((name, ok, detail) => Check(name, ok, detail));
