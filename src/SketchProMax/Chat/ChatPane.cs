@@ -2032,6 +2032,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             return;
         }
         var turn = _turn = new Turn { Brief = brief };
+        CrewHeard(); // the large chat's coordinator nods: your message, or a job reporting back
         // Automatic model and effort: picked for this request by its kind of work, and said in the chat when it changes.
         PickFor(text, attachments.Any(a => System.IO.Path.GetExtension(a.Path).ToLowerInvariant() is ".pdf" or ".docx" or ".pptx" or ".doc"));
         Revit.TimeLog.BeginChat(brief);

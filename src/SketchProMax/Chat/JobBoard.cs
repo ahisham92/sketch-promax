@@ -469,7 +469,7 @@ internal sealed class JobBoard
     {
         Number = j.Number, Key = j.Key, Title = j.Title, Task = j.Task, State = j.State, Kind = j.Kind, Model = j.Model, Effort = j.Effort, Summary = j.Summary, Now = j.Now, Ahead = j.Ahead,
         Created = j.Created, Started = j.Started, Ended = j.Ended, HasSession = j.HasSession, Inbox = j.Inbox.ToList(),
-        InboxFiles = j.InboxFiles.ToList(), Items = j.Items.ToList(),
+        InboxFiles = j.InboxFiles.ToList(), Items = j.Items.ToList(), Activity = j.Activity,
     };
 }
 

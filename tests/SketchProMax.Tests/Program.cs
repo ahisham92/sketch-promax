@@ -138,6 +138,7 @@ SubmissionChecklistTests.Run((name, ok, detail) => Check(name, ok, detail));
 BerthCostTests.Run((name, ok, detail) => Check(name, ok, detail));
 JobCardTests.Run((name, ok, detail) => Check(name, ok, detail));
 ParallelJobTests.Run((name, ok, detail) => Check(name, ok, detail));
+CrewTests.Run((name, ok, detail) => Check(name, ok, detail));
 RunningCallTests.Run((name, ok, detail) => Check(name, ok, detail));
 FreezeTests.Run((name, ok, detail) => Check(name, ok, detail));
 ScriptHintTests.Run((name, ok, detail) => Check(name, ok, detail));
