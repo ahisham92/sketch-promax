@@ -47,6 +47,13 @@ internal static class CrewTests
         e = plan.Update([Job(3, JobBoard.Queued, asked: 2), Job(4, JobBoard.Running)], t0.AddSeconds(21));
         check("crew: a finished job asked again keeps its worker", Cues(e) == "Handover:3" && plan.Seats.Any(s => s.Number == 3 && s.Mood == CrewMood.Waiting), Cues(e));
 
+        // The pane reads the board's copies: what a job does now must come with them.
+        var board = new JobBoard([]);
+        var started = board.Start("Tag doors", "Tag the doors", t0, force: true, out _);
+        board.ToStart(3, t0);
+        board.SetActivity(started!.Key, JobBoard.Applying);
+        check("crew: a board copy keeps what the job does now", JobBoard.ActivityOf(board.Snapshot()[0]) == JobBoard.Applying, JobBoard.ActivityOf(board.Snapshot()[0]));
+
         // Another chat: start over quietly.
         plan.Reset();
         e = plan.Update([Job(7, JobBoard.Running)], t0.AddSeconds(30));

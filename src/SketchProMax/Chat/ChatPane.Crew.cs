@@ -49,7 +49,7 @@ internal sealed partial class ChatPane
             _crew.Clear();
         }
         _crew.Visibility = Visibility.Visible;
-        var events = _crewPlan.Update(jobs, DateTime.UtcNow, CrewActivity);
+        var events = _crewPlan.Update(jobs, DateTime.UtcNow, JobBoard.ActivityOf);
         _crew.Show(_crewPlan.Seats, events);
         // A finished job's worker leaves after a few seconds even when nothing else changes meanwhile.
         if (_crewPlan.Lingering)
@@ -67,9 +67,6 @@ internal sealed partial class ChatPane
         if (!_crewPlan.Lingering || _board is null) _crewLinger?.Stop();
         else ShowCrew(_board.Snapshot());
     }
-
-    /// <summary>What a running job does now: thinking, reading the model, waiting to apply or applying.</summary>
-    private static string CrewActivity(ChatJob job) => "";
 
     /// <summary>You sent the coordinator a message: it nods.</summary>
     private void CrewHeard()

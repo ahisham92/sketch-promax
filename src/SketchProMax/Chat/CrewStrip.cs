@@ -54,7 +54,7 @@ internal sealed class CrewStrip : Border
     }
 
     private readonly Canvas _stage = new() { ClipToBounds = true, Height = StripHeight };
-    private readonly TextBlock _caption = new() { FontSize = ChatUi.SmallSize, VerticalAlignment = VerticalAlignment.Bottom, TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(ChatUi.S2, 0, ChatUi.S3, ChatUi.S2) };
+    private readonly TextBlock _caption = new() { FontSize = ChatUi.SmallSize, MaxWidth = 240, VerticalAlignment = VerticalAlignment.Bottom, TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(ChatUi.S2, 0, ChatUi.S3, ChatUi.S2) };
     private readonly Dictionary<int, Worker> _workers = new();
     private readonly RotateTransform _coordArm = new(0);
     private readonly TranslateTransform _coordHead = new();
