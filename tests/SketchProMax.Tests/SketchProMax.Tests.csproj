@@ -45,6 +45,7 @@
     <Compile Include="../../src/SketchProMax/Tools/OutputPaths.cs" Link="OutputPaths.cs" />
     <Compile Include="../../src/SketchProMax/Tools/ApprovalPolicy.cs" Link="ApprovalPolicy.cs" />
     <Compile Include="../../src/SketchProMax/Tools/CleanupMath.cs" Link="CleanupMath.cs" />
+    <Compile Include="../../src/SketchProMax/Tools/ModelStorageMath.cs" Link="ModelStorageMath.cs" />
     <Compile Include="../../src/SketchProMax/Tools/ModelRules.cs" Link="ModelRules.cs" />
     <Compile Include="../../src/SketchProMax.Loader/RibbonManifest.cs" Link="RibbonManifest.cs" />
     <Compile Include="../../src/SketchProMax/UI/CoreRibbonManifest.cs" Link="CoreRibbonManifest.cs" />

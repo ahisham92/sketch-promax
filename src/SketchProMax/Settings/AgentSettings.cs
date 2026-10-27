@@ -138,6 +138,12 @@ public sealed class AgentSettings
     /// </summary>
     public bool ChangeFile { get; set; } = true;
 
+    /// <summary>
+    /// The size a model should stay under, in MB (Storage & cleanup shows the model against it; a model can still pass it):
+    /// 200 by default, 10 to 100000 (Tools.ModelStorageMath).
+    /// </summary>
+    public int ModelSizeLimitMb { get; set; } = 200;
+
     public static string FilePath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "SketchProMax", "settings.json");
 

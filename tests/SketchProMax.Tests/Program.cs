@@ -150,6 +150,7 @@ PlanUsageTests.Run((name, ok, detail) => Check(name, ok, detail));
 PackageTests.Run((name, ok, detail) => Check(name, ok, detail));
 ApprovalTests.Run((name, ok, detail) => Check(name, ok, detail));
 CleanupTests.Run((name, ok, detail) => Check(name, ok, detail));
+ModelStorageTests.Run((name, ok, detail) => Check(name, ok, detail));
 DocumentTests.Run((name, ok, detail) => Check(name, ok, detail));
 SignaturePagesTests.Run((name, ok, detail) => Check(name, ok, detail));
 {
