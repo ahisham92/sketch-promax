@@ -51,6 +51,7 @@
     <Compile Include="../../src/SketchProMax/UI/LoaderCompat.cs" Link="LoaderCompat.cs" />
     <Compile Include="../../src/SketchProMax/Revit/RevitBlock.cs" Link="RevitBlock.cs" />
     <Compile Include="../../src/SketchProMax/Revit/RunningCall.cs" Link="RunningCall.cs" />
+    <Compile Include="../../src/SketchProMax/Revit/FreezeCause.cs" Link="FreezeCause.cs" />
     <Compile Include="../../src/SketchProMax/Chat/MemoryNotes.cs" Link="MemoryNotes.cs" />
     <Compile Include="../../src/SketchProMax/Bugs/BugLog.cs" Link="BugLog.cs" />
     <Compile Include="../../src/SketchProMax/Bugs/UserFolders.cs" Link="UserFolders.cs" />

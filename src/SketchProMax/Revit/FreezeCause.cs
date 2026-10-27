@@ -1,0 +1,284 @@
+using System.Globalization;
+using System.IO;
+using System.Text.Json;
+using System.Text.RegularExpressions;
+
+namespace SketchProMax.Revit;
+
+/// <summary>
+/// What Revit is busy with while it doesn't respond, read from the end of Revit's own journal (the journal is written
+/// as Revit works, so its last lines name the command that started the long work and the step it is in), and the
+/// commands the user asked to be warned about before they run (<see cref="Warned"/>). Pure: the Rescue window
+/// (UI/RescueWindow) reads the journal's tail off Revit's thread and hands the lines here; the tests compile this file.
+/// </summary>
+internal static class FreezeCause
+{
+    /// <param name="What">The command, as Revit names it ("Run systems analysis"), or the long work ("Synchronizing with central").</param>
+    /// <param name="CommandId">Revit's id for the command ("ID_RUN_SYSTEMS_ANALYSIS"), or null when no command started it.</param>
+    /// <param name="Step">The transaction it is in ("Create Energy Analysis Model"), or null.</param>
+    /// <param name="Since">When the command started (journal time), or null.</param>
+    /// <param name="Ours">The step is a Sketch ProMax transaction.</param>
+    /// <param name="Dialog">The text of a Revit message still waiting for an answer, or null.</param>
+    public sealed record Busy(string What, string? CommandId, string? Step, DateTime? Since, bool Ours, string? Dialog);
+
+    private static readonly Regex Command = new("^\\s*Jrn\\.Command\\s+\"(?<src>[^\"]*)\"\\s*,\\s*\"(?<text>[^\"]*)\"", RegexOptions.Compiled);
+    private static readonly Regex Stamp = new("^\\s*'[CEH] (?<t>\\d{2}-\\w{3}-\\d{4} \\d{2}:\\d{2}:\\d{2})", RegexOptions.Compiled);
+    private static readonly Regex Transaction = new("^\\s*'inTransaction \\S+ (?<name>.+?)\\s*$", RegexOptions.Compiled);
+    private static readonly Regex Done = new("\"Transaction (Successful|Failed|Cancelled|RolledBack)\"\\s*,\\s*\"(?<name>[^\"]*)\"", RegexOptions.Compiled);
+    private static readonly Regex Slog = new("SLOG \\$\\w+ \\S+ \\S+ (?<dir>[<>])(?<tag>[A-Za-z]+)(?=[: ]|$)", RegexOptions.Compiled);
+    private static readonly Regex Dialog = new("^\\s*'\\s*\\d+:< TaskDialog \"(?<text>[^\"]*)", RegexOptions.Compiled);
+
+    /// <summary>Long work the journal brackets with SLOG lines, in the words the user knows.</summary>
+    private static readonly Dictionary<string, string> Brackets = new(StringComparer.Ordinal)
+    {
+        ["STC"] = "Synchronizing with central", ["Open"] = "Opening a model", ["OpenLink"] = "Loading a linked model",
+        ["ReloadLatest"] = "Reloading latest", ["Save"] = "Saving",
+    };
+
+    /// <summary>Commands that end an earlier one (Esc, Undo) and say nothing about what is running.</summary>
+    private static readonly HashSet<string> Noise = new(StringComparer.Ordinal) { "ID_CANCEL_EDITOR", "ID_EDIT_UNDO", "ID_EDIT_REDO" };
+
+    /// <summary>What the journal's last lines say Revit is busy with. Never throws; "something of its own" when nothing can be told.</summary>
+    public static Busy Read(IReadOnlyList<string> tail)
+    {
+        try { return ReadCore(tail); }
+        catch (Exception) { return new Busy("something of its own", null, null, null, false, null); }
+    }
+
+    private static Busy ReadCore(IReadOnlyList<string> tail)
+    {
+        int command = -1;
+        string? what = null, id = null;
+        for (var i = tail.Count - 1; i >= 0 && command < 0; i--)
+        {
+            var m = Command.Match(tail[i]);
+            if (!m.Success) continue;
+            var (name, cid) = SplitCommand(m.Groups["text"].Value);
+            if (cid is not null && Noise.Contains(cid)) continue;
+            command = i;
+            what = name;
+            id = cid;
+        }
+
+        // The transaction in progress after that command: the last one opened that the journal hasn't closed.
+        string? step = null;
+        var closed = new HashSet<string>(StringComparer.Ordinal);
+        for (var i = tail.Count - 1; i > command; i--)
+        {
+            var done = Done.Match(tail[i]);
+            if (done.Success) { closed.Add(Trimmed(done.Groups["name"].Value)); continue; }
+            var t = Transaction.Match(tail[i]);
+            if (!t.Success) continue;
+            var name = Trimmed(t.Groups["name"].Value);
+            if (closed.Contains(name)) continue;
+            step = name;
+            break;
+        }
+
+        // Long work bracketed by SLOG ">Tag" … "<Tag" that hasn't closed (newer than the command).
+        string? bracket = null;
+        var shut = new HashSet<string>(StringComparer.Ordinal);
+        for (var i = tail.Count - 1; i > command; i--)
+        {
+            var s = Slog.Match(tail[i]);
+            if (!s.Success) continue;
+            var tag = s.Groups["tag"].Value;
+            if (s.Groups["dir"].Value == "<") { shut.Add(tag); continue; }
+            if (shut.Contains(tag) || !Brackets.TryGetValue(tag, out var words)) continue;
+            bracket = words;
+            break;
+        }
+
+        // A Revit message after the command that has no answer yet (its "TaskDialogResult" comes after it).
+        string? dialog = null;
+        for (var i = tail.Count - 1; i > command; i--)
+        {
+            if (tail[i].Contains("\"TaskDialogResult\"")) break;
+            var d = Dialog.Match(tail[i]);
+            if (d.Success) { dialog = d.Groups["text"].Value.Trim(); break; }
+        }
+
+        var since = command >= 0 ? TimeNear(tail, command) : null;
+        var ours = step is not null && step.StartsWith("Sketch ProMax", StringComparison.Ordinal);
+        if (bracket is not null && (what is null || id is "ID_FILE_SAVE_TO_CENTRAL" or "ID_REVIT_FILE_OPEN" or "ID_FILE_SAVE")) what = bracket;
+        return new Busy(what ?? bracket ?? "something of its own", id, step, since, ours, dialog);
+    }
+
+    /// <summary>"Run systems analysis. , ID_RUN_SYSTEMS_ANALYSIS" → ("Run systems analysis", "ID_RUN_SYSTEMS_ANALYSIS").</summary>
+    public static (string Name, string? Id) SplitCommand(string text)
+    {
+        var comma = text.LastIndexOf(" , ", StringComparison.Ordinal);
+        var name = (comma >= 0 ? text.Substring(0, comma) : text).Trim().TrimEnd('.').Trim();
+        var id = comma >= 0 ? text.Substring(comma + 3).Trim() : null;
+        if (id is { Length: 0 }) id = null;
+        if (name.Length == 0 && id is not null) name = Humanize(id);
+        return (name.Length == 0 ? "a Revit command" : name, id);
+    }
+
+    /// <summary>"ID_FILE_CADFORMAT_LINK" → "File cadformat link", for a command the journal doesn't describe.</summary>
+    public static string Humanize(string id)
+    {
+        var words = (id.StartsWith("ID_", StringComparison.Ordinal) ? id.Substring(3) : id).Replace('_', ' ').Trim().ToLowerInvariant();
+        return words.Length == 0 ? "a Revit command" : char.ToUpperInvariant(words[0]) + words.Substring(1);
+    }
+
+    private static string Trimmed(string name) => name.TrimEnd('.', ' ');
+
+    /// <summary>The journal time nearest before line <paramref name="index"/> (else just after it).</summary>
+    private static DateTime? TimeNear(IReadOnlyList<string> tail, int index)
+    {
+        for (var i = index; i >= 0 && i > index - 400; i--)
+            if (Parse(tail[i]) is { } t) return t;
+        for (var i = index + 1; i < tail.Count && i < index + 50; i++)
+            if (Parse(tail[i]) is { } t) return t;
+        return null;
+    }
+
+    private static DateTime? Parse(string line)
+    {
+        var m = Stamp.Match(line);
+        return m.Success && DateTime.TryParseExact(m.Groups["t"].Value, "dd-MMM-yyyy HH:mm:ss", CultureInfo.InvariantCulture, DateTimeStyles.None, out var t)
+            ? t : null;
+    }
+
+    // ---- Words for the Rescue window ------------------------------------------------------------------------------
+
+    /// <summary>"6 min", "45 s", "1 h 12 min".</summary>
+    public static string Duration(TimeSpan t) =>
+        t.TotalSeconds < 60 ? $"{Math.Max(0, (int)t.TotalSeconds)} s"
+        : t.TotalMinutes < 60 ? $"{(int)t.TotalMinutes} min"
+        : $"{(int)t.TotalHours} h {t.Minutes} min";
+
+    /// <summary>The window's main line: what Revit is busy with, and for how long.</summary>
+    public static string Line(Busy busy, TimeSpan frozen)
+    {
+        var step = busy.Step is { Length: > 0 } s && !string.Equals(s, busy.What, StringComparison.OrdinalIgnoreCase) && !busy.Ours ? $" ({s})" : "";
+        var what = busy.Ours ? "a Sketch ProMax task" : busy.What + step;
+        return $"Revit is busy with {what}. It hasn't responded for {Duration(frozen)}.";
+    }
+
+    /// <summary>Whose work it is, in one short line.</summary>
+    public static string Whose(Busy busy, bool jobRunning) =>
+        busy.Ours || jobRunning
+            ? "This is a Sketch ProMax task. Stop it below."
+            : busy.CommandId is null && busy.What == "something of its own"
+                ? "This is Revit's own work, not Sketch ProMax."
+                : "This is Revit's own command, not Sketch ProMax.";
+
+    /// <summary>
+    /// Offer "Warn me before this command next time" once Revit has been frozen a while by a command of its own that
+    /// isn't one people need every day (saving, syncing, opening, undo).
+    /// </summary>
+    public static bool OfferWarning(Busy busy, TimeSpan frozen) =>
+        busy.CommandId is { Length: > 0 } id && !busy.Ours && frozen >= WarnAfter && !NeverWarn.Contains(id);
+
+    /// <summary>
+    /// How long Revit may be stuck before the Rescue window opens: 20 s, but 5 min for everyday long work (opening a model
+    /// or a link, syncing, saving), so the window doesn't open at every sync of a big model.
+    /// </summary>
+    public static TimeSpan OpenAfter(Busy busy) => Routine.Contains(busy.What) ? TimeSpan.FromMinutes(5) : TimeSpan.FromSeconds(20);
+
+    private static readonly HashSet<string> Routine = new(Brackets.Values, StringComparer.Ordinal);
+
+    /// <summary>How long a freeze must last before its command is worth a warning.</summary>
+    public static readonly TimeSpan WarnAfter = TimeSpan.FromSeconds(60);
+
+    /// <summary>Commands too common to warn about, however long they take.</summary>
+    public static readonly HashSet<string> NeverWarn = new(StringComparer.Ordinal)
+    {
+        "ID_FILE_SAVE_TO_CENTRAL", "ID_FILE_SAVE", "ID_REVIT_FILE_SAVE", "ID_REVIT_FILE_OPEN", "ID_FILE_OPEN", "ID_EDIT_UNDO",
+        "ID_EDIT_REDO", "ID_CANCEL_EDITOR", "ID_RELOAD_LATEST", "ID_FILE_SYNCHRONIZE_NOW",
+    };
+
+    // ---- Commands to warn about before they run -------------------------------------------------------------------
+
+    /// <param name="Id">Revit's command id.</param>
+    /// <param name="Name">The command as Revit names it.</param>
+    /// <param name="Seconds">The longest freeze seen for it on this PC (0 = none seen yet, a built-in entry).</param>
+    /// <param name="On">Date of that freeze ("27 Oct"), or "".</param>
+    public sealed record Warned(string Id, string Name, int Seconds, string On);
+
+    /// <summary>Warned about from the start: Revit itself says it won't respond while these run on a big model.</summary>
+    public static readonly Warned[] BuiltIn =
+    [
+        // Seen freezing a port model with links on 27 Oct 2026 (it builds an energy analytical model first).
+        new("ID_RUN_SYSTEMS_ANALYSIS", "Run systems analysis", 0, ""),
+    ];
+
+    public static string File => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "SketchProMax", "freeze-warnings.json");
+
+    internal static string? FileForTest;
+
+    private sealed class Saved
+    {
+        public List<Warned> Warn { get; set; } = [];
+        public List<string> Off { get; set; } = [];
+    }
+
+    private static readonly object Gate = new();
+
+    /// <summary>The commands to warn about: the built-in ones (unless turned off) and the ones learned from freezes.</summary>
+    public static List<Warned> Load()
+    {
+        var saved = Read();
+        var list = new List<Warned>();
+        foreach (var w in saved.Warn) if (!list.Any(x => x.Id == w.Id)) list.Add(w);
+        foreach (var b in BuiltIn) if (!saved.Off.Contains(b.Id) && !list.Any(x => x.Id == b.Id)) list.Add(b);
+        return list;
+    }
+
+    /// <summary>Adds (or updates, keeping the longest freeze) a command to warn about. Any thread.</summary>
+    public static void Learn(string id, string name, TimeSpan frozen, DateTime when)
+    {
+        lock (Gate)
+        {
+            var saved = Read();
+            saved.Off.Remove(id);
+            var old = saved.Warn.FirstOrDefault(w => w.Id == id);
+            var seconds = (int)frozen.TotalSeconds;
+            if (old is not null)
+            {
+                if (old.Seconds >= seconds) { Write(saved); return; }
+                saved.Warn.Remove(old);
+            }
+            saved.Warn.Add(new Warned(id, name, seconds, when.ToString("d MMM", CultureInfo.InvariantCulture)));
+            Write(saved);
+        }
+    }
+
+    /// <summary>Stops warning about a command (the warning's "Don't warn me again").</summary>
+    public static void Forget(string id)
+    {
+        lock (Gate)
+        {
+            var saved = Read();
+            saved.Warn.RemoveAll(w => w.Id == id);
+            if (BuiltIn.Any(b => b.Id == id) && !saved.Off.Contains(id)) saved.Off.Add(id);
+            Write(saved);
+        }
+    }
+
+    /// <summary>The warning shown before the command runs: (main line, details).</summary>
+    public static (string Main, string Content) Warning(Warned w) =>
+        ($"{w.Name} can freeze Revit for a long time",
+         (w.Seconds > 0
+             ? $"On {w.On} it kept Revit frozen for {Duration(TimeSpan.FromSeconds(w.Seconds))}."
+             : "Revit doesn't respond while it runs, and on a big model with links that can take a long time.") +
+         " Save your work first. If Revit freezes, the Sketch ProMax Rescue window lets you stop or close it safely.");
+
+    private static Saved Read()
+    {
+        try
+        {
+            var text = SafeFile.Read(FileForTest ?? File);
+            return text is null ? new Saved() : JsonSerializer.Deserialize<Saved>(text) ?? new Saved();
+        }
+        catch (Exception) { return new Saved(); }
+    }
+
+    private static void Write(Saved saved)
+    {
+        try { SafeFile.Write(FileForTest ?? File, JsonSerializer.Serialize(saved, new JsonSerializerOptions { WriteIndented = true })); }
+        catch (Exception) { /* the warning is a convenience */ }
+    }
+}

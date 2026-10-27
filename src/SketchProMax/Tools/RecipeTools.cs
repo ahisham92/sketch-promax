@@ -487,22 +487,26 @@ internal static class ActivityLog
     public static void Note(string what, string text)
     {
         var time = DateTime.Now;
-        Task.Run(() =>
+        Task.Run(() => NoteNow(what, text, time));
+    }
+
+    /// <summary>A <see cref="Note"/> written before this returns (Revit is about to be closed).</summary>
+    public static void NoteNow(string what, string text, DateTime? at = null)
+    {
+        try
         {
-            try
+            var time = at ?? DateTime.Now;
+            var line = JsonSerializer.Serialize(new
             {
-                var line = JsonSerializer.Serialize(new
-                {
-                    time = time.ToString("s"), model = "", tool = what, changes = false, ok = true, arguments = "", result = text,
-                });
-                var file = FileFor(time.ToString("yyyy-MM-dd"));
-                lock (Gate)
-                {
-                    Directory.CreateDirectory(Path.GetDirectoryName(file)!);
-                    File.AppendAllText(file, line + Environment.NewLine);
-                }
+                time = time.ToString("s"), model = "", tool = what, changes = false, ok = true, arguments = "", result = text,
+            });
+            var file = FileFor(time.ToString("yyyy-MM-dd"));
+            lock (Gate)
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+                File.AppendAllText(file, line + Environment.NewLine);
             }
-            catch (Exception) { /* logging is best effort */ }
-        });
+        }
+        catch (Exception) { /* logging is best effort */ }
     }
 }

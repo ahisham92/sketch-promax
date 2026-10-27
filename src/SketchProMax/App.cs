@@ -191,6 +191,9 @@ public sealed class App : IExternalApplication
             try { StartupTimings.Time("bim ready", () => BimReady.Start(app)); } catch (Exception) { /* models are only kept ready by the checklist's Fix buttons */ }
             try { StartupTimings.Time("change tracker", () => ChangeTracker.Start(app)); } catch (Exception) { /* Update status then reads every berth */ }
             try { StartupTimings.Time("chat model note", () => ChatModelWatch.Start(app)); } catch (Exception) { /* chat messages then carry no model note */ }
+            // The Rescue window when Revit freezes, and a warning before Revit commands known to freeze it.
+            try { StartupTimings.Time("freeze watch", () => FreezeWatch.Start(app)); } catch (Exception) { /* no Rescue window this session */ }
+            try { StartupTimings.Time("heavy commands", () => HeavyCommands.Start(app)); } catch (Exception) { /* those commands run without the warning */ }
             // This PC's license (Licensing/LicenseState): without a valid key the License window opens at the first idle moment.
             try
             {
@@ -338,6 +341,8 @@ public sealed class App : IExternalApplication
         try { BimReady.Stop(); } catch (Exception) { }
         try { ChangeTracker.Stop(); } catch (Exception) { }
         try { ChatModelWatch.Stop(); } catch (Exception) { }
+        try { FreezeWatch.Stop(); } catch (Exception) { }
+        try { HeavyCommands.Stop(); } catch (Exception) { }
         try { ChangeFile.Stop(); } catch (Exception) { }
         CentralAccess.Unwatch(app);
         ChatMcp.Stop();
@@ -362,6 +367,8 @@ public sealed class App : IExternalApplication
     internal static void ShutdownCore()
     {
         _life?.Cancel();
+        // Revit closing can take a while (saving, relinquishing): that is not a freeze.
+        try { FreezeWatch.Stop(); } catch (Exception) { }
         if (Shared) return;
         RunningCall.Clear();
         try { Chat.ChatPane.Shutdown(); } catch (Exception) { }

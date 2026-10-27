@@ -157,6 +157,12 @@ internal static class ChangeFile
 
     public static string CurrentFor(string modelPath) => System.IO.Path.Combine(FolderFor(modelPath), M.CurrentName);
 
+    /// <summary>The open models watched and their current change files (for the Rescue window, off Revit's thread).</summary>
+    public static List<(string Model, string File)> CurrentFiles()
+    {
+        lock (Gate) return Models.Values.Select(m => (m.Path, System.IO.Path.Combine(m.Folder, M.CurrentName))).ToList();
+    }
+
     private static void Track(Document doc, bool opened)
     {
         if (!Watched(doc, out var path)) return;
