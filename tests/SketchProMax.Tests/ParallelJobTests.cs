@@ -67,14 +67,24 @@ internal static class ParallelJobTests
 
         // ---- Waiting its turn, words on the card, the list, the report
         check("jobs: a change waiting its turn shows on the card", board.SetWaiting(sheets.Key, 3) && sheets.State == JobBoard.Waiting
-            && JobBoard.StateLabel(sheets) == "Waiting its turn (2 ahead)" && board.SetWaiting(sheets.Key, null) && sheets.State == JobBoard.Running
+            && JobBoard.StateLabel(sheets) == "Waiting to apply (2 ahead)" && board.SetWaiting(sheets.Key, null) && sheets.State == JobBoard.Running
             && !board.SetWaiting(walls!.Key, 1) && !board.SetWaiting("nope", 1), JobBoard.StateLabel(sheets));
+        // What each job does now, for its card and its animation: thinking and reading in parallel, applying one at a time.
+        var seen = new List<string>();
+        foreach (var (activity, ahead) in new[] { (JobBoard.Reading, 0), (JobBoard.WaitingToApply, 2), (JobBoard.Applying, 0), ("", 0) })
+        {
+            board.SetActivity(sheets.Key, activity, ahead);
+            seen.Add(JobBoard.ActivityOf(sheets) + "/" + JobBoard.StateLabel(sheets));
+        }
+        check("jobs: a job shows when it reads, waits to apply, applies and thinks", seen.SequenceEqual(["reading/Reading the model", "waiting/Waiting to apply (1 ahead)",
+            "applying/Applying changes", "thinking/Thinking"]) && sheets.State == JobBoard.Running && !board.SetActivity(sheets.Key, "")
+            && !board.SetActivity(walls!.Key, JobBoard.Applying) && JobBoard.ActivityOf(walls!) == "", string.Join(", ", seen));
         var labels = new[] { JobBoard.Queued, JobBoard.Running, JobBoard.Waiting, JobBoard.Done, JobBoard.Failed, JobBoard.Stopped }
             .Select(s => JobBoard.StateLabel(new ChatJob { State = s })).ToList();
-        check("jobs: every state has words, none name the model", labels.SequenceEqual(["Waiting to start", "Working", "Waiting its turn", "Done", "Ended with a problem", "Stopped"])
+        check("jobs: every state has words, none name the model", labels.SequenceEqual(["Waiting to start", "Thinking", "Waiting to apply", "Done", "Ended with a problem", "Stopped"])
             && labels.All(l => !l.Contains("Claude")), string.Join(", ", labels));
         var list = board.Describe(3);
-        check("jobs: the list gives each job's number, title, state and task", list.Contains("Job 1 \"Sheets for levels 1-5\": working") && list.Contains("Job 2 \"Wall warnings\": stopped")
+        check("jobs: the list gives each job's number, title, state and task", list.Contains("Job 1 \"Sheets for levels 1-5\": thinking") && list.Contains("Job 2 \"Wall warnings\": stopped")
             && list.Contains("up to 3 run at once") && new JobBoard([]).Describe(4).StartsWith("No jobs"), list);
         var finished = new ChatJob { Number = 1, Title = sheets.Title, State = JobBoard.Done, Summary = "Made 6 sheets." };
         var report = JobBoard.Report([finished, forced!], 1);
@@ -148,9 +158,13 @@ internal static class ParallelJobTests
         turns.Leave(b);
         var d = turns.Enter("j5", "x");
         check("turns: an empty queue gives the turn at once", turns.WaitAsync(d, TimeSpan.FromMilliseconds(10), CancellationToken.None).Result && moved >= 8, moved.ToString());
-        var read = turns.Enter("j6", "query_elements");
-        check("turns: a read waits in the same line as the changes", turns.Position(read) == 2 && !turns.WaitAsync(read, TimeSpan.FromMilliseconds(30), CancellationToken.None).Result, "");
+        check("turns: a read doesn't wait for a change that just got its turn", !turns.ChangeOverdue(TimeSpan.FromMinutes(1)), "");
+        Thread.Sleep(30);
+        check("turns: reads let a change go first once it has waited for Revit a while", turns.ChangeOverdue(TimeSpan.FromMilliseconds(10)), "");
+        turns.Began(d);
+        check("turns: reads no longer wait once the change got Revit", !turns.ChangeOverdue(TimeSpan.FromMilliseconds(10)), "");
         turns.Leave(d);
+        check("turns: an empty line holds no read back", !turns.ChangeOverdue(TimeSpan.Zero), "");
         check("turns: Revit's breather is a tenth of the call, a quarter second to two seconds",
             JobTurns.Breather(TimeSpan.FromMilliseconds(100)) == TimeSpan.FromMilliseconds(250) && JobTurns.Breather(TimeSpan.FromSeconds(5)) == TimeSpan.FromMilliseconds(500)
             && JobTurns.Breather(TimeSpan.FromMinutes(5)) == TimeSpan.FromSeconds(2), "");

@@ -66,6 +66,12 @@ internal static class ChatJobs
     {
         if (_board?.SetWaiting(key, ahead) == true) _changed?.Invoke();
     }
+
+    /// <summary>The bridge: what job <paramref name="key"/> does in Revit now (JobBoard.SetActivity), for its card and animation.</summary>
+    public static void SetActivity(string key, string activity, int ahead = 0)
+    {
+        if (_board?.SetActivity(key, activity, ahead) == true) _changed?.Invoke();
+    }
 }
 
 /// <summary>
