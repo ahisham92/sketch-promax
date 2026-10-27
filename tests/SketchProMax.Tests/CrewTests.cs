@@ -32,14 +32,14 @@ internal static class CrewTests
         e = plan.Update([Job(1, JobBoard.Running, asked: 2), Job(2, JobBoard.Waiting), Job(3, JobBoard.Running), Job(4, JobBoard.Running)], t0.AddSeconds(4), Act);
         var moods = string.Join(",", plan.Seats.Select(s => s.Number + ":" + s.Mood));
         check("crew: moods from the job's activity", moods == "1:Applying,2:Waiting,3:Reading,4:Thinking", moods);
-        check("crew: the line says who is in Revit", CrewPlan.Caption(plan.Seats, CrewNames.Defaults) == "Dieng applies Ali's change · 1 thinking · 1 reading the model · 1 in line", CrewPlan.Caption(plan.Seats, CrewNames.Defaults));
+        check("crew: the line says who is in Revit", CrewPlan.Caption(plan.Seats, CrewNames.Defaults) == "Bolt applies Nova's change · 1 thinking · 1 reading the model · 1 in line", CrewPlan.Caption(plan.Seats, CrewNames.Defaults));
         check("crew: without an activity, Waiting still reads as waiting", CrewPlan.Mood(Job(5, JobBoard.Waiting), null) == CrewMood.Waiting && CrewPlan.Mood(Job(5, JobBoard.Running), null) == CrewMood.Thinking, "");
 
         var lines = string.Join(",", plan.Seats.Select(s => s.Number + ":" + s.Line));
         check("crew: the line at the applier: applying first, then waiting; the rest at their desks", lines == "1:0,2:1,3:-1,4:-1", lines);
         var slots = string.Join(",", plan.Seats.Select(s => s.Number + ":" + s.Slot));
         check("crew: each job has its own worker, kept while seated", slots == "1:0,2:1,3:2,4:3", slots);
-        check("crew: workers by name, more jobs than names get a number", plan.WorkerOf(1, CrewNames.Defaults) == "Ali" && plan.WorkerOf(3, CrewNames.Defaults) == "Carla"
+        check("crew: workers by name, more jobs than names get a number", plan.WorkerOf(1, CrewNames.Defaults) == "Nova" && plan.WorkerOf(3, CrewNames.Defaults) == "Pixel"
             && plan.WorkerOf(4, CrewNames.Defaults) == "Worker 4" && plan.WorkerOf(9, CrewNames.Defaults) is null, plan.WorkerOf(4, CrewNames.Defaults) ?? "");
 
         // Done: the worker lingers with a tick, then leaves; stopped leaves at once.
@@ -51,7 +51,7 @@ internal static class CrewTests
 
         // A freed worker takes the next job.
         e = plan.Update([Job(3, JobBoard.Running), Job(4, JobBoard.Running), Job(5, JobBoard.Running)], t0.AddSeconds(12));
-        check("crew: the first free worker takes a new job", plan.WorkerOf(5, CrewNames.Defaults) == "Ali" && Cues(e) == "Arrive:5", Cues(e));
+        check("crew: the first free worker takes a new job", plan.WorkerOf(5, CrewNames.Defaults) == "Nova" && Cues(e) == "Arrive:5", Cues(e));
 
         // A finished job sent a message keeps its worker (waiting to start again) and gets the sheet.
         e = plan.Update([Job(3, JobBoard.Done), Job(4, JobBoard.Running)], t0.AddSeconds(20));
@@ -66,11 +66,11 @@ internal static class CrewTests
         check("crew: a board copy keeps what the job does now", JobBoard.ActivityOf(board.Snapshot()[0]) == JobBoard.Applying, JobBoard.ActivityOf(board.Snapshot()[0]));
 
         // The names: defaults, from Settings, and from the Windows account.
-        var named = CrewNames.From(" Ahmed ", "", "Ali, Carmen ,, Carla", null, "someone");
-        check("crew: names from Settings, blanks get their defaults", named.You == "Ahmed" && named.Coordinator == "Pitso" && named.Applier == "Dieng"
-            && string.Join("|", named.Workers) == "Ali|Carmen|Carla", string.Join("|", named.Workers));
-        check("crew: you default to the Windows account's first name", CrewNames.FromAccount("ahmed.mitwally") == "Ahmed" && CrewNames.FromAccount("DOMAIN\\jdoe") == "Jdoe"
-            && CrewNames.FromAccount("") == "You" && CrewNames.FromAccount("123") == "You", CrewNames.FromAccount("ahmed.mitwally"));
+        var named = CrewNames.From(" Jane ", "", "Ann, Bo ,, Cy", null, "someone");
+        check("crew: names from Settings, blanks get their defaults", named.You == "Jane" && named.Coordinator == "Atlas" && named.Applier == "Bolt"
+            && string.Join("|", named.Workers) == "Ann|Bo|Cy", string.Join("|", named.Workers));
+        check("crew: you default to the Windows account's first name", CrewNames.FromAccount("jane.doe") == "Jane" && CrewNames.FromAccount("DOMAIN\\jdoe") == "Jdoe"
+            && CrewNames.FromAccount("") == "You" && CrewNames.FromAccount("123") == "You", CrewNames.FromAccount("jane.doe"));
         check("crew: an empty workers list falls back to the defaults", CrewNames.From(null, null, " , ", null, null).Workers.Count == 3, "");
 
         // Another chat: start over quietly.
@@ -78,6 +78,6 @@ internal static class CrewTests
         e = plan.Update([Job(7, JobBoard.Running)], t0.AddSeconds(30));
         check("crew: after a reset the first look is quiet again", e.Count == 0 && plan.Seats.Count == 1, Cues(e));
         e = plan.Update([], t0.AddSeconds(31));
-        check("crew: a job gone from the board leaves", Cues(e) == "Leave:7" && plan.Seats.Count == 0 && CrewPlan.Caption(plan.Seats, CrewNames.Defaults) == "Pitso is ready", Cues(e));
+        check("crew: a job gone from the board leaves", Cues(e) == "Leave:7" && plan.Seats.Count == 0 && CrewPlan.Caption(plan.Seats, CrewNames.Defaults) == "Atlas is ready", Cues(e));
     }
 }

@@ -73,7 +73,7 @@ internal sealed partial class ChatPane
         else ShowCrew(_board.Snapshot());
     }
 
-    /// <summary>The worker who has job <paramref name="number"/> in the strip ("Ali"), or null when the strip isn't shown.</summary>
+    /// <summary>The worker who has job <paramref name="number"/> in the strip ("Nova"), or null when the strip isn't shown.</summary>
     private string? CrewWorker(int number) => CrewShown ? _crewPlan.WorkerOf(number, CrewStrip.Names) : null;
 
     /// <summary>You sent the coordinator a message: a sheet to the coordinator, who nods.</summary>

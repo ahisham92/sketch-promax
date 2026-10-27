@@ -21,7 +21,7 @@ internal sealed record CrewSeat(int Number, string Title, CrewMood Mood, int Slo
 /// </summary>
 internal sealed record CrewNames(string You, string Coordinator, IReadOnlyList<string> Workers, string Applier)
 {
-    public const string DefaultCoordinator = "Pitso", DefaultWorkers = "Ali, Carmen, Carla", DefaultApplier = "Dieng";
+    public const string DefaultCoordinator = "Atlas", DefaultWorkers = "Nova, Echo, Pixel", DefaultApplier = "Bolt";
 
     /// <summary>The settings' names, each blank one replaced by its default (you: the first part of the Windows account name).</summary>
     public static CrewNames From(string? you, string? coordinator, string? workers, string? applier, string? account)
