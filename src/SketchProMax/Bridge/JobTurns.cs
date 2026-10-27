@@ -1,11 +1,13 @@
 namespace SketchProMax.Bridge;
 
 /// <summary>
-/// The one queue the chat's parallel jobs (Chat.JobBoard) take turns in to change the model. Revit allows one change at a
-/// time: a job's model-changing call takes a ticket and waits until it is at the front, then runs and gives the ticket
-/// back when its Revit job ends. Reads take no ticket (they run as soon as Revit is free), so they never wait behind a
-/// queue of changes. First come, first served; a caller that goes away leaves the queue. No Revit and no WPF here (the
-/// unit tests compile this file on its own); thread-safe.
+/// The applier: the one line the chat's parallel jobs (Chat.JobBoard) take turns in for Revit. Revit runs one call at a
+/// time on its own thread, and while a call runs Revit can't redraw or take a click. Every call of a job (a change or a
+/// read) takes a ticket and waits until it is at the front, then runs and gives the ticket back when its Revit job ends,
+/// so the jobs go one call each in the order they asked, none can starve another, and a change never races a read. After
+/// each call Revit gets a breather (<see cref="Breather"/>) before the next one starts, so it redraws and answers the user
+/// between the jobs' calls instead of running them back to back. First come, first served; a caller that goes away leaves
+/// the line. No Revit and no WPF here (the unit tests compile this file on its own); thread-safe.
 /// </summary>
 internal sealed class JobTurns
 {
@@ -20,13 +22,13 @@ internal sealed class JobTurns
     private readonly object _gate = new();
     private readonly List<Ticket> _line = [];
 
-    /// <summary>The queue every job's change goes through (one per Revit session).</summary>
+    /// <summary>The line every job's call goes through (one per Revit session).</summary>
     public static JobTurns Shared { get; } = new();
 
     /// <summary>Raised (outside the lock, on the caller's thread) whenever a ticket joins, moves up or leaves.</summary>
     public event Action? Changed;
 
-    /// <summary>A change of <paramref name="job"/> joins the end of the queue.</summary>
+    /// <summary>A call of <paramref name="job"/> joins the end of the line.</summary>
     public Ticket Enter(string job, string tool)
     {
         var ticket = new Ticket { Job = job, Tool = tool };
@@ -77,5 +79,33 @@ internal sealed class JobTurns
         }
         Leave(ticket);
         return false;
+    }
+
+    // When the next call may start (UTC ticks): the breather after the last call.
+    private long _readyAt;
+
+    /// <summary>
+    /// How long Revit is left alone after a call that ran <paramref name="ran"/>: a tenth of it, at least a quarter of a
+    /// second (time to redraw and take a click) and at most two seconds (the user gets their turn after a long call).
+    /// </summary>
+    public static TimeSpan Breather(TimeSpan ran) =>
+        TimeSpan.FromMilliseconds(Math.Max(250, Math.Min(2000, ran.TotalMilliseconds / 10)));
+
+    /// <summary>A call that ran <paramref name="ran"/> ended: the next one waits for its breather.</summary>
+    public void Rested(TimeSpan ran)
+    {
+        var ready = DateTime.UtcNow.Add(Breather(ran)).Ticks;
+        lock (_gate) _readyAt = Math.Max(_readyAt, ready);
+    }
+
+    /// <summary>What is left of the breather (zero when the next call may start).</summary>
+    public TimeSpan RestLeft
+    {
+        get
+        {
+            long left;
+            lock (_gate) left = _readyAt - DateTime.UtcNow.Ticks;
+            return left > 0 ? new TimeSpan(left) : TimeSpan.Zero;
+        }
     }
 }

@@ -384,7 +384,7 @@ public sealed class BridgeServer
         }
         else
         {
-            // A parallel job waits instead: a change for its turn in the one queue, then any call for Revit to be free.
+            // A parallel job waits instead: for its turn in the one line (the applier), then for Revit to be free and rested.
             (job, turn) = await TakeTurnAsync(jobKey, tool, ct).ConfigureAwait(false);
             if (job is null) return ToolResult.Error(ct.IsCancellationRequested ? "The call was cancelled while it waited its turn; nothing was run."
                 : $"{tool.Name} waited more than {(int)TurnWait.TotalMinutes} minutes for its turn in Revit, so nothing was run. Call it again to wait again.");
@@ -455,8 +455,13 @@ public sealed class BridgeServer
             }
         }, queued.Token);
         job.Task = Jobs.Follow(job, firstCall);
-        // A parallel job's change holds its turn until its Revit job ends (a "still running" answer doesn't give it back).
-        if (turn is not null) _ = job.Task.ContinueWith(_ => JobTurns.Shared.Leave(turn), TaskScheduler.Default);
+        // A parallel job's call holds its turn until its Revit job ends (a "still running" answer doesn't give it back),
+        // and Revit gets its breather before the next job's call, after any call (the main chat's too).
+        _ = job.Task.ContinueWith(_ =>
+        {
+            JobTurns.Shared.Rested(job.Elapsed);
+            if (turn is not null) JobTurns.Shared.Leave(turn);
+        }, TaskScheduler.Default);
 
         // Revit picks work up within a second when idle. If it doesn't, it is showing a dialog (said within a few seconds,
         // with its title), busy with a long operation of its own, in an edit mode, or running a command of its own: say
@@ -485,15 +490,16 @@ public sealed class BridgeServer
     internal static readonly TimeSpan TurnWait = TimeSpan.FromMinutes(30);
 
     /// <summary>
-    /// A parallel job's call waits its turn: a change takes a ticket in the one queue (JobTurns) and waits to be at the
-    /// front; then any call waits for Revit to be free of other work and creates its Revit job. The job's card says
-    /// "Waiting its turn" meanwhile. Returns the Revit job and the ticket (the caller gives it back when the job ends);
-    /// a null job when the wait was cancelled or too long (no ticket is kept then).
+    /// A parallel job's call waits its turn: every call (a change or a read) takes a ticket in the one line (JobTurns, the
+    /// applier) and waits to be at the front; then it waits for Revit to be free of other work and for Revit's breather
+    /// after the last call, and creates its Revit job. The job's card says "Waiting its turn" meanwhile. Returns the Revit
+    /// job and the ticket (the caller gives it back when the job ends); a null job when the wait was cancelled or too long
+    /// (no ticket is kept then).
     /// </summary>
     private async Task<(Job? Job, JobTurns.Ticket? Turn)> TakeTurnAsync(string jobKey, IRevitTool tool, CancellationToken ct)
     {
         var turns = JobTurns.Shared;
-        var ticket = tool.ModifiesModel ? turns.Enter(jobKey, tool.Name) : null;
+        JobTurns.Ticket? ticket = turns.Enter(jobKey, tool.Name);
         var waited = false;
         var started = DateTime.UtcNow;
         try
@@ -513,7 +519,7 @@ public sealed class BridgeServer
             while (true)
             {
                 ct.ThrowIfCancellationRequested();
-                if (Jobs.Running is null && !_dispatcher.IsRunning && Jobs.TryCreate(tool.Name, out _) is { } job)
+                if (Jobs.Running is null && !_dispatcher.IsRunning && turns.RestLeft == TimeSpan.Zero && Jobs.TryCreate(tool.Name, out _) is { } job)
                 {
                     var keep = ticket;
                     ticket = null; // handed to the caller
@@ -525,7 +531,7 @@ public sealed class BridgeServer
                     waited = true;
                     Chat.ChatJobs.SetWaiting(jobKey, 1);
                 }
-                await Task.Delay(400, ct).ConfigureAwait(false);
+                await Task.Delay(Math.Max(50, Math.Min(400, (int)turns.RestLeft.TotalMilliseconds)), ct).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException) { return (null, null); }

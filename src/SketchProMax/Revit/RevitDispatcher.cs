@@ -100,7 +100,7 @@ public sealed class RevitDispatcher : IExternalEventHandler
         {
             try { application.Idling -= OnIdling; _idlingHooked = false; } catch (Exception) { }
         }
-        Drain(application, fromEvent: false);
+        Drain(application, fromEvent: false, all: true);
         while (_later.TryDequeue(out _)) { }
         // Work that may only run from the external event can't run here (this may be an event handler): fail it.
         while (_eventOnly.TryDequeue(out var pending)) pending.Fail();
@@ -194,22 +194,41 @@ public sealed class RevitDispatcher : IExternalEventHandler
 
     public string GetName() => "Sketch ProMax dispatcher";
 
-    private void Drain(UIApplication app, bool fromEvent)
+    /// <summary>
+    /// After this long of our work in one go, Revit gets its message loop back (to redraw and take a click) before the
+    /// rest of the queue runs: many short calls from windows and parallel jobs never add up to a freeze.
+    /// </summary>
+    private const int YieldMs = 100;
+
+    private void Drain(UIApplication app, bool fromEvent, bool all = false)
     {
         // A modal dialog shown by a tool (the approval prompt) pumps messages; don't start other work inside it.
         if (_running) return;
         _running = true;
+        var started = Environment.TickCount;
+        var yielded = false;
         try
         {
-            // Drain everything queued so far; one Raise() may cover several items. Event-only work runs only from Execute.
+            // Drain what is queued so far; one Raise() may cover several items. Event-only work runs only from Execute.
             while (true)
             {
+                if (!all && unchecked(Environment.TickCount - started) >= YieldMs && (!_queue.IsEmpty || fromEvent && !_eventOnly.IsEmpty))
+                {
+                    yielded = true;
+                    break;
+                }
                 if (_queue.TryDequeue(out var work)) work(app);
                 else if (fromEvent && _eventOnly.TryDequeue(out var only)) only.Run(app);
                 else break;
             }
         }
         finally { _running = false; }
+        // The rest runs at the next Idling (kept coming while work waits) or external event, once Revit has had its turn.
+        if (yielded)
+        {
+            if ((!_eventOnly.IsEmpty || !_idlingHooked) && _event is { } ev) Raise(ev);
+            Nudge();
+        }
     }
 
     /// <summary>Raised at each Idling this dispatcher gets, on Revit's thread (the time log looks for input here).</summary>
