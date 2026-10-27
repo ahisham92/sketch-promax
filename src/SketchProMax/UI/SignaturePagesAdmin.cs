@@ -148,7 +148,7 @@ internal sealed class SignaturePagesAdmin : Window
         stack.Children.Add(learned);
         Learn(example);
 
-        var typesHead = Brand.Text("TYPES: code, heading at the top, form code at the foot, IDC table", Brand.K.Muted, 10.5, bold: true);
+        var typesHead = Brand.Text("TYPES: code, heading at the top, form code at the foot, IDC table, register only", Brand.K.Muted, 10.5, bold: true);
         typesHead.Margin = new Thickness(0, 14, 0, 4);
         stack.Children.Add(typesHead);
         stack.Children.Add(_types);
@@ -327,8 +327,14 @@ internal sealed class SignaturePagesAdmin : Window
         heading.TextChanged += (_, _) => t.Heading = heading.Text.Trim();
         form.TextChanged += (_, _) => t.Form = form.Text.Trim();
         idc.Click += (_, _) => t.Idc = idc.IsChecked == true;
+        var only = new CheckBox { Content = "Register only", IsChecked = t.RegisterOnly, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) };
+        only.SetResourceReference(ForegroundProperty, Brand.K.Text);
+        AutomationProperties.SetHelpText(only, "Listed in the submission register, with no Word or PDF page (drawings).");
+        only.ToolTip = AutomationProperties.GetHelpText(only);
+        only.Click += (_, _) => t.RegisterOnly = only.IsChecked == true;
         foreach (var b in new[] { code, heading, form }) { b.Margin = new Thickness(0, 0, 6, 0); row.Children.Add(b); }
         row.Children.Add(idc);
+        row.Children.Add(only);
         var remove = new Button { Content = "", FontFamily = new FontFamily("Segoe Fluent Icons, Segoe MDL2 Assets"), Width = 28, Background = Brushes.Transparent, BorderThickness = new Thickness(0) };
         remove.SetResourceReference(ForegroundProperty, Brand.K.Muted);
         AutomationProperties.SetName(remove, "Remove this type");

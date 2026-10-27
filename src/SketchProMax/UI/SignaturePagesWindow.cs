@@ -376,7 +376,8 @@ internal sealed class SignaturePagesWindow : Window
             glyph.SetResourceReference(TextBlock.ForegroundProperty, done[i] ? Brand.K.OnAccent : Brand.K.Text);
         }
         var n = Included().Count;
-        _make.Content = n == 1 ? "Make 1 page" : $"Make {n} pages";
+        var pages = Included().Count(d => !TypeOf(_setup, d.Type).RegisterOnly);
+        _make.Content = pages == n ? (n == 1 ? "Make 1 page" : $"Make {n} pages") : pages == 0 ? "Make the register" : $"Make {pages} page{(pages == 1 ? "" : "s")} + register";
         _make.IsEnabled = n > 0;
         _empty.Visibility = _rows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         ShowSections();
@@ -922,7 +923,7 @@ internal sealed class SignaturePagesWindow : Window
         row.TitleText.ToolTip = d.Title.Length > 0 ? d.Title : null;
         row.NumberText.ToolTip = d.Number.Length > 0 ? d.Number : null;
         row.RevText.Text = RevText(d.Rev, _setup.TwoDigitRev);
-        row.Outputs.Text = !on ? "Skipped" : HasIdc(d) ? "Word + PDF + IDC table" : "Word + PDF";
+        row.Outputs.Text = !on ? "Skipped" : Outputs(_setup, d);
         var selected = _focus == row;
         row.Card.SetResourceReference(Border.BorderBrushProperty, selected ? Brand.K.Accent : Brand.K.Border);
         row.Card.BorderThickness = new Thickness(selected ? 2 : 1);
@@ -946,7 +947,7 @@ internal sealed class SignaturePagesWindow : Window
             chip.Child = t;
             _summary.Children.Add(chip);
         }
-        var files = docs.Sum(d => HasIdc(d) ? 4 : 2);
+        var files = docs.Sum(d => TypeOf(_setup, d.Type).RegisterOnly ? 0 : HasIdc(d) ? 4 : 2) + 1;
         var total = Brand.Text($"{docs.Count} document{(docs.Count == 1 ? "" : "s")}, {files} files", Brand.K.Muted, 12);
         total.Margin = new Thickness(6, 2, 0, 0);
         _summary.Children.Add(total);
@@ -1072,17 +1073,23 @@ internal sealed class SignaturePagesWindow : Window
         var clock = Stopwatch.StartNew();
         try
         {
-            await Task.Run(() => SignaturePages.Make(docs, folder, common));
+            await Task.Run(() =>
+            {
+                SignaturePages.Make(docs, folder, common);
+                Directory.CreateDirectory(folder);
+                WriteRegister(RegisterPath(folder, date), docs, common.Setup, date);
+            });
             _lastFolder = folder;
             _openFolder.Visibility = Visibility.Visible;
             var blank = new[] { _by, _chk, _app }.Where(r => r.Signature is null && r.Who.Text.Trim().Length > 0).Select(r => r.Label).ToList();
-            Say($"Made {docs.Count} page{(docs.Count == 1 ? "" : "s")} (Word and PDF) in {clock.Elapsed.TotalSeconds:0.0} s." +
+            var pages = docs.Count(d => !TypeOf(_setup, d.Type).RegisterOnly);
+            Say($"Made {pages} page{(pages == 1 ? "" : "s")} (Word and PDF) and the register of {docs.Count} in {clock.Elapsed.TotalSeconds:0.0} s." +
                            (blank.Count > 0 ? $" {string.Join(" and ", blank)} left to sign by hand." : ""), Brand.K.SuccessText);
             Keep();
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            Say("Couldn't write the files: " + (ex is IOException and not DirectoryNotFoundException ? "a page is open in Word or a PDF reader; close it and press Make again." : ex.Message), Brand.K.DangerText);
+            Say("Couldn't write the files: " + (ex is IOException and not DirectoryNotFoundException ? "a page or the register is open in Word, Excel or a PDF reader; close it and press Make again." : ex.Message), Brand.K.DangerText);
         }
         finally { Brand.SetBusy(_make, false); ShowSteps(); }
     }

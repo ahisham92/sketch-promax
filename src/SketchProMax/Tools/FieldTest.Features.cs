@@ -1423,6 +1423,9 @@ internal static partial class FieldTest
             var common = new SignaturePages.Common(setup, DateTime.Today, null, sign, null, null);
             var files = SignaturePages.Make(docs, Path.Combine(dir, "out"), common);
             if (idc != 1 || files.Count != (docs.Count + idc) * 2 || !files.All(File.Exists)) problems.Add($"{files.Count} files written for {docs.Count} documents ({idc} with an IDC table)");
+            var register = SignaturePages.RegisterPath(Path.Combine(dir, "out"), DateTime.Today);
+            SignaturePages.WriteRegister(register, docs, setup, DateTime.Today);
+            if (!File.Exists(register)) problems.Add("the submission register wasn't written");
             foreach (var pdf in files.Where(f => f.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase)))
             {
                 using var read = UglyToad.PdfPig.PdfDocument.Open(pdf);
@@ -1434,7 +1437,7 @@ internal static partial class FieldTest
         catch (Exception ex) when (ex is not OutOfMemoryException) { problems.Add($"{ex.GetType().Name}: {ex.Message}"); }
         try { App.Dispatcher.InvokeAsync(_ => { UI.SignaturePagesWindow.ForTest().Close(); return 0; }).GetAwaiter().GetResult(); }
         catch (Exception ex) when (ex is not OutOfMemoryException) { problems.Add($"the window couldn't be built: {ex.GetType().Name}: {ex.Message}"); }
-        return problems.Count == 0 ? Pass("Excel list and spec sections read, a Word file and a PDF per document and the IDC table read back, PIN lock, window built") : Fail(string.Join("; ", problems));
+        return problems.Count == 0 ? Pass("Excel list and spec sections read, a Word file and a PDF per document and the IDC table read back, the register written, PIN lock, window built") : Fail(string.Join("; ", problems));
     }
 
     private static (string, string) PdfAttach()

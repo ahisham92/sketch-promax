@@ -38,6 +38,8 @@ internal static class SignaturePages
         public string Form { get; set; } = "";
         /// <summary>Its documents also get the IDC table page (specifications): the sections and the departments that check them.</summary>
         public bool Idc { get; set; }
+        /// <summary>Listed in the submission register only, with no page of its own (drawings: their PDFs are issued already).</summary>
+        public bool RegisterOnly { get; set; }
     }
 
     /// <summary>A specification section on the IDC table: its reference, title, lead discipline and the discipline that checks it.</summary>
@@ -71,6 +73,8 @@ internal static class SignaturePages
         public string NumberPattern { get; set; } = "";
         /// <summary>The project's sites, code and name (e.g. two terminals), for the {SITE} part of a number.</summary>
         public List<Site> Sites { get; set; } = [];
+        /// <summary>The setup's version: 2 from when drawings went to the register only (older setups are moved on load).</summary>
+        public int Version { get; set; }
     }
 
     /// <summary>A site of the project: the code in its numbers and a name to show.</summary>
@@ -84,7 +88,7 @@ internal static class SignaturePages
         new() { Code = "SPC", Heading = "Project specification", Idc = true },
         new() { Code = "RPT", Heading = "Report" },
         new() { Code = "CAL", Heading = "Calculation report" },
-        new() { Code = "DWG", Heading = "Drawings" },
+        new() { Code = "DWG", Heading = "Drawings", RegisterOnly = true },
     ];
 
     /// <summary>The type of <paramref name="code"/>; an unknown code gets a type whose heading is the code itself.</summary>
@@ -413,6 +417,7 @@ internal static class SignaturePages
         var list = new List<(Doc, string, string, string, string)>();
         foreach (var d in docs)
         {
+            if (TypeOf(setup, d.Type).RegisterOnly) continue;
             var type = TypeFolder(d.Type);
             var name = FileName(d, setup.TwoDigitRev);
             var unique = name;
@@ -423,6 +428,26 @@ internal static class SignaturePages
                 idc ? Path.Combine(folder, type, "Word", idcName + ".docx") : "", idc ? Path.Combine(folder, type, "PDF", idcName + ".pdf") : ""));
         }
         return list;
+    }
+
+    /// <summary>What a document gets: "Register only", "Word + PDF" or "Word + PDF + IDC table".</summary>
+    public static string Outputs(Setup setup, Doc d) =>
+        TypeOf(setup, d.Type) is var t && t.RegisterOnly ? "Register only" : t.Idc ? "Word + PDF + IDC table" : "Word + PDF";
+
+    /// <summary>The submission register's file in the dated folder.</summary>
+    public static string RegisterPath(string folder, DateTime date) =>
+        Path.Combine(folder, "Submission register " + date.ToString("dd-MM-yyyy", System.Globalization.CultureInfo.InvariantCulture) + ".xlsx");
+
+    /// <summary>The submission register: every document listed (drawings included), with its revision, title and what was made.</summary>
+    public static void WriteRegister(string path, IReadOnlyList<Doc> docs, Setup setup, DateTime date)
+    {
+        var rows = docs.Select((d, i) => new OfficeXlsx.Row([i + 1, d.Type, d.Number, RevText(d.Rev, setup.TwoDigitRev).Replace("REV ", ""), d.Title, Outputs(setup, d)])).ToList();
+        var title = $"Submission register {date.ToString("dd/MM/yyyy", System.Globalization.CultureInfo.InvariantCulture)}" + (setup.Project.Length > 0 ? " \u2013 " + setup.Project : "");
+        OfficeXlsx.Write(path, "Submission register",
+        [
+            new OfficeXlsx.Sheet("Register", title, ["No.", "Type", "Document number", "Rev", "Title", "Made"], rows,
+                ["integer", "text", "text", "text", "text", "text"], [6, 8, 46, 6, 60, 22], true),
+        ]);
     }
 
     /// <summary>What every page of one Make shares: the setup, the date, the logo and the signatures put on by their owners.</summary>
@@ -902,6 +927,11 @@ internal static class SignaturePages
             setup.Departments ??= [];
             setup.Sites ??= [];
             setup.NumberPattern ??= "";
+            if (setup.Version < 2)
+            {
+                foreach (var t in setup.Types.Where(t => t.Code.Equals("DWG", StringComparison.OrdinalIgnoreCase))) t.RegisterOnly = true;
+                setup.Version = 2;
+            }
             return setup;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException) { return new Setup(); }
