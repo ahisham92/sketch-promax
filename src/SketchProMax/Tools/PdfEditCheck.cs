@@ -116,6 +116,25 @@ internal static class PdfEditCheck
                 string.Join(" | ", bySize.Select(p => $"{p.First}-{p.Last} {p.Bytes / 1024} KB")));
         }
 
+        // Two editor windows: pages copied from one document into another, which keeps working after the first is closed.
+        var two = new PdfEditSession();
+        using (var one = new PdfEditSession())
+        {
+            one.Open(b);
+            one.Rotate([1], 1);
+            two.Open(extract);
+            var copied = two.Import(one, [one.Pages[1], one.Pages[0], PdfEditSession.Blank(null)]);
+            two.Insert(1, copied);
+            var twice = two.Import(one, [one.Pages[2]]);
+            check("pdf editor: pages copied from another window keep their order and turns, the other window unchanged",
+                Labels(two) == "A1 B2 B1 _ A2" && copied[0].Turns == 1 && copied[2].Source == -1 && Labels(one) == "B1 B2 B3" && one.Pages[1].Turns == 1 && twice[0].Source == copied[0].Source,
+                $"{Labels(two)} / {Labels(one)}");
+        }
+        var both = Path.Combine(folder, "from two windows.pdf");
+        two.Save(both, null);
+        check("pdf editor: copied pages save after the window they came from is closed", Read(both) == "B3 B2 B1 _ A2", Read(both));
+        two.Dispose();
+
         // Errors a person can act on.
         var junk = Path.Combine(folder, "not a pdf.pdf");
         File.WriteAllText(junk, "hello");

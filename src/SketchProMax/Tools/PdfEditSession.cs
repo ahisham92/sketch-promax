@@ -80,6 +80,42 @@ internal sealed class PdfEditSession : IDisposable
         });
     }
 
+    /// <summary>
+    /// The same pages, made pages of this session: what another editor window's pages are when they are copied here.
+    /// Each file they come from is opened here once (with the password it was opened with there), blank pages stay
+    /// blank, and turns and sizes are kept. The other session is not changed.
+    /// </summary>
+    public List<PdfPage> Import(PdfEditSession from, IReadOnlyList<PdfPage> pages)
+    {
+        if (ReferenceEquals(from, this)) return [.. pages];
+        return PdfEngine.Run(() =>
+        {
+            var map = new Dictionary<int, int>();
+            var copied = new List<PdfPage>(pages.Count);
+            foreach (var page in pages)
+            {
+                if (page.Source < 0 || page.Source >= from._sources.Count)
+                {
+                    copied.Add(new PdfPage(-1, 0, page.Turns, page.Width, page.Height));
+                    continue;
+                }
+                if (!map.TryGetValue(page.Source, out var at))
+                {
+                    var theirs = from._sources[page.Source];
+                    at = _sources.FindIndex(o => o.Doc is not null && string.Equals(o.Path, theirs.Path, StringComparison.OrdinalIgnoreCase) && o.Password == theirs.Password);
+                    if (at < 0)
+                    {
+                        _sources.Add(new SourceFile(theirs.Path, theirs.Password) { Doc = PdfEngine.Doc.Open(theirs.Path, theirs.Password) });
+                        at = _sources.Count - 1;
+                    }
+                    map[page.Source] = at;
+                }
+                copied.Add(new PdfPage(at, page.Index, page.Turns, page.Width, page.Height));
+            }
+            return copied;
+        });
+    }
+
     /// <summary>Opens <paramref name="path"/> as the document (the first file of a session): Save writes back to it.</summary>
     public void Open(string path, string? password = null)
     {
