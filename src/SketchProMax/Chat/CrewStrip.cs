@@ -257,7 +257,13 @@ internal sealed class CrewStrip : Border
         {
             if (e.Cue == CrewCue.Arrive && _workers.TryGetValue(e.Number, out var arriving)) Arrive(arriving);
             else if (e.Cue == CrewCue.Handover && _workers.TryGetValue(e.Number, out var given)) HandTo(given);
-            if (e.Cue != CrewCue.Leave && e.Say.Length > 0) Say(e.Number, e.Say, e.Cue is CrewCue.Arrive or CrewCue.Handover ? Fly.TimeSpan : TimeSpan.Zero);
+            if (e.Cue == CrewCue.Huddle)
+            {
+                Reach(_coordinator.Arm, -55);
+                SayAt(Coordinator, CoordX, e.Say, TimeSpan.Zero);
+            }
+            else if (e.Cue == CrewCue.Share) Call(e.From, e.Number, e.Say);
+            else if (e.Cue != CrewCue.Leave && e.Say.Length > 0) Say(e.Number, e.Say, e.Cue is CrewCue.Arrive or CrewCue.Handover ? Fly.TimeSpan : TimeSpan.Zero);
         }
         var applying = seats.FirstOrDefault(s => s.Mood == CrewMood.Applying);
         ShowNames();
@@ -597,7 +603,48 @@ internal sealed class CrewStrip : Border
         _modelTop.BeginAnimation(OpacityProperty, glow);
     }
 
-    private const int Applier = int.MinValue;
+    private const int Applier = int.MinValue, Coordinator = int.MinValue + 1;
+
+    /// <summary>
+    /// What the coordinator does now in the main chat (<paramref name="tool"/>: the step it runs; null when its turn
+    /// ended): reading the model shows the magnifier, handing out jobs says so, under the coordinator's name.
+    /// </summary>
+    public void CoordinatorDoes(string? tool)
+    {
+        var reading = tool is not null && tool != Tools.ChatJobsTool.ToolName && StepNames.ReadOnly(tool) && !tool.StartsWith("Task", StringComparison.Ordinal) && tool != "TodoWrite" && tool != "ToolSearch";
+        _coordinator.Look.Visibility = reading ? Visibility.Visible : Visibility.Collapsed;
+        _coordinator.Status.Text = tool is null ? "" : tool == Tools.ChatJobsTool.ToolName ? "Handing out work" : reading ? "Reading the model" : "Working";
+    }
+
+    /// <summary>
+    /// A call: the worker at desk <paramref name="from"/> passes what their job found to job <paramref name="number"/>'s
+    /// worker; a dashed arc joins the two for a moment, with a phone on it, and the one called says thanks.
+    /// </summary>
+    private void Call(int from, int number, string words)
+    {
+        if (!IsVisible || !_workers.TryGetValue(number, out var w)) return;
+        var x1 = DeskX(from) + 2;
+        var x2 = w.Person.At.X;
+        if (Math.Abs(x2 - x1) < 8) return;
+        var mid = (x1 + x2) / 2;
+        var arc = new Path { StrokeThickness = 1.5, StrokeDashArray = [2, 2], Data = Geometry.Parse(Inv($"M{x1},{Top + 24} Q{mid},{Top - 6} {x2},{Top + 24}")), IsHitTestVisible = false };
+        arc.SetResourceReference(Shape.StrokeProperty, Brand.K.Accent);
+        var phone = ChatUi.Glyph("\uE717", Brand.K.Accent, 10);
+        Canvas.SetLeft(phone, mid - 5);
+        Canvas.SetTop(phone, Top + 2);
+        var call = new Canvas { IsHitTestVisible = false };
+        call.Children.Add(arc);
+        call.Children.Add(phone);
+        _bubbles.Children.Insert(0, call);
+        var show = new DoubleAnimationUsingKeyFrames { Duration = new Duration(TimeSpan.FromMilliseconds(2600)) };
+        show.KeyFrames.Add(new DiscreteDoubleKeyFrame(1, KeyTime.FromTimeSpan(TimeSpan.Zero)));
+        show.KeyFrames.Add(new DiscreteDoubleKeyFrame(1, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(2200))));
+        show.KeyFrames.Add(ChatUi.Animate ? new LinearDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(2600))) : new DiscreteDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(2600))));
+        Timeline.SetDesiredFrameRate(show, 20);
+        show.Completed += (_, _) => _bubbles.Children.Remove(call);
+        call.BeginAnimation(OpacityProperty, show);
+        Say(number, words, TimeSpan.FromMilliseconds(400));
+    }
 
     /// <summary>The line under the applier's name: whose change goes in, who waits, or how many went in.</summary>
     private void ShowApplier()

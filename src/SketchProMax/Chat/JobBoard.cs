@@ -50,6 +50,8 @@ internal sealed class ChatJob
     public int Worker { get; set; } = -1;
     /// <summary>Its plan's steps by id, each pending, in_progress or completed (JobPlan), as its Claude Code keeps it. Saved.</summary>
     public Dictionary<string, string> Plan { get; set; } = new();
+    /// <summary>The other jobs whose reports it was given (JobBoard.Team), so each one reaches it once. Saved.</summary>
+    public List<int> Heard { get; set; } = [];
     public DateTime Created { get; set; }
     public DateTime Started { get; set; }
     public DateTime Ended { get; set; }
@@ -283,7 +285,12 @@ internal sealed class JobBoard
                 job.Ended = default;
                 job.Now = "Starting…";
                 if (JobPlan.AllDone(job.Plan)) job.Plan.Clear(); // a new run after a finished plan makes its own
-                list.Add((job, NextMessage(job)));
+                var message = NextMessage(job);
+                // The team: who else works on what, and what the jobs that finished found, so it builds on them.
+                var team = Team(job, _jobs, out var shared);
+                if (team.Length > 0) message = message with { Text = message.Text + "\n\n" + team };
+                job.Heard.AddRange(shared);
+                list.Add((job, message));
             }
             return list;
         }
@@ -299,6 +306,27 @@ internal sealed class JobBoard
         if (job.HasSession) return new JobMessage(waiting.Length > 0 ? waiting : CarryOn, files);
         var first = "Your job (number " + job.Number + ", \"" + job.Title + "\"):\n\n" + job.Task;
         return new JobMessage(waiting.Length > 0 ? first + "\n\nSince then:\n\n" + waiting : first, files);
+    }
+
+    /// <summary>
+    /// What a job starting a run hears from the team: on its first run, the other open jobs and their parts (so nobody
+    /// does the same work twice); every run, the reports of jobs that finished since it last heard (facts it can use
+    /// instead of reading the model again). <paramref name="shared"/>: the jobs whose reports it now has. "" for nothing.
+    /// </summary>
+    public static string Team(ChatJob job, IEnumerable<ChatJob> jobs, out List<int> shared)
+    {
+        var others = jobs.Where(j => j.Number != job.Number).OrderBy(j => j.Number).ToList();
+        var working = job.HasSession ? new List<ChatJob>() : others.Where(j => j.Open).ToList();
+        var reports = others.Where(j => j.State == Done && j.Summary.Length > 0 && !job.Heard.Contains(j.Number)).ToList();
+        reports = reports.Skip(Math.Max(0, reports.Count - 6)).ToList();
+        shared = reports.Select(j => j.Number).ToList();
+        if (working.Count == 0 && reports.Count == 0) return "";
+        var sb = new StringBuilder("From the team (the other jobs of this chat):");
+        foreach (var j in working)
+            sb.Append($"\n- Job {j.Number} \"{j.Title}\" works alongside you on: {OneLine(j.Task, 200)} Leave that part to it.");
+        foreach (var j in reports)
+            sb.Append($"\n- Job {j.Number} \"{j.Title}\" finished and found: {OneLine(j.Summary, 500)} Use what helps rather than reading the model again.");
+        return sb.ToString();
     }
 
     /// <summary>The messages waiting for the job, joined, and their files (the inbox is emptied).</summary>
@@ -467,7 +495,8 @@ internal sealed class JobBoard
         lock (Gate)
         {
             if (_jobs.Count == 0) return $"No jobs in this chat yet. Up to {ClampLimit(limit)} run at once.";
-            var sb = new StringBuilder($"Jobs in this chat (up to {ClampLimit(limit)} run at once; changes to the model are applied one at a time; thinking and reading run in parallel):\n");
+            var free = Math.Max(0, ClampLimit(limit) - _jobs.Count(j => j.Open));
+            var sb = new StringBuilder($"Jobs in this chat (up to {ClampLimit(limit)} run at once, {free} worker(s) free now; changes to the model are applied one at a time; thinking and reading run in parallel):\n");
             foreach (var j in _jobs.OrderBy(j => j.Number))
             {
                 sb.Append($"- Job {j.Number} \"{j.Title}\": {StateLabel(j).ToLowerInvariant()}");
@@ -505,7 +534,7 @@ internal sealed class JobBoard
         Number = j.Number, Key = j.Key, Title = j.Title, Task = j.Task, State = j.State, Kind = j.Kind, Model = j.Model, Effort = j.Effort, Summary = j.Summary, Now = j.Now, Ahead = j.Ahead,
         Created = j.Created, Started = j.Started, Ended = j.Ended, HasSession = j.HasSession, Inbox = j.Inbox.ToList(),
         InboxFiles = j.InboxFiles.ToList(), Items = j.Items.ToList(), Activity = j.Activity, Worker = j.Worker,
-        Plan = new Dictionary<string, string>(j.Plan),
+        Plan = new Dictionary<string, string>(j.Plan), Heard = j.Heard.ToList(),
     };
 }
 

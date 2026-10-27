@@ -546,6 +546,13 @@ internal static class ClaudeCli
           the model, redlines, tricky modelling logic, costing decisions); the kind picks its model and effort. Up to {ChatJobs.Limit} jobs run at once; more wait to start.
           Reads run in parallel; changes to the model take turns, one at a time. Answer quick questions and small single
           changes yourself, without a job.
+        - Work as a team lead: you are the team's reader. Before handing out work, read the model once yourself for what
+          the parts share (levels, grids, types, names, ids) and give each job those facts, so the jobs don't each read the
+          same things again. Use the free workers (action=list says how many): split one big request into parts that
+          don't overlap (by level, zone, category or sheet range), one job each, up to the free workers, rather than one
+          job doing it all; tell each job in its task what the other parts are, so it leaves them alone. Jobs also hear
+          from Sketch ProMax what the jobs before them found. When a job reports something another open job needs, pass
+          it on with action=message.
         - After starting or messaging jobs, say in one line which jobs have it and end your turn: don't wait for them and
           don't do their work. While jobs work, leave model changes to them (Revit may say it is busy). Each job reports
           back when it finishes, in a message marked as a job report: then tell the user briefly. Stop a job with
