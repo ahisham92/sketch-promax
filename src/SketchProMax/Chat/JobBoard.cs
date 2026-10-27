@@ -46,6 +46,8 @@ internal sealed class ChatJob
     /// gives the whole picture, for the card and its animation.
     /// </summary>
     [JsonIgnore] public string Activity { get; set; } = "";
+    /// <summary>Which worker of the crew strip took it (0: the first name in Settings > Chat; -1: none yet). Saved.</summary>
+    public int Worker { get; set; } = -1;
     public DateTime Created { get; set; }
     public DateTime Started { get; set; }
     public DateTime Ended { get; set; }
@@ -367,6 +369,13 @@ internal sealed class JobBoard
         }
     }
 
+    /// <summary>The crew strip gave job <paramref name="number"/> to worker <paramref name="worker"/> (kept with the chat).</summary>
+    public void SetWorker(int number, int worker)
+    {
+        lock (Gate)
+            if (_jobs.FirstOrDefault(j => j.Number == number) is { } job) job.Worker = worker;
+    }
+
     /// <summary>What an active job is doing: thinking, reading, waiting (to apply) or applying; "" when it isn't active.</summary>
     public static string ActivityOf(ChatJob job) =>
         !job.Active ? "" : job.State == Waiting ? WaitingToApply : job.Activity is Reading or Applying ? job.Activity : Thinking;
@@ -469,7 +478,7 @@ internal sealed class JobBoard
     {
         Number = j.Number, Key = j.Key, Title = j.Title, Task = j.Task, State = j.State, Kind = j.Kind, Model = j.Model, Effort = j.Effort, Summary = j.Summary, Now = j.Now, Ahead = j.Ahead,
         Created = j.Created, Started = j.Started, Ended = j.Ended, HasSession = j.HasSession, Inbox = j.Inbox.ToList(),
-        InboxFiles = j.InboxFiles.ToList(), Items = j.Items.ToList(), Activity = j.Activity,
+        InboxFiles = j.InboxFiles.ToList(), Items = j.Items.ToList(), Activity = j.Activity, Worker = j.Worker,
     };
 }
 

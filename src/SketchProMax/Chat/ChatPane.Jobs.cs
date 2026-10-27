@@ -598,7 +598,7 @@ internal sealed partial class ChatPane
         _switcher.Visibility = jobs.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
         ShowSideEmpty(jobs.Count);
         ShowCrew(jobs);
-        var key = (_viewJob?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "c") + "|" + string.Join("|", jobs.Select(j => j.Number + j.Title + j.State + j.Ahead + CrewWorker(j.Number)));
+        var key = (_viewJob?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "c") + "|" + string.Join("|", jobs.Select(j => j.Number + j.Title + j.State + j.Ahead + CrewWorker(j)));
         if (key == _switchShown) return;
         _switchShown = key;
         var focused = _switchList.Children.OfType<Button>().FirstOrDefault(b => b.IsKeyboardFocused) is { } had ? AutomationProperties.GetAutomationId(had) : null;
@@ -633,7 +633,7 @@ internal sealed partial class ChatPane
             dot.Margin = new Thickness(0, 0, ChatUi.S1, 0);
             if (!job.Active && job.State != JobBoard.Done && job.State != JobBoard.Failed && job.State != JobBoard.Stopped) dot.Text = "○";
             row.Children.Add(dot);
-            var worker = CrewWorker(job.Number) is { } who ? who + " · " : "";
+            var worker = CrewWorker(job) is { } who ? who + " · " : "";
             var title = new TextBlock { Text = $"{worker}Job {job.Number} · {JobBoard.OneLine(job.Title, _jobsSide ? 60 : 24)}", FontSize = ChatUi.SmallSize, VerticalAlignment = VerticalAlignment.Center, FontWeight = _viewJob == job.Number ? FontWeights.SemiBold : FontWeights.Normal, TextTrimming = TextTrimming.CharacterEllipsis };
             Brand.Fg(title, Brand.K.Text);
             row.Children.Add(title);

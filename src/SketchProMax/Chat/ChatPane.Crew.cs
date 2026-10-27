@@ -17,7 +17,7 @@ internal sealed partial class ChatPane
     private JobBoard? _crewBoard;
     private DispatcherTimer? _crewLinger;
 
-    private bool CrewShown => _big is not null && IsCoordinator && !_sample && !_stopped;
+    private bool CrewShown => IsCoordinator && !_sample && !_stopped;
 
     /// <summary>Shows the jobs as workers (or hides the strip when it doesn't belong).</summary>
     private void ShowCrew(List<ChatJob> jobs)
@@ -36,6 +36,8 @@ internal sealed partial class ChatPane
         if (_crew is null)
         {
             _crew = new CrewStrip();
+            _crew.WorkerPicked += ShowWorkerJobs;
+            _crew.CoordinatorPicked += _ => ShowCoordinator(focus: true);
             CrewStrip.NamesChanged += () =>
             {
                 _switchShown = ""; // the jobs column names the workers too
@@ -54,8 +56,20 @@ internal sealed partial class ChatPane
             _crew.Clear();
         }
         _crew.Visibility = Visibility.Visible;
-        var events = _crewPlan.Update(jobs, DateTime.UtcNow, JobBoard.ActivityOf);
-        _crew.Show(_crewPlan.Seats, events);
+        _crew.Compact = _big is null;
+        var workers = ChatJobs.Limit;
+        var events = _crewPlan.Update(jobs, DateTime.UtcNow, JobBoard.ActivityOf, workers);
+        _crew.Show(_crewPlan.Seats, events, workers, _crewPlan.Unassigned);
+        // Each job keeps its worker with the chat, so the worker's list of jobs (and the Jobs column) still says who did it.
+        var kept = false;
+        foreach (var seat in _crewPlan.Seats)
+            if (jobs.FirstOrDefault(j => j.Number == seat.Number) is { } job && job.Worker != seat.Slot)
+            {
+                _board?.SetWorker(seat.Number, seat.Slot);
+                job.Worker = seat.Slot;
+                kept = true;
+            }
+        if (kept) SaveSoon();
         // A finished job's worker leaves after a few seconds even when nothing else changes meanwhile.
         if (_crewPlan.Lingering)
         {
@@ -73,8 +87,18 @@ internal sealed partial class ChatPane
         else ShowCrew(_board.Snapshot());
     }
 
-    /// <summary>The worker who has job <paramref name="number"/> in the strip ("Nova"), or null when the strip isn't shown.</summary>
-    private string? CrewWorker(int number) => CrewShown ? _crewPlan.WorkerOf(number, CrewStrip.Names) : null;
+    /// <summary>The worker who has (or had) job <paramref name="number"/> ("Nova"), or null when none did or the strip isn't shown.</summary>
+    private string? CrewWorker(ChatJob job) => !CrewShown ? null : _crewPlan.WorkerOf(job.Number, CrewStrip.Names) ?? (job.Worker >= 0 ? CrewStrip.Names.Worker(job.Worker) : null);
+
+    /// <summary>A worker was picked in the strip: their jobs (the one now first, then the ones they did), each opening its chat.</summary>
+    private void ShowWorkerJobs(int slot, Button anchor)
+    {
+        var name = CrewStrip.Names.Worker(slot);
+        var jobs = (_board?.Snapshot() ?? []).Where(j => j.Worker == slot).OrderByDescending(j => j.Active).ThenByDescending(j => j.Number).ToList();
+        var rows = jobs.Select(j => ($"Job {j.Number} · {JobBoard.OneLine(j.Title, 48)}", JobBoard.StateLabel(j), _viewJob == j.Number, (Action)(() => OpenJobView(j.Number)))).ToList();
+        if (rows.Count == 0) rows.Add(("No jobs yet", $"{CrewStrip.Names.Coordinator} gives {name} the next job when one comes.", false, () => { }));
+        ToggleChoice(anchor, new Choice($"{name}'s jobs", rows));
+    }
 
     /// <summary>You sent the coordinator a message: a sheet to the coordinator, who nods.</summary>
     private void CrewHeard()
