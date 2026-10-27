@@ -9,8 +9,8 @@ namespace SketchProMax.Revit;
 /// Plays a change file (<see cref="ChangeFileMath"/>) onto the open model: each element found by its UniqueId is set
 /// to the state in the file (type, place, rotation, flips, level elevation, values); one that isn't in the model is
 /// made again when Revit allows it from what the file holds (family instances on a point or a line, straight walls,
-/// grids, levels); a deleted one is deleted. Anything else is listed to redo by hand. Runs in chunks of
-/// <see cref="ChangeFileMath.ReplayChunk"/> elements, one Revit call and one undo step each, through
+/// grids, levels); a deleted one is deleted. Anything else is listed to redo by hand. Runs in small chunks (sized by
+/// <see cref="ChangeFileMath.NextChunk"/>), one short Revit call and one undo step each, through
 /// <see cref="ItemBatch"/> (one item failing doesn't stop the rest; what others own in a workshared model is skipped
 /// and named; what needs borrowing is borrowed in one request per chunk).
 /// </summary>
@@ -56,7 +56,16 @@ internal static class ChangeReplay
             // Older files can hold Revit's energy model (thousands of lines): Revit makes it again by itself.
             if (ChangeFile.IsAnalysis(line.CategoryId)) continue;
             var found = Find(doc, line);
-            if (line.Kind == M.Kinds.Deleted)
+            if (line.Kind == M.Kinds.Deleted && found is not null && line.Unique is not { Length: > 0 })
+            {
+                // Named by id only (deleted before Lifeline read it, often by another add-in or Revit itself): never deleted
+                // automatically, as an id can't prove it is the same element. Listed with what it is now, with Show.
+                if (found.Category is { } cat && ChangeFile.IsAnalysis(cat.Id.Value)) continue;
+                string what;
+                try { what = $"{found.Category?.Name ?? found.GetType().Name} \"{found.Name}\""; } catch (Exception) { what = "an element"; }
+                steps.Add(new(line, Act.Skip, $"deleted by a step Lifeline couldn't read; in the model now it is {what}: delete it by hand if you deleted it"));
+            }
+            else if (line.Kind == M.Kinds.Deleted)
                 steps.Add(found is null ? new(line, Act.Skip, "already not in the model") : new(line, Act.Delete, ""));
             else if (found is not null)
                 steps.Add(new(line, Act.Set, ""));

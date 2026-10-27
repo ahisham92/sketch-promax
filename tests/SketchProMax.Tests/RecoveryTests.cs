@@ -134,6 +134,12 @@ internal static class RecoveryTests
         check("lifeline: a missing element is always made again, never skipped as deleted by someone else", !Src("Revit", "ChangeReplay.cs").Contains("file.MarksNew") && !Src("Revit", "ChangeReplay.cs").Contains("by someone else"), "");
         check("lifeline: a replayed file's time is read back", M.ReplayedTime(M.ReplayedName(new DateTime(2026, 10, 27, 9, 30, 5))) == new DateTime(2026, 10, 27, 9, 30, 5) && M.ReplayedTime(M.CurrentName) is null, "");
         check("lifeline: replayed files stay in the window and are never renamed again", Src("Revit", "ChangeFile.cs").Contains("M.ReplayedTime(file) is null && !string.Equals") && Src("Revit", "ChangeFile.cs").Contains("|| M.ReplayedTime(file) is not null) return;"), "");
+        check("lifeline: replay chunks stay short (start small, halve when slow, grow when quick, capped)",
+            M.ReplayChunk <= 10 && M.NextChunk(5, TimeSpan.FromSeconds(3)) == 2 && M.NextChunk(1, TimeSpan.FromSeconds(9)) == 1
+            && M.NextChunk(5, TimeSpan.FromMilliseconds(50)) == 10 && M.NextChunk(M.ReplayChunkMax, TimeSpan.Zero) == M.ReplayChunkMax
+            && M.NextChunk(8, TimeSpan.FromMilliseconds(400)) == 8 && Src("UI", "RecoverWindow.cs").Contains("size = M.NextChunk(chunk.Count, clock.Elapsed)"), "");
+        check("lifeline: a deletion named by id only is never played, only listed with Show", Src("Revit", "ChangeReplay.cs").Contains("line.Kind == M.Kinds.Deleted && found is not null && line.Unique is not { Length: > 0 }")
+            && Src("UI", "RecoverWindow.cs").Contains("line.Id != 0 ? doc.GetElement(new ElementId(line.Id))"), "");
         check("lifeline: Revit's energy model is never written or replayed", Src("Revit", "ChangeFile.cs").Contains("IsAnalysis(category.Id.Value)") && Src("Revit", "ChangeReplay.cs").Contains("ChangeFile.IsAnalysis(line.CategoryId)"), "");
         check("lifeline: lines marked new stay marked when a newer core carries on", Src("Revit", "ChangeFile.cs").Contains("else SeedAdded(model);"), "");
         check("lifeline: the replay alert shows already right and the commonest reasons", Src("UI", "RecoverWindow.cs").Contains("already right\" +") && Src("UI", "RecoverWindow.cs").Contains("TopReasons(outcome.NotDone)"), "");

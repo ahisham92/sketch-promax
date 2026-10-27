@@ -193,11 +193,14 @@ internal sealed class RecoverWindow : System.Windows.Window
         var outcome = new ChangeReplay.Outcome();
         var done = 0;
         string? stoppedBecause = null;
-        for (var i = 0; i < steps.Count; i += M.ReplayChunk)
+        // Small chunks, each one short Revit call, so Revit stays responsive and Stop and the count work between them.
+        var size = M.ReplayChunk;
+        for (var i = 0; i < steps.Count; i += size)
         {
             if (_stop.IsCancellationRequested) { stoppedBecause = "you pressed Stop"; break; }
-            var chunk = steps.Skip(i).Take(M.ReplayChunk).ToList();
-            Say($"Replaying… {done} of {steps.Count}", Brand.K.Muted);
+            var chunk = steps.Skip(i).Take(size).ToList();
+            Say($"Replaying… {done} of {steps.Count}: {M.Describe(chunk[0].Line)}", Brand.K.Muted);
+            var clock = System.Diagnostics.Stopwatch.StartNew();
             try
             {
                 var why = await App.Dispatcher.InvokeAsync(app =>
@@ -212,6 +215,7 @@ internal sealed class RecoverWindow : System.Windows.Window
             }
             catch (Exception ex) { stoppedBecause = ex.Message; LifelineBugs.Note("replay", "the replay stopped", target.Path, ex); break; }
             done += chunk.Count;
+            size = M.NextChunk(chunk.Count, clock.Elapsed);
         }
         var opened = stoppedBecause is null ? await OpenViews(parsed, outcome, target) : 0;
         WriteReport(file, target.Path, outcome, done, steps.Count, opened, stoppedBecause);
@@ -272,7 +276,7 @@ internal sealed class RecoverWindow : System.Windows.Window
             {
                 if (app.ActiveUIDocument is not { } ui) return ((View? View, string Say)?)null;
                 var doc = ui.Document;
-                var element = made is not null ? doc.GetElement(made) : line.Unique is { } u ? doc.GetElement(u) : null;
+                var element = made is not null ? doc.GetElement(made) : line.Unique is { } u ? doc.GetElement(u) : line.Id != 0 ? doc.GetElement(new ElementId(line.Id)) : null;
                 if (element is not null && element is not View)
                 {
                     ui.Selection.SetElementIds([element.Id]);

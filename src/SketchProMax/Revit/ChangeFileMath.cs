@@ -37,8 +37,14 @@ internal static class ChangeFileMath
     /// <summary>Values kept per element.</summary>
     public const int MaxValues = 200;
 
-    /// <summary>Elements played per Revit call when replaying (each call is one undo step).</summary>
-    public const int ReplayChunk = 100;
+    /// <summary>Elements played in the first Revit call of a replay (each call is one undo step); later calls are sized by
+    /// <see cref="NextChunk"/> so each takes about a third of a second and Revit stays responsive (Stop works between calls).</summary>
+    public const int ReplayChunk = 5, ReplayChunkMax = 50;
+
+    /// <summary>The next chunk's size from how long the last one took: half when it took over a second (down to one
+    /// element), double when it took under 0.15 s (up to <see cref="ReplayChunkMax"/>).</summary>
+    public static int NextChunk(int size, TimeSpan took) =>
+        took.TotalSeconds > 1 ? Math.Max(1, size / 2) : took.TotalSeconds < 0.15 ? Math.Min(ReplayChunkMax, size * 2) : size;
 
     public static string Root => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Sketch ProMax", "Change files");
 
