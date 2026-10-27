@@ -254,7 +254,7 @@ internal static class RescueWindow
             wait.Content = frozen ? "Wait" : "Close";
             AutomationProperties.SetName(wait, frozen ? "Wait" : "Close");
             if (!frozen && doing is not null) Back();
-            if (frozen && !dialog && busy is not null && FreezeCause.OfferWarning(busy, length) && warn.Visibility != Visibility.Visible)
+            if (frozen && !dialog && busy is not null && FreezeCause.OfferWarning(busy, length, ours) && warn.Visibility != Visibility.Visible)
             {
                 warn.Content = new TextBlock { Text = $"Warn me before {busy.What} next time", TextWrapping = TextWrapping.Wrap };
                 AutomationProperties.SetName(warn, $"Warn me before {busy.What} next time");
