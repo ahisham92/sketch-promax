@@ -170,7 +170,8 @@ public static class CoreEntry
         switch (bar >= 0 ? key.Substring(0, bar) : key)
         {
             case "version": return Updater.CurrentText;
-            case "busy": return App.IsBusy ? "1" : "0";
+            // Asked by the loader before it switches to a newer core: also wait while a Revit command may be running.
+            case "busy": return App.IsBusy || Revit.SwitchGate.Wait() ? "1" : "0";
             case "autoupdate": return AgentSettings.Load().AutoUpdate ? "1" : "0";
             case "claude":
             {
