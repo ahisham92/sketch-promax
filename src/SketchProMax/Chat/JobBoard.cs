@@ -477,6 +477,13 @@ internal sealed class JobBoard
 
     // ---- Words ----------------------------------------------------------------------------------------------------
 
+    /// <summary>
+    /// A coordinator's start of one whole job while workers are free is sent back to be divided (chat_jobs): with two
+    /// or more free workers, the work goes out in parts, unless the coordinator says why it can't be divided
+    /// (<paramref name="single"/>). The workers then work at once instead of one doing everything.
+    /// </summary>
+    public static bool MustDivide(int free, string? single) => free >= 2 && string.IsNullOrWhiteSpace(single);
+
     /// <summary>What the card says about the job's state, with how far along its plan is while it works ("Thinking · 40% · 3 left").</summary>
     public static string StateLabel(ChatJob job) => JobPlan.Progress(job) is { Length: > 0 } far ? Bare(job) + " · " + far : Bare(job);
 
