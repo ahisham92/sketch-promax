@@ -64,7 +64,17 @@ internal static class SignaturePages
         public List<string> Departments { get; set; } = ["AR", "EL", "WE", "GE", "LS", "PMC", "ME", "MR", "S&B", "TR", "DSS"];
         /// <summary>The office's form code at the foot of the IDC table page.</summary>
         public string IdcForm { get; set; } = "";
+        /// <summary>
+        /// How the project numbers its documents, learned from one example number: its parts with {SITE}, {AREA},
+        /// {TYPE} and {SEQ} where they change (e.g. PRJ1-0100D-FD-{SITE}-{AREA}-{TYPE}-15A-ST-{SEQ}). Empty: not set.
+        /// </summary>
+        public string NumberPattern { get; set; } = "";
+        /// <summary>The project's sites, code and name (e.g. two terminals), for the {SITE} part of a number.</summary>
+        public List<Site> Sites { get; set; } = [];
     }
+
+    /// <summary>A site of the project: the code in its numbers and a name to show.</summary>
+    internal sealed record Site(string Code, string Name);
 
     /// <summary>The types every project starts with; headings as the office's pages say them, form codes left to fill.</summary>
     public static List<TypeDef> DefaultTypes() =>
@@ -73,7 +83,7 @@ internal static class SignaturePages
         new() { Code = "MOM", Heading = "Project method of measurement" },
         new() { Code = "SPC", Heading = "Project specification", Idc = true },
         new() { Code = "RPT", Heading = "Report" },
-        new() { Code = "CAL", Heading = "Calculations" },
+        new() { Code = "CAL", Heading = "Calculation report" },
         new() { Code = "DWG", Heading = "Drawings" },
     ];
 
@@ -293,6 +303,88 @@ internal static class SignaturePages
                 new OfficeXlsx.Row(["033000", "CONCRETE - CAST-IN-PLACE CONCRETE", "ST", "GE"]),
             ], ["text", "text", "text", "text"], [12, 64, 8, 8], false),
         ]);
+
+    // ---- Numbering --------------------------------------------------------------------------------------------------
+
+    /// <summary>The parts of a document number that change from one document to the next.</summary>
+    internal sealed record NumberParts(string Site, string Area, string Type, string Seq);
+
+    /// <summary>
+    /// Learns the numbering from one example: the part that is a site code becomes {SITE}, the part that is a type code
+    /// {TYPE}, the last part with digits {SEQ}, and a digits-only part right after the site {AREA}. Separators are
+    /// kept. Null when the example has no type code and no sequence.
+    /// </summary>
+    public static string? LearnPattern(string example, IEnumerable<string> siteCodes, IEnumerable<string> typeCodes)
+    {
+        var tokens = Regex.Split((example ?? "").Trim(), @"([-_\s])");
+        if (tokens.Length < 3) return null;
+        var sites = new HashSet<string>(siteCodes.Where(c => c.Length > 0), StringComparer.OrdinalIgnoreCase);
+        var types = new HashSet<string>(typeCodes.Where(c => c.Length > 0), StringComparer.OrdinalIgnoreCase);
+        int site = -1, type = -1, seq = -1, area = -1;
+        for (var i = 0; i < tokens.Length; i += 2)
+        {
+            if (site < 0 && sites.Contains(tokens[i])) site = i;
+            else if (type < 0 && types.Contains(tokens[i])) type = i;
+        }
+        for (var i = tokens.Length - 1; i >= 0; i -= 2)
+            if (i != type && i != site && Regex.IsMatch(tokens[i], @"^\d+$")) { seq = i; break; }
+        if (site >= 0 && site + 2 < tokens.Length && site + 2 != type && site + 2 != seq && Regex.IsMatch(tokens[site + 2], @"^\d+$")) area = site + 2;
+        if (type < 0 || seq < 0) return null;
+        var parts = tokens.ToArray();
+        parts[type] = "{TYPE}";
+        parts[seq] = "{SEQ:" + tokens[seq].Length + "}";
+        if (site >= 0) parts[site] = "{SITE}";
+        if (area >= 0) parts[area] = "{AREA:" + tokens[area].Length + "}";
+        return string.Concat(parts);
+    }
+
+    /// <summary>A number from the pattern and its parts; digits are padded to the example's width ("5" in a "05" part is "05").</summary>
+    public static string ComposeNumber(string pattern, NumberParts p) =>
+        Regex.Replace(pattern ?? "", @"\{(SITE|AREA|TYPE|SEQ)(?::(\d+))?\}", m =>
+        {
+            var value = m.Groups[1].Value switch { "SITE" => p.Site, "AREA" => p.Area, "TYPE" => p.Type, _ => p.Seq };
+            value = (value ?? "").Trim().ToUpperInvariant();
+            return m.Groups[2].Success && Regex.IsMatch(value, @"^\d+$") ? value.PadLeft(int.Parse(m.Groups[2].Value), '0') : value;
+        });
+
+    /// <summary>The changing parts of <paramref name="number"/> when it follows the pattern; null when it doesn't.</summary>
+    public static NumberParts? ReadNumber(string pattern, string number)
+    {
+        if (string.IsNullOrEmpty(pattern)) return null;
+        var regex = "^" + Regex.Replace(Regex.Escape(pattern).Replace("\\{", "{"), @"\{(SITE|AREA|TYPE|SEQ)(?::\d+)?}", m => $"(?<{m.Groups[1].Value}>[A-Za-z0-9]+)") + "$";
+        var match = Regex.Match((number ?? "").Trim(), regex, RegexOptions.IgnoreCase);
+        if (!match.Success) return null;
+        string G(string n) => match.Groups[n].Success ? match.Groups[n].Value.ToUpperInvariant() : "";
+        return new NumberParts(G("SITE"), G("AREA"), G("TYPE"), G("SEQ"));
+    }
+
+    /// <summary>The next free sequence for this site, area and type among <paramref name="numbers"/> ("01" when none).</summary>
+    public static string NextSeq(string pattern, IEnumerable<string> numbers, string site, string area, string type)
+    {
+        var used = numbers.Select(n => ReadNumber(pattern, n))
+            .Where(p => p is not null && p.Site.Equals(site, StringComparison.OrdinalIgnoreCase) && p.Type.Equals(type, StringComparison.OrdinalIgnoreCase)
+                        && (p.Area.TrimStart('0') == (area ?? "").Trim().TrimStart('0')))
+            .Select(p => int.TryParse(p!.Seq, out var n) ? n : 0).DefaultIfEmpty(0).Max();
+        return (used + 1).ToString("00", System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>
+    /// The same documents for another site: each number that follows the pattern gets <paramref name="site"/>; the
+    /// revision and title stay. Documents whose number doesn't follow the pattern are left out.
+    /// </summary>
+    public static List<Doc> ForSite(string pattern, IEnumerable<Doc> docs, string site) =>
+        docs.Select(d => (d, p: ReadNumber(pattern, d.Number)))
+            .Where(x => x.p is { Site.Length: > 0 })
+            .Select(x => x.d with { Number = ComposeNumber(pattern, x.p! with { Site = site }) })
+            .ToList();
+
+    /// <summary>Sites typed as "TIN = Tincan, APA = Apapa" (or one per line); a code alone is its own name.</summary>
+    public static List<Site> ParseSites(string text) =>
+        Regex.Split(text ?? "", @"[,;\n]").Select(t => t.Trim()).Where(t => t.Length > 0)
+            .Select(t => t.Split(['=', ':'], 2) is var kv && kv.Length == 2 ? new Site(kv[0].Trim().ToUpperInvariant(), kv[1].Trim()) : new Site(t.ToUpperInvariant(), t))
+            .Where(x => x.Code.Length > 0).ToList();
+
+    public static string SitesText(IEnumerable<Site> sites) => string.Join(", ", sites.Select(x => x.Name.Length > 0 && x.Name != x.Code ? $"{x.Code} = {x.Name}" : x.Code));
 
     // ---- Files ------------------------------------------------------------------------------------------------------
 
@@ -808,6 +900,8 @@ internal static class SignaturePages
             setup.Docs ??= [];
             setup.Sections ??= [];
             setup.Departments ??= [];
+            setup.Sites ??= [];
+            setup.NumberPattern ??= "";
             return setup;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException) { return new Setup(); }
