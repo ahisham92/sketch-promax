@@ -44,6 +44,7 @@ public sealed class SettingsWindow : Window
     private readonly TextBlock _sigHint = Brand.Text("", Brand.K.Muted, size: 11);
     private readonly TextBox _checklistPath = new();
     private readonly ComboBox _helper = new() { MinHeight = 26 };
+    private readonly TextBox _crewYou = new() { MinHeight = 26 }, _crewCoordinator = new() { MinHeight = 26 }, _crewWorkers = new() { MinHeight = 26 }, _crewApplier = new() { MinHeight = 26 };
     private readonly ComboBox _jobLimit = new() { MinHeight = 26, MinWidth = 56, Margin = new Thickness(6, 0, 6, 0) };
     private string _sigImage = "";
     private readonly TabControl _tabs = new();
@@ -367,6 +368,36 @@ public sealed class SettingsWindow : Window
         after.VerticalAlignment = VerticalAlignment.Center;
         jobRow.Children.Add(after);
         page.Children.Add(jobRow);
+        page.Children.Add(SubHeading("Names in the large chat"));
+        page.Children.Add(Hint("With the chat open large, a strip shows the work as people: you hand it to the coordinator, who gives each job to a worker; a worker with a change for the model queues for the one who applies changes in Revit, one at a time. Leave a name blank for its default.", 2));
+        var names = Chat.CrewNames.From(_settings.ChatCrewYou, _settings.ChatCrewCoordinator, _settings.ChatCrewWorkers, _settings.ChatCrewApplier, Environment.UserName);
+        var grid = new Grid { Margin = new Thickness(0, 8, 0, 0), MaxWidth = 520, HorizontalAlignment = HorizontalAlignment.Left };
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        void NameRow(string label, TextBox box, string value, string help)
+        {
+            var row = grid.RowDefinitions.Count;
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            var text = Brand.Text(label);
+            text.VerticalAlignment = VerticalAlignment.Center;
+            text.Margin = new Thickness(0, 4, 12, 4);
+            Grid.SetRow(text, row);
+            grid.Children.Add(text);
+            box.Text = value;
+            box.Margin = new Thickness(0, 4, 0, 4);
+            box.MinWidth = 240;
+            AutomationProperties.SetName(box, label);
+            AutomationProperties.SetHelpText(box, help);
+            box.ToolTip = help;
+            Grid.SetRow(box, row);
+            Grid.SetColumn(box, 1);
+            grid.Children.Add(box);
+        }
+        NameRow("You", Place("ChatCrewYou", _crewYou), names.You, "Your name, on the person who hands over the requests.");
+        NameRow("Coordinator", Place("ChatCrewCoordinator", _crewCoordinator), names.Coordinator, "The main chat that hands out the jobs.");
+        NameRow("Workers", Place("ChatCrewWorkers", _crewWorkers), string.Join(", ", names.Workers), "One name per job that runs at once, separated by commas. More jobs than names get Worker 4, Worker 5 and so on.");
+        NameRow("Applies changes in Revit", Place("ChatCrewApplier", _crewApplier), names.Applier, "Takes each worker's change into the model, one at a time.");
+        page.Children.Add(grid);
         page.Children.Add(Hint("The model and Brief before running are chosen in the Chat pane, next to the message box.", 12));
         return page;
     }
@@ -836,6 +867,10 @@ public sealed class SettingsWindow : Window
         var motion = _motion.FirstOrDefault(m => m.Button.IsChecked == true).Level;
         _settings.ChatAnimations = Chat.MotionLevels.Store(motion);
         _settings.ChatJobLimit = (_jobLimit.SelectedItem as ComboBoxItem)?.Tag is int limit ? limit : Chat.JobBoard.DefaultLimit;
+        _settings.ChatCrewYou = _crewYou.Text.Trim();
+        _settings.ChatCrewCoordinator = _crewCoordinator.Text.Trim();
+        _settings.ChatCrewWorkers = _crewWorkers.Text.Trim();
+        _settings.ChatCrewApplier = _crewApplier.Text.Trim();
         _settings.ChatTypeDefault = _chatTypes.FirstOrDefault(t => t.Button.IsChecked == true).Type ?? Chat.ChatTypes.Coordinator;
         _settings.ChatModelDefault = Picked("ChatModelDefault", Chat.ChatAuto.Automatic);
         _settings.ChatEffortDefault = Picked("ChatEffortDefault", Chat.ChatAuto.Automatic);
@@ -871,6 +906,7 @@ public sealed class SettingsWindow : Window
         Revit.ChangeFile.ReadSettings();
         Bridge.Approvals.RaiseLevelChanged();
         Chat.ChatUi.SetMotion(motion);
+        Chat.CrewStrip.ReloadNames();
         DialogResult = true;
     }
 }

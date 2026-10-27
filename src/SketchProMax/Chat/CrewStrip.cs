@@ -10,22 +10,24 @@ using SketchProMax.UI;
 namespace SketchProMax.Chat;
 
 /// <summary>
-/// The small strip over the large chat With coordinator: the coordinator at a desk on the left and, for each job at
-/// work, a worker at a computer (CrewPlan says who sits where), and on the right the one Revit station. A new job's
-/// worker gets a sheet from the coordinator and sits down; a message to a job is a sheet handed over. Workers think and
-/// read the model at their own desks all at once (typing; a magnifier while reading), but changes go to the model one at a time: the worker whose call Revit
-/// runs sends its sheet to the Revit station, which lights up with its job's number, while the others wait with a
-/// clock. A finished worker's screen turns to a tick before the worker leaves. Your message makes the coordinator nod.
+/// The small strip over the large chat With coordinator, drawn as people (names from Settings > Chat, CrewNames): you
+/// on the left hand your requests to the coordinator at a desk, who gives each job to a worker at a computer of their
+/// own (CrewPlan says who has which job); a worker without a job is hidden. Workers think and read the model at their
+/// desks all at once (typing; a magnifier while reading). A worker with a change for the model gets up and joins the
+/// line at the applier on the right, who takes one change at a time into Revit (the model block lights up and the
+/// applier's name says whose change it is); the next steps up, and each goes back to the desk after. A finished
+/// worker's screen turns to a tick before the worker leaves. Your message is a sheet handed to the coordinator.
 ///
 /// Cheap on purpose: shapes, no images, no layout work while it moves; the typing is a slow timer (about 6 a second)
-/// that runs only while the strip is on screen, the chat's animations are Full and someone is working, and the one-off
-/// moves ask for 30 frames a second. At Reduced only the arrivals and leavings move; at Off everything jumps.
+/// that runs only while the strip is on screen, the chat's animations are Full and someone is thinking or reading, and
+/// the one-off moves ask for 30 frames a second. At Reduced only walking, arriving and leaving move; at Off everything
+/// jumps to its place.
 /// </summary>
 internal sealed class CrewStrip : Border
 {
-    public const double StripHeight = 72;
-    private const double CoordX = 34, FirstSeat = 128, MaxGap = 104, MinGap = 64, FigWidth = 64, StationWidth = 84;
-    private static readonly Duration Move = new(TimeSpan.FromMilliseconds(450)), Fly = new(TimeSpan.FromMilliseconds(800));
+    public const double StripHeight = 100;
+    private const double Top = 10, YouX = 22, CoordX = 82, FirstDesk = 158, MaxGap = 96, MinGap = 66, ApplierRoom = 74, InLine = 32, NameTop = 76;
+    private static readonly Duration Move = new(TimeSpan.FromMilliseconds(450)), Walk = new(TimeSpan.FromMilliseconds(800)), Fly = new(TimeSpan.FromMilliseconds(800));
 
     // Decorative colours that read on both themes: the people, and the screens (always dark, like a monitor).
     private static readonly Brush Skin = Brand.Brush(Color.FromRgb(0xE3, 0xBC, 0x96));
@@ -34,6 +36,8 @@ internal sealed class CrewStrip : Border
     private static readonly Brush ScreenLine = Brand.Brush(Color.FromRgb(0x93, 0xB4, 0xFF));
     private static readonly Brush ScreenOk = Brand.Brush(Color.FromRgb(0x6E, 0xDC, 0x9A));
     private static readonly Brush ScreenBad = Brand.Brush(Color.FromRgb(0xFF, 0x9A, 0x92));
+    private static readonly Brush YouShirt = Brand.Brush(Color.FromRgb(0x64, 0x74, 0x8B));
+    private static readonly Brush ApplierShirt = Brand.Brush(Color.FromRgb(0x0F, 0x76, 0x6E));
     private static readonly Brush[] Shirts =
     [
         Brand.Brush(Color.FromRgb(0x3E, 0x9C, 0x7A)), Brand.Brush(Color.FromRgb(0xC0, 0x7A, 0x45)),
@@ -41,30 +45,65 @@ internal sealed class CrewStrip : Border
         Brand.Brush(Color.FromRgb(0xB8, 0x5C, 0x7A)), Brand.Brush(Color.FromRgb(0x7A, 0x8C, 0x3E)),
     ];
 
+    private static CrewNames? _names;
+
+    /// <summary>The names from Settings > Chat, read once and again after the settings are saved.</summary>
+    public static CrewNames Names
+    {
+        get
+        {
+            if (_names is { } known) return known;
+            try
+            {
+                var s = Settings.AgentSettings.Load();
+                _names = CrewNames.From(s.ChatCrewYou, s.ChatCrewCoordinator, s.ChatCrewWorkers, s.ChatCrewApplier, Environment.UserName);
+            }
+            catch (Exception) { _names = CrewNames.From(null, null, null, null, Environment.UserName); }
+            return _names;
+        }
+    }
+
+    /// <summary>Raised on the UI thread after the names were changed in Settings.</summary>
+    public static event Action? NamesChanged;
+
+    /// <summary>Settings were saved: the names are read again and every open strip redraws.</summary>
+    public static void ReloadNames()
+    {
+        _names = null;
+        NamesChanged?.Invoke();
+    }
+
+    /// <summary>A person and the parts that move: where they are, the arm, the head (a nod), the legs and the name.</summary>
+    private sealed class Figure
+    {
+        public Canvas Root = null!;
+        public TranslateTransform At = null!, Head = null!;
+        public RotateTransform Arm = null!;
+        public UIElement Legs = null!;
+        public TextBlock Name = null!, Clock = null!, Look = null!;
+    }
+
     private sealed class Worker
     {
-        public int Number;
-        public Canvas Fig = null!;
-        public TranslateTransform Place = null!;
-        public RotateTransform Arm = null!;
+        public int Number, Slot;
+        public Figure Person = null!;
+        public Canvas Desk = null!;
         public readonly List<(Rectangle Line, ScaleTransform Scale)> Lines = [];
-        public TextBlock Clock = null!, Look = null!, Mark = null!;
+        public TextBlock Mark = null!;
         public CrewMood Mood;
-        public bool Leaving, Fresh;
+        public int Line = -1;
+        public bool Leaving, Drawn;
     }
 
     private readonly Canvas _stage = new() { ClipToBounds = true, Height = StripHeight };
-    private readonly TextBlock _caption = new() { FontSize = ChatUi.SmallSize, MaxWidth = 240, VerticalAlignment = VerticalAlignment.Bottom, TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(ChatUi.S2, 0, ChatUi.S3, ChatUi.S2) };
+    private readonly TextBlock _caption = new() { FontSize = ChatUi.SmallSize, VerticalAlignment = VerticalAlignment.Top, HorizontalAlignment = HorizontalAlignment.Left, TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(FirstDesk, 2, ChatUi.S3, 0) };
     private readonly Dictionary<int, Worker> _workers = new();
-    private readonly RotateTransform _coordArm = new(0);
-    private readonly TranslateTransform _coordHead = new();
-    // The Revit station: a model on a stand, lit while a job's call runs in Revit.
-    private readonly Canvas _station = new() { Width = StationWidth, Height = StripHeight };
+    private readonly Figure _you, _coordinator, _applier;
+    private readonly Canvas _station = new();
     private readonly Path _modelTop = new(), _modelLeft = new(), _modelRight = new();
-    private readonly TextBlock _stationLabel = Brand.Text("Revit", Brand.K.Muted, 10);
-    private int? _applying;
     private readonly DispatcherTimer _typing;
     private readonly Random _random = new(7);
+    private int? _applying = -1;
     private int _tick;
 
     public CrewStrip()
@@ -75,19 +114,36 @@ internal sealed class CrewStrip : Border
         SetResourceReference(BackgroundProperty, Brand.K.Bg);
         Brand.Fg(_caption, Brand.K.Muted);
         AutomationProperties.SetLiveSetting(_caption, AutomationLiveSetting.Polite);
-        var dock = new DockPanel { LastChildFill = true };
-        DockPanel.SetDock(_caption, Dock.Right);
-        dock.Children.Add(_caption);
-        dock.Children.Add(_stage);
-        Child = dock;
-        AutomationProperties.SetName(this, "Who is working: the coordinator and its jobs");
+        var grid = new Grid();
+        grid.Children.Add(_stage);
+        grid.Children.Add(_caption);
+        Child = grid;
+        AutomationProperties.SetName(this, "Who is working: you, the coordinator, its workers and who applies changes in Revit");
         Focusable = false;
         _stage.IsHitTestVisible = false; // to look at only: the jobs column does the picking
 
-        _stage.Children.Add(Coordinator());
+        _you = Person(YouShirt, null, standing: true);
+        _you.At.X = YouX;
+        _you.At.Y = Top - 6;
+        _stage.Children.Add(_you.Root);
+
+        _coordinator = Person(null, Brand.K.Accent, standing: false);
+        Bar(_coordinator.Root, 6, 56, 32, 4, Brand.K.Border, null);
+        Bar(_coordinator.Root, 32, 60, 3, 8, Brand.K.Border, null);
+        var tray = Bar(_coordinator.Root, 14, 50, 13, 6, Brand.K.Raised, null);
+        tray.SetResourceReference(Shape.StrokeProperty, Brand.K.Border);
+        tray.StrokeThickness = 1;
+        _coordinator.At.X = CoordX;
+        _coordinator.At.Y = Top;
+        _stage.Children.Add(_coordinator.Root);
+
+        _applier = Person(ApplierShirt, null, standing: false);
+        _applier.At.Y = Top;
         BuildStation();
         _stage.Children.Add(_station);
-        _caption.Text = CrewPlan.Caption([]);
+
+        ShowNames();
+        _caption.Text = CrewPlan.Caption([], Names);
 
         _typing = new DispatcherTimer(DispatcherPriority.Background, Dispatcher) { Interval = TimeSpan.FromMilliseconds(170) };
         _typing.Tick += (_, _) => Type();
@@ -95,26 +151,32 @@ internal sealed class CrewStrip : Border
         _stage.SizeChanged += (_, e) =>
         {
             if (!e.WidthChanged) return;
-            Canvas.SetLeft(_station, Math.Max(FirstSeat + FigWidth, _stage.ActualWidth - StationWidth));
+            Canvas.SetLeft(_station, StationX);
             Arrange(animate: false);
         };
     }
 
+    /// <summary>Where the applier sits (the model block is just right of them).</summary>
+    private double StationX => Math.Max(FirstDesk + MaxGap, _stage.ActualWidth - ApplierRoom);
+
     /// <summary>Shows the crew as the plan has it now and acts out what just happened.</summary>
     public void Show(IReadOnlyList<CrewSeat> seats, IReadOnlyList<CrewEvent> events)
     {
+        var names = Names;
         foreach (var gone in events.Where(e => e.Cue == CrewCue.Leave)) Leave(gone.Number);
         foreach (var seat in seats)
         {
-            if (!_workers.TryGetValue(seat.Number, out var worker) || worker.Leaving)
+            if (!_workers.TryGetValue(seat.Number, out var worker) || worker.Leaving || worker.Slot != seat.Slot)
             {
                 if (worker is not null) Remove(worker);
-                worker = Add(seat.Number);
+                worker = Add(seat.Number, seat.Slot);
             }
             SetMood(worker, seat.Mood);
-            AutomationProperties.SetName(worker.Fig, $"Job {seat.Number}: {seat.Title}, {Words(seat.Mood)}");
+            worker.Line = seat.Line;
+            worker.Person.Name.Text = names.Worker(seat.Slot);
+            AutomationProperties.SetName(worker.Person.Root, $"{names.Worker(seat.Slot)}, job {seat.Number}: {seat.Title}, {Words(seat.Mood)}");
         }
-        // Anyone still seated whom the plan no longer has (a chat switched over): out at once.
+        // Anyone still here whom the plan no longer has (another chat): out.
         foreach (var stale in _workers.Values.Where(w => !w.Leaving && seats.All(s => s.Number != w.Number)).ToList()) Leave(stale.Number);
         Arrange(animate: true);
         foreach (var e in events)
@@ -122,40 +184,57 @@ internal sealed class CrewStrip : Border
             if (e.Cue == CrewCue.Arrive && _workers.TryGetValue(e.Number, out var arriving)) Arrive(arriving);
             else if (e.Cue == CrewCue.Handover && _workers.TryGetValue(e.Number, out var given)) HandTo(given);
         }
-        Apply(seats.FirstOrDefault(s => s.Mood == CrewMood.Applying)?.Number);
-        _caption.Text = CrewPlan.Caption(seats);
-        _caption.ToolTip = string.Join("\n", seats.Select(s => $"Job {s.Number} · {s.Title}: {Words(s.Mood)}"));
+        var applying = seats.FirstOrDefault(s => s.Mood == CrewMood.Applying);
+        ShowNames();
+        Apply(applying?.Number, applying is null ? "" : names.Worker(applying.Slot));
+        _caption.Text = CrewPlan.Caption(seats, names);
+        _caption.ToolTip = seats.Count == 0 ? null : string.Join("\n", seats.Select(s => $"{names.Worker(s.Slot)} · job {s.Number} · {s.Title}: {Words(s.Mood)}"));
         Pace();
     }
 
-    /// <summary>You sent the coordinator a message: a small nod.</summary>
+    /// <summary>You sent the coordinator a message: a sheet goes from you to the coordinator, who nods.</summary>
     public void Heard()
     {
         if (!ChatUi.Lively || !IsVisible) return;
-        var nod = new DoubleAnimationUsingKeyFrames { Duration = new Duration(TimeSpan.FromMilliseconds(900)) };
+        Reach(_you.Arm, -40);
+        Sheet(YouX + 10, CoordX - 6, Top - 2);
+        var nod = new DoubleAnimationUsingKeyFrames { Duration = new Duration(TimeSpan.FromMilliseconds(900)), BeginTime = Fly.TimeSpan };
         nod.KeyFrames.Add(new EasingDoubleKeyFrame(2.5, KeyTime.FromPercent(0.25)));
         nod.KeyFrames.Add(new EasingDoubleKeyFrame(0, KeyTime.FromPercent(0.5)));
         nod.KeyFrames.Add(new EasingDoubleKeyFrame(2.5, KeyTime.FromPercent(0.75)));
         nod.KeyFrames.Add(new EasingDoubleKeyFrame(0, KeyTime.FromPercent(1)));
         Timeline.SetDesiredFrameRate(nod, 30);
-        _coordHead.BeginAnimation(TranslateTransform.YProperty, nod);
+        _coordinator.Head.BeginAnimation(TranslateTransform.YProperty, nod);
     }
 
     /// <summary>Everyone leaves at once (another chat is shown): nothing is acted out.</summary>
     public void Clear()
     {
         foreach (var worker in _workers.Values.ToList()) Remove(worker);
-        Apply(null);
-        _caption.Text = CrewPlan.Caption([]);
+        ShowNames();
+        Apply(null, "");
+        _caption.Text = CrewPlan.Caption([], Names);
         _caption.ToolTip = null;
         Pace();
     }
 
+    private void ShowNames()
+    {
+        var names = Names;
+        _you.Name.Text = names.You;
+        _coordinator.Name.Text = names.Coordinator;
+        if (_applying is null) _applier.Name.Text = names.Applier;
+        AutomationProperties.SetName(_you.Root, names.You + ", you");
+        AutomationProperties.SetName(_coordinator.Root, names.Coordinator + ", the coordinator");
+        AutomationProperties.SetName(_station, names.Applier + " applies changes in Revit, one at a time");
+    }
+
     private static string Words(CrewMood mood) => mood switch
     {
-        CrewMood.Applying => "applying its change in Revit",
-        CrewMood.Waiting => "waiting to apply its change",
+        CrewMood.Applying => "having the change applied in Revit",
+        CrewMood.Waiting => "in line to apply a change",
         CrewMood.Reading => "reading the model",
+        CrewMood.Resting => "waiting to start again",
         CrewMood.Done => "done",
         CrewMood.Failed => "ended with a problem",
         _ => "thinking",
@@ -163,7 +242,7 @@ internal sealed class CrewStrip : Border
 
     // ---- Moving -----------------------------------------------------------------------------------------------------
 
-    /// <summary>The typing runs only while it can be seen, at Full, with someone working.</summary>
+    /// <summary>The typing runs only while it can be seen, at Full, with someone thinking or reading at a desk.</summary>
     private void Pace()
     {
         var run = IsVisible && ChatUi.Lively && _workers.Values.Any(w => !w.Leaving && w.Mood is CrewMood.Thinking or CrewMood.Reading);
@@ -187,7 +266,7 @@ internal sealed class CrewStrip : Border
         foreach (var w in _workers.Values)
         {
             if (w.Leaving || w.Mood is not (CrewMood.Thinking or CrewMood.Reading)) continue;
-            w.Arm.Angle = (_tick + w.Number) % 2 == 0 ? -7 : 2;
+            w.Person.Arm.Angle = (_tick + w.Number) % 2 == 0 ? -7 : 2;
             var line = w.Lines[(_tick / 3 + w.Number) % w.Lines.Count];
             line.Scale.ScaleX = line.Scale.ScaleX >= 1 ? 0.15 : Math.Min(1, line.Scale.ScaleX + 0.2 + _random.NextDouble() * 0.2);
         }
@@ -195,69 +274,82 @@ internal sealed class CrewStrip : Border
 
     private static void Rest(Worker w)
     {
-        w.Arm.Angle = 0;
+        w.Person.Arm.Angle = 0;
         foreach (var (_, scale) in w.Lines) scale.ScaleX = 1;
     }
 
-    /// <summary>Where each seat goes: after the coordinator, closer together when there are many or the window is narrow.</summary>
+    /// <summary>The n-th worker's desk: after the coordinator, closer together when the window is narrow.</summary>
+    private double DeskX(int slot)
+    {
+        var desks = Math.Max(Names.Workers.Count, _workers.Values.Select(w => w.Slot + 1).DefaultIfEmpty(1).Max());
+        var room = StationX - Math.Max(1, _workers.Count) * InLine - 24 - FirstDesk - 50;
+        var gap = desks > 1 ? Math.Max(MinGap, Math.Min(MaxGap, room / (desks - 1))) : MaxGap;
+        return FirstDesk + slot * gap;
+    }
+
+    /// <summary>Each worker at their desk, or standing in the line at the applier (0: in front of the applier).</summary>
     private void Arrange(bool animate)
     {
-        var seated = _workers.Values.Where(w => !w.Leaving).OrderBy(w => w.Number).ToList();
-        var room = Math.Max(0, _stage.ActualWidth - StationWidth - FirstSeat - FigWidth);
-        var gap = seated.Count > 1 ? Math.Max(MinGap, Math.Min(MaxGap, room / (seated.Count - 1))) : MaxGap;
-        foreach (var (w, i) in seated.Select((w, i) => (w, i)))
+        foreach (var w in _workers.Values.Where(w => !w.Leaving))
         {
-            // A worker just added takes its seat straight away; the others slide along to make room.
-            To(w.Place, TranslateTransform.XProperty, FirstSeat + i * gap, animate && !w.Fresh && ChatUi.Animate);
-            w.Fresh = false;
+            var desk = DeskX(w.Slot);
+            Canvas.SetLeft(w.Desk, desk);
+            Canvas.SetTop(w.Desk, Top);
+            var standing = w.Line >= 0;
+            var move = animate && w.Drawn && ChatUi.Animate;
+            To(w.Person.At, TranslateTransform.XProperty, standing ? StationX - 34 - w.Line * InLine : desk, move);
+            To(w.Person.At, TranslateTransform.YProperty, standing ? Top - 6 : Top, move);
+            w.Person.Legs.Visibility = standing ? Visibility.Visible : Visibility.Collapsed;
+            w.Drawn = true;
         }
     }
 
-    private Worker Add(int number)
+    private Worker Add(int number, int slot)
     {
-        var w = Figure(number);
-        w.Fresh = true;
+        var w = new Worker { Number = number, Slot = slot };
+        w.Person = Person(Shirts[slot % Shirts.Length], null, standing: false);
+        w.Desk = Desk(w);
         _workers[number] = w;
-        _stage.Children.Insert(_stage.Children.Count - 1, w.Fig); // under the flying sheet
+        _stage.Children.Insert(0, w.Desk); // behind everyone
+        _stage.Children.Add(w.Person.Root);
         return w;
     }
 
-    /// <summary>A new worker: the coordinator hands over a sheet, then the worker fades in, settling into the chair.</summary>
+    /// <summary>A new worker: the coordinator hands over a sheet, then the worker and the desk fade in.</summary>
     private void Arrive(Worker w)
     {
-        if (!ChatUi.Animate)
+        if (!ChatUi.Animate) return;
+        var delay = ChatUi.Lively && IsVisible ? Fly.TimeSpan : TimeSpan.Zero;
+        HandTo(w);
+        foreach (var part in new UIElement[] { w.Person.Root, w.Desk })
         {
-            w.Fig.Opacity = 1;
-            return;
+            part.Opacity = 0;
+            var fade = new DoubleAnimation(0, 1, Move) { BeginTime = delay };
+            Timeline.SetDesiredFrameRate(fade, 30);
+            part.BeginAnimation(OpacityProperty, fade);
         }
-        w.Fig.Opacity = 0;
-        var settle = (TranslateTransform)((TransformGroup)w.Fig.RenderTransform).Children[1];
-        settle.Y = 8;
-        var delay = ChatUi.Lively ? Fly.TimeSpan : TimeSpan.Zero;
-        if (ChatUi.Lively) HandTo(w);
-        var fade = new DoubleAnimation(0, 1, Move) { BeginTime = delay };
-        var sit = new DoubleAnimation(8, 0, Move) { BeginTime = delay, EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut } };
-        Timeline.SetDesiredFrameRate(fade, 30);
-        Timeline.SetDesiredFrameRate(sit, 30);
-        w.Fig.BeginAnimation(OpacityProperty, fade);
-        settle.BeginAnimation(TranslateTransform.YProperty, sit);
     }
 
-    /// <summary>The coordinator raises an arm and a sheet flies over to the worker's desk.</summary>
+    /// <summary>The coordinator raises an arm and a sheet flies over to the worker.</summary>
     private void HandTo(Worker w)
     {
         if (!ChatUi.Lively || !IsVisible) return;
-        var arm = new DoubleAnimationUsingKeyFrames { Duration = Fly };
-        arm.KeyFrames.Add(new EasingDoubleKeyFrame(-55, KeyTime.FromPercent(0.2)));
-        arm.KeyFrames.Add(new EasingDoubleKeyFrame(-55, KeyTime.FromPercent(0.6)));
-        arm.KeyFrames.Add(new EasingDoubleKeyFrame(0, KeyTime.FromPercent(1)));
-        Timeline.SetDesiredFrameRate(arm, 30);
-        _coordArm.BeginAnimation(RotateTransform.AngleProperty, arm);
-        Sheet(CoordX + 14, w.Place.X + 30);
+        Reach(_coordinator.Arm, -55);
+        Sheet(CoordX + 14, w.Person.At.X + 8, Top);
+    }
+
+    private static void Reach(RotateTransform arm, double angle)
+    {
+        var lift = new DoubleAnimationUsingKeyFrames { Duration = Fly };
+        lift.KeyFrames.Add(new EasingDoubleKeyFrame(angle, KeyTime.FromPercent(0.2)));
+        lift.KeyFrames.Add(new EasingDoubleKeyFrame(angle, KeyTime.FromPercent(0.6)));
+        lift.KeyFrames.Add(new EasingDoubleKeyFrame(0, KeyTime.FromPercent(1)));
+        Timeline.SetDesiredFrameRate(lift, 30);
+        arm.BeginAnimation(RotateTransform.AngleProperty, lift);
     }
 
     /// <summary>A sheet flies in an arc from one x to another and is gone when it lands.</summary>
-    private void Sheet(double from, double to)
+    private void Sheet(double from, double to, double top)
     {
         var sheet = new Rectangle { Width = 9, Height = 11, RadiusX = 1, RadiusY = 1, StrokeThickness = 1, IsHitTestVisible = false };
         sheet.SetResourceReference(Shape.FillProperty, Brand.K.Raised);
@@ -265,7 +357,7 @@ internal sealed class CrewStrip : Border
         var at = new TranslateTransform();
         sheet.RenderTransform = at;
         Canvas.SetLeft(sheet, from);
-        Canvas.SetTop(sheet, 34);
+        Canvas.SetTop(sheet, top + 34);
         _stage.Children.Add(sheet);
         var x = new DoubleAnimation(0, to - from, Fly) { EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut } };
         var y = new DoubleAnimationUsingKeyFrames { Duration = Fly };
@@ -282,29 +374,26 @@ internal sealed class CrewStrip : Border
     }
 
     /// <summary>
-    /// Job <paramref name="number"/>'s call now runs in Revit (null: none): its sheet goes to the station, which lights up
-    /// with the job's number. Only one at a time, as Revit takes them.
+    /// Job <paramref name="number"/>'s change is going into Revit (null: none): the worker in front of the applier hands
+    /// over the sheet, the model block lights up and the applier's name says whose change it is. One at a time.
     /// </summary>
-    private void Apply(int? number)
+    private void Apply(int? number, string worker)
     {
         if (number == _applying) return;
         _applying = number;
         var lit = number is not null;
-        foreach (var face in new[] { _modelTop, _modelLeft, _modelRight }) face.BeginAnimation(OpacityProperty, null);
+        _modelTop.BeginAnimation(OpacityProperty, null);
         _modelTop.SetResourceReference(Shape.FillProperty, lit ? Brand.K.Accent : Brand.K.Surface);
         _modelLeft.SetResourceReference(Shape.FillProperty, lit ? Brand.K.AccentHover : Brand.K.SurfaceHover);
         _modelRight.SetResourceReference(Shape.FillProperty, lit ? Brand.K.AccentPressed : Brand.K.Border);
-        _stationLabel.Text = lit ? $"Revit · Job {number}" : "Revit";
-        _stationLabel.SetResourceReference(TextBlock.ForegroundProperty, lit ? Brand.K.Text : Brand.K.Muted);
-        if (!lit || !_workers.TryGetValue(number!.Value, out var w)) return;
-        if (ChatUi.Lively && IsVisible)
-        {
-            Sheet(w.Place.X + 30, Canvas.GetLeft(_station) + StationWidth / 2 - 4);
-            // A slow, soft glow while the change runs (stops by itself; at most a few seconds of frames).
-            var glow = new DoubleAnimation(1, 0.7, new Duration(TimeSpan.FromMilliseconds(700))) { AutoReverse = true, RepeatBehavior = new RepeatBehavior(3) };
-            Timeline.SetDesiredFrameRate(glow, 20);
-            _modelTop.BeginAnimation(OpacityProperty, glow);
-        }
+        _applier.Name.Text = lit ? $"{Names.Applier} · {worker}" : Names.Applier;
+        if (!lit || !ChatUi.Lively || !IsVisible) return;
+        Reach(_applier.Arm, -30);
+        Sheet(StationX - 30, StationX + 40, Top - 6);
+        // A slow, soft glow while the change goes in (stops by itself; a few seconds of frames at most).
+        var glow = new DoubleAnimation(1, 0.7, new Duration(TimeSpan.FromMilliseconds(700))) { AutoReverse = true, RepeatBehavior = new RepeatBehavior(3) };
+        Timeline.SetDesiredFrameRate(glow, 20);
+        _modelTop.BeginAnimation(OpacityProperty, glow);
     }
 
     private void Leave(int number)
@@ -322,152 +411,132 @@ internal sealed class CrewStrip : Border
         {
             if (w.Leaving) Remove(w);
         };
-        w.Fig.BeginAnimation(OpacityProperty, fade);
+        w.Person.Root.BeginAnimation(OpacityProperty, fade);
+        w.Desk.BeginAnimation(OpacityProperty, fade);
     }
 
     private void Remove(Worker w)
     {
-        w.Fig.BeginAnimation(OpacityProperty, null);
-        _stage.Children.Remove(w.Fig);
+        w.Person.Root.BeginAnimation(OpacityProperty, null);
+        w.Desk.BeginAnimation(OpacityProperty, null);
+        _stage.Children.Remove(w.Person.Root);
+        _stage.Children.Remove(w.Desk);
         if (_workers.TryGetValue(w.Number, out var now) && now == w) _workers.Remove(w.Number);
     }
 
     private void SetMood(Worker w, CrewMood mood)
     {
-        if (w.Mood == mood && w.Fig.Tag is not null) return;
+        if (w.Mood == mood && w.Desk.Tag is not null) return;
         w.Mood = mood;
-        w.Fig.Tag = mood;
+        w.Desk.Tag = mood;
         var finished = mood is CrewMood.Done or CrewMood.Failed;
         foreach (var (line, _) in w.Lines) line.Visibility = finished ? Visibility.Collapsed : Visibility.Visible;
         w.Mark.Visibility = finished ? Visibility.Visible : Visibility.Collapsed;
         w.Mark.Text = mood == CrewMood.Failed ? ChatUi.GlyphError : ChatUi.GlyphCheck;
         w.Mark.Foreground = mood == CrewMood.Failed ? ScreenBad : ScreenOk;
-        w.Clock.Visibility = mood == CrewMood.Waiting ? Visibility.Visible : Visibility.Collapsed;
-        w.Look.Visibility = mood == CrewMood.Reading ? Visibility.Visible : Visibility.Collapsed;
+        w.Person.Clock.Visibility = mood == CrewMood.Waiting ? Visibility.Visible : Visibility.Collapsed;
+        w.Person.Look.Visibility = mood == CrewMood.Reading ? Visibility.Visible : Visibility.Collapsed;
         if (mood is not (CrewMood.Thinking or CrewMood.Reading)) Rest(w);
     }
 
     private static void To(TranslateTransform t, DependencyProperty property, double value, bool animate)
     {
-        if (!animate)
-        {
-            t.BeginAnimation(property, null);
-            t.SetValue(property, value);
-            return;
-        }
         var from = (double)t.GetValue(property);
         t.BeginAnimation(property, null);
         t.SetValue(property, value);
-        if (Math.Abs(from - value) < 0.5) return;
-        var slide = new DoubleAnimation(from, value, Move) { EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseInOut }, FillBehavior = FillBehavior.Stop };
+        if (!animate || Math.Abs(from - value) < 0.5) return;
+        var slide = new DoubleAnimation(from, value, Walk) { EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseInOut }, FillBehavior = FillBehavior.Stop };
         Timeline.SetDesiredFrameRate(slide, 30);
         t.BeginAnimation(property, slide);
     }
 
     // ---- Drawing ----------------------------------------------------------------------------------------------------
 
-    private FrameworkElement Coordinator()
-    {
-        var fig = new Canvas { Width = 80, Height = StripHeight };
-        Canvas.SetLeft(fig, CoordX - 12);
-        Person(fig, Brand.K.Accent, null, _coordHead);
-        var arm = Bar(fig, 16, 42, 13, 3.5, Brand.K.Accent, null);
-        arm.RenderTransformOrigin = new Point(0, 0.5);
-        arm.RenderTransform = _coordArm;
-        Bar(fig, 16, 54, 34, 4, Brand.K.Border, null);
-        Bar(fig, 46, 58, 3, 6, Brand.K.Border, null);
-        // The tray of sheets on the desk.
-        var tray = Bar(fig, 26, 49, 13, 5, Brand.K.Raised, null);
-        tray.SetResourceReference(Shape.StrokeProperty, Brand.K.Border);
-        tray.StrokeThickness = 1;
-        Label(fig, "Coordinator", 12);
-        return fig;
-    }
-
-    /// <summary>The Revit station: a small model block on a stand, with its label under it.</summary>
+    /// <summary>The applier's place: the person, and the model block on its stand to their right.</summary>
     private void BuildStation()
     {
-        double cx = StationWidth / 2, top = 22;
-        _modelTop.Data = Geometry.Parse($"M{cx},{top} L{cx + 14},{top + 7} L{cx},{top + 14} L{cx - 14},{top + 7} Z");
-        _modelLeft.Data = Geometry.Parse($"M{cx - 14},{top + 7} L{cx},{top + 14} L{cx},{top + 30} L{cx - 14},{top + 23} Z");
-        _modelRight.Data = Geometry.Parse($"M{cx + 14},{top + 7} L{cx},{top + 14} L{cx},{top + 30} L{cx + 14},{top + 23} Z");
+        _station.Children.Add(_applier.Root);
+        double cx = 46, top = Top + 22;
+        _modelTop.Data = Geometry.Parse(Inv($"M{cx},{top} L{cx + 14},{top + 7} L{cx},{top + 14} L{cx - 14},{top + 7} Z"));
+        _modelLeft.Data = Geometry.Parse(Inv($"M{cx - 14},{top + 7} L{cx},{top + 14} L{cx},{top + 30} L{cx - 14},{top + 23} Z"));
+        _modelRight.Data = Geometry.Parse(Inv($"M{cx + 14},{top + 7} L{cx},{top + 14} L{cx},{top + 30} L{cx + 14},{top + 23} Z"));
         foreach (var face in new[] { _modelTop, _modelLeft, _modelRight })
         {
             face.StrokeThickness = 1;
             face.SetResourceReference(Shape.StrokeProperty, Brand.K.Border);
             _station.Children.Add(face);
         }
-        _stationLabel.TextWrapping = TextWrapping.NoWrap;
-        _stationLabel.Width = StationWidth;
-        _stationLabel.TextAlignment = TextAlignment.Center;
-        Canvas.SetTop(_stationLabel, 58);
-        _station.Children.Add(_stationLabel);
-        AutomationProperties.SetName(_station, "Revit: changes go in one at a time");
-        _applying = -1;
-        Apply(null);
+        Bar(_station, 30, Top + 56, 32, 4, Brand.K.Border, null);
+        Apply(null, "");
     }
 
-    private Worker Figure(int number)
+    private static string Inv(FormattableString s) => s.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+    /// <summary>A worker's desk and computer (the worker sits just left of it).</summary>
+    private static Canvas Desk(Worker w)
     {
-        var w = new Worker { Number = number, Place = new TranslateTransform(), Arm = new RotateTransform(0) };
-        var fig = new Canvas { Width = FigWidth, Height = StripHeight };
-        var group = new TransformGroup();
-        group.Children.Add(w.Place);
-        group.Children.Add(new TranslateTransform());
-        fig.RenderTransform = group;
-        var shirt = Shirts[(number - 1) % Shirts.Length];
-        Person(fig, null, shirt, null);
-        var arm = Bar(fig, 16, 42, 12, 3.5, null, shirt);
-        arm.RenderTransformOrigin = new Point(0, 0.5);
-        arm.RenderTransform = w.Arm;
-        // Desk, its leg, and the computer.
-        Bar(fig, 14, 54, 44, 4, Brand.K.Border, null);
-        Bar(fig, 52, 58, 3, 6, Brand.K.Border, null);
-        var monitor = Bar(fig, 28, 28, 28, 20, null, Screen);
+        var desk = new Canvas();
+        Bar(desk, 4, 56, 44, 4, Brand.K.Border, null);
+        Bar(desk, 42, 60, 3, 8, Brand.K.Border, null);
+        var monitor = Bar(desk, 18, 30, 28, 20, null, Screen);
         monitor.RadiusX = monitor.RadiusY = 2.5;
-        Bar(fig, 40, 48, 4, 6, Brand.K.Border, null);
-        foreach (var (y, width) in new[] { (32.0, 16.0), (37.0, 20.0), (42.0, 12.0) })
+        Bar(desk, 30, 50, 4, 6, Brand.K.Border, null);
+        foreach (var (y, width) in new[] { (34.0, 16.0), (39.0, 20.0), (44.0, 12.0) })
         {
             var scale = new ScaleTransform(1, 1);
-            var line = Bar(fig, 32, y, width, 2, null, ScreenLine);
+            var line = Bar(desk, 22, y, width, 2, null, ScreenLine);
             line.RenderTransformOrigin = new Point(0, 0.5);
             line.RenderTransform = scale;
             w.Lines.Add((line, scale));
         }
         w.Mark = new TextBlock { FontFamily = ChatUi.Icons, FontSize = 11, Visibility = Visibility.Collapsed };
-        Canvas.SetLeft(w.Mark, 37);
-        Canvas.SetTop(w.Mark, 32);
-        fig.Children.Add(w.Mark);
-        // The clock over the head while the job waits its turn in Revit.
-        w.Clock = ChatUi.Glyph("", Brand.K.WarningText, 10);
-        w.Clock.Visibility = Visibility.Collapsed;
-        Canvas.SetLeft(w.Clock, 7);
-        Canvas.SetTop(w.Clock, 8);
-        fig.Children.Add(w.Clock);
-        // A magnifier over the head while it reads the model (reads run alongside the others).
-        w.Look = ChatUi.Glyph("\uE721", Brand.K.Link, 10);
-        w.Look.Visibility = Visibility.Collapsed;
-        Canvas.SetLeft(w.Look, 7);
-        Canvas.SetTop(w.Look, 8);
-        fig.Children.Add(w.Look);
-        Label(fig, "Job " + number.ToString(System.Globalization.CultureInfo.CurrentCulture), 12);
-        AutomationProperties.SetName(fig, "Job " + number);
-        w.Fig = fig;
-        return w;
+        Canvas.SetLeft(w.Mark, 27);
+        Canvas.SetTop(w.Mark, 34);
+        desk.Children.Add(w.Mark);
+        return desk;
     }
 
-    /// <summary>A seated person facing right, centred on x = 12: body, head and hair.</summary>
-    private static void Person(Canvas fig, string? shirtKey, Brush? shirt, TranslateTransform? head)
+    /// <summary>A person facing right, centred on x = 0: body, head, hair, an arm, legs when standing, and a name.</summary>
+    private static Figure Person(Brush? shirt, string? shirtKey, bool standing)
     {
-        var body = Bar(fig, 3, 36, 18, 22, shirtKey, shirt);
+        var f = new Figure { Root = new Canvas(), At = new TranslateTransform(), Arm = new RotateTransform(0), Head = new TranslateTransform() };
+        f.Root.RenderTransform = f.At;
+        var legs = new Canvas { Visibility = standing ? Visibility.Visible : Visibility.Collapsed };
+        Bar(legs, -6, 58, 5, 12, null, Hair);
+        Bar(legs, 1, 58, 5, 12, null, Hair);
+        f.Root.Children.Add(legs);
+        f.Legs = legs;
+        var body = Bar(f.Root, -9, 38, 18, 22, shirtKey, shirt);
         body.RadiusX = body.RadiusY = 7;
-        var top = new Canvas { RenderTransform = head ?? Transform.Identity };
+        var head = new Canvas { RenderTransform = f.Head };
         var face = new Ellipse { Width = 16, Height = 16, Fill = Skin };
-        Canvas.SetLeft(face, 4);
-        Canvas.SetTop(face, 20);
-        top.Children.Add(face);
-        top.Children.Add(new Path { Data = Geometry.Parse("M4,27 A8,8 0 0 1 20,25 Q12,22 4,27 Z"), Fill = Hair });
-        fig.Children.Add(top);
+        Canvas.SetLeft(face, -8);
+        Canvas.SetTop(face, 22);
+        head.Children.Add(face);
+        head.Children.Add(new Path { Data = Geometry.Parse("M-8,29 A8,8 0 0 1 8,27 Q0,24 -8,29 Z"), Fill = Hair });
+        f.Root.Children.Add(head);
+        var arm = Bar(f.Root, 4, 42, 12, 3.5, shirtKey, shirt);
+        arm.RenderTransformOrigin = new Point(0, 0.5);
+        arm.RenderTransform = f.Arm;
+        // Over the head: a clock while in line for Revit, a magnifier while reading the model.
+        f.Clock = ChatUi.Glyph("", Brand.K.WarningText, 10);
+        f.Look = ChatUi.Glyph("", Brand.K.Link, 10);
+        foreach (var mark in new[] { f.Clock, f.Look })
+        {
+            mark.Visibility = Visibility.Collapsed;
+            Canvas.SetLeft(mark, 4);
+            Canvas.SetTop(mark, 8);
+            f.Root.Children.Add(mark);
+        }
+        f.Name = Brand.Text("", Brand.K.Muted, 10);
+        f.Name.TextWrapping = TextWrapping.NoWrap;
+        f.Name.TextTrimming = TextTrimming.CharacterEllipsis;
+        f.Name.Width = 84;
+        f.Name.TextAlignment = TextAlignment.Center;
+        Canvas.SetLeft(f.Name, -42);
+        Canvas.SetTop(f.Name, NameTop);
+        f.Root.Children.Add(f.Name);
+        return f;
     }
 
     private static Rectangle Bar(Canvas fig, double x, double y, double width, double height, string? key, Brush? fill)
@@ -479,16 +548,5 @@ internal sealed class CrewStrip : Border
         Canvas.SetTop(r, y);
         fig.Children.Add(r);
         return r;
-    }
-
-    private static void Label(Canvas fig, string text, double centre)
-    {
-        var label = Brand.Text(text, Brand.K.Muted, 10);
-        label.TextWrapping = TextWrapping.NoWrap;
-        label.Width = 70;
-        label.TextAlignment = TextAlignment.Center;
-        Canvas.SetLeft(label, centre - 35);
-        Canvas.SetTop(label, 58);
-        fig.Children.Add(label);
     }
 }

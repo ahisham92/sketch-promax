@@ -36,6 +36,11 @@ internal sealed partial class ChatPane
         if (_crew is null)
         {
             _crew = new CrewStrip();
+            CrewStrip.NamesChanged += () =>
+            {
+                _switchShown = ""; // the jobs column names the workers too
+                if (_board is not null && !_stopped) ShowSwitcher();
+            };
             // Under the header, over the conversation, the whole width beside the jobs column.
             SetDock(_crew, Dock.Top);
             var at = Children.IndexOf(_switcherHome);
@@ -68,7 +73,10 @@ internal sealed partial class ChatPane
         else ShowCrew(_board.Snapshot());
     }
 
-    /// <summary>You sent the coordinator a message: it nods.</summary>
+    /// <summary>The worker who has job <paramref name="number"/> in the strip ("Ali"), or null when the strip isn't shown.</summary>
+    private string? CrewWorker(int number) => CrewShown ? _crewPlan.WorkerOf(number, CrewStrip.Names) : null;
+
+    /// <summary>You sent the coordinator a message: a sheet to the coordinator, who nods.</summary>
     private void CrewHeard()
     {
         if (_viewJob is null && _crew is { IsVisible: true }) _crew.Heard();
