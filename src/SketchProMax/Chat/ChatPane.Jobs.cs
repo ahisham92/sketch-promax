@@ -592,6 +592,7 @@ internal sealed partial class ChatPane
         var key = (_viewJob?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "c") + "|" + string.Join("|", jobs.Select(j => j.Number + j.Title + j.State + j.Ahead));
         _switcher.Visibility = jobs.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
         ShowSideEmpty(jobs.Count);
+        ShowCrew(jobs);
         if (key == _switchShown) return;
         _switchShown = key;
         var focused = _switchList.Children.OfType<Button>().FirstOrDefault(b => b.IsKeyboardFocused) is { } had ? AutomationProperties.GetAutomationId(had) : null;
