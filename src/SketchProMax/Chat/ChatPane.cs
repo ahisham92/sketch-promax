@@ -2558,6 +2558,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     {
         var turn = _turn;
         if (end.SessionId.Length > 0) _conv.SessionId = end.SessionId;
+        CountTurn(turn, end);
         RenderDirty();
         if (turn is null) return;
         if (ShrinkEnded(turn, end)) return;

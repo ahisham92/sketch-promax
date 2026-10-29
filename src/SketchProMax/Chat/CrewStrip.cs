@@ -98,6 +98,8 @@ internal sealed class CrewStrip : Border
         public readonly List<(Rectangle Line, ScaleTransform Scale)> Lines = [];
         public TextBlock Mark = null!;
         public Rectangle Progress = null!;
+        /// <summary>On the desk: how many jobs this worker did today.</summary>
+        public TextBlock Badge = null!;
         /// <summary>Over a worker at the desk: what they are doing now, in a few words.</summary>
         public Border? Thought;
         public CrewMood Mood;
@@ -128,6 +130,16 @@ internal sealed class CrewStrip : Border
 
     /// <summary>The applier was clicked: the pane lists what goes into Revit now, what waits, and what went in.</summary>
     public event Action<Button>? ApplierPicked;
+
+    /// <summary>A change went into Revit: its job, and how long it took (for the team's numbers).</summary>
+    public event Action<int, TimeSpan>? AppliedOne;
+
+    /// <summary>The Team button: the pane opens the team's performance.</summary>
+    public event Action? TeamPicked;
+
+    private DateTime _applyingSince;
+    private Dictionary<int, int> _doneToday = new();
+    private int _leader = -1;
     private string _applyingFor = "";
     /// <summary>The path on the floor from the desks to the applier: where the changes go.</summary>
     private readonly Line _path = new() { StrokeThickness = 1.5, StrokeDashArray = [3, 3], IsHitTestVisible = false };
@@ -244,6 +256,12 @@ internal sealed class CrewStrip : Border
             var by = step;
             button.Click += (_, _) => WorkersChanged?.Invoke(Math.Max(JobBoard.MinLimit, Math.Min(JobBoard.MaxLimit, _desks + by)));
         }
+        var team = new Button { Content = "Team", Padding = new Thickness(8, 0, 8, 1), Margin = new Thickness(0, 0, 6, 0), ToolTip = "How the team performs: jobs, time, tokens and dollars per worker" };
+        team.SetResourceReference(StyleProperty, "SpmChatPill");
+        team.SetResourceReference(BackgroundProperty, Brand.K.Raised);
+        AutomationProperties.SetName(team, "Team performance");
+        team.Click += (_, _) => TeamPicked?.Invoke();
+        row.Children.Add(team);
         row.Children.Add(_fewer);
         row.Children.Add(_teamSize);
         row.Children.Add(_more);
@@ -297,7 +315,7 @@ internal sealed class CrewStrip : Border
             }
             SetMood(worker, seat.Mood);
             worker.Line = seat.Line;
-            worker.Person.Name.Text = names.Worker(seat.Slot);
+            Kpi(worker);
             var status = CrewPlan.Status(seat, seat.Slot);
             worker.Person.Status.Text = status;
             // The figure under the name stands out while a job is under way; the bar under it fills with the plan.
@@ -521,7 +539,7 @@ internal sealed class CrewStrip : Border
             }
             var busy = _workers.Values.Any(w => w.Slot == slot);
             idle.Desk.Visibility = idle.Person.Root.Visibility = busy ? Visibility.Collapsed : Visibility.Visible;
-            idle.Person.Name.Text = names.Worker(slot);
+            Kpi(idle);
             idle.Person.Status.Text = CrewPlan.Status(null, slot);
             idle.Hit.ToolTip = names.Worker(slot) + "'s jobs";
             AutomationProperties.SetName(idle.Hit, $"{names.Worker(slot)}'s jobs ({CrewPlan.Status(null, slot).ToLowerInvariant()})");
@@ -658,7 +676,9 @@ internal sealed class CrewStrip : Border
         {
             Applied.Add((_applying!.Value, _applyingFor, DateTime.Now));
             if (Applied.Count > 50) Applied.RemoveAt(0);
+            AppliedOne?.Invoke(_applying.Value, DateTime.UtcNow - _applyingSince);
         }
+        _applyingSince = DateTime.UtcNow;
         _applying = number;
         _applyingFor = worker;
         var lit = number is not null;
@@ -725,6 +745,26 @@ internal sealed class CrewStrip : Border
         if (ChatUi.Lively) Sheet(x1, x2, Top);
         SayAt(-100 - from, x1, "Here's what I found", TimeSpan.Zero);
         Say(number, $"Thanks, {Names.Worker(from)}!", TimeSpan.FromMilliseconds(900));
+    }
+
+    /// <summary>
+    /// Today's jobs done per worker (under each desk, "5 today") and the one who leads (a star by the name), so the team
+    /// can see how each does.
+    /// </summary>
+    public void ShowKpis(Dictionary<int, int> doneToday, int leader)
+    {
+        _doneToday = doneToday;
+        _leader = leader;
+        foreach (var w in _workers.Values.Concat(_idle.Values)) Kpi(w);
+    }
+
+    private void Kpi(Worker w)
+    {
+        var name = Names.Worker(w.Slot);
+        w.Person.Name.Text = w.Slot == _leader ? "★ " + name : name;
+        var done = _doneToday.TryGetValue(w.Slot, out var n) ? n : 0;
+        w.Badge.Text = done == 0 ? "" : done == 1 ? "1 today" : $"{done} today";
+        w.Badge.ToolTip = $"{name}: {done} job(s) done today" + (w.Slot == _leader ? ", the most of the team" : "");
     }
 
     /// <summary>The thought bubble over a worker at the desk: what they are doing now ("" hides it). Text only, nothing moves.</summary>
@@ -870,6 +910,11 @@ internal sealed class CrewStrip : Border
             line.RenderTransform = scale;
             w.Lines.Add((line, scale));
         }
+        // Today's jobs done, on the desk's front.
+        w.Badge = Brand.Text("", Brand.K.Muted, 9);
+        Canvas.SetLeft(w.Badge, 6);
+        Canvas.SetTop(w.Badge, 61);
+        desk.Children.Add(w.Badge);
         // How far along the job's plan is: a thin bar along the bottom of the screen.
         w.Progress = Bar(desk, 19, 47, 0, 2, null, ScreenOk);
         w.Mark = new TextBlock { FontFamily = ChatUi.Icons, FontSize = 11, Visibility = Visibility.Collapsed };
