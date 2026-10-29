@@ -192,7 +192,9 @@ internal sealed partial class ChatPane
             ChatTypes.Hint(t) + (t == standard ? " (your default, Settings > Chat)" : ""),
             false, (Action)(() => NewChat(t))))
             .Append(("New autopilot chat", "Give a goal and approve the plan once: the coordinator and workers carry on without you until it's done",
-                false, (Action)NewAutopilotChat)).ToList());
+                false, (Action)NewAutopilotChat))
+            .Append(("Routines…", "Work the crew does by itself at set times, like a nightly model check; missed runs catch up at the next Revit start",
+                false, (Action)OpenRoutines)).ToList());
     }
 
     /// <summary>Opens (or closes) the small menu under <paramref name="anchor"/> with <paramref name="choice"/>'s rows.</summary>

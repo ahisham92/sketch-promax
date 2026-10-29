@@ -87,7 +87,9 @@ internal static class Autopilot
     /// <summary>Jobs reported back: review them against the goal and carry on (replaces the usual "tell the user").</summary>
     public static string Review(AutopilotRun run) =>
         "Autopilot: review these reports against the goal. Check the model yourself where it matters (a quick read, not the " +
-        "whole job again). Send a job back with action=message when its work is wrong or missing something, start the next " +
+        "whole job again); where a teammate's check found issues, send the job back to fix them. A job paused at its budget: " +
+        "let it carry on only if it was making progress, else give that work another way. Send a job back with action=message " +
+        "when its work is wrong or missing something, start the next " +
         "parts, and keep the workers busy. When the goal is met and no job is open, write the final report (below) and end " +
         "it with " + DoneMark + ". Goal: " + OneLine(run.Goal, 400);
 

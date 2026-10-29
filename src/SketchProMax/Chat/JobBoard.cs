@@ -85,6 +85,26 @@ internal sealed class ChatJob
     /// </summary>
     public List<JobAside> Asides { get; set; } = [];
     /// <summary>
+    /// Its share of the plan's 5-hour limit so far (0 to 1, JobBudget): the rises of the limit reported with its own
+    /// requests. <see cref="BudgetFrom"/> is what it had used when it was last let go on (a pause sets it again on the
+    /// next message). Saved.
+    /// </summary>
+    public double Spent { get; set; }
+    public double BudgetFrom { get; set; }
+    /// <summary>It was paused for using its budget (JobBudget): stopped, and reported so the coordinator decides. Saved.</summary>
+    public bool OverBudget { get; set; }
+    /// <summary>A check of another job's finished work (JobReview): that job's number; 0 for ordinary work. Saved.</summary>
+    public int ReviewOf { get; set; }
+    /// <summary>
+    /// The check of this job's work: "" none, <see cref="JobReview.Pending"/> while a teammate checks it (its report
+    /// waits), else the checker's verdict. <see cref="ReviewedBy"/>: the checking job; <see cref="Reviews"/>: checks so far.
+    /// </summary>
+    public string Review { get; set; } = "";
+    public int ReviewedBy { get; set; }
+    public int Reviews { get; set; }
+    /// <summary>The scheduled routine this job is a run of (Routines; its id), "" for ordinary work. Saved.</summary>
+    public string Routine { get; set; } = "";
+    /// <summary>
     /// The job's own conversation, as the job view shows it: what it was asked (user items; State "coordinator" when the
     /// main chat sent it), its answers (assistant), its steps (tool) and notes. At most <see cref="JobBoard.MaxItems"/>.
     /// </summary>
@@ -258,8 +278,7 @@ internal sealed class JobBoard
             }
             other.Inbox.Add(said);
             if (other.State == Queued) return Delivery.Queued;
-            other.State = Queued;
-            other.Summary = "";
+            Reopen(other);
             return Delivery.Reopened;
         }
     }
@@ -438,10 +457,22 @@ internal sealed class JobBoard
                 Files = files.ToList(), Name = string.Join(", ", files.Select(f => f.Split('\\', '/').Last())),
             }, now);
             if (job.Active || job.State == Queued) return Delivery.Queued;
-            job.State = Queued;
-            job.Summary = "";
+            Reopen(job);
             return Delivery.Reopened;
         }
+    }
+
+    /// <summary>
+    /// A finished, failed or stopped job sent a message waits to start again: a job paused at its budget gets a new
+    /// budget from here, and its work gets a fresh check when it finishes.
+    /// </summary>
+    private static void Reopen(ChatJob job)
+    {
+        job.State = Queued;
+        job.Summary = "";
+        if (job.OverBudget) job.BudgetFrom = job.Spent;
+        job.OverBudget = false;
+        if (job.Review != JobReview.Pending) job.Review = "";
     }
 
     /// <summary>Stops a job: it won't start, or its run ends now (the pane ends its process). Its state before; null when not found.</summary>
@@ -633,6 +664,76 @@ internal sealed class JobBoard
             if (_jobs.FirstOrDefault(j => j.Number == number) is { } job) job.Worker = worker;
     }
 
+    /// <summary>
+    /// Job <paramref name="key"/>'s request raised the 5-hour limit by <paramref name="rise"/> (JobBudget.Rise): it is
+    /// counted to the job, and a job at work that used <paramref name="budget"/> since it was last let go on is paused
+    /// (stopped, with a note saying why). The job when it was paused now (the pane ends its process and reports it), else null.
+    /// </summary>
+    public ChatJob? Charge(string key, double rise, double budget, DateTime now)
+    {
+        lock (Gate)
+        {
+            var job = _jobs.FirstOrDefault(j => j.Key == key);
+            if (job is null || rise <= 0) return null;
+            job.Spent += rise;
+            if (!job.Active || !JobBudget.Over(job, budget)) return null;
+            job.State = Stopped;
+            job.OverBudget = true;
+            job.Ended = now;
+            job.Now = "";
+            job.Ahead = 0;
+            job.Activity = "";
+            foreach (var aside in job.Asides) job.Inbox.Add(aside.Text);
+            job.Asides.Clear();
+            job.Summary = job.Items.LastOrDefault(i => i.Kind == "assistant")?.Text.Trim() ?? "";
+            AddItem(job, new ChatItem { Kind = "error", Text = JobBudget.Paused(job, budget) }, now);
+            return job;
+        }
+    }
+
+    /// <summary>
+    /// Job <paramref name="number"/> finished: a teammate checks its work against its task before it is reported
+    /// (JobReview). The checking job (it waits to start like any job), or null when there is nothing to check.
+    /// </summary>
+    public ChatJob? StartReview(int number, DateTime now)
+    {
+        lock (Gate)
+        {
+            var done = _jobs.FirstOrDefault(j => j.Number == number);
+            if (done is null || done.State != Done || done.ReviewOf > 0) return null;
+            var check = new ChatJob
+            {
+                Number = _jobs.Max(j => j.Number) + 1,
+                Key = Guid.NewGuid().ToString("N").Substring(0, 12),
+                Title = OneLine("Check: " + done.Title, 60), Task = JobReview.Task(done), Created = now, State = Queued, ReviewOf = done.Number,
+            };
+            _jobs.Add(check);
+            done.Review = JobReview.Pending;
+            done.ReviewedBy = check.Number;
+            done.Reviews++;
+            AddItem(check, new ChatItem { Kind = "user", Text = check.Task, State = FromCoordinator }, now);
+            AddNote(done, $"Finished. Job {check.Number} checks the work against the task before it is reported.", now);
+            return check;
+        }
+    }
+
+    /// <summary>
+    /// A checking job ended: its verdict goes on the job it checked, which can now be reported. That job, or null when
+    /// <paramref name="check"/> checks nothing (or what it checked is gone).
+    /// </summary>
+    public ChatJob? ReviewEnded(ChatJob check, DateTime now)
+    {
+        lock (Gate)
+        {
+            if (check.ReviewOf <= 0) return null;
+            var done = _jobs.FirstOrDefault(j => j.Number == check.ReviewOf);
+            if (done is null || done.Review != JobReview.Pending || done.ReviewedBy != check.Number) return null;
+            done.Review = JobReview.Verdict(check);
+            AddNote(done, $"Checked by job {check.Number}: " + (JobReview.Passed(done.Review) ? "passed." : OneLine(done.Review, 300)), now);
+            return done;
+        }
+    }
+
     /// <summary>A plan tool call of the job's (JobPlan) finished: its plan follows it. True when the plan changed.</summary>
     public bool UpdatePlan(ChatJob job, string tool, string input, string result)
     {
@@ -703,7 +804,7 @@ internal sealed class JobBoard
         Running => ActivityOf(job) switch { Reading => "Reading the model", Applying => "Applying changes", Syncing => "Synchronizing with central", _ => "Thinking" },
         Done => "Done",
         Failed => "Ended with a problem",
-        Stopped => "Stopped",
+        Stopped => job.OverBudget ? "Paused at its budget" : "Stopped",
         _ => job.State,
     };
 
@@ -733,7 +834,11 @@ internal sealed class JobBoard
     {
         var sb = new StringBuilder("[Job report from Sketch ProMax, not typed by the user]\n");
         foreach (var j in finished)
-            sb.Append($"\nJob {j.Number} \"{j.Title}\" {(j.State == Failed ? "ended with a problem" : "finished")}:\n{(j.Summary.Length > 0 ? j.Summary.Trim() : "(it gave no summary)")}\n");
+        {
+            sb.Append($"\nJob {j.Number} \"{j.Title}\" {(j.OverBudget ? "was paused at its budget" : j.State == Failed ? "ended with a problem" : "finished")}:\n{(j.Summary.Length > 0 ? j.Summary.Trim() : "(it gave no summary)")}\n");
+            if (j.OverBudget) sb.Append(JobBudget.ReportLine(j) + "\n");
+            if (JobReview.ReportLine(j) is { Length: > 0 } checkedLine) sb.Append(checkedLine + "\n");
+        }
         sb.Append(stillOpen > 0 ? $"\n{stillOpen} other job(s) are still open. " : "\nNo other jobs are open. ");
         sb.Append("Tell the user in a line or two what it did and anything they need to check; the job's card opens its full conversation. Don't redo its work.");
         return sb.ToString();
@@ -753,6 +858,8 @@ internal sealed class JobBoard
         Created = j.Created, Started = j.Started, Ended = j.Ended, HasSession = j.HasSession, Inbox = j.Inbox.ToList(), Asides = j.Asides.Select(a => new JobAside { Id = a.Id, Text = a.Text, Now = a.Now }).ToList(),
         InboxFiles = j.InboxFiles.ToList(), Items = j.Items.ToList(), Activity = j.Activity, Worker = j.Worker,
         Plan = new Dictionary<string, string>(j.Plan), Heard = j.Heard.ToList(), Visited = j.Visited.ToList(),
+        Spent = j.Spent, BudgetFrom = j.BudgetFrom, OverBudget = j.OverBudget, ReviewOf = j.ReviewOf, Review = j.Review, ReviewedBy = j.ReviewedBy,
+        Reviews = j.Reviews, Routine = j.Routine,
     };
 }
 

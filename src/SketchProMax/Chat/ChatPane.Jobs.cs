@@ -78,6 +78,9 @@ internal static class ChatJobs
         return block;
     }
 
+    /// <summary>The bridge: true when job <paramref name="key"/> checks another job's work (JobReview), so it may not change the model.</summary>
+    public static bool IsCheck(string key) => _board?.FindKey(key) is { ReviewOf: > 0 };
+
     /// <summary>The bridge: what job <paramref name="key"/> does in Revit now (JobBoard.SetActivity), for its card and animation.</summary>
     public static void SetActivity(string key, string activity, int ahead = 0)
     {
@@ -323,7 +326,7 @@ internal sealed partial class ChatPane
                 OnJobResult(run, end);
                 return;
             case UsageEvent usage:
-                OnUsage(usage.Usage); // a job's answers report the plan's usage too
+                OnUsage(usage.Usage, run.Job.Key); // a job's answers report the plan's usage too, and count to its budget
                 return;
             default:
                 return;
@@ -438,12 +441,45 @@ internal sealed partial class ChatPane
         }));
     }
 
+    /// <summary>The 5-hour limit rose with job <paramref name="key"/>'s request: counted to it, and over its budget it pauses (JobBudget).</summary>
+    private void ChargeJob(string key, double rise)
+    {
+        double budget;
+        try { budget = JobBudget.Share(AgentSettings.Load().ChatJobBudget); }
+        catch (Exception) { budget = JobBudget.Share(JobBudget.DefaultPercent); }
+        if (_board?.Charge(key, rise, budget, DateTime.UtcNow) is not { } job) return;
+        if (_runs.TryGetValue(key, out var run)) EndRun(run, kill: true);
+        var text = $"Job {job.Number} paused: it used {JobBudget.Percent(job.Spent - job.BudgetFrom)} of your 5-hour limit, its budget (Settings > Chat). " +
+                   "Send it a message to let it carry on.";
+        Note(text);
+        Status(text, spin: false);
+        Report(job);
+    }
+
     // ---- Reporting back to the main chat ----------------------------------------------------------------------------
 
     /// <summary>A job finished (or failed): its summary goes to the main chat soon, several at once when they end together.</summary>
     private void Report(ChatJob job)
     {
-        if (job.State is not (JobBoard.Done or JobBoard.Failed)) return;
+        var now = DateTime.UtcNow;
+        // A teammate's check ended: the job it checked is reported now, with the verdict.
+        if (job.ReviewOf > 0)
+        {
+            if (_board?.ReviewEnded(job, now) is { } checkedJob) Report(checkedJob);
+            return;
+        }
+        if (job.State is not (JobBoard.Done or JobBoard.Failed) && !job.OverBudget || job.Review == JobReview.Pending) return;
+        // Finished: a second worker checks the work in the model first (Settings > Chat).
+        if (job.State == JobBoard.Done && _board is { } board && JobReview.Wanted(AgentSettings.Load().ChatJobReview, Run is { Active: true }, job)
+            && board.StartReview(job.Number, now) is { } check)
+        {
+            ChatJobs.Assign(check, ChatAuto.Everyday);
+            ShowJobCards();
+            PumpJobs();
+            SaveSoon();
+            return;
+        }
+        RoutineEnded(job);
         if (!_reports.Contains(job.Number)) _reports.Add(job.Number);
         _reportTimer ??= new DispatcherTimer(DispatcherPriority.Background, Dispatcher) { Interval = TimeSpan.FromSeconds(1.5) };
         _reportTimer.Tick -= OnReportTick;
@@ -464,7 +500,7 @@ internal sealed partial class ChatPane
         if (_reports.Count == 0 || _board is null || _turn is not null || _stopped || _setup != Setup.Ready || _sample) return;
         if (Run is { State: AutopilotRun.Paused }) return; // reviewed when the run carries on
         var jobs = _board.Snapshot();
-        var done = _reports.Select(n => jobs.FirstOrDefault(j => j.Number == n)).OfType<ChatJob>().Where(j => j.State is JobBoard.Done or JobBoard.Failed).ToList();
+        var done = _reports.Select(n => jobs.FirstOrDefault(j => j.Number == n)).OfType<ChatJob>().Where(j => j.State is JobBoard.Done or JobBoard.Failed || j.OverBudget).ToList();
         _reports.Clear();
         if (done.Count == 0) return;
         var open = jobs.Count(j => j.Active || j.State == JobBoard.Queued);
@@ -540,6 +576,12 @@ internal sealed partial class ChatPane
     {
         if (_board?.Stop(number, DateTime.UtcNow) is null) return;
         if (_runs.Values.FirstOrDefault(r => r.Job.Number == number) is { } run) EndRun(run, kill: true);
+        if (_board.Find(number) is { } stopped)
+        {
+            // A stopped check: the job it checked is reported without it. A stopped routine run: its history says so.
+            if (stopped.ReviewOf > 0 && _board.ReviewEnded(stopped, DateTime.UtcNow) is { } checkedJob) Report(checkedJob);
+            RoutineEnded(stopped);
+        }
         ShowJobCard(number);
         RefreshJobView();
         ShowSwitcher();

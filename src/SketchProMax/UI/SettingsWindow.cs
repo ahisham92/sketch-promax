@@ -46,6 +46,8 @@ public sealed class SettingsWindow : Window
     private readonly ComboBox _helper = new() { MinHeight = 26 };
     private readonly TextBox _crewYou = new() { MinHeight = 26 }, _crewCoordinator = new() { MinHeight = 26 }, _crewWorkers = new() { MinHeight = 26 }, _crewApplier = new() { MinHeight = 26 };
     private readonly ComboBox _jobLimit = new() { MinHeight = 26, MinWidth = 56, Margin = new Thickness(6, 0, 6, 0) };
+    private readonly ComboBox _jobBudget = new() { MinHeight = 26, MinWidth = 64, Margin = new Thickness(6, 0, 6, 0) };
+    private readonly ComboBox _jobReview = new() { MinHeight = 26, MinWidth = 200, Margin = new Thickness(6, 0, 6, 0) };
     private readonly CheckBox _autoSync = Check("Synchronize with central after every");
     private readonly CheckBox _autopilotWeekly = Check("When a weekly limit pauses the autopilot, carry on by itself when it resets");
     private readonly TextBox _syncChanges = new() { Width = 64, MinHeight = 26, Margin = new Thickness(6, 0, 6, 0) };
@@ -82,6 +84,12 @@ public sealed class SettingsWindow : Window
         _helper.SelectedIndex = Math.Max(0, Array.FindIndex(Tools.ChecklistHelper.Choices, c => c.Tag == Tools.ChecklistHelper.Parse(_settings.ChecklistHelper)));
         for (var n = Chat.JobBoard.MinLimit; n <= Chat.JobBoard.MaxLimit; n++) _jobLimit.Items.Add(new ComboBoxItem { Content = n.ToString(System.Globalization.CultureInfo.CurrentCulture), Tag = n });
         _jobLimit.SelectedIndex = Chat.JobBoard.ClampLimit(_settings.ChatJobLimit) - Chat.JobBoard.MinLimit;
+        foreach (var p in Chat.JobBudget.Choices)
+            _jobBudget.Items.Add(new ComboBoxItem { Content = p == 0 ? "never" : p.ToString(System.Globalization.CultureInfo.CurrentCulture) + " %", Tag = p });
+        _jobBudget.SelectedIndex = Math.Max(0, Array.IndexOf(Chat.JobBudget.Choices, _settings.ChatJobBudget) is var b and >= 0 ? b : Array.IndexOf(Chat.JobBudget.Choices, Chat.JobBudget.DefaultPercent));
+        foreach (var (tag, text) in new[] { (Chat.JobReview.Always, "every finished job"), (Chat.JobReview.AutopilotOnly, "only in an autopilot"), (Chat.JobReview.Off, "no job") })
+            _jobReview.Items.Add(new ComboBoxItem { Content = text, Tag = tag });
+        _jobReview.SelectedIndex = Chat.JobReview.Normal(_settings.ChatJobReview) switch { Chat.JobReview.AutopilotOnly => 1, Chat.JobReview.Off => 2, _ => 0 };
         _autoSync.IsChecked = _settings.AutoSync;
         _autopilotWeekly.IsChecked = _settings.AutopilotResumeWeekly;
         _syncChanges.Text = Revit.AutoSyncRule.Clamp(_settings.AutoSyncChanges).ToString(System.Globalization.CultureInfo.CurrentCulture);
@@ -381,6 +389,28 @@ public sealed class SettingsWindow : Window
         after.VerticalAlignment = VerticalAlignment.Center;
         jobRow.Children.Add(after);
         page.Children.Add(jobRow);
+        var budgetRow = new WrapPanel { Margin = new Thickness(0, 8, 0, 0) };
+        var budgetBefore = Brand.Text("Pause a job when it uses");
+        budgetBefore.VerticalAlignment = VerticalAlignment.Center;
+        budgetRow.Children.Add(budgetBefore);
+        AutomationProperties.SetName(_jobBudget, "Pause a job after this share of the 5-hour limit");
+        AutomationProperties.SetHelpText(_jobBudget, "A job that uses this much of your plan's 5-hour limit pauses with a warning; send it a message to let it carry on. 15 % is usual.");
+        budgetRow.Children.Add(Place("ChatJobBudget", _jobBudget));
+        var budgetAfter = Brand.Text("of the 5-hour limit (stops a job going round in circles; 15 % is usual)");
+        budgetAfter.VerticalAlignment = VerticalAlignment.Center;
+        budgetRow.Children.Add(budgetAfter);
+        page.Children.Add(budgetRow);
+        var reviewRow = new WrapPanel { Margin = new Thickness(0, 8, 0, 0) };
+        var reviewBefore = Brand.Text("A second worker checks");
+        reviewBefore.VerticalAlignment = VerticalAlignment.Center;
+        reviewRow.Children.Add(reviewBefore);
+        AutomationProperties.SetName(_jobReview, "Which finished jobs a second worker checks");
+        AutomationProperties.SetHelpText(_jobReview, "Before a job is reported done, another worker reads the model to check the work against the task, without changing anything.");
+        reviewRow.Children.Add(Place("ChatJobReview", _jobReview));
+        var reviewAfter = Brand.Text("in the model before it is reported done");
+        reviewAfter.VerticalAlignment = VerticalAlignment.Center;
+        reviewRow.Children.Add(reviewAfter);
+        page.Children.Add(reviewRow);
         page.Children.Add(SubHeading("Synchronize with central"));
         var syncRow = new WrapPanel { Margin = new Thickness(0, 8, 0, 0) };
         _autoSync.VerticalAlignment = VerticalAlignment.Center;
@@ -936,6 +966,8 @@ public sealed class SettingsWindow : Window
         var motion = _motion.FirstOrDefault(m => m.Button.IsChecked == true).Level;
         _settings.ChatAnimations = Chat.MotionLevels.Store(motion);
         _settings.ChatJobLimit = (_jobLimit.SelectedItem as ComboBoxItem)?.Tag is int limit ? limit : Chat.JobBoard.DefaultLimit;
+        _settings.ChatJobBudget = (_jobBudget.SelectedItem as ComboBoxItem)?.Tag is int budget ? budget : Chat.JobBudget.DefaultPercent;
+        _settings.ChatJobReview = (_jobReview.SelectedItem as ComboBoxItem)?.Tag as string ?? Chat.JobReview.Always;
         _settings.ChatCrewYou = _crewYou.Text.Trim();
         _settings.ChatCrewCoordinator = _crewCoordinator.Text.Trim();
         _settings.ChatCrewWorkers = _crewWorkers.Text.Trim();
