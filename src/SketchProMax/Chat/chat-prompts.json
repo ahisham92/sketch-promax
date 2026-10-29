@@ -148,6 +148,21 @@
    "prompt": "Set up the design vessel for the berth and check its clearance along the quay line."
   },
   {
+   "group": "Marine",
+   "title": "Join like with like",
+   "prompt": "In the berths I name, join the blinding together, the stabilised sand together and the slabs and beams together where they touch, without joining any piles. List the pairs Revit refuses."
+  },
+  {
+   "group": "Marine",
+   "title": "Pile heads into the slab",
+   "prompt": "Raise the selected piles so their heads sit 100 mm inside the slab or beam above (from the highest point where the soffit slopes), keep their toes, and unjoin them from any floor."
+  },
+  {
+   "group": "Marine",
+   "title": "Piles clear of tie rods",
+   "prompt": "On this plan, colour the piles that clash with existing piles or tie rods red and those within 50 mm orange, then list the ones to move and where (the middle between the tie rods)."
+  },
+  {
    "group": "Model",
    "title": "Levels and grids from a sketch",
    "prompt": "I'll attach a sketch: read it and create the levels and grids it shows, then list what you made."
@@ -223,6 +238,11 @@
    "prompt": "Export the open clashes as a BCF file for the coordination meeting."
   },
   {
+   "group": "Issue",
+   "title": "Export the submission set",
+   "prompt": "Export the sheets of the View/Sheet Set I name to PDF and DWG in the folder I give, one file per sheet named like the drawing list, with this model's usual export setups, then check the file names against the List of Drawings."
+  },
+  {
    "group": "Carbon",
    "title": "Embodied carbon now",
    "prompt": "Estimate the embodied carbon of the structure by material and level, with the factors you used."
@@ -281,6 +301,16 @@
    "group": "Check",
    "title": "Model health clean",
    "prompt": "Run a model health clean preview: unused view templates, unplaced rooms and areas, unplaced groups and unused filters, and list the Revit warnings by type with how to fix the top ones."
+  },
+  {
+   "group": "Check",
+   "title": "Clash round with services",
+   "prompt": "Check our structure against the linked electrical, telecom and drainage models in the berths I name. Ignore items both models draw and overlaps up to 10 mm, move pits or manholes up to 50 mm where that clears it, give pipes through blinding an opening, and list what is left as '<element> clashes with <discipline>: <what to do>'."
+  },
+  {
+   "group": "Check",
+   "title": "Review before submission",
+   "prompt": "Review the drawings of the berths I name before submission: title block fields, tags, viewports inside the title block, legends against the colours, schedules and voids that cut. Put the findings on my working plan as short notes beside clouds, without element ids."
   }
  ],
  "projectTypes": [

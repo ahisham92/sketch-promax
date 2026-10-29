@@ -1041,6 +1041,8 @@ internal static partial class SelfTest
         new("cut_openings_in_joined", c => new { openings = new[] { new { host_id = Newest<Floor>(c), outline = c.Square(1000, 1000, 500) } } }, Setup: ["create_floors"]),
         new("create_floors_from_faces", c => new { element_ids = new[] { Newest<Floor>(c) }, face = "bottom", level = c.LevelName }, Setup: ["create_floors"]),
         new("cut_geometry", c => new { action = "join", pairs = new[] { new { cutting = c.Id(c.Wall ?? throw new Skip("the model has no walls")), cut = Newest<Floor>(c) } }, only_overlapping = false }, Setup: ["create_floors"]),
+        // Bulk joins, one pair per step: the check lists the touching pairs and changes nothing.
+        new("join_elements", c => new { action = "check", element_ids = new[] { Newest<Floor>(c), c.Id(c.Wall ?? throw new Skip("the model has no walls")) }, group_by = "none" }, Setup: ["create_floors"]),
 
         new("delete_elements", c => new { element_ids = new[] { c.Id(c.Wall ?? throw new Skip("the model has no walls")) } }),
         // Purge and cleanup (0.34): previews, nothing deleted (the apply runs are in RegressionCases).

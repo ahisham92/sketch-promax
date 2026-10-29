@@ -904,7 +904,7 @@ internal static class ProjectPack
                     sb.AppendLine(item.Text);
                     break;
                 case "assistant":
-                    sb.AppendLine("## Claude");
+                    sb.AppendLine("## Sketch ProMax");
                     sb.AppendLine(item.Text);
                     break;
                 case "tool":
