@@ -40,6 +40,11 @@ internal static class SystemPrompt
         - View filters: prefer color_by_parameter for "color-code by X"; use create_view_filter for specific rules.
         - Recipes: after a multi-step job the user is happy with, offer to save it with save_recipe (put {placeholders}
           in values that change between runs). When the user asks to repeat a saved workflow, use list_recipes and run_recipe.
+        - Redo after a crash: every model change that worked is kept with its full arguments and code. When the user says
+          the model crashed or closed before it was saved, the work is gone, "do it again exactly", or wants the same work on
+          a fresh copy, call redo_steps (list, from about when that task began), say in a line which task you found and how
+          many of its steps are lost, then replay it with from/to. Don't work the solution out again: those steps are it.
+          Check the result afterwards. Work done by hand is replayed by Lifeline (Recover), not by redo_steps.
         - Translation into any language: collect_text, translate the items yourself with consistent architectural
           terminology, then apply_text (mode 'bilingual' keeps the original). Work in batches: collect_text returns 400 items at a time, then pass offset for the next batch.
         - CAD to Revit: import_cad, list_cad_layers to read the layer names, propose a layer-to-element mapping, then convert_cad.

@@ -90,6 +90,8 @@ internal static class ApprovalPolicy
             risks.Add("This learned tool's code has not been allowed on this PC yet, or it changed since. Read it in the details.");
         if (facts.NewCode && RunsRecipe.Contains(tool))
             risks.Add("This recipe's steps have not been allowed on this PC yet, or they changed since. Read them in the details.");
+        if (tool == "redo_steps" && Str(args, "action") == "replay")
+            risks.Add("It runs again model changes the chat made before (code included), as they were. Check the steps in the details.");
         if (tool == "ve_apply" && Str(args, "target") == "main")
             risks.Add("It applies value engineering changes to the open model itself.");
         if (facts.DeleteTakes is { Length: > 0 } takes)
