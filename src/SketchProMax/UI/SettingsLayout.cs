@@ -51,6 +51,7 @@ internal static class SettingsLayout
         ["ChatEffortHard"] = Chat,
         ["ChatModelCoordinator"] = Chat,
         ["ChatEffortCoordinator"] = Chat,
+        ["AutopilotResumeWeekly"] = Chat,
         ["FirmStandards"] = Standards,
         ["LegendSeedPath"] = Standards,
         ["TimeTracking"] = Time,

@@ -188,6 +188,7 @@ internal sealed partial class ChatPane
             _ = Task.Run(() => usage.Save(folder));
         }
         ShowUsage();
+        AutopilotUsage();
         var now = DateTimeOffset.UtcNow;
         var warnings = usage.NewWarnings(_usageWarned, now);
         if (warnings.Count == 0 || _sample) return;

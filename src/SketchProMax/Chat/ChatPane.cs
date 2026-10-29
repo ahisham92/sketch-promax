@@ -1193,6 +1193,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         ShowEarlierButton();
         _empty.Visibility = _conv.Items.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         ShowSwitcher();
+        ShowAutopilot();
         ScrollToEnd(force: true, instant: true);
     }
 
@@ -1231,6 +1232,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             "pjob" => ParallelJobCardFor(item),
             "note" when item.Name.StartsWith("ack:", StringComparison.Ordinal) => AckLine(item),
             "note" when item.Name.StartsWith(AdvicePrefix, StringComparison.Ordinal) => AdviceLine(item),
+            "note" when item.Name == AutopilotApprove => AutopilotApproveLine(item),
             _ => NoteLine(item),
         };
     }
@@ -2129,6 +2131,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         Save(); // the request is on disk before Claude Code starts on it
         ShowTitle();
         SupersedeBriefs();
+        if (AutopilotGoal(text, attachments)) return; // an autopilot's goal: the coordinator plans it first
         if (StartBrief(text, attachments)) return; // a brief card first; the choice on it runs the turn
         await RunTurn(text, attachments, "");
     }
@@ -2735,6 +2738,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         }
         // Jobs that finished while the main chat answered report back now.
         Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(FlushReports));
+        AutopilotTurnEnded(ended, stopped);
         if (_pendingModel is { } next && !JobsOpen)
         {
             _pendingModel = null;

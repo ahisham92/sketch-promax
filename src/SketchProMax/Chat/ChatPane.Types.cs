@@ -190,7 +190,9 @@ internal sealed partial class ChatPane
         return new Choice("Start a new chat", ChatTypes.All.OrderBy(t => t == standard ? 0 : 1).Select(t => (
             t == ChatTypes.Simple ? "New simple chat" : "New chat with coordinator",
             ChatTypes.Hint(t) + (t == standard ? " (your default, Settings > Chat)" : ""),
-            false, (Action)(() => NewChat(t)))).ToList());
+            false, (Action)(() => NewChat(t))))
+            .Append(("New autopilot chat", "Give a goal and approve the plan once: the coordinator and workers carry on without you until it's done",
+                false, (Action)NewAutopilotChat)).ToList());
     }
 
     /// <summary>Opens (or closes) the small menu under <paramref name="anchor"/> with <paramref name="choice"/>'s rows.</summary>

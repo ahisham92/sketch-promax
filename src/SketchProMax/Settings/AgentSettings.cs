@@ -117,6 +117,9 @@ public sealed class AgentSettings
     public string ChatModelCoordinator { get; set; } = "sonnet";
     public string ChatEffortCoordinator { get; set; } = "low";
 
+    /// <summary>An autopilot paused at a weekly limit carries on by itself when it resets (the 5-hour limit always does).</summary>
+    public bool AutopilotResumeWeekly { get; set; } = true;
+
     /// <summary>Your name as it goes on a signed checklist (next to Chat).</summary>
     public string SignatureName { get; set; } = "";
 
