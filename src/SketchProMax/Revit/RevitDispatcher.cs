@@ -245,10 +245,15 @@ public sealed class RevitDispatcher : IExternalEventHandler
         Interlocked.Increment(ref _idlings);
         if (_stopped) return;
         if (Idle is { } idle && sender is UIApplication idleApp)
-        {
-            try { idle(idleApp); }
-            catch (Exception) { /* listeners are best effort */ }
-        }
+            foreach (var listener in idle.GetInvocationList().Cast<Action<UIApplication>>())
+            {
+                var start = UiCost.Start();
+                try { listener(idleApp); }
+                catch (Exception) { /* listeners are best effort */ }
+                UiCost.End(IdleName(listener), start);
+            }
+        // A listener left work for the next idle moment (the change file's backlog): come back without waiting for input.
+        if (_idleAgain) { _idleAgain = false; e.SetRaiseWithoutDelay(); }
         if (StartupTimings.AwaitingIdle && StartupTimings.FirstIdle(sender is UIApplication ui ? title => StillOpen(ui, title) : null) is { } opened)
             ActivityLog.Note("model_open_timing", opened);
         if (_queue.IsEmpty && _eventOnly.IsEmpty)
@@ -277,9 +282,27 @@ public sealed class RevitDispatcher : IExternalEventHandler
     {
         _lastSlice = Environment.TickCount;
         if (!_later.TryDequeue(out var slice)) return;
+        var start = UiCost.Start();
         try { slice(); }
         catch (Exception) { /* deferred UI work is best effort */ }
+        UiCost.End("panes and chat", start);
     }
+
+    private static volatile bool _idleAgain;
+
+    /// <summary>An <see cref="Idle"/> listener has more to do: the next Idling comes without waiting for input.</summary>
+    internal static void IdleAgain() => _idleAgain = true;
+
+    /// <summary>The listener's work in words, for the activity log's timings.</summary>
+    private static string IdleName(Action<UIApplication> listener) => listener.Method.DeclaringType?.Name switch
+    {
+        "ChangeFile" => "Lifeline change file",
+        "TimeLog" => "time log",
+        "BimReady" => "BIM-ready filling",
+        "FreezeWatch" => "freeze watch",
+        { } other => other,
+        null => "idle work",
+    };
 
     /// <summary>What is keeping Revit from running queued work right now (a dialog, a busy UI thread, an edit mode).</summary>
     internal RevitBlock.State Blocker() => RevitBlock.Read(_mainWindow);
