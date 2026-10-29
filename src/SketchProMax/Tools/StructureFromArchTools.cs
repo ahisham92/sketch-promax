@@ -166,7 +166,7 @@ public sealed class ArchToStructureTool : IRevitTool
         if (!source.Equals("model", StringComparison.OrdinalIgnoreCase))
         {
             var link = LinkMatch.Find(doc, new FilteredElementCollector(doc).OfClass(typeof(RevitLinkInstance)).Cast<RevitLinkInstance>().ToList(), source);
-            src = link.GetLinkDocument() ?? throw new ArgumentException($"Link '{link.Name}' is not loaded.");
+            src = LinkMatch.Require(doc, link);
             tr = link.GetTotalTransform(); sourceName = link.Name;
         }
         var what = args.StringList("what");

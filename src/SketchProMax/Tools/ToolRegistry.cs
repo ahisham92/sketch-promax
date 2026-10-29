@@ -261,6 +261,7 @@ public sealed class ToolRegistry
         new CutOpeningsInJoinedTool(),
         new CreateFloorsFromFacesTool(),
         new CutGeometryTool(),
+        new JoinElementsTool(),
         // Guided workarounds for API limits
         new CreateLegendTool(),
         new SaveLegendSeedTool(),
@@ -287,6 +288,7 @@ public sealed class ToolRegistry
         registry.Add(new RunRecipeTool(registry));
         registry.Add(new BatchRunRecipeTool(registry));
         registry.Add(new SaveAsToolTool(registry));
+        registry.Add(new RedoStepsTool(registry));
         registry.Add(new ListLearnedToolsTool());
         registry.Add(new RunLearnedToolTool());
         registry.Add(new DeleteLearnedToolTool());

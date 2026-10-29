@@ -236,7 +236,7 @@ public sealed class ExportFilesTool : IRevitTool
       "view_ids": {"type": "array", "items": {"type": "integer"}, "description": "dwg/png/jpg: views or sheets. ifc/nwc: optional single 3D view to limit the export."},
       "folder": {"type": "string"},
       "file_name": {"type": "string", "description": "Base name. dwg/images add the view name per file."},
-      "dwg_setup": {"type": "string", "description": "Name of a saved DWG export setup in the model."},
+      "dwg_setup": {"type": "string", "description": "Name of a saved DWG export setup in the model. Default: the one this model's DWG exports used last time (with their units, coordinates and name_pattern)."},
       "ifc_version": {"type": "string", "enum": ["IFC2x3", "IFC4"], "description": "Default IFC2x3 Coordination View 2.0. IFC4 exports an IFC4 model view (Reference View unless ifc4_view says otherwise)."},
       "ifc4_view": {"type": "string", "enum": ["reference_view", "design_transfer_view"], "description": "IFC4 only: model view definition. Default reference_view (IFC4 Reference View)."},
       "image_pixels": {"type": "integer", "description": "Image width in pixels, default 3000."},
@@ -268,19 +268,34 @@ public sealed class ExportFilesTool : IRevitTool
             case "dwg":
             {
                 if (ids.Count == 0) ids.Add(doc.ActiveView.Id);
-                var options = args.OptString("dwg_setup") is { } setup
+                // The setup, units, coordinates and naming this model's DWG exports used last time, when left out (ExportDefaults).
+                var model = Chat.ChatPane.ModelKey(doc);
+                var remembered = ExportDefaults.For(model);
+                var usedDefaults = new List<string>();
+                var setupName = ExportDefaults.Pick("dwg_setup", args.OptString("dwg_setup"), remembered, usedDefaults,
+                    n => DWGExportOptions.GetPredefinedOptions(doc, n) is not null);
+                var coordinates = ExportDefaults.Pick("dwg_coordinates", args.OptString("coordinates"), remembered, usedDefaults);
+                var unitsWanted = ExportDefaults.Pick("dwg_units", args.OptString("units"), remembered, usedDefaults);
+                var patternWanted = args.OptString("name_pattern") ?? (ids.Count > 1 ? ExportDefaults.Pick("name_pattern", null, remembered, usedDefaults) : null);
+                ExportDefaults.Remember(model, new Dictionary<string, string?>
+                {
+                    ["dwg_setup"] = args.OptString("dwg_setup"), ["dwg_coordinates"] = args.OptString("coordinates"),
+                    ["dwg_units"] = args.OptString("units"), ["name_pattern"] = args.OptString("name_pattern"),
+                });
+                if (usedDefaults.Count > 0) notes.Add($"Used this model's DWG export settings from last time: {string.Join(", ", usedDefaults)}. Say so in a line; pass other values to change them.");
+                var options = setupName is { } setup
                     ? DWGExportOptions.GetPredefinedOptions(doc, setup) ?? throw new ArgumentException($"No DWG export setup named '{setup}'.")
                     : new DWGExportOptions();
                 options.MergedViews = true;
-                switch (args.OptString("coordinates"))
+                switch (coordinates)
                 {
                     case "shared": options.SharedCoords = true; break;
                     case "internal": options.SharedCoords = false; break;
                     case "project_base": notes.Add("DWG export has no project base point option; used internal coordinates. Use shared coordinates, or IFC, for a project-base origin."); options.SharedCoords = false; break;
                 }
-                if (args.OptString("units") is { } u)
+                if (unitsWanted is { } u)
                     options.TargetUnit = u switch { "mm" => ExportUnit.Millimeter, "cm" => ExportUnit.Centimeter, "m" => ExportUnit.Meter, "in" => ExportUnit.Inch, _ => ExportUnit.Foot };
-                if (args.OptString("name_pattern") is { } pattern)
+                if (patternWanted is { } pattern)
                 {
                     ExportNames.RequireUnique(doc, ids, pattern);
                     foreach (var id in ids)
@@ -459,7 +474,7 @@ public sealed class QueryLinkedModelsTool : IRevitTool
         }
 
         var link = LinkMatch.Find(doc, links, wanted);
-        var linkDoc = link.GetLinkDocument() ?? throw new InvalidOperationException($"'{link.Name}' is not loaded.");
+        var linkDoc = LinkMatch.Require(doc, link);
 
         if (args.OptString("category") is not { } category)
         {
@@ -579,6 +594,69 @@ public sealed class LoadFamilyTool : IRevitTool
 /// </summary>
 internal static class LinkMatch
 {
+    /// <summary>
+    /// The link's model: its loaded copy, else the same model open in this Revit session. Revit can't load a link while
+    /// that model is open in another window of the same Revit, so the link then reads as not loaded (2026-10-25: the
+    /// existing model was open beside the working model, and query_linked_models said it wasn't loaded, twice).
+    /// The link instance's own transform still places its elements.
+    /// </summary>
+    public static Document? Model(Document host, RevitLinkInstance link)
+    {
+        if (link.GetLinkDocument() is { } loaded) return loaded;
+        string? path = null;
+        try
+        {
+            if ((host.GetElement(link.GetTypeId()) as RevitLinkType)?.GetExternalFileReference() is { } ext)
+                path = ModelPathUtils.ConvertModelPathToUserVisiblePath(ext.GetAbsolutePath());
+        }
+        catch (Autodesk.Revit.Exceptions.ApplicationException) { }
+        var file = path is null ? FileOf(host, link) : System.IO.Path.GetFileNameWithoutExtension(path);
+        var open = host.Application.Documents.Cast<Document>()
+            .Where(d => !d.IsLinked && !d.IsFamilyDocument && !d.Equals(host)).ToList();
+        foreach (var d in open)
+        {
+            if (path is not null && SamePath(d.PathName, path)) return d;
+            if (path is not null && d.IsWorkshared)
+            {
+                try { if (SamePath(ModelPathUtils.ConvertModelPathToUserVisiblePath(d.GetWorksharingCentralModelPath()), path)) return d; }
+                catch (Autodesk.Revit.Exceptions.ApplicationException) { }
+            }
+        }
+        // A local copy is named after its central file plus "_<user name>".
+        var byTitle = open.Where(d => SameTitle(d.Title, file)).ToList();
+        return byTitle.Count == 1 ? byTitle[0] : null;
+    }
+
+    /// <summary>The link's model (see <see cref="Model"/>), or an error that says how to get it.</summary>
+    public static Document Require(Document host, RevitLinkInstance link) => Model(host, link)
+        ?? throw new ArgumentException($"Link '{link.Name}' is not loaded. Reload it in Manage Links, or open that model in this Revit session, then try again.");
+
+    /// <summary>True when an open model's title is the link's file name, or its local copy ("Name_user").</summary>
+    internal static bool SameTitle(string title, string file)
+    {
+        if (title.EndsWith(".rvt", StringComparison.OrdinalIgnoreCase)) title = title.Substring(0, title.Length - 4);
+        return string.Equals(title, file, StringComparison.OrdinalIgnoreCase)
+               || title.StartsWith(file + "_", StringComparison.OrdinalIgnoreCase) && title.IndexOf('_', file.Length + 1) < 0;
+    }
+
+    private static bool SamePath(string a, string b)
+    {
+        if (a.Length == 0 || b.Length == 0) return false;
+        try { return string.Equals(System.IO.Path.GetFullPath(a).TrimEnd('\\'), System.IO.Path.GetFullPath(b).TrimEnd('\\'), StringComparison.OrdinalIgnoreCase); }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or System.IO.PathTooLongException)
+        {
+            return string.Equals(a, b, StringComparison.OrdinalIgnoreCase); // a cloud path ("Autodesk Docs://...")
+        }
+    }
+
+    private static string FileOf(Document doc, RevitLinkInstance l)
+    {
+        var name = (doc.GetElement(l.GetTypeId()) as RevitLinkType)?.Name ?? l.Name;
+        var colon = name.IndexOf(" : ", StringComparison.Ordinal);
+        if (colon > 0) name = name.Substring(0, colon);
+        return name.EndsWith(".rvt", StringComparison.OrdinalIgnoreCase) ? name.Substring(0, name.Length - 4) : name;
+    }
+
     public static RevitLinkInstance Find(Document doc, IList<RevitLinkInstance> links, string wanted)
     {
         string FileName(RevitLinkInstance l)

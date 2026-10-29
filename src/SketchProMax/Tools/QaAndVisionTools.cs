@@ -203,12 +203,19 @@ public sealed class CaptureViewImageTool : IRevitTool
         var ids = args.LongList("element_ids");
         if (ids.Count > 0)
         {
-            plan = doc.GetElement(viewId) is View { } v and (ViewPlan or ViewSection) ? v : null;
-            if (plan is null) return ToolResult.Error("element_ids zoom works on plans, sections, elevations and detail views; capture the whole view (or the sheet with region) instead.");
-            // An element's model box, else its box in this view (annotation and detail items have only that one).
-            boxes = ids.Select(i => doc.GetElement(new ElementId(i)) is { } e ? e.get_BoundingBox(null) ?? e.get_BoundingBox(plan) : null).OfType<BoundingBoxXYZ>().ToList();
-            if (boxes.Count == 0) return ToolResult.Error("None of those elements have a location to zoom to in this view (they may be in another view, or deleted).");
-            margin = args.OptDouble("margin") is { } m ? RevitHelpers.ToInternal(doc, m) : 2000 / 304.8;
+            // Plans, sections, elevations, detail views and orthographic 3D views crop in their own frame. Other views
+            // (drafting, legends, perspective 3D) can't be cropped to elements: the whole view is captured instead of
+            // refusing, which had the chat retry the same call (five times, 2026-10-21 to 10-29).
+            var shown = doc.GetElement(viewId) as View;
+            plan = shown is ViewPlan or ViewSection || shown is View3D { IsPerspective: false } ? shown : null;
+            if (plan is not null)
+            {
+                // An element's model box, else its box in this view (annotation and detail items have only that one).
+                boxes = ids.Select(i => doc.GetElement(new ElementId(i)) is { } e ? e.get_BoundingBox(null) ?? e.get_BoundingBox(plan) : null).OfType<BoundingBoxXYZ>().ToList();
+                if (boxes.Count == 0) return ToolResult.Error("None of those elements have a location to zoom to in this view (they may be in another view, or deleted).");
+                margin = args.OptDouble("margin") is { } m ? RevitHelpers.ToInternal(doc, m) : 2000 / 304.8;
+            }
+            else how += $" This is a {shown?.ViewType.ToString() ?? "view"} view, which can't be zoomed to elements, so the whole view was captured.";
         }
         var zoom = plan is null ? null : new TransactionGroup(doc, "Sketch ProMax: zoom for image");
         try

@@ -511,6 +511,11 @@ internal static class ClaudeCli
         - When the user says "remember that ..." (or "from now on ..."), save it with memory_note action=remember: scope=global
           for habits and standards that hold for every model, scope=model for facts about this model. When they say
           "forget ...", use action=forget. Confirm in one line. They can see and edit the notes in the pane's Notes tab.
+        - Don't make them say it twice: a rule given with "always", "never", "typically", "as always", "keep it as default",
+          or a correction that will hold next time ("no, piles are never joined to the slab", "the cover spans the short way
+          only", "use this set and these print settings") is saved the same way without being asked, in their words, and
+          confirmed in a short line. Not one-off instructions for this task. Before a task like one done before, check
+          the notes and recall_chats for how it was done and do it that way.
         - When the user reports progress on a berth or package (sections designed, calculations, bills, costing, or any
           area's status), record it with berth_status action=set (what = the deliverable or area, percent and/or comment)
           and confirm in one line. berth_status action=list or details answers "where are we" questions; it never reads
@@ -524,6 +529,9 @@ internal static class ClaudeCli
           in another chat or project ("the same way as in the Tower project", "like last time"), call recall_chats with the words
           that name it, then action=open on the best match and follow its steps and settings here (checking this model
           first). Say in one line which chat you followed. If nothing matches, ask the user which project they mean.
+        - "Redo it", "do the same again", "the model crashed and it wasn't saved": the steps that solved it are kept (redo_steps
+          action=list shows them with what is lost); replay them rather than asking how or solving it again. This chat's
+          own earlier messages say what the task was: use them to pick the right task.
         - When the chat was shrunk, the summary you have is what it keeps. Don't try to open the earlier conversation's
           file (the .jsonl transcript): it isn't allowed here, and it would cost far more than it saves. If a detail is
           missing, read it from the model or ask the user in one line.

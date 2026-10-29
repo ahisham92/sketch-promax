@@ -468,6 +468,9 @@ public sealed class BridgeServer
                 finally { RunningCall.End(); }
                 result = Revit.AutoSync.Noted(result);
                 ActivityLog.Write(app.ActiveUIDocument?.Document?.Title ?? "", tool, args, result);
+                // Changes that worked, with their whole arguments, so redo_steps can do the work again after a crash.
+                if (tool.ModifiesModel && !result.IsError)
+                    RedoLog.Write(app.ActiveUIDocument?.Document?.Title ?? "", tool.Name, System.Text.Json.JsonSerializer.Serialize(args), result.Text);
                 TimeLog.EndTool(result);
                 return Ended(Capped(result));
             }

@@ -268,16 +268,71 @@ public sealed class AddSpotElevationsTool : IRevitTool
                 return doc.Create.NewSpotElevation(target, t.Face.Ref, t.Point, bend, end, t.Point, leader).Id.Value;
             }, borrow: false);
         var created = batch.Items.Where(x => x.Ok && x.Value is long).Select(x => (long)x.Value!).ToList();
+        var failed = batch.Failed;
+
+        // Revit refuses some face references in a view ("references are no longer valid", "does not lie on its
+        // reference"): shape-edited and sloped slabs, pile bottoms (6 of 8 calls, 2026-10-17 to 10-28). Those spots are
+        // tried again on the same face read from the view's own geometry, which is what Revit's Spot Elevation picks.
+        var retry = targets.Select((t, n) => (t, item: batch.Items[n]))
+            .Where(x => !x.item.Ok && x.item.Error is { } why && (why.IndexOf("no longer valid", StringComparison.OrdinalIgnoreCase) >= 0
+                                                                  || why.IndexOf("does not lie on its reference", StringComparison.OrdinalIgnoreCase) >= 0))
+            .Select(x => (Label: x.item.Item, Face: ViewFace(x.t.Face.Element, target, x.t.Point, sign)))
+            .Where(x => x.Face is not null).Select(x => (x.Label, x.Face!.Value.Ref, x.Face!.Value.Point)).ToList();
+        if (retry.Count > 0)
+        {
+            var again = ItemBatch.Run(doc, "Spot elevations (view faces)", retry, r => r.Label, _ => [], r =>
+            {
+                var bend = r.Point + (target.RightDirection + target.UpDirection) * step * 0.5;
+                var end = bend + target.RightDirection * step * 0.5;
+                return doc.Create.NewSpotElevation(target, r.Ref, r.Point, bend, end, r.Point, leader).Id.Value;
+            }, borrow: false);
+            created.AddRange(again.Items.Where(x => x.Ok && x.Value is long).Select(x => (long)x.Value!));
+            var placed = again.Items.Where(x => x.Ok).Select(x => x.Item).ToHashSet();
+            failed = failed.Where(f => !placed.Contains(f.Item)).ToList();
+        }
         var payload = new
         {
             created = created.Count, ids = created,
-            problems = batch.Failed.Select(f => $"{f.Item}: {f.Error}").Take(50),
+            problems = failed.Select(f => $"{f.Item}: {f.Error}").Take(50),
             noFace = noFace.Count > 0 ? noFace.Take(50) : null,
             dependentView = guard.Report(),
         };
         return created.Count == 0
             ? new ToolResult("No spot elevations were placed. " + System.Text.Json.JsonSerializer.Serialize(payload), IsError: true)
             : ToolResult.Ok(payload);
+    }
+
+    /// <summary>
+    /// The face of the element under a point, read from the view's own geometry (Options.View), with the point moved onto
+    /// it: the references Revit takes for a spot elevation in that view. Null when no up (or down) face is there.
+    /// </summary>
+    private static (Reference Ref, XYZ Point)? ViewFace(Element e, View view, XYZ point, int sign)
+    {
+        GeometryElement? geometry;
+        try { geometry = e.get_Geometry(new Options { ComputeReferences = true, View = view }); }
+        catch (Autodesk.Revit.Exceptions.ApplicationException) { return null; }
+        if (geometry is null) return null;
+        (Reference, XYZ)? best = null;
+        var bestDistance = double.MaxValue;
+        void Look(GeometryElement g, Transform tr, int depth)
+        {
+            foreach (var o in g)
+            {
+                if (o is GeometryInstance gi && depth < 2) { Look(gi.GetInstanceGeometry(), Transform.Identity, depth + 1); continue; }
+                if (o is not Solid { Faces.Size: > 0 } solid) continue;
+                foreach (Face f in solid.Faces)
+                {
+                    if (f.Reference is null) continue;
+                    IntersectionResult? hit;
+                    try { hit = f.Project(point); }
+                    catch (Autodesk.Revit.Exceptions.ApplicationException) { continue; }
+                    if (hit is null || hit.Distance > 0.05 || sign * f.ComputeNormal(hit.UVPoint).Z < 0.3) continue;
+                    if (hit.Distance < bestDistance) { bestDistance = hit.Distance; best = (f.Reference, hit.XYZPoint); }
+                }
+            }
+        }
+        Look(geometry, Transform.Identity, 0);
+        return best;
     }
 }
 

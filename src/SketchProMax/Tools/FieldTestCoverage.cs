@@ -752,6 +752,15 @@ internal static class FieldTestCoverage
         new(49, ["checklist.bep"], "Load and fill the Assembly Codes loads the Excel's codes, lists every type in use without a code and fills the ones kept; the dialog says how many"),
         new(50, ["costing.berth"], "berth costing measures tubes, raked piles and design options right, and names elements counted twice and missing kg/m³"),
         new(51, ["berth.read"], "Berth 1 doesn't count Berth 10's sheets, views or files, and a value 09 is berth 9"),
+        new(52, ["tool:save_as_tool", "tool:run_learned_tool"], "a saved tool that opens its own transactions runs (the unit test checks the flag)"),
+        new(53, ["chat.office"], "an attached Excel file is read while another program holds it open (unit test)"),
+        new(54, ["tool:query_linked_models"], "a link whose model is open in this Revit is read from the open model"),
+        new(55, ["tool:find_clashes"], "singular category names; an odd pair's clash is marked, not the run stopped"),
+        new(56, ["tool:copy_dimensions"], "a spot dimension of several segments is listed, not a stop"),
+        new(57, ["tool:capture_view_image"], "zoom in a 3D view; other views captured whole with a note"),
+        new(58, ["tool:join_elements"], "joins one pair per step, never piles, refused pairs listed"),
+        new(59, ["tool:add_spot_elevations"], "refused spots placed again on the view's own face"),
+        new(60, ["tool:export_chats_and_bugs"], "the exported chats head replies Sketch ProMax (unit test)"),
     ];
 
     /// <summary>
