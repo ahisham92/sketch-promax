@@ -294,6 +294,9 @@ public sealed class BridgeServer
                     // "still running" too). Not when the caller has gone: they then stay queued, and the chat sends
                     // what is left when the turn ends. A job's calls never take them: they are the main chat's.
                     if (fromChat && jobKey is null && !ct.IsCancellationRequested) result = result with { Text = JobNotes.Attach(name, result.Text) };
+                    // A job's own: what the user or a teammate sent it while it worked goes with this step's answer.
+                    else if (fromChat && jobKey is not null && !ct.IsCancellationRequested && Chat.ChatJobs.TakeAsides(jobKey, name) is { } aside)
+                        result = result with { Text = JobText.Add(result.Text, null, aside) };
                     return JsonSerializer.Serialize(new
                     {
                         text = result.Text,

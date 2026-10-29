@@ -70,6 +70,14 @@ internal static class ChatJobs
         if (_board?.SetWaiting(key, ahead) == true) _changed?.Invoke();
     }
 
+    /// <summary>The bridge, after a job's call: the messages sent to it while it worked, to add to the result (null when none).</summary>
+    public static string? TakeAsides(string key, string tool)
+    {
+        var block = _board?.TakeAsides(key, tool, DateTime.UtcNow);
+        if (block is not null) _changed?.Invoke();
+        return block;
+    }
+
     /// <summary>The bridge: what job <paramref name="key"/> does in Revit now (JobBoard.SetActivity), for its card and animation.</summary>
     public static void SetActivity(string key, string activity, int ahead = 0)
     {
@@ -764,6 +772,13 @@ internal sealed partial class ChatPane
             _jobDrawn.Add(items[k]);
             if (appendable && _jobDrawn.Count > 1) ChatUi.Arrive(element, ChatUi.S2);
         }
+        // A message on its way that has since arrived (or was kept for after): its line says so, without the buttons.
+        foreach (var (item, text, actions) in _asideLines)
+            if (text.Text != item.Text)
+            {
+                text.Text = item.Text;
+                actions.Visibility = Visibility.Collapsed;
+            }
         if (items.Count == 0 && _jobMessages.Children.Count == 0)
             _jobMessages.Children.Add(NoteLine(new ChatItem { Kind = "note", Text = "Nothing here yet." }));
         ShowJobBar();
@@ -782,8 +797,48 @@ internal sealed partial class ChatPane
             "tool" => ToolCard(item, first),
             "file" => FileCard(item),
             "error" => ErrorBox(item),
+            "note" when item.Name.StartsWith(JobBoard.AsidePrefix, StringComparison.Ordinal) => AsideLine(item),
             _ => NoteLine(item),
         };
+    }
+
+    /// <summary>
+    /// A message on its way to a busy job: the line says how it will be taken, with Apply now and After this job while
+    /// it hasn't arrived (the worker's own call otherwise).
+    /// </summary>
+    private readonly List<(ChatItem Item, TextBlock Text, WrapPanel Actions)> _asideLines = [];
+
+    private UIElement AsideLine(ChatItem item)
+    {
+        var panel = new StackPanel();
+        var line = (DockPanel)NoteLine(item);
+        panel.Children.Add(line);
+        if (item.Text != JobBoard.AsideWaits || _viewJob is not { } number || line.Children.OfType<TextBlock>().LastOrDefault() is not { } said) return panel;
+        var id = item.Name.Substring(JobBoard.AsidePrefix.Length);
+        var actions = new WrapPanel { Margin = new Thickness(ChatUi.S4, ChatUi.S1, 0, 0) };
+        _asideLines.RemoveAll(a => !a.Actions.IsVisible && a.Actions.Visibility == Visibility.Collapsed);
+        _asideLines.Add((item, said, actions));
+        void Pick(bool now)
+        {
+            if (_board?.SetAside(number, id, now, DateTime.UtcNow) != true)
+            {
+                Status("It already has this message.", spin: false);
+                return;
+            }
+            actions.Visibility = Visibility.Collapsed;
+            said.Text = item.Text;
+            Status(now ? "It applies this with its next step." : "Kept for after its current work.", spin: false);
+            JobsChanged();
+        }
+        var apply = ChatUi.Ghost(ChatUi.GlyphRight, "Apply now", "Apply now", "It changes the work in hand: the job fixes what it affects with its next step.");
+        apply.Click += (_, _) => Pick(true);
+        var after = ChatUi.Ghost(ChatUi.GlyphDown, "After this job", "After this job", "New work: the job does it once its current work is finished.");
+        after.Margin = new Thickness(ChatUi.S2, 0, 0, 0);
+        after.Click += (_, _) => Pick(false);
+        actions.Children.Add(apply);
+        actions.Children.Add(after);
+        panel.Children.Add(actions);
+        return panel;
     }
 
     /// <summary>The job's bar: its number, title and state (what it does now), and Stop while it is open.</summary>
@@ -859,7 +914,8 @@ internal sealed partial class ChatPane
         RefreshJobView();
         _jobScroll?.ScrollToEnd();
         JobsChanged();
-        Status(sent == JobBoard.Delivery.Reopened ? $"Sent to job {number}. It carries on with it."
+        Status(sent == JobBoard.Delivery.Soon ? $"Sent to job {number}. It gets it with its next step: a correction is fixed now, new work is done after."
+            : sent == JobBoard.Delivery.Reopened ? $"Sent to job {number}. It carries on with it."
             : $"Sent to job {number}. It reads it as soon as it finishes what it is doing now.", spin: false);
     }
 }

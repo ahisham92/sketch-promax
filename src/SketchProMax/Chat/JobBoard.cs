@@ -23,6 +23,15 @@ internal sealed class JobLine
 /// <see cref="Key"/>), shown as a card in the pane and as its own chat (the job view), saved with the chat
 /// (<see cref="Conversation.Jobs"/>).
 /// </summary>
+internal sealed class JobAside
+{
+    public string Id { get; set; } = "";
+    /// <summary>The message as the job reads it ("The user says: …", "A teammate, job 2 …").</summary>
+    public string Text { get; set; } = "";
+    /// <summary>The user tapped Apply now: it changes the work in hand, whatever it reads like.</summary>
+    public bool Now { get; set; }
+}
+
 internal sealed class ChatJob
 {
     /// <summary>The job's number in its chat (1, 2, …): how the main chat and the user name it.</summary>
@@ -70,6 +79,11 @@ internal sealed class ChatJob
     public List<string> Inbox { get; set; } = [];
     /// <summary>Files attached to the messages waiting in <see cref="Inbox"/> (full paths), sent with them.</summary>
     public List<string> InboxFiles { get; set; } = [];
+    /// <summary>
+    /// Messages sent to it while it works (from the user or a teammate, no files): they reach it with its next step, not
+    /// at the end of its run (JobBoard.TakeAsides). Any still here when the run ends go to <see cref="Inbox"/>. Saved.
+    /// </summary>
+    public List<JobAside> Asides { get; set; } = [];
     /// <summary>
     /// The job's own conversation, as the job view shows it: what it was asked (user items; State "coordinator" when the
     /// main chat sent it), its answers (assistant), its steps (tool) and notes. At most <see cref="JobBoard.MaxItems"/>.
@@ -235,13 +249,93 @@ internal sealed class JobBoard
             text = text.Trim();
             if (sender is null || other is null || sender == other || text.Length == 0) return Delivery.NotFound;
             sender.Visited.Add(other.Number);
-            other.Inbox.Add($"{TeamSays}{sender.Number} (\"{sender.Title}\"), says: {text}");
+            var said = $"{TeamSays}{sender.Number} (\"{sender.Title}\"), says: {text}";
             AddItem(other, new ChatItem { Kind = "user", Text = text, State = FromTeam + sender.Number }, now);
-            if (other.Active || other.State == Queued) return Delivery.Queued;
+            if (other.Active)
+            {
+                Aside(other, said, now);
+                return Delivery.Soon;
+            }
+            other.Inbox.Add(said);
+            if (other.State == Queued) return Delivery.Queued;
             other.State = Queued;
             other.Summary = "";
             return Delivery.Reopened;
         }
+    }
+
+    /// <summary>A message on its way to a busy job, with the line in its view that says so (and offers Apply now / After this job).</summary>
+    private void Aside(ChatJob job, string text, DateTime now)
+    {
+        var id = Guid.NewGuid().ToString("N").Substring(0, 10);
+        job.Asides.Add(new JobAside { Id = id, Text = text });
+        AddItem(job, new ChatItem { Kind = "note", Name = AsidePrefix + id, Text = AsideWaits }, now);
+    }
+
+    public const string AsideWaits = "It gets this with its next step: a correction to what it is doing is fixed now, new work is done after.";
+
+    /// <summary>
+    /// The bridge, after a call of job <paramref name="key"/>: the messages sent to it while it worked, as a block to add
+    /// to that call's result (null when none). Each one's line in the view says it arrived.
+    /// </summary>
+    public string? TakeAsides(string key, string tool, DateTime now)
+    {
+        lock (Gate)
+        {
+            var job = _jobs.FirstOrDefault(j => j.Key == key);
+            if (job is null || job.Asides.Count == 0) return null;
+            var asides = job.Asides.ToList();
+            job.Asides.Clear();
+            foreach (var aside in asides) SetAsideLine(job, aside.Id, aside.Now
+                ? $"Arrived with its step ({tool}): it applies this now."
+                : $"Arrived with its step ({tool}): it fixes the work now if this changes it, or does it after.");
+            return AsideBlock(asides);
+        }
+    }
+
+    /// <summary>How messages sent while a job worked read to it: apply a correction now, keep new work for after.</summary>
+    public static string AsideBlock(IEnumerable<JobAside> asides)
+    {
+        var sb = new StringBuilder();
+        foreach (var aside in asides)
+        {
+            sb.Append(sb.Length > 0 ? "\n\n" : "");
+            sb.Append(aside.Now
+                ? "[A message sent to you while you worked. Apply it now: it changes the work you are doing, so fix what you already did that it affects, then carry on:]\n"
+                : "[A message sent to you while you worked. If it corrects or changes the work you are doing now, apply it now and fix what you already did that it affects. If it is separate new work, finish your current task first and then do it, before your report:]\n");
+            sb.Append(aside.Text);
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// The user's tap on a waiting message's line: <paramref name="now"/> true applies it now whatever it is; false keeps it
+    /// for after this run (it goes as the next message). False when it already arrived.
+    /// </summary>
+    public bool SetAside(int number, string id, bool now, DateTime when)
+    {
+        lock (Gate)
+        {
+            var job = _jobs.FirstOrDefault(j => j.Number == number);
+            var aside = job?.Asides.FirstOrDefault(a => a.Id == id);
+            if (job is null || aside is null) return false;
+            if (now)
+            {
+                aside.Now = true;
+                SetAsideLine(job, id, "It gets this with its next step and applies it now, fixing what it affects.");
+                return true;
+            }
+            job.Asides.Remove(aside);
+            job.Inbox.Add(aside.Text);
+            SetAsideLine(job, id, "Kept for after: it does this when its current work is finished.");
+            return true;
+        }
+    }
+
+    private static void SetAsideLine(ChatJob job, string id, string text)
+    {
+        var line = job.Items.FirstOrDefault(i => i.Name == AsidePrefix + id);
+        if (line is not null) line.Text = text;
     }
 
     /// <summary>What a job has found so far, for a teammate who asks: its task, state, report or latest words, and its step now.</summary>
@@ -308,7 +402,11 @@ internal sealed class JobBoard
     }
 
     /// <summary>How a message to a job went.</summary>
-    internal enum Delivery { NotFound, Queued, Reopened }
+    /// <summary>NotFound; Queued: at the end of its run; Reopened: it carries on now; Soon: with its next step (it is working).</summary>
+    internal enum Delivery { NotFound, Queued, Reopened, Soon }
+
+    /// <summary>The job view's line for a message on its way to a busy job: Name is this plus the message's id.</summary>
+    public const string AsidePrefix = "aside:";
 
     /// <summary>
     /// A message for job <paramref name="number"/>, from the user (typed in the job view, with any
@@ -324,6 +422,14 @@ internal sealed class JobBoard
             files ??= [];
             if (job is null || text.Length == 0 && files.Count == 0) return Delivery.NotFound;
             var said = text.Length > 0 ? text : "(see the attached files)";
+            // The user writing to a job at work: it reaches the job with its next step, which fixes the work now or
+            // does it after, as it fits (the user can change that on the line).
+            if (fromUser && job.Active && files.Count == 0)
+            {
+                AddItem(job, new ChatItem { Kind = "user", Text = text }, now);
+                Aside(job, UserSays + said, now);
+                return Delivery.Soon;
+            }
             job.Inbox.Add((fromUser ? UserSays : MainSays) + said);
             job.InboxFiles.AddRange(files);
             AddItem(job, new ChatItem
@@ -355,6 +461,7 @@ internal sealed class JobBoard
                 job.Activity = "";
                 job.Inbox.Clear();
                 job.InboxFiles.Clear();
+                job.Asides.Clear();
                 AddItem(job, new ChatItem { Kind = "note", Text = "Stopped. Send it a message to carry on." }, now);
             }
             return was;
@@ -461,6 +568,13 @@ internal sealed class JobBoard
         lock (Gate)
         {
             if (job.State == Stopped) return null;
+            // Messages that didn't reach it during the run (it took no step after them): they go now, as the next message.
+            foreach (var aside in job.Asides)
+            {
+                job.Inbox.Add(aside.Text);
+                SetAsideLine(job, aside.Id, "It finished its step before this arrived, so it carries on with it now.");
+            }
+            job.Asides.Clear();
             if (ok && job.Inbox.Count > 0)
             {
                 job.Summary = summary.Trim();
@@ -636,7 +750,7 @@ internal sealed class JobBoard
     private static ChatJob Copy(ChatJob j) => new()
     {
         Number = j.Number, Key = j.Key, Title = j.Title, Task = j.Task, State = j.State, Kind = j.Kind, Model = j.Model, Effort = j.Effort, Summary = j.Summary, Now = j.Now, Ahead = j.Ahead,
-        Created = j.Created, Started = j.Started, Ended = j.Ended, HasSession = j.HasSession, Inbox = j.Inbox.ToList(),
+        Created = j.Created, Started = j.Started, Ended = j.Ended, HasSession = j.HasSession, Inbox = j.Inbox.ToList(), Asides = j.Asides.Select(a => new JobAside { Id = a.Id, Text = a.Text, Now = a.Now }).ToList(),
         InboxFiles = j.InboxFiles.ToList(), Items = j.Items.ToList(), Activity = j.Activity, Worker = j.Worker,
         Plan = new Dictionary<string, string>(j.Plan), Heard = j.Heard.ToList(), Visited = j.Visited.ToList(),
     };

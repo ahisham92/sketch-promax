@@ -65,7 +65,7 @@ public sealed class ChatJobsTool : IRevitTool
         var sent = board.Tell(me.Key, number.Value, text, now);
         if (sent == JobBoard.Delivery.NotFound) return ToolResult.Error($"There is no job {number}. " + board.Describe(ChatJobs.Limit));
         ChatJobs.Changed?.Invoke();
-        return ToolResult.Ok(new { job = number, sent = true, state = sent == JobBoard.Delivery.Reopened ? "it carries on with this message" : "it gets this when its current run ends" });
+        return ToolResult.Ok(new { job = number, sent = true, state = sent == JobBoard.Delivery.Reopened ? "it carries on with this message" : sent == JobBoard.Delivery.Soon ? "it gets this with its next step" : "it gets this when its current run ends" });
     }
 
     /// <summary>Run from a recipe or the self-test (not the chat): lists, never starts or changes a job.</summary>

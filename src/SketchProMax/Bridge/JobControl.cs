@@ -516,7 +516,7 @@ internal static class JobNotes
     /// <summary>How the notes read to Claude.</summary>
     public static string Block(IEnumerable<string> notes)
     {
-        var sb = new StringBuilder("[Message from the user, sent while this step ran. Apply it from here on; it may change what you do next:]");
+        var sb = new StringBuilder("[Message from the user, sent while this step ran. If it corrects or changes the work you are doing, apply it from here on and fix what you already did that it affects; if it is separate new work, finish the current work first and then do it:]");
         foreach (var n in notes) sb.Append("\n- ").Append(n.Replace("\r", "").Replace("\n", "\n  "));
         return sb.ToString();
     }
