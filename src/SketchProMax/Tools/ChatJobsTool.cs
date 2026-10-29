@@ -23,13 +23,17 @@ public sealed class ChatJobsTool : IRevitTool
         "state and report. action=message sends a follow-up to job (its number): a running job gets it when its current run ends; a " +
         "finished or stopped one carries on with it. action=stop stops job. Before starting a job, list the jobs: a follow-up that " +
         "belongs to an existing job goes there with action=message. start refuses a request that reads as a follow-up of an existing " +
-        "job; call it again with new=true when it really is separate work. Reads run in parallel; model changes take turns. Not a model change.";
+        "job; call it again with new=true when it really is separate work. A job may call it too, to work with its teammates: action=list " +
+        "shows them, action=ask with job and question gets what that job has found so far (forward=true also passes the question on, and it " +
+        "messages you back), action=message with job and text tells it something it needs. Reads run in parallel; model changes take turns. Not a model change.";
     public string PropertiesJson => """
     {
-      "action": {"type": "string", "enum": ["start", "list", "message", "stop"], "description": "Default list."},
+      "action": {"type": "string", "enum": ["start", "list", "message", "stop", "ask"], "description": "Default list. A job (not the main chat) may use list, ask and message."},
+      "question": {"type": "string", "description": "ask (from a job): what you need from that job, e.g. 'the ids of the grids you read'."},
+      "forward": {"type": "boolean", "description": "ask: true to also pass the question on when the job is still working; it messages you the answer when its current run ends."},
       "title": {"type": "string", "description": "start: a few words the user sees on the card, e.g. 'Sheets for levels 1-5'."},
       "task": {"type": "string", "description": "start: the whole task for the job, with every detail it needs (names, levels, types, settings)."},
-      "job": {"type": "integer", "description": "message and stop: the job's number."},
+      "job": {"type": "integer", "description": "message, stop and ask: the job's number."},
       "text": {"type": "string", "description": "message: what to tell the job, in full."},
       "parts": {"type": "array", "description": "start: divide the work, one job per part, all started at once (each part's task in full; the parts must not overlap, e.g. levels 1-3 and 4-6).", "items": {"type": "object", "properties": {"title": {"type": "string"}, "task": {"type": "string"}, "kind": {"type": "string", "enum": ["simple", "everyday", "hard"]}}, "required": ["title", "task"]}},
       "facts": {"type": "string", "description": "start with parts: what you already read from the model that every part needs (levels, grids, types, names, ids); each job gets it with its task."},
@@ -41,6 +45,29 @@ public sealed class ChatJobsTool : IRevitTool
     public string[] Required => [];
     public bool ModifiesModel => false;
 
+    /// <summary>A job's own calls: ask a teammate, or message one; it doesn't start or stop jobs.</summary>
+    private static ToolResult Teamwork(JobBoard board, ChatJob me, string action, ToolArgs args)
+    {
+        var number = Number(args);
+        if (action is not ("ask" or "message"))
+            return ToolResult.Error("A job doesn't start or stop jobs: say in your report what else is needed, and the main chat hands it out. You may list, ask and message.");
+        if (number is null || number == me.Number) return ToolResult.Error("Give another job's number in 'job' (action=list shows your teammates).");
+        var now = DateTime.UtcNow;
+        if (action == "ask")
+        {
+            var answer = board.Ask(me.Key, number.Value, (Str(args, "question") ?? Str(args, "text") ?? "").Trim(), Bool(args, "forward"), now);
+            if (answer is null) return ToolResult.Error($"There is no job {number}. " + board.Describe(ChatJobs.Limit));
+            ChatJobs.Changed?.Invoke();
+            return ToolResult.Ok(new { job = number, answer, next = "Use what fits and carry on with your task; read the model only for what is still missing." });
+        }
+        var text = (Str(args, "text") ?? "").Trim();
+        if (text.Length == 0) return ToolResult.Error("Give what to tell the job in 'text'.");
+        var sent = board.Tell(me.Key, number.Value, text, now);
+        if (sent == JobBoard.Delivery.NotFound) return ToolResult.Error($"There is no job {number}. " + board.Describe(ChatJobs.Limit));
+        ChatJobs.Changed?.Invoke();
+        return ToolResult.Ok(new { job = number, sent = true, state = sent == JobBoard.Delivery.Reopened ? "it carries on with this message" : "it gets this when its current run ends" });
+    }
+
     /// <summary>Run from a recipe or the self-test (not the chat): lists, never starts or changes a job.</summary>
     public ToolResult Execute(UIApplication app, ToolArgs args) => Answer(args, coordinator: false);
 
@@ -48,14 +75,17 @@ public sealed class ChatJobsTool : IRevitTool
     /// The call's answer. <paramref name="coordinator"/>: the main chat of the pane called it (the bridge says so); only
     /// then may it start, message or stop jobs.
     /// </summary>
-    internal static ToolResult Answer(ToolArgs args, bool coordinator)
+    internal static ToolResult Answer(ToolArgs args, bool coordinator, string? jobKey = null)
     {
         var action = (Str(args, "action") ?? "list").Trim().ToLowerInvariant();
         var board = ChatJobs.Board;
         var limit = ChatJobs.Limit;
         if (action == "list")
             return board is null ? ToolResult.Ok(new { jobs = "No chat is open in the Sketch ProMax pane, so there are no jobs." }) : new ToolResult(board.Describe(limit));
-        if (action is not ("start" or "message" or "stop")) return ToolResult.Error("action is start, list, message or stop.");
+        if (action is not ("start" or "message" or "stop" or "ask")) return ToolResult.Error("action is start, list, message, stop or ask.");
+        // A job working with its teammates: it asks one for what it found, or tells one something.
+        if (jobKey is not null && board?.FindKey(jobKey) is { } me) return Teamwork(board, me, action, args);
+        if (action == "ask") return ToolResult.Error("ask is for a job asking another job; the main chat reads a job's report with action=list.");
         if (!coordinator || board is null)
             return ToolResult.Error("Jobs run only from the main chat of the Sketch ProMax pane in Revit. Do the work here yourself instead.");
         if (!ChatJobs.Coordinator)

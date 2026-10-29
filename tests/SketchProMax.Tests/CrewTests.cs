@@ -226,6 +226,41 @@ internal static class CrewTests
         e = crew.Update([done1, Job(2, JobBoard.Running), heard], t0.AddSeconds(2), null, 3);
         check("crew: a job given another's report gets a call from that desk", e.Any(x => x.Cue == CrewCue.Share && x.Number == 3 && x.From == 0), Cues(e));
 
+        // Teammates work together: one job asks another for what it found, or tells it something, and walks over to its desk.
+        var mates = new JobBoard([]);
+        var grids = mates.Start("Read grids", "Read the grids and levels", t0, force: true, out _)!;
+        var walls = mates.Start("Tag walls", "Tag the walls on every level", t0, force: true, out _)!;
+        grids.State = JobBoard.Running;
+        grids.Items.Add(new ChatItem { Kind = "assistant", Text = "Found grids A-F and 1-8. Levels are L1 0 mm and L2 3500 mm." });
+        grids.Now = "Running: Reading levels";
+        walls.State = JobBoard.Running;
+        var answer = mates.Ask(walls.Key, grids.Number, "the level heights?", forward: false, t0);
+        check("teamwork: a job asking another gets what it found so far", answer is not null && answer.Contains("L2 3500 mm") && answer.Contains("Doing now: Running: Reading levels") && walls.Visited.SequenceEqual([grids.Number]), answer ?? "");
+        check("teamwork: the asker's view notes the question", walls.Items.Last().Text.StartsWith("Asked job 1", StringComparison.Ordinal), walls.Items.Last().Text);
+        check("teamwork: a job can't ask itself or a missing job", mates.Ask(walls.Key, walls.Number, "x", false, t0) is null && mates.Ask(walls.Key, 9, "x", false, t0) is null, "");
+        mates.Ask(walls.Key, grids.Number, "the grid ids?", forward: true, t0);
+        check("teamwork: forward passes the question on, marked as from the teammate", grids.Inbox.Last().StartsWith(JobBoard.TeamSays + walls.Number, StringComparison.Ordinal) && grids.Items.Last().State == JobBoard.FromTeam + walls.Number, grids.Inbox.LastOrDefault() ?? "");
+        grids.State = JobBoard.Done;
+        grids.Summary = "Grids A-F, 1-8; levels L1, L2.";
+        check("teamwork: a finished job answers with its report", JobBoard.Findings(grids).Contains("Its report: Grids A-F"), JobBoard.Findings(grids));
+        check("teamwork: telling a finished job something reopens it", mates.Tell(walls.Key, grids.Number, "Level 3 is at 7000 mm", t0) == JobBoard.Delivery.Reopened && grids.State == JobBoard.Queued, grids.State);
+        var visits = new CrewPlan();
+        ChatJob Seated(int n, int worker) { var j = Job(n, JobBoard.Running); j.Worker = worker; return j; }
+        var one = Seated(1, 0);
+        var two = Seated(2, 1);
+        visits.Update([one, two], t0, null, 3);
+        two.Visited.Add(1);
+        e = visits.Update([one, two], t0.AddSeconds(1), null, 3);
+        check("teamwork: the asker walks to the teammate's desk", e.Any(x => x.Cue == CrewCue.Visit && x.Number == 2 && x.From == visits.Seats.First(s => s.Number == 1).Slot), Cues(e));
+        e = visits.Update([one, two], t0.AddSeconds(2), null, 3);
+        check("teamwork: a visit plays once", e.All(x => x.Cue != CrewCue.Visit), Cues(e));
+        one.Now = "Running: Tag walls on Level 2";
+        one.Items.Add(new ChatItem { Kind = "assistant", Text = "I read the walls. **Found 42 walls**, now checking their types." });
+        visits.Update([one, two], t0.AddSeconds(3), null, 3);
+        var seat1 = visits.Seats.First(s => s.Number == 1);
+        check("crew: the line under a working worker says what it is doing", CrewPlan.Status(seat1, seat1.Slot) == "Tag walls on Level 2", CrewPlan.Status(seat1, seat1.Slot));
+        check("crew: the thought bubble is its latest words", seat1.Thought == "Found 42 walls, now checking their types", seat1.Thought);
+
         // The crew's numbers: dollars rise per answer, time saved by working side by side, a job counts once, ties have no leader.
         double seen = 0;
         var r1 = CrewStats.Rise(ref seen, 0.10);

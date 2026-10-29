@@ -13,14 +13,14 @@ internal enum CrewMood { Thinking, Reading, Applying, Waiting, Resting, Done, Fa
 /// Something the strip acts out once: a worker sits down, gets a new sheet from the coordinator, or leaves; and the
 /// moments a worker says something short (a bubble): the plan is made, its turn at Revit came, the job finished.
 /// </summary>
-internal enum CrewCue { Arrive, Handover, Leave, Plan, Turn, Finish, Huddle, Share }
+internal enum CrewCue { Arrive, Handover, Leave, Plan, Turn, Finish, Huddle, Share, Visit }
 
 /// <summary>
 /// A worker at work: the job, its mood, which worker has it (<paramref name="Slot"/>: the n-th name, its own desk) and
 /// its place in the line at the applier (<paramref name="Line"/>: 0 applying now, 1 next, …; -1 at the desk), and how
 /// far its plan is (<paramref name="Percent"/>, with <paramref name="Left"/> steps to go; -1 while it has no plan).
 /// </summary>
-internal sealed record CrewSeat(int Number, string Title, CrewMood Mood, int Slot = 0, int Line = -1, int Percent = -1, int Left = -1, int Steps = 0, string Doing = "");
+internal sealed record CrewSeat(int Number, string Title, CrewMood Mood, int Slot = 0, int Line = -1, int Percent = -1, int Left = -1, int Steps = 0, string Doing = "", string Thought = "");
 
 /// <summary>
 /// The names in the crew strip, from Settings > Chat: you, the coordinator, the workers (one per job that runs at once,
@@ -169,6 +169,7 @@ internal sealed class CrewPlan
     private readonly Dictionary<int, int> _slots = new();
     private readonly Dictionary<int, int> _planned = new();
     private readonly Dictionary<int, int> _heard = new();
+    private readonly Dictionary<int, int> _visited = new();
     /// <summary>When each worker was last given a job: the next job goes to the free worker who waited longest.</summary>
     private readonly Dictionary<int, DateTime> _given = new();
     private List<CrewSeat> _seats = [];
@@ -248,6 +249,12 @@ internal sealed class CrewPlan
                 && all.TryGetValue(job.Heard[job.Heard.Count - 1], out var from) && from.Worker >= 0 && from.Worker < workers)
                 events.Add(new CrewEvent(CrewCue.Share, job.Number, "Thanks for the notes!", from.Worker));
             _heard[job.Number] = job.Heard.Count;
+            // It went to a teammate for information (or to tell them something): it walks over to that desk and back.
+            var visitedBefore = _visited.TryGetValue(job.Number, out var v) ? v : job.Visited.Count;
+            if (!quiet && was && job.Visited.Count > visitedBefore
+                && all.TryGetValue(job.Visited[job.Visited.Count - 1], out var to) && to.Worker >= 0 && to.Worker < workers)
+                events.Add(new CrewEvent(CrewCue.Visit, job.Number, "", to.Worker));
+            _visited[job.Number] = job.Visited.Count;
             _planned[job.Number] = steps;
             _asked[job.Number] = asked;
             next.Add((job, m));
@@ -294,7 +301,8 @@ internal sealed class CrewPlan
             var finished = n.Mood is CrewMood.Done;
             var (done, total) = JobPlan.Count(n.Job.Plan);
             return new CrewSeat(n.Job.Number, n.Job.Title, n.Mood, _slots[n.Job.Number], Percent: JobPlan.Percent(n.Job.Plan, finished), Left: total == 0 ? -1 : finished ? 0 : total - done,
-                Steps: n.Job.Items.Count(i => i.Kind == "tool"), Doing: n.Mood is CrewMood.Thinking or CrewMood.Reading ? Doing(n.Job.Now) : "");
+                Steps: n.Job.Items.Count(i => i.Kind == "tool"), Doing: n.Mood is CrewMood.Thinking or CrewMood.Reading ? Doing(n.Job.Now) : "",
+                Thought: n.Mood is CrewMood.Thinking or CrewMood.Reading ? Thought(n.Job) : "");
         }).ToList();
         // The line at the applier: the change being applied first, then the others in the order they asked.
         var line = placed.Where(s => s.Mood == CrewMood.Applying)
@@ -311,6 +319,7 @@ internal sealed class CrewPlan
         _slots.Remove(number);
         _planned.Remove(number);
         _heard.Remove(number);
+        _visited.Remove(number);
     }
 
     /// <summary>Starts over: the next update seats who is working without acting anything out.</summary>
@@ -321,6 +330,7 @@ internal sealed class CrewPlan
         _slots.Clear();
         _planned.Clear();
         _heard.Clear();
+        _visited.Clear();
         _seats = [];
         Unassigned = 0;
         _started = false;
@@ -402,9 +412,10 @@ internal sealed class CrewPlan
             CrewMood.Resting => "Starting again soon",
             CrewMood.Applying => far.Length > 0 ? $"{seat.Percent}% · applying" : "Applying",
             CrewMood.Waiting => far.Length > 0 ? $"{seat.Percent}% · in line" : "In line",
-            CrewMood.Reading => far.Length > 0 ? far : "Reading the model",
+            // At work: what it is doing now (the bar under it shows how far along); without a step, how far along.
+            CrewMood.Reading => seat.Doing.Length > 0 ? seat.Doing : far.Length > 0 ? far : "Reading the model",
             // No plan written (yet): how many steps it took, so there is always something moving.
-            _ => far.Length > 0 ? far : seat.Steps > 0 ? $"Step {seat.Steps}" : "Planning…",
+            _ => seat.Doing.Length > 0 ? seat.Doing : far.Length > 0 ? far : seat.Steps > 0 ? $"Step {seat.Steps}" : "Planning…",
         };
     }
 
@@ -421,6 +432,20 @@ internal sealed class CrewPlan
         text = text.TrimEnd('…', '.', ' ');
         if (text.Length == 0 || text == "Starting") return text.Length == 0 ? "" : "Getting started";
         return text.Length > 28 ? text.Substring(0, 27).TrimEnd() + "…" : text;
+    }
+
+    /// <summary>
+    /// What a worker is thinking, for the thought bubble over them: the last sentence of its latest words ("Found 42
+    /// walls, checking their types"), shortened; "" before it has said anything.
+    /// </summary>
+    public static string Thought(ChatJob job)
+    {
+        var last = job.Items.LastOrDefault(i => i.Kind == "assistant" && i.Text.Trim().Length > 0)?.Text ?? "";
+        var text = System.Text.RegularExpressions.Regex.Replace(last.Replace("*", "").Replace("#", "").Replace("`", ""), @"\s+", " ").Trim().TrimEnd(':');
+        var sentences = System.Text.RegularExpressions.Regex.Split(text, @"(?<=[.!?])\s+").Where(s => s.Trim().Length > 2).ToList();
+        text = sentences.Count > 0 ? sentences[sentences.Count - 1].Trim() : text;
+        text = text.TrimEnd('.', ' ');
+        return text.Length > 40 ? text.Substring(0, 39).TrimEnd() + "…" : text;
     }
 
     /// <summary>The worker who has job <paramref name="number"/> now, or null when none has it.</summary>
