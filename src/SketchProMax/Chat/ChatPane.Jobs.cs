@@ -97,6 +97,9 @@ internal sealed partial class ChatPane
         public bool Resumed, Retried;
         public string LastText = "";
         public readonly Dictionary<string, ChatItem> Steps = new();
+        /// <summary>When this run (or its carrying on with new messages) started, and the dollars its process reported so far: for CrewStats.</summary>
+        public DateTime RunStart = DateTime.UtcNow;
+        public double CostSeen;
         /// <summary>The whole input of each plan step under way (the item keeps a shortened copy), for JobPlan.</summary>
         public readonly Dictionary<string, string> PlanInputs = new();
     }
@@ -326,6 +329,13 @@ internal sealed partial class ChatPane
         var board = _board!;
         var now = DateTime.UtcNow;
         if (end.SessionId.Length > 0) JobSessions.Set(JobsFolder(_conv), run.Job.Key, end.SessionId);
+        // The worker's numbers: this run's time, tokens and dollars.
+        CrewStats.Add(new CrewRecord
+        {
+            Start = run.RunStart, End = now, Role = CrewRecord.Worker, Slot = run.Job.Worker, Chat = _conv.Id, Job = run.Job.Number,
+            In = end.InputTokens, Out = end.OutputTokens, Usd = CrewStats.Rise(ref run.CostSeen, end.CostUsd), Ok = !end.IsError,
+        });
+        run.RunStart = now;
         var message = end.Text.Trim().Length > 0 ? end.Text.Trim() : string.Join(" ", end.Errors);
         if (end.IsError && run.Resumed && !run.Retried && message.IndexOf("No conversation found", StringComparison.OrdinalIgnoreCase) >= 0)
         {

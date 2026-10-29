@@ -225,5 +225,30 @@ internal static class CrewTests
         heard.Heard.Add(1);
         e = crew.Update([done1, Job(2, JobBoard.Running), heard], t0.AddSeconds(2), null, 3);
         check("crew: a job given another's report gets a call from that desk", e.Any(x => x.Cue == CrewCue.Share && x.Number == 3 && x.From == 0), Cues(e));
+
+        // The crew's numbers: dollars rise per answer, time saved by working side by side, a job counts once, ties have no leader.
+        double seen = 0;
+        var r1 = CrewStats.Rise(ref seen, 0.10);
+        var r2 = CrewStats.Rise(ref seen, 0.25);
+        var r3 = CrewStats.Rise(ref seen, 0.05);
+        check("stats: dollars are the rise of the process total, again from zero in a new process", Math.Abs(r1 - 0.10) < 1e-9 && Math.Abs(r2 - 0.15) < 1e-9 && Math.Abs(r3 - 0.05) < 1e-9, $"{r1} {r2} {r3}");
+        CrewRecord Run(int slot, int job, int from, int to, bool ok = true) => new() { Slot = slot, Chat = "c", Job = job, Start = t0.AddSeconds(from), End = t0.AddSeconds(to), Ok = ok, In = 100, Out = 10, Usd = 0.5 };
+        List<CrewRecord> runs = [Run(0, 1, 0, 60), Run(1, 2, 30, 90), Run(2, 3, 200, 260, ok: false), Run(2, 3, 300, 320)];
+        var (used, saved) = CrewStats.Time(runs);
+        check("stats: time used adds up, time saved is the overlap", used == 200 && saved == 30, $"{used} {saved}");
+        var kpis = CrewStats.Workers(runs);
+        var third = kpis.First(k => k.Slot == 2);
+        check("stats: a job run twice counts once and is judged by its last run", third.Jobs == 1 && third.Done == 1 && third.Seconds == 80 && third.Usd == 1.0, $"{third}");
+        check("stats: a tie at the top has no leader", CrewStats.Leader(runs) == -1, "");
+        runs.Add(Run(0, 4, 400, 430));
+        check("stats: the most jobs done well leads", CrewStats.Leader(runs) == 0, "");
+        runs.Add(new CrewRecord { Role = CrewRecord.Coordinator, Start = t0, End = t0.AddSeconds(5), In = 50, Usd = 0.2 });
+        runs.Add(new CrewRecord { Role = CrewRecord.Applier, Start = t0, End = t0.AddSeconds(3) });
+        var lead = CrewStats.CoordinatorKpi(runs);
+        check("stats: the coordinator's turns and the jobs it handed out", lead.Turns == 1 && lead.JobsHandedOut == 4 && lead.In == 50, $"{lead}");
+        check("stats: the applier's changes", CrewStats.ApplierKpi(runs) == (1, 3.0), "");
+        check("stats: the period keeps only records ending in it", CrewStats.Since(runs, t0.AddSeconds(100)).Count == 3, "");
+        check("stats: friendly numbers", CrewStats.Tokens(1234) == "1.2k" && CrewStats.Tokens(2_100_000) == "2.1M" && CrewStats.Dollars(0.4) == "$0.40" && CrewStats.Duration(45) == "45 s" && CrewStats.Duration(7500) == "2 h 5 min",
+            CrewStats.Tokens(1234) + " " + CrewStats.Dollars(0.4) + " " + CrewStats.Duration(7500));
     }
 }

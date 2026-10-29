@@ -33,7 +33,8 @@ internal sealed record ThinkingDeltaEvent(string Text) : ChatEvent;
 internal sealed record ThinkingTextEvent(string MessageId, string Text) : ChatEvent;
 
 /// <summary>The end of a turn: success, or an error subtype (error_max_turns, error_during_execution, ...).</summary>
-internal sealed record ResultEvent(string Subtype, bool IsError, string Text, string SessionId, long InputTokens, long OutputTokens, IReadOnlyList<string> Errors) : ChatEvent;
+/// <remarks><paramref name="CostUsd"/>: the API-equivalent dollars of the whole process so far (Claude Code's total_cost_usd).</remarks>
+internal sealed record ResultEvent(string Subtype, bool IsError, string Text, string SessionId, long InputTokens, long OutputTokens, IReadOnlyList<string> Errors, double CostUsd = 0) : ChatEvent;
 
 /// <summary>system/api_retry: a request failed and is retried.</summary>
 internal sealed record RetryEvent(int Attempt, int MaxRetries, string Error, int DelayMs) : ChatEvent;
@@ -319,7 +320,8 @@ internal sealed class StreamParser
                 errors.Add(e.ValueKind == JsonValueKind.String ? e.GetString()! : e.ValueKind == JsonValueKind.Object ? Str(e, "message") : e.GetRawText());
         var subtype = Str(root, "subtype");
         var isError = root.TryGetProperty("is_error", out var ie) && ie.ValueKind == JsonValueKind.True || subtype.StartsWith("error", StringComparison.Ordinal);
-        return new ResultEvent(subtype, isError, Str(root, "result"), Str(root, "session_id"), input, output, errors);
+        var cost = root.TryGetProperty("total_cost_usd", out var usd) && usd.ValueKind == JsonValueKind.Number ? usd.GetDouble() : 0;
+        return new ResultEvent(subtype, isError, Str(root, "result"), Str(root, "session_id"), input, output, errors, cost);
     }
 
     /// <summary>"mcp__sketch-promax__create_walls" → "create_walls"; built-in tools keep their name.</summary>

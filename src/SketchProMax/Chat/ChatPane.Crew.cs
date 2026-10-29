@@ -41,6 +41,10 @@ internal sealed partial class ChatPane
             _crew.CoordinatorPicked += _ => ShowCoordinator(focus: true);
             _crew.WorkersChanged += SetWorkers;
             _crew.ApplierPicked += ShowApplierList;
+            _crew.AppliedOne += CountApplied;
+            _crew.TeamPicked += () => new UI.CrewPerformanceWindow().Show();
+            CrewStats.Changed += () => Dispatcher.BeginInvoke(new Action(ShowKpis));
+            ShowKpis();
             CrewStrip.NamesChanged += () =>
             {
                 _switchShown = ""; // the jobs column names the workers too
@@ -102,6 +106,43 @@ internal sealed partial class ChatPane
         }
         if (rows.Count == 0) rows.Add(("Nothing yet", $"{names.Applier} puts the workers' changes into Revit one at a time; they show here.", false, () => { }));
         ToggleChoice(anchor, new Choice($"{names.Applier}: changes into Revit", rows));
+    }
+
+    private object? _costEngine;
+    private double _costSeen;
+
+    /// <summary>
+    /// A turn of the main chat ended: in a chat With coordinator it is the coordinator's work, counted for the team's
+    /// numbers (CrewStats); a Simple chat's turns are counted in step with Simple chats as one worker, later.
+    /// </summary>
+    private void CountTurn(Turn? turn, ResultEvent end)
+    {
+        if (!IsCoordinator || _sample) return;
+        if (!ReferenceEquals(_costEngine, _engine))
+        {
+            _costEngine = _engine;
+            _costSeen = 0;
+        }
+        CrewStats.Add(new CrewRecord
+        {
+            Start = turn?.Started ?? DateTime.UtcNow, End = DateTime.UtcNow, Role = CrewRecord.Coordinator, Chat = _conv.Id,
+            In = end.InputTokens, Out = end.OutputTokens, Usd = CrewStats.Rise(ref _costSeen, end.CostUsd), Ok = !end.IsError,
+        });
+    }
+
+    /// <summary>The applier put job <paramref name="job"/>'s change into Revit, which took <paramref name="took"/>.</summary>
+    private void CountApplied(int job, TimeSpan took)
+    {
+        var now = DateTime.UtcNow;
+        CrewStats.Add(new CrewRecord { Start = now - took, End = now, Role = CrewRecord.Applier, Chat = _conv.Id, Job = job });
+    }
+
+    /// <summary>Today's jobs done per worker, and who leads, on the strip.</summary>
+    private void ShowKpis()
+    {
+        if (_crew is null || _stopped) return;
+        var today = CrewStats.Since(CrewStats.All(), DateTime.Today.ToUniversalTime());
+        _crew.ShowKpis(CrewStats.Workers(today).ToDictionary(k => k.Slot, k => k.Done), CrewStats.Leader(today));
     }
 
     /// <summary>+ or − on the strip: that many workers from now on (Settings: jobs at once); a new one takes a waiting job at once.</summary>
