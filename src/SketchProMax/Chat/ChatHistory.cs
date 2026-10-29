@@ -71,6 +71,10 @@ internal sealed class Conversation
     public string Model { get; set; } = "";
     /// <summary>The chat's effort (ChatAuto): "auto", or a level picked by hand that sticks. "" is auto.</summary>
     public string Effort { get; set; } = "";
+    /// <summary>A Simple chat: the worker's desk it talks to directly (CrewStats.NextWorker); -1 until its first request.</summary>
+    public int Worker { get; set; } = -1;
+    /// <summary>The advice already given in this chat (DirectAdvice: overloaded, mixed, several), so each shows once.</summary>
+    public List<string> Advised { get; set; } = [];
 
     /// <summary>The file it was read from (not saved).</summary>
     [JsonIgnore] public string File { get; set; } = "";

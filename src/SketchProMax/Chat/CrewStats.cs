@@ -23,6 +23,8 @@ internal sealed class CrewRecord
     public long Out { get; set; }
     public double Usd { get; set; }
     public bool Ok { get; set; } = true;
+    /// <summary>A request in a Simple chat, answered by the worker the chat talks to directly (no coordinator handed it out).</summary>
+    public bool Direct { get; set; }
 
     public double Seconds => Math.Max(0, (End - Start).TotalSeconds);
 }
@@ -146,7 +148,7 @@ internal static class CrewStats
     {
         var list = records.ToList();
         var turns = list.Where(r => r.Role == CrewRecord.Coordinator).ToList();
-        var jobs = list.Where(r => r.Role == CrewRecord.Worker).Select(r => (r.Chat, r.Job)).Distinct().Count();
+        var jobs = list.Where(r => r.Role == CrewRecord.Worker && !r.Direct).Select(r => (r.Chat, r.Job)).Distinct().Count();
         return (turns.Count, turns.Sum(r => r.Seconds), turns.Sum(r => r.In), turns.Sum(r => r.Out), turns.Sum(r => r.Usd), jobs);
     }
 
@@ -163,6 +165,18 @@ internal static class CrewStats
         var kpis = Workers(records);
         if (kpis.Count == 0 || kpis[0].Done == 0) return -1;
         return kpis.Count > 1 && kpis[1].Done == kpis[0].Done ? -1 : kpis[0].Slot;
+    }
+
+    /// <summary>
+    /// The worker a new Simple chat talks to: of the first <paramref name="workers"/>, the one who worked least recently
+    /// (never first, then the first desk), so the team takes turns.
+    /// </summary>
+    public static int NextWorker(IEnumerable<CrewRecord> records, int workers)
+    {
+        workers = Math.Max(1, workers);
+        var last = records.Where(r => r.Role == CrewRecord.Worker && r.Slot >= 0 && r.Slot < workers)
+            .GroupBy(r => r.Slot).ToDictionary(g => g.Key, g => g.Max(r => r.End));
+        return Enumerable.Range(0, workers).OrderBy(s => last.TryGetValue(s, out var t) ? t : DateTime.MinValue).ThenBy(s => s).First();
     }
 
     /// <summary>"1.2k", "34k", "2.1M" tokens.</summary>

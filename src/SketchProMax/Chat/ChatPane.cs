@@ -1230,6 +1230,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             "job" => JobCard(item),
             "pjob" => ParallelJobCardFor(item),
             "note" when item.Name.StartsWith("ack:", StringComparison.Ordinal) => AckLine(item),
+            "note" when item.Name.StartsWith(AdvicePrefix, StringComparison.Ordinal) => AdviceLine(item),
             _ => NoteLine(item),
         };
     }
@@ -1252,7 +1253,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     private static string WhenLong(ChatItem item) =>
         item.Time == default ? "" : item.Time.ToLocalTime().ToString("dddd d MMMM yyyy, HH:mm", CultureInfo.InvariantCulture);
 
-    private static UIElement ClaudeHeader(ChatItem item)
+    private UIElement ClaudeHeader(ChatItem item)
     {
         var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, ChatUi.S2) };
         var mark = ChatUi.Mark(20);
@@ -1260,7 +1261,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         mark.VerticalAlignment = VerticalAlignment.Center;
         AutomationProperties.SetName(mark, "");
         row.Children.Add(mark);
-        row.Children.Add(ChatUi.Small("Sketch ProMax", Brand.K.Text, bold: true));
+        // A Simple chat is a talk with one worker: the answers carry that worker's name.
+        row.Children.Add(ChatUi.Small(DirectWorker is { } worker ? worker + " · Sketch ProMax" : "Sketch ProMax", Brand.K.Text, bold: true));
         var time = ChatUi.Small(When(item));
         time.ToolTip = WhenLong(item);
         row.Children.Add(time);

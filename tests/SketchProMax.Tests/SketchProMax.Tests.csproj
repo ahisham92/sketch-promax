@@ -26,6 +26,7 @@
     <Compile Include="../../src/SketchProMax/Chat/JobBoard.cs" Link="JobBoard.cs" />
     <Compile Include="../../src/SketchProMax/Chat/CrewPlan.cs" Link="CrewPlan.cs" />
     <Compile Include="../../src/SketchProMax/Chat/CrewStats.cs" Link="CrewStats.cs" />
+    <Compile Include="../../src/SketchProMax/Chat/DirectAdvice.cs" Link="DirectAdvice.cs" />
     <Compile Include="../../src/SketchProMax/Chat/ChatAuto.cs" Link="ChatAuto.cs" />
     <Compile Include="../../src/SketchProMax/Bridge/JobTurns.cs" Link="JobTurns.cs" />
     <Compile Include="../../src/SketchProMax/Revit/AutoSyncRule.cs" Link="AutoSyncRule.cs" />

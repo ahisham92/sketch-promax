@@ -257,6 +257,29 @@ internal static class CrewTests
         check("coordinator: a model picked by hand still sticks", ChatAuto.Pick("x", "opus", "high", kind: ChatAuto.Coordinating).Label == ChatAuto.Pick("x", "opus", "high").Label, "");
         check("coordinator: the job it hands out keeps the hard kind", ChatAuto.Pick("Check the BEP", "auto", "auto", kind: ChatAuto.Hard).Model == "opus", "");
         check("coordinator: its chat shrinks sooner (short memory)", ChatRecall.ShouldAutoShrink(70_000, 25_000, coordinator: true) && !ChatRecall.ShouldAutoShrink(70_000, 25_000), "");
+        // A Simple chat talks to one worker directly: the least recently busy one takes it, it counts in the worker's numbers
+        // but not as a job the coordinator handed out, and the chat says when the worker is overloaded or the topics mix.
+        List<CrewRecord> recent = [Run(0, 1, 0, 60), Run(1, 2, 100, 160)];
+        check("direct: the worker who never worked takes a new Simple chat", CrewStats.NextWorker(recent, 3) == 2, "");
+        recent.Add(Run(2, 3, 200, 260));
+        check("direct: then the one who worked least recently", CrewStats.NextWorker(recent, 3) == 0, "");
+        check("direct: only the workers on the team", CrewStats.NextWorker(recent, 1) == 0 && CrewStats.NextWorker([], 0) == 0, "");
+        var direct = Run(1, 1, 300, 330);
+        direct.Chat = "simple";
+        direct.Direct = true;
+        recent.Add(direct);
+        check("direct: a Simple chat's answer counts for the worker, not as a job handed out", CrewStats.Workers(recent).First(k => k.Slot == 1).Jobs == 2 && CrewStats.CoordinatorKpi(recent).JobsHandedOut == 3, "");
+        var given = new List<string>();
+        check("direct: a short chat on one topic needs no advice", DirectAdvice.Check(["Tag the walls on level 2", "Now tag the walls on level 3 too"], 20_000, 15_000, given) is null, "");
+        check("direct: a heavy chat means the worker is overloaded", DirectAdvice.Check(["Tag the walls on level 2"], 80_000, 15_000, given) == DirectAdvice.Overloaded, "");
+        given.Add(DirectAdvice.Overloaded);
+        check("direct: each advice shows once", DirectAdvice.Check(["Tag the walls on level 2"], 90_000, 15_000, given) is null, "");
+        List<string> mixed = ["Tag the walls on level 2 with fire ratings", "Export the sheets A101 to A110 as PDF files", "Estimate the concrete volume of the pile caps"];
+        check("direct: three unrelated topics in a row are mixed", DirectAdvice.IsMixed(mixed) && DirectAdvice.Check(mixed, 20_000, 15_000, []) == DirectAdvice.Mixed, "");
+        check("direct: the same topic carried on is not mixed", !DirectAdvice.IsMixed(["Tag the walls on level 2 with fire ratings", "Tag the walls on level 3 with fire ratings", "Fire ratings for walls on level 4 too"]), "");
+        check("direct: a list of three tasks is several", DirectAdvice.IsSeveral("Please:\n1. rename the sheets\n2. tag the doors\n3. export the schedules") && DirectAdvice.IsSeveral("rename the sheets; tag the doors; export the schedules"), "");
+        check("direct: one task with a semicolon is not several", !DirectAdvice.IsSeveral("Rename the sheets; keep the numbers"), "");
+        check("direct: the advice names the worker and points to the coordinator", DirectAdvice.Say(DirectAdvice.Mixed, "Nova").Contains("Nova") && DirectAdvice.Say(DirectAdvice.Overloaded, "Nova").Contains("With coordinator"), "");
         check("stats: friendly numbers", CrewStats.Tokens(1234) == "1.2k" && CrewStats.Tokens(2_100_000) == "2.1M" && CrewStats.Dollars(0.4) == "$0.40" && CrewStats.Duration(45) == "45 s" && CrewStats.Duration(7500) == "2 h 5 min",
             CrewStats.Tokens(1234) + " " + CrewStats.Dollars(0.4) + " " + CrewStats.Duration(7500));
     }

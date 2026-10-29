@@ -117,17 +117,72 @@ internal sealed partial class ChatPane
     /// </summary>
     private void CountTurn(Turn? turn, ResultEvent end)
     {
-        if (!IsCoordinator || _sample) return;
+        if (_sample || turn is { Shrinking: true }) return;
         if (!ReferenceEquals(_costEngine, _engine))
         {
             _costEngine = _engine;
             _costSeen = 0;
         }
+        var usd = CrewStats.Rise(ref _costSeen, end.CostUsd);
+        if (IsCoordinator)
+        {
+            CrewStats.Add(new CrewRecord
+            {
+                Start = turn?.Started ?? DateTime.UtcNow, End = DateTime.UtcNow, Role = CrewRecord.Coordinator, Chat = _conv.Id,
+                In = end.InputTokens, Out = end.OutputTokens, Usd = usd, Ok = !end.IsError,
+            });
+            return;
+        }
+        // A Simple chat: the request was the worker's own job, done directly with you.
+        if (_conv.Worker < 0 || turn is null) return;
         CrewStats.Add(new CrewRecord
         {
-            Start = turn?.Started ?? DateTime.UtcNow, End = DateTime.UtcNow, Role = CrewRecord.Coordinator, Chat = _conv.Id,
-            In = end.InputTokens, Out = end.OutputTokens, Usd = CrewStats.Rise(ref _costSeen, end.CostUsd), Ok = !end.IsError,
+            Start = turn.Started, End = DateTime.UtcNow, Role = CrewRecord.Worker, Slot = _conv.Worker, Chat = _conv.Id,
+            Job = _conv.Items.Count(i => i.Kind == "user"), In = end.InputTokens, Out = end.OutputTokens, Usd = usd, Ok = !end.IsError, Direct = true,
         });
+        if (end.IsError || turn.Stopping) return;
+        var requests = _conv.Items.Where(i => i.Kind == "user").Select(i => i.Text).ToList();
+        if (DirectAdvice.Check(requests, _contextTokens, _conv.ContextFloor, _conv.Advised) is not { } advice) return;
+        _conv.Advised.Add(advice);
+        Add(new ChatItem { Kind = "note", Name = AdvicePrefix + advice, Text = DirectAdvice.Say(advice, DirectWorker ?? "This worker") });
+    }
+
+    private const string AdvicePrefix = "advice:";
+
+    /// <summary>The worker a Simple chat talks to (null in a chat With coordinator, or before its first request).</summary>
+    private string? DirectWorker => !IsCoordinator && _conv.Worker >= 0 ? CrewStrip.Names.Worker(_conv.Worker) : null;
+
+    /// <summary>A Simple chat's first request: the worker who worked least recently takes the chat.</summary>
+    private void TakeDirectWorker()
+    {
+        if (IsCoordinator || _sample || _conv.Worker >= 0) return;
+        _conv.Worker = CrewStats.NextWorker(CrewStats.All(), ChatJobs.Limit);
+        ShowType();
+    }
+
+    /// <summary>
+    /// Advice in a Simple chat (DirectAdvice) as a note with what to do about it: switch the chat to With coordinator,
+    /// and for a heavy chat also shrink it.
+    /// </summary>
+    private UIElement AdviceLine(ChatItem item)
+    {
+        var panel = new StackPanel();
+        panel.Children.Add(NoteLine(item));
+        var actions = new WrapPanel { Margin = new Thickness(ChatUi.S4, ChatUi.S1, 0, 0) };
+        var coordinate = ChatUi.Ghost(ChatUi.GlyphRight, "Switch to With coordinator", "Switch this chat to With coordinator",
+            "The coordinator keeps a short memory and hands each task to its own worker; this chat's history carries on.");
+        coordinate.Click += (_, _) => SetChatType(ChatTypes.Coordinator);
+        actions.Children.Add(coordinate);
+        if (item.Name == AdvicePrefix + DirectAdvice.Overloaded)
+        {
+            var shrink = ChatUi.Ghost(ChatUi.GlyphDown, "Shrink this chat", "Shrink this chat",
+                "Replace the earlier messages with a short summary, so each new message costs less.");
+            shrink.Margin = new Thickness(ChatUi.S2, 0, 0, 0);
+            shrink.Click += (_, _) => _ = Shrink(auto: false);
+            actions.Children.Add(shrink);
+        }
+        panel.Children.Add(actions);
+        return panel;
     }
 
     /// <summary>The applier put job <paramref name="job"/>'s change into Revit, which took <paramref name="took"/>.</summary>

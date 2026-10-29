@@ -57,6 +57,7 @@ internal sealed partial class ChatPane
     {
         // With coordinator, its own turns run light on one model; the heavy work goes to the jobs, each on its own kind's.
         var pick = ChatJobs.Pick(text, _conv.Model, _conv.Effort, IsCoordinator ? ChatAuto.Coordinating : null, documents, _refusedModels);
+        TakeDirectWorker();
         _model = pick.Model;
         _effort = pick.Effort;
         var changed = _lastPick is null || _lastPick.Model != pick.Model || _lastPick.Effort != pick.Effort;
@@ -162,9 +163,12 @@ internal sealed partial class ChatPane
     private void ShowType()
     {
         var type = ChatTypes.Of(_conv);
-        _typeLabel.Text = ChatTypes.Label(type) + (_pendingType is { } next ? " → " + ChatTypes.Label(next) : "");
+        var worker = DirectWorker;
+        _typeLabel.Text = ChatTypes.Label(type) + (worker is not null && _pendingType is null ? " · with " + worker : "") + (_pendingType is { } next ? " → " + ChatTypes.Label(next) : "");
         Brand.Fg(_typeLabel, Brand.K.Muted);
-        _typePill.ToolTip = $"This chat: {ChatTypes.Label(type)}. {ChatTypes.Hint(type)}. Click to switch (while no job is open).";
+        _typePill.ToolTip = $"This chat: {ChatTypes.Label(type)}. {ChatTypes.Hint(type)}." +
+            (worker is not null ? $" You're talking with {worker} directly: each answer counts in {worker}'s numbers (Team on the crew strip)." : "") +
+            " Click to switch (while no job is open).";
         AutomationProperties.SetName(_typePill, "Chat type: " + ChatTypes.Label(type));
         AutomationProperties.SetHelpText(_typePill, (string)_typePill.ToolTip);
     }
