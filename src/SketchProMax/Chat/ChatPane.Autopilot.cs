@@ -65,6 +65,7 @@ internal sealed partial class ChatPane
         AutomationProperties.SetName(_autoBanner, _autoText.Text);
         if (run.Active) _autoTimer!.Start();
         else _autoTimer!.Stop();
+        if (run.Active && run.State != AutopilotRun.Approval) StartWatchdog();
     }
 
     private void BuildAutopilotBanner()
@@ -289,12 +290,81 @@ internal sealed partial class ChatPane
         ShowAutopilot();
     }
 
-    private int _sharedLogRead;
+    private static bool _watching;
+
+    /// <summary>
+    /// While a run is on: a small watcher outside Revit (the connector program, --watch-revit) that starts Revit again on
+    /// the same model if it ends without closing the normal way (a crash); the new Revit carries the run on.
+    /// </summary>
+    private static void StartWatchdog()
+    {
+        if (_watching) return;
+        _watching = true;
+        try
+        {
+            var exe = Update.ClaudeRegistration.ConnectorPath;
+            using var me = System.Diagnostics.Process.GetCurrentProcess();
+            var revit = me.MainModule?.FileName ?? "";
+            if (!File.Exists(exe) || revit.Length == 0) return;
+            var model = Revit.FreezeWatch.ModelToReopen ?? "";
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(exe, $"--watch-revit {me.Id} \"{revit}\" \"{model}\"")
+            {
+                UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = Path.GetDirectoryName(exe) ?? "",
+            })?.Dispose();
+        }
+        catch (Exception) { /* no watcher: after a crash the run carries on when Revit is opened again */ }
+    }
+
+    private bool _recoverChecked;
+
+    /// <summary>
+    /// Once the chat is ready after Revit started: a run left behind by a Revit that went away without closing (a crash,
+    /// or a restart after a hang) is taken over. Its chat opens, the jobs that were working carry on, and the coordinator
+    /// is told what happened.
+    /// </summary>
+    private void AutopilotRecoverTick()
+    {
+        if (_recoverChecked || _stopped || _sample || _setup != Setup.Ready || _install is null) return;
+        if (AutopilotShare.Orphan(DateTime.UtcNow) is not { } orphan)
+        {
+            _recoverChecked = true;
+            return;
+        }
+        var chatId = orphan.Run.Split(':')[0];
+        var conv = ChatStore.All().FirstOrDefault(c => c.Id == chatId && c.Autopilot is { Active: true });
+        if (conv is null)
+        {
+            _recoverChecked = true;
+            return;
+        }
+        if (!string.Equals(conv.Id, _conv.Id, StringComparison.Ordinal))
+        {
+            if (_turn is not null || JobsOpen) return; // tried again next minute
+            ((IHistoryHost)this).OpenChat(ChatHistory.Summarize(conv));
+            if (!string.Equals(_conv.Id, chatId, StringComparison.Ordinal)) return;
+        }
+        _recoverChecked = true;
+        if (Run is not { Active: true } run) return;
+        var why = orphan.Why.Length > 0 ? orphan.Why + "." : "Revit closed unexpectedly and was started again.";
+        AutopilotShare.Beat(Autopilot.RunId(_conv.Id, run), DateTime.UtcNow); // this Revit runs it now
+        TakeSharedLog(run);
+        AutopilotLog(AutopilotEntry.Resumed, why + " The autopilot carried on.");
+        Note("Autopilot: " + why + " It carries on where it was.");
+        ShowAutopilot();
+        // The jobs that were working when Revit went (stopped when the chat reopened) carry on.
+        foreach (var job in _board?.Snapshot().Where(j => j.Number > run.JobsBefore && j.State == JobBoard.Stopped && !j.OverBudget
+                                                          && j.Ended >= orphan.Beat.AddMinutes(-1)).ToList() ?? [])
+            _board!.Message(job.Number, "Revit was restarted while you worked. Carry on with your task where you left off: first check in the " +
+                                        "model what is already done (a change that was being applied may be missing).", DateTime.UtcNow);
+        JobsChanged();
+        Save();
+        if (run.State == AutopilotRun.Running && _turn is null) _ = RunTurn(Autopilot.Recovered(run, why), [], "");
+    }
 
     /// <summary>What the other Revit windows answered for this run (AutopilotShare), into its log.</summary>
     private void TakeSharedLog(AutopilotRun run)
     {
-        foreach (var entry in AutopilotShare.TakeLog(ref _sharedLogRead)) AutopilotLog(entry.Kind, entry.Text);
+        foreach (var entry in AutopilotShare.TakeLog()) AutopilotLog(entry.Kind, entry.Text);
     }
 
     /// <summary>Something answered or allowed for the user while away: kept in the run's log for the report.</summary>

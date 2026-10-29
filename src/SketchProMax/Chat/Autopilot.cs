@@ -3,16 +3,6 @@ using System.Text;
 
 namespace SketchProMax.Chat;
 
-/// <summary>One line of an autopilot run's log: a popup answered, a step skipped, a pause, a decision.</summary>
-internal sealed class AutopilotEntry
-{
-    public const string Popup = "popup", Allowed = "allowed", Paused = "paused", Resumed = "resumed", Note = "note";
-
-    public DateTime Time { get; set; }
-    public string Kind { get; set; } = Note;
-    public string Text { get; set; } = "";
-}
-
 /// <summary>
 /// An autopilot chat's run, saved with the chat (Conversation.Autopilot): the goal, the plan the user approved, where it
 /// is (planning, waiting for approval, running, paused at a usage limit, done or stopped) and its log.
@@ -170,6 +160,27 @@ internal static class Autopilot
 
     /// <summary>What the safe answer reads as, for the log.</summary>
     public static string ResultName(int result) => result switch { 1 => "OK", 3 => "Abort", 7 => "No", _ => "Cancel" };
+
+    // ---- Revit stuck --------------------------------------------------------------------------------------------------
+
+    /// <summary>Revit "Not responding" this long with no activity at all during a run: restarted on the same model.</summary>
+    public static readonly TimeSpan RestartWhenStuck = TimeSpan.FromMinutes(10);
+
+    /// <summary>Revit busy (the processor, memory or files moving) but not responding this long: restarted too.</summary>
+    public static readonly TimeSpan RestartWhenBusy = TimeSpan.FromMinutes(45);
+
+    /// <summary>
+    /// Whether an autopilot restarts a hung Revit by itself: Revit not responding for <see cref="RestartWhenStuck"/> while
+    /// doing nothing at all, or for <see cref="RestartWhenBusy"/> while working; long work Revit is known to do
+    /// (<paramref name="longWork"/>: synchronizing, opening, saving, loading links) gets the longer time either way.
+    /// </summary>
+    public static bool RestartAfterHang(bool unattended, bool notResponding, TimeSpan lasted, bool idle, bool longWork) =>
+        unattended && notResponding && lasted >= (idle && !longWork ? RestartWhenStuck : RestartWhenBusy);
+
+    /// <summary>What the coordinator is told when the run carries on after Revit was started again.</summary>
+    public static string Recovered(AutopilotRun run, string why) =>
+        "[Autopilot, not typed by the user] " + why + " The jobs that were working were told to carry on; a change that was " +
+        "being applied may not be in the model. Check the model where it matters, then carry on toward the goal. Goal: " + OneLine(run.Goal, 400);
 
     // ---- Usage limits --------------------------------------------------------------------------------------------------
 

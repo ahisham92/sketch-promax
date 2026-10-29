@@ -23,10 +23,9 @@ internal static class TwoModelTests
                 && !AutopilotShare.Claim(@"c:\p\tower-docs.RVT", now), "");
             AutopilotShare.AppendLog("chat1:1", AutopilotEntry.Popup, "[Tower-Docs] Revit asked \"Link not found\": answered Cancel", now);
             AutopilotShare.Me = 100;
-            var read = 0;
-            var lines = AutopilotShare.TakeLog(ref read);
+            var lines = AutopilotShare.TakeLog();
             check("two models: what the other window answered reaches the owner's report", lines.Count == 1 && lines[0].Kind == AutopilotEntry.Popup && lines[0].Text.StartsWith("[Tower-Docs]"), "");
-            check("two models: each line is taken once", AutopilotShare.TakeLog(ref read).Count == 0, "");
+            check("two models: each line is taken once", AutopilotShare.TakeLog().Count == 0, "");
             AutopilotShare.Beat("chat1:1", now.AddMinutes(5));
             AutopilotShare.Me = 200;
             check("two models: a run kept alive stays on", AutopilotShare.Remote(now.AddMinutes(6)) == "chat1:1", "");
@@ -39,6 +38,71 @@ internal static class TwoModelTests
             AutopilotShare.Me = 200;
             check("two models: once the run ends the other window asks again", AutopilotShare.Remote(now.AddMinutes(5).AddSeconds(40)) is null && !AutopilotShare.Claim(@"C:\P\Other.rvt", now), "");
             check("two models: Unattended needs a run", !Autopilot.Unattended, "");
+        }
+        finally
+        {
+            (AutopilotShare.Folder, AutopilotShare.Me, AutopilotShare.IsAlive) = (oldFolder, oldMe, oldAlive);
+            try { Directory.Delete(folder, true); } catch (IOException) { }
+        }
+
+        // Revit freezes or crashes during a run.
+        var m = TimeSpan.FromMinutes(1);
+        check("freeze: stuck 10 minutes doing nothing is restarted", Autopilot.RestartAfterHang(true, true, 10 * m, idle: true, longWork: false), "");
+        check("freeze: not before 10 minutes", !Autopilot.RestartAfterHang(true, true, 9 * m, true, false), "");
+        check("freeze: busy (processor or files moving) gets 45 minutes", !Autopilot.RestartAfterHang(true, true, 30 * m, false, false)
+            && Autopilot.RestartAfterHang(true, true, 45 * m, false, false), "");
+        check("freeze: a sync or opening gets 45 minutes even when quiet", !Autopilot.RestartAfterHang(true, true, 20 * m, true, longWork: true), "");
+        check("freeze: never without an autopilot", !Autopilot.RestartAfterHang(false, true, 120 * m, true, false), "");
+        folder = Path.Combine(Path.GetTempPath(), "spm-share-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            AutopilotShare.Folder = folder;
+            var alive = new HashSet<int> { 100 };
+            AutopilotShare.IsAlive = alive.Contains;
+            var now = new DateTime(2026, 10, 30, 1, 0, 0, DateTimeKind.Utc);
+            AutopilotShare.Me = 100;
+            AutopilotShare.Begin("chat1:1", @"C:\P\Tower-Model.rvt", now);
+            // A crash: Revit 100 is gone; the watcher starts it again once, never twice.
+            alive.Remove(100);
+            AutopilotShare.Me = 999; // the watcher
+            check("crash: the watcher starts Revit again", AutopilotShare.ShouldRelaunch(100, now.AddMinutes(1)), "");
+            check("crash: only once for that Revit", !AutopilotShare.ShouldRelaunch(100, now.AddMinutes(1)), "");
+            AutopilotShare.Me = 300; // the new Revit
+            var orphan = AutopilotShare.Orphan(now.AddMinutes(3));
+            check("crash: the new Revit finds the run to carry on", orphan?.Run == "chat1:1" && orphan.Why == "" && orphan.Restarts == 1, "");
+            AutopilotShare.Beat("chat1:1", now.AddMinutes(3));
+            alive.Add(300);
+            check("crash: once taken over it is the owner, with the backups kept", AutopilotShare.Read() is { Owner: 300, Restarts: 1 } st && st.Backups.Count == 1
+                && AutopilotShare.Orphan(now.AddMinutes(4)) is null, "");
+            // A hang: Revit 300 restarts itself; the watcher must not start a second one.
+            AutopilotShare.MarkRestart("Revit stopped responding for 10 minutes");
+            alive.Remove(300);
+            AutopilotShare.Me = 999;
+            check("hang: Revit restarted itself, the watcher starts none", !AutopilotShare.ShouldRelaunch(300, now.AddMinutes(14)), "");
+            AutopilotShare.Me = 400;
+            check("hang: the next Revit carries on and says why", AutopilotShare.Orphan(now.AddMinutes(15))?.Why.StartsWith("Revit stopped responding") == true, "");
+            AutopilotShare.Beat("chat1:1", now.AddMinutes(15));
+            alive.Add(400);
+            // Closed the normal way: nothing restarts or carries on.
+            AutopilotShare.MarkClosed();
+            alive.Remove(400);
+            AutopilotShare.Me = 999;
+            check("closed: the watcher starts no Revit", !AutopilotShare.ShouldRelaunch(400, now.AddMinutes(16)), "");
+            AutopilotShare.Me = 500;
+            check("closed: a later Revit doesn't take the run over", AutopilotShare.Orphan(now.AddMinutes(17)) is null, "");
+            // Revit that keeps crashing: given up after a few restarts.
+            AutopilotShare.Me = 600;
+            AutopilotShare.Begin("chat2:1", "", now);
+            var tries = 0;
+            for (var k = 0; k < 6; k++)
+            {
+                AutopilotShare.Me = 600 + k;
+                AutopilotShare.Beat("chat2:1", now.AddMinutes(k));
+                AutopilotShare.Me = 999;
+                if (AutopilotShare.ShouldRelaunch(600 + k, now.AddMinutes(k))) tries++;
+            }
+            check("crash: given up after three restarts", tries == AutopilotShare.MaxRestarts, tries.ToString());
+            check("crash: a run left too long ago isn't taken over", AutopilotShare.Orphan(now.AddHours(2)) is null, "");
         }
         finally
         {

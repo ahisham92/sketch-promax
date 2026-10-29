@@ -10,6 +10,14 @@ using SketchProMax.Bridge;
 // Claude desktop / Claude Code launch this over stdio. Tool calls are forwarded over a named pipe
 // to the Sketch ProMax add-in inside the running Revit session.
 
+// The autopilot's watchdog (started by the Revit that runs an autopilot): when that Revit ends without closing the normal
+// way (a crash), it is started again on the same model, and the new Revit carries the run on.
+if (args.Length >= 3 && args[0] == "--watch-revit")
+{
+    Watchdog.Run(args);
+    return;
+}
+
 var builder = Host.CreateApplicationBuilder(args);
 // stdout carries the MCP protocol; all logging must go to stderr.
 builder.Logging.AddConsole(o => o.LogToStandardErrorThreshold = LogLevel.Trace);
@@ -82,5 +90,34 @@ internal static class RevitBridge
         if (result.PngBase64 is { } png)
             content.Add(ImageContentBlock.FromBytes(Convert.FromBase64String(png), "image/png"));
         return new CallToolResult { Content = content, IsError = result.IsError };
+    }
+}
+
+internal static class Watchdog
+{
+    /// <summary>--watch-revit &lt;pid&gt; &lt;Revit.exe&gt; [model]: waits for that Revit to end, then starts it again when its autopilot run needs it.</summary>
+    public static void Run(string[] args)
+    {
+        if (!int.TryParse(args[1], out var pid)) return;
+        try
+        {
+            using var revit = System.Diagnostics.Process.GetProcessById(pid);
+            revit.WaitForExit();
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception) { /* already ended */ }
+        // Lifeline and the run's files are written as Revit ends; give them a moment.
+        Thread.Sleep(TimeSpan.FromSeconds(5));
+        if (!SketchProMax.Chat.AutopilotShare.ShouldRelaunch(pid, DateTime.UtcNow)) return;
+        var model = args.Length >= 4 && File.Exists(args[3]) ? args[3] : null;
+        SketchProMax.Chat.AutopilotShare.AppendLog("", SketchProMax.Chat.AutopilotEntry.Note,
+            "Revit closed unexpectedly, so it was started again" + (model is null ? "." : $" on {Path.GetFileName(model)}."), DateTime.UtcNow);
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(args[2], model is null ? "" : "\"" + model + "\"")
+            {
+                UseShellExecute = false, WorkingDirectory = Path.GetDirectoryName(args[2]) ?? "",
+            });
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or FileNotFoundException) { }
     }
 }

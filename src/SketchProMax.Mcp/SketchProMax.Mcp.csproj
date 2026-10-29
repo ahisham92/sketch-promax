@@ -21,6 +21,7 @@
     <Compile Include="..\SketchProMax\Bridge\ConnectorTools.cs" Link="ConnectorTools.cs" />
     <Compile Include="..\SketchProMax\Bridge\RevitTargets.cs" Link="RevitTargets.cs" />
     <Compile Include="..\SketchProMax\Bridge\PdfPartReader.cs" Link="PdfPartReader.cs" />
+    <Compile Include="..\SketchProMax\Chat\AutopilotShare.cs" Link="AutopilotShare.cs" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="ModelContextProtocol" Version="2.2.0" />
