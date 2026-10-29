@@ -274,6 +274,9 @@ internal sealed class CrewPlan
             int slot;
             // (With no number of workers given, simply the first free one.)
             var free = workers > 64 ? [] : Enumerable.Range(0, workers).Where(k => !_slots.ContainsValue(k)).ToList();
+            // A check of a job's work goes to another worker than the one who did it, when another is free.
+            var did = job.ReviewOf > 0 && all.TryGetValue(job.ReviewOf, out var checkedJob) ? checkedJob.Worker : -1;
+            if (did >= 0 && free.Count > 1) free.Remove(did);
             if (job.Worker >= 0 && job.Worker < workers && !_slots.ContainsValue(job.Worker)) slot = job.Worker;
             else if (free.Count > 0) slot = free.OrderBy(k => _given.TryGetValue(k, out var at) ? at : DateTime.MinValue).ThenBy(k => k).First();
             else
@@ -385,11 +388,13 @@ internal sealed class CrewPlan
         var steps = job.Plan.Count;
         return cue switch
         {
+            CrewCue.Arrive when job.ReviewOf > 0 => $"Checking job {job.ReviewOf}!",
             CrewCue.Arrive => job.Task.Length > 600 ? "Big job!" : Pick(job.Number, "On it!", "Got it!", "Let's go!"),
             CrewCue.Handover => Pick(job.Items.Count, "Noted!", "On it!"),
             CrewCue.Plan => steps >= 6 ? "Big job!" : steps <= 2 ? "Quick one!" : "Smart plan!",
             CrewCue.Turn => "My turn!",
             CrewCue.Finish when job.State == JobBoard.Failed => "Hit a snag",
+            CrewCue.Finish when job.ReviewOf > 0 => JobReview.Verdict(job) == JobReview.PassedWord ? "Checked, all good!" : "Found some issues",
             CrewCue.Finish when job.Ended > job.Started && job.Started != default && job.Ended - job.Started < TimeSpan.FromSeconds(90) => "Quick job, done!",
             CrewCue.Finish when steps >= 6 => "Hard job, done!",
             CrewCue.Finish => "Job done!",

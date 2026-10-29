@@ -34,6 +34,8 @@ internal static class SettingsLayout
         ["NoAskTools"] = Approvals,
         ["ChatAnimations"] = Chat,
         ["ChatJobLimit"] = Chat,
+        ["ChatJobBudget"] = Chat,
+        ["ChatJobReview"] = Chat,
         ["ChatCrewYou"] = Chat,
         ["ChatCrewCoordinator"] = Chat,
         ["ChatCrewWorkers"] = Chat,

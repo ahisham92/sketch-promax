@@ -365,6 +365,10 @@ public sealed class BridgeServer
         }
         var tool = _registry.Find(name);
         if (tool is null) return ToolResult.Error($"Unknown tool '{name}'.");
+        // A job checking a teammate's work (Chat.JobReview) only reads: it reports what needs fixing.
+        if (tool.ModifiesModel && fromChat && jobKey is not null && Chat.ChatJobs.IsCheck(jobKey))
+            return ToolResult.Error($"You are checking another job's work, so you can't change the model ({tool.Name} changes it). Read and check only, " +
+                                    "and put what needs fixing in your answer, ending with the ISSUES line.");
 
         var key = HandoffKeys.Call(name, args);
         if (Jobs.Running is { Continuation: { } rest } held && held.Key == key)

@@ -267,6 +267,7 @@ public sealed class App : IExternalApplication
         string title;
         try { title = e.Document?.Title ?? ""; } catch (Exception) { title = ""; }
         StartupTimings.Opened(title, sw.ElapsedMilliseconds);
+        Chat.ChatPane.WakeForRoutines(); // scheduled routines run (and catch up) once a model is open
     }
 
     /// <summary>How often shared packs are compared with their update folders (and this PC's own packs with what it published).</summary>

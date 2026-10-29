@@ -73,6 +73,12 @@ public sealed class AgentSettings
     /// </summary>
     public int ChatJobLimit { get; set; } = 3;
 
+    /// <summary>A job pauses itself after using this percent of the plan's 5-hour limit (Chat.JobBudget; 0: never).</summary>
+    public int ChatJobBudget { get; set; } = 15;
+
+    /// <summary>Which finished jobs a teammate checks before they are reported (Chat.JobReview: always, autopilot or off).</summary>
+    public string ChatJobReview { get; set; } = "always";
+
     /// <summary>
     /// Auto sync (Revit.AutoSyncRule): when Claude's work has made <see cref="AutoSyncChanges"/> changes to a local copy of
     /// a central model since its last sync, every chat job pauses, the model is synchronized with central, and the work

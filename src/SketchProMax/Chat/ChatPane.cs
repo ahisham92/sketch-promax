@@ -776,6 +776,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             AddFiles(handover.Attachments.Where(File.Exists));
         }
         Check(quiet: false);
+        StartRoutineClock();
         Task.Run(CleanAttachments);
     }
 
