@@ -49,7 +49,12 @@ public sealed class SettingsWindow : Window
     private readonly ComboBox _jobBudget = new() { MinHeight = 26, MinWidth = 64, Margin = new Thickness(6, 0, 6, 0) };
     private readonly ComboBox _jobReview = new() { MinHeight = 26, MinWidth = 200, Margin = new Thickness(6, 0, 6, 0) };
     private readonly CheckBox _autoSync = Check("Synchronize with central after every");
-    private readonly CheckBox _autopilotWeekly = Check("When a weekly limit pauses the autopilot, carry on by itself when it resets");
+    private readonly CheckBox _autopilotWeekly = Check("When a weekly limit pauses the autopilot, carry on by itself when the week resets");
+    private readonly ComboBox _apJob = new() { MinHeight = 26, MinWidth = 64, Margin = new Thickness(6, 0, 6, 0) };
+    private readonly ComboBox _apFive = new() { MinHeight = 26, MinWidth = 64, Margin = new Thickness(6, 0, 6, 0) };
+    private readonly ComboBox _apWeek = new() { MinHeight = 26, MinWidth = 64, Margin = new Thickness(6, 0, 6, 0) };
+    private static readonly int[] FiveHourChoices = [50, 60, 70, 75, 80, 85, 90, 95, 100];
+    private static readonly int[] WeekChoices = [0, 5, 10, 15, 20, 25, 30, 40, 50, 75, 100];
     private readonly TextBox _syncChanges = new() { Width = 64, MinHeight = 26, Margin = new Thickness(6, 0, 6, 0) };
     private readonly TextBox _sizeLimit = new() { Width = 72, MinHeight = 26, Margin = new Thickness(6, 0, 6, 0) };
     private string _sigImage = "";
@@ -92,6 +97,9 @@ public sealed class SettingsWindow : Window
         _jobReview.SelectedIndex = Chat.JobReview.Normal(_settings.ChatJobReview) switch { Chat.JobReview.AutopilotOnly => 1, Chat.JobReview.Off => 2, _ => 0 };
         _autoSync.IsChecked = _settings.AutoSync;
         _autopilotWeekly.IsChecked = _settings.AutopilotResumeWeekly;
+        Fill(_apJob, Chat.JobBudget.Choices, _settings.AutopilotJobBudget, Chat.JobBudget.DefaultPercent, "never");
+        Fill(_apFive, FiveHourChoices, _settings.AutopilotFiveHourMax, 90, null);
+        Fill(_apWeek, WeekChoices, _settings.AutopilotWeekShare, 25, "no cap");
         _syncChanges.Text = Revit.AutoSyncRule.Clamp(_settings.AutoSyncChanges).ToString(System.Globalization.CultureInfo.CurrentCulture);
         _sizeLimit.Text = Tools.ModelStorageMath.ClampLimit(_settings.ModelSizeLimitMb).ToString(System.Globalization.CultureInfo.CurrentCulture);
 
@@ -178,6 +186,33 @@ public sealed class SettingsWindow : Window
     {
         _placed.Add((setting, control));
         return control;
+    }
+
+    /// <summary>A percent picker: <paramref name="choices"/> (0 shown as <paramref name="zero"/>), on <paramref name="value"/> or the default.</summary>
+    private static void Fill(ComboBox box, int[] choices, int value, int fallback, string? zero)
+    {
+        foreach (var p in choices)
+            box.Items.Add(new ComboBoxItem { Content = p == 0 && zero is not null ? zero : p.ToString(System.Globalization.CultureInfo.CurrentCulture) + " %", Tag = p });
+        var at = Array.IndexOf(choices, value);
+        box.SelectedIndex = at >= 0 ? at : Math.Max(0, Array.IndexOf(choices, fallback));
+    }
+
+    private static int Picked(ComboBox box, int fallback) => (box.SelectedItem as ComboBoxItem)?.Tag is int p ? p : fallback;
+
+    /// <summary>"before [picker] after" on one line (the picker already placed for its setting).</summary>
+    private WrapPanel LimitRow(string before, ComboBox box, string after, string help)
+    {
+        var row = new WrapPanel { Margin = new Thickness(0, 8, 0, 0) };
+        var a = Brand.Text(before);
+        a.VerticalAlignment = VerticalAlignment.Center;
+        row.Children.Add(a);
+        AutomationProperties.SetName(box, before + " … " + after);
+        AutomationProperties.SetHelpText(box, help);
+        row.Children.Add(box);
+        var b = Brand.Text(after);
+        b.VerticalAlignment = VerticalAlignment.Center;
+        row.Children.Add(b);
+        return row;
     }
 
     private static CheckBox Check(string label)
@@ -425,9 +460,15 @@ public sealed class SettingsWindow : Window
         page.Children.Add(syncRow);
         page.Children.Add(Hint("For a local copy of a central model. When the chat's work reaches the number, every job pauses, the model is synchronized, and the work carries on where it stopped. A bigger step is split across syncs. To do one big step in one go, say so in the chat (for example \"do it in one step, don't sync\").", 2));
         page.Children.Add(SubHeading("Autopilot"));
+        page.Children.Add(LimitRow("One job pauses after", Place("AutopilotJobBudget", _apJob), "of the 5-hour limit (the coordinator then decides)",
+            "An autopilot job that uses this much of the 5-hour limit pauses, and the coordinator decides whether it carries on."));
+        page.Children.Add(LimitRow("The run pauses at", Place("AutopilotFiveHourMax", _apFive), "of the 5-hour limit, and carries on when the 5 hours reset",
+            "When the 5-hour limit reaches this, the autopilot pauses; it carries on by itself when the limit resets."));
+        page.Children.Add(LimitRow("One run uses at most", Place("AutopilotWeekShare", _apWeek), "of the weekly limit, then pauses",
+            "The run's own use of your weekly limit; when it reaches this the autopilot pauses."));
         _autopilotWeekly.Margin = new Thickness(0, 8, 0, 0);
         page.Children.Add(Place("AutopilotResumeWeekly", _autopilotWeekly));
-        page.Children.Add(Hint("An autopilot pauses near 90 % of a usage limit. After the 5-hour limit it always carries on when the limit resets; this says whether a weekly limit does too (otherwise press Resume on the chat's banner).", 2));
+        page.Children.Add(Hint("Any pause carries on when you press Resume on the chat's banner or type \"continue\" in the autopilot chat. A weekly limit near full pauses it too.", 2));
         page.Children.Add(SubHeading("Names of the crew"));
         page.Children.Add(Hint("Over a chat With coordinator, a strip shows the work as people: you hand it to the coordinator, who gives each job to a worker; a worker with a change for the model queues for the one who applies changes in Revit, one at a time. Leave a name blank for its default.", 2));
         var names = Chat.CrewNames.From(_settings.ChatCrewYou, _settings.ChatCrewCoordinator, _settings.ChatCrewWorkers, _settings.ChatCrewApplier, Environment.UserName);
@@ -960,6 +1001,9 @@ public sealed class SettingsWindow : Window
         _settings.ModelSizeLimitMb = sizeLimit;
         _settings.AutoSync = _autoSync.IsChecked == true;
         _settings.AutopilotResumeWeekly = _autopilotWeekly.IsChecked == true;
+        _settings.AutopilotJobBudget = Picked(_apJob, Chat.JobBudget.DefaultPercent);
+        _settings.AutopilotFiveHourMax = Picked(_apFive, 90);
+        _settings.AutopilotWeekShare = Picked(_apWeek, 25);
         _settings.AutoSyncChanges = syncChanges;
         _settings.ChangeFile = _changeFile.IsChecked == true;
         _settings.TimeTracking = _timeOn.IsChecked == true;

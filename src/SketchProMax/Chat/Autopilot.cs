@@ -24,6 +24,16 @@ internal sealed class AutopilotRun
     /// <summary>Turns in a row that ended with no job open and no final report: the run stops after a few.</summary>
     public int Idle { get; set; }
     public string Backup { get; set; } = "";
+    /// <summary>
+    /// A newer Sketch ProMax waits to go in (its version): no new job starts, the running ones finish their step, then
+    /// the update switches in and the run carries on (ChatPane.AutopilotUpdated). "" when none waits. Since when.
+    /// </summary>
+    public string Updating { get; set; } = "";
+    public DateTime HeldSince { get; set; }
+    /// <summary>How much of the weekly limit the run has used so far (0 to 1): the rises of the weekly figure while it ran.</summary>
+    public double WeekUsed { get; set; }
+    /// <summary>The run is paused because it used its share of the week (Settings): a new week starts it again from 0.</summary>
+    public bool WeekCap { get; set; }
     public List<AutopilotEntry> Log { get; set; } = [];
 
     public bool Active => State is Running or Paused;
@@ -161,6 +171,19 @@ internal static class Autopilot
     /// <summary>What the safe answer reads as, for the log.</summary>
     public static string ResultName(int result) => result switch { 1 => "OK", 3 => "Abort", 7 => "No", _ => "Cancel" };
 
+    // ---- Updates of Sketch ProMax ----------------------------------------------------------------------------------------
+
+    /// <summary>How long new jobs wait for an update to go in before the run carries on without it (and tries again later).</summary>
+    public static readonly TimeSpan UpdateHoldMax = TimeSpan.FromMinutes(30);
+
+    /// <summary>
+    /// Whether a run waiting for an update (<see cref="AutopilotRun.Updating"/>) now runs <paramref name="current"/>, the
+    /// version it waited for or newer: it carries on in it.
+    /// </summary>
+    public static bool UpdateIn(AutopilotRun run, Version current) =>
+        run.Updating.Length > 0 && Version.TryParse(run.Updating, out var wanted)
+        && new Version(current.Major, current.Minor, Math.Max(current.Build, 0)) >= new Version(wanted.Major, wanted.Minor, Math.Max(wanted.Build, 0));
+
     // ---- Revit stuck --------------------------------------------------------------------------------------------------
 
     /// <summary>Revit "Not responding" this long with no activity at all during a run: restarted on the same model.</summary>
@@ -191,19 +214,41 @@ internal static class Autopilot
     /// </summary>
     public static (bool Pause, DateTimeOffset? Until, string Why) ShouldPause(PlanUsage? usage, DateTimeOffset now, bool resumeWeekly)
     {
-        if (usage is null) return (false, null, "");
+        var (pause, until, why, _) = ShouldPause(usage, now, resumeWeekly, PauseAt, 0, 0);
+        return (pause, until, why);
+    }
+
+    /// <summary>
+    /// The autopilot's limits (Settings > Chat > Autopilot): the 5-hour limit at <paramref name="fiveHourMax"/> (it carries
+    /// on when it resets), any weekly limit near full (<see cref="PauseAt"/>), and the run's own share of the week:
+    /// <paramref name="weekUsed"/> at <paramref name="weekShare"/> or over (0: no share of its own). A weekly pause carries
+    /// on when the week resets only with <paramref name="resumeWeekly"/>; otherwise it waits for Resume (or "continue").
+    /// WeekCap: the pause is the run's share of the week.
+    /// </summary>
+    public static (bool Pause, DateTimeOffset? Until, string Why, bool WeekCap) ShouldPause(PlanUsage? usage, DateTimeOffset now, bool resumeWeekly,
+        double fiveHourMax, double weekShare, double weekUsed)
+    {
+        if (usage is null) return (false, null, "", false);
         var full = usage.Windows
-            .Where(w => w.Key != PlanUsage.Extra && w.Key != PlanUsage.WeeklyIncluded && PlanUsage.Current(w, now) is { } used && used >= PauseAt)
+            .Where(w => w.Key != PlanUsage.Extra && w.Key != PlanUsage.WeeklyIncluded && PlanUsage.Current(w, now) is { } used
+                        && used >= (w.Key == PlanUsage.FiveHour ? fiveHourMax : PauseAt) - 1e-9)
             .ToList();
         if (full.Count == 0 && usage.Status == "rejected" && usage.Windows.FirstOrDefault(w => w.Key == usage.Binding) is { } binding && !PlanUsage.HasReset(binding, now))
             full.Add(binding);
-        if (full.Count == 0) return (false, null, "");
+        if (full.Count == 0)
+        {
+            if (weekShare <= 0 || weekUsed < weekShare - 1e-9) return (false, null, "", false);
+            var week = usage.Windows.FirstOrDefault(w => w.Key == PlanUsage.Weekly);
+            return (true, resumeWeekly ? week?.ResetsAt : null,
+                $"This run used {Math.Round(weekUsed * 100):0}% of your weekly limit, its share ({Math.Round(weekShare * 100):0}%, Settings > Chat > Autopilot).", true);
+        }
         var weekly = full.Any(w => w.Key != PlanUsage.FiveHour);
         var resets = full.Select(w => w.ResetsAt).ToList();
         DateTimeOffset? until = resets.All(r => r is not null) ? resets.Max() : null;
         if (weekly && !resumeWeekly) until = null;
         var names = string.Join(" and ", full.Select(w => PlanUsage.Label(w.Key).ToLowerInvariant()));
-        return (true, until, $"The {names} is nearly used up.");
+        var fiveOnly = !weekly && full.Count == 1 && Math.Abs(fiveHourMax - PauseAt) > 1e-9;
+        return (true, until, fiveOnly ? $"The {names} reached {Math.Round(fiveHourMax * 100):0}%, the autopilot's limit (Settings > Chat > Autopilot)." : $"The {names} is nearly used up.", false);
     }
 
     // ---- The report ----------------------------------------------------------------------------------------------------

@@ -45,6 +45,13 @@ internal static class TwoModelTests
             try { Directory.Delete(folder, true); } catch (IOException) { }
         }
 
+        // An update during a run: it carries on once the version it waited for (or a newer one) runs.
+        var waiting = new AutopilotRun { Updating = "0.35.43" };
+        check("update: not in while the old version runs", !Autopilot.UpdateIn(waiting, new Version(0, 35, 42)), "");
+        check("update: in once the new version runs", Autopilot.UpdateIn(waiting, new Version(0, 35, 43)) && Autopilot.UpdateIn(waiting, new Version(0, 35, 44, 0)), "");
+        check("update: nothing waiting, nothing to carry on", !Autopilot.UpdateIn(new AutopilotRun(), new Version(9, 9, 9)), "");
+        check("update: a hold is let go after a while", Autopilot.UpdateHoldMax == TimeSpan.FromMinutes(30), "");
+
         // Revit freezes or crashes during a run.
         var m = TimeSpan.FromMinutes(1);
         check("freeze: stuck 10 minutes doing nothing is restarted", Autopilot.RestartAfterHang(true, true, 10 * m, idle: true, longWork: false), "");

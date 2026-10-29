@@ -126,6 +126,15 @@ public sealed class AgentSettings
     /// <summary>An autopilot paused at a weekly limit carries on by itself when it resets (the 5-hour limit always does).</summary>
     public bool AutopilotResumeWeekly { get; set; } = true;
 
+    /// <summary>During an autopilot, a job pauses after this percent of the 5-hour limit (Chat.JobBudget; 0: never).</summary>
+    public int AutopilotJobBudget { get; set; } = 15;
+
+    /// <summary>An autopilot pauses when the 5-hour limit reaches this percent, and carries on when it resets.</summary>
+    public int AutopilotFiveHourMax { get; set; } = 90;
+
+    /// <summary>One autopilot run may use this percent of the weekly limit, then pauses (0: no cap of its own).</summary>
+    public int AutopilotWeekShare { get; set; } = 25;
+
     /// <summary>Your name as it goes on a signed checklist (next to Chat).</summary>
     public string SignatureName { get; set; } = "";
 
