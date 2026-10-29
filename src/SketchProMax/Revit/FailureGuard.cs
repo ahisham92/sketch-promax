@@ -59,8 +59,6 @@ public static class FailureGuard
         try { result = tool(); }
         finally { _active = false; }
 
-        if (Errors.Count > 0) Chat.Autopilot.Log(Chat.AutopilotEntry.Popup, "Revit refused a step, which was undone: " + string.Join("; ", Errors));
-        if (Warnings.Count > 0) Chat.Autopilot.Log(Chat.AutopilotEntry.Popup, "Revit warnings dismissed: " + string.Join("; ", Warnings));
         if (Errors.Count > 0)
             return new ToolResult(
                 $"Revit refused part of this change and undid that step: {string.Join("; ", Errors)}. " +

@@ -203,7 +203,6 @@ internal sealed partial class ChatPane
     private void PumpJobs()
     {
         if (_board is null || _sample || _stopped || _setup != Setup.Ready || _install is null || !IsCoordinator) return;
-        if (Run is { State: AutopilotRun.Paused }) return; // an autopilot paused at a usage limit starts nothing new
         foreach (var (job, message) in _board.ToStart(ChatJobs.Limit, DateTime.UtcNow)) _ = StartRun(job, message);
         if (_runs.Count > 0) StartJobClock();
     }
@@ -462,21 +461,13 @@ internal sealed partial class ChatPane
     private void FlushReports()
     {
         if (_reports.Count == 0 || _board is null || _turn is not null || _stopped || _setup != Setup.Ready || _sample) return;
-        if (Run is { State: AutopilotRun.Paused }) return; // reviewed when the run carries on
         var jobs = _board.Snapshot();
         var done = _reports.Select(n => jobs.FirstOrDefault(j => j.Number == n)).OfType<ChatJob>().Where(j => j.State is JobBoard.Done or JobBoard.Failed).ToList();
         _reports.Clear();
         if (done.Count == 0) return;
         var open = jobs.Count(j => j.Active || j.State == JobBoard.Queued);
         Note(done.Count == 1 ? $"Job {done[0].Number} finished and reported back." : $"Jobs {string.Join(", ", done.Select(j => j.Number))} finished and reported back.");
-        var report = JobBoard.Report(done, open);
-        // An autopilot reviews the reports and carries on instead of telling the user.
-        if (Run is { State: AutopilotRun.Running } run && report.LastIndexOf("Tell the user", StringComparison.Ordinal) is var cut and > 0)
-        {
-            report = report.Substring(0, cut) + Autopilot.Review(run);
-            run.Idle = 0;
-        }
-        _ = RunTurn(report, [], "");
+        _ = RunTurn(JobBoard.Report(done, open), [], "");
     }
 
     // ---- Cards ------------------------------------------------------------------------------------------------------

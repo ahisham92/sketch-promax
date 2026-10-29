@@ -108,7 +108,6 @@ internal static class FreezeWatch
             try
             {
                 Sample();
-                CloseForAutopilot();
                 var now = Read(_main);
                 if (now != kind)
                 {
@@ -130,29 +129,6 @@ internal static class FreezeWatch
             catch (Exception) { /* the watch must never take Revit down */ }
             if (stop.WaitHandle.WaitOne(1000)) break;
         }
-    }
-
-    private static DateTime _blockedSince = DateTime.MaxValue;
-
-    /// <summary>
-    /// An autopilot at work and a dialog Revit's own events didn't reach (another add-in's, Windows') holding Revit for a
-    /// minute: it is closed, as Esc or its X would, and the report says so. Outside autopilot nothing is touched.
-    /// </summary>
-    private static void CloseForAutopilot()
-    {
-        if (!Chat.Autopilot.Unattended || _main == IntPtr.Zero || IsWindowEnabled(_main))
-        {
-            _blockedSince = DateTime.MaxValue;
-            return;
-        }
-        if (_blockedSince == DateTime.MaxValue) _blockedSince = DateTime.Now;
-        if (DateTime.Now - _blockedSince < TimeSpan.FromMinutes(1)) return;
-        var dialog = DialogWindow(_main);
-        if (dialog == IntPtr.Zero) return;
-        PostMessage(dialog, 0x0010, IntPtr.Zero, IntPtr.Zero); // WM_CLOSE
-        _blockedSince = DateTime.Now;
-        Chat.Autopilot.Log(Chat.AutopilotEntry.Popup, "A window held Revit for a minute; it was closed.");
-        Tools.ActivityLog.Note("autopilot_closed_dialog", "A dialog held Revit for a minute during autopilot; it was closed");
     }
 
     private static void Log(Kind kind, TimeSpan lasted, bool opened)

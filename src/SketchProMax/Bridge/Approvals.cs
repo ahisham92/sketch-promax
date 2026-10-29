@@ -93,7 +93,7 @@ internal static class Approvals
     public static bool AskOwn(string tool)
     {
         var call = Call;
-        if (call is { Asked: true } || Chat.Autopilot.Unattended) return false;
+        if (call is { Asked: true }) return false;
         if (call?.Decision.Kind == AskKind.Change) return true;
         var level = Level;
         if (level is ApprovalLevel.RiskyOnly or ApprovalLevel.AlwaysAllow || Remembered().Contains(tool, StringComparer.Ordinal)) return false;
@@ -171,13 +171,6 @@ internal static class Approvals
     public static bool Show(string tool, ApprovalDecision decision, string details, JobControl? chat, string? what = null)
     {
         var friendly = ApprovalPolicy.Friendly(tool);
-        // An autopilot at work: the user approved the goal and a backup of the model was saved, so nothing waits on a click.
-        if (Chat.Autopilot.Unattended && TestAnswer is null)
-        {
-            var (_, why) = Chat.Autopilot.Allows(decision.Reason);
-            if (decision.Kind != AskKind.Change) Chat.Autopilot.Log(Chat.AutopilotEntry.Allowed, $"{friendly}: {why}");
-            return true;
-        }
         var level = Level;
         // "Always allow": nothing asks (the bridge already decided so); this catches the dialogs tools and the ribbon
         // show themselves. Only the issue gate's sign-off (AskKind.Always at this level) is still shown.

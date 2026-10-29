@@ -47,7 +47,6 @@ public sealed class SettingsWindow : Window
     private readonly TextBox _crewYou = new() { MinHeight = 26 }, _crewCoordinator = new() { MinHeight = 26 }, _crewWorkers = new() { MinHeight = 26 }, _crewApplier = new() { MinHeight = 26 };
     private readonly ComboBox _jobLimit = new() { MinHeight = 26, MinWidth = 56, Margin = new Thickness(6, 0, 6, 0) };
     private readonly CheckBox _autoSync = Check("Synchronize with central after every");
-    private readonly CheckBox _autopilotWeekly = Check("When a weekly limit pauses the autopilot, carry on by itself when it resets");
     private readonly TextBox _syncChanges = new() { Width = 64, MinHeight = 26, Margin = new Thickness(6, 0, 6, 0) };
     private readonly TextBox _sizeLimit = new() { Width = 72, MinHeight = 26, Margin = new Thickness(6, 0, 6, 0) };
     private string _sigImage = "";
@@ -83,7 +82,6 @@ public sealed class SettingsWindow : Window
         for (var n = Chat.JobBoard.MinLimit; n <= Chat.JobBoard.MaxLimit; n++) _jobLimit.Items.Add(new ComboBoxItem { Content = n.ToString(System.Globalization.CultureInfo.CurrentCulture), Tag = n });
         _jobLimit.SelectedIndex = Chat.JobBoard.ClampLimit(_settings.ChatJobLimit) - Chat.JobBoard.MinLimit;
         _autoSync.IsChecked = _settings.AutoSync;
-        _autopilotWeekly.IsChecked = _settings.AutopilotResumeWeekly;
         _syncChanges.Text = Revit.AutoSyncRule.Clamp(_settings.AutoSyncChanges).ToString(System.Globalization.CultureInfo.CurrentCulture);
         _sizeLimit.Text = Tools.ModelStorageMath.ClampLimit(_settings.ModelSizeLimitMb).ToString(System.Globalization.CultureInfo.CurrentCulture);
 
@@ -394,10 +392,6 @@ public sealed class SettingsWindow : Window
         syncRow.Children.Add(changes);
         page.Children.Add(syncRow);
         page.Children.Add(Hint("For a local copy of a central model. When the chat's work reaches the number, every job pauses, the model is synchronized, and the work carries on where it stopped. A bigger step is split across syncs. To do one big step in one go, say so in the chat (for example \"do it in one step, don't sync\").", 2));
-        page.Children.Add(SubHeading("Autopilot"));
-        _autopilotWeekly.Margin = new Thickness(0, 8, 0, 0);
-        page.Children.Add(Place("AutopilotResumeWeekly", _autopilotWeekly));
-        page.Children.Add(Hint("An autopilot pauses near 90 % of a usage limit. After the 5-hour limit it always carries on when the limit resets; this says whether a weekly limit does too (otherwise press Resume on the chat's banner).", 2));
         page.Children.Add(SubHeading("Names of the crew"));
         page.Children.Add(Hint("Over a chat With coordinator, a strip shows the work as people: you hand it to the coordinator, who gives each job to a worker; a worker with a change for the model queues for the one who applies changes in Revit, one at a time. Leave a name blank for its default.", 2));
         var names = Chat.CrewNames.From(_settings.ChatCrewYou, _settings.ChatCrewCoordinator, _settings.ChatCrewWorkers, _settings.ChatCrewApplier, Environment.UserName);
@@ -929,7 +923,6 @@ public sealed class SettingsWindow : Window
         }
         _settings.ModelSizeLimitMb = sizeLimit;
         _settings.AutoSync = _autoSync.IsChecked == true;
-        _settings.AutopilotResumeWeekly = _autopilotWeekly.IsChecked == true;
         _settings.AutoSyncChanges = syncChanges;
         _settings.ChangeFile = _changeFile.IsChecked == true;
         _settings.TimeTracking = _timeOn.IsChecked == true;
