@@ -41,7 +41,9 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     private static EventHandler<ViewActivatedEventArgs>? _viewActivated;
 
     /// <summary>True while a turn or a parallel job runs: switching to a new core version waits for it.</summary>
-    public static bool IsBusy => _instance is { } pane && (pane._turn is not null || pane.JobsOpen || pane.BackgroundWorking);
+    public static bool IsBusy => _instance is { } pane && (pane._turn is not null || pane.BackgroundWorking
+        // Jobs waiting to start don't hold an update back while an autopilot waits for it: they carry on in the new version.
+        || (pane.Run is { Updating.Length: > 0 } ? pane._runs.Count > 0 : pane.JobsOpen));
 
     /// <summary>The pane's chat element (created on first use).</summary>
     public static FrameworkElement Get() => _instance ??= new ChatPane();
@@ -70,6 +72,14 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             _modelKey = left.Key;
             _modelTitle = left.Title;
         }
+        // An autopilot running when the version switched (or a run to take over): the chat is made at once, even with the
+        // pane hidden, so the run carries on in this version.
+        if (_instance is null && _retired is null && AutopilotShare.Any(DateTime.UtcNow) is not null)
+            System.Windows.Application.Current?.Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.ApplicationIdle, new Action(() =>
+            {
+                try { Get(); }
+                catch (Exception) { /* the chat is made when it is opened, and the run carries on then */ }
+            }));
         // Started again after a version switch that failed: the pane still shows this core's element, so revive it.
         if (_instance is null && _retired is { } pane)
         {
@@ -3061,6 +3071,10 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         _idle.Stop();
         _render.Stop();
         _saveSoon.Stop();
+        // The autopilot's and the routines' clocks too: the next version runs them (a retired pane must not start turns).
+        _autoTimer?.Stop();
+        _routineTimer?.Stop();
+        Autopilot.Here = false;
         UI.RestartNote.Changed -= ShowRestartNote;
         Bridge.Approvals.LevelChanged -= ShowApprovalLevel;
         try

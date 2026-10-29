@@ -118,6 +118,12 @@ internal sealed partial class ChatPane
     /// </summary>
     private bool AutopilotGoal(string text, List<Attachment> attachments)
     {
+        // A paused run: whatever the user types carries it on, with their message as the coordinator's next turn.
+        if (Run is { State: AutopilotRun.Paused } && text.Length > 0)
+        {
+            AutopilotResume("You said to carry on.", turn: false);
+            return false;
+        }
         if (Run is not { State: AutopilotRun.Planning or AutopilotRun.Approval } run || text.Length == 0) return false;
         run.Goal = run.State == AutopilotRun.Approval && run.Goal.Length > 0 ? run.Goal + "\nChange from the user: " + text : text;
         run.State = AutopilotRun.Planning;
@@ -221,6 +227,7 @@ internal sealed partial class ChatPane
     {
         if (Run is not { Active: true } run) return;
         var now = DateTimeOffset.UtcNow;
+        AutopilotUpdateTick(run);
         // The other Revit windows know the run is still on, and what they answered goes into its log.
         if (run.State != AutopilotRun.Approval && run.Started != default) AutopilotShare.Beat(Autopilot.RunId(_conv.Id, run), DateTime.UtcNow);
         TakeSharedLog(run);
@@ -242,30 +249,44 @@ internal sealed partial class ChatPane
     private void AutopilotUsage()
     {
         if (Run is not { State: AutopilotRun.Running } run) return;
-        var resumeWeekly = true;
-        try { resumeWeekly = Settings.AgentSettings.Load().AutopilotResumeWeekly; } catch (Exception) { }
-        var (pause, until, why) = Autopilot.ShouldPause(_usage, DateTimeOffset.UtcNow, resumeWeekly);
+        Settings.AgentSettings settings;
+        try { settings = Settings.AgentSettings.Load(); } catch (Exception) { settings = new Settings.AgentSettings(); }
+        var (pause, until, why, weekCap) = Autopilot.ShouldPause(_usage, DateTimeOffset.UtcNow, settings.AutopilotResumeWeekly,
+            Math.Min(1, Math.Max(0.1, settings.AutopilotFiveHourMax / 100.0)), JobBudget.Share(settings.AutopilotWeekShare), run.WeekUsed);
         if (!pause) return;
         run.State = AutopilotRun.Paused;
         run.PausedUntil = until;
         run.PauseWhy = why;
-        AutopilotLog(AutopilotEntry.Paused, why + (until is { } u ? $" Paused until {u.ToLocalTime():HH:mm}." : " Paused until you press Resume."));
-        Note("Autopilot paused: " + why + (until is { } at ? $" It carries on at {at.ToLocalTime():HH:mm}, when the limit resets." : " Press Resume to carry on."));
+        run.WeekCap = weekCap;
+        AutopilotLog(AutopilotEntry.Paused, why + (until is { } u ? $" Paused until {u.ToLocalTime():ddd HH:mm}." : " Paused until you press Resume or type \"continue\"."));
+        Note("Autopilot paused: " + why + (until is { } at ? $" It carries on at {at.ToLocalTime():ddd HH:mm}, when the limit resets." : " Press Resume, or type \"continue\", to carry on."));
         Save();
         ShowAutopilot();
     }
 
-    private void AutopilotResume(string why)
+    /// <summary>The run's use of the week (its own share, Settings): the weekly figure's rises while it runs.</summary>
+    private double? _weekSeen;
+
+    private void AutopilotWeekUsage(PlanUsage reported)
+    {
+        var rise = JobBudget.Rise(ref _weekSeen, reported.Windows.FirstOrDefault(w => w.Key == PlanUsage.Weekly)?.Used);
+        if (rise > 0 && Run is { Active: true } run) run.WeekUsed += rise;
+    }
+
+    private void AutopilotResume(string why, bool turn = true)
     {
         if (Run is not { State: AutopilotRun.Paused } run) return;
         run.State = AutopilotRun.Running;
         run.PausedUntil = null;
         run.Idle = 0;
+        // A pause for the run's share of the week: carrying on starts its share again (a new week, or the user's say).
+        if (run.WeekCap) run.WeekUsed = 0;
+        run.WeekCap = false;
         AutopilotLog(AutopilotEntry.Resumed, why);
         Save();
         ShowAutopilot();
         PumpJobs();
-        if (_turn is null) _ = RunTurn(Autopilot.Resume(run, why), [], "");
+        if (turn && _turn is null) _ = RunTurn(Autopilot.Resume(run, why), [], "");
     }
 
     /// <summary>Stop on the banner: the open jobs stop and the report is written.</summary>
@@ -288,6 +309,56 @@ internal sealed partial class ChatPane
         Add(new ChatItem { Kind = "assistant", Text = Autopilot.Report(run, _board?.Snapshot() ?? [], DateTime.UtcNow) });
         Save();
         ShowAutopilot();
+    }
+
+    private DateTime _updateRetryAt;
+
+    /// <summary>
+    /// Sketch ProMax updates during a run without losing work: once a newer version is ready, no new job starts and the
+    /// running ones finish their step, so Revit's next quiet moment switches the version in (ChatPane.IsBusy lets queued
+    /// jobs wait across it). In the new version the run carries on (<see cref="AutopilotUpdated"/>). A hold that lasts
+    /// too long is let go, and tried again later.
+    /// </summary>
+    private void AutopilotUpdateTick(AutopilotRun run)
+    {
+        if (Autopilot.UpdateIn(run, Update.Updater.Current))
+        {
+            AutopilotUpdated(run);
+            return;
+        }
+        if (run.State != AutopilotRun.Running) return;
+        var now = DateTime.UtcNow;
+        if (run.Updating.Length > 0)
+        {
+            if (now - run.HeldSince < Autopilot.UpdateHoldMax) return;
+            AutopilotLog(AutopilotEntry.Note, $"Sketch ProMax {run.Updating} waited {Autopilot.UpdateHoldMax.TotalMinutes:0} minutes for a quiet moment; the work carried on without it, to try again in an hour.");
+            run.Updating = "";
+            _updateRetryAt = now.AddHours(1);
+            Save();
+            PumpJobs();
+            return;
+        }
+        if (now < _updateRetryAt || Update.Updater.Staged is not { } ready) return;
+        run.Updating = ready;
+        run.HeldSince = now;
+        AutopilotLog(AutopilotEntry.Note, $"Sketch ProMax {ready} is ready: no new job starts until it is in; the running jobs finish their step first.");
+        Save();
+    }
+
+    /// <summary>The new version took over the run: the jobs the switch left waiting or stopped carry on, and the coordinator is told.</summary>
+    private void AutopilotUpdated(AutopilotRun run)
+    {
+        var version = Update.Updater.Current.ToString();
+        var since = run.HeldSince;
+        run.Updating = "";
+        AutopilotLog(AutopilotEntry.Resumed, $"Sketch ProMax updated to {version}; the autopilot carried on.");
+        Note($"Autopilot: Sketch ProMax updated to {version}. The work carries on.");
+        foreach (var job in _board?.Snapshot().Where(j => j.Number > run.JobsBefore && j.State == JobBoard.Stopped && !j.OverBudget && j.Ended >= since.AddMinutes(-1)).ToList() ?? [])
+            _board!.Message(job.Number, "Sketch ProMax was updated. Carry on with your task where you left off (check in the model what is already done first).", DateTime.UtcNow);
+        JobsChanged();
+        Save();
+        ShowAutopilot();
+        if (run.State == AutopilotRun.Running && _turn is null) _ = RunTurn(Autopilot.Resume(run, $"Sketch ProMax was updated to {version}."), [], "");
     }
 
     private static bool _watching;

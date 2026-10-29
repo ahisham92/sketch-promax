@@ -232,6 +232,7 @@ internal sealed partial class ChatPane
     {
         if (_board is null || _sample || _stopped || _setup != Setup.Ready || _install is null || !IsCoordinator) return;
         if (Run is { State: AutopilotRun.Paused }) return; // an autopilot paused at a usage limit starts nothing new
+        if (Run is { Updating.Length: > 0 }) return; // nor one waiting for an update to go in
         foreach (var (job, message) in _board.ToStart(ChatJobs.Limit, DateTime.UtcNow)) _ = StartRun(job, message);
         if (_runs.Count > 0) StartJobClock();
     }
@@ -470,7 +471,8 @@ internal sealed partial class ChatPane
     private void ChargeJob(string key, double rise)
     {
         double budget;
-        try { budget = JobBudget.Share(AgentSettings.Load().ChatJobBudget); }
+        // An autopilot's jobs have their own budget (Settings > Chat > Autopilot).
+        try { budget = JobBudget.Share(Run is { Active: true } ? AgentSettings.Load().AutopilotJobBudget : AgentSettings.Load().ChatJobBudget); }
         catch (Exception) { budget = JobBudget.Share(JobBudget.DefaultPercent); }
         if (_board?.Charge(key, rise, budget, DateTime.UtcNow) is not { } job) return;
         if (_runs.TryGetValue(key, out var run)) EndRun(run, kill: true);

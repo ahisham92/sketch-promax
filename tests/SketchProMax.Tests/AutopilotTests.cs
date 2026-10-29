@@ -34,6 +34,17 @@ internal static class AutopilotTests
         check("autopilot: a limit that already reset doesn't pause", !Autopilot.ShouldPause(Usage(PlanUsage.FiveHour, 0.99, now.AddMinutes(-1)), now, true).Pause, "");
         check("autopilot: extra usage doesn't pause", !Autopilot.ShouldPause(Usage(PlanUsage.Extra, 0.99, now.AddHours(1)), now, true).Pause, "");
 
+        // Settings > Chat > Autopilot: its own 5-hour maximum, and its share of the week.
+        var at80 = Autopilot.ShouldPause(Usage(PlanUsage.FiveHour, 0.81, now.AddHours(2)), now, true, 0.80, 0.25, 0);
+        check("autopilot: a 5-hour maximum of 80 % pauses at 81 % until the reset", at80.Pause && at80.Until == now.AddHours(2) && !at80.WeekCap && at80.Why.Contains("80%"), at80.Why);
+        check("autopilot: under its 5-hour maximum it keeps going", !Autopilot.ShouldPause(Usage(PlanUsage.FiveHour, 0.92, now.AddHours(2)), now, true, 0.95, 0.25, 0.1).Pause, "");
+        var share = Autopilot.ShouldPause(Usage(PlanUsage.Weekly, 0.40, now.AddDays(3)), now, true, 0.90, 0.25, 0.26);
+        check("autopilot: its share of the week used pauses it until the week resets", share.Pause && share.WeekCap && share.Until == now.AddDays(3) && share.Why.Contains("25%"), share.Why);
+        check("autopilot: its share of the week waits for Resume when weekly resume is off",
+            Autopilot.ShouldPause(Usage(PlanUsage.Weekly, 0.40, now.AddDays(3)), now, false, 0.90, 0.25, 0.26) is { Pause: true, Until: null, WeekCap: true }, "");
+        check("autopilot: under its share of the week it keeps going", !Autopilot.ShouldPause(Usage(PlanUsage.Weekly, 0.40, now.AddDays(3)), now, true, 0.90, 0.25, 0.20).Pause, "");
+        check("autopilot: no share of the week (0) never pauses for it", !Autopilot.ShouldPause(Usage(PlanUsage.Weekly, 0.40, now.AddDays(3)), now, true, 0.90, 0, 0.9).Pause, "");
+
         // The report: how it ended, its own jobs (not the chat's earlier ones), what was answered for the user.
         run.JobsBefore = 1;
         run.State = AutopilotRun.Done;
