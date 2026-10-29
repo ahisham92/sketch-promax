@@ -143,6 +143,7 @@ AutoSyncTests.Run((name, ok, detail) => Check(name, ok, detail));
 CrewTests.Run((name, ok, detail) => Check(name, ok, detail));
 AutopilotTests.Run((name, ok, detail) => Check(name, ok, detail));
 JobChecksTests.Run((name, ok, detail) => Check(name, ok, detail));
+TwoModelTests.Run((name, ok, detail) => Check(name, ok, detail));
 RunningCallTests.Run((name, ok, detail) => Check(name, ok, detail));
 FreezeTests.Run((name, ok, detail) => Check(name, ok, detail));
 RevitTimeTests.Run((name, ok, detail) => Check(name, ok, detail));

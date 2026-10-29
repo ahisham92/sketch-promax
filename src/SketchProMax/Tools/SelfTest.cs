@@ -509,6 +509,8 @@ internal static partial class SelfTest
         new("in_place_guide", c => new { action = "convert" }),
         new("list_view_filters", _ => new { }),
         new("query_linked_models", _ => new { }),
+        new("save_model", _ => new { check_only = true }),
+        new("reload_links", _ => new { check_only = true }),
         new("collect_text", _ => new { limit = 50 }),
         new("wait_for_job", _ => new { wait_seconds = 0 }),
         new("cancel_job", _ => new { job_id = 999999 }),

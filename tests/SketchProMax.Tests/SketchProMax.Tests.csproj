@@ -30,6 +30,7 @@
     <Compile Include="../../src/SketchProMax/Chat/Autopilot.cs" Link="Autopilot.cs" />
     <Compile Include="../../src/SketchProMax/Chat/JobChecks.cs" Link="JobChecks.cs" />
     <Compile Include="../../src/SketchProMax/Chat/Routines.cs" Link="Routines.cs" />
+    <Compile Include="../../src/SketchProMax/Chat/AutopilotShare.cs" Link="AutopilotShare.cs" />
     <Compile Include="../../src/SketchProMax/Chat/ChatAuto.cs" Link="ChatAuto.cs" />
     <Compile Include="../../src/SketchProMax/Bridge/JobTurns.cs" Link="JobTurns.cs" />
     <Compile Include="../../src/SketchProMax/Revit/AutoSyncRule.cs" Link="AutoSyncRule.cs" />

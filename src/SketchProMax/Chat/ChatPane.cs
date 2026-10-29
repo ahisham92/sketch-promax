@@ -1161,10 +1161,13 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     {
         _chatName.Text = ChatHistory.NameFor(_conv) is { Length: > 0 } name ? name : ChatHistory.Untitled;
         _chatName.ToolTip = _chatName.Text;
-        _modelLine.Text = (_conv.Pinned ? "\u2605 Pinned · " : "") + _conv.Title;
+        // A chat that also works on other models (another Revit window) names them all: "Tower-Model + Tower-Docs".
+        _conv.Models ??= [];
+        var models = string.Join(" + ", new[] { _conv.Title }.Concat(_conv.Models));
+        _modelLine.Text = (_conv.Pinned ? "\u2605 Pinned · " : "") + models;
         _modelLine.ToolTip = "Each Revit model keeps its own chats, also after Revit restarts; open the others from the menu at the top left. " + _conv.Key;
         AutomationProperties.SetName(_chatName, "Chat: " + _chatName.Text);
-        AutomationProperties.SetName(_modelLine, "Revit model: " + _conv.Title);
+        AutomationProperties.SetName(_modelLine, (_conv.Models.Count > 0 ? "Revit models: " : "Revit model: ") + models);
         ShowType();
         ShowModelChoice();
     }
@@ -2985,6 +2988,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     private void ModelChanged()
     {
         if (_stopped) return;
+        // An autopilot keeps its chat whichever model Revit shows (it may work on several).
+        if (Run is { Active: true }) return;
         // Not while the chat answers or its jobs work: the switch happens when they are done.
         if (_turn is not null || JobsOpen) _pendingModel = (ConversationKey, ConversationTitle);
         else SwitchTo(ConversationKey, ConversationTitle);

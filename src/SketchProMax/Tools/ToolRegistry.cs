@@ -100,6 +100,8 @@ public sealed class ToolRegistry
         new CreateSheetListTool(),
         new ExportFilesTool(),
         new QueryLinkedModelsTool(),
+        new SaveModelTool(),
+        new ReloadLinksTool(),
         new LoadFamilyTool(),
 
         // More modeling and dimensions

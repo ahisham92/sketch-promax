@@ -218,6 +218,27 @@ internal static class AutoSync
                          (keepBorrowed ? ", in the middle of a step; the step carried on." : "; the work carried on where it stopped."));
     }
 
+    /// <summary>
+    /// Synchronizes now, asked for (save_model: so another model that links this one can reload it): null when it went
+    /// through, else why not. The count of changes since the last sync starts again either way it succeeded.
+    /// </summary>
+    public static string? SyncNow(Document doc)
+    {
+        if (CentralAccess.Waiting(doc) is { } wait) return wait;
+        var count = Rule.Count(Key(doc));
+        string? failed;
+        try { failed = SyncForTest is { } test ? test(doc, false) : RevitSync(doc, false, count); }
+        catch (Autodesk.Revit.Exceptions.CentralModelContentionException ex) { failed = Workshare.Explain(ex); }
+        catch (Autodesk.Revit.Exceptions.CentralFileCommunicationException ex) { failed = Workshare.Explain(ex); }
+        catch (Autodesk.Revit.Exceptions.CentralModelException ex) { failed = Workshare.Explain(ex); }
+        catch (Autodesk.Revit.Exceptions.ApplicationException ex) { failed = ex.Message; }
+        if (failed is not null) return failed;
+        Syncs++;
+        Rule.Synced(Key(doc));
+        Note(doc, $"Synchronized \"{doc.Title}\" with central (save_model)");
+        return null;
+    }
+
     private static string? RevitSync(Document doc, bool keepBorrowed, int count)
     {
         // Like Synchronize Now: elements borrowed for the work are given back (unless the step is still using them), the

@@ -49,7 +49,7 @@ internal sealed partial class ChatPane
             Autopilot.Logged += (kind, text) => Dispatcher.BeginInvoke(new Action(() => AutopilotLog(kind, text)));
         }
         var run = _sample ? null : Run;
-        Autopilot.Unattended = run is { Active: true };
+        Autopilot.Here = run is { Active: true };
         if (run is null)
         {
             if (_autoBanner is not null) _autoBanner.Visibility = Visibility.Collapsed;
@@ -182,7 +182,11 @@ internal sealed partial class ChatPane
             run.JobsBefore = _board?.Snapshot().Select(j => j.Number).DefaultIfEmpty(0).Max() ?? 0;
             ShowAutopilot();
             Status("Saving a backup copy of the model…", spin: true);
-            run.Backup = await AutopilotBackup();
+            var (model, copy) = await AutopilotBackup();
+            run.Backup = copy;
+            // Other Revit windows the run reaches (a documentation model linking this one) answer for you too, and back
+            // up their model before its first change.
+            AutopilotShare.Begin(Autopilot.RunId(_conv.Id, run), copy.Length > 0 ? model : "", DateTime.UtcNow);
             Note(run.Backup.Length > 0 ? $"Autopilot started. Backup copy of the model: {run.Backup}"
                 : "Autopilot started. No backup copy could be saved (the model has never been saved to a file).");
             Save();
@@ -192,8 +196,8 @@ internal sealed partial class ChatPane
         catch (Exception ex) { Status($"The autopilot couldn't start ({ex.Message}).", spin: false); }
     }
 
-    /// <summary>Copies the model's file into a Backup folder beside it ("Backup\Tower autopilot backup 2026-10-29 2310.rvt"); its path, or "" when it has none.</summary>
-    private static async Task<string> AutopilotBackup()
+    /// <summary>Saves the model and copies it into a Backup folder beside it: the model's file and the copy's path ("" when none).</summary>
+    private static async Task<(string Model, string Copy)> AutopilotBackup()
     {
         string path;
         try
@@ -202,29 +206,13 @@ internal sealed partial class ChatPane
             path = await SketchProMax.App.Dispatcher.InvokeAsync(app =>
             {
                 if (app.ActiveUIDocument?.Document is not { } doc) return "";
-                if (doc.PathName.Length > 0 && doc.IsModified && !doc.IsReadOnly)
-                {
-                    try { doc.Save(); }
-                    catch (Exception) { /* the copy is then of the last save */ }
-                }
+                Revit.AutopilotBackups.SaveFirst(doc);
                 return doc.PathName;
             });
         }
-        catch (Exception) { return ""; }
-        if (path.Length == 0) return "";
-        return await Task.Run(() =>
-        {
-            try
-            {
-                // In a Backup folder beside the model.
-                var folder = Path.Combine(Path.GetDirectoryName(path) ?? "", "Backup");
-                Directory.CreateDirectory(folder);
-                var copy = Path.Combine(folder, Path.GetFileNameWithoutExtension(path) + " autopilot backup " + DateTime.Now.ToString("yyyy-MM-dd HHmm", System.Globalization.CultureInfo.InvariantCulture) + Path.GetExtension(path));
-                File.Copy(path, copy, overwrite: true);
-                return copy;
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) { return ""; }
-        });
+        catch (Exception) { return ("", ""); }
+        if (path.Length == 0) return ("", "");
+        return (path, await Task.Run(() => Revit.AutopilotBackups.Copy(path)));
     }
 
     /// <summary>Every 30 s: carry on after a pause whose limit has reset; nudge a run that went quiet.</summary>
@@ -232,6 +220,9 @@ internal sealed partial class ChatPane
     {
         if (Run is not { Active: true } run) return;
         var now = DateTimeOffset.UtcNow;
+        // The other Revit windows know the run is still on, and what they answered goes into its log.
+        if (run.State != AutopilotRun.Approval && run.Started != default) AutopilotShare.Beat(Autopilot.RunId(_conv.Id, run), DateTime.UtcNow);
+        TakeSharedLog(run);
         if (run.State == AutopilotRun.Paused)
         {
             if (run.PausedUntil is { } until && until <= now) AutopilotResume("The usage limit has reset.");
@@ -290,10 +281,20 @@ internal sealed partial class ChatPane
         run.State = state;
         run.PauseWhy = why;
         run.Ended = DateTime.UtcNow;
-        Autopilot.Unattended = false;
+        Autopilot.Here = false;
+        TakeSharedLog(run);
+        AutopilotShare.End(Autopilot.RunId(_conv.Id, run));
         Add(new ChatItem { Kind = "assistant", Text = Autopilot.Report(run, _board?.Snapshot() ?? [], DateTime.UtcNow) });
         Save();
         ShowAutopilot();
+    }
+
+    private int _sharedLogRead;
+
+    /// <summary>What the other Revit windows answered for this run (AutopilotShare), into its log.</summary>
+    private void TakeSharedLog(AutopilotRun run)
+    {
+        foreach (var entry in AutopilotShare.TakeLog(ref _sharedLogRead)) AutopilotLog(entry.Kind, entry.Text);
     }
 
     /// <summary>Something answered or allowed for the user while away: kept in the run's log for the report.</summary>

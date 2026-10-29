@@ -35,6 +35,8 @@ internal sealed class Conversation
     public string Key { get; set; } = "";
     /// <summary>The model's title.</summary>
     public string Title { get; set; } = "";
+    /// <summary>The other models it (or its jobs) worked on, by title: a documentation model in another Revit window, say.</summary>
+    public List<string> Models { get; set; } = [];
     /// <summary>This chat among the model's chats; empty in a file saved before 0.31 (one chat per model).</summary>
     public string Id { get; set; } = "";
     /// <summary>The chat's name: made from the first request, or what the user renamed it to.</summary>

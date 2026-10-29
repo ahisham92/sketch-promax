@@ -51,7 +51,27 @@ internal sealed class RevitTargets
 
     private sealed record Session(int Pid, string Pipe, string RevitVersion, bool Busy, string? Blocked, List<(string Title, string Path, bool Active)> Documents);
 
-    public async Task<ConnectorResult> CallAsync(string name, IDictionary<string, JsonElement>? arguments, CancellationToken ct)
+    // ---- Set by the add-in (the connector program leaves them null) ------------------------------------------------
+
+    /// <summary>The model (its title) a chat's job was given to work on, by the job's key; null or "" when none.</summary>
+    public static Func<string, string?>? JobModel;
+
+    /// <summary>A chat or job now works on the model with this title (it chose it, or it was given it).</summary>
+    public static Action<string?, string>? Touched;
+
+    /// <summary>
+    /// Before a chat's call goes to another Revit window: the reason it may not (a check job asking for a change), or null.
+    /// That window doesn't know the chat's jobs, so this window decides.
+    /// </summary>
+    public static Func<string, string, string?>? RemoteGuard;
+
+    /// <summary>After a chat's call came back from another Revit window: its text with what the user sent meanwhile added.</summary>
+    public static Func<string, string, string, string>? RemoteAfter;
+
+    /// <summary>A chat's job works in another Revit window now ("reading") or is back to thinking ("").</summary>
+    public static Action<string, string>? RemoteActivity;
+
+        public async Task<ConnectorResult> CallAsync(string name, IDictionary<string, JsonElement>? arguments, CancellationToken ct)
     {
         if (name == ConnectorTools.StatusTool)
             return Text("Install the Sketch ProMax add-in, start Revit and open a model, then restart this app so the Revit tools load.", true);
@@ -70,6 +90,14 @@ internal sealed class RevitTargets
 
         var chosen = _target;
         var target = sessions.FirstOrDefault(s => s.Pid == chosen?.Pid);
+        // A job given a model of its own (chat_jobs start with model=…) works on it, in whichever Revit window it is open.
+        if (target is null && _caller.Job is { Length: > 0 } given && JobModel?.Invoke(given) is { Length: > 0 } wanted
+            && sessions.SelectMany(s => s.Documents.Select(d => (Session: s, d.Title))).FirstOrDefault(x => string.Equals(x.Title, wanted, StringComparison.OrdinalIgnoreCase)) is { Session: not null } at)
+        {
+            target = at.Session;
+            chosen = _target = new Target(at.Session.Pid, at.Title);
+            Touched?.Invoke(given, at.Title);
+        }
         if (target is null && _caller.PreferredPid is { } own && sessions.FirstOrDefault(s => s.Pid == own) is { } mine)
         {
             // Started by the chat pane inside a Revit window: work on that window unless Claude chose another model.
@@ -103,6 +131,12 @@ internal sealed class RevitTargets
                 return Text(a.RootElement.GetProperty("text").GetString() ?? "Could not switch models.", true);
         }
 
+        // A chat's call to another Revit window: this window keeps the chat's jobs, so it guards and delivers for them.
+        var remote = _caller.FromChat && _caller.Job is { Length: > 0 } && !(_local is { } here && here.Pipe == target.Pipe);
+        var caller = _caller.Job ?? "";
+        if (remote && RemoteGuard?.Invoke(caller, name) is { } refused) return Text(refused, true);
+        if (remote) RemoteActivity?.Invoke(caller, "reading");
+
         // From the in-Revit chat, Revit asks the user before code, recipe and file-writing calls run. From one of its
         // parallel jobs, the job's changes take turns with the other jobs' in Revit.
         var request = JsonSerializer.Serialize(new
@@ -111,7 +145,9 @@ internal sealed class RevitTargets
             job = _caller.FromChat && _caller.Job is { Length: > 0 } job ? job : null,
         });
         // The read has no timeout: a tool call may wait on the approval dialog in Revit.
-        var responseLine = await SendAsync(target.Pipe, request, 5000, ct).ConfigureAwait(false);
+        string? responseLine;
+        try { responseLine = await SendAsync(target.Pipe, request, 5000, ct).ConfigureAwait(false); }
+        finally { if (remote) RemoteActivity?.Invoke(caller, ""); }
         if (responseLine is null)
             return Text("Revit is not reachable. Ask the user to start Revit with the Sketch ProMax add-in and open a model.", true);
 
@@ -120,6 +156,7 @@ internal sealed class RevitTargets
         var text = root.GetProperty("text").GetString() ?? "";
         var isError = root.TryGetProperty("isError", out var e) && e.GetBoolean();
         var png = root.TryGetProperty("pngBase64", out var p) && p.ValueKind == JsonValueKind.String ? p.GetString() : null;
+        if (remote && !ct.IsCancellationRequested && RemoteAfter is { } after) text = after(caller, name, text);
         return new ConnectorResult(text, isError, png);
     }
 
@@ -143,6 +180,7 @@ internal sealed class RevitTargets
                 string.Join("\n", matches.Select(x => $"- {x.Title} (Revit {x.Session.RevitVersion})")), true);
 
         _target = new Target(matches[0].Session.Pid, matches[0].Title);
+        Touched?.Invoke(_caller.Job, matches[0].Title);
         return Text($"Now working on '{matches[0].Title}' in Revit {matches[0].Session.RevitVersion}.", false);
     }
 
