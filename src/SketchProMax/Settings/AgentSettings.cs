@@ -113,6 +113,10 @@ public sealed class AgentSettings
     public string ChatEffortEveryday { get; set; } = "medium";
     public string ChatEffortHard { get; set; } = "high";
 
+    /// <summary>The coordinator's own turns in a chat With coordinator (ChatAuto.Coordinating): light, the jobs do the heavy work.</summary>
+    public string ChatModelCoordinator { get; set; } = "sonnet";
+    public string ChatEffortCoordinator { get; set; } = "low";
+
     /// <summary>Your name as it goes on a signed checklist (next to Chat).</summary>
     public string SignatureName { get; set; } = "";
 

@@ -26,6 +26,13 @@ internal static class ChatAuto
     public static readonly string[] Kinds = [Simple, Everyday, Hard];
 
     /// <summary>
+    /// The coordinator's own turns in a chat With coordinator: it only reads what the parts share, plans and hands out
+    /// jobs (the jobs get their own kind), so it runs light, and on one model and effort for the whole chat, so Claude
+    /// Code isn't restarted between requests and the long chat stays cached.
+    /// </summary>
+    public const string Coordinating = "coordinator";
+
+    /// <summary>
     /// The effort levels Claude Code takes with --effort (its help: low, medium, high, xhigh, max). An older Claude Code
     /// without --effort is started again without it (ClaudeCli.EffortRefused).
     /// </summary>
@@ -35,7 +42,7 @@ internal static class ChatAuto
     public static string DefaultModel(string kind) => kind switch { Simple => "haiku", Hard => "opus", _ => "sonnet" };
 
     /// <summary>The effort each kind of work gets by default (Settings > Chat changes them).</summary>
-    public static string DefaultEffort(string kind) => kind switch { Simple => "low", Hard => "high", _ => "medium" };
+    public static string DefaultEffort(string kind) => kind switch { Simple or Coordinating => "low", Hard => "high", _ => "medium" };
 
     public static bool IsAuto(string? value) => string.IsNullOrWhiteSpace(value) || value!.Trim().Equals(Automatic, StringComparison.OrdinalIgnoreCase);
 
@@ -46,12 +53,13 @@ internal static class ChatAuto
     public static string ParseEffort(string? value) =>
         IsAuto(value) ? Automatic : Efforts.FirstOrDefault(e => e.Equals(value!.Trim(), StringComparison.OrdinalIgnoreCase)) ?? Automatic;
 
-    public static string KindLabel(string kind) => kind switch { Simple => "Simple work", Hard => "Hard reasoning", _ => "Everyday work" };
+    public static string KindLabel(string kind) => kind switch { Simple => "Simple work", Hard => "Hard reasoning", Coordinating => "Coordinating", _ => "Everyday work" };
 
     public static string KindHint(string kind) => kind switch
     {
         Simple => "rename, tag, list, count, fill parameters, short summaries",
         Hard => "specs or a BEP against the model, redlines, tricky modelling logic, costing decisions",
+        Coordinating => "the coordinator's own turns: reading what the parts share, planning and handing out jobs (each job gets the model of its own kind)",
         _ => "sheets, views, dimensions, checks, normal modelling",
     };
 
@@ -115,7 +123,7 @@ internal static class ChatAuto
     public static AutoPick Pick(string? text, string? chatModel, string? chatEffort, IReadOnlyDictionary<string, string>? models = null,
         IReadOnlyDictionary<string, string>? efforts = null, string? kind = null, bool documents = false, ICollection<string>? refused = null)
     {
-        var (k, why) = kind is Simple or Everyday or Hard ? (kind, "picked by the coordinator") : Classify(text, documents);
+        var (k, why) = kind is Coordinating ? (kind, "plans and hands out jobs") : kind is Simple or Everyday or Hard ? (kind, "picked by the coordinator") : Classify(text, documents);
         var modelAuto = IsAuto(chatModel);
         var effortAuto = IsAuto(chatEffort);
         var model = modelAuto ? ParseModel(models is not null && models.TryGetValue(k, out var m) ? m : null) : ParseModel(chatModel);

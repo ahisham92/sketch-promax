@@ -55,7 +55,8 @@ internal sealed partial class ChatPane
     /// </summary>
     private void PickFor(string text, bool documents)
     {
-        var pick = ChatJobs.Pick(text, _conv.Model, _conv.Effort, null, documents, _refusedModels);
+        // With coordinator, its own turns run light on one model; the heavy work goes to the jobs, each on its own kind's.
+        var pick = ChatJobs.Pick(text, _conv.Model, _conv.Effort, IsCoordinator ? ChatAuto.Coordinating : null, documents, _refusedModels);
         _model = pick.Model;
         _effort = pick.Effort;
         var changed = _lastPick is null || _lastPick.Model != pick.Model || _lastPick.Effort != pick.Effort;
