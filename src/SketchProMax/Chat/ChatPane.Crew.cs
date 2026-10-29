@@ -40,6 +40,7 @@ internal sealed partial class ChatPane
             _crew.WorkerPicked += ShowWorkerJobs;
             _crew.CoordinatorPicked += _ => ShowCoordinator(focus: true);
             _crew.WorkersChanged += SetWorkers;
+            _crew.ApplierPicked += ShowApplierList;
             CrewStrip.NamesChanged += () =>
             {
                 _switchShown = ""; // the jobs column names the workers too
@@ -81,6 +82,26 @@ internal sealed partial class ChatPane
             _crewLinger.Start();
         }
         else _crewLinger?.Stop();
+    }
+
+    /// <summary>The applier was picked: the change going into Revit now, the ones waiting in line, and the ones that went in.</summary>
+    private void ShowApplierList(Button anchor)
+    {
+        var names = CrewStrip.Names;
+        var jobs = _board?.Snapshot() ?? [];
+        string Who(ChatJob j) => (CrewWorker(j) ?? "A worker") + $" · job {j.Number}";
+        var rows = new List<(string, string, bool, Action)>();
+        foreach (var j in jobs.Where(j => JobBoard.ActivityOf(j) == JobBoard.Applying))
+            rows.Add(($"Now: {Who(j)}", JobBoard.OneLine(j.Title, 60), _viewJob == j.Number, () => OpenJobView(j.Number)));
+        foreach (var j in jobs.Where(j => JobBoard.ActivityOf(j) == JobBoard.WaitingToApply).OrderBy(j => j.Ahead <= 0 ? int.MaxValue : j.Ahead))
+            rows.Add(($"In line: {Who(j)}", JobBoard.OneLine(j.Title, 60), _viewJob == j.Number, () => OpenJobView(j.Number)));
+        foreach (var (job, worker, at) in (_crew?.Applied ?? []).AsEnumerable().Reverse().Take(8))
+        {
+            var number = job;
+            rows.Add(($"Applied {at:HH:mm}: {worker} · job {job}", jobs.FirstOrDefault(j => j.Number == job) is { } j ? JobBoard.OneLine(j.Title, 60) : "", false, () => OpenJobView(number)));
+        }
+        if (rows.Count == 0) rows.Add(("Nothing yet", $"{names.Applier} puts the workers' changes into Revit one at a time; they show here.", false, () => { }));
+        ToggleChoice(anchor, new Choice($"{names.Applier}: changes into Revit", rows));
     }
 
     /// <summary>+ or − on the strip: that many workers from now on (Settings: jobs at once); a new one takes a waiting job at once.</summary>

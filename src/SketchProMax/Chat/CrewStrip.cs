@@ -119,7 +119,13 @@ internal sealed class CrewStrip : Border
     private int? _applying = -1;
     /// <summary>How many changes the applier put into Revit while this strip watched (the line under the name).</summary>
     private int _applied;
-    private int _inLine;
+    private int _inLine, _waitingForWorker;
+
+    /// <summary>The changes the applier put into Revit while this strip watched, newest last: job, whose, when.</summary>
+    public List<(int Job, string Worker, DateTime At)> Applied { get; } = [];
+
+    /// <summary>The applier was clicked: the pane lists what goes into Revit now, what waits, and what went in.</summary>
+    public event Action<Button>? ApplierPicked;
     private string _applyingFor = "";
     /// <summary>The path on the floor from the desks to the applier: where the changes go.</summary>
     private readonly Line _path = new() { StrokeThickness = 1.5, StrokeDashArray = [3, 3], IsHitTestVisible = false };
@@ -272,6 +278,12 @@ internal sealed class CrewStrip : Border
         _desks = Math.Max(1, workers);
         ShowTeamSize();
         _tray.Visibility = unassigned > 0 ? Visibility.Visible : Visibility.Collapsed;
+        // Jobs waiting for a free worker: the coordinator asks for one more (the + lights up) while the team can grow.
+        if (unassigned > _waitingForWorker)
+            SayAt(Coordinator, CoordX, _desks < JobBoard.MaxLimit ? "I need one more worker!" : "Everyone's busy, it waits", TimeSpan.Zero);
+        _waitingForWorker = unassigned;
+        _more.SetResourceReference(BackgroundProperty, unassigned > 0 && _desks < JobBoard.MaxLimit ? Brand.K.AccentSoft : Brand.K.Raised);
+        _more.ToolTip = unassigned > 0 && _desks < JobBoard.MaxLimit ? $"One more worker: {unassigned} job(s) wait for one" : "One more worker";
         _trayCount.Text = unassigned.ToString(System.Globalization.CultureInfo.CurrentCulture);
         foreach (var gone in events.Where(e => e.Cue == CrewCue.Leave)) Leave(gone.Number);
         foreach (var seat in seats)
@@ -628,6 +640,11 @@ internal sealed class CrewStrip : Border
     {
         if (number == _applying) return;
         var finished = _applying is >= 0 && _workers.ContainsKey(_applying.Value);
+        if (finished)
+        {
+            Applied.Add((_applying!.Value, _applyingFor, DateTime.Now));
+            if (Applied.Count > 50) Applied.RemoveAt(0);
+        }
         _applying = number;
         _applyingFor = worker;
         var lit = number is not null;
@@ -690,7 +707,10 @@ internal sealed class CrewStrip : Border
         Timeline.SetDesiredFrameRate(show, 20);
         show.Completed += (_, _) => _bubbles.Children.Remove(call);
         call.BeginAnimation(OpacityProperty, show);
-        Say(number, words, TimeSpan.FromMilliseconds(400));
+        // The handover: what the first one found goes across as a sheet, with a word from each.
+        if (ChatUi.Lively) Sheet(x1, x2, Top);
+        SayAt(-100 - from, x1, "Here's what I found", TimeSpan.Zero);
+        Say(number, $"Thanks, {Names.Worker(from)}!", TimeSpan.FromMilliseconds(900));
     }
 
     /// <summary>The line under the applier's name: whose change goes in, who waits, or how many went in.</summary>
@@ -772,6 +792,7 @@ internal sealed class CrewStrip : Border
     private void BuildStation()
     {
         _station.Children.Add(_applier.Root);
+        _station.Children.Add(HitArea(-14, 76, "What goes into Revit: now, waiting and done", b => ApplierPicked?.Invoke(b)));
         double cx = 46, top = Top + 22;
         _modelTop.Data = Geometry.Parse(Inv($"M{cx},{top} L{cx + 14},{top + 7} L{cx},{top + 14} L{cx - 14},{top + 7} Z"));
         _modelLeft.Data = Geometry.Parse(Inv($"M{cx - 14},{top + 7} L{cx},{top + 14} L{cx},{top + 30} L{cx - 14},{top + 23} Z"));
