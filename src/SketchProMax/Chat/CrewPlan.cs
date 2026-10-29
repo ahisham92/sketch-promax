@@ -20,7 +20,7 @@ internal enum CrewCue { Arrive, Handover, Leave, Plan, Turn, Finish, Huddle, Sha
 /// its place in the line at the applier (<paramref name="Line"/>: 0 applying now, 1 next, …; -1 at the desk), and how
 /// far its plan is (<paramref name="Percent"/>, with <paramref name="Left"/> steps to go; -1 while it has no plan).
 /// </summary>
-internal sealed record CrewSeat(int Number, string Title, CrewMood Mood, int Slot = 0, int Line = -1, int Percent = -1, int Left = -1);
+internal sealed record CrewSeat(int Number, string Title, CrewMood Mood, int Slot = 0, int Line = -1, int Percent = -1, int Left = -1, int Steps = 0);
 
 /// <summary>
 /// The names in the crew strip, from Settings > Chat: you, the coordinator, the workers (one per job that runs at once,
@@ -169,6 +169,8 @@ internal sealed class CrewPlan
     private readonly Dictionary<int, int> _slots = new();
     private readonly Dictionary<int, int> _planned = new();
     private readonly Dictionary<int, int> _heard = new();
+    /// <summary>When each worker was last given a job: the next job goes to the free worker who waited longest.</summary>
+    private readonly Dictionary<int, DateTime> _given = new();
     private List<CrewSeat> _seats = [];
     private bool _started;
 
@@ -257,12 +259,16 @@ internal sealed class CrewPlan
             if (!quiet) events.Add(new CrewEvent(CrewCue.Leave, gone));
             Forget(gone);
         }
-        // Workers for the jobs that have none yet: the one it had before when free, else the first free one, else the
-        // desk of someone still showing a finished job, who leaves now.
+        // Workers for the jobs that have none yet: the one it had before when free, else the free one who has waited
+        // longest for work (so the jobs go round the team, not always to the first), else the desk of someone still
+        // showing a finished job, who leaves now.
         foreach (var (job, _) in next.Where(n => !_slots.ContainsKey(n.Job.Number)).ToList())
         {
             int slot;
+            // (With no number of workers given, simply the first free one.)
+            var free = workers > 64 ? [] : Enumerable.Range(0, workers).Where(k => !_slots.ContainsValue(k)).ToList();
             if (job.Worker >= 0 && job.Worker < workers && !_slots.ContainsValue(job.Worker)) slot = job.Worker;
+            else if (free.Count > 0) slot = free.OrderBy(k => _given.TryGetValue(k, out var at) ? at : DateTime.MinValue).ThenBy(k => k).First();
             else
             {
                 slot = 0;
@@ -277,6 +283,7 @@ internal sealed class CrewPlan
                 }
             }
             _slots[job.Number] = slot;
+            _given[slot] = now;
         }
         Unassigned = unassigned;
         // Several jobs handed out at once: the coordinator splits the work in a huddle.
@@ -286,7 +293,8 @@ internal sealed class CrewPlan
         {
             var finished = n.Mood is CrewMood.Done;
             var (done, total) = JobPlan.Count(n.Job.Plan);
-            return new CrewSeat(n.Job.Number, n.Job.Title, n.Mood, _slots[n.Job.Number], Percent: JobPlan.Percent(n.Job.Plan, finished), Left: total == 0 ? -1 : finished ? 0 : total - done);
+            return new CrewSeat(n.Job.Number, n.Job.Title, n.Mood, _slots[n.Job.Number], Percent: JobPlan.Percent(n.Job.Plan, finished), Left: total == 0 ? -1 : finished ? 0 : total - done,
+                Steps: n.Job.Items.Count(i => i.Kind == "tool"));
         }).ToList();
         // The line at the applier: the change being applied first, then the others in the order they asked.
         var line = placed.Where(s => s.Mood == CrewMood.Applying)
@@ -395,7 +403,8 @@ internal sealed class CrewPlan
             CrewMood.Applying => far.Length > 0 ? $"{seat.Percent}% · applying" : "Applying",
             CrewMood.Waiting => far.Length > 0 ? $"{seat.Percent}% · in line" : "In line",
             CrewMood.Reading => far.Length > 0 ? far : "Reading the model",
-            _ => far.Length > 0 ? far : "Planning…",
+            // No plan written (yet): how many steps it took, so there is always something moving.
+            _ => far.Length > 0 ? far : seat.Steps > 0 ? $"Step {seat.Steps}" : "Planning…",
         };
     }
 

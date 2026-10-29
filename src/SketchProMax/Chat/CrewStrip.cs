@@ -28,7 +28,7 @@ namespace SketchProMax.Chat;
 /// </summary>
 internal sealed class CrewStrip : Border
 {
-    public const double StripHeight = 104;
+    public const double StripHeight = 114;
     private const double Top = 10, YouX = 22, CoordX = 82, FirstDesk = 158, MaxGap = 96, MinGap = 66, ApplierRoom = 74, InLine = 32, NameTop = 76;
     private static readonly Duration Move = new(TimeSpan.FromMilliseconds(450)), Walk = new(TimeSpan.FromMilliseconds(800)), Fly = new(TimeSpan.FromMilliseconds(800));
 
@@ -84,6 +84,9 @@ internal sealed class CrewStrip : Border
         public RotateTransform Arm = null!;
         public UIElement Legs = null!;
         public TextBlock Name = null!, Status = null!, Clock = null!, Look = null!;
+        /// <summary>Under the status: a bar of how far along the job's plan is (hidden without one).</summary>
+        public Canvas Meter = null!;
+        public Rectangle MeterFill = null!;
     }
 
     private sealed class Worker
@@ -101,7 +104,7 @@ internal sealed class CrewStrip : Border
     }
 
     private readonly Canvas _stage = new() { ClipToBounds = true, Height = StripHeight };
-    private readonly TextBlock _caption = new() { FontSize = ChatUi.SmallSize, VerticalAlignment = VerticalAlignment.Top, HorizontalAlignment = HorizontalAlignment.Left, TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(FirstDesk, 2, ChatUi.S3, 0) };
+    private readonly TextBlock _caption = new() { FontSize = ChatUi.SmallSize, VerticalAlignment = VerticalAlignment.Top, HorizontalAlignment = HorizontalAlignment.Left, TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(FirstDesk, 2, 130, 0) };
     private readonly Dictionary<int, Worker> _workers = new();
     /// <summary>The workers without a job, by desk: sitting back, ready for one.</summary>
     private readonly Dictionary<int, Worker> _idle = new();
@@ -131,13 +134,19 @@ internal sealed class CrewStrip : Border
     /// <summary>The coordinator was clicked: the pane shows the coordinator's chat.</summary>
     public event Action<Button>? CoordinatorPicked;
 
+    /// <summary>A worker was added or let go with + and − on the strip: the new number of workers (Settings' jobs at once).</summary>
+    public event Action<int>? WorkersChanged;
+
+    private readonly TextBlock _teamSize = new() { FontSize = ChatUi.SmallSize, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(4, 0, 4, 0) };
+    private readonly Button _fewer = new(), _more = new();
+
     /// <summary>Smaller, for the chat in its pane at the side of Revit.</summary>
     public bool Compact
     {
         get => _scale.ScaleX < 1;
         set
         {
-            _scale.ScaleX = _scale.ScaleY = value ? 0.72 : 1;
+            _scale.ScaleX = _scale.ScaleY = value ? 0.8 : 1;
             Height = StripHeight * _scale.ScaleY;
         }
     }
@@ -154,6 +163,7 @@ internal sealed class CrewStrip : Border
         grid.Children.Add(_stage);
         grid.Children.Add(_caption);
         grid.Children.Add(_bubbles);
+        grid.Children.Add(TeamSize());
         Child = grid;
         AutomationProperties.SetName(this, "Who is working: you, the coordinator, its workers and who applies changes in Revit");
         Focusable = false;
@@ -209,6 +219,37 @@ internal sealed class CrewStrip : Border
         };
     }
 
+    /// <summary>Top right: − 3 workers +, to let a worker go or take one on (1 to the most jobs at once), there and then.</summary>
+    private FrameworkElement TeamSize()
+    {
+        var row = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, 2, ChatUi.S2, 0) };
+        Brand.Fg(_teamSize, Brand.K.Muted);
+        foreach (var (button, glyph, name, step) in new[] { (_fewer, "−", "One worker fewer", -1), (_more, "+", "One more worker", 1) })
+        {
+            button.Content = glyph;
+            button.MinWidth = 22;
+            button.Padding = new Thickness(6, 0, 6, 1);
+            button.SetResourceReference(StyleProperty, "SpmChatPill");
+            button.SetResourceReference(BackgroundProperty, Brand.K.Raised);
+            button.ToolTip = name;
+            AutomationProperties.SetName(button, name);
+            var by = step;
+            button.Click += (_, _) => WorkersChanged?.Invoke(Math.Max(JobBoard.MinLimit, Math.Min(JobBoard.MaxLimit, _desks + by)));
+        }
+        row.Children.Add(_fewer);
+        row.Children.Add(_teamSize);
+        row.Children.Add(_more);
+        ShowTeamSize();
+        return row;
+    }
+
+    private void ShowTeamSize()
+    {
+        _teamSize.Text = _desks == 1 ? "1 worker" : $"{_desks} workers";
+        _fewer.IsEnabled = _desks > JobBoard.MinLimit;
+        _more.IsEnabled = _desks < JobBoard.MaxLimit;
+    }
+
     /// <summary>Where the applier sits (the model block is just right of them).</summary>
     /// <summary>
     /// Where the applier sits (the model block is just right of them): close after the last desk, with room for the line
@@ -229,6 +270,7 @@ internal sealed class CrewStrip : Border
     {
         var names = Names;
         _desks = Math.Max(1, workers);
+        ShowTeamSize();
         _tray.Visibility = unassigned > 0 ? Visibility.Visible : Visibility.Collapsed;
         _trayCount.Text = unassigned.ToString(System.Globalization.CultureInfo.CurrentCulture);
         foreach (var gone in events.Where(e => e.Cue == CrewCue.Leave)) Leave(gone.Number);
@@ -244,6 +286,11 @@ internal sealed class CrewStrip : Border
             worker.Person.Name.Text = names.Worker(seat.Slot);
             var status = CrewPlan.Status(seat, seat.Slot);
             worker.Person.Status.Text = status;
+            // The figure under the name stands out while a job is under way; the bar under it fills with the plan.
+            worker.Person.Status.SetResourceReference(TextBlock.ForegroundProperty, seat.Percent >= 0 && seat.Mood is not (CrewMood.Done or CrewMood.Failed) ? Brand.K.Text : Brand.K.Muted);
+            worker.Person.Status.FontWeight = seat.Percent >= 0 ? FontWeights.SemiBold : FontWeights.Normal;
+            worker.Person.Meter.Visibility = seat.Percent >= 0 ? Visibility.Visible : Visibility.Collapsed;
+            worker.Person.MeterFill.Width = 44 * Math.Max(0, Math.Min(100, seat.Percent)) / 100.0;
             worker.Progress.Width = seat.Percent < 0 || seat.Mood is CrewMood.Done or CrewMood.Failed ? 0 : 26 * seat.Percent / 100.0;
             worker.Hit.ToolTip = names.Worker(seat.Slot) + "'s jobs";
             AutomationProperties.SetName(worker.Hit, $"{names.Worker(seat.Slot)}'s jobs (now job {seat.Number}, {Words(seat.Mood)}, {status})");
@@ -808,7 +855,7 @@ internal sealed class CrewStrip : Border
         Canvas.SetTop(f.Name, NameTop);
         f.Root.Children.Add(f.Name);
         // Under the name, for the workers: how far along, or ready for work.
-        f.Status = Brand.Text("", Brand.K.Muted, 9);
+        f.Status = Brand.Text("", Brand.K.Muted, 10);
         f.Status.TextWrapping = TextWrapping.NoWrap;
         f.Status.TextTrimming = TextTrimming.CharacterEllipsis;
         f.Status.Width = 84;
@@ -816,6 +863,12 @@ internal sealed class CrewStrip : Border
         Canvas.SetLeft(f.Status, -42);
         Canvas.SetTop(f.Status, NameTop + 13);
         f.Root.Children.Add(f.Status);
+        f.Meter = new Canvas { Visibility = Visibility.Collapsed };
+        var track = Bar(f.Meter, -22, NameTop + 28, 44, 4, Brand.K.BorderSubtle, null);
+        track.RadiusX = track.RadiusY = 2;
+        f.MeterFill = Bar(f.Meter, -22, NameTop + 28, 0, 4, null, ScreenOk);
+        f.MeterFill.RadiusX = f.MeterFill.RadiusY = 2;
+        f.Root.Children.Add(f.Meter);
         return f;
     }
 

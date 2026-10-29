@@ -172,6 +172,22 @@ internal static class CrewTests
         carded.State = JobBoard.Done;
         check("plan: a finished job's state is plain", JobBoard.StateLabel(carded) == "Done", JobBoard.StateLabel(carded));
 
+        // The jobs go round the team: the next job goes to the free worker who has waited longest, not always the first.
+        var round = new CrewPlan();
+        round.Update([], t0);
+        round.Update([Job(1, JobBoard.Running)], t0.AddSeconds(1), null, 3);
+        round.Update([Job(1, JobBoard.Stopped)], t0.AddSeconds(2), null, 3);
+        round.Update([Job(1, JobBoard.Stopped), Job(2, JobBoard.Running)], t0.AddSeconds(3), null, 3);
+        check("crew: the next job goes to a worker who hasn't had one", round.WorkerOf(2, CrewNames.Defaults) == "Echo", round.WorkerOf(2, CrewNames.Defaults) ?? "");
+        round.Update([Job(1, JobBoard.Stopped), Job(2, JobBoard.Stopped), Job(3, JobBoard.Running)], t0.AddSeconds(4), null, 3);
+        check("crew: then the one after", round.WorkerOf(3, CrewNames.Defaults) == "Pixel", round.WorkerOf(3, CrewNames.Defaults) ?? "");
+        var stepping = Job(5, JobBoard.Running);
+        stepping.Items.Add(new ChatItem { Kind = "tool", Name = "query_elements" });
+        stepping.Items.Add(new ChatItem { Kind = "tool", Name = "query_elements" });
+        var stepPlan = new CrewPlan();
+        stepPlan.Update([stepping], t0);
+        check("crew: without a plan a worker shows its steps", CrewPlan.Status(stepPlan.Seats[0], 0) == "Step 2", CrewPlan.Status(stepPlan.Seats[0], 0));
+
         // A whole job to one worker while others are free goes back to be divided, unless it can't be.
         check("divide: two free workers, one whole job: divide it", JobBoard.MustDivide(2, null) && JobBoard.MustDivide(3, " "), "");
         check("divide: one free worker, or a reason it can't be divided: start it", !JobBoard.MustDivide(1, null) && !JobBoard.MustDivide(3, "one sheet"), "");
