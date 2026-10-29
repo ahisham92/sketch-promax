@@ -40,7 +40,7 @@ internal static class PdfFiles
     {
         try
         {
-            using var doc = PdfDocument.Open(pdf, Lenient);
+            using var doc = PdfDocument.Open(SharedRead.AllBytes(pdf), Lenient);
             var total = doc.NumberOfPages;
             int characters = 0, withText = 0;
             using var output = new StreamWriter(target, false, new UTF8Encoding(false));
@@ -76,7 +76,7 @@ internal static class PdfFiles
     public static List<Part> Split(string pdf, long maxBytes, string folder, Action<int, int>? progress = null, CancellationToken ct = default, int maxPages = int.MaxValue)
     {
         if (maxBytes < 1024 * 1024) throw new ArgumentException("The part size is at least 1 MB.");
-        var bytes = File.ReadAllBytes(pdf);
+        var bytes = SharedRead.AllBytes(pdf);
         int total;
         try
         {

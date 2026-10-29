@@ -2302,7 +2302,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     /// <summary>A PDF: sent whole when it fits, as the Claude app does; otherwise its text goes to a file the note names.</summary>
     private static string PdfNote(Attachment a, AttachedSoFar used, List<(string, string)> pdfs)
     {
-        var bytes = File.ReadAllBytes(a.Path);
+        var bytes = Tools.SharedRead.AllBytes(a.Path);
         // PdfPig opens it only when it could still fit, for an exact page count.
         var check = PdfAttachment.Assess(bytes, used.Pages, used.Bytes, used.Bytes + bytes.Length <= PdfAttachment.MaxBytes ? PdfFiles.PageCount(bytes) : null);
         if (check.Verdict == PdfAttachment.Verdict.Send)
@@ -2404,7 +2404,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     /// </summary>
     private static (string MediaType, string Base64) EncodeImage(string path)
     {
-        var bytes = File.ReadAllBytes(path);
+        var bytes = Tools.SharedRead.AllBytes(path);
         var type = ImageType(path)!;
         var native = System.IO.Path.GetExtension(path).ToLowerInvariant() is ".png" or ".jpg" or ".jpeg" or ".gif" or ".webp";
         if (native && bytes.Length <= 3_500_000 && type == "image/webp") return (type, Convert.ToBase64String(bytes)); // WPF may not decode it

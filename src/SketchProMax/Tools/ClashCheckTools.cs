@@ -84,7 +84,7 @@ internal static class Sources
         {
             var links = new FilteredElementCollector(doc).OfClass(typeof(RevitLinkInstance)).Cast<RevitLinkInstance>().ToList();
             var link = LinkMatch.Find(doc, links, source);
-            from = link.GetLinkDocument() ?? throw new ArgumentException($"Link '{link.Name}' is not loaded.");
+            from = LinkMatch.Require(doc, link);
             tr = link.GetTotalTransform();
             name = link.Name; inHost = false;
         }
@@ -368,7 +368,12 @@ public sealed class FindClashesTool : IRevitTool
                 var lo = bb.Transform.OfPoint(bb.Min); var hi = bb.Transform.OfPoint(bb.Max);
                 var depth = Math.Min(Math.Abs(hi.X - lo.X), Math.Min(Math.Abs(hi.Y - lo.Y), Math.Abs(hi.Z - lo.Z)));
                 if (depth < minOverlap) continue;
-                return (true, depth, x.ComputeCentroid(), false);
+                // Revit can fail the centroid of a thin or odd intersection ("Unable to complete the centroid calculation",
+                // 2026-10-28): the middle of its box is as good a place for the clash marker.
+                XYZ at;
+                try { at = x.ComputeCentroid(); }
+                catch (Autodesk.Revit.Exceptions.ApplicationException) { at = (lo + hi) / 2; }
+                return (true, depth, at, false);
             }
         if (tried == 0 || failed < tried) return (false, 0, XYZ.Zero, false);
         // Revit couldn't intersect any of their solids; the boxes already overlap by more than min_overlap.

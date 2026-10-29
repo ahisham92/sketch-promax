@@ -106,6 +106,15 @@ internal static class LearnedTools
         JsonValueKind.Object => e.EnumerateObject().ToDictionary(p => p.Name, p => Plain(p.Value)),
         _ => null,
     };
+
+    /// <summary>
+    /// True when the code opens its own transactions (or an edit scope), so it must run without the one the runner
+    /// would open around it: inside an open transaction Revit refuses "Starting a new transaction is not permitted"
+    /// (2026-10-28: two saved join tools failed six times this way).
+    /// </summary>
+    public static bool OpensOwnTransactions(string code) => OwnTransaction.IsMatch(code);
+
+    private static readonly Regex OwnTransaction = new(@"new\s+(Autodesk\.Revit\.DB\.)?(Transaction|TransactionGroup)\s*\(|EditScope\b");
 }
 
 /// <summary>One saved tool. The MCP server reads the same file to list it, so the JSON shape is shared.</summary>
@@ -117,6 +126,8 @@ public sealed class LearnedTool : IRevitTool
     public string PropertiesJson { get; private set; } = "{}";
     public string[] Required { get; private set; } = [];
     public bool ModifiesModel { get; private set; }
+    /// <summary>The code starts and commits its own transactions; the run is still one Undo step (a group).</summary>
+    public bool OwnTransactions { get; private set; }
     public int Uses { get; private set; }
     public DateTime Saved { get; private set; }
 
@@ -128,7 +139,9 @@ public sealed class LearnedTool : IRevitTool
         if (!LearnedTools.IsApproved(Code) && !Bridge.BridgeServer.Approve(this, args.Raw))
             return ToolResult.Error($"The user did not approve running the learned tool '{Name}'. Ask them how to proceed.");
         var values = args.Raw.ToDictionary(p => p.Key, p => LearnedTools.Plain(p.Value));
-        var result = RevitCodeToolBase.RunScript(app, Code, Name.Replace('_', ' '), ModifiesModel, values);
+        // The same time cap as run_revit_code, so a saved tool can't keep Revit frozen either.
+        var result = RevitCodeToolBase.RunScript(app, Code, Name.Replace('_', ' '), ModifiesModel, values, OwnTransactions,
+            RevitCodeToolBase.CapSeconds);
         if (!result.IsError) CountUse();
         else result = result with
         {
@@ -150,10 +163,11 @@ public sealed class LearnedTool : IRevitTool
     }
 
     public static LearnedTool Create(string name, string summary, string code, string propertiesJson, string[] required,
-        bool modifiesModel, int uses) => new()
+        bool modifiesModel, int uses, bool? ownTransactions = null) => new()
     {
         Name = name, Summary = summary, Code = code, PropertiesJson = propertiesJson, Required = required,
         ModifiesModel = modifiesModel, Uses = uses, Saved = DateTime.Now,
+        OwnTransactions = ownTransactions ?? LearnedTools.OpensOwnTransactions(code),
     };
 
     public string ToJson()
@@ -165,6 +179,7 @@ public sealed class LearnedTool : IRevitTool
             description = ToolSchema.Description(this),
             summary = Summary,
             modifiesModel = ModifiesModel,
+            ownTransactions = OwnTransactions,
             inputSchema = new { type = "object", properties = props.RootElement, required = Required },
             code = Code,
             uses = Uses,
@@ -185,6 +200,9 @@ public sealed class LearnedTool : IRevitTool
             Summary = r.GetProperty("summary").GetString() ?? "",
             Code = r.GetProperty("code").GetString()!,
             ModifiesModel = r.GetProperty("modifiesModel").GetBoolean(),
+            // Tools saved before 0.35.43 have no flag: tell from the code.
+            OwnTransactions = r.TryGetProperty("ownTransactions", out var o) && o.ValueKind is JsonValueKind.True or JsonValueKind.False
+                ? o.GetBoolean() : LearnedTools.OpensOwnTransactions(r.GetProperty("code").GetString() ?? ""),
             PropertiesJson = schema.TryGetProperty("properties", out var p) ? p.GetRawText() : "{}",
             Required = schema.TryGetProperty("required", out var q) && q.ValueKind == JsonValueKind.Array
                 ? q.EnumerateArray().Select(x => x.GetString() ?? "").ToArray() : [],
@@ -211,7 +229,8 @@ public sealed class SaveAsToolTool : IRevitTool
       "code": {"type": "string", "description": "C# method body, as for run_revit_code, reading its inputs from args. Must end with a return statement."},
       "parameters": {"type": "object", "description": "JSON Schema 'properties' for the inputs, e.g. {\"level\": {\"type\": \"string\", \"description\": \"Level name\"}}"},
       "required": {"type": "array", "items": {"type": "string"}},
-      "changes_model": {"type": "boolean", "description": "True when the code changes the model. It then runs in one transaction behind the same approval as run_revit_code."}
+      "changes_model": {"type": "boolean", "description": "True when the code changes the model. It then runs in one transaction behind the same approval as run_revit_code."},
+      "own_transactions": {"type": "boolean", "description": "True when the code starts and commits its own transactions (as with own_transactions in run_revit_code: one transaction per item, so one refused item doesn't undo the rest). Default: worked out from the code."}
     }
     """;
     public string[] Required => ["name", "description", "code", "changes_model"];
@@ -243,7 +262,7 @@ public sealed class SaveAsToolTool : IRevitTool
 
         var previous = LearnedTools.Load(name);
         var tool = LearnedTool.Create(name, args.String("description"), code, propertiesJson, required.ToArray(),
-            args.OptBool("changes_model"), previous?.Uses ?? 0);
+            args.OptBool("changes_model"), previous?.Uses ?? 0, args.Has("own_transactions") ? args.OptBool("own_transactions") : (bool?)null);
         Directory.CreateDirectory(LearnedTools.Folder);
         File.WriteAllText(LearnedTools.PathFor(name), tool.ToJson());
         return ToolResult.Ok(new

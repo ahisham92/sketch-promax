@@ -261,6 +261,7 @@ public sealed class ToolRegistry
         new CutOpeningsInJoinedTool(),
         new CreateFloorsFromFacesTool(),
         new CutGeometryTool(),
+        new JoinElementsTool(),
         // Guided workarounds for API limits
         new CreateLegendTool(),
         new SaveLegendSeedTool(),

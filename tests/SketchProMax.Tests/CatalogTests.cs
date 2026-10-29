@@ -204,7 +204,7 @@ internal static class CatalogTests
             Equals(dict["a"], 1L) && Equals(dict["b"], 2.5) && ((IList)dict["c"]!)[0] is true && dict["d"] is null, JsonSerializer.Serialize(converted));
         var toolType = T("SketchProMax.Tools.LearnedTool");
         var made = toolType.GetMethod("Create", Any)!.Invoke(null, ["count_walls", "Counts walls.", "return 1;",
-            """{"level": {"type": "string"}}""", new[] { "level" }, false, 3])!;
+            """{"level": {"type": "string"}}""", new[] { "level" }, false, 3, null])!;
         var json = (string)toolType.GetMethod("ToJson", Any)!.Invoke(made, null)!;
         var back = toolType.GetMethod("FromJson", Any)!.Invoke(null, [json])!;
         check("learned tool survives save and load",
@@ -214,6 +214,18 @@ internal static class CatalogTests
         var forged = json.Replace("\"name\": \"count_walls\"", "\"name\": \"..\\\\..\\\\evil\"");
         var forgedLoad = Throws(() => toolType.GetMethod("FromJson", Any)!.Invoke(null, [forged]));
         check("learned tool with an unsafe name is refused", forgedLoad is not null, "loaded a tool named ..\\..\\evil");
+
+        // A saved tool whose code opens its own transactions must run without one around it (2026-10-28: two saved join
+        // tools failed six times with "Starting a new transaction is not permitted").
+        var own = toolType.GetMethod("Create", Any)!.Invoke(null, ["join_pairs", "Joins pairs.",
+            "foreach (var p in pairs) { using var t = new Transaction(doc, \"j\"); t.Start(); t.Commit(); } return 1;",
+            "{}", Array.Empty<string>(), true, 0, null])!;
+        var ownBack = toolType.GetMethod("FromJson", Any)!.Invoke(null, [(string)toolType.GetMethod("ToJson", Any)!.Invoke(own, null)!])!;
+        var oldJson = ((string)toolType.GetMethod("ToJson", Any)!.Invoke(own, null)!).Replace("\"ownTransactions\": true,", "");
+        var oldBack = toolType.GetMethod("FromJson", Any)!.Invoke(null, [oldJson])!;
+        check("learned tool that opens its own transactions runs without one around it",
+            Prop(own, "OwnTransactions") == "True" && Prop(ownBack, "OwnTransactions") == "True" && Prop(oldBack, "OwnTransactions") == "True"
+            && Prop(made, "OwnTransactions") == "False" && !oldJson.Contains("ownTransactions"), oldJson);
     }
 
     private static void CheckSchema(string path, JsonElement s, List<string> problems)

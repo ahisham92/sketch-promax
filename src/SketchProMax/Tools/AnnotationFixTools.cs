@@ -940,11 +940,11 @@ public sealed class CopyDimensionsTool : IRevitTool
 
         object Where(Job j)
         {
-            var p = j.Dim.Origin;
+            var p = OriginOf(j.Dim);
             return new
             {
                 dimension = j.Dim.Id.Value, view = j.Target.Name, shape = j.Dim.DimensionShape.ToString(),
-                value = j.Dim.NumberOfSegments > 1 ? string.Join(" / ", j.Dim.Segments.Cast<DimensionSegment>().Select(s => s.ValueString)) : j.Dim.ValueString,
+                value = ValueOf(j.Dim),
                 sourceViewPoint = p is null ? null : new[] { RevitHelpers.FromInternal(doc, (p - source.Origin).DotProduct(source.RightDirection)), RevitHelpers.FromInternal(doc, (p - source.Origin).DotProduct(source.UpDirection)) },
                 reason = j.Manual,
             };
@@ -998,7 +998,7 @@ public sealed class CopyDimensionsTool : IRevitTool
                     Kind = "cut_edge_dimension", Item = $"'{target.Name}'",
                     What = $"Add {wanted} dimension{(wanted == 1 ? "" : "s")} by hand in '{target.Name}', to the cut edges",
                     Where = $"Open '{target.Name}', Annotate tab > Dimension > Aligned, and pick the cut edges. They copy dimension{(wanted == 1 ? "" : "s")} " +
-                            string.Join(", ", view.Select(j => $"{j.Dim.Id.Value} ({j.Dim.ValueString ?? string.Join(" / ", j.Dim.Segments.Cast<DimensionSegment>().Select(s => s.ValueString))})")) +
+                            string.Join(", ", view.Select(j => $"{j.Dim.Id.Value} ({ValueOf(j.Dim)})")) +
                             $" in '{source.Name}'",
                     Why = "They measure to cut edges, which exist only in their own view, and the API can't point a dimension at another view's cut edge (Revit API limit). " +
                           "To have static stand-ins drawn instead (a line with the value as text, labelled static; it never updates), Stop and ask again with static_fallback.",
@@ -1019,6 +1019,31 @@ public sealed class CopyDimensionsTool : IRevitTool
                    manual.Count > 0 ? "Add the manualReAdd dimensions by hand in the target views (sourceViewPoint is right/up from the source view origin)." : null,
             units = RevitHelpers.LengthUnitLabel(doc),
         }), handoffs);
+    }
+
+    /// <summary>
+    /// Where a dimension is. Revit throws on Origin (and Value) for a spot dimension of more than one segment, which
+    /// stopped a whole list_only run (2026-10-29: "Thrown when: SpotDimension has more than one segments").
+    /// </summary>
+    internal static XYZ? OriginOf(Dimension d)
+    {
+        try { if (d.NumberOfSegments <= 1) return d.Origin; }
+        catch (Autodesk.Revit.Exceptions.ApplicationException) { }
+        try { foreach (DimensionSegment s in d.Segments) return s.Origin; }
+        catch (Autodesk.Revit.Exceptions.ApplicationException) { }
+        try { return d.Curve is { IsBound: true } c ? c.Evaluate(0.5, true) : null; }
+        catch (Autodesk.Revit.Exceptions.ApplicationException) { return null; }
+    }
+
+    /// <summary>The dimension's text, segment by segment; never throws (see <see cref="OriginOf"/>).</summary>
+    internal static string? ValueOf(Dimension d)
+    {
+        try
+        {
+            if (d.NumberOfSegments > 1) return string.Join(" / ", d.Segments.Cast<DimensionSegment>().Select(s => s.ValueString));
+            return d.ValueString;
+        }
+        catch (Autodesk.Revit.Exceptions.ApplicationException) { return null; }
     }
 
     private static List<Reference> Refs(Dimension d)
@@ -1096,7 +1121,7 @@ public sealed class CopyDimensionsTool : IRevitTool
                 break;
             case DimensionShape.Spot:
             {
-                var at = map.OfPoint(src.Origin);
+                var at = map.OfPoint(OriginOf(src) ?? throw new InvalidOperationException("Revit gives no position for this spot dimension."));
                 var step = view.Scale * 5 / 304.8;
                 var bend = at + (view.RightDirection + view.UpDirection) * step;
                 dim = doc.Create.NewSpotElevation(view, refs[0], at, bend, bend + view.RightDirection * step, at, true);

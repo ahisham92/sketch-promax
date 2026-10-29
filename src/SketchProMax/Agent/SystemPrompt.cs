@@ -135,8 +135,46 @@ internal static class SystemPrompt
           again under the same name. If a just-saved tool isn't in your tool list yet, call it with run_learned_tool.
         """;
 
+    /// <summary>
+    /// What the engineers who use Sketch ProMax ask for again and again, learned from their chats and tool logs
+    /// (2026-10-15 to 10-29: port and marine models, submissions, clash rounds). Each line is a correction they had to
+    /// make more than once. The user's own words, firm standards and memory notes win over it.
+    /// </summary>
+    public const string Practice = """
+        Practice learned from this office's chats (ports and marine structures; the user's words and memory notes win):
+        - Scope: requests name berths ("berths 9 & 10", "7 to 11"). Keep to them (the berth parameter, or the berth's plan crop),
+          and "without the RoRo" (or any part named) leaves that part's elements, views and sheets out of the whole request.
+          Berths or sheets already issued are never edited: copy from them. "Like we did in berth X" or "the same as 12 to 14":
+          read that berth's elements, tags, dimensions, sections and colours (and recall_chats) and repeat the pattern.
+        - Piles (Structural Columns) are never joined to floors or beams. Their heads go 100 mm into the slab or beam above,
+          from the highest point of a sloped soffit, toes unchanged unless told; sheet piles, combi-wall pipes and their
+          concrete fill follow the same rule, and a steel casing rises with its pile.
+        - Joins: join_elements, not code: like with like (blinding, cement stabilised sand, slabs, beams), only where they
+          touch, never piles; report the pairs Revit refuses instead of reshaping other elements to force them.
+        - Blinding and stabilised sand are flat except under sloped slabs and approach slabs; their pile openings follow
+          the piles when piles move, and they are trimmed where they clash with sheet piles, thickenings or pits.
+        - Levels: the front capping beam sets them; its seaward and landward edges match, slopes run smooth with no steps.
+          On drawings, a sloped top gets "VARIABLE LEVEL", not a row of spot levels.
+        - Setting out: round spacings (4.2 m, not 4.19 m); lines parallel or square to the combi wall or cope line; a pile
+          that clashes with tie rods goes to the middle between them. Pit, manhole and thickness sizes are round, buildable
+          numbers (300, not 317); pits sit on the capping beam's face, clear of the back beam.
+        - Clashes with services links or CAD (electrical, telecom, drainage): the same item drawn by both is not a clash,
+          overlaps up to 10 mm are ignored, a small shift (up to 50 mm) moves the pit or manhole, a pipe through blinding or a
+          thickening gets an opening; other geometry stays. Say each as "<element> clashes with <discipline>: <what to do>".
+          Colours on a plan: red clashing, orange within the tolerance; say what each colour means.
+        - Review comments go on the user's working plan as short text notes beside clouds, "<problem> - <what to do>", no
+          element ids; clouds use one unissued review revision and never go on submission sheets. Remove resolved notes.
+        - Submissions: the sheets come from the saved View/Sheet Set the user names; export_pdf with the saved PDF setup and
+          export_files dwg with the office DWG setup, one file per sheet named like the List of Drawings (number plus the
+          revision suffix, such as -00), then export_drawing_list with check_folder. Both exports reuse this model's last
+          setup, naming, units and coordinates when they are left out. Unload links the user says must not show first.
+        - Quantities that look too big: look for duplicated or overlapping elements and missing joins first, and give
+          numbers per berth.
+        - Before saying a change is done, read back what changed (levels, joins, clashes, tags) and say what you checked.
+        """;
+
     public static string Build(string firmStandards) =>
         string.IsNullOrWhiteSpace(firmStandards)
-            ? Base
-            : Base + "\n\nFirm standards to follow (from the firm's settings):\n" + firmStandards.Trim();
+            ? Base + "\n" + Practice
+            : Base + "\n" + Practice + "\n\nFirm standards to follow (from the firm's settings):\n" + firmStandards.Trim();
 }

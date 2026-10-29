@@ -273,12 +273,12 @@ public sealed class ExportPdfTool : IRevitTool
     {
       "view_ids": {"type": "array", "items": {"type": "integer"}, "description": "Sheets or views, in order. Or give sheet_set."},
       "sheet_set": {"type": "string", "description": "Name of a saved View/Sheet Set (Revit's Print dialog): its sheets, by sheet number, then its views. Used when view_ids is not given."},
-      "pdf_setup": {"type": "string", "description": "Name of a saved PDF export setup (Revit's Export PDF dialog): its paper size, orientation, colour, zoom and hidden items. Default: Revit's defaults."},
+      "pdf_setup": {"type": "string", "description": "Name of a saved PDF export setup (Revit's Export PDF dialog): its paper size, orientation, colour, zoom and hidden items. Default: the setup this model's PDF exports used last time, else Revit's defaults."},
       "check_print": {"type": "boolean", "description": "true: an internal check print, not an issue or submission. The issue check is skipped and nothing is recorded as issued. Use only when the user says it is for checking or review."},
       "file_name": {"type": "string", "description": "Name for the combined PDF (no extension)."},
       "combine": {"type": "boolean", "description": "One PDF (default true) or one file per sheet."},
       "folder": {"type": "string"},
-      "name_pattern": {"type": "string", "description": "One file per sheet named from the pattern, e.g. '{number} - {name}' or 'PRJ-{number}-{revision}'. Placeholders: {number} {name} {revision} {view} {date} {project}. The result checks each file name."}
+      "name_pattern": {"type": "string", "description": "One file per sheet named from the pattern, e.g. '{number} - {name}' or 'PRJ-{number}-{revision}'. Placeholders: {number} {name} {revision} {view} {date} {project}. The result checks each file name. With combine false and no pattern, the pattern used last time for this model."}
     }
     """;
     public string[] Required => [];
@@ -404,15 +404,29 @@ public sealed class ExportPdfTool : IRevitTool
         var doc = app.ActiveUIDocument.Document;
         var folder = Folder(args);
         var ids = Ids(doc, args);
+        // The setup and naming this model's exports used last time, when this call leaves them out (ExportDefaults).
+        var model = Chat.ChatPane.ModelKey(doc);
+        var remembered = ExportDefaults.For(model);
+        var usedDefaults = new List<string>();
+        var setups = new FilteredElementCollector(doc).OfClass(typeof(ExportPDFSettings)).Cast<ExportPDFSettings>().ToList();
+        var setupName = ExportDefaults.Pick("pdf_setup", args.OptString("pdf_setup"), remembered, usedDefaults,
+            n => setups.Any(s => string.Equals(s.Name, n, StringComparison.OrdinalIgnoreCase)));
+        // A pattern makes one file per sheet: reused only when this call asks for separate files.
+        var patternGiven = args.OptString("name_pattern");
+        var pattern = patternGiven ?? (args.Has("combine") && !args.OptBool("combine", true)
+            ? ExportDefaults.Pick("name_pattern", null, remembered, usedDefaults) : null);
         // A saved PDF export setup brings its paper, colour, zoom and hidden items; the file name and combining stay this call's.
-        var options = args.OptString("pdf_setup") is { } setup
-            ? Named(new FilteredElementCollector(doc).OfClass(typeof(ExportPDFSettings)).Cast<ExportPDFSettings>().ToList(), setup, s => s.Name,
+        var options = setupName is { } setup
+            ? Named(setups, setup, s => s.Name,
                 "saved PDF export setup (Export > PDF; printer settings from the Print dialog are not PDF setups)").GetOptions()
             : new PDFExportOptions();
         options.Combine = args.OptBool("combine", true);
         options.FileName = OutputPaths.Checked(args.OptString("file_name")) ?? $"{doc.Title} - {DateTime.Now:yyyy-MM-dd HHmm}";
         Directory.CreateDirectory(folder);
-        if (args.OptString("name_pattern") is { } pattern)
+        ExportDefaults.Remember(model, new Dictionary<string, string?> { ["pdf_setup"] = args.OptString("pdf_setup"), ["name_pattern"] = patternGiven });
+        var defaultsNote = usedDefaults.Count == 0 ? null
+            : $"Used this model's export settings from last time: {string.Join(", ", usedDefaults)}. Say so in a line; pass other values to change them.";
+        if (pattern is not null)
         {
             ExportNames.RequireUnique(doc, ids, pattern);
             var naming = new List<object>();
@@ -432,14 +446,14 @@ public sealed class ExportPdfTool : IRevitTool
                 if (!doc.Export(folder, [id], options)) { naming.Add(new { view = view.Name, expected = expected + ".pdf", found = (string?)null, ok = false }); continue; }
                 naming.Add(ExportNames.Settle(folder, expected, ".pdf", before, started, view.Name));
             }
-            return ToolResult.Ok(new { folder, exported = ids.Count, naming, issueCheck = CheckPrintNote(args) });
+            return ToolResult.Ok(new { folder, exported = ids.Count, naming, issueCheck = CheckPrintNote(args), defaults = defaultsNote });
         }
         // Revit only says "failed" when it can't write the file; the usual cause is the same PDF open in a viewer.
         var combined = options.Combine ? Path.Combine(folder, options.FileName + ".pdf") : null;
         if (combined is not null && FileInUse.Why(combined) is { } locked) return ToolResult.Error(locked);
         var exportStarted = DateTime.UtcNow;
         var ok = doc.Export(folder, ids, options);
-        if (ok) return ToolResult.Ok(new { folder, exported = ids.Count, file = combined, issueCheck = CheckPrintNote(args) });
+        if (ok) return ToolResult.Ok(new { folder, exported = ids.Count, file = combined, issueCheck = CheckPrintNote(args), defaults = defaultsNote });
         var held = combined is not null
             ? FileInUse.Why(combined)
             : FileInUse.Describe(Directory.GetFiles(folder, "*.pdf").Where(f => File.GetLastWriteTimeUtc(f) < exportStarted && FileInUse.Why(f) is not null).ToList());

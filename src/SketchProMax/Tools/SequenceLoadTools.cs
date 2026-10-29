@@ -382,7 +382,7 @@ public sealed class LoadingPlanTool : IRevitTool
         var z = level.ProjectElevation;
         var links = new FilteredElementCollector(doc).OfClass(typeof(RevitLinkInstance)).Cast<RevitLinkInstance>().ToList();
         var link = LinkMatch.Find(doc, links, args.String("link"));
-        var linkDoc = link.GetLinkDocument() ?? throw new ArgumentException($"Link '{link.Name}' is not loaded.");
+        var linkDoc = LinkMatch.Require(doc, link);
         var tr = link.GetTotalTransform();
         var asce = args.OptString("standard") == "ASCE7";
         var sdl = args.OptDouble("sdl") ?? 1.5;

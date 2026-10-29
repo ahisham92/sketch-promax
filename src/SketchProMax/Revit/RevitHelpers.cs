@@ -13,14 +13,20 @@ internal static class RevitHelpers
 
         if (Aliases.TryGetValue(trimmed, out bic)) return bic;
 
+        // One more or one fewer "s": "Duct" for Ducts, "Pipe" for Pipes (2026-10-29: find_clashes refused 'Duct').
+        var forms = new[] { trimmed + "s", trimmed + "es", trimmed.EndsWith("s", StringComparison.OrdinalIgnoreCase) ? trimmed.Substring(0, trimmed.Length - 1) : "" }
+            .Where(f => f.Length > 0).ToList();
+        Category? plural = null;
         var near = new List<string>();
         var words = trimmed.Split([' '], StringSplitOptions.RemoveEmptyEntries).Select(w => w.TrimEnd('s')).Where(w => w.Length >= 3).ToList();
         foreach (Category c in doc.Settings.Categories)
         {
             if (string.Equals(c.Name, trimmed, StringComparison.OrdinalIgnoreCase))
                 return (BuiltInCategory)c.Id.Value;
+            if (plural is null && forms.Any(f => string.Equals(c.Name, f, StringComparison.OrdinalIgnoreCase))) plural = c;
             if (words.Any(w => c.Name.IndexOf(w, StringComparison.OrdinalIgnoreCase) >= 0)) near.Add(c.Name);
         }
+        if (plural is not null) return (BuiltInCategory)plural.Id.Value;
         throw new ArgumentException($"Unknown category '{name}'." + (near.Count > 0 ? $" Close ones: {string.Join(", ", near.OrderBy(n => n).Take(8))}." : ""));
     }
 

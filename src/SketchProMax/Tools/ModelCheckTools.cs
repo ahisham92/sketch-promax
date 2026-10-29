@@ -347,7 +347,7 @@ public sealed class FindMissingItemsTool : IRevitTool
         if (args.OptString("source") is { } source && !source.Equals("model", StringComparison.OrdinalIgnoreCase))
         {
             var link = LinkMatch.Find(doc, new FilteredElementCollector(doc).OfClass(typeof(RevitLinkInstance)).Cast<RevitLinkInstance>().ToList(), source);
-            src = link.GetLinkDocument() ?? throw new ArgumentException($"Link '{link.Name}' is not loaded.");
+            src = LinkMatch.Require(doc, link);
             tr = link.GetTotalTransform(); sourceName = link.Name;
         }
         var findings = new List<Checks.Finding>();
@@ -502,7 +502,7 @@ public sealed class ModelSnapshotTool : IRevitTool
         if (args.OptString("source") is { } source && !source.Equals("model", StringComparison.OrdinalIgnoreCase))
         {
             var link = LinkMatch.Find(doc, new FilteredElementCollector(doc).OfClass(typeof(RevitLinkInstance)).Cast<RevitLinkInstance>().ToList(), source);
-            src = link.GetLinkDocument() ?? throw new ArgumentException($"Link '{link.Name}' is not loaded.");
+            src = LinkMatch.Require(doc, link);
             sourceName = src.Title;
         }
         string Safe(string s) => new(s.Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '_' : c).ToArray());

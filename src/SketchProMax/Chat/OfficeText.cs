@@ -34,7 +34,7 @@ internal static class OfficeText
     /// <summary>The text and pictures of a .docx, .pptx or .xlsx. Throws InvalidDataException when it isn't one.</summary>
     public static Content Read(string path)
     {
-        using var zip = OpenZip(File.ReadAllBytes(path));
+        using var zip = OpenZip(Tools.SharedRead.AllBytes(path));
         var ext = Path.GetExtension(path).ToLowerInvariant();
         var text = Text(zip, ext);
         var media = ext == ".docx" ? "word/media/" : IsWorkbook(path) ? "xl/media/" : "ppt/media/";

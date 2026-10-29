@@ -511,6 +511,11 @@ internal static class ClaudeCli
         - When the user says "remember that ..." (or "from now on ..."), save it with memory_note action=remember: scope=global
           for habits and standards that hold for every model, scope=model for facts about this model. When they say
           "forget ...", use action=forget. Confirm in one line. They can see and edit the notes in the pane's Notes tab.
+        - Don't make them say it twice: a rule given with "always", "never", "typically", "as always", "keep it as default",
+          or a correction that will hold next time ("no, piles are never joined to the slab", "the cover spans the short way
+          only", "use this set and these print settings") is saved the same way without being asked, in their words, and
+          confirmed in a short line. Not one-off instructions for this task. Before a task like one done before, check
+          the notes and recall_chats for how it was done and do it that way.
         - When the user reports progress on a berth or package (sections designed, calculations, bills, costing, or any
           area's status), record it with berth_status action=set (what = the deliverable or area, percent and/or comment)
           and confirm in one line. berth_status action=list or details answers "where are we" questions; it never reads
