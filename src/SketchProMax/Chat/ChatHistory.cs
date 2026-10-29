@@ -71,6 +71,8 @@ internal sealed class Conversation
     public string Model { get; set; } = "";
     /// <summary>The chat's effort (ChatAuto): "auto", or a level picked by hand that sticks. "" is auto.</summary>
     public string Effort { get; set; } = "";
+    /// <summary>An autopilot chat's run (Autopilot): its goal, plan, state and log; null in any other chat.</summary>
+    public AutopilotRun? Autopilot { get; set; }
     /// <summary>A Simple chat: the worker's desk it talks to directly (CrewStats.NextWorker); -1 until its first request.</summary>
     public int Worker { get; set; } = -1;
     /// <summary>The advice already given in this chat (DirectAdvice: overloaded, mixed, several), so each shows once.</summary>
