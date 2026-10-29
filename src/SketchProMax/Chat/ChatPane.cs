@@ -905,7 +905,9 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         var auto = ChatAuto.IsAuto(chosen);
         var label = auto ? "Auto" + (_lastPick is { } p ? " · " + ChatModels.Find(p.Model).Label : "") : ChatModels.Find(chosen).Label;
         _modelLabel.Text = label;
-        _modelPill.ToolTip = auto
+        _modelPill.ToolTip = auto && IsCoordinator
+            ? "Model: Automatic. The coordinator runs light on one model (Settings > Chat, Coordinating) and each job gets Haiku, Sonnet or Opus by its kind of work. Click to pick one for this chat."
+            : auto
             ? "Model: Automatic. Each request gets Haiku, Sonnet or Opus by the kind of work (Settings > Chat). Click to pick one for this chat."
             : $"Model: {ChatModels.Find(chosen).Label} for this chat and its new jobs, until you set it back to Automatic. Click to change.";
         AutomationProperties.SetName(_modelPill, "Model: " + (auto ? "Automatic" : ChatModels.Find(chosen).Label));

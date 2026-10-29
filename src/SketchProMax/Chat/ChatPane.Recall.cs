@@ -130,7 +130,7 @@ internal sealed partial class ChatPane
     private void ShrinkIfLong(Turn? ended, bool stopped)
     {
         if (ended is null || ended.Shrinking || stopped || ended.Outcome != "done" || _pendingModel is not null) return;
-        if (!ChatRecall.ShouldAutoShrink(_contextTokens, _conv.ContextFloor)) return;
+        if (!ChatRecall.ShouldAutoShrink(_contextTokens, _conv.ContextFloor, IsCoordinator)) return;
         // After what the turn's end still does (leftover messages are sent first; a turn they start comes first).
         Dispatcher.BeginInvoke(new Action(() => { if (_turn is null && !_stopped) _ = Shrink(auto: true); }));
     }

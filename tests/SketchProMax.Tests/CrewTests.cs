@@ -248,6 +248,15 @@ internal static class CrewTests
         check("stats: the coordinator's turns and the jobs it handed out", lead.Turns == 1 && lead.JobsHandedOut == 4 && lead.In == 50, $"{lead}");
         check("stats: the applier's changes", CrewStats.ApplierKpi(runs) == (1, 3.0), "");
         check("stats: the period keeps only records ending in it", CrewStats.Since(runs, t0.AddSeconds(100)).Count == 3, "");
+        // A cheap coordinator: its own turns run light on one model whatever the request; the jobs keep their kinds.
+        var lead1 = ChatAuto.Pick("Check the BEP against the model and cost it", "auto", "auto", kind: ChatAuto.Coordinating);
+        var lead2 = ChatAuto.Pick("[Job report 1] done", "auto", "auto", kind: ChatAuto.Coordinating);
+        check("coordinator: runs on Sonnet, low effort, for a hard request and a job report alike", lead1.Model == "sonnet" && lead1.Effort == "low" && lead2.Model == lead1.Model && lead2.Effort == lead1.Effort, lead1.Label + " / " + lead2.Label);
+        var leadSet = ChatAuto.Pick("anything", "auto", "auto", new Dictionary<string, string> { [ChatAuto.Coordinating] = "haiku" }, null, ChatAuto.Coordinating);
+        check("coordinator: Settings picks its model", leadSet.Model == "haiku" && leadSet.Effort == "low", leadSet.Label);
+        check("coordinator: a model picked by hand still sticks", ChatAuto.Pick("x", "opus", "high", kind: ChatAuto.Coordinating).Label == ChatAuto.Pick("x", "opus", "high").Label, "");
+        check("coordinator: the job it hands out keeps the hard kind", ChatAuto.Pick("Check the BEP", "auto", "auto", kind: ChatAuto.Hard).Model == "opus", "");
+        check("coordinator: its chat shrinks sooner (short memory)", ChatRecall.ShouldAutoShrink(70_000, 25_000, coordinator: true) && !ChatRecall.ShouldAutoShrink(70_000, 25_000), "");
         check("stats: friendly numbers", CrewStats.Tokens(1234) == "1.2k" && CrewStats.Tokens(2_100_000) == "2.1M" && CrewStats.Dollars(0.4) == "$0.40" && CrewStats.Duration(45) == "45 s" && CrewStats.Duration(7500) == "2 h 5 min",
             CrewStats.Tokens(1234) + " " + CrewStats.Dollars(0.4) + " " + CrewStats.Duration(7500));
     }

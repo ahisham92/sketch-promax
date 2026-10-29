@@ -20,6 +20,12 @@ internal static class ChatRecall
     /// <summary>The chat shrinks itself after a turn whose conversation is this much above the chat's floor.</summary>
     public const long AutoShrinkTokens = 100_000;
 
+    /// <summary>
+    /// A chat With coordinator shrinks sooner: the coordinator keeps a short memory (the jobs hold the details and report
+    /// back), so one long chat stays cheap message after message.
+    /// </summary>
+    public const long CoordinatorShrinkTokens = 40_000;
+
     /// <summary>...and in any case once a message sends this much (well before Claude Code's own near-full point).</summary>
     public const long AutoShrinkMaxTokens = 150_000;
 
@@ -58,10 +64,11 @@ internal static class ChatRecall
 
     /// <summary>
     /// True when the last turn sent so much that the chat should shrink itself now: <paramref name="contextTokens"/> is
-    /// what its last request sent, <paramref name="floor"/> the least any request of this chat sent (0 when unknown).
+    /// what its last request sent, <paramref name="floor"/> the least any request of this chat sent (0 when unknown);
+    /// a <paramref name="coordinator"/> chat shrinks at <see cref="CoordinatorShrinkTokens"/> over its floor.
     /// </summary>
-    public static bool ShouldAutoShrink(long contextTokens, long floor) =>
-        floor > 0 && contextTokens - floor >= AutoShrinkTokens
+    public static bool ShouldAutoShrink(long contextTokens, long floor, bool coordinator = false) =>
+        floor > 0 && contextTokens - floor >= (coordinator ? CoordinatorShrinkTokens : AutoShrinkTokens)
         || contextTokens >= AutoShrinkMaxTokens && (floor <= 0 || contextTokens - floor >= MinShrinkGain);
 
     /// <summary>The chat's floor after a request that sent <paramref name="contextTokens"/>.</summary>

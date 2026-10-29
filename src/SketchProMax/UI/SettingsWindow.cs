@@ -337,7 +337,7 @@ public sealed class SettingsWindow : Window
         page.Children.Add(Hint("New chats start on these; the pickers under a chat's name change them for that chat (and its new jobs) until set back to Automatic. Automatic sorts each request and job into simple, everyday or hard work by its words and uses the model and effort below, to save your plan's limits.", 2));
         page.Children.Add(PickRow("New chats' model", "ChatModelDefault", _settings.ChatModelDefault, models: true, automatic: true, b => Place("ChatModelDefault", b)));
         page.Children.Add(PickRow("New chats' effort", "ChatEffortDefault", _settings.ChatEffortDefault, models: false, automatic: true, b => Place("ChatEffortDefault", b)));
-        foreach (var kind in Chat.ChatAuto.Kinds)
+        foreach (var kind in Chat.ChatAuto.Kinds.Append(Chat.ChatAuto.Coordinating))
         {
             var label = Brand.Text(Chat.ChatAuto.KindLabel(kind), bold: true);
             label.Margin = new Thickness(0, 10, 0, 0);
@@ -350,6 +350,10 @@ public sealed class SettingsWindow : Window
                 case Chat.ChatAuto.Simple:
                     row.Children.Add(PickRow("Model", "ChatModelSimple", _settings.ChatModelSimple, models: true, automatic: false, b => Place("ChatModelSimple", b), what));
                     row.Children.Add(PickRow("Effort", "ChatEffortSimple", _settings.ChatEffortSimple, models: false, automatic: false, b => Place("ChatEffortSimple", b), what));
+                    break;
+                case Chat.ChatAuto.Coordinating:
+                    row.Children.Add(PickRow("Model", "ChatModelCoordinator", _settings.ChatModelCoordinator, models: true, automatic: false, b => Place("ChatModelCoordinator", b), what));
+                    row.Children.Add(PickRow("Effort", "ChatEffortCoordinator", _settings.ChatEffortCoordinator, models: false, automatic: false, b => Place("ChatEffortCoordinator", b), what));
                     break;
                 case Chat.ChatAuto.Hard:
                     row.Children.Add(PickRow("Model", "ChatModelHard", _settings.ChatModelHard, models: true, automatic: false, b => Place("ChatModelHard", b), what));
@@ -938,6 +942,8 @@ public sealed class SettingsWindow : Window
         _settings.ChatEffortSimple = Picked("ChatEffortSimple", Chat.ChatAuto.DefaultEffort(Chat.ChatAuto.Simple));
         _settings.ChatEffortEveryday = Picked("ChatEffortEveryday", Chat.ChatAuto.DefaultEffort(Chat.ChatAuto.Everyday));
         _settings.ChatEffortHard = Picked("ChatEffortHard", Chat.ChatAuto.DefaultEffort(Chat.ChatAuto.Hard));
+        _settings.ChatModelCoordinator = Picked("ChatModelCoordinator", Chat.ChatAuto.DefaultModel(Chat.ChatAuto.Coordinating));
+        _settings.ChatEffortCoordinator = Picked("ChatEffortCoordinator", Chat.ChatAuto.DefaultEffort(Chat.ChatAuto.Coordinating));
         _settings.IdleMinutes = idle;
         _settings.TimeRates = _rates is { Count: > 0 } ? _rates : null;
         _settings.SignatureName = _sigName.Text.Trim();

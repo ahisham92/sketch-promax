@@ -44,8 +44,8 @@ internal static class ChatJobs
     public static (Dictionary<string, string> Models, Dictionary<string, string> Efforts) AutoMaps()
     {
         var s = AgentSettings.Load();
-        return (new() { [ChatAuto.Simple] = s.ChatModelSimple, [ChatAuto.Everyday] = s.ChatModelEveryday, [ChatAuto.Hard] = s.ChatModelHard },
-                new() { [ChatAuto.Simple] = s.ChatEffortSimple, [ChatAuto.Everyday] = s.ChatEffortEveryday, [ChatAuto.Hard] = s.ChatEffortHard });
+        return (new() { [ChatAuto.Simple] = s.ChatModelSimple, [ChatAuto.Everyday] = s.ChatModelEveryday, [ChatAuto.Hard] = s.ChatModelHard, [ChatAuto.Coordinating] = s.ChatModelCoordinator },
+                new() { [ChatAuto.Simple] = s.ChatEffortSimple, [ChatAuto.Everyday] = s.ChatEffortEveryday, [ChatAuto.Hard] = s.ChatEffortHard, [ChatAuto.Coordinating] = s.ChatEffortCoordinator });
     }
 
     /// <summary>The model and effort for a request or job (ChatAuto.Pick with the Settings' maps).</summary>
