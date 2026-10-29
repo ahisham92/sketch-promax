@@ -84,6 +84,8 @@ internal sealed class CrewStrip : Border
         public RotateTransform Arm = null!;
         public UIElement Legs = null!;
         public TextBlock Name = null!, Status = null!, Clock = null!, Look = null!;
+        /// <summary>Beside the bar: how far along, in percent.</summary>
+        public TextBlock Pct = null!;
         /// <summary>Under the status: a bar of how far along the job's plan is (hidden without one).</summary>
         public Canvas Meter = null!;
         public Rectangle MeterFill = null!;
@@ -318,6 +320,8 @@ internal sealed class CrewStrip : Border
             Kpi(worker);
             var status = CrewPlan.Status(seat, seat.Slot);
             worker.Person.Status.Text = status;
+            worker.Person.Status.ToolTip = status;
+            worker.Person.Pct.Text = seat.Percent >= 0 && seat.Mood is not (CrewMood.Done or CrewMood.Failed) ? seat.Percent + "%" : "";
             // The figure under the name stands out while a job is under way; the bar under it fills with the plan.
             worker.Person.Status.SetResourceReference(TextBlock.ForegroundProperty, seat.Percent >= 0 && seat.Mood is not (CrewMood.Done or CrewMood.Failed) ? Brand.K.Text : Brand.K.Muted);
             worker.Person.Status.FontWeight = seat.Percent >= 0 ? FontWeights.SemiBold : FontWeights.Normal;
@@ -350,6 +354,7 @@ internal sealed class CrewStrip : Border
                 briefs++;
             }
             else if (e.Cue == CrewCue.Share) Call(e.From, e.Number, e.Say);
+            else if (e.Cue == CrewCue.Visit) Visit(e.Number, e.From);
             else if (e.Cue != CrewCue.Leave && e.Say.Length > 0) Say(e.Number, e.Say, e.Cue is CrewCue.Arrive or CrewCue.Handover ? Fly.TimeSpan : TimeSpan.Zero);
         }
         var applying = seats.FirstOrDefault(s => s.Mood == CrewMood.Applying);
@@ -359,7 +364,7 @@ internal sealed class CrewStrip : Border
         ShowApplier();
         // What each worker at a desk is doing, in a thought bubble over them; the line over the strip makes room for them.
         foreach (var seat in seats)
-            if (_workers.TryGetValue(seat.Number, out var thinker)) Think(thinker, seat.Doing);
+            if (_workers.TryGetValue(seat.Number, out var thinker)) Think(thinker, seat.Thought);
         _caption.Visibility = _workers.Values.Any(w => w.Thought is { Visibility: Visibility.Visible }) ? Visibility.Hidden : Visibility.Visible;
         _caption.Text = CrewPlan.Caption(seats, names, unassigned);
         _caption.ToolTip = seats.Count == 0 ? null : string.Join("\n", seats.Select(s => $"{names.Worker(s.Slot)} · job {s.Number} · {s.Title}: {Words(s.Mood)}, {CrewPlan.Status(s, s.Slot)}"));
@@ -748,6 +753,35 @@ internal sealed class CrewStrip : Border
     }
 
     /// <summary>
+    /// A worker goes over to a teammate's desk (at <paramref name="slot"/>) for information or to tell them something:
+    /// it walks there, asks, the teammate answers, and it walks back to its own desk.
+    /// </summary>
+    private void Visit(int number, int slot)
+    {
+        if (!_workers.TryGetValue(number, out var w) || w.Leaving || w.Line >= 0) return;
+        var teammate = Names.Worker(slot);
+        var home = w.Person.At.X;
+        var desk = DeskX(slot);
+        var there = desk + (desk > home ? -24 : 24);
+        if (!ChatUi.Lively || !IsVisible || Math.Abs(there - home) < 8)
+        {
+            Say(number, $"Asked {teammate}", TimeSpan.Zero);
+            return;
+        }
+        var walk = new DoubleAnimationUsingKeyFrames { Duration = new Duration(TimeSpan.FromMilliseconds(4600)), FillBehavior = FillBehavior.Stop };
+        walk.KeyFrames.Add(new EasingDoubleKeyFrame(there, KeyTime.FromPercent(0.18), new QuadraticEase { EasingMode = EasingMode.EaseInOut }));
+        walk.KeyFrames.Add(new DiscreteDoubleKeyFrame(there, KeyTime.FromPercent(0.82)));
+        walk.KeyFrames.Add(new EasingDoubleKeyFrame(home, KeyTime.FromPercent(1), new QuadraticEase { EasingMode = EasingMode.EaseInOut }));
+        Timeline.SetDesiredFrameRate(walk, 30);
+        w.Person.Legs.Visibility = Visibility.Visible;
+        if (w.Thought is not null) w.Thought.Visibility = Visibility.Collapsed;
+        walk.Completed += (_, _) => { if (w.Line < 0) w.Person.Legs.Visibility = Visibility.Collapsed; };
+        w.Person.At.BeginAnimation(TranslateTransform.XProperty, walk);
+        SayAt(number, there + 4, $"{teammate}, got a minute?", TimeSpan.FromMilliseconds(900));
+        SayAt(-200 - slot, desk + 4, "Sure, here you go!", TimeSpan.FromMilliseconds(2300));
+    }
+
+    /// <summary>
     /// Today's jobs done per worker (under each desk, "5 today") and the one who leads (a star by the name), so the team
     /// can see how each does.
     /// </summary>
@@ -978,6 +1012,10 @@ internal sealed class CrewStrip : Border
         track.RadiusX = track.RadiusY = 2;
         f.MeterFill = Bar(f.Meter, -22, NameTop + 28, 0, 4, null, ScreenOk);
         f.MeterFill.RadiusX = f.MeterFill.RadiusY = 2;
+        f.Pct = Brand.Text("", Brand.K.Muted, 9);
+        Canvas.SetLeft(f.Pct, 25);
+        Canvas.SetTop(f.Pct, NameTop + 24);
+        f.Meter.Children.Add(f.Pct);
         f.Root.Children.Add(f.Meter);
         return f;
     }

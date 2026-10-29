@@ -1282,7 +1282,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         }
         // In a job's view, what the coordinator (the main chat) sent the job is marked as such.
         var fromCoordinator = item.State == JobBoard.FromCoordinator;
-        var who = ChatUi.Small((fromCoordinator ? "From the coordinator" : "You") + When(item));
+        var fromTeam = item.State.StartsWith(JobBoard.FromTeam, StringComparison.Ordinal) ? item.State.Substring(JobBoard.FromTeam.Length) : null;
+        var who = ChatUi.Small((fromCoordinator ? "From the coordinator" : fromTeam is not null ? "From job " + fromTeam : "You") + When(item));
         who.ToolTip = WhenLong(item);
         who.Margin = new Thickness(ChatUi.S1, 0, 0, 0);
         head.Children.Add(who);

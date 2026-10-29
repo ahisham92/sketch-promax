@@ -52,6 +52,8 @@ internal sealed class ChatJob
     public Dictionary<string, string> Plan { get; set; } = new();
     /// <summary>The other jobs whose reports it was given (JobBoard.Team), so each one reaches it once. Saved.</summary>
     public List<int> Heard { get; set; } = [];
+    /// <summary>The other jobs it went to for information or told something (chat_jobs ask / message from a job), oldest first. Saved.</summary>
+    public List<int> Visited { get; set; } = [];
     public DateTime Created { get; set; }
     public DateTime Started { get; set; }
     public DateTime Ended { get; set; }
@@ -115,7 +117,10 @@ internal sealed class JobBoard
     public const string FromCoordinator = "coordinator";
 
     /// <summary>How the messages waiting for a job start, by who sent them.</summary>
-    public const string UserSays = "The user says: ", MainSays = "The main chat says: ";
+    public const string UserSays = "The user says: ", MainSays = "The main chat says: ", TeamSays = "A teammate, job ";
+
+    /// <summary>A job's view marks a message another job sent it with this State and the sender's number ("team:2").</summary>
+    public const string FromTeam = "team:";
 
     /// <summary>What a resumed job is sent when it has no message waiting.</summary>
     public const string CarryOn = "Carry on with your task.";
@@ -181,6 +186,77 @@ internal sealed class JobBoard
     public ChatJob? Find(int number)
     {
         lock (Gate) return _jobs.FirstOrDefault(j => j.Number == number);
+    }
+
+    /// <summary>The job whose session is <paramref name="key"/> (what the connector passes on for a job's calls).</summary>
+    public ChatJob? FindKey(string? key)
+    {
+        if (string.IsNullOrEmpty(key)) return null;
+        lock (Gate) return _jobs.FirstOrDefault(j => j.Key == key);
+    }
+
+    /// <summary>
+    /// One job asks another for what it knows (chat_jobs action=ask from a job): the answer is what <paramref name="target"/>
+    /// has found so far (its report, or its latest words and step), at once and without a run of its own. Both views note
+    /// it, and the asker walks over on the crew strip. With <paramref name="forward"/>, an open target also gets the
+    /// question, and answers with a message when its current run ends. Null when either job isn't found.
+    /// </summary>
+    public string? Ask(string askerKey, int target, string question, bool forward, DateTime now)
+    {
+        lock (Gate)
+        {
+            var asker = _jobs.FirstOrDefault(j => j.Key == askerKey);
+            var other = _jobs.FirstOrDefault(j => j.Number == target);
+            if (asker is null || other is null || asker == other) return null;
+            question = question.Trim();
+            asker.Visited.Add(other.Number);
+            AddItem(asker, new ChatItem { Kind = "note", Text = $"Asked job {other.Number} (\"{other.Title}\"): {OneLine(question, 200)}" }, now);
+            var answer = Findings(other);
+            if (forward && question.Length > 0 && (other.Active || other.State == Queued))
+            {
+                other.Inbox.Add($"{TeamSays}{asker.Number} (\"{asker.Title}\"), asks: {question}\nAnswer it with chat_jobs action=message, job={asker.Number}, when you know.");
+                AddItem(other, new ChatItem { Kind = "user", Text = question, State = FromTeam + asker.Number }, now);
+                answer += $"\nJob {other.Number} also got your question and will message you the answer when its current run ends; carry on meanwhile.";
+            }
+            return answer;
+        }
+    }
+
+    /// <summary>
+    /// One job tells another something (chat_jobs action=message from a job): it goes to that job like the main chat's
+    /// messages, marked as from the teammate, and the sender walks over on the crew strip.
+    /// </summary>
+    public Delivery Tell(string senderKey, int target, string text, DateTime now)
+    {
+        lock (Gate)
+        {
+            var sender = _jobs.FirstOrDefault(j => j.Key == senderKey);
+            var other = _jobs.FirstOrDefault(j => j.Number == target);
+            text = text.Trim();
+            if (sender is null || other is null || sender == other || text.Length == 0) return Delivery.NotFound;
+            sender.Visited.Add(other.Number);
+            other.Inbox.Add($"{TeamSays}{sender.Number} (\"{sender.Title}\"), says: {text}");
+            AddItem(other, new ChatItem { Kind = "user", Text = text, State = FromTeam + sender.Number }, now);
+            if (other.Active || other.State == Queued) return Delivery.Queued;
+            other.State = Queued;
+            other.Summary = "";
+            return Delivery.Reopened;
+        }
+    }
+
+    /// <summary>What a job has found so far, for a teammate who asks: its task, state, report or latest words, and its step now.</summary>
+    public static string Findings(ChatJob job)
+    {
+        var lines = new List<string> { $"Job {job.Number} \"{job.Title}\" ({StateLabel(job)}). Its task: {OneLine(job.Task, 300)}" };
+        if (job.Summary.Length > 0) lines.Add("Its report: " + OneLine(job.Summary, 1500));
+        else
+        {
+            var said = job.Items.Where(i => i.Kind == "assistant" && i.Text.Trim().Length > 0).Select(i => i.Text.Trim()).ToList();
+            if (said.Count > 0) lines.Add("What it has found so far: " + OneLine(string.Join(" ", said.Skip(Math.Max(0, said.Count - 2))), 1500));
+            if (job.Now.Length > 0) lines.Add("Doing now: " + OneLine(job.Now, 150));
+            if (said.Count == 0) lines.Add("It hasn't reported anything yet.");
+        }
+        return string.Join("\n", lines);
     }
 
     /// <summary>Jobs running or waiting their turn now.</summary>
@@ -366,7 +442,8 @@ internal sealed class JobBoard
         lock (Gate)
         {
             job.HasSession = false;
-            if (pending.Text.StartsWith(UserSays, StringComparison.Ordinal) || pending.Text.StartsWith(MainSays, StringComparison.Ordinal))
+            if (pending.Text.StartsWith(UserSays, StringComparison.Ordinal) || pending.Text.StartsWith(MainSays, StringComparison.Ordinal)
+                || pending.Text.StartsWith(TeamSays, StringComparison.Ordinal))
             {
                 job.Inbox.Insert(0, pending.Text);
                 job.InboxFiles.InsertRange(0, pending.Files);
@@ -561,7 +638,7 @@ internal sealed class JobBoard
         Number = j.Number, Key = j.Key, Title = j.Title, Task = j.Task, State = j.State, Kind = j.Kind, Model = j.Model, Effort = j.Effort, Summary = j.Summary, Now = j.Now, Ahead = j.Ahead,
         Created = j.Created, Started = j.Started, Ended = j.Ended, HasSession = j.HasSession, Inbox = j.Inbox.ToList(),
         InboxFiles = j.InboxFiles.ToList(), Items = j.Items.ToList(), Activity = j.Activity, Worker = j.Worker,
-        Plan = new Dictionary<string, string>(j.Plan), Heard = j.Heard.ToList(),
+        Plan = new Dictionary<string, string>(j.Plan), Heard = j.Heard.ToList(), Visited = j.Visited.ToList(),
     };
 }
 

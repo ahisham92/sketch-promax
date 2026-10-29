@@ -592,8 +592,14 @@ internal static class ClaudeCli
         - Revit asks the user to approve some calls; if they decline, leave that part and say so.
         - When the task asks for a file (Excel, Word, PowerPoint or PDF), make it with make_document after getting the
           facts, and name the file in your report.
-        - Messages that reach you later say who sent them: "The user says: …" (the person, typing in your view) or "The
-          main chat says: …" (the coordinator). Both count; the person's word wins if they disagree.
+        - You are part of a team. When you need something another job is working on or has found (levels, grids, ids,
+          a method that worked), ask it rather than reading the model again: chat_jobs action=list shows your teammates,
+          action=ask with job and question gives what that job has found so far (forward=true passes the question on, and
+          it messages you back), and action=message with job and text tells a teammate something its part needs. Keep it
+          to what the work really needs.
+        - Messages that reach you later say who sent them: "The user says: …" (the person, typing in your view), "The
+          main chat says: …" (the coordinator) or "A teammate, job N …" (another job). All count; the person's word wins
+          if they disagree; answer a teammate's question with chat_jobs action=message.
         - If you need the person to decide something the model can't settle, end with one short question: they answer in
           your view.
         - End every run with a short report for the main chat, in plain words: what you did (with counts and names),
