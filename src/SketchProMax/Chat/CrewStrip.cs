@@ -28,8 +28,8 @@ namespace SketchProMax.Chat;
 /// </summary>
 internal sealed class CrewStrip : Border
 {
-    public const double StripHeight = 114;
-    private const double Top = 10, YouX = 22, CoordX = 82, FirstDesk = 158, MaxGap = 96, MinGap = 66, ApplierRoom = 74, InLine = 32, NameTop = 76;
+    public const double StripHeight = 160;
+    private const double Top = 30, YouX = 22, CoordX = 82, FirstDesk = 158, MaxGap = 96, MinGap = 66, StatusWidth = 104, ApplierRoom = 74, InLine = 32, NameTop = 76;
     private static readonly Duration Move = new(TimeSpan.FromMilliseconds(450)), Walk = new(TimeSpan.FromMilliseconds(800)), Fly = new(TimeSpan.FromMilliseconds(800));
 
     // Decorative colours that read on both themes: the people, and the screens (always dark, like a monitor).
@@ -323,6 +323,7 @@ internal sealed class CrewStrip : Border
             var status = CrewPlan.Status(seat, seat.Slot);
             worker.Person.Status.Text = status;
             worker.Person.Status.ToolTip = status;
+            FitStatus(worker.Person);
             worker.Person.Pct.Text = seat.Percent >= 0 && seat.Mood is not (CrewMood.Done or CrewMood.Failed) ? seat.Percent + "%" : "";
             // The figure under the name stands out while a job is under way; the bar under it fills with the plan.
             worker.Person.Status.SetResourceReference(TextBlock.ForegroundProperty, seat.Percent >= 0 && seat.Mood is not (CrewMood.Done or CrewMood.Failed) ? Brand.K.Text : Brand.K.Muted);
@@ -759,6 +760,14 @@ internal sealed class CrewStrip : Border
     /// A worker goes over to a teammate's desk (at <paramref name="slot"/>) for information or to tell them something:
     /// it walks there, asks, the teammate answers, and it walks back to its own desk.
     /// </summary>
+    /// <summary>The line under a worker fits between the desks beside it: as wide as the gap allows (up to two lines).</summary>
+    private void FitStatus(Figure f)
+    {
+        var width = Math.Max(MinGap - 4, Math.Min(StatusWidth, DeskX(1) - DeskX(0) - 4));
+        f.Status.Width = width;
+        Canvas.SetLeft(f.Status, -width / 2);
+    }
+
     private void Visit(int number, int slot, string question)
     {
         if (!_workers.TryGetValue(number, out var w) || w.Leaving || w.Line >= 0) return;
@@ -786,16 +795,20 @@ internal sealed class CrewStrip : Border
             ShowData(away);
             if (away.Thought is not null) away.Thought.Visibility = Visibility.Collapsed;
         }
-        walk.Completed += (_, _) =>
+        // Back at the desks when the talk is over, by the clock: another move (the line at the applier) can cut the walk short.
+        var back = new DispatcherTimer(DispatcherPriority.Background, Dispatcher) { Interval = walk.Duration.TimeSpan + TimeSpan.FromMilliseconds(200) };
+        back.Tick += (_, _) =>
         {
+            back.Stop();
             if (w.Line < 0) w.Person.Legs.Visibility = Visibility.Collapsed;
-            foreach (var back in new[] { w, mate })
+            foreach (var returned in new[] { w, mate })
             {
-                if (back is null) continue;
-                back.Away = false;
-                ShowData(back);
+                if (returned is null) continue;
+                returned.Away = false;
+                ShowData(returned);
             }
         };
+        back.Start();
         w.Person.At.BeginAnimation(TranslateTransform.XProperty, walk);
         // A short talk, one line at a time: the ask, the answer, the handover of the data, and thanks.
         var me = Names.Worker(w.Slot);
@@ -812,7 +825,7 @@ internal sealed class CrewStrip : Border
         {
             var (mine, words) = lines[i];
             // Each line its own bubble, the asker's above and the teammate's below, so they read as a talk.
-            SayAt(mine ? -5000 - number * 10 - i : -6000 - slot * 10 - i, mine ? there + 4 : desk + 4, words, TimeSpan.FromMilliseconds(900 + i * 1700), mine ? 2 : 20);
+            SayAt(mine ? -5000 - number * 10 - i : -6000 - slot * 10 - i, mine ? there + 4 : desk + 4, words, TimeSpan.FromMilliseconds(900 + i * 1700), mine ? 0 : 15);
         }
         if (asked)
         {
@@ -870,8 +883,10 @@ internal sealed class CrewStrip : Border
             var text = Brand.Text("", Brand.K.Muted, 9.5);
             text.FontStyle = FontStyles.Italic;
             text.TextTrimming = TextTrimming.CharacterEllipsis;
-            text.TextWrapping = TextWrapping.NoWrap;
-            w.Thought = new Border { Child = text, CornerRadius = new CornerRadius(8), BorderThickness = new Thickness(1), Padding = new Thickness(6, 1, 6, 1), MaxWidth = MinGap + 24, IsHitTestVisible = false };
+            text.TextWrapping = TextWrapping.Wrap;
+            text.MaxHeight = 26;
+            text.TextAlignment = TextAlignment.Center;
+            w.Thought = new Border { Child = text, CornerRadius = new CornerRadius(8), BorderThickness = new Thickness(1), Padding = new Thickness(6, 1, 6, 1), MaxWidth = MaxGap + 20, IsHitTestVisible = false };
             w.Thought.SetResourceReference(BackgroundProperty, Brand.K.Surface);
             w.Thought.SetResourceReference(BorderBrushProperty, Brand.K.BorderSubtle);
             _bubbles.Children.Insert(0, w.Thought); // under anything said aloud
@@ -882,7 +897,7 @@ internal sealed class CrewStrip : Border
         w.Thought.Visibility = Visibility.Visible;
         w.Thought.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
         Canvas.SetLeft(w.Thought, Math.Max(0, w.Person.At.X + 4 - w.Thought.DesiredSize.Width / 2));
-        Canvas.SetTop(w.Thought, 3);
+        Canvas.SetTop(w.Thought, Math.Max(0, Top - 2 - w.Thought.DesiredSize.Height));
     }
 
     /// <summary>The line under the applier's name: whose change goes in, who waits, or how many went in.</summary>
@@ -1055,22 +1070,24 @@ internal sealed class CrewStrip : Border
         Canvas.SetTop(f.Name, NameTop);
         f.Root.Children.Add(f.Name);
         // Under the name, for the workers: how far along, or ready for work.
+        // Up to two lines, so what a worker is doing reads in full (hover gives it all).
         f.Status = Brand.Text("", Brand.K.Muted, 10);
-        f.Status.TextWrapping = TextWrapping.NoWrap;
+        f.Status.TextWrapping = TextWrapping.Wrap;
         f.Status.TextTrimming = TextTrimming.CharacterEllipsis;
-        f.Status.Width = 84;
+        f.Status.Width = StatusWidth;
+        f.Status.MaxHeight = 27;
         f.Status.TextAlignment = TextAlignment.Center;
-        Canvas.SetLeft(f.Status, -42);
+        Canvas.SetLeft(f.Status, -StatusWidth / 2);
         Canvas.SetTop(f.Status, NameTop + 13);
         f.Root.Children.Add(f.Status);
         f.Meter = new Canvas { Visibility = Visibility.Collapsed };
-        var track = Bar(f.Meter, -22, NameTop + 28, 44, 4, Brand.K.BorderSubtle, null);
+        var track = Bar(f.Meter, -22, NameTop + 42, 44, 4, Brand.K.BorderSubtle, null);
         track.RadiusX = track.RadiusY = 2;
-        f.MeterFill = Bar(f.Meter, -22, NameTop + 28, 0, 4, null, ScreenOk);
+        f.MeterFill = Bar(f.Meter, -22, NameTop + 42, 0, 4, null, ScreenOk);
         f.MeterFill.RadiusX = f.MeterFill.RadiusY = 2;
         f.Pct = Brand.Text("", Brand.K.Muted, 9);
         Canvas.SetLeft(f.Pct, 25);
-        Canvas.SetTop(f.Pct, NameTop + 24);
+        Canvas.SetTop(f.Pct, NameTop + 38);
         f.Meter.Children.Add(f.Pct);
         f.Root.Children.Add(f.Meter);
         return f;
