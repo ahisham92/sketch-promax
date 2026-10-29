@@ -119,6 +119,38 @@ internal static class ChatTypes
 }
 
 /// <summary>
+/// Which chats belong to an open model (ChatPane.ModelKey), so the history shows that model's chats and no other's. A
+/// workshared model's chats are its central model's: the central opened itself and every local copy of it share them. A
+/// saved model's are its file's. A model never saved (a new project, a detached copy) has chats of its own for as long
+/// as it is open, never those of another unsaved model with the same name ("Project1", "Tower_detached"); saving it
+/// takes them along to its file (ChatPane's Save As).
+/// </summary>
+internal static class ChatModelKeys
+{
+    public const string UnsavedPrefix = "unsaved:";
+
+    /// <param name="path">The model's file (Document.PathName; "" when never saved).</param>
+    /// <param name="central">The central model's path of a workshared model, else null.</param>
+    /// <param name="detached">A model detached from its central (it no longer belongs to it).</param>
+    /// <param name="unsavedId">Unique for this open, never-saved model.</param>
+    public static string For(string? path, string title, string? central, bool detached, string unsavedId)
+    {
+        if (!detached && !string.IsNullOrEmpty(central)) return central!;
+        if (!string.IsNullOrEmpty(path)) return path!;
+        return UnsavedPrefix + unsavedId + ":" + title;
+    }
+
+    public static bool IsUnsaved(string key) => key.StartsWith(UnsavedPrefix, StringComparison.Ordinal);
+
+    /// <summary>
+    /// The key this model's chats were kept under before 0.35.34 (its file, for a local copy of a central model), when it
+    /// differs from <paramref name="key"/>: they move to the central's key. Null when nothing moves.
+    /// </summary>
+    public static string? Legacy(string? path, string key) =>
+        !string.IsNullOrEmpty(path) && !IsUnsaved(key) && !string.Equals(path, key, StringComparison.OrdinalIgnoreCase) ? path : null;
+}
+
+/// <summary>
 /// The history drawer's rules, which need no WPF: chat names from the first request, the date groups, search, and the
 /// order (pinned first, then by date; the open model's chats first or only).
 /// </summary>

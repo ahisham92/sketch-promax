@@ -19,6 +19,9 @@ internal static class ChatJobs
     private static volatile Action? _changed;
     private static volatile bool _coordinator = true;
 
+    /// <summary>The key (JobBoard.ChatKey) the shown chat's Claude Code passes with its calls: those are the main chat's.</summary>
+    public static volatile string Shown = "";
+
     /// <summary>The open chat is With coordinator (ChatTypes): only then may its main chat start or message jobs.</summary>
     public static bool Coordinator { get => _coordinator; set => _coordinator = value; }
 

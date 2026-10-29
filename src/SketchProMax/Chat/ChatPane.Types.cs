@@ -161,7 +161,7 @@ internal sealed partial class ChatPane
     private void ShowType()
     {
         var type = ChatTypes.Of(_conv);
-        _typeLabel.Text = ChatTypes.Label(type);
+        _typeLabel.Text = ChatTypes.Label(type) + (_pendingType is { } next ? " → " + ChatTypes.Label(next) : "");
         Brand.Fg(_typeLabel, Brand.K.Muted);
         _typePill.ToolTip = $"This chat: {ChatTypes.Label(type)}. {ChatTypes.Hint(type)}. Click to switch (while no job is open).";
         AutomationProperties.SetName(_typePill, "Chat type: " + ChatTypes.Label(type));
@@ -170,9 +170,12 @@ internal sealed partial class ChatPane
 
     private sealed record Choice(string Heading, List<(string Label, string Hint, bool Chosen, Action Pick)> Rows);
 
+    /// <summary>The kind picked while the chat answered: it switches when the answer ends (null when none waits).</summary>
+    private string? _pendingType;
+
     private Choice TypeChoices()
     {
-        var current = ChatTypes.Of(_conv);
+        var current = _pendingType ?? ChatTypes.Of(_conv);
         return new Choice("This chat's type", ChatTypes.All.Select(t => (ChatTypes.Label(t), ChatTypes.Hint(t), t == current, (Action)(() => SetChatType(t)))).ToList());
     }
 
@@ -230,7 +233,7 @@ internal sealed partial class ChatPane
         }
         _choiceMenu.PlacementTarget = anchor;
         // New chat is in the header (the menu drops down); the type and effort pills are under the message box (it opens up).
-        _choiceMenu.Placement = anchor == _newChat ? PlacementMode.Bottom : PlacementMode.Top;
+        _choiceMenu.Placement = anchor == _newChat || anchor == _chatsPill ? PlacementMode.Bottom : PlacementMode.Top;
         _choiceMenu.IsOpen = true;
         AutomationProperties.SetItemStatus(anchor, "Expanded");
         Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() => first?.Focus()));
@@ -244,10 +247,26 @@ internal sealed partial class ChatPane
     private void SetChatType(string type)
     {
         type = ChatTypes.Parse(type);
-        if (type == ChatTypes.Of(_conv) || _stopped) return;
+        if (_stopped) return;
+        if (type == ChatTypes.Of(_conv))
+        {
+            if (_pendingType is not null) Status($"This chat stays {ChatTypes.Label(type)}.", spin: false);
+            _pendingType = null;
+            ShowType();
+            return;
+        }
+        // Picked while it answers: the switch waits for the answer to end, and the pill says so meanwhile.
+        if (_turn is not null && !JobsOpen)
+        {
+            _pendingType = type;
+            ShowType();
+            Note($"This chat becomes {(type == ChatTypes.Simple ? "a simple chat" : "a chat with coordinator")} as soon as the current answer finishes.");
+            return;
+        }
         if (ChatTypes.WhyNotSwitch(JobsOpen, _turn is not null) is { } why)
         {
-            Status(why, spin: false);
+            // In the chat, not only the status line, so the refusal isn't missed.
+            Note(why);
             return;
         }
         _conv.Type = type;

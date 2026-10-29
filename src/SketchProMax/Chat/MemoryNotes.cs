@@ -159,6 +159,19 @@ internal static class MemoryNotes
         return true;
     }
 
+    /// <summary>Moves model <paramref name="from"/>'s notes to model <paramref name="to"/> (after the ones it has); true when any moved.</summary>
+    public static bool Rekey(List<Section> sections, string from, string to)
+    {
+        if (string.Equals(from, to, StringComparison.OrdinalIgnoreCase) || Find(sections, from) is not { } old) return false;
+        sections.Remove(old);
+        if (old.Notes.Count == 0) return true;
+        var target = Find(sections, to);
+        if (target is null) sections.Add(target = new Section(to));
+        foreach (var note in old.Notes)
+            if (!target.Notes.Contains(note, StringComparer.OrdinalIgnoreCase)) target.Notes.Add(note);
+        return true;
+    }
+
     // ---- The file ----------------------------------------------------------------------------------------------------
 
     public static List<Section> Load()

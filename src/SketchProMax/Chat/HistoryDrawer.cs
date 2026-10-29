@@ -15,6 +15,8 @@ internal interface IHistoryHost
     string ModelKey { get; }
     /// <summary>The file of the chat shown in the pane ("" before it is saved).</summary>
     string CurrentFile { get; }
+    /// <summary>What a chat is doing, when it isn't idle: working or finished in the background, or working in the pane.</summary>
+    string? StateOf(string file);
     void OpenChat(ChatSummary chat);
     void NewChat();
     /// <summary>Renames or pins a chat; the pane applies it to the chat it shows, so its next save keeps the change.</summary>
@@ -156,6 +158,11 @@ internal sealed class HistoryDrawer : Border
         text.Children.Add(name);
         var sub = StreamRender.Stamp(chat.Updated.ToLocalTime(), DateTime.Now) + " · " + ChatTypes.Label(chat.Type) + (!mine || _all.IsChecked == true ? " · " + chat.ModelTitle : "");
         text.Children.Add(ChatUi.Small(sub));
+        if (_host.StateOf(chat.File) is { } state)
+        {
+            text.Children.Add(ChatUi.Small(state, Brand.K.Accent, bold: true));
+            sub = state + " · " + sub;
+        }
         var open = new Button { Content = text, HorizontalContentAlignment = HorizontalAlignment.Left, Padding = new Thickness(ChatUi.S2, 4, ChatUi.S2, 4) };
         open.SetResourceReference(StyleProperty, "SpmChatGhost");
         open.ToolTip = chat.Name + "\n" + ChatTypes.Label(chat.Type) + "\n" + chat.ModelTitle + "\n" + $"{chat.Count} messages and steps";

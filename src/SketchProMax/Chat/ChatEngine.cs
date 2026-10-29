@@ -28,8 +28,9 @@ internal sealed class ChatEngine : IDisposable
     /// <param name="coordinator">The main chat's engine: true for a chat With coordinator (it gets chat_jobs and the
     /// coordinator's instructions), false for a Simple chat.</param>
     /// <param name="job">The parallel job this process is (its MCP config's job header), or null for the main chat.</param>
-    public ChatEngine(Dispatcher ui, ClaudeCli.Install install, string? resumeSessionId, string model, Func<ProcessStartInfo>? start = null, bool coordinator = true, string effort = "", string? job = null)
+    public ChatEngine(Dispatcher ui, ClaudeCli.Install install, string? resumeSessionId, string model, Func<ProcessStartInfo>? start = null, bool coordinator = true, string effort = "", string? job = null, string? chatKey = null)
     {
+        ChatKey = chatKey;
         Job = job;
         Effort = effort;
         _ui = ui;
@@ -42,6 +43,9 @@ internal sealed class ChatEngine : IDisposable
 
     /// <summary>The parallel job this process is, or null for the main chat.</summary>
     public string? Job { get; }
+
+    /// <summary>The main chat's own key (JobBoard.ChatKey) its calls carry, or null (a job's process, or a chat without an id).</summary>
+    public string? ChatKey { get; }
 
     /// <summary>The main chat's kind this process was started for (ChatTypes); switching the kind needs a new process.</summary>
     public bool Coordinator { get; }
@@ -91,7 +95,7 @@ internal sealed class ChatEngine : IDisposable
     /// <summary>Starts the process off the UI thread and writes <paramref name="firstLine"/> to it.</summary>
     public Task StartAsync(string firstLine) => Task.Run(() =>
     {
-        var info = _start?.Invoke() ?? ClaudeCli.EngineStart(_install, ResumedFrom, Model, Coordinator, Effort);
+        var info = _start?.Invoke() ?? ClaudeCli.EngineStart(_install, ResumedFrom, Model, Coordinator, Effort, ChatKey);
         McpAddress = ClaudeCli.McpAddress;
         var started = DateTime.UtcNow;
         var process = new Process { StartInfo = info, EnableRaisingEvents = true };
@@ -135,7 +139,7 @@ internal sealed class ChatEngine : IDisposable
     {
         if (ToolsWaitUseless || Bridge.ChatMcp.Current is not { } http || http.Url != McpAddress || McpAddress.Length == 0) return;
         var until = started.AddMilliseconds(ToolsWaitMs);
-        while (!http.ToolsListedSince(Job, started))
+        while (!http.ToolsListedSince(Job ?? ChatKey, started))
         {
             bool gone;
             lock (_gate) gone = _disposed;
