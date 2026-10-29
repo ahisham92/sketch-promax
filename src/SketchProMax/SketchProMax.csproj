@@ -16,7 +16,7 @@
     <LangVersion>latest</LangVersion>
     <RootNamespace>SketchProMax</RootNamespace>
     <AssemblyName>SketchProMax</AssemblyName>
-    <Version>0.35.33</Version>
+    <Version>0.35.34</Version>
     <!-- Copy NuGet dependencies (System.Text.Json on Revit 2024) next to the add-in DLL. -->
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
