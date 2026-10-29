@@ -98,6 +98,8 @@ internal sealed class CrewStrip : Border
         public readonly List<(Rectangle Line, ScaleTransform Scale)> Lines = [];
         public TextBlock Mark = null!;
         public Rectangle Progress = null!;
+        /// <summary>Over a worker at the desk: what they are doing now, in a few words.</summary>
+        public Border? Thought;
         public CrewMood Mood;
         public int Line = -1;
         public bool Leaving, Drawn;
@@ -119,7 +121,13 @@ internal sealed class CrewStrip : Border
     private int? _applying = -1;
     /// <summary>How many changes the applier put into Revit while this strip watched (the line under the name).</summary>
     private int _applied;
-    private int _inLine;
+    private int _inLine, _waitingForWorker;
+
+    /// <summary>The changes the applier put into Revit while this strip watched, newest last: job, whose, when.</summary>
+    public List<(int Job, string Worker, DateTime At)> Applied { get; } = [];
+
+    /// <summary>The applier was clicked: the pane lists what goes into Revit now, what waits, and what went in.</summary>
+    public event Action<Button>? ApplierPicked;
     private string _applyingFor = "";
     /// <summary>The path on the floor from the desks to the applier: where the changes go.</summary>
     private readonly Line _path = new() { StrokeThickness = 1.5, StrokeDashArray = [3, 3], IsHitTestVisible = false };
@@ -272,6 +280,12 @@ internal sealed class CrewStrip : Border
         _desks = Math.Max(1, workers);
         ShowTeamSize();
         _tray.Visibility = unassigned > 0 ? Visibility.Visible : Visibility.Collapsed;
+        // Jobs waiting for a free worker: the coordinator asks for one more (the + lights up) while the team can grow.
+        if (unassigned > _waitingForWorker)
+            SayAt(Coordinator, CoordX, _desks < JobBoard.MaxLimit ? "I need one more worker!" : "Everyone's busy, it waits", TimeSpan.Zero);
+        _waitingForWorker = unassigned;
+        _more.SetResourceReference(BackgroundProperty, unassigned > 0 && _desks < JobBoard.MaxLimit ? Brand.K.AccentSoft : Brand.K.Raised);
+        _more.ToolTip = unassigned > 0 && _desks < JobBoard.MaxLimit ? $"One more worker: {unassigned} job(s) wait for one" : "One more worker";
         _trayCount.Text = unassigned.ToString(System.Globalization.CultureInfo.CurrentCulture);
         foreach (var gone in events.Where(e => e.Cue == CrewCue.Leave)) Leave(gone.Number);
         foreach (var seat in seats)
@@ -300,6 +314,7 @@ internal sealed class CrewStrip : Border
         foreach (var stale in _workers.Values.Where(w => !w.Leaving && seats.All(s => s.Number != w.Number)).ToList()) Leave(stale.Number);
         ShowIdle();
         Arrange(animate: true);
+        var briefs = 0;
         foreach (var e in events)
         {
             if (e.Cue == CrewCue.Arrive && _workers.TryGetValue(e.Number, out var arriving)) Arrive(arriving);
@@ -309,6 +324,13 @@ internal sealed class CrewStrip : Border
                 Reach(_coordinator.Arm, -55);
                 SayAt(Coordinator, CoordX, e.Say, TimeSpan.Zero);
             }
+            // The coordinator briefs each new worker on their part, one after another (what he read goes with it).
+            if (e.Cue == CrewCue.Arrive && seats.FirstOrDefault(s => s.Number == e.Number) is { } briefed)
+            {
+                var brief = briefed.Title.Length > 22 ? briefed.Title.Substring(0, 21).TrimEnd() + "…" : briefed.Title;
+                SayAt(-1000 - briefs, CoordX, $"{names.Worker(briefed.Slot)}: {brief}", TimeSpan.FromMilliseconds(events.Any(x => x.Cue == CrewCue.Huddle) ? 2800 * (briefs + 1) : 2800 * briefs));
+                briefs++;
+            }
             else if (e.Cue == CrewCue.Share) Call(e.From, e.Number, e.Say);
             else if (e.Cue != CrewCue.Leave && e.Say.Length > 0) Say(e.Number, e.Say, e.Cue is CrewCue.Arrive or CrewCue.Handover ? Fly.TimeSpan : TimeSpan.Zero);
         }
@@ -317,6 +339,10 @@ internal sealed class CrewStrip : Border
         _inLine = seats.Count(s => s.Mood == CrewMood.Waiting);
         Apply(applying?.Number, applying is null ? "" : names.Worker(applying.Slot));
         ShowApplier();
+        // What each worker at a desk is doing, in a thought bubble over them; the line over the strip makes room for them.
+        foreach (var seat in seats)
+            if (_workers.TryGetValue(seat.Number, out var thinker)) Think(thinker, seat.Doing);
+        _caption.Visibility = _workers.Values.Any(w => w.Thought is { Visibility: Visibility.Visible }) ? Visibility.Hidden : Visibility.Visible;
         _caption.Text = CrewPlan.Caption(seats, names, unassigned);
         _caption.ToolTip = seats.Count == 0 ? null : string.Join("\n", seats.Select(s => $"{names.Worker(s.Slot)} · job {s.Number} · {s.Title}: {Words(s.Mood)}, {CrewPlan.Status(s, s.Slot)}"));
         Pace();
@@ -628,6 +654,11 @@ internal sealed class CrewStrip : Border
     {
         if (number == _applying) return;
         var finished = _applying is >= 0 && _workers.ContainsKey(_applying.Value);
+        if (finished)
+        {
+            Applied.Add((_applying!.Value, _applyingFor, DateTime.Now));
+            if (Applied.Count > 50) Applied.RemoveAt(0);
+        }
         _applying = number;
         _applyingFor = worker;
         var lit = number is not null;
@@ -690,7 +721,38 @@ internal sealed class CrewStrip : Border
         Timeline.SetDesiredFrameRate(show, 20);
         show.Completed += (_, _) => _bubbles.Children.Remove(call);
         call.BeginAnimation(OpacityProperty, show);
-        Say(number, words, TimeSpan.FromMilliseconds(400));
+        // The handover: what the first one found goes across as a sheet, with a word from each.
+        if (ChatUi.Lively) Sheet(x1, x2, Top);
+        SayAt(-100 - from, x1, "Here's what I found", TimeSpan.Zero);
+        Say(number, $"Thanks, {Names.Worker(from)}!", TimeSpan.FromMilliseconds(900));
+    }
+
+    /// <summary>The thought bubble over a worker at the desk: what they are doing now ("" hides it). Text only, nothing moves.</summary>
+    private void Think(Worker w, string doing)
+    {
+        if (doing.Length == 0 || w.Line >= 0)
+        {
+            if (w.Thought is not null) w.Thought.Visibility = Visibility.Collapsed;
+            return;
+        }
+        if (w.Thought is null)
+        {
+            var text = Brand.Text("", Brand.K.Muted, 9.5);
+            text.FontStyle = FontStyles.Italic;
+            text.TextTrimming = TextTrimming.CharacterEllipsis;
+            text.TextWrapping = TextWrapping.NoWrap;
+            w.Thought = new Border { Child = text, CornerRadius = new CornerRadius(8), BorderThickness = new Thickness(1), Padding = new Thickness(6, 1, 6, 1), MaxWidth = MinGap + 24, IsHitTestVisible = false };
+            w.Thought.SetResourceReference(BackgroundProperty, Brand.K.Surface);
+            w.Thought.SetResourceReference(BorderBrushProperty, Brand.K.BorderSubtle);
+            _bubbles.Children.Insert(0, w.Thought); // under anything said aloud
+        }
+        var said = (TextBlock)w.Thought.Child;
+        said.Text = doing;
+        w.Thought.ToolTip = doing;
+        w.Thought.Visibility = Visibility.Visible;
+        w.Thought.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        Canvas.SetLeft(w.Thought, Math.Max(0, w.Person.At.X + 4 - w.Thought.DesiredSize.Width / 2));
+        Canvas.SetTop(w.Thought, 3);
     }
 
     /// <summary>The line under the applier's name: whose change goes in, who waits, or how many went in.</summary>
@@ -708,6 +770,7 @@ internal sealed class CrewStrip : Border
     {
         if (!_workers.TryGetValue(number, out var w) || w.Leaving) return;
         w.Leaving = true;
+        if (w.Thought is not null) w.Thought.Visibility = Visibility.Collapsed;
         if (!ChatUi.Animate || !IsVisible)
         {
             Remove(w);
@@ -730,6 +793,7 @@ internal sealed class CrewStrip : Border
         _stage.Children.Remove(w.Person.Root);
         _stage.Children.Remove(w.Desk);
         if (_workers.TryGetValue(w.Number, out var now) && now == w) _workers.Remove(w.Number);
+        if (w.Thought is not null) _bubbles.Children.Remove(w.Thought);
         if (_said.TryGetValue(w.Number, out var bubble))
         {
             bubble.BeginAnimation(OpacityProperty, null);
@@ -772,6 +836,7 @@ internal sealed class CrewStrip : Border
     private void BuildStation()
     {
         _station.Children.Add(_applier.Root);
+        _station.Children.Add(HitArea(-14, 76, "What goes into Revit: now, waiting and done", b => ApplierPicked?.Invoke(b)));
         double cx = 46, top = Top + 22;
         _modelTop.Data = Geometry.Parse(Inv($"M{cx},{top} L{cx + 14},{top + 7} L{cx},{top + 14} L{cx - 14},{top + 7} Z"));
         _modelLeft.Data = Geometry.Parse(Inv($"M{cx - 14},{top + 7} L{cx},{top + 14} L{cx},{top + 30} L{cx - 14},{top + 23} Z"));

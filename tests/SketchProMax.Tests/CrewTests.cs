@@ -188,6 +188,9 @@ internal static class CrewTests
         stepPlan.Update([stepping], t0);
         check("crew: without a plan a worker shows its steps", CrewPlan.Status(stepPlan.Seats[0], 0) == "Step 2", CrewPlan.Status(stepPlan.Seats[0], 0));
 
+        check("crew: a worker's thought is its step in a few words", CrewPlan.Doing("Running: Find walls on Level 1… If Revit asks, answer it there.") == "Find walls on Level 1"
+            && CrewPlan.Doing("Starting…") == "Getting started" && CrewPlan.Doing("") == "" && CrewPlan.Doing(new string('a', 40)).Length == 28, CrewPlan.Doing("Running: Find walls on Level 1… If Revit asks, answer it there."));
+
         // A whole job to one worker while others are free goes back to be divided, unless it can't be.
         check("divide: two free workers, one whole job: divide it", JobBoard.MustDivide(2, null) && JobBoard.MustDivide(3, " "), "");
         check("divide: one free worker, or a reason it can't be divided: start it", !JobBoard.MustDivide(1, null) && !JobBoard.MustDivide(3, "one sheet"), "");

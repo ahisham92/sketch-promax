@@ -20,7 +20,7 @@ internal enum CrewCue { Arrive, Handover, Leave, Plan, Turn, Finish, Huddle, Sha
 /// its place in the line at the applier (<paramref name="Line"/>: 0 applying now, 1 next, …; -1 at the desk), and how
 /// far its plan is (<paramref name="Percent"/>, with <paramref name="Left"/> steps to go; -1 while it has no plan).
 /// </summary>
-internal sealed record CrewSeat(int Number, string Title, CrewMood Mood, int Slot = 0, int Line = -1, int Percent = -1, int Left = -1, int Steps = 0);
+internal sealed record CrewSeat(int Number, string Title, CrewMood Mood, int Slot = 0, int Line = -1, int Percent = -1, int Left = -1, int Steps = 0, string Doing = "");
 
 /// <summary>
 /// The names in the crew strip, from Settings > Chat: you, the coordinator, the workers (one per job that runs at once,
@@ -294,7 +294,7 @@ internal sealed class CrewPlan
             var finished = n.Mood is CrewMood.Done;
             var (done, total) = JobPlan.Count(n.Job.Plan);
             return new CrewSeat(n.Job.Number, n.Job.Title, n.Mood, _slots[n.Job.Number], Percent: JobPlan.Percent(n.Job.Plan, finished), Left: total == 0 ? -1 : finished ? 0 : total - done,
-                Steps: n.Job.Items.Count(i => i.Kind == "tool"));
+                Steps: n.Job.Items.Count(i => i.Kind == "tool"), Doing: n.Mood is CrewMood.Thinking or CrewMood.Reading ? Doing(n.Job.Now) : "");
         }).ToList();
         // The line at the applier: the change being applied first, then the others in the order they asked.
         var line = placed.Where(s => s.Mood == CrewMood.Applying)
@@ -406,6 +406,21 @@ internal sealed class CrewPlan
             // No plan written (yet): how many steps it took, so there is always something moving.
             _ => far.Length > 0 ? far : seat.Steps > 0 ? $"Step {seat.Steps}" : "Planning…",
         };
+    }
+
+    /// <summary>
+    /// What a worker is doing now, in a few words for the thought bubble over them: its current step ("Find walls on
+    /// Level 1"), shortened; "" when there is nothing to say.
+    /// </summary>
+    public static string Doing(string now)
+    {
+        var text = (now ?? "").Trim();
+        if (text.StartsWith("Running: ", StringComparison.Ordinal)) text = text.Substring("Running: ".Length);
+        var cut = text.IndexOf(" If Revit asks", StringComparison.Ordinal);
+        if (cut > 0) text = text.Substring(0, cut);
+        text = text.TrimEnd('…', '.', ' ');
+        if (text.Length == 0 || text == "Starting") return text.Length == 0 ? "" : "Getting started";
+        return text.Length > 28 ? text.Substring(0, 27).TrimEnd() + "…" : text;
     }
 
     /// <summary>The worker who has job <paramref name="number"/> now, or null when none has it.</summary>
