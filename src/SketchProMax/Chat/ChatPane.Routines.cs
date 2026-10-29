@@ -13,12 +13,15 @@ internal sealed partial class ChatPane
 {
     private DispatcherTimer? _routineTimer;
 
-    /// <summary>Revit opened a model: with routines set up, the chat is made (unseen until opened) so they can run and catch up.</summary>
+    /// <summary>
+    /// Revit opened a model: with routines set up, or an autopilot run left by a Revit that crashed or was restarted, the
+    /// chat is made (unseen until opened) so they run, catch up and carry on.
+    /// </summary>
     internal static void WakeForRoutines()
     {
         try
         {
-            if (_instance is not null || !Routines.Load(ClaudeCli.Folder).Any(r => r.On)) return;
+            if (_instance is not null || !Routines.Load(ClaudeCli.Folder).Any(r => r.On) && AutopilotShare.Orphan(DateTime.UtcNow) is null) return;
             System.Windows.Application.Current?.Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(() =>
             {
                 try { Get(); }
@@ -35,6 +38,8 @@ internal sealed partial class ChatPane
         _routineTimer.Tick += (_, _) =>
         {
             _routineTimer.Interval = TimeSpan.FromMinutes(1);
+            try { AutopilotRecoverTick(); }
+            catch (Exception) { /* tried again next minute */ }
             try { RoutineTick(); }
             catch (Exception) { /* on Revit's UI thread: a routine that can't start tries again next minute */ }
         };

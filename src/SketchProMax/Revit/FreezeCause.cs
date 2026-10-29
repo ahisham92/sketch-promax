@@ -185,6 +185,9 @@ internal static class FreezeCause
 
     private static readonly HashSet<string> Routine = new(Brackets.Values, StringComparer.Ordinal);
 
+    /// <summary>Long work Revit is known to do (synchronizing, opening, saving, loading links): worth waiting longer for.</summary>
+    public static bool IsLongWork(Busy busy) => Routine.Contains(busy.What);
+
     /// <summary>How long a freeze must last before its command is worth a warning.</summary>
     public static readonly TimeSpan WarnAfter = TimeSpan.FromSeconds(60);
 

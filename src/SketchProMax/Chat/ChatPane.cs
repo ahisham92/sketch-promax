@@ -110,6 +110,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     public static void Shutdown()
     {
         if (_instance is not { } pane) return;
+        // Closed the normal way: an autopilot's run isn't carried on by a restart (the watcher starts no Revit).
+        if (pane.Run is { Active: true }) AutopilotShare.MarkClosed();
         pane.CloseBig();
         pane.EndRuns("Revit closed, so this job stopped. Send it a message to carry on.", now: true);
         pane.StopBackground("Revit closed while this chat worked in the background, so it stopped here. Send your message again to carry on.", now: true);

@@ -120,7 +120,9 @@ internal static class FreezeWatch
                     shown = false;
                     Current = (kind, since);
                 }
-                else if (kind != Kind.Responding && !shown && DateTime.Now - since >= OpenAfter
+                else if (kind == Kind.NotResponding && Chat.Autopilot.Unattended && DateTime.Now - _hangChecked >= TimeSpan.FromSeconds(30))
+                    RestartIfHung(DateTime.Now - since);
+                if (kind != Kind.Responding && !shown && DateTime.Now - since >= OpenAfter
                          && (kind == Kind.HiddenDialog || DateTime.Now - since >= FreezeCause.OpenAfter(Cause())))
                 {
                     shown = true;
@@ -132,7 +134,26 @@ internal static class FreezeWatch
         }
     }
 
-    private static DateTime _blockedSince = DateTime.MaxValue;
+    private static DateTime _blockedSince = DateTime.MaxValue, _hangChecked;
+
+    /// <summary>
+    /// An autopilot at work and Revit not responding (Autopilot.RestartAfterHang: 10 minutes doing nothing at all, 45 while
+    /// busy): Revit is restarted on the same model, as the Rescue window's Restart would; Lifeline replays the unsaved
+    /// changes, the backup was saved at the start, and the new Revit carries the run on (ChatPane.AutopilotRecover).
+    /// </summary>
+    private static void RestartIfHung(TimeSpan lasted)
+    {
+        _hangChecked = DateTime.Now;
+        var activity = Activity();
+        var cause = Cause();
+        if (!Chat.Autopilot.RestartAfterHang(Chat.Autopilot.Unattended, true, lasted, activity.Progress == FreezeCause.Progress.Stuck, FreezeCause.IsLongWork(cause))) return;
+        var why = $"Revit stopped responding for {FreezeCause.Duration(lasted)} (busy with {cause.What}), so it was restarted on the same model";
+        // Written to the shared files: Revit's own thread is stuck and won't save anything now.
+        if (Chat.AutopilotShare.Any(DateTime.UtcNow) is { } run) Chat.AutopilotShare.AppendLog(run, Chat.AutopilotEntry.Note, why + ".", DateTime.UtcNow);
+        Chat.AutopilotShare.MarkRestart(why);
+        Tools.ActivityLog.NoteNow("autopilot_restart", why);
+        RestartRevit("autopilot: " + why);
+    }
 
     /// <summary>
     /// An autopilot at work and a dialog Revit's own events didn't reach (another add-in's, Windows') holding Revit for a

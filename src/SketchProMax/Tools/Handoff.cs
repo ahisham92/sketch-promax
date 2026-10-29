@@ -80,6 +80,20 @@ public static class Handoff
             return Final(result, items, outcomes);
         }
 
+        // An autopilot with nobody at the computer: a step only the user can do would wait all night. It is skipped, the
+        // worker carries on another way, and the report lists it.
+        if (Chat.Autopilot.Unattended)
+        {
+            Chat.Autopilot.Log(Chat.AutopilotEntry.Note, $"Skipped a step only you can do ({tool}): {Chat.JobBoard.OneLine(items[0].Step.Text, 200)}");
+            return With(result, new
+            {
+                status = "skipped: nobody is at the computer (autopilot)",
+                steps = items.Select(i => i.Step.Text).Take(20).ToList(),
+                next = "Nobody is at the computer to do this step, so it wasn't handed over. Reach the goal another way without it, or leave " +
+                       "it and list it under Skipped in your report, saying what the user must do.",
+            });
+        }
+
         // The same step for the same tool and item already open (a ribbon run, or a call that got here twice): don't open
         // a second card or window; the open one carries on, and its Continue runs the work once.
         var keys = items.Select(i => HandoffKeys.Step(tool, i.Step)).Distinct().ToList();
@@ -135,6 +149,12 @@ public static class Handoff
     {
         if (TestResponder is { } respond) return respond(step, null) == HandoffChoice.Continue;
         if (App.Ui is null) return false;
+        // An autopilot: no card that waits for a click; the call comes back as not run, and the worker tries again later.
+        if (Chat.Autopilot.Unattended)
+        {
+            Chat.Autopilot.Log(Chat.AutopilotEntry.Note, "Revit couldn't take a step (" + Chat.JobBoard.OneLine(step.Text, 160) + "); it was tried again later instead of waiting for you.");
+            return false;
+        }
         var outcomes = await HandoffLoop.RunAsync([new HandoffItem(step, null)], Show, null,
             work => Task.FromResult(work()), () => ct.IsCancellationRequested).ConfigureAwait(false);
         Remember(outcomes);
