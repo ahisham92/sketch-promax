@@ -1,3 +1,4 @@
+using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
@@ -38,6 +39,7 @@ internal sealed partial class ChatPane
             _crew = new CrewStrip();
             _crew.WorkerPicked += ShowWorkerJobs;
             _crew.CoordinatorPicked += _ => ShowCoordinator(focus: true);
+            _crew.WorkersChanged += SetWorkers;
             CrewStrip.NamesChanged += () =>
             {
                 _switchShown = ""; // the jobs column names the workers too
@@ -79,6 +81,25 @@ internal sealed partial class ChatPane
             _crewLinger.Start();
         }
         else _crewLinger?.Stop();
+    }
+
+    /// <summary>+ or − on the strip: that many workers from now on (Settings: jobs at once); a new one takes a waiting job at once.</summary>
+    private void SetWorkers(int workers)
+    {
+        try
+        {
+            var settings = Settings.AgentSettings.Load();
+            settings.ChatJobLimit = JobBoard.ClampLimit(workers);
+            settings.Save();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            ShowStatus("Couldn't change the number of workers: " + ex.Message);
+            return;
+        }
+        PumpJobs();
+        _switchShown = "";
+        if (_board is not null) ShowSwitcher();
     }
 
     private void OnCrewLinger(object? sender, EventArgs e)
