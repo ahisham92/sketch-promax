@@ -456,6 +456,7 @@ internal static class ChangeFile
 
     private static void OnChanged(object? sender, DocumentChangedEventArgs e)
     {
+        var start = UiCost.Start();
         try
         {
             if (!On) return;
@@ -488,6 +489,7 @@ internal static class ChangeFile
             Append(model, lines);
         }
         catch (Exception ex) { LifelineBugs.Note("capture", "deleted elements couldn't be noted", Safe(() => e.GetDocument().PathName), ex); /* this change is missing from the file; the model is not affected */ }
+        finally { UiCost.End("Lifeline noting a change", start); }
     }
 
     /// <summary>At Revit's idle moments: the elements changed since the last look are read and written.</summary>
@@ -497,7 +499,9 @@ internal static class ChangeFile
         {
             if (unchecked(Environment.TickCount - _lastSettings) > 60_000) ReadSettings();
             if (!On) return;
-            foreach (Document doc in app.Application.Documents) ReadPending(doc, M.ReadPerIdle);
+            var more = false;
+            foreach (Document doc in app.Application.Documents) more |= ReadPending(doc, M.ReadPerIdle, M.ReadBudgetMs);
+            if (more) RevitDispatcher.IdleAgain();
             if (unchecked(Environment.TickCount - _lastViews) > 5000) { _lastViews = Environment.TickCount; NoteOpenViews(app); }
         }
         catch (Exception) { }
@@ -527,19 +531,31 @@ internal static class ChangeFile
         }
     }
 
-    private static void ReadPending(Document doc, int max)
+    /// <summary>
+    /// Reads and writes up to <paramref name="max"/> changed elements, stopping once <paramref name="budgetMs"/> is spent
+    /// so Revit stays responsive after a big change; true when some are left for the next idle moment.
+    /// </summary>
+    private static bool ReadPending(Document doc, int max, int budgetMs = int.MaxValue)
     {
-        if (For(doc) is not { } model) return;
+        if (For(doc) is not { } model) return false;
         List<long> ids;
         lock (Gate)
         {
-            if (model.Pending.Count == 0) return;
+            if (model.Pending.Count == 0) return false;
             ids = model.Pending.Take(max).ToList();
             foreach (var id in ids) model.Pending.Remove(id);
         }
         var lines = new List<M.Line>();
-        foreach (var id in ids)
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        for (var i = 0; i < ids.Count; i++)
         {
+            var id = ids[i];
+            if (clock.ElapsedMilliseconds >= budgetMs)
+            {
+                // Out of time: the rest go back for the next idle moment (unless a newer change took them meanwhile).
+                lock (Gate) for (var j = i; j < ids.Count; j++) model.Pending.Add(ids[j]);
+                break;
+            }
             try
             {
                 if (doc.GetElement(new ElementId(id)) is not { } element || Capture(doc, element) is not { } line) continue;
@@ -559,6 +575,7 @@ internal static class ChangeFile
             catch (Exception ex) { LifelineBugs.Note("capture", $"an element couldn't be read ({Safe(() => doc.GetElement(new ElementId(id))?.Category?.Name) ?? "no category"})", doc.PathName, ex); }
         }
         Append(model, lines);
+        lock (Gate) return model.Pending.Count > 0;
     }
 
     // ---- An element's state ----------------------------------------------------------------------------------------------

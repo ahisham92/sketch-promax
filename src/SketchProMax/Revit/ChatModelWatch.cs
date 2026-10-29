@@ -81,6 +81,7 @@ internal static class ChatModelWatch
 
     private static void OnChanged(object? sender, DocumentChangedEventArgs e)
     {
+        var start = UiCost.Start();
         try
         {
             var doc = e.GetDocument();
@@ -103,6 +104,7 @@ internal static class ChatModelWatch
             }
         }
         catch (Exception) { /* best effort */ }
+        finally { UiCost.End("chat noting a change", start); }
     }
 
     private static void OnSelection(object? sender, SelectionChangedEventArgs e)

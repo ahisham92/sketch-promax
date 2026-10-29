@@ -34,6 +34,9 @@ internal static class ChangeFileMath
     /// <summary>Elements read per idle moment (the rest wait for the next), so Revit never stalls on a big change.</summary>
     public const int ReadPerIdle = 200;
 
+    /// <summary>Milliseconds of Revit's time one idle moment may spend reading (a big change is read over many moments).</summary>
+    public const int ReadBudgetMs = 40;
+
     /// <summary>Values kept per element.</summary>
     public const int MaxValues = 200;
 
