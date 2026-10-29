@@ -244,6 +244,29 @@ internal static class CrewTests
         grids.Summary = "Grids A-F, 1-8; levels L1, L2.";
         check("teamwork: a finished job answers with its report", JobBoard.Findings(grids).Contains("Its report: Grids A-F"), JobBoard.Findings(grids));
         check("teamwork: telling a finished job something reopens it", mates.Tell(walls.Key, grids.Number, "Level 3 is at 7000 mm", t0) == JobBoard.Delivery.Reopened && grids.State == JobBoard.Queued, grids.State);
+        // A message to a busy job reaches it with its next step, not at the end of its run.
+        var busy = new JobBoard([]);
+        var tagger = busy.Start("Tag walls", "Tag the walls on L1-3", t0, force: true, out _)!;
+        tagger.State = JobBoard.Running;
+        check("aside: a message to a working job goes with its next step", busy.Message(tagger.Number, "use the Fire Rating tag", t0, fromUser: true) == JobBoard.Delivery.Soon
+            && tagger.Inbox.Count == 0 && tagger.Asides.Count == 1 && tagger.Items.Last().Name.StartsWith(JobBoard.AsidePrefix, StringComparison.Ordinal), "");
+        var block = busy.TakeAsides(tagger.Key, "tag_elements", t0);
+        check("aside: the step's answer carries it, with: fix now if it changes the work, else after", block is not null && block.Contains("use the Fire Rating tag") && block.Contains("If it is separate new work")
+            && tagger.Asides.Count == 0 && tagger.Items.Last().Text.StartsWith("Arrived with its step (tag_elements)", StringComparison.Ordinal), block ?? "");
+        check("aside: nothing waits, nothing added", busy.TakeAsides(tagger.Key, "x", t0) is null, "");
+        busy.Message(tagger.Number, "also dimension the grids", t0, fromUser: true);
+        var later = tagger.Asides[0].Id;
+        check("aside: After this job keeps it for the end of the run", busy.SetAside(tagger.Number, later, now: false, t0) && tagger.Inbox.Count == 1 && tagger.Asides.Count == 0, "");
+        check("aside: a tap after it arrived does nothing", !busy.SetAside(tagger.Number, later, now: true, t0), "");
+        busy.Message(tagger.Number, "no, the other tag", t0, fromUser: true);
+        busy.SetAside(tagger.Number, tagger.Asides[0].Id, now: true, t0);
+        check("aside: Apply now says to apply it now", busy.TakeAsides(tagger.Key, "x", t0)!.Contains("Apply it now"), "");
+        busy.Message(tagger.Number, "and level 4", t0, fromUser: true);
+        var next = busy.RunEnded(tagger, true, "Tagged.", t0);
+        check("aside: one that didn't arrive goes as the next message when the run ends", next is not null && next.Text.Contains("and level 4") && next.Text.Contains("also dimension the grids") && tagger.Asides.Count == 0, next?.Text ?? "");
+        var idle = busy.Start("Sheets", "Make sheets", t0, force: true, out _)!;
+        check("aside: a job not working gets messages as before", busy.Message(idle.Number, "A1 size", t0, fromUser: true) == JobBoard.Delivery.Queued && idle.Asides.Count == 0, "");
+
         var visits = new CrewPlan();
         ChatJob Seated(int n, int worker) { var j = Job(n, JobBoard.Running); j.Worker = worker; return j; }
         var one = Seated(1, 0);
