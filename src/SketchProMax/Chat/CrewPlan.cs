@@ -431,7 +431,7 @@ internal sealed class CrewPlan
         if (cut > 0) text = text.Substring(0, cut);
         text = text.TrimEnd('…', '.', ' ');
         if (text.Length == 0 || text == "Starting") return text.Length == 0 ? "" : "Getting started";
-        return text.Length > 28 ? text.Substring(0, 27).TrimEnd() + "…" : text;
+        return text.Length > 60 ? text.Substring(0, 59).TrimEnd() + "…" : text;
     }
 
     /// <summary>
@@ -445,7 +445,7 @@ internal sealed class CrewPlan
         var sentences = System.Text.RegularExpressions.Regex.Split(text, @"(?<=[.!?])\s+").Where(s => s.Trim().Length > 2).ToList();
         text = sentences.Count > 0 ? sentences[sentences.Count - 1].Trim() : text;
         text = text.TrimEnd('.', ' ');
-        return text.Length > 40 ? text.Substring(0, 39).TrimEnd() + "…" : text;
+        return text.Length > 80 ? text.Substring(0, 79).TrimEnd() + "…" : text;
     }
 
     /// <summary>
