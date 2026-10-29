@@ -253,7 +253,7 @@ internal sealed class CrewPlan
             var visitedBefore = _visited.TryGetValue(job.Number, out var v) ? v : job.Visited.Count;
             if (!quiet && was && job.Visited.Count > visitedBefore
                 && all.TryGetValue(job.Visited[job.Visited.Count - 1], out var to) && to.Worker >= 0 && to.Worker < workers)
-                events.Add(new CrewEvent(CrewCue.Visit, job.Number, "", to.Worker));
+                events.Add(new CrewEvent(CrewCue.Visit, job.Number, Asking(job), to.Worker));
             _visited[job.Number] = job.Visited.Count;
             _planned[job.Number] = steps;
             _asked[job.Number] = asked;
@@ -446,6 +446,20 @@ internal sealed class CrewPlan
         text = sentences.Count > 0 ? sentences[sentences.Count - 1].Trim() : text;
         text = text.TrimEnd('.', ' ');
         return text.Length > 40 ? text.Substring(0, 39).TrimEnd() + "…" : text;
+    }
+
+    /// <summary>
+    /// What a worker who went to a teammate asks, in a few words for the bubble ("which wall tag type?"): its latest
+    /// question (JobBoard.Ask notes it in the job's view); "" when it went to tell them something instead.
+    /// </summary>
+    public static string Asking(ChatJob job)
+    {
+        var note = job.Items.LastOrDefault(i => i.Kind == "note" && i.Text.StartsWith("Asked job ", StringComparison.Ordinal))?.Text ?? "";
+        var at = note.IndexOf("): ", StringComparison.Ordinal);
+        var question = at < 0 ? "" : note.Substring(at + 3).Trim();
+        if (question.Length == 0) return "";
+        question = char.ToLowerInvariant(question[0]) + question.Substring(1);
+        return question.Length > 34 ? question.Substring(0, 33).TrimEnd() + "…" : question;
     }
 
     /// <summary>The worker who has job <paramref name="number"/> now, or null when none has it.</summary>
