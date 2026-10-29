@@ -102,6 +102,11 @@ internal sealed class ChatJob
     public string Review { get; set; } = "";
     public int ReviewedBy { get; set; }
     public int Reviews { get; set; }
+    /// <summary>
+    /// The open model it works on (its title), when the chat works on several: it may be open in another Revit window
+    /// (a documentation model linking the working model). "" for the model active in the chat's own window. Saved.
+    /// </summary>
+    public string RevitModel { get; set; } = "";
     /// <summary>The scheduled routine this job is a run of (Routines; its id), "" for ordinary work. Saved.</summary>
     public string Routine { get; set; } = "";
     /// <summary>
@@ -420,6 +425,16 @@ internal sealed class JobBoard
         }
     }
 
+    /// <summary>The model the job works on (chat_jobs start model=…): kept, and said at the top of its task.</summary>
+    public static void SetRevitModel(ChatJob job, string? model)
+    {
+        model = (model ?? "").Trim();
+        if (model.Length == 0 || job.HasSession) return;
+        job.RevitModel = model;
+        job.Task = $"Work on the model \"{model}\" (it may be open in another Revit window: Sketch ProMax sends your calls there).\n\n" + job.Task;
+        if (job.Items.FirstOrDefault(i => i.Kind == "user") is { } first) first.Text = job.Task;
+    }
+
     /// <summary>How a message to a job went.</summary>
     /// <summary>NotFound; Queued: at the end of its run; Reopened: it carries on now; Soon: with its next step (it is working).</summary>
     internal enum Delivery { NotFound, Queued, Reopened, Soon }
@@ -706,6 +721,7 @@ internal sealed class JobBoard
                 Number = _jobs.Max(j => j.Number) + 1,
                 Key = Guid.NewGuid().ToString("N").Substring(0, 12),
                 Title = OneLine("Check: " + done.Title, 60), Task = JobReview.Task(done), Created = now, State = Queued, ReviewOf = done.Number,
+                RevitModel = done.RevitModel,
             };
             _jobs.Add(check);
             done.Review = JobReview.Pending;
@@ -819,6 +835,7 @@ internal sealed class JobBoard
             foreach (var j in _jobs.OrderBy(j => j.Number))
             {
                 sb.Append($"- Job {j.Number} \"{j.Title}\": {StateLabel(j).ToLowerInvariant()}");
+                if (j.RevitModel.Length > 0) sb.Append($" (on {j.RevitModel})");
                 if (j.Active && j.Now.Length > 0) sb.Append($". Now: {OneLine(j.Now, 120)}");
                 if (j.Inbox.Count > 0) sb.Append($". {j.Inbox.Count} message(s) waiting for it");
                 sb.Append($". Task: {OneLine(j.Task, 200)}");
@@ -859,7 +876,7 @@ internal sealed class JobBoard
         InboxFiles = j.InboxFiles.ToList(), Items = j.Items.ToList(), Activity = j.Activity, Worker = j.Worker,
         Plan = new Dictionary<string, string>(j.Plan), Heard = j.Heard.ToList(), Visited = j.Visited.ToList(),
         Spent = j.Spent, BudgetFrom = j.BudgetFrom, OverBudget = j.OverBudget, ReviewOf = j.ReviewOf, Review = j.Review, ReviewedBy = j.ReviewedBy,
-        Reviews = j.Reviews, Routine = j.Routine,
+        Reviews = j.Reviews, Routine = j.Routine, RevitModel = j.RevitModel,
     };
 }
 

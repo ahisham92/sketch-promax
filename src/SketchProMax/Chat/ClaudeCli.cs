@@ -566,6 +566,11 @@ internal static class ClaudeCli
           don't do their work. While jobs work, leave model changes to them (Revit may say it is busy). Each job reports
           back when it finishes, in a message marked as a job report: then tell the user briefly. Stop a job with
           action=stop when the user asks.
+        - Two models: when the work spans models open in different Revit windows (list_revit_models), for example a
+          working model and a documentation model that links it, give each job its model (model=its title): jobs in
+          different windows work at the same time. Changes in the working model reach the documentation model only once
+          it is saved (save_model, which synchronizes a local copy) and the link is reloaded there (reload_links): put
+          that order in the tasks, and start the documentation part after the working part reported.
         """;
 
     /// <summary>A parallel job's instructions: Sketch ProMax's agent instructions plus what is special about a job.</summary>
@@ -600,6 +605,8 @@ internal static class ClaudeCli
         - Messages that reach you later say who sent them: "The user says: …" (the person, typing in your view), "The
           main chat says: …" (the coordinator) or "A teammate, job N …" (another job). All count; the person's word wins
           if they disagree; answer a teammate's question with chat_jobs action=message.
+        - Working on a model another one links (a documentation model in another Revit window): when your changes must
+          show there, save_model at the end of your changes; a job on the linking model then calls reload_links first.
         - If you need the person to decide something the model can't settle, end with one short question: they answer in
           your view.
         - End every run with a short report for the main chat, in plain words: what you did (with counts and names),

@@ -78,6 +78,17 @@ internal static class ChatJobs
         return block;
     }
 
+    private static volatile Action<string?, string>? _touched;
+
+    /// <summary>The pane: told when the chat or one of its jobs works on a model (by title), to name it in the header.</summary>
+    public static Action<string?, string>? TouchedModel { get => _touched; set => _touched = value; }
+
+    /// <summary>The connection: the chat (<paramref name="key"/>: its key or a job's) works on model <paramref name="title"/> now.</summary>
+    public static void Touched(string? key, string title) => _touched?.Invoke(key, title);
+
+    /// <summary>The connection: the model job <paramref name="key"/> was given (chat_jobs start model=…), or null.</summary>
+    public static string? ModelOf(string key) => _board?.FindKey(key) is { RevitModel.Length: > 0 } job ? job.RevitModel : null;
+
     /// <summary>The bridge: true when job <paramref name="key"/> checks another job's work (JobReview), so it may not change the model.</summary>
     public static bool IsCheck(string key) => _board?.FindKey(key) is { ReviewOf: > 0 };
 
@@ -168,6 +179,20 @@ internal sealed partial class ChatPane
         ChatJobs.Board = _board;
         ChatJobs.Coordinator = IsCoordinator;
         ChatJobs.Changed = () => Dispatcher.BeginInvoke(new Action(JobsChanged));
+        ChatJobs.TouchedModel = (key, title) => Dispatcher.BeginInvoke(new Action(() => ModelTouched(key, title)));
+    }
+
+    /// <summary>The chat or one of its jobs works on another model: the header names it with the chat's own.</summary>
+    private void ModelTouched(string? key, string title)
+    {
+        if (_sample || title.Trim().Length == 0 || string.Equals(title, _conv.Title, StringComparison.OrdinalIgnoreCase)) return;
+        // Only this chat's own calls: its main chat or one of its jobs (a chat left in the background keeps its own).
+        if (key is not null && key != JobBoard.ChatKey(_conv.Id) && _board?.FindKey(key) is null) return;
+        _conv.Models ??= [];
+        if (_conv.Models.Any(m => string.Equals(m, title, StringComparison.OrdinalIgnoreCase))) return;
+        _conv.Models.Add(title);
+        ShowTitle();
+        SaveSoon();
     }
 
     /// <summary>Ends every running job's process (the chat is left, Revit closes, the core switches versions).</summary>

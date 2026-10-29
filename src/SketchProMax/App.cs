@@ -186,6 +186,7 @@ public sealed class App : IExternalApplication
             // The chat's own connection, inside Revit (no helper program to start): a new port and token for each core.
             try { StartupTimings.Time("chat connection", () => ChatMcp.Start(Bridge!)); } catch (Exception) { /* the chat uses the connector program */ }
             try { StartupTimings.Time("chat hooks", () => Chat.ChatPane.Start(app)); } catch (Exception) { /* the chat tab says what is wrong when it is opened */ }
+            Chat.Autopilot.ModelTitle = () => Chat.ChatPane.CurrentModelTitle;
             try { StartupTimings.Time("restart note", () => UI.RestartNote.AfterStart(Ui)); } catch (Exception) { /* the chat and the Version button still say it */ }
             try { StartupTimings.Time("time log", () => TimeLog.Start(app)); } catch (Exception) { /* tasks still run; time is not counted */ }
             try { StartupTimings.Time("bim ready", () => BimReady.Start(app)); } catch (Exception) { /* models are only kept ready by the checklist's Fix buttons */ }

@@ -57,17 +57,35 @@ internal static class Autopilot
     /// <summary>Turns in a row with nothing open and no final report before the run stops (it isn't getting anywhere).</summary>
     public const int MaxIdle = 3;
 
-    /// <summary>True while an approved run works in the chat shown in the pane: popups and approvals are answered for the user.</summary>
-    public static volatile bool Unattended;
+    /// <summary>True while an approved run works in the chat shown in this window's pane.</summary>
+    public static volatile bool Here;
+
+    /// <summary>
+    /// True while popups and approvals are answered for the user: an approved run works in this window's chat, or in
+    /// another Revit window's chat that reaches this one (AutopilotShare: a documentation model linking the working model).
+    /// </summary>
+    public static bool Unattended => Here || AutopilotShare.Remote(DateTime.UtcNow) is not null;
+
+    /// <summary>This window's model, for the lines it logs for another window's run (set by the add-in).</summary>
+    public static Func<string>? ModelTitle;
 
     /// <summary>Raised (any thread) when something was answered or skipped for the user: kind (AutopilotEntry), text.</summary>
     public static event Action<string, string>? Logged;
 
     public static void Log(string kind, string text)
     {
-        if (!Unattended) return;
-        try { Logged?.Invoke(kind, text); } catch (Exception) { /* a log line must never break the call */ }
+        try
+        {
+            if (Here) Logged?.Invoke(kind, text);
+            // For another window's run: written for its report, saying which model it was in.
+            else if (AutopilotShare.Remote(DateTime.UtcNow) is { } run)
+                AutopilotShare.AppendLog(run, kind, (ModelTitle?.Invoke() is { Length: > 0 } model ? $"[{model}] " : "[other Revit window] ") + text, DateTime.UtcNow);
+        }
+        catch (Exception) { /* a log line must never break the call */ }
     }
+
+    /// <summary>A run's id across the Revit windows: its chat and when it started.</summary>
+    public static string RunId(string chatId, AutopilotRun run) => chatId + ":" + run.Started.Ticks.ToString(CultureInfo.InvariantCulture);
 
     // ---- What the coordinator is told ----------------------------------------------------------------------------------
 

@@ -55,6 +55,16 @@ public sealed class BridgeServer
         _registry = registry;
         _dispatcher = dispatcher;
         _revitVersion = revitVersion;
+        // The chat's calls to a model open in another Revit window: that window doesn't know the chat's jobs, so this one
+        // pins each job to its model, refuses a check job's changes, and delivers what the user sent it meanwhile.
+        RevitTargets.JobModel = Chat.ChatJobs.ModelOf;
+        RevitTargets.Touched = Chat.ChatJobs.Touched;
+        RevitTargets.RemoteGuard = (key, tool) => _registry.Find(tool) is { ModifiesModel: true } && Chat.ChatJobs.IsCheck(key)
+            ? $"You are checking another job's work, so you can't change the model ({tool} changes it). Read and check only, and put what needs fixing in your answer, ending with the ISSUES line."
+            : null;
+        RevitTargets.RemoteAfter = (key, tool, text) => key == Chat.ChatJobs.Shown ? JobNotes.Attach(tool, text)
+            : Chat.ChatJobs.TakeAsides(key, tool) is { } aside ? JobText.Add(text, null, aside) : text;
+        RevitTargets.RemoteActivity = (key, activity) => Chat.ChatJobs.SetActivity(key, activity.Length > 0 ? Chat.JobBoard.Reading : "");
     }
 
     public void Start()
@@ -432,6 +442,8 @@ public sealed class BridgeServer
                 if (app.ActiveUIDocument is null) return Ended(ToolResult.Error("No model is open in Revit. Ask the user to open one."));
                 // A batch of this call may stop at an item boundary to synchronize (auto sync); nothing else may.
                 Revit.AutoSync.Seen(app.ActiveUIDocument.Document);
+                // An autopilot (this window's, or another window's reaching this one) backs up each model before its first change.
+                if (fromChat && tool.ModifiesModel && Chat.Autopilot.Unattended) Revit.AutopilotBackups.Ensure(app.ActiveUIDocument.Document);
                 Revit.AutoSync.InCallNow(true);
                 // Whether to ask first (Approvals, ApprovalPolicy): risky calls and the always-asked ones always; normal
                 // changes per the approval level, unless the task is approved or the user said not to ask about the tool

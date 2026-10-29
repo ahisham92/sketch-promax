@@ -25,7 +25,9 @@ public sealed class ChatJobsTool : IRevitTool
         "belongs to an existing job goes there with action=message. start refuses a request that reads as a follow-up of an existing " +
         "job; call it again with new=true when it really is separate work. A job may call it too, to work with its teammates: action=list " +
         "shows them, action=ask with job and question gets what that job has found so far (forward=true also passes the question on, and it " +
-        "messages you back), action=message with job and text tells it something it needs. Reads run in parallel; model changes take turns. Not a model change.";
+        "messages you back), action=message with job and text tells it something it needs. Reads run in parallel; model changes take turns. " +
+        "Work on two models open in two Revit windows (list_revit_models), for example a working model and a documentation model " +
+        "that links it: give each job its model (model=its title); jobs in different windows really work at once. Not a model change.";
     public string PropertiesJson => """
     {
       "action": {"type": "string", "enum": ["start", "list", "message", "stop", "ask"], "description": "Default list. A job (not the main chat) may use list, ask and message."},
@@ -35,7 +37,8 @@ public sealed class ChatJobsTool : IRevitTool
       "task": {"type": "string", "description": "start: the whole task for the job, with every detail it needs (names, levels, types, settings)."},
       "job": {"type": "integer", "description": "message, stop and ask: the job's number."},
       "text": {"type": "string", "description": "message: what to tell the job, in full."},
-      "parts": {"type": "array", "description": "start: divide the work, one job per part, all started at once (each part's task in full; the parts must not overlap, e.g. levels 1-3 and 4-6).", "items": {"type": "object", "properties": {"title": {"type": "string"}, "task": {"type": "string"}, "kind": {"type": "string", "enum": ["simple", "everyday", "hard"]}}, "required": ["title", "task"]}},
+      "parts": {"type": "array", "description": "start: divide the work, one job per part, all started at once (each part's task in full; the parts must not overlap, e.g. levels 1-3 and 4-6).", "items": {"type": "object", "properties": {"title": {"type": "string"}, "task": {"type": "string"}, "kind": {"type": "string", "enum": ["simple", "everyday", "hard"]}, "model": {"type": "string"}}, "required": ["title", "task"]}},
+      "model": {"type": "string", "description": "start (and each part): the open model the job works on, its title as list_revit_models gives it, when several are open (also in another Revit window). Left out: the model active in this window."},
       "facts": {"type": "string", "description": "start with parts: what you already read from the model that every part needs (levels, grids, types, names, ids); each job gets it with its task."},
       "single": {"type": "string", "description": "start without parts while two or more workers are free: why this work can't be divided (one element, one sheet, one short answer). Without it such a start is sent back to be divided."},
       "new": {"type": "boolean", "description": "start: true when it is separate work even though it resembles an existing job."},
@@ -96,7 +99,7 @@ public sealed class ChatJobsTool : IRevitTool
         switch (action)
         {
             case "start" when args.Raw.TryGetValue("parts", out var parts) && parts.ValueKind == JsonValueKind.Array && parts.GetArrayLength() > 0:
-                return StartParts(board, parts, (Str(args, "facts") ?? "").Trim(), limit, now);
+                return StartParts(board, parts, (Str(args, "facts") ?? "").Trim(), Str(args, "model"), limit, now);
             case "start":
             {
                 var task = (Str(args, "task") ?? "").Trim();
@@ -122,7 +125,11 @@ public sealed class ChatJobsTool : IRevitTool
                                $"action=message, job={similar.Number}. If it really is separate work, call start again with new=true.",
                     });
                 var kind = (Str(args, "kind") ?? "").Trim().ToLowerInvariant();
-                lock (board.Gate) ChatJobs.Assign(job, kind is ChatAuto.Simple or ChatAuto.Everyday or ChatAuto.Hard ? kind : null);
+                lock (board.Gate)
+                {
+                    ChatJobs.Assign(job, kind is ChatAuto.Simple or ChatAuto.Everyday or ChatAuto.Hard ? kind : null);
+                    JobBoard.SetRevitModel(job, Str(args, "model"));
+                }
                 ChatJobs.Changed?.Invoke();
                 var waiting = board.OpenCount > JobBoard.ClampLimit(limit);
                 var free = Math.Max(0, JobBoard.ClampLimit(limit) - board.OpenCount);
@@ -172,24 +179,29 @@ public sealed class ChatJobsTool : IRevitTool
     }
 
     /// <summary>start with parts: one job per part, all at once (they are separate work, so none is refused as a follow-up).</summary>
-    private static ToolResult StartParts(JobBoard board, JsonElement parts, string facts, int limit, DateTime now)
+    private static ToolResult StartParts(JobBoard board, JsonElement parts, string facts, string? model, int limit, DateTime now)
     {
         var list = parts.EnumerateArray().Where(p => p.ValueKind == JsonValueKind.Object).Select(p => (
-            Title: Prop(p, "title"), Task: Prop(p, "task"), Kind: Prop(p, "kind").ToLowerInvariant())).Where(p => p.Task.Length > 0).Take(12).ToList();
+            Title: Prop(p, "title"), Task: Prop(p, "task"), Kind: Prop(p, "kind").ToLowerInvariant(), Model: Prop(p, "model") is { Length: > 0 } m ? m : model ?? ""))
+            .Where(p => p.Task.Length > 0).Take(12).ToList();
         if (list.Count == 0) return ToolResult.Error("Each part needs its whole task in 'task' (and a short 'title').");
         var titles = list.Select(p => p.Title.Length > 0 ? p.Title : JobBoard.OneLine(p.Task, 40)).ToList();
         var started = new List<object>();
         for (var i = 0; i < list.Count; i++)
         {
-            var (title, task, kind) = list[i];
+            var (title, task, kind, partModel) = list[i];
             // Each part knows what was read for all of them and what the other parts are, so it leaves them alone.
             var others = string.Join("; ", titles.Where((_, k) => k != i));
             var full = task + (facts.Length > 0 ? "\n\nFacts the coordinator already read (use them; don't read them again):\n" + facts : "")
                 + (others.Length > 0 ? "\n\nThe other parts, done by other jobs at the same time (leave them alone): " + others + "." : "");
             var job = board.Start(titles[i], full, now, force: true, out _);
             if (job is null) continue;
-            lock (board.Gate) ChatJobs.Assign(job, kind is ChatAuto.Simple or ChatAuto.Everyday or ChatAuto.Hard ? kind : null);
-            started.Add(new { job = job.Number, title = job.Title, model = ChatAuto.ModelLabel(job.Model) });
+            lock (board.Gate)
+            {
+                ChatJobs.Assign(job, kind is ChatAuto.Simple or ChatAuto.Everyday or ChatAuto.Hard ? kind : null);
+                JobBoard.SetRevitModel(job, partModel);
+            }
+            started.Add(new { job = job.Number, title = job.Title, model = ChatAuto.ModelLabel(job.Model), revit_model = job.RevitModel.Length > 0 ? job.RevitModel : null });
         }
         ChatJobs.Changed?.Invoke();
         var waiting = Math.Max(0, board.OpenCount - JobBoard.ClampLimit(limit));
