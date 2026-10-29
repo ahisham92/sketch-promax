@@ -253,6 +253,8 @@ internal static class CrewTests
         e = visits.Update([one, two], t0.AddSeconds(1), null, 3);
         check("teamwork: the asker walks to the teammate's desk", e.Any(x => x.Cue == CrewCue.Visit && x.Number == 2 && x.From == visits.Seats.First(s => s.Number == 1).Slot), Cues(e));
         e = visits.Update([one, two], t0.AddSeconds(2), null, 3);
+        check("teamwork: the talk uses the asker's question", CrewPlan.Asking(walls) == "the grid ids?", CrewPlan.Asking(walls));
+        check("teamwork: a visit to tell something has no question", CrewPlan.Asking(Job(9, JobBoard.Running)) == "", "");
         check("teamwork: a visit plays once", e.All(x => x.Cue != CrewCue.Visit), Cues(e));
         one.Now = "Running: Tag walls on Level 2";
         one.Items.Add(new ChatItem { Kind = "assistant", Text = "I read the walls. **Found 42 walls**, now checking their types." });

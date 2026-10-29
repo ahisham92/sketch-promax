@@ -107,6 +107,8 @@ internal sealed class CrewStrip : Border
         public CrewMood Mood;
         public int Line = -1;
         public bool Leaving, Drawn;
+        /// <summary>Walking over to a teammate, or visited by one: only the name shows until both are back.</summary>
+        public bool Away;
     }
 
     private readonly Canvas _stage = new() { ClipToBounds = true, Height = StripHeight };
@@ -326,6 +328,7 @@ internal sealed class CrewStrip : Border
             worker.Person.Status.SetResourceReference(TextBlock.ForegroundProperty, seat.Percent >= 0 && seat.Mood is not (CrewMood.Done or CrewMood.Failed) ? Brand.K.Text : Brand.K.Muted);
             worker.Person.Status.FontWeight = seat.Percent >= 0 ? FontWeights.SemiBold : FontWeights.Normal;
             worker.Person.Meter.Visibility = seat.Percent >= 0 ? Visibility.Visible : Visibility.Collapsed;
+            ShowData(worker);
             worker.Person.MeterFill.Width = 44 * Math.Max(0, Math.Min(100, seat.Percent)) / 100.0;
             worker.Progress.Width = seat.Percent < 0 || seat.Mood is CrewMood.Done or CrewMood.Failed ? 0 : 26 * seat.Percent / 100.0;
             worker.Hit.ToolTip = names.Worker(seat.Slot) + "'s jobs";
@@ -354,7 +357,7 @@ internal sealed class CrewStrip : Border
                 briefs++;
             }
             else if (e.Cue == CrewCue.Share) Call(e.From, e.Number, e.Say);
-            else if (e.Cue == CrewCue.Visit) Visit(e.Number, e.From);
+            else if (e.Cue == CrewCue.Visit) Visit(e.Number, e.From, e.Say);
             else if (e.Cue != CrewCue.Leave && e.Say.Length > 0) Say(e.Number, e.Say, e.Cue is CrewCue.Arrive or CrewCue.Handover ? Fly.TimeSpan : TimeSpan.Zero);
         }
         var applying = seats.FirstOrDefault(s => s.Mood == CrewMood.Applying);
@@ -756,7 +759,7 @@ internal sealed class CrewStrip : Border
     /// A worker goes over to a teammate's desk (at <paramref name="slot"/>) for information or to tell them something:
     /// it walks there, asks, the teammate answers, and it walks back to its own desk.
     /// </summary>
-    private void Visit(int number, int slot)
+    private void Visit(int number, int slot, string question)
     {
         if (!_workers.TryGetValue(number, out var w) || w.Leaving || w.Line >= 0) return;
         var teammate = Names.Worker(slot);
@@ -768,17 +771,70 @@ internal sealed class CrewStrip : Border
             Say(number, $"Asked {teammate}", TimeSpan.Zero);
             return;
         }
-        var walk = new DoubleAnimationUsingKeyFrames { Duration = new Duration(TimeSpan.FromMilliseconds(4600)), FillBehavior = FillBehavior.Stop };
-        walk.KeyFrames.Add(new EasingDoubleKeyFrame(there, KeyTime.FromPercent(0.18), new QuadraticEase { EasingMode = EasingMode.EaseInOut }));
-        walk.KeyFrames.Add(new DiscreteDoubleKeyFrame(there, KeyTime.FromPercent(0.82)));
+        var walk = new DoubleAnimationUsingKeyFrames { Duration = new Duration(TimeSpan.FromMilliseconds(11000)), FillBehavior = FillBehavior.Stop };
+        walk.KeyFrames.Add(new EasingDoubleKeyFrame(there, KeyTime.FromPercent(0.08), new QuadraticEase { EasingMode = EasingMode.EaseInOut }));
+        walk.KeyFrames.Add(new DiscreteDoubleKeyFrame(there, KeyTime.FromPercent(0.92)));
         walk.KeyFrames.Add(new EasingDoubleKeyFrame(home, KeyTime.FromPercent(1), new QuadraticEase { EasingMode = EasingMode.EaseInOut }));
         Timeline.SetDesiredFrameRate(walk, 30);
         w.Person.Legs.Visibility = Visibility.Visible;
-        if (w.Thought is not null) w.Thought.Visibility = Visibility.Collapsed;
-        walk.Completed += (_, _) => { if (w.Line < 0) w.Person.Legs.Visibility = Visibility.Collapsed; };
+        // While they talk, both keep only their names: the lines under them would run into each other.
+        var mate = _workers.Values.FirstOrDefault(x => x.Slot == slot && !x.Leaving) ?? (_idle.TryGetValue(slot, out var free) ? free : null);
+        foreach (var away in new[] { w, mate })
+        {
+            if (away is null) continue;
+            away.Away = true;
+            ShowData(away);
+            if (away.Thought is not null) away.Thought.Visibility = Visibility.Collapsed;
+        }
+        walk.Completed += (_, _) =>
+        {
+            if (w.Line < 0) w.Person.Legs.Visibility = Visibility.Collapsed;
+            foreach (var back in new[] { w, mate })
+            {
+                if (back is null) continue;
+                back.Away = false;
+                ShowData(back);
+            }
+        };
         w.Person.At.BeginAnimation(TranslateTransform.XProperty, walk);
-        SayAt(number, there + 4, $"{teammate}, got a minute?", TimeSpan.FromMilliseconds(900));
-        SayAt(-200 - slot, desk + 4, "Sure, here you go!", TimeSpan.FromMilliseconds(2300));
+        // A short talk, one line at a time: the ask, the answer, the handover of the data, and thanks.
+        var me = Names.Worker(w.Slot);
+        var asked = question.Length > 0;
+        var lines = new (bool Mine, string Words)[]
+        {
+            (true, $"{teammate}, have you got a minute please?"),
+            (false, "Sure, what do you need?"),
+            (true, asked ? $"Can you tell me {question}" : "I've got something your part needs"),
+            (false, asked ? $"Here, {me}, I'll hand you my data" : "Thanks, I'll use it"),
+            (true, asked ? $"Thanks, {teammate}!" : "Great, back to work"),
+        };
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var (mine, words) = lines[i];
+            // Each line its own bubble, the asker's above and the teammate's below, so they read as a talk.
+            SayAt(mine ? -5000 - number * 10 - i : -6000 - slot * 10 - i, mine ? there + 4 : desk + 4, words, TimeSpan.FromMilliseconds(900 + i * 1700), mine ? 2 : 20);
+        }
+        if (asked)
+        {
+            var hand = new DispatcherTimer(DispatcherPriority.Background, Dispatcher) { Interval = TimeSpan.FromMilliseconds(900 + 3 * 1700 + 600) };
+            hand.Tick += (_, _) =>
+            {
+                hand.Stop();
+                if (IsVisible) Sheet(desk + 2, there, Top);
+            };
+            hand.Start();
+        }
+    }
+
+    /// <summary>
+    /// The line and the bar under a worker's name show only while they are at their desk: walking to a teammate, being
+    /// visited or standing in line at the applier, only the name goes along, so nothing runs into anything else.
+    /// </summary>
+    private static void ShowData(Worker w)
+    {
+        var shown = !w.Away && w.Line < 0 ? 1.0 : 0.0;
+        w.Person.Status.Opacity = shown;
+        w.Person.Meter.Opacity = shown;
     }
 
     /// <summary>
@@ -804,7 +860,7 @@ internal sealed class CrewStrip : Border
     /// <summary>The thought bubble over a worker at the desk: what they are doing now ("" hides it). Text only, nothing moves.</summary>
     private void Think(Worker w, string doing)
     {
-        if (doing.Length == 0 || w.Line >= 0)
+        if (doing.Length == 0 || w.Line >= 0 || w.Away)
         {
             if (w.Thought is not null) w.Thought.Visibility = Visibility.Collapsed;
             return;
