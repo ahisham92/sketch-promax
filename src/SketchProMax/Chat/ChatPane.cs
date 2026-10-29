@@ -41,7 +41,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     private static EventHandler<ViewActivatedEventArgs>? _viewActivated;
 
     /// <summary>True while a turn or a parallel job runs: switching to a new core version waits for it.</summary>
-    public static bool IsBusy => _instance is { } pane && (pane._turn is not null || pane.JobsOpen);
+    public static bool IsBusy => _instance is { } pane && (pane._turn is not null || pane.JobsOpen || pane.BackgroundWorking);
 
     /// <summary>The pane's chat element (created on first use).</summary>
     public static FrameworkElement Get() => _instance ??= new ChatPane();
@@ -57,6 +57,10 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
                 catch (Exception) { /* a document being closed: keep the current one */ }
             };
             app.ViewActivated += _viewActivated;
+            _savedAs = OnSavedAs;
+            _closing = OnClosing;
+            app.Application.DocumentSavedAs += _savedAs;
+            app.Application.DocumentClosing += _closing;
         }
         catch (Exception) { /* the chat still works, with one conversation */ }
         // Started by a version switch while no model was known to Revit's API (ActiveUIDocument): the chat that was open
@@ -89,9 +93,16 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     /// <summary>The core is stopping (switching versions): end the engine and save; the new core resumes the session.</summary>
     public static void Stop(UIApplication app)
     {
-        try { if (_viewActivated is not null) app.ViewActivated -= _viewActivated; }
+        try
+        {
+            if (_viewActivated is not null) app.ViewActivated -= _viewActivated;
+            if (_savedAs is not null) app.Application.DocumentSavedAs -= _savedAs;
+            if (_closing is not null) app.Application.DocumentClosing -= _closing;
+        }
         catch (Exception) { }
         _viewActivated = null;
+        _savedAs = null;
+        _closing = null;
         _instance?.Retire();
     }
 
@@ -101,13 +112,99 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         if (_instance is not { } pane) return;
         pane.CloseBig();
         pane.EndRuns("Revit closed, so this job stopped. Send it a message to carry on.", now: true);
+        pane.StopBackground("Revit closed while this chat worked in the background, so it stopped here. Send your message again to carry on.", now: true);
         pane.Save();
         pane._engine?.KillNow();
         pane._engine = null;
     }
 
-    /// <summary>The key a model's conversation is saved under (ChatStore): its path, or its title when never saved.</summary>
-    internal static string ModelKey(Autodesk.Revit.DB.Document doc) => string.IsNullOrEmpty(doc.PathName) ? doc.Title : doc.PathName;
+    /// <summary>
+    /// The key a model's chats are saved under (ChatStore; ChatModelKeys): the central model's path for a workshared
+    /// model, else its file, else (never saved: a new project, a detached copy) a key of its own while it is open.
+    /// </summary>
+    internal static string ModelKey(Autodesk.Revit.DB.Document doc)
+    {
+        string? central = null;
+        var detached = false;
+        try
+        {
+            detached = doc.IsDetached;
+            if (doc.IsWorkshared && !detached && doc.GetWorksharingCentralModelPath() is { } path)
+                central = Autodesk.Revit.DB.ModelPathUtils.ConvertModelPathToUserVisiblePath(path);
+        }
+        catch (Exception) { /* no central known: the file decides */ }
+        var title = doc.Title;
+        string id;
+        lock (UnsavedIds)
+            if (!UnsavedIds.TryGetValue(title, out id!)) UnsavedIds[title] = id = Guid.NewGuid().ToString("N").Substring(0, 8);
+        return ChatModelKeys.For(doc.PathName, title, central, detached, id);
+    }
+
+    /// <summary>The key of each open never-saved model, by its title: dropped when it closes, so the next "Project1" starts with no chats.</summary>
+    private static readonly Dictionary<string, string> UnsavedIds = new(StringComparer.OrdinalIgnoreCase);
+
+    private static EventHandler<Autodesk.Revit.DB.Events.DocumentSavedAsEventArgs>? _savedAs;
+    private static EventHandler<Autodesk.Revit.DB.Events.DocumentClosingEventArgs>? _closing;
+
+    /// <summary>
+    /// Save As of a model never saved (a new project, a detached copy): its chats and memory notes go with it to the file,
+    /// and the pane keeps the same chat open.
+    /// </summary>
+    private static void OnSavedAs(object? sender, Autodesk.Revit.DB.Events.DocumentSavedAsEventArgs e)
+    {
+        try
+        {
+            if (e.Status != Autodesk.Revit.DB.Events.RevitAPIEventStatus.Succeeded || e.Document is not { IsFamilyDocument: false } doc) return;
+            if (!string.IsNullOrEmpty(e.OriginalPath) || !ChatModelKeys.IsUnsaved(_modelKey)) return;
+            var from = _modelKey;
+            var to = ModelKey(doc);
+            if (ChatModelKeys.IsUnsaved(to)) return;
+            _modelKey = to;
+            _modelTitle = doc.Title;
+            SketchProMax.App.Dispatcher.Later(() => MoveChats(from, to));
+        }
+        catch (Exception) { /* the chats stay where they were */ }
+    }
+
+    private static void OnClosing(object? sender, Autodesk.Revit.DB.Events.DocumentClosingEventArgs e)
+    {
+        try
+        {
+            if (e.Document is not { } doc || !string.IsNullOrEmpty(doc.PathName)) return;
+            var title = doc.Title;
+            // After the other closing handlers, which still read its key.
+            SketchProMax.App.Dispatcher.Later(() => { lock (UnsavedIds) UnsavedIds.Remove(title); });
+        }
+        catch (Exception) { }
+    }
+
+    /// <summary>Moves model <paramref name="from"/>'s chats and notes to <paramref name="to"/>; the open chat follows.</summary>
+    private static void MoveChats(string from, string to)
+    {
+        try
+        {
+            _instance?.Rekeyed(from, to);
+            ChatStore.Rekey(from, to);
+            if (MemoryNotes.Load().Any(n => n.Key is { } k && string.Equals(k, from, StringComparison.OrdinalIgnoreCase)))
+                MemoryNotes.Change(sections => MemoryNotes.Rekey(sections, from, to));
+        }
+        catch (Exception) { }
+    }
+
+    /// <summary>The shown chat (and any chat working in the background) now belongs to model <paramref name="to"/>.</summary>
+    private void Rekeyed(string from, string to)
+    {
+        if (string.Equals(_conv.Key, from, StringComparison.OrdinalIgnoreCase))
+        {
+            var old = _conv.File;
+            _conv.Key = to;
+            _conv.Title = _modelTitle;
+            Save();
+            if (old.Length > 0 && !string.Equals(old, _conv.File, StringComparison.OrdinalIgnoreCase)) ChatStore.Delete(old);
+            ShowTitle();
+        }
+        RekeyBackground(from, to);
+    }
 
     /// <summary>The open model's key (see <see cref="ModelKey"/>), "" before one is open: memory notes are kept under it.</summary>
     internal static string CurrentModelKey => _modelKey;
@@ -120,6 +217,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         if (string.Equals(key, _modelKey, StringComparison.OrdinalIgnoreCase)) return;
         _modelKey = key;
         _modelTitle = doc.Title;
+        // A local copy of a central model: its chats saved before 0.35.34 under the local file move to the central's.
+        if (ChatModelKeys.Legacy(doc.PathName, key) is { } legacy) SketchProMax.App.Dispatcher.Later(() => MoveChats(legacy, key));
         // Switching conversations reads and lays out the saved one: at the next idle moment, not inside Revit's model
         // open or view activation (bug #18). It reads the current key then, so several switches collapse into one.
         if (_instance is not null) SketchProMax.App.Dispatcher.Later(() => _instance?.ModelChanged());
@@ -319,6 +418,10 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         AutomationProperties.SetItemStatus(_newChat, "Collapsed");
         DockPanel.SetDock(_newChat, Dock.Right);
         top.Children.Add(_newChat);
+        // Chats: switch between this model's chats; it says which chats work or finished in the background.
+        BuildChatsPill();
+        DockPanel.SetDock(_chatsPill, Dock.Right);
+        top.Children.Add(_chatsPill);
         DockPanel.SetDock(_choiceMenu, Dock.Right);
         top.Children.Add(_choiceMenu);
         // The plan's usage (5-hour and weekly limits), as Claude Code reports it with each answer.
@@ -1065,6 +1168,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
 
     private void ShowConversation()
     {
+        ChatJobs.Shown = JobBoard.ChatKey(_conv.Id);
+        _pendingType = null;
         ShowCoordinator(focus: false);
         _lastPick = null;
         AttachJobs();
@@ -2075,8 +2180,12 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             var effort = ClaudeCli.EffortRefused ? "" : _effort;
             // A process started for another model, kind or effort needs a new one, and so does one whose Revit tools are at
             // an address that changed (a new core while Revit runs, or the connection inside Revit started after a fallback).
+            // The chat's own key goes with its calls (JobBoard.Caller): a chat saved before 0.31 gets its id first.
+            if (_conv.Id.Length == 0) Save();
+            var chatKey = JobBoard.ChatKey(_conv.Id);
+            ChatJobs.Shown = chatKey;
             if (_engine is { IsAlive: true } engine && engine.Model == _model && engine.Coordinator == IsCoordinator && engine.Effort == effort
-                && engine.McpAddress == ClaudeCli.McpAddress)
+                && engine.McpAddress == ClaudeCli.McpAddress && (engine.ChatKey ?? "") == chatKey)
             {
                 ShowStatus();
                 await engine.SendAsync(turn.Line);
@@ -2091,7 +2200,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
                 if (_turn != turn) return;
             }
             // A new model needs a new Claude Code process; it resumes the same conversation.
-            var fresh = new ChatEngine(Dispatcher, _install!, resume, _model, coordinator: IsCoordinator, effort: effort);
+            var fresh = new ChatEngine(Dispatcher, _install!, resume, _model, coordinator: IsCoordinator, effort: effort, chatKey: chatKey.Length > 0 ? chatKey : null);
             fresh.Event += e => { if (_engine == fresh) OnEvent(e); };
             fresh.Exited += tail => { if (_engine == fresh) OnExited(fresh, tail); };
             _engine = fresh;
@@ -2612,6 +2721,12 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         SendLeftover(left, stopped || _pendingModel is not null);
         ShrinkIfLong(ended, stopped || left.Count > 0);
         if (ended is { Planning: false, Shrinking: false } && !stopped && ended.Outcome == "done") Finished(ended);
+        // A kind picked while it answered: the chat switches now.
+        if (_pendingType is { } kind)
+        {
+            _pendingType = null;
+            SetChatType(kind);
+        }
         // Jobs that finished while the main chat answered report back now.
         Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(FlushReports));
         if (_pendingModel is { } next && !JobsOpen)
@@ -2686,22 +2801,34 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     private void NewChat(string? type = null)
     {
         if (_stopped) return;
-        // The chat shown stays in the history; a running answer is stopped (the chat resumes when reopened).
-        if (_turn is not null) MarkRunningTools("stopped");
-        _turn?.KillTimer?.Stop();
-        // A brief being planned: end its Claude Code run now, not when it finishes on its own.
-        _turn?.Cancel?.Cancel();
-        // The task's time ends here, or its open span would stop by-hand time being counted.
-        try { if (_turn is not null) Revit.TimeLog.EndChat(); } catch (Exception) { }
-        _control?.Apply(JobAction.Stop);
-        var left = _control is not null ? EndJob("stopped", null) : new List<(string Id, string Text)>();
-        _turn = null;
-        CrewCoordinatorDoes(null);
-        _engine?.Kill();
-        _engine = null;
-        EndRuns("A new chat was started, so this job stopped. Open this chat again and send it a message to carry on.");
-        Save();
-        Remember(_conv);
+        // The chat shown stays in the history; a running answer carries on in the background (Chats says when it is
+        // done), or, when it can't (its jobs are open, a brief is being planned), it is stopped and resumes when reopened.
+        var left = new List<(string Id, string Text)>();
+        string? why = null;
+        if (_turn is not null && Detach(out why)) { }
+        else if (why is not null)
+        {
+            Status(why, spin: false);
+            return;
+        }
+        else
+        {
+            if (_turn is not null) MarkRunningTools("stopped");
+            _turn?.KillTimer?.Stop();
+            // A brief being planned: end its Claude Code run now, not when it finishes on its own.
+            _turn?.Cancel?.Cancel();
+            // The task's time ends here, or its open span would stop by-hand time being counted.
+            try { if (_turn is not null) Revit.TimeLog.EndChat(); } catch (Exception) { }
+            _control?.Apply(JobAction.Stop);
+            if (_control is not null) left = EndJob("stopped", null);
+            _turn = null;
+            CrewCoordinatorDoes(null);
+            _engine?.Kill();
+            _engine = null;
+            EndRuns("A new chat was started, so this job stopped. Open this chat again and send it a message to carry on.");
+            Save();
+            Remember(_conv);
+        }
         _contextTokens = 0;
         if (left.Count > 0 && _input.Text.Trim().Length == 0) _input.Text = string.Join("\n\n", left.Select(n => n.Text));
         _conv = ChatStore.New(ConversationKey, ConversationTitle, type ?? DefaultType());
@@ -2759,6 +2886,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
 
     string IHistoryHost.CurrentFile => _conv.File;
 
+    string? IHistoryHost.StateOf(string file) => StateOf(file);
+
     void IHistoryHost.NewChat() => NewChat();
 
     void IHistoryHost.OpenChat(ChatSummary chat)
@@ -2768,16 +2897,24 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             CloseDrawer();
             return;
         }
-        if (_turn is not null)
+        if (JobsOpen)
         {
-            Status("Sketch ProMax is still answering. Wait for it, or press Stop, then open the other chat.", spin: false);
+            Status("Jobs are still working in this chat, and they report back to it. Wait for them, or press Stop on their cards, then open the other chat.", spin: false);
             CloseDrawer();
             return;
         }
-        if (JobsOpen)
+        // An answer running here carries on in the background (Chats, at the top, says when it is done).
+        if (_turn is not null && !Detach(out var why))
         {
-            Status("Jobs are still working in this chat. Wait for them, or press Stop on their cards, then open the other chat.", spin: false);
+            Status(why ?? "Sketch ProMax is still answering (planning or shrinking can't move to the background). Wait for it, or press Stop, then open the other chat.", spin: false);
             CloseDrawer();
+            return;
+        }
+        if (BackgroundOf(chat.File) is { } bg)
+        {
+            Reattach(bg);
+            CloseDrawer();
+            _input.Focus();
             return;
         }
         if (ChatStore.Read(chat.File) is not { } conv)
@@ -2815,6 +2952,12 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     {
         var current = string.Equals(file, _conv.File, StringComparison.OrdinalIgnoreCase);
         if (current && (_turn is not null || JobsOpen)) return false;
+        if (BackgroundOf(file) is { } bg)
+        {
+            if (bg.State == BackgroundChat.Working) return false;
+            _background.Remove(bg);
+            ShowChats();
+        }
         if (!ChatStore.Delete(file)) return false;
         if (current)
         {
@@ -2921,6 +3064,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             _undoTimer?.Stop();
             _reportTimer?.Stop();
             EndRuns("Sketch ProMax updated, so this job stopped. Send it a message to carry on.");
+            StopBackground("Sketch ProMax updated while this chat worked in the background, so it stopped here. Send your message again to carry on.", now: false);
             if (ChatJobs.Board == _board) { ChatJobs.Board = null; ChatJobs.Changed = null; }
         }
         catch (Exception) { /* whatever failed above, the chat is saved and handed over below */ }

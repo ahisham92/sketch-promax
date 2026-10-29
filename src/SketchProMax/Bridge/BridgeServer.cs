@@ -287,6 +287,8 @@ public sealed class BridgeServer
                     var fromChat = root.TryGetProperty("origin", out var origin) && origin.ValueKind == JsonValueKind.String && origin.GetString() == "chat";
                     // One of the chat's parallel jobs (its own session): its changes take turns with the other jobs'.
                     var jobKey = fromChat && root.TryGetProperty("job", out var jk) && jk.ValueKind == JsonValueKind.String && jk.GetString() is { Length: > 0 } k ? k : null;
+                    // The chat shown in the pane is the main chat; a chat left working in the background takes turns like a job.
+                    jobKey = Chat.JobBoard.Caller(jobKey, Chat.ChatJobs.Shown);
                     var result = await CallTool(name, args, fromChat, ct, jobKey: jobKey).ConfigureAwait(false);
                     // Messages the user typed while the chat task ran go with the answer Claude reads now (any tool's,
                     // "still running" too). Not when the caller has gone: they then stay queued, and the chat sends

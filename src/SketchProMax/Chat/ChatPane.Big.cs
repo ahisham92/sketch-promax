@@ -70,6 +70,7 @@ internal sealed partial class ChatPane
         ShowUsage();
         ShowPickers();
         ShowBriefChoice();
+        ShowChats();
     }
 
     /// <summary>Moves the pane into the large window (maximised), leaving a note in the dock.</summary>

@@ -120,6 +120,24 @@ internal sealed class JobBoard
     /// <summary>What a resumed job is sent when it has no message waiting.</summary>
     public const string CarryOn = "Carry on with your task.";
 
+    /// <summary>
+    /// What a main chat's own Claude Code passes with its calls ("chat-" and the chat's id), so the bridge tells the chat
+    /// shown in the pane from one left working in the background (<see cref="Caller"/>). "" for a chat without an id.
+    /// </summary>
+    public static string ChatKey(string chatId) => chatId.Length > 0 ? ChatPrefix + chatId : "";
+
+    public const string ChatPrefix = "chat-";
+
+    public static bool IsChatKey(string? key) => key is not null && key.StartsWith(ChatPrefix, StringComparison.Ordinal);
+
+    /// <summary>
+    /// Who made a call, for the bridge: null for the main chat shown in the pane (its task's Pause, Stop, approvals and
+    /// queued messages apply), else the key the call takes turns under like a parallel job: a job's own key, or the key
+    /// of a chat working in the background (one that is not <paramref name="shown"/>, the shown chat's key).
+    /// </summary>
+    public static string? Caller(string? key, string shown) =>
+        string.IsNullOrEmpty(key) || (IsChatKey(key) && string.Equals(key, shown, StringComparison.Ordinal)) ? null : key;
+
     public readonly object Gate = new();
     private readonly List<ChatJob> _jobs;
 

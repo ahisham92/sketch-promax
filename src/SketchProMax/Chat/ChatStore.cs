@@ -149,6 +149,34 @@ internal static class ChatStore
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException) { /* not saved: the chat still works */ }
     }
 
+    /// <summary>
+    /// Moves every chat of model <paramref name="from"/> to model <paramref name="to"/> (an unsaved model saved to a file, a
+    /// local copy's chats going to its central's; ChatModelKeys). Returns how many moved.
+    /// </summary>
+    public static int Rekey(string from, string to)
+    {
+        if (from.Length == 0 || to.Length == 0 || string.Equals(from, to, StringComparison.OrdinalIgnoreCase)) return 0;
+        var moved = 0;
+        try
+        {
+            if (!Directory.Exists(Folder)) return 0;
+            var hash = Hash(from);
+            foreach (var file in Directory.GetFiles(Folder, hash + "*.json"))
+            {
+                var name = Path.GetFileNameWithoutExtension(file);
+                if (name != hash && !name.StartsWith(hash + "-", StringComparison.Ordinal)) continue;
+                if (Read(file) is not { } conv || !string.Equals(conv.Key, from, StringComparison.OrdinalIgnoreCase)) continue;
+                conv.Key = to;
+                Save(conv, touch: false);
+                if (string.Equals(conv.File, file, StringComparison.OrdinalIgnoreCase)) continue; // not written (empty): left as it was
+                File.Delete(file);
+                moved++;
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        return moved;
+    }
+
     /// <summary>Deletes a saved chat; false when the file couldn't be deleted.</summary>
     public static bool Delete(string file)
     {

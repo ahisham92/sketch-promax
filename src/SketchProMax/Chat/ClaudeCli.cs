@@ -146,14 +146,17 @@ internal static class ClaudeCli
     /// <param name="coordinator">A chat With coordinator (ChatTypes): it may start jobs with chat_jobs and is told how.
     /// A Simple chat never gets chat_jobs or those instructions.</param>
     /// <param name="effort">Claude Code's --effort level (ChatAuto.Efforts); left out when empty or this Claude Code doesn't take it.</param>
-    public static ProcessStartInfo EngineStart(Install install, string? resumeSessionId, string? model = null, bool coordinator = true, string? effort = null)
+    public static ProcessStartInfo EngineStart(Install install, string? resumeSessionId, string? model = null, bool coordinator = true, string? effort = null, string? chatKey = null)
     {
         Directory.CreateDirectory(WorkFolder);
         var engine = Path.Combine(Folder, "engine");
         Directory.CreateDirectory(engine);
         var pid = Process.GetCurrentProcess().Id.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
-        var mcpFile = WriteMcpConfig(engine, pid, claude: install.Path, model: model);
+        // The chat's own key (JobBoard.ChatKey) goes with its calls, so one left working in the background is told apart
+        // from the chat shown in the pane (JobBoard.Caller).
+        var mcpFile = string.IsNullOrEmpty(chatKey) ? WriteMcpConfig(engine, pid, claude: install.Path, model: model)
+            : WriteMcpConfig(engine, pid, "mcp-" + chatKey + "-", install.Path, model, chatKey);
 
         var promptFile = Path.Combine(engine, "prompt-" + pid + ".md");
         File.WriteAllText(promptFile, Prompt(coordinator), new UTF8Encoding(false));
@@ -319,7 +322,7 @@ internal static class ClaudeCli
             return new JsonObject
             {
                 ["type"] = "http", ["url"] = http.Url, ["headers"] = headers,
-                ["timeout"] = string.IsNullOrEmpty(job) ? 1_800_000 : JobToolTimeoutMs,
+                ["timeout"] = string.IsNullOrEmpty(job) || JobBoard.IsChatKey(job) ? 1_800_000 : JobToolTimeoutMs,
             };
         }
         return new JsonObject
