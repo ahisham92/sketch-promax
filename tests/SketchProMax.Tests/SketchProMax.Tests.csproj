@@ -16,6 +16,7 @@
     <Compile Include="../../src/SketchProMax/Tools/PdfFiles.cs" Link="PdfFiles.cs" />
     <Compile Include="../../src/SketchProMax/Tools/SharedRead.cs" Link="SharedRead.cs" />
     <Compile Include="../../src/SketchProMax/Tools/ExportDefaults.cs" Link="ExportDefaults.cs" />
+    <Compile Include="../../src/SketchProMax/Tools/RedoLog.cs" Link="RedoLog.cs" />
     <Compile Include="../../src/SketchProMax/Tools/PdfEngine.cs" Link="PdfEngine.cs" />
     <Compile Include="../../src/SketchProMax/Tools/PdfEditSession.cs" Link="PdfEditSession.cs" />
     <Compile Include="../../src/SketchProMax/Tools/PdfEditCheck.cs" Link="PdfEditCheck.cs" />

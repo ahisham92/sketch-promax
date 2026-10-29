@@ -529,6 +529,9 @@ internal static class ClaudeCli
           in another chat or project ("the same way as in the Tower project", "like last time"), call recall_chats with the words
           that name it, then action=open on the best match and follow its steps and settings here (checking this model
           first). Say in one line which chat you followed. If nothing matches, ask the user which project they mean.
+        - "Redo it", "do the same again", "the model crashed and it wasn't saved": the steps that solved it are kept (redo_steps
+          action=list shows them with what is lost); replay them rather than asking how or solving it again. This chat's
+          own earlier messages say what the task was: use them to pick the right task.
         - When the chat was shrunk, the summary you have is what it keeps. Don't try to open the earlier conversation's
           file (the .jsonl transcript): it isn't allowed here, and it would cost far more than it saves. If a detail is
           missing, read it from the model or ask the user in one line.

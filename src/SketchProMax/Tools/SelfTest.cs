@@ -517,6 +517,7 @@ internal static partial class SelfTest
         new("get_coordinates", _ => new { }),
         new("convert_coordinates", _ => new { points = new[] { new[] { 0.0, 0.0, 0.0 } }, from = "internal" }),
         new("get_activity_log", _ => new { limit = 5 }),
+        new("redo_steps", _ => new { action = "list" }),
         new("memory_note", _ => new { action = "list" }),
         // A project that isn't set up is refused by name; on a PC with exactly one set up, that one is listed instead.
         new("berth_costing", _ => new { action = "list", project = "SELFTEST-NONE" }) { ExpectError = "No berths to cost" },

@@ -42,6 +42,30 @@ internal static class HistoryLessonsTests
             given == "A3 mono" && remembered == "A0 colour" && gone is null && none is null && used.SequenceEqual(["pdf_setup 'A0 colour'"]),
             string.Join(" | ", used));
 
+        // ---- Redo after a crash: whole arguments kept, steps grouped into tasks, lost ids carried to later steps
+        var t0 = new DateTime(2026, 10, 29, 14, 0, 0);
+        var log = string.Join("\n",
+            RedoLog.Line(t0, "run_revit_code", """{"code":"var f = Floor.Create(doc, loops, typeId, levelId); return f.Id;","description":"Make the ramp slab"}""", """{"result":5480001}"""),
+            RedoLog.Line(t0.AddMinutes(3), "cut_geometry", """{"action":"join","pairs":[{"cutting":2554931,"cut":5480001}]}""", """{"done":1}"""),
+            "not json",
+            RedoLog.Line(t0.AddMinutes(40), "tag_elements_in_view", """{"view_id":5501000}""", """{"created":2,"ids":[5480100,5480101]}"""));
+        var steps = RedoLog.Parse(log);
+        var tasks = RedoLog.Tasks(steps);
+        check("redo: steps keep their numbers, a bad line is skipped, a 15-minute gap starts a new task",
+            steps.Select(x => x.Number).SequenceEqual([1, 2, 4]) && tasks.Count == 2 && tasks[0].First == 1 && tasks[0].Last == 2 && tasks[1].First == 4,
+            string.Join(",", steps.Select(x => x.Number)) + " / " + tasks.Count);
+        check("redo: a step is described by its code's description, else its first arguments",
+            RedoLog.Describe(steps[0]) == "Make the ramp slab" && RedoLog.Describe(steps[1]).StartsWith("action=join"), RedoLog.Describe(steps[1]));
+        check("redo: element ids found in results and code (not small numbers or decimals)",
+            RedoLog.Ids("{\"ids\":[5480100,5480101],\"count\":2,\"x\":12.5}").SequenceEqual([5480100L, 5480101L])
+            && RedoLog.Ids("new ElementId(5475707L)").SequenceEqual([5475707L]), "");
+        var remapped = RedoLog.Remap("""{"code":"var e = doc.GetElement(new ElementId(5480001L)); var g = 54800012;","pairs":[{"cut":5480001}]}""",
+            new Dictionary<long, long> { [5480001] = 6100007 });
+        check("redo: a lost element's id becomes its new id in later steps, code included, and longer numbers stay",
+            remapped.Contains("new ElementId(6100007L)") && remapped.Contains("\"cut\":6100007") && remapped.Contains("54800012"), remapped);
+        check("redo: bookkeeping calls are not recorded", RedoLog.NotRedone.Contains("redo_steps") && RedoLog.NotRedone.Contains("auto_sync")
+            && !RedoLog.NotRedone.Contains("run_revit_code"), "");
+
         // ---- Joins written as code: the hint points at the bulk join tool
         check("code hint: a refused join points to join_elements",
             ScriptSource.RuntimeHint("Can't cut joined element.").Contains("join_elements"), ScriptSource.RuntimeHint("Can't cut joined element."));
