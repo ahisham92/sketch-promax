@@ -179,6 +179,21 @@ internal static class AutopilotShare
         }
     }
 
+    /// <summary>The watchdog asked to open Revit again and the user said no: the run counts as closed (no Revit takes it over).</summary>
+    public static void Decline(int pid)
+    {
+        lock (Lock)
+        {
+            try
+            {
+                if (Read() is not { } state || state.Owner != pid) return;
+                state.Closed = true;
+                Write(state);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        }
+    }
+
     /// <summary>The run ended: the other windows go back to asking.</summary>
     public static void End(string run)
     {

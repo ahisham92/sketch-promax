@@ -4,11 +4,11 @@ using Autodesk.Revit.UI.Events;
 namespace SketchProMax.Revit;
 
 /// <summary>
-/// A warning before Revit commands that have frozen Revit (FreezeCause.Load: Run systems analysis from the start, and
-/// any command the user ticked in the Rescue window after it froze Revit). Each is bound with an AddInCommandBinding
-/// whose BeforeExecuted shows the warning; Cancel stops the command, "Run it anyway" lets Revit run it as usual (no
-/// Executed handler, so Revit's own command runs). "Don't warn me again" takes it off the list. A command another add-in
-/// has bound already is left alone.
+/// A hint before Revit commands that have frozen Revit (FreezeCause.Load: Run systems analysis from the start, and
+/// any command the user ticked in the Rescue window after it froze Revit; never sync, save, open, close or links). Each
+/// is bound with an AddInCommandBinding whose BeforeExecuted shows a hint in the corner (UI.CommandHint) and lets Revit
+/// run the command at once (no Executed handler, so Revit's own command runs): nothing is ever cancelled. "Don't show
+/// this again" takes it off the list. A command another add-in has bound already is left alone.
 /// A binding is never removed while Revit runs: removing (and binding again) a command that is running, such as Create
 /// Spot Elevation waiting for a click while a newer core was switched to, closed Revit on 27 Oct 2026. A command taken
 /// off the list keeps its binding and runs without a word; a newer core takes the bindings over from the older one.
@@ -66,30 +66,21 @@ internal static class HeavyCommands
         }
     }
 
+    /// <summary>
+    /// Before a command that froze Revit before: a hint in the corner, and the command runs at once. Never a question and
+    /// never a cancel (0.35.52's warning had Cancel as its default and stopped the user's syncs and links).
+    /// </summary>
     private static void OnBefore(object? sender, BeforeExecutedEventArgs e)
     {
         try
         {
             var id = e.CommandId?.Name ?? "";
-            // Off the list ("Don't warn me again"): Revit's command runs without asking.
+            // Off the list ("Don't show this again"), or one of the everyday long commands: nothing shown.
             if (FreezeCause.Load().FirstOrDefault(w => w.Id == id) is not { } warned) return;
             var (main, content) = FreezeCause.Warning(warned);
-            var dialog = new TaskDialog("Sketch ProMax")
-            {
-                MainInstruction = main, MainContent = content, CommonButtons = TaskDialogCommonButtons.Cancel,
-                DefaultButton = TaskDialogResult.Cancel, VerificationText = "Don't warn me about this command again",
-            };
-            dialog.AddCommandLink(TaskDialogCommandLinkId.CommandLink1, "Run it anyway");
-            var answer = dialog.Show();
-            if (dialog.WasVerificationChecked()) FreezeCause.Forget(id);
-            if (answer == TaskDialogResult.CommandLink1)
-            {
-                Tools.ActivityLog.Note("heavy_command", $"{warned.Name}: run anyway after the warning");
-                return;
-            }
-            e.Cancel = true;
-            Tools.ActivityLog.Note("heavy_command", $"{warned.Name}: cancelled at the warning");
+            UI.CommandHint.Show(main, content, () => FreezeCause.Forget(id));
+            Tools.ActivityLog.Note("heavy_command", $"{warned.Name}: hint shown, the command ran");
         }
-        catch (Exception) { /* never stop Revit's command because of the warning itself */ }
+        catch (Exception) { /* never stop Revit's command because of the hint itself */ }
     }
 }

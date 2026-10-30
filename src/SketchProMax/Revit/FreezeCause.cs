@@ -175,7 +175,7 @@ internal static class FreezeCause
     /// (27 Oct 2026: a chat task froze Revit during Create Spot Elevation, and the warning was offered for spot elevations).
     /// </summary>
     public static bool OfferWarning(Busy busy, TimeSpan frozen, bool ours = false) =>
-        busy.CommandId is { Length: > 0 } id && !busy.Ours && !ours && frozen >= WarnAfter && !NeverWarn.Contains(id);
+        busy.CommandId is { Length: > 0 } id && !busy.Ours && !ours && frozen >= WarnAfter && !Everyday(id, busy.What);
 
     /// <summary>
     /// How long Revit may be stuck before the Rescue window opens: 20 s, but 1 min for everyday long work (opening a model
@@ -300,6 +300,18 @@ internal static class FreezeCause
         new("ID_RUN_SYSTEMS_ANALYSIS", "Run systems analysis", 0, ""),
     ];
 
+    /// <summary>
+    /// Commands that are slow by nature and that the user must be able to run without a question in the way: sync and
+    /// save, open and close, links, worksharing. Never learned and never warned about (0.35.52 had learned Save to Central
+    /// and Link from long runs, and the warning's Cancel stopped the user's syncs).
+    /// </summary>
+    public static bool Everyday(string id, string name) =>
+        NeverWarn.Contains(id ?? "") ||
+        System.Text.RegularExpressions.Regex.IsMatch(id ?? "", @"SAVE|SYNC|CENTRAL|MASTER|RELINQUISH|WORKSET|OPEN|CLOSE|EXIT|LINK|RELOAD|EXPORT|PRINT|PUBLISH|UNDO|REDO",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+        || System.Text.RegularExpressions.Regex.IsMatch(name ?? "", @"\b(save|sync|synchroni[sz]e|central|relinquish|open|close|link|reload|export|print)",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
     public static string File => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "SketchProMax", "freeze-warnings.json");
 
     internal static string? FileForTest;
@@ -321,7 +333,7 @@ internal static class FreezeCause
     {
         var saved = Read();
         var list = new List<Warned>();
-        foreach (var w in saved.Warn) if (!list.Any(x => x.Id == w.Id)) list.Add(w);
+        foreach (var w in saved.Warn) if (!Everyday(w.Id, w.Name) && !list.Any(x => x.Id == w.Id)) list.Add(w);
         foreach (var b in BuiltIn) if (!saved.Off.Contains(b.Id) && !list.Any(x => x.Id == b.Id)) list.Add(b);
         return list;
     }
@@ -329,6 +341,7 @@ internal static class FreezeCause
     /// <summary>Adds (or updates, keeping the longest freeze) a command to warn about. Any thread.</summary>
     public static void Learn(string id, string name, TimeSpan frozen, DateTime when)
     {
+        if (Everyday(id, name)) return;
         lock (Gate)
         {
             var saved = Read();
@@ -359,11 +372,11 @@ internal static class FreezeCause
 
     /// <summary>The warning shown before the command runs: (main line, details).</summary>
     public static (string Main, string Content) Warning(Warned w) =>
-        ($"{w.Name} can freeze Revit for a long time",
+        ($"{w.Name} can take a while",
          (w.Seconds > 0
              ? $"On {w.On} it kept Revit frozen for {Duration(TimeSpan.FromSeconds(w.Seconds))}."
              : "Revit doesn't respond while it runs, and on a big model with links that can take a long time.") +
-         " Save your work first. If Revit freezes, the Sketch ProMax Rescue window lets you stop or close it safely.");
+         " It is running now. If Revit stops responding, the Sketch ProMax Rescue window lets you stop or close it safely.");
 
     private static Saved Read()
     {

@@ -125,7 +125,7 @@ internal static class FreezeTests
             var learned = FreezeCause.Load().Single(w => w.Id == "ID_RUN_SYSTEMS_ANALYSIS");
             check("warn: the longest freeze is kept", learned.Seconds == 1500 && learned.On == "27 Oct", learned.ToString());
             var (main, content) = FreezeCause.Warning(learned);
-            check("warn: the warning names the command and its freeze", main == "Run systems analysis can freeze Revit for a long time" && content.StartsWith("On 27 Oct it kept Revit frozen for 25 min.") && !content.Contains("Claude"), content);
+            check("warn: the warning names the command and its freeze", main == "Run systems analysis can take a while" && content.StartsWith("On 27 Oct it kept Revit frozen for 25 min.") && !content.Contains("Claude"), content);
             FreezeCause.Learn("ID_SOMETHING_SLOW", "Something slow", TimeSpan.FromSeconds(90), new DateTime(2026, 10, 27));
             check("warn: a command ticked in the Rescue window is added", FreezeCause.Load().Any(w => w.Id == "ID_SOMETHING_SLOW"), "");
             FreezeCause.Forget("ID_RUN_SYSTEMS_ANALYSIS");
@@ -138,6 +138,18 @@ internal static class FreezeTests
                 FreezeCause.Load().Select(w => w.Id).SequenceEqual(["ID_RUN_SYSTEMS_ANALYSIS"]), string.Join(",", FreezeCause.Load()));
             FreezeCause.Learn("ID_SOMETHING_SLOW", "Something slow", TimeSpan.FromSeconds(90), new DateTime(2026, 10, 28));
             check("warn: a command learned now is kept", FreezeCause.Load().Any(w => w.Id == "ID_SOMETHING_SLOW"), File.ReadAllText(file));
+
+            // Sync, save, open, close and links are slow by nature: never learned, and dropped from lists that have them.
+            FreezeCause.Learn("ID_FILE_SAVE_TO_CENTRAL_SHORTCUT", "Save the active project back to the Central Model", TimeSpan.FromMinutes(3), new DateTime(2026, 10, 31));
+            FreezeCause.Learn("ID_RVTDOC_LINK", "Link another Revit project", TimeSpan.FromMinutes(4), new DateTime(2026, 10, 31));
+            check("warn: sync and link are never learned", !FreezeCause.Load().Any(w => w.Id is "ID_FILE_SAVE_TO_CENTRAL_SHORTCUT" or "ID_RVTDOC_LINK"), File.ReadAllText(file));
+            File.WriteAllText(file, "{\"Version\":2,\"Warn\":[{\"Id\":\"ID_FILE_SAVE_TO_CENTRAL_SHORTCUT\",\"Name\":\"Save the active project back to the Central Model\",\"Seconds\":206,\"On\":\"27 Oct\"},"
+                + "{\"Id\":\"ID_RVTDOC_LINK\",\"Name\":\"Link another Revit project\",\"Seconds\":232,\"On\":\"31 Oct\"},{\"Id\":\"ID_SEL_ALL_IN_VIEW\",\"Name\":\"Selects all visible elements of this type in the active view\",\"Seconds\":100,\"On\":\"28 Oct\"}],\"Off\":[]}");
+            var kept = FreezeCause.Load().Select(w => w.Id).ToList();
+            check("warn: sync and link learned by 0.35.52 are no longer warned about; others stay",
+                !kept.Contains("ID_FILE_SAVE_TO_CENTRAL_SHORTCUT") && !kept.Contains("ID_RVTDOC_LINK") && kept.Contains("ID_SEL_ALL_IN_VIEW"), string.Join(",", kept));
+            check("warn: run systems analysis is still warned about", !FreezeCause.Everyday("ID_RUN_SYSTEMS_ANALYSIS", "Run systems analysis")
+                && FreezeCause.Everyday("ID_FILE_SAVE_TO_MASTER", "Synchronize with Central") && FreezeCause.Everyday("ID_RELOAD_LATEST", "Reload Latest"), "");
         }
         finally
         {
