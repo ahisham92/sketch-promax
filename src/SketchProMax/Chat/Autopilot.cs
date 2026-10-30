@@ -35,6 +35,10 @@ internal sealed class AutopilotRun
     /// <summary>The run is paused because it used its share of the week (Settings): a new week starts it again from 0.</summary>
     public bool WeekCap { get; set; }
     public List<AutopilotEntry> Log { get; set; } = [];
+    /// <summary>Review rounds so far: the review team checks the goal each time the coordinator says it is met (GoalReview).</summary>
+    public int ReviewRound { get; set; }
+    /// <summary>What the review team last found not done ("" when nothing): sent back to the coordinator, and in the report.</summary>
+    public string Gaps { get; set; } = "";
 
     public bool Active => State is Running or Paused;
 }
@@ -89,14 +93,29 @@ internal static class Autopilot
 
     // ---- What the coordinator is told ----------------------------------------------------------------------------------
 
-    /// <summary>The user's goal, sent to the coordinator to plan (nothing starts until the plan is approved).</summary>
+    /// <summary>The heading that ends the plan: everything the coordinator needs from the user, asked once.</summary>
+    public const string QuestionsHeading = "Questions before you leave";
+
+    /// <summary>
+    /// The user's goal, sent to the coordinator to plan (nothing changes until the plan is approved). It reads what the
+    /// goal depends on first, with read-only jobs, so every question is asked now, in one list, while the user is there.
+    /// </summary>
     public static string PlanRequest(string goal) =>
         "[Autopilot goal from the user]\n" + goal.Trim() + "\n\n" +
-        "Plan it, and don't start any job yet. The user will approve the plan once and then be away: after that nobody " +
-        "answers questions. Read the model only as much as planning needs. Answer with a short plan: the parts you will " +
-        "hand to workers (in order, side by side where they can be), how you will check each part, and how you will know " +
-        "the goal is met. Work out the best way to reach the goal, as a senior engineer would; where something is unclear, " +
-        "say which choice you will make and why, keeping assumptions to the few the goal really needs.";
+        "Plan it. The user will approve the plan once and then be away: after that nobody answers questions. So read first: " +
+        "start read-only jobs side by side (chat_jobs start; they can't change anything before the plan is approved) to read " +
+        "what the goal depends on: the attached files, the drawings and folders it names, CAD files and the models, so that " +
+        "every question shows up now and not hours later. Keep what they find: the work after approval builds on it. When " +
+        "they have all reported, answer with a short plan: the parts you will hand to workers (in order, side by side where " +
+        "they can be), how you will check each part, and how you will know the goal is met. Work out the best way to reach " +
+        "the goal, as a senior engineer would. End with \"" + QuestionsHeading + "\": everything you need from the user, in " +
+        "one numbered list, each with the answer you will assume if they don't reply. Ask nothing later.";
+
+    /// <summary>The reading jobs reported while the plan is made: plan once they all have.</summary>
+    public static string PlanReports(int stillOpen) =>
+        stillOpen > 0
+            ? $"Autopilot planning: {stillOpen} reading job(s) are still working. Note what these found; end your turn without the plan, and plan when the rest report."
+            : "Autopilot planning: all reading jobs have reported. Now answer with the plan, ending with \"" + QuestionsHeading + "\" (each question with the answer you will assume).";
 
     /// <summary>The run starts: the coordinator works on its own from here.</summary>
     public static string Approved(AutopilotRun run) =>
@@ -108,14 +127,15 @@ internal static class Autopilot
         "whole job again); where a teammate's check found issues, send the job back to fix them. A job paused at its budget: " +
         "let it carry on only if it was making progress, else give that work another way. Send a job back with action=message " +
         "when its work is wrong or missing something, start the next " +
-        "parts, and keep the workers busy. When the goal is met and no job is open, write the final report (below) and end " +
-        "it with " + DoneMark + ". Goal: " + OneLine(run.Goal, 400);
+        "parts, and keep the workers busy (start every part that doesn't wait on another). A job stopped for no progress: " +
+        "give its work another way. Don't wait for the user's go-ahead: they are away. When the goal is met and no job is " +
+        "open, write the final report (below) and end it with " + DoneMark + ". Goal: " + OneLine(run.Goal, 400);
 
     /// <summary>The coordinator ended a turn with nothing open and no final report.</summary>
     public static string Nudge(AutopilotRun run) =>
         "[Autopilot, not typed by the user] No job is open. Carry on toward the goal: start the next parts, or send a job " +
         "back to fix its work. If the goal is met, write the final report and end it with " + DoneMark + ". Don't ask " +
-        "the user anything: they are away. Goal: " + OneLine(run.Goal, 400);
+        "the user anything and don't wait for their go-ahead: they are away. Goal: " + OneLine(run.Goal, 400);
 
     /// <summary>The run carries on after a pause.</summary>
     public static string Resume(AutopilotRun run, string why) =>
@@ -132,6 +152,13 @@ internal static class Autopilot
         "- Hand the work to jobs, divided across the free workers; review each report like a senior reviewer and send back " +
         "what is wrong or not good enough.\n" +
         "- A step Revit refuses is undone; find another way, and skip it only when there is none (list it).\n" +
+        "- Never stop to wait for the user's confirmation or go-ahead, even where an earlier message or a brief says to wait: " +
+        "the run only stops when the goal is met, a limit pauses it or the user presses Stop. A choice you'd ask about: make it, " +
+        "carry on, and list it under Decisions I made.\n" +
+        "- Keep every worker busy: never hold parts back for a slow job. Start every part that doesn't depend on it; a big part " +
+        "with several steps is split across the free workers (changes still go into Revit one at a time, by themselves).\n" +
+        "- When you say the goal is met, a review team checks every item the user asked for in the models and files. What " +
+        "they find not done comes back to you, so finish everything the user asked for, not only the easy parts.\n" +
         "- Final report, when the goal is met: Done (what was done, with counts), Checked (what you verified and how), " +
         "Unsure (what the user should look at), Skipped (what needs the user, and why), Decisions I made. Then " + DoneMark + ".";
 
@@ -264,7 +291,7 @@ internal static class Autopilot
         var sb = new StringBuilder();
         sb.Append("**Autopilot report** · ").Append(run.State switch
         {
-            AutopilotRun.Done => "the goal is met",
+            AutopilotRun.Done => run.ReviewRound > 0 ? "the goal is met, checked by the review team" : "the goal is met",
             AutopilotRun.Paused => "paused: " + run.PauseWhy,
             _ => "stopped" + (run.PauseWhy.Length > 0 ? ": " + run.PauseWhy : ""),
         });
@@ -291,6 +318,8 @@ internal static class Autopilot
                 sb.Append("\n- ").Append(e.Time.ToLocalTime().ToString("HH:mm", CultureInfo.InvariantCulture)).Append(' ').Append(e.Text);
             if (lines.Count > 40) sb.Append("\n- …and ").Append(lines.Count - 40).Append(" more");
         }
+        if (run.State != AutopilotRun.Done && run.Gaps.Trim().Length > 0)
+            sb.Append("\n\n**Still not done** (what the review team found)\n").Append(run.Gaps.Trim());
         Section("Risky steps allowed for you", AutopilotEntry.Allowed);
         Section("Popups answered for you", AutopilotEntry.Popup);
         Section("Pauses", AutopilotEntry.Paused);
@@ -321,4 +350,87 @@ internal static class Autopilot
     private static string Trim(string text) => OneLine(text, 160).TrimEnd('.');
 
     private static string OneLine(string text, int max) => JobBoard.OneLine(text, max);
+}
+
+/// <summary>
+/// The review team (Autopilot): when the coordinator says the goal is met, reviewers (read-only jobs) check every item the
+/// user asked for in the models and files, not in the reports. All met: the run ends. Anything not done goes back to the
+/// coordinator, who carries on, and the team checks again, up to <see cref="MaxRounds"/> times. Needs no WPF or Revit
+/// (the unit tests compile this file).
+/// </summary>
+internal static class GoalReview
+{
+    /// <summary>Review rounds before the run stops with what is still not done listed.</summary>
+    public const int MaxRounds = 5;
+
+    /// <summary>The verdict lines that end a reviewer's report.</summary>
+    public const string MetWord = "GOAL MET", NotMetWord = "GOAL NOT MET";
+
+    /// <summary>The team: each reviewer takes one side of the goal, side by side.</summary>
+    public static readonly (string Title, string Scope)[] Parts =
+    [
+        ("Review: modelling", "the modelling: elements, geometry, levels, voids and openings, parameters and marks, bills " +
+                              "and quantities, links, clashes. Check the model in this window and any other model the goal names."),
+        ("Review: drawings and files", "the drawings and deliverables: sheets and their grouping, views, tags, dimensions, " +
+                                       "annotation, revisions and dates, schedules, and exported files (PDF sets, lists, " +
+                                       "bills). The sheets may be in a documentation model open in another Revit window " +
+                                       "(list_revit_models), so check there too."),
+    ];
+
+    /// <summary>A reviewer's task: the goal in full, the plan's checks, the coordinator's claims, and how to answer.</summary>
+    public static string Task(AutopilotRun run, int part, string claims) =>
+        $"You are on the review team of an autopilot run. The coordinator says the user's goal is met. Check it, for {Parts[part].Scope}\n\n" +
+        "The user's goal, with their answers to the plan's questions:\n" + run.Goal.Trim() + "\n\n" +
+        (run.Plan.Trim().Length > 0 ? "The plan the user approved (its checks say how each part is verified):\n" + Clip(run.Plan, 6000) + "\n\n" : "") +
+        (run.Gaps.Trim().Length > 0 ? "Last round, the team found these not done; check them first:\n" + run.Gaps.Trim() + "\n\n" : "") +
+        "The coordinator's final report (claims to check, not proof):\n" + (claims.Trim().Length > 0 ? Clip(claims, 6000) : "(none)") + "\n\n" +
+        "How to review:\n" +
+        "1. List every thing the user asked for on your side, one line each, from the goal and their answers (not from the plan or the report).\n" +
+        "2. Check each one in the models and files with Sketch ProMax's tools: count it, read it, look at it. A report saying it is done is not proof.\n" +
+        "3. An item is NOT DONE when it is missing, partly done, done differently from what the user said, or left for later, " +
+        "\"to confirm\" or \"flagged\" when the user didn't allow that. An assumption is fine only where the goal left the choice open.\n" +
+        "4. Don't change anything (your changes are refused): you only check.\n\n" +
+        $"End with one line: \"{MetWord}\" when every item on your side is done, or \"{NotMetWord}:\" followed by the items not done, " +
+        "one per line starting with \"- \", each saying what is missing (with counts) and what to do.";
+
+    /// <summary>A reviewer's verdict: met, and else what is not done (its own words after the NOT MET line, or why it couldn't tell).</summary>
+    public static (bool Met, string Gaps) Verdict(ChatJob reviewer)
+    {
+        var text = reviewer.Summary.Trim();
+        if (reviewer.State != JobBoard.Done)
+            return (false, $"- {reviewer.Title}: the review couldn't finish" + (text.Length > 0 ? " (" + JobBoard.OneLine(text, 300) + ")" : "") + ". Check this side again.");
+        var lines = text.Split('\n').Select(l => l.Trim()).ToList();
+        int Find(string word) => lines.FindLastIndex(l => l.Trim('*', '_', '`', ' ').StartsWith(word, StringComparison.OrdinalIgnoreCase));
+        var notMet = Find(NotMetWord);
+        if (notMet >= 0)
+        {
+            var first = lines[notMet].Trim('*', '_', '`', ' ').Substring(NotMetWord.Length).TrimStart(':', ' ', '-');
+            var items = lines.Skip(notMet + 1).Where(l => l.Length > 0).ToList();
+            if (first.Length > 0) items.Insert(0, "- " + first);
+            return (false, items.Count > 0 ? string.Join("\n", items) : $"- {reviewer.Title}: not met, with no list given. Check this side again.");
+        }
+        if (Find(MetWord) >= 0) return (true, "");
+        return (false, $"- {reviewer.Title}: gave no verdict. Its report: " + JobBoard.OneLine(text, 600));
+    }
+
+    /// <summary>The team's verdict: met only when every reviewer says so; else everything not done, by reviewer.</summary>
+    public static (bool Met, string Gaps) Combine(IEnumerable<ChatJob> reviewers)
+    {
+        var all = reviewers.OrderBy(j => j.Number).Select(j => (j.Title, Verdict: Verdict(j))).ToList();
+        if (all.Count > 0 && all.All(v => v.Verdict.Met)) return (true, "");
+        return (false, string.Join("\n\n", all.Where(v => !v.Verdict.Met).Select(v => $"{v.Title.Replace("Review: ", "")}:\n{v.Verdict.Gaps}")));
+    }
+
+    /// <summary>What the coordinator is told when the team found work not done: carry on, without stopping or asking.</summary>
+    public static string SendBack(AutopilotRun run, string gaps) =>
+        "[Autopilot, not typed by the user] The review team checked the goal in the models and files: it is NOT met yet. " +
+        $"Still to do (round {run.ReviewRound} of {MaxRounds}):\n{gaps.Trim()}\n\n" +
+        "Hand all of this out to the workers now, side by side where it can be, and check it as it comes back. Don't stop, don't " +
+        "wait for the user's go-ahead and don't ask them anything: they are away. When it is all done, write the final report " +
+        "again and end it with " + Autopilot.DoneMark + "; the team checks again. Goal: " + JobBoard.OneLine(run.Goal, 400);
+
+    /// <summary>Whether the coordinator can't move it on: a turn that ends with nothing open after a send-back still gets checked.</summary>
+    public static bool MoreRounds(AutopilotRun run) => run.ReviewRound < MaxRounds;
+
+    private static string Clip(string text, int max) => text.Length <= max ? text.Trim() : text.Substring(0, max).TrimEnd() + "…";
 }

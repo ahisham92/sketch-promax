@@ -103,6 +103,16 @@ internal sealed class ChatJob
     public int ReviewedBy { get; set; }
     public int Reviews { get; set; }
     /// <summary>
+    /// A reviewer of an autopilot's goal (GoalReview): the review round it belongs to; 0 for ordinary work. Its report
+    /// goes to the run (met, or what is still to do back to the coordinator), not to the coordinator's chat. Saved.
+    /// </summary>
+    public int GoalCheck { get; set; }
+    /// <summary>
+    /// It may only read (an autopilot's reading before the plan is approved, a goal reviewer): the bridge refuses its
+    /// changes, like a check's. Saved.
+    /// </summary>
+    public bool ReadOnly { get; set; }
+    /// <summary>
     /// The open model it works on (its title), when the chat works on several: it may be open in another Revit window
     /// (a documentation model linking the working model). "" for the model active in the chat's own window. Saved.
     /// </summary>
@@ -366,7 +376,7 @@ internal sealed class JobBoard
     public static string Findings(ChatJob job)
     {
         var lines = new List<string> { $"Job {job.Number} \"{job.Title}\" ({StateLabel(job)}). Its task: {OneLine(job.Task, 300)}" };
-        if (job.Summary.Length > 0) lines.Add("Its report: " + OneLine(job.Summary, 1500));
+        if (job.Summary.Length > 0) lines.Add("Its report: " + OneLine(job.Summary, 4000));
         else
         {
             var said = job.Items.Where(i => i.Kind == "assistant" && i.Text.Trim().Length > 0).Select(i => i.Text.Trim()).ToList();
@@ -508,6 +518,8 @@ internal sealed class JobBoard
                 job.Inbox.Clear();
                 job.InboxFiles.Clear();
                 job.Asides.Clear();
+                // What it wrote so far stays as its report, so whoever stops it (cancel_job) still has its findings.
+                if (job.Summary.Length == 0 && job.Items.LastOrDefault(i => i.Kind == "assistant") is { } said) job.Summary = said.Text.Trim();
                 AddItem(job, new ChatItem { Kind = "note", Text = "Stopped. Send it a message to carry on." }, now);
             }
             return was;
@@ -734,6 +746,40 @@ internal sealed class JobBoard
     }
 
     /// <summary>
+    /// A reviewer of an autopilot's goal (GoalReview), round <paramref name="round"/>: a read-only job that waits to start
+    /// like any other. Not checked itself by a teammate (JobReview).
+    /// </summary>
+    public ChatJob StartGoalCheck(string title, string task, int round, DateTime now)
+    {
+        lock (Gate)
+        {
+            var check = new ChatJob
+            {
+                Number = _jobs.Count == 0 ? 1 : _jobs.Max(j => j.Number) + 1,
+                Key = Guid.NewGuid().ToString("N").Substring(0, 12),
+                Title = Clean(title, 60), Task = task.Trim(), Created = now, State = Queued, GoalCheck = round, ReadOnly = true,
+            };
+            _jobs.Add(check);
+            AddItem(check, new ChatItem { Kind = "user", Text = check.Task, State = FromCoordinator }, now);
+            return check;
+        }
+    }
+
+    /// <summary>Jobs not started yet may only read (an autopilot reads before its plan is approved): the bridge refuses their changes.</summary>
+    public void ReadOnlyUntilStarted()
+    {
+        lock (Gate)
+            foreach (var job in _jobs.Where(j => j.State == Queued && j.Started == default)) job.ReadOnly = true;
+    }
+
+    /// <summary>The plan was approved: the reading jobs may change the model from now on (goal reviewers never).</summary>
+    public void AllowChanges()
+    {
+        lock (Gate)
+            foreach (var job in _jobs.Where(j => j.GoalCheck == 0)) job.ReadOnly = false;
+    }
+
+    /// <summary>
     /// A checking job ended: its verdict goes on the job it checked, which can now be reported. That job, or null when
     /// <paramref name="check"/> checks nothing (or what it checked is gone).
     /// </summary>
@@ -886,7 +932,7 @@ internal sealed class JobBoard
         InboxFiles = j.InboxFiles.ToList(), Items = j.Items.ToList(), Activity = j.Activity, Worker = j.Worker,
         Plan = new Dictionary<string, string>(j.Plan), Heard = j.Heard.ToList(), Visited = j.Visited.ToList(),
         Spent = j.Spent, BudgetFrom = j.BudgetFrom, OverBudget = j.OverBudget, ReviewOf = j.ReviewOf, Review = j.Review, ReviewedBy = j.ReviewedBy,
-        Reviews = j.Reviews, Routine = j.Routine, RevitModel = j.RevitModel,
+        Reviews = j.Reviews, Routine = j.Routine, RevitModel = j.RevitModel, GoalCheck = j.GoalCheck, ReadOnly = j.ReadOnly,
     };
 }
 

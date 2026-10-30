@@ -217,7 +217,7 @@ internal static class PromptBriefs
 
     /// <summary>The planning run's message: the request, its attachments, and the end of the conversation so far.</summary>
     public static string PlanMessage(string request, IEnumerable<string> attachmentNames, IEnumerable<(string Kind, string Text)> recent,
-        string remembered = "", string modelNote = "")
+        string remembered = "", string modelNote = "", bool autopilot = false)
     {
         var sb = new StringBuilder();
         if (remembered.Trim().Length > 0) sb.Append("What this chat remembers of its earlier work:\n").Append(Shorten(remembered, 1500)).Append("\n\n");
@@ -233,8 +233,18 @@ internal static class PromptBriefs
         var names = attachmentNames.Where(n => n.Length > 0).ToList();
         if (names.Count > 0) sb.Append("\n\nAttached files (the assistant will read them later): ").Append(string.Join(", ", names));
         sb.Append(modelNote);
+        if (autopilot) sb.Append("\n\n").Append(AutopilotNote);
         return sb.ToString();
     }
+
+    /// <summary>
+    /// Added to the brief of a message sent during an autopilot run: the run works on its own, so the brief never makes
+    /// it wait (the 29-30 Oct run stopped for hours on a brief's "until the user confirms").
+    /// </summary>
+    public const string AutopilotNote =
+        "This chat is an autopilot run that carries on by itself while the user is away. Never add a step, rule or " +
+        "assumption that makes it wait for the user's confirmation or go-ahead, and no questions: where a choice is open, " +
+        "say which one it makes.";
 
     private static string Shorten(string text, int max)
     {

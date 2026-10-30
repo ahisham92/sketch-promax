@@ -36,7 +36,8 @@ internal sealed partial class ChatPane
         // The end of the conversation (before this message), so a follow-up is briefed in its context.
         var recent = _conv.Items.Take(_conv.Items.Count - 1).Where(i => i.Kind is "user" or "assistant" && i.Text.Length > 0)
             .Reverse().Take(6).Reverse().Select(i => (i.Kind, i.Text)).ToList();
-        var message = PromptBriefs.PlanMessage(text, attachments.Select(a => a.Name), recent, _conv.Recall, Revit.ChatModelWatch.Note(_conv.Key));
+        var message = PromptBriefs.PlanMessage(text, attachments.Select(a => a.Name), recent, _conv.Recall, Revit.ChatModelWatch.Note(_conv.Key),
+            autopilot: Run is { Active: true });
         _ = PlanAndShow(turn, _install, text, message, _model, _briefMode, attachments);
         return true;
     }

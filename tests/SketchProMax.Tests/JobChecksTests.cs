@@ -12,7 +12,58 @@ internal static class JobChecksTests
         check("budget: the first report counts nothing", JobBudget.Rise(ref seen, 0.30) == 0 && seen == 0.30, "");
         check("budget: a rise counts", Math.Abs(JobBudget.Rise(ref seen, 0.34) - 0.04) < 1e-9, "");
         check("budget: a report without a figure counts nothing and keeps the last", JobBudget.Rise(ref seen, null) == 0 && seen == 0.34, "");
-        check("budget: a lower figure is a reset window, what it shows was used since", Math.Abs(JobBudget.Rise(ref seen, 0.02) - 0.02) < 1e-9, "");
+        check("budget: a lower figure from another job's older reading counts nothing and keeps the highest", JobBudget.Rise(ref seen, 0.02) == 0 && seen == 0.34, "");
+        check("budget: a 55% reading after a 54% one never charges 55% (the 0.35.44 overnight bug)", JobBudget.Rise(ref seen, 0.55) > 0.2 && JobBudget.Rise(ref seen, 0.54) == 0 && Math.Abs(JobBudget.Rise(ref seen, 0.55)) < 1e-9, "");
+        check("budget: a new window starts again, what it shows was used since", Math.Abs(JobBudget.Rise(ref seen, 0.02, reset: true) - 0.02) < 1e-9 && seen == 0.02, "");
+        DateTimeOffset? resets = null;
+        var at = new DateTimeOffset(2026, 10, 30, 15, 0, 0, TimeSpan.Zero);
+        check("budget: the first reset time is no new window", !JobBudget.NewWindow(ref resets, at), "");
+        check("budget: the same reset time (seconds apart) is no new window", !JobBudget.NewWindow(ref resets, at.AddSeconds(30)), "");
+        check("budget: a reset time hours later is a new window", JobBudget.NewWindow(ref resets, at.AddHours(5)), "");
+        check("budget: a rise is shared between the jobs and chat working", Math.Abs(JobBudget.ShareOf(0.09, 3) - 0.03) < 1e-9 && JobBudget.ShareOf(0.09, 0) == 0.09, "");
+        // ---- Jobs that stop moving (the 29-30 Oct run: two reports written, runs never ended, 12 hours lost) ----
+        var t0 = new DateTime(2026, 10, 29, 23, 0, 0, DateTimeKind.Utc);
+        var hung = new ChatJob { Number = 2, Title = "Read as-built", State = JobBoard.Running, Started = t0 };
+        hung.Items.Add(new ChatItem { Kind = "tool", Name = "get_coordinates", State = "done", Time = t0.AddMinutes(5) });
+        hung.Items.Add(new ChatItem { Kind = "assistant", Text = "# Existing quay spec\n" + new string('x', 600), Time = t0.AddMinutes(8) });
+        check("watch: a report written, then quiet 4 minutes, is fine", JobWatch.Judge(hung, t0.AddMinutes(12)) == JobWatch.Fine, "");
+        check("watch: a report written, then quiet 5 minutes, is finished with it", JobWatch.Judge(hung, t0.AddMinutes(13)) == JobWatch.Finished, "");
+        var slow = new ChatJob { Number = 3, Title = "Survey", State = JobBoard.Running, Started = t0 };
+        slow.Items.Add(new ChatItem { Kind = "assistant", Text = "Nearly done, checking grids.", Time = t0.AddMinutes(1) });
+        check("watch: a short line between steps is not a report", JobWatch.Judge(slow, t0.AddMinutes(10)) == JobWatch.Fine, "");
+        check("watch: nothing for 20 minutes is stuck", JobWatch.Judge(slow, t0.AddMinutes(21)) == JobWatch.Stopped, "");
+        slow.Activity = JobBoard.Applying;
+        check("watch: a job whose change is being applied is never judged", JobWatch.Judge(slow, t0.AddHours(2)) == JobWatch.Fine, "");
+        slow.Activity = "";
+        check("watch: a job waiting its turn or finished is never judged", JobWatch.Judge(new ChatJob { State = JobBoard.Waiting, Started = t0 }, t0.AddHours(2)) == JobWatch.Fine
+            && JobWatch.Judge(new ChatJob { State = JobBoard.Done, Started = t0 }, t0.AddHours(2)) == JobWatch.Fine, "");
+        var stuckReport = JobWatch.StuckReport(slow);
+        check("watch: a stuck job hands back what it found, and says not to hold others back", stuckReport.Contains("no progress for 20 minutes") && stuckReport.Contains("checking grids")
+            && stuckReport.Contains("don't hold other parts back"), stuckReport);
+        var stopBoard = new JobBoard([]);
+        var toStop = stopBoard.Start("Read CAD", "Read the CAD", t0, force: true, out _)!;
+        stopBoard.ToStart(3, t0);
+        stopBoard.AddItem(toStop, new ChatItem { Kind = "assistant", Text = "## Survey report\nPits: 20, none in capping beams." }, t0);
+        stopBoard.Stop(toStop.Number, t0.AddHours(1));
+        check("watch: a job stopped by the coordinator keeps what it wrote as its report", stopBoard.Find(toStop.Number)!.Summary.Contains("Pits: 20")
+            && JobBoard.Findings(stopBoard.Find(toStop.Number)!).Contains("Pits: 20"), "");
+
+        // ---- No worker waits while there is work ----
+        var busy = new ChatJob { Number = 25, Title = "PVC, voids, pits, fenders, grids", State = JobBoard.Running };
+        foreach (var (id, st) in new[] { ("1", JobPlan.Finished), ("2", JobPlan.Doing), ("3", JobPlan.ToDo), ("4", JobPlan.ToDo), ("5", JobPlan.ToDo) }) busy.Plan[id] = st;
+        var other = new ChatJob { Number = 24, Title = "Existing model", State = JobBoard.Running };
+        other.Plan["1"] = JobPlan.ToDo;
+        var offered = new HashSet<int>();
+        check("free workers: one free of three, the job with the most steps not started is shared", FreeWorkers.ToShare([busy, other], 3, offered) == busy && FreeWorkers.Free([busy, other], 3) == 1, "");
+        check("free workers: nobody free, nothing to share", FreeWorkers.ToShare([busy, other], 2, offered) is null, "");
+        check("free workers: a job with one step left isn't split", FreeWorkers.ToShare([other], 3, offered) is null, "");
+        offered.Add(busy.Number);
+        check("free workers: each job is offered once", FreeWorkers.ToShare([busy, other], 3, offered) is null, "");
+        check("free workers: reviewers and checks are never split", FreeWorkers.ToShare([new ChatJob { Number = 40, State = JobBoard.Running, GoalCheck = 1, Plan = busy.Plan }], 3, new HashSet<int>()) is null, "");
+        var share = FreeWorkers.Nudge(busy, 1);
+        check("free workers: the coordinator is told to hand steps to new jobs and tell the job", share.Contains("job 25") && share.Contains("3 steps") && share.Contains("chat_jobs start")
+            && share.Contains("chat_jobs message") && share.Contains("not typed by the user"), share);
+
         check("budget: 15 % by default, 0 is off", JobBudget.DefaultPercent == 15 && JobBudget.Share(0) == 0 && JobBudget.Share(15) == 0.15, "");
 
         var jobs = new List<ChatJob>();

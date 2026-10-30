@@ -60,7 +60,7 @@ public sealed class BridgeServer
         RevitTargets.JobModel = Chat.ChatJobs.ModelOf;
         RevitTargets.Touched = Chat.ChatJobs.Touched;
         RevitTargets.RemoteGuard = (key, tool) => _registry.Find(tool) is { ModifiesModel: true } && Chat.ChatJobs.IsCheck(key)
-            ? $"You are checking another job's work, so you can't change the model ({tool} changes it). Read and check only, and put what needs fixing in your answer, ending with the ISSUES line."
+            ? $"This job only reads (it checks work, or reads before the plan is approved), so it can't change the model ({tool} changes it). Read and check only, and put what needs changing in your answer, ending with the line your task asks for."
             : null;
         RevitTargets.RemoteAfter = (key, tool, text) => key == Chat.ChatJobs.Shown ? JobNotes.Attach(tool, text)
             : Chat.ChatJobs.TakeAsides(key, tool) is { } aside ? JobText.Add(text, null, aside) : text;
@@ -375,10 +375,10 @@ public sealed class BridgeServer
         }
         var tool = _registry.Find(name);
         if (tool is null) return ToolResult.Error($"Unknown tool '{name}'.");
-        // A job checking a teammate's work (Chat.JobReview) only reads: it reports what needs fixing.
+        // A job that only reads (a check of a teammate's work, a goal reviewer, reading before a plan): it reports what needs fixing.
         if (tool.ModifiesModel && fromChat && jobKey is not null && Chat.ChatJobs.IsCheck(jobKey))
-            return ToolResult.Error($"You are checking another job's work, so you can't change the model ({tool.Name} changes it). Read and check only, " +
-                                    "and put what needs fixing in your answer, ending with the ISSUES line.");
+            return ToolResult.Error($"This job only reads (it checks work, or reads before the plan is approved), so it can't change the model ({tool.Name} changes it). " +
+                                    "Read and check only, and put what needs changing in your answer, ending with the line your task asks for.");
 
         var key = HandoffKeys.Call(name, args);
         if (Jobs.Running is { Continuation: { } rest } held && held.Key == key)
