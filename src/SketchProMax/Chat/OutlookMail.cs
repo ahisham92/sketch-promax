@@ -13,6 +13,12 @@ namespace SketchProMax.Chat;
 /// </summary>
 internal static class OutlookMail
 {
+    /// <summary>
+    /// Outlook is no longer used (the user's call, 2026-10-30: questions and progress go to his phone instead): nothing
+    /// here starts or touches Outlook.
+    /// </summary>
+    public static readonly bool Off = true;
+
     /// <summary>One reply found: its subject, its text and its id (to move it).</summary>
     internal sealed record Reply(string Subject, string Body, DateTime Received);
 
@@ -26,7 +32,7 @@ internal static class OutlookMail
     /// the Outbox: an Outlook started in the background for this call quits when the call ends, so without waiting the email
     /// stayed there and never went (2026-10-30: three progress emails logged as sent, none arrived).
     /// </summary>
-    public static string? SendToSelf(string subject, string body) => Sta(() =>
+    public static string? SendToSelf(string subject, string body) => Off ? "emails through Outlook are switched off" : Sta(() =>
     {
         var app = Application();
         var session = Get(app, "Session");
@@ -66,7 +72,7 @@ internal static class OutlookMail
     /// first, so a big Inbox isn't searched every time (a search of the whole Inbox every 30 s made Outlook heavy,
     /// 2026-10-30). Null when Outlook can't be reached.
     /// </summary>
-    public static List<Reply>? TakeReplies(IReadOnlyCollection<string> tokens, DateTime since) => Sta(() =>
+    public static List<Reply>? TakeReplies(IReadOnlyCollection<string> tokens, DateTime since) => Off ? [] : Sta(() =>
     {
         var replies = new List<Reply>();
         if (tokens.Count == 0) return replies;

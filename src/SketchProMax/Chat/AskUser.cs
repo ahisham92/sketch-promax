@@ -33,6 +33,7 @@ internal static class AskUser
     {
         get
         {
+            if (OutlookMail.Off) return 0; // no emails: ask_user says so, and no progress email is due
             try { return Math.Max(0, Settings.AgentSettings.Load().AutopilotUpdateMinutes); }
             catch (Exception) { return AskByEmail.DefaultUpdateMinutes; }
         }
@@ -61,6 +62,7 @@ internal static class AskUser
     {
         get
         {
+            if (OutlookMail.Off) return 0; // no emails: ask_user says so, and no progress email is due
             try { return Math.Max(0, Settings.AgentSettings.Load().AutopilotAskWaitMinutes); }
             catch (Exception) { return AskByEmail.DefaultWaitMinutes; }
         }
