@@ -2866,6 +2866,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     private void NewChat(string? type = null)
     {
         if (_stopped) return;
+        if (AutopilotHolds()) return;
         // The chat shown stays in the history; a running answer carries on in the background (Chats says when it is
         // done), or, when it can't (its jobs are open, a brief is being planned), it is stopped and resumes when reopened.
         var left = new List<(string Id, string Text)>();
@@ -2958,6 +2959,11 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     void IHistoryHost.OpenChat(ChatSummary chat)
     {
         if (string.Equals(chat.File, _conv.File, StringComparison.OrdinalIgnoreCase))
+        {
+            CloseDrawer();
+            return;
+        }
+        if (AutopilotHolds())
         {
             CloseDrawer();
             return;

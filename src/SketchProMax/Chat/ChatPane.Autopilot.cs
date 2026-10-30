@@ -30,6 +30,7 @@ internal sealed partial class ChatPane
     /// <summary>New chat › New autopilot chat: a chat With coordinator waiting for the goal.</summary>
     private void NewAutopilotChat()
     {
+        if (AutopilotHolds()) return; // one running here already
         NewChat(ChatTypes.Coordinator);
         if (_conv.Type != ChatTypes.Coordinator) return; // the new chat couldn't be opened (the status line says why)
         _conv.Autopilot = new AutopilotRun();
@@ -38,6 +39,17 @@ internal sealed partial class ChatPane
              "when it resets) or you press Stop. A backup copy of the model is saved first, in a Backup folder beside it.");
         Save();
         ShowAutopilot();
+    }
+
+    /// <summary>
+    /// The autopilot runs (or is paused) in the chat shown: it can't be left, since its clock (progress emails, the review
+    /// team, the connection watch, carrying on after a pause) runs only while its chat is shown. True when it refused.
+    /// </summary>
+    private bool AutopilotHolds()
+    {
+        if (_sample || Run is not { Active: true }) return false;
+        Status("The autopilot runs in this chat, so it stays open: leaving it would stop its progress emails and checks. Press Stop on its banner first to open another chat.", spin: false);
+        return true;
     }
 
     /// <summary>The banner, the unattended switch and the timer, for the chat shown now.</summary>
