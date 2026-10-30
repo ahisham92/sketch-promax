@@ -33,8 +33,9 @@ jobs:
           $mcp = ([xml](Get-Content src/SketchProMax.Mcp/SketchProMax.Mcp.csproj)).Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
           if ($addin -ne $mcp) { throw "Version mismatch: add-in $addin, connector $mcp" }
           "version=$addin" >> $env:GITHUB_OUTPUT
-          gh release view "v$addin" --repo "${{ github.repository }}" *> $null
-          if ($LASTEXITCODE -eq 0) {
+          # Only a published release counts: a draft left by a failed upload is finished by the Publish step.
+          $draft = gh release view "v$addin" --repo "${{ github.repository }}" --json isDraft --jq .isDraft 2> $null
+          if ($LASTEXITCODE -eq 0 -and $draft -eq "false") {
             Write-Host "Release v$addin already exists; nothing to publish."
             "exists=true" >> $env:GITHUB_OUTPUT
           } else {
@@ -138,7 +139,25 @@ jobs:
           $own = "docs/release-notes/$v.md"
           if (Test-Path $own) { $notes = (Get-Content $own -Raw).Trim() + "`n`n" + $notes }
           $assets = @("SketchProMax-$v.zip", "SketchProMax-$v.files.json") + (Get-ChildItem delta\*.gz).FullName
-          gh release create "v$v" @assets --repo "${{ github.repository }}" --target "${{ github.sha }}" --title "Sketch ProMax $v" --generate-notes --notes $notes
+          # GitHub's upload service sometimes fails one file (502, or a retried upload that already landed), so the
+          # release starts as a draft, each file is uploaded with retries, and it is published only when all are there.
+          $repo = "${{ github.repository }}"
+          gh release view "v$v" --repo $repo *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create "v$v" --draft --repo $repo --target "${{ github.sha }}" --title "Sketch ProMax $v" --generate-notes --notes $notes
+            if ($LASTEXITCODE -ne 0) { throw "Could not create the draft release" }
+          }
+          foreach ($a in $assets) {
+            $ok = $false
+            for ($i = 1; $i -le 5 -and -not $ok; $i++) {
+              gh release upload "v$v" $a --clobber --repo $repo
+              $ok = $LASTEXITCODE -eq 0
+              if (-not $ok) { Write-Host "Upload of $a failed (try $i), retrying"; Start-Sleep -Seconds (10 * $i) }
+            }
+            if (-not $ok) { throw "Could not upload $a" }
+          }
+          gh release edit "v$v" --repo $repo --draft=false --latest
+          if ($LASTEXITCODE -ne 0) { throw "Could not publish the release" }
 
       - name: Keep the package (manual runs)
         if: github.event_name == 'workflow_dispatch'
