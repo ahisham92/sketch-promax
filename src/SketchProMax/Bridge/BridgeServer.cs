@@ -361,6 +361,8 @@ public sealed class BridgeServer
         // The chat's parallel jobs: only the main chat of the pane manages them (not a job, not the desktop app).
         if (name == ChatJobsTool.ToolName) return ChatJobsTool.Answer(new ToolArgs(args), coordinator: fromChat && jobKey is null, jobKey: fromChat ? jobKey : null);
         if (name == AutoSyncTool.ToolName) return AutoSyncTool.Answer(new ToolArgs(args));
+        // An autopilot's question to the user by email: answered here, it may wait for the reply.
+        if (name == AskUserTool.ToolName) return await AskUserTool.AnswerAsync(new ToolArgs(args), fromChat, jobKey, ct).ConfigureAwait(false);
         // A call of the main chat's task (its card, Pause, Skip step, Stop, Undo all and typed notes); a job's calls are its own.
         var task = fromChat && jobKey is null;
 

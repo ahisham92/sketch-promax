@@ -280,6 +280,7 @@ public sealed class ToolRegistry
         new RecallChatsTool(),
         new ChatJobsTool(),
         new AutoSyncTool(),
+        new AskUserTool(),
         // Files for the user: Excel, Word, PowerPoint and PDF
         new MakeDocumentTool(),
         new ReadDocumentTextTool(),

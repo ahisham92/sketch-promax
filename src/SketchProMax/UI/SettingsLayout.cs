@@ -57,6 +57,8 @@ internal static class SettingsLayout
         ["AutopilotJobBudget"] = Chat,
         ["AutopilotFiveHourMax"] = Chat,
         ["AutopilotWeekShare"] = Chat,
+        ["AutopilotAskWaitMinutes"] = Chat,
+        ["AutopilotUpdateMinutes"] = Chat,
         ["FirmStandards"] = Standards,
         ["LegendSeedPath"] = Standards,
         ["TimeTracking"] = Time,
