@@ -136,12 +136,12 @@ public sealed class AgentSettings
     public int AutopilotWeekShare { get; set; } = 25;
 
     /// <summary>
-    /// During an autopilot, a job that needs the user emails them (Chat.AskUser, classic Outlook) and waits this many
-    /// minutes for a reply before carrying on with its assumption (0: no questions by email).
+    /// During an autopilot, a job that needs the user asks them on their phone (Chat.AskUser, Iris) and waits this many
+    /// minutes for an answer before carrying on with its assumption (0: nothing is asked).
     /// </summary>
     public int AutopilotAskWaitMinutes { get; set; } = 10;
 
-    /// <summary>During an autopilot, a progress email goes to the user this often, in minutes; a reply reaches the coordinator (0: none).</summary>
+    /// <summary>During an autopilot, a progress update goes to the user's phone this often, in minutes; what they write back reaches the coordinator (0: none).</summary>
     public int AutopilotUpdateMinutes { get; set; } = 60;
 
     /// <summary>Your name as it goes on a signed checklist (next to Chat).</summary>

@@ -39,6 +39,8 @@
   <!-- PdfPig (Apache 2.0) reads and splits PDFs: the text of PDFs too large for the chat, and Split PDF. -->
   <ItemGroup>
     <PackageReference Include="PdfPig" Version="0.1.9" />
+    <!-- QRCoder (MIT) draws the QR code a phone scans to connect (Settings › Chat › Your phone). -->
+    <PackageReference Include="QRCoder" Version="1.6.0" />
   </ItemGroup>
 
   <!--

@@ -1,93 +1,102 @@
 using System.Threading;
+using SketchProMax.Phone;
 
 namespace SketchProMax.Chat;
 
 /// <summary>
-/// The autopilot's questions to the user by email (ask_user; rules in AskByEmail): a job asks, the question waits a moment
-/// for others to join it, then one email goes to the user's own address through Outlook. Replies are looked for every 30
-/// seconds and each answer goes to the question; a job waiting on it gets it at once, and an answer that comes after the
-/// job stopped waiting is passed on by the chat (<see cref="Answered"/>). Runs on a background loop, never on Revit's thread.
+/// The autopilot's questions to the user on their phone (ask_user; rules in AskRules; the phone link in Phone.PhoneLink,
+/// through Iris on the user's own website): a job asks, the question waits a moment for others to join it, then each goes
+/// to the phone with a one-tap button for the assumed answer. While a run is on, the phone is read every 30 seconds while a
+/// job may be waiting on an answer, else every 2 minutes, for answers, messages and Stop/Resume. A job waiting on the
+/// answer gets it at once; an answer that comes after the job stopped waiting is passed on by the chat
+/// (<see cref="Answered"/>). Runs on a background loop, never on Revit's thread. With no phone connected, nothing is asked:
+/// the job makes the call itself.
 /// </summary>
 internal static class AskUser
 {
     private static readonly object Gate = new();
-    private static readonly List<EmailQuestion> Questions = [];
-    private static readonly Random Tokens = new();
+    private static readonly List<UserQuestion> Questions = [];
     private static int _next;
     private static Task? _loop;
+    private static bool _listening;
+    private static DateTime _readAt;
 
-    /// <summary>The goal the emails name (set by the chat when a run starts).</summary>
+    /// <summary>The goal of the run (set by the chat when a run starts).</summary>
     public static string Goal { get; set; } = "";
 
     /// <summary>Raised (on the loop's thread) when an answer came that the asking job hasn't taken itself.</summary>
-    public static event Action<EmailQuestion>? Answered;
+    public static event Action<UserQuestion>? Answered;
 
-    /// <summary>Raised (on the loop's thread) when the user replied to a progress email: what they wrote.</summary>
+    /// <summary>Raised (on the loop's thread) when the user wrote to the run from the phone: what they wrote.</summary>
     public static event Action<string>? UserWrote;
 
-    /// <summary>Progress emails whose replies are looked for (their token, and when each went).</summary>
-    private static readonly Dictionary<string, DateTime> Updates = new(StringComparer.Ordinal);
+    /// <summary>Raised (on the loop's thread) when the user pressed one of PhoneLink.Commands on the phone.</summary>
+    public static event Action<string>? Command;
 
-    /// <summary>The progress interval, in minutes (Settings › Chat › Autopilot; 0: no progress emails).</summary>
-    public static int UpdateMinutes
-    {
-        get
-        {
-            if (OutlookMail.Off) return 0; // no emails: ask_user says so, and no progress email is due
-            try { return Math.Max(0, Settings.AgentSettings.Load().AutopilotUpdateMinutes); }
-            catch (Exception) { return AskByEmail.DefaultUpdateMinutes; }
-        }
-    }
-
-    /// <summary>Sends a progress email (on a background thread) and looks for replies to it. Null when sent, else why not.</summary>
-    public static async Task<string?> SendUpdateAsync(string body)
-    {
-        var token = AskByEmail.NewToken(Tokens);
-        var refused = await Task.Run(() => OutlookMail.SendToSelf(AskByEmail.UpdateSubject(DateTime.Now, token), body)).ConfigureAwait(false);
-        var error = OutlookMail.LastError.Length > 0 ? OutlookMail.LastError : refused;
-        if (error is not null) return error;
-        lock (Gate)
-        {
-            Updates[token] = DateTime.UtcNow;
-            _loop ??= Task.Run(Loop);
-        }
-        return null;
-    }
-
-    /// <summary>Raised when an email went out, or couldn't (text for the run's log).</summary>
+    /// <summary>Raised when a question or update went to the phone, or couldn't (text for the run's log).</summary>
     public static event Action<string>? Logged;
 
-    /// <summary>The wait for a reply, in minutes (Settings › Chat › Autopilot; 0: no questions by email).</summary>
+    /// <summary>A phone is connected (Settings › Chat › Your phone): questions and progress go there.</summary>
+    public static bool ByPhone => PhoneLink.Connected;
+
+    /// <summary>The wait for an answer, in minutes (Settings › Chat › Autopilot; 0, or no phone connected: nothing is asked).</summary>
     public static int WaitMinutes
     {
         get
         {
-            if (OutlookMail.Off) return 0; // no emails: ask_user says so, and no progress email is due
+            if (!ByPhone) return 0;
             try { return Math.Max(0, Settings.AgentSettings.Load().AutopilotAskWaitMinutes); }
-            catch (Exception) { return AskByEmail.DefaultWaitMinutes; }
+            catch (Exception) { return AskRules.DefaultWaitMinutes; }
         }
     }
 
-    /// <summary>A job (or the coordinator) asks: the question waits to go out with any others asked meanwhile.</summary>
-    public static EmailQuestion Ask(string jobKey, string asker, string question, string assumed)
+    /// <summary>The progress interval, in minutes (Settings › Chat › Autopilot; 0, or no phone connected: no updates).</summary>
+    public static int UpdateMinutes
     {
-        EmailQuestion q;
+        get
+        {
+            if (!ByPhone) return 0;
+            try { return Math.Max(0, Settings.AgentSettings.Load().AutopilotUpdateMinutes); }
+            catch (Exception) { return AskRules.DefaultUpdateMinutes; }
+        }
+    }
+
+    /// <summary>
+    /// An autopilot is running: while the phone is connected it is read for Stop/Resume and messages even with no question
+    /// open. Ended by Clear. Cheap to call again (the chat calls it every 30 s).
+    /// </summary>
+    public static void Listen()
+    {
         lock (Gate)
         {
-            q = new EmailQuestion { Id = ++_next, JobKey = jobKey, Asker = asker, Question = question.Trim(), Assumed = assumed.Trim(), Asked = DateTime.UtcNow };
+            _listening = true;
+            if (ByPhone) _loop ??= Task.Run(Loop);
+        }
+    }
+
+    /// <summary>Sends a progress update to the phone (on a background thread). Null when sent, else why not.</summary>
+    public static Task<string?> SendUpdateAsync(string body) => PhoneLink.UpdateAsync(body);
+
+    /// <summary>A job (or the coordinator) asks: the question waits to go out with any others asked meanwhile.</summary>
+    public static UserQuestion Ask(string jobKey, string asker, string question, string assumed)
+    {
+        UserQuestion q;
+        lock (Gate)
+        {
+            q = new UserQuestion { Id = ++_next, JobKey = jobKey, Asker = asker, Question = question.Trim(), Assumed = assumed.Trim(), Asked = DateTime.UtcNow };
             Questions.Add(q);
             _loop ??= Task.Run(Loop);
         }
         return q;
     }
 
-    /// <summary>The questions emailed and not answered yet (for the progress email).</summary>
-    public static List<EmailQuestion> Waiting()
+    /// <summary>The questions sent and not answered yet (for the progress update).</summary>
+    public static List<UserQuestion> Waiting()
     {
         lock (Gate) return Questions.Where(q => q.Sent != default && q.Answer is null && DateTime.UtcNow - q.Sent < TimeSpan.FromDays(1)).ToList();
     }
 
-    public static EmailQuestion? Find(int id)
+    public static UserQuestion? Find(int id)
     {
         lock (Gate) return Questions.FirstOrDefault(q => q.Id == id);
     }
@@ -115,31 +124,29 @@ internal static class AskUser
         }
     }
 
-    /// <summary>The run ended: questions still open are dropped (a later reply is left in the Inbox).</summary>
+    /// <summary>The run ended: questions still open are dropped, and the phone isn't read any more.</summary>
     public static void Clear()
     {
         lock (Gate)
         {
             Questions.RemoveAll(q => q.Answer is null || q.Delivered || q.Taken);
-            Updates.Clear();
+            _listening = false;
         }
     }
 
-    /// <summary>Every 30 s while questions are open: send what is due, read replies, pass on answers nobody took.</summary>
+    /// <summary>Every 15 s while questions are open or a run listens: send what is due, read the phone, pass on answers nobody took.</summary>
     private static async Task Loop()
     {
         while (true)
         {
-            try { Tick(DateTime.UtcNow); }
+            try { await TickAsync(DateTime.UtcNow).ConfigureAwait(false); }
             catch (Exception) { /* tried again next time */ }
             await Task.Delay(TimeSpan.FromSeconds(15)).ConfigureAwait(false);
             lock (Gate)
             {
-                // Open for a day at most: after that a reply isn't looked for.
+                // Open for a day at most: after that an answer isn't looked for.
                 Questions.RemoveAll(q => (q.Answer is not null && (q.Taken || q.Delivered)) || DateTime.UtcNow - q.Asked > TimeSpan.FromDays(1));
-                // A progress email's reply is looked for 6 hours: the next ones carry what came later.
-                foreach (var old in Updates.Where(u => DateTime.UtcNow - u.Value > TimeSpan.FromHours(6)).Select(u => u.Key).ToList()) Updates.Remove(old);
-                if (Questions.Count == 0 && Updates.Count == 0)
+                if (Questions.Count == 0 && !(_listening && ByPhone))
                 {
                     _loop = null;
                     return;
@@ -148,65 +155,59 @@ internal static class AskUser
         }
     }
 
-    private static DateTime _readAt;
-
-    private static void Tick(DateTime now)
+    private static async Task TickAsync(DateTime now)
     {
-        List<EmailQuestion> due;
-        lock (Gate) due = AskByEmail.Due(Questions, now);
+        List<UserQuestion> due;
+        lock (Gate) due = AskRules.Due(Questions, now);
         if (due.Count > 0)
         {
-            var token = AskByEmail.NewToken(Tokens);
             var wait = Math.Max(1, WaitMinutes);
-            var refused = OutlookMail.SendToSelf(AskByEmail.Subject(due, token), AskByEmail.Body(due, Goal, DateTime.Now, wait));
-            var error = OutlookMail.LastError.Length > 0 ? OutlookMail.LastError : refused;
-            lock (Gate)
-                foreach (var q in due)
+            var failed = new List<string>();
+            foreach (var q in due)
+            {
+                var (id, error) = ByPhone
+                    ? await PhoneLink.AskAsync(AskRules.PhoneText(q), q.Assumed, now.AddMinutes(wait)).ConfigureAwait(false)
+                    : (0, "no phone is connected");
+                lock (Gate)
                 {
-                    q.Token = token;
+                    q.PhoneId = id;
                     q.Sent = error is null ? now : now.AddYears(-1); // not sent: its wait is over at once
                 }
-            Logged?.Invoke(error is null
-                ? $"Emailed you {(due.Count == 1 ? "Q" + due[0].Id : due.Count + " questions")} ({string.Join("; ", due.Select(q => Short(q.Question)))})."
-                : $"Couldn't email you Q{string.Join(", Q", due.Select(q => q.Id))} ({error}); the work carried on with its assumptions.");
+                if (error is not null) failed.Add($"Q{q.Id} ({error})");
+            }
+            Logged?.Invoke(failed.Count == 0
+                ? $"Sent {(due.Count == 1 ? "Q" + due[0].Id : due.Count + " questions")} to your phone ({string.Join("; ", due.Select(q => Short(q.Question)))})."
+                : $"Couldn't send {string.Join(", ", failed)} to your phone; the work carried on with its assumptions.");
         }
-        // Replies: every 30 s while a job may be waiting on an answer, else every 2 minutes (AskByEmail.ReadEvery).
-        List<EmailQuestion> open;
-        List<string> updates;
-        List<DateTime> sent;
+
+        List<UserQuestion> open;
+        bool listening;
         lock (Gate)
         {
-            open = Questions.Where(q => q.Sent != default && q.Answer is null && q.Token.Length > 0 && now - q.Sent < TimeSpan.FromDays(1)).ToList();
-            updates = Updates.Keys.ToList();
-            sent = open.Select(q => q.Sent).Concat(Updates.Values).ToList();
+            open = Questions.Where(q => q.PhoneId != 0 && q.Answer is null && now - q.Sent < TimeSpan.FromDays(1)).ToList();
+            listening = _listening;
         }
-        if ((open.Count > 0 || updates.Count > 0) && now - _readAt >= AskByEmail.ReadEvery(open, now, WaitMinutes))
+        if ((open.Count > 0 || listening) && ByPhone && now - _readAt >= AskRules.ReadEvery(open, now, WaitMinutes))
         {
             _readAt = now;
-            var since = AskByEmail.ReadSince(sent, now).ToLocalTime();
-            var replies = OutlookMail.TakeReplies(open.Select(q => q.Token).Concat(updates).Distinct().ToList(), since) ?? [];
-            foreach (var reply in replies.OrderBy(r => r.Received))
+            foreach (var m in await PhoneLink.InboxAsync().ConfigureAwait(false) ?? [])
             {
-                if (AskByEmail.TokenOf(reply.Subject) is not { } token) continue;
-                // A reply to a progress email: something new from the user, for the coordinator.
-                if (updates.Contains(token))
-                {
-                    var text = AskByEmail.NewText(reply.Body);
-                    if (text.Length > 0) UserWrote?.Invoke(text);
-                    continue;
-                }
-                var batch = open.Where(q => q.Token == token).OrderBy(q => q.Id).ToList();
-                foreach (var pair in AskByEmail.Answers(AskByEmail.NewText(reply.Body), batch))
+                var text = m.Text.Trim();
+                if (m.Error.Length > 0 || text.Length == 0) continue;
+                if (m.Kind == "command") Command?.Invoke(text);
+                else if (m.Kind == "message") UserWrote?.Invoke(text);
+                else if (m.Kind == "answer")
                     lock (Gate)
-                        if (batch.FirstOrDefault(q => q.Id == pair.Key) is { Answer: null } q)
+                        if (Questions.FirstOrDefault(q => q.PhoneId != 0 && q.PhoneId == m.ReplyTo) is { Answer: null } q)
                         {
-                            q.Answer = pair.Value;
+                            q.Answer = AskRules.Keep(text, q);
                             q.Answered = now;
                         }
             }
         }
+
         // Answers the asking job didn't take itself (it stopped waiting, or never waited): passed on by the chat.
-        List<EmailQuestion> late;
+        List<UserQuestion> late;
         lock (Gate) late = Questions.Where(q => q.Answer is not null && !q.Taken && !q.Delivered && now - q.Answered > TimeSpan.FromSeconds(10)).ToList();
         foreach (var q in late)
         {

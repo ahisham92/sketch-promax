@@ -46,7 +46,7 @@ internal static class StepNames
         ["what_if"] = "What if",
         ["read_pdf_part"] = "Read a part of the PDF",
         ["chat_jobs"] = "Jobs",
-        ["ask_user"] = "Ask you by email",
+        ["ask_user"] = "Ask you on your phone",
         ["make_document"] = "Make a file",
         // Built-in steps of the chat engine.
         ["Read"] = "Read a file",
