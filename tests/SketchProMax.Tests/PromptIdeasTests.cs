@@ -31,7 +31,7 @@ internal static class PromptIdeasTests
 
     public static void RunSources(string root, Action<string, bool, string> check)
     {
-        string Read(string path) => File.ReadAllText(Path.Combine(root, path));
+        string Read(string path) => File.ReadAllText(Path.Combine(root, path)).Replace("\r\n", "\n");
         var cli = Read("src/SketchProMax/Chat/ClaudeCli.cs");
         var system = Read("src/SketchProMax/Agent/SystemPrompt.cs");
         var jobs = Read("src/SketchProMax/Tools/ChatJobsTool.cs");
