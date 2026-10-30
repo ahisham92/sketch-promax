@@ -519,6 +519,7 @@ internal static partial class SelfTest
         new("get_activity_log", _ => new { limit = 5 }),
         new("redo_steps", _ => new { action = "list" }),
         new("memory_note", _ => new { action = "list" }),
+        new("read_document_text", _ => new { path = Path.GetTempPath() }),
         // A project that isn't set up is refused by name; on a PC with exactly one set up, that one is listed instead.
         new("berth_costing", _ => new { action = "list", project = "SELFTEST-NONE" }) { ExpectError = "No berths to cost" },
         new("berth_status", _ => new { action = "list", project = "SELFTEST-NONE" }) { ExpectError = "berth status", ExpectErrorIf = _ => BerthStatusMath.Projects().Count != 1 },

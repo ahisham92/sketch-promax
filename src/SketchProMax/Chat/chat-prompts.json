@@ -80,7 +80,7 @@
   {
    "group": "Structure",
    "title": "Frame a floor from the grids",
-   "prompt": "Place columns at every grid intersection on Level 1 and beams along all grid lines, using the default types. Show me the plan before you change the model."
+   "prompt": "Place columns at every grid intersection on {level} and beams along all grid lines, using the default types. Show me the plan before you change the model."
   },
   {
    "group": "Structure",
@@ -90,7 +90,7 @@
   {
    "group": "Structure",
    "title": "Slab from the architecture",
-   "prompt": "Create structural slabs on Level 2 that follow the architectural floor outlines, 200 mm thick, and tell me where the outlines don't close."
+   "prompt": "Create structural slabs on {level} that follow the architectural floor outlines, 200 mm thick, and tell me where the outlines don't close."
   },
   {
    "group": "Structure",
@@ -105,12 +105,12 @@
   {
    "group": "Steel",
    "title": "Bracing bays",
-   "prompt": "Add X-bracing in the end bays along grid A on all levels, using a hollow section I choose. Ask me for the section first."
+   "prompt": "Add X-bracing in the end bays along grid {grid} on all levels, using a hollow section I choose. Ask me for the section first."
   },
   {
    "group": "Steel",
    "title": "Connection schedule",
-   "prompt": "List the steel connection types available and propose a connection for each beam-to-column joint on Level 3."
+   "prompt": "List the steel connection types available and propose a connection for each beam-to-column joint on {level}."
   },
   {
    "group": "Steel",
@@ -145,12 +145,12 @@
   {
    "group": "Marine",
    "title": "Design vessel",
-   "prompt": "Set up the design vessel for the berth and check its clearance along the quay line."
+   "prompt": "Set up the design vessel for {berth} and check its clearance along the quay line."
   },
   {
    "group": "Marine",
    "title": "Join like with like",
-   "prompt": "In the berths I name, join the blinding together, the stabilised sand together and the slabs and beams together where they touch, without joining any piles. List the pairs Revit refuses."
+   "prompt": "In {berth}, join the blinding together, the stabilised sand together and the slabs and beams together where they touch, without joining any piles. List the pairs Revit refuses."
   },
   {
    "group": "Marine",
@@ -170,12 +170,12 @@
   {
    "group": "Model",
    "title": "Import a CAD plan",
-   "prompt": "Import the attached DWG on Level 1, list its layers, and tell me which ones look like structure."
+   "prompt": "Import the attached DWG on {level}, list its layers, and tell me which ones look like structure."
   },
   {
    "group": "Model",
    "title": "Doors and windows",
-   "prompt": "Place the doors and windows from the attached schedule in the walls on Level 1, matching marks to types."
+   "prompt": "Place the doors and windows from the attached schedule in the walls on {level}, matching marks to types."
   },
   {
    "group": "Documents",
@@ -240,7 +240,7 @@
   {
    "group": "Issue",
    "title": "Export the submission set",
-   "prompt": "Export the sheets of the View/Sheet Set I name to PDF and DWG in the folder I give, one file per sheet named like the drawing list, with this model's usual export setups, then check the file names against the List of Drawings."
+   "prompt": "Export the sheets of the View/Sheet Set {sheet_set} to PDF and DWG in the folder I give, one file per sheet named like the drawing list, with this model's usual export setups, then check the file names against the List of Drawings."
   },
   {
    "group": "Carbon",
@@ -305,12 +305,12 @@
   {
    "group": "Check",
    "title": "Clash round with services",
-   "prompt": "Check our structure against the linked electrical, telecom and drainage models in the berths I name. Ignore items both models draw and overlaps up to 10 mm, move pits or manholes up to 50 mm where that clears it, give pipes through blinding an opening, and list what is left as '<element> clashes with <discipline>: <what to do>'."
+   "prompt": "Check our structure against the linked electrical, telecom and drainage models in {berth}. Ignore items both models draw and overlaps up to 10 mm, move pits or manholes up to 50 mm where that clears it, give pipes through blinding an opening, and list what is left as '<element> clashes with <discipline>: <what to do>'."
   },
   {
    "group": "Check",
    "title": "Review before submission",
-   "prompt": "Review the drawings of the berths I name before submission: title block fields, tags, viewports inside the title block, legends against the colours, schedules and voids that cut. Put the findings on my working plan as short notes beside clouds, without element ids."
+   "prompt": "Review the drawings of {berth} before submission: title block fields, tags, viewports inside the title block, legends against the colours, schedules and voids that cut. Put the findings on my working plan as short notes beside clouds, without element ids."
   }
  ],
  "projectTypes": [
@@ -422,7 +422,7 @@
    "type": "building",
    "phase": "detailed",
    "title": "Beam reinforcement",
-   "prompt": "Reinforce the beams on the selected level from the attached design output and report any beam you couldn't match."
+   "prompt": "Reinforce the beams on {level} from the attached design output and report any beam you couldn't match."
   },
   {
    "type": "building",
@@ -494,7 +494,7 @@
    "type": "marine",
    "phase": "concept",
    "title": "Berth layout",
-   "prompt": "Set up the berth for the design vessel and show the clear water along the quay line."
+   "prompt": "Set up {berth} for the design vessel and show the clear water along the quay line."
   },
   {
    "type": "marine",

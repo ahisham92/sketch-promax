@@ -810,6 +810,16 @@ internal sealed class JobBoard
     /// </summary>
     public static bool MustDivide(int free, string? single) => free >= 2 && string.IsNullOrWhiteSpace(single);
 
+    /// <summary>The line that starts a job's finish conditions in its task (the job checks each before it reports).</summary>
+    public const string DoneWhenHeading = "Done when (check each one in the model before you report):";
+
+    /// <summary>
+    /// The task with its finish line: the conditions, said so they can be checked in the model ("every sheet of set X has
+    /// its title block filled"), that tell the job it is finished. The task alone when there are none or it has them already.
+    /// </summary>
+    public static string WithDoneWhen(string task, string? doneWhen) =>
+        string.IsNullOrWhiteSpace(doneWhen) || string.IsNullOrWhiteSpace(task) || task.Contains(DoneWhenHeading) ? task : task.TrimEnd() + "\n\n" + DoneWhenHeading + " " + doneWhen!.Trim();
+
     /// <summary>What the card says about the job's state, with how far along its plan is while it works ("Thinking · 40% · 3 left").</summary>
     public static string StateLabel(ChatJob job) => JobPlan.Progress(job) is { Length: > 0 } far ? Bare(job) + " · " + far : Bare(job);
 
