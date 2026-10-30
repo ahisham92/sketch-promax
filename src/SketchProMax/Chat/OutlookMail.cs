@@ -32,9 +32,9 @@ internal static class OutlookMail
     });
 
     /// <summary>
-    /// The replies (RE: …) in the Inbox whose subject carries one of <paramref name="tokens"/>; each one read and moved to
-    /// the Sketch ProMax folder. The question or progress email itself stays in the Inbox, where the user reads it (moving
-    /// it too hid every email in that folder within 30 seconds of arriving). Null when Outlook can't be reached.
+    /// The replies (RE: …) in the Inbox whose subject carries one of <paramref name="tokens"/>, each one read. Once the user
+    /// replied to an email, that email and the replies move to the Sketch ProMax folder; an email not replied to stays in
+    /// the Inbox, where the user reads it. Null when Outlook can't be reached.
     /// </summary>
     public static List<Reply>? TakeReplies(IReadOnlyCollection<string> tokens) => Sta(() =>
     {
@@ -46,22 +46,31 @@ internal static class OutlookMail
         var items = Get(inbox, "Items");
         var found = Call(items, "Restrict", "@SQL=\"urn:schemas:httpmail:subject\" LIKE '%" + AskByEmail.SubjectTag.Trim('[', ']') + "%'");
         var count = (int)Get(found, "Count");
-        var mails = new List<object>();
-        for (var i = 1; i <= count; i++) mails.Add(Call(found, "Item", i));
-        object? folder = null;
-        foreach (var mail in mails)
+        var mails = new List<(object Mail, string Token)>();
+        for (var i = 1; i <= count; i++)
+        {
+            var mail = Call(found, "Item", i);
+            var token = AskByEmail.TokenOf(Get(mail, "Subject") as string ?? "");
+            if (token is not null && tokens.Contains(token)) mails.Add((mail, token));
+        }
+        var replied = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var (mail, token) in mails)
         {
             var subject = Get(mail, "Subject") as string ?? "";
-            var token = AskByEmail.TokenOf(subject);
-            if (token is null || !tokens.Contains(token)) continue;
-            if (!tokens.Any(t => AskByEmail.IsReply(subject, t))) continue; // the email itself: left for the user to read
+            if (!AskByEmail.IsReply(subject, token)) continue;
             replies.Add(new Reply(subject, Get(mail, "Body") as string ?? "", Get(mail, "ReceivedTime") is DateTime at ? at : DateTime.Now));
+            replied.Add(token);
+        }
+        // Answered: the email and its replies are filed together (the email isn't read again: only replies are).
+        object? folder = null;
+        foreach (var (mail, token) in mails.Where(m => replied.Contains(m.Token)))
+        {
             try
             {
                 folder ??= OwnFolder(inbox);
                 Call(mail, "Move", folder);
             }
-            catch (Exception) { /* left in the Inbox: read once, it is never read again (its question has its answer) */ }
+            catch (Exception) { /* left in the Inbox */ }
         }
         return replies;
     });
