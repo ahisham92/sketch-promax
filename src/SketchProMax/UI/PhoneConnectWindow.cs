@@ -54,7 +54,7 @@ internal sealed class PhoneConnectWindow : Window
         _status.TextWrapping = TextWrapping.Wrap;
         _status.Margin = new Thickness(0, 8, 0, 0);
         AutomationProperties.SetLiveSetting(_status, AutomationLiveSetting.Polite);
-        _status.Text = "Sign in to your website on your phone once. Then show the code here and scan it with the phone's camera.";
+        _status.Text = "On your phone, open Iris (your website's /iris, from the Home Screen) and sign in once. Then show the code here, and in Iris tap Add a connection to scan it.";
         page.Children.Add(_status);
 
         _copy.Visibility = Visibility.Collapsed;
@@ -98,7 +98,7 @@ internal sealed class PhoneConnectWindow : Window
             _qr.Source = Qr(_link);
             _qr.Visibility = Visibility.Visible;
             _copy.Visibility = Visibility.Visible;
-            Say("Scan this with your phone's camera and tap Connect. The code works for 10 minutes.", Brand.K.Muted);
+            Say("In Iris on your phone, tap Add a connection and point it at this code, then tap Connect. The code works for 10 minutes.", Brand.K.Muted);
             _poll.Start();
         }
         catch (Exception e)
