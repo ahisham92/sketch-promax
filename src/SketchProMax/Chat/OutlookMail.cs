@@ -7,29 +7,57 @@ namespace SketchProMax.Chat;
 /// <summary>
 /// The classic Outlook on this PC, for the autopilot's questions (AskUser): an email to the user's own address, and the
 /// replies to it read back from the Inbox and moved to a "Sketch ProMax" folder. Outlook is reached by COM (late bound,
-/// so no Office reference is needed); Outlook starts in the background when it isn't open. The new Outlook has no COM:
-/// the classic one only needs a mail profile set up. Every call runs on a thread of its own and gives up after a minute.
+/// so no Office reference is needed); Outlook starts in the background when it isn't open, and a send waits until the
+/// email has left the Outbox. The new Outlook has no COM: the classic one only needs a mail profile set up. Every call
+/// runs on a thread of its own and gives up after a minute.
 /// </summary>
 internal static class OutlookMail
 {
     /// <summary>One reply found: its subject, its text and its id (to move it).</summary>
     internal sealed record Reply(string Subject, string Body, DateTime Received);
 
-    private const int OlMailItem = 0, OlFolderInbox = 6;
+    private const int OlMailItem = 0, OlFolderOutbox = 4, OlFolderInbox = 6;
 
-    /// <summary>Sends an email to the user's own address. Null when sent, else why not.</summary>
+    /// <summary>How long a sent email may wait in the Outbox before it counts as not sent.</summary>
+    private static readonly TimeSpan OutboxWait = TimeSpan.FromSeconds(45);
+
+    /// <summary>
+    /// Sends an email to the user's own address. Null once it has left the Outbox, else why not. Send only puts the email in
+    /// the Outbox: an Outlook started in the background for this call quits when the call ends, so without waiting the email
+    /// stayed there and never went (2026-10-30: three progress emails logged as sent, none arrived).
+    /// </summary>
     public static string? SendToSelf(string subject, string body) => Sta(() =>
     {
         var app = Application();
-        var me = OwnAddress(Get(app, "Session"));
+        var session = Get(app, "Session");
+        var me = OwnAddress(session);
         if (me.Length == 0) return "Outlook has no account to send from.";
         var mail = Call(app, "CreateItem", OlMailItem);
         Set(mail, "To", me);
         Set(mail, "Subject", subject);
         Set(mail, "Body", body);
         Call(mail, "Send");
+        try { Call(session, "SendAndReceive", false); }
+        catch (Exception) { /* sent by Outlook's own schedule */ }
+        var outbox = Call(session, "GetDefaultFolder", OlFolderOutbox);
+        var until = DateTime.UtcNow + OutboxWait;
+        while (InOutbox(outbox, subject))
+        {
+            if (DateTime.UtcNow >= until)
+                return "it is waiting in Outlook's Outbox: open the classic Outlook so it can sign in and send it";
+            Thread.Sleep(2000);
+        }
         return (string?)null;
     });
+
+    private static bool InOutbox(object outbox, string subject)
+    {
+        var items = Get(outbox, "Items");
+        var count = (int)Get(items, "Count");
+        for (var i = 1; i <= count; i++)
+            if (Get(Call(items, "Item", i), "Subject") as string == subject) return true;
+        return false;
+    }
 
     /// <summary>
     /// The replies (RE: …) in the Inbox whose subject carries one of <paramref name="tokens"/>, each one read. Once the user
