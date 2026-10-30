@@ -91,14 +91,27 @@ internal sealed class JobTurns
     /// <summary>
     /// How long Revit is left alone after a call that ran <paramref name="ran"/>: a tenth of it, at least a quarter of a
     /// second (time to redraw and take a click) and at most two seconds (the user gets their turn after a long call).
+    /// With nobody at the PC (<paramref name="away"/>: an autopilot overnight) there is no one to give a turn to: a
+    /// twentieth of a second, for Revit to redraw.
     /// </summary>
-    public static TimeSpan Breather(TimeSpan ran) =>
-        TimeSpan.FromMilliseconds(Math.Max(250, Math.Min(2000, ran.TotalMilliseconds / 10)));
+    public static TimeSpan Breather(TimeSpan ran, bool away = false) =>
+        away ? AwayBreather : TimeSpan.FromMilliseconds(Math.Max(250, Math.Min(2000, ran.TotalMilliseconds / 10)));
+
+    internal static readonly TimeSpan AwayBreather = TimeSpan.FromMilliseconds(50);
+
+    /// <summary>No mouse or key on this PC for this long: the user is away, and the breather shrinks.</summary>
+    internal static readonly TimeSpan AwayAfter = TimeSpan.FromMinutes(2);
+
+    /// <summary>How long since the user last touched the mouse or keyboard (set by the add-in; zero in the tests: here).</summary>
+    public static Func<TimeSpan> SinceInput { get; set; } = () => TimeSpan.Zero;
 
     /// <summary>A call that ran <paramref name="ran"/> ended: the next one waits for its breather.</summary>
     public void Rested(TimeSpan ran)
     {
-        var ready = DateTime.UtcNow.Add(Breather(ran)).Ticks;
+        bool away;
+        try { away = SinceInput() >= AwayAfter; }
+        catch (Exception) { away = false; }
+        var ready = DateTime.UtcNow.Add(Breather(ran, away)).Ticks;
         lock (_gate) _readyAt = Math.Max(_readyAt, ready);
     }
 

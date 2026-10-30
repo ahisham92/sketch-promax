@@ -147,6 +147,7 @@ AutopilotTests.Run((name, ok, detail) => Check(name, ok, detail));
 JobChecksTests.Run((name, ok, detail) => Check(name, ok, detail));
 AskByEmailTests.Run((name, ok, detail) => Check(name, ok, detail));
 ConnectionWatchTests.Run((name, ok, detail) => Check(name, ok, detail));
+SpeedTests.Run((name, ok, detail) => Check(name, ok, detail));
 TwoModelTests.Run((name, ok, detail) => Check(name, ok, detail));
 RunningCallTests.Run((name, ok, detail) => Check(name, ok, detail));
 FreezeTests.Run((name, ok, detail) => Check(name, ok, detail));

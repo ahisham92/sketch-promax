@@ -168,6 +168,19 @@ internal static class ParallelJobTests
         check("turns: Revit's breather is a tenth of the call, a quarter second to two seconds",
             JobTurns.Breather(TimeSpan.FromMilliseconds(100)) == TimeSpan.FromMilliseconds(250) && JobTurns.Breather(TimeSpan.FromSeconds(5)) == TimeSpan.FromMilliseconds(500)
             && JobTurns.Breather(TimeSpan.FromMinutes(5)) == TimeSpan.FromSeconds(2), "");
+        check("turns: with nobody at the PC the breather is a twentieth of a second, however long the call",
+            JobTurns.Breather(TimeSpan.FromMinutes(5), away: true) == TimeSpan.FromMilliseconds(50) && JobTurns.Breather(TimeSpan.FromMilliseconds(100), away: true) == TimeSpan.FromMilliseconds(50), "");
+        {
+            var away = new JobTurns();
+            JobTurns.SinceInput = () => TimeSpan.FromMinutes(10);
+            away.Rested(TimeSpan.FromMinutes(5));
+            var awayLeft = away.RestLeft;
+            var here = new JobTurns();
+            JobTurns.SinceInput = () => TimeSpan.FromSeconds(5);
+            here.Rested(TimeSpan.FromMinutes(5));
+            JobTurns.SinceInput = () => TimeSpan.Zero;
+            check("turns: the breather shrinks only after two minutes without mouse or keys", awayLeft <= TimeSpan.FromMilliseconds(50) && here.RestLeft > TimeSpan.FromSeconds(1), $"{awayLeft} {here.RestLeft}");
+        }
         check("turns: no breather before any call", turns.RestLeft == TimeSpan.Zero, "");
         turns.Rested(TimeSpan.FromSeconds(10));
         check("turns: the next call waits for the breather after one ends", turns.RestLeft > TimeSpan.FromMilliseconds(800) && turns.RestLeft <= TimeSpan.FromSeconds(1), turns.RestLeft.ToString());

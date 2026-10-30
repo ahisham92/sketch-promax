@@ -130,6 +130,8 @@ internal sealed partial class ChatPane
         public double CostSeen;
         /// <summary>The whole input of each plan step under way (the item keeps a shortened copy), for JobPlan.</summary>
         public readonly Dictionary<string, string> PlanInputs = new();
+        /// <summary>Where the current answer's time goes, for the activity log's answer_time line.</summary>
+        public readonly AnswerTiming Timing = new(DateTime.UtcNow);
     }
 
     private JobBoard? _board;
@@ -202,8 +204,68 @@ internal sealed partial class ChatPane
     }
 
     /// <summary>Ends every running job's process (the chat is left, Revit closes, the core switches versions).</summary>
+    // ---- Warm engines: a finished job's Claude Code stays up a while, for the fix or next part sent to it ----------------
+
+    private sealed class ParkedEngine
+    {
+        public ChatEngine Engine = null!;
+        public string Model = "", Effort = "", Address = "";
+        public DispatcherTimer? Timer;
+    }
+
+    private readonly Dictionary<string, ParkedEngine> _parked = new();
+
+    /// <summary>How long a finished job's process stays up for a message to it (a review's fix, the next part).</summary>
+    internal static readonly TimeSpan ParkFor = TimeSpan.FromMinutes(10);
+
+    /// <summary>At most this many finished jobs' processes stay up (each holds memory).</summary>
+    internal const int MaxParked = 2;
+
+    /// <summary>
+    /// A job finished well: its Claude Code process is kept running for <see cref="ParkFor"/>, so a message to the job (the
+    /// coordinator's fix, the review team's gap, the next part) goes straight in, with no start and no reopening of its
+    /// conversation. False when it can't be kept (the caller ends it).
+    /// </summary>
+    private bool Park(JobRun run)
+    {
+        if (!run.Engine.IsAlive || _stopped) return false;
+        DropParked(run.Job.Key);
+        while (_parked.Count >= MaxParked) DropParked(_parked.First().Key);
+        var parked = new ParkedEngine { Engine = run.Engine, Model = run.Engine.Model, Effort = run.Engine.Effort, Address = run.Engine.McpAddress };
+        var key = run.Job.Key;
+        parked.Timer = new DispatcherTimer(DispatcherPriority.Background, Dispatcher) { Interval = ParkFor };
+        parked.Timer.Tick += (_, _) =>
+        {
+            if (_parked.TryGetValue(key, out var p) && p == parked) DropParked(key);
+            else parked.Timer?.Stop();
+        };
+        parked.Timer.Start();
+        _parked[key] = parked;
+        return true;
+    }
+
+    /// <summary>The job's kept process, when it still runs the model and effort the job now needs; null otherwise (and it ends).</summary>
+    private ChatEngine? TakeParked(string key, string model, string effort)
+    {
+        if (!_parked.TryGetValue(key, out var p)) return null;
+        _parked.Remove(key);
+        p.Timer?.Stop();
+        if (p.Engine.IsAlive && p.Model == model && p.Effort == effort && p.Address == ClaudeCli.McpAddress) return p.Engine;
+        p.Engine.Dispose();
+        return null;
+    }
+
+    private void DropParked(string key)
+    {
+        if (!_parked.TryGetValue(key, out var p)) return;
+        _parked.Remove(key);
+        p.Timer?.Stop();
+        p.Engine.Dispose();
+    }
+
     private void EndRuns(string note, bool now = false)
     {
+        foreach (var key in _parked.Keys.ToList()) DropParked(key);
         foreach (var run in _runs.Values.ToList())
         {
             _board?.Stop(run.Job.Number, DateTime.UtcNow);
@@ -275,7 +337,10 @@ internal sealed partial class ChatPane
         var model = job.Model;
         var effort = ClaudeCli.EffortRefused ? "" : job.Effort;
         var key = job.Key;
-        var engine = new ChatEngine(Dispatcher, install, resume, model, () => ClaudeCli.JobStart(install, key, resume, session, model, effort), effort: effort, job: key);
+        // A job that finished a few minutes ago still has its process (Park): the message goes straight in.
+        var warm = resume is not null ? TakeParked(key, model, effort) : null;
+        if (warm is null) DropParked(key);
+        var engine = warm ?? new ChatEngine(Dispatcher, install, resume, model, () => ClaudeCli.JobStart(install, key, resume, session, model, effort), effort: effort, job: key);
         var run = new JobRun { Job = job, Engine = engine, Message = message, Resumed = resume is not null };
         _runs[key] = run;
         engine.Event += e => { if (_runs.TryGetValue(key, out var r) && r == run) OnJobEvent(run, e); };
@@ -286,7 +351,8 @@ internal sealed partial class ChatPane
         {
             var line = await Task.Run(() => JobLine(message));
             if (!_runs.TryGetValue(key, out var still) || still != run) return; // stopped meanwhile
-            await engine.StartAsync(line);
+            if (warm is not null) await engine.SendAsync(line);
+            else await engine.StartAsync(line);
         }
         catch (Exception ex)
         {
@@ -334,12 +400,14 @@ internal sealed partial class ChatPane
                     Kind = "tool", Name = name, State = "running", Text = summary, Input = tool.InputJson.Length > 0 ? Pretty(tool.InputJson) : "",
                 }, now);
                 run.Job.Now = JobBoard.OneLine(StepNames.Line(name, summary), 120);
+                run.Timing.ToolStarted(tool.Id, name, now);
                 if (JobPlan.IsPlanTool(name)) run.PlanInputs[tool.Id] = tool.InputJson;
                 break;
             }
             case ToolResultEvent result when run.Steps.TryGetValue(result.ToolUseId, out var step):
             {
                 var state = result.IsError ? "failed" : "done";
+                run.Timing.ToolEnded(result.ToolUseId, now);
                 if (_viewJob == run.Job.Number && _rows.TryGetValue(step, out var row)) SetTool(row, state, step.Text, result.Text);
                 else
                 {
@@ -381,6 +449,8 @@ internal sealed partial class ChatPane
             In = end.InputTokens, Out = end.OutputTokens, Usd = CrewStats.Rise(ref run.CostSeen, end.CostUsd), Ok = !end.IsError,
         });
         run.RunStart = now;
+        Tools.ActivityLog.Note("answer_time", run.Timing.Line($"Job {run.Job.Number}", now, end.ApiMs));
+        run.Timing.Restart(now);
         var message = end.Text.Trim().Length > 0 ? end.Text.Trim() : string.Join(" ", end.Errors);
         if (end.IsError && run.Resumed && !run.Retried && message.IndexOf("No conversation found", StringComparison.OrdinalIgnoreCase) >= 0)
         {
@@ -405,7 +475,7 @@ internal sealed partial class ChatPane
             return;
         }
         if (end.IsError) board.AddItem(run.Job, new ChatItem { Kind = "error", Text = summary }, now);
-        EndRun(run, kill: false);
+        EndRun(run, kill: false, park: !end.IsError);
         Report(run.Job);
     }
 
@@ -446,11 +516,11 @@ internal sealed partial class ChatPane
     }
 
     /// <summary>The run is over (its process ends): the next waiting job may start.</summary>
-    private void EndRun(JobRun run, bool kill)
+    private void EndRun(JobRun run, bool kill, bool park = false)
     {
         if (_runs.TryGetValue(run.Job.Key, out var r) && r == run) _runs.Remove(run.Job.Key);
         if (kill) run.Engine.Kill();
-        else run.Engine.Dispose();
+        else if (!park || !Park(run)) run.Engine.Dispose();
         // Steps still turning when the run ended: they won't finish now.
         foreach (var step in run.Steps.Values.Where(s => s.State == "running"))
         {

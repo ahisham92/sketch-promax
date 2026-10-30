@@ -19,15 +19,18 @@ internal static class SwitchGate
     /// <summary>True when switching cores now could land inside a running Revit command. Revit's UI thread.</summary>
     public static bool Wait() => RecentInput() || ContextualTab() != false;
 
-    private static bool RecentInput()
+    private static bool RecentInput() => SinceInput() < Quiet;
+
+    /// <summary>How long since the mouse or keyboard was last used on this PC (zero when that can't be read). Any thread.</summary>
+    public static TimeSpan SinceInput()
     {
         try
         {
             var info = new LastInputInfo { Size = (uint)Marshal.SizeOf<LastInputInfo>() };
-            if (!GetLastInputInfo(ref info)) return false;
-            return unchecked((uint)Environment.TickCount - info.Time) < Quiet.TotalMilliseconds;
+            if (!GetLastInputInfo(ref info)) return TimeSpan.Zero;
+            return TimeSpan.FromMilliseconds(unchecked((uint)Environment.TickCount - info.Time));
         }
-        catch (Exception) { return false; }
+        catch (Exception) { return TimeSpan.Zero; }
     }
 
     /// <summary>True: a contextual tab shows; false: none; null: the ribbon couldn't be read (then the switch waits).</summary>

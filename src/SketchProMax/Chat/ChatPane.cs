@@ -259,6 +259,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         public string Brief = "";
         /// <summary>When the turn started: a long one that finishes glows and flashes Revit's taskbar button (<see cref="Finished"/>).</summary>
         public DateTime Started = DateTime.UtcNow;
+        /// <summary>Where its time goes, for the activity log's answer_time line.</summary>
+        public AnswerTiming? Timing;
     }
 
     /// <summary>A task at least this long that finishes gets the finished glow and, when you are in another program, the taskbar flash.</summary>
@@ -527,6 +529,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         _hint.SetBinding(TextBlock.FontFamilyProperty, new System.Windows.Data.Binding(nameof(TextBox.FontFamily)) { Source = _input });
         _input.TextChanged += (_, _) => _hint.Visibility = _input.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
         _input.TextChanged += (_, _) => { if (_turn is not null) ShowSteer(); };
+        _input.TextChanged += (_, _) => { if (_input.Text.Length > 0) WarmEngine(); };
         var field = new Grid();
         field.Children.Add(_input);
         field.Children.Add(_hint);
@@ -2208,6 +2211,14 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             if (_conv.Id.Length == 0) Save();
             var chatKey = JobBoard.ChatKey(_conv.Id);
             ChatJobs.Shown = chatKey;
+            if (_engine is { Warming: true } warming)
+            {
+                // Started early while the user typed: it is nearly ready. One that failed to start is replaced below.
+                ShowStatus("Starting…");
+                try { await warming.WarmAsync(); }
+                catch (Exception) { /* replaced below */ }
+                if (_turn != turn) return;
+            }
             if (_engine is { IsAlive: true } engine && engine.Model == _model && engine.Coordinator == IsCoordinator && engine.Effort == effort
                 && engine.McpAddress == ClaudeCli.McpAddress && (engine.ChatKey ?? "") == chatKey)
             {
@@ -2247,6 +2258,31 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
                 : $"The message could not be sent ({ex.Message}). Send it again.");
             if (ex is System.ComponentModel.Win32Exception or FileNotFoundException) Check(quiet: false);
         }
+    }
+
+    /// <summary>
+    /// The user started typing in a chat that has a conversation and no Claude Code running for it (Revit just opened, or
+    /// the chat was switched to): its process starts now, so the message goes the moment it is sent instead of waiting for
+    /// Claude Code to start and fetch the Revit tools. Only where the model and effort don't depend on the message (a
+    /// chat With coordinator, or a chosen model and effort); Send uses it when it still matches, and replaces it otherwise.
+    /// </summary>
+    private void WarmEngine()
+    {
+        try
+        {
+            if (_turn is not null || _sample || _stopped || _setup != Setup.Ready || _install is null || _conv.SessionId.Length == 0 || _conv.Id.Length == 0) return;
+            if (_engine is { } running && (running.IsAlive || running.Warming)) return;
+            if (!IsCoordinator && (ChatAuto.IsAuto(_conv.Model) || ChatAuto.IsAuto(_conv.Effort))) return;
+            var pick = ChatJobs.Pick("", _conv.Model, _conv.Effort, IsCoordinator ? ChatAuto.Coordinating : null, false, _refusedModels);
+            var effort = ClaudeCli.EffortRefused ? "" : pick.Effort;
+            _engine?.Dispose();
+            var warm = new ChatEngine(Dispatcher, _install, _conv.SessionId, pick.Model, coordinator: IsCoordinator, effort: effort, chatKey: JobBoard.ChatKey(_conv.Id));
+            warm.Event += e => { if (_engine == warm) OnEvent(e); };
+            warm.Exited += tail => { if (_engine == warm) OnExited(warm, tail); };
+            _engine = warm;
+            _ = warm.WarmAsync().ContinueWith(t => _ = t.Exception, TaskContinuationOptions.OnlyOnFaulted); // Send starts it again
+        }
+        catch (Exception) { /* Send starts it */ }
     }
 
     /// <summary>What the chat's session already carries as attachments; BuildMessage adds this message's.</summary>
@@ -2528,6 +2564,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
                     JobToolStarted(tool.Id, item.Name, summary);
                 }
                 if (turn is not null) turn.SawTool = true;
+                if (turn is not null) (turn.Timing ??= new AnswerTiming(turn.Started)).ToolStarted(tool.Id, row.Item.Name, DateTime.UtcNow);
                 CrewCoordinatorDoes(row.Item.Name);
                 if (tool.InputJson.Length > 0)
                 {
@@ -2547,6 +2584,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
                     if (!result.IsError && FilesItem(done.Item.Name, result.Text) is { } files) Add(files);
                 }
                 JobToolEnded(result.ToolUseId, result.Text, result.IsError);
+                turn?.Timing?.ToolEnded(result.ToolUseId, DateTime.UtcNow);
                 if (turn is { Stopping: false }) ShowStatus("Sketch ProMax is thinking…");
                 break;
             case RetryEvent retry:
@@ -2585,6 +2623,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         CountTurn(turn, end);
         RenderDirty();
         if (turn is null) return;
+        if (!turn.Shrinking) Tools.ActivityLog.Note("answer_time", (turn.Timing ?? new AnswerTiming(turn.Started)).Line(IsCoordinator ? "Coordinator" : "Chat", DateTime.UtcNow, end.ApiMs));
         if (ShrinkEnded(turn, end)) return;
         var message = end.Text.Trim().Length > 0 ? end.Text.Trim() : string.Join(" ", end.Errors);
         if (end.IsError && !turn.Stopping && !turn.Retried && _engine?.ResumedFrom is not null &&
