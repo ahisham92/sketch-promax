@@ -4,9 +4,11 @@ using Autodesk.Revit.UI.Events;
 namespace SketchProMax.Revit;
 
 /// <summary>
-/// While an autopilot works with nobody at the computer (Chat.Autopilot.Unattended), Revit's dialogs are answered as
-/// they appear, so nothing waits on a click: Cancel where there is one (the step is undone and the worker finds another
-/// way), else No, else OK. Each answer goes in the autopilot's report. Outside autopilot nothing is touched.
+/// While an autopilot works with nobody at the computer (Chat.Autopilot.Unattended), the dialogs Revit shows during
+/// Sketch ProMax's own work on Revit's thread are answered as they appear, so nothing waits on a click: Cancel where
+/// there is one (the step is undone and the worker finds another way), else No, else OK. Each answer goes in the
+/// autopilot's report. A dialog of the user's own command (Synchronize with Central, Link Revit, closing a view or Revit)
+/// is never touched: on 31 Oct 2026 a run that carried on after Revit was opened again cancelled every one of them.
 /// </summary>
 internal static class UnattendedDialogs
 {
@@ -15,11 +17,18 @@ internal static class UnattendedDialogs
         try { app.DialogBoxShowing += OnDialog; } catch (Exception) { }
     }
 
+    /// <summary>This core stops: a newer one watches instead (an older handler left behind would keep answering).</summary>
+    public static void Unwatch(UIApplication app)
+    {
+        try { app.DialogBoxShowing -= OnDialog; } catch (Exception) { }
+    }
+
     private static void OnDialog(object? sender, DialogBoxShowingEventArgs e)
     {
-        if (!Chat.Autopilot.Unattended) return;
         try
         {
+            // Only while our work runs on Revit's thread: the user's own commands' dialogs show as usual.
+            if (!Chat.Autopilot.Unattended || App.Dispatcher is not { IsRunning: true }) return;
             var type = e is MessageBoxShowingEventArgs box ? box.DialogType : -1;
             var said = e switch
             {
