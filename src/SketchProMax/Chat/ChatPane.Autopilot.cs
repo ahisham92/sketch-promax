@@ -63,6 +63,7 @@ internal sealed partial class ChatPane
             AskUser.Answered += q => Dispatcher.BeginInvoke(new Action(() => PhoneAnswered(q)));
             AskUser.UserWrote += text => Dispatcher.BeginInvoke(new Action(() => FromPhone(text)));
             AskUser.Command += name => Dispatcher.BeginInvoke(new Action(() => PhoneCommand(name)));
+            AskUser.Listen(); // a connected phone is read from now on: the user can write to the chat from it
         }
         var run = _sample ? null : Run;
         Autopilot.Here = run is { Active: true };
@@ -159,6 +160,7 @@ internal sealed partial class ChatPane
     /// <summary>A coordinator turn ended (EndTurn): the plan waits for approval, the run carries on, or it is finished.</summary>
     private void AutopilotTurnEnded(Turn? ended, bool stopped)
     {
+        PhoneTurnEnded(ended, stopped);
         if (Run is not { } run || ended is null || ended.Planning || ended.Shrinking) return;
         var last = _conv.Items.LastOrDefault(i => i.Kind == "assistant")?.Text ?? "";
         if (run.State == AutopilotRun.Planning)
@@ -437,10 +439,19 @@ internal sealed partial class ChatPane
 
     private readonly List<string> _fromPhone = [];
 
-    /// <summary>The user wrote from the phone: shown in the chat as their message (from your phone), and the coordinator takes it in.</summary>
+    /// <summary>
+    /// The user wrote from the phone: shown in the chat as their message (from your phone). During a run the coordinator
+    /// takes it in; otherwise the chat answers it as if typed here, and the answer goes back to the phone.
+    /// </summary>
     private void FromPhone(string text)
     {
-        if (Run is not { Active: true } run) return;
+        if (_instance != this) return; // one chat takes it
+        if (Run is not { Active: true } run)
+        {
+            _phoneAsks.Add(text);
+            NextPhoneAsk();
+            return;
+        }
         const string how = "from your phone";
         Add(new ChatItem { Kind = "user", Text = text + $"\n\n({how})" });
         AutopilotLog(AutopilotEntry.Asked, $"You wrote {how}: " + (text.Length > 200 ? text.Substring(0, 199) + "…" : text));
@@ -449,6 +460,49 @@ internal sealed partial class ChatPane
         _fromPhone.Add(text);
         Save();
         SendLateAnswers();
+    }
+
+    private readonly List<string> _phoneAsks = [];
+    private Turn? _phoneTurn;
+
+    /// <summary>The next message from the phone, once the chat is free: answered as a turn of its own (no brief card: nobody is here to choose).</summary>
+    private void NextPhoneAsk()
+    {
+        if (_phoneAsks.Count == 0 || _turn is not null || _stopped || Run is { Active: true }) return;
+        if (_setup != Setup.Ready || !Licensing.LicenseState.Allowed)
+        {
+            _phoneAsks.Clear();
+            _ = AskUser.SendUpdateAsync("The chat on the PC isn't ready (it needs signing in or a license there), so your message wasn't taken in.");
+            return;
+        }
+        var text = string.Join("\n\n", _phoneAsks);
+        _phoneAsks.Clear();
+        Add(new ChatItem { Kind = "user", Text = text + "\n\n(from your phone)" });
+        _conv.Name = ChatHistory.NameFor(_conv);
+        Save();
+        ShowTitle();
+        SupersedeBriefs();
+        _ = RunPhoneTurn(text);
+    }
+
+    private async Task RunPhoneTurn(string text)
+    {
+        var run = RunTurn("[The user wrote this from their phone, away from the PC: do it as if typed here, and answer in a few plain sentences, as the answer is sent to the phone] " + text, [], "");
+        _phoneTurn = _turn; // set before RunTurn's first wait
+        await run;
+    }
+
+    /// <summary>A turn ended: when it answered a message from the phone, the answer goes back there; then the next one waiting.</summary>
+    private void PhoneTurnEnded(Turn? ended, bool stopped)
+    {
+        if (ended is null || ended.Planning || ended.Shrinking) return;
+        if (ReferenceEquals(ended, _phoneTurn))
+        {
+            _phoneTurn = null;
+            var last = _conv.Items.LastOrDefault(i => i.Kind == "assistant")?.Text ?? "";
+            _ = AskUser.SendUpdateAsync(AskRules.PhoneReply(last, stopped ? "stopped" : ended.Outcome));
+        }
+        if (_phoneAsks.Count > 0) Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(NextPhoneAsk));
     }
 
     /// <summary>Stop or Resume pressed on the phone (PhoneLink.Commands): as if pressed on the banner.</summary>

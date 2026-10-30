@@ -54,6 +54,27 @@ internal static class AskRules
     public static TimeSpan ReadEvery(IEnumerable<UserQuestion> open, DateTime nowUtc, int waitMinutes) =>
         open.Any(q => q.Sent != default && nowUtc < q.Sent.AddMinutes(Math.Max(1, waitMinutes))) ? TimeSpan.FromSeconds(30) : TimeSpan.FromMinutes(2);
 
+    /// <summary>After the user wrote from the phone, it is read this often for this long (their next message, or a reply to the chat's answer).</summary>
+    public static readonly TimeSpan ChatReadEvery = TimeSpan.FromSeconds(30);
+    public static readonly TimeSpan ChatFor = TimeSpan.FromMinutes(10);
+
+    /// <summary>The longest chat answer sent back to the phone; the rest is in the chat on the PC.</summary>
+    public const int ReplyMax = 1500;
+
+    /// <summary>
+    /// The chat's answer to a message written from the phone, as the phone shows it: the answer's text, cut at
+    /// <see cref="ReplyMax"/> with a pointer to the chat on the PC; a stop or failure in one line.
+    /// </summary>
+    public static string PhoneReply(string answer, string outcome)
+    {
+        var text = Regex.Replace(answer ?? "", @"\n{3,}", "\n\n").Trim();
+        if (outcome != "done")
+            return text.Length > 0 ? Cut(text) + "\n\n(Stopped before it finished. The rest is in the chat on the PC.)" : "It stopped before it finished. The details are in the chat on the PC.";
+        return text.Length > 0 ? Cut(text) : "Done. The details are in the chat on the PC.";
+
+        static string Cut(string t) => t.Length <= ReplyMax ? t : t.Substring(0, ReplyMax - 1).TrimEnd() + "… (the rest is in the chat on the PC)";
+    }
+
     /// <summary>The questions to send now: every one not sent yet, once the oldest has waited <see cref="Gather"/> for others to join.</summary>
     public static List<UserQuestion> Due(IEnumerable<UserQuestion> questions, DateTime now)
     {

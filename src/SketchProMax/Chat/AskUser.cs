@@ -7,7 +7,8 @@ namespace SketchProMax.Chat;
 /// The autopilot's questions to the user on their phone (ask_user; rules in AskRules; the phone link in Phone.PhoneLink,
 /// through Iris on the user's own website): a job asks, the question waits a moment for others to join it, then each goes
 /// to the phone with a one-tap button for the assumed answer. While a run is on, the phone is read every 30 seconds while a
-/// job may be waiting on an answer, else every 2 minutes, for answers, messages and Stop/Resume. A job waiting on the
+/// job may be waiting on an answer or the user is writing from the phone, else every 2 minutes, for answers, messages and
+/// Stop/Resume; with or without a run, so the user can start a conversation from the phone too. A job waiting on the
 /// answer gets it at once; an answer that comes after the job stopped waiting is passed on by the chat
 /// (<see cref="Answered"/>). Runs on a background loop, never on Revit's thread. With no phone connected, nothing is asked:
 /// the job makes the call itself.
@@ -18,8 +19,7 @@ internal static class AskUser
     private static readonly List<UserQuestion> Questions = [];
     private static int _next;
     private static Task? _loop;
-    private static bool _listening;
-    private static DateTime _readAt;
+    private static DateTime _readAt, _chatUntil;
 
     /// <summary>The goal of the run (set by the chat when a run starts).</summary>
     public static string Goal { get; set; } = "";
@@ -62,14 +62,13 @@ internal static class AskUser
     }
 
     /// <summary>
-    /// An autopilot is running: while the phone is connected it is read for Stop/Resume and messages even with no question
-    /// open. Ended by Clear. Cheap to call again (the chat calls it every 30 s).
+    /// While a phone is connected it is read for messages, answers and Stop/Resume, with or without a run. Cheap to call
+    /// again (the chat calls it when it opens, when a phone is connected and every 30 s during a run).
     /// </summary>
     public static void Listen()
     {
         lock (Gate)
         {
-            _listening = true;
             if (ByPhone) _loop ??= Task.Run(Loop);
         }
     }
@@ -124,17 +123,13 @@ internal static class AskUser
         }
     }
 
-    /// <summary>The run ended: questions still open are dropped, and the phone isn't read any more.</summary>
+    /// <summary>The run ended: questions still open are dropped (the phone is still read for messages).</summary>
     public static void Clear()
     {
-        lock (Gate)
-        {
-            Questions.RemoveAll(q => q.Answer is null || q.Delivered || q.Taken);
-            _listening = false;
-        }
+        lock (Gate) Questions.RemoveAll(q => q.Answer is null || q.Delivered || q.Taken);
     }
 
-    /// <summary>Every 15 s while questions are open or a run listens: send what is due, read the phone, pass on answers nobody took.</summary>
+    /// <summary>Every 15 s while questions are open or a phone is connected: send what is due, read the phone, pass on answers nobody took.</summary>
     private static async Task Loop()
     {
         while (true)
@@ -146,7 +141,7 @@ internal static class AskUser
             {
                 // Open for a day at most: after that an answer isn't looked for.
                 Questions.RemoveAll(q => (q.Answer is not null && (q.Taken || q.Delivered)) || DateTime.UtcNow - q.Asked > TimeSpan.FromDays(1));
-                if (Questions.Count == 0 && !(_listening && ByPhone))
+                if (Questions.Count == 0 && !ByPhone)
                 {
                     _loop = null;
                     return;
@@ -181,13 +176,9 @@ internal static class AskUser
         }
 
         List<UserQuestion> open;
-        bool listening;
-        lock (Gate)
-        {
-            open = Questions.Where(q => q.PhoneId != 0 && q.Answer is null && now - q.Sent < TimeSpan.FromDays(1)).ToList();
-            listening = _listening;
-        }
-        if ((open.Count > 0 || listening) && ByPhone && now - _readAt >= AskRules.ReadEvery(open, now, WaitMinutes))
+        lock (Gate) open = Questions.Where(q => q.PhoneId != 0 && q.Answer is null && now - q.Sent < TimeSpan.FromDays(1)).ToList();
+        var every = now < _chatUntil ? AskRules.ChatReadEvery : AskRules.ReadEvery(open, now, WaitMinutes);
+        if (ByPhone && now - _readAt >= every)
         {
             _readAt = now;
             foreach (var m in await PhoneLink.InboxAsync().ConfigureAwait(false) ?? [])
@@ -195,7 +186,12 @@ internal static class AskUser
                 var text = m.Text.Trim();
                 if (m.Error.Length > 0 || text.Length == 0) continue;
                 if (m.Kind == "command") Command?.Invoke(text);
-                else if (m.Kind == "message") UserWrote?.Invoke(text);
+                else if (m.Kind == "message")
+                {
+                    // Writing from the phone: read every 30 s for a while, so a conversation doesn't wait minutes per message.
+                    _chatUntil = now + AskRules.ChatFor;
+                    UserWrote?.Invoke(text);
+                }
                 else if (m.Kind == "answer")
                     lock (Gate)
                         if (Questions.FirstOrDefault(q => q.PhoneId != 0 && q.PhoneId == m.ReplyTo) is { Answer: null } q)
