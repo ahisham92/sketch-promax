@@ -108,18 +108,20 @@ internal static class Watchdog
         // Lifeline and the run's files are written as Revit ends; give them a moment.
         Thread.Sleep(TimeSpan.FromSeconds(5));
         if (!SketchProMax.Chat.AutopilotShare.ShouldRelaunch(pid, DateTime.UtcNow)) return;
-        // Ended by the user (Task Manager) looks the same as a crash from here: ask first, and reopen by itself only when
-        // nobody answers (away from the PC).
-        if (!AskToReopen())
+        // Revit is never opened again without the user's yes (the user, 30 Oct 2026): on the phone when it is on, and
+        // on this PC. The first answer counts; with no answer, Revit stays closed.
+        var open = AskToReopen();
+        if (!open)
         {
             SketchProMax.Chat.AutopilotShare.Decline(pid);
             SketchProMax.Chat.AutopilotShare.AppendLog("", SketchProMax.Chat.AutopilotEntry.Note,
-                "Revit closed and you chose not to open it again, so the autopilot stopped.", DateTime.UtcNow);
+                "Revit closed and wasn't opened again (you said no, or didn't answer), so the autopilot stopped.", DateTime.UtcNow);
+            Environment.Exit(0); // closes the question still open on the PC
             return;
         }
         var model = args.Length >= 4 && File.Exists(args[3]) ? args[3] : null;
         SketchProMax.Chat.AutopilotShare.AppendLog("", SketchProMax.Chat.AutopilotEntry.Note,
-            "Revit closed unexpectedly, so it was started again" + (model is null ? "." : $" on {Path.GetFileName(model)}."), DateTime.UtcNow);
+            "Revit closed and you said to open it again" + (model is null ? "." : $", so it was started on {Path.GetFileName(model)}."), DateTime.UtcNow);
         try
         {
             System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(args[2], model is null ? "" : "\"" + model + "\"")
@@ -128,27 +130,65 @@ internal static class Watchdog
             });
         }
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or FileNotFoundException) { }
+        Environment.Exit(0);
     }
 
-    /// <summary>How long the question waits before Revit is opened again anyway.</summary>
-    internal const int AskSeconds = 60;
+    /// <summary>How long the question waits for an answer before the run is given up (Revit stays closed).</summary>
+    internal static readonly TimeSpan AskFor = TimeSpan.FromHours(12);
 
-    /// <summary>"Open Revit again?" on top of everything: true for Yes or no answer in <see cref="AskSeconds"/>, false for No.</summary>
+    private static readonly string Folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "SketchProMax");
+
+    /// <summary>"Open Revit again?" on the phone (when connected and on) and on this PC: true only for a yes.</summary>
     private static bool AskToReopen()
+    {
+        var answer = new TaskCompletionSource<bool>();
+        var pc = new Thread(() =>
+        {
+            try
+            {
+                const uint YesNo = 0x4, Question = 0x20, SetForeground = 0x10000, TopMost = 0x40000;
+                var result = MessageBox(IntPtr.Zero,
+                    "Revit closed while the Sketch ProMax autopilot was running.\n\nOpen Revit again so the autopilot carries on?\n\n" +
+                    "Yes: Revit opens again. No: the autopilot stops and Revit stays closed.",
+                    "Sketch ProMax", YesNo | Question | SetForeground | TopMost);
+                answer.TrySetResult(result == 6); // IDYES
+            }
+            catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException) { }
+        }) { IsBackground = true };
+        pc.SetApartmentState(ApartmentState.STA);
+        pc.Start();
+        _ = Task.Run(() => AskPhoneAsync(answer));
+        return answer.Task.Wait(AskFor) && answer.Task.Result;
+    }
+
+    private static async Task AskPhoneAsync(TaskCompletionSource<bool> answer)
     {
         try
         {
-            const uint YesNo = 0x4, Question = 0x20, SetForeground = 0x10000, TopMost = 0x40000;
-            var answer = MessageBoxTimeout(IntPtr.Zero,
-                "Revit closed while the Sketch ProMax autopilot was running.\n\n" +
-                "Open Revit again so the autopilot carries on?\n\n" +
-                $"Yes: Revit opens again. No: the autopilot stops and Revit stays closed.\nWith no answer, Revit opens again in {AskSeconds} seconds.",
-                "Sketch ProMax", YesNo | Question | SetForeground | TopMost, 0, AskSeconds * 1000);
-            return answer != 7; // IDNO
+            if (File.Exists(Path.Combine(Folder, "phone-off"))) return;
+            var file = Path.Combine(Folder, "iris.json");
+            if (!File.Exists(file)) return;
+            var state = JsonSerializer.Deserialize<SketchProMax.Phone.IrisState>(File.ReadAllText(file));
+            if (state is not { Connected: true }) return;
+            var iris = new SketchProMax.Phone.IrisClient(state);
+            var asked = await iris.AskAsync("Revit closed while the autopilot was running. Open Revit again so it carries on?",
+                ["Open Revit", "Leave it closed"], "Leave it closed");
+            var until = DateTime.UtcNow + AskFor;
+            while (!answer.Task.IsCompleted && DateTime.UtcNow < until)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(20));
+                foreach (var m in await iris.InboxAsync())
+                {
+                    if (m.Kind != "answer" || m.ReplyTo != asked) continue;
+                    var yes = m.Text.Trim().StartsWith("open", StringComparison.OrdinalIgnoreCase) || m.Text.Trim().StartsWith("yes", StringComparison.OrdinalIgnoreCase);
+                    answer.TrySetResult(yes);
+                }
+                try { File.WriteAllText(file, JsonSerializer.Serialize(iris.State)); } catch (IOException) { }
+            }
         }
-        catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException) { return true; }
+        catch (Exception) { /* the phone can't be reached: the question on the PC still stands */ }
     }
 
-    [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, EntryPoint = "MessageBoxTimeoutW")]
-    private static extern int MessageBoxTimeout(IntPtr hWnd, string text, string caption, uint type, ushort language, int milliseconds);
+    [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, EntryPoint = "MessageBoxW")]
+    private static extern int MessageBox(IntPtr hWnd, string text, string caption, uint type);
 }
