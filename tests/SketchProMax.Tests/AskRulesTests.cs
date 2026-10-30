@@ -75,6 +75,6 @@ internal static class AskRulesTests
         var waiting = new UserQuestion { Id = 7, Sent = t0.AddMinutes(-3) };
         var late = new UserQuestion { Id = 8, Sent = t0.AddMinutes(-30) };
         check("ask: the phone is read every 30 s while a job may wait on an answer", AskRules.ReadEvery([waiting, late], t0, 10) == TimeSpan.FromSeconds(30), "");
-        check("ask: otherwise every 2 minutes", AskRules.ReadEvery([late], t0, 10) == TimeSpan.FromMinutes(2) && AskRules.ReadEvery([], t0, 10) == TimeSpan.FromMinutes(2), "");
+        check("ask: otherwise every minute (a message from the phone is taken in within a minute)", AskRules.ReadEvery([late], t0, 10) == TimeSpan.FromMinutes(1) && AskRules.ReadEvery([], t0, 10) == TimeSpan.FromMinutes(1), "");
     }
 }

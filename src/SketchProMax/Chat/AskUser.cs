@@ -7,7 +7,7 @@ namespace SketchProMax.Chat;
 /// The autopilot's questions to the user on their phone (ask_user; rules in AskRules; the phone link in Phone.PhoneLink,
 /// through Iris on the user's own website): a job asks, the question waits a moment for others to join it, then each goes
 /// to the phone with a one-tap button for the assumed answer. While a run is on, the phone is read every 30 seconds while a
-/// job may be waiting on an answer or the user is writing from the phone, else every 2 minutes, for answers, messages and
+/// job may be waiting on an answer or the user is writing from the phone, else every minute, for answers, messages and
 /// Stop/Resume; with or without a run, so the user can start a conversation from the phone too. A job waiting on the
 /// answer gets it at once; an answer that comes after the job stopped waiting is passed on by the chat
 /// (<see cref="Answered"/>). Runs on a background loop, never on Revit's thread. With no phone connected, nothing is asked:
