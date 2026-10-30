@@ -108,6 +108,15 @@ internal static class Watchdog
         // Lifeline and the run's files are written as Revit ends; give them a moment.
         Thread.Sleep(TimeSpan.FromSeconds(5));
         if (!SketchProMax.Chat.AutopilotShare.ShouldRelaunch(pid, DateTime.UtcNow)) return;
+        // Ended by the user (Task Manager) looks the same as a crash from here: ask first, and reopen by itself only when
+        // nobody answers (away from the PC).
+        if (!AskToReopen())
+        {
+            SketchProMax.Chat.AutopilotShare.Decline(pid);
+            SketchProMax.Chat.AutopilotShare.AppendLog("", SketchProMax.Chat.AutopilotEntry.Note,
+                "Revit closed and you chose not to open it again, so the autopilot stopped.", DateTime.UtcNow);
+            return;
+        }
         var model = args.Length >= 4 && File.Exists(args[3]) ? args[3] : null;
         SketchProMax.Chat.AutopilotShare.AppendLog("", SketchProMax.Chat.AutopilotEntry.Note,
             "Revit closed unexpectedly, so it was started again" + (model is null ? "." : $" on {Path.GetFileName(model)}."), DateTime.UtcNow);
@@ -120,4 +129,26 @@ internal static class Watchdog
         }
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or FileNotFoundException) { }
     }
+
+    /// <summary>How long the question waits before Revit is opened again anyway.</summary>
+    internal const int AskSeconds = 60;
+
+    /// <summary>"Open Revit again?" on top of everything: true for Yes or no answer in <see cref="AskSeconds"/>, false for No.</summary>
+    private static bool AskToReopen()
+    {
+        try
+        {
+            const uint YesNo = 0x4, Question = 0x20, SetForeground = 0x10000, TopMost = 0x40000;
+            var answer = MessageBoxTimeout(IntPtr.Zero,
+                "Revit closed while the Sketch ProMax autopilot was running.\n\n" +
+                "Open Revit again so the autopilot carries on?\n\n" +
+                $"Yes: Revit opens again. No: the autopilot stops and Revit stays closed.\nWith no answer, Revit opens again in {AskSeconds} seconds.",
+                "Sketch ProMax", YesNo | Question | SetForeground | TopMost, 0, AskSeconds * 1000);
+            return answer != 7; // IDNO
+        }
+        catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException) { return true; }
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, EntryPoint = "MessageBoxTimeoutW")]
+    private static extern int MessageBoxTimeout(IntPtr hWnd, string text, string caption, uint type, ushort language, int milliseconds);
 }
