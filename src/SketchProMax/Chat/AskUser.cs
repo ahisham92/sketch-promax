@@ -79,6 +79,12 @@ internal static class AskUser
         return q;
     }
 
+    /// <summary>The questions emailed and not answered yet (for the progress email).</summary>
+    public static List<EmailQuestion> Waiting()
+    {
+        lock (Gate) return Questions.Where(q => q.Sent != default && q.Answer is null && DateTime.UtcNow - q.Sent < TimeSpan.FromDays(1)).ToList();
+    }
+
     public static EmailQuestion? Find(int id)
     {
         lock (Gate) return Questions.FirstOrDefault(q => q.Id == id);

@@ -65,12 +65,17 @@ internal static class AskByEmailTests
             new() { Number = 3, Title = "PVC pipes", State = JobBoard.Running },
             new() { Number = 4, Title = "Sheets", State = JobBoard.Queued },
         ];
-        var pbody = AskByEmail.UpdateBody(prun, pjobs, t0.AddHours(-1), "Handing out the PVC pipes next.", t0);
-        check("progress: says how long and what finished since the last one only", pbody.Contains("Working for 3 h 0 min") && pbody.Contains("Job 2 Existing model: Gravity wall")
-            && !pbody.Contains("Template read"), pbody);
-        check("progress: says what works now and waits", pbody.Contains("Job 3 PVC pipes") && pbody.Contains("1 more waiting to start"), pbody);
-        check("progress: says what isn't done yet and the coordinator's latest words", pbody.Contains("PVC pipes: none") && pbody.Contains("Handing out the PVC pipes next."), pbody);
-        check("progress: says a reply goes to the coordinator", pbody.Contains("Reply to this email with anything new"), pbody);
+        var pbody = AskByEmail.UpdateBody(prun, pjobs, t0.AddHours(-1), [], t0);
+        check("progress: short: finished in the last hour, left, working now", pbody.StartsWith("1 job finished in the last hour. 2 left: 1 working now, 1 waiting.\r\n"), pbody);
+        check("progress: no job titles, summaries or coordinator's words", !pbody.Contains("Gravity wall") && !pbody.Contains("Existing model") && !pbody.Contains("Berths 7-11"), pbody);
+        check("progress: one line for what the review team found open", pbody.Contains("The review team found 1 item not done yet."), pbody);
+        check("progress: no questions, no question section", !pbody.Contains("input") && pbody.Contains("Reply to add or change anything."), pbody);
+        var asked = new List<EmailQuestion> { new() { Id = 5, Question = "PVC pipes: 4 lengths or 3?", Sent = t0.AddMinutes(-5) }, new() { Id = 3, Question = "Copy the Berth 11 section?", Sent = t0.AddMinutes(-9) } };
+        var qbody = AskByEmail.UpdateBody(prun, pjobs, t0.AddHours(-1), asked, t0);
+        check("progress: the questions waiting for you, listed", qbody.Contains("We need your input on:\r\nQ3: Copy the Berth 11 section?\r\nQ5: PVC pipes: 4 lengths or 3?"), qbody);
+        check("progress: the span reads plainly", AskByEmail.Span(TimeSpan.FromMinutes(30)) == "30 min" && AskByEmail.Span(TimeSpan.FromHours(2)) == "2 hours", "");
+        var paused = new AutopilotRun { State = AutopilotRun.Paused, PauseWhy = "The 5-hour limit is nearly used up." };
+        check("progress: a pause in one line", AskByEmail.UpdateBody(paused, [], t0.AddHours(-1), [], t0).Contains("Paused: The 5-hour limit is nearly used up.\r\n"), "");
         var sub = AskByEmail.UpdateSubject(new DateTime(2026, 10, 30, 16, 0, 0), "BEEF");
         check("progress: tagged subject with the time and a token for the reply", sub == "[Sketch ProMax] Progress at 16:00 #BEEF" && AskByEmail.IsReply("RE: " + sub, "BEEF"), sub);
         check("progress: a reply reaches the coordinator as the user's message", AskByEmail.FromEmail("also add the fender schedule").Contains("by email from their phone")

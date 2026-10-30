@@ -180,36 +180,46 @@ internal static class AskByEmail
     public static string UpdateSubject(DateTime local, string token) => $"{SubjectTag} Progress at {local.ToString("HH:mm", CultureInfo.InvariantCulture)} #{token}";
 
     /// <summary>
-    /// The progress email: the goal, what finished since the last one, what is working and waiting, what the coordinator
-    /// said last, and how to reply with something new.
+    /// The progress email, as short as can be (the user asked, 2026-10-30): how many jobs finished in the interval, how many
+    /// are left and how many work now; the questions waiting for the user's answer, when there are some; a pause or what
+    /// the review team found still open, in one line each. Nothing else.
     /// </summary>
-    public static string UpdateBody(AutopilotRun run, IReadOnlyList<ChatJob> jobs, DateTime since, string lastWords, DateTime nowUtc)
+    public static string UpdateBody(AutopilotRun run, IReadOnlyList<ChatJob> jobs, DateTime since, IReadOnlyList<EmailQuestion> waiting, DateTime nowUtc)
     {
-        var own = jobs.Where(j => j.Number > run.JobsBefore).ToList();
-        var done = own.Where(j => j.State == JobBoard.Done && j.Ended >= since).OrderBy(j => j.Number).ToList();
-        var working = own.Where(j => j.Active).OrderBy(j => j.Number).ToList();
+        var own = jobs.Where(j => j.Number > run.JobsBefore && j.GoalCheck == 0).ToList();
+        var done = own.Count(j => j.State == JobBoard.Done && j.Ended >= since);
+        var working = own.Count(j => j.Active);
         var queued = own.Count(j => j.State == JobBoard.Queued);
         var sb = new StringBuilder();
-        sb.Append("Goal: ").Append(Short(run.Goal, 300)).Append("\r\n");
-        sb.Append("Working for ").Append(Autopilot.Duration(nowUtc - run.Started)).Append(", ").Append(own.Count(j => j.State == JobBoard.Done)).Append(" jobs done so far.\r\n\r\n");
-        sb.Append("Finished since the last update:\r\n");
-        if (done.Count == 0) sb.Append("- nothing new\r\n");
-        foreach (var j in done) sb.Append("- Job ").Append(j.Number).Append(' ').Append(j.Title).Append(": ").Append(Short(j.Summary, 200)).Append("\r\n");
-        sb.Append("\r\nWorking now:\r\n");
-        if (working.Count == 0) sb.Append("- no job (the coordinator is reviewing or planning)\r\n");
-        foreach (var j in working) sb.Append("- Job ").Append(j.Number).Append(' ').Append(j.Title).Append(": ").Append(JobBoard.StateLabel(j)).Append("\r\n");
-        if (queued > 0) sb.Append("- ").Append(queued).Append(" more waiting to start\r\n");
-        if (run.State == AutopilotRun.Paused) sb.Append("\r\nPaused: ").Append(run.PauseWhy).Append("\r\n");
-        if (run.Gaps.Trim().Length > 0) sb.Append("\r\nThe review team's last list of what isn't done yet:\r\n").Append(Short(run.Gaps, 800)).Append("\r\n");
-        if (lastWords.Trim().Length > 0) sb.Append("\r\nThe coordinator's latest words: ").Append(Short(lastWords, 600)).Append("\r\n");
-        sb.Append("\r\nReply to this email with anything new, a change or a question: it goes to the coordinator as your message.\r\n\r\nSketch ProMax");
+        sb.Append(done).Append(done == 1 ? " job" : " jobs").Append(" finished in the last ").Append(Span(nowUtc - since)).Append(". ");
+        sb.Append(working + queued).Append(" left: ").Append(working).Append(" working now");
+        if (queued > 0) sb.Append(", ").Append(queued).Append(" waiting");
+        sb.Append(".\r\n");
+        if (run.State == AutopilotRun.Paused) sb.Append("Paused: ").Append(Short(run.PauseWhy, 120).TrimEnd('.')).Append(".\r\n");
+        var gaps = run.Gaps.Split('\n').Count(l => l.TrimStart().StartsWith("- ", StringComparison.Ordinal));
+        if (gaps > 0) sb.Append("The review team found ").Append(gaps).Append(gaps == 1 ? " item" : " items").Append(" not done yet.\r\n");
+        if (waiting.Count > 0)
+        {
+            sb.Append("\r\nWe need your input on:\r\n");
+            foreach (var q in waiting.OrderBy(q => q.Id)) sb.Append("Q").Append(q.Id).Append(": ").Append(Short(q.Question, 200)).Append("\r\n");
+            sb.Append("\r\nReply \"Q").Append(waiting.Min(q => q.Id)).Append(": your answer\" to answer in the email you got for it, or here with anything new.\r\n");
+        }
+        else sb.Append("\r\nReply to add or change anything.\r\n");
         return sb.ToString();
+    }
+
+    /// <summary>"hour", "2 hours", "30 min".</summary>
+    internal static string Span(TimeSpan span)
+    {
+        var minutes = Math.Max(1, (int)Math.Round(span.TotalMinutes));
+        if (minutes % 60 == 0) return minutes == 60 ? "hour" : minutes / 60 + " hours";
+        return minutes + " min";
     }
 
     /// <summary>What the coordinator gets when the user replied to a progress email.</summary>
     public static string FromEmail(string text) =>
         "[The user, by email from their phone, while the autopilot runs] " + text.Trim() + "\n\nTake this in as the user's message: fit it into the " +
-        "work (hand it out, or change what is planned), carry on, and say in the next progress email what you did with it.";
+        "work (hand it out, or change what is planned) and carry on.";
 
     /// <summary>What ask_user answers once a reply came.</summary>
     public static string AnswerLine(EmailQuestion q) => $"The user answered Q{q.Id} by email: \"{q.Answer}\". Go by it (you assumed: {q.Assumed}).";
