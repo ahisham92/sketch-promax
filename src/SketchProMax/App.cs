@@ -350,6 +350,7 @@ public sealed class App : IExternalApplication
         try { HeavyCommands.Stop(); } catch (Exception) { }
         try { ChangeFile.Stop(); } catch (Exception) { }
         CentralAccess.Unwatch(app);
+        UnattendedDialogs.Unwatch(app);
         ChatMcp.Stop();
         // A shared-mode core never opened the connection point, and the session file named after this Revit is Sketch ProMax's.
         if (!Shared) Bridge?.Stop(keepSession: true);

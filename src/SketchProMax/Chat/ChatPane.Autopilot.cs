@@ -756,6 +756,18 @@ internal sealed partial class ChatPane
         var why = orphan.Why.Length > 0 ? orphan.Why + "." : "Revit closed unexpectedly and was started again.";
         AutopilotShare.Beat(Autopilot.RunId(_conv.Id, run), DateTime.UtcNow); // this Revit runs it now
         TakeSharedLog(run);
+        if (!orphan.Relaunched && run.State == AutopilotRun.Running)
+        {
+            // The user opened Revit (no restart they said yes to): they are at the computer, so the run waits for them.
+            run.State = AutopilotRun.Paused;
+            run.PausedUntil = null;
+            run.PauseWhy = "Revit was opened again by you.";
+            AutopilotLog(AutopilotEntry.Paused, "Revit closed unexpectedly and you opened it again: paused until you press Resume.");
+            Note("Autopilot paused: Revit closed unexpectedly and you opened it again. Press Resume, or type \"continue\", to carry on, or Stop to end it.");
+            Save();
+            ShowAutopilot();
+            return;
+        }
         AutopilotLog(AutopilotEntry.Resumed, why + " The autopilot carried on.");
         Note("Autopilot: " + why + " It carries on where it was.");
         ShowAutopilot();
