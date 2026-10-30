@@ -124,6 +124,7 @@ internal sealed class PhoneConnectWindow : Window
                 Say("Connected. Autopilot questions and progress now go to your phone, and you can write to the chat from it.", Brand.K.SuccessText);
                 var error = await Task.Run(() => PhoneLink.SendTestAsync());
                 if (error is not null) Say($"Connected, but the test message didn't go ({error}).", Brand.K.DangerText);
+                PhoneLink.SetOn(true); // just connected: on, so the test message and what follows reach it
                 Chat.AskUser.Listen(); // read from now on: messages written on the phone reach the chat
                 Connected?.Invoke();
             }

@@ -36,8 +36,8 @@ internal static class AskUser
     /// <summary>Raised when a question or update went to the phone, or couldn't (text for the run's log).</summary>
     public static event Action<string>? Logged;
 
-    /// <summary>A phone is connected (Settings › Chat › Your phone): questions and progress go there.</summary>
-    public static bool ByPhone => PhoneLink.Connected;
+    /// <summary>A phone is connected (Settings › Chat › Your phone) and switched on in the chat: questions and progress go there.</summary>
+    public static bool ByPhone => PhoneLink.Active;
 
     /// <summary>The wait for an answer, in minutes (Settings › Chat › Autopilot; 0, or no phone connected: nothing is asked).</summary>
     public static int WaitMinutes
