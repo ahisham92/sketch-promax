@@ -11,7 +11,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>SketchProMax.Mcp</AssemblyName>
     <RootNamespace>SketchProMax.Mcp</RootNamespace>
-    <Version>0.35.50</Version>
+    <Version>0.35.51</Version>
     <InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>
   <ItemGroup>
