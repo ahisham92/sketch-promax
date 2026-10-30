@@ -652,6 +652,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         var pickers = new WrapPanel();
         pickers.Children.Add(_typePill);
         pickers.Children.Add(_effortPick);
+        pickers.Children.Add(PhonePill());
         settings.Children.Add(pickers);
         composer.Children.Add(settings);
         composer.Children.Add(_statusRow);

@@ -39,6 +39,56 @@ internal static class PhoneLink
     /// <summary>Connected to a phone: the autopilot's questions and progress go there.</summary>
     public static bool Connected => Client.State.Connected;
 
+    /// <summary>
+    /// The phone is on (the chat's Phone switch): questions, progress and replies go to it and it is read. Off while the
+    /// user is at the PC, so nothing reaches the phone; the link stays, so turning it on again is instant. Kept in
+    /// phone-off (there: off).
+    /// </summary>
+    public static bool On
+    {
+        get
+        {
+            if (_on is { } on) return on;
+            try { _on = !File.Exists(OffFile); }
+            catch (Exception) { _on = true; }
+            return _on.Value;
+        }
+    }
+
+    private static bool? _on;
+
+    private static string OffFile =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "SketchProMax", "phone-off");
+
+    /// <summary>Connected and on: what the autopilot and the chat go by.</summary>
+    public static bool Active => Connected && On;
+
+    /// <summary>Raised (on the caller's thread) when On or the connection changed.</summary>
+    public static event Action? Changed;
+
+    /// <summary>Turns the phone on or off at once; the file is written in the background.</summary>
+    public static void SetOn(bool on)
+    {
+        _on = on;
+        Task.Run(() =>
+        {
+            try
+            {
+                if (on) File.Delete(OffFile);
+                else
+                {
+                    Directory.CreateDirectory(Path.GetDirectoryName(OffFile)!);
+                    File.WriteAllText(OffFile, "");
+                }
+            }
+            catch (Exception) { /* kept for this session */ }
+        });
+        Changed?.Invoke();
+    }
+
+    /// <summary>Tells the switch the connection changed (connected, or disconnected).</summary>
+    public static void Notify() => Changed?.Invoke();
+
     /// <summary>The Iris address this PC is connected to (or last tried).</summary>
     public static string Site => Client.State.Site;
 
@@ -124,6 +174,7 @@ internal static class PhoneLink
         {
             Client.Forget();
             Save();
+            Changed?.Invoke();
             return "your phone disconnected Sketch ProMax; connect it again in Settings › Chat";
         }
         catch (Exception e)
