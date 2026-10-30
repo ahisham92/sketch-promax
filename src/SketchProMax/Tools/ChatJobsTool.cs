@@ -17,7 +17,8 @@ public sealed class ChatJobsTool : IRevitTool
     public string Name => ToolName;
     public string Description =>
         "Jobs that work side by side in the Revit chat pane, each its own helper with a card the user sees. action=start opens a job: " +
-        "title (a few words) and task (everything it needs, in full: it doesn't see this chat). To divide work across the free workers, " +
+        "title (a few words), task (everything it needs, in full: it doesn't see this chat) and done_when (how the job can check in the model that it " +
+        "is finished; it checks that before it reports). To divide work across the free workers, " +
         "give parts instead (one {title, task, kind} per part, which don't overlap) and facts (what you read that every part needs): they " +
         "all start at once. action=list shows every job with its " +
         "state and report. action=message sends a follow-up to job (its number): a running job gets it when its current run ends; a " +
@@ -35,9 +36,10 @@ public sealed class ChatJobsTool : IRevitTool
       "forward": {"type": "boolean", "description": "ask: true to also pass the question on when the job is still working; it messages you the answer when its current run ends."},
       "title": {"type": "string", "description": "start: a few words the user sees on the card, e.g. 'Sheets for levels 1-5'."},
       "task": {"type": "string", "description": "start: the whole task for the job, with every detail it needs (names, levels, types, settings)."},
+      "done_when": {"type": "string", "description": "start (and each part): the finish line, one to three conditions the job can check in the model, e.g. 'every sheet A-101 to A-120 has a filled title block and a plan view; issue_check passes'. The job checks them before it reports and says which held."},
       "job": {"type": "integer", "description": "message, stop and ask: the job's number."},
       "text": {"type": "string", "description": "message: what to tell the job, in full."},
-      "parts": {"type": "array", "description": "start: divide the work, one job per part, all started at once (each part's task in full; the parts must not overlap, e.g. levels 1-3 and 4-6).", "items": {"type": "object", "properties": {"title": {"type": "string"}, "task": {"type": "string"}, "kind": {"type": "string", "enum": ["simple", "everyday", "hard"]}, "model": {"type": "string"}}, "required": ["title", "task"]}},
+      "parts": {"type": "array", "description": "start: divide the work, one job per part, all started at once (each part's task in full; the parts must not overlap, e.g. levels 1-3 and 4-6).", "items": {"type": "object", "properties": {"title": {"type": "string"}, "task": {"type": "string"}, "done_when": {"type": "string"}, "kind": {"type": "string", "enum": ["simple", "everyday", "hard"]}, "model": {"type": "string"}}, "required": ["title", "task"]}},
       "model": {"type": "string", "description": "start (and each part): the open model the job works on, its title as list_revit_models gives it, when several are open (also in another Revit window). Left out: the model active in this window."},
       "facts": {"type": "string", "description": "start with parts: what you already read from the model that every part needs (levels, grids, types, names, ids); each job gets it with its task."},
       "single": {"type": "string", "description": "start without parts while two or more workers are free: why this work can't be divided (one element, one sheet, one short answer). Without it such a start is sent back to be divided."},
@@ -115,7 +117,7 @@ public sealed class ChatJobsTool : IRevitTool
                                "not overlapping: by level, zone, category, sheet range, or reading / checking / changing) and facts (what you already read " +
                                "that every part needs). Only if it truly can't be divided, call start again with the same task and single = why.",
                     });
-                var job = board.Start(title, task, now, Bool(args, "new"), out var similar);
+                var job = board.Start(title, JobBoard.WithDoneWhen(task, Str(args, "done_when")), now, Bool(args, "new"), out var similar);
                 if (job is null)
                     return ToolResult.Ok(new
                     {
@@ -182,7 +184,7 @@ public sealed class ChatJobsTool : IRevitTool
     private static ToolResult StartParts(JobBoard board, JsonElement parts, string facts, string? model, int limit, DateTime now)
     {
         var list = parts.EnumerateArray().Where(p => p.ValueKind == JsonValueKind.Object).Select(p => (
-            Title: Prop(p, "title"), Task: Prop(p, "task"), Kind: Prop(p, "kind").ToLowerInvariant(), Model: Prop(p, "model") is { Length: > 0 } m ? m : model ?? ""))
+            Title: Prop(p, "title"), Task: JobBoard.WithDoneWhen(Prop(p, "task"), Prop(p, "done_when")), Kind: Prop(p, "kind").ToLowerInvariant(), Model: Prop(p, "model") is { Length: > 0 } m ? m : model ?? ""))
             .Where(p => p.Task.Length > 0).Take(12).ToList();
         if (list.Count == 0) return ToolResult.Error("Each part needs its whole task in 'task' (and a short 'title').");
         var titles = list.Select(p => p.Title.Length > 0 ? p.Title : JobBoard.OneLine(p.Task, 40)).ToList();

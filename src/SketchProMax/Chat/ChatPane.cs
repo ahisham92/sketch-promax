@@ -662,7 +662,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         _earlier.HorizontalAlignment = HorizontalAlignment.Center;
         _earlier.Margin = new Thickness(0, ChatUi.S1, 0, 0);
         _earlier.Click += (_, _) => ShowEarlier();
-        var home = new HomeView(UsePrompt, () => Saved);
+        var home = new HomeView(UsePrompt, () => Saved, () => App.Dispatcher.InvokeAsync(Revit.PromptChoices.Read));
         PromptsChanged += home.SavedChanged;
         _empty = home;
         // What Claude is doing: the breathing mark and a line, and until the first words a shimmering placeholder.

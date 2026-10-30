@@ -282,6 +282,7 @@ public sealed class ToolRegistry
         new AutoSyncTool(),
         // Files for the user: Excel, Word, PowerPoint and PDF
         new MakeDocumentTool(),
+        new ReadDocumentTextTool(),
     ]);
         // Recipes replay other tools, so they need the registry itself.
         registry.Add(new SaveRecipeTool(registry));

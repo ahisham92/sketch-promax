@@ -20,6 +20,10 @@ internal sealed class HomeView : StackPanel
 
     private readonly Action<string> _use;
     private readonly Func<List<SavedPrompt>> _saved;
+    /// <summary>The open model's names for the prompts' blanks (PromptSlots), read in Revit; null: blanks stay for the user to type.</summary>
+    private readonly Func<Task<Dictionary<string, List<string>>>>? _choices;
+    /// <summary>True while a prompt's blanks are being picked (Back returns to the list).</summary>
+    private bool _picking;
     private readonly TextBlock _greeting = Brand.Text(Greeting.Line(null), Brand.K.Text, ChatUi.GreetingSize, bold: true);
     private readonly TextBlock _sub = Brand.Text("What can I take care of for you today?", Brand.K.Muted, ChatUi.BodySize);
     private readonly StackPanel _home = new();
@@ -41,10 +45,11 @@ internal sealed class HomeView : StackPanel
     /// <summary>The first name for the greeting, read once per Revit session off the UI thread (null: none found).</summary>
     private static Task<string?>? _firstName;
 
-    public HomeView(Action<string> use, Func<List<SavedPrompt>> saved)
+    public HomeView(Action<string> use, Func<List<SavedPrompt>> saved, Func<Task<Dictionary<string, List<string>>>>? choices = null)
     {
         _use = use;
         _saved = saved;
+        _choices = choices;
         Margin = new Thickness(ChatUi.S1, ChatUi.S6, ChatUi.S1, ChatUi.S2);
 
         // Home: the mark and greeting, a muted line, then DISCOVER and its cards.
@@ -74,7 +79,7 @@ internal sealed class HomeView : StackPanel
         var head = new DockPanel { Margin = new Thickness(-ChatUi.S1, 0, 0, ChatUi.S3) };
         _back = ChatUi.IconButton(ChatUi.Paths.Back, "Back to home", "Back to the home screen (Esc)");
         _back.Margin = new Thickness(0, 0, ChatUi.S2, 0);
-        _back.Click += (_, _) => Guarded(() => Show("home"));
+        _back.Click += (_, _) => Guarded(GoBack);
         DockPanel.SetDock(_back, Dock.Left);
         head.Children.Add(_back);
         _libraryCount.Margin = new Thickness(ChatUi.S2, 2, 0, 0);
@@ -90,7 +95,7 @@ internal sealed class HomeView : StackPanel
         {
             if (e.Key != System.Windows.Input.Key.Escape || e.Handled) return;
             e.Handled = true;
-            Guarded(() => Show("home"));
+            Guarded(GoBack);
         };
         Children.Add(_library);
 
@@ -300,6 +305,7 @@ internal sealed class HomeView : StackPanel
 
     private void Draw()
     {
+        _picking = false;
         switch (_tab)
         {
             case "saved": DrawSaved(); break;
@@ -418,8 +424,81 @@ internal sealed class HomeView : StackPanel
         button.SetResourceReference(StyleProperty, "SpmChatGhost");
         AutomationProperties.SetName(button, title + ". " + summary);
         AutomationProperties.SetHelpText(button, "Puts this prompt in the message box to edit before sending.");
-        button.Click += (_, _) => Guarded(() => _use(prompt));
+        button.Click += (_, _) => Guarded(() => Use(title, prompt));
         return button;
+    }
+
+    /// <summary>Back (or Esc): from picking a prompt's blanks to its list, else home.</summary>
+    private void GoBack()
+    {
+        if (_picking) Draw();
+        else Show("home");
+    }
+
+    // ---- Blanks filled from the model ------------------------------------------------------------------------------
+
+    /// <summary>How long the home screen waits for Revit to name the model's levels, grids and sheet sets.</summary>
+    private const int ChoicesWaitMs = 2000;
+
+    /// <summary>
+    /// Puts a prompt in the message box, its blanks ({level}, {grid}, {sheet_set}, {berth}) first picked from the open
+    /// model's own names with one tap each. A blank the model has no names for (or when Revit is busy) is left as
+    /// "[level]" for the user to type over.
+    /// </summary>
+    private async void Use(string title, string prompt)
+    {
+        try
+        {
+            var slots = PromptSlots.ToPick(prompt);
+            var picked = new Dictionary<string, string>(StringComparer.Ordinal);
+            if (slots.Count == 0 || _choices is null) { _use(PromptSlots.Fill(prompt, picked)); return; }
+            var read = _choices();
+            var choices = await Task.WhenAny(read, Task.Delay(ChoicesWaitMs)) == read && read.Status == TaskStatus.RanToCompletion
+                ? read.Result : new Dictionary<string, List<string>>();
+            var wanted = slots.Where(s => choices.TryGetValue(s.Name, out var c) && c.Count > 0).ToList();
+            void Next(int i)
+            {
+                if (i >= wanted.Count)
+                {
+                    if (_picking) Draw();
+                    _use(PromptSlots.Fill(prompt, picked));
+                    return;
+                }
+                var slot = wanted[i];
+                DrawPick(title, slot, choices[slot.Name], i, wanted.Count, value =>
+                {
+                    picked[slot.Name] = value;
+                    Next(i + 1);
+                });
+            }
+            Next(0);
+        }
+        catch (Exception ex) { System.Diagnostics.Trace.WriteLine("Sketch ProMax home screen: " + ex); }
+    }
+
+    /// <summary>One blank's choices as pills, then "I'll type it" (leaves the blank to type over).</summary>
+    private void DrawPick(string title, PromptSlots.Slot slot, List<string> options, int index, int count, Action<string> picked)
+    {
+        _picking = true;
+        var panel = new StackPanel();
+        panel.Children.Add(ChatUi.Small(title, Brand.K.Text, bold: true));
+        var question = Brand.Text(count > 1 ? $"{slot.Question} ({index + 1} of {count})" : slot.Question, Brand.K.Muted, ChatUi.SmallSize);
+        question.Margin = new Thickness(0, ChatUi.S1, 0, ChatUi.S2);
+        panel.Children.Add(question);
+        var row = new WrapPanel();
+        foreach (var option in options)
+        {
+            var button = Pill(option, false, $"{slot.Question} {option}");
+            var value = option;
+            button.Click += (_, _) => Guarded(() => picked(value));
+            row.Children.Add(button);
+        }
+        var own = Pill("I'll type it", false, "Leaves " + slot.Unpicked + " in the message for you to type over.");
+        own.Click += (_, _) => Guarded(() => picked(""));
+        row.Children.Add(own);
+        panel.Children.Add(row);
+        _body.Content = panel;
+        Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() => (row.Children.Count > 0 ? row.Children[0] as Button : null)?.Focus()));
     }
 
     /// <summary>Runs a click's work; nothing it throws may reach Revit's dispatcher (that would end Revit).</summary>

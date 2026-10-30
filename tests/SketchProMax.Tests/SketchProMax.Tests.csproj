@@ -50,6 +50,7 @@
     <Compile Include="../../src/SketchProMax/Chat/PromptBrief.cs" Link="PromptBrief.cs" />
     <Compile Include="../../src/SketchProMax/Settings/SafeFile.cs" Link="SafeFile.cs" />
     <Compile Include="../../src/SketchProMax/Chat/PromptLibrary.cs" Link="PromptLibrary.cs" />
+    <Compile Include="../../src/SketchProMax/Chat/PromptSlots.cs" Link="PromptSlots.cs" />
     <EmbeddedResource Include="../../src/SketchProMax/Chat/chat-prompts.json" LogicalName="SketchProMax.chat-prompts.json" />
     <Compile Include="../../src/SketchProMax/Tools/OutputPaths.cs" Link="OutputPaths.cs" />
     <Compile Include="../../src/SketchProMax/Tools/ApprovalPolicy.cs" Link="ApprovalPolicy.cs" />
