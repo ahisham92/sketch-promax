@@ -89,8 +89,11 @@ internal static class ChatJobs
     /// <summary>The connection: the model job <paramref name="key"/> was given (chat_jobs start model=…), or null.</summary>
     public static string? ModelOf(string key) => _board?.FindKey(key) is { RevitModel.Length: > 0 } job ? job.RevitModel : null;
 
-    /// <summary>The bridge: true when job <paramref name="key"/> checks another job's work (JobReview), so it may not change the model.</summary>
-    public static bool IsCheck(string key) => _board?.FindKey(key) is { ReviewOf: > 0 };
+    /// <summary>
+    /// The bridge: true when job <paramref name="key"/> may only read: it checks another job's work (JobReview), reviews an
+    /// autopilot's goal (GoalReview) or reads before an autopilot's plan is approved. Its changes are refused.
+    /// </summary>
+    public static bool IsCheck(string key) => _board?.FindKey(key) is { ReviewOf: > 0 } or { ReadOnly: true };
 
     /// <summary>The bridge: what job <paramref name="key"/> does in Revit now (JobBoard.SetActivity), for its card and animation.</summary>
     public static void SetActivity(string key, string activity, int ahead = 0)
@@ -233,6 +236,7 @@ internal sealed partial class ChatPane
         if (_board is null || _sample || _stopped || _setup != Setup.Ready || _install is null || !IsCoordinator) return;
         if (Run is { State: AutopilotRun.Paused }) return; // an autopilot paused at a usage limit starts nothing new
         if (Run is { Updating.Length: > 0 }) return; // nor one waiting for an update to go in
+        if (Run is { State: AutopilotRun.Planning or AutopilotRun.Approval }) _board.ReadOnlyUntilStarted(); // reading before the plan is approved
         foreach (var (job, message) in _board.ToStart(ChatJobs.Limit, DateTime.UtcNow)) _ = StartRun(job, message);
         if (_runs.Count > 0) StartJobClock();
     }
@@ -489,6 +493,12 @@ internal sealed partial class ChatPane
     private void Report(ChatJob job)
     {
         var now = DateTime.UtcNow;
+        // A goal reviewer's report goes to the run (GoalReview), not to the coordinator's chat.
+        if (job.GoalCheck > 0)
+        {
+            if (!job.Open) GoalCheckEnded(job);
+            return;
+        }
         // A teammate's check ended: the job it checked is reported now, with the verdict.
         if (job.ReviewOf > 0)
         {
@@ -539,7 +549,60 @@ internal sealed partial class ChatPane
             report = report.Substring(0, cut) + Autopilot.Review(run);
             run.Idle = 0;
         }
+        // Reading before the plan: the plan comes once every reading job has reported.
+        else if (Run is { State: AutopilotRun.Planning } && report.LastIndexOf("Tell the user", StringComparison.Ordinal) is var at and > 0)
+            report = report.Substring(0, at) + Autopilot.PlanReports(open);
         _ = RunTurn(report, [], "");
+    }
+
+    private DateTime _watchedAt;
+
+    /// <summary>
+    /// Every 30 s while jobs run (JobWatch): a job that wrote its report but never ended is finished with it, and one with
+    /// no step for 20 minutes is stopped and reported, so the coordinator hands its work out again and nothing waits on it.
+    /// </summary>
+    private void WatchJobs()
+    {
+        _watchedAt = DateTime.UtcNow;
+        if (_board is not { } board) return;
+        ShareWithFreeWorkers(board);
+        foreach (var run in _runs.Values.ToList())
+        {
+            var now = DateTime.UtcNow;
+            var verdict = JobWatch.Judge(run.Job, now);
+            if (verdict == JobWatch.Fine) continue;
+            EndRun(run, kill: true);
+            if (verdict == JobWatch.Finished)
+            {
+                var report = run.Job.Items.Last(i => i.Kind == "assistant").Text.Trim();
+                board.AddNote(run.Job, JobWatch.FinishedNote, now);
+                board.RunEnded(run.Job, true, report, now);
+            }
+            else
+            {
+                var why = JobWatch.StuckReport(run.Job);
+                board.RunEnded(run.Job, false, why, now);
+                board.AddItem(run.Job, new ChatItem { Kind = "error", Text = $"No progress for {JobWatch.Stuck.TotalMinutes:0} minutes, so it was stopped." }, now);
+            }
+            Tools.ActivityLog.Note("job_watch", $"job {run.Job.Number} {verdict}");
+            Report(run.Job);
+        }
+    }
+
+    private readonly HashSet<int> _shareOffered = [];
+
+    /// <summary>
+    /// A worker is free while a running job has steps it hasn't started (FreeWorkers): the coordinator is told to hand
+    /// some to the free worker, once per job. Not while the coordinator is answering, nor in a paused or planning run.
+    /// </summary>
+    private void ShareWithFreeWorkers(JobBoard board)
+    {
+        if (_turn is not null || _reports.Count > 0 || _stopped || _sample || !IsCoordinator) return;
+        if (Run is { State: not AutopilotRun.Running and not AutopilotRun.Done and not AutopilotRun.Stopped }) return;
+        var jobs = board.Snapshot();
+        if (FreeWorkers.ToShare(jobs, ChatJobs.Limit, _shareOffered) is not { } job) return;
+        _shareOffered.Add(job.Number);
+        _ = RunTurn(FreeWorkers.Nudge(job, FreeWorkers.Free(jobs, ChatJobs.Limit)), [], "");
     }
 
     // ---- Cards ------------------------------------------------------------------------------------------------------
@@ -594,6 +657,7 @@ internal sealed partial class ChatPane
     private void OnJobClock(object? sender, EventArgs e)
     {
         if (_runs.Count == 0) { _jobClock?.Stop(); return; }
+        if (DateTime.UtcNow - _watchedAt > TimeSpan.FromSeconds(30)) WatchJobs();
         foreach (var run in _runs.Values) ShowJobCard(run.Job.Number);
         ShowSwitcher();
     }
@@ -607,6 +671,8 @@ internal sealed partial class ChatPane
         {
             // A stopped check: the job it checked is reported without it. A stopped routine run: its history says so.
             if (stopped.ReviewOf > 0 && _board.ReviewEnded(stopped, DateTime.UtcNow) is { } checkedJob) Report(checkedJob);
+            // A stopped goal reviewer: its round is judged without it (it counts as not able to tell).
+            if (stopped.GoalCheck > 0) GoalCheckEnded(stopped);
             RoutineEnded(stopped);
         }
         ShowJobCard(number);

@@ -21,6 +21,7 @@ internal sealed partial class ChatPane
     private static readonly HashSet<string> _usageWarned = new(StringComparer.Ordinal);
     /// <summary>The 5-hour figure last reported (any chat or job), for the jobs' budgets (JobBudget.Rise).</summary>
     private double? _fiveHourSeen;
+    private DateTimeOffset? _fiveHourResets;
     private static bool _usageLoaded;
 
     private readonly Popup _usageMenu = new() { StaysOpen = false, AllowsTransparency = true, Placement = PlacementMode.Top };
@@ -183,9 +184,11 @@ internal sealed partial class ChatPane
     /// </summary>
     private void OnUsage(PlanUsage reported, string? job = null)
     {
-        // The rise of the 5-hour figure since the last report counts to the job that made the request (JobBudget).
-        var rise = JobBudget.Rise(ref _fiveHourSeen, reported.Windows.FirstOrDefault(w => w.Key == PlanUsage.FiveHour)?.Used);
-        if (job is not null && rise > 0 && !_sample) ChargeJob(job, rise);
+        // The rise of the 5-hour figure since the last report counts to the job that made the request (JobBudget), shared
+        // with the others working meanwhile; an older (lower) reading counts nothing, only a new window starts it again.
+        var five = reported.Windows.FirstOrDefault(w => w.Key == PlanUsage.FiveHour);
+        var rise = JobBudget.Rise(ref _fiveHourSeen, five?.Used, JobBudget.NewWindow(ref _fiveHourResets, five?.ResetsAt));
+        if (job is not null && rise > 0 && !_sample) ChargeJob(job, JobBudget.ShareOf(rise, _runs.Count + (_turn is not null ? 1 : 0)));
         var usage = _usage = PlanUsage.Merge(_usage, reported);
         if (!_sample)
         {

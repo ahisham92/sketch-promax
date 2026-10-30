@@ -10,10 +10,23 @@ internal static class AutopilotTests
 
         // What the coordinator is told: plan first, then work alone as a senior, with a final report that ends the run.
         var plan = Autopilot.PlanRequest(run.Goal);
-        check("autopilot: the goal is planned first, no job yet", plan.Contains(run.Goal) && plan.Contains("don't start any job yet"), plan);
+        check("autopilot: the goal is planned after reading, with read-only jobs, so questions come now", plan.Contains(run.Goal) && plan.Contains("read-only jobs")
+            && plan.Contains("can't change anything before the plan is approved"), plan);
+        check("autopilot: the plan ends with every question at once, each with its assumed answer", plan.Contains(Autopilot.QuestionsHeading) && plan.Contains("one numbered list")
+            && plan.Contains("answer you will assume") && plan.Contains("Ask nothing later"), plan);
+        check("autopilot: while reading jobs are out, no plan yet", Autopilot.PlanReports(2).Contains("2 reading job(s) are still working") && Autopilot.PlanReports(2).Contains("without the plan"), "");
+        check("autopilot: once they reported, the plan and the questions", Autopilot.PlanReports(0).Contains("Now answer with the plan") && Autopilot.PlanReports(0).Contains(Autopilot.QuestionsHeading), "");
         var approved = Autopilot.Approved(run);
         check("autopilot: approved, it never asks and takes the best way, not merely the safest", approved.Contains("Never ask the user") && approved.Contains("best way")
             && approved.Contains("change and delete whatever the goal needs") && approved.Contains(Autopilot.DoneMark), approved);
+        check("autopilot: it never waits for a go-ahead, even where a brief says so", approved.Contains("Never stop to wait for the user's confirmation")
+            && approved.Contains("even where an earlier message or a brief says to wait") && Autopilot.Review(run).Contains("Don't wait for the user's go-ahead")
+            && Autopilot.Nudge(run).Contains("don't wait for their go-ahead"), approved);
+        check("autopilot: every worker kept busy, nothing held back for a slow job", approved.Contains("Keep every worker busy") && approved.Contains("never hold parts back")
+            && Autopilot.Review(run).Contains("stopped for no progress"), "");
+        check("autopilot: the coordinator knows a review team checks the goal", approved.Contains("review team checks every item"), "");
+        check("autopilot: a brief in a run never adds a wait", PromptBriefs.PlanMessage("yes please do so", [], [], autopilot: true).Contains("Never add a step, rule or assumption that makes it wait")
+            && !PromptBriefs.PlanMessage("yes please do so", [], []).Contains("autopilot run"), "");
         check("autopilot: reports are reviewed against the goal, not just told", Autopilot.Review(run).Contains("review these reports") && Autopilot.Review(run).Contains(run.Goal), "");
         check("autopilot: a quiet turn gets a nudge that names the goal", Autopilot.Nudge(run).Contains("No job is open") && Autopilot.Nudge(run).Contains(run.Goal), "");
         check("autopilot: the final mark ends the run", ("All done.\n" + Autopilot.DoneMark).Contains(Autopilot.DoneMark), "");
@@ -56,6 +69,57 @@ internal static class AutopilotTests
         check("autopilot: the report says it is met, how long, and the backup", report.Contains("the goal is met") && report.Contains("2 h 0 min") && report.Contains("autopilot backup"), report);
         check("autopilot: the report lists its own jobs only", report.Contains("Job 2 \"Tag walls\": done") && report.Contains("Job 3 \"Sheets\": ended with a problem") && !report.Contains("Earlier"), report);
         check("autopilot: the report lists the popups answered", report.Contains("Popups answered for you** (1)") && report.Contains("answered Cancel"), report);
+
+        check("autopilot: met without a review round says so plainly", !report.Contains("review team"), report);
+        run.ReviewRound = 1;
+        check("autopilot: met after the review team says it was checked", Autopilot.Report(run, jobs, now.UtcDateTime).Contains("the goal is met, checked by the review team"), "");
+        var short_ = new AutopilotRun { Goal = run.Goal, State = AutopilotRun.Stopped, PauseWhy = "the review team still found work not done after 5 rounds", Started = run.Started, Ended = run.Ended,
+            Gaps = "Modelling:\n- PVC pipes: none modelled; place PVC-01 to PVC-04" };
+        var shortReport = Autopilot.Report(short_, jobs, now.UtcDateTime);
+        check("autopilot: stopped short, the report never says met and lists what is still not done", !shortReport.Contains("goal is met") && shortReport.Contains("Still not done")
+            && shortReport.Contains("PVC pipes: none modelled"), shortReport);
+
+        // The review team: two reviewers side by side, read-only, met only when both say so; else it goes back.
+        var goal = new AutopilotRun { Goal = "Berths 7-11 package: existing model, PVC pipes, sheets Rev 0 dated 05-11\nChange from the user: TL is inside the Revit model", Plan = "Stage 1 ...\n## When the goal is met\nEvery sheet passes the issue check.", State = AutopilotRun.Running, ReviewRound = 1 };
+        var task0 = GoalReview.Task(goal, 0, "Done: 110 sheets.");
+        var task1 = GoalReview.Task(goal, 1, "Done: 110 sheets.");
+        check("review team: one reviewer for the modelling, one for the drawings and files", GoalReview.Parts.Length == 2 && task0.Contains("the modelling") && task1.Contains("drawings and deliverables")
+            && task1.Contains("list_revit_models"), task1);
+        check("review team: each gets the user's goal with their answers, the plan's checks and the claims", task0.Contains("TL is inside the Revit model") && task0.Contains("When the goal is met")
+            && task0.Contains("claims to check, not proof") && task0.Contains("Done: 110 sheets."), task0);
+        check("review team: items come from the user's words, checked in the model, not the reports", task0.Contains("from the goal and their answers (not from the plan or the report)")
+            && task0.Contains("A report saying it is done is not proof"), task0);
+        check("review team: left for later or 'to confirm' counts as not done unless the user allowed it", task0.Contains("left for later") && task0.Contains("when the user didn't allow that"), task0);
+        check("review team: they never change anything and end with the verdict line", task0.Contains("Don't change anything") && task0.Contains(GoalReview.MetWord) && task0.Contains(GoalReview.NotMetWord), task0);
+        ChatJob Reviewer(int n, string title, string summary, string state = JobBoard.Done) => new() { Number = n, Title = title, State = state, Summary = summary, GoalCheck = 1, ReadOnly = true };
+        var met = Reviewer(30, "Review: modelling", "Checked 12 items, all there.\n**GOAL MET**");
+        var notMet = Reviewer(31, "Review: drawings and files", "Checked 9 items.\nGOAL NOT MET:\n- PDF set: not exported\n- Berths 7-11 sheets: Rev 0 missing on 6 of 30");
+        check("review team: a GOAL MET line is met", GoalReview.Verdict(met).Met, "");
+        var v = GoalReview.Verdict(notMet);
+        check("review team: GOAL NOT MET is not met (never read as MET), with its list", !v.Met && v.Gaps.Contains("PDF set: not exported") && v.Gaps.Contains("6 of 30"), v.Gaps);
+        check("review team: a reviewer with no verdict is not taken as met", !GoalReview.Verdict(Reviewer(32, "Review: modelling", "I looked around.")).Met, "");
+        check("review team: a reviewer that couldn't finish is not taken as met", GoalReview.Verdict(Reviewer(33, "Review: modelling", "", JobBoard.Failed)) is { Met: false } f && f.Gaps.Contains("couldn't finish"), "");
+        check("review team: met only when every reviewer says so", GoalReview.Combine([met, Reviewer(34, "Review: drawings and files", "GOAL MET")]).Met && !GoalReview.Combine([met, notMet]).Met
+            && !GoalReview.Combine([]).Met, "");
+        var gaps = GoalReview.Combine([met, notMet]).Gaps;
+        check("review team: the gaps say which side they come from", gaps.StartsWith("drawings and files:") && gaps.Contains("PDF set"), gaps);
+        var back = GoalReview.SendBack(goal, gaps);
+        check("review team: the gaps go back to the coordinator to carry on, without stopping or asking", back.Contains("NOT met yet") && back.Contains("PDF set") && back.Contains("Don't stop")
+            && back.Contains("round 1 of " + GoalReview.MaxRounds) && back.Contains(Autopilot.DoneMark), back);
+        check("review team: rounds are limited", GoalReview.MoreRounds(new AutopilotRun { ReviewRound = GoalReview.MaxRounds - 1 }) && !GoalReview.MoreRounds(new AutopilotRun { ReviewRound = GoalReview.MaxRounds }), "");
+        goal.Gaps = gaps;
+        check("review team: the next round checks last round's gaps first", GoalReview.Task(goal, 0, "").Contains("check them first") && GoalReview.Task(goal, 0, "").Contains("PDF set"), "");
+        var board = new JobBoard([]);
+        var rev = board.StartGoalCheck("Review: modelling", task0, 1, now.UtcDateTime);
+        check("review team: a reviewer is a read-only job of its round, not checked itself by a teammate", rev.GoalCheck == 1 && rev.ReadOnly && rev.State == JobBoard.Queued
+            && !JobReview.Wanted(JobReview.Always, true, new ChatJob { State = JobBoard.Done, GoalCheck = 1 }), "");
+
+        // Reading before the plan is approved: read-only; approval lets those jobs change the model, never a reviewer.
+        var reading = board.Start("Read as-built drawings", "Read the as-built folder", now.UtcDateTime, force: true, out _)!;
+        board.ReadOnlyUntilStarted();
+        check("autopilot: jobs started before approval may only read", board.Find(reading.Number)!.ReadOnly, "");
+        board.AllowChanges();
+        check("autopilot: approved, the reading jobs may change the model, reviewers still can't", !board.Find(reading.Number)!.ReadOnly && board.Find(rev.Number)!.ReadOnly, "");
 
         // The banner says where it is.
         var paused = new AutopilotRun { State = AutopilotRun.Paused, PausedUntil = now.AddHours(1), PauseWhy = "The current session (5-hour limit) is nearly used up." };

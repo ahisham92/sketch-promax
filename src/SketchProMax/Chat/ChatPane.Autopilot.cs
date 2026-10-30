@@ -124,6 +124,13 @@ internal sealed partial class ChatPane
             AutopilotResume("You said to carry on.", turn: false);
             return false;
         }
+        // A run that ended (or that the coordinator stopped short): writing in its chat starts it again, so the rules,
+        // the free-worker rule and the review team apply to what the user asks now.
+        if (Run is { State: AutopilotRun.Done or AutopilotRun.Stopped } ended && ended.Started != default && text.Length > 0)
+        {
+            AutopilotRestart(ended);
+            return false;
+        }
         if (Run is not { State: AutopilotRun.Planning or AutopilotRun.Approval } run || text.Length == 0) return false;
         run.Goal = run.State == AutopilotRun.Approval && run.Goal.Length > 0 ? run.Goal + "\nChange from the user: " + text : text;
         run.State = AutopilotRun.Planning;
@@ -140,6 +147,8 @@ internal sealed partial class ChatPane
         var last = _conv.Items.LastOrDefault(i => i.Kind == "assistant")?.Text ?? "";
         if (run.State == AutopilotRun.Planning)
         {
+            // Reading jobs still out: their reports bring the next turn, and the plan comes once they all reported.
+            if (JobsOpen || _reports.Count > 0) return;
             if (stopped || ended.Outcome != "done" || last.Trim().Length == 0) return;
             run.Plan = last.Trim();
             run.State = AutopilotRun.Approval;
@@ -151,7 +160,8 @@ internal sealed partial class ChatPane
         if (run.State != AutopilotRun.Running) return;
         if (last.Contains(Autopilot.DoneMark))
         {
-            AutopilotFinish(AutopilotRun.Done, "");
+            // Said to be met: the review team checks it in the models and files before the run ends.
+            if (!JobsOpen) AutopilotReview(last);
             return;
         }
         _autoIdleSince = DateTime.UtcNow;
@@ -166,7 +176,9 @@ internal sealed partial class ChatPane
         run.Idle++;
         if (run.Idle > Autopilot.MaxIdle)
         {
-            AutopilotFinish(AutopilotRun.Stopped, "the coordinator stopped making progress without a final report");
+            // The coordinator stopped short: the review team says what is still to do, and it goes back to him.
+            if (GoalReview.MoreRounds(run)) AutopilotReview(_conv.Items.LastOrDefault(i => i.Kind == "assistant")?.Text ?? "");
+            else AutopilotFinish(AutopilotRun.Stopped, "the coordinator stopped making progress without a final report");
             return;
         }
         _ = RunTurn(Autopilot.Nudge(run), [], "");
@@ -186,7 +198,9 @@ internal sealed partial class ChatPane
             run.State = AutopilotRun.Running;
             run.Started = DateTime.UtcNow;
             run.Idle = 0;
-            run.JobsBefore = _board?.Snapshot().Select(j => j.Number).DefaultIfEmpty(0).Max() ?? 0;
+            // The reading jobs before approval stay the run's (their findings are what it builds on), and may change now.
+            run.JobsBefore = 0;
+            _board?.AllowChanges();
             ShowAutopilot();
             Status("Saving a backup copy of the model…", spin: true);
             var (model, copy) = await AutopilotBackup();
@@ -237,6 +251,7 @@ internal sealed partial class ChatPane
             ShowAutopilot();
             return;
         }
+        if (_gapsWaiting && _turn is null && _reports.Count == 0) SendGaps(run);
         if (_turn is null && !JobsOpen && _reports.Count == 0 && DateTime.UtcNow - _autoIdleSince > TimeSpan.FromMinutes(2))
         {
             _autoIdleSince = DateTime.UtcNow;
@@ -266,10 +281,12 @@ internal sealed partial class ChatPane
 
     /// <summary>The run's use of the week (its own share, Settings): the weekly figure's rises while it runs.</summary>
     private double? _weekSeen;
+    private DateTimeOffset? _weekResets;
 
     private void AutopilotWeekUsage(PlanUsage reported)
     {
-        var rise = JobBudget.Rise(ref _weekSeen, reported.Windows.FirstOrDefault(w => w.Key == PlanUsage.Weekly)?.Used);
+        var week = reported.Windows.FirstOrDefault(w => w.Key == PlanUsage.Weekly);
+        var rise = JobBudget.Rise(ref _weekSeen, week?.Used, JobBudget.NewWindow(ref _weekResets, week?.ResetsAt));
         if (rise > 0 && Run is { Active: true } run) run.WeekUsed += rise;
     }
 
@@ -289,10 +306,94 @@ internal sealed partial class ChatPane
         if (turn && _turn is null) _ = RunTurn(Autopilot.Resume(run, why), [], "");
     }
 
+    private bool _gapsWaiting;
+
+    /// <summary>
+    /// The coordinator says the goal is met (or stopped short): the review team, read-only jobs side by side, checks every
+    /// item the user asked for in the models and files (GoalReview). Past the last round the run stops, listing what is
+    /// still not done.
+    /// </summary>
+    private void AutopilotReview(string claims)
+    {
+        if (Run is not { State: AutopilotRun.Running } run || _board is not { } board) return;
+        if (!GoalReview.MoreRounds(run))
+        {
+            AutopilotFinish(AutopilotRun.Stopped, $"the review team still found work not done after {GoalReview.MaxRounds} rounds");
+            return;
+        }
+        run.ReviewRound++;
+        run.Idle = 0;
+        var now = DateTime.UtcNow;
+        for (var part = 0; part < GoalReview.Parts.Length; part++)
+        {
+            var reviewer = board.StartGoalCheck(GoalReview.Parts[part].Title, GoalReview.Task(run, part, claims), run.ReviewRound, now);
+            ChatJobs.Assign(reviewer, ChatAuto.Everyday);
+        }
+        var text = $"The coordinator says the goal is met. The review team ({GoalReview.Parts.Length} reviewers, round {run.ReviewRound}) " +
+                   "is checking every item you asked for in the models and files before the run ends; anything not done goes back to the coordinator.";
+        Note(text);
+        AutopilotLog(AutopilotEntry.Note, text);
+        Save();
+        ShowJobCards();
+        PumpJobs();
+        ShowAutopilot();
+    }
+
+    /// <summary>A reviewer finished: once the whole round has, the run ends (all met) or the gaps go back to the coordinator.</summary>
+    private void GoalCheckEnded(ChatJob reviewer)
+    {
+        if (Run is not { State: AutopilotRun.Running or AutopilotRun.Paused } run || _board is not { } board || reviewer.GoalCheck != run.ReviewRound) return;
+        var round = board.Snapshot().Where(j => j.GoalCheck == run.ReviewRound).ToList();
+        if (round.Any(j => j.Open)) return;
+        var (met, gaps) = GoalReview.Combine(round);
+        if (met)
+        {
+            run.Gaps = "";
+            AutopilotLog(AutopilotEntry.Note, $"The review team checked the goal (round {run.ReviewRound}): met.");
+            AutopilotFinish(AutopilotRun.Done, "");
+            return;
+        }
+        run.Gaps = gaps;
+        var count = gaps.Split('\n').Count(l => l.TrimStart().StartsWith("- ", StringComparison.Ordinal));
+        AutopilotLog(AutopilotEntry.Note, $"The review team found the goal not met yet (round {run.ReviewRound}): {Math.Max(1, count)} item(s) went back to the coordinator.");
+        Note($"The review team found {Math.Max(1, count)} item(s) not done yet. They went back to the coordinator, who carries on.");
+        Save();
+        _gapsWaiting = true;
+        SendGaps(run);
+    }
+
+    /// <summary>What the review team found goes to the coordinator as soon as the chat is free (or at the next tick).</summary>
+    private void SendGaps(AutopilotRun run)
+    {
+        if (run.State != AutopilotRun.Running || _turn is not null) return;
+        _gapsWaiting = false;
+        run.Idle = 0;
+        _ = RunTurn(GoalReview.SendBack(run, run.Gaps), [], "");
+    }
+
+    /// <summary>The user wrote in the chat of a run that ended: it runs again, with what they wrote as the next turn.</summary>
+    private void AutopilotRestart(AutopilotRun run)
+    {
+        TakeSharedLog(run);
+        run.State = AutopilotRun.Running;
+        run.Ended = default;
+        run.PauseWhy = "";
+        run.PausedUntil = null;
+        run.Idle = 0;
+        run.ReviewRound = 0;
+        AutopilotShare.Begin(Autopilot.RunId(_conv.Id, run), "", DateTime.UtcNow);
+        var text = "Autopilot started again with your message: the coordinator and workers carry on without asking you, and the review team checks the goal before it ends.";
+        AutopilotLog(AutopilotEntry.Resumed, text);
+        Note(text);
+        Save();
+        ShowAutopilot();
+    }
+
     /// <summary>Stop on the banner: the open jobs stop and the report is written.</summary>
     private void AutopilotStop(string why)
     {
-        if (Run is not { Active: true }) return;
+        if (Run is not { Active: true } run) return;
+        run.State = AutopilotRun.Stopped; // first: the stopped reviewers must not send anything back
         foreach (var job in _board?.Snapshot().Where(j => j.Active || j.State == JobBoard.Queued).ToList() ?? []) StopJob(job.Number);
         AutopilotFinish(AutopilotRun.Stopped, why);
     }
