@@ -32,8 +32,9 @@ internal static class OutlookMail
     });
 
     /// <summary>
-    /// The replies (RE: …) in the Inbox whose subject carries one of <paramref name="tokens"/>; each one read, and every
-    /// mail of those threads (the question too) moved to the Sketch ProMax folder. Null when Outlook can't be reached.
+    /// The replies (RE: …) in the Inbox whose subject carries one of <paramref name="tokens"/>; each one read and moved to
+    /// the Sketch ProMax folder. The question or progress email itself stays in the Inbox, where the user reads it (moving
+    /// it too hid every email in that folder within 30 seconds of arriving). Null when Outlook can't be reached.
     /// </summary>
     public static List<Reply>? TakeReplies(IReadOnlyCollection<string> tokens) => Sta(() =>
     {
@@ -53,8 +54,8 @@ internal static class OutlookMail
             var subject = Get(mail, "Subject") as string ?? "";
             var token = AskByEmail.TokenOf(subject);
             if (token is null || !tokens.Contains(token)) continue;
-            if (tokens.Any(t => AskByEmail.IsReply(subject, t)))
-                replies.Add(new Reply(subject, Get(mail, "Body") as string ?? "", Get(mail, "ReceivedTime") is DateTime at ? at : DateTime.Now));
+            if (!tokens.Any(t => AskByEmail.IsReply(subject, t))) continue; // the email itself: left for the user to read
+            replies.Add(new Reply(subject, Get(mail, "Body") as string ?? "", Get(mail, "ReceivedTime") is DateTime at ? at : DateTime.Now));
             try
             {
                 folder ??= OwnFolder(inbox);
