@@ -82,5 +82,13 @@ internal static class AskByEmailTests
         check("email: a job is told to ask by email, carry on, and fix after a late reply", Autopilot.JobRules.Contains("ask_user") && Autopilot.JobRules.Contains("put the work right"), "");
         check("email: the report lists the questions emailed", Autopilot.Report(new AutopilotRun { State = AutopilotRun.Done, Log = [new AutopilotEntry { Kind = AutopilotEntry.Asked, Text = "Emailed you Q1 (x)." }] }, [], t0)
             .Contains("Questions emailed to you** (1)"), "");
+
+        // Reading replies: often only while a job may be waiting, and only mail since the oldest open email.
+        var waiting = new EmailQuestion { Id = 7, Sent = t0.AddMinutes(-3) };
+        var late = new EmailQuestion { Id = 8, Sent = t0.AddMinutes(-30) };
+        check("email: replies are read every 30 s while a job may wait on one", AskByEmail.ReadEvery([waiting, late], t0, 10) == TimeSpan.FromSeconds(30), "");
+        check("email: otherwise every 2 minutes", AskByEmail.ReadEvery([late], t0, 10) == TimeSpan.FromMinutes(2) && AskByEmail.ReadEvery([], t0, 10) == TimeSpan.FromMinutes(2), "");
+        check("email: only mail since the oldest open email (less 2 min) is looked at",
+            AskByEmail.ReadSince([t0.AddMinutes(-30), t0.AddMinutes(-3), default], t0) == t0.AddMinutes(-32) && AskByEmail.ReadSince([], t0) == t0.AddMinutes(-2), "");
     }
 }

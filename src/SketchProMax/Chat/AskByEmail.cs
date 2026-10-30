@@ -53,6 +53,21 @@ internal static class AskByEmail
     /// <summary>The longest one ask_user wait call holds (a job calls again to keep waiting).</summary>
     public const int WaitCallSeconds = 45;
 
+    /// <summary>
+    /// How often the Inbox is read for replies: every 30 s while a job may be waiting on an answer (within the wait after
+    /// its email went), else every 2 minutes (a progress email's reply, or an answer coming late). Reading more often made
+    /// Outlook heavy.
+    /// </summary>
+    public static TimeSpan ReadEvery(IEnumerable<EmailQuestion> open, DateTime nowUtc, int waitMinutes) =>
+        open.Any(q => q.Sent != default && nowUtc < q.Sent.AddMinutes(Math.Max(1, waitMinutes))) ? TimeSpan.FromSeconds(30) : TimeSpan.FromMinutes(2);
+
+    /// <summary>The oldest open email's time, less 2 minutes: only mail received since then is looked at (UTC).</summary>
+    public static DateTime ReadSince(IEnumerable<DateTime> sentUtc, DateTime nowUtc)
+    {
+        var list = sentUtc.Where(t => t != default).ToList();
+        return (list.Count > 0 ? list.Min() : nowUtc).AddMinutes(-2);
+    }
+
     /// <summary>A short token for one email ("A7F2"): the reply's subject carries it back.</summary>
     public static string NewToken(Random random) => random.Next(0x1000, 0x10000).ToString("X4", CultureInfo.InvariantCulture);
 
