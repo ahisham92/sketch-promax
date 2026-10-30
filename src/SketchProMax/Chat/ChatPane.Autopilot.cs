@@ -458,7 +458,7 @@ internal sealed partial class ChatPane
         if (!AskByEmail.UpdateDue(run.LastUpdate, now, AskUser.UpdateMinutes)) return;
         var since = run.LastUpdate;
         run.LastUpdate = now;
-        var body = AskByEmail.UpdateBody(run, _board?.Snapshot() ?? [], since, _conv.Items.LastOrDefault(i => i.Kind == "assistant")?.Text ?? "", now);
+        var body = AskByEmail.UpdateBody(run, _board?.Snapshot() ?? [], since, AskUser.Waiting(), now);
         _updateSending = true;
         _ = AskUser.SendUpdateAsync(body).ContinueWith(t => Dispatcher.BeginInvoke(new Action(() =>
         {
