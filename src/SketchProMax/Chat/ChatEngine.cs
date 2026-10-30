@@ -92,8 +92,44 @@ internal sealed class ChatEngine : IDisposable
         catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception) { return true; }
     }
 
-    /// <summary>Starts the process off the UI thread and writes <paramref name="firstLine"/> to it.</summary>
-    public Task StartAsync(string firstLine) => Task.Run(() =>
+    private Task? _starting;
+
+    /// <summary>True while the process is being started early (<see cref="WarmAsync"/>) and isn't ready for a message yet.</summary>
+    public bool Warming
+    {
+        get
+        {
+            lock (_gate) return _starting is { IsCompleted: false };
+        }
+    }
+
+    /// <summary>
+    /// Starts the process ahead of the first message (the user is typing): by the time they send, Claude Code is up and has
+    /// the Revit tools, so the message goes at once. Starting twice starts once.
+    /// </summary>
+    public Task WarmAsync()
+    {
+        lock (_gate)
+        {
+            if (_starting is null)
+            {
+                McpAddress = ClaudeCli.McpAddress;
+                _starting = Task.Run(Launch);
+            }
+            return _starting;
+        }
+    }
+
+    /// <summary>Starts the process off the UI thread (unless it was started early) and writes <paramref name="firstLine"/> to it.</summary>
+    public async Task StartAsync(string firstLine)
+    {
+        await WarmAsync().ConfigureAwait(false);
+        lock (_gate)
+            if (_disposed) return;
+        Write(firstLine);
+    }
+
+    private void Launch()
     {
         var info = _start?.Invoke() ?? ClaudeCli.EngineStart(_install, ResumedFrom, Model, Coordinator, Effort, ChatKey);
         McpAddress = ClaudeCli.McpAddress;
@@ -116,8 +152,7 @@ internal sealed class ChatEngine : IDisposable
         new Thread(() => ReadOutput(process)) { IsBackground = true, Name = "Sketch ProMax chat output" }.Start();
         new Thread(() => ReadErrors(process)) { IsBackground = true, Name = "Sketch ProMax chat errors" }.Start();
         WaitForTools(process, started);
-        Write(firstLine);
-    });
+    }
 
     /// <summary>How long a new process may take to fetch the Revit tools before its first message goes anyway.</summary>
     internal const int ToolsWaitMs = 15000;
@@ -155,8 +190,14 @@ internal sealed class ChatEngine : IDisposable
         Thread.Sleep(300);
     }
 
-    /// <summary>Writes one stream-json line (a user message or a control request) off the UI thread.</summary>
-    public Task SendAsync(string line) => Task.Run(() => Write(line));
+    /// <summary>Writes one stream-json line (a user message or a control request) off the UI thread, once a process started early is ready.</summary>
+    public async Task SendAsync(string line)
+    {
+        Task? starting;
+        lock (_gate) starting = _starting;
+        if (starting is not null) await starting.ConfigureAwait(false);
+        await Task.Run(() => Write(line)).ConfigureAwait(false);
+    }
 
     private void Write(string line)
     {

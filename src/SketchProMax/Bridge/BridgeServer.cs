@@ -55,6 +55,8 @@ public sealed class BridgeServer
         _registry = registry;
         _dispatcher = dispatcher;
         _revitVersion = revitVersion;
+        // Nobody at the PC (an autopilot overnight): the jobs' calls follow each other with almost no breather.
+        JobTurns.SinceInput = Revit.SwitchGate.SinceInput;
         // The chat's calls to a model open in another Revit window: that window doesn't know the chat's jobs, so this one
         // pins each job to its model, refuses a check job's changes, and delivers what the user sent it meanwhile.
         RevitTargets.JobModel = Chat.ChatJobs.ModelOf;

@@ -57,7 +57,11 @@ public abstract class RevitCodeToolBase : IRevitTool
         "under a minute, and keep any whole-model collection filtered.";
 
     public virtual ToolResult Execute(UIApplication app, ToolArgs args) =>
-        RunScript(app, args.String("code"), args.String("description"), ModifiesModel, new Dictionary<string, object?>(), capSeconds: CapSeconds);
+        Counted(RunScript(app, args.String("code"), args.String("description"), ModifiesModel, new Dictionary<string, object?>(), capSeconds: CapSeconds), args);
+
+    /// <summary>The same code written again and again: the third time it worked, it is offered as a tool of its own (CodeRepeats).</summary>
+    protected static ToolResult Counted(ToolResult result, ToolArgs args) =>
+        !result.IsError && CodeRepeats.Note(args.String("code"), args.String("description")) is { } tip ? result with { Text = result.Text + "\n\n" + tip } : result;
 
     /// <summary>
     /// Compiles and runs a snippet, inside one transaction when it changes the model. Learned tools use this too.
@@ -259,8 +263,8 @@ public sealed class RunRevitQueryCodeTool : RevitCodeToolBase
     """;
 
     public override ToolResult Execute(UIApplication app, ToolArgs args) =>
-        RunScript(app, args.String("code"), args.String("description"), false, new Dictionary<string, object?>(), args.OptBool("own_transactions"),
-            CapSeconds);
+        Counted(RunScript(app, args.String("code"), args.String("description"), false, new Dictionary<string, object?>(), args.OptBool("own_transactions"),
+            CapSeconds), args);
 }
 
 public sealed class RunRevitCodeTool : RevitCodeToolBase
@@ -284,8 +288,8 @@ public sealed class RunRevitCodeTool : RevitCodeToolBase
     """;
 
     public override ToolResult Execute(UIApplication app, ToolArgs args) =>
-        RunScript(app, args.String("code"), args.String("description"), ModifiesModel, new Dictionary<string, object?>(),
-            args.OptBool("own_transactions"), CapSeconds);
+        Counted(RunScript(app, args.String("code"), args.String("description"), ModifiesModel, new Dictionary<string, object?>(),
+            args.OptBool("own_transactions"), CapSeconds), args);
 }
 
 /// <summary>Compiles snippets with Roslyn, caching by source so a retried snippet doesn't compile twice.</summary>
