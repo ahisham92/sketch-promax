@@ -39,6 +39,11 @@ internal sealed class AutopilotRun
     public int ReviewRound { get; set; }
     /// <summary>What the review team last found not done ("" when nothing): sent back to the coordinator, and in the report.</summary>
     public string Gaps { get; set; } = "";
+    /// <summary>When the last progress email went (Settings › Chat › Autopilot; the run's start before the first).</summary>
+    public DateTime LastUpdate { get; set; }
+    /// <summary>Paused because the connection dropped (ConnectionWatch.Internet or .Network; "" otherwise), and since when.</summary>
+    public string Offline { get; set; } = "";
+    public DateTime OfflineSince { get; set; }
 
     public bool Active => State is Running or Paused;
 }
@@ -147,7 +152,9 @@ internal static class Autopilot
         "Rules while the user is away:\n" +
         "- Work as a senior engineer who owns the result: choose the best way to reach the goal, not merely the safest. " +
         "Never ask the user anything and never wait for an answer; make the call a senior would, keep assumptions to the " +
-        "few the goal needs, and list them under \"Decisions I made\" in the final report.\n" +
+        "few the goal needs, and list them under \"Decisions I made\" in the final report. Only a choice that would change the " +
+        "result a lot and that the goal doesn't settle may go to the user by email (ask_user, with the answer you assume): " +
+        "carry on meanwhile; their reply, even a late one, reaches the job to put the work right.\n" +
         "- You may change and delete whatever the goal needs; a backup copy of the model was saved before you started.\n" +
         "- Hand the work to jobs, divided across the free workers; review each report like a senior reviewer and send back " +
         "what is wrong or not good enough.\n" +
@@ -169,6 +176,9 @@ internal static class Autopilot
         - Autopilot: nobody is at the computer. Never end with a question and never wait for an answer. Work as a senior
           engineer: where you would ask, make the best call for the goal (not merely the safest), change or delete what
           the task needs, and say in your report what you decided and why. A backup of the model was saved first.
+          Only a choice that would change the result a lot and that the task doesn't settle may go to the user by email:
+          ask_user with the question and the answer you assume, then carry on with work that doesn't depend on it (or
+          ask_user action=wait); a reply that comes later reaches you as a message, to put the work right.
         """;
 
     // ---- Answering for the user ----------------------------------------------------------------------------------------
@@ -320,6 +330,7 @@ internal static class Autopilot
         }
         if (run.State != AutopilotRun.Done && run.Gaps.Trim().Length > 0)
             sb.Append("\n\n**Still not done** (what the review team found)\n").Append(run.Gaps.Trim());
+        Section("Questions emailed to you", AutopilotEntry.Asked);
         Section("Risky steps allowed for you", AutopilotEntry.Allowed);
         Section("Popups answered for you", AutopilotEntry.Popup);
         Section("Pauses", AutopilotEntry.Paused);

@@ -135,6 +135,15 @@ public sealed class AgentSettings
     /// <summary>One autopilot run may use this percent of the weekly limit, then pauses (0: no cap of its own).</summary>
     public int AutopilotWeekShare { get; set; } = 25;
 
+    /// <summary>
+    /// During an autopilot, a job that needs the user emails them (Chat.AskUser, classic Outlook) and waits this many
+    /// minutes for a reply before carrying on with its assumption (0: no questions by email).
+    /// </summary>
+    public int AutopilotAskWaitMinutes { get; set; } = 10;
+
+    /// <summary>During an autopilot, a progress email goes to the user this often, in minutes; a reply reaches the coordinator (0: none).</summary>
+    public int AutopilotUpdateMinutes { get; set; } = 60;
+
     /// <summary>Your name as it goes on a signed checklist (next to Chat).</summary>
     public string SignatureName { get; set; } = "";
 

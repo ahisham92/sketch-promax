@@ -47,6 +47,9 @@ internal sealed partial class ChatPane
         {
             _autoHooked = true;
             Autopilot.Logged += (kind, text) => Dispatcher.BeginInvoke(new Action(() => AutopilotLog(kind, text)));
+            AskUser.Logged += text => Dispatcher.BeginInvoke(new Action(() => AutopilotLog(AutopilotEntry.Asked, text)));
+            AskUser.Answered += q => Dispatcher.BeginInvoke(new Action(() => EmailAnswered(q)));
+            AskUser.UserWrote += text => Dispatcher.BeginInvoke(new Action(() => EmailFromUser(text)));
         }
         var run = _sample ? null : Run;
         Autopilot.Here = run is { Active: true };
@@ -208,6 +211,7 @@ internal sealed partial class ChatPane
             // Other Revit windows the run reaches (a documentation model linking this one) answer for you too, and back
             // up their model before its first change.
             AutopilotShare.Begin(Autopilot.RunId(_conv.Id, run), copy.Length > 0 ? model : "", DateTime.UtcNow);
+            AskUser.Goal = run.Goal;
             Note(run.Backup.Length > 0 ? $"Autopilot started. Backup copy of the model: {run.Backup}"
                 : "Autopilot started. No backup copy could be saved (the model has never been saved to a file).");
             Save();
@@ -241,10 +245,15 @@ internal sealed partial class ChatPane
     {
         if (Run is not { Active: true } run) return;
         var now = DateTimeOffset.UtcNow;
+        if (AskUser.Goal.Length == 0) AskUser.Goal = run.Goal; // a run carried on after Revit started again
         AutopilotUpdateTick(run);
         // The other Revit windows know the run is still on, and what they answered goes into its log.
         if (run.State != AutopilotRun.Approval && run.Started != default) AutopilotShare.Beat(Autopilot.RunId(_conv.Id, run), DateTime.UtcNow);
         TakeSharedLog(run);
+        // Progress by email, and what came back by email (also while paused: the user's word carries a paused run on).
+        AutopilotProgressEmail(run);
+        SendLateAnswers();
+        AutopilotConnection(run);
         if (run.State == AutopilotRun.Paused)
         {
             if (run.PausedUntil is { } until && until <= now) AutopilotResume("The usage limit has reset.");
@@ -252,6 +261,7 @@ internal sealed partial class ChatPane
             return;
         }
         if (_gapsWaiting && _turn is null && _reports.Count == 0) SendGaps(run);
+
         if (_turn is null && !JobsOpen && _reports.Count == 0 && DateTime.UtcNow - _autoIdleSince > TimeSpan.FromMinutes(2))
         {
             _autoIdleSince = DateTime.UtcNow;
@@ -295,6 +305,7 @@ internal sealed partial class ChatPane
         if (Run is not { State: AutopilotRun.Paused } run) return;
         run.State = AutopilotRun.Running;
         run.PausedUntil = null;
+        run.Offline = "";
         run.Idle = 0;
         // A pause for the run's share of the week: carrying on starts its share again (a new week, or the user's say).
         if (run.WeekCap) run.WeekUsed = 0;
@@ -306,7 +317,145 @@ internal sealed partial class ChatPane
         if (turn && _turn is null) _ = RunTurn(Autopilot.Resume(run, why), [], "");
     }
 
+    private readonly ConnectionWatch _connection = new();
+    private bool _probing;
+
+    /// <summary>
+    /// Every 30 s while a run is on: is the internet there, and the company network the central model is on? When either
+    /// drops (two probes in a row) the run pauses: running jobs finish or fail their step, nothing new starts. When it is
+    /// back the run carries on by itself, and the jobs the drop cut off are told to check the model and carry on.
+    /// </summary>
+    private void AutopilotConnection(AutopilotRun run)
+    {
+        if (_probing) return;
+        _probing = true;
+        var central = _modelKey;
+        _ = Task.Run(async () => (internet: await ConnectionProbe.InternetAsync().ConfigureAwait(false), network: await ConnectionProbe.NetworkAsync(central).ConfigureAwait(false)))
+            .ContinueWith(t => Dispatcher.BeginInvoke(new Action(() =>
+            {
+                _probing = false;
+                if (t.Status != TaskStatus.RanToCompletion || Run is not { Active: true } now || !ReferenceEquals(now, run)) return;
+                try { ConnectionChanged(run, t.Result.internet, t.Result.network); }
+                catch (Exception) { /* the next probe tries again */ }
+            })), TaskScheduler.Default);
+    }
+
+    private void ConnectionChanged(AutopilotRun run, bool internet, bool? network)
+    {
+        _connection.Record(internet, network);
+        var down = _connection.Down;
+        if (down.Length > 0)
+        {
+            if (run.State == AutopilotRun.Running)
+            {
+                // Only a running run: a usage pause stays as it is (this one takes over if the limit resets while still offline).
+                run.State = AutopilotRun.Paused;
+                run.PausedUntil = null;
+                run.Offline = down;
+                run.OfflineSince = DateTime.UtcNow;
+                run.PauseWhy = ConnectionWatch.Why(down);
+                var text = $"Paused: {run.PauseWhy}. It carries on by itself when the connection is back.";
+                AutopilotLog(AutopilotEntry.Paused, text);
+                Note("Autopilot " + char.ToLowerInvariant(text[0]) + text.Substring(1));
+                Save();
+                ShowAutopilot();
+            }
+            else if (ConnectionWatch.IsConnectionPause(run) && run.Offline != down)
+            {
+                run.Offline = down;
+                run.PauseWhy = ConnectionWatch.Why(down);
+                Save();
+                ShowAutopilot();
+            }
+            return;
+        }
+        // Back only on a probe that worked (after Revit started again, the watch knows nothing yet).
+        if (!ConnectionWatch.IsConnectionPause(run) || !internet || network == false) return;
+        var back = ConnectionWatch.BackLine(run.Offline, run.OfflineSince, DateTime.UtcNow);
+        var cut = _board is { } board ? ConnectionWatch.CutOff(board.Snapshot(), run.JobsBefore, run.OfflineSince) : [];
+        foreach (var job in cut) _board!.Message(job.Number, ConnectionWatch.CarryOnLine, DateTime.UtcNow);
+        if (cut.Count > 0)
+        {
+            back += $" Job{(cut.Count == 1 ? "" : "s")} {string.Join(", ", cut.Select(j => j.Number))}, cut off by the drop, " +
+                    $"{(cut.Count == 1 ? "was" : "were")} told to check the model and carry on.";
+            JobsChanged();
+        }
+        Note(back);
+        AutopilotResume(back);
+    }
+
     private bool _gapsWaiting;
+    private readonly List<EmailQuestion> _lateAnswers = [];
+
+    /// <summary>
+    /// The user answered a question by email after the asking job stopped waiting for it (AskUser): the job gets it as a
+    /// message (it reopens if it had finished) to put its work right; the coordinator's own question comes as its next turn.
+    /// </summary>
+    private void EmailAnswered(EmailQuestion q)
+    {
+        AutopilotLog(AutopilotEntry.Asked, $"You answered Q{q.Id} by email: {q.Answer}");
+        if (q.JobKey.Length > 0 && _board?.FindKey(q.JobKey) is { } job)
+        {
+            _board.Message(job.Number, AskByEmail.LateLine(q), DateTime.UtcNow);
+            JobsChanged();
+            return;
+        }
+        _lateAnswers.Add(q);
+        SendLateAnswers();
+    }
+
+    private void SendLateAnswers()
+    {
+        if (_turn is not null || Run is not { State: AutopilotRun.Running or AutopilotRun.Paused }) return;
+        if (_fromEmail.Count > 0)
+        {
+            var asks = string.Join("\n\n", _fromEmail);
+            _fromEmail.Clear();
+            _ = RunTurn(AskByEmail.FromEmail(asks), [], "");
+            return;
+        }
+        if (_lateAnswers.Count == 0 || Run is not { State: AutopilotRun.Running }) return;
+        var text = "[Autopilot, not typed by the user] " + string.Join("\n", _lateAnswers.Select(AskByEmail.LateLine));
+        _lateAnswers.Clear();
+        _ = RunTurn(text, [], "");
+    }
+
+    private readonly List<string> _fromEmail = [];
+
+    /// <summary>The user replied to a progress email: shown in the chat as their message (by email), and the coordinator takes it in.</summary>
+    private void EmailFromUser(string text)
+    {
+        if (Run is not { Active: true } run) return;
+        Add(new ChatItem { Kind = "user", Text = text + "\n\n(by email)" });
+        AutopilotLog(AutopilotEntry.Asked, "You wrote by email: " + (text.Length > 200 ? text.Substring(0, 199) + "…" : text));
+        // A paused run: the user's word carries it on, as typing "continue" would.
+        if (run.State == AutopilotRun.Paused) AutopilotResume("You wrote by email.", turn: false);
+        _fromEmail.Add(text);
+        Save();
+        SendLateAnswers();
+    }
+
+    private bool _updateSending;
+
+    /// <summary>Every hour or so (Settings): a progress email; a reply to it comes back as the user's message.</summary>
+    private void AutopilotProgressEmail(AutopilotRun run)
+    {
+        if (_updateSending || run.State is not (AutopilotRun.Running or AutopilotRun.Paused)) return;
+        var now = DateTime.UtcNow;
+        if (run.LastUpdate == default) run.LastUpdate = run.Started;
+        if (!AskByEmail.UpdateDue(run.LastUpdate, now, AskUser.UpdateMinutes)) return;
+        var since = run.LastUpdate;
+        run.LastUpdate = now;
+        var body = AskByEmail.UpdateBody(run, _board?.Snapshot() ?? [], since, _conv.Items.LastOrDefault(i => i.Kind == "assistant")?.Text ?? "", now);
+        _updateSending = true;
+        _ = AskUser.SendUpdateAsync(body).ContinueWith(t => Dispatcher.BeginInvoke(new Action(() =>
+        {
+            _updateSending = false;
+            var error = t.Status == TaskStatus.RanToCompletion ? t.Result : t.Exception?.GetBaseException().Message;
+            AutopilotLog(AutopilotEntry.Asked, error is null ? "Emailed you a progress update." : $"Couldn't email the progress update ({error}).");
+            Save();
+        })), TaskScheduler.Default);
+    }
 
     /// <summary>
     /// The coordinator says the goal is met (or stopped short): the review team, read-only jobs side by side, checks every
@@ -382,6 +531,7 @@ internal sealed partial class ChatPane
         run.Idle = 0;
         run.ReviewRound = 0;
         AutopilotShare.Begin(Autopilot.RunId(_conv.Id, run), "", DateTime.UtcNow);
+        AskUser.Goal = run.Goal;
         var text = "Autopilot started again with your message: the coordinator and workers carry on without asking you, and the review team checks the goal before it ends.";
         AutopilotLog(AutopilotEntry.Resumed, text);
         Note(text);
@@ -407,6 +557,7 @@ internal sealed partial class ChatPane
         Autopilot.Here = false;
         TakeSharedLog(run);
         AutopilotShare.End(Autopilot.RunId(_conv.Id, run));
+        AskUser.Clear();
         Add(new ChatItem { Kind = "assistant", Text = Autopilot.Report(run, _board?.Snapshot() ?? [], DateTime.UtcNow) });
         Save();
         ShowAutopilot();

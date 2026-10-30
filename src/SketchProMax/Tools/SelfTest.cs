@@ -534,6 +534,7 @@ internal static partial class SelfTest
         new("chat_jobs", _ => new { action = "start", title = "Self-test job", task = "Nothing: this job must not start." }) { ExpectError = "only from the main chat" },
         // Reads the rule only: a skip would change what the user's next chat task does.
         new("auto_sync", _ => new { action = "status" }),
+        new("ask_user", _ => new { question = "Self-test: nothing is sent.", assumed = "nothing" }) { ExpectError = "only in the chat inside Revit" },
         new("list_recipes", _ => new { }),
         new("list_learned_tools", _ => new { }),
         new("list_steel_connection_types", _ => new { }),

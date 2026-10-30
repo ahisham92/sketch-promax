@@ -26,7 +26,7 @@ internal static class RedoLog
     /// <summary>Calls that are not model work to redo (bookkeeping, sync, the redo itself).</summary>
     public static readonly HashSet<string> NotRedone = new(StringComparer.Ordinal)
     {
-        "redo_steps", "auto_sync", "save_model", "reload_links", "relinquish_mine", "borrow_elements", "make_worksets_editable",
+        "redo_steps", "auto_sync", "ask_user", "save_model", "reload_links", "relinquish_mine", "borrow_elements", "make_worksets_editable",
         "memory_note", "chat_jobs", "work_progress", "berth_status", "berth_costing", "report_bug", "save_recipe", "save_as_tool",
         "delete_learned_tool", "model_snapshot", "coordination_progress", "use_revit_model", "cancel_job", "wait_for_job",
     };

@@ -7,7 +7,7 @@ namespace SketchProMax.Chat;
 /// <summary>One line of an autopilot run's log: a popup answered, a step skipped, a pause, a decision.</summary>
 internal sealed class AutopilotEntry
 {
-    public const string Popup = "popup", Allowed = "allowed", Paused = "paused", Resumed = "resumed", Note = "note";
+    public const string Popup = "popup", Allowed = "allowed", Paused = "paused", Resumed = "resumed", Note = "note", Asked = "asked";
 
     public DateTime Time { get; set; }
     public string Kind { get; set; } = Note;

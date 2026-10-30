@@ -46,6 +46,7 @@ internal static class StepNames
         ["what_if"] = "What if",
         ["read_pdf_part"] = "Read a part of the PDF",
         ["chat_jobs"] = "Jobs",
+        ["ask_user"] = "Ask you by email",
         ["make_document"] = "Make a file",
         // Built-in steps of the chat engine.
         ["Read"] = "Read a file",
@@ -154,7 +155,7 @@ internal static class StepNames
     {
         tool = Short(tool);
         return tool is "run_revit_query_code" or "query_elements" or "query_linked_models" or "capture_view_image" or "select_elements"
-                   or "wait_for_job" or "cancel_job" or "chat_jobs" or "help" or "features" or "memory_note" or "diagnostics" or "make_document"
+                   or "wait_for_job" or "cancel_job" or "chat_jobs" or "ask_user" or "help" or "features" or "memory_note" or "diagnostics" or "make_document"
                    or "Read" or "Glob" or "Grep" or "LS" or "TodoWrite" or "TaskCreate" or "TaskUpdate" or "WebFetch" or "WebSearch" or "ToolSearch"
                || tool.StartsWith("get_", StringComparison.Ordinal) || tool.StartsWith("list_", StringComparison.Ordinal)
                || tool.StartsWith("find_", StringComparison.Ordinal) || tool.StartsWith("read_", StringComparison.Ordinal);
