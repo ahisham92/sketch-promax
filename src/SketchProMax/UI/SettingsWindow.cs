@@ -102,14 +102,14 @@ public sealed class SettingsWindow : Window
         Fill(_apJob, Chat.JobBudget.Choices, _settings.AutopilotJobBudget, Chat.JobBudget.DefaultPercent, "never");
         Fill(_apFive, FiveHourChoices, _settings.AutopilotFiveHourMax, 90, null);
         Fill(_apWeek, WeekChoices, _settings.AutopilotWeekShare, 25, "no cap");
-        foreach (var m in Chat.AskByEmail.WaitChoices)
-            _apAsk.Items.Add(new ComboBoxItem { Content = m == 0 ? "never (no emails)" : m.ToString(System.Globalization.CultureInfo.CurrentCulture) + " min", Tag = m });
-        foreach (var m in Chat.AskByEmail.UpdateChoices)
+        foreach (var m in Chat.AskRules.WaitChoices)
+            _apAsk.Items.Add(new ComboBoxItem { Content = m == 0 ? "never (ask nothing)" : m.ToString(System.Globalization.CultureInfo.CurrentCulture) + " min", Tag = m });
+        foreach (var m in Chat.AskRules.UpdateChoices)
             _apUpdate.Items.Add(new ComboBoxItem { Content = m == 0 ? "never" : m < 60 ? m.ToString(System.Globalization.CultureInfo.CurrentCulture) + " min" : (m / 60).ToString(System.Globalization.CultureInfo.CurrentCulture) + (m == 60 ? " hour" : " hours"), Tag = m });
-        _apUpdate.SelectedIndex = Math.Max(0, Array.IndexOf(Chat.AskByEmail.UpdateChoices, _settings.AutopilotUpdateMinutes) is var u and >= 0 ? u
-            : Array.IndexOf(Chat.AskByEmail.UpdateChoices, Chat.AskByEmail.DefaultUpdateMinutes));
-        _apAsk.SelectedIndex = Math.Max(0, Array.IndexOf(Chat.AskByEmail.WaitChoices, _settings.AutopilotAskWaitMinutes) is var i and >= 0 ? i
-            : Array.IndexOf(Chat.AskByEmail.WaitChoices, Chat.AskByEmail.DefaultWaitMinutes));
+        _apUpdate.SelectedIndex = Math.Max(0, Array.IndexOf(Chat.AskRules.UpdateChoices, _settings.AutopilotUpdateMinutes) is var u and >= 0 ? u
+            : Array.IndexOf(Chat.AskRules.UpdateChoices, Chat.AskRules.DefaultUpdateMinutes));
+        _apAsk.SelectedIndex = Math.Max(0, Array.IndexOf(Chat.AskRules.WaitChoices, _settings.AutopilotAskWaitMinutes) is var i and >= 0 ? i
+            : Array.IndexOf(Chat.AskRules.WaitChoices, Chat.AskRules.DefaultWaitMinutes));
         _syncChanges.Text = Revit.AutoSyncRule.Clamp(_settings.AutoSyncChanges).ToString(System.Globalization.CultureInfo.CurrentCulture);
         _sizeLimit.Text = Tools.ModelStorageMath.ClampLimit(_settings.ModelSizeLimitMb).ToString(System.Globalization.CultureInfo.CurrentCulture);
 
@@ -476,10 +476,12 @@ public sealed class SettingsWindow : Window
             "When the 5-hour limit reaches this, the autopilot pauses; it carries on by itself when the limit resets."));
         page.Children.Add(LimitRow("One run uses at most", Place("AutopilotWeekShare", _apWeek), "of the weekly limit, then pauses",
             "The run's own use of your weekly limit; when it reaches this the autopilot pauses."));
-        page.Children.Add(LimitRow("When a job needs you, email you and wait", Place("AutopilotAskWaitMinutes", _apAsk), "for a reply, then carry on with its assumption",
-            "The question goes to your own address through the classic Outlook on this PC, subject starting [Sketch ProMax]. Reply from your phone; a later reply still counts and the work is put right."));
-        page.Children.Add(LimitRow("Email you a progress update every", Place("AutopilotUpdateMinutes", _apUpdate), "while it runs; reply to add or change anything",
-            "What finished, what is working and what's next, to your own address through the classic Outlook. Your reply goes to the coordinator as your message."));
+        page.Children.Add(LimitRow("When a job needs you, ask you and wait", Place("AutopilotAskWaitMinutes", _apAsk), "for a reply, then carry on with its assumption",
+            "The question goes to your phone (connect it below), with a button for the assumed answer. A later answer still counts and the work is put right. With no phone connected, nothing is asked: the job makes the call itself."));
+        page.Children.Add(LimitRow("Send you a progress update every", Place("AutopilotUpdateMinutes", _apUpdate), "while it runs; reply to add or change anything",
+            "How many jobs finished, how many are left, and the questions waiting for you, to your phone. What you write back goes to the coordinator as your message."));
+        page.Children.Add(SubHeading("Your phone"));
+        page.Children.Add(PhoneRow());
         _autopilotWeekly.Margin = new Thickness(0, 8, 0, 0);
         page.Children.Add(Place("AutopilotResumeWeekly", _autopilotWeekly));
         page.Children.Add(Hint("Any pause carries on when you press Resume on the chat's banner or type \"continue\" in the autopilot chat. A weekly limit near full pauses it too.", 2));
@@ -777,6 +779,51 @@ public sealed class SettingsWindow : Window
         return page;
     }
 
+    /// <summary>
+    /// Settings › Chat › Your phone: whether this PC is connected to the user's phone through Iris (their own website), with
+    /// Connect your phone (a QR code to scan) and Disconnect. Connected, the autopilot asks and reports there.
+    /// </summary>
+    private StackPanel PhoneRow()
+    {
+        var panel = new StackPanel();
+        var state = Brand.Text("");
+        state.TextWrapping = TextWrapping.Wrap;
+        var connect = Brand.Button("Connect your phone…");
+        var disconnect = Brand.Button("Disconnect", Brand.Weight.Danger);
+        void Show()
+        {
+            var on = Phone.PhoneLink.Connected;
+            state.Text = on
+                ? $"Connected through {Phone.PhoneLink.Site}. Autopilot questions and progress go to your phone, with one-tap answers and Stop/Resume."
+                : "Not connected: the autopilot asks you nothing and sends no progress. Connect your phone to get its questions there, with one-tap answers.";
+            connect.Content = on ? "Connect again…" : "Connect your phone…";
+            disconnect.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
+        }
+        connect.Click += (_, _) =>
+        {
+            var window = new PhoneConnectWindow(Phone.PhoneLink.Site) { Owner = this };
+            window.Connected += Show;
+            window.ShowDialog();
+            Show();
+        };
+        AutomationProperties.SetHelpText(disconnect, "The autopilot stops asking and reporting. You can also disconnect from the phone.");
+        disconnect.Click += async (_, _) =>
+        {
+            disconnect.IsEnabled = false;
+            await Task.Run(Phone.PhoneLink.DisconnectAsync);
+            disconnect.IsEnabled = true;
+            Show();
+        };
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 8, 0, 0) };
+        connect.Margin = new Thickness(0, 0, 8, 0);
+        buttons.Children.Add(connect);
+        buttons.Children.Add(disconnect);
+        panel.Children.Add(state);
+        panel.Children.Add(buttons);
+        Show();
+        return panel;
+    }
+
     /// <summary>Automatic updates, the version installed and the last check, and Check now.</summary>
     private StackPanel UpdatesPage()
     {
@@ -1018,8 +1065,8 @@ public sealed class SettingsWindow : Window
         _settings.AutopilotJobBudget = Picked(_apJob, Chat.JobBudget.DefaultPercent);
         _settings.AutopilotFiveHourMax = Picked(_apFive, 90);
         _settings.AutopilotWeekShare = Picked(_apWeek, 25);
-        _settings.AutopilotAskWaitMinutes = Picked(_apAsk, Chat.AskByEmail.DefaultWaitMinutes);
-        _settings.AutopilotUpdateMinutes = Picked(_apUpdate, Chat.AskByEmail.DefaultUpdateMinutes);
+        _settings.AutopilotAskWaitMinutes = Picked(_apAsk, Chat.AskRules.DefaultWaitMinutes);
+        _settings.AutopilotUpdateMinutes = Picked(_apUpdate, Chat.AskRules.DefaultUpdateMinutes);
         _settings.AutoSyncChanges = syncChanges;
         _settings.ChangeFile = _changeFile.IsChecked == true;
         _settings.TimeTracking = _timeOn.IsChecked == true;

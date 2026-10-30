@@ -10,6 +10,8 @@
   <ItemGroup>
     <Compile Include="../../src/SketchProMax/Tools/ScriptSource.cs" Link="ScriptSource.cs" />
     <Compile Include="../../src/SketchProMax/Chat/StreamJson.cs" Link="StreamJson.cs" />
+    <Compile Include="../../src/SketchProMax/Phone/IrisClient.cs" Link="IrisClient.cs" />
+    <Compile Include="../../src/SketchProMax/Phone/PhoneLink.cs" Link="PhoneLink.cs" />
     <Compile Include="../../src/SketchProMax/Chat/PlanUsage.cs" Link="PlanUsage.cs" />
     <Compile Include="../../src/SketchProMax/Chat/PdfAttachment.cs" Link="PdfAttachment.cs" />
     <Compile Include="../../src/SketchProMax/Chat/OfficeText.cs" Link="OfficeText.cs" />
@@ -32,7 +34,7 @@
     <Compile Include="../../src/SketchProMax/Chat/DirectAdvice.cs" Link="DirectAdvice.cs" />
     <Compile Include="../../src/SketchProMax/Chat/Autopilot.cs" Link="Autopilot.cs" />
     <Compile Include="../../src/SketchProMax/Chat/JobChecks.cs" Link="JobChecks.cs" />
-    <Compile Include="../../src/SketchProMax/Chat/AskByEmail.cs" Link="AskByEmail.cs" />
+    <Compile Include="../../src/SketchProMax/Chat/AskRules.cs" Link="AskRules.cs" />
     <Compile Include="../../src/SketchProMax/Chat/ConnectionWatch.cs" Link="ConnectionWatch.cs" />
     <Compile Include="../../src/SketchProMax/Chat/AnswerTiming.cs" Link="AnswerTiming.cs" />
     <Compile Include="../../src/SketchProMax/Tools/CodeRepeats.cs" Link="CodeRepeats.cs" />

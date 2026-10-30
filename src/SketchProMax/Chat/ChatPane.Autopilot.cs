@@ -42,13 +42,13 @@ internal sealed partial class ChatPane
     }
 
     /// <summary>
-    /// The autopilot runs (or is paused) in the chat shown: it can't be left, since its clock (progress emails, the review
+    /// The autopilot runs (or is paused) in the chat shown: it can't be left, since its clock (progress updates to the phone, the review
     /// team, the connection watch, carrying on after a pause) runs only while its chat is shown. True when it refused.
     /// </summary>
     private bool AutopilotHolds()
     {
         if (_sample || Run is not { Active: true }) return false;
-        Status("The autopilot runs in this chat, so it stays open: leaving it would stop its progress emails and checks. Press Stop on its banner first to open another chat.", spin: false);
+        Status("The autopilot runs in this chat, so it stays open: leaving it would stop its progress updates and checks. Press Stop on its banner first to open another chat.", spin: false);
         return true;
     }
 
@@ -60,8 +60,9 @@ internal sealed partial class ChatPane
             _autoHooked = true;
             Autopilot.Logged += (kind, text) => Dispatcher.BeginInvoke(new Action(() => AutopilotLog(kind, text)));
             AskUser.Logged += text => Dispatcher.BeginInvoke(new Action(() => AutopilotLog(AutopilotEntry.Asked, text)));
-            AskUser.Answered += q => Dispatcher.BeginInvoke(new Action(() => EmailAnswered(q)));
-            AskUser.UserWrote += text => Dispatcher.BeginInvoke(new Action(() => EmailFromUser(text)));
+            AskUser.Answered += q => Dispatcher.BeginInvoke(new Action(() => PhoneAnswered(q)));
+            AskUser.UserWrote += text => Dispatcher.BeginInvoke(new Action(() => FromPhone(text)));
+            AskUser.Command += name => Dispatcher.BeginInvoke(new Action(() => PhoneCommand(name)));
         }
         var run = _sample ? null : Run;
         Autopilot.Here = run is { Active: true };
@@ -224,6 +225,7 @@ internal sealed partial class ChatPane
             // up their model before its first change.
             AutopilotShare.Begin(Autopilot.RunId(_conv.Id, run), copy.Length > 0 ? model : "", DateTime.UtcNow);
             AskUser.Goal = run.Goal;
+            AskUser.Listen();
             Note(run.Backup.Length > 0 ? $"Autopilot started. Backup copy of the model: {run.Backup}"
                 : "Autopilot started. No backup copy could be saved (the model has never been saved to a file).");
             Save();
@@ -258,12 +260,13 @@ internal sealed partial class ChatPane
         if (Run is not { Active: true } run) return;
         var now = DateTimeOffset.UtcNow;
         if (AskUser.Goal.Length == 0) AskUser.Goal = run.Goal; // a run carried on after Revit started again
+        AskUser.Listen(); // the phone is read for Stop/Resume while the run is on
         AutopilotUpdateTick(run);
         // The other Revit windows know the run is still on, and what they answered goes into its log.
         if (run.State != AutopilotRun.Approval && run.Started != default) AutopilotShare.Beat(Autopilot.RunId(_conv.Id, run), DateTime.UtcNow);
         TakeSharedLog(run);
-        // Progress by email, and what came back by email (also while paused: the user's word carries a paused run on).
-        AutopilotProgressEmail(run);
+        // Progress to the phone, and what came back from it (also while paused: the user's word carries a paused run on).
+        AutopilotProgress(run);
         SendLateAnswers();
         AutopilotConnection(run);
         if (run.State == AutopilotRun.Paused)
@@ -397,18 +400,18 @@ internal sealed partial class ChatPane
     }
 
     private bool _gapsWaiting;
-    private readonly List<EmailQuestion> _lateAnswers = [];
+    private readonly List<UserQuestion> _lateAnswers = [];
 
     /// <summary>
-    /// The user answered a question by email after the asking job stopped waiting for it (AskUser): the job gets it as a
+    /// The user answered a question on the phone after the asking job stopped waiting for it (AskUser): the job gets it as a
     /// message (it reopens if it had finished) to put its work right; the coordinator's own question comes as its next turn.
     /// </summary>
-    private void EmailAnswered(EmailQuestion q)
+    private void PhoneAnswered(UserQuestion q)
     {
-        AutopilotLog(AutopilotEntry.Asked, $"You answered Q{q.Id} by email: {q.Answer}");
+        AutopilotLog(AutopilotEntry.Asked, $"You answered Q{q.Id} on your phone: {q.Answer}");
         if (q.JobKey.Length > 0 && _board?.FindKey(q.JobKey) is { } job)
         {
-            _board.Message(job.Number, AskByEmail.LateLine(q), DateTime.UtcNow);
+            _board.Message(job.Number, AskRules.LateLine(q), DateTime.UtcNow);
             JobsChanged();
             return;
         }
@@ -419,52 +422,65 @@ internal sealed partial class ChatPane
     private void SendLateAnswers()
     {
         if (_turn is not null || Run is not { State: AutopilotRun.Running or AutopilotRun.Paused }) return;
-        if (_fromEmail.Count > 0)
+        if (_fromPhone.Count > 0)
         {
-            var asks = string.Join("\n\n", _fromEmail);
-            _fromEmail.Clear();
-            _ = RunTurn(AskByEmail.FromEmail(asks), [], "");
+            var asks = string.Join("\n\n", _fromPhone);
+            _fromPhone.Clear();
+            _ = RunTurn(AskRules.FromPhone(asks), [], "");
             return;
         }
         if (_lateAnswers.Count == 0 || Run is not { State: AutopilotRun.Running }) return;
-        var text = "[Autopilot, not typed by the user] " + string.Join("\n", _lateAnswers.Select(AskByEmail.LateLine));
+        var text = "[Autopilot, not typed by the user] " + string.Join("\n", _lateAnswers.Select(AskRules.LateLine));
         _lateAnswers.Clear();
         _ = RunTurn(text, [], "");
     }
 
-    private readonly List<string> _fromEmail = [];
+    private readonly List<string> _fromPhone = [];
 
-    /// <summary>The user replied to a progress email: shown in the chat as their message (by email), and the coordinator takes it in.</summary>
-    private void EmailFromUser(string text)
+    /// <summary>The user wrote from the phone: shown in the chat as their message (from your phone), and the coordinator takes it in.</summary>
+    private void FromPhone(string text)
     {
         if (Run is not { Active: true } run) return;
-        Add(new ChatItem { Kind = "user", Text = text + "\n\n(by email)" });
-        AutopilotLog(AutopilotEntry.Asked, "You wrote by email: " + (text.Length > 200 ? text.Substring(0, 199) + "…" : text));
+        const string how = "from your phone";
+        Add(new ChatItem { Kind = "user", Text = text + $"\n\n({how})" });
+        AutopilotLog(AutopilotEntry.Asked, $"You wrote {how}: " + (text.Length > 200 ? text.Substring(0, 199) + "…" : text));
         // A paused run: the user's word carries it on, as typing "continue" would.
-        if (run.State == AutopilotRun.Paused) AutopilotResume("You wrote by email.", turn: false);
-        _fromEmail.Add(text);
+        if (run.State == AutopilotRun.Paused) AutopilotResume($"You wrote {how}.", turn: false);
+        _fromPhone.Add(text);
         Save();
         SendLateAnswers();
     }
 
+    /// <summary>Stop or Resume pressed on the phone (PhoneLink.Commands): as if pressed on the banner.</summary>
+    private void PhoneCommand(string name)
+    {
+        if (Run is not { Active: true }) return;
+        if (name.Equals("Stop", StringComparison.OrdinalIgnoreCase))
+        {
+            AutopilotLog(AutopilotEntry.Asked, "You pressed Stop on your phone.");
+            AutopilotStop("you pressed Stop on your phone");
+        }
+        else if (name.Equals("Resume", StringComparison.OrdinalIgnoreCase)) AutopilotResume("You pressed Resume on your phone.");
+    }
+
     private bool _updateSending;
 
-    /// <summary>Every hour or so (Settings): a progress email; a reply to it comes back as the user's message.</summary>
-    private void AutopilotProgressEmail(AutopilotRun run)
+    /// <summary>Every hour or so (Settings): a progress update to the phone; what the user writes back comes as their message.</summary>
+    private void AutopilotProgress(AutopilotRun run)
     {
         if (_updateSending || run.State is not (AutopilotRun.Running or AutopilotRun.Paused)) return;
         var now = DateTime.UtcNow;
         if (run.LastUpdate == default) run.LastUpdate = run.Started;
-        if (!AskByEmail.UpdateDue(run.LastUpdate, now, AskUser.UpdateMinutes)) return;
+        if (!AskRules.UpdateDue(run.LastUpdate, now, AskUser.UpdateMinutes)) return;
         var since = run.LastUpdate;
         run.LastUpdate = now;
-        var body = AskByEmail.UpdateBody(run, _board?.Snapshot() ?? [], since, AskUser.Waiting(), now);
+        var body = AskRules.UpdateBody(run, _board?.Snapshot() ?? [], since, AskUser.Waiting(), now);
         _updateSending = true;
         _ = AskUser.SendUpdateAsync(body).ContinueWith(t => Dispatcher.BeginInvoke(new Action(() =>
         {
             _updateSending = false;
             var error = t.Status == TaskStatus.RanToCompletion ? t.Result : t.Exception?.GetBaseException().Message;
-            AutopilotLog(AutopilotEntry.Asked, error is null ? "Emailed you a progress update." : $"Couldn't email the progress update ({error}).");
+            AutopilotLog(AutopilotEntry.Asked, error is null ? "Sent a progress update to your phone." : $"Couldn't send the progress update to your phone ({error}).");
             Save();
         })), TaskScheduler.Default);
     }
@@ -544,6 +560,7 @@ internal sealed partial class ChatPane
         run.ReviewRound = 0;
         AutopilotShare.Begin(Autopilot.RunId(_conv.Id, run), "", DateTime.UtcNow);
         AskUser.Goal = run.Goal;
+        AskUser.Listen();
         var text = "Autopilot started again with your message: the coordinator and workers carry on without asking you, and the review team checks the goal before it ends.";
         AutopilotLog(AutopilotEntry.Resumed, text);
         Note(text);

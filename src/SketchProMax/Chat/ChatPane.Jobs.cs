@@ -95,7 +95,7 @@ internal static class ChatJobs
     /// </summary>
     public static bool IsCheck(string key) => _board?.FindKey(key) is { ReviewOf: > 0 } or { ReadOnly: true };
 
-    /// <summary>Who asks the user by email (ask_user): "Job 7: Existing model", or the coordinator for the main chat.</summary>
+    /// <summary>Who asks the user on their phone (ask_user): "Job 7: Existing model", or the coordinator for the main chat.</summary>
     public static string AskerName(string? key) => key is not null && _board?.FindKey(key) is { } job ? $"Job {job.Number}: {job.Title}" : "the coordinator";
 
     /// <summary>The bridge: what job <paramref name="key"/> does in Revit now (JobBoard.SetActivity), for its card and animation.</summary>
