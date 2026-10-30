@@ -64,6 +64,13 @@ internal static class AskRulesTests
         check("ask: the report lists the questions sent", Autopilot.Report(new AutopilotRun { State = AutopilotRun.Done, Log = [new AutopilotEntry { Kind = AutopilotEntry.Asked, Text = "Sent Q1 to your phone (x)." }] }, [], t0)
             .Contains("Questions sent to your phone** (1)"), "");
 
+        // Messages started from the phone: the chat's answer goes back, short.
+        check("phone chat: the answer goes back as it is", AskRules.PhoneReply("Added 12 fenders to Berth 7.", "done") == "Added 12 fenders to Berth 7.", "");
+        var longReply = AskRules.PhoneReply(new string('x', 4000), "done");
+        check("phone chat: a long answer is cut, pointing to the PC", longReply.Length < AskRules.ReplyMax + 60 && longReply.EndsWith("(the rest is in the chat on the PC)"), longReply.Length.ToString());
+        check("phone chat: a stop says so", AskRules.PhoneReply("", "stopped").Contains("stopped before it finished") && AskRules.PhoneReply("Half done.", "failed").Contains("Stopped before it finished"), "");
+        check("phone chat: read every 30 s for 10 minutes after the user writes", AskRules.ChatReadEvery == TimeSpan.FromSeconds(30) && AskRules.ChatFor == TimeSpan.FromMinutes(10), "");
+
         // Reading the phone: often only while a job may be waiting.
         var waiting = new UserQuestion { Id = 7, Sent = t0.AddMinutes(-3) };
         var late = new UserQuestion { Id = 8, Sent = t0.AddMinutes(-30) };

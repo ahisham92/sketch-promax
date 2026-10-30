@@ -794,7 +794,7 @@ public sealed class SettingsWindow : Window
         {
             var on = Phone.PhoneLink.Connected;
             state.Text = on
-                ? $"Connected through {Phone.PhoneLink.Site}. Autopilot questions and progress go to your phone, with one-tap answers and Stop/Resume."
+                ? $"Connected through {Phone.PhoneLink.Site}. Autopilot questions and progress go to your phone, with one-tap answers and Stop/Resume. You can also write to the chat from the phone; the answer comes back there."
                 : "Not connected: the autopilot asks you nothing and sends no progress. Connect your phone to get its questions there, with one-tap answers.";
             connect.Content = on ? "Connect again…" : "Connect your phone…";
             disconnect.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
