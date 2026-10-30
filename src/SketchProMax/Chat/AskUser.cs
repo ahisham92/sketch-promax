@@ -129,7 +129,8 @@ internal static class AskUser
             {
                 // Open for a day at most: after that a reply isn't looked for.
                 Questions.RemoveAll(q => (q.Answer is not null && (q.Taken || q.Delivered)) || DateTime.UtcNow - q.Asked > TimeSpan.FromDays(1));
-                foreach (var old in Updates.Where(u => DateTime.UtcNow - u.Value > TimeSpan.FromDays(1)).Select(u => u.Key).ToList()) Updates.Remove(old);
+                // A progress email's reply is looked for 6 hours: the next ones carry what came later.
+                foreach (var old in Updates.Where(u => DateTime.UtcNow - u.Value > TimeSpan.FromHours(6)).Select(u => u.Key).ToList()) Updates.Remove(old);
                 if (Questions.Count == 0 && Updates.Count == 0)
                 {
                     _loop = null;
@@ -161,18 +162,21 @@ internal static class AskUser
                 ? $"Emailed you {(due.Count == 1 ? "Q" + due[0].Id : due.Count + " questions")} ({string.Join("; ", due.Select(q => Short(q.Question)))})."
                 : $"Couldn't email you Q{string.Join(", Q", due.Select(q => q.Id))} ({error}); the work carried on with its assumptions.");
         }
-        // Replies: every 30 s while an email waits for one.
+        // Replies: every 30 s while a job may be waiting on an answer, else every 2 minutes (AskByEmail.ReadEvery).
         List<EmailQuestion> open;
         List<string> updates;
+        List<DateTime> sent;
         lock (Gate)
         {
             open = Questions.Where(q => q.Sent != default && q.Answer is null && q.Token.Length > 0 && now - q.Sent < TimeSpan.FromDays(1)).ToList();
             updates = Updates.Keys.ToList();
+            sent = open.Select(q => q.Sent).Concat(Updates.Values).ToList();
         }
-        if ((open.Count > 0 || updates.Count > 0) && now - _readAt >= TimeSpan.FromSeconds(30))
+        if ((open.Count > 0 || updates.Count > 0) && now - _readAt >= AskByEmail.ReadEvery(open, now, WaitMinutes))
         {
             _readAt = now;
-            var replies = OutlookMail.TakeReplies(open.Select(q => q.Token).Concat(updates).Distinct().ToList()) ?? [];
+            var since = AskByEmail.ReadSince(sent, now).ToLocalTime();
+            var replies = OutlookMail.TakeReplies(open.Select(q => q.Token).Concat(updates).Distinct().ToList(), since) ?? [];
             foreach (var reply in replies.OrderBy(r => r.Received))
             {
                 if (AskByEmail.TokenOf(reply.Subject) is not { } token) continue;

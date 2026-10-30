@@ -62,9 +62,11 @@ internal static class OutlookMail
     /// <summary>
     /// The replies (RE: …) in the Inbox whose subject carries one of <paramref name="tokens"/>, each one read. Once the user
     /// replied to an email, that email and the replies move to the Sketch ProMax folder; an email not replied to stays in
-    /// the Inbox, where the user reads it. Null when Outlook can't be reached.
+    /// the Inbox, where the user reads it. Only mail received since <paramref name="since"/> (local time) is looked at, newest
+    /// first, so a big Inbox isn't searched every time (a search of the whole Inbox every 30 s made Outlook heavy,
+    /// 2026-10-30). Null when Outlook can't be reached.
     /// </summary>
-    public static List<Reply>? TakeReplies(IReadOnlyCollection<string> tokens) => Sta(() =>
+    public static List<Reply>? TakeReplies(IReadOnlyCollection<string> tokens, DateTime since) => Sta(() =>
     {
         var replies = new List<Reply>();
         if (tokens.Count == 0) return replies;
@@ -72,13 +74,15 @@ internal static class OutlookMail
         var session = Get(app, "Session");
         var inbox = Call(session, "GetDefaultFolder", OlFolderInbox);
         var items = Get(inbox, "Items");
-        var found = Call(items, "Restrict", "@SQL=\"urn:schemas:httpmail:subject\" LIKE '%" + AskByEmail.SubjectTag.Trim('[', ']') + "%'");
-        var count = (int)Get(found, "Count");
+        Call(items, "Sort", "[ReceivedTime]", true);
         var mails = new List<(object Mail, string Token)>();
-        for (var i = 1; i <= count; i++)
+        var seen = 0;
+        for (var mail = Call(items, "GetFirst"); mail is not null && seen < MaxLook; mail = Call(items, "GetNext"), seen++)
         {
-            var mail = Call(found, "Item", i);
-            var token = AskByEmail.TokenOf(Get(mail, "Subject") as string ?? "");
+            if (Get(mail, "ReceivedTime") is DateTime received && received < since) break; // older than every open email
+            var subject = Get(mail, "Subject") as string ?? "";
+            if (subject.IndexOf(AskByEmail.SubjectTag, StringComparison.Ordinal) < 0) continue;
+            var token = AskByEmail.TokenOf(subject);
             if (token is not null && tokens.Contains(token)) mails.Add((mail, token));
         }
         var replied = new HashSet<string>(StringComparer.Ordinal);
@@ -103,11 +107,32 @@ internal static class OutlookMail
         return replies;
     });
 
+    /// <summary>At most this many of the newest Inbox mails are looked at in one read.</summary>
+    private const int MaxLook = 300;
+
+    /// <summary>The Outlook already open when there is one (no second copy is started), else one started in the background.</summary>
     private static object Application()
     {
+        if (Running() is { } open) return open;
         var type = Type.GetTypeFromProgID("Outlook.Application") ?? throw new InvalidOperationException("The classic Outlook isn't installed.");
         return Activator.CreateInstance(type) ?? throw new InvalidOperationException("Outlook didn't start.");
     }
+
+    private static object? Running()
+    {
+        try
+        {
+            if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows) || CLSIDFromProgID("Outlook.Application", out var clsid) != 0) return null;
+            return GetActiveObject(ref clsid, IntPtr.Zero, out var unknown) == 0 ? unknown : null;
+        }
+        catch (Exception) { return null; }
+    }
+
+    [DllImport("ole32.dll", CharSet = CharSet.Unicode)]
+    private static extern int CLSIDFromProgID(string progId, out Guid clsid);
+
+    [DllImport("oleaut32.dll")]
+    private static extern int GetActiveObject(ref Guid clsid, IntPtr reserved, [MarshalAs(UnmanagedType.IUnknown)] out object unknown);
 
     /// <summary>The user's own SMTP address (Exchange users' primary address, else the account's).</summary>
     private static string OwnAddress(object session)
