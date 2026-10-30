@@ -449,6 +449,8 @@ internal sealed partial class ChatPane
         if (Run is not { Active: true } run)
         {
             _phoneAsks.Add(text);
+            // Busy with something else: say so, so the phone isn't left wondering.
+            if (_turn is not null && _phoneAsks.Count == 1) _ = AskUser.SendUpdateAsync("Got it. Finishing the current task first, then this.");
             NextPhoneAsk();
             return;
         }

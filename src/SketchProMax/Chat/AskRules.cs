@@ -48,11 +48,12 @@ internal static class AskRules
     public const int WaitCallSeconds = 45;
 
     /// <summary>
-    /// How often the phone's answers are read: every 30 s while a job may be waiting on an answer (within the wait after
-    /// its question went), else every 2 minutes (Stop/Resume, a message, or an answer coming late).
+    /// How often the phone is read: every 30 s while a job may be waiting on an answer (within the wait after its question
+    /// went), else every minute (a message started on the phone, Stop/Resume, or an answer coming late): the phone says a
+    /// message is taken in "within a minute".
     /// </summary>
     public static TimeSpan ReadEvery(IEnumerable<UserQuestion> open, DateTime nowUtc, int waitMinutes) =>
-        open.Any(q => q.Sent != default && nowUtc < q.Sent.AddMinutes(Math.Max(1, waitMinutes))) ? TimeSpan.FromSeconds(30) : TimeSpan.FromMinutes(2);
+        open.Any(q => q.Sent != default && nowUtc < q.Sent.AddMinutes(Math.Max(1, waitMinutes))) ? TimeSpan.FromSeconds(30) : TimeSpan.FromMinutes(1);
 
     /// <summary>After the user wrote from the phone, it is read this often for this long (their next message, or a reply to the chat's answer).</summary>
     public static readonly TimeSpan ChatReadEvery = TimeSpan.FromSeconds(30);
