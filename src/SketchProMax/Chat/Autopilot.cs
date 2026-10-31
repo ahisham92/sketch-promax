@@ -17,6 +17,8 @@ internal sealed class AutopilotRun
     /// comments. Kept with the goal, so every prompt, every job and the review team see them, not only the turn they came in.
     /// </summary>
     public List<string> Said { get; set; } = [];
+    /// <summary>The user's messages written to the run before <see cref="Said"/> existed were gathered from its chat.</summary>
+    public bool Backfilled { get; set; }
     public string Plan { get; set; } = "";
     public string State { get; set; } = Planning;
     public DateTime Started { get; set; }
@@ -153,6 +155,27 @@ internal static class Autopilot
         UserWords = Words(run);
     }
 
+    /// <summary>
+    /// A run that started before Sketch ProMax kept the user's words (0.35.57 and earlier): what they typed or sent from the
+    /// phone in its chat since the start goes into <see cref="AutopilotRun.Said"/> once, so comments written then count too.
+    /// True when something was added.
+    /// </summary>
+    public static bool Backfill(AutopilotRun run, IEnumerable<(DateTime Time, string Kind, string Text)> items)
+    {
+        if (run.Backfilled || run.Started == default) return false;
+        run.Backfilled = true;
+        var before = run.Said.ToList();
+        run.Said.Clear();
+        foreach (var (time, kind, text) in items)
+        {
+            if (kind != "user" || time < run.Started) continue;
+            var words = text.Replace("\n\n(from your phone)", "").Trim();
+            if (words.Length > 0) Heard(run, words);
+        }
+        foreach (var said in before) Heard(run, said);
+        return run.Said.Count > before.Count;
+    }
+
     public const int SaidMax = 30;
 
     /// <summary>The running Autopilot's goal and the user's words, added to every job's instructions ("" when none runs here).</summary>
@@ -184,6 +207,13 @@ internal static class Autopilot
         "[Autopilot, not typed by the user] No job is open. Carry on toward the goal: start the next parts, or send a job " +
         "back to fix its work. If the goal is met, write the final report and end it with " + DoneMark + ". Don't ask " +
         "the user anything and don't wait for their go-ahead: they are away. " + Words(run);
+
+    /// <summary>The user's comments since the start were found in the chat (a run from before they were kept): check the work against them.</summary>
+    public static string Recheck(AutopilotRun run) =>
+        "[Autopilot, not typed by the user] Below are the goal and every message the user wrote to this run since it " +
+        "started. Some may have been missed. Go through them one by one: for each, check whether the work done so far follows " +
+        "it (in the model and files, not from the reports), and hand out jobs now to redo or finish what doesn't, copying the " +
+        "user's words into each task. Carry on with the rest of the goal meanwhile; don't ask the user anything.\n" + Words(run);
 
     /// <summary>The run carries on after a pause.</summary>
     public static string Resume(AutopilotRun run, string why) =>

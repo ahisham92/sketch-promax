@@ -48,6 +48,21 @@ internal static class AutopilotTests
         check("autopilot: no run, no words added to jobs", Autopilot.JobWords() == "", "");
         check("autopilot: a run that hasn't started keeps nothing (its changes go into the goal)", Test(() => { var r = new AutopilotRun(); Autopilot.Heard(r, "x"); return r.Said.Count == 0; }), "");
 
+        // A run from before the words were kept: what the user wrote in its chat since the start is gathered once.
+        var old = new AutopilotRun { Goal = "Berth plans", State = AutopilotRun.Running, Started = run.Started };
+        var items = new List<(DateTime, string, string)>
+        {
+            (run.Started.AddMinutes(-5), "user", "Berth plans"),
+            (run.Started.AddHours(1), "user", "Plans at 1:200, north up"),
+            (run.Started.AddHours(2), "assistant", "On it"),
+            (run.Started.AddHours(3), "user", "Use the berth title block\n\n(from your phone)"),
+        };
+        check("autopilot: comments written before the update are gathered from the chat", Autopilot.Backfill(old, items)
+            && old.Said.SequenceEqual(new[] { "Plans at 1:200, north up", "Use the berth title block" }), string.Join("|", old.Said));
+        check("autopilot: gathered once only", !Autopilot.Backfill(old, items) && old.Said.Count == 2, "");
+        check("autopilot: the coordinator rechecks the work against every comment", Autopilot.Recheck(old).Contains("one by one") && Autopilot.Recheck(old).Contains("north up"), "");
+        Autopilot.UserWords = "";
+
         check("autopilot: the final mark ends the run", ("All done.\n" + Autopilot.DoneMark).Contains(Autopilot.DoneMark), "");
 
         // Answering for the user: every approval is given (a backup was saved), dialogs get Cancel, No or OK.
