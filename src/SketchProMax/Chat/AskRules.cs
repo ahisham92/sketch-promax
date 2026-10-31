@@ -102,11 +102,12 @@ internal static class AskRules
     public static bool UpdateDue(DateTime last, DateTime now, int everyMinutes) => everyMinutes > 0 && now - last >= TimeSpan.FromMinutes(everyMinutes);
 
     /// <summary>
-    /// The progress update, as short as can be (the user asked, 2026-10-30): how many jobs finished in the interval, how
-    /// many are left and how many work now; the questions waiting for the user's answer, when there are some; a pause or
-    /// what the review team found still open, in one line each. Nothing else.
+    /// The progress update, short (the user asked, 2026-10-30): how many jobs finished in the interval, how many are left
+    /// and how many work now, then one line per worker on what they are doing now; the questions waiting for the user's
+    /// answer, when there are some; a pause or what the review team found still open, in one line each.
     /// </summary>
-    public static string UpdateBody(AutopilotRun run, IReadOnlyList<ChatJob> jobs, DateTime since, IReadOnlyList<UserQuestion> waiting, DateTime nowUtc)
+    public static string UpdateBody(AutopilotRun run, IReadOnlyList<ChatJob> jobs, DateTime since, IReadOnlyList<UserQuestion> waiting, DateTime nowUtc,
+        Func<int, string>? worker = null)
     {
         var own = jobs.Where(j => j.Number > run.JobsBefore && j.GoalCheck == 0).ToList();
         var done = own.Count(j => j.State == JobBoard.Done && j.Ended >= since);
@@ -117,6 +118,13 @@ internal static class AskRules
         sb.Append(working + queued).Append(" left: ").Append(working).Append(" working now");
         if (queued > 0) sb.Append(", ").Append(queued).Append(" waiting");
         sb.Append(".\n");
+        // What each worker is on now (the user asked, 31 Oct 2026: "I need updates from what the guys are doing").
+        foreach (var job in own.Where(j => j.Active).OrderBy(j => j.Number).Take(6))
+        {
+            var who = worker is not null && job.Worker >= 0 ? worker(job.Worker) : "Job " + job.Number;
+            var doing = job.Now.Trim().Length > 0 ? job.Now : job.Title;
+            sb.Append("• ").Append(who).Append(": ").Append(Short(doing, 90).TrimEnd('.')).Append('\n');
+        }
         if (run.State == AutopilotRun.Paused) sb.Append("Paused: ").Append(Short(run.PauseWhy, 120).TrimEnd('.')).Append(".\n");
         var gaps = run.Gaps.Split('\n').Count(l => l.TrimStart().StartsWith("- ", StringComparison.Ordinal));
         if (gaps > 0) sb.Append("The review team found ").Append(gaps).Append(gaps == 1 ? " item" : " items").Append(" not done yet.\n");
@@ -137,9 +145,23 @@ internal static class AskRules
     }
 
     /// <summary>What the coordinator gets when the user wrote from the phone.</summary>
-    public static string FromPhone(string text) =>
+    public static string FromPhone(string text, string coordinator = "") =>
         "[The user, from their phone, while the autopilot runs] " + text.Trim() + "\n\nTake this in as the user's message: fit it into the " +
-        "work (hand it out, or change what is planned) and carry on.";
+        "work (hand it out, or change what is planned) and carry on. " + PhoneVoice(coordinator);
+
+    /// <summary>
+    /// How an answer that goes to the phone reads: the coordinator by name, as a friendly colleague texting back (the user
+    /// asked, 31 Oct 2026: "I am talking to Pitso, so it should be way more friendly"). The name is the user's own, from
+    /// Settings › Chat (crew names).
+    /// </summary>
+    public static string PhoneVoice(string coordinator) =>
+        "Your answer is sent to their phone as a chat message" + (coordinator.Length > 0 ? $" from you, {coordinator}" : "") + ": write like a " +
+        "friendly colleague texting back. Warm and short (a few sentences), first person, plain words, no headings or tables, at most one " +
+        "emoji. Say what you did or are doing and what the workers are on; the autopilot's jobs and workers are yours, never \"another chat\".";
+
+    /// <summary>A message from the phone when no autopilot runs: done as if typed here, answered for the phone.</summary>
+    public static string PhoneTurn(string text, string coordinator = "") =>
+        "[The user wrote this from their phone, away from the PC: do it as if typed here. " + PhoneVoice(coordinator) + "] " + text;
 
     /// <summary>What ask_user answers once an answer came.</summary>
     public static string AnswerLine(UserQuestion q) => $"The user answered Q{q.Id} from their phone: \"{q.Answer}\". Go by it (you assumed: {q.Assumed}).";

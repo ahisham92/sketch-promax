@@ -139,6 +139,10 @@ namespace SketchProMax.Phone
             State.PairCode = "";
         }
 
+        /// <summary>The name the tool speaks under on the phone (the coordinator's: Pitso, ...).</summary>
+        public Task<JsonNode> SetAgentAsync(string agent, CancellationToken ct = default) =>
+            CallAsync(HttpMethod.Post, "/api/tool/me", new JsonObject { ["agent"] = agent }, null, ct);
+
         /// <summary>Whether the site still knows this tool. Throws IrisException(401) when it was disconnected.</summary>
         public Task<JsonNode> CheckAsync(CancellationToken ct = default) => CallAsync(HttpMethod.Get, "/api/tool/me", null, null, ct);
 

@@ -64,6 +64,16 @@ internal sealed partial class ChatPane
             AskUser.UserWrote += text => Dispatcher.BeginInvoke(new Action(() => FromPhone(text)));
             AskUser.Command += name => Dispatcher.BeginInvoke(new Action(() => PhoneCommand(name)));
             AskUser.Listen(); // a connected phone is read from now on: the user can write to the chat from it
+            // The phone shows the coordinator's name (Pitso for one user, another name for the next): Settings › Chat.
+            Phone.PhoneLink.Agent = CrewStrip.Names.Coordinator;
+            CrewStrip.NamesChanged += () => Phone.PhoneLink.Agent = CrewStrip.Names.Coordinator;
+            _jobsTimer = new DispatcherTimer(DispatcherPriority.Background, Dispatcher) { Interval = TimeSpan.FromMinutes(1) };
+            _jobsTimer.Tick += (_, _) =>
+            {
+                try { JobsProgress(); }
+                catch (Exception) { /* the next tick tries again */ }
+            };
+            _jobsTimer.Start();
         }
         var run = _sample ? null : Run;
         Autopilot.Here = run is { Active: true };
@@ -428,7 +438,9 @@ internal sealed partial class ChatPane
         {
             var asks = string.Join("\n\n", _fromPhone);
             _fromPhone.Clear();
-            _ = RunTurn(AskRules.FromPhone(asks), [], "");
+            var turn = RunTurn(AskRules.FromPhone(asks, CrewStrip.Names.Coordinator), [], "");
+            _phoneTurn = _turn; // its answer goes back to the phone
+            _ = turn;
             return;
         }
         if (_lateAnswers.Count == 0 || Run is not { State: AutopilotRun.Running }) return;
@@ -446,6 +458,10 @@ internal sealed partial class ChatPane
     private void FromPhone(string text)
     {
         if (_instance != this) return; // one chat takes it
+        // An autopilot runs in another of this window's chats: its coordinator takes the message (opened when the chat is
+        // free), so the phone never talks to a chat that only sees "another chat" keeping Revit busy (31 Oct 2026).
+        if (Run is not { Active: true } && RunningAutopilotChat() is { } other && _turn is null && !JobsOpen)
+            ((IHistoryHost)this).OpenChat(ChatHistory.Summarize(other));
         if (Run is not { Active: true } run)
         {
             _phoneAsks.Add(text);
@@ -466,6 +482,14 @@ internal sealed partial class ChatPane
 
     private readonly List<string> _phoneAsks = [];
     private Turn? _phoneTurn;
+
+    /// <summary>This window's other chat with an autopilot running, when this one has none.</summary>
+    private static Conversation? RunningAutopilotChat()
+    {
+        if (AutopilotShare.Read() is not { } shared || shared.Owner != AutopilotShare.Me) return null;
+        var chatId = shared.Run.Split(':')[0];
+        return ChatStore.All().FirstOrDefault(c => c.Id == chatId && c.Autopilot is { Active: true });
+    }
 
     /// <summary>The next message from the phone, once the chat is free: answered as a turn of its own (no brief card: nobody is here to choose).</summary>
     private void NextPhoneAsk()
@@ -489,7 +513,7 @@ internal sealed partial class ChatPane
 
     private async Task RunPhoneTurn(string text)
     {
-        var run = RunTurn("[The user wrote this from their phone, away from the PC: do it as if typed here, and answer in a few plain sentences, as the answer is sent to the phone] " + text, [], "");
+        var run = RunTurn(AskRules.PhoneTurn(text, CrewStrip.Names.Coordinator), [], "");
         _phoneTurn = _turn; // set before RunTurn's first wait
         await run;
     }
@@ -520,6 +544,34 @@ internal sealed partial class ChatPane
     }
 
     private bool _updateSending;
+    private DispatcherTimer? _jobsTimer;
+    private DateTime _jobsLastUpdate;
+
+    /// <summary>How an update opens on the phone: the user's name, from the coordinator.</summary>
+    private static string PhoneGreeting() => $"Hi {CrewStrip.Names.You} 👋 here's the latest from the team:\n";
+
+    /// <summary>
+    /// Workers busy without an autopilot (jobs handed out in the chat): the same update every interval while the phone is
+    /// on, so the user away from the PC still sees what the workers are doing.
+    /// </summary>
+    private void JobsProgress()
+    {
+        if (_updateSending || _sample || Run is { Active: true } || !Phone.PhoneLink.Active || _board is not { } board) return;
+        var jobs = board.Snapshot();
+        var now = DateTime.UtcNow;
+        if (!jobs.Any(j => j.Active))
+        {
+            _jobsLastUpdate = default;
+            return;
+        }
+        if (_jobsLastUpdate == default) _jobsLastUpdate = now; // the first update one interval after the work started
+        if (!AskRules.UpdateDue(_jobsLastUpdate, now, AskUser.UpdateMinutes)) return;
+        var since = _jobsLastUpdate;
+        _jobsLastUpdate = now;
+        var body = PhoneGreeting() + AskRules.UpdateBody(new AutopilotRun { State = AutopilotRun.Running }, jobs, since, AskUser.Waiting(), now, CrewStrip.Names.Worker);
+        _updateSending = true;
+        _ = AskUser.SendUpdateAsync(body).ContinueWith(_ => Dispatcher.BeginInvoke(new Action(() => _updateSending = false)), TaskScheduler.Default);
+    }
 
     /// <summary>Every hour or so (Settings): a progress update to the phone; what the user writes back comes as their message.</summary>
     private void AutopilotProgress(AutopilotRun run)
@@ -530,7 +582,7 @@ internal sealed partial class ChatPane
         if (!AskRules.UpdateDue(run.LastUpdate, now, AskUser.UpdateMinutes)) return;
         var since = run.LastUpdate;
         run.LastUpdate = now;
-        var body = AskRules.UpdateBody(run, _board?.Snapshot() ?? [], since, AskUser.Waiting(), now);
+        var body = PhoneGreeting() + AskRules.UpdateBody(run, _board?.Snapshot() ?? [], since, AskUser.Waiting(), now, CrewStrip.Names.Worker);
         _updateSending = true;
         _ = AskUser.SendUpdateAsync(body).ContinueWith(t => Dispatcher.BeginInvoke(new Action(() =>
         {

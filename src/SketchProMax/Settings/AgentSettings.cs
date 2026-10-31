@@ -141,8 +141,12 @@ public sealed class AgentSettings
     /// </summary>
     public int AutopilotAskWaitMinutes { get; set; } = 10;
 
-    /// <summary>During an autopilot, a progress update goes to the user's phone this often, in minutes; what they write back reaches the coordinator (0: none).</summary>
-    public int AutopilotUpdateMinutes { get; set; } = 60;
+    /// <summary>
+    /// While workers or an autopilot work, a progress update goes to the user's phone this often, in minutes; what they write
+    /// back reaches the coordinator (0: none). Named AutopilotUpdateMinutes before 31 Oct 2026, when 0 often stood for "no
+    /// hourly email" and left the phone with no updates: the old value is not carried over.
+    /// </summary>
+    public int PhoneUpdateMinutes { get; set; } = 60;
 
     /// <summary>Your name as it goes on a signed checklist (next to Chat).</summary>
     public string SignatureName { get; set; } = "";

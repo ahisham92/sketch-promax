@@ -776,6 +776,7 @@ internal static class FieldTestCoverage
         new(59, ["tool:add_spot_elevations"], "refused spots placed again on the view's own face"),
         new(60, ["tool:export_chats_and_bugs"], "the exported chats head replies Sketch ProMax (unit test)"),
         new(61, ["chat.autopilot_ui"], "during and after an autopilot, Synchronize with Central, Link Revit and closing Revit work; only Sketch ProMax's own dialogs are answered"),
+        new(62, ["chat.phone_switch_ui"], "with the phone on and workers busy, an update comes every hour naming what each worker does, from the coordinator's name"),
     ];
 
     /// <summary>

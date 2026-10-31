@@ -45,7 +45,12 @@ internal static class AskRulesTests
         ];
         var pbody = AskRules.UpdateBody(prun, pjobs, t0.AddHours(-1), [], t0);
         check("progress: short: finished in the last hour, left, working now", pbody.StartsWith("1 job finished in the last hour. 2 left: 1 working now, 1 waiting.\n"), pbody);
-        check("progress: no job titles, summaries or coordinator's words", !pbody.Contains("Gravity wall") && !pbody.Contains("Existing model") && !pbody.Contains("Berths 7-11"), pbody);
+        check("progress: no finished jobs' titles, summaries or coordinator's words", !pbody.Contains("Gravity wall") && !pbody.Contains("Existing model") && !pbody.Contains("Berths 7-11"), pbody);
+        check("progress: what each worker is on now", pbody.Contains("• Job 3: PVC pipes\n") && !pbody.Contains("Sheets"), pbody);
+        pjobs[2].Worker = 0;
+        pjobs[2].Now = "Placing pipes on Berth 8";
+        var named = AskRules.UpdateBody(prun, pjobs, t0.AddHours(-1), [], t0, slot => slot == 0 ? "Ali" : "?");
+        check("progress: the worker by name, with what they are doing now", named.Contains("• Ali: Placing pipes on Berth 8\n"), named);
         check("progress: one line for what the review team found open", pbody.EndsWith("The review team found 1 item not done yet."), pbody);
         check("progress: no questions, no question section", !pbody.Contains("input"), pbody);
         var asked = new List<UserQuestion> { new() { Id = 5, Question = "PVC pipes: 4 lengths or 3?", Sent = t0.AddMinutes(-5) }, new() { Id = 3, Question = "Copy the Berth 11 section?", Sent = t0.AddMinutes(-9) } };
@@ -54,6 +59,8 @@ internal static class AskRulesTests
         check("progress: the span reads plainly", AskRules.Span(TimeSpan.FromMinutes(30)) == "30 min" && AskRules.Span(TimeSpan.FromHours(2)) == "2 hours", "");
         var paused = new AutopilotRun { State = AutopilotRun.Paused, PauseWhy = "The 5-hour limit is nearly used up." };
         check("progress: a pause in one line", AskRules.UpdateBody(paused, [], t0.AddHours(-1), [], t0).Contains("Paused: The 5-hour limit is nearly used up."), "");
+        check("phone voice: friendly, by the coordinator's own name, never \"another chat\"", AskRules.PhoneTurn("hi", "Pitso").Contains("from you, Pitso")
+            && AskRules.PhoneTurn("hi", "Pitso").Contains("friendly") && AskRules.FromPhone("x", "Nova").Contains("Nova") && AskRules.PhoneVoice("").Contains("never \"another chat\""), "");
         check("progress: what the user writes reaches the coordinator as their message", AskRules.FromPhone("also add the fender schedule").Contains("from their phone")
             && AskRules.FromPhone("also add the fender schedule").Contains("also add the fender schedule"), "");
 
