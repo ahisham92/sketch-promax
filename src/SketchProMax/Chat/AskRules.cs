@@ -151,7 +151,7 @@ internal static class AskRules
 
     /// <summary>
     /// How an answer that goes to the phone reads: the coordinator by name, as a friendly colleague texting back (the user
-    /// asked, 31 Oct 2026: "I am talking to Pitso, so it should be way more friendly"). The name is the user's own, from
+    /// asked, 31 Oct 2026: "I am talking to <coordinator>, so it should be way more friendly"). The name is the user's own, from
     /// Settings › Chat (crew names).
     /// </summary>
     public static string PhoneVoice(string coordinator) =>

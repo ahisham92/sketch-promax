@@ -139,7 +139,7 @@ namespace SketchProMax.Phone
             State.PairCode = "";
         }
 
-        /// <summary>The name the tool speaks under on the phone (the coordinator's: Pitso, ...).</summary>
+        /// <summary>The name the tool speaks under on the phone (the coordinator's: Sam, ...).</summary>
         public Task<JsonNode> SetAgentAsync(string agent, CancellationToken ct = default) =>
             CallAsync(HttpMethod.Post, "/api/tool/me", new JsonObject { ["agent"] = agent }, null, ct);
 

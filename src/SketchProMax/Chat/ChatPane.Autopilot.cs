@@ -64,7 +64,7 @@ internal sealed partial class ChatPane
             AskUser.UserWrote += text => Dispatcher.BeginInvoke(new Action(() => FromPhone(text)));
             AskUser.Command += name => Dispatcher.BeginInvoke(new Action(() => PhoneCommand(name)));
             AskUser.Listen(); // a connected phone is read from now on: the user can write to the chat from it
-            // The phone shows the coordinator's name (Pitso for one user, another name for the next): Settings › Chat.
+            // The phone shows the coordinator's name (Sam for one user, another name for the next): Settings › Chat.
             Phone.PhoneLink.Agent = CrewStrip.Names.Coordinator;
             CrewStrip.NamesChanged += () => Phone.PhoneLink.Agent = CrewStrip.Names.Coordinator;
             _jobsTimer = new DispatcherTimer(DispatcherPriority.Background, Dispatcher) { Interval = TimeSpan.FromMinutes(1) };

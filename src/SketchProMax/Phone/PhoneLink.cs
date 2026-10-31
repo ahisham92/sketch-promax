@@ -151,7 +151,7 @@ internal static class PhoneLink
         return (id, error);
     }
 
-    /// <summary>The coordinator's name (Settings › Chat crew names): the phone shows the chat as from them (Pitso, ...).</summary>
+    /// <summary>The coordinator's name (Settings › Chat crew names): the phone shows the chat as from them (Sam, ...).</summary>
     public static string Agent { get; set; } = "";
 
     private static string _agentSent = "";

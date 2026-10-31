@@ -59,8 +59,8 @@ internal static class AskRulesTests
         check("progress: the span reads plainly", AskRules.Span(TimeSpan.FromMinutes(30)) == "30 min" && AskRules.Span(TimeSpan.FromHours(2)) == "2 hours", "");
         var paused = new AutopilotRun { State = AutopilotRun.Paused, PauseWhy = "The 5-hour limit is nearly used up." };
         check("progress: a pause in one line", AskRules.UpdateBody(paused, [], t0.AddHours(-1), [], t0).Contains("Paused: The 5-hour limit is nearly used up."), "");
-        check("phone voice: friendly, by the coordinator's own name, never \"another chat\"", AskRules.PhoneTurn("hi", "Pitso").Contains("from you, Pitso")
-            && AskRules.PhoneTurn("hi", "Pitso").Contains("friendly") && AskRules.FromPhone("x", "Nova").Contains("Nova") && AskRules.PhoneVoice("").Contains("never \"another chat\""), "");
+        check("phone voice: friendly, by the coordinator's own name, never \"another chat\"", AskRules.PhoneTurn("hi", "Sam").Contains("from you, Sam")
+            && AskRules.PhoneTurn("hi", "Sam").Contains("friendly") && AskRules.FromPhone("x", "Nova").Contains("Nova") && AskRules.PhoneVoice("").Contains("never \"another chat\""), "");
         check("progress: what the user writes reaches the coordinator as their message", AskRules.FromPhone("also add the fender schedule").Contains("from their phone")
             && AskRules.FromPhone("also add the fender schedule").Contains("also add the fender schedule"), "");
 
