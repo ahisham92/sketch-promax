@@ -12,6 +12,11 @@ internal sealed class AutopilotRun
     public const string Planning = "planning", Approval = "approval", Running = "running", Paused = "paused", Done = "done", Stopped = "stopped";
 
     public string Goal { get; set; } = "";
+    /// <summary>
+    /// What the user wrote to the run after it started (typed in its chat or from the phone): how to do the work, changes,
+    /// comments. Kept with the goal, so every prompt, every job and the review team see them, not only the turn they came in.
+    /// </summary>
+    public List<string> Said { get; set; } = [];
     public string Plan { get; set; } = "";
     public string State { get; set; } = Planning;
     public DateTime Started { get; set; }
@@ -122,6 +127,44 @@ internal static class Autopilot
             ? $"Autopilot planning: {stillOpen} reading job(s) are still working. Note what these found; end your turn without the plan, and plan when the rest report."
             : "Autopilot planning: all reading jobs have reported. Now answer with the plan, ending with \"" + QuestionsHeading + "\" (each question with the answer you will assume).";
 
+    /// <summary>Longest goal or instruction kept in full in the prompts (longer is cut, with a mark).</summary>
+    public const int WordsMax = 6000;
+
+    /// <summary>
+    /// The goal and everything the user wrote to the run since, in full: every prompt of the run carries it, so a comment
+    /// sent mid-run (how to do the plans, say) is not lost after its turn or cut at 400 characters as before (31 Oct 2026).
+    /// </summary>
+    public static string Words(AutopilotRun run)
+    {
+        var text = "Goal: " + Clip(run.Goal, WordsMax);
+        if (run.Said.Count == 0) return text;
+        return text + "\nWhat the user wrote since (it wins over the goal and the plan where they differ; follow it exactly):\n" +
+               string.Join("\n", run.Said.Select(s => "- " + Clip(s, WordsMax).Replace("\n", "\n  ")));
+    }
+
+    /// <summary>The user wrote to a run that started: kept with the goal (the last <see cref="SaidMax"/>).</summary>
+    public static void Heard(AutopilotRun run, string text)
+    {
+        text = text.Trim();
+        if (text.Length == 0 || run.Started == default) return;
+        if (run.Said.Count > 0 && run.Said[^1] == text) return;
+        run.Said.Add(text);
+        if (run.Said.Count > SaidMax) run.Said.RemoveRange(0, run.Said.Count - SaidMax);
+        UserWords = Words(run);
+    }
+
+    public const int SaidMax = 30;
+
+    /// <summary>The running Autopilot's goal and the user's words, added to every job's instructions ("" when none runs here).</summary>
+    public static string UserWords { get; set; } = "";
+
+    /// <summary>The block a job gets: the user's own words, so a worker follows them even if its task left them out.</summary>
+    public static string JobWords() => UserWords.Length == 0 ? "" :
+        "\n\nThe user's own words for this Autopilot run (requirements: where they touch your task, do it their way exactly, " +
+        "even where you would do it differently, and say in your report how you followed them):\n" + UserWords;
+
+    private static string Clip(string text, int max) => text.Length <= max ? text.Trim() : text.Substring(0, max).TrimEnd() + "…";
+
     /// <summary>The run starts: the coordinator works on its own from here.</summary>
     public static string Approved(AutopilotRun run) =>
         "[Autopilot approved by the user, who is now away]\n" + Rules(run) + "\nStart now: hand out the first parts.";
@@ -134,13 +177,13 @@ internal static class Autopilot
         "when its work is wrong or missing something, start the next " +
         "parts, and keep the workers busy (start every part that doesn't wait on another). A job stopped for no progress: " +
         "give its work another way. Don't wait for the user's go-ahead: they are away. When the goal is met and no job is " +
-        "open, write the final report (below) and end it with " + DoneMark + ". Goal: " + OneLine(run.Goal, 400);
+        "open, write the final report (below) and end it with " + DoneMark + ". " + Words(run);
 
     /// <summary>The coordinator ended a turn with nothing open and no final report.</summary>
     public static string Nudge(AutopilotRun run) =>
         "[Autopilot, not typed by the user] No job is open. Carry on toward the goal: start the next parts, or send a job " +
         "back to fix its work. If the goal is met, write the final report and end it with " + DoneMark + ". Don't ask " +
-        "the user anything and don't wait for their go-ahead: they are away. Goal: " + OneLine(run.Goal, 400);
+        "the user anything and don't wait for their go-ahead: they are away. " + Words(run);
 
     /// <summary>The run carries on after a pause.</summary>
     public static string Resume(AutopilotRun run, string why) =>
@@ -148,8 +191,12 @@ internal static class Autopilot
         "check which jobs finished, then start the next parts.\n" + Rules(run);
 
     private static string Rules(AutopilotRun run) =>
-        "Goal: " + run.Goal.Trim() + "\n" +
+        Words(run) + "\n" +
         "Rules while the user is away:\n" +
+        "- The user's own words (the goal, their answers and everything they wrote since) are requirements, not suggestions. " +
+        "Where they say HOW to do something (a method, a layout, a standard, comments on the drawings or plans, an example to " +
+        "follow), do it their way exactly, even where you would do it differently. Copy those words, word for word, into the " +
+        "task of every job whose part they touch; a job only knows what its task says.\n" +
         "- Work as a senior engineer who owns the result: choose the best way to reach the goal, not merely the safest. " +
         "Never ask the user anything and never wait for an answer; make the call a senior would, keep assumptions to the " +
         "few the goal needs, and list them under \"Decisions I made\" in the final report. Only a choice that would change the " +
@@ -240,7 +287,7 @@ internal static class Autopilot
     /// <summary>What the coordinator is told when the run carries on after Revit was started again.</summary>
     public static string Recovered(AutopilotRun run, string why) =>
         "[Autopilot, not typed by the user] " + why + " The jobs that were working were told to carry on; a change that was " +
-        "being applied may not be in the model. Check the model where it matters, then carry on toward the goal. Goal: " + OneLine(run.Goal, 400);
+        "being applied may not be in the model. Check the model where it matters, then carry on toward the goal. " + Words(run);
 
     // ---- Usage limits --------------------------------------------------------------------------------------------------
 
@@ -391,12 +438,13 @@ internal static class GoalReview
     /// <summary>A reviewer's task: the goal in full, the plan's checks, the coordinator's claims, and how to answer.</summary>
     public static string Task(AutopilotRun run, int part, string claims) =>
         $"You are on the review team of an autopilot run. The coordinator says the user's goal is met. Check it, for {Parts[part].Scope}\n\n" +
-        "The user's goal, with their answers to the plan's questions:\n" + run.Goal.Trim() + "\n\n" +
+        "The user's goal, with their answers to the plan's questions, and what they wrote since:\n" + Autopilot.Words(run) + "\n\n" +
         (run.Plan.Trim().Length > 0 ? "The plan the user approved (its checks say how each part is verified):\n" + Clip(run.Plan, 6000) + "\n\n" : "") +
         (run.Gaps.Trim().Length > 0 ? "Last round, the team found these not done; check them first:\n" + run.Gaps.Trim() + "\n\n" : "") +
         "The coordinator's final report (claims to check, not proof):\n" + (claims.Trim().Length > 0 ? Clip(claims, 6000) : "(none)") + "\n\n" +
         "How to review:\n" +
-        "1. List every thing the user asked for on your side, one line each, from the goal and their answers (not from the plan or the report).\n" +
+        "1. List every thing the user asked for on your side, one line each, from the goal, their answers and what they wrote since, " +
+        "including HOW they said to do it (not from the plan or the report).\n" +
         "2. Check each one in the models and files with Sketch ProMax's tools: count it, read it, look at it. A report saying it is done is not proof.\n" +
         "3. An item is NOT DONE when it is missing, partly done, done differently from what the user said, or left for later, " +
         "\"to confirm\" or \"flagged\" when the user didn't allow that. An assumption is fine only where the goal left the choice open.\n" +
@@ -438,7 +486,7 @@ internal static class GoalReview
         $"Still to do (round {run.ReviewRound} of {MaxRounds}):\n{gaps.Trim()}\n\n" +
         "Hand all of this out to the workers now, side by side where it can be, and check it as it comes back. Don't stop, don't " +
         "wait for the user's go-ahead and don't ask them anything: they are away. When it is all done, write the final report " +
-        "again and end it with " + Autopilot.DoneMark + "; the team checks again. Goal: " + JobBoard.OneLine(run.Goal, 400);
+        "again and end it with " + Autopilot.DoneMark + "; the team checks again. " + Autopilot.Words(run);
 
     /// <summary>Whether the coordinator can't move it on: a turn that ends with nothing open after a send-back still gets checked.</summary>
     public static bool MoreRounds(AutopilotRun run) => run.ReviewRound < MaxRounds;

@@ -3,6 +3,8 @@ using SketchProMax.Chat;
 /// <summary>Autopilot's rules: what the coordinator is told, the answers given for the user, pausing at limits, the report.</summary>
 internal static class AutopilotTests
 {
+    private static bool Test(Func<bool> f) => f();
+
     public static void Run(Action<string, bool, string> check)
     {
         var now = new DateTimeOffset(2026, 10, 29, 23, 0, 0, TimeSpan.Zero);
@@ -29,6 +31,23 @@ internal static class AutopilotTests
             && !PromptBriefs.PlanMessage("yes please do so", [], []).Contains("autopilot run"), "");
         check("autopilot: reports are reviewed against the goal, not just told", Autopilot.Review(run).Contains("review these reports") && Autopilot.Review(run).Contains(run.Goal), "");
         check("autopilot: a quiet turn gets a nudge that names the goal", Autopilot.Nudge(run).Contains("No job is open") && Autopilot.Nudge(run).Contains(run.Goal), "");
+        // What the user writes after the start (how to do the plans, say) stays with the goal: every prompt, every job and
+        // the review team carry it, in full (31 Oct 2026: comments were lost after their turn and the goal was cut at 400).
+        var heard = new AutopilotRun { Goal = run.Goal + " " + new string('x', 600) + " END-OF-GOAL", State = AutopilotRun.Running, Started = run.Started };
+        Autopilot.Heard(heard, "On the plans, put the grid bubbles at the top and left only");
+        Autopilot.Heard(heard, "On the plans, put the grid bubbles at the top and left only");
+        check("autopilot: a comment written mid-run is kept once", heard.Said.Count == 1, string.Join("|", heard.Said));
+        check("autopilot: the full goal and the comment reach every prompt", new[] { Autopilot.Nudge(heard), Autopilot.Review(heard), Autopilot.Approved(heard),
+            Autopilot.Resume(heard, "x"), GoalReview.SendBack(heard, "- sheets"), GoalReview.Task(heard, 0, "") }
+            .All(t => t.Contains("END-OF-GOAL") && t.Contains("grid bubbles at the top and left only") && t.Contains("wins over the goal and the plan")), Autopilot.Nudge(heard));
+        check("autopilot: the user's how-to is a requirement, copied into each job's task", Autopilot.Approved(heard).Contains("do it their way exactly")
+            && Autopilot.Approved(heard).Contains("word for word"), "");
+        check("autopilot: jobs get the user's words themselves", Autopilot.UserWords.Contains("grid bubbles") && Autopilot.JobWords().Contains("do it their way exactly"), Autopilot.JobWords());
+        check("autopilot: the review team checks how the user said to do it", GoalReview.Task(heard, 1, "").Contains("including HOW they said to do it"), "");
+        Autopilot.UserWords = "";
+        check("autopilot: no run, no words added to jobs", Autopilot.JobWords() == "", "");
+        check("autopilot: a run that hasn't started keeps nothing (its changes go into the goal)", Test(() => { var r = new AutopilotRun(); Autopilot.Heard(r, "x"); return r.Said.Count == 0; }), "");
+
         check("autopilot: the final mark ends the run", ("All done.\n" + Autopilot.DoneMark).Contains(Autopilot.DoneMark), "");
 
         // Answering for the user: every approval is given (a backup was saved), dialogs get Cancel, No or OK.
@@ -87,7 +106,7 @@ internal static class AutopilotTests
             && task1.Contains("list_revit_models"), task1);
         check("review team: each gets the user's goal with their answers, the plan's checks and the claims", task0.Contains("TL is inside the Revit model") && task0.Contains("When the goal is met")
             && task0.Contains("claims to check, not proof") && task0.Contains("Done: 110 sheets."), task0);
-        check("review team: items come from the user's words, checked in the model, not the reports", task0.Contains("from the goal and their answers (not from the plan or the report)")
+        check("review team: items come from the user's words, checked in the model, not the reports", task0.Contains("from the goal, their answers and what they wrote since") && task0.Contains("(not from the plan or the report)")
             && task0.Contains("A report saying it is done is not proof"), task0);
         check("review team: left for later or 'to confirm' counts as not done unless the user allowed it", task0.Contains("left for later") && task0.Contains("when the user didn't allow that"), task0);
         check("review team: they never change anything and end with the verdict line", task0.Contains("Don't change anything") && task0.Contains(GoalReview.MetWord) && task0.Contains(GoalReview.NotMetWord), task0);

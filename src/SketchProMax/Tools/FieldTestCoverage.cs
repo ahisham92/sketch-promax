@@ -778,6 +778,7 @@ internal static class FieldTestCoverage
         new(61, ["chat.autopilot_ui"], "during and after an autopilot, Synchronize with Central, Link Revit and closing Revit work; only Sketch ProMax's own dialogs are answered"),
         new(62, ["chat.phone_switch_ui"], "with the phone on and workers busy, an update comes every hour naming what each worker does, from the coordinator's name"),
         new(63, ["chat.phone_switch_ui"], "with two Revit windows open, a message from the phone gets one answer, and asking about a question sent to the phone gets it explained"),
+        new(64, ["chat.autopilot_ui"], "in an Autopilot run, write how to do the plans after it starts; the jobs that make the plans follow it and the review team checks it"),
     ];
 
     /// <summary>
