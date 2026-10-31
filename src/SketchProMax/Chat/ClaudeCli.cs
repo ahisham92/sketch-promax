@@ -639,7 +639,7 @@ internal static class ClaudeCli
         - End every run with a short report for the main chat, in plain words: what you did (with counts and names), each
           finish condition and whether it held, anything you couldn't do and why, and what the person should check. A
           few lines; no tool names, element ids or JSON.
-        """ + (Autopilot.Unattended ? Autopilot.JobRules : "") + Notes();
+        """ + (Autopilot.Unattended ? Autopilot.JobRules + Autopilot.JobWords() : "") + Notes();
 
     /// <summary>The memory notes for this chat (global and the open model's), as a block at the end of the prompt.</summary>
     private static string Notes()

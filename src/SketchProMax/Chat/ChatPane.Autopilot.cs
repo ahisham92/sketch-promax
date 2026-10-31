@@ -145,6 +145,13 @@ internal sealed partial class ChatPane
     /// </summary>
     private bool AutopilotGoal(string text, List<Attachment> attachments)
     {
+        // A run that started keeps what the user writes with its goal: every later prompt, every job and the review team
+        // see it, not only the turn it came in with (31 Oct 2026: comments on how to do the plans were lost).
+        if (Run is { } said && said.Started != default && said.State is not (AutopilotRun.Planning or AutopilotRun.Approval) && text.Length > 0)
+        {
+            Autopilot.Heard(said, text);
+            Save();
+        }
         // A paused run: whatever the user types carries it on, with their message as the coordinator's next turn.
         if (Run is { State: AutopilotRun.Paused } && text.Length > 0)
         {
@@ -237,6 +244,7 @@ internal sealed partial class ChatPane
             // up their model before its first change.
             AutopilotShare.Begin(Autopilot.RunId(_conv.Id, run), copy.Length > 0 ? model : "", DateTime.UtcNow);
             AskUser.Goal = run.Goal;
+            Autopilot.UserWords = Autopilot.Words(run);
             AskUser.Listen();
             Note(run.Backup.Length > 0 ? $"Autopilot started. Backup copy of the model: {run.Backup}"
                 : "Autopilot started. No backup copy could be saved (the model has never been saved to a file).");
@@ -272,6 +280,7 @@ internal sealed partial class ChatPane
         if (Run is not { Active: true } run) return;
         var now = DateTimeOffset.UtcNow;
         if (AskUser.Goal.Length == 0) AskUser.Goal = run.Goal; // a run carried on after Revit started again
+        if (Autopilot.UserWords.Length == 0) Autopilot.UserWords = Autopilot.Words(run);
         AskUser.Listen(); // the phone is read for Stop/Resume while the run is on
         AutopilotUpdateTick(run);
         // The other Revit windows know the run is still on, and what they answered goes into its log.
@@ -473,6 +482,7 @@ internal sealed partial class ChatPane
         const string how = "from your phone";
         Add(new ChatItem { Kind = "user", Text = text + $"\n\n({how})" });
         AutopilotLog(AutopilotEntry.Asked, $"You wrote {how}: " + (text.Length > 200 ? text.Substring(0, 199) + "…" : text));
+        Autopilot.Heard(run, text);
         // A paused run: the user's word carries it on, as typing "continue" would.
         if (run.State == AutopilotRun.Paused) AutopilotResume($"You wrote {how}.", turn: false);
         _fromPhone.Add(text);
@@ -668,6 +678,7 @@ internal sealed partial class ChatPane
         run.ReviewRound = 0;
         AutopilotShare.Begin(Autopilot.RunId(_conv.Id, run), "", DateTime.UtcNow);
         AskUser.Goal = run.Goal;
+        Autopilot.UserWords = Autopilot.Words(run);
         AskUser.Listen();
         var text = "Autopilot started again with your message: the coordinator and workers carry on without asking you, and the review team checks the goal before it ends.";
         AutopilotLog(AutopilotEntry.Resumed, text);
@@ -695,6 +706,7 @@ internal sealed partial class ChatPane
         TakeSharedLog(run);
         AutopilotShare.End(Autopilot.RunId(_conv.Id, run));
         AskUser.Clear();
+        Autopilot.UserWords = "";
         Add(new ChatItem { Kind = "assistant", Text = Autopilot.Report(run, _board?.Snapshot() ?? [], DateTime.UtcNow) });
         Save();
         ShowAutopilot();
