@@ -280,6 +280,7 @@ internal sealed partial class ChatPane
         if (Run is not { Active: true } run) return;
         var now = DateTimeOffset.UtcNow;
         if (AskUser.Goal.Length == 0) AskUser.Goal = run.Goal; // a run carried on after Revit started again
+        AutopilotBackfill(run);
         if (Autopilot.UserWords.Length == 0) Autopilot.UserWords = Autopilot.Words(run);
         AskUser.Listen(); // the phone is read for Stop/Resume while the run is on
         AutopilotUpdateTick(run);
@@ -297,6 +298,11 @@ internal sealed partial class ChatPane
             return;
         }
         if (_gapsWaiting && _turn is null && _reports.Count == 0) SendGaps(run);
+        if (_backfillWaiting && _turn is null && _reports.Count == 0 && run.State == AutopilotRun.Running)
+        {
+            _backfillWaiting = false;
+            _ = RunTurn(Autopilot.Recheck(run), [], "");
+        }
 
         if (_turn is null && !JobsOpen && _reports.Count == 0 && DateTime.UtcNow - _autoIdleSince > TimeSpan.FromMinutes(2))
         {
@@ -677,6 +683,7 @@ internal sealed partial class ChatPane
         run.Idle = 0;
         run.ReviewRound = 0;
         AutopilotShare.Begin(Autopilot.RunId(_conv.Id, run), "", DateTime.UtcNow);
+        AutopilotBackfill(run);
         AskUser.Goal = run.Goal;
         Autopilot.UserWords = Autopilot.Words(run);
         AskUser.Listen();
@@ -686,6 +693,24 @@ internal sealed partial class ChatPane
         Save();
         ShowAutopilot();
     }
+
+    /// <summary>
+    /// A run from before 0.35.58: the comments already written in its chat join the goal, the jobs and the review team, and
+    /// the coordinator is told to check the work done so far against them.
+    /// </summary>
+    private void AutopilotBackfill(AutopilotRun run)
+    {
+        if (run.Backfilled) return;
+        if (!Autopilot.Backfill(run, _conv.Items.Select(i => (i.Time, i.Kind, i.Text)).ToList())) { Save(); return; }
+        Autopilot.UserWords = Autopilot.Words(run);
+        var text = $"Autopilot now keeps your {run.Said.Count} message(s) written since it started with the goal: every job follows them and the review team checks them.";
+        AutopilotLog(AutopilotEntry.Resumed, text);
+        Note(text);
+        Save();
+        _backfillWaiting = true;
+    }
+
+    private bool _backfillWaiting;
 
     /// <summary>Stop on the banner: the open jobs stop and the report is written.</summary>
     private void AutopilotStop(string why)

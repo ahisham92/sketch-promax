@@ -566,6 +566,17 @@ internal sealed partial class ChatPane
     private void Report(ChatJob job)
     {
         var now = DateTime.UtcNow;
+        // During a run nobody is there to press "try again": a job that ended with a problem is started again by itself
+        // (twice at most) before it counts as failed.
+        if (Run is { State: AutopilotRun.Running } && _board is { } retry && Autopilot.RetryMessage(job) is { } again)
+        {
+            job.AutoRetries++;
+            Tools.ActivityLog.Note("job_retry", $"job {job.Number} try {job.AutoRetries}: {JobBoard.OneLine(job.Summary, 200)}");
+            retry.Message(job.Number, again, now);
+            JobsChanged();
+            SaveSoon();
+            return;
+        }
         // A goal reviewer's report goes to the run (GoalReview), not to the coordinator's chat.
         if (job.GoalCheck > 0)
         {
