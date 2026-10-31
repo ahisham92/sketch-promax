@@ -151,12 +151,25 @@ internal static class PhoneLink
         return (id, error);
     }
 
+    /// <summary>The coordinator's name (Settings › Chat crew names): the phone shows the chat as from them (Pitso, ...).</summary>
+    public static string Agent { get; set; } = "";
+
+    private static string _agentSent = "";
+
     /// <summary>What the phone sent since last time (answers, messages, Stop/Resume), or null when it couldn't be read.</summary>
     public static async Task<List<IrisMessage>?> InboxAsync()
     {
         List<IrisMessage>? got = null;
         var error = await Try(async c => got = await c.InboxAsync().ConfigureAwait(false)).ConfigureAwait(false);
         if (got is { Count: > 0 }) Save();
+        if (error is null && Agent.Length > 0 && Agent != _agentSent)
+        {
+            var name = Agent;
+            // An older Iris without names answers 404/405: asked again only when the name changes.
+            try { await Client.SetAgentAsync(name).ConfigureAwait(false); _agentSent = name; }
+            catch (IrisException) { _agentSent = name; }
+            catch (Exception) { /* no network: the next read tries again */ }
+        }
         return error is null ? got : null;
     }
 

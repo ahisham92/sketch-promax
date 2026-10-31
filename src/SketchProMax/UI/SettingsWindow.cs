@@ -106,7 +106,7 @@ public sealed class SettingsWindow : Window
             _apAsk.Items.Add(new ComboBoxItem { Content = m == 0 ? "never (ask nothing)" : m.ToString(System.Globalization.CultureInfo.CurrentCulture) + " min", Tag = m });
         foreach (var m in Chat.AskRules.UpdateChoices)
             _apUpdate.Items.Add(new ComboBoxItem { Content = m == 0 ? "never" : m < 60 ? m.ToString(System.Globalization.CultureInfo.CurrentCulture) + " min" : (m / 60).ToString(System.Globalization.CultureInfo.CurrentCulture) + (m == 60 ? " hour" : " hours"), Tag = m });
-        _apUpdate.SelectedIndex = Math.Max(0, Array.IndexOf(Chat.AskRules.UpdateChoices, _settings.AutopilotUpdateMinutes) is var u and >= 0 ? u
+        _apUpdate.SelectedIndex = Math.Max(0, Array.IndexOf(Chat.AskRules.UpdateChoices, _settings.PhoneUpdateMinutes) is var u and >= 0 ? u
             : Array.IndexOf(Chat.AskRules.UpdateChoices, Chat.AskRules.DefaultUpdateMinutes));
         _apAsk.SelectedIndex = Math.Max(0, Array.IndexOf(Chat.AskRules.WaitChoices, _settings.AutopilotAskWaitMinutes) is var i and >= 0 ? i
             : Array.IndexOf(Chat.AskRules.WaitChoices, Chat.AskRules.DefaultWaitMinutes));
@@ -478,7 +478,7 @@ public sealed class SettingsWindow : Window
             "The run's own use of your weekly limit; when it reaches this the autopilot pauses."));
         page.Children.Add(LimitRow("When a job needs you, ask you and wait", Place("AutopilotAskWaitMinutes", _apAsk), "for a reply, then carry on with its assumption",
             "The question goes to your phone (connect it below), with a button for the assumed answer. A later answer still counts and the work is put right. With no phone connected, nothing is asked: the job makes the call itself."));
-        page.Children.Add(LimitRow("Send you a progress update every", Place("AutopilotUpdateMinutes", _apUpdate), "while it runs; reply to add or change anything",
+        page.Children.Add(LimitRow("Send you a progress update every", Place("PhoneUpdateMinutes", _apUpdate), "while it runs; reply to add or change anything",
             "How many jobs finished, how many are left, and the questions waiting for you, to your phone. What you write back goes to the coordinator as your message."));
         page.Children.Add(SubHeading("Your phone"));
         page.Children.Add(PhoneRow());
@@ -1067,7 +1067,7 @@ public sealed class SettingsWindow : Window
         _settings.AutopilotFiveHourMax = Picked(_apFive, 90);
         _settings.AutopilotWeekShare = Picked(_apWeek, 25);
         _settings.AutopilotAskWaitMinutes = Picked(_apAsk, Chat.AskRules.DefaultWaitMinutes);
-        _settings.AutopilotUpdateMinutes = Picked(_apUpdate, Chat.AskRules.DefaultUpdateMinutes);
+        _settings.PhoneUpdateMinutes = Picked(_apUpdate, Chat.AskRules.DefaultUpdateMinutes);
         _settings.AutoSyncChanges = syncChanges;
         _settings.ChangeFile = _changeFile.IsChecked == true;
         _settings.TimeTracking = _timeOn.IsChecked == true;

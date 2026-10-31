@@ -56,7 +56,7 @@ internal static class AskUser
         get
         {
             if (!ByPhone) return 0;
-            try { return Math.Max(0, Settings.AgentSettings.Load().AutopilotUpdateMinutes); }
+            try { return Math.Max(0, Settings.AgentSettings.Load().PhoneUpdateMinutes); }
             catch (Exception) { return AskRules.DefaultUpdateMinutes; }
         }
     }

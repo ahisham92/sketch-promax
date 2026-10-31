@@ -3119,6 +3119,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         _saveSoon.Stop();
         // The autopilot's and the routines' clocks too: the next version runs them (a retired pane must not start turns).
         _autoTimer?.Stop();
+        _jobsTimer?.Stop();
         _routineTimer?.Stop();
         Autopilot.Here = false;
         UI.RestartNote.Changed -= ShowRestartNote;
