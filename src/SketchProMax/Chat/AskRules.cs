@@ -144,10 +144,24 @@ internal static class AskRules
         return minutes + " min";
     }
 
-    /// <summary>What the coordinator gets when the user wrote from the phone.</summary>
-    public static string FromPhone(string text, string coordinator = "") =>
+    /// <summary>What the coordinator gets when the user wrote from the phone (with the phone conversation so far).</summary>
+    public static string FromPhone(string text, string coordinator = "", string history = "") =>
         "[The user, from their phone, while the autopilot runs] " + text.Trim() + "\n\nTake this in as the user's message: fit it into the " +
-        "work (hand it out, or change what is planned) and carry on. " + PhoneVoice(coordinator);
+        "work (hand it out, or change what is planned) and carry on. " + PhoneVoice(coordinator) + Conversation(history);
+
+    /// <summary>Lines of the phone conversation kept for the coordinator.</summary>
+    public const int PhoneHistoryMax = 16;
+
+    /// <summary>
+    /// The phone conversation so far, given with every message from the phone: what was asked and sent there (by you or a
+    /// worker, as "Qn (asker)") is yours to explain; never say a question or update didn't come from you.
+    /// </summary>
+    public static string Conversation(string history) => history.Trim().Length == 0 ? "" :
+        "\n\nThe conversation on their phone so far (oldest first; everything \"You\" asked or sent there came from you or your workers, so " +
+        "explain it from this, never say it didn't come from you):\n" + history.Trim();
+
+    /// <summary>One line, cut to <paramref name="max"/> characters.</summary>
+    public static string Clip(string text, int max) => Short(text, max);
 
     /// <summary>
     /// How an answer that goes to the phone reads: the coordinator by name, as a friendly colleague texting back (the user
@@ -160,8 +174,8 @@ internal static class AskRules
         "emoji. Say what you did or are doing and what the workers are on; the autopilot's jobs and workers are yours, never \"another chat\".";
 
     /// <summary>A message from the phone when no autopilot runs: done as if typed here, answered for the phone.</summary>
-    public static string PhoneTurn(string text, string coordinator = "") =>
-        "[The user wrote this from their phone, away from the PC: do it as if typed here. " + PhoneVoice(coordinator) + "] " + text;
+    public static string PhoneTurn(string text, string coordinator = "", string history = "") =>
+        "[The user wrote this from their phone, away from the PC: do it as if typed here. " + PhoneVoice(coordinator) + "] " + text + Conversation(history);
 
     /// <summary>What ask_user answers once an answer came.</summary>
     public static string AnswerLine(UserQuestion q) => $"The user answered Q{q.Id} from their phone: \"{q.Answer}\". Go by it (you assumed: {q.Assumed}).";

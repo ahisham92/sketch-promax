@@ -61,6 +61,17 @@ internal static class AskRulesTests
         check("progress: a pause in one line", AskRules.UpdateBody(paused, [], t0.AddHours(-1), [], t0).Contains("Paused: The 5-hour limit is nearly used up."), "");
         check("phone voice: friendly, by the coordinator's own name, never \"another chat\"", AskRules.PhoneTurn("hi", "Sam").Contains("from you, Sam")
             && AskRules.PhoneTurn("hi", "Sam").Contains("friendly") && AskRules.FromPhone("x", "Nova").Contains("Nova") && AskRules.PhoneVoice("").Contains("never \"another chat\""), "");
+        check("phone history: the coordinator is given what was asked and sent on the phone", AskRules.FromPhone("what do you mean?", "Sam", "[11:29] You asked: Q1 (the coordinator): square the grids?")
+            .Contains("Q1 (the coordinator): square the grids?") && AskRules.PhoneTurn("hi", "Sam", "[09:00] You sent: hello").Contains("never say it didn't come from you")
+            && !AskRules.PhoneTurn("hi", "Sam", "").Contains("conversation on their phone"), "");
+        static bool Alive(int pid) => pid is 1 or 2;
+        var fresh = new SketchProMax.Phone.PhoneLink.ReaderState { Pid = 1, Beat = t0.AddMinutes(-1) };
+        check("one reader: the first Revit keeps the phone's messages while it answers", !SketchProMax.Phone.PhoneLink.ShouldRead(fresh, 2, null, Alive, t0)
+            && SketchProMax.Phone.PhoneLink.ShouldRead(fresh, 1, null, Alive, t0) && SketchProMax.Phone.PhoneLink.ShouldRead(null, 2, null, Alive, t0), "");
+        check("one reader: a reader closed or silent is replaced", SketchProMax.Phone.PhoneLink.ShouldRead(new SketchProMax.Phone.PhoneLink.ReaderState { Pid = 3, Beat = t0 }, 2, null, Alive, t0)
+            && SketchProMax.Phone.PhoneLink.ShouldRead(new SketchProMax.Phone.PhoneLink.ReaderState { Pid = 1, Beat = t0.AddMinutes(-4) }, 2, null, Alive, t0), "");
+        check("one reader: the autopilot's Revit takes them", SketchProMax.Phone.PhoneLink.ShouldRead(fresh, 2, 2, Alive, t0) && !SketchProMax.Phone.PhoneLink.ShouldRead(null, 1, 2, Alive, t0)
+            && SketchProMax.Phone.PhoneLink.ShouldRead(fresh, 1, 3, Alive, t0), "");
         check("progress: what the user writes reaches the coordinator as their message", AskRules.FromPhone("also add the fender schedule").Contains("from their phone")
             && AskRules.FromPhone("also add the fender schedule").Contains("also add the fender schedule"), "");
 
