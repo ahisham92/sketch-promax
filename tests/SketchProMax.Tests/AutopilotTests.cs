@@ -63,6 +63,15 @@ internal static class AutopilotTests
         check("autopilot: the coordinator rechecks the work against every comment", Autopilot.Recheck(old).Contains("one by one") && Autopilot.Recheck(old).Contains("north up"), "");
         Autopilot.UserWords = "";
 
+        // A job that ends with a problem during a run is tried again by itself, twice at most, not for the usage limit.
+        var failed = new ChatJob { Number = 117, State = JobBoard.Failed, Summary = "It stopped unexpectedly. Send it a message to try again." };
+        check("autopilot: a failed job is tried again by itself", Autopilot.RetryMessage(failed) is { } m && m.Contains("try 1 of 2") && m.Contains("stopped unexpectedly")
+            && m.Contains("smaller steps"), Autopilot.RetryMessage(failed) ?? "");
+        failed.AutoRetries = Autopilot.MaxRetries;
+        check("autopilot: twice at most", Autopilot.RetryMessage(failed) is null, "");
+        check("autopilot: not for the usage limit (the run pauses) or a done job", Autopilot.RetryMessage(new ChatJob { State = JobBoard.Failed, Summary = "Your plan's usage limit is reached" }) is null
+            && Autopilot.RetryMessage(new ChatJob { State = JobBoard.Done }) is null, "");
+
         check("autopilot: the final mark ends the run", ("All done.\n" + Autopilot.DoneMark).Contains(Autopilot.DoneMark), "");
 
         // Answering for the user: every approval is given (a backup was saved), dialogs get Cancel, No or OK.

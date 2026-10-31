@@ -107,6 +107,8 @@ internal sealed class ChatJob
     /// goes to the run (met, or what is still to do back to the coordinator), not to the coordinator's chat. Saved.
     /// </summary>
     public int GoalCheck { get; set; }
+    /// <summary>How many times an Autopilot run started it again by itself after it ended with a problem (Autopilot.RetryMessage).</summary>
+    public int AutoRetries { get; set; }
     /// <summary>
     /// It may only read (an autopilot's reading before the plan is approved, a goal reviewer): the bridge refuses its
     /// changes, like a check's. Saved.

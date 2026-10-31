@@ -176,6 +176,26 @@ internal static class Autopilot
         return run.Said.Count > before.Count;
     }
 
+    /// <summary>Times a job that ended with a problem is started again by itself during a run, before it is reported.</summary>
+    public const int MaxRetries = 2;
+
+    /// <summary>
+    /// A job ended with a problem during a run: what it is sent to carry on, or null when it isn't tried again (the usage
+    /// limit or sign-in, which pause the run instead, or it already had <see cref="MaxRetries"/> tries). Nobody is at the
+    /// computer to press "try again", so a failure no longer ends the work there (31 Oct 2026: review jobs ended one after
+    /// another with "Ended with a problem" and nothing done).
+    /// </summary>
+    public static string? RetryMessage(ChatJob job)
+    {
+        if (job.State != JobBoard.Failed || job.AutoRetries >= MaxRetries) return null;
+        var why = job.Summary;
+        if (System.Text.RegularExpressions.Regex.IsMatch(why, @"usage limit|not signed in", System.Text.RegularExpressions.RegexOptions.IgnoreCase)) return null;
+        return $"[Autopilot, try {job.AutoRetries + 1} of {MaxRetries}] Your last run ended with a problem: " + Clip(JobBoard.OneLine(why, 400), 400) +
+               " Try again now and finish your task. Carry on from where you stopped (what you found or changed stays); work " +
+               "in smaller steps (fewer elements, views or sheets at a time); if a tool keeps failing, get the same thing " +
+               "another way. Don't end without your report.";
+    }
+
     public const int SaidMax = 30;
 
     /// <summary>The running Autopilot's goal and the user's words, added to every job's instructions ("" when none runs here).</summary>
