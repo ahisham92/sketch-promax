@@ -438,7 +438,7 @@ internal sealed partial class ChatPane
         {
             var asks = string.Join("\n\n", _fromPhone);
             _fromPhone.Clear();
-            var turn = RunTurn(AskRules.FromPhone(asks, CrewStrip.Names.Coordinator), [], "");
+            var turn = RunTurn(AskRules.FromPhone(asks, CrewStrip.Names.Coordinator, AskUser.History()), [], "");
             _phoneTurn = _turn; // its answer goes back to the phone
             _ = turn;
             return;
@@ -513,7 +513,7 @@ internal sealed partial class ChatPane
 
     private async Task RunPhoneTurn(string text)
     {
-        var run = RunTurn(AskRules.PhoneTurn(text, CrewStrip.Names.Coordinator), [], "");
+        var run = RunTurn(AskRules.PhoneTurn(text, CrewStrip.Names.Coordinator, AskUser.History()), [], "");
         _phoneTurn = _turn; // set before RunTurn's first wait
         await run;
     }

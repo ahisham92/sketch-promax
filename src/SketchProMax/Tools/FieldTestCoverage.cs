@@ -777,6 +777,7 @@ internal static class FieldTestCoverage
         new(60, ["tool:export_chats_and_bugs"], "the exported chats head replies Sketch ProMax (unit test)"),
         new(61, ["chat.autopilot_ui"], "during and after an autopilot, Synchronize with Central, Link Revit and closing Revit work; only Sketch ProMax's own dialogs are answered"),
         new(62, ["chat.phone_switch_ui"], "with the phone on and workers busy, an update comes every hour naming what each worker does, from the coordinator's name"),
+        new(63, ["chat.phone_switch_ui"], "with two Revit windows open, a message from the phone gets one answer, and asking about a question sent to the phone gets it explained"),
     ];
 
     /// <summary>

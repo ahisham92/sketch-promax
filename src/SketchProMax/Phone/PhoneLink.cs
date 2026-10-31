@@ -151,6 +151,49 @@ internal static class PhoneLink
         return (id, error);
     }
 
+    // ---- One Revit takes the phone's messages ---------------------------------------------------------------------
+
+    /// <summary>Which Revit on this PC takes the phone's messages and Stop/Resume (phone-reader.json).</summary>
+    internal sealed class ReaderState
+    {
+        public int Pid { get; set; }
+        public DateTime Beat { get; set; }
+    }
+
+    /// <summary>A reader not heard from for this long (closed, hung) is replaced.</summary>
+    public static readonly TimeSpan ReaderFresh = TimeSpan.FromMinutes(3);
+
+    /// <summary>
+    /// Whether this Revit (<paramref name="me"/>) takes the phone's messages: the Revit whose chat runs an autopilot when one
+    /// runs, else the one that took them first while it keeps answering (<paramref name="held"/>), else this one.
+    /// </summary>
+    internal static bool ShouldRead(ReaderState? held, int me, int? runOwner, Func<int, bool> alive, DateTime nowUtc)
+    {
+        if (runOwner is { } owner) return owner == me || !alive(owner);
+        return held is null || held.Pid == me || nowUtc - held.Beat > ReaderFresh || !alive(held.Pid);
+    }
+
+    private static string ReaderFile =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "SketchProMax", "phone-reader.json");
+
+    /// <summary>True when this Revit takes the phone's messages now (it then says so in phone-reader.json). Any thread.</summary>
+    public static bool TakesMessages(DateTime nowUtc)
+    {
+        try
+        {
+            ReaderState? held = null;
+            try { if (File.Exists(ReaderFile)) held = JsonSerializer.Deserialize<ReaderState>(File.ReadAllText(ReaderFile)); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException) { }
+            var me = Chat.AutopilotShare.Me;
+            var run = Chat.AutopilotShare.Any(nowUtc) is not null ? Chat.AutopilotShare.Read()?.Owner : null;
+            if (!ShouldRead(held, me, run, Chat.AutopilotShare.IsAlive, nowUtc)) return false;
+            Directory.CreateDirectory(Path.GetDirectoryName(ReaderFile)!);
+            File.WriteAllText(ReaderFile, JsonSerializer.Serialize(new ReaderState { Pid = me, Beat = nowUtc }));
+            return true;
+        }
+        catch (Exception) { return true; /* the file can't be used: as before, this Revit answers */ }
+    }
+
     /// <summary>The coordinator's name (Settings › Chat crew names): the phone shows the chat as from them (Sam, ...).</summary>
     public static string Agent { get; set; } = "";
 

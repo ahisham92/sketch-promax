@@ -74,7 +74,36 @@ internal static class AskUser
     }
 
     /// <summary>Sends a progress update to the phone (on a background thread). Null when sent, else why not.</summary>
-    public static Task<string?> SendUpdateAsync(string body) => PhoneLink.UpdateAsync(body);
+    public static async Task<string?> SendUpdateAsync(string body)
+    {
+        var error = await PhoneLink.UpdateAsync(body).ConfigureAwait(false);
+        if (error is null) Remember("You sent", body);
+        return error;
+    }
+
+    // ---- The conversation on the phone, for the coordinator ----------------------------------------------------------
+
+    private static readonly List<string> Said = [];
+
+    /// <summary>
+    /// A line of the phone conversation (questions, updates, replies, what the user wrote and answered), kept for the
+    /// coordinator: on 31 Oct 2026 the user asked "what do you mean by squaring off?" about the coordinator's own question
+    /// and got "that didn't come from me", because the turn answering the phone didn't see what had been sent there.
+    /// </summary>
+    internal static void Remember(string who, string text)
+    {
+        lock (Gate)
+        {
+            Said.Add($"[{DateTime.Now:HH:mm}] {who}: {AskRules.Clip(text, 600)}");
+            if (Said.Count > AskRules.PhoneHistoryMax) Said.RemoveRange(0, Said.Count - AskRules.PhoneHistoryMax);
+        }
+    }
+
+    /// <summary>The phone conversation so far (oldest first), the message being answered last.</summary>
+    public static string History()
+    {
+        lock (Gate) return string.Join("\n", Said);
+    }
 
     /// <summary>A job (or the coordinator) asks: the question waits to go out with any others asked meanwhile.</summary>
     public static UserQuestion Ask(string jobKey, string asker, string question, string assumed)
@@ -168,6 +197,7 @@ internal static class AskUser
                     q.PhoneId = id;
                     q.Sent = error is null ? now : now.AddYears(-1); // not sent: its wait is over at once
                 }
+                if (error is null) Remember("You asked", AskRules.PhoneText(q) + (q.Assumed.Length > 0 ? " (if no answer: " + q.Assumed + ")" : ""));
                 if (error is not null) failed.Add($"Q{q.Id} ({error})");
             }
             Logged?.Invoke(failed.Count == 0
@@ -181,13 +211,18 @@ internal static class AskUser
         if (ByPhone && now - _readAt >= every)
         {
             _readAt = now;
+            // With two Revit windows open, both read the phone (each its own answers), but only one takes the user's
+            // messages and Stop/Resume: on 31 Oct 2026 both answered one message, differently.
+            var takes = PhoneLink.TakesMessages(now);
             foreach (var m in await PhoneLink.InboxAsync().ConfigureAwait(false) ?? [])
             {
                 var text = m.Text.Trim();
                 if (m.Error.Length > 0 || text.Length == 0) continue;
+                if (m.Kind is "command" or "message" && !takes) continue;
                 if (m.Kind == "command") Command?.Invoke(text);
                 else if (m.Kind == "message")
                 {
+                    Remember("They wrote", text);
                     // Writing from the phone: read every 30 s for a while, so a conversation doesn't wait minutes per message.
                     _chatUntil = now + AskRules.ChatFor;
                     UserWrote?.Invoke(text);
@@ -196,6 +231,7 @@ internal static class AskUser
                     lock (Gate)
                         if (Questions.FirstOrDefault(q => q.PhoneId != 0 && q.PhoneId == m.ReplyTo) is { Answer: null } q)
                         {
+                            Said.Add($"[{DateTime.Now:HH:mm}] They answered Q{q.Id}: {AskRules.Clip(text, 600)}");
                             q.Answer = AskRules.Keep(text, q);
                             q.Answered = now;
                         }
