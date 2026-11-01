@@ -15,16 +15,31 @@ if ([Net.WebRequest]::DefaultWebProxy) { [Net.WebRequest]::DefaultWebProxy.Crede
 
 $repo = "ahisham92/sketch-promax"
 Write-Host "Finding the latest Sketch ProMax release..."
-$release = Invoke-RestMethod "https://api.github.com/repos/$repo/releases/latest" -Headers @{ "User-Agent" = "SketchProMax-get" } -UseBasicParsing
-$asset = $release.assets | Where-Object { $_.name -like "SketchProMax-*.zip" } | Select-Object -First 1
-if (-not $asset) { throw "The latest release ($($release.tag_name)) has no SketchProMax zip. Download it from https://github.com/$repo/releases instead." }
+# GitHub's API allows 60 requests an hour per address, which an office shares; when it refuses, the latest tag is
+# read from github.com/<repo>/releases/latest's redirect instead and the zip's download link is built from it.
+$tag = $null; $url = $null; $size = 0
+try {
+    $release = Invoke-RestMethod "https://api.github.com/repos/$repo/releases/latest" -Headers @{ "User-Agent" = "SketchProMax-get" } -UseBasicParsing
+    $asset = $release.assets | Where-Object { $_.name -like "SketchProMax-*.zip" } | Select-Object -First 1
+    if ($asset) { $tag = $release.tag_name; $url = $asset.browser_download_url; $size = $asset.size }
+} catch { Write-Host "GitHub's API is busy for this network; using the releases page instead." }
+if (-not $url) {
+    $request = [Net.HttpWebRequest]::Create("https://github.com/$repo/releases/latest")
+    $request.AllowAutoRedirect = $false
+    $request.UserAgent = "SketchProMax-get"
+    $response = $request.GetResponse()
+    $location = $response.Headers["Location"]; $response.Close()
+    if ($location -notmatch '/releases/tag/(v[^/?#]+)') { throw "Couldn't find the latest release. Download the zip from https://github.com/$repo/releases instead." }
+    $tag = $Matches[1]
+    $url = "https://github.com/$repo/releases/download/$tag/SketchProMax-$($tag.TrimStart('v')).zip"
+}
 
-$work = Join-Path $env:TEMP ("SketchProMax-install-" + $release.tag_name.TrimStart("v"))
+$work = Join-Path $env:TEMP ("SketchProMax-install-" + $tag.TrimStart("v"))
 New-Item -ItemType Directory -Force $work | Out-Null
-$zip = Join-Path $work $asset.name
-if (-not ((Test-Path $zip) -and (Get-Item $zip).Length -eq $asset.size)) {
-    Write-Host ("Downloading {0} ({1:N0} MB)..." -f $asset.name, ($asset.size / 1MB))
-    Invoke-WebRequest $asset.browser_download_url -OutFile $zip -UseBasicParsing -Headers @{ "User-Agent" = "SketchProMax-get" }
+$zip = Join-Path $work ($url.Split("/")[-1])
+if (-not ((Test-Path $zip) -and $size -gt 0 -and (Get-Item $zip).Length -eq $size)) {
+    Write-Host ("Downloading {0}..." -f ($url.Split("/")[-1]))
+    Invoke-WebRequest $url -OutFile $zip -UseBasicParsing -Headers @{ "User-Agent" = "SketchProMax-get" }
 }
 Unblock-File $zip -ErrorAction SilentlyContinue
 
@@ -36,7 +51,7 @@ Get-ChildItem $out -Recurse -File | Unblock-File -ErrorAction SilentlyContinue
 
 $install = Get-ChildItem $out -Recurse -Filter "install.ps1" -File | Select-Object -First 1
 if (-not $install) { throw "The zip has no install.ps1. Download it from https://github.com/$repo/releases instead." }
-Write-Host "Installing Sketch ProMax $($release.tag_name.TrimStart('v'))..."
+Write-Host "Installing Sketch ProMax $($tag.TrimStart('v'))..."
 # In this window: some company PCs refuse to start powershell.exe from another program. Bypass lasts for this window only.
 Set-ExecutionPolicy -Scope Process Bypass -Force
 try { & $install.FullName }
