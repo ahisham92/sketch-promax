@@ -2654,11 +2654,14 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
 
     private void Failure(string message, string subtype)
     {
+        if (Autopilot.LostAccess(message)) AutopilotLostAccess(message);
         if (LooksSignedOut(message))
         {
             _setup = Setup.SignedOut;
             ShowSetup();
-            Error("You're not signed in. Press Sign in above, then send your message again.");
+            Error(Regex.IsMatch(message, "disabled|admin", RegexOptions.IgnoreCase)
+                ? $"Sketch ProMax can't use this sign-in: {message.Trim()} Press Sign in above and sign in with the account that has your own plan, then send your message again."
+                : "You're not signed in. Press Sign in above, then send your message again.");
             return;
         }
         if (subtype == "error_max_turns")
@@ -2696,8 +2699,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         return true;
     }
 
-    private static bool LooksSignedOut(string text) =>
-        Regex.IsMatch(text, @"not logged in|/login\b|\blog ?in again|invalid api key|authentication_failed|authentication failed|oauth token (has )?expired|please run .*login|\bsign in again\b", RegexOptions.IgnoreCase);
+    private static bool LooksSignedOut(string text) => Autopilot.LostAccess(text);
 
     private void OnExited(ChatEngine engine, string tail)
     {

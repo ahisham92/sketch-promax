@@ -72,6 +72,14 @@ internal static class AutopilotTests
         check("autopilot: not for the usage limit (the run pauses) or a done job", Autopilot.RetryMessage(new ChatJob { State = JobBoard.Failed, Summary = "Your plan's usage limit is reached" }) is null
             && Autopilot.RetryMessage(new ChatJob { State = JobBoard.Done }) is null, "");
 
+        // Lost access to the plan (1 Nov 2026): the run pauses and says so, instead of failing every job for hours.
+        const string orgOff = "Your organization has disabled Claude subscription access for Claude Code · Use an Anthropic API key instead, or ask your admin to enable access";
+        check("autopilot: an organisation turning subscription access off is lost access", Autopilot.LostAccess(orgOff) && Autopilot.LostAccess("Not logged in · Please run /login")
+            && !Autopilot.LostAccess("The wall could not be joined."), "");
+        check("autopilot: lost access is not retried job by job (the run pauses)", Autopilot.RetryMessage(new ChatJob { State = JobBoard.Failed, Summary = orgOff }) is null, "");
+        check("autopilot: the pause says what happened and how to carry on", Autopilot.AccessNote(orgOff).Contains("Sign in") && Autopilot.AccessNote(orgOff).Contains("Nothing is lost")
+            && Autopilot.AccessRetry == TimeSpan.FromMinutes(20), Autopilot.AccessNote(orgOff));
+
         check("autopilot: the final mark ends the run", ("All done.\n" + Autopilot.DoneMark).Contains(Autopilot.DoneMark), "");
 
         // Answering for the user: every approval is given (a backup was saved), dialogs get Cancel, No or OK.
@@ -149,7 +157,14 @@ internal static class AutopilotTests
         var back = GoalReview.SendBack(goal, gaps);
         check("review team: the gaps go back to the coordinator to carry on, without stopping or asking", back.Contains("NOT met yet") && back.Contains("PDF set") && back.Contains("Don't stop")
             && back.Contains("round 1 of " + GoalReview.MaxRounds) && back.Contains(Autopilot.DoneMark), back);
-        check("review team: rounds are limited", GoalReview.MoreRounds(new AutopilotRun { ReviewRound = GoalReview.MaxRounds - 1 }) && !GoalReview.MoreRounds(new AutopilotRun { ReviewRound = GoalReview.MaxRounds }), "");
+        check("review team: rounds with no progress are limited", GoalReview.MoreRounds(new AutopilotRun { ReviewRound = 9, StuckRounds = GoalReview.MaxRounds - 1 })
+            && !GoalReview.MoreRounds(new AutopilotRun { ReviewRound = 9, StuckRounds = GoalReview.MaxRounds })
+            && !GoalReview.MoreRounds(new AutopilotRun { ReviewRound = GoalReview.HardMaxRounds }), "");
+        var progress = new AutopilotRun();
+        GoalReview.Counted(progress, 30); GoalReview.Counted(progress, 20); GoalReview.Counted(progress, 12);
+        check("review team: rounds that leave fewer items don't count toward the limit", progress.StuckRounds == 0, progress.StuckRounds.ToString());
+        GoalReview.Counted(progress, 12);
+        check("review team: a round with no fewer items counts", progress.StuckRounds == 1, "");
         goal.Gaps = gaps;
         check("review team: the next round checks last round's gaps first", GoalReview.Task(goal, 0, "").Contains("check them first") && GoalReview.Task(goal, 0, "").Contains("PDF set"), "");
         var board = new JobBoard([]);

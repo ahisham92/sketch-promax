@@ -475,6 +475,7 @@ internal sealed partial class ChatPane
             return;
         }
         if (end.IsError) board.AddItem(run.Job, new ChatItem { Kind = "error", Text = summary }, now);
+        if (end.IsError && Autopilot.LostAccess(message)) AutopilotLostAccess(message);
         EndRun(run, kill: false, park: !end.IsError);
         Report(run.Job);
     }
@@ -502,6 +503,7 @@ internal sealed partial class ChatPane
             : "It stopped unexpectedly." + (detail.Length > 0 ? " " + detail : "") + " Send it a message to try again.";
         board.RunEnded(run.Job, false, why, DateTime.UtcNow);
         board.AddItem(run.Job, new ChatItem { Kind = "error", Text = why }, DateTime.UtcNow);
+        if (Autopilot.LostAccess(tail)) AutopilotLostAccess(tail);
         RefreshJobView();
         Report(run.Job);
     }
