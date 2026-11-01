@@ -521,6 +521,7 @@ internal static class GoalReview
         "1. List every thing the user asked for on your side, one line each, from the goal, their answers and what they wrote since, " +
         "including HOW they said to do it (not from the plan or the report).\n" +
         "2. Check each one in the models and files with Sketch ProMax's tools: count it, read it, look at it. A report saying it is done is not proof.\n" +
+        "An item the user later said to hold, skip or leave (exports, clash re-runs, a berth not to touch) is not a gap: leave it out.\n" +
         "3. An item is NOT DONE when it is missing, partly done, done differently from what the user said, or left for later, " +
         "\"to confirm\" or \"flagged\" when the user didn't allow that. An assumption is fine only where the goal left the choice open.\n" +
         "4. Don't change anything (your changes are refused): you only check.\n\n" +
@@ -559,7 +560,10 @@ internal static class GoalReview
     public static string SendBack(AutopilotRun run, string gaps) =>
         "[Autopilot, not typed by the user] The review team checked the goal in the models and files: it is NOT met yet. " +
         $"Still to do (round {run.ReviewRound} of {MaxRounds}):\n{gaps.Trim()}\n\n" +
-        "Hand all of this out to the workers now, side by side where it can be, and check it as it comes back. Don't stop, don't " +
+        "This list is a checklist: give EVERY item to a job (chat_jobs, its words copied in full), with a done_when that reads " +
+        "the result back in the model or the files (counts, names, values), side by side where it can be. Don't write the final " +
+        "report while any item has no job or its job didn't read it back; in the report, list each item with what the read-back " +
+        "showed. Don't stop, don't " +
         "wait for the user's go-ahead and don't ask them anything: they are away. When it is all done, write the final report " +
         "again and end it with " + Autopilot.DoneMark + "; the team checks again. " + Autopilot.Words(run);
 

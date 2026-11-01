@@ -80,6 +80,10 @@ internal static class AutopilotTests
         check("autopilot: the pause says what happened and how to carry on", Autopilot.AccessNote(orgOff).Contains("Sign in") && Autopilot.AccessNote(orgOff).Contains("Nothing is lost")
             && Autopilot.AccessRetry == TimeSpan.FromMinutes(20), Autopilot.AccessNote(orgOff));
 
+        check("review team: what was not done comes back as a checklist, each item read back", GoalReview.SendBack(run, "- x").Contains("give EVERY item to a job")
+            && GoalReview.SendBack(run, "- x").Contains("reads the result back"), "");
+        check("review team: what the user said to hold is not a gap", GoalReview.Task(run, 1, "").Contains("said to hold, skip or leave"), "");
+
         check("autopilot: the final mark ends the run", ("All done.\n" + Autopilot.DoneMark).Contains(Autopilot.DoneMark), "");
 
         // Answering for the user: every approval is given (a backup was saved), dialogs get Cancel, No or OK.
