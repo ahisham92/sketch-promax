@@ -19,6 +19,12 @@ internal sealed class AutopilotRun
     public List<string> Said { get; set; } = [];
     /// <summary>The user's messages written to the run before <see cref="Said"/> existed were gathered from its chat.</summary>
     public bool Backfilled { get; set; }
+    /// <summary>Paused because Claude Code lost access to the user's plan (signed out, or an organisation turned it off).</summary>
+    public bool AccessLost { get; set; }
+    /// <summary>Items the review team last found not done (0 before the first round).</summary>
+    public int LastGapCount { get; set; }
+    /// <summary>Review rounds in a row that found no fewer items not done: the run stops after GoalReview.MaxRounds of these.</summary>
+    public int StuckRounds { get; set; }
     public string Plan { get; set; } = "";
     public string State { get; set; } = Planning;
     public DateTime Started { get; set; }
@@ -176,6 +182,25 @@ internal static class Autopilot
         return run.Said.Count > before.Count;
     }
 
+    /// <summary>
+    /// Claude Code can't use the user's plan any more: signed out, or the account it is signed in with belongs to an
+    /// organisation that turned subscription access off. Every turn and job fails from then on, so the run pauses at once
+    /// and tells the user, instead of failing job after job and ending with a "not done" list (1 Nov 2026: a 49-hour run).
+    /// </summary>
+    public static bool LostAccess(string text) => System.Text.RegularExpressions.Regex.IsMatch(text,
+        @"disabled (claude )?subscription access|ask your admin to enable|organi[sz]ation has disabled|not logged in|/login\b|\blog ?in again|invalid api key|" +
+        @"authentication_failed|authentication failed|oauth token (has )?expired|please run .*login|\bsign in again\b|not signed in",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+    /// <summary>How long a run paused for lost access waits before it tries again by itself (the user may sign in meanwhile).</summary>
+    public static readonly TimeSpan AccessRetry = TimeSpan.FromMinutes(20);
+
+    /// <summary>What the user is told (chat and phone) when the run pauses for lost access.</summary>
+    public static string AccessNote(string message) =>
+        "Autopilot paused: Sketch ProMax can't use your Claude plan any more (" + Clip(JobBoard.OneLine(message, 300), 300) + "). " +
+        "Nothing is lost. On the PC, press Sign in at the top of the chat and sign in with the account that has your Max plan; " +
+        "the run carries on by itself within 20 minutes, or press Resume.";
+
     /// <summary>Times a job that ended with a problem is started again by itself during a run, before it is reported.</summary>
     public const int MaxRetries = 2;
 
@@ -189,7 +214,7 @@ internal static class Autopilot
     {
         if (job.State != JobBoard.Failed || job.AutoRetries >= MaxRetries) return null;
         var why = job.Summary;
-        if (System.Text.RegularExpressions.Regex.IsMatch(why, @"usage limit|not signed in", System.Text.RegularExpressions.RegexOptions.IgnoreCase)) return null;
+        if (System.Text.RegularExpressions.Regex.IsMatch(why, @"usage limit", System.Text.RegularExpressions.RegexOptions.IgnoreCase) || LostAccess(why)) return null;
         return $"[Autopilot, try {job.AutoRetries + 1} of {MaxRetries}] Your last run ended with a problem: " + Clip(JobBoard.OneLine(why, 400), 400) +
                " Try again now and finish your task. Carry on from where you stopped (what you found or changed stays); work " +
                "in smaller steps (fewer elements, views or sheets at a time); if a tool keeps failing, get the same thing " +
@@ -539,7 +564,21 @@ internal static class GoalReview
         "again and end it with " + Autopilot.DoneMark + "; the team checks again. " + Autopilot.Words(run);
 
     /// <summary>Whether the coordinator can't move it on: a turn that ends with nothing open after a send-back still gets checked.</summary>
-    public static bool MoreRounds(AutopilotRun run) => run.ReviewRound < MaxRounds;
+    public static bool MoreRounds(AutopilotRun run) => run.StuckRounds < MaxRounds && run.ReviewRound < HardMaxRounds;
+
+    /// <summary>Rounds at most, even while each finds fewer items left.</summary>
+    public const int HardMaxRounds = 20;
+
+    /// <summary>
+    /// A round found <paramref name="count"/> items not done: a round that leaves fewer than the last is progress and
+    /// doesn't count toward the limit, so a big goal isn't stopped while it is still getting done (1 Nov 2026).
+    /// </summary>
+    public static void Counted(AutopilotRun run, int count)
+    {
+        if (run.LastGapCount > 0 && count < run.LastGapCount) run.StuckRounds = 0;
+        else run.StuckRounds++;
+        run.LastGapCount = count;
+    }
 
     private static string Clip(string text, int max) => text.Length <= max ? text.Trim() : text.Substring(0, max).TrimEnd() + "…";
 }

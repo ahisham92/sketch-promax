@@ -293,7 +293,8 @@ internal sealed partial class ChatPane
         AutopilotConnection(run);
         if (run.State == AutopilotRun.Paused)
         {
-            if (run.PausedUntil is { } until && until <= now) AutopilotResume("The usage limit has reset.");
+            if (run.PausedUntil is { } until && until <= now)
+                AutopilotResume(run.AccessLost ? "Trying again after Sketch ProMax lost access to your plan." : "The usage limit has reset.");
             ShowAutopilot();
             return;
         }
@@ -342,10 +343,33 @@ internal sealed partial class ChatPane
         if (rise > 0 && Run is { Active: true } run) run.WeekUsed += rise;
     }
 
+    /// <summary>
+    /// A turn or job failed because Claude Code can't use the plan: the run pauses now and says so on the PC and the phone
+    /// (AutopilotTick tries again every 20 minutes). A review round cut off by it is run again after, without using a round.
+    /// </summary>
+    private void AutopilotLostAccess(string message)
+    {
+        if (Run is not { State: AutopilotRun.Running } run) return;
+        run.State = AutopilotRun.Paused;
+        run.AccessLost = true;
+        run.PausedUntil = DateTimeOffset.UtcNow + Autopilot.AccessRetry;
+        run.PauseWhy = "Sketch ProMax can't use your Claude plan (sign in again).";
+        var text = Autopilot.AccessNote(message);
+        AutopilotLog(AutopilotEntry.Paused, text);
+        Note(text);
+        _ = AskUser.SendUpdateAsync(text);
+        Save();
+        ShowAutopilot();
+    }
+
+    private bool _reviewAgain;
+
     private void AutopilotResume(string why, bool turn = true)
     {
         if (Run is not { State: AutopilotRun.Paused } run) return;
         run.State = AutopilotRun.Running;
+        var access = run.AccessLost;
+        run.AccessLost = false;
         run.PausedUntil = null;
         run.Offline = "";
         run.Idle = 0;
@@ -356,6 +380,15 @@ internal sealed partial class ChatPane
         Save();
         ShowAutopilot();
         PumpJobs();
+        if (_reviewAgain && _board is { } reviewBoard && !reviewBoard.Snapshot().Any(j => j.GoalCheck > 0 && j.Open))
+        {
+            // The review round lost access part-way: it runs again in full, and the lost one doesn't count.
+            _reviewAgain = false;
+            run.ReviewRound = Math.Max(0, run.ReviewRound - 1);
+            AutopilotReview(_conv.Items.LastOrDefault(i => i.Kind == "assistant")?.Text ?? "");
+            return;
+        }
+        if (access) Tools.ActivityLog.Note("autopilot", "resumed after lost access");
         if (turn && _turn is null) _ = RunTurn(Autopilot.Resume(run, why), [], "");
     }
 
@@ -619,7 +652,7 @@ internal sealed partial class ChatPane
         if (Run is not { State: AutopilotRun.Running } run || _board is not { } board) return;
         if (!GoalReview.MoreRounds(run))
         {
-            AutopilotFinish(AutopilotRun.Stopped, $"the review team still found work not done after {GoalReview.MaxRounds} rounds");
+            AutopilotFinish(AutopilotRun.Stopped, $"the review team still found work not done after {run.ReviewRound} rounds, the last {run.StuckRounds} with no fewer items left");
             return;
         }
         run.ReviewRound++;
@@ -646,6 +679,13 @@ internal sealed partial class ChatPane
         if (Run is not { State: AutopilotRun.Running or AutopilotRun.Paused } run || _board is not { } board || reviewer.GoalCheck != run.ReviewRound) return;
         var round = board.Snapshot().Where(j => j.GoalCheck == run.ReviewRound).ToList();
         if (round.Any(j => j.Open)) return;
+        // Cut off because the plan couldn't be used: not a verdict; the round runs again once access is back.
+        if (round.Any(j => j.State == JobBoard.Failed && Autopilot.LostAccess(j.Summary)))
+        {
+            _reviewAgain = true;
+            AutopilotLostAccess(round.First(j => Autopilot.LostAccess(j.Summary)).Summary);
+            return;
+        }
         var (met, gaps) = GoalReview.Combine(round);
         if (met)
         {
@@ -656,6 +696,7 @@ internal sealed partial class ChatPane
         }
         run.Gaps = gaps;
         var count = gaps.Split('\n').Count(l => l.TrimStart().StartsWith("- ", StringComparison.Ordinal));
+        GoalReview.Counted(run, Math.Max(1, count));
         AutopilotLog(AutopilotEntry.Note, $"The review team found the goal not met yet (round {run.ReviewRound}): {Math.Max(1, count)} item(s) went back to the coordinator.");
         Note($"The review team found {Math.Max(1, count)} item(s) not done yet. They went back to the coordinator, who carries on.");
         Save();
