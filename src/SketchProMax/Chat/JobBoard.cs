@@ -102,6 +102,13 @@ internal sealed class ChatJob
     public string Review { get; set; } = "";
     public int ReviewedBy { get; set; }
     public int Reviews { get; set; }
+    /// <summary>It called a tool that changes the model since its work was last checked (the bridge, ModifiesModel). Saved.</summary>
+    public bool ChangedModel { get; set; }
+    /// <summary>
+    /// It finished work since its work was last checked: only then is it checked by a teammate (JobReview.Wanted), so the
+    /// report after a check never asks for another, and a job sent back is checked again once it finishes. Saved.
+    /// </summary>
+    public bool Unchecked { get; set; }
     /// <summary>
     /// A reviewer of an autopilot's goal (GoalReview): the review round it belongs to; 0 for ordinary work. Its report
     /// goes to the run (met, or what is still to do back to the coordinator), not to the coordinator's chat. Saved.
@@ -643,6 +650,7 @@ internal sealed class JobBoard
                 return new JobMessage(waiting, files);
             }
             job.State = ok ? Done : Failed;
+            if (ok) job.Unchecked = true;
             job.Summary = summary.Trim();
             job.Ended = now;
             job.Now = "";
@@ -663,6 +671,13 @@ internal sealed class JobBoard
             job.Ahead = ahead ?? 0;
             return true;
         }
+    }
+
+    /// <summary>The bridge: job <paramref name="key"/> calls a tool that changes the model, so its work gets checked when it finishes.</summary>
+    public void MarkChanged(string key)
+    {
+        lock (Gate)
+            if (_jobs.FirstOrDefault(j => j.Key == key) is { } job) job.ChangedModel = true;
     }
 
     /// <summary>
@@ -741,6 +756,8 @@ internal sealed class JobBoard
             done.Review = JobReview.Pending;
             done.ReviewedBy = check.Number;
             done.Reviews++;
+            done.ChangedModel = false;
+            done.Unchecked = false; // checked from here: only work it finishes after this is checked again
             AddItem(check, new ChatItem { Kind = "user", Text = check.Task, State = FromCoordinator }, now);
             AddNote(done, $"Finished. Job {check.Number} checks the work against the task before it is reported.", now);
             return check;
@@ -935,6 +952,7 @@ internal sealed class JobBoard
         Plan = new Dictionary<string, string>(j.Plan), Heard = j.Heard.ToList(), Visited = j.Visited.ToList(),
         Spent = j.Spent, BudgetFrom = j.BudgetFrom, OverBudget = j.OverBudget, ReviewOf = j.ReviewOf, Review = j.Review, ReviewedBy = j.ReviewedBy,
         Reviews = j.Reviews, Routine = j.Routine, RevitModel = j.RevitModel, GoalCheck = j.GoalCheck, ReadOnly = j.ReadOnly,
+        ChangedModel = j.ChangedModel, Unchecked = j.Unchecked,
     };
 }
 

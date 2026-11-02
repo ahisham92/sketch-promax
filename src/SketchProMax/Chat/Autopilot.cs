@@ -247,6 +247,19 @@ internal static class Autopilot
         $"Autopilot: the coordinator's answer showed nothing for {Math.Max(1, (int)Math.Round(quiet.TotalMinutes))} minutes (the connection may have " +
         "dropped mid-answer), so it was ended and he carries on from where the work stands.";
 
+    /// <summary>
+    /// The note when an answer of any other chat (a Simple chat, a coordinator, an Autopilot still planning or paused) was
+    /// ended stuck: nothing is sent again by itself; what the user typed meanwhile goes as the next message.
+    /// </summary>
+    public static string AnswerStalledNote(TimeSpan quiet) =>
+        $"The answer showed nothing for {Math.Max(1, (int)Math.Round(quiet.TotalMinutes))} minutes (the connection may have dropped), so it was ended.";
+
+    /// <summary>
+    /// Which stuck-answer watch ends a chat's answer: a running Autopilot's own (AutopilotStallCheck: its coordinator is
+    /// told to carry on, and after a few the run pauses), else the plain one every chat has (the answer ends with a note).
+    /// </summary>
+    public static bool RunWatchesAnswer(AutopilotRun? run) => run is { Active: true, State: AutopilotRun.Running };
+
     /// <summary>Why the run pauses after <see cref="MaxStalls"/> stuck answers in a row.</summary>
     public const string StalledWhy = "the coordinator's answers kept getting stuck (check the internet connection)";
 

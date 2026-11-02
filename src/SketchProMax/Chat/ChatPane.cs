@@ -777,6 +777,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         _poll.Tick += (_, _) => Check(quiet: true);
         _idle.Tick += (_, _) => IdleCheck();
         _idle.Tick += (_, _) => ShowUsage(); // a limit's reset time passing
+        _idle.Tick += (_, _) => StallCheckAll(); // an answer stuck mid-stream, in any chat
         _saveSoon.Tick += (_, _) =>
         {
             _saveSoon.Stop();
@@ -2769,7 +2770,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             return;
         }
         MarkRunningTools("stopped");
-        EndTurn();
+        // What went wrong is said first, and the answer ends after (messages typed meanwhile go next, EndTurn; not
+        // when signed out).
         var detail = Last(tail, 500);
         if (LooksSignedOut(tail))
         {
@@ -2782,6 +2784,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
                   (detail.Length > 0 ? "\n\n" + detail : ""));
         else
             Error("The chat stopped unexpectedly. Send your message again; the conversation is kept." + (detail.Length > 0 ? "\n\n" + detail : ""));
+        EndTurn();
     }
 
     private static string Last(string text, int max)
@@ -2834,8 +2837,10 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         Save();
         ShowStatus();
         TrimDrawn();
-        // Messages sent during the task that no step picked up: sent now (or back in the box after a stop or a switch).
-        SendLeftover(left, stopped || (!Hidden && _pendingModel is not null));
+        // Messages sent during the task that no step picked up: sent now as the next message, however the answer ended
+        // (finished, Stop, killed, failed or stuck), so they never wait behind a dead answer (bug 68). Back in the box only
+        // when they can't go (a model switch waits, or the chat isn't ready).
+        SendLeftover(left, hold: !Hidden && _pendingModel is not null, stopped);
         if (!Hidden) ShrinkIfLong(ended, stopped || left.Count > 0);
         if (ended is { Planning: false, Shrinking: false } && !stopped && ended.Outcome == "done") Finished(ended);
         // A kind picked while it answered: the chat switches now (in the background it is only kept for the next message).

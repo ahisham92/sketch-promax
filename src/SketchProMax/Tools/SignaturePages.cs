@@ -439,7 +439,7 @@ internal static class SignaturePages
             .Select(x => x.d with { Number = ComposeNumber(x.pattern, x.p! with { Site = site }) })
             .ToList();
 
-    /// <summary>Sites typed as "TIN = Tincan, APA = Apapa" (or one per line); a code alone is its own name.</summary>
+    /// <summary>Sites typed as "NTH = North quay, STH = South quay" (or one per line); a code alone is its own name.</summary>
     public static List<Site> ParseSites(string text) =>
         Regex.Split(text ?? "", @"[,;\n]").Select(t => t.Trim()).Where(t => t.Length > 0)
             .Select(t => t.Split(['=', ':'], 2) is var kv && kv.Length == 2 ? new Site(kv[0].Trim().ToUpperInvariant(), kv[1].Trim()) : new Site(t.ToUpperInvariant(), t))
