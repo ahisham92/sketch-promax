@@ -2,7 +2,8 @@ using SketchProMax.Chat;
 
 /// <summary>
 /// An Autopilot run whose answer got stuck after the connection dropped (bug-log row 67): the stuck answer and jobs are
-/// found, a typed "stop" stops the run, and a run whose model was closed pauses.
+/// found, a typed "stop" stops the run, and a run whose model was closed pauses. Bug 68: every chat's answer is watched
+/// the same way, and messages typed meanwhile always go next.
 /// </summary>
 internal static class AutopilotStallTests
 {
@@ -49,6 +50,17 @@ internal static class AutopilotStallTests
         check("model: open among the open models (any case)", Autopilot.ModelOpen(@"\\server\models\tower.rvt", [@"C:\other.rvt", @"\\SERVER\models\Tower.rvt"]), "");
         check("model: not open when only others are", !Autopilot.ModelOpen(@"\\server\models\tower.rvt", [@"C:\other.rvt"]), "");
         check("model: a run with no model counts as open", Autopilot.ModelOpen("", []), "");
+        // Bug 68: every chat's answer is watched, not only a running Autopilot's.
+        var ended = Autopilot.AnswerStalledNote(TimeSpan.FromMinutes(10.2));
+        check("any chat: the stuck answer's note says how long and why", ended == "The answer showed nothing for 10 minutes (the connection may have dropped), so it was ended.", ended);
+        check("any chat: a running Autopilot watches its own coordinator", Autopilot.RunWatchesAnswer(new AutopilotRun { State = AutopilotRun.Running }), "");
+        check("any chat: no run, or one planning, waiting for approval or paused, gets the plain watch",
+            !Autopilot.RunWatchesAnswer(null) && !Autopilot.RunWatchesAnswer(new AutopilotRun { State = AutopilotRun.Planning })
+            && !Autopilot.RunWatchesAnswer(new AutopilotRun { State = AutopilotRun.Approval }) && !Autopilot.RunWatchesAnswer(new AutopilotRun { State = AutopilotRun.Paused }), "");
+        check("queued: messages typed meanwhile go next however the answer ended", ChatWork.LeftoverGoes(hold: false, closing: false, ready: true), "");
+        check("queued: kept back only for a model switch, a closing pane or a chat not ready",
+            !ChatWork.LeftoverGoes(true, false, true) && !ChatWork.LeftoverGoes(false, true, true) && !ChatWork.LeftoverGoes(false, false, false), "");
+
         var gone = Autopilot.ModelGoneNote("Tower");
         check("model: the pause note names the model and says how to carry on", gone.Contains("Tower") && gone.Contains("Resume") && gone.Contains("free") && !gone.Contains("Claude"), gone);
     }
@@ -67,5 +79,16 @@ internal static class AutopilotStallTests
             && at < pane.IndexOf("QueueNote(note);", StringComparison.Ordinal), "");
         check("stall source: the 30 s tick checks for a stuck answer and the run's model", auto.Contains("AutopilotStallCheck(run);") && auto.Contains("AutopilotModelCheck(run);"), "");
         check("stall source: the connection coming back is remembered for the stuck check", auto.Contains("_reconnectedAt = DateTime.UtcNow;"), "");
+        var job = Read("ChatPane.Job.cs");
+        check("stall source (bug 68): every chat's answer is watched, shown or in the background", pane.Contains("_idle.Tick += (_, _) => StallCheckAll();")
+            && auto.Contains("foreach (var s in Sessions.ToList()) In(s, AnswerStallCheck);"), "");
+        check("stall source (bug 68): a stuck answer is ended and its process killed", auto.Contains("AbortTurn(text);") && auto.Contains("_engine?.Kill();"), "");
+        check("stall source (bug 68): a stop no longer holds back the messages typed meanwhile", pane.Contains("SendLeftover(left, hold: !Hidden && _pendingModel is not null, stopped);")
+            && job.Contains("ChatWork.LeftoverGoes(hold, _stopped, _setup == Setup.Ready)"), "");
+        var exited = pane.Substring(pane.IndexOf("private void OnExited(", StringComparison.Ordinal));
+        exited = exited.Substring(0, exited.IndexOf("\n    }", StringComparison.Ordinal));
+        check("stall source (bug 68): a crashed answer is signed-out-checked before the messages typed meanwhile go", exited.IndexOf("_setup = Setup.SignedOut;", StringComparison.Ordinal) < exited.LastIndexOf("EndTurn();", StringComparison.Ordinal), "");
+        var bridge = File.ReadAllText(Path.Combine(root, "src", "SketchProMax", "Bridge", "BridgeServer.cs")).Replace("\r\n", "\n");
+        check("review source (bug 68): a job's model change is marked, so only changed work is checked", bridge.Contains("if (tool.ModifiesModel && fromChat && jobKey is not null) Chat.ChatJobs.ChangesModel(jobKey);"), "");
     }
 }

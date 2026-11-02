@@ -130,6 +130,12 @@ internal static class ChatJobs
     /// <summary>The connection: the model job <paramref name="key"/> was given (chat_jobs start model=…), or null.</summary>
     public static string? ModelOf(string key) => BoardFor(key)?.FindKey(key) is { RevitModel.Length: > 0 } job ? job.RevitModel : null;
 
+    /// <summary>The bridge: job <paramref name="key"/> (not a chat) calls a tool that changes the model (JobBoard.MarkChanged).</summary>
+    public static void ChangesModel(string key)
+    {
+        if (!JobBoard.IsChatKey(key)) BoardFor(key)?.MarkChanged(key);
+    }
+
     /// <summary>
     /// The bridge: true when job <paramref name="key"/> may only read: it checks another job's work (JobReview), reviews an
     /// autopilot's goal (GoalReview) or reads before an autopilot's plan is approved. Its changes are refused.

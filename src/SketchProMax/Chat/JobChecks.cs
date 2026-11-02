@@ -94,10 +94,15 @@ internal static class JobReview
 
     public static string Normal(string? mode) => mode is Always or AutopilotOnly or Off ? mode : Always;
 
-    /// <summary>True when job <paramref name="job"/>, just finished, gets a check before it is reported.</summary>
+    /// <summary>
+    /// True when job <paramref name="job"/>, just finished, gets a check before it is reported: only when it changed the
+    /// model since it was last checked (<see cref="ChatJob.ChangedModel"/>; a job that only read is never checked, and a
+    /// job reported after its check is not checked again), and at most <see cref="MaxReviews"/> times.
+    /// </summary>
     public static bool Wanted(string? mode, bool autopilot, ChatJob job) =>
         Normal(mode) switch { Off => false, AutopilotOnly => autopilot, _ => true }
-        && job.State == JobBoard.Done && job.ReviewOf == 0 && job.GoalCheck == 0 && job.Review != Pending && job.Reviews < MaxReviews;
+        && job.State == JobBoard.Done && job.ReviewOf == 0 && job.GoalCheck == 0 && !job.ReadOnly && job.ChangedModel
+        && job.Review != Pending && job.Reviews < MaxReviews;
 
     /// <summary>The checking job's task: the job's task and report, and how to answer.</summary>
     public static string Task(ChatJob done) =>

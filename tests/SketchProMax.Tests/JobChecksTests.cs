@@ -87,7 +87,15 @@ internal static class JobChecksTests
         var b2 = new JobBoard(jobs2);
         var work = b2.Start("Sheets L1-3", "Make sheets for levels 1-3", now, force: true, out _)!;
         b2.ToStart(3, now);
+        b2.MarkChanged(work.Key);
         b2.RunEnded(work, true, "Made 3 sheets: A101-A103.", now);
+        var reader = b2.Start("Read the title block", "Read the title block's parameters", now, force: true, out _)!;
+        b2.ToStart(3, now);
+        b2.RunEnded(reader, true, "It has 12 parameters.", now);
+        check("review: a job that only read is never checked (bug 68)", !JobReview.Wanted(JobReview.Always, true, reader), "");
+        check("review: a job reading before the plan is approved is never checked", !JobReview.Wanted(JobReview.Always, true,
+            new ChatJob { State = JobBoard.Done, ReadOnly = true, ChangedModel = true }), "");
+        b2.MarkChanged("nope");
         check("review: wanted for a finished job when on", JobReview.Wanted(JobReview.Always, false, work), "");
         check("review: only in an autopilot when set so", !JobReview.Wanted(JobReview.AutopilotOnly, false, work) && JobReview.Wanted(JobReview.AutopilotOnly, true, work), "");
         check("review: never when off", !JobReview.Wanted(JobReview.Off, true, work), "");
@@ -102,11 +110,15 @@ internal static class JobChecksTests
         b2.RunEnded(check1, true, "All three sheets exist with their views.\n**PASSED**", now);
         check("review: a passed check goes on the job", b2.ReviewEnded(check1, now) == work && JobReview.Passed(work.Review), work.Review);
         check("review: the coordinator hears it passed", JobBoard.Report([work], 0).Contains("checked the work in the model: it passed"), "");
+        check("review: a job reported after its check is not checked again (bug 68: two checks per job)", !JobReview.Wanted(JobReview.Always, true, work) && !work.ChangedModel, "");
         // Found issues: the job is sent back, fixes, and is checked once more at most.
         b2.Message(work.Number, "add A104", now);
         check("review: a job carrying on is checked again later", work.Review == "", work.Review);
         b2.ToStart(3, now);
         b2.RunEnded(work, true, "Made A104 too.", now);
+        check("review: a job sent back that changed nothing isn't checked again", !JobReview.Wanted(JobReview.Always, true, work), "");
+        b2.MarkChanged(work.Key);
+        check("review: a job sent back that changed the model is checked again", JobReview.Wanted(JobReview.Always, true, work), "");
         var check2 = b2.StartReview(work.Number, now)!;
         b2.ToStart(3, now);
         b2.RunEnded(check2, true, "A101-A103 fine.\nISSUES: A104 has no view placed.\n- place the level 4 plan on A104", now);
@@ -115,6 +127,7 @@ internal static class JobChecksTests
         var r2 = JobBoard.Report([work], 0);
         check("review: the coordinator is told what was found and to send the job back", r2.Contains("found: ISSUES") && r2.Contains($"Send job {work.Number} a message"), r2);
         b2.Message(work.Number, "fix it", now);
+        b2.MarkChanged(work.Key);
         b2.ToStart(3, now);
         b2.RunEnded(work, true, "Placed.", now);
         check("review: at most two checks of one job", !JobReview.Wanted(JobReview.Always, true, work), "");

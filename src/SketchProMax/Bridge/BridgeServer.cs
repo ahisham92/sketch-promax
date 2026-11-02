@@ -386,6 +386,8 @@ public sealed class BridgeServer
                                     "Read and check only, and put what needs changing in your answer, ending with the line your task asks for.");
         // Another chat already works on this model (an Autopilot run, or a coordinator with jobs): the shown chat's change goes to it.
         if (tool.ModifiesModel && fromChat && Chat.ChatJobs.ChangeRefusal(jobKey) is { } handed) return ToolResult.Error(handed);
+        // A job that changes the model gets its work checked when it finishes (JobReview.Wanted); one that only reads doesn't.
+        if (tool.ModifiesModel && fromChat && jobKey is not null) Chat.ChatJobs.ChangesModel(jobKey);
 
         var key = HandoffKeys.Call(name, args);
         if (Jobs.Running is { Continuation: { } rest } held && held.Key == key)

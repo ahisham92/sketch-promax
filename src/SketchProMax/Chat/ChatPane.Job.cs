@@ -362,20 +362,31 @@ internal sealed partial class ChatPane
         if (ack.Text.Parent is FrameworkElement row) AutomationProperties.SetName(row, text);
     }
 
-    /// <summary>Messages no step picked up: sent as the next message, or (after a stop) put back in the message box.</summary>
-    private void SendLeftover(List<(string Id, string Text)> left, bool stopped)
+    /// <summary>
+    /// Messages no step picked up: sent as the next message whenever the answer ended (<paramref name="stopped"/>: by
+    /// Stop, or ended stuck), or put back in the message box when they can't go now (<paramref name="hold"/>, or the
+    /// chat isn't ready).
+    /// </summary>
+    private void SendLeftover(List<(string Id, string Text)> left, bool hold, bool stopped)
     {
         if (left.Count == 0) return;
         var text = string.Join("\n\n", left.Select(n => n.Text));
-        if (stopped || _stopped || _setup != Setup.Ready)
+        if (!ChatWork.LeftoverGoes(hold, _stopped, _setup == Setup.Ready))
         {
-            foreach (var (id, _) in left) SetAck(id, "Not sent: the task was stopped. It is back in the message box.");
+            if (Hidden)
+            {
+                foreach (var (id, _) in left) SetAck(id, "Not sent: the chat couldn't take it then. Send it again.");
+                return;
+            }
+            foreach (var (id, _) in left) SetAck(id, "Not sent yet: it is back in the message box.");
             if (_input.Text.Trim().Length == 0) _input.Text = text;
             else _input.Text = text + "\n\n" + _input.Text;
             _input.CaretIndex = _input.Text.Length;
             return;
         }
-        foreach (var (id, _) in left) SetAck(id, "Sketch ProMax finished before another step, so this was sent as your next message.");
+        foreach (var (id, _) in left)
+            SetAck(id, stopped ? "The answer ended before another step, so this was sent as your next message."
+                : "Sketch ProMax finished before another step, so this was sent as your next message.");
         _ = RunTurn(text, [], "");
     }
 

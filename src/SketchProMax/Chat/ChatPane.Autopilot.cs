@@ -464,6 +464,31 @@ internal sealed partial class ChatPane
         _turn is { Planning: false } && Autopilot.Stalled(_lastActivity, now, StepRunning, _reconnectedAt);
 
     /// <summary>
+    /// Every minute, in every chat (shown or in the background, any type, with an Autopilot or not): an answer stuck
+    /// mid-stream (no word from its Claude Code for Autopilot.TurnStuck, ToolStuck while a Revit step runs, AfterReconnect
+    /// once the connection came back) is ended and its process killed, with a note. Nothing is sent again by itself; the
+    /// messages typed while it hung ("will apply after this item") go as the next message (EndTurn). A running Autopilot
+    /// watches its coordinator itself (AutopilotStallCheck).
+    /// </summary>
+    private void StallCheckAll()
+    {
+        if (_stopped || _sample) return;
+        foreach (var s in Sessions.ToList()) In(s, AnswerStallCheck);
+    }
+
+    private void AnswerStallCheck()
+    {
+        if (Autopilot.RunWatchesAnswer(Run)) return;
+        var now = DateTime.UtcNow;
+        if (!TurnStalled(now)) return;
+        var quiet = now - _lastActivity;
+        Tools.ActivityLog.Note("chat", $"answer stuck for {quiet.TotalMinutes:0} min: ended");
+        var text = Autopilot.AnswerStalledNote(quiet);
+        if (Run is { Active: true }) AutopilotLog(AutopilotEntry.Note, text);
+        AbortTurn(text);
+    }
+
+    /// <summary>
     /// Every 30 s while a run works: an answer of the coordinator stuck mid-stream (a connection dropped and came back, and
     /// no error ever came) is ended and he is told to carry on; after a few in a row the run pauses for the user. Jobs
     /// silent since the connection came back are restarted and told to check the model and carry on.
@@ -574,6 +599,7 @@ internal sealed partial class ChatPane
         if (!ConnectionWatch.IsConnectionPause(run) || !internet || network == false) return;
         // An answer or job silent since now is stuck (AutopilotStallCheck): no error comes from a stream that lost its connection.
         _reconnectedAt = DateTime.UtcNow;
+        foreach (var other in Sessions) other.ReconnectedAt = _reconnectedAt; // every chat's answer silent since is stuck too
         var back = ConnectionWatch.BackLine(run.Offline, run.OfflineSince, DateTime.UtcNow);
         var cut = _board is { } board ? ConnectionWatch.CutOff(board.Snapshot(), run.JobsBefore, run.OfflineSince) : [];
         foreach (var job in cut) _board!.Message(job.Number, ConnectionWatch.CarryOnLine, DateTime.UtcNow);

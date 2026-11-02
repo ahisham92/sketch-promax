@@ -80,4 +80,13 @@ internal static class ChatWork
         $"[Handed over from the user's chat “{from}”, typed by the user there] The user asked for this while you work on the same model, " +
         "so it comes to you instead of a second chat changing the model alongside your work. Fit it into your work (a job, or a message " +
         "to the job it belongs to), without undoing what is done:\n\n" + string.Join("\n\n", requests);
+
+    // ---- Messages typed while an answer ran ------------------------------------------------------------------------------
+
+    /// <summary>
+    /// Messages typed while an answer ran ("will apply after this item") that no step picked up go as the next message
+    /// however the answer ended (finished, Stop, killed, failed or stuck): never left behind a dead answer. Only a model
+    /// switch waiting (<paramref name="hold"/>), the pane closing or a chat not ready keeps them back.
+    /// </summary>
+    public static bool LeftoverGoes(bool hold, bool closing, bool ready) => !hold && !closing && ready;
 }
