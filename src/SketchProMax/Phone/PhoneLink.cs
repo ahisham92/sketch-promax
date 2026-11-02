@@ -140,15 +140,90 @@ internal static class PhoneLink
         Save();
     }
 
-    /// <summary>A progress update. Null when it went, else why not.</summary>
-    public static Task<string?> UpdateAsync(string text) => Try(c => c.UpdateAsync(text));
+    /// <summary>A progress update, in <paramref name="topic"/>'s chat on the phone (the project). Null when it went, else why not.</summary>
+    public static Task<string?> UpdateAsync(string text, string topic = "") => Try(c => c.UpdateAsync(text, default, topic));
 
     /// <summary>A question with a one-tap button for the assumed answer. The message id (0 when it couldn't go), and why not.</summary>
-    public static async Task<(long Id, string? Error)> AskAsync(string text, string assumed, DateTime deadlineUtc)
+    public static async Task<(long Id, string? Error)> AskAsync(string text, string assumed, DateTime deadlineUtc, string topic = "")
     {
         long id = 0;
-        var error = await Try(async c => id = await c.AskAsync(text, assumed.Length > 0 ? [assumed] : null, assumed, deadlineUtc).ConfigureAwait(false)).ConfigureAwait(false);
+        var error = await Try(async c => id = await c.AskAsync(text, assumed.Length > 0 ? [assumed] : null, assumed, deadlineUtc, default, topic).ConfigureAwait(false)).ConfigureAwait(false);
         return (id, error);
+    }
+
+    // ---- One chat per project on the phone ---------------------------------------------------------------------------
+
+    /// <summary>The projects a Revit on this PC has chats for, and when it last said so (phone-projects.json, by process).</summary>
+    internal sealed class ProjectClaim
+    {
+        public List<string> Projects { get; set; } = [];
+        public DateTime Beat { get; set; }
+    }
+
+    /// <summary>
+    /// Which Revit takes a message the phone sent in <paramref name="topic"/>'s chat: one with a chat for that project, the
+    /// one whose Autopilot runs first, then the Revit that takes the phone's messages (<paramref name="reader"/>), then the
+    /// lowest process id, so every Revit on the PC works out the same one. A message in the main chat (""), or for a project
+    /// no Revit has open, goes to the reader, which says so on the phone. Null when no Revit is known.
+    /// </summary>
+    internal static int? TopicTaker(string topic, IReadOnlyDictionary<int, ProjectClaim> claims, int? reader, int? runOwner,
+        Func<int, bool> alive, DateTime nowUtc)
+    {
+        if (topic.Trim().Length == 0) return reader;
+        var open = claims.Where(c => nowUtc - c.Value.Beat <= ReaderFresh && alive(c.Key) && c.Value.Projects.Any(p => PhoneProjects.Same(p, topic)))
+            .Select(c => c.Key).OrderBy(p => p).ToList();
+        if (open.Count == 0) return reader;
+        if (runOwner is { } run && open.Contains(run)) return run;
+        if (reader is { } r && open.Contains(r)) return r;
+        return open[0];
+    }
+
+    private static string ProjectsFile =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "SketchProMax", "phone-projects.json");
+
+    private static Dictionary<int, ProjectClaim> ReadClaims()
+    {
+        try
+        {
+            if (File.Exists(ProjectsFile))
+                return JsonSerializer.Deserialize<Dictionary<int, ProjectClaim>>(File.ReadAllText(ProjectsFile)) ?? [];
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException) { }
+        return [];
+    }
+
+    /// <summary>This Revit's projects with chats (the chat pane says, every minute): their phone messages come here.</summary>
+    public static void Claim(IEnumerable<string> projects, DateTime nowUtc)
+    {
+        try
+        {
+            var claims = ReadClaims();
+            foreach (var gone in claims.Where(c => nowUtc - c.Value.Beat > ReaderFresh || !Chat.AutopilotShare.IsAlive(c.Key)).Select(c => c.Key).ToList()) claims.Remove(gone);
+            claims[Chat.AutopilotShare.Me] = new ProjectClaim
+            {
+                Projects = projects.Where(p => p.Trim().Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
+                Beat = nowUtc,
+            };
+            Directory.CreateDirectory(Path.GetDirectoryName(ProjectsFile)!);
+            File.WriteAllText(ProjectsFile, JsonSerializer.Serialize(claims));
+        }
+        catch (Exception) { /* the reader takes every message meanwhile */ }
+    }
+
+    /// <summary>Whether this Revit takes a message the phone sent in <paramref name="topic"/>'s chat (<paramref name="reader"/>: it takes the phone's messages).</summary>
+    public static bool TakesTopic(string topic, bool reader, DateTime nowUtc)
+    {
+        try
+        {
+            var me = Chat.AutopilotShare.Me;
+            int? readerPid = reader ? me : null;
+            if (!reader)
+                try { if (File.Exists(ReaderFile)) readerPid = JsonSerializer.Deserialize<ReaderState>(File.ReadAllText(ReaderFile))?.Pid; }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException) { }
+            var run = Chat.AutopilotShare.Any(nowUtc) is not null ? Chat.AutopilotShare.Read()?.Owner : null;
+            return TopicTaker(topic, ReadClaims(), readerPid, run, Chat.AutopilotShare.IsAlive, nowUtc) is { } taker ? taker == me : reader;
+        }
+        catch (Exception) { return reader; }
     }
 
     // ---- One Revit takes the phone's messages ---------------------------------------------------------------------
@@ -216,8 +291,8 @@ internal static class PhoneLink
         return error is null ? got : null;
     }
 
-    public static Task<string?> SendTestAsync() =>
-        Try(c => c.UpdateAsync("Sketch ProMax is connected. Autopilot questions and progress will come here."));
+    public static Task<string?> SendTestAsync(string topic = "") =>
+        Try(c => c.UpdateAsync("Sketch ProMax is connected. Autopilot questions and progress will come here.", default, topic));
 
     private static async Task<string?> Try(Func<IrisClient, Task> call)
     {

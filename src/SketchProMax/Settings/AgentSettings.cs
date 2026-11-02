@@ -148,6 +148,12 @@ public sealed class AgentSettings
     /// </summary>
     public int PhoneUpdateMinutes { get; set; } = 60;
 
+    /// <summary>
+    /// The user's names for projects on the phone, "HBR = Harbour, TWR = Tower" (PhoneProjects.Renamed): each project has
+    /// its own chat there, and the name Sketch ProMax guesses from the model's file can be changed or two joined (2 Nov 2026).
+    /// </summary>
+    public string PhoneProjectNames { get; set; } = "";
+
     /// <summary>Your name as it goes on a signed checklist (next to Chat).</summary>
     public string SignatureName { get; set; } = "";
 

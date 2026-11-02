@@ -53,7 +53,7 @@ public sealed class AskUserTool : IRevitTool
             var question = (args.OptString("question") ?? "").Trim();
             var assumed = (args.OptString("assumed") ?? "").Trim();
             if (question.Length == 0 || assumed.Length == 0) return ToolResult.Error("ask needs the question and the answer you will assume.");
-            var q = AskUser.Ask(jobKey ?? "", ChatJobs.AskerName(jobKey), question, assumed);
+            var q = AskUser.Ask(jobKey ?? "", ChatJobs.AskerName(jobKey), question, assumed, ChatJobs.TopicFor?.Invoke(jobKey) ?? "");
             var until = DateTime.Now.Add(AskRules.Gather).AddMinutes(wait);
             return ToolResult.Ok(new
             {

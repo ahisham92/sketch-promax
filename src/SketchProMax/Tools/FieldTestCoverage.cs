@@ -784,6 +784,7 @@ internal static class FieldTestCoverage
         new(65, ["chat.autopilot_ui"], "in an Autopilot run, a job that ends with a problem starts again by itself (twice at most) and its card says so"),
         new(66, ["chat.autopilot_ui"], "in an Autopilot run, sign Claude Code out: the run pauses at once with a note on the PC and the phone, and carries on after you sign in"),
         new(67, ["chat.autopilot_ui"], "in an Autopilot run, turn the internet off mid-answer and on again: within minutes the stuck answer ends and the run carries on; typing \"stop\" or pressing the round stop button ends the run at once; closing the run's model pauses it with a note naming the model"),
+        new(69, ["chat.autopilot_ui"], "with the phone connected, open a project's central model and later its detached copy: the phone shows one chat for the project, named after the coordinator and the project; a message written in it reaches that project's chat in Revit, and its answer comes back in the same phone chat"),
     ];
 
     /// <summary>

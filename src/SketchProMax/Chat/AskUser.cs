@@ -27,11 +27,11 @@ internal static class AskUser
     /// <summary>Raised (on the loop's thread) when an answer came that the asking job hasn't taken itself.</summary>
     public static event Action<UserQuestion>? Answered;
 
-    /// <summary>Raised (on the loop's thread) when the user wrote to the run from the phone: what they wrote.</summary>
-    public static event Action<string>? UserWrote;
+    /// <summary>Raised (on the loop's thread) when the user wrote from the phone: what they wrote, and in which project's chat.</summary>
+    public static event Action<string, string>? UserWrote;
 
-    /// <summary>Raised (on the loop's thread) when the user pressed one of PhoneLink.Commands on the phone.</summary>
-    public static event Action<string>? Command;
+    /// <summary>Raised (on the loop's thread) when the user pressed one of PhoneLink.Commands on the phone, in which project's chat.</summary>
+    public static event Action<string, string>? Command;
 
     /// <summary>Raised when a question or update went to the phone, or couldn't (text for the run's log).</summary>
     public static event Action<string>? Logged;
@@ -73,45 +73,50 @@ internal static class AskUser
         }
     }
 
-    /// <summary>Sends a progress update to the phone (on a background thread). Null when sent, else why not.</summary>
-    public static async Task<string?> SendUpdateAsync(string body)
+    /// <summary>
+    /// Sends a progress update or reply to <paramref name="topic"/>'s chat on the phone (the project, PhoneProjects; on a
+    /// background thread). Null when sent, else why not.
+    /// </summary>
+    public static async Task<string?> SendUpdateAsync(string body, string topic = "")
     {
-        var error = await PhoneLink.UpdateAsync(body).ConfigureAwait(false);
-        if (error is null) Remember("You sent", body);
+        var error = await PhoneLink.UpdateAsync(body, topic).ConfigureAwait(false);
+        if (error is null) Remember("You sent", body, topic);
         return error;
     }
 
     // ---- The conversation on the phone, for the coordinator ----------------------------------------------------------
 
-    private static readonly List<string> Said = [];
+    private static readonly List<(string Topic, string Line)> Said = [];
 
     /// <summary>
     /// A line of the phone conversation (questions, updates, replies, what the user wrote and answered), kept for the
     /// coordinator: on 31 Oct 2026 the user asked "what do you mean by squaring off?" about the coordinator's own question
     /// and got "that didn't come from me", because the turn answering the phone didn't see what had been sent there.
     /// </summary>
-    internal static void Remember(string who, string text)
+    internal static void Remember(string who, string text, string topic = "")
     {
         lock (Gate)
         {
-            Said.Add($"[{DateTime.Now:HH:mm}] {who}: {AskRules.Clip(text, 600)}");
-            if (Said.Count > AskRules.PhoneHistoryMax) Said.RemoveRange(0, Said.Count - AskRules.PhoneHistoryMax);
+            Said.Add((topic.Trim(), $"[{DateTime.Now:HH:mm}] {who}: {AskRules.Clip(text, 600)}"));
+            // Kept per project's chat: each keeps its last few lines.
+            var mine = Said.Where(s => PhoneProjects.Same(s.Topic, topic)).ToList();
+            foreach (var old in mine.Take(Math.Max(0, mine.Count - AskRules.PhoneHistoryMax))) Said.Remove(old);
         }
     }
 
-    /// <summary>The phone conversation so far (oldest first), the message being answered last.</summary>
-    public static string History()
+    /// <summary>The conversation in <paramref name="topic"/>'s chat on the phone so far (oldest first), the message being answered last.</summary>
+    public static string History(string topic = "")
     {
-        lock (Gate) return string.Join("\n", Said);
+        lock (Gate) return string.Join("\n", Said.Where(s => PhoneProjects.Same(s.Topic, topic)).Select(s => s.Line));
     }
 
     /// <summary>A job (or the coordinator) asks: the question waits to go out with any others asked meanwhile.</summary>
-    public static UserQuestion Ask(string jobKey, string asker, string question, string assumed)
+    public static UserQuestion Ask(string jobKey, string asker, string question, string assumed, string topic = "")
     {
         UserQuestion q;
         lock (Gate)
         {
-            q = new UserQuestion { Id = ++_next, JobKey = jobKey, Asker = asker, Question = question.Trim(), Assumed = assumed.Trim(), Asked = DateTime.UtcNow };
+            q = new UserQuestion { Id = ++_next, JobKey = jobKey, Asker = asker, Question = question.Trim(), Assumed = assumed.Trim(), Asked = DateTime.UtcNow, Topic = topic.Trim() };
             Questions.Add(q);
             _loop ??= Task.Run(Loop);
         }
@@ -190,14 +195,14 @@ internal static class AskUser
             foreach (var q in due)
             {
                 var (id, error) = ByPhone
-                    ? await PhoneLink.AskAsync(AskRules.PhoneText(q), q.Assumed, now.AddMinutes(wait)).ConfigureAwait(false)
+                    ? await PhoneLink.AskAsync(AskRules.PhoneText(q), q.Assumed, now.AddMinutes(wait), q.Topic).ConfigureAwait(false)
                     : (0, "no phone is connected");
                 lock (Gate)
                 {
                     q.PhoneId = id;
                     q.Sent = error is null ? now : now.AddYears(-1); // not sent: its wait is over at once
                 }
-                if (error is null) Remember("You asked", AskRules.PhoneText(q) + (q.Assumed.Length > 0 ? " (if no answer: " + q.Assumed + ")" : ""));
+                if (error is null) Remember("You asked", AskRules.PhoneText(q) + (q.Assumed.Length > 0 ? " (if no answer: " + q.Assumed + ")" : ""), q.Topic);
                 if (error is not null) failed.Add($"Q{q.Id} ({error})");
             }
             Logged?.Invoke(failed.Count == 0
@@ -218,20 +223,21 @@ internal static class AskUser
             {
                 var text = m.Text.Trim();
                 if (m.Error.Length > 0 || text.Length == 0) continue;
-                if (m.Kind is "command" or "message" && !takes) continue;
-                if (m.Kind == "command") Command?.Invoke(text);
+                // Each project has its chat on the phone: the Revit with a chat for that project takes what is written there.
+                if (m.Kind is "command" or "message" && !PhoneLink.TakesTopic(m.Topic, takes, now)) continue;
+                if (m.Kind == "command") Command?.Invoke(text, m.Topic);
                 else if (m.Kind == "message")
                 {
-                    Remember("They wrote", text);
+                    Remember("They wrote", text, m.Topic);
                     // Writing from the phone: read every 30 s for a while, so a conversation doesn't wait minutes per message.
                     _chatUntil = now + AskRules.ChatFor;
-                    UserWrote?.Invoke(text);
+                    UserWrote?.Invoke(text, m.Topic);
                 }
                 else if (m.Kind == "answer")
                     lock (Gate)
                         if (Questions.FirstOrDefault(q => q.PhoneId != 0 && q.PhoneId == m.ReplyTo) is { Answer: null } q)
                         {
-                            Said.Add($"[{DateTime.Now:HH:mm}] They answered Q{q.Id}: {AskRules.Clip(text, 600)}");
+                            Said.Add((q.Topic, $"[{DateTime.Now:HH:mm}] They answered Q{q.Id}: {AskRules.Clip(text, 600)}"));
                             q.Answer = AskRules.Keep(text, q);
                             q.Answered = now;
                         }

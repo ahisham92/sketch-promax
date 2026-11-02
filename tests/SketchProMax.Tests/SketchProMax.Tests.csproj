@@ -12,6 +12,7 @@
     <Compile Include="../../src/SketchProMax/Chat/StreamJson.cs" Link="StreamJson.cs" />
     <Compile Include="../../src/SketchProMax/Phone/IrisClient.cs" Link="IrisClient.cs" />
     <Compile Include="../../src/SketchProMax/Phone/PhoneLink.cs" Link="PhoneLink.cs" />
+    <Compile Include="../../src/SketchProMax/Phone/PhoneProjects.cs" Link="PhoneProjects.cs" />
     <Compile Include="../../src/SketchProMax/Chat/PlanUsage.cs" Link="PlanUsage.cs" />
     <Compile Include="../../src/SketchProMax/Chat/PdfAttachment.cs" Link="PdfAttachment.cs" />
     <Compile Include="../../src/SketchProMax/Chat/OfficeText.cs" Link="OfficeText.cs" />

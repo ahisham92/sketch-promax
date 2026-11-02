@@ -39,6 +39,7 @@ public sealed class SettingsWindow : Window
     private readonly TextBox _idle = new() { Width = 56, MinHeight = 26, Margin = new Thickness(6, 0, 6, 0) };
     private readonly CheckBox _changeFile = Check("Keep a change file for each model (cleared at every save)");
     private readonly TextBox _sigName = new() { MinHeight = 26 };
+    private readonly TextBox _phoneNames = new() { MinHeight = 26 };
     private readonly ComboBox _sigRole = new() { IsEditable = true, MinHeight = 26 };
     private readonly System.Windows.Controls.Image _sigPreview = new() { MaxHeight = 70, MaxWidth = 260, Stretch = System.Windows.Media.Stretch.Uniform, HorizontalAlignment = HorizontalAlignment.Left };
     private readonly TextBlock _sigHint = Brand.Text("", Brand.K.Muted, size: 11);
@@ -84,6 +85,7 @@ public sealed class SettingsWindow : Window
         _rates = _settings.TimeRates;
         _changeFile.IsChecked = _settings.ChangeFile;
         _sigName.Text = _settings.SignatureName ?? "";
+        _phoneNames.Text = _settings.PhoneProjectNames ?? "";
         _sigRole.Text = _settings.SignatureRole ?? "";
         _sigImage = _settings.SignatureImage ?? "";
         _checklistPath.Text = _settings.ChecklistPath ?? "";
@@ -482,6 +484,10 @@ public sealed class SettingsWindow : Window
             "How many jobs finished, how many are left, and the questions waiting for you, to your phone. What you write back goes to the coordinator as your message."));
         page.Children.Add(SubHeading("Your phone"));
         page.Children.Add(PhoneRow());
+        page.Children.Add(Label("Phone chats"));
+        AutomationProperties.SetName(_phoneNames, "Names of the project chats on your phone");
+        page.Children.Add(Place("PhoneProjectNames", _phoneNames));
+        page.Children.Add(Hint("Each project has its own chat on your phone, named after the coordinator and the project, for example \"Sam (Harbour)\". The central model, your local copy and a detached copy share one chat. The project name comes from the model's file; to change it, or join two names into one chat, write them here: HBR = Harbour, TWR = Tower.", 2));
         _autopilotWeekly.Margin = new Thickness(0, 8, 0, 0);
         page.Children.Add(Place("AutopilotResumeWeekly", _autopilotWeekly));
         page.Children.Add(Hint("Any pause carries on when you press Resume on the chat's banner or type \"continue\" in the autopilot chat. A weekly limit near full pauses it too.", 2));
@@ -1094,6 +1100,7 @@ public sealed class SettingsWindow : Window
         _settings.IdleMinutes = idle;
         _settings.TimeRates = _rates is { Count: > 0 } ? _rates : null;
         _settings.SignatureName = _sigName.Text.Trim();
+        _settings.PhoneProjectNames = _phoneNames.Text.Trim();
         _settings.SignatureRole = _sigRole.Text.Trim();
         _settings.ChecklistPath = _checklistPath.Text.Trim().Trim('"');
         _settings.ChecklistHelper = (_helper.SelectedItem as ComboBoxItem)?.Tag as string ?? Tools.ChecklistHelper.ProMax;

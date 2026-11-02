@@ -50,6 +50,34 @@ internal sealed partial class ChatPane
     /// <summary>The chat with an Autopilot on (shown or working in the background), else the shown one: the phone talks to it.</summary>
     private ChatSession RunSession => Sessions.FirstOrDefault(s => s.Conv.Autopilot is { Active: true }) ?? _shown;
 
+    /// <summary>The project of chat <paramref name="s"/> on the phone: its own chat there, "Sam (Harbour)" (PhoneProjects).</summary>
+    private static string TopicOf(ChatSession? s) =>
+        s is null ? "" : Phone.PhoneProjects.Of(s.Conv.Key, s.Conv.Title, Environment.UserName, Settings.AgentSettings.Load().PhoneProjectNames);
+
+    /// <summary>The phone chat of the chat working now (_conv): updates and answers go there.</summary>
+    private string PhoneTopic => TopicOf(_s);
+
+    /// <summary>The projects this window's chats work on, for which this Revit takes the phone's messages (PhoneLink.Claim).</summary>
+    private void ClaimPhoneProjects()
+    {
+        if (_sample) return;
+        try { Phone.PhoneLink.Claim(Sessions.Select(TopicOf).Where(t => t.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToList(), DateTime.UtcNow); }
+        catch (Exception) { /* the next minute tries again */ }
+    }
+
+    /// <summary>
+    /// A message or button from the phone chat of project <paramref name="topic"/>: to the chat here on that project (the one
+    /// with an autopilot first, then the one shown, then any). The tool's main chat ("") goes to RunSession, as before.
+    /// </summary>
+    private void ToPhoneChat(string topic, Action act)
+    {
+        if (topic.Length == 0) { In(RunSession, act); return; }
+        var same = Sessions.Where(s => Phone.PhoneProjects.Same(TopicOf(s), topic)).ToList();
+        var to = same.FirstOrDefault(s => s.Conv.Autopilot is { Active: true }) ?? same.FirstOrDefault(s => ReferenceEquals(s, _shown)) ?? same.FirstOrDefault();
+        if (to is not null) { In(to, act); return; }
+        _ = AskUser.SendUpdateAsync($"{topic} isn't open in Sketch ProMax on the PC now, so this wasn't taken in. Open the model there (central, local or detached copy) and write again.", topic);
+    }
+
     /// <summary>The banner, the unattended switch and the timer, for the chat shown now.</summary>
     private void ShowAutopilot()
     {
@@ -60,8 +88,14 @@ internal sealed partial class ChatPane
             Autopilot.Logged += (kind, text) => Dispatcher.BeginInvoke(new Action(() => In(RunSession, () => AutopilotLog(kind, text))));
             AskUser.Logged += text => Dispatcher.BeginInvoke(new Action(() => In(RunSession, () => AutopilotLog(AutopilotEntry.Asked, text))));
             AskUser.Answered += q => Dispatcher.BeginInvoke(new Action(() => In(q.JobKey.Length > 0 && SessionOf(q.JobKey) is { } of ? of : RunSession, () => PhoneAnswered(q))));
-            AskUser.UserWrote += text => Dispatcher.BeginInvoke(new Action(() => In(RunSession, () => FromPhone(text))));
-            AskUser.Command += name => Dispatcher.BeginInvoke(new Action(() => In(RunSession, () => PhoneCommand(name))));
+            // Each project has its own chat on the phone (PhoneProjects): a message goes to this window's chat on that project.
+            AskUser.UserWrote += (text, topic) => Dispatcher.BeginInvoke(new Action(() => ToPhoneChat(topic, () => FromPhone(text))));
+            AskUser.Command += (name, topic) => Dispatcher.BeginInvoke(new Action(() => ToPhoneChat(topic, () => PhoneCommand(name))));
+            ChatJobs.TopicFor = key =>
+            {
+                try { return Dispatcher.Invoke(() => TopicOf(key is { Length: > 0 } && SessionOf(key) is { } of ? of : RunSession), DispatcherPriority.Send, CancellationToken.None, TimeSpan.FromSeconds(5)); }
+                catch (Exception) { return ""; } // a busy window: the tool's main chat
+            };
             AskUser.Listen(); // a connected phone is read from now on: the user can write to the chat from it
             // The phone shows the coordinator's name (Sam for one user, another name for the next): Settings › Chat.
             Phone.PhoneLink.Agent = CrewStrip.Names.Coordinator;
@@ -69,10 +103,11 @@ internal sealed partial class ChatPane
             _jobsTimer = new DispatcherTimer(DispatcherPriority.Background, Dispatcher) { Interval = TimeSpan.FromMinutes(1) };
             _jobsTimer.Tick += (_, _) =>
             {
-                try { JobsProgress(); }
+                try { ClaimPhoneProjects(); JobsProgress(); }
                 catch (Exception) { /* the next tick tries again */ }
             };
             _jobsTimer.Start();
+            ClaimPhoneProjects();
         }
         var run = _sample ? null : Run;
         // Popups and approvals are answered for the user while a run works in any of this window's chats.
@@ -377,7 +412,7 @@ internal sealed partial class ChatPane
         var text = Autopilot.AccessNote(message);
         AutopilotLog(AutopilotEntry.Paused, text);
         Note(text);
-        _ = AskUser.SendUpdateAsync(text);
+        _ = AskUser.SendUpdateAsync(text, PhoneTopic);
         Save();
         ShowAutopilot();
     }
@@ -449,7 +484,7 @@ internal sealed partial class ChatPane
         var text = Autopilot.ModelGoneNote(title);
         AutopilotLog(AutopilotEntry.Paused, text);
         Note(text);
-        _ = AskUser.SendUpdateAsync(text);
+        _ = AskUser.SendUpdateAsync(text, PhoneTopic);
         Save();
         ShowAutopilot();
         Status("Autopilot paused: " + run.PauseWhy + ".", spin: false);
@@ -504,7 +539,7 @@ internal sealed partial class ChatPane
             var why = $"Autopilot paused: {Autopilot.StalledWhy}. Press Resume, or type \"continue\", to carry on, or Stop to end it.";
             AutopilotLog(AutopilotEntry.Paused, why);
             Note(why);
-            _ = AskUser.SendUpdateAsync(why);
+            _ = AskUser.SendUpdateAsync(why, PhoneTopic);
             Save();
             ShowAutopilot();
             return;
@@ -614,7 +649,7 @@ internal sealed partial class ChatPane
         {
             var asks = string.Join("\n\n", _fromPhone);
             _fromPhone.Clear();
-            var turn = RunTurn(AskRules.FromPhone(asks, CrewStrip.Names.Coordinator, AskUser.History()), [], "");
+            var turn = RunTurn(AskRules.FromPhone(asks, CrewStrip.Names.Coordinator, AskUser.History(PhoneTopic)), [], "");
             _phoneTurn = _turn; // its answer goes back to the phone
             _ = turn;
             return;
@@ -640,7 +675,7 @@ internal sealed partial class ChatPane
         {
             _phoneAsks.Add(text);
             // Busy with something else: say so, so the phone isn't left wondering.
-            if (_turn is not null && _phoneAsks.Count == 1) _ = AskUser.SendUpdateAsync("Got it. Finishing the current task first, then this.");
+            if (_turn is not null && _phoneAsks.Count == 1) _ = AskUser.SendUpdateAsync("Got it. Finishing the current task first, then this.", PhoneTopic);
             NextPhoneAsk();
             return;
         }
@@ -666,7 +701,7 @@ internal sealed partial class ChatPane
         if (_setup != Setup.Ready || !Licensing.LicenseState.Allowed)
         {
             _phoneAsks.Clear();
-            _ = AskUser.SendUpdateAsync("The chat on the PC isn't ready (it needs signing in or a license there), so your message wasn't taken in.");
+            _ = AskUser.SendUpdateAsync("The chat on the PC isn't ready (it needs signing in or a license there), so your message wasn't taken in.", PhoneTopic);
             return;
         }
         var text = string.Join("\n\n", _phoneAsks);
@@ -681,7 +716,7 @@ internal sealed partial class ChatPane
 
     private async Task RunPhoneTurn(string text)
     {
-        var run = RunTurn(AskRules.PhoneTurn(text, CrewStrip.Names.Coordinator, AskUser.History()), [], "");
+        var run = RunTurn(AskRules.PhoneTurn(text, CrewStrip.Names.Coordinator, AskUser.History(PhoneTopic)), [], "");
         _phoneTurn = _turn; // set before RunTurn's first wait
         await run;
     }
@@ -694,7 +729,7 @@ internal sealed partial class ChatPane
         {
             _phoneTurn = null;
             var last = _conv.Items.LastOrDefault(i => i.Kind == "assistant")?.Text ?? "";
-            _ = AskUser.SendUpdateAsync(AskRules.PhoneReply(last, stopped ? "stopped" : ended.Outcome));
+            _ = AskUser.SendUpdateAsync(AskRules.PhoneReply(last, stopped ? "stopped" : ended.Outcome), PhoneTopic);
         }
         if (_phoneAsks.Count > 0) Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(NextPhoneAsk));
     }
@@ -738,7 +773,7 @@ internal sealed partial class ChatPane
         _jobsLastUpdate = now;
         var body = PhoneGreeting() + AskRules.UpdateBody(new AutopilotRun { State = AutopilotRun.Running }, jobs, since, AskUser.Waiting(), now, CrewStrip.Names.Worker);
         _updateSending = true;
-        _ = AskUser.SendUpdateAsync(body).ContinueWith(_ => Dispatcher.BeginInvoke(new Action(() => _updateSending = false)), TaskScheduler.Default);
+        _ = AskUser.SendUpdateAsync(body, PhoneTopic).ContinueWith(_ => Dispatcher.BeginInvoke(new Action(() => _updateSending = false)), TaskScheduler.Default);
     }
 
     /// <summary>Every hour or so (Settings): a progress update to the phone; what the user writes back comes as their message.</summary>
@@ -753,7 +788,7 @@ internal sealed partial class ChatPane
         var body = PhoneGreeting() + AskRules.UpdateBody(run, _board?.Snapshot() ?? [], since, AskUser.Waiting(), now, CrewStrip.Names.Worker);
         _updateSending = true;
         var s = _s;
-        _ = AskUser.SendUpdateAsync(body).ContinueWith(t => Dispatcher.BeginInvoke(new Action(() => In(s, () =>
+        _ = AskUser.SendUpdateAsync(body, PhoneTopic).ContinueWith(t => Dispatcher.BeginInvoke(new Action(() => In(s, () =>
         {
             _updateSending = false;
             var error = t.Status == TaskStatus.RanToCompletion ? t.Result : t.Exception?.GetBaseException().Message;
