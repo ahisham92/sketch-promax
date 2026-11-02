@@ -144,6 +144,7 @@ ParallelJobTests.Run((name, ok, detail) => Check(name, ok, detail));
 AutoSyncTests.Run((name, ok, detail) => Check(name, ok, detail));
 CrewTests.Run((name, ok, detail) => Check(name, ok, detail));
 AutopilotTests.Run((name, ok, detail) => Check(name, ok, detail));
+ChatWorkTests.Run((name, ok, detail) => Check(name, ok, detail));
 AutopilotStallTests.Run((name, ok, detail) => Check(name, ok, detail));
 JobChecksTests.Run((name, ok, detail) => Check(name, ok, detail));
 AskRulesTests.Run((name, ok, detail) => Check(name, ok, detail));

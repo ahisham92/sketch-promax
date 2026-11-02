@@ -280,6 +280,7 @@ internal sealed partial class ChatPane
         }
         _conv.Type = type;
         ChatJobs.Coordinator = type == ChatTypes.Coordinator;
+        RegisterBoard();
         // The process was started for the other kind: the next message starts one for this kind (the same session).
         if (_engine is { } engine && engine.Coordinator != (type == ChatTypes.Coordinator))
         {

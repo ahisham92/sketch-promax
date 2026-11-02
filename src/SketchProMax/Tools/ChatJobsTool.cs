@@ -51,7 +51,7 @@ public sealed class ChatJobsTool : IRevitTool
     public bool ModifiesModel => false;
 
     /// <summary>A job's own calls: ask a teammate, or message one; it doesn't start or stop jobs.</summary>
-    private static ToolResult Teamwork(JobBoard board, ChatJob me, string action, ToolArgs args)
+    private static ToolResult Teamwork(JobBoard board, ChatJob me, string action, ToolArgs args, string jobKey)
     {
         var number = Number(args);
         if (action is not ("ask" or "message"))
@@ -62,14 +62,14 @@ public sealed class ChatJobsTool : IRevitTool
         {
             var answer = board.Ask(me.Key, number.Value, (Str(args, "question") ?? Str(args, "text") ?? "").Trim(), Bool(args, "forward"), now);
             if (answer is null) return ToolResult.Error($"There is no job {number}. " + board.Describe(ChatJobs.Limit));
-            ChatJobs.Changed?.Invoke();
+            ChatJobs.ChangedFor(jobKey);
             return ToolResult.Ok(new { job = number, answer, next = "Use what fits and carry on with your task; read the model only for what is still missing." });
         }
         var text = (Str(args, "text") ?? "").Trim();
         if (text.Length == 0) return ToolResult.Error("Give what to tell the job in 'text'.");
         var sent = board.Tell(me.Key, number.Value, text, now);
         if (sent == JobBoard.Delivery.NotFound) return ToolResult.Error($"There is no job {number}. " + board.Describe(ChatJobs.Limit));
-        ChatJobs.Changed?.Invoke();
+        ChatJobs.ChangedFor(jobKey);
         return ToolResult.Ok(new { job = number, sent = true, state = sent == JobBoard.Delivery.Reopened ? "it carries on with this message" : sent == JobBoard.Delivery.Soon ? "it gets this with its next step" : "it gets this when its current run ends" });
     }
 
@@ -83,25 +83,26 @@ public sealed class ChatJobsTool : IRevitTool
     internal static ToolResult Answer(ToolArgs args, bool coordinator, string? jobKey = null)
     {
         var action = (Str(args, "action") ?? "list").Trim().ToLowerInvariant();
-        var board = ChatJobs.Board;
+        // The calling chat's own board: the shown chat's, or that of a chat working in the background (its chat key).
+        var board = ChatJobs.BoardFor(jobKey);
         var limit = ChatJobs.Limit;
         if (action == "list")
             return board is null ? ToolResult.Ok(new { jobs = "No chat is open in the Sketch ProMax pane, so there are no jobs." }) : new ToolResult(board.Describe(limit));
         if (action is not ("start" or "message" or "stop" or "ask")) return ToolResult.Error("action is start, list, message, stop or ask.");
         // A job working with its teammates: it asks one for what it found, or tells one something.
-        if (jobKey is not null && board?.FindKey(jobKey) is { } me) return Teamwork(board, me, action, args);
+        if (jobKey is not null && !JobBoard.IsChatKey(jobKey) && board?.FindKey(jobKey) is { } me) return Teamwork(board, me, action, args, jobKey);
         if (action == "ask") return ToolResult.Error("ask is for a job asking another job; the main chat reads a job's report with action=list.");
         if (!coordinator || board is null)
             return ToolResult.Error("Jobs run only from the main chat of the Sketch ProMax pane in Revit. Do the work here yourself instead.");
-        if (!ChatJobs.Coordinator)
+        if (!ChatJobs.CoordinatorFor(jobKey))
             return ToolResult.Error(SimpleChatRefusal);
-        if (!ChatJobs.Available)
+        if (!ClaudeCli.JobsAvailable)
             return ToolResult.Error("Jobs aren't available right now (the Sketch ProMax connector is older than the add-in, or the chat is switching). Do the work here yourself.");
         var now = DateTime.UtcNow;
         switch (action)
         {
             case "start" when args.Raw.TryGetValue("parts", out var parts) && parts.ValueKind == JsonValueKind.Array && parts.GetArrayLength() > 0:
-                return StartParts(board, parts, (Str(args, "facts") ?? "").Trim(), Str(args, "model"), limit, now);
+                return StartParts(board, parts, (Str(args, "facts") ?? "").Trim(), Str(args, "model"), limit, now, jobKey);
             case "start":
             {
                 var task = (Str(args, "task") ?? "").Trim();
@@ -132,7 +133,7 @@ public sealed class ChatJobsTool : IRevitTool
                     ChatJobs.Assign(job, kind is ChatAuto.Simple or ChatAuto.Everyday or ChatAuto.Hard ? kind : null);
                     JobBoard.SetRevitModel(job, Str(args, "model"));
                 }
-                ChatJobs.Changed?.Invoke();
+                ChatJobs.ChangedFor(jobKey);
                 var waiting = board.OpenCount > JobBoard.ClampLimit(limit);
                 var free = Math.Max(0, JobBoard.ClampLimit(limit) - board.OpenCount);
                 return ToolResult.Ok(new
@@ -153,7 +154,7 @@ public sealed class ChatJobsTool : IRevitTool
                 if (number is null || text.Length == 0) return ToolResult.Error("Give the job's number in 'job' and what to tell it in 'text'.");
                 var sent = board.Message(number.Value, text, now, fromUser: false);
                 if (sent == JobBoard.Delivery.NotFound) return ToolResult.Error($"There is no job {number}. " + board.Describe(limit));
-                ChatJobs.Changed?.Invoke();
+                ChatJobs.ChangedFor(jobKey);
                 return ToolResult.Ok(new
                 {
                     job = number, sent = true,
@@ -167,7 +168,7 @@ public sealed class ChatJobsTool : IRevitTool
                 if (number is null) return ToolResult.Error("Give the job's number in 'job'.");
                 var was = board.Stop(number.Value, now);
                 if (was is null) return ToolResult.Error($"There is no job {number}. " + board.Describe(limit));
-                ChatJobs.Changed?.Invoke();
+                ChatJobs.ChangedFor(jobKey);
                 return ToolResult.Ok(new
                 {
                     job = number,
@@ -181,7 +182,7 @@ public sealed class ChatJobsTool : IRevitTool
     }
 
     /// <summary>start with parts: one job per part, all at once (they are separate work, so none is refused as a follow-up).</summary>
-    private static ToolResult StartParts(JobBoard board, JsonElement parts, string facts, string? model, int limit, DateTime now)
+    private static ToolResult StartParts(JobBoard board, JsonElement parts, string facts, string? model, int limit, DateTime now, string? jobKey)
     {
         var list = parts.EnumerateArray().Where(p => p.ValueKind == JsonValueKind.Object).Select(p => (
             Title: Prop(p, "title"), Task: JobBoard.WithDoneWhen(Prop(p, "task"), Prop(p, "done_when")), Kind: Prop(p, "kind").ToLowerInvariant(), Model: Prop(p, "model") is { Length: > 0 } m ? m : model ?? ""))
@@ -205,7 +206,7 @@ public sealed class ChatJobsTool : IRevitTool
             }
             started.Add(new { job = job.Number, title = job.Title, model = ChatAuto.ModelLabel(job.Model), revit_model = job.RevitModel.Length > 0 ? job.RevitModel : null });
         }
-        ChatJobs.Changed?.Invoke();
+        ChatJobs.ChangedFor(jobKey);
         var waiting = Math.Max(0, board.OpenCount - JobBoard.ClampLimit(limit));
         return ToolResult.Ok(new
         {

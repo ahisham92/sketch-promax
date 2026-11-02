@@ -3157,6 +3157,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             EndRuns("Sketch ProMax updated, so this job stopped. Send it a message to carry on.");
             StopBackground("Sketch ProMax updated while this chat worked in the background, so it stopped here. Send your message again to carry on.", now: false);
             if (ChatJobs.Board == _board) { ChatJobs.Board = null; ChatJobs.Changed = null; }
+            if (_boardChat.Length > 0) ChatJobs.Boards.Remove(_boardChat);
         }
         catch (Exception) { /* whatever failed above, the chat is saved and handed over below */ }
         finally

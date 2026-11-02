@@ -10,8 +10,9 @@ using SketchProMax.UI;
 namespace SketchProMax.Chat;
 
 /// <summary>
-/// Where the bridge reaches the open chat's parallel jobs (chat_jobs calls and a job's change waiting its turn), from
-/// its own threads. The pane sets it when a chat is shown.
+/// Where the bridge reaches the chats' parallel jobs (chat_jobs calls and a job's change waiting its turn), from its own
+/// threads: the shown chat's (the pane sets it when a chat is shown) and, through <see cref="Boards"/>, those of the chats
+/// still working in the background, found by the caller's key.
 /// </summary>
 internal static class ChatJobs
 {
@@ -21,6 +22,25 @@ internal static class ChatJobs
 
     /// <summary>The key (JobBoard.ChatKey) the shown chat's Claude Code passes with its calls: those are the main chat's.</summary>
     public static volatile string Shown = "";
+
+    /// <summary>Every working chat's board by its chat key (the shown chat's too): a chat in the background keeps its own.</summary>
+    public static readonly ChatBoards Boards = new();
+
+    /// <summary>The board, kind and change call a call reaches: the shown chat's for no key or its jobs, else by <see cref="Boards"/>.</summary>
+    private static (JobBoard? Board, bool Coordinator, Action? Changed) Route(string? key)
+    {
+        if (string.IsNullOrEmpty(key) || key == Shown || (!JobBoard.IsChatKey(key) && _board?.FindKey(key) is not null)) return (_board, _coordinator, _changed);
+        return Boards.For(key, "") is { } entry ? (entry.Board, entry.Coordinator, entry.Changed) : (null, false, null);
+    }
+
+    /// <summary>The board of the chat that made a call (<paramref name="key"/>: the bridge's caller key, null for the shown chat).</summary>
+    public static JobBoard? BoardFor(string? key) => Route(key).Board;
+
+    /// <summary>The calling chat is With coordinator (only then may it start or message jobs).</summary>
+    public static bool CoordinatorFor(string? key) => Route(key).Coordinator;
+
+    /// <summary>After the bridge changed a job of the calling chat: its pane session starts, stops and redraws.</summary>
+    public static void ChangedFor(string? key) => Route(key).Changed?.Invoke();
 
     /// <summary>The open chat is With coordinator (ChatTypes): only then may its main chat start or message jobs.</summary>
     public static bool Coordinator { get => _coordinator; set => _coordinator = value; }
@@ -67,14 +87,14 @@ internal static class ChatJobs
     /// <summary>The bridge: job <paramref name="key"/>'s call waits its turn (<paramref name="ahead"/>: its place, 1 = next) or got it (null).</summary>
     public static void SetWaiting(string key, int? ahead)
     {
-        if (_board?.SetWaiting(key, ahead) == true) _changed?.Invoke();
+        if (BoardFor(key)?.SetWaiting(key, ahead) == true) ChangedFor(key);
     }
 
     /// <summary>The bridge, after a job's call: the messages sent to it while it worked, to add to the result (null when none).</summary>
     public static string? TakeAsides(string key, string tool)
     {
-        var block = _board?.TakeAsides(key, tool, DateTime.UtcNow);
-        if (block is not null) _changed?.Invoke();
+        var block = BoardFor(key)?.TakeAsides(key, tool, DateTime.UtcNow);
+        if (block is not null) ChangedFor(key);
         return block;
     }
 
@@ -87,21 +107,21 @@ internal static class ChatJobs
     public static void Touched(string? key, string title) => _touched?.Invoke(key, title);
 
     /// <summary>The connection: the model job <paramref name="key"/> was given (chat_jobs start model=…), or null.</summary>
-    public static string? ModelOf(string key) => _board?.FindKey(key) is { RevitModel.Length: > 0 } job ? job.RevitModel : null;
+    public static string? ModelOf(string key) => BoardFor(key)?.FindKey(key) is { RevitModel.Length: > 0 } job ? job.RevitModel : null;
 
     /// <summary>
     /// The bridge: true when job <paramref name="key"/> may only read: it checks another job's work (JobReview), reviews an
     /// autopilot's goal (GoalReview) or reads before an autopilot's plan is approved. Its changes are refused.
     /// </summary>
-    public static bool IsCheck(string key) => _board?.FindKey(key) is { ReviewOf: > 0 } or { ReadOnly: true };
+    public static bool IsCheck(string key) => BoardFor(key)?.FindKey(key) is { ReviewOf: > 0 } or { ReadOnly: true };
 
     /// <summary>Who asks the user on their phone (ask_user): "Job 7: Existing model", or the coordinator for the main chat.</summary>
-    public static string AskerName(string? key) => key is not null && _board?.FindKey(key) is { } job ? $"Job {job.Number}: {job.Title}" : "the coordinator";
+    public static string AskerName(string? key) => key is not null && BoardFor(key)?.FindKey(key) is { } job ? $"Job {job.Number}: {job.Title}" : "the coordinator";
 
     /// <summary>The bridge: what job <paramref name="key"/> does in Revit now (JobBoard.SetActivity), for its card and animation.</summary>
     public static void SetActivity(string key, string activity, int ahead = 0)
     {
-        if (_board?.SetActivity(key, activity, ahead) == true) _changed?.Invoke();
+        if (BoardFor(key)?.SetActivity(key, activity, ahead) == true) ChangedFor(key);
     }
 }
 
@@ -187,8 +207,21 @@ internal sealed partial class ChatPane
         ChatJobs.Board = _board;
         ChatJobs.Coordinator = IsCoordinator;
         ChatJobs.Changed = () => Dispatcher.BeginInvoke(new Action(JobsChanged));
+        RegisterBoard();
         ChatJobs.TouchedModel = (key, title) => Dispatcher.BeginInvoke(new Action(() => ModelTouched(key, title)));
     }
+
+    /// <summary>This chat's board in ChatJobs.Boards, under its chat key (again when its kind changes).</summary>
+    private void RegisterBoard()
+    {
+        if (_sample || _board is null) return;
+        var key = JobBoard.ChatKey(_conv.Id);
+        if (_boardChat.Length > 0 && _boardChat != key) ChatJobs.Boards.Remove(_boardChat);
+        _boardChat = key;
+        ChatJobs.Boards.Set(key, _board, IsCoordinator, () => Dispatcher.BeginInvoke(new Action(JobsChanged)));
+    }
+
+    private string _boardChat = "";
 
     /// <summary>The chat or one of its jobs works on another model: the header names it with the chat's own.</summary>
     private void ModelTouched(string? key, string title)

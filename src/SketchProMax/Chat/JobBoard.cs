@@ -939,6 +939,62 @@ internal sealed class JobBoard
 }
 
 /// <summary>
+/// The job boards of every chat working in this Revit window, by the chat's key (JobBoard.ChatKey): the chat shown in the
+/// pane and those left working in the background (ChatPane sessions). The bridge finds a call's board from its caller: the
+/// shown chat (no key), a chat in the background (its chat key) or a job (its own key, on whichever board has it), so a
+/// chat's coordinator and jobs keep working with their own board while another chat is shown. Needs no WPF or Revit
+/// (the unit tests compile this file).
+/// </summary>
+internal sealed class ChatBoards
+{
+    /// <summary>One chat's board: whether it is With coordinator (only then may it start jobs) and what to call after a change.</summary>
+    public sealed record Entry(JobBoard Board, bool Coordinator, Action? Changed);
+
+    private readonly object _gate = new();
+    private readonly Dictionary<string, Entry> _boards = new(StringComparer.Ordinal);
+
+    /// <summary>Chat <paramref name="chatKey"/>'s board (again, when its kind changed); "" keys are not kept.</summary>
+    public void Set(string chatKey, JobBoard board, bool coordinator, Action? changed)
+    {
+        if (chatKey.Length == 0) return;
+        lock (_gate) _boards[chatKey] = new Entry(board, coordinator, changed);
+    }
+
+    /// <summary>The chat is closed for good (or its work ended and it was let go): its board is no longer reached.</summary>
+    public void Remove(string chatKey)
+    {
+        lock (_gate) _boards.Remove(chatKey);
+    }
+
+    public int Count
+    {
+        get { lock (_gate) return _boards.Count; }
+    }
+
+    /// <summary>
+    /// The board a call reaches: <paramref name="key"/> null or the shown chat's key: <paramref name="shown"/>'s; a chat key:
+    /// that chat's; a job's key: the board that has the job. Null when none.
+    /// </summary>
+    public Entry? For(string? key, string shown)
+    {
+        lock (_gate)
+        {
+            if (string.IsNullOrEmpty(key)) return shown.Length > 0 && _boards.TryGetValue(shown, out var main) ? main : null;
+            if (JobBoard.IsChatKey(key)) return _boards.TryGetValue(key!, out var chat) ? chat : null;
+            // The shown chat's board first: most calls are its jobs'.
+            if (shown.Length > 0 && _boards.TryGetValue(shown, out var first) && first.Board.FindKey(key) is not null) return first;
+            return _boards.Values.FirstOrDefault(e => e.Board.FindKey(key) is not null);
+        }
+    }
+
+    /// <summary>The chat key whose board has job <paramref name="jobKey"/> ("" when none).</summary>
+    public string ChatOf(string jobKey)
+    {
+        lock (_gate) return _boards.FirstOrDefault(p => p.Value.Board.FindKey(jobKey) is not null).Key ?? "";
+    }
+}
+
+/// <summary>
 /// Which existing job a follow-up belongs to: "also add level 6" after "Sheets for levels 1-5" goes to that job, not a
 /// new one. Words are compared without case, plural s or filler words; numbers count only alongside a shared word.
 /// </summary>
