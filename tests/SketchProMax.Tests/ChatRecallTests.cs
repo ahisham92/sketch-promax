@@ -82,14 +82,14 @@ internal static class ChatRecallTests
         check("recall: summary capped", huge.Length <= ChatRecall.MaxSummary && huge.StartsWith("- bullet 0"), huge.Length.ToString());
 
         // What a new chat starts with.
-        var a1 = Chat("Tin Can.rvt", "Columns", 3, "- columns 600x600 C40");
-        var a2 = Chat("Tin Can.rvt", "Beams", 1, "- beams 300x600");
-        var a3 = Chat("tin can.RVT", "Slabs", 2, "- slabs 250 thick");
-        var a4 = Chat("Tin Can.rvt", "Oldest", 9, "- piles 600");
-        var aNow = Chat("Tin Can.rvt", "Now", 0, "- the open chat's own memory");
+        var a1 = Chat("Harbour East.rvt", "Columns", 3, "- columns 600x600 C40");
+        var a2 = Chat("Harbour East.rvt", "Beams", 1, "- beams 300x600");
+        var a3 = Chat("harbour east.RVT", "Slabs", 2, "- slabs 250 thick");
+        var a4 = Chat("Harbour East.rvt", "Oldest", 9, "- piles 600");
+        var aNow = Chat("Harbour East.rvt", "Now", 0, "- the open chat's own memory");
         var b1 = Chat("Tower.rvt", "Pile caps for the Tower", 5, "- pile caps 1.5 m deep");
         var all = new List<Conversation> { a1, a2, a3, a4, aNow, b1 };
-        var block = ChatRecall.PromptBlock(all, "Tin Can.rvt", aNow.Id);
+        var block = ChatRecall.PromptBlock(all, "Harbour East.rvt", aNow.Id);
         check("recall: new chat gets the latest three of its model, newest first",
             block.Contains("300x600") && block.Contains("250 thick") && block.Contains("C40") && !block.Contains("piles 600") &&
             block.IndexOf("300x600", StringComparison.Ordinal) < block.IndexOf("250 thick", StringComparison.Ordinal), block);

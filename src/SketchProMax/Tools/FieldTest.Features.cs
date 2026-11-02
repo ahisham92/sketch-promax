@@ -1041,8 +1041,8 @@ internal static partial class FieldTest
                 Chat.ChatStore.Save(c);
                 return c;
             }
-            var a1 = Make("Field test Tin Can", "Columns on every grid", "- Columns are 600x600 C40 at every grid crossing");
-            var a2 = Make("Field test Tin Can", "Now the beams", "");
+            var a1 = Make("Field test Harbour East", "Columns on every grid", "- Columns are 600x600 C40 at every grid crossing");
+            var a2 = Make("Field test Harbour East", "Now the beams", "");
             var b1 = Make("Field test Tower", "Pile caps for the Tower", "- Pile caps 1.5 m deep, 4 piles each");
             var problems = new List<string>();
             var block = Chat.ChatRecall.PromptBlock(Chat.ChatStore.ForModel(a2.Key), a2.Key, a2.Id);

@@ -92,9 +92,8 @@ internal static class JobChecksTests
         var reader = b2.Start("Read the title block", "Read the title block's parameters", now, force: true, out _)!;
         b2.ToStart(3, now);
         b2.RunEnded(reader, true, "It has 12 parameters.", now);
-        check("review: a job that only read is never checked (bug 68)", !JobReview.Wanted(JobReview.Always, true, reader), "");
-        check("review: a job reading before the plan is approved is never checked", !JobReview.Wanted(JobReview.Always, true,
-            new ChatJob { State = JobBoard.Done, ReadOnly = true, ChangedModel = true }), "");
+        check("review: a job that only read is checked too", JobReview.Wanted(JobReview.Always, true, reader), "");
+        check("review: a job not marked as finished work isn't checked", !JobReview.Wanted(JobReview.Always, true, new ChatJob { State = JobBoard.Done }), "");
         b2.MarkChanged("nope");
         check("review: wanted for a finished job when on", JobReview.Wanted(JobReview.Always, false, work), "");
         check("review: only in an autopilot when set so", !JobReview.Wanted(JobReview.AutopilotOnly, false, work) && JobReview.Wanted(JobReview.AutopilotOnly, true, work), "");
@@ -110,15 +109,13 @@ internal static class JobChecksTests
         b2.RunEnded(check1, true, "All three sheets exist with their views.\n**PASSED**", now);
         check("review: a passed check goes on the job", b2.ReviewEnded(check1, now) == work && JobReview.Passed(work.Review), work.Review);
         check("review: the coordinator hears it passed", JobBoard.Report([work], 0).Contains("checked the work in the model: it passed"), "");
-        check("review: a job reported after its check is not checked again (bug 68: two checks per job)", !JobReview.Wanted(JobReview.Always, true, work) && !work.ChangedModel, "");
+        check("review: a job reported after its check is not checked again (bug 68: two checks per job)", !JobReview.Wanted(JobReview.Always, true, work) && !work.Unchecked, "");
         // Found issues: the job is sent back, fixes, and is checked once more at most.
         b2.Message(work.Number, "add A104", now);
         check("review: a job carrying on is checked again later", work.Review == "", work.Review);
         b2.ToStart(3, now);
         b2.RunEnded(work, true, "Made A104 too.", now);
-        check("review: a job sent back that changed nothing isn't checked again", !JobReview.Wanted(JobReview.Always, true, work), "");
-        b2.MarkChanged(work.Key);
-        check("review: a job sent back that changed the model is checked again", JobReview.Wanted(JobReview.Always, true, work), "");
+        check("review: a job sent back is checked again once it finishes", JobReview.Wanted(JobReview.Always, true, work), "");
         var check2 = b2.StartReview(work.Number, now)!;
         b2.ToStart(3, now);
         b2.RunEnded(check2, true, "A101-A103 fine.\nISSUES: A104 has no view placed.\n- place the level 4 plan on A104", now);
