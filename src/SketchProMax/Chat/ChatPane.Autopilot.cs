@@ -23,14 +23,20 @@ internal sealed partial class ChatPane
     private Button? _autoStop, _autoResume;
     private DispatcherTimer? _autoTimer;
     private bool _autoHooked;
-    private DateTime _autoIdleSince;
+    private DateTime _autoIdleSince { get => _s.AutoIdleSince; set => _s.AutoIdleSince = value; }
 
     private AutopilotRun? Run => _conv.Autopilot;
 
     /// <summary>New chat › New autopilot chat: a chat With coordinator waiting for the goal.</summary>
     private void NewAutopilotChat()
     {
-        if (AutopilotHolds()) return; // one running here already
+        // One run at a time in this Revit window (the phone and the unattended answers belong to it).
+        if (!_sample && Sessions.FirstOrDefault(s => s.Conv.Autopilot is { Active: true }) is { } running)
+        {
+            Status($"An Autopilot already runs in “{(ChatHistory.NameFor(running.Conv) is { Length: > 0 } n ? n : ChatHistory.Untitled)}”: one at a time. " +
+                   "Open it from Chats at the top, or press Stop on its banner first.", spin: false);
+            return;
+        }
         NewChat(ChatTypes.Coordinator);
         if (_conv.Type != ChatTypes.Coordinator) return; // the new chat couldn't be opened (the status line says why)
         _conv.Autopilot = new AutopilotRun();
@@ -41,18 +47,8 @@ internal sealed partial class ChatPane
         ShowAutopilot();
     }
 
-    /// <summary>
-    /// The autopilot runs in the chat shown: it can't be left, since its clock (progress updates to the phone, the review
-    /// team, the connection watch, carrying on after a pause) runs only while its chat is shown. Only a healthy run holds
-    /// it (Autopilot.HoldsChat): a paused one, one whose answer is stuck or whose model isn't open lets the user go. True
-    /// when it refused; the status line then says how to leave.
-    /// </summary>
-    private bool AutopilotHolds()
-    {
-        if (_sample || !Autopilot.HoldsChat(Run, RunModelOpen, TurnStalled(DateTime.UtcNow))) return false;
-        Status(Autopilot.HoldLine, spin: false);
-        return true;
-    }
+    /// <summary>The chat with an Autopilot on (shown or working in the background), else the shown one: the phone talks to it.</summary>
+    private ChatSession RunSession => Sessions.FirstOrDefault(s => s.Conv.Autopilot is { Active: true }) ?? _shown;
 
     /// <summary>The banner, the unattended switch and the timer, for the chat shown now.</summary>
     private void ShowAutopilot()
@@ -60,11 +56,12 @@ internal sealed partial class ChatPane
         if (!_autoHooked)
         {
             _autoHooked = true;
-            Autopilot.Logged += (kind, text) => Dispatcher.BeginInvoke(new Action(() => AutopilotLog(kind, text)));
-            AskUser.Logged += text => Dispatcher.BeginInvoke(new Action(() => AutopilotLog(AutopilotEntry.Asked, text)));
-            AskUser.Answered += q => Dispatcher.BeginInvoke(new Action(() => PhoneAnswered(q)));
-            AskUser.UserWrote += text => Dispatcher.BeginInvoke(new Action(() => FromPhone(text)));
-            AskUser.Command += name => Dispatcher.BeginInvoke(new Action(() => PhoneCommand(name)));
+            // The run's log, the phone's answers, messages and commands go to the chat the run works in, shown or not.
+            Autopilot.Logged += (kind, text) => Dispatcher.BeginInvoke(new Action(() => In(RunSession, () => AutopilotLog(kind, text))));
+            AskUser.Logged += text => Dispatcher.BeginInvoke(new Action(() => In(RunSession, () => AutopilotLog(AutopilotEntry.Asked, text))));
+            AskUser.Answered += q => Dispatcher.BeginInvoke(new Action(() => In(q.JobKey.Length > 0 && SessionOf(q.JobKey) is { } of ? of : RunSession, () => PhoneAnswered(q))));
+            AskUser.UserWrote += text => Dispatcher.BeginInvoke(new Action(() => In(RunSession, () => FromPhone(text))));
+            AskUser.Command += name => Dispatcher.BeginInvoke(new Action(() => In(RunSession, () => PhoneCommand(name))));
             AskUser.Listen(); // a connected phone is read from now on: the user can write to the chat from it
             // The phone shows the coordinator's name (Sam for one user, another name for the next): Settings › Chat.
             Phone.PhoneLink.Agent = CrewStrip.Names.Coordinator;
@@ -78,11 +75,21 @@ internal sealed partial class ChatPane
             _jobsTimer.Start();
         }
         var run = _sample ? null : Run;
-        Autopilot.Here = run is { Active: true };
+        // Popups and approvals are answered for the user while a run works in any of this window's chats.
+        var anyRun = !_sample && Sessions.Any(s => s.Conv.Autopilot is { Active: true });
+        Autopilot.Here = anyRun;
+        // The clock ticks for every run, shown or in the background (AutopilotTickAll).
+        _autoTimer ??= AutopilotClock();
+        if (anyRun) _autoTimer.Start();
+        else _autoTimer.Stop();
+        if (Hidden)
+        {
+            if (run is { Active: true } && run.State != AutopilotRun.Approval) StartWatchdog();
+            return;
+        }
         if (run is null)
         {
             if (_autoBanner is not null) _autoBanner.Visibility = Visibility.Collapsed;
-            _autoTimer?.Stop();
             return;
         }
         if (_autoBanner is null) BuildAutopilotBanner();
@@ -92,9 +99,23 @@ internal sealed partial class ChatPane
         _autoStop!.Visibility = run.Active ? Visibility.Visible : Visibility.Collapsed;
         _autoResume!.Visibility = run.State == AutopilotRun.Paused && run.PausedUntil is null ? Visibility.Visible : Visibility.Collapsed;
         AutomationProperties.SetName(_autoBanner, _autoText.Text);
-        if (run.Active) _autoTimer!.Start();
-        else _autoTimer!.Stop();
         if (run.Active && run.State != AutopilotRun.Approval) StartWatchdog();
+    }
+
+    /// <summary>Every 30 s: each run's tick (AutopilotTick) in its own chat, shown or working in the background.</summary>
+    private DispatcherTimer AutopilotClock()
+    {
+        var timer = new DispatcherTimer(DispatcherPriority.Background, Dispatcher) { Interval = TimeSpan.FromSeconds(30) };
+        timer.Tick += (_, _) =>
+        {
+            foreach (var s in Sessions.Where(s => s.Conv.Autopilot is { Active: true }).ToList())
+                In(s, () =>
+                {
+                    try { AutopilotTick(); }
+                    catch (Exception) { /* the next tick tries again */ }
+                });
+        };
+        return timer;
     }
 
     private void BuildAutopilotBanner()
@@ -119,12 +140,6 @@ internal sealed partial class ChatPane
         SetDock(_autoBanner, Dock.Top);
         var at = Children.IndexOf(_switcherHome);
         Children.Insert(at < 0 ? Children.Count - 1 : at, _autoBanner);
-        _autoTimer = new DispatcherTimer(DispatcherPriority.Background, Dispatcher) { Interval = TimeSpan.FromSeconds(30) };
-        _autoTimer.Tick += (_, _) =>
-        {
-            try { AutopilotTick(); }
-            catch (Exception) { /* the next tick tries again */ }
-        };
 
         Button Pill(string text, bool primary, string help, Action click)
         {
@@ -204,7 +219,7 @@ internal sealed partial class ChatPane
         }
         _autoIdleSince = DateTime.UtcNow;
         // Jobs still working or reports on their way: they bring the next turn.
-        Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(AutopilotNudgeIfIdle));
+        Later(AutopilotNudgeIfIdle, DispatcherPriority.Background);
     }
 
     /// <summary>Nothing open, nothing to report, no final report: tell the coordinator to carry on (a few times at most).</summary>
@@ -241,7 +256,7 @@ internal sealed partial class ChatPane
             _board?.AllowChanges();
             ShowAutopilot();
             Status("Saving a backup copy of the model…", spin: true);
-            var (model, copy) = await AutopilotBackup();
+            var (model, copy) = await On(AutopilotBackup());
             run.Backup = copy;
             // Other Revit windows the run reaches (a documentation model linking this one) answer for you too, and back
             // up their model before its first change.
@@ -367,7 +382,7 @@ internal sealed partial class ChatPane
         ShowAutopilot();
     }
 
-    private bool _reviewAgain;
+    private bool _reviewAgain { get => _s.ReviewAgain; set => _s.ReviewAgain = value; }
 
     private void AutopilotResume(string why, bool turn = true)
     {
@@ -399,11 +414,8 @@ internal sealed partial class ChatPane
     }
 
     /// <summary>The run's model is open in this Revit (checked every 30 s, AutopilotModelCheck); true until known otherwise.</summary>
-    private (string Key, bool Open) _runModel = ("", true);
 
-    /// <summary>The run's model is open in this Revit, as last checked for the chat shown (true until known otherwise).</summary>
-    private bool RunModelOpen => _runModel.Open || !string.Equals(_runModel.Key, _conv.Key, StringComparison.OrdinalIgnoreCase);
-    private bool _modelChecking;
+    private bool _modelChecking { get => _s.ModelChecking; set => _s.ModelChecking = value; }
 
     /// <summary>
     /// Every 30 s while a run is on: is the model it works on (its chat's) still open in this Revit? When it isn't, the run
@@ -414,20 +426,20 @@ internal sealed partial class ChatPane
         var key = _conv.Key == NoModelKey ? "" : _conv.Key;
         if (_modelChecking || key.Length == 0) return;
         _modelChecking = true;
+        var s = _s;
         _ = SketchProMax.App.Dispatcher.InvokeAsync(app => app.Application.Documents.Cast<Autodesk.Revit.DB.Document>()
                 .Where(d => !d.IsFamilyDocument).Select(ModelKey).ToList())
-            .ContinueWith(t => Dispatcher.BeginInvoke(new Action(() =>
+            .ContinueWith(t => Dispatcher.BeginInvoke(new Action(() => In(s, () =>
             {
                 _modelChecking = false;
                 if (t.Status != TaskStatus.RanToCompletion || Run is not { Active: true } now || !ReferenceEquals(now, run) || _conv.Key != key) return;
                 try { ModelOpenChanged(run, Autopilot.ModelOpen(key, t.Result)); }
                 catch (Exception) { /* the next check tries again */ }
-            })), TaskScheduler.Default);
+            }))), TaskScheduler.Default);
     }
 
     private void ModelOpenChanged(AutopilotRun run, bool open)
     {
-        _runModel = (_conv.Key, open);
         if (open || run.ModelGone) return;
         var title = _conv.Title.Length > 0 ? _conv.Title : "the model";
         run.State = AutopilotRun.Paused;
@@ -440,16 +452,16 @@ internal sealed partial class ChatPane
         _ = AskUser.SendUpdateAsync(text);
         Save();
         ShowAutopilot();
-        Status("Autopilot paused: " + run.PauseWhy + ". You can open another chat now.", spin: false);
+        Status("Autopilot paused: " + run.PauseWhy + ".", spin: false);
     }
 
     /// <summary>When the connection last came back (default: it didn't drop): answers and jobs silent since are stuck.</summary>
-    private DateTime _reconnectedAt;
-    private int _stalls;
+    private DateTime _reconnectedAt { get => _s.ReconnectedAt; set => _s.ReconnectedAt = value; }
+    private int _stalls { get => _s.Stalls; set => _s.Stalls = value; }
 
     /// <summary>The coordinator's answer runs and is stuck (Autopilot.Stalled): no word from its Claude Code for too long.</summary>
     private bool TurnStalled(DateTime now) =>
-        _turn is { Planning: false } && Autopilot.Stalled(_lastActivity, now, _tools.Values.Any(r => r.Item.State == "running"), _reconnectedAt);
+        _turn is { Planning: false } && Autopilot.Stalled(_lastActivity, now, StepRunning, _reconnectedAt);
 
     /// <summary>
     /// Every 30 s while a run works: an answer of the coordinator stuck mid-stream (a connection dropped and came back, and
@@ -505,8 +517,8 @@ internal sealed partial class ChatPane
             _ = RunTurn(Autopilot.Resume(run, "Your last answer got stuck (no word for a long time) and was ended."), [], "");
     }
 
-    private readonly ConnectionWatch _connection = new();
-    private bool _probing;
+    private ConnectionWatch _connection => _s.Connection;
+    private bool _probing { get => _s.Probing; set => _s.Probing = value; }
 
     /// <summary>
     /// Every 30 s while a run is on: is the internet there, and the company network the central model is on? When either
@@ -518,14 +530,15 @@ internal sealed partial class ChatPane
         if (_probing) return;
         _probing = true;
         var central = _modelKey;
+        var s = _s;
         _ = Task.Run(async () => (internet: await ConnectionProbe.InternetAsync().ConfigureAwait(false), network: await ConnectionProbe.NetworkAsync(central).ConfigureAwait(false)))
-            .ContinueWith(t => Dispatcher.BeginInvoke(new Action(() =>
+            .ContinueWith(t => Dispatcher.BeginInvoke(new Action(() => In(s, () =>
             {
                 _probing = false;
                 if (t.Status != TaskStatus.RanToCompletion || Run is not { Active: true } now || !ReferenceEquals(now, run)) return;
                 try { ConnectionChanged(run, t.Result.internet, t.Result.network); }
                 catch (Exception) { /* the next probe tries again */ }
-            })), TaskScheduler.Default);
+            }))), TaskScheduler.Default);
     }
 
     private void ConnectionChanged(AutopilotRun run, bool internet, bool? network)
@@ -574,8 +587,8 @@ internal sealed partial class ChatPane
         AutopilotResume(back);
     }
 
-    private bool _gapsWaiting;
-    private readonly List<UserQuestion> _lateAnswers = [];
+    private bool _gapsWaiting { get => _s.GapsWaiting; set => _s.GapsWaiting = value; }
+    private List<UserQuestion> _lateAnswers => _s.LateAnswers;
 
     /// <summary>
     /// The user answered a question on the phone after the asking job stopped waiting for it (AskUser): the job gets it as a
@@ -612,7 +625,7 @@ internal sealed partial class ChatPane
         _ = RunTurn(text, [], "");
     }
 
-    private readonly List<string> _fromPhone = [];
+    private List<string> _fromPhone => _s.FromPhone;
 
     /// <summary>
     /// The user wrote from the phone: shown in the chat as their message (from your phone). During a run the coordinator
@@ -621,10 +634,8 @@ internal sealed partial class ChatPane
     private void FromPhone(string text)
     {
         if (_instance != this) return; // one chat takes it
-        // An autopilot runs in another of this window's chats: its coordinator takes the message (opened when the chat is
-        // free), so the phone never talks to a chat that only sees "another chat" keeping Revit busy (31 Oct 2026).
-        if (Run is not { Active: true } && RunningAutopilotChat() is { } other && _turn is null && !JobsOpen)
-            ((IHistoryHost)this).OpenChat(ChatHistory.Summarize(other));
+        // An autopilot runs in one of this window's chats (shown or in the background): this runs in it (RunSession), so
+        // its coordinator takes the message and the phone never talks to a chat that only sees "another chat" (31 Oct 2026).
         if (Run is not { Active: true } run)
         {
             _phoneAsks.Add(text);
@@ -646,15 +657,7 @@ internal sealed partial class ChatPane
     }
 
     private readonly List<string> _phoneAsks = [];
-    private Turn? _phoneTurn;
-
-    /// <summary>This window's other chat with an autopilot running, when this one has none.</summary>
-    private static Conversation? RunningAutopilotChat()
-    {
-        if (AutopilotShare.Read() is not { } shared || shared.Owner != AutopilotShare.Me) return null;
-        var chatId = shared.Run.Split(':')[0];
-        return ChatStore.All().FirstOrDefault(c => c.Id == chatId && c.Autopilot is { Active: true });
-    }
+    private Turn? _phoneTurn { get => _s.PhoneTurn; set => _s.PhoneTurn = value; }
 
     /// <summary>The next message from the phone, once the chat is free: answered as a turn of its own (no brief card: nobody is here to choose).</summary>
     private void NextPhoneAsk()
@@ -749,13 +752,14 @@ internal sealed partial class ChatPane
         run.LastUpdate = now;
         var body = PhoneGreeting() + AskRules.UpdateBody(run, _board?.Snapshot() ?? [], since, AskUser.Waiting(), now, CrewStrip.Names.Worker);
         _updateSending = true;
-        _ = AskUser.SendUpdateAsync(body).ContinueWith(t => Dispatcher.BeginInvoke(new Action(() =>
+        var s = _s;
+        _ = AskUser.SendUpdateAsync(body).ContinueWith(t => Dispatcher.BeginInvoke(new Action(() => In(s, () =>
         {
             _updateSending = false;
             var error = t.Status == TaskStatus.RanToCompletion ? t.Result : t.Exception?.GetBaseException().Message;
             AutopilotLog(AutopilotEntry.Asked, error is null ? "Sent a progress update to your phone." : $"Couldn't send the progress update to your phone ({error}).");
             Save();
-        })), TaskScheduler.Default);
+        }))), TaskScheduler.Default);
     }
 
     /// <summary>
@@ -867,7 +871,7 @@ internal sealed partial class ChatPane
         _backfillWaiting = true;
     }
 
-    private bool _backfillWaiting;
+    private bool _backfillWaiting { get => _s.BackfillWaiting; set => _s.BackfillWaiting = value; }
 
     /// <summary>
     /// Stop on the banner, the round stop button, the phone, or "stop" typed: the open jobs stop, the coordinator's answer
@@ -944,9 +948,10 @@ internal sealed partial class ChatPane
         Add(new ChatItem { Kind = "assistant", Text = Autopilot.Report(run, _board?.Snapshot() ?? [], DateTime.UtcNow) });
         Save();
         ShowAutopilot();
+        if (Hidden) Later(AwayCheck, DispatcherPriority.Background); // a run in the background ended: its chat is marked finished
     }
 
-    private DateTime _updateRetryAt;
+    private DateTime _updateRetryAt { get => _s.UpdateRetryAt; set => _s.UpdateRetryAt = value; }
 
     /// <summary>
     /// Sketch ProMax updates during a run without losing work: once a newer version is ready, no new job starts and the
@@ -1045,7 +1050,7 @@ internal sealed partial class ChatPane
         }
         if (!string.Equals(conv.Id, _conv.Id, StringComparison.Ordinal))
         {
-            if (_turn is not null || JobsOpen) return; // tried again next minute
+            // The chat shown carries on in the background; tried again next minute when it can't be left now.
             ((IHistoryHost)this).OpenChat(ChatHistory.Summarize(conv));
             if (!string.Equals(_conv.Id, chatId, StringComparison.Ordinal)) return;
         }

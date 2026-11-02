@@ -154,16 +154,17 @@ internal sealed partial class ChatPane
         public readonly AnswerTiming Timing = new(DateTime.UtcNow);
     }
 
-    private JobBoard? _board;
-    private List<ChatJob>? _boardJobs;
-    private readonly Dictionary<string, JobRun> _runs = new();
+    private JobBoard? _board { get => _s.Board; set => _s.Board = value; }
+    private List<ChatJob>? _boardJobs { get => _s.BoardJobs; set => _s.BoardJobs = value; }
+    private Dictionary<string, JobRun> _runs => _s.Runs;
     private readonly Dictionary<int, ParallelJobCard> _jobCards = new();
-    private readonly List<int> _reports = [];
-    private DispatcherTimer? _reportTimer, _jobClock;
-    private bool _jobsQueued;
+    private List<int> _reports => _s.Reports;
+    private DispatcherTimer? _reportTimer { get => _s.ReportTimer; set => _s.ReportTimer = value; }
+    private DispatcherTimer? _jobClock { get => _s.JobClock; set => _s.JobClock = value; }
+    private bool _jobsQueued { get => _s.JobsQueued; set => _s.JobsQueued = value; }
 
     // The job view: which job is shown (null: the main chat), its drawn items, the switcher and the job's bar.
-    private int? _viewJob;
+    private int? _viewJob { get => _s.ViewJob; set => _s.ViewJob = value; }
     private readonly StackPanel _jobMessages = new();
     private readonly List<ChatItem> _jobDrawn = [];
     private ScrollViewer? _jobScroll;
@@ -190,12 +191,18 @@ internal sealed partial class ChatPane
         _conv.Jobs ??= [];
         _conv.Type = ChatTypes.Of(_conv);
         ChatJobs.Coordinator = IsCoordinator;
-        if (_board is not null && ReferenceEquals(_boardJobs, _conv.Jobs)) return;
+        // The cards drawn were the chat shown before's.
+        _jobCards.Clear();
+        // A chat left working and opened again keeps its board, its running jobs and their reports.
+        if (_board is not null && ReferenceEquals(_boardJobs, _conv.Jobs))
+        {
+            HookJobs();
+            return;
+        }
         EndRuns("The chat was left, so this job stopped. Open the chat again and send it a message to carry on.");
         _boardJobs = _conv.Jobs;
         _board = new JobBoard(_conv.Jobs);
         _board.AfterReload(DateTime.UtcNow);
-        _jobCards.Clear();
         _reports.Clear();
         HookJobs();
     }
@@ -206,9 +213,14 @@ internal sealed partial class ChatPane
         if (_sample || _board is null) return;
         ChatJobs.Board = _board;
         ChatJobs.Coordinator = IsCoordinator;
-        ChatJobs.Changed = () => Dispatcher.BeginInvoke(new Action(JobsChanged));
+        var s = _s;
+        ChatJobs.Changed = () => Dispatcher.BeginInvoke(new Action(() => In(s, JobsChanged)));
         RegisterBoard();
-        ChatJobs.TouchedModel = (key, title) => Dispatcher.BeginInvoke(new Action(() => ModelTouched(key, title)));
+        // Each chat's own calls name its models, the shown chat's or one working in the background.
+        ChatJobs.TouchedModel = (key, title) => Dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (SessionOf(key) is { } of) In(of, () => ModelTouched(key, title));
+        }));
     }
 
     /// <summary>This chat's board in ChatJobs.Boards, under its chat key (again when its kind changes).</summary>
@@ -218,10 +230,11 @@ internal sealed partial class ChatPane
         var key = JobBoard.ChatKey(_conv.Id);
         if (_boardChat.Length > 0 && _boardChat != key) ChatJobs.Boards.Remove(_boardChat);
         _boardChat = key;
-        ChatJobs.Boards.Set(key, _board, IsCoordinator, () => Dispatcher.BeginInvoke(new Action(JobsChanged)));
+        var s = _s;
+        ChatJobs.Boards.Set(key, _board, IsCoordinator, () => Dispatcher.BeginInvoke(new Action(() => In(s, JobsChanged))));
     }
 
-    private string _boardChat = "";
+    private string _boardChat { get => _s.BoardChat; set => _s.BoardChat = value; }
 
     /// <summary>The chat or one of its jobs works on another model: the header names it with the chat's own.</summary>
     private void ModelTouched(string? key, string title)
@@ -229,6 +242,13 @@ internal sealed partial class ChatPane
         if (_sample || title.Trim().Length == 0 || string.Equals(title, _conv.Title, StringComparison.OrdinalIgnoreCase)) return;
         // Only this chat's own calls: its main chat or one of its jobs (a chat left in the background keeps its own).
         if (key is not null && key != JobBoard.ChatKey(_conv.Id) && _board?.FindKey(key) is null) return;
+        if (Hidden)
+        {
+            _conv.Models ??= [];
+            if (!_conv.Models.Any(m => string.Equals(m, title, StringComparison.OrdinalIgnoreCase))) _conv.Models.Add(title);
+            SaveSoon();
+            return;
+        }
         _conv.Models ??= [];
         if (_conv.Models.Any(m => string.Equals(m, title, StringComparison.OrdinalIgnoreCase))) return;
         _conv.Models.Add(title);
@@ -246,7 +266,7 @@ internal sealed partial class ChatPane
         public DispatcherTimer? Timer;
     }
 
-    private readonly Dictionary<string, ParkedEngine> _parked = new();
+    private Dictionary<string, ParkedEngine> _parked => _s.Parked;
 
     /// <summary>How long a finished job's process stays up for a message to it (a review's fix, the next part).</summary>
     internal static readonly TimeSpan ParkFor = TimeSpan.FromMinutes(10);
@@ -266,12 +286,11 @@ internal sealed partial class ChatPane
         while (_parked.Count >= MaxParked) DropParked(_parked.First().Key);
         var parked = new ParkedEngine { Engine = run.Engine, Model = run.Engine.Model, Effort = run.Engine.Effort, Address = run.Engine.McpAddress };
         var key = run.Job.Key;
-        parked.Timer = new DispatcherTimer(DispatcherPriority.Background, Dispatcher) { Interval = ParkFor };
-        parked.Timer.Tick += (_, _) =>
+        parked.Timer = SessionTimer(ParkFor, () =>
         {
             if (_parked.TryGetValue(key, out var p) && p == parked) DropParked(key);
             else parked.Timer?.Stop();
-        };
+        });
         parked.Timer.Start();
         _parked[key] = parked;
         return true;
@@ -315,7 +334,7 @@ internal sealed partial class ChatPane
     {
         if (_jobsQueued) return;
         _jobsQueued = true;
-        Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
+        Later(() =>
         {
             _jobsQueued = false;
             if (_board is null || _stopped) return;
@@ -325,7 +344,7 @@ internal sealed partial class ChatPane
             ShowJobCards();
             RefreshJobView();
             SaveSoon();
-        }));
+        }, DispatcherPriority.Background);
     }
 
     /// <summary>Starts the jobs waiting to start, while fewer than the Settings' number run (never in a Simple chat).</summary>
@@ -376,21 +395,23 @@ internal sealed partial class ChatPane
         var engine = warm ?? new ChatEngine(Dispatcher, install, resume, model, () => ClaudeCli.JobStart(install, key, resume, session, model, effort), effort: effort, job: key);
         var run = new JobRun { Job = job, Engine = engine, Message = message, Resumed = resume is not null };
         _runs[key] = run;
-        engine.Event += e => { if (_runs.TryGetValue(key, out var r) && r == run) OnJobEvent(run, e); };
-        engine.Exited += tail => { if (_runs.TryGetValue(key, out var r) && r == run) OnJobExited(run, tail); };
+        // Its events are handled in its chat, shown or working in the background.
+        var s = _s;
+        engine.Event += e => In(s, () => { if (_runs.TryGetValue(key, out var r) && r == run) OnJobEvent(run, e); });
+        engine.Exited += tail => In(s, () => { if (_runs.TryGetValue(key, out var r) && r == run) OnJobExited(run, tail); });
         ShowJobCards();
         ShowSwitcher();
         try
         {
-            var line = await Task.Run(() => JobLine(message));
+            var line = await On(Task.Run(() => JobLine(message)));
             if (!_runs.TryGetValue(key, out var still) || still != run) return; // stopped meanwhile
-            if (warm is not null) await engine.SendAsync(line);
-            else await engine.StartAsync(line);
+            if (warm is not null) await On(engine.SendAsync(line));
+            else await On(engine.StartAsync(line));
         }
         catch (Exception ex)
         {
             if (!_runs.TryGetValue(key, out var r) || r != run) return;
-            if (ex is IOException && await Task.Run(() => engine.WaitForExit(500))) return; // Exited says why
+            if (ex is IOException && await On(Task.Run(() => engine.WaitForExit(500)))) return; // Exited says why
             EndRun(run, kill: true);
             _board?.RunEnded(job, false, $"It couldn't start ({ex.Message}). Send it a message to try again.", DateTime.UtcNow);
             ShowJobCards();
@@ -415,7 +436,7 @@ internal sealed partial class ChatPane
                     var status = server.Status;
                     _ = Task.Run(() => ClaudeCli.ToolsFailed(status, address, job: true)).ContinueWith(t => Dispatcher.BeginInvoke(new Action(() =>
                     {
-                        try { if (_board == board) board.AddNote(run.Job, t.Result, DateTime.UtcNow); }
+                        try { board.AddNote(run.Job, t.Result, DateTime.UtcNow); }
                         catch (Exception) { /* on Revit's UI thread: a note that can't be added must not escape */ }
                     })), TaskContinuationOptions.OnlyOnRanToCompletion);
                 }
@@ -567,16 +588,14 @@ internal sealed partial class ChatPane
         ShowSwitcher();
         SaveSoon();
         if (_runs.Count == 0) _jobClock?.Stop();
-        Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
+        Later(() =>
         {
             PumpJobs();
+            // A chat in the background with nothing left to do is marked finished.
+            if (Hidden) AwayCheck();
             // A model switch held while jobs ran happens once they all ended.
-            if (!JobsOpen && _turn is null && _pendingModel is { } next)
-            {
-                _pendingModel = null;
-                SwitchTo(next.Key, next.Title);
-            }
-        }));
+            In(_shown, TryPendingModel);
+        }, DispatcherPriority.Background);
     }
 
     /// <summary>The 5-hour limit rose with job <paramref name="key"/>'s request: counted to it, and over its budget it pauses (JobBudget).</summary>
@@ -637,9 +656,7 @@ internal sealed partial class ChatPane
         }
         RoutineEnded(job);
         if (!_reports.Contains(job.Number)) _reports.Add(job.Number);
-        _reportTimer ??= new DispatcherTimer(DispatcherPriority.Background, Dispatcher) { Interval = TimeSpan.FromSeconds(1.5) };
-        _reportTimer.Tick -= OnReportTick;
-        _reportTimer.Tick += OnReportTick;
+        _reportTimer ??= SessionTimer(TimeSpan.FromSeconds(1.5), () => OnReportTick(null, EventArgs.Empty));
         _reportTimer.Stop();
         _reportTimer.Start();
     }
@@ -674,7 +691,7 @@ internal sealed partial class ChatPane
         _ = RunTurn(report, [], "");
     }
 
-    private DateTime _watchedAt;
+    private DateTime _watchedAt { get => _s.WatchedAt; set => _s.WatchedAt = value; }
 
     /// <summary>
     /// Every 30 s while jobs run (JobWatch): a job that wrote its report but never ended is finished with it, and one with
@@ -708,7 +725,7 @@ internal sealed partial class ChatPane
         }
     }
 
-    private readonly HashSet<int> _shareOffered = [];
+    private HashSet<int> _shareOffered => _s.ShareOffered;
 
     /// <summary>
     /// A worker is free while a running job has steps it hasn't started (FreeWorkers): the coordinator is told to hand
@@ -746,9 +763,11 @@ internal sealed partial class ChatPane
     {
         if (_board is null) return;
         var jobs = _board.Snapshot();
+        // A new job's card goes in the conversation also while its chat is in the background (drawn when opened).
         foreach (var job in jobs.Where(j => j.Active || j.State == JobBoard.Queued))
             if (!_conv.Items.Any(i => i.Kind == "pjob" && i.Name == job.Number.ToString(System.Globalization.CultureInfo.InvariantCulture)))
                 Add(new ChatItem { Kind = "pjob", Name = job.Number.ToString(System.Globalization.CultureInfo.InvariantCulture), Text = job.Title });
+        if (Hidden) return;
         var limit = ChatJobs.Limit;
         foreach (var job in jobs)
             if (_jobCards.TryGetValue(job.Number, out var card)) card.Render(job, DateTime.UtcNow, limit);
@@ -758,6 +777,7 @@ internal sealed partial class ChatPane
 
     private void ShowJobCard(int number)
     {
+        if (Hidden) return;
         if (_board is null) return;
         if (_jobCards.TryGetValue(number, out var card) && _board.Snapshot().FirstOrDefault(j => j.Number == number) is { } job)
             card.Render(job, DateTime.UtcNow, ChatJobs.Limit);
@@ -767,9 +787,7 @@ internal sealed partial class ChatPane
     /// <summary>While jobs run, their cards' clocks move.</summary>
     private void StartJobClock()
     {
-        _jobClock ??= new DispatcherTimer(DispatcherPriority.Background, Dispatcher) { Interval = TimeSpan.FromSeconds(1) };
-        _jobClock.Tick -= OnJobClock;
-        _jobClock.Tick += OnJobClock;
+        _jobClock ??= SessionTimer(TimeSpan.FromSeconds(1), () => OnJobClock(null, EventArgs.Empty));
         _jobClock.Start();
     }
 
@@ -886,6 +904,7 @@ internal sealed partial class ChatPane
     /// </summary>
     private void ShowSwitcher()
     {
+        if (Hidden) return;
         var jobs = _board?.Snapshot() ?? [];
         if (_viewJob is { } shownJob && jobs.All(j => j.Number != shownJob)) ShowCoordinator(focus: false);
         // The side pane lists only the open jobs; the large window's column lists the finished ones too, under them.

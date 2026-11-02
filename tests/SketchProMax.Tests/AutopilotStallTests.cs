@@ -2,7 +2,7 @@ using SketchProMax.Chat;
 
 /// <summary>
 /// An Autopilot run whose answer got stuck after the connection dropped (bug-log row 67): the stuck answer and jobs are
-/// found, a typed "stop" stops the run, and only a healthy run holds its chat.
+/// found, a typed "stop" stops the run, and a run whose model was closed pauses.
 /// </summary>
 internal static class AutopilotStallTests
 {
@@ -44,15 +44,6 @@ internal static class AutopilotStallTests
             check($"stop: \"{said}\" stops the run", Autopilot.SaysStop(said), said);
         foreach (var said in new[] { "stop adding doors to level 2", "don't stop", "", "carry on", "please continue, stop asking me", "why did it stop?", "stop using the old title block for the sheets" })
             check($"stop: \"{said}\" is not a stop", !Autopilot.SaysStop(said), said);
-
-        // Which run holds its chat.
-        var running = new AutopilotRun { State = AutopilotRun.Running };
-        check("hold: a healthy running run in its open model holds the chat", Autopilot.HoldsChat(running, modelOpen: true, stalled: false), "");
-        check("hold: a stuck run doesn't", !Autopilot.HoldsChat(running, true, stalled: true), "");
-        check("hold: a run whose model isn't open doesn't", !Autopilot.HoldsChat(running, modelOpen: false, false), "");
-        check("hold: a paused run doesn't", !Autopilot.HoldsChat(new AutopilotRun { State = AutopilotRun.Paused }, true, false), "");
-        check("hold: no run, or one that ended, doesn't", !Autopilot.HoldsChat(null, true, false) && !Autopilot.HoldsChat(new AutopilotRun { State = AutopilotRun.Stopped }, true, false), "");
-        check("hold: the status line says how to leave", Autopilot.HoldLine.Contains("press Stop"), Autopilot.HoldLine);
 
         // The run's model open in this Revit.
         check("model: open among the open models (any case)", Autopilot.ModelOpen(@"\\server\models\tower.rvt", [@"C:\other.rvt", @"\\SERVER\models\Tower.rvt"]), "");

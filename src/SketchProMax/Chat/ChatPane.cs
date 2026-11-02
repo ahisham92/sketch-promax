@@ -41,9 +41,9 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     private static EventHandler<ViewActivatedEventArgs>? _viewActivated;
 
     /// <summary>True while a turn or a parallel job runs: switching to a new core version waits for it.</summary>
-    public static bool IsBusy => _instance is { } pane && (pane._turn is not null || pane.BackgroundWorking
+    public static bool IsBusy => _instance is { } pane && pane.Sessions.Any(s => s.Turn is not null
         // Jobs waiting to start don't hold an update back while an autopilot waits for it: they carry on in the new version.
-        || (pane.Run is { Updating.Length: > 0 } ? pane._runs.Count > 0 : pane.JobsOpen));
+        || (s.Conv.Autopilot is { Updating.Length: > 0 } ? s.Runs.Count > 0 : s.Runs.Count > 0 || (s.Board?.OpenCount ?? 0) > 0));
 
     /// <summary>The pane's chat element (created on first use).</summary>
     public static FrameworkElement Get() => _instance ??= new ChatPane();
@@ -121,10 +121,11 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     {
         if (_instance is not { } pane) return;
         // Closed the normal way: an autopilot's run isn't carried on by a restart (the watcher starts no Revit).
-        if (pane.Run is { Active: true }) AutopilotShare.MarkClosed();
+        if (pane.Sessions.Any(s => s.Conv.Autopilot is { Active: true })) AutopilotShare.MarkClosed();
         pane.CloseBig();
         pane.EndRuns("Revit closed, so this job stopped. Send it a message to carry on.", now: true);
-        pane.StopBackground("Revit closed while this chat worked in the background, so it stopped here. Send your message again to carry on.", now: true);
+        pane.StopBackground("Revit closed while this chat worked in the background, so it stopped here. Send your message again to carry on.",
+            "Revit closed, so this job stopped. Send it a message to carry on.", now: true);
         pane.Save();
         pane._engine?.KillNow();
         pane._engine = null;
@@ -284,18 +285,19 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
 
     private const int MaxImages = 8, MaxResult = 3000, MaxIdLinks = 20;
 
-    private Conversation _conv;
-    private ChatEngine? _engine;
+    private Conversation _conv { get => _s.Conv; set => _s.Conv = value; }
+    private ChatEngine? _engine { get => _s.Engine; set => _s.Engine = value; }
     private ClaudeCli.Install? _install;
     private Setup _setup = Setup.Checking;
     private string _setupDetail = "";
-    private Turn? _turn;
+    private Turn? _turn { get => _s.Turn; set => _s.Turn = value; }
     private bool _stopped, _checking, _scrollQueued;
     private int _firstShown; // the first conversation item drawn (see History)
     private readonly ScrollFollow _follow = new();
     private readonly Throttle _throttle = new(TimeSpan.FromMilliseconds(40));
     private (string Key, string Title)? _pendingModel;
-    private DateTime _lastActivity = DateTime.UtcNow, _waitingSince;
+    private DateTime _waitingSince;
+    private DateTime _lastActivity { get => _s.LastActivity; set => _s.LastActivity = value; }
     private readonly List<Attachment> _pending = [];
     private readonly Dictionary<string, (ChatItem Item, MarkdownView View)> _texts = new();
     private readonly Dictionary<string, ToolRow> _tools = new();
@@ -322,7 +324,9 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     private DateTime _modelMenuClosed;
     // The model and effort the main chat's next process runs with: the chat's own choice, or what Automatic picked for
     // the latest request (ChatAuto; see PickFor).
-    private string _model = ChatModels.DefaultId, _effort = "", _lastWorkingModel = "";
+    private string _lastWorkingModel = "";
+    private string _model { get => _s.Model; set => _s.Model = value; }
+    private string _effort { get => _s.Effort; set => _s.Effort = value; }
     private readonly Border _setupCard = new() { Visibility = Visibility.Collapsed };
     private readonly StackPanel _messages = new();
     private readonly ScrollViewer _scroll;
@@ -398,7 +402,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         // After an in-session update: the chat the previous version had open, with its unsent message (ChatHandover).
         var handover = sample is null ? ChatHandover.Take() : null;
         if (sample is null) DefaultType();
-        _conv = sample ?? ChatHandover.Open(handover, ConversationKey, ConversationTitle);
+        _s = _shown = new ChatSession(sample ?? ChatHandover.Open(handover, ConversationKey, ConversationTitle));
 
         // Top: the history menu, this chat's name with its type and the Revit model as a muted caption, its effort and
         // the plan's usage; on the right Shrink, New chat (one button: its menu picks the type), the large window and,
@@ -776,7 +780,11 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         _saveSoon.Tick += (_, _) =>
         {
             _saveSoon.Stop();
-            if (!_stopped) Save();
+            if (!_stopped)
+            {
+                Save();
+                SaveAway();
+            }
         };
         if (sample is not null) _setup = Setup.Ready;
         else _idle.Start();
@@ -918,6 +926,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     /// <summary>Shows the chat's model on the pill (Auto, with what it picked last), with its hint as the tooltip.</summary>
     private void ShowModelChoice()
     {
+        if (Hidden) return;
         var chosen = ChatAuto.ParseModel(_conv.Model);
         var auto = ChatAuto.IsAuto(chosen);
         var label = auto ? "Auto" + (_lastPick is { } p ? " · " + ChatModels.Find(p.Model).Label : "") : ChatModels.Find(chosen).Label;
@@ -1175,6 +1184,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
 
     private void ShowTitle()
     {
+        if (Hidden) return;
         _chatName.Text = ChatHistory.NameFor(_conv) is { Length: > 0 } name ? name : ChatHistory.Untitled;
         _chatName.ToolTip = _chatName.Text;
         // A chat that also works on other models (another Revit window) names them all: "Tower-Model + Tower-Docs".
@@ -1220,6 +1230,13 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     private void Add(ChatItem item)
     {
         if (item.Time == default) item.Time = DateTime.UtcNow;
+        if (Hidden)
+        {
+            // A chat working in the background: kept and saved, drawn when it is opened again.
+            _conv.Items.Add(item);
+            SaveSoon();
+            return;
+        }
         _empty.Visibility = Visibility.Collapsed;
         _conv.Items.Add(item);
         SaveSoon();
@@ -1779,6 +1796,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     /// </summary>
     private void ScrollToEnd(bool force = false, bool instant = false)
     {
+        if (Hidden) return;
         if (force) _follow.Jump();
         UpdateJump();
         if (!_follow.Following || _scrollQueued) return;
@@ -1919,6 +1937,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     /// <summary>After a turn, while the reader is at the bottom, the oldest drawn messages beyond two pages are let go.</summary>
     private void TrimDrawn()
     {
+        if (Hidden) return;
         var drop = History.Trim(_messages.Children.Count, _follow.Following);
         if (drop <= 0) return;
         Forget(_conv.Items.Skip(_firstShown).Take(drop));
@@ -1943,6 +1962,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
 
     private void RenderDirty()
     {
+        if (Hidden) return;
         _render.Stop();
         _throttle.Drawn(DateTime.UtcNow);
         foreach (var key in _dirty)
@@ -1954,6 +1974,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     /// <summary>Streamed text changed: draw it soon, at most every 40 ms, together with whatever else arrives meanwhile.</summary>
     private void RequestRender()
     {
+        if (Hidden) return;
         if (_throttle.Request(DateTime.UtcNow) is not { } wait) return;
         _render.Interval = wait > TimeSpan.FromMilliseconds(1) ? wait : TimeSpan.FromMilliseconds(1);
         _render.Start();
@@ -1963,6 +1984,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
 
     private void ShowStatus(string? text = null)
     {
+        if (Hidden) return;
         // In a job's view Send stays: it talks to the job, whatever the main chat is doing.
         var busy = _turn is not null && _viewJob is null;
         // While Claude works, Stop takes Send's place (Send isn't greyed out: the pane is working, not disabled).
@@ -2005,6 +2027,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     /// </summary>
     private void Status(string text, bool spin)
     {
+        if (Hidden) return; // a chat in the background: its status shows in Chats, and in it when opened
         // The main chat's progress isn't shown in a job's view (it shows again on the way back).
         if (_viewJob is not null && spin && _turn is not null && !_stopped) return;
         var working = _turn is not null && !_stopped && _viewJob is null;
@@ -2177,8 +2200,12 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         CrewHeard(); // the large chat's coordinator nods: your message, or a job reporting back
         // Automatic model and effort: picked for this request by its kind of work, and said in the chat when it changes.
         PickFor(text, attachments.Any(a => System.IO.Path.GetExtension(a.Path).ToLowerInvariant() is ".pdf" or ".docx" or ".pptx" or ".doc"));
-        Revit.TimeLog.BeginChat(brief);
-        BeginJob(plan);
+        // A chat working in the background (a job's report, its Autopilot's next step) has no task card or task time.
+        if (!Hidden)
+        {
+            Revit.TimeLog.BeginChat(brief);
+            BeginJob(plan);
+        }
         _lastActivity = DateTime.UtcNow;
         ShowStatus(attachments.Count > 0 ? "Preparing the attachments…" : null);
         try
@@ -2188,7 +2215,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
                 : new AttachedSoFar();
             // What changed since the last answer, the active view and the selection: a follow-up needn't read the model again to know.
             var sent = text + Revit.ChatModelWatch.Note(_conv.Key);
-            turn.Line = await Task.Run(() => BuildMessage(sent, attachments, used));
+            turn.Line = await On(Task.Run(() => BuildMessage(sent, attachments, used)));
             (_conv.AttachedBytes, _conv.AttachedPages, _conv.AttachedSession) = (used.Bytes, used.Pages, _conv.SessionId);
         }
         catch (Exception ex)
@@ -2201,7 +2228,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         if (_turn != turn) return; // stopped meanwhile
         try
         {
-            await Deliver(turn);
+            await On(Deliver(turn));
         }
         catch (Exception ex)
         {
@@ -2220,12 +2247,12 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             // The chat's own key goes with its calls (JobBoard.Caller): a chat saved before 0.31 gets its id first.
             if (_conv.Id.Length == 0) Save();
             var chatKey = JobBoard.ChatKey(_conv.Id);
-            ChatJobs.Shown = chatKey;
+            if (!Hidden) ChatJobs.Shown = chatKey;
             if (_engine is { Warming: true } warming)
             {
                 // Started early while the user typed: it is nearly ready. One that failed to start is replaced below.
                 ShowStatus("Starting…");
-                try { await warming.WarmAsync(); }
+                try { await On(warming.WarmAsync()); }
                 catch (Exception) { /* replaced below */ }
                 if (_turn != turn) return;
             }
@@ -2233,7 +2260,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
                 && engine.McpAddress == ClaudeCli.McpAddress && (engine.ChatKey ?? "") == chatKey)
             {
                 ShowStatus();
-                await engine.SendAsync(turn.Line);
+                await On(engine.SendAsync(turn.Line));
                 return;
             }
             _engine?.Dispose();
@@ -2241,16 +2268,15 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             if (resume is null)
             {
                 // A new conversation starts with what earlier chats remembered: the one just left may still be writing it.
-                await WaitForMemory(turn);
+                await On(WaitForMemory(turn));
                 if (_turn != turn) return;
             }
             // A new model needs a new Claude Code process; it resumes the same conversation.
             var fresh = new ChatEngine(Dispatcher, _install!, resume, _model, coordinator: IsCoordinator, effort: effort, chatKey: chatKey.Length > 0 ? chatKey : null);
-            fresh.Event += e => { if (_engine == fresh) OnEvent(e); };
-            fresh.Exited += tail => { if (_engine == fresh) OnExited(fresh, tail); };
+            Hook(fresh);
             _engine = fresh;
             ShowStatus(resume is null ? "Starting…" : "Reopening this conversation…");
-            await fresh.StartAsync(turn.Line);
+            await On(fresh.StartAsync(turn.Line));
         }
         catch (Exception ex)
         {
@@ -2258,7 +2284,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             // Writing failed because Claude Code already ended (a bad option, a session it couldn't open): its Exited
             // event follows and says why, or starts fresh. The pipe can break a moment before the process is seen to end,
             // so it gets half a second to end before it is killed.
-            if (ex is IOException && _engine is { } ended && await Task.Run(() => ended.WaitForExit(500))) return;
+            if (ex is IOException && _engine is { } ended && await On(Task.Run(() => ended.WaitForExit(500)))) return;
             if (_turn != turn) return; // stopped meanwhile
             _engine?.Kill();
             _engine = null;
@@ -2287,8 +2313,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             var effort = ClaudeCli.EffortRefused ? "" : pick.Effort;
             _engine?.Dispose();
             var warm = new ChatEngine(Dispatcher, _install, _conv.SessionId, pick.Model, coordinator: IsCoordinator, effort: effort, chatKey: JobBoard.ChatKey(_conv.Id));
-            warm.Event += e => { if (_engine == warm) OnEvent(e); };
-            warm.Exited += tail => { if (_engine == warm) OnExited(warm, tail); };
+            Hook(warm);
             _engine = warm;
             _ = warm.WarmAsync().ContinueWith(t => _ = t.Exception, TaskContinuationOptions.OnlyOnFaulted); // Send starts it again
         }
@@ -2524,8 +2549,9 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
                 {
                     // Whether the PC blocks it takes a look at Claude Code's log and perhaps starting the connector: off the UI thread.
                     var status = server.Status;
+                    var session = _s;
                     _ = Task.Run(() => ClaudeCli.ToolsFailed(status, address))
-                        .ContinueWith(t => Dispatcher.BeginInvoke(new Action(() => { if (!_stopped) Note(t.Result); })), TaskContinuationOptions.OnlyOnRanToCompletion);
+                        .ContinueWith(t => Dispatcher.BeginInvoke(new Action(() => In(session, () => { if (!_stopped) Note(t.Result); }))), TaskContinuationOptions.OnlyOnRanToCompletion);
                 }
                 if (turn is not null && !turn.Stopping) ShowStatus(turn.Shrinking ? "Shrinking this chat…" : null);
                 break;
@@ -2766,6 +2792,11 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
 
     private void MarkRunningTools(string state)
     {
+        if (Hidden)
+        {
+            foreach (var item in _s.Tools.Values.Where(i => i.State == "running")) item.State = state;
+            return;
+        }
         foreach (var row in _tools.Values.Where(r => r.Item.State == "running").ToList()) SetTool(row, state, row.Item.Text, "");
     }
 
@@ -2777,7 +2808,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         if (ended is { Planning: false, Shrinking: false }) Revit.ChatModelWatch.Mark(_conv.Key);
         // "Done in X. By hand: about Y. Saved: Z." when the task's tools saved any time: on the job card when it has one.
         string? time = null;
-        try { if (_turn is not null) time = Revit.TimeLog.EndChat(); } catch (Exception) { }
+        // (A chat answering in the background has no task time: it ended when the chat was left.)
+        try { if (_turn is not null && !Hidden) time = Revit.TimeLog.EndChat(); } catch (Exception) { }
         var stopped = _turn?.Stopping == true || _control?.State == JobState.Stopping;
         var left = new List<(string Id, string Text)>();
         if (_control is not null) left = EndJob(stopped ? "stopped" : _turn?.Outcome ?? "done", time);
@@ -2787,30 +2819,45 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         CrewCoordinatorDoes(null);
         // Idle now: the streaming keys and tool ids of the turn are no longer needed (the drawn items stay in _views/_rows).
         if (_dirty.Count > 0) RenderDirty();
-        _texts.Clear();
-        _tools.Clear();
+        if (Hidden)
+        {
+            _s.Texts.Clear();
+            _s.Tools.Clear();
+            _s.Now = "";
+        }
+        else
+        {
+            _texts.Clear();
+            _tools.Clear();
+        }
         _lastActivity = DateTime.UtcNow;
         Save();
         ShowStatus();
         TrimDrawn();
         // Messages sent during the task that no step picked up: sent now (or back in the box after a stop or a switch).
-        SendLeftover(left, stopped || _pendingModel is not null);
-        ShrinkIfLong(ended, stopped || left.Count > 0);
+        SendLeftover(left, stopped || (!Hidden && _pendingModel is not null));
+        if (!Hidden) ShrinkIfLong(ended, stopped || left.Count > 0);
         if (ended is { Planning: false, Shrinking: false } && !stopped && ended.Outcome == "done") Finished(ended);
-        // A kind picked while it answered: the chat switches now.
+        // A kind picked while it answered: the chat switches now (in the background it is only kept for the next message).
         if (_pendingType is { } kind)
         {
             _pendingType = null;
-            SetChatType(kind);
+            if (Hidden) _conv.Type = kind;
+            else SetChatType(kind);
         }
         // Jobs that finished while the main chat answered report back now.
-        Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(FlushReports));
+        Later(FlushReports, DispatcherPriority.Background);
         AutopilotTurnEnded(ended, stopped);
-        if (_pendingModel is { } next && !JobsOpen)
-        {
-            _pendingModel = null;
-            SwitchTo(next.Key, next.Title);
-        }
+        if (Hidden) Later(AwayCheck, DispatcherPriority.Background);
+        In(_shown, TryPendingModel);
+    }
+
+    /// <summary>A model switch held while the shown chat answered or its jobs worked happens once they are done.</summary>
+    private void TryPendingModel()
+    {
+        if (_pendingModel is not { } next || _turn is not null || JobsOpen) return;
+        _pendingModel = null;
+        SwitchTo(next.Key, next.Title);
     }
 
     /// <summary>Swaps the chat styles for the ones with (or without) hover fades when the animation level changed.</summary>
@@ -2829,6 +2876,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     /// </summary>
     private void Finished(Turn turn)
     {
+        if (Hidden) return;
         if (DateTime.UtcNow - turn.Started < LongTask || _messages.Children.Count == 0) return;
         // The answer or job card, not the "Done in…" note after it (each drawn child is item _firstShown + its index).
         var index = _conv.Items.FindLastIndex(i => i.Kind is "assistant" or "job") - _firstShown;
@@ -2861,7 +2909,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         // If Claude Code doesn't end the turn soon (a tool call waiting on Revit, say), end the process; the
         // conversation is resumed with the next message.
         turn.KillTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(engine is { IsAlive: true } ? 6 : 0.1) };
-        turn.KillTimer.Tick += (_, _) =>
+        var session = _s; // the chat may be left meanwhile: it stops there all the same
+        turn.KillTimer.Tick += (_, _) => In(session, () =>
         {
             turn.KillTimer.Stop();
             if (_turn != turn) return;
@@ -2870,7 +2919,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             RenderDirty();
             Note("Stopped. Ask again, or say what to do instead. (A Revit tool that was already running finishes on its own.)");
             EndTurn();
-        };
+        });
         turn.KillTimer.Start();
     }
 
@@ -2878,40 +2927,14 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     private void NewChat(string? type = null)
     {
         if (_stopped) return;
-        if (AutopilotHolds()) return;
-        // The chat shown stays in the history; a running answer carries on in the background (Chats says when it is
-        // done), or, when it can't (its jobs are open, a brief is being planned), it is stopped and resumes when reopened.
-        var left = new List<(string Id, string Text)>();
-        string? why = null;
-        if (_turn is not null && Detach(out why)) { }
-        else if (why is not null)
+        // The chat shown stays in the history; whatever it is doing (an answer, its jobs, an Autopilot run) carries on in
+        // the background, and Chats at the top says when it is done.
+        if (!LeaveShown(out var why))
         {
-            Status(why, spin: false);
+            Status(why ?? "This chat can't be left right now.", spin: false);
             return;
         }
-        else
-        {
-            if (_turn is not null) MarkRunningTools("stopped");
-            _turn?.KillTimer?.Stop();
-            // A brief being planned: end its Claude Code run now, not when it finishes on its own.
-            _turn?.Cancel?.Cancel();
-            // The task's time ends here, or its open span would stop by-hand time being counted.
-            try { if (_turn is not null) Revit.TimeLog.EndChat(); } catch (Exception) { }
-            _control?.Apply(JobAction.Stop);
-            if (_control is not null) left = EndJob("stopped", null);
-            _turn = null;
-            CrewCoordinatorDoes(null);
-            _engine?.Kill();
-            _engine = null;
-            EndRuns("A new chat was started, so this job stopped. Open this chat again and send it a message to carry on.");
-            Save();
-            Remember(_conv);
-        }
-        _contextTokens = 0;
-        if (left.Count > 0 && _input.Text.Trim().Length == 0) _input.Text = string.Join("\n\n", left.Select(n => n.Text));
-        _conv = ChatStore.New(ConversationKey, ConversationTitle, type ?? DefaultType());
-        ShowConversation();
-        ShowStatus();
+        ShowNew(ChatStore.New(ConversationKey, ConversationTitle, type ?? DefaultType()));
         CloseDrawer();
         _input.Focus();
     }
@@ -2975,44 +2998,22 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             CloseDrawer();
             return;
         }
-        if (AutopilotHolds())
-        {
-            CloseDrawer();
-            return;
-        }
-        if (JobsOpen)
-        {
-            Status("Jobs are still working in this chat, and they report back to it. Wait for them, or press Stop on their cards, then open the other chat.", spin: false);
-            CloseDrawer();
-            return;
-        }
-        // An answer running here carries on in the background (Chats, at the top, says when it is done).
-        if (_turn is not null && !Detach(out var why))
-        {
-            Status(why ?? "Sketch ProMax is still answering (planning or shrinking can't move to the background). Wait for it, or press Stop, then open the other chat.", spin: false);
-            CloseDrawer();
-            return;
-        }
-        if (BackgroundOf(chat.File) is { } bg)
-        {
-            Reattach(bg);
-            CloseDrawer();
-            _input.Focus();
-            return;
-        }
-        if (ChatStore.Read(chat.File) is not { } conv)
+        var away = AwayOf(chat.File);
+        var conv = away is null ? ChatStore.Read(chat.File) : null;
+        if (away is null && conv is null)
         {
             Status("That chat couldn't be read. Open the history again and press Refresh.", spin: false);
             return;
         }
-        Save();
-        Remember(_conv);
-        _contextTokens = 0;
-        _engine?.Dispose();
-        _engine = null;
-        _conv = conv;
-        ShowConversation();
-        ShowStatus();
+        // The chat shown carries on in the background with whatever it is doing (its answer, jobs or Autopilot).
+        if (!LeaveShown(out var why))
+        {
+            Status(why ?? "This chat can't be left right now.", spin: false);
+            CloseDrawer();
+            return;
+        }
+        if (away is not null) ShowSession(away);
+        else ShowNew(conv!);
         CloseDrawer();
         _input.Focus();
     }
@@ -3034,22 +3035,18 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     bool IHistoryHost.DeleteChat(string file)
     {
         var current = string.Equals(file, _conv.File, StringComparison.OrdinalIgnoreCase);
-        if (current && (_turn is not null || JobsOpen)) return false;
-        if (BackgroundOf(file) is { } bg)
+        if (current && Working(_shown)) return false;
+        if (AwayOf(file) is { } away)
         {
-            if (bg.State == BackgroundChat.Working) return false;
-            _background.Remove(bg);
+            if (Working(away)) return false;
+            _away.Remove(away);
             ShowChats();
         }
         if (!ChatStore.Delete(file)) return false;
         if (current)
         {
-            _engine?.Dispose();
-            _engine = null;
-            _contextTokens = 0;
-            _conv = ChatStore.New(ConversationKey, ConversationTitle);
-            ShowConversation();
-            ShowStatus();
+            LetGo(_shown);
+            ShowNew(ChatStore.New(ConversationKey, ConversationTitle));
         }
         return true;
     }
@@ -3068,14 +3065,14 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     private void SwitchTo(string key, string title)
     {
         if (string.Equals(key, _conv.Key, StringComparison.OrdinalIgnoreCase)) return;
-        Save();
-        Remember(_conv);
-        _contextTokens = 0;
-        _engine?.Dispose();
-        _engine = null;
-        _conv = ChatStore.Load(key, title);
-        ShowConversation();
-        ShowStatus();
+        if (!LeaveShown(out _))
+        {
+            _pendingModel = (key, title); // tried again when a background chat is done (EndTurn, EndRun)
+            return;
+        }
+        var conv = ChatStore.Load(key, title);
+        if (AwayOf(conv.File) is { } away) ShowSession(away);
+        else ShowNew(conv);
         if (_setup == Setup.Ready) RememberLeftOver();
     }
 
@@ -3094,12 +3091,20 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     private void SaveSoon()
     {
         if (_sample || _stopped) return;
+        if (Hidden) _s.SaveDue = true; // written with the shown chat's next save (SaveAway)
         if (!_saveSoon.IsEnabled) _saveSoon.Start();
     }
 
     private void Save()
     {
         if (_sample || _handedOver) return; // the DPI snapshot's and frame test's stand-alone pane keeps nothing; nor a retired one
+        if (Hidden)
+        {
+            _s.SaveDue = false;
+            if (_board is { } away) lock (away.Gate) ChatStore.Save(_conv);
+            else ChatStore.Save(_conv);
+            return;
+        }
         _saveSoon.Stop();
         var old = _conv.Items.ToList();
         // The bridge may change a job meanwhile (a chat_jobs call): the jobs are written as one consistent state.
@@ -3134,6 +3139,13 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         _jobsTimer?.Stop();
         _routineTimer?.Stop();
         Autopilot.Here = false;
+        // An Autopilot running in the background: its chat is the one handed over, so the next version carries the run on.
+        if (Run is not { Active: true } && _away.FirstOrDefault(a => a.Conv.Autopilot is { Active: true }) is { } run)
+        {
+            _away.Add(_shown);
+            _away.Remove(run);
+            _s = _shown = run;
+        }
         UI.RestartNote.Changed -= ShowRestartNote;
         Bridge.Approvals.LevelChanged -= ShowApprovalLevel;
         try
@@ -3155,7 +3167,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             _undoTimer?.Stop();
             _reportTimer?.Stop();
             EndRuns("Sketch ProMax updated, so this job stopped. Send it a message to carry on.");
-            StopBackground("Sketch ProMax updated while this chat worked in the background, so it stopped here. Send your message again to carry on.", now: false);
+            StopBackground("Sketch ProMax updated while this chat worked in the background, so it stopped here. Send your message again to carry on.",
+                "Sketch ProMax updated, so this job stopped. Send it a message to carry on.", now: false);
             if (ChatJobs.Board == _board) { ChatJobs.Board = null; ChatJobs.Changed = null; }
             if (_boardChat.Length > 0) ChatJobs.Boards.Remove(_boardChat);
         }

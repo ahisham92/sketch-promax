@@ -34,6 +34,36 @@ internal static class ChatWorkTests
         boards.Set("", awayBoard, true, null);
         check("boards: a chat without an id isn't kept", boards.Count == 1, "");
         check("boards: the caller of a background chat is its chat key", JobBoard.Caller(away, shown) == away && JobBoard.Caller(shown, shown) is null, "");
+
+        // Leaving a chat that works: nothing stops; only the cap, or an old connector, keeps it open.
+        check("leave: a working chat can be left under the cap", ChatWork.WhyNotLeave(ChatWork.Limit - 1, false) is null, "");
+        var full = ChatWork.WhyNotLeave(ChatWork.Limit, false) ?? "";
+        check("leave: at the cap, one line says so and stops nothing", full.Length > 0 && !full.Contains('\n') && full.Contains(ChatWork.Limit.ToString()) && !full.Contains("Claude"), full);
+        var old = ChatWork.WhyNotLeave(0, cantAnswerAway: true) ?? "";
+        check("leave: an answer an old connector can't carry on says how to update", old.Contains("Install.cmd") && !old.Contains("Claude"), old);
+
+        // What the switcher and the history say.
+        check("label: a working chat shows what it does", ChatWork.Label(true, "Tagging walls", "", false) == "Working · Tagging walls", ChatWork.Label(true, "Tagging walls", "", false));
+        check("label: an Autopilot run says so", ChatWork.Label(true, "", "", true).StartsWith("Autopilot working", StringComparison.Ordinal), ChatWork.Label(true, "", "", true));
+        check("label: finished and failed until opened", ChatWork.Label(false, "", ChatWork.Done, false).Contains("Finished") && ChatWork.Label(false, "", ChatWork.Failed, false).Contains("error"), "");
+        check("finished line: names the chat and where to open it", ChatWork.FinishedLine("Doors", ChatWork.Done).Contains("“Doors” finished") && ChatWork.FinishedLine("Doors", ChatWork.Failed).Contains("error"), "");
+        check("pill: plain with nothing in the background", ChatWork.PillText(0, 0, false) == "Chats", ChatWork.PillText(0, 0, false));
+        check("pill: counts working and finished chats", ChatWork.PillText(2, 1, false) == "Chats · 2 working, 1 finished" && ChatWork.PillText(2, 1, true) == "Chats · 3", ChatWork.PillText(2, 1, false));
+    }
+
+    /// <summary>The pane: leaving a chat or starting a new one stops nothing, and the Autopilot hold is gone.</summary>
+    public static void RunSources(string root, Action<string, bool, string> check)
+    {
+        string Read(string file) => File.ReadAllText(Path.Combine(root, "src", "SketchProMax", "Chat", file)).Replace("\r\n", "\n");
+        var pane = Read("ChatPane.cs");
+        var auto = Read("ChatPane.Autopilot.cs");
+        var session = Read("ChatPane.Session.cs");
+        var newChat = pane.Substring(pane.IndexOf("private void NewChat(", StringComparison.Ordinal));
+        newChat = newChat.Substring(0, newChat.IndexOf("\n    }", StringComparison.Ordinal));
+        check("switch source: New chat leaves the shown chat working, it doesn't stop it", newChat.Contains("LeaveShown(") && !newChat.Contains("StopBackground(") && !newChat.Contains("EndRuns("), newChat);
+        check("switch source: no chat is held open by its Autopilot run", !auto.Contains("AutopilotHolds") && !pane.Contains("AutopilotHolds"), "");
+        check("switch source: the cap is the only refusal for working chats", session.Contains("ChatWork.WhyNotLeave("), "");
+        check("switch source: the Autopilot clock ticks every running chat", auto.Contains("AutopilotClock()"), "");
     }
 
     private static bool Run(Action call)

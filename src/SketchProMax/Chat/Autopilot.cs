@@ -203,7 +203,7 @@ internal static class Autopilot
         "Nothing is lost. On the PC, press Sign in at the top of the chat and sign in with the account that has your Max plan; " +
         "the run carries on by itself within 20 minutes, or press Resume.";
 
-    // ---- A stuck answer, a typed stop, the chat held -------------------------------------------------------------------
+    // ---- A stuck answer, a typed stop, the run's model -------------------------------------------------------------------
 
     /// <summary>
     /// No word from the coordinator's Claude Code for this long while it answers: its answer is taken as stuck. A connection
@@ -273,16 +273,6 @@ internal static class Autopilot
         if (at >= words.Count || !StopVerbs.Contains(words[at])) return false;
         return words.Skip(at + 1).All(StopRest.Contains);
     }
-
-    /// <summary>
-    /// The chat of a run may refuse to be left only while the run is healthy: running, its model open in this Revit
-    /// (<paramref name="modelOpen"/>) and its answer not stuck. A stuck, paused or model-less run never holds the chat.
-    /// </summary>
-    public static bool HoldsChat(AutopilotRun? run, bool modelOpen, bool stalled) => run is { State: AutopilotRun.Running } && modelOpen && !stalled;
-
-    /// <summary>The status line while a healthy run holds its chat: why, and how to leave.</summary>
-    public const string HoldLine = "The autopilot runs in this chat, so it stays open: leaving it would stop its progress updates and checks. " +
-                                   "To open another chat, press Stop on its banner (or the round stop button) first.";
 
     /// <summary>True when the run's model (<paramref name="runKey"/>, "" when none) is among the models open in this Revit.</summary>
     public static bool ModelOpen(string runKey, IEnumerable<string> openKeys) =>

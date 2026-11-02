@@ -196,8 +196,12 @@ internal sealed partial class ChatPane
             _ = Task.Run(() => usage.Save(folder));
         }
         ShowUsage();
-        AutopilotWeekUsage(reported);
-        AutopilotUsage();
+        // The run's limits, whichever chat reported the usage (it may work in the background).
+        In(RunSession, () =>
+        {
+            AutopilotWeekUsage(reported);
+            AutopilotUsage();
+        });
         var now = DateTimeOffset.UtcNow;
         var warnings = usage.NewWarnings(_usageWarned, now);
         if (warnings.Count == 0 || _sample) return;

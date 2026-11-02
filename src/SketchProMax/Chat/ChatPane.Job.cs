@@ -16,11 +16,11 @@ namespace SketchProMax.Chat;
 /// </summary>
 internal sealed partial class ChatPane
 {
-    private JobControl? _control;
-    private JobCardView? _job;
+    private JobControl? _control { get => _s.Control; set => _s.Control = value; }
+    private JobCardView? _job { get => _s.Job; set => _s.Job = value; }
     /// <summary>The finished card that offers Undo all (only one does: the latest task's).</summary>
     private JobCardView? _undoView;
-    private ChatItem? _jobItem;
+    private ChatItem? _jobItem { get => _s.JobItem; set => _s.JobItem = value; }
     private DispatcherTimer? _jobTimer, _undoTimer;
     private readonly Dictionary<string, JobStep> _jobSteps = new();
     private readonly Dictionary<string, string> _jobInputs = new();
@@ -313,6 +313,7 @@ internal sealed partial class ChatPane
     /// </summary>
     private void ShowSteer()
     {
+        if (Hidden) return;
         var steer = _turn is { Planning: false, Stopping: false } && _control is not null && _input.Text.Trim().Length > 0;
         if (_turn is not null) _send.Visibility = steer ? Visibility.Visible : Visibility.Collapsed;
         var tip = steer ? "Send to Sketch ProMax now: it is applied after the current item (Enter)." : "Send (Enter)";

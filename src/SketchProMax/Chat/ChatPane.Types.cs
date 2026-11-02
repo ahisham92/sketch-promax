@@ -26,7 +26,7 @@ internal sealed partial class ChatPane
     private readonly TextBlock _effortPickLabel = new() { FontSize = ChatUi.SmallSize, VerticalAlignment = VerticalAlignment.Center };
     private Button _effortPick = null!;
     /// <summary>What Automatic picked for the main chat's latest request (null before one, or after a chat switch).</summary>
-    private AutoPick? _lastPick;
+    private AutoPick? _lastPick { get => _s.LastPick; set => _s.LastPick = value; }
     /// <summary>Models the plan refused in this Revit session: Automatic doesn't pick them again.</summary>
     private readonly HashSet<string> _refusedModels = new(StringComparer.OrdinalIgnoreCase);
 
@@ -176,7 +176,7 @@ internal sealed partial class ChatPane
     private sealed record Choice(string Heading, List<(string Label, string Hint, bool Chosen, Action Pick)> Rows);
 
     /// <summary>The kind picked while the chat answered: it switches when the answer ends (null when none waits).</summary>
-    private string? _pendingType;
+    private string? _pendingType { get => _s.PendingType; set => _s.PendingType = value; }
 
     private Choice TypeChoices()
     {

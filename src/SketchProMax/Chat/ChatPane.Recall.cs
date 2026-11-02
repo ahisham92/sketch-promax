@@ -12,7 +12,7 @@ namespace SketchProMax.Chat;
 internal sealed partial class ChatPane
 {
     /// <summary>How much the last request of this chat sent (its context), from the stream; 0 when unknown.</summary>
-    private long _contextTokens;
+    private long _contextTokens { get => _s.ContextTokens; set => _s.ContextTokens = value; }
     private Button _shrink = null!;
     private static Task? _remembering;
     private static readonly HashSet<string> RememberingIds = [];
@@ -225,7 +225,7 @@ internal sealed partial class ChatPane
     {
         if (_remembering is not { IsCompleted: false } pending) return;
         ShowStatus("Remembering your last chat for this one…");
-        await Task.WhenAny(pending, Task.Delay(TimeSpan.FromSeconds(30)));
+        await On(Task.WhenAny(pending, Task.Delay(TimeSpan.FromSeconds(30))));
         if (_turn == turn) ShowStatus(turn.Shrinking ? "Shrinking this chat…" : null);
     }
 

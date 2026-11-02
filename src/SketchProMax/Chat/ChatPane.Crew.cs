@@ -108,8 +108,8 @@ internal sealed partial class ChatPane
         ToggleChoice(anchor, new Choice($"{names.Applier}: changes into Revit", rows));
     }
 
-    private object? _costEngine;
-    private double _costSeen;
+    private object? _costEngine { get => _s.CostEngine; set => _s.CostEngine = value; }
+    private double _costSeen { get => _s.CostSeen; set => _s.CostSeen = value; }
 
     /// <summary>
     /// A turn of the main chat ended: in a chat With coordinator it is the coordinator's work, counted for the team's
@@ -123,7 +123,9 @@ internal sealed partial class ChatPane
             _costEngine = _engine;
             _costSeen = 0;
         }
-        var usd = CrewStats.Rise(ref _costSeen, end.CostUsd);
+        var seen = _costSeen;
+        var usd = CrewStats.Rise(ref seen, end.CostUsd);
+        _costSeen = seen;
         if (IsCoordinator)
         {
             CrewStats.Add(new CrewRecord
@@ -241,12 +243,14 @@ internal sealed partial class ChatPane
     /// <summary>The main chat runs <paramref name="tool"/> (null: its turn ended): the coordinator in the strip shows it.</summary>
     private void CrewCoordinatorDoes(string? tool)
     {
+        if (Hidden) return;
         if (_crew is not null) _crew.CoordinatorDoes(CrewShown ? tool : null);
     }
 
     /// <summary>You sent the coordinator a message: a sheet to the coordinator, who nods.</summary>
     private void CrewHeard()
     {
+        if (Hidden) return;
         if (_viewJob is null && _crew is { IsVisible: true }) _crew.Heard();
     }
 }
