@@ -65,7 +65,7 @@ internal static class PhoneProjects
         return Tidy(word);
     }
 
-    /// <summary>"apapa" and "APAPA" read "Apapa"; mixed case stays as typed; a code of three letters or fewer stays capitals.</summary>
+    /// <summary>"harbour" and "HARBOUR" read "Harbour"; mixed case stays as typed; a code of three letters or fewer stays capitals.</summary>
     private static string Tidy(string word)
     {
         word = word.Trim();

@@ -27,38 +27,38 @@ internal static class IrisTests
             var got = PhoneProjects.Guess(source, user);
             check($"phone project: {source} is {want}", got == want, got);
         }
-        Project(@"C:\Models\apapa.rvt", "Apapa");
-        Project(@"\\server\Projects\APAPA.rvt", "Apapa");
-        Project("apapa_sam.taylor", "Apapa");
-        Project(@"C:\Users\sam\Documents\apapa_sam.rvt", "Apapa", "sam");
-        Project("apapa_sam.taylor_detached", "Apapa");
+        Project(@"C:\Models\harbour.rvt", "Harbour");
+        Project(@"\\server\Projects\HARBOUR.rvt", "Harbour");
+        Project("harbour_sam.taylor", "Harbour");
+        Project(@"C:\Users\sam\Documents\harbour_sam.rvt", "Harbour", "sam");
+        Project("harbour_sam.taylor_detached", "Harbour");
         Project(@"D:\Work\Harbour_detached.rvt", "Harbour");
         Project("Harbour - Copy", "Harbour");
         Project("Tower.0003", "Tower");
         Project("PRJ1-0100D-RVT-HBR-SB", "HBR");
-        Project("apapa_documentation_sam.taylor", "Apapa");
+        Project("harbour_documentation_sam.taylor", "Harbour");
         Project("", "");
         check("phone project: a rename gives the chat its name", PhoneProjects.Of("PRJ1-0100D-RVT-HBR-SB", "", "", "TWR = Tower, HBR = Harbour") == "Harbour",
             PhoneProjects.Of("PRJ1-0100D-RVT-HBR-SB", "", "", "TWR = Tower, HBR = Harbour"));
-        check("phone project: two names join into one chat", PhoneProjects.Renamed("APA", "APA = Apapa\nApapa2 = Apapa") == "Apapa" && PhoneProjects.Renamed("Apapa2", "APA = Apapa\nApapa2 = Apapa") == "Apapa", "");
-        check("phone project: no rename keeps the guess", PhoneProjects.Renamed("Tincan", "APA = Apapa") == "Tincan", "");
-        check("phone project: an unsaved model goes by its title", PhoneProjects.Of("unsaved:42", "Tincan_detached") == "Tincan", PhoneProjects.Of("unsaved:42", "Tincan_detached"));
-        check("phone project: case doesn't split a chat", PhoneProjects.Same("apapa", "Apapa "), "");
+        check("phone project: two names join into one chat", PhoneProjects.Renamed("HAR", "HAR = Harbour\nHarbour2 = Harbour") == "Harbour" && PhoneProjects.Renamed("Harbour2", "HAR = Harbour\nHarbour2 = Harbour") == "Harbour", "");
+        check("phone project: no rename keeps the guess", PhoneProjects.Renamed("Northpier", "HAR = Harbour") == "Northpier", "");
+        check("phone project: an unsaved model goes by its title", PhoneProjects.Of("unsaved:42", "Northpier_detached") == "Northpier", PhoneProjects.Of("unsaved:42", "Northpier_detached"));
+        check("phone project: case doesn't split a chat", PhoneProjects.Same("harbour", "Harbour "), "");
 
         // Which Revit takes a message from a project's phone chat.
         var now = new DateTime(2026, 11, 2, 12, 0, 0, DateTimeKind.Utc);
         var claims = new Dictionary<int, PhoneLink.ProjectClaim>
         {
-            [100] = new() { Projects = ["Apapa"], Beat = now },
-            [200] = new() { Projects = ["Tincan", "Apapa"], Beat = now },
-            [300] = new() { Projects = ["Sibline"], Beat = now.AddHours(-3) },
+            [100] = new() { Projects = ["Harbour"], Beat = now },
+            [200] = new() { Projects = ["Northpier", "Harbour"], Beat = now },
+            [300] = new() { Projects = ["Eastbay"], Beat = now.AddHours(-3) },
         };
         bool Alive(int pid) => pid != 400;
         check("phone routing: the main chat goes to the reader", PhoneLink.TopicTaker("", claims, 100, null, Alive, now) == 100, "");
-        check("phone routing: a project open in one Revit goes there", PhoneLink.TopicTaker("tincan", claims, 100, null, Alive, now) == 200, "");
-        check("phone routing: open in two, the autopilot's Revit takes it", PhoneLink.TopicTaker("Apapa", claims, 100, 200, Alive, now) == 200, "");
-        check("phone routing: open in two, no autopilot, the reader takes it", PhoneLink.TopicTaker("Apapa", claims, 200, null, Alive, now) == 200, "");
-        check("phone routing: a stale claim doesn't count", PhoneLink.TopicTaker("Sibline", claims, 100, null, Alive, now) == 100, "");
+        check("phone routing: a project open in one Revit goes there", PhoneLink.TopicTaker("northpier", claims, 100, null, Alive, now) == 200, "");
+        check("phone routing: open in two, the autopilot's Revit takes it", PhoneLink.TopicTaker("Harbour", claims, 100, 200, Alive, now) == 200, "");
+        check("phone routing: open in two, no autopilot, the reader takes it", PhoneLink.TopicTaker("Harbour", claims, 200, null, Alive, now) == 200, "");
+        check("phone routing: a stale claim doesn't count", PhoneLink.TopicTaker("Eastbay", claims, 100, null, Alive, now) == 100, "");
         claims[400] = new() { Projects = ["Lekki"], Beat = now };
         check("phone routing: a closed Revit doesn't count", PhoneLink.TopicTaker("Lekki", claims, 100, null, Alive, now) == 100, "");
     }
