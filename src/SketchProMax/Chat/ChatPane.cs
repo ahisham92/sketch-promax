@@ -2847,6 +2847,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         }
         // Jobs that finished while the main chat answered report back now.
         Later(FlushReports, DispatcherPriority.Background);
+        // Requests handed over from another chat go to the coordinator next.
+        Later(SendHanded, DispatcherPriority.Background);
         AutopilotTurnEnded(ended, stopped);
         if (Hidden) Later(AwayCheck, DispatcherPriority.Background);
         In(_shown, TryPendingModel);

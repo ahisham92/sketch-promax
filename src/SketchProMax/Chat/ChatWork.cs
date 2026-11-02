@@ -49,4 +49,35 @@ internal static class ChatWork
         if (finished > 0) parts.Add($"{finished} finished");
         return "Chats · " + string.Join(", ", parts);
     }
+
+    // ---- One chat at a time changes a model -----------------------------------------------------------------------------
+
+    /// <summary>
+    /// A chat working in the background takes the model changes asked in the shown chat when it works on the same model
+    /// and is an Autopilot run or a coordinator with jobs open: two chats changing one model side by side would undo
+    /// each other's work.
+    /// </summary>
+    public static bool TakesHandoff(bool sameModel, bool autopilotOn, int jobsOpen) => sameModel && (autopilotOn || jobsOpen > 0);
+
+    /// <summary>
+    /// Whether a model change from the caller <paramref name="key"/> (the bridge's caller key: null for the shown chat's
+    /// own answer, a job's key, or a background chat's key) is refused and handed over: only the shown chat's own answer
+    /// and its jobs (<paramref name="shownJob"/>), and only while another chat works on its model (<paramref name="elsewhere"/>).
+    /// </summary>
+    public static bool RefusesChange(string? key, bool shownJob, bool elsewhere) =>
+        elsewhere && (key is null || (!JobBoard.IsChatKey(key) && shownJob));
+
+    /// <summary>What the refused call answers, so the chat stops changing the model and says where the request went.</summary>
+    public static string HandoffRefusal(string chat) =>
+        $"Not run: the chat “{chat}” is already working on this model, so the user's request was handed to it and it will do it there. " +
+        "A note already tells the user so. Don't change the model from this chat (reading is fine): answer only what the request asks to know, else end with no more than a short line.";
+
+    /// <summary>The one line in the chat the request came from.</summary>
+    public static string HandedLine(string chat) => $"Sent to “{chat}”, which is already working on this model; it will do it there.";
+
+    /// <summary>The turn the working chat's coordinator gets with the requests handed to it.</summary>
+    public static string HandedTurn(IReadOnlyList<string> requests, string from) =>
+        $"[Handed over from the user's chat “{from}”, typed by the user there] The user asked for this while you work on the same model, " +
+        "so it comes to you instead of a second chat changing the model alongside your work. Fit it into your work (a job, or a message " +
+        "to the job it belongs to), without undoing what is done:\n\n" + string.Join("\n\n", requests);
 }

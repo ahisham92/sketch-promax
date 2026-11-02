@@ -55,6 +55,12 @@ internal sealed partial class ChatPane
         public readonly List<string> FromPhone = [];
         public Turn? PhoneTurn;
 
+        // Model changes asked in another chat while this one works on the model (ChatWork.TakesHandoff): sent to the
+        // coordinator as its next turn, with the name of the chat they came from; and the shown chat's request handed last.
+        public readonly List<string> Handed = [];
+        public string HandedFrom = "";
+        public ChatItem? HandedItem;
+
         // While in the background: the running answer's streamed texts and steps (by the stream's keys and tool ids), what
         // it does now, how its work ended (ChatWork.Done or .Failed until opened), and a save waiting.
         public readonly Dictionary<string, ChatItem> Texts = new(), Tools = new();
@@ -153,7 +159,7 @@ internal sealed partial class ChatPane
 
     /// <summary>The session has work going: an answer, jobs running, waiting or reporting, or an Autopilot run on.</summary>
     private static bool Working(ChatSession s) =>
-        s.Turn is not null || s.Runs.Count > 0 || (s.Board?.OpenCount ?? 0) > 0 || s.Reports.Count > 0 || s.Conv.Autopilot is { Active: true };
+        s.Turn is not null || s.Runs.Count > 0 || (s.Board?.OpenCount ?? 0) > 0 || s.Reports.Count > 0 || s.Handed.Count > 0 || s.Conv.Autopilot is { Active: true };
 
     /// <summary>Every session: the shown one first, then those in the background.</summary>
     private IEnumerable<ChatSession> Sessions => new[] { _shown }.Concat(_away);
@@ -415,5 +421,70 @@ internal sealed partial class ChatPane
             s.SaveDue = false;
             In(s, Save);
         }
+    }
+
+    // ---- One chat at a time changes a model ------------------------------------------------------------------------
+
+    /// <summary>
+    /// The chat in the background that works on the shown chat's model (an Autopilot run, or a coordinator with jobs open)
+    /// and so takes its model changes; null when none, or when the shown chat works on that model itself.
+    /// </summary>
+    private ChatSession? Elsewhere()
+    {
+        if (TakesChanges(_shown, _shown)) return null;
+        return _away.FirstOrDefault(a => TakesChanges(a, _shown));
+    }
+
+    private static bool TakesChanges(ChatSession s, ChatSession shown) =>
+        ChatWork.TakesHandoff(ReferenceEquals(s, shown) || string.Equals(s.Conv.Key, shown.Conv.Key, StringComparison.OrdinalIgnoreCase),
+            s.Conv.Autopilot is { Active: true }, s.Runs.Count + (s.Board?.OpenCount ?? 0));
+
+    private static string NameOf(ChatSession s) => ChatHistory.NameFor(s.Conv) is { Length: > 0 } n ? n : ChatHistory.Untitled;
+
+    /// <summary>What the bridge reads before a model change (ChatJobs.ChangeRefusal): the chat that takes it, by name.</summary>
+    private void ShowElsewhere() => ChatJobs.WorkingElsewhere = !_stopped && Elsewhere() is { } s ? NameOf(s) : "";
+
+    /// <summary>
+    /// The shown chat (or its job) tried to change the model while another chat works on it: the user's last request here
+    /// goes to that chat's coordinator, as a message from the phone does, and one line here says so. Once per request.
+    /// </summary>
+    private void HandOffShown()
+    {
+        if (_stopped || Hidden || Elsewhere() is not { } target) return;
+        var asked = _conv.Items.LastOrDefault(i => i.Kind == "user");
+        if (asked is null || ReferenceEquals(asked, _shown.HandedItem) || asked.Text.Trim().Length == 0) return;
+        _shown.HandedItem = asked;
+        var from = NameOf(_shown);
+        var text = asked.Text.Trim();
+        In(target, () => TakeHandoff(text, from));
+        Note(ChatWork.HandedLine(NameOf(target)));
+        Save();
+    }
+
+    /// <summary>In the chat that works on the model: the request shows as the user's (from the other chat) and goes to its coordinator.</summary>
+    private void TakeHandoff(string text, string from)
+    {
+        var how = $"from the chat “{from}”";
+        Add(new ChatItem { Kind = "user", Text = text + $"\n\n({how})" });
+        if (Run is { Active: true } run)
+        {
+            AutopilotLog(AutopilotEntry.Asked, $"You wrote {how}: " + (text.Length > 200 ? text.Substring(0, 199) + "…" : text));
+            Autopilot.Heard(run, text);
+            // A paused run: the user's word carries it on, as typing "continue" would.
+            if (run.State == AutopilotRun.Paused) AutopilotResume($"You wrote {how}.", turn: false);
+        }
+        _s.Handed.Add(text);
+        _s.HandedFrom = from;
+        Save();
+        SendHanded();
+    }
+
+    /// <summary>The requests handed to this chat go to its coordinator as soon as it isn't answering.</summary>
+    private void SendHanded()
+    {
+        if (_stopped || _turn is not null || _s.Handed.Count == 0) return;
+        var asks = _s.Handed.ToList();
+        _s.Handed.Clear();
+        _ = RunTurn(ChatWork.HandedTurn(asks, _s.HandedFrom), [], "");
     }
 }

@@ -49,6 +49,21 @@ internal static class ChatWorkTests
         check("finished line: names the chat and where to open it", ChatWork.FinishedLine("Doors", ChatWork.Done).Contains("“Doors” finished") && ChatWork.FinishedLine("Doors", ChatWork.Failed).Contains("error"), "");
         check("pill: plain with nothing in the background", ChatWork.PillText(0, 0, false) == "Chats", ChatWork.PillText(0, 0, false));
         check("pill: counts working and finished chats", ChatWork.PillText(2, 1, false) == "Chats · 2 working, 1 finished" && ChatWork.PillText(2, 1, true) == "Chats · 3", ChatWork.PillText(2, 1, false));
+
+        // One chat at a time changes a model: the shown chat's change goes to the chat already working on it.
+        check("handoff: an Autopilot run on the same model takes changes", ChatWork.TakesHandoff(true, autopilotOn: true, 0), "");
+        check("handoff: a coordinator with jobs open on the same model takes changes", ChatWork.TakesHandoff(true, false, jobsOpen: 2), "");
+        check("handoff: a chat that only answers, or another model's, takes nothing", !ChatWork.TakesHandoff(true, false, 0) && !ChatWork.TakesHandoff(false, true, 3), "");
+        check("handoff: the shown chat's own change is refused while another works on the model", ChatWork.RefusesChange(null, false, elsewhere: true), "");
+        check("handoff: and its job's", ChatWork.RefusesChange("0123456789ab", shownJob: true, elsewhere: true), "");
+        check("handoff: the working chat's own calls and jobs run", !ChatWork.RefusesChange(away, false, true) && !ChatWork.RefusesChange("0123456789ab", shownJob: false, true), "");
+        check("handoff: nothing is refused when no other chat works on the model", !ChatWork.RefusesChange(null, false, elsewhere: false) && !ChatWork.RefusesChange("0123456789ab", true, false), "");
+        var refused = ChatWork.HandoffRefusal("Doors");
+        check("handoff: the refused call names the chat and leaves reading free", refused.Contains("“Doors”") && refused.Contains("reading is fine") && refused.StartsWith("Not run", StringComparison.Ordinal), refused);
+        var line = ChatWork.HandedLine("Doors");
+        check("handoff: one line in the chat it came from", line == "Sent to “Doors”, which is already working on this model; it will do it there." && !line.Contains("Claude"), line);
+        var turn = ChatWork.HandedTurn(["add a door schedule", "and a window one"], "Sheets");
+        check("handoff: the working coordinator gets the requests and where they came from", turn.Contains("“Sheets”") && turn.Contains("add a door schedule") && turn.Contains("and a window one") && turn.Contains("typed by the user"), turn);
     }
 
     /// <summary>The pane: leaving a chat or starting a new one stops nothing, and the Autopilot hold is gone.</summary>
@@ -64,6 +79,12 @@ internal static class ChatWorkTests
         check("switch source: no chat is held open by its Autopilot run", !auto.Contains("AutopilotHolds") && !pane.Contains("AutopilotHolds"), "");
         check("switch source: the cap is the only refusal for working chats", session.Contains("ChatWork.WhyNotLeave("), "");
         check("switch source: the Autopilot clock ticks every running chat", auto.Contains("AutopilotClock()"), "");
+        var bridge = File.ReadAllText(Path.Combine(root, "src", "SketchProMax", "Bridge", "BridgeServer.cs")).Replace("\r\n", "\n");
+        check("handoff source: the bridge refuses the shown chat's model changes only (ModifiesModel), after the check jobs'",
+            bridge.Contains("tool.ModifiesModel && fromChat && Chat.ChatJobs.ChangeRefusal(jobKey)")
+            && bridge.IndexOf("ChatJobs.IsCheck(jobKey)", StringComparison.Ordinal) < bridge.IndexOf("ChatJobs.ChangeRefusal(", StringComparison.Ordinal), "");
+        check("handoff source: the request goes to the working chat and one line says so", session.Contains("In(target, () => TakeHandoff(text, from));") && session.Contains("Note(ChatWork.HandedLine("), "");
+        check("handoff source: a handed request is sent when the coordinator is free", pane.Contains("Later(SendHanded,") && session.Contains("ChatWork.HandedTurn("), "");
     }
 
     private static bool Run(Action call)

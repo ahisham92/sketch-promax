@@ -39,6 +39,27 @@ internal static class ChatJobs
     /// <summary>The calling chat is With coordinator (only then may it start or message jobs).</summary>
     public static bool CoordinatorFor(string? key) => Route(key).Coordinator;
 
+    /// <summary>
+    /// The chat working in the background on the shown chat's model (its name, "" when none): an Autopilot run or a
+    /// coordinator with jobs. Model changes asked in the shown chat are handed to it (ChatWork, ChatPane.HandOffShown).
+    /// </summary>
+    public static volatile string WorkingElsewhere = "";
+
+    /// <summary>The pane: hands the shown chat's request to the chat working on its model (on its own thread).</summary>
+    public static volatile Action? HandOff;
+
+    /// <summary>
+    /// The bridge, before a model change: the refusal when it comes from the shown chat (or one of its jobs) while another
+    /// chat works on its model; the request is then handed to that chat. Null to run it.
+    /// </summary>
+    public static string? ChangeRefusal(string? key)
+    {
+        var elsewhere = WorkingElsewhere;
+        if (!ChatWork.RefusesChange(key, key is not null && _board?.FindKey(key) is not null, elsewhere.Length > 0)) return null;
+        HandOff?.Invoke();
+        return ChatWork.HandoffRefusal(elsewhere);
+    }
+
     /// <summary>After the bridge changed a job of the calling chat: its pane session starts, stops and redraws.</summary>
     public static void ChangedFor(string? key) => Route(key).Changed?.Invoke();
 
@@ -216,6 +237,8 @@ internal sealed partial class ChatPane
         var s = _s;
         ChatJobs.Changed = () => Dispatcher.BeginInvoke(new Action(() => In(s, JobsChanged)));
         RegisterBoard();
+        // A model change asked here while another chat works on this model goes to that chat (ChatPane.HandOffShown).
+        ChatJobs.HandOff = () => Dispatcher.BeginInvoke(new Action(() => In(_shown, HandOffShown)));
         // Each chat's own calls name its models, the shown chat's or one working in the background.
         ChatJobs.TouchedModel = (key, title) => Dispatcher.BeginInvoke(new Action(() =>
         {
@@ -344,6 +367,7 @@ internal sealed partial class ChatPane
             ShowJobCards();
             RefreshJobView();
             SaveSoon();
+            ShowElsewhere();
         }, DispatcherPriority.Background);
     }
 

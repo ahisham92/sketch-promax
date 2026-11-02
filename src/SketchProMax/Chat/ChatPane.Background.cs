@@ -46,6 +46,7 @@ internal sealed partial class ChatPane
             });
         }
         _away.Clear();
+        ChatJobs.WorkingElsewhere = "";
     }
 
     /// <summary>A model never saved was saved: its chats in the background belong to the file now.</summary>
@@ -100,6 +101,7 @@ internal sealed partial class ChatPane
             : "Switch chat: this model's recent chats. A chat you leave while it works keeps working in the background.";
         AutomationProperties.SetName(_chatsPill, _chatsLabel.Text);
         AutomationProperties.SetHelpText(_chatsPill, (string)_chatsPill.ToolTip);
+        ShowElsewhere();
     }
 
     /// <summary>The switcher: the chats in the background first, then this model's recent chats (read off the UI thread).</summary>
