@@ -12,6 +12,8 @@ internal sealed class UserQuestion
     public string JobKey { get; set; } = "";
     /// <summary>Who asked ("Job 7: Existing model").</summary>
     public string Asker { get; set; } = "";
+    /// <summary>The project's chat on the phone it goes to (PhoneProjects), "" for the main one.</summary>
+    public string Topic { get; set; } = "";
     public string Question { get; set; } = "";
     /// <summary>What the job does if no answer comes in time.</summary>
     public string Assumed { get; set; } = "";

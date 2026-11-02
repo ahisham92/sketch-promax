@@ -51,6 +51,8 @@ namespace SketchProMax.Phone
         /// <summary>The answer or message text, or the command name.</summary>
         public string Text { get; set; } = "";
         public string Error { get; set; } = "";
+        /// <summary>Which of the tool's chats on the phone it came from (Sketch ProMax: the project), "" for the main one.</summary>
+        public string Topic { get; set; } = "";
     }
 
     internal sealed class IrisException : Exception
@@ -148,26 +150,28 @@ namespace SketchProMax.Phone
 
         // ---- talking -----------------------------------------------------------
 
-        public async Task<long> SendAsync(string kind, JsonObject value, long? replyTo = null, CancellationToken ct = default)
+        /// <summary><paramref name="topic"/>: which of the tool's chats on the phone it goes to (a project, say); "" the main one.</summary>
+        public async Task<long> SendAsync(string kind, JsonObject value, long? replyTo = null, CancellationToken ct = default, string topic = "")
         {
             var body = new JsonObject { ["kind"] = kind, ["body"] = Seal(KeyBytes, value.ToJsonString()) };
             if (replyTo != null) body["reply_to"] = replyTo.Value;
+            if (!string.IsNullOrWhiteSpace(topic)) body["topic"] = topic.Trim();
             var got = await CallAsync(HttpMethod.Post, "/api/tool/messages", body, null, ct).ConfigureAwait(false);
             return got["id"]!.GetValue<long>();
         }
 
-        public Task<long> UpdateAsync(string text, CancellationToken ct = default) =>
-            SendAsync("update", new JsonObject { ["text"] = text }, null, ct);
+        public Task<long> UpdateAsync(string text, CancellationToken ct = default, string topic = "") =>
+            SendAsync("update", new JsonObject { ["text"] = text }, null, ct, topic);
 
         /// <summary>Ask a question. Returns its id; the answer arrives through InboxAsync with ReplyTo = that id.</summary>
-        public Task<long> AskAsync(string text, IEnumerable<string>? options = null, string? assumed = null, DateTime? deadlineUtc = null, CancellationToken ct = default)
+        public Task<long> AskAsync(string text, IEnumerable<string>? options = null, string? assumed = null, DateTime? deadlineUtc = null, CancellationToken ct = default, string topic = "")
         {
             var value = new JsonObject { ["text"] = text };
             var opts = options?.Where(o => !string.IsNullOrWhiteSpace(o)).ToArray() ?? Array.Empty<string>();
             if (opts.Length > 0) value["options"] = new JsonArray(opts.Select(o => (JsonNode?)JsonValue.Create(o)).ToArray());
             if (!string.IsNullOrWhiteSpace(assumed)) value["assumed"] = assumed;
             if (deadlineUtc != null) value["deadline"] = deadlineUtc.Value.ToUniversalTime().ToString("o");
-            return SendAsync("question", value, null, ct);
+            return SendAsync("question", value, null, ct, topic);
         }
 
         /// <summary>Close a question on this side (went with the assumption, or answered on the PC).</summary>
@@ -187,6 +191,7 @@ namespace SketchProMax.Phone
                     Kind = m["kind"]!.GetValue<string>(),
                     ReplyTo = m["reply_to"] is JsonNode r ? r.GetValue<long>() : (long?)null,
                     Created = DateTimeOffset.FromUnixTimeMilliseconds((long)(m["created"]!.GetValue<double>() * 1000)).UtcDateTime,
+                    Topic = m["topic"] is JsonNode t ? t.GetValue<string>() : "",
                 };
                 try
                 {

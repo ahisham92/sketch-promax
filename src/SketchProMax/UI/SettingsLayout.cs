@@ -59,6 +59,7 @@ internal static class SettingsLayout
         ["AutopilotWeekShare"] = Chat,
         ["AutopilotAskWaitMinutes"] = Chat,
         ["PhoneUpdateMinutes"] = Chat,
+        ["PhoneProjectNames"] = Chat,
         ["FirmStandards"] = Standards,
         ["LegendSeedPath"] = Standards,
         ["TimeTracking"] = Time,

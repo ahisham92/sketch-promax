@@ -142,6 +142,9 @@ internal static class ChatJobs
     /// </summary>
     public static bool IsCheck(string key) => BoardFor(key)?.FindKey(key) is { ReviewOf: > 0 } or { ReadOnly: true };
 
+    /// <summary>The pane: the project chat on the phone of the chat or job <paramref name="key"/> (null: the main chat), for ask_user.</summary>
+    public static Func<string?, string>? TopicFor { get; set; }
+
     /// <summary>Who asks the user on their phone (ask_user): "Job 7: Existing model", or the coordinator for the main chat.</summary>
     public static string AskerName(string? key) => key is not null && BoardFor(key)?.FindKey(key) is { } job ? $"Job {job.Number}: {job.Title}" : "the coordinator";
 
