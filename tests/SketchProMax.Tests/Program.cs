@@ -144,6 +144,7 @@ ParallelJobTests.Run((name, ok, detail) => Check(name, ok, detail));
 AutoSyncTests.Run((name, ok, detail) => Check(name, ok, detail));
 CrewTests.Run((name, ok, detail) => Check(name, ok, detail));
 AutopilotTests.Run((name, ok, detail) => Check(name, ok, detail));
+AutopilotStallTests.Run((name, ok, detail) => Check(name, ok, detail));
 JobChecksTests.Run((name, ok, detail) => Check(name, ok, detail));
 AskRulesTests.Run((name, ok, detail) => Check(name, ok, detail));
 IrisTests.Run((name, ok, detail) => Check(name, ok, detail));
@@ -179,6 +180,7 @@ SignaturePagesTests.Run((name, ok, detail) => Check(name, ok, detail));
     SharingTests.Run(File.Exists(Path.Combine(root, "README.md")) ? root : Directory.GetCurrentDirectory(), (name, ok, detail) => Check(name, ok, detail));
     CrashSafetyTests.Run(File.Exists(Path.Combine(root, "README.md")) ? root : Directory.GetCurrentDirectory(), (name, ok, detail) => Check(name, ok, detail));
     RecoveryTests.Run(File.Exists(Path.Combine(root, "README.md")) ? root : Directory.GetCurrentDirectory(), (name, ok, detail) => Check(name, ok, detail));
+    AutopilotStallTests.RunSources(File.Exists(Path.Combine(root, "README.md")) ? root : Directory.GetCurrentDirectory(), (name, ok, detail) => Check(name, ok, detail));
     LicenseTests.Run(File.Exists(Path.Combine(root, "README.md")) ? root : Directory.GetCurrentDirectory(), (name, ok, detail) => Check(name, ok, detail));
 }
 

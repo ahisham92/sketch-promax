@@ -42,13 +42,15 @@ internal sealed partial class ChatPane
     }
 
     /// <summary>
-    /// The autopilot runs (or is paused) in the chat shown: it can't be left, since its clock (progress updates to the phone, the review
-    /// team, the connection watch, carrying on after a pause) runs only while its chat is shown. True when it refused.
+    /// The autopilot runs in the chat shown: it can't be left, since its clock (progress updates to the phone, the review
+    /// team, the connection watch, carrying on after a pause) runs only while its chat is shown. Only a healthy run holds
+    /// it (Autopilot.HoldsChat): a paused one, one whose answer is stuck or whose model isn't open lets the user go. True
+    /// when it refused; the status line then says how to leave.
     /// </summary>
     private bool AutopilotHolds()
     {
-        if (_sample || Run is not { Active: true }) return false;
-        Status("The autopilot runs in this chat, so it stays open: leaving it would stop its progress updates and checks. Press Stop on its banner first to open another chat.", spin: false);
+        if (_sample || !Autopilot.HoldsChat(Run, RunModelOpen, TurnStalled(DateTime.UtcNow))) return false;
+        Status(Autopilot.HoldLine, spin: false);
         return true;
     }
 
@@ -179,6 +181,7 @@ internal sealed partial class ChatPane
     {
         PhoneTurnEnded(ended, stopped);
         if (Run is not { } run || ended is null || ended.Planning || ended.Shrinking) return;
+        if (!stopped && ended.Outcome == "done") _stalls = 0; // an answer that ended by itself: the stuck ones before don't add up
         var last = _conv.Items.LastOrDefault(i => i.Kind == "assistant")?.Text ?? "";
         if (run.State == AutopilotRun.Planning)
         {
@@ -291,6 +294,8 @@ internal sealed partial class ChatPane
         AutopilotProgress(run);
         SendLateAnswers();
         AutopilotConnection(run);
+        AutopilotModelCheck(run);
+        AutopilotStallCheck(run);
         if (run.State == AutopilotRun.Paused)
         {
             if (run.PausedUntil is { } until && until <= now)
@@ -372,6 +377,7 @@ internal sealed partial class ChatPane
         run.AccessLost = false;
         run.PausedUntil = null;
         run.Offline = "";
+        run.ModelGone = false;
         run.Idle = 0;
         // A pause for the run's share of the week: carrying on starts its share again (a new week, or the user's say).
         if (run.WeekCap) run.WeekUsed = 0;
@@ -390,6 +396,113 @@ internal sealed partial class ChatPane
         }
         if (access) Tools.ActivityLog.Note("autopilot", "resumed after lost access");
         if (turn && _turn is null) _ = RunTurn(Autopilot.Resume(run, why), [], "");
+    }
+
+    /// <summary>The run's model is open in this Revit (checked every 30 s, AutopilotModelCheck); true until known otherwise.</summary>
+    private (string Key, bool Open) _runModel = ("", true);
+
+    /// <summary>The run's model is open in this Revit, as last checked for the chat shown (true until known otherwise).</summary>
+    private bool RunModelOpen => _runModel.Open || !string.Equals(_runModel.Key, _conv.Key, StringComparison.OrdinalIgnoreCase);
+    private bool _modelChecking;
+
+    /// <summary>
+    /// Every 30 s while a run is on: is the model it works on (its chat's) still open in this Revit? When it isn't, the run
+    /// pauses with a note naming it and the chat is free to leave; Resume carries it on once the model is open again.
+    /// </summary>
+    private void AutopilotModelCheck(AutopilotRun run)
+    {
+        var key = _conv.Key == NoModelKey ? "" : _conv.Key;
+        if (_modelChecking || key.Length == 0) return;
+        _modelChecking = true;
+        _ = SketchProMax.App.Dispatcher.InvokeAsync(app => app.Application.Documents.Cast<Autodesk.Revit.DB.Document>()
+                .Where(d => !d.IsFamilyDocument).Select(ModelKey).ToList())
+            .ContinueWith(t => Dispatcher.BeginInvoke(new Action(() =>
+            {
+                _modelChecking = false;
+                if (t.Status != TaskStatus.RanToCompletion || Run is not { Active: true } now || !ReferenceEquals(now, run) || _conv.Key != key) return;
+                try { ModelOpenChanged(run, Autopilot.ModelOpen(key, t.Result)); }
+                catch (Exception) { /* the next check tries again */ }
+            })), TaskScheduler.Default);
+    }
+
+    private void ModelOpenChanged(AutopilotRun run, bool open)
+    {
+        _runModel = (_conv.Key, open);
+        if (open || run.ModelGone) return;
+        var title = _conv.Title.Length > 0 ? _conv.Title : "the model";
+        run.State = AutopilotRun.Paused;
+        run.ModelGone = true;
+        run.PausedUntil = null;
+        run.PauseWhy = Autopilot.ModelGoneWhy(title);
+        var text = Autopilot.ModelGoneNote(title);
+        AutopilotLog(AutopilotEntry.Paused, text);
+        Note(text);
+        _ = AskUser.SendUpdateAsync(text);
+        Save();
+        ShowAutopilot();
+        Status("Autopilot paused: " + run.PauseWhy + ". You can open another chat now.", spin: false);
+    }
+
+    /// <summary>When the connection last came back (default: it didn't drop): answers and jobs silent since are stuck.</summary>
+    private DateTime _reconnectedAt;
+    private int _stalls;
+
+    /// <summary>The coordinator's answer runs and is stuck (Autopilot.Stalled): no word from its Claude Code for too long.</summary>
+    private bool TurnStalled(DateTime now) =>
+        _turn is { Planning: false } && Autopilot.Stalled(_lastActivity, now, _tools.Values.Any(r => r.Item.State == "running"), _reconnectedAt);
+
+    /// <summary>
+    /// Every 30 s while a run works: an answer of the coordinator stuck mid-stream (a connection dropped and came back, and
+    /// no error ever came) is ended and he is told to carry on; after a few in a row the run pauses for the user. Jobs
+    /// silent since the connection came back are restarted and told to check the model and carry on.
+    /// </summary>
+    private void AutopilotStallCheck(AutopilotRun run)
+    {
+        if (run.State != AutopilotRun.Running) return;
+        var now = DateTime.UtcNow;
+        if (_board is { } board)
+        {
+            var stuck = board.Snapshot().Where(j => Autopilot.JobStalled(j, run.JobsBefore, _reconnectedAt, now)).ToList();
+            foreach (var job in stuck)
+            {
+                board.Stop(job.Number, now);
+                if (_runs.Values.FirstOrDefault(r => r.Job.Number == job.Number) is { } jobRun) EndRun(jobRun, kill: true);
+                board.Message(job.Number, ConnectionWatch.CarryOnLine, now);
+                Tools.ActivityLog.Note("autopilot", $"job {job.Number} silent after the connection came back: restarted");
+            }
+            if (stuck.Count > 0)
+            {
+                AutopilotLog(AutopilotEntry.Note, $"Job{(stuck.Count == 1 ? "" : "s")} {string.Join(", ", stuck.Select(j => j.Number))} said nothing after the connection came back, " +
+                                                  "so they were restarted and told to check the model and carry on.");
+                JobsChanged();
+            }
+        }
+        if (!TurnStalled(now)) return;
+        var quiet = now - _lastActivity;
+        Tools.ActivityLog.Note("autopilot", $"coordinator answer stuck for {quiet.TotalMinutes:0} min: ended");
+        _stalls++;
+        if (_stalls >= Autopilot.MaxStalls)
+        {
+            // It keeps getting stuck: the run waits for the user instead of trying all night.
+            _stalls = 0;
+            run.State = AutopilotRun.Paused;
+            run.PausedUntil = null;
+            run.PauseWhy = Autopilot.StalledWhy;
+            AbortTurn("");
+            var why = $"Autopilot paused: {Autopilot.StalledWhy}. Press Resume, or type \"continue\", to carry on, or Stop to end it.";
+            AutopilotLog(AutopilotEntry.Paused, why);
+            Note(why);
+            _ = AskUser.SendUpdateAsync(why);
+            Save();
+            ShowAutopilot();
+            return;
+        }
+        var text = Autopilot.StalledNote(quiet);
+        AutopilotLog(AutopilotEntry.Note, text);
+        AbortTurn(text);
+        // Reports waiting go to him first (FlushReports), and bring the next turn themselves.
+        if (Run is { State: AutopilotRun.Running } still && ReferenceEquals(still, run) && _turn is null && _reports.Count == 0)
+            _ = RunTurn(Autopilot.Resume(run, "Your last answer got stuck (no word for a long time) and was ended."), [], "");
     }
 
     private readonly ConnectionWatch _connection = new();
@@ -446,6 +559,8 @@ internal sealed partial class ChatPane
         }
         // Back only on a probe that worked (after Revit started again, the watch knows nothing yet).
         if (!ConnectionWatch.IsConnectionPause(run) || !internet || network == false) return;
+        // An answer or job silent since now is stuck (AutopilotStallCheck): no error comes from a stream that lost its connection.
+        _reconnectedAt = DateTime.UtcNow;
         var back = ConnectionWatch.BackLine(run.Offline, run.OfflineSince, DateTime.UtcNow);
         var cut = _board is { } board ? ConnectionWatch.CutOff(board.Snapshot(), run.JobsBefore, run.OfflineSince) : [];
         foreach (var job in cut) _board!.Message(job.Number, ConnectionWatch.CarryOnLine, DateTime.UtcNow);
@@ -520,6 +635,7 @@ internal sealed partial class ChatPane
         }
         const string how = "from your phone";
         Add(new ChatItem { Kind = "user", Text = text + $"\n\n({how})" });
+        if (AutopilotStopTyped(text.Trim(), " " + how)) return;
         AutopilotLog(AutopilotEntry.Asked, $"You wrote {how}: " + (text.Length > 200 ? text.Substring(0, 199) + "…" : text));
         Autopilot.Heard(run, text);
         // A paused run: the user's word carries it on, as typing "continue" would.
@@ -753,13 +869,65 @@ internal sealed partial class ChatPane
 
     private bool _backfillWaiting;
 
-    /// <summary>Stop on the banner: the open jobs stop and the report is written.</summary>
+    /// <summary>
+    /// Stop on the banner, the round stop button, the phone, or "stop" typed: the open jobs stop, the coordinator's answer
+    /// ends now (its Claude Code is ended, also when it hangs), and the report is written.
+    /// </summary>
     private void AutopilotStop(string why)
     {
         if (Run is not { Active: true } run) return;
         run.State = AutopilotRun.Stopped; // first: the stopped reviewers must not send anything back
         foreach (var job in _board?.Snapshot().Where(j => j.Active || j.State == JobBoard.Queued).ToList() ?? []) StopJob(job.Number);
+        _reports.Clear();
+        _stalls = 0;
+        AbortTurn("");
         AutopilotFinish(AutopilotRun.Stopped, why);
+    }
+
+    /// <summary>
+    /// The coordinator's answer ends now, whatever it is doing: its Claude Code is ended (not asked to stop, which a stuck
+    /// one never answers) and the conversation is resumed with the next message. <paramref name="note"/> goes in the chat.
+    /// </summary>
+    private void AbortTurn(string note)
+    {
+        if (_turn is not { } turn) return;
+        if (turn.Planning)
+        {
+            StopBrief(turn);
+            return;
+        }
+        turn.Stopping = true;
+        turn.KillTimer?.Stop();
+        _control?.Apply(Bridge.JobAction.Stop);
+        _engine?.Kill();
+        _engine = null;
+        RenderDirty();
+        if (note.Length > 0) Note(note);
+        EndTurn();
+    }
+
+    /// <summary>The round stop button: in a running autopilot's chat it stops the run (as the banner's Stop), else the answer.</summary>
+    private void StopPressed()
+    {
+        if (!_sample && _viewJob is null && Run is { Active: true })
+        {
+            AutopilotLog(AutopilotEntry.Asked, "You pressed the stop button.");
+            AutopilotStop("you pressed Stop");
+            return;
+        }
+        StopTurn();
+    }
+
+    /// <summary>
+    /// A message to a running autopilot that only says to stop it (Autopilot.SaysStop): the run stops now, instead of the
+    /// message waiting "after this item" behind an answer that may never end. True when it was one.
+    /// </summary>
+    private bool AutopilotStopTyped(string text, string how)
+    {
+        if (_sample || Run is not { Active: true } || !Autopilot.SaysStop(text)) return false;
+        AutopilotLog(AutopilotEntry.Asked, $"You wrote{how}: {text}");
+        AutopilotStop($"you wrote \"{text}\"{how}");
+        return true;
     }
 
     private void AutopilotFinish(string state, string why)

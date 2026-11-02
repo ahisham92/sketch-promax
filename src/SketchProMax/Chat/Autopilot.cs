@@ -57,6 +57,8 @@ internal sealed class AutopilotRun
     /// <summary>Paused because the connection dropped (ConnectionWatch.Internet or .Network; "" otherwise), and since when.</summary>
     public string Offline { get; set; } = "";
     public DateTime OfflineSince { get; set; }
+    /// <summary>Paused because the model it works on (its chat's) isn't open in this Revit: Resume once it is open again.</summary>
+    public bool ModelGone { get; set; }
 
     public bool Active => State is Running or Paused;
 }
@@ -200,6 +202,99 @@ internal static class Autopilot
         "Autopilot paused: Sketch ProMax can't use your Claude plan any more (" + Clip(JobBoard.OneLine(message, 300), 300) + "). " +
         "Nothing is lost. On the PC, press Sign in at the top of the chat and sign in with the account that has your Max plan; " +
         "the run carries on by itself within 20 minutes, or press Resume.";
+
+    // ---- A stuck answer, a typed stop, the chat held -------------------------------------------------------------------
+
+    /// <summary>
+    /// No word from the coordinator's Claude Code for this long while it answers: its answer is taken as stuck. A connection
+    /// that drops mid-answer sends no error, so without this a run waited all night on one (bug-log row 67).
+    /// </summary>
+    public static readonly TimeSpan TurnStuck = TimeSpan.FromMinutes(10);
+
+    /// <summary>The same while one of its steps runs in Revit (a long change in the model is quiet too).</summary>
+    public static readonly TimeSpan ToolStuck = TimeSpan.FromMinutes(30);
+
+    /// <summary>After the connection came back: an answer or job with no word since gets this long.</summary>
+    public static readonly TimeSpan AfterReconnect = TimeSpan.FromMinutes(3);
+
+    /// <summary>Stuck answers in a row before the run pauses for the user instead of trying again.</summary>
+    public const int MaxStalls = 3;
+
+    /// <summary>
+    /// True when an answer whose last word came at <paramref name="lastWord"/> is stuck: nothing since the connection came
+    /// back (<paramref name="reconnected"/>, default when it didn't drop) for <see cref="AfterReconnect"/>, or nothing for
+    /// <see cref="TurnStuck"/> (<see cref="ToolStuck"/> while a step runs in Revit).
+    /// </summary>
+    public static bool Stalled(DateTime lastWord, DateTime now, bool stepRunning, DateTime reconnected)
+    {
+        if (!stepRunning && reconnected != default && reconnected > lastWord && now - reconnected >= AfterReconnect) return true;
+        return now - lastWord >= (stepRunning ? ToolStuck : TurnStuck);
+    }
+
+    /// <summary>
+    /// A job of the run (from <paramref name="jobsBefore"/>) that said nothing since the connection came back, for
+    /// <see cref="AfterReconnect"/>: its Claude Code lost the connection mid-answer and is restarted with ConnectionWatch.CarryOnLine.
+    /// Never a reviewer, nor one whose step runs in Revit or that waits its turn there (JobWatch judges those).
+    /// </summary>
+    public static bool JobStalled(ChatJob job, int jobsBefore, DateTime reconnected, DateTime now) =>
+        reconnected != default && job.Number > jobsBefore && job.GoalCheck == 0 && job.State == JobBoard.Running
+        && job.Activity is not (JobBoard.Syncing or JobBoard.Applying or JobBoard.Reading)
+        && job.Items.LastOrDefault(i => i.Kind != "note") is not { Kind: "tool", State: "running" }
+        && JobWatch.LastMove(job) < reconnected && now - reconnected >= AfterReconnect;
+
+    /// <summary>The note when a stuck answer was ended and the coordinator carries on.</summary>
+    public static string StalledNote(TimeSpan quiet) =>
+        $"Autopilot: the coordinator's answer showed nothing for {Math.Max(1, (int)Math.Round(quiet.TotalMinutes))} minutes (the connection may have " +
+        "dropped mid-answer), so it was ended and he carries on from where the work stands.";
+
+    /// <summary>Why the run pauses after <see cref="MaxStalls"/> stuck answers in a row.</summary>
+    public const string StalledWhy = "the coordinator's answers kept getting stuck (check the internet connection)";
+
+    private static readonly HashSet<string> StopVerbs = ["stop", "halt", "abort", "cancel", "end"];
+    private static readonly HashSet<string> StopLead = ["please", "pls", "ok", "okay", "so", "just", "now", "hey", "and"];
+    private static readonly HashSet<string> StopRest =
+    [
+        "for", "now", "this", "that", "the", "a", "chat", "autopilot", "run", "running", "it", "all", "everything", "work", "working",
+        "here", "please", "pls", "today", "job", "jobs", "and", "wait", "thanks", "thank", "you", "team", "there", "immediately",
+        "right", "away", "of", "them", "task", "tasks", "pilot", "auto", "process", "everyone", "at", "once", "moment", "while",
+    ];
+
+    /// <summary>
+    /// True when a message typed (or sent from the phone) to a running autopilot only says to stop it: "stop",
+    /// "stop for now this chat", "please stop the autopilot". A message that says what to stop doing ("stop adding doors")
+    /// is an instruction for the coordinator, not a stop.
+    /// </summary>
+    public static bool SaysStop(string text)
+    {
+        var words = System.Text.RegularExpressions.Regex.Matches(text.ToLowerInvariant(), "[a-z']+").Cast<System.Text.RegularExpressions.Match>().Select(m => m.Value).ToList();
+        if (words.Count is 0 or > 12) return false;
+        var at = 0;
+        while (at < words.Count && StopLead.Contains(words[at])) at++;
+        if (at >= words.Count || !StopVerbs.Contains(words[at])) return false;
+        return words.Skip(at + 1).All(StopRest.Contains);
+    }
+
+    /// <summary>
+    /// The chat of a run may refuse to be left only while the run is healthy: running, its model open in this Revit
+    /// (<paramref name="modelOpen"/>) and its answer not stuck. A stuck, paused or model-less run never holds the chat.
+    /// </summary>
+    public static bool HoldsChat(AutopilotRun? run, bool modelOpen, bool stalled) => run is { State: AutopilotRun.Running } && modelOpen && !stalled;
+
+    /// <summary>The status line while a healthy run holds its chat: why, and how to leave.</summary>
+    public const string HoldLine = "The autopilot runs in this chat, so it stays open: leaving it would stop its progress updates and checks. " +
+                                   "To open another chat, press Stop on its banner (or the round stop button) first.";
+
+    /// <summary>True when the run's model (<paramref name="runKey"/>, "" when none) is among the models open in this Revit.</summary>
+    public static bool ModelOpen(string runKey, IEnumerable<string> openKeys) =>
+        runKey.Length == 0 || openKeys.Any(k => string.Equals(k, runKey, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>The pause's reason when the run's model isn't open (<paramref name="title"/>: its name).</summary>
+    public static string ModelGoneWhy(string title) => $"{title}, the model it works on, isn't open in this Revit";
+
+    /// <summary>The note (chat, log and phone) when the run pauses because its model isn't open.</summary>
+    public static string ModelGoneNote(string title) =>
+        $"Autopilot paused: {title}, the model it works on, isn't open in this Revit any more. The chat is free to leave. Open {title} " +
+        "again, then press Resume (or type \"continue\") in this chat to carry on, or Stop to end it.";
 
     /// <summary>Times a job that ended with a problem is started again by itself during a run, before it is reported.</summary>
     public const int MaxRetries = 2;

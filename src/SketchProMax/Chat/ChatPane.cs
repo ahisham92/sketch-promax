@@ -563,7 +563,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         _stop.ToolTip = "Stops Sketch ProMax's answer (Escape). A Revit change already made stays; undo it with Ctrl+Z.";
         AutomationProperties.SetName(_stop, "Stop Sketch ProMax's answer");
         AutomationProperties.SetHelpText(_stop, _stop.ToolTip as string ?? "");
-        _stop.Click += (_, _) => StopTurn();
+        _stop.Click += (_, _) => StopPressed(); // in a running autopilot's chat: stops the run, its answer and jobs
         DockPanel.SetDock(_send, Dock.Right);
         DockPanel.SetDock(_stop, Dock.Right);
         // The model for the next message: a pill left of Send that opens a small menu.
@@ -2114,6 +2114,15 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             SendToJob(shownJob);
             return;
         }
+        // "stop" typed to a running autopilot stops it now (not "after this item", behind an answer that may hang).
+        if (!_sample && Run is { Active: true } && Autopilot.SaysStop(_input.Text))
+        {
+            var said = _input.Text.Trim();
+            _input.Clear();
+            Add(new ChatItem { Kind = "user", Text = said });
+            AutopilotStopTyped(said, "");
+            return;
+        }
         if (_turn is not null)
         {
             // While a task runs the box stays open: the message reaches Claude at the next step boundary.
@@ -3048,8 +3057,9 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     private void ModelChanged()
     {
         if (_stopped) return;
-        // An autopilot keeps its chat whichever model Revit shows (it may work on several).
-        if (Run is { Active: true }) return;
+        // An autopilot keeps its chat whichever model Revit shows (it may work on several), unless its own model was
+        // closed (it paused, AutopilotModelCheck): then the chat follows the model shown, as any chat does.
+        if (Run is { Active: true, ModelGone: false }) return;
         // Not while the chat answers or its jobs work: the switch happens when they are done.
         if (_turn is not null || JobsOpen) _pendingModel = (ConversationKey, ConversationTitle);
         else SwitchTo(ConversationKey, ConversationTitle);
