@@ -558,6 +558,7 @@ internal static class ClaudeCli
     /// <summary>How the main chat coordinates parallel jobs (chat_jobs); nothing when jobs aren't available.</summary>
     private static string JobsPrompt() => !JobsAvailable ? "" : $"""
 
+        - {CrewStrip.Names.Line()}
         - Jobs: you coordinate. When a request has separate parts that can go side by side ("make sheets for levels 1-5
           and check the walls"), or is one long piece of model work, hand it to jobs with chat_jobs. Call action=list first;
           a follow-up that belongs to an existing job ("also add level 6" after a sheets job) goes to that job with

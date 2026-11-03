@@ -35,6 +35,8 @@ internal static class PromptIdeasTests
         var cli = Read("src/SketchProMax/Chat/ClaudeCli.cs");
         var system = Read("src/SketchProMax/Agent/SystemPrompt.cs");
         var jobs = Read("src/SketchProMax/Tools/ChatJobsTool.cs");
+        check("crew: the coordinator's prompt and list_jobs carry the crew's names from Settings (bug 70)",
+            cli.Contains("{CrewStrip.Names.Line()}") && Read("src/SketchProMax/Chat/ChatPane.Jobs.cs").Contains("JobBoard.WorkerName = slot => CrewStrip.Names.Worker(slot)"), "");
         check("done when: the coordinator gives each job one, the tool takes it for a job and each part",
             cli.Contains("its done_when") && Regex.Matches(jobs, "\"done_when\"").Count >= 2 && Regex.Matches(jobs, @"JobBoard\.WithDoneWhen\(").Count == 2, "");
         check("done when: a job checks its finish line before it reports, writing its own when it has none",

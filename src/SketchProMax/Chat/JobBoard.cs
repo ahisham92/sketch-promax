@@ -899,17 +899,26 @@ internal sealed class JobBoard
         _ => job.State,
     };
 
+    /// <summary>The crew strip's name of the worker at desk N (ChatJob.Worker), or null; set by the pane (CrewStrip.Names).</summary>
+    public static Func<int, string?> WorkerName { get; set; } = _ => null;
+
+    /// <summary>Who is who in the crew (CrewNames.Line), for the coordinator; "" when not set.</summary>
+    public static Func<string> CrewLine { get; set; } = () => "";
+
+    private static string WorkerOf(ChatJob j) => j.Worker >= 0 && WorkerName(j.Worker) is { Length: > 0 } name ? $" ({name})" : "";
+
     /// <summary>The jobs as list_jobs gives them to the main chat.</summary>
     public string Describe(int limit)
     {
         lock (Gate)
         {
-            if (_jobs.Count == 0) return $"No jobs in this chat yet. Up to {ClampLimit(limit)} run at once.";
+            var crew = CrewLine() is { Length: > 0 } line ? line + "\n" : "";
+            if (_jobs.Count == 0) return $"{crew}No jobs in this chat yet. Up to {ClampLimit(limit)} run at once.";
             var free = Math.Max(0, ClampLimit(limit) - _jobs.Count(j => j.Open));
-            var sb = new StringBuilder($"Jobs in this chat (up to {ClampLimit(limit)} run at once, {free} worker(s) free now; changes to the model are applied one at a time; thinking and reading run in parallel):\n");
+            var sb = new StringBuilder(crew + $"Jobs in this chat (up to {ClampLimit(limit)} run at once, {free} worker(s) free now; changes to the model are applied one at a time; thinking and reading run in parallel):\n");
             foreach (var j in _jobs.OrderBy(j => j.Number))
             {
-                sb.Append($"- Job {j.Number} \"{j.Title}\": {StateLabel(j).ToLowerInvariant()}");
+                sb.Append($"- Job {j.Number}{WorkerOf(j)} \"{j.Title}\": {StateLabel(j).ToLowerInvariant()}");
                 if (j.RevitModel.Length > 0) sb.Append($" (on {j.RevitModel})");
                 if (j.Active && j.Now.Length > 0) sb.Append($". Now: {OneLine(j.Now, 120)}");
                 if (j.Inbox.Count > 0) sb.Append($". {j.Inbox.Count} message(s) waiting for it");
@@ -927,7 +936,7 @@ internal sealed class JobBoard
         var sb = new StringBuilder("[Job report from Sketch ProMax, not typed by the user]\n");
         foreach (var j in finished)
         {
-            sb.Append($"\nJob {j.Number} \"{j.Title}\" {(j.OverBudget ? "was paused at its budget" : j.State == Failed ? "ended with a problem" : "finished")}:\n{(j.Summary.Length > 0 ? j.Summary.Trim() : "(it gave no summary)")}\n");
+            sb.Append($"\nJob {j.Number}{WorkerOf(j)} \"{j.Title}\" {(j.OverBudget ? "was paused at its budget" : j.State == Failed ? "ended with a problem" : "finished")}:\n{(j.Summary.Length > 0 ? j.Summary.Trim() : "(it gave no summary)")}\n");
             if (j.OverBudget) sb.Append(JobBudget.ReportLine(j) + "\n");
             if (JobReview.ReportLine(j) is { Length: > 0 } checkedLine) sb.Append(checkedLine + "\n");
         }

@@ -13,6 +13,24 @@ internal static class CrewTests
         };
         string Cues(List<CrewEvent> e) => string.Join(",", e.Select(x => x.Cue + ":" + x.Number));
 
+        // ---- The coordinator knows its crew by name (bug-log row 70)
+        var r70Crew = CrewNames.From("Sam", "Atlas", "Nova, Echo", "Bolt", null);
+        check("crew: the coordinator's line names him, the user, every worker and the applier",
+            r70Crew.Line().Contains("you are Atlas") && r70Crew.Line().Contains("Sam is the user") && r70Crew.Line().Contains("Nova, Echo") && r70Crew.Line().Contains("Bolt applies"), r70Crew.Line());
+        var echoJob = Job(1, JobBoard.Running);
+        echoJob.Worker = 1;
+        var r70Board = new JobBoard([echoJob, Job(2, JobBoard.Done)]);
+        var oldName = JobBoard.WorkerName;
+        var oldLine = JobBoard.CrewLine;
+        try
+        {
+            JobBoard.WorkerName = slot => r70Crew.Worker(slot);
+            JobBoard.CrewLine = r70Crew.Line;
+            var listing = r70Board.Describe(3);
+            check("crew: list_jobs starts with the crew and names each job's worker", listing.StartsWith("Your crew") && listing.Contains("Job 1 (Echo)") && listing.Contains("- Job 2 \""), listing);
+        }
+        finally { JobBoard.WorkerName = oldName; JobBoard.CrewLine = oldLine; }
+
         // The first look seats who is already working, without a show.
         var plan = new CrewPlan();
         var first = plan.Update([Job(1, JobBoard.Running), Job(2, JobBoard.Queued), Job(3, JobBoard.Done)], t0);

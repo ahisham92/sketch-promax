@@ -16,6 +16,13 @@ namespace SketchProMax.Chat;
 /// </summary>
 internal static class ChatJobs
 {
+    static ChatJobs()
+    {
+        // The coordinator knows its crew by the names the user sees (Settings > Chat), in list_jobs and job reports.
+        JobBoard.WorkerName = slot => CrewStrip.Names.Worker(slot);
+        JobBoard.CrewLine = () => CrewStrip.Names.Line();
+    }
+
     private static volatile JobBoard? _board;
     private static volatile Action? _changed;
     private static volatile bool _coordinator = true;

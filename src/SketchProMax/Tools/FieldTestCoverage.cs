@@ -786,6 +786,7 @@ internal static class FieldTestCoverage
         new(67, ["chat.autopilot_ui"], "in an Autopilot run, turn the internet off mid-answer and on again: within minutes the stuck answer ends and the run carries on; typing \"stop\" or pressing the round stop button ends the run at once; closing the run's model pauses it with a note naming the model"),
         new(68, ["chat.autopilot_ui", "chat.job_review_ui"], "in a chat (also an Autopilot still planning), turn the internet off mid-answer and type a message: within about 10 minutes the answer ends with a note and the message is sent next; every finished job (also one that only read) is checked once by a second worker, never twice in a row"),
         new(69, ["chat.autopilot_ui"], "with the phone connected, open a project's central model and later its detached copy: the phone shows one chat for the project, named after the coordinator and the project; a message written in it reaches that project's chat in Revit, and its answer comes back in the same phone chat"),
+        new(70, ["chat.jobs_ui"], "in a chat With coordinator with jobs running, ask \"what is <a worker's name> doing?\": the coordinator answers about that worker's job by name"),
     ];
 
     /// <summary>

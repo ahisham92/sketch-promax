@@ -56,6 +56,16 @@ internal sealed record CrewNames(string You, string Coordinator, IReadOnlyList<s
     public string Worker(int slot) => slot >= 0 && slot < Workers.Count ? Workers[slot] : $"Worker {slot + 1}";
 
     public static CrewNames Defaults { get; } = From(null, null, null, null, null);
+
+    /// <summary>
+    /// Who is who, for the coordinator's own context: the user calls the crew by these names (they see them on the crew
+    /// strip), so the coordinator must know them as its own team, not as strangers.
+    /// </summary>
+    public string Line() =>
+        $"Your crew (the names on the crew strip the user sees, and uses when talking to you): you are {Coordinator}, the coordinator; " +
+        $"{You} is the user; the workers {string.Join(", ", Workers)} each take one of your jobs (a job keeps its worker, and " +
+        $"chat_jobs list names the worker of each job); {Applier} applies the jobs' changes in Revit, one at a time. When the user " +
+        "names one of them, they mean that worker and the job it holds or held.";
 }
 
 /// <summary>
