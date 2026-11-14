@@ -35,6 +35,7 @@
     <Compile Include="../../src/SketchProMax/Chat/CrewStats.cs" Link="CrewStats.cs" />
     <Compile Include="../../src/SketchProMax/Chat/DirectAdvice.cs" Link="DirectAdvice.cs" />
     <Compile Include="../../src/SketchProMax/Chat/Autopilot.cs" Link="Autopilot.cs" />
+    <Compile Include="../../src/SketchProMax/Chat/SignInHealth.cs" Link="SignInHealth.cs" />
     <Compile Include="../../src/SketchProMax/Chat/JobChecks.cs" Link="JobChecks.cs" />
     <Compile Include="../../src/SketchProMax/Chat/AskRules.cs" Link="AskRules.cs" />
     <Compile Include="../../src/SketchProMax/Chat/ConnectionWatch.cs" Link="ConnectionWatch.cs" />

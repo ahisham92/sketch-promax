@@ -348,6 +348,10 @@ internal sealed partial class ChatPane
         AutopilotStallCheck(run);
         if (run.State == AutopilotRun.Paused)
         {
+            // Paused for the sign-in: no retry while it is known not to work (each try would fail the same way); signing
+            // in again carries the run on (Checked).
+            if (run.AccessLost && run.PausedUntil is { } due && due <= now && SignInHealth.Broken)
+                run.PausedUntil = now + Autopilot.AccessRetry;
             if (run.PausedUntil is { } until && until <= now)
                 AutopilotResume(run.AccessLost ? "Trying again after Sketch ProMax lost access to your plan." : "The usage limit has reset.");
             ShowAutopilot();

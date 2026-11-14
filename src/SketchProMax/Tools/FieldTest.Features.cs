@@ -861,6 +861,8 @@ internal static partial class FieldTest
     {
         if (cli?.Install is not { } install) return Fail("Claude Code is not installed (see chat.cli), so its sign-in can't be read");
         var (state, method) = Chat.ClaudeCli.CheckSignIn(install);
+        if (state != Chat.ClaudeCli.SignIn.SignedOut && Chat.SignInHealth.Broken)
+            return Fail("Claude Code says signed in, but the chat's last message failed to authenticate (the sign-in expired): open Chat and press Sign in again");
         return state switch
         {
             Chat.ClaudeCli.SignIn.SignedIn => Pass("signed in" + (method.Length > 0 ? $" ({method})" : "")),

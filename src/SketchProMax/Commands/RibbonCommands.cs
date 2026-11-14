@@ -66,6 +66,7 @@ internal static class CoreCommands
                 _ => "The Claude desktop app is not connected",
             },
             MainContent = detail + "\n\n" +
+                (Chat.SignInHealth.Broken ? "Chat: sign-in expired. Open Chat and press Sign in again.\n\n" : "") +
                 (doc is null ? "Open a model, then " : $"Active model: {doc.Title}\n\n") +
                 "chat in the Claude desktop app, for example: \"What's in my Revit model?\"\n\n" +
                 "If the Revit tools don't appear there, quit the Claude app completely (system tray > Quit) and start it again.",

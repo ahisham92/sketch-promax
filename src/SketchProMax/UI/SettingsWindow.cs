@@ -346,6 +346,8 @@ public sealed class SettingsWindow : Window
     private StackPanel ChatPage()
     {
         var page = new StackPanel();
+        page.Children.Add(SubHeading("Sign-in"));
+        page.Children.Add(SignInRow());
         page.Children.Add(SubHeading("Chat animations"));
         var current = Chat.MotionLevels.Parse(_settings.ChatAnimations);
         foreach (var level in Chat.MotionLevels.All)
@@ -828,6 +830,82 @@ public sealed class SettingsWindow : Window
         panel.Children.Add(state);
         panel.Children.Add(buttons);
         Show();
+        return panel;
+    }
+
+    /// <summary>
+    /// Settings › Chat › Sign-in: whether the chat's sign-in really works (an expired one counts as signed out, see
+    /// Chat.SignInHealth), and Sign in again, which opens the browser (no Command Prompt).
+    /// </summary>
+    private StackPanel SignInRow()
+    {
+        var panel = new StackPanel();
+        var state = Brand.Text("Checking the sign-in…");
+        state.TextWrapping = TextWrapping.Wrap;
+        var signIn = Brand.Button("Sign in again", Brand.Weight.Primary);
+        AutomationProperties.SetHelpText(signIn, "Opens your browser to sign in. Use it when the sign-in expired, or to use another account.");
+        Chat.ClaudeCli.Install? install = null;
+        void Say(string text, string key = Brand.K.Text)
+        {
+            state.Text = text;
+            Brand.Fg(state, key);
+        }
+        async void Check()
+        {
+            (Chat.ClaudeCli.Install? found, Chat.ClaudeCli.SignIn signedIn) result;
+            try
+            {
+                result = await Task.Run(() =>
+                {
+                    var cli = Chat.ClaudeCli.Find();
+                    return (cli, cli is null ? Chat.ClaudeCli.SignIn.Unknown : Chat.SignInCheck.Real(Chat.ClaudeCli.CheckSignIn(cli).State));
+                });
+            }
+            catch (Exception ex)
+            {
+                Say("The sign-in couldn't be checked: " + ex.Message, Brand.K.DangerText);
+                return;
+            }
+            var (found, signedIn) = result;
+            install = found;
+            if (found is null) Say("The chat isn't installed on this PC yet. Open Chat: it offers to install it.", Brand.K.Muted);
+            else if (Chat.SignInFlow.Now == Chat.SignInFlow.State.Waiting) Say("Finish signing in in your browser…");
+            else if (Chat.SignInHealth.Broken) Say("Sign-in expired: Sketch ProMax can't use your plan until you sign in again.", Brand.K.DangerText);
+            else if (signedIn == Chat.ClaudeCli.SignIn.SignedOut) Say("Signed out. Sign in to chat.", Brand.K.DangerText);
+            else Say("Signed in.", Brand.K.SuccessText);
+            signIn.IsEnabled = found is not null;
+        }
+        void Flow()
+        {
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                switch (Chat.SignInFlow.Now)
+                {
+                    case Chat.SignInFlow.State.Waiting: Say("Finish signing in in your browser…"); break;
+                    case Chat.SignInFlow.State.Done: Check(); break;
+                    case Chat.SignInFlow.State.Failed:
+                        Say("The sign-in didn't finish" + (Chat.SignInFlow.Problem.Length > 0 ? ": " + Chat.SignInFlow.Problem : ".") + " Press Sign in again.", Brand.K.DangerText);
+                        break;
+                }
+            }));
+        }
+        Chat.SignInFlow.Changed += Flow;
+        Closed += (_, _) => Chat.SignInFlow.Changed -= Flow;
+        signIn.Click += (_, _) =>
+        {
+            if (install is null) { Check(); return; }
+            try { Chat.SignInFlow.Start(install); }
+            catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or IOException)
+            {
+                Chat.ClaudeCli.StartSignIn(install); // a PC that won't run it hidden gets the sign-in window
+            }
+            Say("Finish signing in in your browser…");
+        };
+        signIn.Margin = new Thickness(0, 8, 0, 0);
+        signIn.HorizontalAlignment = HorizontalAlignment.Left;
+        panel.Children.Add(state);
+        panel.Children.Add(signIn);
+        Check();
         return panel;
     }
 
