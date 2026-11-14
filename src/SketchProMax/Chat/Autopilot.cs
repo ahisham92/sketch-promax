@@ -192,7 +192,7 @@ internal static class Autopilot
     public static bool LostAccess(string text) => System.Text.RegularExpressions.Regex.IsMatch(text,
         @"disabled (claude )?subscription access|ask your admin to enable|organi[sz]ation has disabled|not logged in|/login\b|\blog ?in again|invalid api key|" +
         @"authentication_failed|authentication failed|oauth token (has )?expired|please run .*login|\bsign in again\b|not signed in",
-        System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase) || SignInHealth.LooksExpired(text);
 
     /// <summary>How long a run paused for lost access waits before it tries again by itself (the user may sign in meanwhile).</summary>
     public static readonly TimeSpan AccessRetry = TimeSpan.FromMinutes(20);
@@ -200,8 +200,8 @@ internal static class Autopilot
     /// <summary>What the user is told (chat and phone) when the run pauses for lost access.</summary>
     public static string AccessNote(string message) =>
         "Autopilot paused: Sketch ProMax can't use your Claude plan any more (" + Clip(JobBoard.OneLine(message, 300), 300) + "). " +
-        "Nothing is lost. On the PC, press Sign in at the top of the chat and sign in with the account that has your Max plan; " +
-        "the run carries on by itself within 20 minutes, or press Resume.";
+        "Nothing is lost. On the PC, press Sign in again in the chat and sign in with the account that has your Max plan; " +
+        "the run carries on by itself as soon as you have signed in.";
 
     // ---- A stuck answer, a typed stop, the run's model -------------------------------------------------------------------
 

@@ -555,7 +555,11 @@ internal sealed partial class ChatPane
         if (!end.IsError) summary = message.Length > 0 ? message : run.LastText;
         else if (System.Text.RegularExpressions.Regex.IsMatch(message, @"usage limit|rate limit|limit reached|out of (extra )?usage", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
             summary = $"Your plan's usage limit is reached: {message}. Send it a message to carry on when the limit resets.";
-        else if (LooksSignedOut(message)) summary = "You're not signed in. Press Sign in at the top of the chat, then send this job a message to carry on.";
+        else if (LooksSignedOut(message))
+        {
+            SignInLost();
+            summary = JobSignInError;
+        }
         else summary = (message.Length > 0 ? message : "It reported an error.") + " Send it a message to try again.";
         // Messages sent while it ran: it carries on with them in the same process.
         if (board.RunEnded(run.Job, !end.IsError, summary, now) is { } next)
@@ -593,7 +597,9 @@ internal sealed partial class ChatPane
             return;
         }
         var detail = Last(tail, 300);
-        var why = LooksSignedOut(tail) ? "You're not signed in. Press Sign in at the top of the chat, then send this job a message to carry on."
+        var lost = LooksSignedOut(tail);
+        if (lost) SignInLost();
+        var why = lost ? JobSignInError
             : "It stopped unexpectedly." + (detail.Length > 0 ? " " + detail : "") + " Send it a message to try again.";
         board.RunEnded(run.Job, false, why, DateTime.UtcNow);
         board.AddItem(run.Job, new ChatItem { Kind = "error", Text = why }, DateTime.UtcNow);

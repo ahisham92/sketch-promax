@@ -94,6 +94,15 @@ internal sealed partial class ChatPane
             : "Your plan's usage shows after Sketch ProMax's next answer.";
         AutomationProperties.SetName(_usagePill, "Plan usage: " + (meter.Length > 0 ? meter.Replace("·", ",") : "not reported yet"));
         AutomationProperties.SetHelpText(_usagePill, (string)_usagePill.ToolTip);
+        if (!_sample && _setup == Setup.SignedOut)
+        {
+            // Signed out or expired: the line says so (no stale "ready" figures), and a click offers Sign in again.
+            _usageText.Text = _narrow ? "Signed out" : SignInHealth.Broken ? "Sign-in expired · sign in again" : "Signed out · sign in";
+            Brand.Fg(_usageText, Brand.K.WarningText);
+            _usageBar.Visibility = Visibility.Collapsed;
+            _usagePill.ToolTip = "Sketch ProMax can't use your plan until you sign in again. Click, then Sign in again.";
+            AutomationProperties.SetName(_usagePill, "Signed out: sign in again");
+        }
         if (_usageMenu.IsOpen) FillUsage();
     }
 
@@ -168,6 +177,19 @@ internal sealed partial class ChatPane
             _usageList.Children.Add(Brand.Text($"As reported with an answer at {when}. Only reported figures are shown, never an estimate: the weekly Opus or Sonnet limit appears only once it is the limit in force.",
                 Brand.K.Muted, ChatUi.SmallSize));
         }
+        // The account: whether the sign-in works, and Sign in again (the browser opens; no Command Prompt).
+        var account = Brand.Text(SignInHealth.Broken ? "Sign-in: expired. Sign in again to keep chatting." : _setup == Setup.Ready ? "Sign-in: working." : "Sign-in: not signed in.",
+            SignInHealth.Broken || _setup != Setup.Ready ? Brand.K.WarningText : Brand.K.Muted, ChatUi.SmallSize);
+        account.Margin = new Thickness(0, ChatUi.S3, 0, 0);
+        _usageList.Children.Add(account);
+        var signIn = new Button { Content = "Sign in again", Margin = new Thickness(0, ChatUi.S2, 0, 0), HorizontalAlignment = HorizontalAlignment.Left, ToolTip = "Opens your browser to sign in again, for example with another account or when the sign-in expired." };
+        signIn.SetResourceReference(StyleProperty, "SpmChatPill");
+        signIn.Click += (_, _) =>
+        {
+            _usageMenu.IsOpen = false;
+            SignInAgain();
+        };
+        _usageList.Children.Add(signIn);
         var close = new Button { Content = "Close", Margin = new Thickness(0, ChatUi.S3, 0, 0), HorizontalAlignment = HorizontalAlignment.Right, MinWidth = 64 };
         close.SetResourceReference(StyleProperty, "SpmChatPill");
         close.Click += (_, _) =>

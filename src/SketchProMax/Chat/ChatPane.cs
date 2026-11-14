@@ -385,6 +385,11 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         Unloaded += (_, _) => ChatUi.MotionChanged -= MotionChanged;
         _sample = sample is not null;
         if (sample is null) Tools.Handoff.ChatPresenter = r => _instance is { } pane && pane.ShowHandoff(r);
+        if (sample is null)
+        {
+            SignInHealth.Changed += SignInChangedSoon;
+            SignInFlow.Changed += SignInChangedSoon;
+        }
         SetResourceReference(BackgroundProperty, Brand.K.Bg);
         SetResourceReference(TextElement.ForegroundProperty, Brand.K.Text);
         TextElement.SetFontSize(this, ChatUi.BodySize);
@@ -996,7 +1001,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         {
             var install = ClaudeCli.Find();
             var signIn = install is null ? (ClaudeCli.SignIn.Unknown, "") : ClaudeCli.CheckSignIn(install);
-            return (install, signIn.Item1);
+            // "auth status" says signed in while a saved sign-in that expired is still on disk: what the chat saw counts.
+            return (install, SignInCheck.Real(signIn.Item1));
         }).ContinueWith(t => Dispatcher.BeginInvoke(new Action(() => Checked(t))), TaskScheduler.Default);
     }
 
@@ -1018,9 +1024,12 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
                 else if (signIn == ClaudeCli.SignIn.SignedOut) _setup = _setup == Setup.SigningIn ? Setup.SigningIn : Setup.SignedOut;
                 else
                 {
+                    var was = _setup;
                     if (_setup != Setup.Ready) RememberLeftOver();
                     _setup = Setup.Ready;
                     if (waiting) Note("Sketch ProMax is ready. Ask your first question below.");
+                    // An Autopilot paused because the sign-in stopped working carries on as soon as it works again.
+                    if (was != Setup.Ready && Run is { State: AutopilotRun.Paused, AccessLost: true }) AutopilotResume("Signed in again.");
                 }
                 // Give up waiting after a quarter of an hour; the card then offers to try again.
                 if (_setup is Setup.Installing or Setup.SigningIn && DateTime.UtcNow - _waitingSince > TimeSpan.FromMinutes(15))
@@ -1040,6 +1049,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
 
     private void ShowSetup()
     {
+        ShowUsage(); // the line under the box says when the sign-in doesn't work
         // Check again is in the header only while the setup needs it (the card has its own too).
         _refresh.Visibility = _setup == Setup.Ready ? Visibility.Collapsed : Visibility.Visible;
         if (_setup == Setup.Ready)
@@ -1117,18 +1127,48 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
                 Add("Install again", Brand.Weight.Secondary, () => Launch(Setup.Installing));
                 break;
             case Setup.SignedOut:
-                Title("Sign in to your Claude account");
-                Para($"Claude Code {_install?.Version} is installed but not signed in. Sign in opens a window and your browser: " +
-                     "sign in with the Claude account that has your plan, then come back here.");
-                Add("Sign in", Brand.Weight.Primary, () => Launch(Setup.SigningIn));
-                Add("Check again", Brand.Weight.Secondary, () => Check(quiet: false));
+                var expired = SignInHealth.Broken;
+                Title(expired ? "Sign-in expired" : "Sign in to your Claude account");
+                Para(expired
+                    ? "Sketch ProMax is signed out: your sign-in expired. Sign in again opens your browser; sign in with the account that has your plan."
+                    : "Sign in opens your browser: sign in with the Claude account that has your plan. The chat carries on by itself.");
+                if (SignInFlow.Now == SignInFlow.State.Failed && SignInFlow.Problem.Length > 0)
+                    Para("The last sign-in didn't finish: " + SignInFlow.Problem, Brand.K.DangerText);
+                Add(expired ? "Sign in again" : "Sign in", Brand.Weight.Primary, () => Launch(Setup.SigningIn));
+                Add("Check again", Brand.Weight.Secondary, () =>
+                {
+                    SignInHealth.Clear(); // the user says try anyway: the next message shows whether it works
+                    Check(quiet: false);
+                });
                 break;
             case Setup.SigningIn:
                 Title("Signing in");
-                Waiting("Waiting for you to finish signing in in the browser…");
-                Para("When the window says you're signed in, close it. This pane continues by itself.", Brand.K.Muted);
-                Add("Check again", Brand.Weight.Secondary, () => Check(quiet: false));
-                Add("Open sign-in again", Brand.Weight.Secondary, () => Launch(Setup.SigningIn));
+                Waiting("Finish signing in in your browser…");
+                Para("Browser didn't open? Press Open the page, sign in, then paste the code it shows here.", Brand.K.Muted);
+                var codeBox = new TextBox { MinWidth = 180, Margin = new Thickness(0, 0, ChatUi.S2, ChatUi.S1), VerticalContentAlignment = VerticalAlignment.Center };
+                AutomationProperties.SetName(codeBox, "Sign-in code");
+                Add("Open the page", Brand.Weight.Secondary, () =>
+                {
+                    if (SignInFlow.OpenPage() || _install is not { } cli) return;
+                    // No page address came yet: the sign-in window as before (it shows the address and takes the code).
+                    SignInFlow.Cancel();
+                    try { ClaudeCli.StartSignIn(cli); }
+                    catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException) { Status("The sign-in page couldn't be opened: " + ex.Message, spin: false); }
+                });
+                row.Children.Add(codeBox);
+                Add("Send code", Brand.Weight.Secondary, () =>
+                {
+                    if (!SignInFlow.SendCode(codeBox.Text)) Status("Press Sign in again first, then paste the code.", spin: false);
+                    else Status("Code sent; finishing the sign-in…", spin: true);
+                });
+                Add("Cancel", Brand.Weight.Secondary, () =>
+                {
+                    SignInFlow.Cancel();
+                    _setup = Setup.SignedOut;
+                    _poll.Stop();
+                    ShowSetup();
+                    ShowStatus();
+                });
                 break;
             case Setup.Failed:
                 Title("The chat setup couldn't be checked");
@@ -1153,7 +1193,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         try
         {
             if (next == Setup.Installing) ClaudeCli.StartInstall();
-            else if (_install is { } install) ClaudeCli.StartSignIn(install);
+            else if (_install is { } install) StartSignIn(install);
             else { Check(quiet: false); return; }
         }
         catch (Exception ex) when (next == Setup.Installing && ex is System.ComponentModel.Win32Exception or InvalidOperationException)
@@ -1562,6 +1602,15 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         icon.Margin = new Thickness(0, 1, ChatUi.S2, 0);
         DockPanel.SetDock(icon, Dock.Left);
         row.Children.Add(icon);
+        if (IsSignInError(item.Text) && !_sample)
+        {
+            // A sign-in problem: the way out is right here (never "New chat", which can't help).
+            var again = new Button { Content = "Sign in again", Margin = new Thickness(ChatUi.S2, 0, 0, 0), VerticalAlignment = VerticalAlignment.Top };
+            again.SetResourceReference(StyleProperty, "SpmChatPrimary");
+            again.Click += (_, _) => SignInAgain();
+            DockPanel.SetDock(again, Dock.Right);
+            row.Children.Add(again);
+        }
         row.Children.Add(Brand.Text(item.Text, Brand.K.Text));
         var box = new Border
         {
@@ -2678,6 +2727,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         }
         if (end.IsError && !turn.Stopping && ChatModels.IsRejection(message) && _engine is { } refused && FallBack(turn, refused.Model, message)) return;
         if (!end.IsError && _engine is { } worked) _lastWorkingModel = worked.Model;
+        if (!end.IsError && !turn.Stopping) SignInHealth.Clear(); // an answer came: the sign-in works
         if (end.IsError) turn.Outcome = "failed";
         if (turn.Stopping)
             Note("Stopped. Ask again, or say what to do instead.");
@@ -2693,11 +2743,10 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         if (Autopilot.LostAccess(message)) AutopilotLostAccess(message);
         if (LooksSignedOut(message))
         {
-            _setup = Setup.SignedOut;
-            ShowSetup();
+            SignInLost();
             Error(Regex.IsMatch(message, "disabled|admin", RegexOptions.IgnoreCase)
-                ? $"Sketch ProMax can't use this sign-in: {message.Trim()} Press Sign in above and sign in with the account that has your own plan, then send your message again."
-                : "You're not signed in. Press Sign in above, then send your message again.");
+                ? $"Sketch ProMax can't use this sign-in: {message.Trim()} Press Sign in again and sign in with the account that has your own plan, then send your message again."
+                : SignInError);
             return;
         }
         if (subtype == "error_max_turns")
@@ -2737,6 +2786,69 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
 
     private static bool LooksSignedOut(string text) => Autopilot.LostAccess(text);
 
+    // ---- Sign-in ------------------------------------------------------------------------------------------------
+
+    /// <summary>What a message that failed for the sign-in says; its box carries a Sign in again button.</summary>
+    internal const string SignInError = "Your sign-in expired, so Sketch ProMax couldn't answer. Press Sign in again, then send your message again.";
+
+    internal const string JobSignInError = "Your sign-in expired. Press Sign in again in the chat, then send this job a message to carry on.";
+
+    internal static bool IsSignInError(string text) =>
+        text.StartsWith("Your sign-in expired", StringComparison.Ordinal) || text.StartsWith("You're not signed in", StringComparison.Ordinal) ||
+        text.StartsWith("Sketch ProMax can't use this sign-in", StringComparison.Ordinal);
+
+    /// <summary>A message (the chat's or a job's) failed for the sign-in: the chat says so until the user signs in again.</summary>
+    private void SignInLost()
+    {
+        SignInHealth.MarkFailed();
+        if (_setup is not (Setup.SigningIn or Setup.Checking)) _setup = Setup.SignedOut;
+        ShowSetup();
+        ShowStatus();
+    }
+
+    /// <summary>Sign in again (the error box, the usage menu): runs the sign-in in the browser, no console window.</summary>
+    internal void SignInAgain()
+    {
+        if (_stopped) return;
+        if (_install is null) { Check(quiet: false); return; }
+        Launch(Setup.SigningIn);
+    }
+
+    /// <summary>Claude Code's sign-in, hidden: it opens the browser. A PC that won't run it hidden gets the old window.</summary>
+    private static void StartSignIn(ClaudeCli.Install install)
+    {
+        try { SignInFlow.Start(install); }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or IOException)
+        {
+            ClaudeCli.StartSignIn(install);
+        }
+    }
+
+    private void SignInChangedSoon()
+    {
+        try { Dispatcher.BeginInvoke(new Action(SignInChanged)); }
+        catch (InvalidOperationException) { }
+    }
+
+    /// <summary>The sign-in finished, failed or broke (from this chat, a job or Settings): the card and Autopilot follow.</summary>
+    private void SignInChanged()
+    {
+        if (_stopped || _sample) return;
+        switch (SignInFlow.Now)
+        {
+            case SignInFlow.State.Done when _setup is Setup.SigningIn or Setup.SignedOut:
+                Check(quiet: true);
+                break;
+            case SignInFlow.State.Failed when _setup == Setup.SigningIn:
+                _setup = Setup.SignedOut;
+                _poll.Stop();
+                ShowSetup();
+                ShowStatus();
+                break;
+        }
+        if (_setup == Setup.Ready && SignInHealth.Broken) SignInLost();
+    }
+
     private void OnExited(ChatEngine engine, string tail)
     {
         _engine = null;
@@ -2775,9 +2887,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         var detail = Last(tail, 500);
         if (LooksSignedOut(tail))
         {
-            _setup = Setup.SignedOut;
-            ShowSetup();
-            Error("You're not signed in. Press Sign in above, then send your message again.");
+            SignInLost();
+            Error(SignInError);
         }
         else if (Regex.IsMatch(tail, @"unknown option|unrecognized|invalid value", RegexOptions.IgnoreCase))
             Error("The chat engine (Claude Code) is too old for the Revit chat. Update it (open a Command Prompt and run: claude update), then send again." +
@@ -3137,6 +3248,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         CloseBig();
         _stopped = true;
         _poll.Stop();
+        SignInHealth.Changed -= SignInChangedSoon;
+        SignInFlow.Changed -= SignInChangedSoon;
         // Nothing may keep a retired pane alive after a hot swap: timers (rooted by the dispatcher while running) and static events.
         _idle.Stop();
         _render.Stop();
