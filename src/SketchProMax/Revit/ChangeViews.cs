@@ -24,6 +24,8 @@ internal static class ChangeViews
         ImportInstance => "cad",
         // The preview Revit keeps of each loaded family type is in a category of its own (OST_PreviewLegendComponents): not this one.
         _ when e.Category?.Id.Value == (long)BuiltInCategory.OST_LegendComponents => "legendcomponent",
+        // A view reference ("see sheet S-101"): an annotation with no class of its own.
+        _ when e is not ElementType && e.Category?.Id.Value == (long)BuiltInCategory.OST_ReferenceViewer => "viewref",
         _ => null,
     };
 
@@ -37,7 +39,7 @@ internal static class ChangeViews
         catch (Autodesk.Revit.Exceptions.InvalidOperationException) { return null; }
     }
 
-    public static bool Owns(M.Line line) => line.What is "sheet" or "view" or "viewport" or "schedule-on-sheet" or "group" or "link" or "cad" or "legendcomponent";
+    public static bool Owns(M.Line line) => line.What is "sheet" or "view" or "viewport" or "schedule-on-sheet" or "group" or "link" or "cad" or "legendcomponent" or "viewref";
 
     /// <summary>
     /// What comes with something else and never gets a line: a title block's revision schedule (and its place on the
@@ -80,6 +82,8 @@ internal static class ChangeViews
                 line.ViewKind = view.ViewType.ToString();
                 try { line.Name = view.Name; } catch (Exception) { }
                 if (view.GenLevel is { } level) { line.Level = level.Name; line.LevelUnique = level.UniqueId; }
+                // An area plan is made again in its area scheme.
+                if (view is ViewPlan { AreaScheme: { } scheme }) (line.Extra ??= [])["scheme"] = scheme.Name;
                 if (view.GetPrimaryViewId() is { } primary && primary != ElementId.InvalidElementId) line.Host = doc.GetElement(primary)?.UniqueId;
                 if (view is View3D v3)
                 {
@@ -114,6 +118,8 @@ internal static class ChangeViews
                             _ => null,
                         };
                         line.Fields = Enumerable.Range(0, definition.GetFieldCount()).Select(i => definition.GetField(i).ParameterId.Value).ToList();
+                        // Its headings, widths, hidden columns, sorting, grouping, filters and totals.
+                        try { (line.Extra ??= [])["look"] = System.Text.Json.JsonSerializer.Serialize(ReadLook(definition)); } catch (Exception) { }
                     }
                     catch (Exception) { }
                 }
@@ -135,6 +141,15 @@ internal static class ChangeViews
                 break;
             case not null when line.What == "legendcomponent":
                 if (doc.GetElement(e.OwnerViewId) is View legend && e.get_BoundingBox(legend) is { } bb) line.P = P((bb.Min + bb.Max) / 2);
+                break;
+            case not null when line.What == "viewref":
+                if (doc.GetElement(e.OwnerViewId) is View drawn)
+                {
+                    line.View = drawn.UniqueId;
+                    if (e.get_BoundingBox(drawn) is { } rb) line.P = P((rb.Min + rb.Max) / 2);
+                }
+                // The view it refers to.
+                try { line.Host = doc.GetElement(ReferenceableViewUtils.GetReferencedViewId(doc, e.Id))?.UniqueId; } catch (Exception) { }
                 break;
             case RevitLinkInstance link:
                 line.Box = Placement(link.GetTotalTransform());
@@ -176,7 +191,8 @@ internal static class ChangeViews
     {
         "view" when line.ViewKind is nameof(ViewType.Elevation) && (line.PlaneOrigin is null || line.PlaneNormal is null) => "an elevation made after the last save: make it again by hand",
         "view" when line.ViewKind is nameof(ViewType.Elevation) or nameof(ViewType.Legend) => null,
-        "view" when line.ViewKind is nameof(ViewType.AreaPlan) => "an area plan made after the last save: make it again by hand (it needs its area scheme)",
+        "view" when line.ViewKind is nameof(ViewType.AreaPlan) && line.Host is null =>
+            line.Extra is { } x && x.ContainsKey("scheme") && (line.LevelUnique is not null || line.Level is not null) ? null : "an area plan made after the last save whose area scheme isn't in the file: make it again by hand",
         "view" when line.Values?.Any(v => v.Bip == (int)BuiltInParameter.VIEW_TEMPLATE_FOR_SCHEDULE) == true && line.ViewKind is null => "a view template made after the last save: make it again by hand",
         "view" when line.Host is not null => null,
         "view" when line.ViewKind is nameof(ViewType.FloorPlan) or nameof(ViewType.CeilingPlan) or nameof(ViewType.EngineeringPlan) && line.LevelUnique is not null => null,
@@ -191,6 +207,7 @@ internal static class ChangeViews
         "cad" when line.Name is { Length: > 0 } => null,
         "cad" => "CAD made after the last save whose file isn't known: link or import it again by hand",
         "legendcomponent" when line.View is not null && line.P is not null => null,
+        "viewref" when line.View is not null && line.P is not null => null,
         _ => "made after the last save, but the file doesn't have all it needs: make it again by hand",
     };
 
@@ -228,6 +245,23 @@ internal static class ChangeViews
                              ?? throw new InvalidOperationException("there is no legend component in the model to copy: place it by hand");
                 var copied = ElementTransformUtils.CopyElements(doc.GetElement(source.OwnerViewId) as View, [source.Id], legend, Transform.Identity, new CopyPasteOptions());
                 return doc.GetElement(copied.First());
+            }
+            case "viewref":
+            {
+                // Revit has no call to place a view reference: one already in the model is copied into the view, then
+                // pointed at the file's view, given its type and moved into place.
+                if (find(line.View) is not View drawn) throw new InvalidOperationException("the view it was drawn in isn't in this model");
+                var all = new FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_ReferenceViewer).WhereElementIsNotElementType().ToElements();
+                var source = all.FirstOrDefault(r => r.OwnerViewId == drawn.Id) ?? all.FirstOrDefault(r => type is not null && r.GetTypeId() == type.Id) ?? all.FirstOrDefault()
+                             ?? throw new InvalidOperationException("there is no view reference in the model to copy: place one by hand, then replay again");
+                var copy = source.OwnerViewId == drawn.Id
+                    ? doc.GetElement(ElementTransformUtils.CopyElement(doc, source.Id, XYZ.Zero).First())
+                    : doc.GetElement(ElementTransformUtils.CopyElements(doc.GetElement(source.OwnerViewId) as View, [source.Id], drawn, Transform.Identity, new CopyPasteOptions()).First());
+                if (find(line.Host) is View target)
+                    try { ReferenceableViewUtils.ChangeReferencedView(doc, copy.Id, target.Id); }
+                    catch (Exception) { notes.Add($"{label}: made again, but Revit didn't let it refer to {target.Name}: set its Target view by hand"); }
+                if (type is not null && copy.GetTypeId() != type.Id) try { copy.ChangeTypeId(type.Id); } catch (Exception) { }
+                return copy;
             }
             case "group":
             {
@@ -291,6 +325,15 @@ internal static class ChangeViews
                 case nameof(ViewType.DraftingView):
                     view = ViewDrafting.Create(doc, typeId());
                     break;
+                case nameof(ViewType.AreaPlan):
+                {
+                    var wanted = line.Extra!["scheme"];
+                    var scheme = new FilteredElementCollector(doc).OfClass(typeof(AreaScheme)).Cast<AreaScheme>().FirstOrDefault(a => a.Name == wanted)
+                                 ?? throw new InvalidOperationException($"the area scheme {wanted} isn't in this model");
+                    view = ViewPlan.CreateAreaPlan(doc, scheme.Id, (level ?? throw new InvalidOperationException("its level isn't in this model")).Id);
+                    if (line.Box is { Min: not null, Max: not null } areaCrop) try { view.CropBox = Bounding(areaCrop); } catch (Exception) { }
+                    break;
+                }
                 case nameof(ViewType.Elevation):
                     view = MakeElevation(doc, line, typeId());
                     break;
@@ -328,7 +371,12 @@ internal static class ChangeViews
                         if (field is null) { missing++; continue; }
                         try { definition.AddField(field); } catch (Exception) { missing++; }
                     }
-                    notes.Add($"{label}: made again with its columns: redo its filters, sorting and formatting by hand" + (missing > 0 ? $" ({missing} column(s) couldn't be added)" : ""));
+                    // Its headings, widths, sorting, grouping, filters and totals, when the file has them (older files don't).
+                    var looked = false;
+                    if (line.Extra is { } extra && extra.TryGetValue("look", out var json))
+                        try { SetLook(definition, System.Text.Json.JsonSerializer.Deserialize<M.Look>(json)!); looked = true; } catch (Exception) { }
+                    if (!looked) notes.Add($"{label}: made again with its columns: redo its filters, sorting and formatting by hand" + (missing > 0 ? $" ({missing} column(s) couldn't be added)" : ""));
+                    else if (missing > 0) notes.Add($"{label}: made again, but {missing} of its columns (calculated or combined ones) couldn't be added: add them by hand");
                     view = schedule;
                     break;
                 }
@@ -373,14 +421,98 @@ internal static class ChangeViews
     /// <summary>After its values are set: a legend component moved to where it was in its legend. True when moved.</summary>
     public static bool Settle(Document doc, Element e, M.Line line)
     {
-        if (line.What != "legendcomponent" || line.P is not { } want || doc.GetElement(e.OwnerViewId) is not View legend) return false;
+        if (line.What is not ("legendcomponent" or "viewref") || line.P is not { } want || doc.GetElement(e.OwnerViewId) is not View legend) return false;
         doc.Regenerate();
         if (e.get_BoundingBox(legend) is not { } bb) return false;
         var move = X(want) - (bb.Min + bb.Max) / 2;
-        move = new XYZ(move.X, move.Y, 0);
+        // Only within the view's plane.
+        XYZ? normal = null;
+        try { normal = legend.ViewDirection; } catch (Exception) { }
+        move = normal is null || normal.IsZeroLength() ? new XYZ(move.X, move.Y, 0) : move - normal.Multiply(move.DotProduct(normal));
         if (move.GetLength() < 3.3e-4) return false;
         ElementTransformUtils.MoveElement(doc, e.Id, move);
         return true;
+    }
+
+    // ---- A schedule's look -------------------------------------------------------------------------------------------------
+
+    private static M.Look ReadLook(ScheduleDefinition d)
+    {
+        var look = new M.Look { Itemized = d.IsItemized, GrandTotal = d.ShowGrandTotal, Title = d.ShowTitle, Headers = d.ShowHeaders };
+        long Param(ScheduleFieldId id) => d.GetField(id).ParameterId.Value;
+        for (var i = 0; i < d.GetFieldCount(); i++)
+        {
+            var f = d.GetField(i);
+            look.Cols.Add(new M.LookCol { P = f.ParameterId.Value, H = f.ColumnHeading, Hid = f.IsHidden, W = M.Round(f.GridColumnWidth) });
+        }
+        foreach (var s in d.GetSortGroupFields())
+            look.Sorts.Add(new M.LookSort { P = Param(s.FieldId), Desc = s.SortOrder == ScheduleSortOrder.Descending, Header = s.ShowHeader, Footer = s.ShowFooter, Blank = s.ShowBlankLine });
+        foreach (var f in d.GetFilters())
+        {
+            var filter = new M.LookFilter { P = Param(f.FieldId), T = f.FilterType.ToString() };
+            var c = System.Globalization.CultureInfo.InvariantCulture;
+            if (f.IsStringValue) (filter.K, filter.V) = ("s", f.GetStringValue());
+            else if (f.IsDoubleValue) (filter.K, filter.V) = ("d", f.GetDoubleValue().ToString("R", c));
+            else if (f.IsIntegerValue) (filter.K, filter.V) = ("i", f.GetIntegerValue().ToString(c));
+            else if (f.IsElementIdValue) (filter.K, filter.V) = ("e", f.GetElementIdValue().Value.ToString(c));
+            look.Filters.Add(filter);
+        }
+        return look;
+    }
+
+    /// <summary>Gives a schedule made again (its columns are there) the look of its line; what Revit refuses for one row is left.</summary>
+    private static void SetLook(ScheduleDefinition d, M.Look look)
+    {
+        var byParam = new Dictionary<long, ScheduleField>();
+        for (var i = 0; i < d.GetFieldCount(); i++)
+        {
+            var f = d.GetField(i);
+            if (!byParam.ContainsKey(f.ParameterId.Value)) byParam[f.ParameterId.Value] = f;
+        }
+        try { d.IsItemized = look.Itemized; } catch (Exception) { }
+        try { d.ShowGrandTotal = look.GrandTotal; } catch (Exception) { }
+        try { d.ShowTitle = look.Title; } catch (Exception) { }
+        try { d.ShowHeaders = look.Headers; } catch (Exception) { }
+        foreach (var col in look.Cols)
+        {
+            if (!byParam.TryGetValue(col.P, out var f)) continue;
+            try { if (col.H is not null && f.ColumnHeading != col.H) f.ColumnHeading = col.H; } catch (Exception) { }
+            try { if (f.IsHidden != col.Hid) f.IsHidden = col.Hid; } catch (Exception) { }
+            try { if (col.W > 0) f.GridColumnWidth = col.W; } catch (Exception) { }
+        }
+        try
+        {
+            d.ClearSortGroupFields();
+            foreach (var s in look.Sorts)
+            {
+                if (!byParam.TryGetValue(s.P, out var f)) continue;
+                var row = new ScheduleSortGroupField(f.FieldId, s.Desc ? ScheduleSortOrder.Descending : ScheduleSortOrder.Ascending) { ShowHeader = s.Header, ShowFooter = s.Footer, ShowBlankLine = s.Blank };
+                try { d.AddSortGroupField(row); } catch (Exception) { }
+            }
+        }
+        catch (Exception) { }
+        try
+        {
+            d.ClearFilters();
+            var c = System.Globalization.CultureInfo.InvariantCulture;
+            foreach (var want in look.Filters)
+            {
+                if (!byParam.TryGetValue(want.P, out var f) || !Enum.TryParse<ScheduleFilterType>(want.T, out var type)) continue;
+                try
+                {
+                    d.AddFilter(want.K switch
+                    {
+                        "s" => new ScheduleFilter(f.FieldId, type, want.V ?? ""),
+                        "d" => new ScheduleFilter(f.FieldId, type, double.Parse(want.V!, c)),
+                        "i" => new ScheduleFilter(f.FieldId, type, int.Parse(want.V!, c)),
+                        "e" => new ScheduleFilter(f.FieldId, type, new ElementId(long.Parse(want.V!, c))),
+                        _ => new ScheduleFilter(f.FieldId, type),
+                    });
+                }
+                catch (Exception) { }
+            }
+        }
+        catch (Exception) { }
     }
 
     /// <summary>A link or CAD to its place in the file (moved, then turned about its origin).</summary>

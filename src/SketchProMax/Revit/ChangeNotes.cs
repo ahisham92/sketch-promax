@@ -64,6 +64,7 @@ internal static class ChangeNotes
                 line.Refs = Refs(doc, dim.References);
                 // Linear dimensions only: their line is P and a point one foot along it.
                 if (dim.Curve is Line dl) { line.P = P(dl.Origin); line.Q = P(dl.Origin + dl.Direction); }
+                else ReadArcDimension(dim, line, ref approx);
                 break;
             case IndependentTag tag:
                 line.Refs = Refs(doc, tag.GetTaggedReferences());
@@ -104,6 +105,53 @@ internal static class ChangeNotes
         if (approx) line.Approx = true;
     }
 
+    /// <summary>An angle, radius or diameter dimension: which it is, and the arc its line is on (angle dimensions are made on it).</summary>
+    private static void ReadArcDimension(Dimension dim, M.Line line, ref bool approx)
+    {
+        DimensionShape shape;
+        try { shape = dim.DimensionShape; } catch (Exception) { return; }
+        if (shape is not (DimensionShape.Angular or DimensionShape.Radial or DimensionShape.Diameter)) return;
+        (line.Extra ??= [])["dim"] = shape.ToString();
+        if (shape != DimensionShape.Angular || dim.Curve is not Arc arc) return;
+        // Revit can hand the whole circle: a quarter of it says the same (its centre, radius and plane).
+        if (!arc.IsBound) arc = Arc.Create(arc.Center, arc.Radius, 0, Math.PI / 2, arc.XDirection, arc.YDirection);
+        line.Loops = [ChangeShapes.Segs(arc, ref approx).ToList()];
+    }
+
+    /// <summary>Null when a dimension that isn't linear can be made again, else why not.</summary>
+    private static string? CanMakeArcDimension(M.Line line)
+    {
+        var shape = line.Extra is { } x && x.TryGetValue("dim", out var d) ? d : null;
+        if (shape == nameof(DimensionShape.Angular) && line.Loops is { Count: > 0 } && line.Refs is { Count: >= 2 }) return null;
+#if !REVIT2024
+        if (shape is nameof(DimensionShape.Radial) or nameof(DimensionShape.Diameter)) return null;
+#else
+        if (shape is nameof(DimensionShape.Radial) or nameof(DimensionShape.Diameter)) return "a radius or diameter dimension made after the last save: Revit 2024 has no way for add-ins to make one, make it again by hand";
+#endif
+        return "an arc length dimension made after the last save: make it again by hand";
+    }
+
+    private static Dimension MakeArcDimension(Document doc, M.Line line, View view, ElementType? type, Func<string, Reference> reference)
+    {
+        var shape = line.Extra!["dim"];
+        if (shape == nameof(DimensionShape.Angular))
+        {
+            var arc = ChangeShapes.ToCurve(line.Loops![0][0]) as Arc ?? throw new InvalidOperationException("the file doesn't have the dimension's arc");
+            var style = type as DimensionType ?? new FilteredElementCollector(doc).OfClass(typeof(DimensionType)).Cast<DimensionType>().FirstOrDefault(t => t.StyleType == DimensionStyleType.Angular)
+                        ?? throw new InvalidOperationException("there is no angular dimension type in this model");
+            return AngularDimension.Create(doc, view, arc, line.Refs!.Take(2).Select(reference).ToList(), style)
+                   ?? throw new InvalidOperationException("Revit couldn't make the angle dimension");
+        }
+#if !REVIT2024
+        Dimension radial = RadialDimension.Create(doc, view, reference(line.Refs![0]), shape == nameof(DimensionShape.Diameter))
+                           ?? throw new InvalidOperationException("Revit couldn't make the radius dimension");
+        if (type is DimensionType wanted && radial.GetTypeId() != wanted.Id) try { radial.ChangeTypeId(wanted.Id); } catch (Exception) { }
+        return radial;
+#else
+        throw new InvalidOperationException("Revit 2024 has no way for add-ins to make a radius dimension");
+#endif
+    }
+
     private static List<string>? Refs(Document doc, IEnumerable<Reference> references)
     {
         var list = new List<string>();
@@ -124,10 +172,24 @@ internal static class ChangeNotes
         line.Host = doc.GetElement(rebar.GetHostId())?.UniqueId;
         var bar = new M.Bar { FreeForm = rebar.IsRebarFreeForm() };
         line.Bar = bar;
+        if (bar.FreeForm)
+        {
+            // Free form: every bar of the set has its own curves (one loop each), made again as an unconstrained free form bar.
+            var bars = new List<List<M.Seg>>();
+            var count = Math.Min(rebar.NumberOfBarPositions, MaxFreeFormBars);
+            for (var i = 0; i < count; i++)
+            {
+                var one = new List<M.Seg>();
+                foreach (var c in rebar.GetCenterlineCurves(false, true, true, MultiplanarOption.IncludeAllMultiplanarCurves, i)) one.AddRange(ChangeShapes.Segs(c, ref approx));
+                if (one.Count > 0) bars.Add(one);
+            }
+            line.Loops = bars;
+            try { bar.Style = rebar.get_Parameter(BuiltInParameter.REBAR_ELEM_HOOK_STYLE)?.AsInteger() == 1 ? 1 : 0; } catch (Exception) { }
+            return;
+        }
         var loop = new List<M.Seg>();
         foreach (var c in rebar.GetCenterlineCurves(false, true, true, MultiplanarOption.IncludeOnlyPlanarCurves, 0)) loop.AddRange(ChangeShapes.Segs(c, ref approx));
         line.Loops = [loop];
-        if (bar.FreeForm) return;
         if (doc.GetElement(rebar.GetShapeId()) is RebarShape shape) bar.Style = shape.RebarStyle == RebarStyle.StirrupTie ? 1 : 0;
         bar.HookStart = doc.GetElement(rebar.GetHookTypeId(0))?.UniqueId;
         bar.HookEnd = doc.GetElement(rebar.GetHookTypeId(1))?.UniqueId;
@@ -158,7 +220,7 @@ internal static class ChangeNotes
     public static string? CanMake(M.Line line) => line.What switch
     {
         "tag" or "dimension" or "spot" when line.Refs is null || line.View is null => "made after the last save, but the file doesn't say what it points at: make it again by hand",
-        "dimension" when line.P is null || line.Q is null => "a radial, diameter or angle dimension made after the last save: make it again by hand",
+        "dimension" when line.P is null || line.Q is null => CanMakeArcDimension(line),
         "spot" when line.CategoryId == (long)BuiltInCategory.OST_SpotSlopes => "a spot slope made after the last save: make it again by hand",
         "tag" or "spot" when line.P is null => "made after the last save, but the file has no place for it: make it again by hand",
         "tag" or "dimension" or "spot" => null,
@@ -166,7 +228,7 @@ internal static class ChangeNotes
         "text" when line.Text is not null && line.P is not null && line.View is not null => null,
         "cloud" when line.Loops is { Count: > 0 } && line.View is not null && line.Revision is not null => null,
         "room" or "space" when line.P is not null && line.Level is not null => null,
-        "rebar" when line.Bar is { FreeForm: true } => "free form rebar made after the last save: make it again by hand",
+        "rebar" when line.Bar is { FreeForm: true } => line.Loops is { Count: > 0 } && line.Host is not null && line.Type is not null ? null : "free form rebar made after the last save whose bars aren't in the file: make it again by hand",
         "rebar" when line.Loops is { Count: > 0 } && line.PlaneNormal is not null && line.Host is not null && line.Type is not null => null,
         "areareinf" when line.Loops is { Count: > 0 } && line.Bar?.Dir is not null && line.Host is not null && line.Type is not null => null,
         "pathreinf" when line.Loops is { Count: > 0 } && line.Host is not null && line.Type is not null => null,
@@ -201,6 +263,7 @@ internal static class ChangeNotes
                 var refs = new ReferenceArray();
                 foreach (var r in line.Refs!) refs.Append(Ref(r));
                 var view = ViewOf();
+                if (line.P is null || line.Q is null) return MakeArcDimension(doc, line, view, type, Ref);
                 var dimLine = Line.CreateBound(X(line.P!), X(line.Q!));
                 return type is DimensionType dt ? doc.Create.NewDimension(view, dimLine, refs, dt) : doc.Create.NewDimension(view, dimLine, refs);
             }
@@ -251,7 +314,6 @@ internal static class ChangeNotes
             case "areareinf":
                 return AreaReinforcement.Create(doc, HostOf(), Curves(line), X(line.Bar!.Dir!), TypeId(), BarType(doc, line, find), ElementId.InvalidElementId);
             case "pathreinf":
-                notes.Add($"{label}: made again: check which side its bars are on");
                 return PathReinforcement.Create(doc, HostOf(), Curves(line), line.Bar?.Flip ?? false, TypeId(), BarType(doc, line, find), ElementId.InvalidElementId, ElementId.InvalidElementId);
             default:
                 return null;
@@ -263,10 +325,25 @@ internal static class ChangeNotes
     private static ElementId BarType(Document doc, M.Line line, Func<string?, Element?> find) =>
         find(line.Bar?.BarType)?.Id ?? new FilteredElementCollector(doc).OfClass(typeof(RebarBarType)).FirstElementId();
 
+    /// <summary>The most bars of one free form set that are written (a set is rarely over a few hundred).</summary>
+    private const int MaxFreeFormBars = 500;
+
     private static Rebar MakeRebar(Document doc, M.Line line, RebarBarType barType, Element host, Func<string?, Element?> find)
     {
         var bar = line.Bar ?? new M.Bar();
         var style = bar.Style == 1 ? RebarStyle.StirrupTie : RebarStyle.Standard;
+        if (bar.FreeForm)
+        {
+            IList<IList<Curve>> bars = line.Loops!.Select(l => (IList<Curve>)l.Select(ChangeShapes.ToCurve).ToList()).ToList();
+#if REVIT2024 || REVIT2025
+            var free = Rebar.CreateFreeForm(doc, barType, host, bars, out var error);
+            if (free is null) throw new InvalidOperationException($"Revit couldn't make the free form bar from its curves ({error})");
+            return free;
+#else
+            var result = Rebar.CreateFreeForm(doc, barType, host, bars, style);
+            return result?.Rebar ?? throw new InvalidOperationException($"Revit couldn't make the free form bar from its curves ({result?.Error})");
+#endif
+        }
         var normal = X(line.PlaneNormal!);
         var curves = Curves(line);
 #if REVIT2024 || REVIT2025

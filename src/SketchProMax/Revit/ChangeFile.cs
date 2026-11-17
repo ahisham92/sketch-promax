@@ -42,6 +42,12 @@ internal static class ChangeFile
         /// <summary>Families loaded since the last save, waiting for their copy next to the file (and how often each was tried).</summary>
         public readonly Queue<long> Families = new();
         public readonly Dictionary<long, int> FamilyTries = [];
+        /// <summary>Families loaded again over themselves since the last save (seen by the name of Revit's own step), so their new file is kept too.</summary>
+        public readonly HashSet<long> Reloaded = [];
+        /// <summary>New elements waiting for their copy in the kept-elements project, and whether copies stopped for the session (one took too long).</summary>
+        public readonly HashSet<long> Keeps = [];
+        public bool KeepOff;
+        public int LastKeep = unchecked(Environment.TickCount - M.KeepEveryMs);
     }
 
     private static readonly object Gate = new();
@@ -142,7 +148,7 @@ internal static class ChangeFile
         {
             if (!doc.IsValidObject || doc.IsFamilyDocument || doc.IsLinked) return false;
             path = PathOf(doc);
-            if (path.Length == 0) return false;
+            if (path.Length == 0 || ChangeKeeper.Is(path)) return false;
             // The field test's own throwaway projects stay out of Documents.
             if (RootForTest is null && path.StartsWith(System.IO.Path.GetTempPath(), StringComparison.OrdinalIgnoreCase)) return false;
             return true;
@@ -297,6 +303,9 @@ internal static class ChangeFile
     {
         try
         {
+            if (Directory.Exists(folder))
+                ChangeKeeper.Tidy(folder, Directory.GetFiles(folder, "*.txt").Where(f => !string.Equals(System.IO.Path.GetFileName(f), M.KeptMapName, StringComparison.OrdinalIgnoreCase))
+                    .Select(f => string.Join("\n", ReadLines(f).Where(l => l.Contains("\"kept\":")))));
             var families = System.IO.Path.Combine(folder, M.FamiliesFolder);
             if (!Directory.Exists(families)) return;
             var texts = Directory.GetFiles(folder, "*.txt").Select(f => string.Join("\n", ReadLines(f).Where(l => l.Contains("\"file\":"))));
@@ -359,7 +368,7 @@ internal static class ChangeFile
     private static void Cleared(Document doc, string why)
     {
         if (For(doc) is not { } model) return;
-        lock (Gate) { model.Pending.Clear(); model.Written.Clear(); model.Added.Clear(); model.Started = false; model.Families.Clear(); model.FamilyTries.Clear(); }
+        lock (Gate) { model.Pending.Clear(); model.Written.Clear(); model.Added.Clear(); model.Started = false; model.Families.Clear(); model.FamilyTries.Clear(); model.Reloaded.Clear(); model.Keeps.Clear(); }
         Queue(() =>
         {
             var current = System.IO.Path.Combine(model.Folder, M.CurrentName);
@@ -448,6 +457,8 @@ internal static class ChangeFile
             // Everything noted is read now (a few seconds at most). The model stays watched: the close can still be
             // cancelled (Cancel on "save changes?"), and then its changes must go on being written.
             ReadPending(e.Document, int.MaxValue, 3000);
+            // And the copies still waiting are kept (closed without saving is when they are needed).
+            KeepElements(e.Document, model, now: true);
             lock (Gate) Closing[e.DocumentId] = model.Path;
         }
         catch (Exception) { }
@@ -550,6 +561,10 @@ internal static class ChangeFile
                 foreach (var id in added) { model.Pending.Add(id.Value); if (model.Added.Count < KnownCap) model.Added.Add(id.Value); }
                 foreach (var id in e.GetModifiedElementIds()) model.Pending.Add(id.Value);
             }
+            // A family loaded again over itself (Revit's own step is named for it): its new file is kept like a new family's.
+            if (e.GetTransactionNames().Any(M.IsFamilyLoad))
+                foreach (var id in e.GetModifiedElementIds())
+                    try { if (doc.GetElement(id) is Family) lock (Gate) model.Reloaded.Add(id.Value); } catch (Exception) { }
             // New elements are noted at once: one deleted again before the next idle moment is still named.
             if (added.Count <= 5000)
                 foreach (var id in added)
@@ -596,7 +611,7 @@ internal static class ChangeFile
                 var reading = ReadPending(doc, M.ReadPerIdle, M.ReadBudgetMs);
                 more |= reading;
                 // Only when nothing is waiting to be read: a loaded family's copy, then noting the model's elements.
-                if (!reading && For(doc) is { } model) more |= KeepFamily(doc, model) || NoteElements(doc, model);
+                if (!reading && For(doc) is { } model) more |= KeepFamily(doc, model) || KeepElements(doc, model) || NoteElements(doc, model);
             }
             if (more) RevitDispatcher.IdleAgain();
             if (unchecked(Environment.TickCount - _lastViews) > 5000) { _lastViews = Environment.TickCount; NoteOpenViews(app); }
@@ -662,10 +677,17 @@ internal static class ChangeFile
                     line.New = model.Added.Contains(id);
                     if (line.What == "family")
                     {
-                        // Only a family loaded after the last save has a line: its copy is kept next to the file.
-                        if (!line.New) continue;
+                        // Only a family loaded (or loaded again) after the last save has a line: its copy is kept next to the file.
+                        var again = model.Reloaded.Remove(id);
+                        if (!line.New && !again) continue;
                         line.File = M.FamilyFileName(element.UniqueId);
-                        if (!model.FamilyTries.ContainsKey(id)) { model.FamilyTries[id] = 0; model.Families.Enqueue(id); }
+                        if (!model.Families.Contains(id)) { model.FamilyTries[id] = 0; model.Families.Enqueue(id); }
+                    }
+                    else if (line.New && !model.KeepOff && ChangeKeeper.Wants(element, line))
+                    {
+                        // What can't be made again from a line is kept as a copy next to the file, and copied back.
+                        (line.Extra ??= [])["kept"] = "1";
+                        model.Keeps.Add(id);
                     }
                     model.Written.TryGetValue(id, out var written);
                     var all = line.Values ?? [];
@@ -865,6 +887,44 @@ internal static class ChangeFile
             opened.SaveAs(System.IO.Path.Combine(folder, M.FamilyFileName(family.UniqueId)), new SaveAsOptions { OverwriteExistingFile = true, MaximumBackups = 1 });
         }
         finally { try { opened?.Close(false); } catch (Exception) { } }
+    }
+
+    /// <summary>
+    /// Copies the new elements that can't be made again from a line into the kept-elements project next to the change
+    /// file (<see cref="ChangeKeeper"/>), at most every <see cref="ChangeFileMath.KeepEveryMs"/> and when the model
+    /// closes; false always (one go takes them all). The model is only read. A go that takes too long stops the
+    /// copies for this session, so Revit never feels heavy.
+    /// </summary>
+    private static bool KeepElements(Document doc, Model model, bool now = false)
+    {
+        List<long> ids;
+        lock (Gate)
+        {
+            if (model.Keeps.Count == 0 || model.KeepOff) return false;
+            // Not after every change: the project is opened and saved each time, so what gathered goes in together.
+            if (!now && unchecked(Environment.TickCount - model.LastKeep) < M.KeepEveryMs) return false;
+            model.LastKeep = Environment.TickCount;
+            ids = model.Keeps.ToList();
+        }
+        // Revit is in the middle of something: at a later idle moment.
+        if (doc.IsModifiable || doc.IsReadOnly) return false;
+        lock (Gate) model.Keeps.Clear();
+        var start = UiCost.Start();
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        try
+        {
+            // A few at a time: a step that made hundreds of such elements (a tool, a paste) is not copied one by one.
+            var elements = ids.Take(M.KeepMost).Select(id => doc.GetElement(new ElementId(id))).Where(e => e is not null).ToList();
+            ChangeKeeper.Keep(doc, model.Folder, elements!);
+        }
+        catch (Exception ex) { LifelineBugs.Note("capture", "new elements couldn't be kept as copies next to the change file", Safe(() => doc.PathName), ex, "kept copies"); }
+        finally { UiCost.End("Lifeline keeping a copy of new elements", start); }
+        if (clock.ElapsedMilliseconds > M.KeepLimitMs)
+        {
+            lock (Gate) model.KeepOff = true;
+            LifelineBugs.Note("capture", $"keeping copies of new elements took {clock.ElapsedMilliseconds / 1000} s: stopped for this session", Safe(() => doc.PathName), null, "kept copies slow");
+        }
+        return false;
     }
 
     private static bool Waiting(Model model) { lock (Gate) return model.Families.Count > 0; }

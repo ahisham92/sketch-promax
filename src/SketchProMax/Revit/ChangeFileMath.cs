@@ -471,6 +471,108 @@ internal static class ChangeFileMath
         return familyFiles.Where(f => all.IndexOf("\"file\":\"" + f.Substring(f.LastIndexOfAny(['/', '\\']) + 1) + "\"", StringComparison.OrdinalIgnoreCase) < 0).ToList();
     }
 
+    // ---- Kept elements --------------------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// Next to the change files: a small Revit project with a copy of each new element that can't be made again from
+    /// its line (in-place families, curved stairs, extrusion roofs, pipes...), and the list of which copy is whose
+    /// (the element's UniqueId, tab, its copy's UniqueId).
+    /// </summary>
+    public const string KeptName = "kept elements.rvt";
+    public const string KeptMapName = "kept elements.txt";
+
+    /// <summary>The line's element has a copy in the kept-elements project.</summary>
+    public static bool IsKept(Line l) => l.Extra is { } x && x.ContainsKey("kept");
+
+    /// <summary>True while a change file of the folder still names a kept element (<paramref name="texts"/>: the folder's change files).</summary>
+    public static bool KeptInUse(IEnumerable<string> texts) => texts.Any(t => t.IndexOf("\"kept\":\"1\"", StringComparison.Ordinal) >= 0);
+
+    /// <summary>Revit's own step that loads a family (Load Family, Reload, Load into Project and Close): how a family loaded again over itself is told.</summary>
+    public static bool IsFamilyLoad(string transaction) =>
+        transaction.IndexOf("Load", StringComparison.OrdinalIgnoreCase) >= 0 && transaction.IndexOf("Famil", StringComparison.OrdinalIgnoreCase) >= 0
+        || transaction.IndexOf("Load into Project", StringComparison.OrdinalIgnoreCase) >= 0 || transaction.StartsWith("Reload", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>How long one copy into the kept-elements project may take before copies stop for the session (Revit must never feel heavy).</summary>
+    public const int KeepLimitMs = 15000;
+
+    /// <summary>The least time between two goes of copying into the kept-elements project (it is opened and saved each time).</summary>
+    public const int KeepEveryMs = 45000;
+
+    /// <summary>The most elements copied in one go.</summary>
+    public const int KeepMost = 60;
+
+    /// <summary>
+    /// The "not done" lines grouped by reason, commonest first, for the window: one row for each reason with how many
+    /// (the lines stay in the report). <paramref name="max"/> reasons; the rest are counted in the last entry.
+    /// </summary>
+    public static List<(string Reason, List<int> Items)> GroupReasons(IReadOnlyList<string> notDone, int max = 12)
+    {
+        var groups = new Dictionary<string, List<int>>(StringComparer.Ordinal);
+        var order = new List<string>();
+        for (var i = 0; i < notDone.Count; i++)
+        {
+            var reason = Generic(Reason(notDone[i]));
+            if (!groups.TryGetValue(reason, out var list)) { groups[reason] = list = []; order.Add(reason); }
+            list.Add(i);
+        }
+        var sorted = order.OrderByDescending(r => groups[r].Count).Select(r => (r, groups[r])).ToList();
+        if (sorted.Count <= max) return sorted;
+        var rest = sorted.Skip(max - 1).SelectMany(g => g.Item2).OrderBy(i => i).ToList();
+        return [.. sorted.Take(max - 1), ("other reasons", rest)];
+    }
+
+    /// <summary>
+    /// The one line a replay ends with: "All 350 changes are back. Check the model before you save." or
+    /// "338 of 350 changes are back; 12 need you (listed below). Check the model before you save."
+    /// </summary>
+    public static string ReplaySummary(int back, int notDone, string? stopped)
+    {
+        var all = back + notDone;
+        var text = notDone == 0
+            ? (all == 1 ? "The change is back." : $"All {all} changes are back.")
+            : $"{back} of {all} changes are back; {notDone} need{(notDone == 1 ? "s" : "")} you (listed below).";
+        return text + (stopped is not null ? " " + stopped : "") + " Check the model before you save.";
+    }
+
+    /// <summary>A reason without what is particular to one element (quoted names, numbers), so alike reasons group together.</summary>
+    public static string Generic(string reason)
+    {
+        var text = new StringBuilder(reason.Length);
+        var quoted = false;
+        foreach (var c in reason)
+        {
+            if (c == '"') { quoted = !quoted; if (!quoted) text.Append("…"); continue; }
+            if (!quoted) text.Append(c);
+        }
+        var flat = text.ToString();
+        var cut = flat.IndexOf("; in the model now it is", StringComparison.Ordinal);
+        if (cut >= 0 && flat.IndexOf(": delete it by hand", cut, StringComparison.Ordinal) is var end and >= 0) flat = flat.Substring(0, cut) + flat.Substring(end);
+        return flat.Trim();
+    }
+
+    // ---- A schedule's look ---------------------------------------------------------------------------------------------
+
+    /// <summary>A schedule's headings, widths, hidden columns, sorting and grouping, filters and totals, as written in its line.</summary>
+    public sealed class Look
+    {
+        public bool Itemized { get; set; } = true;
+        public bool GrandTotal { get; set; }
+        public bool Title { get; set; } = true;
+        public bool Headers { get; set; } = true;
+        public List<LookCol> Cols { get; set; } = [];
+        public List<LookSort> Sorts { get; set; } = [];
+        public List<LookFilter> Filters { get; set; } = [];
+    }
+
+    /// <summary>A column, by its parameter: heading, hidden, width.</summary>
+    public sealed class LookCol { public long P { get; set; } public string? H { get; set; } public bool Hid { get; set; } public double W { get; set; } }
+
+    /// <summary>A sorting or grouping row, by its column's parameter.</summary>
+    public sealed class LookSort { public long P { get; set; } public bool Desc { get; set; } public bool Header { get; set; } public bool Footer { get; set; } public bool Blank { get; set; } }
+
+    /// <summary>A filter row: its column's parameter, the comparison, and the value (K: s text, d number, i whole number, e element, n none).</summary>
+    public sealed class LookFilter { public long P { get; set; } public string T { get; set; } = ""; public string K { get; set; } = "n"; public string? V { get; set; } }
+
     // ---- What a replay made again ---------------------------------------------------------------------------------------
 
     /// <summary>

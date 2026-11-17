@@ -572,6 +572,8 @@ internal static class FieldTestCoverage
             "in the test project: a wall type duplicated with a thicker layer, an elevation and straight stairs, made after the save and deleted, are made again (the type with its name and layers, the elevation looking the same way, the stairs with their run); what the test made is deleted afterwards"),
         new("recovery.complete", Central, "Replay names every deletion and puts materials and loaded families back, once", How.Probe, "",
             "in the test project, with the change file sent to a temporary folder: a wall Lifeline never read is deleted and its deletion is in the file by UniqueId; a floor type's line holds no outline; a material (with its colour and transparency), a wall and a loadable family (from the copy kept next to the file) made after the save and deleted are made again; planning the same file a second time makes nothing again; what the test made is deleted afterwards"),
+        new("recovery.kept", Central, "Replay copies back what can't be made from words, and schedules with their sorting", How.Probe, "",
+            "in the test project, with a kept-elements project in a temporary folder: a wall is copied into it (as an in-place family, curved stairs or an extrusion roof would be), deleted, and copied back where it was by a replay; a wall schedule with a heading, a sorting row and a filter, deleted, is made again with all three; the kept-elements project is closed again and what the test made is deleted"),
         new("recovery.bugs", Central, "Lifeline keeps a list of its problems", How.Probe, "",
             "with the list sent to a test folder: a problem noted twice is written once, as one line (when, version, Revit, model, where, what) under the file's header"),
         new("recovery.ui", Central, "Recover after Revit closes by itself, on a real shared model", How.Manual, "", "needs Revit to close by itself and a real central model",
@@ -800,6 +802,7 @@ internal static class FieldTestCoverage
         new(71, ["chat.signin_again_ui"], "with an expired sign-in, a message says the sign-in expired with Sign in again (not New chat), the chat no longer looks ready, and Sign in again opens the browser with no Command Prompt"),
         new(72, ["chat.sync_lock_ui"], "with the chat and a job working on a local copy of a central model, Synchronize with Central finishes in its usual time and no Claude Code or Sketch ProMax program holds the central's lock files"),
         new(73, ["recovery.complete", "recovery.replay"], "replay plays every step, names every deletion, and puts materials, loaded families and sloped floors back, once"),
+        new(74, ["recovery.kept", "recovery.complete"], "a replay copies back in-place families and the like from their kept copies, makes schedules with their sorting and filters, and ends with one line (an alert only when something needs you)"),
     ];
 
     /// <summary>
