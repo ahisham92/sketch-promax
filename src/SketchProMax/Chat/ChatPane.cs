@@ -2196,6 +2196,16 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             AutopilotStopTyped(said, "");
             return;
         }
+        // "Are you working?", "how many jobs left?": answered at once from the job list, not queued behind the answer.
+        if (!_sample && StatusAnswer(_input.Text) is { Length: > 0 } status)
+        {
+            var asked = _input.Text.Trim();
+            _input.Clear();
+            Add(new ChatItem { Kind = "user", Text = asked });
+            Note(status);
+            Save();
+            return;
+        }
         if (_turn is not null)
         {
             // While a task runs the box stays open: the message reaches Claude at the next step boundary.
@@ -2236,7 +2246,16 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         if (AutopilotGoal(text, attachments)) return; // an autopilot's goal: the coordinator plans it first
         LearnFrom(text); // a correction becomes a lesson for next time, in the background
         if (StartBrief(text, attachments)) return; // a brief card first; the choice on it runs the turn
-        await RunTurn(text, attachments, "", hint: FocusHint(text, attachments));
+        // Code that did this kind of work before is named with the message, so it is adapted and not written again.
+        await RunTurn(text, attachments, "", hint: FocusHint(text, attachments) + (Run is { Active: true } ? "" : SketchProMax.Tools.WorkedCode.HintFor(text)));
+    }
+
+    /// <summary>The answer to a status question from the job list (ChatFocus.StatusLine); "" when it isn't one or nothing runs.</summary>
+    private string StatusAnswer(string typed)
+    {
+        if (_pending.Count > 0 || !ChatFocus.IsStatusAsk(typed)) return "";
+        var since = _conv.Items.LastOrDefault(i => i.Kind == "user" && !ChatFocus.IsStatusAsk(i.Text))?.Time ?? DateTime.MinValue;
+        return ChatFocus.StatusLine(_board?.Snapshot() ?? [], _turn is not null, since, DateTime.UtcNow);
     }
 
     /// <summary>Sends a message to Claude Code as a new turn (from Send, or from a choice on a brief card).</summary>

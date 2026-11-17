@@ -8,7 +8,9 @@ namespace SketchProMax.Chat;
 /// compile this file):
 ///  - a small ask (about what is selected or shown, a line or two) runs at once: no brief, no job, no list of options;
 ///  - a correction ("no", "still there", "why is it...") is fixed and checked in the view the user looks at;
-///  - and that correction is distilled into one lesson kept in the memory notes, which every later chat and job reads.
+///  - and that correction is distilled into one lesson kept in the memory notes, which every later chat and job reads;
+///  - "see what I did for ..." is read as an example to reproduce exactly, not a hint to interpret;
+///  - "are you working?" is answered at once from the job list, without waiting for the chat.
 /// </summary>
 internal static class ChatFocus
 {
@@ -69,6 +71,12 @@ internal static class ChatFocus
             return start + "this reads as a correction of your last work. Don't explain the earlier attempt and don't offer options. " +
                    "When what they want is clear, fix exactly that now, yourself; when it isn't, ask one short question. Before you answer, " +
                    "look at the result in the view they are looking at (capture_view_image), not only at numbers. Answer in one or two lines.]";
+        if (IsExample(text))
+            return start + "the user made an example by hand and wants the same. First read the example exactly: which elements or " +
+                   "view they changed (the model note lists what the user changed), its types, parameter values, offsets, joins and " +
+                   "graphics, and look at it (capture_view_image). For annotation in a view they set up, learn it first " +
+                   "(drawing_standard action=learn, add=true, that view). Say in one line what the example has, then reproduce exactly " +
+                   "that: don't improve on it, and what differs from the example in your result is a mistake to fix before you answer.]";
         if (IsSmall(text, selected, attachments))
             return start + "this is a small ask about what is selected or shown. Do it yourself now: no job, and no list of ways to choose from. " +
                    "Take the way that changes least (the element keeps its id, type and values) and say in one line which you took. Before you " +
@@ -76,6 +84,73 @@ internal static class ChatFocus
                    "Answer in at most three lines.]";
         return "";
     }
+
+    // ---- Their example -------------------------------------------------------------------------------------------------
+
+    private static readonly Regex Example = new(
+        @"\b(see|check|look at|follow|copy|repeat|same as|as|like|similar to) (what|how|the one|the ones|the way) i(('ve| have))? (just )?(did|made|done|fixed|adjusted|modified|changed|placed|drew|modelled|modeled|annotated|tagged|dimensioned)\b" +
+        @"|\b(like|as|same as|similar to) (i|what i) (did|made|have done|fixed|adjusted|modified|annotated) (for|in|on|at|to)\b" +
+        @"|\bi (did|made|fixed|adjusted|modified|annotated|tagged|dimensioned) (one|it|this|the first|an example|a sample)\b.*\b(same|rest|others?|all|remaining|similarly|likewise)\b" +
+        @"|\b(do|apply|make) (the )?(same|similar)\b.*\b(i (did|made|have done|fixed|adjusted))\b|\bas per my (example|sample|manual)\b|\bmy (example|sample)\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    /// <summary>True when the user points at something they did by hand as the example to follow ("see what I did for berth 12").</summary>
+    public static bool IsExample(string text) => Example.IsMatch((text ?? "").Trim());
+
+    // ---- "Are you working?" --------------------------------------------------------------------------------------------
+
+    private static readonly Regex StatusAsk = new(
+        @"^(status|progress|update|updates|any update|any updates|any progress|hello|still there)\W*$" +
+        @"|\b(are|r) (you|u) (still )?(working|there|alive|stuck|running|on it|done|finished|hanging|hung|frozen)\b" +
+        @"|\b(is|are) (it|this|that|they|the jobs?|the task) (still )?(working|running|stuck|done|finished|hanging|hung|frozen)\b" +
+        @"|\bstill (working|running)\b|\bwhy (is it |are you )?(taking )?so (long|slow)\b|\bwhat is taking\b" +
+        @"|\bhow (many|much) (jobs?|tasks?|items?|time|more|longer)?\s*(are |is )?(left|remaining|pending|running|done|finished)\b|\bhow (long|much longer)\b" +
+        @"|\bwhat('s| is) (left|remaining|pending|the status|the progress|running)\b|\bdid (you|it) (stop|finish|hang|freeze|crash)\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    /// <summary>The longest message (in words) that can be a status question, and when a running job counts as long (minutes).</summary>
+    public const int StatusWords = 12, LongMinutes = 30;
+
+    /// <summary>True for "are you working?", "how many jobs left?", "status?": answered from the job list, with no wait.</summary>
+    public static bool IsStatusAsk(string text)
+    {
+        var t = (text ?? "").Trim();
+        return t.Length > 0 && Words(t) <= StatusWords && StatusAsk.IsMatch(t);
+    }
+
+    /// <summary>
+    /// The answer to a status question, from the job list alone: what runs, what waits, what ended since
+    /// <paramref name="since"/> (the user's last request). "" when nothing is running and the chat isn't answering:
+    /// then the question goes to the chat as any other.
+    /// </summary>
+    public static string StatusLine(IEnumerable<ChatJob> jobs, bool answering, DateTime since, DateTime now)
+    {
+        var all = jobs.ToList();
+        var running = all.Where(j => j.Active).OrderBy(j => j.Started).ToList();
+        var queued = all.Count(j => j.State == JobBoard.Queued);
+        if (running.Count == 0 && queued == 0)
+            return answering ? "Yes, working on your last message; no jobs are running. Your message reaches it at its next step." : "";
+        var ended = all.Where(j => !j.Open && j.Ended >= since).ToList();
+        var done = ended.Count(j => j.State == JobBoard.Done);
+        var failed = ended.Count(j => j.State is JobBoard.Failed or JobBoard.Stopped);
+        var text = new System.Text.StringBuilder("Working: ").Append(Count(running.Count, "job")).Append(" running");
+        if (queued > 0) text.Append(", ").Append(queued).Append(" waiting to start");
+        if (done > 0) text.Append(", ").Append(done).Append(" done");
+        if (failed > 0) text.Append(", ").Append(failed).Append(" failed or stopped");
+        text.Append('.');
+        foreach (var job in running.Take(3))
+        {
+            var minutes = job.Started == default ? 0 : (int)Math.Max(0, (now - job.Started).TotalMinutes);
+            var doing = JobBoard.OneLine(job.Now, 80);
+            text.Append("\nJob ").Append(job.Number).Append(", ").Append(JobBoard.OneLine(job.Title, 60))
+                .Append(doing.Length > 0 ? ": " + doing : "").Append(" (").Append(minutes).Append(" min")
+                .Append(minutes >= LongMinutes ? ", long: open its card to see it, or stop it there" : "").Append(')');
+        }
+        if (running.Count > 3) text.Append("\nAnd ").Append(running.Count - 3).Append(" more.");
+        return text.ToString();
+    }
+
+    private static string Count(int n, string what) => n + " " + what + (n == 1 ? "" : "s");
 
     // ---- Lessons -------------------------------------------------------------------------------------------------------
 

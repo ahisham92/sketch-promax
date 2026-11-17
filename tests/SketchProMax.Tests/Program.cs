@@ -119,6 +119,7 @@ BugAndMemoryTests.Run((name, ok, detail) => Check(name, ok, detail));
 HistoryLessonsTests.Run((name, ok, detail) => Check(name, ok, detail));
 PromptIdeasTests.Run((name, ok, detail) => Check(name, ok, detail));
 ChatFocusTests.Run((name, ok, detail) => Check(name, ok, detail));
+WorkedCodeTests.Run((name, ok, detail) => Check(name, ok, detail));
 DrawingStandardTests.Run((name, ok, detail) => Check(name, ok, detail));
 LayoutTests.Run((name, ok, detail) => Check(name, ok, detail));
 RibbonFormTests.Run((name, ok, detail) => Check(name, ok, detail));

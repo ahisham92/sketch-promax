@@ -537,6 +537,7 @@ internal static partial class SelfTest
         new("ask_user", _ => new { question = "Self-test: nothing is sent.", assumed = "nothing" }) { ExpectError = "only in the chat inside Revit" },
         new("list_recipes", _ => new { }),
         new("list_learned_tools", _ => new { }),
+        new("worked_code", _ => new { action = "list", max = 3 }),
         new("list_steel_connection_types", _ => new { }),
         new("list_title_blocks", c => new { sheet_number = c.Sheet?.SheetNumber }),
         new("get_drawing_package_plan", c => new { request = "GA plans, sections and column schedule for all levels on A1 with our title block" })

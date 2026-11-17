@@ -57,11 +57,23 @@ public abstract class RevitCodeToolBase : IRevitTool
         "under a minute, and keep any whole-model collection filtered.";
 
     public virtual ToolResult Execute(UIApplication app, ToolArgs args) =>
-        Counted(RunScript(app, args.String("code"), args.String("description"), ModifiesModel, new Dictionary<string, object?>(), capSeconds: CapSeconds), args);
+        Counted(app, RunScript(app, args.String("code"), args.String("description"), ModifiesModel, new Dictionary<string, object?>(), capSeconds: CapSeconds), args);
 
     /// <summary>The same code written again and again: the third time it worked, it is offered as a tool of its own (CodeRepeats).</summary>
-    protected static ToolResult Counted(ToolResult result, ToolArgs args) =>
-        !result.IsError && CodeRepeats.Note(args.String("code"), args.String("description")) is { } tip ? result with { Text = result.Text + "\n\n" + tip } : result;
+    /// <summary>
+    /// Code that worked is also kept with what it did (WorkedCode), so the next chat or job adapts it instead of writing
+    /// it again; a call that failed ends with the kept code that did similar work.
+    /// </summary>
+    protected ToolResult Counted(UIApplication app, ToolResult result, ToolArgs args)
+    {
+        var (code, description) = (args.String("code"), args.String("description"));
+        if (result.IsError)
+            return WorkedCode.PointerFor(description, code) is { Length: > 0 } pointer ? result with { Text = result.Text + "\n\n" + pointer } : result;
+        var model = "";
+        try { model = app.ActiveUIDocument?.Document?.Title ?? ""; } catch (Exception) { /* no model name */ }
+        WorkedCode.Note(code, description, Name, args.OptBool("own_transactions"), model);
+        return CodeRepeats.Note(code, description) is { } tip ? result with { Text = result.Text + "\n\n" + tip } : result;
+    }
 
     /// <summary>
     /// Compiles and runs a snippet, inside one transaction when it changes the model. Learned tools use this too.
@@ -263,7 +275,7 @@ public sealed class RunRevitQueryCodeTool : RevitCodeToolBase
     """;
 
     public override ToolResult Execute(UIApplication app, ToolArgs args) =>
-        Counted(RunScript(app, args.String("code"), args.String("description"), false, new Dictionary<string, object?>(), args.OptBool("own_transactions"),
+        Counted(app, RunScript(app, args.String("code"), args.String("description"), false, new Dictionary<string, object?>(), args.OptBool("own_transactions"),
             CapSeconds), args);
 }
 
@@ -288,7 +300,7 @@ public sealed class RunRevitCodeTool : RevitCodeToolBase
     """;
 
     public override ToolResult Execute(UIApplication app, ToolArgs args) =>
-        Counted(RunScript(app, args.String("code"), args.String("description"), ModifiesModel, new Dictionary<string, object?>(),
+        Counted(app, RunScript(app, args.String("code"), args.String("description"), ModifiesModel, new Dictionary<string, object?>(),
             args.OptBool("own_transactions"), CapSeconds), args);
 }
 
