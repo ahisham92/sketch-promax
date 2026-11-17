@@ -117,7 +117,7 @@ internal static class ChatFocusTests
     /// <summary>Checks on the sources: the prompts and the pane carry the rules.</summary>
     public static void RunSources(string root, Action<string, bool, string> check)
     {
-        string Read(string path) => File.ReadAllText(Path.Combine(root, path));
+        string Read(string path) => File.ReadAllText(Path.Combine(root, path)).Replace("\r\n", "\n");
         var chat = Read("src/SketchProMax/Chat/ClaudeCli.cs");
         check("prompt: one reply, the result first, three lines", chat.Contains("To the point: one reply per request, the result first, three lines at most"), "");
         check("prompt: tables only when asked for", chat.Contains("a table only when") && !chat.Contains("short paragraphs, lists and tables"), "");
