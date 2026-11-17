@@ -46,21 +46,6 @@ internal static class WorkedCodeTests
             hint.StartsWith("\n\n[Sketch ProMax, not typed by the user:") && hint.Contains("Move the selected piles between the tie rods") && hint.Contains("worked 2x")
             && WorkedCode.Hint(list, "move the slab").Length == 0, hint);
 
-        // ---- The team's code
-        var theirs = new List<WorkedCode.Entry>();
-        WorkedCode.Keep(theirs, Code("OST_Ramps", 4) + "\nvar colour = new Color(255, 0, 0);", "Colour the piles clashing with tie rods red in the active view", "run_revit_code", false, "Model C", now);
-        WorkedCode.Keep(theirs, Code("OST_StructuralFraming", 2) + "\nvar trimmed = piles.Count;", "Their trim of beams", "run_revit_code", false, "", now);
-        var json = System.Text.Json.JsonSerializer.Serialize(theirs);
-        var team = WorkedCode.FromTeam([("PC-2", json), ("PC-1", json), ("PC-3", "not json")], "pc-1");
-        var merged = WorkedCode.Merge(list, team);
-        check("team: a colleague's code is found here, marked with whose PC; this PC's own file and a broken file are left out",
-            team.Count == 2 && team.All(e => e.By == "PC-2") && WorkedCode.Find(merged, "colour piles clashing with the tie rods")[0].Entry.By == "PC-2"
-            && WorkedCode.Line(team[0]).Contains("kept by PC-2"), team.Count + "");
-        check("team: for a shape this PC has, its own code stays", merged.Count == list.Count + 1 && merged.Single(e => e.Description.StartsWith("Trim framing")).By == "", merged.Count + "");
-        check("team tools: installed when new, updated while untouched, kept when it is this PC's own, changed here or deleted here",
-            WorkedCode.Decide(null, null, "t1") == "install" && WorkedCode.Decide("t1", "t1", "t2") == "update" && WorkedCode.Decide("mine", null, "t1") == "keep"
-            && WorkedCode.Decide("edited", "t1", "t2") == "keep" && WorkedCode.Decide(null, "t1", "t2") == "keep" && WorkedCode.Decide("t1", "t0", "t1") == "keep", "");
-
         var many = new List<WorkedCode.Entry>();
         for (var i = 0; i < WorkedCode.MaxEntries + 5; i++)
             WorkedCode.Keep(many, Code("OST_Walls", 1) + string.Concat(Enumerable.Repeat("\nlog.AppendLine(doc.Title);", i + 1)), "Work number " + i, "run_revit_code", false, "", now.AddMinutes(i));

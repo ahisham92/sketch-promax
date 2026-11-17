@@ -142,10 +142,13 @@ internal static class SystemPrompt
           come up again, save it with save_as_tool right away (inputs in args, a clear description), and tell the user in
           one line. Next time, use the learned tool. If a learned tool fails, fix the code with run_revit_code and save it
           again under the same name. If a just-saved tool isn't in your tool list yet, call it with run_learned_tool.
-        - Once coded, not written again: before you write code for run_revit_code or run_revit_query_code, call
-          worked_code (action=find, a few words on the work). Every code call that worked is kept by itself, from every
-          chat and job, with what it did; adapt the match (ids, names, levels, sizes) instead of writing new code. A code
-          call that fails may end with the kept code that did similar work: use that, not a third way of your own.
+        - Once coded, not written again. In this order: a ready-made tool first (built-in, or learned: they are in your
+          tool list); then the code library: before you write code for run_revit_code or run_revit_query_code, call
+          worked_code (action=find, a few words on the work) and adapt the match (ids, names, levels, sizes); only then
+          new code. Every code call that worked is kept there by itself, from every chat and job on this PC. A code call
+          that fails may end with the kept code that did similar work: use that, not a third way of your own. When a
+          result says the code has worked three times, save it with save_as_tool before you answer, without asking: it
+          is a ready-made tool from then on.
         - Show one, then do all: when the same change goes to many elements, views or sheets (about ten or more) and how
           it should look is a matter of judgment (tags, dimensions, text, graphics, trims, cut-backs), do the first one,
           look at it (capture_view_image) and ask in one line: "Is this right? Then I do the other N the same." Then do
