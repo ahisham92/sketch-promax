@@ -15,6 +15,20 @@ internal static class DeltaUpdateTests
 
         string List(params (string Path, long Size, string Sha)[] files) =>
             "{\"version\":\"1.2.3\",\"files\":[" + string.Join(",", files.Select(f => $"{{\"path\":\"{f.Path}\",\"size\":{f.Size},\"sha256\":\"{f.Sha}\"}}")) + "]}";
+        var years = new List<DeltaUpdate.Entry>
+        {
+            new("Revit2024/SketchProMax.dll", 3, h), new("Revit2025/SketchProMax.dll", 3, h), new("Revit2026/SketchProMax.dll", 3, h),
+            new("Revit2027/SketchProMax.dll", 3, h), new("mcp/SketchProMax.Mcp.exe", 4, h),
+        };
+        var only = DeltaUpdate.ForYears(years, new HashSet<string> { "2024", "2025" });
+        check("changed files: only the installed Revit versions' files are fetched",
+            only.Count == 3 && only.Any(e => e.Path.StartsWith("Revit2024/")) && only.Any(e => e.Path.StartsWith("Revit2025/"))
+            && only.Any(e => e.Path.StartsWith("mcp/")) && !only.Any(e => e.Path.StartsWith("Revit2026/")), string.Join(", ", only.Select(e => e.Path)));
+        check("changed files: with no known Revit version every file is fetched", DeltaUpdate.ForYears(years, new HashSet<string>()).Count == years.Count, "");
+        check("changed files: a list that would leave no core keeps every file", DeltaUpdate.ForYears(years, new HashSet<string> { "2019" }).Count == years.Count, "");
+        check("changed files: a file's Revit year is read from its top folder only",
+            DeltaUpdate.YearOf("Revit2025/x.dll") == "2025" && DeltaUpdate.YearOf("mcp/x.exe") is null && DeltaUpdate.YearOf("RevitAbcd/x.dll") is null
+            && DeltaUpdate.YearOf("x/Revit2025/y.dll") is null, "");
         check("changed files: a good list is read", DeltaUpdate.Parse(List(("Revit2025/SketchProMax.dll", 3, h), ("mcp/SketchProMax.Mcp.exe", 4, h)))?.Count == 2, "");
         check("changed files: a list without the core is refused", DeltaUpdate.Parse(List(("mcp/SketchProMax.Mcp.exe", 4, h))) is null, "");
         check("changed files: paths leaving the folder are refused", DeltaUpdate.Parse(List(("Revit2025/SketchProMax.dll", 3, h), ("../evil.dll", 1, h))) is null

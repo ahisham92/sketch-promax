@@ -808,6 +808,7 @@ internal static class FieldTestCoverage
         new(73, ["recovery.complete", "recovery.replay"], "replay plays every step, names every deletion, and puts materials, loaded families and sloped floors back, once"),
         new(74, ["recovery.kept", "recovery.complete"], "a replay copies back in-place families and the like from their kept copies, makes schedules with their sorting and filters, and ends with one line (an alert only when something needs you)"),
         new(75, ["recovery.extras", "recovery.kept"], "a replay also puts back joins and cuts, a view's graphics (hidden and overridden categories, elements and filters), line styles, view templates, view filters and patterns, images, splines and ellipses as drawn, groups of new types, and changed dimensions"),
+        new(76, ["update.resume", "update.fallback"], "an update downloads only the files of the Revit versions Sketch ProMax is installed for (the update window names them), and the whole package is still the fallback"),
     ];
 
     /// <summary>

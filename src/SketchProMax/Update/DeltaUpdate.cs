@@ -47,6 +47,29 @@ internal static class DeltaUpdate
     }
 
     /// <summary>
+    /// Leaves out the files of Revit versions this PC doesn't have Sketch ProMax installed for (folders named Revit20xx
+    /// whose year isn't in <paramref name="years"/>). Files outside such folders (the connector, shared files) are always
+    /// kept. With no known years nothing is left out. A Revit version added later gets its files with the next update,
+    /// because then its add-in is installed and its files aren't on the PC yet.
+    /// </summary>
+    public static IReadOnlyList<Entry> ForYears(IReadOnlyList<Entry> files, IReadOnlyCollection<string> years)
+    {
+        if (years.Count == 0) return files;
+        var kept = files.Where(e => YearOf(e.Path) is not { } y || years.Contains(y)).ToList();
+        // Never leave out every core: then nothing could load, so fall back to all of them.
+        return kept.Any(e => e.Path.EndsWith("/SketchProMax.dll", StringComparison.OrdinalIgnoreCase)) ? kept : files;
+    }
+
+    /// <summary>The Revit year of a file in a Revit20xx folder at the top of the package, else null.</summary>
+    public static string? YearOf(string path)
+    {
+        var slash = path.IndexOf('/');
+        if (slash != 9 || !path.StartsWith("Revit", StringComparison.OrdinalIgnoreCase)) return null;
+        var year = path.Substring(5, 4);
+        return year.All(char.IsDigit) ? year : null;
+    }
+
+    /// <summary>
     /// For each listed file, an installed copy with the same contents, looked for at the same place under each of
     /// <paramref name="bases"/> (installed version folders) and, for the connector, in <paramref name="connectorFolder"/>.
     /// Files with no match are left out: they are the ones to download.

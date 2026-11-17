@@ -587,12 +587,15 @@ public static class Updater
                 if (!r.IsSuccessStatusCode) return false;
                 json = await r.Content.ReadAsStringAsync().ConfigureAwait(false);
             }
-            if (DeltaUpdate.Parse(json) is not { } files) return false;
+            if (DeltaUpdate.Parse(json) is not { } all) return false;
+            // Only the Revit versions Sketch ProMax is installed for on this PC (TritoRevit's copy keeps them all).
+            var years = versionsFolder.Equals(VersionsFolder, StringComparison.OrdinalIgnoreCase) ? InstalledYears() : new HashSet<string>();
+            var files = DeltaUpdate.ForYears(all, years);
             progress.Report(UpdateStage.Downloading, "Finding the files that changed…", v);
             var local = DeltaUpdate.LocalCopies(files, InstalledVersionFolders(versionsFolder, target), McpFolder);
             var changed = files.Where(e => !local.ContainsKey(e.Path)).GroupBy(e => e.Sha256).Sum(g => g.First().Size);
             progress.Report(UpdateStage.Downloading,
-                $"Downloading only the files that changed in Sketch ProMax {v} ({UpdateSnapshot.Megabytes(changed)} before compression)…", v);
+                $"Downloading only the files that changed in Sketch ProMax {v}{ForText(all, files)} ({UpdateSnapshot.Megabytes(changed)} before compression)…", v);
             await DeltaUpdate.AssembleAsync(files, local, temp, release.ZipUrl, async (url, t) =>
             {
                 var resp = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, t).ConfigureAwait(false);
@@ -615,6 +618,39 @@ public static class Updater
             LogWarning($"Downloading only the changed files of {v} failed, downloading the whole package instead: {ex.Message}");
             return false;
         }
+    }
+
+    /// <summary>
+    /// The Revit years Sketch ProMax is installed for on this PC: the running Revit, and every Addins\&lt;year&gt; folder
+    /// (this user's or all users') that holds SketchProMax.addin.
+    /// </summary>
+    private static HashSet<string> InstalledYears()
+    {
+        var years = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (App.RevitYear.Length == 4) years.Add(App.RevitYear);
+        var machine = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Autodesk", "Revit", "Addins");
+        foreach (var root in new[] { RevitAddinsRoot, machine })
+        {
+            try
+            {
+                if (!Directory.Exists(root)) continue;
+                foreach (var folder in Directory.GetDirectories(root))
+                {
+                    var year = Path.GetFileName(folder);
+                    if (year.Length == 4 && year.All(char.IsDigit) && File.Exists(Path.Combine(folder, AddinFiles.ManifestName))) years.Add(year);
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        }
+        return years;
+    }
+
+    /// <summary>" for Revit 2024 and 2025" when some Revit versions' files were left out, else "".</summary>
+    private static string ForText(IReadOnlyList<DeltaUpdate.Entry> all, IReadOnlyList<DeltaUpdate.Entry> kept)
+    {
+        if (kept.Count == all.Count) return "";
+        var years = kept.Select(e => DeltaUpdate.YearOf(e.Path)).OfType<string>().Distinct().OrderBy(y => y).ToList();
+        return years.Count == 0 ? "" : " for Revit " + (years.Count == 1 ? years[0] : string.Join(", ", years.Take(years.Count - 1)) + " and " + years[years.Count - 1]);
     }
 
     /// <summary>Version folders whose files can be reused: the running one first, then every complete one.</summary>
