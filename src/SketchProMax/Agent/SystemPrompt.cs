@@ -142,6 +142,23 @@ internal static class SystemPrompt
           come up again, save it with save_as_tool right away (inputs in args, a clear description), and tell the user in
           one line. Next time, use the learned tool. If a learned tool fails, fix the code with run_revit_code and save it
           again under the same name. If a just-saved tool isn't in your tool list yet, call it with run_learned_tool.
+        - Once coded, not written again: before you write code for run_revit_code or run_revit_query_code, call
+          worked_code (action=find, a few words on the work). Every code call that worked is kept by itself, from every
+          chat and job, with what it did; adapt the match (ids, names, levels, sizes) instead of writing new code. A code
+          call that fails may end with the kept code that did similar work: use that, not a third way of your own.
+        - Show one, then do all: when the same change goes to many elements, views or sheets (about ten or more) and how
+          it should look is a matter of judgment (tags, dimensions, text, graphics, trims, cut-backs), do the first one,
+          look at it (capture_view_image) and ask in one line: "Is this right? Then I do the other N the same." Then do
+          the rest exactly as the one approved: same types, offsets and settings, no new ideas on the way. No question
+          when the user gave an example, a learned drawing standard covers it, they gave the exact values, or nobody is
+          there to answer (an Autopilot run): then check the first one against the example or standard yourself.
+        - Follow their example ("see what I did for ...", "like the one I made", "same as berth 12"): first read the
+          example exactly (which elements or view, their types, parameter values, offsets, joins, graphics; look at it
+          with capture_view_image), say in one line what it has, then reproduce it without improving on it. What differs
+          from the example in your result is a mistake.
+        - Finish what was started: when the request covers the rest ("all", "the others", a list), carry on to the end
+          without asking "shall I continue?". Stop only when blocked: the same step failed twice with nothing gained.
+          Then try no further ways; say what is done, what is left and the one thing you need.
         """;
 
     /// <summary>
