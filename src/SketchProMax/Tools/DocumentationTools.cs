@@ -10,7 +10,8 @@ public sealed class TagElementsInViewTool : IRevitTool
     public string Name => "tag_elements_in_view";
     public string Description =>
         "Tag every untagged element of a category (Doors, Windows, Rooms, Walls, Furniture, Structural Columns, Floors, ...) in a plan view. " +
-        "Uses the category's default tag type; elements that already have a tag in that view are skipped. " +
+        "The tag type is tag_type when given, else the one the model's drawing standard uses for that category in this kind of view " +
+        "(drawing_standard, learned from issued drawings; its leader too), else the category's default; elements that already have a tag in that view are skipped. " +
         "Columns get one tag per stack (the column seen from below and the one above share a location: the one cut by the view is tagged), " +
         "with the tag head outside the column, clear of other columns and tags. Floors, foundations, roofs and ceilings are tagged at a point " +
         "well inside each element's own outline, moved apart where tags would overlap.";
@@ -18,7 +19,8 @@ public sealed class TagElementsInViewTool : IRevitTool
     {
       "category": {"type": "string"},
       "view_id": {"type": "integer", "description": "Defaults to the active view."},
-      "leader": {"type": "boolean", "description": "Draw a leader from the tag to its element (default false)."}
+      "leader": {"type": "boolean", "description": "Draw a leader from the tag to its element (default: as the drawing standard does, else false)."},
+      "tag_type": {"type": "string", "description": "The tag to use, 'Family: Type'. Default: the drawing standard's tag for this category, else the category's default tag."}
     }
     """);
     public string[] Required => ["category"];
@@ -31,6 +33,23 @@ public sealed class TagElementsInViewTool : IRevitTool
         var bic = RevitHelpers.ParseCategory(doc, args.String("category"));
         var guard = DependentGuard.For(doc, view, args.OptString("dependent_view"));
         var target = guard.Target;
+
+        // The tag to use: the one named, else the drawing standard's for this category in this kind of view.
+        FamilySymbol? tagType = null;
+        var leader = args.OptBool("leader");
+        var tagFrom = "the category's default tag";
+        if (args.OptString("tag_type") is { Length: > 0 } named)
+        {
+            tagType = DrawingStandardTool.TagType(doc, named)
+                ?? throw new ArgumentException($"No tag type '{named}' is loaded. Give it as 'Family: Type' (list_types for the tag category), or load the tag family first.");
+            tagFrom = "tag_type";
+        }
+        else if (DrawingStandardTool.Preferred(doc, view, Category.GetCategory(doc, bic)?.Name ?? "") is { } standard)
+        {
+            tagType = standard.Type;
+            if (!args.Has("leader")) leader = standard.Leader;
+            tagFrom = "the drawing standard";
+        }
 
         // Everything already tagged in this view: element tags (IndependentTag) and spatial tags (room, space and
         // area tags are SpatialElementTag, not IndependentTag). Tag categories are collected too, in case a tag
@@ -126,8 +145,14 @@ public sealed class TagElementsInViewTool : IRevitTool
                     // Slabs: points well inside the element's own outline (its bounding box centre can be off the slab, or shared).
                     var spots = isSlab ? InsidePoints(e, center.Z) : [];
                     var at = spots.Count > 0 ? spots[0] : center;
-                    var tag = IndependentTag.Create(doc, target.Id, new Reference(e), args.OptBool("leader"),
+                    var tag = IndependentTag.Create(doc, target.Id, new Reference(e), leader,
                         TagMode.TM_ADDBY_CATEGORY, TagOrientation.Horizontal, at);
+                    if (tagType is not null && tag.GetTypeId() != tagType.Id)
+                    {
+                        // A tag type of another category is refused by Revit: the default tag stays, and it is said once.
+                        try { tag.ChangeTypeId(tagType.Id); }
+                        catch (Autodesk.Revit.Exceptions.ApplicationException) { tagType = null; tagFrom = "the category's default tag (the standard's tag doesn't fit this category)"; }
+                    }
                     if (isColumn || isSlab) placedTags.Add((tag, e, spots));
                 }
                 tagged++;
@@ -150,6 +175,8 @@ public sealed class TagElementsInViewTool : IRevitTool
         return ToolResult.Ok(new
         {
             view = view.Name, tagged, skipped, alreadyTagged = alreadyTagged.Count,
+            tagType = tagged > 0 && tagType is not null ? DrawingStandardTool.TypeName(tagType) : null,
+            tagTypeFrom = tagged > 0 ? tagFrom : null,
             sameColumnStack = sameStack > 0 ? sameStack : (int?)null,
             tagsMovedApart = moved > 0 ? moved : (int?)null,
             skippedBecause = reasons.Select(r => $"{r.Value}: {r.Key}"),

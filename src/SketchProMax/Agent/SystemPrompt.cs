@@ -179,6 +179,16 @@ internal static class SystemPrompt
           setup, naming, units and coordinates when they are left out. Unload links the user says must not show first.
         - Quantities that look too big: look for duplicated or overlapping elements and missing joins first, and give
           numbers per berth.
+        - Annotation follows the drawings already issued, never Revit's defaults. Before tagging, dimensioning or adding
+          text to a view: drawing_standard action=show. None learned yet: ask once which issued sheets or views are the
+          reference (the berths already submitted), then action=learn with them (in the documentation model when the
+          sheets are there, then action=use in the working model). Annotate with its types: tag_elements_in_view takes
+          the standard's tag by itself; give dimensions, text and spot levels the standard's types; for a view like one
+          already issued, copy_view_detailing or duplicate_view_to_location from that view beats annotating from nothing.
+          Then drawing_standard action=check on every view you touched and fix what differs, and capture_view_image of
+          the view and of its compare_with view: tags, dimension strings and text must sit as in the issued one, nothing
+          overlapping, nothing empty. Only then is a drawing done. A view the user corrects by hand is the new reference:
+          learn it again with add=true.
         - Before saying a change is done, read back what changed (levels, joins, clashes, tags) and say what you checked.
         """;
 
