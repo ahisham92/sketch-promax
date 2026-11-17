@@ -32,7 +32,7 @@ internal static class SubmissionFormat
         new("piles", 101, 109, "PILES PLAN - PART <k>", @"^PILES PLAN - PART \d+$", "usually 1:100", true,
             [new("BERTH <n> - PART <k> PILES PLAN", @"PART \d+ PILES PLAN", [100])],
             ["PILES SCHEDULE"],
-            ["every pile tagged with its type mark, filled with its type's colour", "grid bubbles and the dimensions between grids, both ways",
+            ["every pile inside the matchlines tagged with its type mark, filled with its type's colour; beyond a matchline the piles show with their tags hidden", "grid bubbles and the dimensions between grids, both ways",
              "the piles schedule (type mark, description, top level, bottom level, length, count for the berth) with the colour key, and the sheet pile wall schedule where the berth has one",
              "the neighbouring berth hatched and named at the matchline"]),
         new("framing", 111, 119, "FRAMING PLAN - PART <k>", @"^FRAMING PLAN - PART \d+$", "usually 1:100", true,
@@ -164,8 +164,12 @@ internal static class SubmissionFormat
         public int EmptyTags, OverlappingTags, MatchlinesPastCrop;
         /// <summary>The view's box runs outside the sheet's frame.</summary>
         public bool OffSheet;
-        /// <summary>Of a category the view tags: how many elements show, and how many have no tag (not a failure by itself: a neighbouring berth's piles show too).</summary>
-        public int Taggable, Untagged;
+        /// <summary>
+        /// Of the categories the view tags (the owner's rule, 2026-11-17: inside the matchlines every pile is tagged; outside
+        /// them the tag is hidden): how many elements lie inside the view's matchlines, how many of those have no tag, and
+        /// how many tags sit on elements beyond a matchline. A view with no matchline is all inside.
+        /// </summary>
+        public int Taggable, UntaggedInside, TaggedOutside;
         public static implicit operator PlacedView((string Title, int Scale) v) => new() { Title = v.Title, Scale = v.Scale };
     }
 
@@ -230,6 +234,13 @@ internal static class SubmissionFormat
                         if (!StandardScales.Contains(v.Scale))
                             issues.Add(new(name, "Scale", $"\"{Clean(v.Title)}\" is at 1:{v.Scale}, which is not a standard scale.", $"Set it to 1:{rule.Scales[0]}, or the nearest standard scale that fits the sheet."));
                         scales.Add((name, kind.Key + "|" + rule.Pattern, rule, v));
+                        if (kind.Key == "piles")
+                        {
+                            if (v.UntaggedInside > 0)
+                                issues.Add(new(name, "Tags", $"{v.UntaggedInside} of {v.Taggable} piles inside the matchlines have no tag in \"{Clean(v.Title)}\".", "Tag them with the tag the others have (tag_elements_in_view)."));
+                            if (v.TaggedOutside > 0)
+                                issues.Add(new(name, "Tags", $"{v.TaggedOutside} tag(s) are on piles beyond the matchline in \"{Clean(v.Title)}\".", "Hide those tags: a pile beyond the matchline is tagged on its own part's plan."));
+                        }
                         if (Regex.Match(v.Title, @"BERTH (\d+)", RegexOptions.IgnoreCase) is { Success: true } b && int.Parse(b.Groups[1].Value) != berth)
                             issues.Add(new(name, "Names", $"View title \"{Clean(v.Title)}\" names another berth.", $"It is on a Berth {berth} sheet: correct the title or the view."));
                         else if (!Regex.IsMatch(v.Title, @"BERTH \d+", RegexOptions.IgnoreCase))
@@ -276,8 +287,9 @@ internal static class SubmissionFormat
     }
 
     /// <summary>
-    /// What to look at by eye on the sheets of <paramref name="berths"/>, not failures by themselves: elements of a tagged
-    /// category with no tag (a neighbouring berth's piles show too), and a key plan the model doesn't describe.
+    /// What to look at by eye on the sheets of <paramref name="berths"/>, not failures by themselves: on sheets other than
+    /// the piles plans (where it is a failure), elements of a tagged category with no tag, and a key plan the model
+    /// doesn't describe.
     /// </summary>
     public static List<string> Look(IReadOnlyList<Sheet> all, IEnumerable<int>? berths = null)
     {
@@ -287,8 +299,9 @@ internal static class SubmissionFormat
         foreach (var sheet in all)
         {
             if (Parse(sheet.Number) is not { Berth: > 0 } at || (wanted.Count > 0 && !wanted.Contains(at.Berth))) continue;
-            foreach (var v in sheet.Views.Where(v => v.Untagged > 0))
-                lines.Add($"{Bare(sheet.Number)}: {v.Untagged} of {v.Taggable} elements of the tagged categories have no tag in \"{Clean(v.Title)}\". Tag those of Berth {at.Berth}; a neighbouring berth's stay untagged.");
+            if (KindOf(at.Series, sheet.Name)?.Key != "piles")
+                foreach (var v in sheet.Views.Where(v => v.UntaggedInside > 0))
+                    lines.Add($"{Bare(sheet.Number)}: {v.UntaggedInside} of {v.Taggable} elements of the tagged categories have no tag in \"{Clean(v.Title)}\". See whether they should have one.");
             if (!sheet.KeyPlanFound || sheet.KeyPlanBerths.Count == 0) noKeyPlan.Add(Bare(sheet.Number));
         }
         if (noKeyPlan.Count > 0)
