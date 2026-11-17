@@ -686,13 +686,25 @@ internal sealed partial class ChatPane
         // A teammate's check ended: the job it checked is reported now, with the verdict.
         if (job.ReviewOf > 0)
         {
-            if (_board?.ReviewEnded(job, now) is { } checkedJob) Report(checkedJob);
+            if (_board?.ReviewEnded(job, now) is { } checkedJob)
+            {
+                // Parts found not done: the job goes back to finish exactly those by itself, and is checked again.
+                if (JobReview.SendBack(checkedJob))
+                {
+                    Tools.ActivityLog.Note("job_sent_back", $"job {checkedJob.Number} after check {checkedJob.Reviews}: {JobBoard.OneLine(checkedJob.Review, 200)}");
+                    _board.Message(checkedJob.Number, JobReview.FixMessage(checkedJob), now);
+                    JobsChanged();
+                    PumpJobs();
+                    SaveSoon();
+                }
+                else Report(checkedJob);
+            }
             return;
         }
         if (job.State is not (JobBoard.Done or JobBoard.Failed) && !job.OverBudget || job.Review == JobReview.Pending) return;
         // Finished: a second worker checks the work in the model first (Settings > Chat).
         if (job.State == JobBoard.Done && _board is { } board && JobReview.Wanted(AgentSettings.Load().ChatJobReview, Run is { Active: true }, job)
-            && board.StartReview(job.Number, now) is { } check)
+            && board.StartReview(job.Number, now, AskedWords()) is { } check)
         {
             ChatJobs.Assign(check, ChatAuto.Everyday);
             ShowJobCards();
@@ -705,6 +717,15 @@ internal sealed partial class ChatPane
         _reportTimer ??= SessionTimer(TimeSpan.FromSeconds(1.5), () => OnReportTick(null, EventArgs.Empty));
         _reportTimer.Stop();
         _reportTimer.Start();
+    }
+
+    /// <summary>What the user asked lately, in their own words, for a check (JobReview.Task): their last three messages.</summary>
+    private string AskedWords()
+    {
+        var said = _conv.Items.Where(i => i.Kind == "user" && i.Text.Trim().Length > 0 && !i.Text.TrimStart().StartsWith("[", StringComparison.Ordinal))
+            .Select(i => i.Text.Trim()).ToList();
+        var text = string.Join("\n", said.Skip(Math.Max(0, said.Count - 3)));
+        return text.Length > 3000 ? text.Substring(text.Length - 3000) : text;
     }
 
     private void OnReportTick(object? sender, EventArgs e)

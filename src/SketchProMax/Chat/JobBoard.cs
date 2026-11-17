@@ -739,7 +739,7 @@ internal sealed class JobBoard
     /// Job <paramref name="number"/> finished: a teammate checks its work against its task before it is reported
     /// (JobReview). The checking job (it waits to start like any job), or null when there is nothing to check.
     /// </summary>
-    public ChatJob? StartReview(int number, DateTime now)
+    public ChatJob? StartReview(int number, DateTime now, string asked = "")
     {
         lock (Gate)
         {
@@ -749,7 +749,7 @@ internal sealed class JobBoard
             {
                 Number = _jobs.Max(j => j.Number) + 1,
                 Key = Guid.NewGuid().ToString("N").Substring(0, 12),
-                Title = OneLine("Check: " + done.Title, 60), Task = JobReview.Task(done), Created = now, State = Queued, ReviewOf = done.Number,
+                Title = OneLine("Check: " + done.Title, 60), Task = JobReview.Task(done, asked), Created = now, State = Queued, ReviewOf = done.Number,
                 RevitModel = done.RevitModel,
             };
             _jobs.Add(check);
@@ -941,7 +941,8 @@ internal sealed class JobBoard
             if (JobReview.ReportLine(j) is { Length: > 0 } checkedLine) sb.Append(checkedLine + "\n");
         }
         sb.Append(stillOpen > 0 ? $"\n{stillOpen} other job(s) are still open. " : "\nNo other jobs are open. ");
-        sb.Append("Tell the user in a line or two what it did and anything they need to check; the job's card opens its full conversation. Don't redo its work.");
+        sb.Append("Tell the user in a line or two what it did and anything they need to check; the job's card opens its full conversation. " +
+                  "Parts a check found not done come first, named exactly; never call work finished while a part is open. Don't redo its work.");
         return sb.ToString();
     }
 

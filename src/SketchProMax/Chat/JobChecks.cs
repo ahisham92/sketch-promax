@@ -86,8 +86,12 @@ internal static class JobReview
     /// <summary>A job's <see cref="ChatJob.Review"/> while its check runs.</summary>
     public const string Pending = "pending";
 
-    /// <summary>Checks of one job at most (a job sent back to fix what a check found is checked once more).</summary>
-    public const int MaxReviews = 2;
+    /// <summary>
+    /// Checks of one job at most. A job whose check found parts not done is sent back to finish exactly those by itself
+    /// and is checked again (<see cref="SendBack"/>); only after the last check does unfinished work reach the user, named
+    /// as not done (the owner, 2026-11-17: "when checks are done I see things not done at the end").
+    /// </summary>
+    public const int MaxReviews = 3;
 
     /// <summary>The verdict's first word when the work is right.</summary>
     public const string PassedWord = "PASSED", IssuesWord = "ISSUES";
@@ -104,15 +108,47 @@ internal static class JobReview
         && job.State == JobBoard.Done && job.ReviewOf == 0 && job.GoalCheck == 0 && job.Unchecked
         && job.Review != Pending && job.Reviews < MaxReviews;
 
-    /// <summary>The checking job's task: the job's task and report, and how to answer.</summary>
-    public static string Task(ChatJob done) =>
+    /// <summary>The words that mark a part in a check's list.</summary>
+    public const string DoneWord = "DONE", NotDoneWord = "NOT DONE";
+
+    /// <summary>
+    /// The checking job's task: the job's task and report, what the user asked in their own words (<paramref name="asked"/>,
+    /// so a part the task left out is still caught), and how to answer: every part listed and read back, one by one.
+    /// </summary>
+    public static string Task(ChatJob done, string asked = "") =>
         $"Check the work of job {done.Number} (\"{done.Title}\"), which says it is finished, against what it was asked to do.\n\n" +
         $"Its task:\n{done.Task.Trim()}\n\nIts report:\n{(done.Summary.Trim().Length > 0 ? done.Summary.Trim() : "(it gave none)")}\n\n" +
-        "How to check: read the model with Sketch ProMax's tools and see that each part of the task is really done in the model " +
-        "(the elements, counts, names, values, views and sheets it should have made or changed), not just reported. Don't change " +
-        "the model: changes are refused for a check; say what needs fixing instead. Be quick: check what matters, not everything twice.\n\n" +
-        $"End your answer with one line: \"{PassedWord}\" when the work is done right, or \"{IssuesWord}: \" followed by what is wrong " +
-        "or missing, each with what to fix.";
+        (asked.Trim().Length > 0
+            ? "What the user asked, in their own words (the task above was written from this; a part of it that belongs to this job and is " +
+              $"missing from the task still counts):\n{asked.Trim()}\n\n"
+            : "") +
+        "How to check, part by part:\n" +
+        "1. Write the task as a numbered list of its parts: every thing it had to make, change, place, name or leave alone. Leave nothing " +
+        "out because it is small, and don't take the report's word for any of it.\n" +
+        "2. For each part, read the model with Sketch ProMax's tools and see that it is really there: the elements, names, values, views " +
+        "and sheets. Where the task says all or gives a number (all piles, every sheet, berths 7 to 11), count what was done against what " +
+        "was asked. For anything drawn (geometry, lines, tags, dimensions, text), also look at it in its view (capture_view_image): " +
+        "overlapping tags, a missing dimension or a hidden element show there and not in the numbers.\n" +
+        "3. Don't change the model: changes are refused for a check.\n\n" +
+        $"Answer with the list, one line per part: \"<n>. <the part>: {DoneWord}\" with what you read, or \"<n>. <the part>: {NotDoneWord} - " +
+        "<what is missing or wrong, and where>\". A part you could not check is NOT DONE with the reason.\n" +
+        $"End with one line: \"{PassedWord}\" only when every part is {DoneWord}, or \"{IssuesWord}: \" followed by the {NotDoneWord} parts, " +
+        "each with what to fix.";
+
+    /// <summary>
+    /// True when a job whose check found parts not done goes back to finish them by itself, without the user or the main
+    /// chat in between: it finished, a check gave a verdict that isn't a pass, and it has checks left.
+    /// </summary>
+    public static bool SendBack(ChatJob job) =>
+        job.State == JobBoard.Done && job.Review.Length > 0 && job.Review != Pending && !Passed(job.Review)
+        && job.Review.StartsWith(IssuesWord, StringComparison.OrdinalIgnoreCase) && job.Reviews < MaxReviews;
+
+    /// <summary>What a job sent back is told: exactly the parts the check found not done.</summary>
+    public static string FixMessage(ChatJob job) =>
+        $"A teammate checked your work in the model, part by part, and it is not finished. {job.Review}\n\n" +
+        "Finish exactly these parts now; leave what was found done as it is. After each one, read it back in the model (and look at " +
+        "drawn work in its view) before you go on. A part that truly can't be done: say why in one line, don't call it done. " +
+        "Then report each of these parts as done or not done. Your work is checked again.";
 
     /// <summary>The checking job's verdict, from its report: its last line when that says PASSED or ISSUES, else the whole report.</summary>
     public static string Verdict(ChatJob check)
@@ -134,7 +170,9 @@ internal static class JobReview
     public static string ReportLine(ChatJob job) =>
         job.Review.Length == 0 || job.Review == Pending ? ""
         : Passed(job.Review) ? $"A teammate (job {job.ReviewedBy}) checked the work in the model: it passed."
-        : $"A teammate (job {job.ReviewedBy}) checked the work in the model and found: {job.Review} Send job {job.Number} a message to fix it (or say why it is fine).";
+        : $"A teammate (job {job.ReviewedBy}) checked the work in the model, part by part" + (job.Reviews > 1 ? $" ({job.Reviews} checks, the job was sent back to finish in between)" : "") +
+          $", and this is still not done: {job.Review} Tell the user these parts first, exactly as not done; don't say the work is finished. " +
+          $"Then send job {job.Number} a message to finish them another way, or ask the user the one thing that blocks them.";
 }
 
 /// <summary>

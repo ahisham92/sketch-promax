@@ -121,13 +121,35 @@ internal static class JobChecksTests
         b2.RunEnded(check2, true, "A101-A103 fine.\nISSUES: A104 has no view placed.\n- place the level 4 plan on A104", now);
         b2.ReviewEnded(check2, now);
         check("review: issues are kept with what to fix", work.Review.StartsWith("ISSUES: A104 has no view placed.") && work.Review.Contains("place the level 4 plan"), work.Review);
-        var r2 = JobBoard.Report([work], 0);
-        check("review: the coordinator is told what was found and to send the job back", r2.Contains("found: ISSUES") && r2.Contains($"Send job {work.Number} a message"), r2);
-        b2.Message(work.Number, "fix it", now);
+        check("review: a job with parts not done and checks left goes back by itself, told exactly those parts",
+            JobReview.SendBack(work) && JobReview.FixMessage(work).Contains("A104 has no view placed") && JobReview.FixMessage(work).Contains("Finish exactly these parts")
+            && JobReview.FixMessage(work).Contains("checked again"), JobReview.FixMessage(work));
+        b2.Message(work.Number, JobReview.FixMessage(work), now);
         b2.MarkChanged(work.Key);
         b2.ToStart(3, now);
         b2.RunEnded(work, true, "Placed.", now);
-        check("review: at most two checks of one job", !JobReview.Wanted(JobReview.Always, true, work), "");
+        check("review: the job sent back is checked a third time", JobReview.Wanted(JobReview.Always, true, work), "");
+        var check3 = b2.StartReview(work.Number, now, "make sheets for levels 1 to 4 with their plans")!;
+        check("review: the check lists every part, reads each back, counts, looks at drawn work, and has the user's own words",
+            check3.Task.Contains("numbered list of its parts") && check3.Task.Contains("count what was done against what") && check3.Task.Contains("capture_view_image")
+            && check3.Task.Contains(JobReview.NotDoneWord) && check3.Task.Contains("make sheets for levels 1 to 4 with their plans") && !check3.Task.Contains("Be quick"), check3.Task);
+        b2.ToStart(3, now);
+        b2.RunEnded(check3, true, "1. A101-A103: DONE\n2. A104 plan: NOT DONE - the plan is on A104 but cropped empty\nISSUES: 2. A104 plan is cropped empty: reset its crop", now);
+        b2.ReviewEnded(check3, now);
+        check("review: after the last check nothing goes back by itself; unfinished parts reach the user named as not done",
+            !JobReview.SendBack(work) && work.Reviews == JobReview.MaxReviews, work.Reviews + "");
+        var r2 = JobBoard.Report([work], 0);
+        check("review: the coordinator is told what is still not done, to say it first, and to send the job back or ask",
+            r2.Contains("still not done: ISSUES") && r2.Contains("3 checks") && r2.Contains("don't say the work is finished") && r2.Contains($"send job {work.Number} a message")
+            && r2.Contains("never call work finished while a part is open"), r2);
+        b2.Message(work.Number, "fix it", now);
+        b2.MarkChanged(work.Key);
+        b2.ToStart(3, now);
+        b2.RunEnded(work, true, "Fixed.", now);
+        check("review: at most three checks of one job", !JobReview.Wanted(JobReview.Always, true, work), "");
+        check("review: a passed job, a failed check or a job with no verdict is not sent back",
+            !JobReview.SendBack(new ChatJob { State = JobBoard.Done, Review = JobReview.PassedWord }) && !JobReview.SendBack(new ChatJob { State = JobBoard.Done, Review = "The check couldn't finish: usage limit" })
+            && !JobReview.SendBack(new ChatJob { State = JobBoard.Done }) && !JobReview.SendBack(new ChatJob { State = JobBoard.Done, Review = JobReview.Pending }), "");
         var failed = new ChatJob { ReviewOf = 1, State = JobBoard.Failed, Summary = "usage limit" };
         check("review: a check that failed says so", JobReview.Verdict(failed).StartsWith("The check couldn't finish"), JobReview.Verdict(failed));
         var crew = new CrewPlan();
