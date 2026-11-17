@@ -583,7 +583,7 @@ internal static partial class FieldTest
 
     /// <summary>One probe on Revit's thread.</summary>
     private static Task Probe(State s, string key, Func<UIApplication, (string Status, string Message)> body, string family = "features") =>
-        ProbeCore(s, key, () => App.Dispatcher.InvokeAsync(body), family);
+        ProbeCore(s, key, () => App.Dispatcher.InvokeAsync(app => Revit.FailureGuard.WithoutDialogs(() => body(app))), family);
 
     /// <summary>One probe off Revit's thread.</summary>
     private static Task Probe(State s, string key, Func<(string Status, string Message)> body, string family = "features") =>
@@ -2616,7 +2616,7 @@ internal static partial class FieldTest
             if (!boqXml.Contains("To Summary")) problems.Add("the built-in BOQ has no summary line");
             var baseCost = Path.Combine(folder, "built-in costing.xlsx");
             BerthCostDocs.WriteCosting(p, [berth], baseCost);
-            if (!Sheet1(baseCost).Contains("Berth 1")) problems.Add("the built-in costing doesn't list the berth");
+            if (!Sheet1(baseCost).Contains(System.Security.SecurityElement.Escape(berth.Title))) problems.Add("the built-in costing doesn't list the berth (" + berth.Title + ")");
             var baseDoc = Path.Combine(folder, "built-in back-up.docx");
             BerthCostDocs.WriteBackup(p, [berth], baseDoc);
             using (var zip = ZipFile.OpenRead(baseDoc))
@@ -2816,6 +2816,15 @@ internal static partial class FieldTest
         if (ChecklistMath.BuiltIn() is not { } def) return Fail("the built-in checklist can't be read");
         var problems = new List<string>();
         var said = new List<string>();
+        // Each fix is timed: on 17 Nov 2026 this check took 32 minutes once (30 s the run before), and the time of each
+        // fix says which one waited (making worksets asks the central model).
+        var slow = new List<string>();
+        string Timed(string key, Func<string> run)
+        {
+            var clock = Stopwatch.StartNew();
+            try { return run(); }
+            finally { if (clock.ElapsedMilliseconds >= 5000) slow.Add($"{key} {clock.Elapsed.TotalSeconds:0} s"); }
+        }
         foreach (var key in new[] { "titleblock", "levels", "worksets", "backgrounds", "viewfolders", "tbmodelname", "duplicates", "submission", "nwcsettings" })
             if (ChecklistFixes.For(key, def) is not { } offer || offer.Button.Length == 0 || offer.Question.Length == 0) problems.Add(key + ": no Fix button");
 
@@ -2830,7 +2839,7 @@ internal static partial class FieldTest
             var second = ChecklistFixes.SubmissionFile(folder, "PRJ1-BLDG-01-STR_detached.rvt", "_S03_R##");
             if (Path.GetFileName(second) != "PRJ1-BLDG-01-STR_S03_R01.rvt") problems.Add("submission: with R00 taken the copy is named " + Path.GetFileName(second));
         }
-        var submission = ChecklistFixes.Run(doc, "submission", null, def: def);
+        var submission = Timed("submission", () => ChecklistFixes.Run(doc, "submission", null, def: def));
         said.Add("submission: " + submission);
 
         // NWC only when the package needs no IFC.
@@ -2857,7 +2866,7 @@ internal static partial class FieldTest
                 t.Commit();
             }
             if (!ChecklistFacts.UnusedLevels(doc).Any(l => l.Id == spare.Id)) problems.Add("levels: the spare level isn't listed as unused");
-            said.Add("levels: " + ChecklistFixes.Run(doc, "levels", null, def: def));
+            said.Add("levels: " + Timed("levels", () => ChecklistFixes.Run(doc, "levels", null, def: def)));
             if (spare.IsValidObject) problems.Add("levels: the spare level is still there");
 
             // A sheet with no title block gets the title block family set in the rules.
@@ -2872,7 +2881,7 @@ internal static partial class FieldTest
                 t.Commit();
             }
             var tbDef = new ChecklistMath.Definition { Rules = { ["titleblock"] = family ?? "NOT-LOADED-TB" } };
-            var tb = ChecklistFixes.Run(doc, "titleblock", null, def: tbDef);
+            var tb = Timed("titleblock", () => ChecklistFixes.Run(doc, "titleblock", null, def: tbDef));
             said.Add("titleblock: " + tb);
             var hasBlock = new FilteredElementCollector(doc, sheet.Id).OfCategory(BuiltInCategory.OST_TitleBlocks).WhereElementIsNotElementType().GetElementCount() > 0;
             if (family is not null && !hasBlock) problems.Add("titleblock: the bare sheet got no title block (" + tb + ")");
@@ -2880,13 +2889,13 @@ internal static partial class FieldTest
 
             // The model name written into a sheet parameter.
             var nameDef = new ChecklistMath.Definition { Rules = { ["tbmodelname"] = "Approved By" } };
-            said.Add("tbmodelname: " + ChecklistFixes.Run(doc, "tbmodelname", null, def: nameDef));
+            said.Add("tbmodelname: " + Timed("tbmodelname", () => ChecklistFixes.Run(doc, "tbmodelname", null, def: nameDef)));
             var name = Path.GetFileNameWithoutExtension(ChecklistMath.WorkingName(string.IsNullOrEmpty(doc.PathName) ? doc.Title : Path.GetFileName(doc.PathName)));
             if ((sheet.LookupParameter("Approved By")?.AsString() ?? "") != name) problems.Add("tbmodelname: the sheet's Approved By isn't " + name);
 
             // View folders: an empty view parameter filled with the typed value.
             var folderDef = new ChecklistMath.Definition { Rules = { ["viewfolders"] = "Title on Sheet" } };
-            said.Add("viewfolders: " + ChecklistFixes.Run(doc, "viewfolders", null, def: folderDef, answer: "PRJ1 TEST"));
+            said.Add("viewfolders: " + Timed("viewfolders", () => ChecklistFixes.Run(doc, "viewfolders", null, def: folderDef, answer: "PRJ1 TEST")));
             var empty = new FilteredElementCollector(doc).OfClass(typeof(View)).Cast<View>()
                 .Count(v => !v.IsTemplate && v.ViewType is not (ViewType.ProjectBrowser or ViewType.SystemBrowser or ViewType.Internal or ViewType.Undefined or ViewType.DrawingSheet) &&
                             v.LookupParameter("Title on Sheet") is { IsReadOnly: false, StorageType: StorageType.String } p && !ChecklistFacts.Filled(p));
@@ -2900,22 +2909,28 @@ internal static partial class FieldTest
                 ICollection<ElementId> copy;
                 using (var t = new Transaction(doc, "Field test: an identical copy"))
                 {
+                    // Revit's "identical instances in the same place" warning must stay (the duplicates fix reads it) but
+                    // never as a dialog: it held Revit for 32 minutes on 17 Nov 2026 until someone clicked it.
+                    var options = t.GetFailureHandlingOptions();
+                    options.SetForcedModalHandling(false);
+                    t.SetFailureHandlingOptions(options);
                     t.Start();
                     copy = ElementTransformUtils.CopyElement(doc, original.Id, XYZ.Zero);
                     t.Commit();
                 }
-                said.Add("duplicates: " + ChecklistFixes.Run(doc, "duplicates", null, def: def));
+                said.Add("duplicates: " + Timed("duplicates", () => ChecklistFixes.Run(doc, "duplicates", null, def: def)));
                 if (copy.Any(id => doc.GetElement(id) is not null) && original.IsValidObject) problems.Add("duplicates: the identical copy is still there");
                 if (!original.IsValidObject && copy.All(id => doc.GetElement(id) is null)) problems.Add("duplicates: both copies were deleted");
             }
 
             // Worksets and linked backgrounds: run without an error (the test project may be neither workshared nor linked).
             foreach (var key in new[] { "worksets", "backgrounds" })
-                said.Add(key + ": " + ChecklistFixes.Run(doc, key, null, def: def));
+                said.Add(key + ": " + Timed(key, () => ChecklistFixes.Run(doc, key, null, def: def)));
         }
         catch (Exception ex) when (ex is not OutOfMemoryException) { problems.Add("threw " + ex.GetType().Name + ": " + ex.Message); }
         finally { RollBack(group); }
         foreach (var line in said.Where(l => l.IndexOf("There is no automatic fix", StringComparison.Ordinal) >= 0)) problems.Add(line);
+        if (slow.Count > 0) problems.Add("slow (Revit is frozen meanwhile): " + string.Join(", ", slow));
         return problems.Count == 0 ? Pass("fixes ran and were rolled back: " + string.Join(" ", said)) : Fail(string.Join("; ", problems));
     }
 
@@ -3051,6 +3066,10 @@ internal static partial class FieldTest
             if (column is not null)
                 using (var t = new Transaction(doc, "Field test: a split pile"))
                 {
+                    // The copy in place makes Revit's "identical instances" warning: kept, but never as a dialog.
+                    var options = t.GetFailureHandlingOptions();
+                    options.SetForcedModalHandling(false);
+                    t.SetFailureHandlingOptions(options);
                     t.Start();
                     ElementTransformUtils.CopyElement(doc, column.Id, XYZ.Zero);
                     t.Commit();

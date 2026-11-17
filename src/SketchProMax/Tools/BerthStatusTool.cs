@@ -68,8 +68,8 @@ public sealed class BerthStatusTool : IRevitTool
                 return ToolResult.Ok(new
                 {
                     project,
-                    berths = setup.Berths.Select(b => Line(Summarize(setup, b, state, now), detail: false)),
-                    note = "Model results are from each berth's last Update status (readAt). Press Update status in the Berth status window to read the model again.",
+                    berths = setup.Berths.Select(b => Brief(Summarize(setup, b, state, now))),
+                    note = "Model results are from each berth's last Update status (readAt). Press Update status in the Berth status window to read the model again. 'details' with berth gives one berth's areas, deliverables and what to fix.",
                 });
             case "details":
                 return ToolResult.Ok(Line(Summarize(setup, Pick(), state, now), detail: true));
@@ -102,6 +102,26 @@ public sealed class BerthStatusTool : IRevitTool
                 throw new ArgumentException("action is list, details, set or finish.");
         }
     }
+
+    /// <summary>
+    /// One berth in 'list': a project with many berths, areas and deliverables gave 31,760 characters (over the chat's
+    /// 24,000) when each berth carried its whole area and deliverable rows, so 'list' gives each as one short "name %" text
+    /// and 'details' keeps the full rows.
+    /// </summary>
+    private static object Brief(Summary s) => new
+    {
+        berth = s.Berth.Name,
+        model = s.Berth.Model,
+        status = Pct(s.Percent),
+        verdict = Text(s.Verdict),
+        next = s.Next is null ? null : s.Next.Name + (s.Due is { } due ? " due " + due.ToString("ddd dd-MMM-yyyy HH:mm", CultureInfo.InvariantCulture) : "") + $", {Math.Round(s.HoursLeft, 1).ToString(CultureInfo.InvariantCulture)} working h left",
+        submitted = s.Last is { } last ? last.Name + When(last, "dd-MMM-yyyy", ", ") : null,
+        expectedFinish = s.Finish?.ToString("ddd dd-MMM-yyyy HH:mm", CultureInfo.InvariantCulture),
+        readAt = s.State.ReadAt?.ToString("dd-MMM-yyyy HH:mm", CultureInfo.InvariantCulture),
+        areas = s.Scores.All(a => a.Percent is null) ? "not measured yet" : string.Join("; ", s.Scores.Select(a => a.Area.Name + " " + Pct(a.Percent) + ((a.Result?.Findings.Count ?? 0) is > 0 and var n ? $" ({n} to fix)" : ""))),
+        deliverables = s.Deliverables.All(d => d.Percent is null) ? "not measured yet" : string.Join("; ", s.Deliverables.Select(d => d.Deliverable.Name + " " + Pct(d.Percent))),
+        comment = s.State.Comment.Length > 0 ? s.State.Comment : null,
+    };
 
     private static object Line(Summary s, bool detail) => new
     {

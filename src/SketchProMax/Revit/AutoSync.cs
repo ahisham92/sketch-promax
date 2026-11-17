@@ -65,6 +65,9 @@ internal static class AutoSync
     public static void ReadSettings()
     {
         _lastSettings = Environment.TickCount;
+        // The field test sets its own limit (20) and a stand-in sync: reading the user's settings in the middle of it (once
+        // a minute, on a change) put the limit back to theirs, so the test batch was never split.
+        if (SyncForTest is not null) return;
         var s = AgentSettings.Load();
         Rule.Configure(s.AutoSync, s.AutoSyncChanges);
     }

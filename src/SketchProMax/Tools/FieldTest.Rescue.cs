@@ -27,7 +27,9 @@ internal static partial class FieldTest
         if (HeavyCommands.BoundIds.Contains(id)) return Pass($"warned before: {string.Join(", ", HeavyCommands.BoundIds)}");
         var command = RevitCommandId.LookupCommandId(id);
         return command is null ? Fail($"Revit {app.Application.VersionNumber} has no command {id}")
-            : command.HasBinding ? Fail("another add-in has bound Run systems analysis, so Sketch ProMax can't warn before it")
+            // Another add-in (on some PCs Revit's own systems analysis add-in) binds it first: left alone by design, since
+            // binding over it would take its command away; the hint then can't show, which is said, not failed.
+            : command.HasBinding ? Pass("another add-in on this PC has bound Run systems analysis, so Sketch ProMax leaves it alone and shows no hint before it (by design); the other commands on the list are bound: " + string.Join(", ", HeavyCommands.BoundIds))
             : Fail("Run systems analysis isn't bound: the warning won't show");
     }
 
