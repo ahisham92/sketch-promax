@@ -18,8 +18,9 @@ internal static class SyncLockTests
         check("child process: environment block sorted, \\0 separated, ends in \\0\\0", block == "A=1\0b=2\0C=\0\0", block.Replace("\0", "|"));
         check("code hints: a family that won't load back gets its fix", ScriptSource.RuntimeHint("Family loading failed.").Contains("run_revit_code"), ScriptSource.RuntimeHint("Family loading failed."));
 
+        RunWindows(check);
         // Off Windows ChildProcess is Process.Start: it still hands back working streams.
-        var shell = File.Exists("/bin/sh") ? "/bin/sh" : null;
+        var shell = Environment.OSVersion.Platform != PlatformID.Win32NT && File.Exists("/bin/sh") ? "/bin/sh" : null;
         if (shell is not null)
         {
             using var child = ChildProcess.Start(new ProcessStartInfo(shell, "-c \"read x; echo got $x; echo err 1>&2\"")
@@ -32,6 +33,27 @@ internal static class SyncLockTests
             var error = child.StandardError!.ReadToEnd().Trim();
             check("child process: input, output and error streams work", output == "got hello" && error == "err" && child.WaitForExit(5000), output + " / " + error);
         }
+    }
+
+    /// <summary>On Windows (CI): the handle-list start itself, through cmd.exe, with all three streams.</summary>
+    private static void RunWindows(Action<string, bool, string> check)
+    {
+        if (Environment.OSVersion.Platform != PlatformID.Win32NT) return;
+        var info = new ProcessStartInfo("cmd.exe", "/d /c \"findstr x & echo err 1>&2\"")
+        {
+            UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true,
+            WorkingDirectory = Path.GetTempPath(),
+        };
+        info.Environment["SKETCHPROMAX_TEST"] = "1";
+        using var child = ChildProcess.Start(info);
+        child.StandardInput!.WriteLine("hello x");
+        child.StandardInput.Close();
+        var output = child.StandardOutput!.ReadToEnd().Trim();
+        var error = child.StandardError!.ReadToEnd().Trim();
+        var ended = child.WaitForExit(10000);
+        check("child process (Windows): started with the handle list, streams and exit code work",
+            ChildProcess.LastStartIsolated && output == "hello x" && error == "err" && ended && child.Process.ExitCode == 0,
+            $"{ChildProcess.LastStartIsolated} '{output}' '{error}' {ended}");
     }
 
     public static void RunSources(string root, Action<string, bool, string> check)
