@@ -583,7 +583,7 @@ internal static partial class FieldTest
 
     /// <summary>One probe on Revit's thread.</summary>
     private static Task Probe(State s, string key, Func<UIApplication, (string Status, string Message)> body, string family = "features") =>
-        ProbeCore(s, key, () => App.Dispatcher.InvokeAsync(body), family);
+        ProbeCore(s, key, () => App.Dispatcher.InvokeAsync(app => Revit.FailureGuard.WithoutDialogs(() => body(app))), family);
 
     /// <summary>One probe off Revit's thread.</summary>
     private static Task Probe(State s, string key, Func<(string Status, string Message)> body, string family = "features") =>
@@ -2909,6 +2909,11 @@ internal static partial class FieldTest
                 ICollection<ElementId> copy;
                 using (var t = new Transaction(doc, "Field test: an identical copy"))
                 {
+                    // Revit's "identical instances in the same place" warning must stay (the duplicates fix reads it) but
+                    // never as a dialog: it held Revit for 32 minutes on 17 Nov 2026 until someone clicked it.
+                    var options = t.GetFailureHandlingOptions();
+                    options.SetForcedModalHandling(false);
+                    t.SetFailureHandlingOptions(options);
                     t.Start();
                     copy = ElementTransformUtils.CopyElement(doc, original.Id, XYZ.Zero);
                     t.Commit();
@@ -3061,6 +3066,10 @@ internal static partial class FieldTest
             if (column is not null)
                 using (var t = new Transaction(doc, "Field test: a split pile"))
                 {
+                    // The copy in place makes Revit's "identical instances" warning: kept, but never as a dialog.
+                    var options = t.GetFailureHandlingOptions();
+                    options.SetForcedModalHandling(false);
+                    t.SetFailureHandlingOptions(options);
                     t.Start();
                     ElementTransformUtils.CopyElement(doc, column.Id, XYZ.Zero);
                     t.Commit();

@@ -150,7 +150,14 @@ internal static partial class FieldTest
         {
             _ = App.Dispatcher.InvokeFromEventAsync(app =>
             {
-                if (Jobs.Running is null && !SelfTest.IsRunning && Untold() is { } c) ShowCrash(app, c);
+                // A hint in the corner, never a dialog: a dialog shown by itself waited for a click and blocked every
+                // Sketch ProMax tool (and the next field test) while the user was away (17 Nov 2026). The full choice
+                // (report folder, continue, run again) opens from the Field test button.
+                if (Jobs.Running is null && !SelfTest.IsRunning && Untold() is { } c)
+                    UI.CommandHint.Show("Revit closed during the last field test",
+                        FieldTestJournal.Tell(StepOf(c), FamilyTitle(c), c.Report is { Length: > 0 } r ? Path.GetDirectoryName(r)! : c.Header.ReportFolder ?? DefaultReportFolder) +
+                        " Press Field test for the report and to run it again.",
+                        () => FieldTestJournal.MarkShown(c));
                 return true;
             }).ContinueWith(t => _ = t.Exception, TaskScheduler.Default);
         }

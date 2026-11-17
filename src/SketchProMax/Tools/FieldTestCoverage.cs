@@ -815,6 +815,7 @@ internal static class FieldTestCoverage
         new(77, ["recovery.notes", "recovery.views", "recovery.types", "recovery.extras"], "in Revit itself: a deleted dimension between grids, a spline drawn in a view, a view on its sheet, an elevation and stairs are made again in a replay"),
         new(76, ["update.resume", "update.fallback"], "an update downloads only the files of the Revit versions Sketch ProMax is installed for (the update window names them), and the whole package is still the fallback"),
         new(78, ["tool:berth_status"], "berth_status list on this PC's berth status setup fits a chat (under 24,000 characters)"),
+        new(79, ["checklist.fix_more", "checklist.autotests"], "the checklist checks copy a column onto itself and finish in seconds with no Revit dialog; a Fix taking 5 s or more is named"),
     ];
 
     /// <summary>
