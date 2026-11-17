@@ -2,7 +2,7 @@
 
 <p align="center"><img src="assets/logo/sketch-promax-wordmark.png" alt="Sketch ProMax" width="420"></p>
 
-An AI agent for Autodesk Revit 2024, 2025, 2026 and 2027, powered by Claude. Ask in plain language; it reads, documents, audits and edits the open model through 232 tools, and it learns new ones as you use it. Every change can be undone with Ctrl+Z, and it asks for your approval before anything risky (or before every change, if you prefer).
+An AI agent for Autodesk Revit 2024, 2025, 2026 and 2027, powered by Claude. Ask in plain language; it reads, documents, audits and edits the open model through 233 tools, and it learns new ones as you use it. Every change can be undone with Ctrl+Z, and it asks for your approval before anything risky (or before every change, if you prefer).
 
 See [docs/PLAN.md](docs/PLAN.md) for the comparison with SketchPro, the roadmap and the architecture.
 

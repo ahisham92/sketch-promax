@@ -72,7 +72,7 @@ internal static class SubmissionFormat
         "Sheet title in three lines: STRUCTURAL / BERTH <n> / the sheet's name; the sheet number with the revision after it",
         "Notes legend of this berth's notes, key plan with only this berth highlighted, legend, tidal bar",
         "Stage and month (FINAL DESIGN, the month of issue), revision row: Rev, phase, date, ISSUED FOR APPROVAL, approver",
-        "The same issue date, in the same form, on every sheet of the submission",
+        "The issue date written in the same form on every sheet (the date itself is later on sheets added in a later revision)",
         "Matchlines stop inside the view crop",
         "Every drawing number cited in a note is a sheet of the submission",
         "No dimension shows a typed value over what the model measures",
@@ -146,10 +146,12 @@ internal static class SubmissionFormat
         public List<PlacedView> Views = [];
         /// <summary>True when a key plan was found (a view on the sheet named KEY PLAN, or yes/no berth switches in the title block).</summary>
         public bool KeyPlanFound;
-        /// <summary>The berths the key plan highlights, as far as the model says.</summary>
-        public List<int> KeyPlanBerths = [];
+        /// <summary>What the key plan highlights, as far as the model says: a whole berth (part 0) or one part of it ("Berth 6 - Part 2").</summary>
+        public List<(int Berth, int Part)> KeyPlanOn = [];
         /// <summary>True when the key plan is yes/no berth switches in the title block (the owner, 2026-11-17: that is how it is made).</summary>
         public bool KeyPlanSwitches;
+        /// <summary>True when the title block has switches for the parts of a berth ("Berth 6 - Part 2"), not only for whole berths.</summary>
+        public bool KeyPlanParts;
         /// <summary>Yes/no parameters of the title block whose names name no berth: listed when no berth switch was found, so the names can be taught.</summary>
         public List<string> OtherSwitches = [];
         public List<string> Schedules = [];
@@ -168,6 +170,8 @@ internal static class SubmissionFormat
         public int EmptyTags, OverlappingTags, MatchlinesPastCrop;
         /// <summary>The view's box runs outside the sheet's frame.</summary>
         public bool OffSheet;
+        /// <summary>Its tags and matchlines were not read in this run (the time for drawing views ran out): the next run reads them.</summary>
+        public bool NotJudged;
         /// <summary>
         /// Of the categories the view tags (the owner's rule, 2026-11-17: inside the matchlines every pile is tagged; outside
         /// them the tag is hidden): how many elements lie inside the view's matchlines, how many of those have no tag, and
@@ -254,10 +258,20 @@ internal static class SubmissionFormat
                 foreach (var schedule in kind.Schedules)
                     if (!sheet.Schedules.Any(s => s.IndexOf(schedule, StringComparison.OrdinalIgnoreCase) >= 0))
                         issues.Add(new(name, "Schedules", $"No \"BERTH {berth} - {schedule}\" on the sheet.", "Place the schedule on the sheet."));
-                if (sheet.KeyPlanSwitches && sheet.KeyPlanBerths.Count == 0)
-                    issues.Add(new(name, "Key plan", "The key plan highlights no berth: every berth switch of the title block is off.", $"Switch on Berth {berth} in the sheet's title block."));
-                if (sheet.KeyPlanFound && sheet.KeyPlanBerths.Count > 0 && !(sheet.KeyPlanBerths.Distinct().Count() == 1 && sheet.KeyPlanBerths[0] == berth))
-                    issues.Add(new(name, "Key plan", $"The key plan highlights berth {string.Join(", ", sheet.KeyPlanBerths.Distinct().OrderBy(b => b))}.", $"Highlight only Berth {berth}: in the sheet's title block switch Berth {berth} on and the others off."));
+                // The key plan: only this berth is on, and on a part's sheet only that part.
+                static string Says((int Berth, int Part) k) => k.Part > 0 ? $"Berth {k.Berth} - Part {k.Part}" : $"Berth {k.Berth}";
+                var on = sheet.KeyPlanOn.Distinct().OrderBy(k => k.Berth).ThenBy(k => k.Part).ToList();
+                var partOf = kind.Key is "piles" or "framing" ? at.Series % 10 : 0;
+                if (sheet.KeyPlanSwitches && on.Count == 0)
+                    issues.Add(new(name, "Key plan", "The key plan highlights nothing: every berth switch of the title block is off.", $"Switch on {Says((berth, partOf))} in the sheet's title block."));
+                else if (sheet.KeyPlanFound && on.Count > 0)
+                {
+                    var wrong = on.Where(k => k.Berth != berth || (partOf > 0 && k.Part > 0 && k.Part != partOf) || (partOf == 0 && k.Part > 0)).ToList();
+                    // A part's sheet shows its part, where the title block has part switches at all.
+                    var missingPart = partOf > 0 && wrong.Count == 0 && on.All(k => k.Part == 0) && sheet.KeyPlanParts;
+                    if (wrong.Count > 0 || missingPart)
+                        issues.Add(new(name, "Key plan", $"The key plan highlights {string.Join(", ", on.Select(Says))}.", $"In the sheet's title block switch on only {Says((berth, partOf))}."));
+                }
             }
             // The same views of a berth share one scale: all its parts, all its sections.
             foreach (var group in scales.Where(x => StandardScales.Contains(x.View.Scale)).GroupBy(x => x.Group))
@@ -270,10 +284,11 @@ internal static class SubmissionFormat
         }
 
         // What the QC sheet checks on every sheet of the submission.
-        var dates = inScope.Select(p => p.Sheet.IssueDate.Trim()).Where(d => d.Length > 0).GroupBy(d => d).OrderByDescending(g => g.Count()).ToList();
-        if (dates.Count > 1)
-            foreach (var (sheet, _) in inScope.Where(p => p.Sheet.IssueDate.Trim().Length > 0 && p.Sheet.IssueDate.Trim() != dates[0].Key))
-                issues.Add(new(Bare(sheet.Number), "Title block", $"Issue date \"{sheet.IssueDate.Trim()}\"; the other sheets show \"{dates[0].Key}\".", $"Set it to {dates[0].Key}."));
+        // Sheets added in a later revision carry a later date, so the date itself may differ; the way it is written may not.
+        var forms = inScope.Select(p => p.Sheet.IssueDate.Trim()).Where(d => d.Length > 0).GroupBy(DateForm).OrderByDescending(g => g.Count()).ToList();
+        if (forms.Count > 1)
+            foreach (var (sheet, _) in inScope.Where(p => p.Sheet.IssueDate.Trim().Length > 0 && DateForm(p.Sheet.IssueDate.Trim()) != forms[0].Key))
+                issues.Add(new(Bare(sheet.Number), "Title block", $"Issue date \"{sheet.IssueDate.Trim()}\" is written another way than on the other sheets (\"{forms[0].First()}\").", $"Write it like {forms[0].First()}."));
         foreach (var (sheet, _) in inScope)
         {
             foreach (var cited in sheet.Cited.Select(Bare).Distinct(StringComparer.OrdinalIgnoreCase).Where(c => !numbers.Contains(c)))
@@ -291,6 +306,9 @@ internal static class SubmissionFormat
         }
         return issues;
     }
+
+    /// <summary>How a date is written: digits as 9, letters as A ("14/05/2026" is 99/99/9999, "06/17/26" is 99/99/99).</summary>
+    public static string DateForm(string date) => Regex.Replace(Regex.Replace(date.Trim(), @"\d", "9"), @"\p{L}", "A");
 
     /// <summary>
     /// What to look at by eye on the sheets of <paramref name="berths"/>, not failures by themselves: on sheets other than
@@ -311,6 +329,14 @@ internal static class SubmissionFormat
                     lines.Add($"{Bare(sheet.Number)}: {v.UntaggedInside} of {v.Taggable} elements of the tagged categories have no tag in \"{Clean(v.Title)}\". See whether they should have one.");
             if (!sheet.KeyPlanFound) { noKeyPlan.Add(Bare(sheet.Number)); switches.UnionWith(sheet.OtherSwitches); }
         }
+        var dates = all.Where(s => Parse(s.Number) is { } at && (at.Berth == 0 || wanted.Count == 0 || wanted.Contains(at.Berth)) && s.IssueDate.Trim().Length > 0)
+            .GroupBy(s => s.IssueDate.Trim()).OrderByDescending(g => g.Count()).ToList();
+        if (dates.Count > 1)
+            lines.Add("Issue dates: " + string.Join("; ", dates.Select(g => $"{g.Key} on {g.Count()} sheet(s)" + (g != dates[0] ? $" ({string.Join(", ", g.Take(4).Select(s => Bare(s.Number)))}{(g.Count() > 4 ? ", ..." : "")})" : ""))) +
+                      ". Right when those sheets were issued in another revision.");
+        var pending = all.Where(s => Parse(s.Number) is { Berth: > 0 } at && (wanted.Count == 0 || wanted.Contains(at.Berth)) && s.Views.Any(v => v.NotJudged)).Select(s => Bare(s.Number)).ToList();
+        if (pending.Count > 0)
+            lines.Insert(0, $"Not read yet: the tags and matchlines on {pending.Count} sheet(s) ({string.Join(", ", pending.Take(6))}{(pending.Count > 6 ? ", ..." : "")}). Run the check again to carry on.");
         if (noKeyPlan.Count > 0)
             lines.Add($"Key plan: the model doesn't say which berth it highlights on {noKeyPlan.Count} sheet(s) ({string.Join(", ", noKeyPlan.Take(6))}{(noKeyPlan.Count > 6 ? ", ..." : "")}). Look at one sheet per berth (capture_view_image): only that berth is highlighted." +
                       (switches.Count > 0 ? $" The title block's yes/no switches name no berth: {string.Join(", ", switches.Take(20))}. Tell the user, so the right ones can be read." : ""));
@@ -334,6 +360,10 @@ internal static class SubmissionFormat
         else if (Regex.Match(n, @"^(?:B[\s\-_.#]*)?(\d{1,2})$") is { Success: true } bare) found.Add(int.Parse(bare.Groups[1].Value));
         return found.Where(b => b > 0).Distinct().ToList();
     }
+
+    /// <summary>The part a title block's switch is for ("Berth 6 - Part 2" is 2); 0 when it is for a whole berth.</summary>
+    public static int SwitchPart(string name) =>
+        Regex.Match(Clean(name), @"PART\D{0,2}(\d{1,2})\b", RegexOptions.IgnoreCase) is { Success: true } m ? int.Parse(m.Groups[1].Value) : 0;
 
     /// <summary>A sheet number without its revision ("...-SC-101-0" is "...-SC-101").</summary>
     public static string Bare(string number)

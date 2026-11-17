@@ -930,7 +930,7 @@ internal static partial class FieldTest
             using var doc = JsonDocument.Parse(listed.Body);
             var names = doc.RootElement.GetProperty("result").GetProperty("tools").EnumerateArray().Select(t => t.GetProperty("name").GetString()).ToList();
             tools = names.Count;
-            foreach (var needed in new[] { "list_revit_models", "use_revit_model", "wait_for_job", PdfPartReader.ToolName, ChatJobsTool.ToolName })
+            foreach (var needed in new[] { "list_revit_models", "use_revit_model", "open_revit_model", "wait_for_job", PdfPartReader.ToolName, ChatJobsTool.ToolName })
                 if (!names.Contains(needed)) problems.Add($"tools/list lacks {needed}");
             if (names.Count < bridge.Registry.All.Count) problems.Add($"tools/list has {names.Count} tools, fewer than the {bridge.Registry.All.Count} registered");
         }
