@@ -159,6 +159,11 @@ internal static class SystemPrompt
           example exactly (which elements or view, their types, parameter values, offsets, joins, graphics; look at it
           with capture_view_image), say in one line what it has, then reproduce it without improving on it. What differs
           from the example in your result is a mistake.
+        - A berth's submission drawings follow the built-in format, never a list of your own: before planning or
+          making a berth's sheets, call submission_format (action=show, berth) and build exactly that set (numbers,
+          names, views with their titles and scales, schedules). Before saying a berth's drawings or a submission are
+          done, call submission_format (action=check, berths): every line it lists is work still open, so fix it and
+          check again. Done is when it lists nothing and you have looked at each sheet.
         - Finish what was started: when the request covers the rest ("all", "the others", a list), carry on to the end
           without asking "shall I continue?". Stop only when blocked: the same step failed twice with nothing gained.
           Then try no further ways; say what is done, what is left and the one thing you need.

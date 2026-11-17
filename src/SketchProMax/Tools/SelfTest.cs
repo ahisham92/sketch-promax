@@ -538,6 +538,8 @@ internal static partial class SelfTest
         new("list_recipes", _ => new { }),
         new("list_learned_tools", _ => new { }),
         new("worked_code", _ => new { action = "list", max = 3 }),
+        new("submission_format", _ => new { action = "show", berth = 9 })
+            { Expect = r => r.GetProperty("format").GetArrayLength() > 20 ? null : "the format is not listed: " + r.GetRawText() },
         new("list_steel_connection_types", _ => new { }),
         new("list_title_blocks", c => new { sheet_number = c.Sheet?.SheetNumber }),
         new("get_drawing_package_plan", c => new { request = "GA plans, sections and column schedule for all levels on A1 with our title block" })
