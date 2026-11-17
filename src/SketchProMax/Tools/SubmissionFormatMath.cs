@@ -148,6 +148,10 @@ internal static class SubmissionFormat
         public bool KeyPlanFound;
         /// <summary>The berths the key plan highlights, as far as the model says.</summary>
         public List<int> KeyPlanBerths = [];
+        /// <summary>True when the key plan is yes/no berth switches in the title block (the owner, 2026-11-17: that is how it is made).</summary>
+        public bool KeyPlanSwitches;
+        /// <summary>Yes/no parameters of the title block whose names name no berth: listed when no berth switch was found, so the names can be taught.</summary>
+        public List<string> OtherSwitches = [];
         public List<string> Schedules = [];
         /// <summary>Drawing numbers cited in the notes on the sheet and its views.</summary>
         public List<string> Cited = [];
@@ -250,8 +254,10 @@ internal static class SubmissionFormat
                 foreach (var schedule in kind.Schedules)
                     if (!sheet.Schedules.Any(s => s.IndexOf(schedule, StringComparison.OrdinalIgnoreCase) >= 0))
                         issues.Add(new(name, "Schedules", $"No \"BERTH {berth} - {schedule}\" on the sheet.", "Place the schedule on the sheet."));
+                if (sheet.KeyPlanSwitches && sheet.KeyPlanBerths.Count == 0)
+                    issues.Add(new(name, "Key plan", "The key plan highlights no berth: every berth switch of the title block is off.", $"Switch on Berth {berth} in the sheet's title block."));
                 if (sheet.KeyPlanFound && sheet.KeyPlanBerths.Count > 0 && !(sheet.KeyPlanBerths.Distinct().Count() == 1 && sheet.KeyPlanBerths[0] == berth))
-                    issues.Add(new(name, "Key plan", $"The key plan highlights berth {string.Join(", ", sheet.KeyPlanBerths.Distinct().OrderBy(b => b))}.", $"Highlight only Berth {berth}."));
+                    issues.Add(new(name, "Key plan", $"The key plan highlights berth {string.Join(", ", sheet.KeyPlanBerths.Distinct().OrderBy(b => b))}.", $"Highlight only Berth {berth}: in the sheet's title block switch Berth {berth} on and the others off."));
             }
             // The same views of a berth share one scale: all its parts, all its sections.
             foreach (var group in scales.Where(x => StandardScales.Contains(x.View.Scale)).GroupBy(x => x.Group))
@@ -296,17 +302,37 @@ internal static class SubmissionFormat
         var wanted = (berths ?? []).Where(b => b > 0).ToHashSet();
         var lines = new List<string>();
         var noKeyPlan = new List<string>();
+        var switches = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var sheet in all)
         {
             if (Parse(sheet.Number) is not { Berth: > 0 } at || (wanted.Count > 0 && !wanted.Contains(at.Berth))) continue;
             if (KindOf(at.Series, sheet.Name)?.Key != "piles")
                 foreach (var v in sheet.Views.Where(v => v.UntaggedInside > 0))
                     lines.Add($"{Bare(sheet.Number)}: {v.UntaggedInside} of {v.Taggable} elements of the tagged categories have no tag in \"{Clean(v.Title)}\". See whether they should have one.");
-            if (!sheet.KeyPlanFound || sheet.KeyPlanBerths.Count == 0) noKeyPlan.Add(Bare(sheet.Number));
+            if (!sheet.KeyPlanFound) { noKeyPlan.Add(Bare(sheet.Number)); switches.UnionWith(sheet.OtherSwitches); }
         }
         if (noKeyPlan.Count > 0)
-            lines.Add($"Key plan: the model doesn't say which berth it highlights on {noKeyPlan.Count} sheet(s) ({string.Join(", ", noKeyPlan.Take(6))}{(noKeyPlan.Count > 6 ? ", ..." : "")}). Look at one sheet per berth (capture_view_image): only that berth is highlighted.");
+            lines.Add($"Key plan: the model doesn't say which berth it highlights on {noKeyPlan.Count} sheet(s) ({string.Join(", ", noKeyPlan.Take(6))}{(noKeyPlan.Count > 6 ? ", ..." : "")}). Look at one sheet per berth (capture_view_image): only that berth is highlighted." +
+                      (switches.Count > 0 ? $" The title block's yes/no switches name no berth: {string.Join(", ", switches.Take(20))}. Tell the user, so the right ones can be read." : ""));
         return lines;
+    }
+
+    /// <summary>
+    /// The berths a title block's yes/no switch is for, by its name: "Berth 9", "BERTH 09", "B9", "B-10", "KP 9",
+    /// "Key Plan - Berth 5&amp;6", "9". Empty when the name names no berth ("Show Logo", "A1").
+    /// </summary>
+    public static List<int> SwitchBerths(string name)
+    {
+        var n = Clean(name).ToUpperInvariant();
+        var found = new List<int>();
+        var m = Regex.Match(n, @"(?:BERTHS?|KEY ?PLAN|\bKP|\bBTH|\bBR)\D{0,3}(\d{1,2})(?:\s*(?:&|AND|,|\+)\s*(\d{1,2}))*\b");
+        if (m.Success)
+        {
+            found.Add(int.Parse(m.Groups[1].Value));
+            foreach (Capture c in m.Groups[2].Captures) found.Add(int.Parse(c.Value));
+        }
+        else if (Regex.Match(n, @"^(?:B[\s\-_.#]*)?(\d{1,2})$") is { Success: true } bare) found.Add(int.Parse(bare.Groups[1].Value));
+        return found.Where(b => b > 0).Distinct().ToList();
     }
 
     /// <summary>A sheet number without its revision ("...-SC-101-0" is "...-SC-101").</summary>

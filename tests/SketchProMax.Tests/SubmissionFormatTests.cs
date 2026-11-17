@@ -131,6 +131,18 @@ internal static class SubmissionFormatTests
         check("submission format: piles inside the matchlines with no tag, and tags on piles beyond the matchline, are failures on a piles plan",
             Seen("101", "Tags", "14 of 120 piles inside the matchlines have no tag") && Seen("101", "Tags", "6 tag(s) are on piles beyond the matchline") && Seen("101", "Tags", "Hide those tags")
             && !seen.Any(i => i.Sheet.EndsWith("-111") && i.Check == "Tags"), "");
+        check("submission format: a title block's berth switch is read by its name, whatever the wording; other switches name no berth",
+            SubmissionFormat.SwitchBerths("Berth 9").SequenceEqual([9]) && SubmissionFormat.SwitchBerths("BERTH 09").SequenceEqual([9]) && SubmissionFormat.SwitchBerths("B10").SequenceEqual([10])
+            && SubmissionFormat.SwitchBerths("B-05").SequenceEqual([5]) && SubmissionFormat.SwitchBerths("KP 7").SequenceEqual([7]) && SubmissionFormat.SwitchBerths("Key Plan - Berth 5&6").SequenceEqual([5, 6])
+            && SubmissionFormat.SwitchBerths("12").SequenceEqual([12]) && SubmissionFormat.SwitchBerths("Show Logo").Count == 0 && SubmissionFormat.SwitchBerths("A1").Count == 0
+            && SubmissionFormat.SwitchBerths("Stamp 2026").Count == 0, string.Join(",", SubmissionFormat.SwitchBerths("Key Plan - Berth 5&6")));
+        var off = Good();
+        off[0].KeyPlanFound = off[0].KeyPlanSwitches = true;
+        off[1].OtherSwitches = ["Show Logo", "North Arrow"];
+        var allOff = SubmissionFormat.Check(off);
+        check("submission format: every berth switch off is a key plan with no berth; switches that name no berth are named for the user",
+            allOff.Count == 1 && allOff[0].Check == "Key plan" && allOff[0].Fix.Contains("Switch on Berth 9")
+            && SubmissionFormat.Look(off).Any(l => l.Contains("North Arrow, Show Logo") && !l.Contains("SC-100,")), string.Join(" | ", SubmissionFormat.Look(off)));
         var look = SubmissionFormat.Look(drawn);
         check("submission format: untagged elements on other sheets and a key plan the model doesn't describe are to look at, not failures",
             look.Any(l => l.Contains("5 of 40") && l.Contains("SC-111")) && !look.Any(l => l.Contains("14 of 120")) && look.Any(l => l.StartsWith("Key plan:") && l.Contains("SC-100") && !l.Contains("SC-101"))
