@@ -112,7 +112,10 @@ internal static class SubmissionFormatTests
         drawn[1].Views[0].OverlappingTags = 2;
         drawn[1].Views[0].MatchlinesPastCrop = 1;
         drawn[1].Views[0].Taggable = 120;
-        drawn[1].Views[0].Untagged = 14;
+        drawn[1].Views[0].UntaggedInside = 14;
+        drawn[1].Views[0].TaggedOutside = 6;
+        drawn[3].Views[0].Taggable = 40;
+        drawn[3].Views[0].UntaggedInside = 5;
         drawn[3].Views[1].OffSheet = true;
         drawn[1].KeyPlanFound = true;
         drawn[1].KeyPlanBerths = [9];
@@ -124,11 +127,14 @@ internal static class SubmissionFormatTests
             Seen("101", "Tags", "3 empty tag") && Seen("101", "Tags", "arrange_tags") && Seen("101", "Matchlines", "trim_matchlines"), string.Join(" | ", seen.Select(i => i.Sheet + " " + i.Problem)));
         check("submission format: a view running off the sheet is listed", Seen("111", "Fit", "PART 1 ELEVATION") && Seen("111", "Fit", "next standard scale"), "");
         check("submission format: a key plan highlighting another berth too is listed; one highlighting only this berth is not",
-            Seen("102", "Key plan", "9, 10") && !seen.Any(i => i.Check == "Key plan" && i.Sheet.EndsWith("-101")) && seen.Count == 5, seen.Count + "");
+            Seen("102", "Key plan", "9, 10") && !seen.Any(i => i.Check == "Key plan" && i.Sheet.EndsWith("-101")) && seen.Count == 7, seen.Count + "");
+        check("submission format: piles inside the matchlines with no tag, and tags on piles beyond the matchline, are failures on a piles plan",
+            Seen("101", "Tags", "14 of 120 piles inside the matchlines have no tag") && Seen("101", "Tags", "6 tag(s) are on piles beyond the matchline") && Seen("101", "Tags", "Hide those tags")
+            && !seen.Any(i => i.Sheet.EndsWith("-111") && i.Check == "Tags"), "");
         var look = SubmissionFormat.Look(drawn);
-        check("submission format: untagged elements and a key plan the model doesn't describe are to look at, not failures",
-            look.Any(l => l.Contains("14 of 120") && l.Contains("SC-101")) && look.Any(l => l.StartsWith("Key plan:") && l.Contains("SC-100") && !l.Contains("SC-101"))
-            && !look.Any(l => l.Contains("00-SC-203")) && !seen.Any(i => i.Problem.Contains("14 of")), string.Join(" | ", look));
+        check("submission format: untagged elements on other sheets and a key plan the model doesn't describe are to look at, not failures",
+            look.Any(l => l.Contains("5 of 40") && l.Contains("SC-111")) && !look.Any(l => l.Contains("14 of 120")) && look.Any(l => l.StartsWith("Key plan:") && l.Contains("SC-100") && !l.Contains("SC-101"))
+            && !look.Any(l => l.Contains("00-SC-203")) && !seen.Any(i => i.Problem.Contains("5 of 40")), string.Join(" | ", look));
 
         var section = Good();
         section.Add(Sheet($"{P}-09-SC-302", "DESIGN SECTION 2 CROSS SECTION", "15 OCT 2026", ("BERTH 9 - DESIGN SECTION 2 CROSS SECTION", 75)));

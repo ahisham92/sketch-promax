@@ -23,7 +23,7 @@ public sealed class SubmissionFormatTool : IRevitTool
         "BEFORE planning or starting a berth's sheets, and build exactly that list. action=check reads the model's sheets " +
         "against it (berths: which ones; none = every berth with sheets) and lists every sheet missing, wrong name or view " +
         "title, scale that is not standard or differs between a berth's parts, view running off the sheet, missing " +
-        "schedule, empty sheet, empty or overlapping tag, matchline past the crop, key plan highlighting another berth, " +
+        "schedule, empty sheet, empty or overlapping tag, pile inside the matchlines with no tag, tag on a pile beyond the matchline, matchline past the crop, key plan highlighting another berth, " +
         "different issue date, drawing cited that is not a sheet, and typed-over dimension, with the fix: call it BEFORE " +
         "saying a submission is done; the work is done when it lists nothing. Scales are usual ones, not fixed: a view too " +
         "long for the sheet takes the next standard scale. 'look' in the result is what to see by eye. Changes nothing.";
@@ -164,6 +164,7 @@ public sealed class SubmissionFormatTool : IRevitTool
         XYZ right = view.RightDirection, up = view.UpDirection;
         var boxes = new List<(double U0, double V0, double U1, double V1)>();
         var tagged = new Dictionary<long, HashSet<long>>();
+        var inside = InsideMatchlines(doc, view);
         foreach (var tag in new FilteredElementCollector(doc, view.Id).OfClass(typeof(IndependentTag)).Cast<IndependentTag>())
         {
             try
@@ -174,7 +175,7 @@ public sealed class SubmissionFormatTool : IRevitTool
                 {
                     if (link.LinkInstanceId != ElementId.InvalidElementId || doc.GetElement(link.HostElementId) is not { Category: { } cat } host) continue;
                     if (!tagged.TryGetValue(cat.Id.Value, out var set)) tagged[cat.Id.Value] = set = [];
-                    set.Add(host.Id.Value);
+                    if (set.Add(host.Id.Value) && inside(host) == false) placed.TaggedOutside++;
                 }
             }
             catch (Autodesk.Revit.Exceptions.ApplicationException) { /* a tag whose host is gone */ }
@@ -190,10 +191,67 @@ public sealed class SubmissionFormatTool : IRevitTool
                 if (i != j && boxes[i].U0 < boxes[j].U1 && boxes[j].U0 < boxes[i].U1 && boxes[i].V0 < boxes[j].V1 && boxes[j].V0 < boxes[i].V1) { placed.OverlappingTags++; break; }
         foreach (var pair in tagged)
         {
-            var shown = new FilteredElementCollector(doc, view.Id).OfCategoryId(new ElementId(pair.Key)).WhereElementIsNotElementType().GetElementCount();
-            placed.Taggable += shown;
-            placed.Untagged += Math.Max(0, shown - pair.Value.Count);
+            foreach (var e in new FilteredElementCollector(doc, view.Id).OfCategoryId(new ElementId(pair.Key)).WhereElementIsNotElementType())
+            {
+                // On a matchline (null) an element is neither required to have a tag nor wrong to have one.
+                if (inside(e) != true) continue;
+                placed.Taggable++;
+                if (!pair.Value.Contains(e.Id.Value)) placed.UntaggedInside++;
+            }
         }
+    }
+
+    /// <summary>
+    /// Says whether an element lies inside the view's matchlines: on the same side of every matchline as the middle of the
+    /// crop (the part the view is for). False beyond one; null on one (within about 100 mm). All true when the view has
+    /// no matchline or no crop. Matchlines hidden in the view (redrawn by trim_matchlines) count too.
+    /// </summary>
+    private static Func<Element, bool?> InsideMatchlines(Document doc, View view)
+    {
+        var lines = new List<(double U, double V, double Du, double Dv, double Side)>();
+        try
+        {
+            if (view.ViewType is ViewType.FloorPlan or ViewType.EngineeringPlan or ViewType.CeilingPlan or ViewType.AreaPlan && view.CropBoxActive && view.CropBox is { } crop)
+            {
+                XYZ right = view.RightDirection, up = view.UpDirection;
+                var middle = crop.Transform.OfPoint((crop.Min + crop.Max) / 2);
+                double mu = middle.DotProduct(right), mv = middle.DotProduct(up);
+                foreach (var ml in new FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_Matchline).WhereElementIsNotElementType())
+                {
+                    if (ml.OwnerViewId != ElementId.InvalidElementId && ml.OwnerViewId != view.Id) continue;
+                    var shown = !ml.IsHidden(view);
+                    if (shown && !new FilteredElementCollector(doc, view.Id).OfCategory(BuiltInCategory.OST_Matchline).WhereElementIsNotElementType().Any(e => e.Id == ml.Id)) continue;
+                    // The matchline's longest run is the cut; short jogs are not.
+                    if (TrimMatchlinesTool.Curves(doc, ml, view).OrderByDescending(c => c.Length).FirstOrDefault() is not { } run) continue;
+                    XYZ a = run.GetEndPoint(0), b = run.GetEndPoint(1);
+                    double u = a.DotProduct(right), v = a.DotProduct(up), du = b.DotProduct(right) - u, dv = b.DotProduct(up) - v;
+                    var length = Math.Sqrt(du * du + dv * dv);
+                    if (length < 1) continue;
+                    du /= length; dv /= length;
+                    var side = du * (mv - v) - dv * (mu - u);
+                    // A matchline through the middle of the crop cuts nothing off for this view.
+                    if (Math.Abs(side) > 1) lines.Add((u, v, du, dv, Math.Sign(side)));
+                }
+            }
+        }
+        catch (Autodesk.Revit.Exceptions.ApplicationException) { lines.Clear(); }
+        if (lines.Count == 0) return _ => true;
+        var r = view.RightDirection;
+        var t = view.UpDirection;
+        return e =>
+        {
+            XYZ? at = e.Location is LocationPoint p ? p.Point : e.get_BoundingBox(view) is { } box ? (box.Min + box.Max) / 2 : null;
+            if (at is null) return null;
+            double pu = at.DotProduct(r), pv = at.DotProduct(t);
+            bool? result = true;
+            foreach (var l in lines)
+            {
+                var d = (l.Du * (pv - l.V) - l.Dv * (pu - l.U)) * l.Side;
+                if (d < -0.33) return false;
+                if (d < 0.33) result = null;
+            }
+            return result;
+        };
     }
 
     /// <summary>The matchlines the view shows that run past its crop (ones hidden and redrawn by trim_matchlines are not shown).</summary>
