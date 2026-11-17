@@ -12,7 +12,11 @@ namespace SketchProMax.Tools;
 /// </summary>
 internal static class SubmissionFormat
 {
-    /// <summary>One view a sheet of a kind carries: what its title says, its scales, and whether the sheet must have it.</summary>
+    /// <summary>
+    /// One view a sheet of a kind carries: what its title says, its usual scale, and whether the sheet must have it. The
+    /// scale is not fixed (the owner, 2026-11-17: a long berth or a wide section takes another scale so it fits the sheet):
+    /// any scale of <see cref="StandardScales"/> is right, as long as the same views of a berth share it.
+    /// </summary>
     internal sealed record ViewRule(string Says, string Pattern, int[] Scales, bool Required = true);
 
     /// <summary>One kind of sheet in a berth's set.</summary>
@@ -21,38 +25,46 @@ internal static class SubmissionFormat
 
     public static readonly Kind[] Kinds =
     [
-        new("layout", 100, 100, "OVERALL LAYOUT", @"^OVERALL LAYOUT$", "1:300", true,
+        new("layout", 100, 100, "OVERALL LAYOUT", @"^OVERALL LAYOUT$", "usually 1:300", true,
             [new("BERTH <n> OVERALL PLAN", @"OVERALL PLAN", [300])],
             ["FURNITURE SCHEDULE"],
             ["the whole berth with its parts named (PART 1, PART 2, ...) and matchlines inside the crop", "the quay wall furniture schedule (fenders, bollards, ladders, mooring rings)"]),
-        new("piles", 101, 109, "PILES PLAN - PART <k>", @"^PILES PLAN - PART \d+$", "1:100", true,
+        new("piles", 101, 109, "PILES PLAN - PART <k>", @"^PILES PLAN - PART \d+$", "usually 1:100", true,
             [new("BERTH <n> - PART <k> PILES PLAN", @"PART \d+ PILES PLAN", [100])],
             ["PILES SCHEDULE"],
             ["every pile tagged with its type mark, filled with its type's colour", "grid bubbles and the dimensions between grids, both ways",
              "the piles schedule (type mark, description, top level, bottom level, length, count for the berth) with the colour key, and the sheet pile wall schedule where the berth has one",
              "the neighbouring berth hatched and named at the matchline"]),
-        new("framing", 111, 119, "FRAMING PLAN - PART <k>", @"^FRAMING PLAN - PART \d+$", "1:100", true,
+        new("framing", 111, 119, "FRAMING PLAN - PART <k>", @"^FRAMING PLAN - PART \d+$", "usually 1:100", true,
             [new("BERTH <n> - PART <k> FRAMING PLAN", @"PART \d+ FRAMING PLAN", [100]), new("BERTH <n> - PART <k> ELEVATION", @"PART \d+ ELEVATION", [100])],
             [],
             ["the framing plan above and the front elevation of the same part below it", "beams and slab thickenings named with their sizes, expansion joints named",
              "slab thickenings, pits and approach slab hatched, with the hatch key in the legend", "fenders, bollards, ladders and mooring rings named; levels in the elevation",
              "REFERENCE DRAWINGS listing only drawings that exist"]),
-        new("section", 301, 399, "DESIGN SECTION <s> CROSS SECTION", @"^DESIGN SECTION \w+ CROSS SECTION$", "1:75", true,
-            [new("BERTH <n> - DESIGN SECTION <s> CROSS SECTION", @"DESIGN SECTION \w+ CROSS SECTION", [75])],
+        new("section", 301, 399, "DESIGN SECTION <s> CROSS SECTION", @"^DESIGN SECTION \w+ CROSS SECTION$", "usually 1:100", true,
+            [new("BERTH <n> - DESIGN SECTION <s> CROSS SECTION", @"DESIGN SECTION \w+ CROSS SECTION", [100]),
+             new("BERTH <n> - TYPICAL CROSS SECTION AT FENDER AND BOLLARD LOCATION", @"TYPICAL CROSS SECTION", [100], false)],
             [],
             ["one sheet per design section of the berth", "grids with the dimensions between them and the overall width", "every pile named with its type mark and diameter, levels at top and toe",
              "front and rear capping beams, deck and approach slab named with sizes", "water levels, dredge level and scour protection, with the tidal bar in the legend"]),
-        new("slope", 301, 399, "LONGITUDINAL SLOPE SECTIONS <i>", @"^LONGITUDINAL SLOPE SECTIONS \d+$", "1:75", false,
-            [new("BERTH <n> - LONGITUDINAL SLOPE - ...", @"LONGITUDINAL SLOPE", [75])],
+        new("slope", 301, 399, "LONGITUDINAL SLOPE SECTIONS <i>", @"^LONGITUDINAL SLOPE SECTIONS \d+$", "usually 1:100", false,
+            [new("BERTH <n> - LONGITUDINAL SLOPE - ...", @"LONGITUDINAL SLOPE", [100])],
             [],
             ["only where the berth's deck slopes along its length: the sections along the front beam and each pile row"]),
-        new("piledetails", 401, 409, "PILES DETAILS - <i>", @"^PILES DETAILS - \d+$", "AS SHOWN", true,
+        new("cross", 301, 399, "CROSS SECTIONS - <i>", @"^CROSS SECTIONS - \d+$", "usually 1:100", false,
+            [new("BERTH <n> - SECTION <j>", @"BERTH \d+ - SECTION \w+$", [100])],
+            [],
+            ["only where the berth needs more cross sections than its design sections: several on a sheet, numbered in order"]),
+        new("piledetails", 401, 409, "PILES DETAILS - <i>", @"^PILES DETAILS - \d+$", "usually sections 1:25, elevations 1:50", true,
             [new("BERTH <n> - <PILE> - <DS> - SECTION A, B, ...", @" - SECTION [A-Z]$", [25]), new("BERTH <n> - <PILE> - DESIGN SECTION <s>", @"DESIGN SECTION \w+", [50])],
             [],
             ["for every pile type of every design section: its elevation with the reinforcement, and a cross section at each change of reinforcement",
              "section marks on the elevation that match the section titles", "bars, spirals and spacers named; the pile diameter dimensioned",
              "the same title wording for the same pile in every berth"]),
     ];
+
+    /// <summary>The scales a drawing may use. A view takes its usual scale, or the next one of these that fits it on the sheet.</summary>
+    public static readonly int[] StandardScales = [5, 10, 20, 25, 50, 75, 100, 125, 150, 200, 250, 300, 400, 500, 750, 1000, 1250, 1500, 2000, 2500, 3000, 5000];
 
     /// <summary>What every sheet's title block carries, and what the office's QC sheet checks on every sheet before issue.</summary>
     public static readonly string[] EverySheet =
@@ -64,7 +76,8 @@ internal static class SubmissionFormat
         "Matchlines stop inside the view crop",
         "Every drawing number cited in a note is a sheet of the submission",
         "No dimension shows a typed value over what the model measures",
-        "No empty tag, no section mark pointing to a view that is on no sheet",
+        "No empty tag, no tag on top of another, no section mark pointing to a view that is on no sheet",
+        "Every view lies inside the sheet's frame; a view too long for it takes the next standard scale, the same for all parts",
     ];
 
     /// <summary>How the files go out.</summary>
@@ -103,12 +116,17 @@ internal static class SubmissionFormat
     public static List<string> Show(int berth = 0)
     {
         var n = berth > 0 ? berth.ToString() : "<n>";
-        var lines = new List<string> { "Sheet number: <project prefix>-<berth, two digits>-<discipline>-<series>, general sheets under berth 00." };
+        var lines = new List<string>
+        {
+            "Sheet number: <project prefix>-<berth, two digits>-<discipline>-<series>, general sheets under berth 00.",
+            "In the names below, <k> is the part's number, <s> the design section's number (1, 2a, ...), <i> and <j> count from 1.",
+            "Scales: each view has a usual scale. When the view is too long or wide for the sheet at that scale, use the nearest standard scale that fits (1:75, 1:100, 1:150, 1:200, 1:250, 1:300, 1:500), and keep one scale for the same views of a berth (all its parts, all its sections).",
+        };
         foreach (var k in Kinds)
         {
             var series = k.From == k.To ? k.From.ToString() : k.Key == "piles" || k.Key == "framing" ? $"{k.From}, {k.From + 1}, ... (one per part)" : $"{k.From}, {k.From + 1}, ...";
             lines.Add($"{series}  {k.Title}  ({k.Scale}{(k.Required ? "" : ", when needed")})");
-            foreach (var v in k.Views) lines.Add($"    view: {v.Says.Replace("<n>", n)}  at 1:{string.Join(" or 1:", v.Scales)}");
+            foreach (var v in k.Views) lines.Add($"    view: {v.Says.Replace("<n>", n)}  usually 1:{v.Scales[0]}{(v.Required ? "" : "  (when needed)")}");
             foreach (var s in k.Schedules) lines.Add($"    schedule: BERTH {n} - {s}");
             foreach (var s in k.Shows) lines.Add($"    shows: {s}");
         }
@@ -125,12 +143,30 @@ internal static class SubmissionFormat
     internal sealed class Sheet
     {
         public string Number = "", Name = "", IssueDate = "";
-        public List<(string Title, int Scale)> Views = [];
+        public List<PlacedView> Views = [];
+        /// <summary>True when a key plan was found (a view on the sheet named KEY PLAN, or yes/no berth switches in the title block).</summary>
+        public bool KeyPlanFound;
+        /// <summary>The berths the key plan highlights, as far as the model says.</summary>
+        public List<int> KeyPlanBerths = [];
         public List<string> Schedules = [];
         /// <summary>Drawing numbers cited in the notes on the sheet and its views.</summary>
         public List<string> Cited = [];
         /// <summary>Dimensions whose shown value was typed over.</summary>
         public int TypedDimensions;
+    }
+
+    /// <summary>One view on a sheet: its title on the sheet, its scale, and what was read in it.</summary>
+    internal sealed class PlacedView
+    {
+        public string Title = "";
+        public int Scale;
+        /// <summary>Tags with no text; tags lying on another tag; matchlines that run past the crop.</summary>
+        public int EmptyTags, OverlappingTags, MatchlinesPastCrop;
+        /// <summary>The view's box runs outside the sheet's frame.</summary>
+        public bool OffSheet;
+        /// <summary>Of a category the view tags: how many elements show, and how many have no tag (not a failure by itself: a neighbouring berth's piles show too).</summary>
+        public int Taggable, Untagged;
+        public static implicit operator PlacedView((string Title, int Scale) v) => new() { Title = v.Title, Scale = v.Scale };
     }
 
     internal sealed record Issue(string Sheet, string Check, string Problem, string Fix);
@@ -157,7 +193,7 @@ internal static class SubmissionFormat
             var byKind = mine.Select(p => (p.Sheet, p.At, Kind: KindOf(p.At.Series, p.Sheet.Name))).ToList();
             foreach (var k in Kinds.Where(k => k.Required))
                 if (!byKind.Any(p => p.Kind == k))
-                    issues.Add(new(label, "Sheets", $"No sheet \"{k.Title}\" (series {k.From}{(k.From == k.To ? "" : "+")}).", $"Add it, with: {string.Join("; ", k.Views.Select(v => v.Says.Replace("<n>", berth.ToString())))}."));
+                    issues.Add(new(label, "Sheets", $"No sheet \"{k.Title}\" (series {k.From}{(k.From == k.To ? "" : "+")}).", $"Add it, with: {string.Join("; ", k.Views.Where(v => v.Required).Select(v => v.Says.Replace("<n>", berth.ToString())))}."));
             // A part has both its piles plan and its framing plan.
             var pileParts = byKind.Where(p => p.Kind?.Key == "piles").Select(p => p.At.Series % 10).ToHashSet();
             var frameParts = byKind.Where(p => p.Kind?.Key == "framing").Select(p => p.At.Series % 10).ToHashSet();
@@ -171,6 +207,7 @@ internal static class SubmissionFormat
                 if (detailTitles.Count > 0 && !detailTitles.Any(t => NamesSection(t, s)))
                     issues.Add(new(label, "Completeness", $"Design section {s} has a cross section and no pile details.", $"Add the pile details of every pile type of design section {s}."));
 
+            var scales = new List<(string Sheet, string Group, ViewRule Rule, PlacedView View)>();
             foreach (var (sheet, at, kind) in byKind)
             {
                 var name = Bare(sheet.Number);
@@ -179,7 +216,7 @@ internal static class SubmissionFormat
                     issues.Add(new(name, "Names", $"Sheet name \"{Clean(sheet.Name)}\" differs from the format.", $"Name it \"{kind.Title}\"."));
                 else if (kind.Key is "piles" or "framing" && Regex.Match(sheet.Name, @"PART (\d+)", RegexOptions.IgnoreCase) is { Success: true } part && int.Parse(part.Groups[1].Value) != at.Series % 10)
                     issues.Add(new(name, "Names", $"The name says part {part.Groups[1].Value} and the number says part {at.Series % 10}.", "Make the name and the number agree."));
-                if (sheet.Views.Count == 0) { issues.Add(new(name, "Views", "The sheet has no view.", "Place its views: " + string.Join("; ", kind.Views.Select(v => v.Says.Replace("<n>", berth.ToString()))) + ".")); continue; }
+                if (sheet.Views.Count == 0) { issues.Add(new(name, "Views", "The sheet has no view.", "Place its views: " + string.Join("; ", kind.Views.Where(v => v.Required).Select(v => v.Says.Replace("<n>", berth.ToString()))) + ".")); continue; }
                 foreach (var rule in kind.Views)
                 {
                     var matches = sheet.Views.Where(v => Regex.IsMatch(Clean(v.Title), rule.Pattern, RegexOptions.IgnoreCase)).ToList();
@@ -190,8 +227,9 @@ internal static class SubmissionFormat
                     }
                     foreach (var v in matches)
                     {
-                        if (!rule.Scales.Contains(v.Scale))
-                            issues.Add(new(name, "Scale", $"\"{Clean(v.Title)}\" is at 1:{v.Scale}.", $"Set it to 1:{string.Join(" or 1:", rule.Scales)}."));
+                        if (!StandardScales.Contains(v.Scale))
+                            issues.Add(new(name, "Scale", $"\"{Clean(v.Title)}\" is at 1:{v.Scale}, which is not a standard scale.", $"Set it to 1:{rule.Scales[0]}, or the nearest standard scale that fits the sheet."));
+                        scales.Add((name, kind.Key + "|" + rule.Pattern, rule, v));
                         if (Regex.Match(v.Title, @"BERTH (\d+)", RegexOptions.IgnoreCase) is { Success: true } b && int.Parse(b.Groups[1].Value) != berth)
                             issues.Add(new(name, "Names", $"View title \"{Clean(v.Title)}\" names another berth.", $"It is on a Berth {berth} sheet: correct the title or the view."));
                         else if (!Regex.IsMatch(v.Title, @"BERTH \d+", RegexOptions.IgnoreCase))
@@ -201,6 +239,16 @@ internal static class SubmissionFormat
                 foreach (var schedule in kind.Schedules)
                     if (!sheet.Schedules.Any(s => s.IndexOf(schedule, StringComparison.OrdinalIgnoreCase) >= 0))
                         issues.Add(new(name, "Schedules", $"No \"BERTH {berth} - {schedule}\" on the sheet.", "Place the schedule on the sheet."));
+                if (sheet.KeyPlanFound && sheet.KeyPlanBerths.Count > 0 && !(sheet.KeyPlanBerths.Distinct().Count() == 1 && sheet.KeyPlanBerths[0] == berth))
+                    issues.Add(new(name, "Key plan", $"The key plan highlights berth {string.Join(", ", sheet.KeyPlanBerths.Distinct().OrderBy(b => b))}.", $"Highlight only Berth {berth}."));
+            }
+            // The same views of a berth share one scale: all its parts, all its sections.
+            foreach (var group in scales.Where(x => StandardScales.Contains(x.View.Scale)).GroupBy(x => x.Group))
+            {
+                var by = group.GroupBy(x => x.View.Scale).OrderByDescending(g => g.Count()).ThenBy(g => Math.Abs(g.Key - group.First().Rule.Scales[0])).ToList();
+                if (by.Count < 2) continue;
+                foreach (var x in by.Skip(1).SelectMany(g => g))
+                    issues.Add(new(x.Sheet, "Scale", $"\"{Clean(x.View.Title)}\" is at 1:{x.View.Scale}; the berth's other views of this kind are at 1:{by[0].Key}.", $"Use one scale for all of them: the one that fits the longest."));
             }
         }
 
@@ -213,10 +261,39 @@ internal static class SubmissionFormat
         {
             foreach (var cited in sheet.Cited.Select(Bare).Distinct(StringComparer.OrdinalIgnoreCase).Where(c => !numbers.Contains(c)))
                 issues.Add(new(Bare(sheet.Number), "Cross-references", $"A note cites {cited}, which is not a sheet in the model.", "Correct the number, or remove the line if that drawing is not part of the submission."));
+            foreach (var v in sheet.Views)
+            {
+                var title = Clean(v.Title);
+                if (v.OffSheet) issues.Add(new(Bare(sheet.Number), "Fit", $"\"{title}\" runs outside the sheet's frame.", "Move it inside, tighten its crop, or take the next standard scale (the same for the berth's other views of this kind)."));
+                if (v.EmptyTags > 0) issues.Add(new(Bare(sheet.Number), "Tags", $"{v.EmptyTags} empty tag(s) in \"{title}\".", "Fill the value the tag reads (type mark, mark), or delete the tag."));
+                if (v.OverlappingTags > 0) issues.Add(new(Bare(sheet.Number), "Tags", $"{v.OverlappingTags} tag(s) lie on another tag in \"{title}\".", "arrange_tags action=fix_overlaps, then look at the view."));
+                if (v.MatchlinesPastCrop > 0) issues.Add(new(Bare(sheet.Number), "Matchlines", $"{v.MatchlinesPastCrop} matchline(s) run past the crop of \"{title}\".", "trim_matchlines on this view."));
+            }
             if (sheet.TypedDimensions > 0)
                 issues.Add(new(Bare(sheet.Number), "Dimensions", $"{sheet.TypedDimensions} dimension(s) show a typed value, not what the model measures.", "Remove the typed value, and move the element if the model is off."));
         }
         return issues;
+    }
+
+    /// <summary>
+    /// What to look at by eye on the sheets of <paramref name="berths"/>, not failures by themselves: elements of a tagged
+    /// category with no tag (a neighbouring berth's piles show too), and a key plan the model doesn't describe.
+    /// </summary>
+    public static List<string> Look(IReadOnlyList<Sheet> all, IEnumerable<int>? berths = null)
+    {
+        var wanted = (berths ?? []).Where(b => b > 0).ToHashSet();
+        var lines = new List<string>();
+        var noKeyPlan = new List<string>();
+        foreach (var sheet in all)
+        {
+            if (Parse(sheet.Number) is not { Berth: > 0 } at || (wanted.Count > 0 && !wanted.Contains(at.Berth))) continue;
+            foreach (var v in sheet.Views.Where(v => v.Untagged > 0))
+                lines.Add($"{Bare(sheet.Number)}: {v.Untagged} of {v.Taggable} elements of the tagged categories have no tag in \"{Clean(v.Title)}\". Tag those of Berth {at.Berth}; a neighbouring berth's stay untagged.");
+            if (!sheet.KeyPlanFound || sheet.KeyPlanBerths.Count == 0) noKeyPlan.Add(Bare(sheet.Number));
+        }
+        if (noKeyPlan.Count > 0)
+            lines.Add($"Key plan: the model doesn't say which berth it highlights on {noKeyPlan.Count} sheet(s) ({string.Join(", ", noKeyPlan.Take(6))}{(noKeyPlan.Count > 6 ? ", ..." : "")}). Look at one sheet per berth (capture_view_image): only that berth is highlighted.");
+        return lines;
     }
 
     /// <summary>A sheet number without its revision ("...-SC-101-0" is "...-SC-101").</summary>

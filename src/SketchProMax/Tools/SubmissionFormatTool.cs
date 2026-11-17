@@ -22,9 +22,11 @@ public sealed class SubmissionFormatTool : IRevitTool
         "what the QC sheet checks on every sheet. action=show gives the format (give berth for its exact titles): call it " +
         "BEFORE planning or starting a berth's sheets, and build exactly that list. action=check reads the model's sheets " +
         "against it (berths: which ones; none = every berth with sheets) and lists every sheet missing, wrong name or view " +
-        "title, wrong scale, missing schedule, empty sheet, different issue date, drawing cited that is not a sheet, and " +
-        "typed-over dimension, with the fix: call it BEFORE saying a submission is done; the work is done when it lists " +
-        "nothing. Changes nothing.";
+        "title, scale that is not standard or differs between a berth's parts, view running off the sheet, missing " +
+        "schedule, empty sheet, empty or overlapping tag, matchline past the crop, key plan highlighting another berth, " +
+        "different issue date, drawing cited that is not a sheet, and typed-over dimension, with the fix: call it BEFORE " +
+        "saying a submission is done; the work is done when it lists nothing. Scales are usual ones, not fixed: a view too " +
+        "long for the sheet takes the next standard scale. 'look' in the result is what to see by eye. Changes nothing.";
     public string PropertiesJson => """
     {
       "action": {"type": "string", "enum": ["show", "check"], "description": "Default show."},
@@ -70,8 +72,9 @@ public sealed class SubmissionFormatTool : IRevitTool
                     open = issues.Count,
                     issues = issues.Select(i => new { sheet = i.Sheet, check = i.Check, problem = i.Problem, fix = i.Fix }).ToList(),
                     sheetsWithOpenItems = matrix.Select(m => new { sheet = m.Key, checks = m.Value }).ToList(),
+                    look = SubmissionFormat.Look(sheets, checkedBerths),
                     note = issues.Count == 0
-                        ? "Every line of the format that can be read from the model holds. Still look at each sheet (capture_view_image): overlapping tags, matchlines past the crop and the key plan show only there."
+                        ? "Every line of the format that can be read from the model holds. Go through 'look', and see each sheet once (capture_view_image) before saying it is done."
                         : "The submission is not done while this lists anything: fix each line, then check again.",
                 });
             }
@@ -99,17 +102,118 @@ public sealed class SubmissionFormatTool : IRevitTool
             sheet.IssueDate = s.get_Parameter(BuiltInParameter.SHEET_ISSUE_DATE)?.AsString() ?? "";
             sheet.Schedules = schedules[s.Id.Value].Select(i => doc.GetElement(i.ScheduleId)?.Name ?? "").Where(n => n.Length > 0).ToList();
             Notes(doc, s.Id, sheet);
-            foreach (var id in s.GetAllPlacedViews())
+            KeyPlan(doc, s, sheet);
+            var frame = s.Outline;
+            foreach (var port in new FilteredElementCollector(doc, s.Id).OfClass(typeof(Viewport)).Cast<Viewport>())
             {
-                if (doc.GetElement(id) is not View view || view.ViewType == ViewType.Legend) continue;
+                if (doc.GetElement(port.ViewId) is not View view || view.ViewType == ViewType.Legend) continue;
                 var title = view.get_Parameter(BuiltInParameter.VIEW_DESCRIPTION)?.AsString();
-                sheet.Views.Add((string.IsNullOrWhiteSpace(title) ? view.Name : title!, view.Scale));
-                Notes(doc, id, sheet);
-                sheet.TypedDimensions += TypedDimensions(doc, id);
+                var placed = new SubmissionFormat.PlacedView { Title = string.IsNullOrWhiteSpace(title) ? view.Name : title!, Scale = view.Scale };
+                sheet.Views.Add(placed);
+                // A key plan placed as a view is not a drawing of the sheet: nothing more is read in it.
+                if (IsKeyPlan(view)) continue;
+                try
+                {
+                    var box = port.GetBoxOutline();
+                    const double slack = 0.02; // about 6 mm on paper
+                    placed.OffSheet = frame is not null && (box.MinimumPoint.X < frame.Min.U - slack || box.MinimumPoint.Y < frame.Min.V - slack
+                                                         || box.MaximumPoint.X > frame.Max.U + slack || box.MaximumPoint.Y > frame.Max.V + slack);
+                }
+                catch (Autodesk.Revit.Exceptions.ApplicationException) { /* a viewport with no box: not judged */ }
+                Tags(doc, view, placed);
+                placed.MatchlinesPastCrop = MatchlinesPastCrop(doc, view);
+                Notes(doc, view.Id, sheet);
+                sheet.TypedDimensions += TypedDimensions(doc, view.Id);
             }
             sheet.Cited = sheet.Cited.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         }
         return result;
+    }
+
+    private static bool IsKeyPlan(View view) =>
+        Regex.IsMatch(view.Name + " " + (view.get_Parameter(BuiltInParameter.VIEW_DESCRIPTION)?.AsString() ?? ""), @"KEY\s*PLAN", RegexOptions.IgnoreCase);
+
+    /// <summary>
+    /// The key plan, as far as the model describes it: a view on the sheet named KEY PLAN (its name says the berth), or
+    /// yes/no parameters of the title block named for a berth or the key plan (the ones switched on).
+    /// </summary>
+    private static void KeyPlan(Document doc, ViewSheet s, SubmissionFormat.Sheet sheet)
+    {
+        static IEnumerable<int> Berths(string text) =>
+            Regex.Matches(text ?? "", @"BERTH\s*0?(\d{1,2})", RegexOptions.IgnoreCase).Cast<Match>().Select(m => int.Parse(m.Groups[1].Value));
+        foreach (var id in s.GetAllPlacedViews())
+            if (doc.GetElement(id) is View view && IsKeyPlan(view))
+            {
+                sheet.KeyPlanFound = true;
+                sheet.KeyPlanBerths.AddRange(Berths(view.Name + " " + (view.get_Parameter(BuiltInParameter.VIEW_DESCRIPTION)?.AsString() ?? "")));
+            }
+        foreach (var block in new FilteredElementCollector(doc, s.Id).OfCategory(BuiltInCategory.OST_TitleBlocks).WhereElementIsNotElementType())
+            foreach (Parameter p in block.Parameters)
+            {
+                if (p.StorageType != StorageType.Integer || p.Definition is null || p.Definition.GetDataType() != SpecTypeId.Boolean.YesNo) continue;
+                var berths = Berths(p.Definition.Name).ToList();
+                if (berths.Count == 0) continue;
+                sheet.KeyPlanFound = true;
+                if (p.AsInteger() == 1) sheet.KeyPlanBerths.AddRange(berths);
+            }
+    }
+
+    /// <summary>The view's tags: empty ones, ones lying on another tag, and how many elements of the tagged categories have none.</summary>
+    private static void Tags(Document doc, View view, SubmissionFormat.PlacedView placed)
+    {
+        XYZ right = view.RightDirection, up = view.UpDirection;
+        var boxes = new List<(double U0, double V0, double U1, double V1)>();
+        var tagged = new Dictionary<long, HashSet<long>>();
+        foreach (var tag in new FilteredElementCollector(doc, view.Id).OfClass(typeof(IndependentTag)).Cast<IndependentTag>())
+        {
+            try
+            {
+                var text = (tag.TagText ?? "").Trim();
+                if (text.Length == 0 || text == "?") placed.EmptyTags++;
+                foreach (var link in tag.GetTaggedElementIds())
+                {
+                    if (link.LinkInstanceId != ElementId.InvalidElementId || doc.GetElement(link.HostElementId) is not { Category: { } cat } host) continue;
+                    if (!tagged.TryGetValue(cat.Id.Value, out var set)) tagged[cat.Id.Value] = set = [];
+                    set.Add(host.Id.Value);
+                }
+            }
+            catch (Autodesk.Revit.Exceptions.ApplicationException) { /* a tag whose host is gone */ }
+            if (tag.get_BoundingBox(view) is not { } box) continue;
+            var corners = new[] { box.Min, box.Max, new XYZ(box.Min.X, box.Max.Y, box.Min.Z), new XYZ(box.Max.X, box.Min.Y, box.Max.Z) };
+            double u0 = corners.Min(c => c.DotProduct(right)), u1 = corners.Max(c => c.DotProduct(right)), v0 = corners.Min(c => c.DotProduct(up)), v1 = corners.Max(c => c.DotProduct(up));
+            // Shrunk a little: tags that only touch are not on top of each other.
+            double du = (u1 - u0) * 0.1, dv = (v1 - v0) * 0.1;
+            if (u1 > u0 && v1 > v0) boxes.Add((u0 + du, v0 + dv, u1 - du, v1 - dv));
+        }
+        for (var i = 0; i < boxes.Count; i++)
+            for (var j = 0; j < boxes.Count; j++)
+                if (i != j && boxes[i].U0 < boxes[j].U1 && boxes[j].U0 < boxes[i].U1 && boxes[i].V0 < boxes[j].V1 && boxes[j].V0 < boxes[i].V1) { placed.OverlappingTags++; break; }
+        foreach (var pair in tagged)
+        {
+            var shown = new FilteredElementCollector(doc, view.Id).OfCategoryId(new ElementId(pair.Key)).WhereElementIsNotElementType().GetElementCount();
+            placed.Taggable += shown;
+            placed.Untagged += Math.Max(0, shown - pair.Value.Count);
+        }
+    }
+
+    /// <summary>The matchlines the view shows that run past its crop (ones hidden and redrawn by trim_matchlines are not shown).</summary>
+    private static int MatchlinesPastCrop(Document doc, View view)
+    {
+        if (view.ViewType is not (ViewType.FloorPlan or ViewType.EngineeringPlan or ViewType.CeilingPlan or ViewType.AreaPlan)) return 0;
+        var count = 0;
+        try
+        {
+            if (CropClip.For(view) is not { } crop) return 0;
+            foreach (var ml in new FilteredElementCollector(doc, view.Id).OfCategory(BuiltInCategory.OST_Matchline).WhereElementIsNotElementType())
+            {
+                var curves = TrimMatchlinesTool.Curves(doc, ml, view);
+                var total = curves.Sum(c => c.Length);
+                var inside = curves.SelectMany(c => crop.Clip(c, 0)).Sum(c => c.Length);
+                if (total - inside > 0.05) count++; // more than about 15 mm in the model
+            }
+        }
+        catch (Autodesk.Revit.Exceptions.ApplicationException) { /* a view whose crop can't be read: not judged */ }
+        return count;
     }
 
     private static void Notes(Document doc, ElementId view, SubmissionFormat.Sheet sheet)
