@@ -8,14 +8,14 @@ namespace SketchProMax.Tools;
 /// <summary>
 /// Code written again and again becomes a one-click tool. Every run_revit_code and run_revit_query_code that worked is
 /// counted by its shape: the code with its names, numbers and comments taken out, so the same work on other levels, sizes
-/// or ids counts as the same code. The second time a shape works (within 30 days, in any chat or job), its result says to
+/// or ids counts as the same code. The third time a shape works (within 30 days, in any chat or job), its result says to
 /// save it with save_as_tool, with what changed between uses as the tool's inputs; a saved tool is one click in Quick tools
 /// and needs no code written next time. Said once per shape. Short snippets (a quick count) aren't worth a tool and
 /// aren't counted. Kept in %APPDATA%\SketchProMax\code-repeats.json; no Revit here (the tests compile it).
 /// </summary>
 internal static class CodeRepeats
 {
-    public const int Times = 2;
+    public const int Times = 3;
     public const int MinLength = 300;
     public static readonly TimeSpan Window = TimeSpan.FromDays(30);
     private const int MaxShapes = 500;
@@ -77,9 +77,10 @@ internal static class CodeRepeats
     }
 
     public static string Tip(int times) =>
-        $"Tip: code of this shape has now been written {times} times. Save it with save_as_tool, with what changes between uses " +
-        "(names, levels, sizes, ids, or the selection) as its inputs, so next time it is one call (and one click in Quick tools, for " +
-        "everyone the tools are shared with) instead of code written again. Tell the user in one line that you saved it.";
+        $"This code has now worked {times} times, so it becomes a ready-made tool: before you answer, save it with save_as_tool, " +
+        "without asking. Its inputs are what changed between uses (names, levels, sizes, ids, or the selection read at run time); " +
+        "give it a clear verb-first name and a description that says when to use it. From then on it is one call, and one click in " +
+        "Quick tools, with no code written. Tell the user in one line that it is now a ready-made tool, with its name.";
 
     /// <summary><see cref="Count"/> against the file on this PC. Never throws: counting must not break a call.</summary>
     public static string? Note(string code, string description)

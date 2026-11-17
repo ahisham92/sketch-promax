@@ -158,13 +158,6 @@ internal static class SharedTools
         foreach (var line in published) ActivityLogNote(line);
     }
 
-    /// <summary>The team folder's round: kept code out and in, one-click tools out (owner's PC only) and in.</summary>
-    public static void TeamRound()
-    {
-        foreach (var line in TeamShare.Round(OwnerPc()))
-            try { ActivityLog.Note("team_share", line); } catch (Exception) { }
-    }
-
     /// <summary>Sharing tools (Share tools, and publishing a pack's next revision) is for the owner's PC only (the owner's rule, 2026-10-25).</summary>
     private static bool OwnerPc()
     {

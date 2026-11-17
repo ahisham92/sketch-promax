@@ -132,15 +132,12 @@ internal static class ChatFocusTests
             && chat.Contains("\"Why ...?\" is a question") && chat.Contains("<where>: <problem> - <what to do>"), "");
         var basePrompt = Read("src/SketchProMax/Agent/SystemPrompt.cs");
         check("prompt: kept code is looked up before code is written; show one then do all; their example; finish what was started",
-            basePrompt.Contains("Once coded, not written again") && basePrompt.Contains("worked_code") && basePrompt.Contains("Show one, then do all")
+            basePrompt.Contains("Once coded, not written again") && basePrompt.Contains("worked_code") && basePrompt.Contains("a ready-made tool first")
+            && !File.Exists(Path.Combine(root, "src/SketchProMax/Sharing/TeamShare.cs")) && basePrompt.Contains("Show one, then do all")
             && basePrompt.Contains("Follow their example") && basePrompt.Contains("Finish what was started"), "");
         var code = Read("src/SketchProMax/Tools/CodeTools.cs");
         check("code tools: code that worked is kept, and a failed call points at kept code",
             code.Contains("WorkedCode.Note(code, description, Name") && code.Contains("WorkedCode.PointerFor(description, code)"), "");
-        var teamShare = Read("src/SketchProMax/Sharing/TeamShare.cs");
-        check("team: kept code and one-click tools are shared in the background round, tools published by the owner's PC only",
-            Read("src/SketchProMax/App.cs").Contains("Sharing.SharedTools.TeamRound();") && Read("src/SketchProMax/App.cs").Contains("Sharing.TeamShare.Start();")
-            && teamShare.Contains("if (ownerPc && Directory.Exists(LearnedTools.Folder))") && Read("src/SketchProMax/Sharing/SharedTools.cs").Contains("TeamShare.Round(OwnerPc())"), "");
         var pane = Read("src/SketchProMax/Chat/ChatPane.cs");
         check("pane: a status question is answered from the job list at once, and kept code is named with the message",
             pane.Contains("StatusAnswer(_input.Text)") && pane.Contains("WorkedCode.HintFor(text)"), "");
