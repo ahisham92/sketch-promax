@@ -20,6 +20,7 @@
     <Compile Include="../../src/SketchProMax/Tools/PdfFiles.cs" Link="PdfFiles.cs" />
     <Compile Include="../../src/SketchProMax/Tools/SharedRead.cs" Link="SharedRead.cs" />
     <Compile Include="../../src/SketchProMax/Tools/ExportDefaults.cs" Link="ExportDefaults.cs" />
+    <Compile Include="../../src/SketchProMax/Tools/DrawingStandardMath.cs" Link="DrawingStandardMath.cs" />
     <Compile Include="../../src/SketchProMax/Tools/RedoLog.cs" Link="RedoLog.cs" />
     <Compile Include="../../src/SketchProMax/Tools/PdfEngine.cs" Link="PdfEngine.cs" />
     <Compile Include="../../src/SketchProMax/Tools/PdfEditSession.cs" Link="PdfEditSession.cs" />
@@ -35,6 +36,7 @@
     <Compile Include="../../src/SketchProMax/Chat/CrewPlan.cs" Link="CrewPlan.cs" />
     <Compile Include="../../src/SketchProMax/Chat/CrewStats.cs" Link="CrewStats.cs" />
     <Compile Include="../../src/SketchProMax/Chat/DirectAdvice.cs" Link="DirectAdvice.cs" />
+    <Compile Include="../../src/SketchProMax/Chat/ChatFocus.cs" Link="ChatFocus.cs" />
     <Compile Include="../../src/SketchProMax/Chat/Autopilot.cs" Link="Autopilot.cs" />
     <Compile Include="../../src/SketchProMax/Chat/SignInHealth.cs" Link="SignInHealth.cs" />
     <Compile Include="../../src/SketchProMax/Chat/JobChecks.cs" Link="JobChecks.cs" />

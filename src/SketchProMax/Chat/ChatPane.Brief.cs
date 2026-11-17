@@ -30,6 +30,8 @@ internal sealed partial class ChatPane
     private bool StartBrief(string text, List<Attachment> attachments)
     {
         if (_install is null || !PromptBriefs.ShouldPlan(_briefMode, text)) return false;
+        // A small ask about what is selected or shown, or a correction of the last answer: it runs at once (ChatFocus).
+        if (FocusHint(text, attachments).Length > 0) return false;
         var turn = _turn = new Turn { Planning = true, Cancel = new CancellationTokenSource() };
         _lastActivity = DateTime.UtcNow;
         ShowStatus("Reading the model to write a brief. Nothing changes yet…");
@@ -319,6 +321,38 @@ internal sealed partial class ChatPane
             Dispatcher.BeginInvoke(new Action(() =>
             {
                 if (!_stopped) Note("Remembered for later briefs: " + note + " (edit or delete it in the Notes tab).");
+            }));
+        }, TaskScheduler.Default);
+    }
+
+    /// <summary>What goes with a typed message for a small ask or a correction (ChatFocus.Hint); "" in an autopilot.</summary>
+    private string FocusHint(string text, List<Attachment> attachments)
+    {
+        if (Run is { Active: true }) return "";
+        var answered = _conv.Items.Any(i => i.Kind == "assistant" && i.Text.Length > 0);
+        return ChatFocus.Hint(text, Revit.ChatModelWatch.Selected(_conv.Key), attachments.Count > 0, answered);
+    }
+
+    /// <summary>
+    /// A correction of the last answer is distilled into one lesson in the background and kept in the memory notes, so
+    /// the same thing isn't said twice; the chat says what it kept.
+    /// </summary>
+    private void LearnFrom(string correction)
+    {
+        if (_install is not { } install || Run is { Active: true } || !ChatFocus.IsCorrection(correction)) return;
+        // The answer being corrected, and the request it answered (the message before this one is the last in the list).
+        var before = _conv.Items.Take(_conv.Items.Count - 1).ToList();
+        var answer = before.LastOrDefault(i => i.Kind == "assistant" && i.Text.Trim().Length > 0);
+        if (answer is null) return;
+        var request = before.Take(before.IndexOf(answer)).LastOrDefault(i => i.Kind == "user" && i.Text.Trim().Length > 0)?.Text ?? "";
+        var (model, key, conv) = (_model, _conv.Key, _conv);
+        var task = Task.Run(() => BriefRunner.RememberLesson(install, request, answer.Text, correction, key, model));
+        task.ContinueWith(t =>
+        {
+            if (t.Status != TaskStatus.RanToCompletion || t.Result.Length == 0) return;
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                if (!_stopped && _conv == conv) Note(ChatFocus.Saved(t.Result));
             }));
         }, TaskScheduler.Default);
     }

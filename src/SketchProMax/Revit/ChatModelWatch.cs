@@ -79,6 +79,12 @@ internal static class ChatModelWatch
         }
     }
 
+    /// <summary>How many elements are selected in <paramref name="modelKey"/>'s model; -1 when not known.</summary>
+    public static int Selected(string modelKey)
+    {
+        lock (Models) return Models.TryGetValue(modelKey, out var facts) && facts.SelectionKnown ? facts.SelectedCount : -1;
+    }
+
     private static void OnChanged(object? sender, DocumentChangedEventArgs e)
     {
         var start = UiCost.Start();
