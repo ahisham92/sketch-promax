@@ -532,6 +532,8 @@ internal static partial class FieldTest
         await Probe(s, "recovery.views", app => RecoveryViews(app, s)).ConfigureAwait(false);
         // Stairs are made in a stairs edit scope, which needs the external event.
         await ProbeCore(s, "recovery.types", () => App.Dispatcher.InvokeFromEventAsync(app => RecoveryTypes(app, s))).ConfigureAwait(false);
+        // Keeping a family's copy opens it (EditFamily): from the external event.
+        await ProbeCore(s, "recovery.complete", () => App.Dispatcher.InvokeFromEventAsync(app => RecoveryComplete(app, s))).ConfigureAwait(false);
         await Probe(s, "recovery.bugs", () => RecoveryBugs(s)).ConfigureAwait(false);
         await Probe(s, "rescue.cause", RescueCause).ConfigureAwait(false);
         await Probe(s, "rescue.warn", RescueWarn).ConfigureAwait(false);

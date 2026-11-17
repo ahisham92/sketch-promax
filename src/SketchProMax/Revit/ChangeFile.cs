@@ -14,7 +14,9 @@ namespace SketchProMax.Revit;
 /// <see cref="ChangeReplay"/>). Nothing here saves or changes the model, and nothing waits on Revit's thread for the
 /// disk: DocumentChanged only notes which elements changed; at the next idle moments their states are read, a few
 /// hundred at a time, and a background thread appends the lines. Deleted elements are written at once, by the
-/// UniqueId seen when they were last read or selected (Revit can't tell it once they are gone).
+/// UniqueId noted for them (Revit can't tell it once they are gone): after a model opens, its elements' UniqueIds are
+/// noted a few milliseconds at a time (<see cref="ChangeFileMath.KnownIds"/>), so a deletion always names what was
+/// deleted. A family loaded after the last save is copied next to the file, so a replay can load it again.
 /// </summary>
 internal static class ChangeFile
 {
@@ -31,13 +33,22 @@ internal static class ChangeFile
         public bool Started;
         /// <summary>The values last written for each element, so a later line holds only what changed.</summary>
         public readonly Dictionary<long, Dictionary<string, string>> Written = [];
+        /// <summary>The UniqueId of each element seen (noted after opening, read, added or selected), so a deletion can still name it.</summary>
+        public readonly M.KnownIds Known = new();
+        /// <summary>Noting the model's elements: the ids still to look at (null before the listing), whether it is done, and the highest id listed.</summary>
+        public Queue<long>? ToIndex;
+        public bool Indexed;
+        public long IndexedUpTo;
+        /// <summary>Families loaded since the last save, waiting for their copy next to the file (and how often each was tried).</summary>
+        public readonly Queue<long> Families = new();
+        public readonly Dictionary<long, int> FamilyTries = [];
     }
 
     private static readonly object Gate = new();
     private static readonly Dictionary<string, Model> Models = new(StringComparer.OrdinalIgnoreCase);
-    // The UniqueId of each element seen (read, added or selected), so a deletion can still name it.
-    private static readonly Dictionary<string, Dictionary<long, (string Unique, string? Category)>> Known = new(StringComparer.OrdinalIgnoreCase);
     private const int KnownCap = 200_000;
+    // Documents being closed (Revit's id for the closing, to the model's path): forgotten only once Revit says it closed.
+    private static readonly Dictionary<int, string> Closing = [];
     private static readonly BlockingCollection<Action> Disk = new();
     private static Thread? _writer;
     private static Autodesk.Revit.ApplicationServices.Application? _app;
@@ -70,6 +81,7 @@ internal static class ChangeFile
         _app.DocumentChanged += OnChanged;
         _app.DocumentOpened += OnOpened;
         _app.DocumentClosing += OnClosing;
+        _app.DocumentClosed += OnClosed;
         _app.DocumentSaved += OnSaved;
         _app.DocumentSavedAs += OnSavedAs;
         _app.DocumentSynchronizingWithCentral += OnSyncing;
@@ -91,6 +103,7 @@ internal static class ChangeFile
             app.DocumentChanged -= OnChanged;
             app.DocumentOpened -= OnOpened;
             app.DocumentClosing -= OnClosing;
+            app.DocumentClosed -= OnClosed;
             app.DocumentSaved -= OnSaved;
             app.DocumentSavedAs -= OnSavedAs;
             app.DocumentSynchronizingWithCentral -= OnSyncing;
@@ -104,7 +117,7 @@ internal static class ChangeFile
         try { foreach (Document doc in app.Documents) ReadPending(doc, int.MaxValue); } catch (Exception) { }
         _app = null;
         _ui = null;
-        lock (Gate) { Models.Clear(); Known.Clear(); }
+        lock (Gate) { Models.Clear(); Closing.Clear(); }
         Flush(TimeSpan.FromSeconds(3));
     }
 
@@ -150,7 +163,7 @@ internal static class ChangeFile
 
     internal static void ForgetForTest(Document doc)
     {
-        if (For(doc) is { } model) lock (Gate) { Models.Remove(model.Path); Known.Remove(model.Path); }
+        if (For(doc) is { } model) lock (Gate) Models.Remove(model.Path);
     }
 
     public static string FolderFor(string modelPath) => System.IO.Path.Combine(Root, M.FolderName(modelPath));
@@ -170,6 +183,9 @@ internal static class ChangeFile
         Model model;
         lock (Gate)
         {
+            // Opened again after a close Revit never reported as finished: a fresh start, not the closed model's state.
+            var stale = opened ? Closing.Where(c => string.Equals(c.Value, path, StringComparison.OrdinalIgnoreCase)).Select(c => c.Key).ToList() : [];
+            foreach (var id in stale) { Closing.Remove(id); Models.Remove(path); }
             // Opened twice (a new local is saved as, then opened): the model watched already carries on.
             if (opened && Models.TryGetValue(path, out var known)) model = known;
             else Models[path] = model = new Model { Path = path, Folder = FolderFor(path), Central = central };
@@ -234,8 +250,10 @@ internal static class ChangeFile
         var kept = System.IO.Path.Combine(folder, M.LeftoverName(File.GetLastWriteTime(current)));
         if (File.Exists(kept)) File.Delete(kept);
         File.Move(current, kept);
+        Drop(M.MadeMapName(current));
         foreach (var old in M.LeftoversToDelete(Directory.GetFiles(folder, "*.txt")))
-            try { File.Delete(old); } catch (Exception) { }
+            try { File.Delete(old); Drop(M.MadeMapName(old)); } catch (Exception) { }
+        TidyFamilies(folder);
         return kept;
     }
 
@@ -269,6 +287,45 @@ internal static class ChangeFile
         return found.OrderByDescending(File.GetLastWriteTime).ToList();
     }
 
+    private static void Drop(string file)
+    {
+        try { if (File.Exists(file)) File.Delete(file); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+    }
+
+    /// <summary>Kept families that no change file of the folder names any more are deleted.</summary>
+    private static void TidyFamilies(string folder)
+    {
+        try
+        {
+            var families = System.IO.Path.Combine(folder, M.FamiliesFolder);
+            if (!Directory.Exists(families)) return;
+            var texts = Directory.GetFiles(folder, "*.txt").Select(f => string.Join("\n", ReadLines(f).Where(l => l.Contains("\"file\":"))));
+            foreach (var old in M.FamiliesToDelete(Directory.GetFiles(families), texts)) Drop(old);
+            if (Directory.GetFileSystemEntries(families).Length == 0) Directory.Delete(families);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+    }
+
+    /// <summary>Where a change file's kept families are: the "families" folder next to it.</summary>
+    public static string FamiliesFolderOf(string changeFile) => System.IO.Path.Combine(System.IO.Path.GetDirectoryName(changeFile) ?? "", M.FamiliesFolder);
+
+    /// <summary>What earlier replays of <paramref name="file"/> made again (old UniqueId to new), so playing it again doesn't make them twice.</summary>
+    public static Dictionary<string, string> ReadMade(string file)
+    {
+        try
+        {
+            var map = M.MadeMapName(file);
+            return File.Exists(map) ? M.ParseMade(File.ReadAllLines(map)) : new(StringComparer.Ordinal);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return new(StringComparer.Ordinal); }
+    }
+
+    public static void WriteMade(string file, IReadOnlyDictionary<string, string> map)
+    {
+        try { if (map.Count > 0) File.WriteAllLines(M.MadeMapName(file), M.WriteMade(map)); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+    }
+
     /// <summary>A file replayed in full: renamed so it isn't offered again (still in the folder, as "replayed ...", with its time).</summary>
     public static void MarkReplayed(string file)
     {
@@ -280,6 +337,9 @@ internal static class ChangeFile
             var to = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(file)!, M.ReplayedName(at));
             if (File.Exists(to)) File.Delete(to);
             File.Move(file, to);
+            // What the replay made goes with it (the file can be replayed again).
+            Drop(M.MadeMapName(to));
+            if (File.Exists(M.MadeMapName(file))) File.Move(M.MadeMapName(file), M.MadeMapName(to));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
     }
@@ -299,16 +359,19 @@ internal static class ChangeFile
     private static void Cleared(Document doc, string why)
     {
         if (For(doc) is not { } model) return;
-        lock (Gate) { model.Pending.Clear(); model.Written.Clear(); model.Added.Clear(); model.Started = false; }
+        lock (Gate) { model.Pending.Clear(); model.Written.Clear(); model.Added.Clear(); model.Started = false; model.Families.Clear(); model.FamilyTries.Clear(); }
         Queue(() =>
         {
             var current = System.IO.Path.Combine(model.Folder, M.CurrentName);
-            if (!File.Exists(current)) return;
+            if (!File.Exists(current)) { TidyFamilies(model.Folder); return; }
             var last = System.IO.Path.Combine(model.Folder, M.LastSaveName);
             // Which Revit event cleared it, so a file cleared when nothing was really saved can be told apart.
             try { File.AppendAllText(current, M.Write(new M.Line { Kind = M.Kinds.Cleared, At = Now, Text = why }) + Environment.NewLine); } catch (IOException) { }
             if (File.Exists(last)) File.Delete(last);
             File.Move(current, last);
+            Drop(M.MadeMapName(last));
+            Drop(M.MadeMapName(current));
+            TidyFamilies(model.Folder);
         });
     }
 
@@ -382,8 +445,24 @@ internal static class ChangeFile
         try
         {
             if (For(e.Document) is not { } model) return;
-            ReadPending(e.Document, 5000);
-            lock (Gate) { Models.Remove(model.Path); Known.Remove(model.Path); }
+            // Everything noted is read now (a few seconds at most). The model stays watched: the close can still be
+            // cancelled (Cancel on "save changes?"), and then its changes must go on being written.
+            ReadPending(e.Document, int.MaxValue, 3000);
+            lock (Gate) Closing[e.DocumentId] = model.Path;
+        }
+        catch (Exception) { }
+    }
+
+    private static void OnClosed(object? sender, DocumentClosedEventArgs e)
+    {
+        try
+        {
+            lock (Gate)
+            {
+                if (!Closing.TryGetValue(e.DocumentId, out var path)) return;
+                Closing.Remove(e.DocumentId);
+                if (e.Status == RevitAPIEventStatus.Succeeded) Models.Remove(path);
+            }
         }
         catch (Exception) { }
     }
@@ -427,7 +506,14 @@ internal static class ChangeFile
     /// <summary>While central's elements come in (reload latest, sync), what changes is other people's work, not this file's.</summary>
     private static void Incoming(Document doc, bool on)
     {
-        try { if (For(doc) is { } model) model.Incoming = on; } catch (Exception) { }
+        try
+        {
+            if (For(doc) is not { } model) return;
+            model.Incoming = on;
+            // Other people's elements came in: they are noted too (only the ones above the highest id noted so far).
+            if (!on) lock (Gate) { if (model.Indexed) { model.Indexed = false; model.ToIndex = null; } }
+        }
+        catch (Exception) { }
     }
 
     private static void OnSelection(object? sender, SelectionChangedEventArgs e)
@@ -447,11 +533,7 @@ internal static class ChangeFile
 
     private static void Remember(Model model, long id, string unique, string? category)
     {
-        lock (Gate)
-        {
-            if (!Known.TryGetValue(model.Path, out var map)) Known[model.Path] = map = [];
-            if (map.Count < KnownCap || map.ContainsKey(id)) map[id] = (unique, category);
-        }
+        lock (Gate) model.Known.Remember(id, unique, category);
     }
 
     private static void OnChanged(object? sender, DocumentChangedEventArgs e)
@@ -462,11 +544,16 @@ internal static class ChangeFile
             if (!On) return;
             var doc = e.GetDocument();
             if (For(doc) is not { } model || model.Incoming) return;
+            var added = e.GetAddedElementIds();
             lock (Gate)
             {
-                foreach (var id in e.GetAddedElementIds()) { model.Pending.Add(id.Value); if (model.Added.Count < KnownCap) model.Added.Add(id.Value); }
+                foreach (var id in added) { model.Pending.Add(id.Value); if (model.Added.Count < KnownCap) model.Added.Add(id.Value); }
                 foreach (var id in e.GetModifiedElementIds()) model.Pending.Add(id.Value);
             }
+            // New elements are noted at once: one deleted again before the next idle moment is still named.
+            if (added.Count <= 5000)
+                foreach (var id in added)
+                    try { if (doc.GetElement(id) is { } made) Remember(model, id.Value, made.UniqueId, made.Category?.Name); } catch (Exception) { }
             // A stairs run or landing changed: its stairs' line is written again (looked at only for edits of a few elements).
             var touched = e.GetAddedElementIds().Concat(e.GetModifiedElementIds()).Take(501).ToList();
             if (touched.Count <= 500)
@@ -478,12 +565,16 @@ internal static class ChangeFile
             var lines = new List<M.Line>();
             lock (Gate)
             {
-                Known.TryGetValue(model.Path, out var map);
                 foreach (var id in deleted)
                 {
                     model.Pending.Remove(id.Value);
-                    var known = map is not null && map.TryGetValue(id.Value, out var k) ? k : default;
-                    lines.Add(new M.Line { Kind = M.Kinds.Deleted, At = Now, Id = id.Value, Unique = known.Unique, Category = known.Category, Tx = tx.Length > 0 ? tx : null });
+                    var named = model.Known.TryGet(id.Value, out var unique, out var category);
+                    // Made after the last save and deleted again: marked New, so a replay knows there is nothing to delete.
+                    var made = model.Added.Remove(id.Value);
+                    model.Written.Remove(id.Value);
+                    // What Revit makes and deletes by itself (and was never noted) gets no line.
+                    if (!named && !made && model.Indexed) continue;
+                    lines.Add(new M.Line { Kind = M.Kinds.Deleted, At = Now, Id = id.Value, Unique = named ? unique : null, Category = category, New = made, Tx = tx.Length > 0 ? tx : null });
                 }
             }
             Append(model, lines);
@@ -500,7 +591,13 @@ internal static class ChangeFile
             if (unchecked(Environment.TickCount - _lastSettings) > 60_000) ReadSettings();
             if (!On) return;
             var more = false;
-            foreach (Document doc in app.Application.Documents) more |= ReadPending(doc, M.ReadPerIdle, M.ReadBudgetMs);
+            foreach (Document doc in app.Application.Documents)
+            {
+                var reading = ReadPending(doc, M.ReadPerIdle, M.ReadBudgetMs);
+                more |= reading;
+                // Only when nothing is waiting to be read: a loaded family's copy, then noting the model's elements.
+                if (!reading && For(doc) is { } model) more |= KeepFamily(doc, model) || NoteElements(doc, model);
+            }
             if (more) RevitDispatcher.IdleAgain();
             if (unchecked(Environment.TickCount - _lastViews) > 5000) { _lastViews = Environment.TickCount; NoteOpenViews(app); }
         }
@@ -559,10 +656,17 @@ internal static class ChangeFile
             try
             {
                 if (doc.GetElement(new ElementId(id)) is not { } element || Capture(doc, element) is not { } line) continue;
-                Remember(model, id, element.UniqueId, element.Category?.Name);
+                Remember(model, id, element.UniqueId, element.Category?.Name ?? line.Category);
                 lock (Gate)
                 {
                     line.New = model.Added.Contains(id);
+                    if (line.What == "family")
+                    {
+                        // Only a family loaded after the last save has a line: its copy is kept next to the file.
+                        if (!line.New) continue;
+                        line.File = M.FamilyFileName(element.UniqueId);
+                        if (!model.FamilyTries.ContainsKey(id)) { model.FamilyTries[id] = 0; model.Families.Enqueue(id); }
+                    }
                     model.Written.TryGetValue(id, out var written);
                     var all = line.Values ?? [];
                     var changed = M.Changed(all, written);
@@ -592,13 +696,18 @@ internal static class ChangeFile
     /// <summary>The element as it is now; null for what isn't worth a line (Revit's own bookkeeping elements).</summary>
     internal static M.Line? Capture(Document doc, Element element)
     {
+        if (element is Family family) return FamilyLine(family);
         var category = element.Category;
         var viewKind = ChangeViews.Kind(element);
         if (category is null && element is not ElementType && viewKind is null) return null;
+        // What Revit makes by itself with something else (a sketch's automatic dimensions, a view's camera and section
+        // box, a loaded type's preview), and what belongs to a title block or isn't on a sheet.
+        if (category is not null && M.IsRevitsOwn(category.Id.Value)) return null;
+        if (ChangeViews.IsRevitsOwn(element)) return null;
         // Work plane grids and the marks of views (sections, callouts) change with the view or come with it: no line of their own.
         if (category is not null && element is not View && category.Id.Value is (long)BuiltInCategory.OST_IOSSketchGrid or (long)BuiltInCategory.OST_Viewers or (long)BuiltInCategory.OST_Views) return null;
         if (category is not null && IsAnalysis(category.Id.Value) || element.GetType().Namespace == "Autodesk.Revit.DB.Analysis") return null;
-        if (ChangeViews.Ignored(element) || element is View { IsTemplate: true } || element is ElementType { Category: null } || ChangeShapes.IsSketchLine(element) || ChangeNotes.IsPart(element)
+        if (ChangeViews.Ignored(element) || element is View { IsTemplate: true } || element is ElementType { Category: null } and not (TextElementType or DimensionType) || ChangeShapes.IsSketchLine(element) || ChangeNotes.IsPart(element)
             || ChangeViews.IsPart(element) || ChangeStairs.IsPart(element)) return null;
         var line = new M.Line
         {
@@ -606,7 +715,7 @@ internal static class ChangeFile
             Category = category?.Name, CategoryId = category?.Id.Value ?? 0,
             What = ChangeShapes.Kind(element) ?? ChangeNotes.Kind(element) ?? viewKind ?? element switch
             {
-                Level => "level", Grid => "grid", ElementType => "type", Wall => "wall", FamilyInstance => "instance",
+                Level => "level", Grid => "grid", ElementType => "type", Wall => "wall", FamilyInstance => "instance", Material => "material",
                 Autodesk.Revit.DB.Architecture.Stairs => "stairs", _ => "other",
             },
         };
@@ -658,6 +767,7 @@ internal static class ChangeFile
         try
         {
             if (element is ElementType asType) ChangeTypes.Read(doc, asType, line);
+            else if (element is Material material) ChangeTypes.ReadMaterial(doc, material, line);
             else if (element is Autodesk.Revit.DB.Architecture.Stairs stairs) ChangeStairs.Read(doc, stairs, line);
         }
         catch (Exception ex) { LifelineBugs.Note("capture", $"{line.What} ({line.Category}) couldn't be read in full", doc.PathName, ex); }
@@ -693,6 +803,142 @@ internal static class ChangeFile
         }
         if (values.Count > 0) line.Values = values;
         return line;
+    }
+
+    /// <summary>A loadable family's line (in-place families can't be kept as a file): written only when it was loaded after the last save.</summary>
+    private static M.Line? FamilyLine(Family family)
+    {
+        try
+        {
+            if (family.IsInPlace || !family.IsEditable) return null;
+            var category = family.FamilyCategory;
+            return new M.Line
+            {
+                Kind = M.Kinds.State, At = Now, Id = family.Id.Value, Unique = family.UniqueId, What = "family", Name = family.Name,
+                Category = category?.Name, CategoryId = category?.Id.Value ?? 0,
+            };
+        }
+        catch (Exception) { return null; }
+    }
+
+    // ---- Loaded families and the model's elements, a little at each idle moment -------------------------------------
+
+    /// <summary>
+    /// Copies one family loaded after the last save next to the change file (Revit has no other way to get a family
+    /// back than its file); true when more are waiting. Nothing in the model changes.
+    /// </summary>
+    private static bool KeepFamily(Document doc, Model model)
+    {
+        long id;
+        lock (Gate)
+        {
+            if (model.Families.Count == 0) return false;
+            id = model.Families.Dequeue();
+        }
+        var start = UiCost.Start();
+        try
+        {
+            if (doc.GetElement(new ElementId(id)) is not Family { IsInPlace: false, IsEditable: true } family) return Waiting(model);
+            // Revit is in the middle of something: tried again at a later idle moment, a few times.
+            if (doc.IsModifiable || doc.IsReadOnly) { Again(model, id); return false; }
+            SaveFamily(doc, family, System.IO.Path.Combine(model.Folder, M.FamiliesFolder));
+        }
+        catch (Exception ex)
+        {
+            if (!Again(model, id)) LifelineBugs.Note("capture", "a loaded family couldn't be copied next to the change file", Safe(() => doc.PathName), ex, "family copy");
+        }
+        finally { UiCost.End("Lifeline keeping a loaded family", start); }
+        return Waiting(model);
+    }
+
+    /// <summary>
+    /// Opens the family in memory (as Edit Family does), saves a copy of it in <paramref name="folder"/> and closes it
+    /// again, whatever happens. Also for the field test.
+    /// </summary>
+    internal static void SaveFamily(Document doc, Family family, string folder)
+    {
+        Document? opened = null;
+        try
+        {
+            Directory.CreateDirectory(folder);
+            opened = doc.EditFamily(family);
+            opened.SaveAs(System.IO.Path.Combine(folder, M.FamilyFileName(family.UniqueId)), new SaveAsOptions { OverwriteExistingFile = true, MaximumBackups = 1 });
+        }
+        finally { try { opened?.Close(false); } catch (Exception) { } }
+    }
+
+    private static bool Waiting(Model model) { lock (Gate) return model.Families.Count > 0; }
+
+    /// <summary>Puts a family back in the queue for another try (three in all); false when it has had them.</summary>
+    private static bool Again(Model model, long id)
+    {
+        lock (Gate)
+        {
+            model.FamilyTries.TryGetValue(id, out var tries);
+            model.FamilyTries[id] = ++tries;
+            if (tries >= 3) return false;
+            model.Families.Enqueue(id);
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Notes the UniqueId and category of the model's elements, <see cref="ChangeFileMath.IndexBudgetMs"/> at a time, so
+    /// a later deletion names what was deleted; true while some are left. Read only.
+    /// </summary>
+    private static bool NoteElements(Document doc, Model model)
+    {
+        if (model.Indexed) return false;
+        var start = UiCost.Start();
+        try
+        {
+            if (model.ToIndex is null)
+            {
+                // One listing of the ids; elements noted already (and those below the last listing's highest id) are passed over.
+                var from = model.IndexedUpTo;
+                var ids = new FilteredElementCollector(doc).WherePasses(new LogicalOrFilter(new ElementIsElementTypeFilter(false), new ElementIsElementTypeFilter(true)))
+                    .ToElementIds().Select(i => i.Value).Where(i => i > from).ToList();
+                lock (Gate) { model.ToIndex = new Queue<long>(ids); if (ids.Count > 0) model.IndexedUpTo = Math.Max(from, ids.Max()); }
+                return true;
+            }
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            while (clock.ElapsedMilliseconds < M.IndexBudgetMs)
+            {
+                var batch = new List<(long, string, string?)>();
+                for (var i = 0; i < 200 && model.ToIndex.Count > 0; i++)
+                {
+                    var id = model.ToIndex.Dequeue();
+                    if (model.Known.Has(id)) continue;
+                    try
+                    {
+                        if (doc.GetElement(new ElementId(id)) is not { } element) continue;
+                        // Only what could have a line: Revit's own bookkeeping elements (no category) are passed over.
+                        var category = element.Category;
+                        if (category is null && element is not (ElementType or View or Family)) continue;
+                        if (category is not null && (M.IsRevitsOwn(category.Id.Value) || IsAnalysis(category.Id.Value))) continue;
+                        batch.Add((id, element.UniqueId, category?.Name));
+                    }
+                    catch (Exception) { }
+                }
+                lock (Gate) foreach (var (id, unique, category) in batch) model.Known.Remember(id, unique, category);
+                if (model.ToIndex.Count == 0) { lock (Gate) { model.Indexed = true; model.ToIndex = null; } return false; }
+            }
+            return true;
+        }
+        catch (Exception ex)
+        {
+            lock (Gate) { model.Indexed = true; model.ToIndex = null; }
+            LifelineBugs.Note("capture", "the model's elements couldn't be noted (deletions may be listed by id only)", Safe(() => doc.PathName), ex, "note elements");
+            return false;
+        }
+        finally { UiCost.End("Lifeline noting the model's elements", start); }
+    }
+
+    /// <summary>For the field test: note all of <paramref name="doc"/>'s elements now.</summary>
+    internal static void NoteAllForTest(Document doc)
+    {
+        if (For(doc) is not { } model) return;
+        for (var i = 0; i < 100_000 && NoteElements(doc, model); i++) { }
     }
 
     private static M.Xyz P(XYZ p) => new(M.Round(p.X), M.Round(p.Y), M.Round(p.Z));

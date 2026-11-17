@@ -77,9 +77,13 @@ internal static class ChangeShapes
     {
         try
         {
-            var id = e switch { Floor f => f.SketchId, Ceiling c => c.SketchId, Toposolid t => t.SketchId, _ => ElementId.InvalidElementId };
+            var id = e switch { Floor f => f.SketchId, Ceiling c => c.SketchId, Toposolid t => t.SketchId, Wall w => w.SketchId, _ => ElementId.InvalidElementId };
             if (id != ElementId.InvalidElementId && doc.GetElement(id) is Sketch direct) return direct;
-            return e.GetDependentElements(new ElementClassFilter(typeof(Sketch))).Select(doc.GetElement).OfType<Sketch>().FirstOrDefault();
+            // Only elements drawn from a sketch of their own. A type or a view also "depends" on the sketches of the
+            // elements of that type or in that view: those are never its sketch (they gave types and views an outline
+            // that a replay then tried to redraw).
+            if (e is not (RoofBase or RevisionCloud or Autodesk.Revit.DB.Structure.AreaReinforcement or Autodesk.Revit.DB.Structure.PathReinforcement)) return null;
+            return e.GetDependentElements(new ElementClassFilter(typeof(Sketch))).Select(doc.GetElement).OfType<Sketch>().OrderByDescending(s => s.OwnerId == e.Id).FirstOrDefault();
         }
         catch (Exception) { return null; }
     }
@@ -141,8 +145,8 @@ internal static class ChangeShapes
                         count += array.Size;
                     }
                     line.Loops = profileLoops;
-                    // A slope arrow (or other extra sketch element) isn't a boundary edge.
-                    try { line.SlopeArrow = sketch.GetAllElements().Count > count; } catch (Exception) { }
+                    // A slope arrow isn't a boundary edge: its line (tail to head) and slope are kept so it is drawn again.
+                    try { ReadArrow(doc, sketch, line); } catch (Exception) { }
                 }
                 break;
         }
@@ -177,8 +181,14 @@ internal static class ChangeShapes
         {
             case "floor":
                 var structural = line.Values?.FirstOrDefault(v => v.Bip == (int)BuiltInParameter.FLOOR_PARAM_IS_STRUCTURAL)?.Whole == 1;
+                if (ArrowLine(line) is { } floorArrow)
+                    try { return Floor.Create(doc, CurveLoops(line.Loops!), TypeId(), Need().Id, structural, floorArrow, line.ArrowSlope ?? 0); }
+                    catch (Exception ex) when (ex is Autodesk.Revit.Exceptions.ApplicationException or ArgumentException) { line.Arrow = null; /* made flat below, and listed */ }
                 return Floor.Create(doc, CurveLoops(line.Loops!), TypeId(), Need().Id, structural, null, 0);
             case "ceiling":
+                if (ArrowLine(line) is { } ceilingArrow)
+                    try { return Ceiling.Create(doc, CurveLoops(line.Loops!), TypeId(), Need().Id, ceilingArrow, line.ArrowSlope ?? 0); }
+                    catch (Exception ex) when (ex is Autodesk.Revit.Exceptions.ApplicationException or ArgumentException) { line.Arrow = null; }
                 return Ceiling.Create(doc, CurveLoops(line.Loops!), TypeId(), Need().Id);
             case "topo":
                 return line.Points is { Count: > 0 } points
@@ -225,6 +235,35 @@ internal static class ChangeShapes
         }
     }
 
+    /// <summary>
+    /// The sketch's slope arrow, when it has one: a line of the sketch that isn't a boundary edge and has the slope
+    /// arrow's "Specify" value. Its slope (rise over run) is its Slope value, else worked out from its two heights.
+    /// </summary>
+    private static void ReadArrow(Document doc, Sketch sketch, M.Line line)
+    {
+        foreach (var id in sketch.GetAllElements())
+        {
+            if (doc.GetElement(id) is not CurveElement { GeometryCurve: Line arrow } ce) continue;
+            if (ce.get_Parameter(BuiltInParameter.SPECIFY_SLOPE_OR_OFFSET) is null) continue;
+            line.SlopeArrow = true;
+            line.Arrow = new M.Seg(P(arrow.GetEndPoint(0)), P(arrow.GetEndPoint(1)));
+            double? slope = null;
+            if (ce.get_Parameter(BuiltInParameter.ROOF_SLOPE) is { HasValue: true } s) slope = s.AsDouble();
+            if (slope is null or 0 && ce.get_Parameter(BuiltInParameter.SLOPE_START_HEIGHT) is { HasValue: true } tail
+                && ce.get_Parameter(BuiltInParameter.SLOPE_END_HEIGHT) is { HasValue: true } head && arrow.Length > 1e-6)
+            {
+                double Level(BuiltInParameter p) => doc.GetElement(ce.get_Parameter(p)?.AsElementId() ?? ElementId.InvalidElementId) is Level l ? l.Elevation : 0;
+                slope = (Level(BuiltInParameter.SLOPE_ARROW_LEVEL_END) + head.AsDouble() - Level(BuiltInParameter.SLOPE_ARROW_LEVEL_START) - tail.AsDouble()) / arrow.Length;
+            }
+            line.ArrowSlope = slope is { } value ? M.Round(value) : null;
+            return;
+        }
+    }
+
+    /// <summary>The slope arrow to make the element with, when the file has one with a slope.</summary>
+    private static Line? ArrowLine(M.Line line) =>
+        line.Arrow is { } a && line.ArrowSlope is not null && !M.Same(a.P, a.Q) ? Line.CreateBound(X(a.P), X(a.Q)) : null;
+
     private static void Style(Document doc, CurveElement curve, M.Line line)
     {
         if (line.LineStyle is not { } name) return;
@@ -263,7 +302,8 @@ internal static class ChangeShapes
         sketch = null;
         var changed = false;
         var now = new M.Line();
-        Read(doc, e, now);
+        // An element made a moment ago has no sketch to read yet: it was made from the file, so it is as the file has it.
+        try { Read(doc, e, now); } catch (Autodesk.Revit.Exceptions.ApplicationException) { now.Loops = line.Loops; }
         if (line.Loops is not null && !M.SameLoops(now.Loops, line.Loops))
         {
             if (e is Railing railing) { railing.SetPath(CurveLoops(line.Loops).First()); changed = true; }
@@ -281,10 +321,10 @@ internal static class ChangeShapes
     public static void Points(Element e, List<M.Xyz> points)
     {
         if (Editor(e) is not { } editor) return;
-        editor.ResetSlabShape();
+        if (editor.IsEnabled) editor.ResetSlabShape();
         if (points.Count == 0) return;
-        if (e is Toposolid) { editor.AddPoints(points.Select(X).ToList()); return; }
         if (!editor.IsEnabled) editor.Enable();
+        if (e is Toposolid) { editor.AddPoints(points.Select(X).ToList()); return; }
         foreach (var p in points)
         {
             SlabShapeVertex? At() => editor.SlabShapeVertices.Cast<SlabShapeVertex>().FirstOrDefault(v => M.Same(v.Position.X, p.X) && M.Same(v.Position.Y, p.Y));

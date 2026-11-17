@@ -22,6 +22,7 @@ internal static class ChangeViews
         Group => "group",
         RevitLinkInstance => "link",
         ImportInstance => "cad",
+        // The preview Revit keeps of each loaded family type is in a category of its own (OST_PreviewLegendComponents): not this one.
         _ when e.Category?.Id.Value == (long)BuiltInCategory.OST_LegendComponents => "legendcomponent",
         _ => null,
     };
@@ -30,6 +31,30 @@ internal static class ChangeViews
     public static bool IsPart(Element e) => e is ElevationMarker;
 
     public static bool Owns(M.Line line) => line.What is "sheet" or "view" or "viewport" or "schedule-on-sheet" or "group" or "link" or "cad" or "legendcomponent";
+
+    /// <summary>
+    /// What comes with something else and never gets a line: a title block's revision schedule (and its place on the
+    /// sheet), Revit's internal keynote schedule, and a viewport that isn't on a sheet (Revit keeps one for each of those).
+    /// </summary>
+    public static bool IsRevitsOwn(Element e)
+    {
+        try
+        {
+            return e switch
+            {
+                ViewSchedule schedule => schedule.IsTitleblockRevisionSchedule || schedule.IsInternalKeynoteSchedule,
+                ScheduleSheetInstance placed => placed.IsTitleblockRevisionSchedule,
+                Viewport viewport => viewport.SheetId == ElementId.InvalidElementId,
+                _ => false,
+            };
+        }
+        catch (Exception) { return false; }
+    }
+
+    /// <summary>The same for a line of an older file (written before these were left out).</summary>
+    public static bool IsRevitsOwn(M.Line line) =>
+        (line.What is "view" or "schedule-on-sheet" && line.Name is { } name && name.StartsWith("<Revision Schedule>", StringComparison.Ordinal))
+        || (line.What == "viewport" && line.Kind == M.Kinds.State && line.View is null);
 
     /// <summary>Views that are Revit's own (browsers, internal views) never get a line.</summary>
     public static bool Ignored(Element e) => e is View v && v.ViewType is ViewType.ProjectBrowser or ViewType.SystemBrowser or ViewType.Internal
@@ -72,6 +97,15 @@ internal static class ChangeViews
                     {
                         var definition = schedule.Definition;
                         line.ScheduleCategory = definition.CategoryId.Value;
+                        // The kind of schedule, for the call that makes it again.
+                        line.Text = definition.IsKeySchedule ? "key" : definition.IsMaterialTakeoff ? "takeoff" : line.ScheduleCategory switch
+                        {
+                            (long)BuiltInCategory.OST_Sheets => "sheets",
+                            (long)BuiltInCategory.OST_Views => "views",
+                            (long)BuiltInCategory.OST_Revisions => "revisions",
+                            (long)BuiltInCategory.OST_KeynoteTags => "keynotes",
+                            _ => null,
+                        };
                         line.Fields = Enumerable.Range(0, definition.GetFieldCount()).Select(i => definition.GetField(i).ParameterId.Value).ToList();
                     }
                     catch (Exception) { }
@@ -139,7 +173,7 @@ internal static class ChangeViews
         "view" when line.ViewKind is nameof(ViewType.FloorPlan) or nameof(ViewType.CeilingPlan) or nameof(ViewType.EngineeringPlan) && line.LevelUnique is not null => null,
         "view" when line.ViewKind is nameof(ViewType.Section) or nameof(ViewType.Detail) && line.Box is { Min: not null, Max: not null } => null,
         "view" when line.ViewKind is nameof(ViewType.ThreeD) or nameof(ViewType.DraftingView) => null,
-        "view" when line.ViewKind is nameof(ViewType.Schedule) && line.ScheduleCategory != 0 => null,
+        "view" when line.ViewKind is nameof(ViewType.Schedule) && (line.ScheduleCategory != 0 || line.Fields is not null) => null,
         "view" => "a view made after the last save that the file can't make: make it again by hand",
         "sheet" => null,
         "viewport" or "schedule-on-sheet" when line.Host is not null && line.View is not null && line.P is not null => null,
@@ -261,12 +295,26 @@ internal static class ChangeViews
                 }
                 case nameof(ViewType.Schedule):
                 {
-                    var schedule = ViewSchedule.CreateSchedule(doc, new ElementId(line.ScheduleCategory));
+                    var category = new ElementId(line.ScheduleCategory);
+                    var schedule = line.Text switch
+                    {
+                        "key" => ViewSchedule.CreateKeySchedule(doc, category),
+                        "takeoff" => ViewSchedule.CreateMaterialTakeoff(doc, category),
+                        "sheets" => ViewSchedule.CreateSheetList(doc),
+                        "views" => ViewSchedule.CreateViewList(doc),
+                        "revisions" => ViewSchedule.CreateRevisionSchedule(doc),
+                        "keynotes" => ViewSchedule.CreateKeynoteLegend(doc),
+                        // No category: a schedule of several categories.
+                        _ => ViewSchedule.CreateSchedule(doc, line.ScheduleCategory == 0 || line.ScheduleCategory == -1 ? ElementId.InvalidElementId : category),
+                    };
                     var definition = schedule.Definition;
                     var fields = definition.GetSchedulableFields();
                     var missing = 0;
+                    var has = Enumerable.Range(0, definition.GetFieldCount()).Select(i => definition.GetField(i).ParameterId.Value).ToHashSet();
                     foreach (var id in line.Fields ?? [])
                     {
+                        // A sheet list or the like comes with columns of its own.
+                        if (has.Contains(id)) continue;
                         var field = fields.FirstOrDefault(f => f.ParameterId.Value == id);
                         if (field is null) { missing++; continue; }
                         try { definition.AddField(field); } catch (Exception) { missing++; }

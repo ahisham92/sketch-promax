@@ -472,6 +472,146 @@ internal static partial class FieldTest
         }
     }
 
+    /// <summary>
+    /// What a real replay missed (9 Nov 2026): a deletion of an element Lifeline never read names it; a type's line
+    /// has no outline of its elements; a material and a loaded family made after the save come back (the family from
+    /// its kept copy); a file played twice sets what the first play made instead of making it again. What it made is
+    /// deleted afterwards.
+    /// </summary>
+    private static (string, string) RecoveryComplete(UIApplication app, State s)
+    {
+        if (TestDoc(app, s, out var why) is not { } doc) return Fail(why);
+        if (BasicWallType(doc) is not { } type) return Fail("the test project has no basic wall type with layers");
+        if (new FilteredElementCollector(doc).OfClass(typeof(Level)).FirstElement() is not Level level) return Fail("the test project has no level");
+        var root = Path.Combine(s.Folder, "change-files-complete");
+        ChangeFile.RootForTest = root;
+        ChangeFile.ForceForTest = true;
+        var problems = new List<string>();
+        var notes = new List<string>();
+        var made = new List<ElementId>();
+        try
+        {
+            // 1. A wall that was in the model before Lifeline looked (never read, never selected), then deleted.
+            Wall old;
+            using (var t = new Transaction(doc, "Field test: lifeline old wall"))
+            {
+                t.Start();
+                old = Wall.Create(doc, Line.CreateBound(new XYZ(0, -120, 0), new XYZ(20, -120, 0)), type.Id, level.Id, 10, 0, false, false);
+                t.Commit();
+            }
+            var oldUnique = old.UniqueId;
+            ChangeFile.TrackForTest(doc);
+            ChangeFile.NoteAllForTest(doc);
+            var file = ChangeFile.CurrentFor(doc.PathName);
+            using (var t = new Transaction(doc, "Field test: lifeline delete old wall"))
+            {
+                t.Start();
+                doc.Delete(old.Id);
+                t.Commit();
+            }
+            ChangeFile.ReadNow(doc);
+            ChangeFile.Flush(TimeSpan.FromSeconds(5));
+            var deleted = M.Read(ChangeFile.ReadLines(file)).Elements.FirstOrDefault(l => l.Kind == M.Kinds.Deleted && l.Unique == oldUnique);
+            if (deleted is null) problems.Add("the deletion of a wall Lifeline never read isn't named by its UniqueId");
+            else if (deleted.Category is not { Length: > 0 }) problems.Add("the named deletion has no category");
+
+            // 2. A type's line holds no outline (it used to take the sketch of an element of that type).
+            if (new FilteredElementCollector(doc).OfClass(typeof(Floor)).FirstElement() is Floor anyFloor && doc.GetElement(anyFloor.GetTypeId()) is ElementType floorType)
+            {
+                if (ChangeFile.Capture(doc, floorType) is { } typeLine && (typeLine.Loops is not null || typeLine.SlopeArrow)) problems.Add("a floor type's line holds an outline");
+            }
+            else notes.Add("no floor in the test project (type outline not checked)");
+
+            // 3. A material and a wall made after the save, then gone; a family kept as a copy, then gone.
+            Material material;
+            Wall fresh;
+            using (var t = new Transaction(doc, "Field test: lifeline new things"))
+            {
+                t.Start();
+                material = (Material)doc.GetElement(Material.Create(doc, "SPM lifeline " + DateTime.Now.ToString("HHmmss")));
+                material.Color = new Color(12, 140, 200);
+                material.Transparency = 35;
+                fresh = Wall.Create(doc, Line.CreateBound(new XYZ(0, -130, 0), new XYZ(20, -130, 0)), type.Id, level.Id, 10, 0, false, false);
+                t.Commit();
+            }
+            var lines = new List<M.Line>();
+            foreach (var e in new Element[] { material, fresh })
+            {
+                if (ChangeFile.Capture(doc, e) is not { } line) { problems.Add($"{e.GetType().Name} wasn't captured"); continue; }
+                line.New = true;
+                lines.Add(line);
+            }
+            if (lines.FirstOrDefault(l => l.What == "material") is not { Extra: { } extra } || !extra.ContainsKey("color")) problems.Add("the material's colour isn't in its line");
+            var (materialUnique, materialName, freshUnique) = (material.UniqueId, material.Name, fresh.UniqueId);
+            // A loadable family nothing is placed of (so deleting it takes nothing else with it).
+            var used = new FilteredElementCollector(doc).OfClass(typeof(FamilyInstance)).Cast<FamilyInstance>().Select(i => i.Symbol?.Family?.Id).ToHashSet();
+            var family = new FilteredElementCollector(doc).OfClass(typeof(Family)).Cast<Family>()
+                .FirstOrDefault(f => !f.IsInPlace && f.IsEditable && !used.Contains(f.Id) && f.FamilyCategory is { CategoryType: CategoryType.Model });
+            var families = Path.Combine(ChangeFile.FolderFor(doc.PathName), M.FamiliesFolder);
+            string? familyName = null;
+            if (family is not null)
+            {
+                familyName = family.Name;
+                if (ChangeFile.Capture(doc, family) is not { What: "family" } familyLine) problems.Add("the family wasn't captured as a family");
+                else
+                {
+                    familyLine.New = true;
+                    familyLine.File = M.FamilyFileName(family.UniqueId);
+                    try
+                    {
+                        ChangeFile.SaveFamily(doc, family, families);
+                        if (!File.Exists(Path.Combine(families, familyLine.File))) problems.Add("the family's copy isn't next to the change file");
+                        else lines.Add(familyLine);
+                    }
+                    catch (Exception ex) { problems.Add("the family couldn't be copied next to the change file: " + ex.Message); }
+                }
+            }
+            else notes.Add("no unused loadable family in the test project (family copy not checked)");
+            using (var t = new Transaction(doc, "Field test: lifeline things gone"))
+            {
+                t.Start();
+                doc.Delete(fresh.Id);
+                doc.Delete(material.Id);
+                if (family is not null && lines.Any(l => l.What == "family")) doc.Delete(family.Id);
+                t.Commit();
+            }
+            var model = new M.Line { Kind = M.Kinds.Model, At = DateTime.Now, Path = doc.PathName, Format = M.FormatNew };
+            var parsed = M.Read(lines.Prepend(model).Select(M.Write));
+            var outcome = new ChangeReplay.Outcome { FamiliesFolder = families };
+            ChangeReplay.Apply(doc, ChangeReplay.Plan(doc, parsed, outcome), outcome);
+            made.AddRange(outcome.MadeFor.Values);
+            var notDone = " (" + string.Join("; ", outcome.NotDone) + ")";
+            if (!outcome.MadeFor.TryGetValue(materialUnique, out var materialId) || doc.GetElement(materialId) is not Material back || back.Name != materialName
+                || back.Color.Red != 12 || back.Color.Blue != 200 || back.Transparency != 35)
+                problems.Add("the material wasn't made again with its colour and transparency" + notDone);
+            if (!outcome.MadeFor.TryGetValue(freshUnique, out var wallId) || doc.GetElement(wallId) is not Wall) problems.Add("the wall wasn't made again" + notDone);
+            if (familyName is not null && lines.Any(l => l.What == "family")
+                && !new FilteredElementCollector(doc).OfClass(typeof(Family)).Cast<Family>().Any(f => f.Name == familyName))
+                problems.Add("the family wasn't loaded again from its kept copy" + notDone);
+
+            // 4. The same file played again: what the first play made is found, nothing is made twice.
+            var second = new ChangeReplay.Outcome { FamiliesFolder = families };
+            ChangeReplay.Remember(doc, outcome.MadeUnique, second);
+            var again = ChangeReplay.Plan(doc, parsed, second);
+            if (again.Any(st => st.Act == ChangeReplay.Act.Make)) problems.Add("a second play of the file would make again: " + string.Join(", ", again.Where(st => st.Act == ChangeReplay.Act.Make).Select(st => st.Line.What)));
+            return problems.Count == 0
+                ? Pass($"a deletion named by UniqueId; a material, a wall{(familyName is not null ? " and a family" : "")} made again; a second play makes nothing twice" + (notes.Count > 0 ? "; " + string.Join("; ", notes) : ""))
+                : Fail(string.Join("; ", problems));
+        }
+        finally
+        {
+            ChangeFile.ForgetForTest(doc);
+            ChangeFile.RootForTest = null;
+            ChangeFile.ForceForTest = false;
+            using var t = new Transaction(doc, "Field test: lifeline tidy up");
+            t.Start();
+            // Walls first, the material last (once nothing uses it); a family loaded again stays (it was there before).
+            foreach (var id in made.Where(id => doc.GetElement(id) is not Family).OrderBy(id => doc.GetElement(id) is Material ? 1 : 0).ToList())
+                try { if (doc.GetElement(id) is not null) doc.Delete(id); } catch (Exception) { }
+            t.Commit();
+        }
+    }
+
     /// <summary>Lifeline's bug list: a problem noted twice is one line under the header, in a test folder.</summary>
     private static (string, string) RecoveryBugs(State s)
     {

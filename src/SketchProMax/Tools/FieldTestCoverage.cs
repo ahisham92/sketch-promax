@@ -564,6 +564,8 @@ internal static class FieldTestCoverage
             "in the test project: a drafting view, a sheet with the view placed on it and a text note with a leader, made after the save and deleted, are made again (the view with its name, the sheet with its viewport, the note with its leader); a grid that was there before and is gone, as if someone deleted it in central, is left deleted and listed; what the test made is deleted afterwards"),
         new("recovery.types", Central, "Replay puts new types, elevations and stairs back", How.Probe, "",
             "in the test project: a wall type duplicated with a thicker layer, an elevation and straight stairs, made after the save and deleted, are made again (the type with its name and layers, the elevation looking the same way, the stairs with their run); what the test made is deleted afterwards"),
+        new("recovery.complete", Central, "Replay names every deletion and puts materials and loaded families back, once", How.Probe, "",
+            "in the test project, with the change file sent to a temporary folder: a wall Lifeline never read is deleted and its deletion is in the file by UniqueId; a floor type's line holds no outline; a material (with its colour and transparency), a wall and a loadable family (from the copy kept next to the file) made after the save and deleted are made again; planning the same file a second time makes nothing again; what the test made is deleted afterwards"),
         new("recovery.bugs", Central, "Lifeline keeps a list of its problems", How.Probe, "",
             "with the list sent to a test folder: a problem noted twice is written once, as one line (when, version, Revit, model, where, what) under the file's header"),
         new("recovery.ui", Central, "Recover after Revit closes by itself, on a real shared model", How.Manual, "", "needs Revit to close by itself and a real central model",
@@ -790,6 +792,7 @@ internal static class FieldTestCoverage
         new(69, ["chat.autopilot_ui"], "with the phone connected, open a project's central model and later its detached copy: the phone shows one chat for the project, named after the coordinator and the project; a message written in it reaches that project's chat in Revit, and its answer comes back in the same phone chat"),
         new(70, ["chat.jobs_ui"], "in a chat With coordinator with jobs running, ask \"what is <a worker's name> doing?\": the coordinator answers about that worker's job by name"),
         new(71, ["chat.signin_again_ui"], "with an expired sign-in, a message says the sign-in expired with Sign in again (not New chat), the chat no longer looks ready, and Sign in again opens the browser with no Command Prompt"),
+        new(73, ["recovery.complete", "recovery.replay"], "replay plays every step, names every deletion, and puts materials, loaded families and sloped floors back, once"),
     ];
 
     /// <summary>
