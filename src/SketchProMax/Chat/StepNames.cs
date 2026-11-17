@@ -33,6 +33,7 @@ internal static class StepNames
         ["memory_note"] = "Save a note",
         ["read_document_text"] = "Read a document",
         ["berth_status"] = "Submissions status",
+        ["submission_format"] = "Submission format",
         ["berth_costing"] = "Berth costing",
         ["help"] = "Read the guide",
         ["features"] = "List what it can do",

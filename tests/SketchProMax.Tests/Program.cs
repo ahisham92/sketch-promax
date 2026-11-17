@@ -120,6 +120,7 @@ HistoryLessonsTests.Run((name, ok, detail) => Check(name, ok, detail));
 PromptIdeasTests.Run((name, ok, detail) => Check(name, ok, detail));
 ChatFocusTests.Run((name, ok, detail) => Check(name, ok, detail));
 WorkedCodeTests.Run((name, ok, detail) => Check(name, ok, detail));
+SubmissionFormatTests.Run((name, ok, detail) => Check(name, ok, detail));
 DrawingStandardTests.Run((name, ok, detail) => Check(name, ok, detail));
 LayoutTests.Run((name, ok, detail) => Check(name, ok, detail));
 RibbonFormTests.Run((name, ok, detail) => Check(name, ok, detail));
@@ -191,6 +192,7 @@ SignaturePagesTests.Run((name, ok, detail) => Check(name, ok, detail));
     AutopilotStallTests.RunSources(File.Exists(Path.Combine(root, "README.md")) ? root : Directory.GetCurrentDirectory(), (name, ok, detail) => Check(name, ok, detail));
     ChatWorkTests.RunSources(File.Exists(Path.Combine(root, "README.md")) ? root : Directory.GetCurrentDirectory(), (name, ok, detail) => Check(name, ok, detail));
     SyncLockTests.RunSources(File.Exists(Path.Combine(root, "README.md")) ? root : Directory.GetCurrentDirectory(), (name, ok, detail) => Check(name, ok, detail));
+    SubmissionFormatTests.RunSources(File.Exists(Path.Combine(root, "README.md")) ? root : Directory.GetCurrentDirectory(), (name, ok, detail) => Check(name, ok, detail));
     LicenseTests.Run(File.Exists(Path.Combine(root, "README.md")) ? root : Directory.GetCurrentDirectory(), (name, ok, detail) => Check(name, ok, detail));
 }
 

@@ -129,7 +129,9 @@ internal static class JobReview
         "and sheets. Where the task says all or gives a number (all piles, every sheet, berths 7 to 11), count what was done against what " +
         "was asked. For anything drawn (geometry, lines, tags, dimensions, text), also look at it in its view (capture_view_image): " +
         "overlapping tags, a missing dimension or a hidden element show there and not in the numbers.\n" +
-        "3. Don't change the model: changes are refused for a check.\n\n" +
+        "3. When the work was a berth's submission drawings or sheets, also call submission_format (action=check, berths): every line " +
+        "it lists for those berths is a part that is NOT DONE.\n" +
+        "4. Don't change the model: changes are refused for a check.\n\n" +
         $"Answer with the list, one line per part: \"<n>. <the part>: {DoneWord}\" with what you read, or \"<n>. <the part>: {NotDoneWord} - " +
         "<what is missing or wrong, and where>\". A part you could not check is NOT DONE with the reason.\n" +
         $"End with one line: \"{PassedWord}\" only when every part is {DoneWord}, or \"{IssuesWord}: \" followed by the {NotDoneWord} parts, " +
