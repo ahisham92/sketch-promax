@@ -179,8 +179,18 @@ internal static class FreezeWatch
     private static void Log(Kind kind, TimeSpan lasted, bool opened)
     {
         var busy = kind == Kind.HiddenDialog ? "a dialog that was out of sight" : Cause().What;
+        // Revit's journal names the last command it recorded, which isn't the one running when the freeze is in our own
+        // call (bug 72: an auto sync was logged as "Reset Slab Shape"): say which of ours was running too.
+        if (kind != Kind.HiddenDialog && OursNow() is { } ours) busy += $" (during Sketch ProMax's {ours})";
         Tools.ActivityLog.Note("revit_froze", $"Revit {(kind == Kind.HiddenDialog ? "waited for" : "didn't respond, busy with")} {busy} for {FreezeCause.Duration(lasted)}" +
                                               (opened ? "; the Rescue window opened" : ""));
+    }
+
+    /// <summary>The Sketch ProMax call running on Revit's thread now, named for the log ("auto sync with central"), or null.</summary>
+    internal static string? OursNow()
+    {
+        if (RunningCall.Current is not { } call) return null;
+        return call.Tool == "auto_sync" ? "auto sync with central" : call.Tool + (call.Where.Length > 0 ? " from " + call.Where : "");
     }
 
     /// <summary>Whether Revit is stuck, from outside its thread.</summary>
@@ -331,10 +341,11 @@ internal static class FreezeWatch
         {
             var exe = Own.MainModule?.FileName;
             if (exe is { Length: > 0 })
-                Process.Start(new ProcessStartInfo(exe, model is null ? "" : "\"" + model + "\"")
+                // The new Revit must not inherit this one's open files: the central model's locks would stay held (bug 72).
+                Chat.ChildProcess.Start(new ProcessStartInfo(exe, model is null ? "" : "\"" + model + "\"")
                 {
                     UseShellExecute = false, WorkingDirectory = Path.GetDirectoryName(exe) ?? "",
-                });
+                }).Dispose();
         }
         catch (Exception) { /* Revit is still ended: the user starts it from the Start menu */ }
         try { Own.Kill(); } catch (Exception) { }

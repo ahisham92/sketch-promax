@@ -306,13 +306,15 @@ internal static class Redlines
         info.WorkingDirectory = ClaudeCli.WorkFolder;
         // It runs on the user's Claude plan, like the chat.
         info.EnvironmentVariables.Remove("ANTHROPIC_API_KEY");
+        Chat.ChildProcess? child = null;
         Process? process = null;
         try
         {
-            process = Process.Start(info) ?? throw new InvalidOperationException("Claude Code didn't start.");
-            var stdout = process.StandardOutput.ReadToEndAsync();
-            var stderr = process.StandardError.ReadToEndAsync();
-            using (var input = new StreamWriter(process.StandardInput.BaseStream, new UTF8Encoding(false)))
+            child = Chat.ChildProcess.Start(info); // inherits none of Revit's open files (bug 72)
+            process = child.Process;
+            var stdout = child.StandardOutput!.ReadToEndAsync();
+            var stderr = child.StandardError!.ReadToEndAsync();
+            using (var input = child.StandardInput!)
                 input.Write(Redline.VisionMessage(png, page));
             var watch = Stopwatch.StartNew();
             while (!stdout.Wait(500))
@@ -339,7 +341,7 @@ internal static class Redlines
             if (process is not null)
             {
                 try { if (!process.HasExited) ClaudeCli.KillTree(process); } catch (InvalidOperationException) { }
-                process.Dispose();
+                child?.Dispose();
             }
         }
     }

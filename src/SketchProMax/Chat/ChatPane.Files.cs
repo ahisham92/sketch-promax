@@ -86,7 +86,7 @@ internal sealed partial class ChatPane
         var buttons = new WrapPanel { Margin = new Thickness(ChatUi.S3 + 18, ChatUi.S2, 0, 0) };
         buttons.Children.Add(Pill("Open", true, "Open it in its app (Excel, Word, PowerPoint or your PDF reader)", () => ChatUi.Open(path)));
         buttons.Children.Add(Pill("Show in folder", false, "Open its folder with the file selected: " + folder, () =>
-            Process.Start(new ProcessStartInfo("explorer.exe", "/select,\"" + path + "\"") { UseShellExecute = false })?.Dispose()));
+            Process.Start(new ProcessStartInfo("explorer.exe", "/select,\"" + path + "\"") { UseShellExecute = true })?.Dispose()));
         buttons.Children.Add(Pill("Save a copy…", false, "Save a copy somewhere else, for example on the project drive", () =>
         {
             var dialog = new Microsoft.Win32.SaveFileDialog

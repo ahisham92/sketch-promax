@@ -30,6 +30,13 @@ internal static class ChangeViews
     /// <summary>Elevation markers come with their elevations: no line of their own.</summary>
     public static bool IsPart(Element e) => e is ElevationMarker;
 
+    /// <summary>The viewport's centre on its sheet, or null when it is not on a sheet (its sheet is being deleted).</summary>
+    internal static XYZ? BoxCenter(Viewport viewport)
+    {
+        try { return viewport.SheetId == ElementId.InvalidElementId ? null : viewport.GetBoxCenter(); }
+        catch (Autodesk.Revit.Exceptions.InvalidOperationException) { return null; }
+    }
+
     public static bool Owns(M.Line line) => line.What is "sheet" or "view" or "viewport" or "schedule-on-sheet" or "group" or "link" or "cad" or "legendcomponent";
 
     /// <summary>
@@ -114,7 +121,9 @@ internal static class ChangeViews
             case Viewport viewport:
                 line.Host = doc.GetElement(viewport.ViewId)?.UniqueId;
                 line.View = doc.GetElement(viewport.SheetId)?.UniqueId;
-                line.P = P(viewport.GetBoxCenter());
+                // A viewport that is coming off its sheet (its sheet deleted in the same change) has no box: Revit throws
+                // "The viewport is not on a sheet". Nothing to keep then; it was logged as a Lifeline bug every time.
+                if (BoxCenter(viewport) is { } center) line.P = P(center);
                 break;
             case ScheduleSheetInstance placed:
                 line.Host = doc.GetElement(placed.ScheduleId)?.UniqueId;
@@ -399,7 +408,7 @@ internal static class ChangeViews
             case View view when e is not ViewSheet:
                 if (line.Name is { Length: > 0 } name && view.Name != name) { try { view.Name = name; changed = true; } catch (Exception) { notes.Add($"{M.Describe(line)}: the name {name} is taken: rename it by hand"); } }
                 break;
-            case Viewport viewport when line.P is { } p && !M.Same(P(viewport.GetBoxCenter()), p):
+            case Viewport viewport when line.P is { } p && BoxCenter(viewport) is { } now && !M.Same(P(now), p):
                 viewport.SetBoxCenter(X(p));
                 changed = true;
                 break;

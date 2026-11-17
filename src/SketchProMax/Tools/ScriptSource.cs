@@ -127,6 +127,7 @@ internal static class ScriptSource
         ("Object reference not set", "Something was null on that line: get_Parameter/LookupParameter, doc.GetElement, Category, Location, get_Geometry and ActiveView return null when absent. Check them (?. or 'is not null') before use."),
         ("no open transaction", "run_revit_query_code already runs inside a rolled-back transaction; don't start or commit your own there. In run_revit_code use own_transactions only for edit scopes."),
         ("is not a valid object", "An element or object was deleted or regenerated (for example after doc.Regenerate or a delete). Fetch it again by id after the change."),
+        ("Family loading failed", "Loading an edited family back into the project (familyDoc.LoadFamily) fails inside run_revit_query_code (its rolled-back trial) and while any transaction is open in the project, and each try can hold Revit for minutes. Don't try it there: do the edit for real with run_revit_code (own_transactions, close the family's transactions first, then LoadFamily with an IFamilyLoadOptions that overwrites), or use a void cut / join in the project instead."),
         ("Can't cut joined element", "These elements are already joined or cut in a way that blocks this join, and in one code call one refused join undoes all of them. For joins and unjoins use join_elements (one pair per step, tries the other order, lists what Revit refuses); otherwise skip and report them rather than unjoining anything."),
     ];
 

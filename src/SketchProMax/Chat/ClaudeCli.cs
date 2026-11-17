@@ -420,15 +420,14 @@ internal static class ClaudeCli
     {
         try
         {
-            using var process = Process.Start(new ProcessStartInfo(ClaudeRegistration.ConnectorPath)
+            using var process = ChildProcess.Start(new ProcessStartInfo(ClaudeRegistration.ConnectorPath)
             {
                 UseShellExecute = false, CreateNoWindow = true,
                 RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true,
             });
-            if (process is null) return false;
             // It started: with its input closed it ends by itself.
-            process.StandardInput.Close();
-            if (!process.WaitForExit(3000)) KillTree(process);
+            process.StandardInput!.Close();
+            if (!process.WaitForExit(3000)) KillTree(process.Process);
             return false;
         }
         catch (System.ComponentModel.Win32Exception ex)
@@ -629,8 +628,10 @@ internal static class ClaudeCli
         - Messages that reach you later say who sent them: "The user says: …" (the person, typing in your view), "The
           main chat says: …" (the coordinator) or "A teammate, job N …" (another job). All count; the person's word wins
           if they disagree; answer a teammate's question with chat_jobs action=message.
-        - Working on a model another one links (a documentation model in another Revit window): when your changes must
-          show there, save_model at the end of your changes; a job on the linking model then calls reload_links first.
+        - Don't save or synchronize the model yourself: saving a big model holds Revit for a minute or two and every
+          other job waits behind it. Only when your task says another model (open in another Revit window) links this
+          one and must show your changes, call save_model once, at the very end; a job on the linking model then calls
+          reload_links first.
         - If you need the person to decide something the model can't settle, end with one short question: they answer in
           your view.
         - Finish line: your task may end with "Done when": those are the checks that tell you the task is finished. Without
@@ -679,18 +680,17 @@ internal static class ClaudeCli
             info.StandardErrorEncoding = Encoding.UTF8;
             info.WorkingDirectory = Directory.Exists(WorkFolder) ? WorkFolder : Path.GetTempPath();
             info.EnvironmentVariables.Remove("ANTHROPIC_API_KEY");
-            using var process = Process.Start(info);
-            if (process is null) return (-1, "");
-            process.StandardInput.Close();
-            var stdout = process.StandardOutput.ReadToEndAsync();
-            var stderr = process.StandardError.ReadToEndAsync();
+            using var process = ChildProcess.Start(info); // inherits none of Revit's open files (bug 72)
+            process.StandardInput!.Close();
+            var stdout = process.StandardOutput!.ReadToEndAsync();
+            var stderr = process.StandardError!.ReadToEndAsync();
             if (!process.WaitForExit(timeoutMs))
             {
-                KillTree(process);
+                KillTree(process.Process);
                 return (-1, "");
             }
             Task.WaitAll(new Task[] { stdout, stderr }, 2000);
-            return (process.ExitCode, (stdout.IsCompleted ? stdout.Result : "") + "\n" + (stderr.IsCompleted ? stderr.Result : ""));
+            return (process.Process.ExitCode, (stdout.IsCompleted ? stdout.Result : "") + "\n" + (stderr.IsCompleted ? stderr.Result : ""));
         }
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or IOException or AggregateException)
         {
