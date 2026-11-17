@@ -147,14 +147,19 @@ public sealed class SubmissionFormatTool : IRevitTool
                 sheet.KeyPlanFound = true;
                 sheet.KeyPlanBerths.AddRange(Berths(view.Name + " " + (view.get_Parameter(BuiltInParameter.VIEW_DESCRIPTION)?.AsString() ?? "")));
             }
+        // The key plan is drawn in the title block, one yes/no switch per berth: on the sheet's title block or on its type.
         foreach (var block in new FilteredElementCollector(doc, s.Id).OfCategory(BuiltInCategory.OST_TitleBlocks).WhereElementIsNotElementType())
-            foreach (Parameter p in block.Parameters)
+            foreach (var owner in new[] { block, doc.GetElement(block.GetTypeId()) })
             {
-                if (p.StorageType != StorageType.Integer || p.Definition is null || p.Definition.GetDataType() != SpecTypeId.Boolean.YesNo) continue;
-                var berths = Berths(p.Definition.Name).ToList();
-                if (berths.Count == 0) continue;
-                sheet.KeyPlanFound = true;
-                if (p.AsInteger() == 1) sheet.KeyPlanBerths.AddRange(berths);
+                if (owner is null) continue;
+                foreach (Parameter p in owner.Parameters)
+                {
+                    if (p.StorageType != StorageType.Integer || p.Definition is null || p.Definition.GetDataType() != SpecTypeId.Boolean.YesNo) continue;
+                    var berths = SubmissionFormat.SwitchBerths(p.Definition.Name);
+                    if (berths.Count == 0) { sheet.OtherSwitches.Add(p.Definition.Name); continue; }
+                    sheet.KeyPlanFound = sheet.KeyPlanSwitches = true;
+                    if (p.AsInteger() == 1) sheet.KeyPlanBerths.AddRange(berths);
+                }
             }
     }
 
