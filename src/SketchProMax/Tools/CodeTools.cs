@@ -59,7 +59,7 @@ public abstract class RevitCodeToolBase : IRevitTool
     public virtual ToolResult Execute(UIApplication app, ToolArgs args) =>
         Counted(app, RunScript(app, args.String("code"), args.String("description"), ModifiesModel, new Dictionary<string, object?>(), capSeconds: CapSeconds), args);
 
-    /// <summary>The same code written again and again: the third time it worked, it is offered as a tool of its own (CodeRepeats).</summary>
+    /// <summary>The same code written again and again: the second time it worked, it is offered as a tool of its own (CodeRepeats).</summary>
     /// <summary>
     /// Code that worked is also kept with what it did (WorkedCode), so the next chat or job adapts it instead of writing
     /// it again; a call that failed ends with the kept code that did similar work.
