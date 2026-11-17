@@ -668,9 +668,11 @@ internal static class ClaudeCli
           dimensions, text), one check is always to look at it in the view the person works in (capture_view_image of the
           view named in the task, else the active one): a family's plan-only lines, a hidden or unjoined element or a tag
           over another show there and not in the numbers.
-        - End every run with a short report for the main chat, in plain words: what you did (with counts and names), each
-          finish condition and whether it held, anything you couldn't do and why, and what the person should check. A
-          few lines; no tool names, element ids or JSON.
+        - End every run with a short report for the main chat, in plain words: each part of your task as done or not
+          done (with counts and names: "38 of 40 piles tagged" is not done), each
+          finish condition and whether it held, anything you couldn't do and why, and what the person should check. A part you did not read back in the model
+          is not done. A teammate then checks every part in the model; what it finds not done comes back to you to
+          finish. A few lines; no tool names, element ids or JSON.
         """ + (Autopilot.Unattended ? Autopilot.JobRules + Autopilot.JobWords() : "") + Notes();
 
     /// <summary>The memory notes for this chat (global and the open model's), as a block at the end of the prompt.</summary>
