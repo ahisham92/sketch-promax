@@ -2234,12 +2234,14 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         ShowTitle();
         SupersedeBriefs();
         if (AutopilotGoal(text, attachments)) return; // an autopilot's goal: the coordinator plans it first
+        LearnFrom(text); // a correction becomes a lesson for next time, in the background
         if (StartBrief(text, attachments)) return; // a brief card first; the choice on it runs the turn
-        await RunTurn(text, attachments, "");
+        await RunTurn(text, attachments, "", hint: FocusHint(text, attachments));
     }
 
     /// <summary>Sends a message to Claude Code as a new turn (from Send, or from a choice on a brief card).</summary>
-    private async Task RunTurn(string text, List<Attachment> attachments, string brief, PromptBrief? plan = null)
+    /// <param name="hint">What goes to Claude after the text and is never shown (ChatFocus.Hint): how to take a small ask or a correction.</param>
+    private async Task RunTurn(string text, List<Attachment> attachments, string brief, PromptBrief? plan = null, string hint = "")
     {
         if (DeliveryCapture is { } capture)
         {
@@ -2264,7 +2266,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
                 : _conv.AttachedSession.Length == 0 || _conv.AttachedSession == _conv.SessionId ? new AttachedSoFar { Bytes = _conv.AttachedBytes, Pages = _conv.AttachedPages }
                 : new AttachedSoFar();
             // What changed since the last answer, the active view and the selection: a follow-up needn't read the model again to know.
-            var sent = text + Revit.ChatModelWatch.Note(_conv.Key);
+            var sent = text + hint + Revit.ChatModelWatch.Note(_conv.Key);
             turn.Line = await On(Task.Run(() => BuildMessage(sent, attachments, used)));
             (_conv.AttachedBytes, _conv.AttachedPages, _conv.AttachedSession) = (used.Bytes, used.Pages, _conv.SessionId);
         }
