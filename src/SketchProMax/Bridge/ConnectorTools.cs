@@ -16,6 +16,7 @@ internal static class ConnectorTools
     internal sealed record Def(string Name, string? Description, JsonElement InputSchema);
 
     public const string StatusTool = "sketch_promax_status";
+    public const string OpenTool = "open_revit_model";
 
     /// <summary>Listed alone when Revit has never written its catalogue (Sketch ProMax hasn't run in Revit yet).</summary>
     public static readonly Def Status = new(StatusTool, "Sketch ProMax has not run in Revit yet. Call this to get setup help.",
@@ -27,12 +28,24 @@ internal static class ConnectorTools
             "Lists every Revit window connected to Sketch ProMax (Revit version and open models), and which one Claude is working on. Call this when the user mentions a model by name or has several Revit windows open.",
             Schema("""{"type":"object","properties":{}}""")),
         new("use_revit_model",
-            "Chooses which open Revit model the other tools act on, by its name (part of the name is enough). Optionally narrow by Revit version when the same model is open in two versions.",
+            "Chooses which open Revit model the other tools act on, by its name (part of the name is enough). Optionally narrow by Revit version when the same model is open in two versions. " +
+            "With revitVersion alone it chooses that Revit window, also one with no model open yet (then open one with open_revit_model).",
             Schema("""
                 {"type":"object","properties":{
-                  "model":{"type":"string","description":"Model name as shown in Revit's title bar, or part of it"},
-                  "revitVersion":{"type":"string","description":"Optional, e.g. 2024"}},
-                 "required":["model"]}
+                  "model":{"type":"string","description":"Model name as shown in Revit's title bar, or part of it. Left out: the Revit window itself (revitVersion), with whichever model is active in it."},
+                  "revitVersion":{"type":"string","description":"Optional, e.g. 2024"}}}
+                """)),
+        new(OpenTool,
+            "Opens a Revit model from its file path in a connected Revit window and makes it the model the other tools act on. " +
+            "A workshared model (a central or local file) is always opened as a detached copy with its worksets kept, so the " +
+            "central model is never touched; the copy is named '<name>_detached' and is not saved unless the user asks. " +
+            "A model that is already open is switched to. Works in a Revit window with no model open. Opening a large model " +
+            "takes minutes: when the call says it is still opening, call list_revit_models after a while to see it.",
+            Schema("""
+                {"type":"object","properties":{
+                  "path":{"type":"string","description":"Full path of the .rvt file on the user's computer"},
+                  "revitVersion":{"type":"string","description":"The Revit window to open it in, e.g. 2024, when several are connected. Left out: the window being worked in."}},
+                 "required":["path"]}
                 """)),
     ];
 

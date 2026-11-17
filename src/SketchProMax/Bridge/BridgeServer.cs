@@ -22,6 +22,7 @@ namespace SketchProMax.Bridge;
 /// Protocol: one JSON request line per connection, one JSON response line back.
 ///   {"method":"ping"}                                   -> {"ok":true,"pid":..,"revitVersion":"2025","documents":[..]}
 ///   {"method":"activate_document","title":"..."}       -> {"ok":true} or {"text":"...","isError":true}
+///   {"method":"open_document","path":"..."}            -> {"ok":true,"title":"...","text":"..."} (no title: still opening) or {"text":"...","isError":true}
 ///   {"method":"call_tool","name":"...","arguments":{}}  -> {"text":"...","isError":false,"pngBase64":null}
 ///   (call_tool may carry "origin":"chat" when the in-Revit chat started the connector; see Approvals and ApprovalPolicy,
 ///   and "job":"<key>" when one of the chat's parallel jobs did; see JobTurns and Chat.JobBoard.)
@@ -291,6 +292,36 @@ public sealed class BridgeServer
                         return error is null ? JsonSerializer.Serialize(new { ok = true }) : Error(error);
                     }
 
+                case "open_document":
+                    if (Jobs.Running is { } inTheWay) return Error(Jobs.Busy(inTheWay).Text);
+                    var file = root.GetProperty("path").GetString() ?? "";
+                    if (!System.IO.File.Exists(file)) return Error($"There is no file at '{file}'. Check the path (the user's Documents and Downloads folders are common places).");
+                    // Opening a document is only allowed from the external event, like switching. Not being picked up means
+                    // nothing happened; once Revit has started, the opening runs to the end however long it takes.
+                    using (var opening = CancellationTokenSource.CreateLinkedTokenSource(ct))
+                    {
+                        var begun = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                        var open = _dispatcher.InvokeFromEventAsync(app =>
+                        {
+                            begun.TrySetResult(true);
+                            return ModelOpener.Open(app, file);
+                        }, CancellationToken.None);
+                        var taken = Task.WhenAny(open, begun.Task);
+                        var held = await _dispatcher.WaitForPickupAsync(taken, "Opening the model", ActivateWaitMs, DialogWaitMs, ct).ConfigureAwait(false);
+                        if (held is not null && !begun.Task.IsCompleted && !open.IsCompleted)
+                            return Error(held + " The model will open once Revit is free; call list_revit_models to see it.");
+                        if (await Task.WhenAny(open, Task.Delay(OpenWaitMs, ct)).ConfigureAwait(false) != open)
+                            return JsonSerializer.Serialize(new
+                            {
+                                ok = true,
+                                text = $"Revit is opening '{System.IO.Path.GetFileName(file)}', which takes a while for a large model. It carries on by itself. " +
+                                       "Call list_revit_models in a minute or two: when the model is listed, choose it with use_revit_model. " +
+                                       "If Revit shows as waiting on a dialog there, ask the user to answer it.",
+                            });
+                        var opened = await open.ConfigureAwait(false);
+                        return opened.Error is not null ? Error(opened.Error) : JsonSerializer.Serialize(new { ok = true, title = opened.Title, text = opened.Text });
+                    }
+
                 case "call_tool":
                     var name = root.GetProperty("name").GetString() ?? "";
                     var args = root.TryGetProperty("arguments", out var a) && a.ValueKind == JsonValueKind.Object
@@ -334,6 +365,9 @@ public sealed class BridgeServer
 
     /// <summary>How long switching models may wait for Revit (the connector waits 20 s for the answer).</summary>
     private const int ActivateWaitMs = 12000;
+
+    /// <summary>How long an open_revit_model call waits for the model before answering that it is still opening.</summary>
+    private const int OpenWaitMs = 50000;
 
     /// <summary>A modal dialog open this long ends the wait early: Revit runs no add-in work behind one.</summary>
     private const int DialogWaitMs = 4000;
@@ -448,7 +482,7 @@ public sealed class BridgeServer
             {
                 // Time saved and AI time: from here (the approval wait included) to the end of the run.
                 TimeLog.BeginTool(app, tool, fromChat);
-                if (app.ActiveUIDocument is null) return Ended(ToolResult.Error("No model is open in Revit. Ask the user to open one."));
+                if (app.ActiveUIDocument is null) return Ended(ToolResult.Error("No model is open in this Revit window. Open one with open_revit_model (its file path), or ask the user to open one."));
                 // A batch of this call may stop at an item boundary to synchronize (auto sync); nothing else may.
                 Revit.AutoSync.Seen(app.ActiveUIDocument.Document);
                 // An autopilot (this window's, or another window's reaching this one) backs up each model before its first change.

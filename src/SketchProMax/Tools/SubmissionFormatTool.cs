@@ -24,8 +24,9 @@ public sealed class SubmissionFormatTool : IRevitTool
         "against it (berths: which ones; none = every berth with sheets) and lists every sheet missing, wrong name or view " +
         "title, scale that is not standard or differs between a berth's parts, view running off the sheet, missing " +
         "schedule, empty sheet, empty or overlapping tag, pile inside the matchlines with no tag, tag on a pile beyond the matchline, matchline past the crop, key plan highlighting another berth, " +
-        "different issue date, drawing cited that is not a sheet, and typed-over dimension, with the fix: call it BEFORE " +
-        "saying a submission is done; the work is done when it lists nothing. Scales are usual ones, not fixed: a view too " +
+        "issue date written another way, drawing cited that is not a sheet, and typed-over dimension, with the fix: call it BEFORE " +
+        "saying a submission is done; the work is done when it lists nothing. In a big model one call reads the tags of " +
+        "only as many views as fit in about a minute: while its note says NOT COMPLETE, call check again. Scales are usual ones, not fixed: a view too " +
         "long for the sheet takes the next standard scale. 'look' in the result is what to see by eye. Changes nothing.";
     public string PropertiesJson => """
     {
@@ -63,6 +64,7 @@ public sealed class SubmissionFormatTool : IRevitTool
                         note = "No sheet here is numbered <prefix>-<berth>-<discipline>-<series>, so there is nothing to compare. Call action=show for the list to build.",
                     });
                 var issues = SubmissionFormat.Check(sheets, berths);
+                var pending = sheets.Sum(s => s.Views.Count(v => v.NotJudged));
                 var matrix = SubmissionFormat.Matrix(issues);
                 var checkedBerths = (berths.Count > 0 ? berths : sheets.Select(s => SubmissionFormat.Parse(s.Number)?.Berth ?? 0).Where(b => b > 0).Distinct().ToList()).OrderBy(b => b).ToList();
                 return ToolResult.Ok(new
@@ -70,10 +72,13 @@ public sealed class SubmissionFormatTool : IRevitTool
                     berths = checkedBerths,
                     sheetsChecked = sheets.Count(s => SubmissionFormat.Parse(s.Number) is { } at && (at.Berth == 0 || checkedBerths.Contains(at.Berth))),
                     open = issues.Count,
+                    viewsNotReadYet = pending,
                     issues = issues.Select(i => new { sheet = i.Sheet, check = i.Check, problem = i.Problem, fix = i.Fix }).ToList(),
                     sheetsWithOpenItems = matrix.Select(m => new { sheet = m.Key, checks = m.Value }).ToList(),
                     look = SubmissionFormat.Look(sheets, checkedBerths),
-                    note = issues.Count == 0
+                    note = pending > 0
+                        ? $"NOT COMPLETE: the tags and matchlines of {pending} view(s) are not read yet (Revit takes long to draw a full plan the first time). Call check again with the same berths until this note goes; each call carries on from where the last stopped."
+                        : issues.Count == 0
                         ? "Every line of the format that can be read from the model holds. Go through 'look', and see each sheet once (capture_view_image) before saying it is done."
                         : "The submission is not done while this lists anything: fix each line, then check again.",
                 });
@@ -88,11 +93,17 @@ public sealed class SubmissionFormatTool : IRevitTool
     /// with their views (title on sheet, scale), schedules, issue date, the drawing numbers their notes cite and their
     /// typed-over dimensions.
     /// </summary>
-    internal static List<SubmissionFormat.Sheet> Read(Document doc, IReadOnlyCollection<int> berths)
+    /// <remarks>
+    /// Tags and matchlines need Revit to draw the view, which takes up to a minute the first time for a full plan of a
+    /// big model (measured on a berths model, 2026-11-17: 13 minutes for two berths). So they are read while
+    /// <paramref name="budgetMs"/> lasts; the views after that are marked not judged, and the next call carries on
+    /// quickly through the ones Revit has drawn already.
+    /// </remarks>
+    internal static List<SubmissionFormat.Sheet> Read(Document doc, IReadOnlyCollection<int> berths, int budgetMs = 60000)
     {
+        var clock = System.Diagnostics.Stopwatch.StartNew();
         var all = new FilteredElementCollector(doc).OfClass(typeof(ViewSheet)).Cast<ViewSheet>().Where(s => !s.IsPlaceholder).ToList();
-        var schedules = new FilteredElementCollector(doc).OfClass(typeof(ScheduleSheetInstance)).Cast<ScheduleSheetInstance>()
-            .Where(i => !i.IsTitleblockRevisionSchedule).ToLookup(i => i.OwnerViewId.Value);
+        var index = new Index(doc);
         var result = new List<SubmissionFormat.Sheet>();
         foreach (var s in all)
         {
@@ -100,11 +111,13 @@ public sealed class SubmissionFormatTool : IRevitTool
             result.Add(sheet);
             if (SubmissionFormat.Parse(sheet.Number) is not { } at || (at.Berth > 0 && berths.Count > 0 && !berths.Contains(at.Berth))) continue;
             sheet.IssueDate = s.get_Parameter(BuiltInParameter.SHEET_ISSUE_DATE)?.AsString() ?? "";
-            sheet.Schedules = schedules[s.Id.Value].Select(i => doc.GetElement(i.ScheduleId)?.Name ?? "").Where(n => n.Length > 0).ToList();
-            Notes(doc, s.Id, sheet);
-            KeyPlan(doc, s, sheet);
+            sheet.Schedules = index.Schedules[s.Id.Value].Select(i => doc.GetElement(i.ScheduleId)?.Name ?? "").Where(n => n.Length > 0).ToList();
+            Notes(index.Notes[s.Id.Value], sheet);
+            KeyPlan(doc, index, s, sheet);
+            // The general sheets (berth 00) are read for their notes and dimensions only: the format has no rule for their views.
+            var kind = at.Berth > 0 ? SubmissionFormat.KindOf(at.Series, sheet.Name)?.Key : null;
             var frame = s.Outline;
-            foreach (var port in new FilteredElementCollector(doc, s.Id).OfClass(typeof(Viewport)).Cast<Viewport>())
+            foreach (var port in index.Ports[s.Id.Value])
             {
                 if (doc.GetElement(port.ViewId) is not View view || view.ViewType == ViewType.Legend) continue;
                 var title = view.get_Parameter(BuiltInParameter.VIEW_DESCRIPTION)?.AsString();
@@ -120,14 +133,39 @@ public sealed class SubmissionFormatTool : IRevitTool
                                                          || box.MaximumPoint.X > frame.Max.U + slack || box.MaximumPoint.Y > frame.Max.V + slack);
                 }
                 catch (Autodesk.Revit.Exceptions.ApplicationException) { /* a viewport with no box: not judged */ }
-                Tags(doc, view, placed);
-                placed.MatchlinesPastCrop = MatchlinesPastCrop(doc, view);
-                Notes(doc, view.Id, sheet);
-                sheet.TypedDimensions += TypedDimensions(doc, view.Id);
+                // A dependent view (one part of a plan) owns no annotation: its tags, notes and dimensions belong to its
+                // primary view, and the ones inside its crop are its own.
+                var owner = view.GetPrimaryViewId() is { } primary && primary != ElementId.InvalidElementId ? primary : view.Id;
+                var here = owner == view.Id ? _ => true : InCrop(view);
+                Notes(index.Notes[owner.Value].Where(x => here(x)), sheet);
+                sheet.TypedDimensions += TypedDimensions(index.Dimensions[owner.Value].Where(x => here(x)));
+                if (at.Berth == 0) continue;
+                if (clock.ElapsedMilliseconds > budgetMs) { placed.NotJudged = true; continue; }
+                // Asking a view what it shows is slow in a big model: once per plan for its matchlines, and once per tagged
+                // category on a piles plan. Tags, notes and dimensions come from the model's lists by their view.
+                var plan = view.ViewType is ViewType.FloorPlan or ViewType.EngineeringPlan or ViewType.CeilingPlan or ViewType.AreaPlan;
+                var shown = plan && index.Matchlines.Count > 0
+                    ? new FilteredElementCollector(doc, view.Id).OfCategory(BuiltInCategory.OST_Matchline).WhereElementIsNotElementType().ToElementIds().Select(i => i.Value).ToHashSet()
+                    : [];
+                Tags(doc, index, index.Tags[owner.Value].Where(x => here(x)), view, placed, kind == "piles", shown);
+                if (plan) placed.MatchlinesPastCrop = MatchlinesPastCrop(doc, index, view, shown);
             }
             sheet.Cited = sheet.Cited.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         }
         return result;
+    }
+
+    /// <summary>The model's annotations by the view that owns them, read once: asking each view for them is far slower.</summary>
+    private sealed class Index(Document doc)
+    {
+        public readonly ILookup<long, ScheduleSheetInstance> Schedules = new FilteredElementCollector(doc).OfClass(typeof(ScheduleSheetInstance)).Cast<ScheduleSheetInstance>()
+            .Where(i => !i.IsTitleblockRevisionSchedule).ToLookup(i => i.OwnerViewId.Value);
+        public readonly ILookup<long, Viewport> Ports = new FilteredElementCollector(doc).OfClass(typeof(Viewport)).Cast<Viewport>().ToLookup(v => v.SheetId.Value);
+        public readonly ILookup<long, Element> Blocks = new FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_TitleBlocks).WhereElementIsNotElementType().ToLookup(e => e.OwnerViewId.Value);
+        public readonly ILookup<long, IndependentTag> Tags = new FilteredElementCollector(doc).OfClass(typeof(IndependentTag)).Cast<IndependentTag>().ToLookup(t => t.OwnerViewId.Value);
+        public readonly ILookup<long, TextNote> Notes = new FilteredElementCollector(doc).OfClass(typeof(TextNote)).Cast<TextNote>().ToLookup(t => t.OwnerViewId.Value);
+        public readonly ILookup<long, Dimension> Dimensions = new FilteredElementCollector(doc).OfClass(typeof(Dimension)).Cast<Dimension>().ToLookup(t => t.OwnerViewId.Value);
+        public readonly List<Element> Matchlines = new FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_Matchline).WhereElementIsNotElementType().ToList();
     }
 
     private static bool IsKeyPlan(View view) =>
@@ -137,18 +175,16 @@ public sealed class SubmissionFormatTool : IRevitTool
     /// The key plan, as far as the model describes it: a view on the sheet named KEY PLAN (its name says the berth), or
     /// yes/no parameters of the title block named for a berth or the key plan (the ones switched on).
     /// </summary>
-    private static void KeyPlan(Document doc, ViewSheet s, SubmissionFormat.Sheet sheet)
+    private static void KeyPlan(Document doc, Index index, ViewSheet s, SubmissionFormat.Sheet sheet)
     {
-        static IEnumerable<int> Berths(string text) =>
-            Regex.Matches(text ?? "", @"BERTH\s*0?(\d{1,2})", RegexOptions.IgnoreCase).Cast<Match>().Select(m => int.Parse(m.Groups[1].Value));
-        foreach (var id in s.GetAllPlacedViews())
-            if (doc.GetElement(id) is View view && IsKeyPlan(view))
+        foreach (var port in index.Ports[s.Id.Value])
+            if (doc.GetElement(port.ViewId) is View view && IsKeyPlan(view))
             {
                 sheet.KeyPlanFound = true;
-                sheet.KeyPlanBerths.AddRange(Berths(view.Name + " " + (view.get_Parameter(BuiltInParameter.VIEW_DESCRIPTION)?.AsString() ?? "")));
+                sheet.KeyPlanOn.AddRange(SubmissionFormat.SwitchBerths(view.Name + " " + (view.get_Parameter(BuiltInParameter.VIEW_DESCRIPTION)?.AsString() ?? "")).Select(b => (b, 0)));
             }
         // The key plan is drawn in the title block, one yes/no switch per berth: on the sheet's title block or on its type.
-        foreach (var block in new FilteredElementCollector(doc, s.Id).OfCategory(BuiltInCategory.OST_TitleBlocks).WhereElementIsNotElementType())
+        foreach (var block in index.Blocks[s.Id.Value])
             foreach (var owner in new[] { block, doc.GetElement(block.GetTypeId()) })
             {
                 if (owner is null) continue;
@@ -158,27 +194,30 @@ public sealed class SubmissionFormatTool : IRevitTool
                     var berths = SubmissionFormat.SwitchBerths(p.Definition.Name);
                     if (berths.Count == 0) { sheet.OtherSwitches.Add(p.Definition.Name); continue; }
                     sheet.KeyPlanFound = sheet.KeyPlanSwitches = true;
-                    if (p.AsInteger() == 1) sheet.KeyPlanBerths.AddRange(berths);
+                    var part = SubmissionFormat.SwitchPart(p.Definition.Name);
+                    if (part > 0) sheet.KeyPlanParts = true;
+                    if (p.AsInteger() == 1) sheet.KeyPlanOn.AddRange(berths.Select(b => (b, part)));
                 }
             }
     }
 
     /// <summary>The view's tags: empty ones, ones lying on another tag, and how many elements of the tagged categories have none.</summary>
-    private static void Tags(Document doc, View view, SubmissionFormat.PlacedView placed)
+    private static void Tags(Document doc, Index index, IEnumerable<IndependentTag> tags, View view, SubmissionFormat.PlacedView placed, bool piles, HashSet<long> shownMatchlines)
     {
         XYZ right = view.RightDirection, up = view.UpDirection;
         var boxes = new List<(double U0, double V0, double U1, double V1)>();
         var tagged = new Dictionary<long, HashSet<long>>();
-        var inside = InsideMatchlines(doc, view);
-        foreach (var tag in new FilteredElementCollector(doc, view.Id).OfClass(typeof(IndependentTag)).Cast<IndependentTag>())
+        Func<Element, bool?> inside = piles ? InsideMatchlines(doc, index, view, shownMatchlines) : _ => true;
+        foreach (var tag in tags)
         {
+            if (tag.IsHidden(view)) continue;
             try
             {
                 var text = (tag.TagText ?? "").Trim();
                 if (text.Length == 0 || text == "?") placed.EmptyTags++;
                 foreach (var link in tag.GetTaggedElementIds())
                 {
-                    if (link.LinkInstanceId != ElementId.InvalidElementId || doc.GetElement(link.HostElementId) is not { Category: { } cat } host) continue;
+                    if (!piles || link.LinkInstanceId != ElementId.InvalidElementId || doc.GetElement(link.HostElementId) is not { Category: { } cat } host) continue;
                     if (!tagged.TryGetValue(cat.Id.Value, out var set)) tagged[cat.Id.Value] = set = [];
                     if (set.Add(host.Id.Value) && inside(host) == false) placed.TaggedOutside++;
                 }
@@ -211,7 +250,7 @@ public sealed class SubmissionFormatTool : IRevitTool
     /// crop (the part the view is for). False beyond one; null on one (within about 100 mm). All true when the view has
     /// no matchline or no crop. Matchlines hidden in the view (redrawn by trim_matchlines) count too.
     /// </summary>
-    private static Func<Element, bool?> InsideMatchlines(Document doc, View view)
+    private static Func<Element, bool?> InsideMatchlines(Document doc, Index index, View view, HashSet<long> shownMatchlines)
     {
         var lines = new List<(double U, double V, double Du, double Dv, double Side)>();
         try
@@ -221,11 +260,11 @@ public sealed class SubmissionFormatTool : IRevitTool
                 XYZ right = view.RightDirection, up = view.UpDirection;
                 var middle = crop.Transform.OfPoint((crop.Min + crop.Max) / 2);
                 double mu = middle.DotProduct(right), mv = middle.DotProduct(up);
-                foreach (var ml in new FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_Matchline).WhereElementIsNotElementType())
+                foreach (var ml in index.Matchlines)
                 {
                     if (ml.OwnerViewId != ElementId.InvalidElementId && ml.OwnerViewId != view.Id) continue;
-                    var shown = !ml.IsHidden(view);
-                    if (shown && !new FilteredElementCollector(doc, view.Id).OfCategory(BuiltInCategory.OST_Matchline).WhereElementIsNotElementType().Any(e => e.Id == ml.Id)) continue;
+                    // The ones the view shows, and the ones hidden in it by hand (trim_matchlines hides and redraws them).
+                    if (!shownMatchlines.Contains(ml.Id.Value) && !ml.IsHidden(view)) continue;
                     // The matchline's longest run is the cut; short jogs are not.
                     if (TrimMatchlinesTool.Curves(doc, ml, view).OrderByDescending(c => c.Length).FirstOrDefault() is not { } run) continue;
                     XYZ a = run.GetEndPoint(0), b = run.GetEndPoint(1);
@@ -260,14 +299,14 @@ public sealed class SubmissionFormatTool : IRevitTool
     }
 
     /// <summary>The matchlines the view shows that run past its crop (ones hidden and redrawn by trim_matchlines are not shown).</summary>
-    private static int MatchlinesPastCrop(Document doc, View view)
+    private static int MatchlinesPastCrop(Document doc, Index index, View view, HashSet<long> shownMatchlines)
     {
-        if (view.ViewType is not (ViewType.FloorPlan or ViewType.EngineeringPlan or ViewType.CeilingPlan or ViewType.AreaPlan)) return 0;
         var count = 0;
         try
         {
             if (CropClip.For(view) is not { } crop) return 0;
-            foreach (var ml in new FilteredElementCollector(doc, view.Id).OfCategory(BuiltInCategory.OST_Matchline).WhereElementIsNotElementType())
+            if (shownMatchlines.Count == 0) return 0;
+            foreach (var ml in index.Matchlines.Where(m => shownMatchlines.Contains(m.Id.Value)))
             {
                 var curves = TrimMatchlinesTool.Curves(doc, ml, view);
                 var total = curves.Sum(c => c.Length);
@@ -279,17 +318,50 @@ public sealed class SubmissionFormatTool : IRevitTool
         return count;
     }
 
-    private static void Notes(Document doc, ElementId view, SubmissionFormat.Sheet sheet)
+    /// <summary>
+    /// Says whether an annotation of a primary view lies in this dependent view: inside its crop (by the tag's head, the
+    /// note's origin, the dimension's middle). Everything when the view has no crop.
+    /// </summary>
+    private static Func<Element, bool> InCrop(View view)
     {
-        foreach (var note in new FilteredElementCollector(doc, view).OfClass(typeof(TextNote)).Cast<TextNote>())
+        try
+        {
+            if (!view.CropBoxActive || view.CropBox is not { } crop) return _ => true;
+            var back = crop.Transform.Inverse;
+            return e =>
+            {
+                try
+                {
+                    // Never the element's box in the view: that makes Revit draw the view, which is slow.
+                    XYZ? at = e switch
+                    {
+                        IndependentTag t => t.TagHeadPosition,
+                        TextNote n => n.Coord,
+                        Dimension { NumberOfSegments: > 1 } d => d.Segments.get_Item(d.NumberOfSegments / 2).Origin,
+                        Dimension d => d.Origin,
+                        _ => null,
+                    };
+                    if (at is null) return false;
+                    var p = back.OfPoint(at);
+                    return p.X >= crop.Min.X && p.X <= crop.Max.X && p.Y >= crop.Min.Y && p.Y <= crop.Max.Y;
+                }
+                catch (Autodesk.Revit.Exceptions.ApplicationException) { return false; }
+            };
+        }
+        catch (Autodesk.Revit.Exceptions.ApplicationException) { return _ => true; }
+    }
+
+    private static void Notes(IEnumerable<TextNote> notes, SubmissionFormat.Sheet sheet)
+    {
+        foreach (var note in notes)
             sheet.Cited.AddRange(SubmissionFormat.CitedIn(note.Text ?? ""));
     }
 
     /// <summary>The dimensions of a view whose typed number differs from what the model measures ('EQ', 'TYP' are labels, not numbers).</summary>
-    private static int TypedDimensions(Document doc, ElementId view)
+    private static int TypedDimensions(IEnumerable<Dimension> dimensions)
     {
         var count = 0;
-        foreach (var d in new FilteredElementCollector(doc, view).OfClass(typeof(Dimension)).Cast<Dimension>())
+        foreach (var d in dimensions)
         {
             IEnumerable<(string? over, string? shown)> Parts() => d.NumberOfSegments > 1
                 ? d.Segments.Cast<DimensionSegment>().Select(s => (s.ValueOverride, s.ValueString))

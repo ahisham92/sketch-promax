@@ -84,7 +84,7 @@ internal static class ChatMcpTests
         var list = Answer(endpoint, """{"jsonrpc":"2.0","id":3,"method":"tools/list"}""").GetProperty("result").GetProperty("tools");
         var names = list.EnumerateArray().Select(t => t.GetProperty("name").GetString()).ToList();
         check("chat mcp: tools/list has the connector's tools, each with its schema",
-            names.SequenceEqual(["list_revit_models", "use_revit_model", "wait_for_job", "cancel_job", "place_rooms", "read_pdf_part"])
+            names.SequenceEqual(["list_revit_models", "use_revit_model", "open_revit_model", "wait_for_job", "cancel_job", "place_rooms", "read_pdf_part"])
             && list.EnumerateArray().All(t => t.GetProperty("inputSchema").GetProperty("type").GetString() == "object"), string.Join(",", names));
         var session = new McpSession("s", "job1", "sonnet");
         var call = Answer(endpoint, """{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"capture","arguments":{"x":5}}}""", session);
@@ -120,8 +120,22 @@ internal static class ChatMcpTests
             File.WriteAllText(Path.Combine(folder, "learned", "a.json"), """{"name":"tag_walls","description":"Taken.","inputSchema":{"type":"object"}}""");
             var tools = ConnectorTools.Compose(ConnectorTools.ReadCatalogue(Path.Combine(folder, "tools.json"))!, Path.Combine(folder, "learned"));
             check("connector tools: connection and job tools first (Revit's own job tool kept), learned tools last, no name twice",
-                tools.Select(t => t.Name).SequenceEqual(["list_revit_models", "use_revit_model", "wait_for_job", "cancel_job", "tag_walls", "read_pdf_part", "my_tool"])
-                && tools[2].Description == "Revit's own" && tools.Count(t => t.Name == "read_pdf_part") == 1, string.Join(",", tools.Select(t => t.Name)));
+                tools.Select(t => t.Name).SequenceEqual(["list_revit_models", "use_revit_model", "open_revit_model", "wait_for_job", "cancel_job", "tag_walls", "read_pdf_part", "my_tool"])
+                && tools[3].Description == "Revit's own" && tools.Count(t => t.Name == "read_pdf_part") == 1, string.Join(",", tools.Select(t => t.Name)));
+            // Which Revit window a call means: one with no model open can be chosen and can open a model.
+            (string, int)[] two = [("2024", 10), ("2025", 20)];
+            check("revit windows: the version asked for, the only window, else the one being worked in",
+                RevitTargets.Window(two, "2024", null).Index == 0 && RevitTargets.Window(two, " 2025 ", 10).Index == 1
+                && RevitTargets.Window([("2024", 10)], null, null).Index == 0 && RevitTargets.Window(two, null, 20).Index == 1, "");
+            check("revit windows: several and none said, a version that isn't connected, or no window, says why",
+                RevitTargets.Window(two, null, null) is { Index: -1 } several && several.Why.Contains("revitVersion")
+                && RevitTargets.Window(two, "2026", 10) is { Index: -1 } none && none.Why.Contains("Revit 2026")
+                && RevitTargets.Window([("2024", 10), ("2024", 11)], "2024", null).Index == -1 && RevitTargets.Window([("2024", 10), ("2024", 11)], "2024", 11).Index == 1
+                && RevitTargets.Window([], "2024", null).Index == -1, "");
+            var open = ConnectorTools.ConnectionTools.Single(t => t.Name == ConnectorTools.OpenTool);
+            check("revit windows: use_revit_model needs no model name; open_revit_model needs a path and says a workshared model opens detached",
+                !ConnectorTools.ConnectionTools.Single(t => t.Name == "use_revit_model").InputSchema.TryGetProperty("required", out _)
+                && open.InputSchema.GetProperty("required")[0].GetString() == "path" && open.Description!.Contains("detached copy"), "");
         }
         finally { Directory.Delete(folder, true); }
     }
@@ -186,7 +200,7 @@ internal static class ChatMcpTests
         var listedEarly = server.ToolsListedSince("job7", beforeList);
         var list = await http.SendAsync(Post("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""", session: session));
         var listJson = JsonDocument.Parse(await list.Content.ReadAsStringAsync()).RootElement;
-        check("chat mcp server: tools/list over HTTP", listJson.GetProperty("result").GetProperty("tools").GetArrayLength() == 6, listJson.ToString());
+        check("chat mcp server: tools/list over HTTP", listJson.GetProperty("result").GetProperty("tools").GetArrayLength() == 7, listJson.ToString());
         // Bug log row 40: a new chat process waits for its tool list before its first message (ChatEngine.WaitForTools).
         check("chat mcp server: a tool list sent is remembered for that job only, from that moment",
             !listedEarly && server.ToolsListedSince("job7", beforeList) && !server.ToolsListedSince(null, beforeList)

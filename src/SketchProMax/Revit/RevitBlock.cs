@@ -65,6 +65,7 @@ internal static class RevitBlock
             or "run_revit_query_code" or "check_model" => "reading your model",
         "capture_view_image" => "taking a picture of the view",
         "list_revit_models" or "use_revit_model" => "finding the open models",
+        "open_revit_model" => "opening the model",
         "export_pdf" or "export_files" => "exporting",
         "run_revit_code" => "running the code",
         _ => changes ? "the change you asked for" : "reading your model",
