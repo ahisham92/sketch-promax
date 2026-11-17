@@ -543,7 +543,7 @@ internal sealed partial class ChatPane
             In = end.InputTokens, Out = end.OutputTokens, Usd = CrewStats.Rise(ref run.CostSeen, end.CostUsd), Ok = !end.IsError,
         });
         run.RunStart = now;
-        Tools.ActivityLog.Note("answer_time", run.Timing.Line($"Job {run.Job.Number}", now, end.ApiMs));
+        Tools.ActivityLog.Note("answer_time", run.Timing.Line($"Job {run.Job.Number}", now, run.Engine.ThinkingMs(end.ApiMs)));
         run.Timing.Restart(now);
         var message = end.Text.Trim().Length > 0 ? end.Text.Trim() : string.Join(" ", end.Errors);
         if (end.IsError && run.Resumed && !run.Retried && message.IndexOf("No conversation found", StringComparison.OrdinalIgnoreCase) >= 0)

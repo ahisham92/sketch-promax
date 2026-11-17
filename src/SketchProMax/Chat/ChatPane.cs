@@ -2709,7 +2709,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         CountTurn(turn, end);
         RenderDirty();
         if (turn is null) return;
-        if (!turn.Shrinking) Tools.ActivityLog.Note("answer_time", (turn.Timing ?? new AnswerTiming(turn.Started)).Line(IsCoordinator ? "Coordinator" : "Chat", DateTime.UtcNow, end.ApiMs));
+        if (!turn.Shrinking) Tools.ActivityLog.Note("answer_time", (turn.Timing ?? new AnswerTiming(turn.Started)).Line(IsCoordinator ? "Coordinator" : "Chat", DateTime.UtcNow, _engine?.ThinkingMs(end.ApiMs) ?? end.ApiMs));
         if (ShrinkEnded(turn, end)) return;
         var message = end.Text.Trim().Length > 0 ? end.Text.Trim() : string.Join(" ", end.Errors);
         if (end.IsError && !turn.Stopping && !turn.Retried && _engine?.ResumedFrom is not null &&

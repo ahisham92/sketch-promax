@@ -17,7 +17,7 @@ namespace SketchProMax.Bugs;
 /// </summary>
 internal static class BugReport
 {
-    private const int MaxActivity = 50, ScreenshotWidth = 1600;
+    private const int MaxActivity = 50, ScreenshotWidth = 1600, MaxDescription = 8000;
 
     /// <summary>A screenshot taken before any dialog opens, or null with the reason.</summary>
     public static (byte[]? Jpeg, string? Error) Screenshot()
@@ -31,7 +31,8 @@ internal static class BugReport
     {
         description = string.Join(" ", (description ?? "").Replace("\r", " ").Replace("\n", " ").Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries));
         if (description.Length == 0) throw new ArgumentException("Say in one line what went wrong.");
-        if (description.Length > 500) description = description.Substring(0, 500) + "…";
+        // Kept whole (bug 72: a report cut at 500 characters lost the cause); the Bug log list shortens it itself.
+        if (description.Length > MaxDescription) description = description.Substring(0, MaxDescription) + "…";
 
         var now = DateTime.Now;
         Directory.CreateDirectory(BugLog.ReportsFolder);

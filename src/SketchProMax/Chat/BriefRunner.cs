@@ -18,28 +18,28 @@ internal static class BriefRunner
     public static async Task<(string Text, string Error)> Run(ClaudeCli.Install install, string instructions, string message, bool readTools,
         string? model, int timeoutMs, CancellationToken cancel)
     {
-        Process? process = null;
+        ChildProcess? process = null;
         try
         {
             var info = ClaudeCli.OneShotStart(install, instructions, readTools, model);
-            process = Process.Start(info) ?? throw new InvalidOperationException("The chat didn't start.");
+            process = ChildProcess.Start(info); // inherits none of Revit's open files (bug 72)
             // Stop and closing the pane cancel on Revit's UI thread, and the kill can wait seconds (taskkill): not there.
             var started = process;
-            using var stop = cancel.Register(() => Task.Run(() => ClaudeCli.KillTree(started)));
-            var stdout = process.StandardOutput.ReadToEndAsync();
-            var stderr = process.StandardError.ReadToEndAsync();
+            using var stop = cancel.Register(() => Task.Run(() => ClaudeCli.KillTree(started.Process)));
+            var stdout = process.StandardOutput!.ReadToEndAsync();
+            var stderr = process.StandardError!.ReadToEndAsync();
             // UTF-8 without a byte order mark on every framework (on .NET Framework StandardInput uses the console code page).
             // Fed in the background, inside the timeout: a Claude Code that never reads its input can't hold the brief.
             var feed = Task.Run(async () =>
             {
-                using var input = new StreamWriter(started.StandardInput.BaseStream, new UTF8Encoding(false));
+                using var input = started.StandardInput!;
                 await input.WriteAsync(message).ConfigureAwait(false);
             });
             _ = feed.ContinueWith(t => _ = t.Exception, TaskContinuationOptions.OnlyOnFaulted);
             var done = await Task.WhenAny(stdout, Task.Delay(timeoutMs, cancel)).ConfigureAwait(false);
             if (done != stdout)
             {
-                ClaudeCli.KillTree(process);
+                ClaudeCli.KillTree(process.Process);
                 return ("", cancel.IsCancellationRequested ? "Stopped." : "The answer took too long.");
             }
             var output = await stdout.ConfigureAwait(false);
@@ -61,7 +61,7 @@ internal static class BriefRunner
         {
             if (process is not null)
             {
-                try { if (!process.HasExited) ClaudeCli.KillTree(process); }
+                try { if (!process.HasExited) ClaudeCli.KillTree(process.Process); }
                 catch (InvalidOperationException) { }
                 process.Dispose();
             }

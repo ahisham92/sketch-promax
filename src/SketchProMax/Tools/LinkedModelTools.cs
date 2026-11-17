@@ -17,7 +17,8 @@ public sealed class SaveModelTool : IRevitTool
         "check_only=true says what it would do. Use it when a change must reach the models that link this one, not after every step.";
     public string PropertiesJson => """
     {
-      "check_only": {"type": "boolean", "description": "true: only say whether it would save or synchronize, and why not when it can't."}
+      "check_only": {"type": "boolean", "description": "true: only say whether it would save or synchronize, and why not when it can't."},
+      "force": {"type": "boolean", "description": "true: save even when no open model links this one (only when the user asked for a save)."}
     }
     """;
     public string[] Required => [];
@@ -35,6 +36,16 @@ public sealed class SaveModelTool : IRevitTool
         var does = shared ? "synchronize with central" : "save";
         if (args.OptBool("check_only")) return ToolResult.Ok(new { model = doc.Title, would = does, can = problem is null, why_not = problem });
         if (problem is not null) return ToolResult.Error(problem);
+        // Saving a big model holds Revit for a minute or two, and jobs called this at the end of every run although no model
+        // linked theirs (22 saves of ~100 s in two days, the other jobs' calls waiting behind each): only when a model open in
+        // this Revit links it, or another Revit window is open (its links can't be seen from here).
+        if (!args.OptBool("force") && !MayBeLinked(app, doc))
+            return ToolResult.Ok(new
+            {
+                model = doc.Title, saved = false,
+                note = "Not needed: no other open model links this one, so nothing would reload it. Not saved (that takes a minute or two); " +
+                       "saving and synchronizing stay with the user. Pass force=true only if the user asked for a save.",
+            });
         if (shared)
         {
             if (AutoSync.SyncNow(doc) is { } failed) return ToolResult.Error($"\"{doc.Title}\" couldn't be synchronized with central: {failed}");
@@ -43,6 +54,41 @@ public sealed class SaveModelTool : IRevitTool
         if (!doc.IsModified) return ToolResult.Ok(new { model = doc.Title, saved = false, note = "Nothing to save: the file already has every change." });
         doc.Save();
         return ToolResult.Ok(new { model = doc.Title, saved = true, next = "Models that link this one can now reload_links to see the changes." });
+    }
+
+    /// <summary>
+    /// True when a model that links <paramref name="doc"/> may be open: one open in this Revit links a file of the same name,
+    /// or another Revit window is running (what it links can't be seen from here, so it may).
+    /// </summary>
+    internal static bool MayBeLinked(UIApplication app, Document doc)
+    {
+        try
+        {
+            var me = System.Diagnostics.Process.GetCurrentProcess();
+            var others = System.Diagnostics.Process.GetProcessesByName(me.ProcessName).Count(p => { using (p) return p.Id != me.Id; });
+            if (others > 0) return true;
+            var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { System.IO.Path.GetFileNameWithoutExtension(doc.PathName) };
+            if (doc.IsWorkshared)
+            {
+                try { names.Add(System.IO.Path.GetFileNameWithoutExtension(ModelPathUtils.ConvertModelPathToUserVisiblePath(doc.GetWorksharingCentralModelPath()))); }
+                catch (Exception) { }
+            }
+            foreach (Document other in app.Application.Documents)
+            {
+                if (other.Equals(doc) || other.IsLinked || other.IsFamilyDocument) continue;
+                foreach (var type in new FilteredElementCollector(other).OfClass(typeof(RevitLinkType)).Cast<RevitLinkType>())
+                {
+                    try
+                    {
+                        var path = type.GetExternalFileReference()?.GetAbsolutePath() is { } mp ? ModelPathUtils.ConvertModelPathToUserVisiblePath(mp) : type.Name;
+                        if (names.Contains(System.IO.Path.GetFileNameWithoutExtension(path))) return true;
+                    }
+                    catch (Exception) { return true; }
+                }
+            }
+            return false;
+        }
+        catch (Exception) { return true; } // unsure: save, as asked
     }
 }
 
