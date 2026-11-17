@@ -128,7 +128,9 @@ internal static class ChangeFileMath
         [property: JsonPropertyName("p")] Xyz P,
         [property: JsonPropertyName("q")] Xyz Q,
         [property: JsonPropertyName("m"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] Xyz? M = null,
-        [property: JsonPropertyName("s"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? Slope = null);
+        [property: JsonPropertyName("s"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? Slope = null,
+        // A curve that is neither a line nor an arc, exactly (a spline, an ellipse, a whole circle): what kind and its numbers.
+        [property: JsonPropertyName("c"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? C = null);
 
     /// <summary>
     /// One value from the element's properties. Found again by its built-in id (Bip), else its shared parameter's GUID,
@@ -431,7 +433,7 @@ internal static class ChangeFileMath
     /// </summary>
     public static List<Line> PlayOrder(Parsed file)
     {
-        int Rank(Line l) => l.Kind == Kinds.Deleted ? 9 : l.What switch { "level" => 0, "grid" or "material" or "family" => 1, "type" => 2, "wall" or "view" or "sheet" or "group" or "link" or "stairs" => 3, _ when IsNote(l) => 5, _ => 4 };
+        int Rank(Line l) => l.Kind == Kinds.Deleted ? 9 : l.What switch { "level" => 0, "grid" or "material" or "family" or "filter" or "linepattern" or "fillpattern" or "style" => 1, "type" => 2, "view" when IsTemplate(l) => 2, "wall" or "view" or "sheet" or "group" or "link" or "stairs" => 3, _ when IsNote(l) => 5, _ => 4 };
         var ranked = file.Elements.Select((l, i) => (Line: l, Index: i)).OrderBy(x => Rank(x.Line)).ThenBy(x => x.Index).Select(x => x.Line).ToList();
         // Hosted instances after their host, when the host is in the file.
         var position = ranked.Select((l, i) => (l.Unique, i)).Where(x => x.Unique is not null).GroupBy(x => x.Unique!).ToDictionary(g => g.Key, g => g.First().i);
@@ -481,6 +483,24 @@ internal static class ChangeFileMath
     public const string KeptName = "kept elements.rvt";
     public const string KeptMapName = "kept elements.txt";
 
+    /// <summary>A view template's line.</summary>
+    public static bool IsTemplate(Line l) => l.What == "view" && l.Extra is { } x && x.ContainsKey("template");
+
+    /// <summary>Things of the project that are kept as copies whole (a view template, a view filter, a line or fill pattern): found again by name too.</summary>
+    public static bool IsDocItem(Line l) => l.What is "filter" or "linepattern" or "fillpattern" || IsTemplate(l);
+
+    /// <summary>A type that comes with its first instance (a group's type with the group, an image's with the image): no step of its own when it is missing.</summary>
+    public static bool ComesWithInstance(Line l) => l.What == "type" && l.CategoryId is -2000095 or -2000096 or -2000560;
+
+    /// <summary>A group's members (UniqueIds), when its line has them.</summary>
+    public static List<string> Members(Line l) =>
+        l.Extra is { } x && x.TryGetValue("members", out var text) ? text.Split([';'], StringSplitOptions.RemoveEmptyEntries).ToList() : [];
+
+    /// <summary>The lines that have something to do once everything else is played: joins and cuts, a view's graphics, a shape to check against its kept copy.</summary>
+    public static List<Line> AfterLines(Parsed file) =>
+        file.Elements.Where(l => l.Kind != Kinds.Deleted && l.Unique is { Length: > 0 } && l.Extra is { } x
+            && (x.ContainsKey("joins") || x.ContainsKey("voids") || x.ContainsKey("cuts") || x.ContainsKey("attop") || x.ContainsKey("atbase") || x.ContainsKey("vg") || x.ContainsKey("shape"))).ToList();
+
     /// <summary>The line's element has a copy in the kept-elements project.</summary>
     public static bool IsKept(Line l) => l.Extra is { } x && x.ContainsKey("kept");
 
@@ -496,7 +516,7 @@ internal static class ChangeFileMath
     public const int KeepLimitMs = 15000;
 
     /// <summary>The least time between two goes of copying into the kept-elements project (it is opened and saved each time).</summary>
-    public const int KeepEveryMs = 45000;
+    public const int KeepEveryMs = 15000;
 
     /// <summary>The most elements copied in one go.</summary>
     public const int KeepMost = 60;
@@ -740,8 +760,94 @@ internal static class ChangeFileMath
 
     // An arc's M is its middle point (half way along it), the same whichever way round it was drawn.
     private static bool SameSeg(Seg a, Seg b) =>
-        ((Same(a.P, b.P) && Same(a.Q, b.Q)) || (Same(a.P, b.Q) && Same(a.Q, b.P))) && Same(a.M, b.M)
+        ((Same(a.P, b.P) && Same(a.Q, b.Q)) || (Same(a.P, b.Q) && Same(a.Q, b.P))) && Same(a.M, b.M) && SameCurve(a.C, b.C)
         && (a.Slope is null ? b.Slope is null : b.Slope is { } s && Same(a.Slope.Value, s));
+
+    /// <summary>Two exact curves (<see cref="Seg.C"/>) are the same: the same kind and numbers, each within a hundredth of a millimetre.</summary>
+    public static bool SameCurve(string? a, string? b)
+    {
+        if (a is null || b is null) return a is null && b is null;
+        if (a == b) return true;
+        var (x, y) = (a.Split('|', ',', ';'), b.Split('|', ',', ';'));
+        if (x.Length != y.Length) return false;
+        for (var i = 0; i < x.Length; i++)
+        {
+            if (x[i] == y[i]) continue;
+            if (!double.TryParse(x[i], NumberStyles.Float, CultureInfo.InvariantCulture, out var p) || !double.TryParse(y[i], NumberStyles.Float, CultureInfo.InvariantCulture, out var q) || !Same(p, q)) return false;
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// Two shape signatures (an element's box, volume and number of faces, as numbers with spaces between) are the same
+    /// shape: lengths within a millimetre, the volume within a thousandth, the same number of faces.
+    /// </summary>
+    public static bool SameSignature(string? a, string? b)
+    {
+        if (a is null || b is null) return a == b;
+        var (x, y) = (a.Split(' '), b.Split(' '));
+        if (x.Length != 8 || y.Length != 8) return a == b;
+        for (var i = 0; i < 8; i++)
+        {
+            if (!double.TryParse(x[i], NumberStyles.Float, CultureInfo.InvariantCulture, out var p) || !double.TryParse(y[i], NumberStyles.Float, CultureInfo.InvariantCulture, out var q)) return false;
+            var slack = i < 6 ? 0.0035 : i == 6 ? 0.01 + Math.Abs(p) * 0.001 : 0.5;
+            if (Math.Abs(p - q) > slack) return false;
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// A view's graphics as written in its line: the categories hidden, the categories, filters and elements drawn
+    /// differently (each as "name=value" pairs), the filters in order, and the elements hidden or shown again.
+    /// </summary>
+    public sealed class Vg
+    {
+        public List<long> Hidden { get; set; } = [];
+        public Dictionary<string, string> Over { get; set; } = [];
+        public List<VgFilter> Filters { get; set; } = [];
+        /// <summary>Elements (by UniqueId) hidden in the view, shown again, and drawn differently (empty text: as the view draws them).</summary>
+        public List<string>? Hide { get; set; }
+        public List<string>? Show { get; set; }
+        public Dictionary<string, string>? Elements { get; set; }
+    }
+
+    public sealed class VgFilter
+    {
+        public string U { get; set; } = "";
+        public bool Visible { get; set; } = true;
+        public bool Enabled { get; set; } = true;
+        public string Over { get; set; } = "";
+    }
+
+    /// <summary>
+    /// The relations written in a line ("joins", "voids", "cuts", "attop", "atbase"): the other elements' UniqueIds;
+    /// in "joins" each starts with + (this element cuts the other) or - (the other cuts this one).
+    /// </summary>
+    public static List<(string Unique, bool Cuts)> Relations(Line l, string key)
+    {
+        var list = new List<(string, bool)>();
+        if (l.Extra is not { } x || !x.TryGetValue(key, out var text) || text.Length == 0) return list;
+        foreach (var part in text.Split(';'))
+        {
+            if (part.Length == 0) continue;
+            if (part[0] is '+' or '-') list.Add((part.Substring(1), part[0] == '+'));
+            else list.Add((part, false));
+        }
+        return list;
+    }
+
+    /// <summary>The last line of each element that has relations to others, in file order: played after everything is made.</summary>
+    public static List<Line> RelationLines(Parsed file)
+    {
+        var last = new Dictionary<string, Line>(StringComparer.Ordinal);
+        foreach (var l in file.Elements)
+        {
+            if (l.Unique is not { Length: > 0 } u) continue;
+            if (l.Kind == Kinds.Deleted) { last.Remove(u); continue; }
+            if (l.Extra is { } x && (x.ContainsKey("joins") || x.ContainsKey("voids") || x.ContainsKey("cuts") || x.ContainsKey("attop") || x.ContainsKey("atbase"))) last[u] = l;
+        }
+        return file.Elements.Where(l => l.Unique is { } u && last.TryGetValue(u, out var keep) && ReferenceEquals(keep, l)).ToList();
+    }
 
     /// <summary>Two point sets of a shape-edited slab are the same (in any order).</summary>
     public static bool SamePoints(List<Xyz>? a, List<Xyz>? b)

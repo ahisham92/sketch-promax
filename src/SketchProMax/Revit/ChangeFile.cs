@@ -48,11 +48,16 @@ internal static class ChangeFile
         public readonly HashSet<long> Keeps = [];
         public bool KeepOff;
         public int LastKeep = unchecked(Environment.TickCount - M.KeepEveryMs);
+        /// <summary>The elements selected while each view was the active one (what Hide in View and Override Graphics act on): looked at when the view's graphics are read.</summary>
+        public readonly Dictionary<long, HashSet<long>> Touched = [];
     }
 
     private static readonly object Gate = new();
     private static readonly Dictionary<string, Model> Models = new(StringComparer.OrdinalIgnoreCase);
     private const int KnownCap = 200_000;
+    private const int MaxTouched = 500;
+    /// <summary>A changed element that was in the model already is kept as a copy only when few changed together (a hand edit, not a tool's batch).</summary>
+    private const int KeepChangedUpTo = 25;
     // Documents being closed (Revit's id for the closing, to the model's path): forgotten only once Revit says it closed.
     private static readonly Dictionary<int, string> Closing = [];
     private static readonly BlockingCollection<Action> Disk = new();
@@ -368,7 +373,7 @@ internal static class ChangeFile
     private static void Cleared(Document doc, string why)
     {
         if (For(doc) is not { } model) return;
-        lock (Gate) { model.Pending.Clear(); model.Written.Clear(); model.Added.Clear(); model.Started = false; model.Families.Clear(); model.FamilyTries.Clear(); model.Reloaded.Clear(); model.Keeps.Clear(); }
+        lock (Gate) { model.Pending.Clear(); model.Written.Clear(); model.Added.Clear(); model.Started = false; model.Families.Clear(); model.FamilyTries.Clear(); model.Reloaded.Clear(); model.Keeps.Clear(); model.Touched.Clear(); }
         Queue(() =>
         {
             var current = System.IO.Path.Combine(model.Folder, M.CurrentName);
@@ -538,6 +543,13 @@ internal static class ChangeFile
             if (ids.Count > 2000) return;
             foreach (var id in ids)
                 if (doc.GetElement(id) is { } element) Remember(model, id.Value, element.UniqueId, element.Category?.Name);
+            // What is selected in a view is what its Hide in View and Override Graphics act on.
+            if (ids.Count is > 0 and <= MaxTouched && doc.ActiveView is { } active)
+                lock (Gate)
+                {
+                    if (!model.Touched.TryGetValue(active.Id.Value, out var touched) && model.Touched.Count < 200) model.Touched[active.Id.Value] = touched = [];
+                    if (touched is not null) foreach (var id in ids) if (touched.Count < MaxTouched) touched.Add(id.Value);
+                }
         }
         catch (Exception) { }
     }
@@ -683,11 +695,18 @@ internal static class ChangeFile
                         line.File = M.FamilyFileName(element.UniqueId);
                         if (!model.Families.Contains(id)) { model.FamilyTries[id] = 0; model.Families.Enqueue(id); }
                     }
-                    else if (line.New && !model.KeepOff && ChangeKeeper.Wants(element, line))
+                    else if (!model.KeepOff && (line.New || ChangeKeeper.IsDocItem(element) || (ids.Count <= KeepChangedUpTo && ChangeKeeper.OnlyByCopy(element))) && ChangeKeeper.Wants(element, line))
                     {
-                        // What can't be made again from a line is kept as a copy next to the file, and copied back.
+                        // What can't be made again from a line is kept as a copy next to the file, and copied back
+                        // (one changed is put back from its copy when its shape isn't the line's any more).
                         (line.Extra ??= [])["kept"] = "1";
+                        if (ChangeExtras.Signature(element) is { } shape) line.Extra["shape"] = shape;
                         model.Keeps.Add(id);
+                    }
+                    if (element is View drawn)
+                    {
+                        List<ElementId> touched = model.Touched.TryGetValue(id, out var selected) ? selected.Select(t => new ElementId(t)).ToList() : [];
+                        if (ChangeExtras.ReadGraphics(doc, drawn, touched) is { } graphics) (line.Extra ??= [])["vg"] = graphics;
                     }
                     model.Written.TryGetValue(id, out var written);
                     var all = line.Values ?? [];
@@ -719,9 +738,11 @@ internal static class ChangeFile
     internal static M.Line? Capture(Document doc, Element element)
     {
         if (element is Family family) return FamilyLine(family);
+        if (element is GraphicsStyle style) return StyleLine(doc, style);
         var category = element.Category;
         var viewKind = ChangeViews.Kind(element);
-        if (category is null && element is not ElementType && viewKind is null) return null;
+        var item = element switch { ParameterFilterElement => "filter", LinePatternElement => "linepattern", FillPatternElement => "fillpattern", _ => null };
+        if (category is null && element is not ElementType && viewKind is null && item is null) return null;
         // What Revit makes by itself with something else (a sketch's automatic dimensions, a view's camera and section
         // box, a loaded type's preview), and what belongs to a title block or isn't on a sheet.
         if (category is not null && M.IsRevitsOwn(category.Id.Value)) return null;
@@ -729,13 +750,13 @@ internal static class ChangeFile
         // Work plane grids and the marks of views (sections, callouts) change with the view or come with it: no line of their own.
         if (category is not null && element is not View && category.Id.Value is (long)BuiltInCategory.OST_IOSSketchGrid or (long)BuiltInCategory.OST_Viewers or (long)BuiltInCategory.OST_Views) return null;
         if (category is not null && IsAnalysis(category.Id.Value) || element.GetType().Namespace == "Autodesk.Revit.DB.Analysis") return null;
-        if (ChangeViews.Ignored(element) || element is View { IsTemplate: true } || element is ElementType { Category: null } and not (TextElementType or DimensionType) || ChangeShapes.IsSketchLine(element) || ChangeNotes.IsPart(element)
+        if (ChangeViews.Ignored(element) || element is ElementType { Category: null } and not (TextElementType or DimensionType) || ChangeShapes.IsSketchLine(element) || ChangeNotes.IsPart(element)
             || ChangeViews.IsPart(element) || ChangeStairs.IsPart(element)) return null;
         var line = new M.Line
         {
             Kind = M.Kinds.State, At = Now, Id = element.Id.Value, Unique = element.UniqueId,
-            Category = category?.Name, CategoryId = category?.Id.Value ?? 0,
-            What = ChangeShapes.Kind(element) ?? ChangeNotes.Kind(element) ?? viewKind ?? element switch
+            Category = category?.Name ?? item switch { "filter" => "View filter", "linepattern" => "Line pattern", "fillpattern" => "Fill pattern", _ => null }, CategoryId = category?.Id.Value ?? 0,
+            What = item ?? ChangeShapes.Kind(element) ?? ChangeNotes.Kind(element) ?? viewKind ?? element switch
             {
                 Level => "level", Grid => "grid", ElementType => "type", Wall => "wall", FamilyInstance => "instance", Material => "material",
                 Autodesk.Revit.DB.Architecture.Stairs => "stairs", _ => "other",
@@ -757,6 +778,17 @@ internal static class ChangeFile
             line.Host = fi.Host?.UniqueId;
             line.Structural = fi.StructuralType.ToString();
             try { line.FacingFlipped = fi.FacingFlipped; line.HandFlipped = fi.HandFlipped; } catch (Exception) { }
+            // On a face (a face-based family): the face and which way it points along it, so it is made on that face again.
+            try
+            {
+                if (fi.HostFace is { } face && fi.HandOrientation is { } hand)
+                {
+                    var x = line.Extra ??= [];
+                    x["face"] = face.ConvertToStableRepresentation(doc);
+                    x["hand"] = FormattableString.Invariant($"{M.Round(hand.X)} {M.Round(hand.Y)} {M.Round(hand.Z)}");
+                }
+            }
+            catch (Exception) { }
         }
         switch (element)
         {
@@ -795,6 +827,8 @@ internal static class ChangeFile
         catch (Exception ex) { LifelineBugs.Note("capture", $"{line.What} ({line.Category}) couldn't be read in full", doc.PathName, ex); }
         // Views, sheets, what is placed on sheets, groups, links and CAD.
         try { ChangeViews.Read(doc, element, line); } catch (Exception ex) { LifelineBugs.Note("capture", $"{line.What} ({line.Category}) couldn't be read in full", doc.PathName, ex); }
+        // What it is joined to, cut by and attached to.
+        try { ChangeExtras.ReadRelations(doc, element, line); } catch (Exception) { }
         var values = new List<M.Value>();
         foreach (Parameter p in element.Parameters)
         {
@@ -825,6 +859,19 @@ internal static class ChangeFile
         }
         if (values.Count > 0) line.Values = values;
         return line;
+    }
+
+    /// <summary>A line style's or object style's line (only the project's own: <see cref="ChangeExtras.IsStyle"/>).</summary>
+    private static M.Line? StyleLine(Document doc, GraphicsStyle style)
+    {
+        try
+        {
+            if (!ChangeExtras.IsStyle(style)) return null;
+            var line = new M.Line { Kind = M.Kinds.State, At = Now, Id = style.Id.Value, Unique = style.UniqueId, What = "style", Category = style.GraphicsStyleCategory.Parent?.Name ?? "Object style" };
+            ChangeExtras.ReadStyle(doc, style, line);
+            return line;
+        }
+        catch (Exception) { return null; }
     }
 
     /// <summary>A loadable family's line (in-place families can't be kept as a file): written only when it was loaded after the last save.</summary>
@@ -974,7 +1021,7 @@ internal static class ChangeFile
                         if (doc.GetElement(new ElementId(id)) is not { } element) continue;
                         // Only what could have a line: Revit's own bookkeeping elements (no category) are passed over.
                         var category = element.Category;
-                        if (category is null && element is not (ElementType or View or Family)) continue;
+                        if (category is null && element is not (ElementType or View or Family or ParameterFilterElement or LinePatternElement or FillPatternElement) && !ChangeExtras.IsStyle(element)) continue;
                         if (category is not null && (M.IsRevitsOwn(category.Id.Value) || IsAnalysis(category.Id.Value))) continue;
                         batch.Add((id, element.UniqueId, category?.Name));
                     }

@@ -725,4 +725,159 @@ internal static partial class FieldTest
             LifelineBugs.ForgetForTest();
         }
     }
+
+    /// <summary>
+    /// What a change file keeps besides values and shapes: in the test project, two joined walls, a line style, a 3D
+    /// view with a hidden category, a hidden wall, a wall drawn halftone and a filter switched off, a spline drawn in
+    /// a drafting view, and a group of a new type are captured; then the walls are unjoined, the style, the filter,
+    /// the spline and the group with its type deleted and the view's graphics cleared; a replay puts all of it back.
+    /// What the test made is deleted.
+    /// </summary>
+    private static (string, string) RecoveryExtras(UIApplication app, State s)
+    {
+        if (TestDoc(app, s, out var why) is not { } doc) return Fail(why);
+        if (BasicWallType(doc) is not { } type) return Fail("the test project has no basic wall type with layers");
+        if (new FilteredElementCollector(doc).OfClass(typeof(Level)).FirstElement() is not Level level) return Fail("the test project has no level");
+        var view3 = new FilteredElementCollector(doc).OfClass(typeof(ViewFamilyType)).Cast<ViewFamilyType>().FirstOrDefault(t => t.ViewFamily == ViewFamily.ThreeDimensional);
+        var drafting = new FilteredElementCollector(doc).OfClass(typeof(ViewFamilyType)).Cast<ViewFamilyType>().FirstOrDefault(t => t.ViewFamily == ViewFamily.Drafting);
+        if (view3 is null || drafting is null) return Fail("the test project has no 3D or drafting view type");
+        var folder = Path.Combine(s.Folder, "change-files-extras");
+        var problems = new List<string>();
+        var made = new List<ElementId>();
+        ChangeReplay.Outcome? outcome = null;
+        var stamp = DateTime.Now.ToString("HHmmss");
+        var (styleName, filterName, groupName) = ("SPM lifeline style " + stamp, "SPM lifeline filter " + stamp, "SPM lifeline group " + stamp);
+        var lines = doc.Settings.Categories.get_Item(BuiltInCategory.OST_Lines);
+        var wallsId = new ElementId(BuiltInCategory.OST_Walls);
+        try
+        {
+            Directory.CreateDirectory(folder);
+            Wall a, b, c, d;
+            View3D view;
+            ViewDrafting sheet;
+            ParameterFilterElement filter;
+            DetailCurve spline;
+            Group group;
+            GraphicsStyle style;
+            using (var t = new Transaction(doc, "Field test: lifeline extras"))
+            {
+                t.Start();
+                a = Wall.Create(doc, Line.CreateBound(new XYZ(0, -180, 0), new XYZ(20, -180, 0)), type.Id, level.Id, 10, 0, false, false);
+                b = Wall.Create(doc, Line.CreateBound(new XYZ(10, -190, 0), new XYZ(10, -170, 0)), type.Id, level.Id, 10, 0, false, false);
+                c = Wall.Create(doc, Line.CreateBound(new XYZ(0, -220, 0), new XYZ(20, -220, 0)), type.Id, level.Id, 10, 0, false, false);
+                d = Wall.Create(doc, Line.CreateBound(new XYZ(0, -230, 0), new XYZ(20, -230, 0)), type.Id, level.Id, 10, 0, false, false);
+                doc.Regenerate();
+                try { if (!JoinGeometryUtils.AreElementsJoined(doc, a, b)) JoinGeometryUtils.JoinGeometry(doc, a, b); } catch (Exception ex) { problems.Add("the two walls couldn't be joined: " + ex.Message); }
+                var sub = doc.Settings.Categories.NewSubcategory(lines, styleName);
+                sub.SetLineWeight(5, GraphicsStyleType.Projection);
+                sub.LineColor = new Color(200, 40, 40);
+                doc.Regenerate();
+                style = sub.GetGraphicsStyle(GraphicsStyleType.Projection);
+                filter = ParameterFilterElement.Create(doc, filterName, [wallsId]);
+                view = View3D.CreateIsometric(doc, view3.Id);
+                view.Name = "SPM lifeline 3D " + stamp;
+                view.SetCategoryHidden(new ElementId(BuiltInCategory.OST_Floors), true);
+                view.AddFilter(filter.Id);
+                view.SetFilterVisibility(filter.Id, false);
+                var half = new OverrideGraphicSettings();
+                half.SetHalftone(true);
+                view.SetElementOverrides(a.Id, half);
+                view.HideElements([b.Id]);
+                sheet = ViewDrafting.Create(doc, drafting.Id);
+                sheet.Name = "SPM lifeline drafting " + stamp;
+                spline = doc.Create.NewDetailCurve(sheet, HermiteSpline.Create([new XYZ(0, 0, 0), new XYZ(2, 1, 0), new XYZ(4, -1, 0), new XYZ(6, 0, 0)], false));
+                group = doc.Create.NewGroup([c.Id, d.Id]);
+                group.GroupType.Name = groupName;
+                t.Commit();
+            }
+            made.AddRange([a.Id, b.Id, c.Id, d.Id, view.Id, sheet.Id, filter.Id, group.Id, group.GroupType.Id]);
+            var written = new List<M.Line>();
+            M.Line? Take(Element e, bool isNew = true)
+            {
+                if (ChangeFile.Capture(doc, e) is not { } line) { problems.Add($"{e.GetType().Name} wasn't captured"); return null; }
+                line.New = isNew;
+                written.Add(line);
+                return line;
+            }
+            var (la, lb) = (Take(a), Take(b));
+            if (la is not null && M.Relations(la, "joins").Count != 1) problems.Add("the wall's join isn't in its line");
+            if (Take(style) is not { What: "style" } styleLine || styleLine.Extra?["weight"] != "5") problems.Add("the line style's weight isn't in its line");
+            if (Take(filter) is { } filterLine) (filterLine.Extra ??= [])["kept"] = "1";
+            if (Take(view) is { } viewLine)
+            {
+                if (ChangeExtras.ReadGraphics(doc, view, [a.Id, b.Id]) is { } graphics) (viewLine.Extra ??= [])["vg"] = graphics;
+                else problems.Add("the view's graphics couldn't be read");
+            }
+            Take(sheet);
+            if (Take(spline) is { } splineLine && (splineLine.Approx || splineLine.Loops?.SelectMany(l => l).Any(g => g.C is not null) != true)) problems.Add("the spline isn't in its line as a spline");
+            Take(group.GroupType);
+            Take(c);
+            Take(d);
+            if (Take(group) is { } groupLine && M.Members(groupLine).Count != 2) problems.Add("the group's members aren't in its line");
+            var uniques = new { A = a.UniqueId, B = b.UniqueId, Style = style.UniqueId, Filter = filter.UniqueId, View = view.UniqueId, Spline = spline.UniqueId, Group = group.UniqueId };
+            var kept = ChangeKeeper.Keep(doc, folder, [filter]);
+            if (!kept.Contains(uniques.Filter)) problems.Add("the view filter wasn't copied into the kept-elements project");
+            using (var t = new Transaction(doc, "Field test: lifeline extras undone"))
+            {
+                t.Start();
+                try { JoinGeometryUtils.UnjoinGeometry(doc, a, b); } catch (Exception) { }
+                view.SetCategoryHidden(new ElementId(BuiltInCategory.OST_Floors), false);
+                view.SetElementOverrides(a.Id, new OverrideGraphicSettings());
+                view.UnhideElements([b.Id]);
+                doc.Delete(filter.Id);
+                doc.Delete(style.GraphicsStyleCategory.Id);
+                doc.Delete(spline.Id);
+                var typeId = group.GroupType.Id;
+                doc.Delete(group.Id);
+                foreach (var id in new[] { c.Id, d.Id }) if (doc.GetElement(id) is not null) doc.Delete(id);
+                doc.Delete(typeId);
+                t.Commit();
+            }
+            var model = new M.Line { Kind = M.Kinds.Model, At = DateTime.Now, Path = doc.PathName, Format = M.FormatNew };
+            var parsed = M.Read(written.Prepend(model).Select(M.Write));
+            outcome = new ChangeReplay.Outcome { KeptFolder = folder, Kept = ChangeKeeper.ReadMap(folder) };
+            ChangeReplay.Apply(doc, ChangeReplay.Plan(doc, parsed, outcome), outcome);
+            made.AddRange(outcome.MadeFor.Values);
+            var notDone = " (" + string.Join("; ", outcome.NotDone) + ")";
+            if (!JoinGeometryUtils.AreElementsJoined(doc, a, b)) problems.Add("the walls weren't joined again" + notDone);
+            var subAgain = lines.SubCategories.Cast<Category>().FirstOrDefault(k => k.Name == styleName);
+            if (subAgain is null) problems.Add("the line style wasn't made again" + notDone);
+            else
+            {
+                made.Add(subAgain.Id);
+                if (subAgain.GetLineWeight(GraphicsStyleType.Projection) != 5 || subAgain.LineColor.Red != 200) problems.Add("the line style came back without its weight or colour");
+            }
+            var filterAgain = new FilteredElementCollector(doc).OfClass(typeof(ParameterFilterElement)).FirstOrDefault(f => f.Name == filterName);
+            if (filterAgain is null) problems.Add("the view filter wasn't copied back" + notDone);
+            else
+            {
+                made.Add(filterAgain.Id);
+                if (!view.IsFilterApplied(filterAgain.Id) || view.GetFilterVisibility(filterAgain.Id)) problems.Add("the view's filter isn't on the view switched off again");
+            }
+            if (!view.GetCategoryHidden(new ElementId(BuiltInCategory.OST_Floors))) problems.Add("the view's hidden category isn't hidden again");
+            if (!view.GetElementOverrides(a.Id).Halftone) problems.Add("the wall isn't drawn halftone in the view again");
+            if (!b.IsHidden(view)) problems.Add("the wall hidden in the view isn't hidden again");
+            if (!outcome.MadeFor.TryGetValue(uniques.Spline, out var splineId) || doc.GetElement(splineId) is not DetailCurve { GeometryCurve: HermiteSpline }) problems.Add("the spline didn't come back as a spline" + notDone);
+            if (!outcome.MadeFor.TryGetValue(uniques.Group, out var groupId) || doc.GetElement(groupId) is not Group again) problems.Add("the group of a new type wasn't put together again" + notDone);
+            else
+            {
+                made.Add(again.GroupType.Id);
+                if (again.GetMemberIds().Count != 2 || again.GroupType.Name != groupName) problems.Add($"the group came back with {again.GetMemberIds().Count} members as {again.GroupType.Name}");
+            }
+            if (outcome.NotDone.Count > 0) problems.Add("the replay listed" + notDone);
+            return problems.Count == 0
+                ? Pass("joined walls, a line style, a view's hidden category, hidden and halftone walls and switched-off filter, a spline and a group of a new type, undone, all came back in a replay")
+                : Fail(string.Join("; ", problems));
+        }
+        finally
+        {
+            ChangeKeeper.Close(outcome?.Keeper);
+            using var t = new Transaction(doc, "Field test: lifeline tidy up");
+            t.Start();
+            // Groups first (their members go with them), types and the style last.
+            foreach (var id in made.Distinct().OrderBy(id => doc.GetElement(id) switch { Group => 0, ElementType => 2, null => 3, _ => 1 }).ToList())
+                try { doc.Delete(id); } catch (Exception) { /* gone with its group or view already */ }
+            t.Commit();
+        }
+    }
 }

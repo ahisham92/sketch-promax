@@ -29,10 +29,11 @@ internal static class ChangeNotes
         Rebar => "rebar",
         AreaReinforcement => "areareinf",
         PathReinforcement => "pathreinf",
+        ImageInstance => "image",
         _ => null,
     };
 
-    public static bool Owns(M.Line line) => line.What is "spot" or "dimension" or "tag" or "roomtag" or "text" or "cloud" or "room" or "space" or "rebar" or "areareinf" or "pathreinf";
+    public static bool Owns(M.Line line) => line.What is "spot" or "dimension" or "tag" or "roomtag" or "text" or "cloud" or "room" or "space" or "rebar" or "areareinf" or "pathreinf" or "image";
 
     private static readonly HashSet<long> PartCategories = new[] { "OST_AreaReinBoundary", "OST_PathReinBoundary", "OST_AreaReinSketchOverrides" }
         .Select(n => Enum.TryParse<BuiltInCategory>(n, out var c) ? (long)c : 0).Where(c => c != 0).ToHashSet();
@@ -95,6 +96,12 @@ internal static class ChangeNotes
                 line.Host = doc.GetElement(area.GetHostId())?.UniqueId;
                 line.Loops ??= [area.GetBoundaryCurveIds().Select(doc.GetElement).OfType<AreaReinforcementCurve>().SelectMany(c => ChangeShapes.Segs(c.Curve, ref approx)).ToList()];
                 line.Bar = new M.Bar { Dir = P(area.Direction), BarType = BarTypeOf(doc, area.GetRebarInSystemIds()) };
+                break;
+            case ImageInstance image:
+                // A placed image: its middle, its width, and the file its type was read from.
+                line.P = P(image.GetLocation(BoxPlacement.Center));
+                line.Width = M.Round(image.Width);
+                try { if (doc.GetElement(image.GetTypeId()) is ImageType { Path: { Length: > 0 } path }) (line.Extra ??= [])["path"] = path; } catch (Exception) { }
                 break;
             case PathReinforcement path:
                 line.Host = doc.GetElement(path.GetHostId())?.UniqueId;
@@ -232,6 +239,7 @@ internal static class ChangeNotes
         "rebar" when line.Loops is { Count: > 0 } && line.PlaneNormal is not null && line.Host is not null && line.Type is not null => null,
         "areareinf" when line.Loops is { Count: > 0 } && line.Bar?.Dir is not null && line.Host is not null && line.Type is not null => null,
         "pathreinf" when line.Loops is { Count: > 0 } && line.Host is not null && line.Type is not null => null,
+        "image" when line.P is not null && line.View is not null => null,
         _ => "made after the last save, but the file doesn't have all it needs: make it again by hand",
     };
 
@@ -313,6 +321,21 @@ internal static class ChangeNotes
                 return MakeRebar(doc, line, type as RebarBarType ?? throw new InvalidOperationException($"the bar type {line.Type} isn't in this model"), HostOf(), find);
             case "areareinf":
                 return AreaReinforcement.Create(doc, HostOf(), Curves(line), X(line.Bar!.Dir!), TypeId(), BarType(doc, line, find), ElementId.InvalidElementId);
+            case "image":
+            {
+                // Its image is in the model still (its type), or is read again from its file.
+                var path = line.Extra is { } x && x.TryGetValue("path", out var from) ? from : null;
+                var imageType = type as ImageType
+                                ?? new FilteredElementCollector(doc).OfClass(typeof(ImageType)).Cast<ImageType>().FirstOrDefault(t => path is not null && string.Equals(t.Path, path, StringComparison.OrdinalIgnoreCase));
+                if (imageType is null)
+                {
+                    if (path is null || !System.IO.File.Exists(path)) throw new InvalidOperationException($"its image file {path ?? "(not known)"} isn't there any more: place the image again by hand");
+                    imageType = ImageType.Create(doc, new ImageTypeOptions(path, false, ImageTypeSource.Import));
+                }
+                var image = ImageInstance.Create(doc, ViewOf(), imageType.Id, new ImagePlacementOptions(X(line.P!), BoxPlacement.Center));
+                if (line.Width is { } wide && wide > 0 && !M.Same(image.Width, wide)) try { image.Width = wide; image.SetLocation(X(line.P!), BoxPlacement.Center); } catch (Exception) { }
+                return image;
+            }
             case "pathreinf":
                 return PathReinforcement.Create(doc, HostOf(), Curves(line), line.Bar?.Flip ?? false, TypeId(), BarType(doc, line, find), ElementId.InvalidElementId, ElementId.InvalidElementId);
             default:
@@ -445,6 +468,10 @@ internal static class ChangeNotes
                 }
                 if (line.Bar is { FreeForm: false } bar && now.Bar is { } nb && !SameLayout(bar, nb)) { Layout(rebar, bar); changed = true; }
                 break;
+            case ImageInstance image:
+                if (line.Width is { } iw && iw > 0 && !M.Same(image.Width, iw)) { try { image.Width = iw; changed = true; } catch (Exception) { } }
+                if (line.P is { } ip && !M.Same(P(image.GetLocation(BoxPlacement.Center)), ip)) { image.SetLocation(X(ip), BoxPlacement.Center); changed = true; }
+                break;
             case RevisionCloud or AreaReinforcement or PathReinforcement when line.Loops is not null && now.Loops is not null && !M.SameLoops(now.Loops, line.Loops):
                 if (Shift(now.Loops, line.Loops) is { } shift) { ElementTransformUtils.MoveElement(doc, e.Id, shift); changed = true; }
                 else if (ChangeShapes.SketchOf(doc, e) is { } s) sketch = s.Id;
@@ -490,6 +517,36 @@ internal static class ChangeNotes
     {
         if (e is RevisionCloud or AreaReinforcement or PathReinforcement) try { ChangeShapes.Read(doc, e, now); } catch (Exception) { }
         Read(doc, e, now);
+    }
+
+    /// <summary>
+    /// True when the element in the model can't be set to its line and is made again in its place instead: a dimension
+    /// that measures other things now or runs another way, a bar whose shape changed.
+    /// </summary>
+    public static bool MustRemake(Document doc, Element e, M.Line line, Func<string, string> remap)
+    {
+        try
+        {
+            if (e is SpotDimension || CanMake(line) is not null) return false;
+            var now = new M.Line();
+            ReadNow(doc, e, now);
+            switch (e)
+            {
+                case Dimension:
+                    if (line.Refs is not null && !SameRefs(now.Refs, line.Refs.Select(remap).ToList())) return true;
+                    if (line.P is { } p && line.Q is { } q && now.P is { } p0 && now.Q is { } q0)
+                    {
+                        var (want, dir) = ((X(q) - X(p)).Normalize(), (X(q0) - X(p0)).Normalize());
+                        return !want.IsAlmostEqualTo(dir) && !want.IsAlmostEqualTo(dir.Negate());
+                    }
+                    return false;
+                case Rebar when line.Loops is not null && now.Loops is not null:
+                    return !M.SameLoops(now.Loops, line.Loops) && Shift(now.Loops, line.Loops) is null;
+                default:
+                    return false;
+            }
+        }
+        catch (Exception) { return false; }
     }
 
     private static bool SameRefs(List<string>? a, List<string> b) => a is not null && a.Count == b.Count && a.All(b.Contains);

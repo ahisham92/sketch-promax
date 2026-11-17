@@ -244,8 +244,8 @@ internal static class RecoveryTests
         check("lifeline: 72 steps in growing chunks are 72 steps played", played == 72, played.ToString());
         check("lifeline: what Revit refused is tried once more at the end, and taken names are set then", Src("UI", "RecoverWindow.cs").Contains("outcome.TakeFailed()") && Src("UI", "RecoverWindow.cs").Contains("ChangeReplay.Settle(doc, outcome)")
             && Src("Revit", "ChangeReplay.cs").Contains("if (step.Act == Act.Make) outcome.Unmake(step.Line.Unique);"), "");
-        check("lifeline: an element just made is worked out before its state is set", Src("Revit", "ChangeReplay.cs").Contains("try { doc.Regenerate(); } catch (Exception) { }\n                        SetState(doc, made, s.Line, outcome);".Replace("\n", Environment.NewLine))
-            || Src("Revit", "ChangeReplay.cs").Replace("\r\n", "\n").Contains("try { doc.Regenerate(); } catch (Exception) { }\n                        SetState(doc, made, s.Line, outcome);"), "");
+        check("lifeline: an element just made is worked out before its state is set", Src("Revit", "ChangeReplay.cs").Replace("\r\n", "\n").Contains("try { doc.Regenerate(); } catch (Exception) { }\n                        // (A group put together again")
+            && Src("Revit", "ChangeReplay.cs").Contains("SetState(doc, made, s.Line, outcome, justMade: true);"), "");
         check("lifeline: a filled region whose outline changed is drawn again in its place", Src("Revit", "ChangeReplay.cs").Contains("FilledRegion.Create(doc, region.GetTypeId(), region.OwnerViewId, ChangeShapes.CurveLoops(outline))"), "");
         check("lifeline: a close that is cancelled keeps the model watched", Src("Revit", "ChangeFile.cs").Contains("DocumentClosed += OnClosed") && Src("Revit", "ChangeFile.cs").Contains("if (e.Status == RevitAPIEventStatus.Succeeded) Models.Remove(path);"), "");
         check("lifeline: schedules of every kind are made by their own call", new[] { "CreateKeySchedule", "CreateMaterialTakeoff", "CreateSheetList", "CreateViewList", "CreateRevisionSchedule", "CreateKeynoteLegend" }.All(Src("Revit", "ChangeViews.cs").Contains), "");
@@ -292,6 +292,45 @@ internal static class RecoveryTests
         var lookBack = System.Text.Json.JsonSerializer.Deserialize<M.Look>(System.Text.Json.JsonSerializer.Serialize(look))!;
         check("lifeline: a schedule's headings, sorting and filters are written in its line and read back", !lookBack.Itemized && lookBack.GrandTotal && lookBack.Title && lookBack.Cols[0].H == "Mark" && lookBack.Sorts[0].Desc && lookBack.Filters[0].V == "P-"
             && Src("Revit", "ChangeViews.cs").Contains("SetLook(definition,"), System.Text.Json.JsonSerializer.Serialize(look));
+        // What a change file keeps besides values and shapes: exact curves, joins, a view's graphics, kept templates and filters, new groups.
+        var spline = new M.Seg(new M.Xyz(0, 0, 0), new M.Xyz(6, 0, 0), null) { C = "H|0|0,0,0;2,1,0;6,0,0|0|1" };
+        var splineSame = new M.Seg(new M.Xyz(6, 0, 0), new M.Xyz(0, 0, 0), null) { C = "H|0|0,0,0;2,1.000001,0;6,0,0|0|1" };
+        var splineOther = new M.Seg(new M.Xyz(0, 0, 0), new M.Xyz(6, 0, 0), null) { C = "H|0|0,0,0;2,1.5,0;6,0,0|0|1" };
+        check("lifeline: a spline is the same curve only with the same points", M.SameLoops([[spline]], [[splineSame]]) && !M.SameLoops([[spline]], [[splineOther]]) && !M.SameLoops([[spline]], [[new M.Seg(spline.P, spline.Q, null)]]), "");
+        var segBack = M.Read(new[] { new M.Line { Kind = M.Kinds.State, At = at, Unique = "curve1", What = "detailcurve", Loops = [[spline]] } }.Select(M.Write)).Elements[0].Loops![0][0];
+        check("lifeline: an exact curve is written in its line and read back", segBack.C == spline.C, segBack.C ?? "none");
+        check("lifeline: splines and ellipses are written as they are, not as short lines", Src("Revit", "ChangeShapes.cs").Contains("HermiteSpline.Create(") && Src("Revit", "ChangeShapes.cs").Contains("NurbSpline.CreateCurve(") && Src("Revit", "ChangeShapes.cs").Contains("Ellipse.CreateCurve("), "");
+        check("lifeline: a shape's signature tells a changed shape from the same one", M.SameSignature("0 0 0 10 1 10 100 6", "0 0 0 10.002 1 10 100.05 6") && !M.SameSignature("0 0 0 10 1 10 100 6", "0 0 0 12 1 10 120 6")
+            && !M.SameSignature("0 0 0 10 1 10 100 6", "0 0 0 10 1 10 100 8") && !M.SameSignature("0 0 0 10 1 10 100 6", null), "");
+        var joined = new M.Line { Kind = M.Kinds.State, At = at, Unique = "wallA", What = "wall", Extra = new() { ["joins"] = "+wallB;-floorC", ["voids"] = "void1" } };
+        var relations = M.Relations(joined, "joins");
+        check("lifeline: a line's joins say which element cuts", relations.Count == 2 && relations[0] == ("wallB", true) && relations[1] == ("floorC", false) && M.Relations(joined, "voids")[0].Unique == "void1" && M.Relations(joined, "cuts").Count == 0, joined.Extra["joins"]);
+        var template = new M.Line { Kind = M.Kinds.State, At = at, Unique = "tmpl1", What = "view", Name = "Structural plan", New = true, Extra = new() { ["template"] = "1", ["kept"] = "1", ["vg"] = "{}" } };
+        var filterLine = new M.Line { Kind = M.Kinds.State, At = at, Unique = "filter1", What = "filter", Name = "Piles", New = true, Extra = new() { ["kept"] = "1" } };
+        var planView = new M.Line { Kind = M.Kinds.State, At = at, Unique = "plan1", What = "view", Name = "Level 1", Extra = new() { ["vg"] = "{}" } };
+        var groupType = new M.Line { Kind = M.Kinds.State, At = at, Unique = "gt1", What = "type", CategoryId = -2000095, Name = "Bay", New = true };
+        var groupLine = new M.Line { Kind = M.Kinds.State, At = at, Unique = "g1", What = "group", Type = "Model Group: Bay", New = true, Extra = new() { ["members"] = "m1;m2" } };
+        var goneWall = new M.Line { Kind = M.Kinds.Deleted, At = at, Unique = "wallZ", Extra = new() { ["joins"] = "" } };
+        var extras = M.Read(new[] { planView, joined, template, filterLine, groupType, groupLine, pileLine, goneWall }.Select(M.Write));
+        var playOrder = M.PlayOrder(extras).Select(l => l.Unique).ToList();
+        check("lifeline: filters and templates are played before the views that use them", playOrder.IndexOf("filter1") < playOrder.IndexOf("tmpl1") && playOrder.IndexOf("tmpl1") < playOrder.IndexOf("plan1"), string.Join(",", playOrder));
+        var after = M.AfterLines(extras).Select(l => l.Unique).ToList();
+        check("lifeline: joins and view graphics are played after everything else, never for a deleted element", after.Count == 3 && after.Contains("wallA") && after.Contains("plan1") && after.Contains("tmpl1") && !after.Contains("wallZ"), string.Join(",", after));
+        check("lifeline: templates, filters and patterns are found again by name; a group's type comes with the group", M.IsDocItem(template) && M.IsDocItem(filterLine) && !M.IsDocItem(planView) && M.IsTemplate(template) && !M.IsTemplate(planView)
+            && M.ComesWithInstance(groupType) && !M.ComesWithInstance(pileLine) && M.Members(groupLine).SequenceEqual(["m1", "m2"]) && M.Members(pileLine).Count == 0, "");
+        var vg = new M.Vg { Hidden = [-2000032], Over = new() { ["-2000011"] = "plc=255.0.0,ht=1" }, Filters = [new() { U = "filter1", Visible = false }], Hide = ["wallB"], Elements = new() { ["wallA"] = "ht=1" } };
+        var vgBack = System.Text.Json.JsonSerializer.Deserialize<M.Vg>(System.Text.Json.JsonSerializer.Serialize(vg))!;
+        check("lifeline: a view's graphics are written in its line and read back", vgBack.Hidden[0] == -2000032 && vgBack.Over["-2000011"] == "plc=255.0.0,ht=1" && !vgBack.Filters[0].Visible && vgBack.Filters[0].Enabled && vgBack.Hide![0] == "wallB" && vgBack.Elements!["wallA"] == "ht=1" && vgBack.Show is null, "");
+        check("lifeline: joins, cuts and a view's graphics are read with each element and set in a last step", Src("Revit", "ChangeFile.cs").Contains("ChangeExtras.ReadRelations(doc, element, line)") && Src("Revit", "ChangeFile.cs").Contains("ChangeExtras.ReadGraphics(doc, drawn, touched)")
+            && Src("Revit", "ChangeReplay.cs").Contains("foreach (var line in M.AfterLines(file))") && Src("Revit", "ChangeReplay.cs").Contains("ChangeExtras.SetGraphics(doc, view, graphics, Known)")
+            && Src("Revit", "ChangeReplay.cs").Contains("ChangeExtras.Relate(doc, element, line, Known, LineOf)"), "");
+        check("lifeline: a join is only taken off when both elements' lines agree", Src("Revit", "ChangeExtras.cs").Contains("if (lineOf(other.UniqueId) is not { Extra: { } ox } || !ox.ContainsKey(\"joins\")) continue;"), "");
+        check("lifeline: templates, filters and patterns are kept whole, and line styles made again", Src("Revit", "ChangeKeeper.cs").Contains("e is View { IsTemplate: true } or ParameterFilterElement or LinePatternElement or FillPatternElement")
+            && !Src("Revit", "ChangeFile.cs").Contains("element is View { IsTemplate: true } ||") && Src("Revit", "ChangeExtras.cs").Contains("doc.Settings.Categories.NewSubcategory(parent, line.Name)"), "");
+        check("lifeline: a changed element is put back from its copy only when nothing hangs on it, and few changed together", Src("Revit", "ChangeReplay.cs").Contains("ChangeExtras.SafeToReplace(doc, element)") && Src("Revit", "ChangeFile.cs").Contains("ids.Count <= KeepChangedUpTo && ChangeKeeper.OnlyByCopy(element)"), "");
+        check("lifeline: a dimension that measures other things is made again; images and groups of new types come back", Src("Revit", "ChangeReplay.cs").Contains("ChangeNotes.MustRemake(doc, element, line, Remap(doc, outcome))")
+            && Src("Revit", "ChangeNotes.cs").Contains("ImageInstance.Create(doc, ViewOf(), imageType.Id,") && Src("Revit", "ChangeViews.cs").Contains("doc.Create.NewGroup(ids)"), "");
+        check("lifeline: copies are kept soon after a change", M.KeepEveryMs is > 0 and <= 20000, M.KeepEveryMs.ToString());
         check("recovery: Help > Open folders lists the change files", SketchProMax.Bugs.UserFolders.List().Any(f => f.Title == "Change files" && f.Path.EndsWith(Path.Combine("Sketch ProMax", "Change files"))), "");
     }
 }

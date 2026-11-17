@@ -578,6 +578,8 @@ internal static class FieldTestCoverage
             "in the test project, with the change file sent to a temporary folder: a wall Lifeline never read is deleted and its deletion is in the file by UniqueId; a floor type's line holds no outline; a material (with its colour and transparency), a wall and a loadable family (from the copy kept next to the file) made after the save and deleted are made again; planning the same file a second time makes nothing again; what the test made is deleted afterwards"),
         new("recovery.kept", Central, "Replay copies back what can't be made from words, and schedules with their sorting", How.Probe, "",
             "in the test project, with a kept-elements project in a temporary folder: a wall is copied into it (as an in-place family, curved stairs or an extrusion roof would be), deleted, and copied back where it was by a replay; a wall schedule with a heading, a sorting row and a filter, deleted, is made again with all three; the kept-elements project is closed again and what the test made is deleted"),
+        new("recovery.extras", Central, "Replay puts joins, view graphics, styles, filters, splines and new groups back", How.Probe, "",
+            "in the test project, with a kept-elements project in a temporary folder: two joined walls are unjoined; a line style, a view filter, a spline in a drafting view and a group of a new type are deleted; a 3D view's hidden category, hidden wall, halftone wall and switched-off filter are cleared; a replay joins the walls, makes the style with its weight and colour, copies the filter back, sets the view's graphics, draws the spline as a spline and puts the group together under its name; what the test made is deleted"),
         new("recovery.bugs", Central, "Lifeline keeps a list of its problems", How.Probe, "",
             "with the list sent to a test folder: a problem noted twice is written once, as one line (when, version, Revit, model, where, what) under the file's header"),
         new("recovery.ui", Central, "Recover after Revit closes by itself, on a real shared model", How.Manual, "", "needs Revit to close by itself and a real central model",
@@ -807,6 +809,7 @@ internal static class FieldTestCoverage
         new(72, ["chat.sync_lock_ui"], "with the chat and a job working on a local copy of a central model, Synchronize with Central finishes in its usual time and no Claude Code or Sketch ProMax program holds the central's lock files"),
         new(73, ["recovery.complete", "recovery.replay"], "replay plays every step, names every deletion, and puts materials, loaded families and sloped floors back, once"),
         new(74, ["recovery.kept", "recovery.complete"], "a replay copies back in-place families and the like from their kept copies, makes schedules with their sorting and filters, and ends with one line (an alert only when something needs you)"),
+        new(75, ["recovery.extras", "recovery.kept"], "a replay also puts back joins and cuts, a view's graphics (hidden and overridden categories, elements and filters), line styles, view templates, view filters and patterns, images, splines and ellipses as drawn, groups of new types, and changed dimensions"),
     ];
 
     /// <summary>

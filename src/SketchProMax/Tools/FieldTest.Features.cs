@@ -536,6 +536,7 @@ internal static partial class FieldTest
         await ProbeCore(s, "recovery.complete", () => App.Dispatcher.InvokeFromEventAsync(app => RecoveryComplete(app, s))).ConfigureAwait(false);
         // Keeping a copy opens the kept-elements project (no window): from the external event.
         await ProbeCore(s, "recovery.kept", () => App.Dispatcher.InvokeFromEventAsync(app => RecoveryKept(app, s))).ConfigureAwait(false);
+        await ProbeCore(s, "recovery.extras", () => App.Dispatcher.InvokeFromEventAsync(app => RecoveryExtras(app, s))).ConfigureAwait(false);
         await Probe(s, "recovery.bugs", () => RecoveryBugs(s)).ConfigureAwait(false);
         await Probe(s, "rescue.cause", RescueCause).ConfigureAwait(false);
         await Probe(s, "rescue.warn", RescueWarn).ConfigureAwait(false);

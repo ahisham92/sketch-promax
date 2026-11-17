@@ -20,7 +20,8 @@ namespace SketchProMax.Revit;
 internal static class ChangeReplay
 {
     /// <summary>Done: already as the file has it (a deletion of what isn't in the model), counted as already right.</summary>
-    public enum Act { Set, Make, Delete, Skip, Done }
+    /// <summary>After: what is done once everything else is played (joins and cuts, a view's graphics, a changed shape put back from its copy).</summary>
+    public enum Act { Set, Make, Delete, Skip, Done, After }
 
     public sealed record Step(M.Line Line, Act Act, string Why);
 
@@ -48,6 +49,12 @@ internal static class ChangeReplay
         public Document? Keeper;
         /// <summary>The kept-elements project couldn't be opened (said once).</summary>
         public string? KeeperError;
+        /// <summary>Groups whose type isn't in the model: their members are played one by one and grouped again at the end.</summary>
+        public readonly HashSet<string> LateGroups = new(StringComparer.Ordinal);
+        /// <summary>The lines with joins and cuts, by UniqueId (a join is only taken off when both elements' lines agree).</summary>
+        public readonly Dictionary<string, M.Line> Relations = new(StringComparer.Ordinal);
+        /// <summary>Lines whose own step found nothing to change: one that changes in its After step is counted as set back then.</summary>
+        public readonly HashSet<M.Line> Unchanged = [];
 
         /// <summary>Notes that <paramref name="old"/> is now <paramref name="made"/>.</summary>
         public void MadeAgain(string? old, Element made)
@@ -120,8 +127,11 @@ internal static class ChangeReplay
         var steps = new List<Step>();
         var ordered = M.PlayOrder(file);
         // Groups made again bring their members: the members' own lines aren't played.
-        var groupsMade = new HashSet<string>(ordered.Where(l => l.What == "group" && l.Kind != M.Kinds.Deleted && l.Unique is not null
-            && Find(doc, l) is null && CanMake(l) is null).Select(l => l.Unique!), StringComparer.Ordinal);
+        // (A group whose type isn't in the model is put together again from its members, at the end.)
+        var groupsMissing = ordered.Where(l => l.What == "group" && l.Kind != M.Kinds.Deleted && l.Unique is not null && Find(doc, l) is null && CanMake(l) is null).ToList();
+        var groupsMade = new HashSet<string>(groupsMissing.Where(l => Type(doc, l, outcome) is GroupType).Select(l => l.Unique!), StringComparer.Ordinal);
+        var late = new List<Step>();
+        foreach (var l in groupsMissing.Where(l => !groupsMade.Contains(l.Unique!) && M.Members(l).Count > 0)) outcome.LateGroups.Add(l.Unique!);
         // Stairs made again bring their own railings.
         var stairsMade = new HashSet<string>(ordered.Where(l => l.What == "stairs" && l.Kind != M.Kinds.Deleted && l.Unique is not null
             && Find(doc, l) is null && CanMake(l) is null).Select(l => l.Unique!), StringComparer.Ordinal);
@@ -134,6 +144,14 @@ internal static class ChangeReplay
             // Made after the last save and deleted again before Lifeline read it: there is nothing to delete.
             if (line.Kind == M.Kinds.Deleted && line.New && line.Unique is not { Length: > 0 }) { steps.Add(new(line, Act.Done, "")); continue; }
             var found = Find(doc, line);
+            // A template, filter or pattern of that name is the same thing (one brought in by a copy, or made by hand since).
+            if (found is null && line.Kind != M.Kinds.Deleted && M.IsDocItem(line) && ChangeKeeper.ByName(doc, line) is { } named)
+            {
+                outcome.MadeAgain(line.Unique, named);
+                found = named;
+            }
+            // A group's or an image's type comes with the group or image.
+            if (found is null && line.Kind != M.Kinds.Deleted && M.ComesWithInstance(line)) continue;
             if (line.What == "family" && line.Kind != M.Kinds.Deleted)
             {
                 // A family loaded after the last save: loaded again from its kept copy, unless one of that name is there.
@@ -161,6 +179,8 @@ internal static class ChangeReplay
                 steps.Add(new(line, Act.Set, ""));
             else if (line.Group is { } group && groupsMade.Contains(group))
                 continue;
+            else if (line.What == "group" && outcome.LateGroups.Contains(line.Unique!))
+                late.Add(new(line, Act.Make, ""));
             else if (line.What == "railing" && line.Host is { } onStairs && stairsMade.Contains(onStairs))
                 continue;
             else if (FromKept(line, outcome))
@@ -169,6 +189,18 @@ internal static class ChangeReplay
                 steps.Add(new(line, Act.Skip, why));
             else
                 steps.Add(new(line, Act.Make, ""));
+        }
+        steps.AddRange(late);
+        // Last: joins and cuts, views' graphics and shapes to check against their kept copies (everything they name is there by now).
+        foreach (var line in M.AfterLines(file))
+        {
+            if (ChangeFile.IsAnalysis(line.CategoryId) || M.IsRevitsOwn(line.CategoryId)) continue;
+            var x = line.Extra!;
+            if (x.ContainsKey("joins")) outcome.Relations[line.Unique!] = line;
+            // Joined and cut as its line says already (most elements): no step.
+            if (!x.ContainsKey("vg") && !x.ContainsKey("shape") && Find(doc, line) is { } there
+                && ChangeExtras.Related(doc, there, line, u => outcome.MadeFor.TryGetValue(u, out var id) ? doc.GetElement(id) : doc.GetElement(u))) continue;
+            steps.Add(new(line, Act.After, ""));
         }
         return steps;
     }
@@ -202,6 +234,9 @@ internal static class ChangeReplay
         "wall" or "instance" => "made after the last save, but its shape isn't a point or a straight line: make it again by hand",
         "type" => ChangeTypes.CanMake(line),
         "material" => ChangeTypes.CanMakeMaterial(line),
+        "style" => ChangeExtras.CanMakeStyle(line),
+        "filter" => "a view filter made after the last save whose copy wasn't kept: make it again by hand",
+        "linepattern" or "fillpattern" => "a pattern made after the last save whose copy wasn't kept: make it again by hand",
         _ when line.What != "viewref" && line.CategoryId is (long)BuiltInCategory.OST_ReferenceViewer or (long)BuiltInCategory.OST_ReferenceViewerSymbol =>
             "a view reference made after the last save (written by an older version): place it again by hand",
         "stairs" => ChangeStairs.CanMake(line),
@@ -220,7 +255,7 @@ internal static class ChangeReplay
         foreach (var s in steps.Where(s => s.Act == Act.Skip)) outcome.Missed(s.Line, $"{M.Describe(s.Line)}: {s.Why}");
         // Stairs first, each in a stairs edit scope of its own (it can't sit inside a transaction), so what is on them finds them.
         // The kept-elements project is opened (once per replay) before any transaction starts.
-        if (outcome.Keeper is null && outcome.KeeperError is null && work.Any(s => s.Act == Act.Make && FromKept(s.Line, outcome)))
+        if (outcome.Keeper is null && outcome.KeeperError is null && work.Any(s => NeedsKeeper(doc, s, outcome)))
             try { outcome.Keeper = ChangeKeeper.Open(doc.Application, outcome.KeptFolder); }
             catch (Exception ex) { outcome.KeeperError = ex.Message; }
         foreach (var s in work.Where(s => s.Act == Act.Make && s.Line.What == "stairs" && !FromKept(s.Line, outcome)).ToList())
@@ -255,13 +290,19 @@ internal static class ChangeReplay
                 switch (s.Act)
                 {
                     case Act.Delete:
-                        if (Find(doc, s.Line) is { } gone) doc.Delete(gone.Id);
+                        // A line style or object style goes with its subcategory.
+                        if (Find(doc, s.Line) is { } gone) doc.Delete(gone is GraphicsStyle { GraphicsStyleCategory: { } styled } ? styled.Id : gone.Id);
                         did = "deleted";
+                        break;
+                    case Act.After:
+                        did = "after";
+                        if (Find(doc, s.Line) is { } settled && After(doc, settled, s.Line, outcome) && outcome.Unchanged.Remove(s.Line)) { outcome.Same--; outcome.Set++; }
                         break;
                     case Act.Set:
                         var sketches = outcome.Sketches.Count;
                         var set = SetState(doc, Find(doc, s.Line)!, s.Line, outcome);
                         did = set ? "set" : "same";
+                        if (!set) outcome.Unchanged.Add(s.Line);
                         if (outcome.Sketches.Count > sketches) outcome.Sketches[outcome.Sketches.Count - 1] = outcome.Sketches[outcome.Sketches.Count - 1] with { Counted = set };
                         break;
                     case Act.Make:
@@ -269,7 +310,8 @@ internal static class ChangeReplay
                         outcome.MadeAgain(s.Line.Unique, made);
                         // What was just made is worked out (its sketch, its faces) before its state is set and others point at it.
                         try { doc.Regenerate(); } catch (Exception) { }
-                        SetState(doc, made, s.Line, outcome);
+                        // (A group put together again from its members is where they are: nothing to set.)
+                        if (!(s.Line.What == "group" && outcome.LateGroups.Contains(s.Line.Unique!))) SetState(doc, made, s.Line, outcome, justMade: true);
                         did = "made";
                         // Only what didn't come back is said (a slope arrow that did is not a message).
                         if (s.Line.SlopeArrow && (s.Line.Arrow is null || s.Line.ArrowSlope is null))
@@ -290,6 +332,7 @@ internal static class ChangeReplay
                     case "deleted": outcome.Deleted++; break;
                     case "set": outcome.Set++; break;
                     case "made": outcome.Made++; break;
+                    case "after": break;
                     default: outcome.Same++; break;
                 }
                 continue;
@@ -353,10 +396,35 @@ internal static class ChangeReplay
     // ---- Setting an element to its state --------------------------------------------------------------------------------
 
     /// <summary>Sets what differs; true when anything changed.</summary>
-    private static bool SetState(Document doc, Element element, M.Line line, Outcome outcome)
+    private static bool SetState(Document doc, Element element, M.Line line, Outcome outcome, bool justMade = false)
     {
         var changed = false;
         if (line.What == "family") return false;
+        Element? Known(string? unique) => unique is null ? null : outcome.MadeFor.TryGetValue(unique, out var id) ? doc.GetElement(id) : doc.GetElement(unique);
+        if (element is GraphicsStyle style) return ChangeExtras.SetStyle(doc, style, line, u => Known(u));
+        // A filter or pattern that was in the model gets what its kept copy has.
+        if (!justMade && line.What is "filter" or "linepattern" or "fillpattern")
+        {
+            if (FromKept(line, outcome) && outcome.Keeper is { } keeper) changed |= ChangeKeeper.Refresh(keeper, doc, element, outcome.Kept[line.Unique!]);
+            if (line.Name is { Length: > 0 } itemName && element.Name != itemName) try { element.Name = itemName; changed = true; } catch (Exception) { }
+            return changed;
+        }
+        // A dimension that measures other things now, or a bar of another shape, can't be edited: made again in its place.
+        if (!justMade && element is Dimension or Rebar && ChangeNotes.MustRemake(doc, element, line, Remap(doc, outcome)) && (element is Dimension || ChangeExtras.SafeToReplace(doc, element)))
+        {
+            try
+            {
+                if (ChangeNotes.Make(doc, line, Type(doc, line, outcome), LevelOf(doc, line), Known, Remap(doc, outcome), outcome.NotDone) is { } again)
+                {
+                    doc.Delete(element.Id);
+                    try { doc.Regenerate(); } catch (Exception) { }
+                    outcome.MadeAgain(line.Unique, again);
+                    element = again;
+                    changed = true;
+                }
+            }
+            catch (Exception) { /* what it measured isn't there: set as far as it goes, and said below */ }
+        }
         if (element is not (ElementType or Material) && line.Type is not null && Type(doc, line, outcome) is { } type && element.GetTypeId() != type.Id)
         {
             element.ChangeTypeId(type.Id);
@@ -494,6 +562,14 @@ internal static class ChangeReplay
             return ChangeKeeper.Make(outcome.Keeper ?? throw new InvalidOperationException("its kept copy couldn't be opened" + (outcome.KeeperError is { } e ? $" ({e})" : "")),
                 doc, outcome.Kept[line.Unique!], line);
         if (line.What == "material") return ChangeTypes.MakeMaterial(doc, line);
+        if (line.What == "style") return ChangeExtras.MakeStyle(doc, line);
+        if (line.What == "group" && outcome.LateGroups.Contains(line.Unique!))
+        {
+            // The first group of a new type names the type; later ones of that type take it.
+            var group = ChangeViews.Regroup(doc, line, Known, Type(doc, line, outcome) as GroupType);
+            if (line.TypeUnique is { } typeUnique && !outcome.MadeFor.ContainsKey(typeUnique) && doc.GetElement(typeUnique) is null) outcome.MadeAgain(typeUnique, group.GroupType);
+            return group;
+        }
         if (ChangeShapes.Make(doc, line, Type(doc, line, outcome), LevelOf(doc, line), Known) is { } shaped) return shaped;
         if (ChangeNotes.Make(doc, line, Type(doc, line, outcome), LevelOf(doc, line), Known, Remap(doc, outcome), outcome.NotDone) is { } note) return note;
         if (ChangeViews.Make(doc, line, Type(doc, line, outcome), LevelOf(doc, line), Known, outcome.NotDone) is { } viewed) return viewed;
@@ -530,6 +606,14 @@ internal static class ChangeReplay
                     if (lvl is null) throw new InvalidOperationException("its level isn't in this model");
                     return doc.Create.NewFamilyInstance(ChangeShapes.ToCurve(new M.Seg(line.P!, q, line.M)), symbol, lvl, structural);
                 }
+                // A face-based family: on its face again, pointing the same way along it.
+                if (line.Extra is { } fx && fx.TryGetValue("face", out var stable) && fx.TryGetValue("hand", out var hand))
+                    try
+                    {
+                        var n = hand.Split(' ').Select(t => double.Parse(t, System.Globalization.CultureInfo.InvariantCulture)).ToArray();
+                        if (Reference.ParseFromStableRepresentation(doc, Remap(doc, outcome)(stable)) is { } face) return doc.Create.NewFamilyInstance(face, X(line.P!), new XYZ(n[0], n[1], n[2]), symbol);
+                    }
+                    catch (Exception) { /* the face isn't there as it was: on its host or level, below */ }
                 var host = line.Host is { } h ? (outcome.MadeFor.TryGetValue(h, out var madeHost) ? doc.GetElement(madeHost) : doc.GetElement(h)) : null;
                 if (host is not null && lvl is not null) return doc.Create.NewFamilyInstance(X(line.P!), symbol, host, lvl, structural);
                 if (host is not null) return doc.Create.NewFamilyInstance(X(line.P!), symbol, host, structural);
@@ -537,6 +621,62 @@ internal static class ChangeReplay
                 return lvl is not null ? doc.Create.NewFamilyInstance(X(line.P!), symbol, lvl, structural) : doc.Create.NewFamilyInstance(X(line.P!), symbol, structural);
             }
         }
+    }
+
+    // ---- After everything else -------------------------------------------------------------------------------------------
+
+    /// <summary>True when the step needs the kept-elements project open (it must be opened before any transaction starts).</summary>
+    private static bool NeedsKeeper(Document doc, Step s, Outcome outcome)
+    {
+        if (!FromKept(s.Line, outcome)) return false;
+        switch (s.Act)
+        {
+            case Act.Make: return true;
+            case Act.Set: return s.Line.What is "filter" or "linepattern" or "fillpattern";
+            case Act.After:
+                try { return s.Line.Extra!.TryGetValue("shape", out var shape) && Find(doc, s.Line, outcome.MadeFor) is { } e && !M.SameSignature(ChangeExtras.Signature(e), shape); }
+                catch (Exception) { return false; }
+            default: return false;
+        }
+    }
+
+    /// <summary>
+    /// What a line has to do once everything is played: its element's joins, cuts and attachments, a view's graphics,
+    /// and an element whose shape isn't its line's put back from its kept copy. True when anything changed.
+    /// Call inside a transaction.
+    /// </summary>
+    private static bool After(Document doc, Element element, M.Line line, Outcome outcome)
+    {
+        Element? Known(string unique) => outcome.MadeFor.TryGetValue(unique, out var id) ? doc.GetElement(id) : doc.GetElement(unique);
+        M.Line? LineOf(string unique)
+        {
+            if (outcome.Relations.TryGetValue(unique, out var own)) return own;
+            // The element may have been made again in this replay: its line is under its old UniqueId.
+            foreach (var made in outcome.MadeUnique) if (made.Value == unique && outcome.Relations.TryGetValue(made.Key, out var old)) return old;
+            return null;
+        }
+        var x = line.Extra!;
+        var changed = false;
+        if (element is View view && x.TryGetValue("vg", out var graphics)) changed |= ChangeExtras.SetGraphics(doc, view, graphics, Known);
+        changed |= ChangeExtras.Relate(doc, element, line, Known, LineOf);
+        if (x.TryGetValue("shape", out var shape))
+        {
+            if (changed) try { doc.Regenerate(); } catch (Exception) { }
+            if (!M.SameSignature(ChangeExtras.Signature(element), shape))
+            {
+                if (FromKept(line, outcome) && outcome.Keeper is { } keeper && ChangeExtras.SafeToReplace(doc, element))
+                {
+                    var fresh = ChangeKeeper.Make(keeper, doc, outcome.Kept[line.Unique!], line);
+                    doc.Delete(element.Id);
+                    try { doc.Regenerate(); } catch (Exception) { }
+                    outcome.MadeAgain(line.Unique, fresh);
+                    ChangeExtras.Relate(doc, fresh, line, Known, LineOf);
+                    changed = true;
+                }
+                else outcome.NotDone.Add($"{M.Describe(line)}: its shape was changed after the last save and can't be put back from the file: reshape it by hand");
+            }
+        }
+        return changed;
     }
 
     /// <summary>Points a stable reference at the elements made again so far in this replay.</summary>
