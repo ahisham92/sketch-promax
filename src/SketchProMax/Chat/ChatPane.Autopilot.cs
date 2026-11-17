@@ -1083,10 +1083,11 @@ internal sealed partial class ChatPane
             var revit = me.MainModule?.FileName ?? "";
             if (!File.Exists(exe) || revit.Length == 0) return;
             var model = Revit.FreezeWatch.ModelToReopen ?? "";
-            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(exe, $"--watch-revit {me.Id} \"{revit}\" \"{model}\"")
+            // It watches for hours: started so it holds none of Revit's open files, the central model's locks above all (bug 72).
+            ChildProcess.Start(new System.Diagnostics.ProcessStartInfo(exe, $"--watch-revit {me.Id} \"{revit}\" \"{model}\"")
             {
                 UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = Path.GetDirectoryName(exe) ?? "",
-            })?.Dispose();
+            }).Dispose();
         }
         catch (Exception) { /* no watcher: after a crash the run carries on when Revit is opened again */ }
     }

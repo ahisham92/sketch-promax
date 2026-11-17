@@ -14,6 +14,18 @@ internal static class SignInFlow
 {
     private static readonly object Gate = new();
     private static Process? _process;
+    private static StreamWriter? _input;
+
+    /// <summary>Reads one of the sign-in's outputs line by line on a background thread.</summary>
+    private static void Pump(StreamReader reader) =>
+        new Thread(() =>
+        {
+            try
+            {
+                while (reader.ReadLine() is { } line) Read(line);
+            }
+            catch (Exception) { /* its own thread: nothing may escape */ }
+        }) { IsBackground = true, Name = "Sketch ProMax sign-in output" }.Start();
     private static readonly StringBuilder Output = new();
 
     public enum State { Idle, Waiting, Done, Failed }
@@ -52,13 +64,14 @@ internal static class SignInFlow
             info.StandardErrorEncoding = Encoding.UTF8;
             info.WorkingDirectory = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
             info.EnvironmentVariables.Remove("ANTHROPIC_API_KEY");
-            var process = new Process { StartInfo = info, EnableRaisingEvents = true };
-            process.OutputDataReceived += (_, e) => Read(e.Data);
-            process.ErrorDataReceived += (_, e) => Read(e.Data);
+            // Started so it inherits none of Revit's open files (bug 72).
+            var child = ChildProcess.Start(info);
+            var process = child.Process;
             process.Exited += (_, _) => Ended(process);
-            process.Start();
-            process.BeginOutputReadLine();
-            process.BeginErrorReadLine();
+            process.EnableRaisingEvents = true;
+            Pump(child.StandardOutput!);
+            Pump(child.StandardError!);
+            _input = child.StandardInput;
             _process = process;
             Now = State.Waiting;
         }
@@ -110,11 +123,11 @@ internal static class SignInFlow
         if (code.Length == 0) return false;
         lock (Gate)
         {
-            if (_process is not { HasExited: false } p) return false;
+            if (_process is not { HasExited: false } || _input is not { } input) return false;
             try
             {
-                p.StandardInput.WriteLine(code);
-                p.StandardInput.Flush();
+                input.WriteLine(code);
+                input.Flush();
                 return true;
             }
             catch (Exception ex) when (ex is IOException or InvalidOperationException) { return false; }

@@ -157,6 +157,7 @@ RunningCallTests.Run((name, ok, detail) => Check(name, ok, detail));
 FreezeTests.Run((name, ok, detail) => Check(name, ok, detail));
 RevitTimeTests.Run((name, ok, detail) => Check(name, ok, detail));
 ScriptHintTests.Run((name, ok, detail) => Check(name, ok, detail));
+SyncLockTests.Run((name, ok, detail) => Check(name, ok, detail));
 ChatMcpTests.Run((name, ok, detail) => Check(name, ok, detail));
 ResultViewTests.Run((name, ok, detail) => Check(name, ok, detail));
 ChatAutoTests.Run((name, ok, detail) => Check(name, ok, detail));
@@ -184,6 +185,7 @@ SignaturePagesTests.Run((name, ok, detail) => Check(name, ok, detail));
     RecoveryTests.Run(File.Exists(Path.Combine(root, "README.md")) ? root : Directory.GetCurrentDirectory(), (name, ok, detail) => Check(name, ok, detail));
     AutopilotStallTests.RunSources(File.Exists(Path.Combine(root, "README.md")) ? root : Directory.GetCurrentDirectory(), (name, ok, detail) => Check(name, ok, detail));
     ChatWorkTests.RunSources(File.Exists(Path.Combine(root, "README.md")) ? root : Directory.GetCurrentDirectory(), (name, ok, detail) => Check(name, ok, detail));
+    SyncLockTests.RunSources(File.Exists(Path.Combine(root, "README.md")) ? root : Directory.GetCurrentDirectory(), (name, ok, detail) => Check(name, ok, detail));
     LicenseTests.Run(File.Exists(Path.Combine(root, "README.md")) ? root : Directory.GetCurrentDirectory(), (name, ok, detail) => Check(name, ok, detail));
 }
 

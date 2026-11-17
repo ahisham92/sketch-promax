@@ -108,16 +108,19 @@ internal static class PdfPartReader
         foreach (var name in start.Environment.Keys.Where(k => k == "CLAUDECODE" || k.StartsWith("CLAUDE_CODE_", StringComparison.Ordinal) && k.Contains("SESSION")).ToList())
             start.Environment.Remove(name);
 
-        using var process = new Process { StartInfo = start };
-        try { process.Start(); }
+        // Started so it inherits none of Revit's open files (the central model's locks held Sync with Central, bug 72).
+        SketchProMax.Chat.ChildProcess child;
+        try { child = SketchProMax.Chat.ChildProcess.Start(start); }
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException) { return ("", null, ex.Message); }
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(ct);
         stop.CancelAfter(TimeSpan.FromMinutes(10));
+        using var owned = child;
+        var process = child.Process;
         using var kill = stop.Token.Register(() => KillTree(process));
-        var errors = process.StandardError.ReadToEndAsync();
+        var errors = child.StandardError!.ReadToEndAsync();
         try
         {
-            var stdin = new StreamWriter(process.StandardInput.BaseStream, new UTF8Encoding(false));
+            var stdin = child.StandardInput!;
             await stdin.WriteLineAsync(line).ConfigureAwait(false);
             await stdin.FlushAsync().ConfigureAwait(false);
             stdin.Close();
@@ -125,7 +128,7 @@ internal static class PdfPartReader
         catch (IOException) { /* it ended at once; the output says why */ }
 
         string? answer = null, newSession = null, failure = null;
-        while (await process.StandardOutput.ReadLineAsync().ConfigureAwait(false) is { } output)
+        while (await child.StandardOutput!.ReadLineAsync().ConfigureAwait(false) is { } output)
         {
             if (!output.StartsWith("{", StringComparison.Ordinal) || output.IndexOf("\"result\"", StringComparison.Ordinal) < 0) continue;
             try

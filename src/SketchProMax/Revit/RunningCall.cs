@@ -63,6 +63,15 @@ internal static class RunningCall
         }
     }
 
+    /// <summary>The innermost call running now (its tool name, and where it came from), or null. Any thread.</summary>
+    public static (string Tool, string Where)? Current
+    {
+        get
+        {
+            lock (Gate) return Open.Count > 0 ? (Open.Peek().Tool, Open.Peek().Where) : null;
+        }
+    }
+
     /// <summary>The call ended (any way): the one around it is the running call again, or none.</summary>
     public static void End()
     {

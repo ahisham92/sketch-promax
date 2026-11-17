@@ -62,6 +62,20 @@ internal sealed class ChatEngine : IDisposable
     /// <summary>The session this engine was asked to resume, if any.</summary>
     public string? ResumedFrom { get; }
 
+    /// <summary>
+    /// Claude Code's duration_api_ms so far: in a process that answers many messages it counts up over all of them, so
+    /// one answer's thinking is the rise since the last answer (<see cref="ThinkingMs"/>).
+    /// </summary>
+    private long _apiMsSeen;
+
+    /// <summary>This answer's thinking time from the running total a result carries (UI thread).</summary>
+    public long ThinkingMs(long apiMsTotal)
+    {
+        var rise = apiMsTotal >= _apiMsSeen ? apiMsTotal - _apiMsSeen : apiMsTotal;
+        _apiMsSeen = apiMsTotal;
+        return Math.Max(0, rise);
+    }
+
     /// <summary>True once system/init arrived (Claude Code started and read its config).</summary>
     public bool Initialized { get; private set; }
 
@@ -134,10 +148,12 @@ internal sealed class ChatEngine : IDisposable
         var info = _start?.Invoke() ?? ClaudeCli.EngineStart(_install, ResumedFrom, Model, Coordinator, Effort, ChatKey);
         McpAddress = ClaudeCli.McpAddress;
         var started = DateTime.UtcNow;
-        var process = new Process { StartInfo = info, EnableRaisingEvents = true };
+        // Started so it inherits none of Revit's open files (the central model's locks held Sync with Central, bug 72).
+        var child = ChildProcess.Start(info);
+        var process = child.Process;
         // Raised on a thread-pool thread: an exception there would close Revit.
         process.Exited += (_, _) => { try { OnExited(); } catch (Exception) { } };
-        process.Start();
+        process.EnableRaisingEvents = true;
         lock (_gate)
         {
             if (_disposed)
@@ -147,10 +163,11 @@ internal sealed class ChatEngine : IDisposable
             }
             _process = process;
             // UTF-8 without a byte order mark on every framework (on .NET Framework StandardInput uses the console code page).
-            _stdin = new StreamWriter(process.StandardInput.BaseStream, new UTF8Encoding(false)) { AutoFlush = true, NewLine = "\n" };
+            _stdin = child.StandardInput!;
+            _stdin.NewLine = "\n";
         }
-        new Thread(() => ReadOutput(process)) { IsBackground = true, Name = "Sketch ProMax chat output" }.Start();
-        new Thread(() => ReadErrors(process)) { IsBackground = true, Name = "Sketch ProMax chat errors" }.Start();
+        new Thread(() => ReadOutput(child.StandardOutput!)) { IsBackground = true, Name = "Sketch ProMax chat output" }.Start();
+        new Thread(() => ReadErrors(child.StandardError!)) { IsBackground = true, Name = "Sketch ProMax chat errors" }.Start();
         WaitForTools(process, started);
     }
 
@@ -220,11 +237,10 @@ internal sealed class ChatEngine : IDisposable
         }
     }
 
-    private void ReadOutput(Process process)
+    private void ReadOutput(StreamReader reader)
     {
         try
         {
-            var reader = process.StandardOutput;
             var buffer = new char[8192];
             int read;
             // Read in chunks rather than lines: the parser keeps a partial last line until its newline arrives.
@@ -250,12 +266,12 @@ internal sealed class ChatEngine : IDisposable
         catch (Exception) { }
     }
 
-    private void ReadErrors(Process process)
+    private void ReadErrors(StreamReader errors)
     {
         try
         {
             string? line;
-            while ((line = process.StandardError.ReadLine()) is not null)
+            while ((line = errors.ReadLine()) is not null)
             {
                 lock (_stderr)
                 {
