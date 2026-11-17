@@ -32,6 +32,8 @@ internal static class WorkedCode
         public DateTime Last { get; set; }
         /// <summary>How many times code of this shape worked.</summary>
         public int Uses { get; set; }
+        /// <summary>Whose PC it came from, for code kept by a colleague (the team folder); "" for this PC's own.</summary>
+        public string By { get; set; } = "";
     }
 
     internal sealed record Match(Entry Entry, int Shared, double Score);
@@ -124,7 +126,7 @@ internal static class WorkedCode
 
     public static string Line(Entry e) =>
         $"{e.Id}: {OneLine(e.Description, 140)} ({e.Tool}{(e.OwnTransactions ? ", own_transactions" : "")}, worked {e.Uses}x, last {e.Last:yyyy-MM-dd}" +
-        (e.Model.Length > 0 ? $", in {e.Model}" : "") + ")";
+        (e.Model.Length > 0 ? $", in {e.Model}" : "") + (e.By.Length > 0 ? $", kept by {e.By}" : "") + ")";
 
     private static string OneLine(string text, int max)
     {
@@ -156,6 +158,60 @@ internal static class WorkedCode
                ". When this needs code, get it with worked_code (action=get, id) and adapt it instead of writing it again.]";
     }
 
+    // ---- The team's code --------------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// Where colleagues' kept code comes from (Sharing.TeamShare sets it; the tests leave it unset): what one person's
+    /// chat coded, the next person's chat finds instead of coding it again.
+    /// </summary>
+    public static Func<List<Entry>>? Team;
+
+    /// <summary>
+    /// What to do with a one-click tool from the team folder: "install" when this PC doesn't have it and never had it
+    /// from the team, "update" when the copy here is still the one the team gave, "keep" otherwise (this PC's own tool
+    /// of that name, one changed here, or one deleted here on purpose).
+    /// </summary>
+    public static string Decide(string? localHash, string? installedHash, string teamHash) =>
+        localHash is null ? (installedHash is null ? "install" : "keep")
+        : localHash == teamHash ? "keep"
+        : installedHash is not null && localHash == installedHash ? "update" : "keep";
+
+    /// <summary>This PC's code with the team's: its own first, a colleague's entry only for a shape this PC doesn't have.</summary>
+    public static List<Entry> Merge(List<Entry> mine, IEnumerable<Entry> team)
+    {
+        var all = new List<Entry>(mine);
+        var have = new HashSet<string>(mine.Select(e => e.Id), StringComparer.Ordinal);
+        foreach (var e in team.OrderByDescending(e => e.Uses).ThenByDescending(e => e.Last))
+            if (e.Id.Length > 0 && e.Code.Length is > 0 and <= MaxCode && e.Description.Length > 0 && have.Add(e.Id)) all.Add(e);
+        return all;
+    }
+
+    /// <summary>
+    /// The colleagues' code read from their files in the team folder (<paramref name="files"/>: PC name and JSON), with
+    /// this PC's own file left out; a broken file is skipped. Each entry is marked with whose PC it came from.
+    /// </summary>
+    public static List<Entry> FromTeam(IEnumerable<(string Pc, string Json)> files, string thisPc)
+    {
+        var all = new List<Entry>();
+        foreach (var (pc, json) in files)
+        {
+            if (string.Equals(pc, thisPc, StringComparison.OrdinalIgnoreCase)) continue;
+            try
+            {
+                foreach (var e in JsonSerializer.Deserialize<List<Entry>>(json) ?? [])
+                {
+                    if (e is null || e.Id is null || e.Code is null || e.Description is null) continue;
+                    e.By = pc;
+                    e.Tool = e.Tool == "run_revit_query_code" ? e.Tool : "run_revit_code";
+                    e.Model ??= "";
+                    all.Add(e);
+                }
+            }
+            catch (JsonException) { /* a broken file is skipped */ }
+        }
+        return all;
+    }
+
     // ---- The file on this PC -------------------------------------------------------------------------------------------
 
     /// <summary><see cref="Keep"/> against the file on this PC. Never throws: keeping must not break a call.</summary>
@@ -177,9 +233,14 @@ internal static class WorkedCode
         catch (Exception) { /* not kept this time */ }
     }
 
-    public static List<Entry> Load()
+    /// <summary>The kept code: this PC's, and (unless <paramref name="own"/>) the colleagues' from the team folder.</summary>
+    public static List<Entry> Load(bool own = false)
     {
-        lock (Gate) return Read();
+        List<Entry> mine;
+        lock (Gate) mine = Read();
+        if (own || Team is null) return mine;
+        try { return Merge(mine, Team()); }
+        catch (Exception) { return mine; }
     }
 
     /// <summary>The pointer for a failed call, from the file; "" on any trouble.</summary>

@@ -16,12 +16,15 @@ public sealed class WorkedCodeTool : IRevitTool
         "did, from every chat and job. Call it BEFORE writing code (action=find with a few words on the work, for example " +
         "'trim beam to slab edge' or 'dimension pile centres'): the best match comes back with its code, ready to adapt (other " +
         "ids, levels, sizes), so nothing that worked once is written again or fails the same way twice. action=get with an id " +
-        "gives one entry's code; action=list the newest. Changes nothing.";
+        "gives one entry's code; action=list the newest. Kept code is shared with the team: with a team folder (action=share shows " +
+        "it; folder sets it, 'off' stops it; by default the update folder of the shared tools) every PC's kept code is found by " +
+        "everyone, and the owner's one-click tools (save_as_tool) are installed on every PC. Changes nothing in the model.";
     public string PropertiesJson => """
     {
-      "action": {"type": "string", "enum": ["find", "get", "list"], "description": "Default find."},
+      "action": {"type": "string", "enum": ["find", "get", "list", "share"], "description": "Default find."},
       "query": {"type": "string", "description": "find: what the code should do, in a few words (the words of its description)."},
       "id": {"type": "string", "description": "get: the entry's id, from find, list, or the note on a failed code call."},
+      "folder": {"type": "string", "description": "share: the team folder on the network to set (everyone uses the same one), or 'off'. Leave out to see how sharing stands."},
       "max": {"type": "integer", "description": "find and list: how many entries. Default 5 (find), 20 (list)."}
     }
     """;
@@ -63,19 +66,40 @@ public sealed class WorkedCodeTool : IRevitTool
                     note = "Adapt the best one (ids, names, levels, sizes) rather than writing new code. It worked as it is; when it fails now, the model differs: read the error, change only that.",
                 });
             }
+            case "share":
+            {
+                if (args.OptString("folder") is { } folder && folder.Trim().Length > 0)
+                {
+                    folder = folder.Trim().Trim('"');
+                    if (!folder.Equals("off", StringComparison.OrdinalIgnoreCase) && !System.IO.Directory.Exists(folder))
+                        return ToolResult.Error($"This PC can't reach the folder '{folder}'. Give a network folder everyone can open.");
+                    Sharing.TeamShare.Set(folder);
+                }
+                var (team, reachable, fromTeam) = Sharing.TeamShare.Status();
+                return ToolResult.Ok(new
+                {
+                    teamFolder = team.Length > 0 ? team : null,
+                    reachable,
+                    keptHere = entries.Count(e => e.By.Length == 0),
+                    keptByColleagues = fromTeam,
+                    note = team.Length == 0
+                        ? "No team folder: kept code stays on this PC. Set one with action=share and folder (a network folder everyone can open); the others set the same folder once, or get it with the shared tools."
+                        : "Kept code goes to and comes from this folder every two minutes; the owner's one-click tools are installed on every PC from it.",
+                });
+            }
             default:
-                return ToolResult.Error("action is find, get or list.");
+                return ToolResult.Error("action is find, get, list or share.");
         }
     }
 
     private static object Header(WorkedCode.Entry e) => new
     {
-        id = e.Id, description = e.Description, tool = e.Tool, worked = e.Uses, last = e.Last.ToString("yyyy-MM-dd"), model = e.Model,
+        id = e.Id, description = e.Description, tool = e.Tool, worked = e.Uses, last = e.Last.ToString("yyyy-MM-dd"), model = e.Model, keptBy = e.By.Length > 0 ? e.By : null,
     };
 
     private static object Full(WorkedCode.Entry e) => new
     {
         id = e.Id, description = e.Description, tool = e.Tool, own_transactions = e.OwnTransactions, worked = e.Uses,
-        last = e.Last.ToString("yyyy-MM-dd"), model = e.Model, code = e.Code,
+        last = e.Last.ToString("yyyy-MM-dd"), model = e.Model, keptBy = e.By.Length > 0 ? e.By : null, code = e.Code,
     };
 }

@@ -253,6 +253,7 @@ public sealed class App : IExternalApplication
         try { Updater.SettleInstall(); } catch (Exception) { }
         if (stop.IsCancellationRequested) return;
         // Shared tools: packs this PC shared are republished when they change, packs it received follow their updates.
+        Sharing.TeamShare.Start();
         _ = Task.Run(() => SharedLoopAsync(stop));
         // Check at every start, then hourly while Revit stays open; the bug log is fetched with each check. With
         // automatic updates off a newer version is only announced (UI/UpdateNotice), never downloaded.
@@ -288,6 +289,8 @@ public sealed class App : IExternalApplication
             {
                 Sharing.SharedTools.AutoPublish();
                 if (Sharing.SharedPacks.Any()) Sharing.SharedPacks.Sync(stop);
+                // Kept code and one-click tools, shared through the team folder (Sharing.TeamShare).
+                if (!Shared) Sharing.SharedTools.TeamRound();
                 if (!settled && Sharing.TritoRuntime.Installed()) { Sharing.TritoRuntime.SettleFromRunning(); settled = true; }
             }
             catch (Exception) { /* tried again at the next round */ }
