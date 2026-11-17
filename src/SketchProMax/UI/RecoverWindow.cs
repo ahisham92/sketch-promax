@@ -181,44 +181,79 @@ internal sealed class RecoverWindow : System.Windows.Window
         _results.Children.Clear();
         Say("Reading the model…", Brand.K.Muted);
         List<ChangeReplay.Step> steps;
+        // What an earlier replay of this file made again is set, not made a second time; the file's kept families are next to it.
+        var outcome = new ChangeReplay.Outcome { FamiliesFolder = ChangeFile.FamiliesFolderOf(file) };
+        var madeBefore = ChangeFile.ReadMade(file);
         try
         {
             var planned = await App.Dispatcher.InvokeAsync(app =>
-                app.ActiveUIDocument?.Document is { } doc && string.Equals(doc.PathName ?? "", target.Path, StringComparison.OrdinalIgnoreCase) ? ChangeReplay.Plan(doc, parsed) : null);
+            {
+                if (app.ActiveUIDocument?.Document is not { } doc || !string.Equals(doc.PathName ?? "", target.Path, StringComparison.OrdinalIgnoreCase)) return null;
+                ChangeReplay.Remember(doc, madeBefore, outcome);
+                return ChangeReplay.Plan(doc, parsed, outcome);
+            });
             if (planned is null) { Say($"Make {target.Title} the active model, then press Replay again.", Brand.K.DangerText); return; }
             steps = planned;
         }
         catch (Exception ex) { Say("Couldn't read the model: " + ex.Message, Brand.K.DangerText); LifelineBugs.Note("replay", "the replay couldn't plan", target.Path, ex); return; }
 
-        var outcome = new ChangeReplay.Outcome();
         var done = 0;
+        var total = steps.Count;
         string? stoppedBecause = null;
+        var written = outcome.MadeUnique.Count;
         // Small chunks, each one short Revit call, so Revit stays responsive and Stop and the count work between them.
-        var size = M.ReplayChunk;
-        for (var i = 0; i < steps.Count; i += size)
+        async Task Play(List<ChangeReplay.Step> list, string saying)
         {
-            if (_stop.IsCancellationRequested) { stoppedBecause = "you pressed Stop"; break; }
-            var chunk = steps.Skip(i).Take(size).ToList();
-            Say($"Replaying… {done} of {steps.Count}: {M.Describe(chunk[0].Line)}", Brand.K.Muted);
-            var clock = System.Diagnostics.Stopwatch.StartNew();
+            var size = M.ReplayChunk;
+            for (var i = 0; i < list.Count;)
+            {
+                if (_stop!.IsCancellationRequested) { stoppedBecause = "you pressed Stop"; break; }
+                var chunk = list.Skip(i).Take(size).ToList();
+                Say($"{saying} {done} of {total}: {M.Describe(chunk[0].Line)}", Brand.K.Muted);
+                var clock = System.Diagnostics.Stopwatch.StartNew();
+                try
+                {
+                    var why = await App.Dispatcher.InvokeAsync(app =>
+                    {
+                        if (app.ActiveUIDocument?.Document is not { } doc || !string.Equals(doc.PathName ?? "", target.Path, StringComparison.OrdinalIgnoreCase))
+                            return "another model became the active one";
+                        if (doc.IsModifiable) return "a change is being made in the model (finish it or press Esc)";
+                        ChangeReplay.Apply(doc, chunk, outcome);
+                        return null;
+                    });
+                    if (why is not null) { stoppedBecause = why; break; }
+                }
+                catch (Exception ex) { stoppedBecause = ex.Message; LifelineBugs.Note("replay", "the replay stopped", target.Path, ex); break; }
+                // Every step of the chunk is done before the next chunk starts where this one ended (never further on).
+                i += chunk.Count;
+                done += chunk.Count;
+                size = M.NextChunk(chunk.Count, clock.Elapsed);
+                // What was made so far is remembered next to the file: a replay stopped here can be played again.
+                if (outcome.MadeUnique.Count != written) { written = outcome.MadeUnique.Count; ChangeFile.WriteMade(file, outcome.MadeUnique); }
+            }
+        }
+        await Play(steps, "Replaying…");
+        // What Revit refused is tried once more: by now what it waited for (its view, a deletion that frees its name) is done.
+        if (stoppedBecause is null && outcome.Failed.Count > 0)
+        {
+            var again = outcome.TakeFailed();
+            total += again.Count;
+            await Play(again, "Trying again what Revit refused…");
+        }
+        // Names that were taken while an element the file deletes was still there are set now.
+        if (stoppedBecause is null && outcome.NotDone.Count > 0)
             try
             {
-                var why = await App.Dispatcher.InvokeAsync(app =>
+                await App.Dispatcher.InvokeAsync(app =>
                 {
-                    if (app.ActiveUIDocument?.Document is not { } doc || !string.Equals(doc.PathName ?? "", target.Path, StringComparison.OrdinalIgnoreCase))
-                        return "another model became the active one";
-                    if (doc.IsModifiable) return "a change is being made in the model (finish it or press Esc)";
-                    ChangeReplay.Apply(doc, chunk, outcome);
-                    return null;
+                    if (app.ActiveUIDocument?.Document is { } doc && string.Equals(doc.PathName ?? "", target.Path, StringComparison.OrdinalIgnoreCase)) ChangeReplay.Settle(doc, outcome);
+                    return true;
                 });
-                if (why is not null) { stoppedBecause = why; break; }
             }
-            catch (Exception ex) { stoppedBecause = ex.Message; LifelineBugs.Note("replay", "the replay stopped", target.Path, ex); break; }
-            done += chunk.Count;
-            size = M.NextChunk(chunk.Count, clock.Elapsed);
-        }
+            catch (Exception ex) { LifelineBugs.Note("replay", "names couldn't be set at the end", target.Path, ex); }
+        ChangeFile.WriteMade(file, outcome.MadeUnique);
         var opened = stoppedBecause is null ? await OpenViews(parsed, outcome, target) : 0;
-        WriteReport(file, target.Path, outcome, done, steps.Count, opened, stoppedBecause);
+        WriteReport(file, target.Path, outcome, done, total, opened, stoppedBecause);
         // Lifeline's bug list: Revit's errors first, then what replay can't put back yet (what to build next).
         foreach (var error in outcome.Errors) LifelineBugs.Note("replay error", error, target.Path);
         foreach (var n in outcome.NotDone.Except(outcome.Errors)) LifelineBugs.Note("replay couldn't", n, target.Path, key: M.Reason(n));
@@ -226,7 +261,7 @@ internal sealed class RecoverWindow : System.Windows.Window
 
         var line = $"Done: {outcome.Set} set back, {outcome.Made} made again, {outcome.Deleted} deleted, {outcome.Same} already right" +
                    (opened > 0 ? $", {Plural(opened, "view")} opened" : "") + "." +
-                   (stoppedBecause is not null ? $" Stopped after {done} of {steps.Count} because {stoppedBecause}." : "");
+                   (stoppedBecause is not null ? $" Stopped after {done} of {total} because {stoppedBecause}. Press Replay again to carry on: what is done already stays as it is." : "");
         Say(line, stoppedBecause is null && outcome.NotDone.Count == 0 ? Brand.K.SuccessText : Brand.K.WarningText);
         ShowNotDone(outcome);
         // The owner asked for this alert: replay can't promise every change, so the user checks before saving.
@@ -246,6 +281,10 @@ internal sealed class RecoverWindow : System.Windows.Window
         _results.Children.Clear();
         if (outcome.NotDone.Count == 0) return;
         _results.Children.Add(Brand.Text($"Not done ({outcome.NotDone.Count})", Brand.K.Text, 13, bold: true));
+        // The reasons first, commonest first, so a long list is understood before it is read.
+        var reasons = outcome.NotDone.GroupBy(M.Reason).OrderByDescending(g => g.Count()).ToList();
+        if (reasons.Count > 1 && outcome.NotDone.Count > 5)
+            foreach (var g in reasons.Take(8)) _results.Children.Add(Wrap(Brand.Text($"{g.Count()} × {g.Key}", Brand.K.Muted, 11)));
         for (var i = 0; i < outcome.NotDone.Count && i < 300; i++)
         {
             var text = Wrap(Brand.Text(outcome.NotDone[i], Brand.K.Text, 12));

@@ -326,6 +326,13 @@ internal static class ChangeFileMath
         /// <summary>Level: its elevation (internal units).</summary>
         [JsonPropertyName("elev"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public double? Elevation { get; set; }
         [JsonPropertyName("v"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public List<Value>? Values { get; set; }
+        /// <summary>A sketch's slope arrow (floors, ceilings): from its tail (P) to its head (Q), and its slope (rise over run).</summary>
+        [JsonPropertyName("sa"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public Seg? Arrow { get; set; }
+        [JsonPropertyName("sl"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public double? ArrowSlope { get; set; }
+        /// <summary>A family loaded after the last save: its copy kept next to the change file (the file's name in <see cref="FamiliesFolder"/>).</summary>
+        [JsonPropertyName("file"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? File { get; set; }
+        /// <summary>What a kind keeps besides its values, by name (a material's colours, patterns and assets).</summary>
+        [JsonPropertyName("x"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public Dictionary<string, string>? Extra { get; set; }
         /// <summary>The transaction it came from (Move, Wall, Paste...), for the list.</summary>
         [JsonPropertyName("tx"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? Tx { get; set; }
     }
@@ -419,12 +426,12 @@ internal static class ChangeFileMath
         (file.Elements.Count(e => e.Kind == Kinds.State), file.Elements.Count(e => e.Kind == Kinds.Deleted));
 
     /// <summary>
-    /// The order elements are played in: levels and grids first (others sit on them), then types, then everything else in
+    /// The order elements are played in: levels, grids, materials and loaded families first (others sit on or use them), then types, then everything else in
     /// the order it changed (a host before what it hosts, when the host came in the same file), deletions last.
     /// </summary>
     public static List<Line> PlayOrder(Parsed file)
     {
-        int Rank(Line l) => l.Kind == Kinds.Deleted ? 9 : l.What switch { "level" => 0, "grid" => 1, "type" => 2, "wall" or "view" or "sheet" or "group" or "link" or "stairs" => 3, _ when IsNote(l) => 5, _ => 4 };
+        int Rank(Line l) => l.Kind == Kinds.Deleted ? 9 : l.What switch { "level" => 0, "grid" or "material" or "family" => 1, "type" => 2, "wall" or "view" or "sheet" or "group" or "link" or "stairs" => 3, _ when IsNote(l) => 5, _ => 4 };
         var ranked = file.Elements.Select((l, i) => (Line: l, Index: i)).OrderBy(x => Rank(x.Line)).ThenBy(x => x.Index).Select(x => x.Line).ToList();
         // Hosted instances after their host, when the host is in the file.
         var position = ranked.Select((l, i) => (l.Unique, i)).Where(x => x.Unique is not null).GroupBy(x => x.Unique!).ToDictionary(g => g.Key, g => g.First().i);
@@ -439,6 +446,121 @@ internal static class ChangeFileMath
         foreach (var l in ranked) Place(l, 0);
         return result;
     }
+
+    // ---- What Revit makes by itself -------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// Categories Revit makes, changes and deletes by itself along with something else (the automatic dimensions and
+    /// constraints of a sketch, a view's camera, section box and sun path, the preview of a loaded family's type): they
+    /// never get a line, and lines of them in older files are not played. Revit's numbers for the categories.
+    /// </summary>
+    public static bool IsRevitsOwn(long categoryId) => categoryId is -2000261 or -2000262 or -2000500 or -2000301 or -2009609 or -2000576;
+
+    // ---- Loaded families ------------------------------------------------------------------------------------------------
+
+    /// <summary>The folder (in the model's change-file folder) with a copy of each family loaded after the last save.</summary>
+    public const string FamiliesFolder = "families";
+
+    /// <summary>A kept family's file name: the family's UniqueId, so two families of one name keep apart.</summary>
+    public static string FamilyFileName(string unique) => SafeName(unique) + ".rfa";
+
+    /// <summary>The kept families that no change file in the folder names any more (<paramref name="texts"/>: the folder's change files).</summary>
+    public static List<string> FamiliesToDelete(IEnumerable<string> familyFiles, IEnumerable<string> texts)
+    {
+        var all = string.Join("\n", texts);
+        return familyFiles.Where(f => all.IndexOf("\"file\":\"" + f.Substring(f.LastIndexOfAny(['/', '\\']) + 1) + "\"", StringComparison.OrdinalIgnoreCase) < 0).ToList();
+    }
+
+    // ---- What a replay made again ---------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// Next to a change file: the elements a replay of it made again (old UniqueId, tab, new UniqueId, one per line), so
+    /// playing the file again (after a Stop, or to finish what Revit refused) sets those instead of making them twice.
+    /// </summary>
+    public static string MadeMapName(string changeFile) => changeFile + ".made";
+
+    public static Dictionary<string, string> ParseMade(IEnumerable<string> lines)
+    {
+        var map = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var line in lines)
+        {
+            var cut = line.IndexOf('\t');
+            if (cut > 0 && cut < line.Length - 1) map[line.Substring(0, cut)] = line.Substring(cut + 1).Trim();
+        }
+        return map;
+    }
+
+    public static IEnumerable<string> WriteMade(IReadOnlyDictionary<string, string> map) => map.Select(m => m.Key + "\t" + m.Value);
+
+    // ---- The elements seen (so a deletion can name what was deleted) ---------------------------------------------------
+
+    /// <summary>
+    /// Each element's UniqueId and category by its id, kept small (a big model has a million elements): a UniqueId is a
+    /// long code shared by many elements plus a short number, so the code is kept once and the number as a number.
+    /// Revit can't tell a deleted element's UniqueId, only its id: this is where the deletion's line gets it from.
+    /// </summary>
+    public sealed class KnownIds
+    {
+        private readonly Dictionary<long, (int Prefix, ulong Suffix, int Category)> _byId = [];
+        private readonly Dictionary<string, int> _prefixIds = new(StringComparer.Ordinal);
+        private readonly List<string> _prefixes = [];
+        private readonly Dictionary<string, int> _categoryIds = new(StringComparer.Ordinal);
+        private readonly List<string> _categories = [];
+        // UniqueIds that aren't "code-hexnumber" (none seen so far) are kept whole.
+        private readonly Dictionary<long, string> _whole = [];
+
+        public const int Cap = 3_000_000;
+
+        public int Count => _byId.Count;
+
+        public bool Has(long id) => _byId.ContainsKey(id);
+
+        public void Remember(long id, string unique, string? category)
+        {
+            if (string.IsNullOrEmpty(unique) || (Count >= Cap && !Has(id))) return;
+            var cat = 0;
+            if (category is { Length: > 0 } && !_categoryIds.TryGetValue(category, out cat))
+            {
+                _categories.Add(category);
+                _categoryIds[category] = cat = _categories.Count;
+            }
+            var cut = unique.LastIndexOf('-');
+            if (cut > 0 && unique.Length - cut - 1 is > 0 and <= 16
+                && ulong.TryParse(unique.Substring(cut + 1), NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture, out var suffix)
+                && unique.Substring(cut + 1).ToLowerInvariant() == unique.Substring(cut + 1))
+            {
+                var head = unique.Substring(0, cut);
+                if (!_prefixIds.TryGetValue(head, out var prefix))
+                {
+                    _prefixes.Add(head);
+                    _prefixIds[head] = prefix = _prefixes.Count - 1;
+                }
+                // The number's width, so "0004d2a1" comes back with its zeros.
+                _byId[id] = (prefix, suffix, cat | ((unique.Length - cut - 1) << 24));
+                return;
+            }
+            _whole[id] = unique;
+            _byId[id] = (-1, 0, cat);
+        }
+
+        public bool TryGet(long id, out string unique, out string? category)
+        {
+            unique = "";
+            category = null;
+            if (!_byId.TryGetValue(id, out var k)) return false;
+            var cat = k.Category & 0xFFFFFF;
+            category = cat > 0 ? _categories[cat - 1] : null;
+            if (k.Prefix < 0) return _whole.TryGetValue(id, out unique!);
+            var width = k.Category >> 24;
+            unique = _prefixes[k.Prefix] + "-" + k.Suffix.ToString("x" + width, CultureInfo.InvariantCulture);
+            return true;
+        }
+
+        public void Forget(long id) { _byId.Remove(id); _whole.Remove(id); }
+    }
+
+    /// <summary>Milliseconds of Revit's time one idle moment may spend noting the model's elements after it opens.</summary>
+    public const int IndexBudgetMs = 15;
 
     // ---- Lifeline's bug list (Revit/LifelineBugs) ----------------------------------------------------------------------
 

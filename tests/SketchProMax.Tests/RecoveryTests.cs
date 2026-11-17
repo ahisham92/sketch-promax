@@ -171,6 +171,85 @@ internal static class RecoveryTests
         check("lifeline: the window also offers the file cleared at the last save, newest first", Src("Revit", "ChangeFile.cs").Contains("M.LastSaveName, StringComparison.OrdinalIgnoreCase)) continue;") && Src("Revit", "ChangeFile.cs").Contains("OrderByDescending(File.GetLastWriteTime)"), "");
         check("update: a click while the automatic update runs follows it instead of saying another window is updating", Src("Update", "Updater.cs").Contains("Follow(running, progress)") && !Src("Update", "Updater.cs").Contains("Another Revit window is updating"), "");
         check("lifeline: the window lists the open model's files, each with View and Replay, nothing to pick", Src("UI", "RecoverWindow.cs").Contains("Brand.Button(\"View\")") && Src("UI", "RecoverWindow.cs").Contains("ChangeFile.CurrentFor(target.Path)") && !Src("UI", "RecoverWindow.cs").Contains("OpenFileDialog"), "");
+        // ---- What a real replay missed (9 Nov 2026: 543 items not done of 2258) --------------------------------------
+        // Deletions are named: each element's UniqueId is noted by its id, kept small.
+        var known = new M.KnownIds();
+        const string episode = "b2f3a85d-6910-4195-b411-8563b3bba103";
+        known.Remember(438011, episode + "-0006aefb", "Viewports");
+        known.Remember(438016, episode + "-0006af00", "Viewports");
+        known.Remember(7, "74e46f31-7d48-47ee-9207-931708e57a52-00000007", null);
+        known.Remember(8, "an-odd-id-WITHOUT-hex", "Walls");
+        var got1 = known.TryGet(438011, out var u1, out var c1);
+        var got7 = known.TryGet(7, out var u7, out var c7);
+        var got8 = known.TryGet(8, out var u8, out var c8);
+        check("lifeline: a noted element's UniqueId comes back whole, with its zeros and category",
+            got1 && u1 == episode + "-0006aefb" && c1 == "Viewports" && got7 && u7 == "74e46f31-7d48-47ee-9207-931708e57a52-00000007" && c7 is null
+            && got8 && u8 == "an-odd-id-WITHOUT-hex" && c8 == "Walls", u1 + " / " + u7 + " / " + u8);
+        known.Forget(438016);
+        check("lifeline: an element not noted has no UniqueId to give", !known.TryGet(438016, out _, out _) && !known.TryGet(99, out _, out _) && known.Count == 3, known.Count.ToString());
+        var bulk = new M.KnownIds();
+        var memoryBefore = GC.GetTotalMemory(true);
+        for (var i = 0; i < 200_000; i++) bulk.Remember(i, episode + "-" + i.ToString("x8"), i % 2 == 0 ? "Walls" : "Structural Columns");
+        var perElement = (GC.GetTotalMemory(true) - memoryBefore) / 200_000.0;
+        check("lifeline: noting an element takes tens of bytes, not its whole UniqueId", perElement < 80 && bulk.TryGet(199_999, out var lastNoted, out _) && lastNoted == episode + "-00030d3f", perElement.ToString("0") + " bytes each");
+        check("lifeline: the model's elements are noted in short slices, after what changed is read", M.IndexBudgetMs is > 0 and <= 20
+            && Src("Revit", "ChangeFile.cs").Contains("if (!reading && For(doc) is { } model) more |= KeepFamily(doc, model) || NoteElements(doc, model);"), M.IndexBudgetMs.ToString());
+        check("lifeline: a deletion takes its UniqueId from the noted elements; one made and deleted after the save is marked",
+            Src("Revit", "ChangeFile.cs").Contains("model.Known.TryGet(id.Value, out var unique, out var category)") && Src("Revit", "ChangeFile.cs").Contains("New = made,")
+            && Src("Revit", "ChangeReplay.cs").Contains("line.Kind == M.Kinds.Deleted && line.New && line.Unique is not { Length: > 0 }"), "");
+        // What Revit makes by itself never gets a line, and isn't played from older files.
+        check("lifeline: a sketch's automatic dimensions, cameras, section boxes, sun paths and type previews are Revit's own",
+            new long[] { -2000261, -2000262, -2000500, -2000301, -2009609, -2000576 }.All(M.IsRevitsOwn) && !M.IsRevitsOwn(-2000575) && !M.IsRevitsOwn(-2000011) && !M.IsRevitsOwn(0), "");
+        check("lifeline: Revit's own elements get no line and older lines of them aren't played", Src("Revit", "ChangeFile.cs").Contains("M.IsRevitsOwn(category.Id.Value)") && Src("Revit", "ChangeFile.cs").Contains("ChangeViews.IsRevitsOwn(element)")
+            && Src("Revit", "ChangeReplay.cs").Contains("M.IsRevitsOwn(line.CategoryId) || ChangeViews.IsRevitsOwn(line)") && Src("Revit", "ChangeViews.cs").Contains("IsTitleblockRevisionSchedule")
+            && Src("Revit", "ChangeViews.cs").Contains("viewport.SheetId == ElementId.InvalidElementId"), "");
+        // A type or a view never takes the sketch of an element of that type or in that view.
+        check("lifeline: only an element drawn from a sketch of its own has an outline", Src("Revit", "ChangeShapes.cs").Contains("if (e is not (RoofBase or RevisionCloud or")
+            && Src("Revit", "ChangeShapes.cs").Contains("Wall w => w.SketchId"), "");
+        check("lifeline: a slope arrow is told by its Specify value and drawn again with the floor", Src("Revit", "ChangeShapes.cs").Contains("BuiltInParameter.SPECIFY_SLOPE_OR_OFFSET")
+            && Src("Revit", "ChangeShapes.cs").Contains("structural, floorArrow, line.ArrowSlope ?? 0)") && !Src("Revit", "ChangeShapes.cs").Contains("GetAllElements().Count > count"), "");
+        var sloped = M.Read([M.Write(new M.Line { Kind = M.Kinds.State, At = at, Unique = "f2", What = "floor", Loops = [outline], SlopeArrow = true, Arrow = new(new(0, 0, 0), new(20, 0, 0)), ArrowSlope = 0.02 })]).Elements.Single();
+        check("lifeline: a floor's slope arrow and slope read back", sloped.Arrow is { Q.X: 20 } && sloped.ArrowSlope == 0.02 && sloped.SlopeArrow, M.Write(sloped));
+        // Text and dimension types have no category: they have lines, and are found by name.
+        check("lifeline: text and dimension types are written and found by name", Src("Revit", "ChangeFile.cs").Contains("element is ElementType { Category: null } and not (TextElementType or DimensionType)")
+            && Src("Revit", "ChangeReplay.cs").Contains("t.Category is null || t.Category.Id.Value == line.CategoryId"), "");
+        // Families, materials: before the types and elements that use them.
+        var famLine = new M.Line { Kind = M.Kinds.State, At = at, Unique = "fam1", What = "family", Name = "MS-SheetPile-AZ1", File = M.FamilyFileName("fam1"), New = true };
+        var matLine = new M.Line { Kind = M.Kinds.State, At = at, Unique = "mat1", What = "material", Name = "MS - Rockfill", Extra = new() { ["color"] = "12,140,200" }, New = true };
+        var symbolLine = new M.Line { Kind = M.Kinds.State, At = at, Unique = "sym1", What = "type", Name = "AZ14-770", Class = "FamilySymbol", New = true };
+        var pileLine = new M.Line { Kind = M.Kinds.State, At = at, Unique = "pile1", What = "instance", Type = "MS-SheetPile-AZ1: AZ14-770", P = new(1, 2, 3), New = true };
+        var loaded = M.Read(new[] { pileLine, symbolLine, matLine, famLine }.Select(M.Write));
+        var loadedOrder = M.PlayOrder(loaded).Select(l => l.Unique).ToList();
+        check("lifeline: materials and loaded families play before types, types before their elements", loadedOrder.SequenceEqual(["mat1", "fam1", "sym1", "pile1"]), string.Join(",", loadedOrder));
+        var famBack = loaded.Elements.First(e => e.What == "family");
+        check("lifeline: a loaded family's line names its kept copy; a material's colour reads back", famBack.File == "fam1.rfa" && loaded.Elements.First(e => e.What == "material").Extra?["color"] == "12,140,200", M.Write(famBack));
+        var keptFamilies = M.FamiliesToDelete([@"C:\x\families\fam1.rfa", @"C:\x\families\fam2.rfa", @"C:\x\families\fam2.0001.rfa"], [M.Write(famLine)]);
+        check("lifeline: kept families no change file names are deleted, the others stay", keptFamilies.Count == 2 && keptFamilies.All(f => f.Contains("fam2")), string.Join(",", keptFamilies));
+        check("lifeline: a loaded family is copied next to the file and loaded again from the copy", Src("Revit", "ChangeFile.cs").Contains("doc.EditFamily(family)") && Src("Revit", "ChangeFile.cs").Contains("opened?.Close(false)")
+            && Src("Revit", "ChangeTypes.cs").Contains("doc.LoadFamily(named, new KeepValues(), out var family)") && Src("Revit", "ChangeTypes.cs").Contains("Material.Create(doc, line.Name!)"), "");
+        check("lifeline: a family's type is never a copy of another family's type", Src("Revit", "ChangeTypes.cs").Contains("isn't in this model: load it, then replay again"), "");
+        check("lifeline: a type's layers go back into its own structure first", Src("Revit", "ChangeTypes.cs").Contains("cs.SetLayers(layers);"), "");
+        // Playing a file again: what the first play made is found.
+        var madeMap = new Dictionary<string, string> { ["old-1"] = "new-1", ["old-2"] = "new-2" };
+        var madeBack = M.ParseMade(M.WriteMade(madeMap).Append("").Append("broken line"));
+        check("lifeline: what a replay made again is remembered next to the file", madeBack.Count == 2 && madeBack["old-2"] == "new-2" && M.MadeMapName(@"C:\x\not saved 2026-11-09 043548.txt").EndsWith(".txt.made"), madeBack.Count.ToString());
+        check("lifeline: a replay played again sets what it made before, and remembers after each chunk", Src("UI", "RecoverWindow.cs").Contains("ChangeReplay.Remember(doc, madeBefore, outcome)")
+            && Src("UI", "RecoverWindow.cs").Contains("ChangeFile.WriteMade(file, outcome.MadeUnique)") && Src("Revit", "ChangeReplay.cs").Contains("made.TryGetValue(unique, out var again)"), "");
+        // The chunks: every step is played (a growing chunk used to jump over steps: 45 of 2258, 17 of 72).
+        check("lifeline: the next chunk starts where the last one ended, whatever its size", Src("UI", "RecoverWindow.cs").Contains("i += chunk.Count;") && !Src("UI", "RecoverWindow.cs").Contains("i += size"), "");
+        var chunkSize = M.ReplayChunk;
+        var played = 0;
+        for (var i = 0; i < 72;) { var n = Math.Min(chunkSize, 72 - i); i += n; played += n; chunkSize = M.NextChunk(n, TimeSpan.FromMilliseconds(50)); }
+        check("lifeline: 72 steps in growing chunks are 72 steps played", played == 72, played.ToString());
+        check("lifeline: what Revit refused is tried once more at the end, and taken names are set then", Src("UI", "RecoverWindow.cs").Contains("outcome.TakeFailed()") && Src("UI", "RecoverWindow.cs").Contains("ChangeReplay.Settle(doc, outcome)")
+            && Src("Revit", "ChangeReplay.cs").Contains("if (step.Act == Act.Make) outcome.Unmake(step.Line.Unique);"), "");
+        check("lifeline: an element just made is worked out before its state is set", Src("Revit", "ChangeReplay.cs").Contains("try { doc.Regenerate(); } catch (Exception) { }\n                        SetState(doc, made, s.Line, outcome);".Replace("\n", Environment.NewLine))
+            || Src("Revit", "ChangeReplay.cs").Replace("\r\n", "\n").Contains("try { doc.Regenerate(); } catch (Exception) { }\n                        SetState(doc, made, s.Line, outcome);"), "");
+        check("lifeline: a filled region whose outline changed is drawn again in its place", Src("Revit", "ChangeReplay.cs").Contains("FilledRegion.Create(doc, region.GetTypeId(), region.OwnerViewId, ChangeShapes.CurveLoops(outline))"), "");
+        check("lifeline: a close that is cancelled keeps the model watched", Src("Revit", "ChangeFile.cs").Contains("DocumentClosed += OnClosed") && Src("Revit", "ChangeFile.cs").Contains("if (e.Status == RevitAPIEventStatus.Succeeded) Models.Remove(path);"), "");
+        check("lifeline: schedules of every kind are made by their own call", new[] { "CreateKeySchedule", "CreateMaterialTakeoff", "CreateSheetList", "CreateViewList", "CreateRevisionSchedule", "CreateKeynoteLegend" }.All(Src("Revit", "ChangeViews.cs").Contains), "");
+        check("lifeline: a toposolid's shape editor is on before its points go back", Src("Revit", "ChangeShapes.cs").Replace("\r\n", "\n").Contains("if (!editor.IsEnabled) editor.Enable();\n        if (e is Toposolid)"), "");
+        check("lifeline: a stopped replay says how to carry on", Src("UI", "RecoverWindow.cs").Contains("Press Replay again to carry on"), "");
         check("recovery: Help > Open folders lists the change files", SketchProMax.Bugs.UserFolders.List().Any(f => f.Title == "Change files" && f.Path.EndsWith(Path.Combine("Sketch ProMax", "Change files"))), "");
     }
 }

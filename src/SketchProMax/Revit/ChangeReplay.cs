@@ -12,7 +12,10 @@ namespace SketchProMax.Revit;
 /// grids, levels); a deleted one is deleted. Anything else is listed to redo by hand. Runs in small chunks (sized by
 /// <see cref="ChangeFileMath.NextChunk"/>), one short Revit call and one undo step each, through
 /// <see cref="ItemBatch"/> (one item failing doesn't stop the rest; what others own in a workshared model is skipped
-/// and named; what needs borrowing is borrowed in one request per chunk).
+/// and named; what needs borrowing is borrowed in one request per chunk). What Revit refused is tried once more at
+/// the end (<see cref="Outcome.TakeFailed"/>): by then what it waited for (a view, a deletion that frees a name) is done.
+/// What a replay made again is remembered next to the file (<see cref="ChangeFileMath.MadeMapName"/>), so playing the
+/// file again sets those elements instead of making them twice.
 /// </summary>
 internal static class ChangeReplay
 {
@@ -33,6 +36,61 @@ internal static class ChangeReplay
         public readonly List<(ElementId Sketch, ElementId Owner, M.Line Line, bool Counted)> Sketches = [];
         /// <summary>The line each NotDone entry is about (by its place in NotDone), so the window can take you to it.</summary>
         public readonly Dictionary<int, M.Line> Place = [];
+        /// <summary>Old UniqueId to the new UniqueId of what was made again (written next to the file after each chunk).</summary>
+        public readonly Dictionary<string, string> MadeUnique = new(StringComparer.Ordinal);
+        /// <summary>The steps Revit refused, each with its entry in NotDone: tried once more at the end.</summary>
+        public readonly List<(Step Step, string Text)> Failed = [];
+        /// <summary>Where the file's kept families are.</summary>
+        public string FamiliesFolder = "";
+
+        /// <summary>Notes that <paramref name="old"/> is now <paramref name="made"/>.</summary>
+        public void MadeAgain(string? old, Element made)
+        {
+            if (old is not { Length: > 0 }) return;
+            MadeFor[old] = made.Id;
+            try { MadeUnique[old] = made.UniqueId; } catch (Exception) { }
+        }
+
+        public void Unmake(string? old)
+        {
+            if (old is not { Length: > 0 }) return;
+            MadeFor.Remove(old);
+            MadeUnique.Remove(old);
+        }
+
+        /// <summary>Takes the NotDone entries at <paramref name="drop"/> out (the lines the others are about stay right).</summary>
+        public void Drop(HashSet<int> drop)
+        {
+            if (drop.Count == 0) return;
+            var kept = new List<string>();
+            var place = new Dictionary<int, M.Line>();
+            for (var i = 0; i < NotDone.Count; i++)
+            {
+                if (drop.Contains(i)) continue;
+                if (Place.TryGetValue(i, out var line)) place[kept.Count] = line;
+                kept.Add(NotDone[i]);
+            }
+            NotDone.Clear();
+            NotDone.AddRange(kept);
+            Place.Clear();
+            foreach (var p in place) Place[p.Key] = p.Value;
+        }
+
+        /// <summary>The steps Revit refused, to try once more; their entries leave NotDone and Errors (a second refusal puts them back).</summary>
+        public List<Step> TakeFailed()
+        {
+            var drop = new HashSet<int>();
+            foreach (var (step, text) in Failed)
+            {
+                for (var i = 0; i < NotDone.Count; i++)
+                    if (!drop.Contains(i) && NotDone[i] == text && Place.TryGetValue(i, out var line) && ReferenceEquals(line, step.Line)) { drop.Add(i); break; }
+                Errors.Remove(text);
+            }
+            Drop(drop);
+            var steps = Failed.Select(f => f.Step).ToList();
+            Failed.Clear();
+            return steps;
+        }
 
         public void Missed(M.Line line, string text)
         {
@@ -41,9 +99,18 @@ internal static class ChangeReplay
         }
     }
 
-    /// <summary>What each line of the file will do to <paramref name="doc"/> (read only).</summary>
-    public static List<Step> Plan(Document doc, M.Parsed file)
+    /// <summary>What earlier replays of the file made again (<see cref="ChangeFile.ReadMade"/>), as elements of <paramref name="doc"/>; ones since deleted are left out.</summary>
+    public static void Remember(Document doc, IReadOnlyDictionary<string, string> made, Outcome outcome)
     {
+        foreach (var m in made)
+            if (doc.GetElement(m.Value) is { } element) outcome.MadeAgain(m.Key, element);
+    }
+
+    /// <summary>What each line of the file will do to <paramref name="doc"/> (read only). <paramref name="outcome"/> knows what earlier replays made and where the kept families are.</summary>
+    public static List<Step> Plan(Document doc, M.Parsed file, Outcome? outcome = null)
+    {
+        outcome ??= new Outcome();
+        Element? Find(Document d, M.Line l) => ChangeReplay.Find(d, l, outcome.MadeFor);
         var steps = new List<Step>();
         var ordered = M.PlayOrder(file);
         // Groups made again bring their members: the members' own lines aren't played.
@@ -56,11 +123,25 @@ internal static class ChangeReplay
         {
             // Older files can hold Revit's energy model (thousands of lines): Revit makes it again by itself.
             if (ChangeFile.IsAnalysis(line.CategoryId)) continue;
+            // And what Revit makes with something else (a sketch's automatic dimensions, a title block's revision schedule...).
+            if (M.IsRevitsOwn(line.CategoryId) || ChangeViews.IsRevitsOwn(line)) continue;
+            // Made after the last save and deleted again before Lifeline read it: there is nothing to delete.
+            if (line.Kind == M.Kinds.Deleted && line.New && line.Unique is not { Length: > 0 }) { steps.Add(new(line, Act.Done, "")); continue; }
             var found = Find(doc, line);
+            if (line.What == "family" && line.Kind != M.Kinds.Deleted)
+            {
+                // A family loaded after the last save: loaded again from its kept copy, unless one of that name is there.
+                if (found is not null || ChangeTypes.FamilyThere(doc, line) is not null) continue;
+                steps.Add(ChangeTypes.CanMakeFamily(line, outcome.FamiliesFolder) is { } missing ? new(line, Act.Skip, missing) : new(line, Act.Make, ""));
+                continue;
+            }
             if (line.Kind == M.Kinds.Deleted && found is not null && line.Unique is not { Length: > 0 })
             {
                 // Named by id only (deleted before Lifeline read it, often by another add-in or Revit itself): never deleted
                 // automatically, as an id can't prove it is the same element. Listed with what it is now, with Show.
+                // Revit's own bookkeeping elements (no category) and what it makes by itself are not listed.
+                if (found.Category is null && found is not (View or ElementType)) continue;
+                if (found.Category is { } own && M.IsRevitsOwn(own.Id.Value)) continue;
                 if (found.Category is { } cat && ChangeFile.IsAnalysis(cat.Id.Value)) continue;
                 string what;
                 try { what = $"{found.Category?.Name ?? found.GetType().Name} \"{found.Name}\""; } catch (Exception) { what = "an element"; }
@@ -82,10 +163,11 @@ internal static class ChangeReplay
         return steps;
     }
 
-    /// <summary>The element a line is about: by UniqueId; a deletion named by id only, by id when it was in central already (never someone's new element).</summary>
-    private static Element? Find(Document doc, M.Line line)
+    /// <summary>The element a line is about: by UniqueId (the one made again for it, when a replay made it); a deletion named by id only, by id when it was in central already (never someone's new element).</summary>
+    private static Element? Find(Document doc, M.Line line, IReadOnlyDictionary<string, ElementId>? made = null)
     {
-        if (line.Unique is { Length: > 0 } unique) return doc.GetElement(unique);
+        if (line.Unique is { Length: > 0 } unique)
+            return made is not null && made.TryGetValue(unique, out var again) && doc.GetElement(again) is { } now ? now : doc.GetElement(unique);
         if (line.Kind != M.Kinds.Deleted || line.Id == 0) return null;
         var element = doc.GetElement(new ElementId(line.Id));
         if (element is null) return null;
@@ -106,6 +188,9 @@ internal static class ChangeReplay
         "instance" when line.P is not null && line.Type is not null => null,
         "wall" or "instance" => "made after the last save, but its shape isn't a point or a straight line: make it again by hand",
         "type" => ChangeTypes.CanMake(line),
+        "material" => ChangeTypes.CanMakeMaterial(line),
+        _ when line.CategoryId is (long)BuiltInCategory.OST_ReferenceViewer or (long)BuiltInCategory.OST_ReferenceViewerSymbol =>
+            "a view reference made after the last save: Revit has no way for add-ins to place one, place it again by hand",
         "stairs" => ChangeStairs.CanMake(line),
         "floor" or "ceiling" or "topo" or "region" or "railing" or "roof" or "roof-other" or "opening" or "modelcurve" or "detailcurve" => ChangeShapes.CanMake(line),
         _ when ChangeNotes.Owns(line) => ChangeNotes.CanMake(line),
@@ -116,6 +201,7 @@ internal static class ChangeReplay
     /// <summary>Plays <paramref name="steps"/> (one chunk) onto the model. Call with no transaction open.</summary>
     public static void Apply(Document doc, IReadOnlyList<Step> steps, Outcome outcome)
     {
+        Element? Find(Document d, M.Line l) => ChangeReplay.Find(d, l, outcome.MadeFor);
         var work = steps.Where(s => s.Act is not (Act.Skip or Act.Done)).ToList();
         outcome.Same += steps.Count(s => s.Act == Act.Done);
         foreach (var s in steps.Where(s => s.Act == Act.Skip)) outcome.Missed(s.Line, $"{M.Describe(s.Line)}: {s.Why}");
@@ -126,7 +212,7 @@ internal static class ChangeReplay
             try
             {
                 var id = ChangeStairs.Make(doc, s.Line, u => u is null ? null : outcome.MadeFor.TryGetValue(u, out var m) ? doc.GetElement(m) : doc.GetElement(u));
-                if (s.Line.Unique is { } u) outcome.MadeFor[u] = id;
+                if (doc.GetElement(id) is { } stairs) outcome.MadeAgain(s.Line.Unique, stairs);
                 outcome.Made++;
                 using var t = new Transaction(doc, "Sketch ProMax: Replay change file (stairs values)");
                 t.Start();
@@ -134,46 +220,78 @@ internal static class ChangeReplay
             }
             catch (Exception ex)
             {
-                outcome.Missed(s.Line, $"{M.Describe(s.Line)}: {ex.Message}");
-                outcome.Errors.Add($"{M.Describe(s.Line)}: {ex.Message}");
+                var text = $"{M.Describe(s.Line)}: {ex.Message}";
+                outcome.Missed(s.Line, text);
+                outcome.Errors.Add(text);
+                outcome.Failed.Add((s, text));
             }
         }
         if (work.Count == 0) return;
-        var byLabel = new Dictionary<string, M.Line>();
-        foreach (var s in work) byLabel[M.Describe(s.Line)] = s.Line;
+        // The notes and sketches each item adds, so those of an item Revit refused (and rolled back) are taken out again.
+        var notesFrom = outcome.NotDone.Count;
         var result = ItemBatch.Run(doc, "Replay change file", work, s => M.Describe(s.Line),
             s => Find(doc, s.Line) is { } e ? [e.Id] : [],
             s =>
             {
                 var notes = outcome.NotDone.Count;
+                var did = "same";
                 switch (s.Act)
                 {
                     case Act.Delete:
                         if (Find(doc, s.Line) is { } gone) doc.Delete(gone.Id);
-                        outcome.Deleted++;
+                        did = "deleted";
                         break;
                     case Act.Set:
                         var sketches = outcome.Sketches.Count;
                         var set = SetState(doc, Find(doc, s.Line)!, s.Line, outcome);
-                        if (set) outcome.Set++; else outcome.Same++;
+                        did = set ? "set" : "same";
                         if (outcome.Sketches.Count > sketches) outcome.Sketches[outcome.Sketches.Count - 1] = outcome.Sketches[outcome.Sketches.Count - 1] with { Counted = set };
                         break;
                     case Act.Make:
                         var made = Make(doc, s.Line, outcome);
-                        if (s.Line.Unique is { } u) outcome.MadeFor[u] = made.Id;
+                        outcome.MadeAgain(s.Line.Unique, made);
+                        // What was just made is worked out (its sketch, its faces) before its state is set and others point at it.
+                        try { doc.Regenerate(); } catch (Exception) { }
                         SetState(doc, made, s.Line, outcome);
-                        outcome.Made++;
-                        if (s.Line.SlopeArrow) outcome.NotDone.Add($"{M.Describe(s.Line)}: made again without its slope arrow: add the slope by hand");
+                        did = "made";
+                        if (s.Line.SlopeArrow)
+                            outcome.NotDone.Add(s.Line.Arrow is not null && s.Line.ArrowSlope is not null
+                                ? $"{M.Describe(s.Line)}: made again with its slope arrow: check its slope"
+                                : $"{M.Describe(s.Line)}: made again without its slope arrow: add the slope by hand");
                         break;
                 }
                 for (var i = notes; i < outcome.NotDone.Count; i++) outcome.Place[i] = s.Line;
-                return null;
+                return did;
             });
-        foreach (var f in result.Failed)
+        var drop = new HashSet<int>();
+        for (var i = 0; i < work.Count && i < result.Items.Count; i++)
         {
-            if (byLabel.TryGetValue(f.Item, out var failed)) outcome.Place[outcome.NotDone.Count] = failed;
-            outcome.NotDone.Add($"{f.Item}: {f.Error}");
-            outcome.Errors.Add($"{f.Item}: {f.Error}");
+            var (step, item) = (work[i], result.Items[i]);
+            if (item.Ok)
+            {
+                switch (item.Value as string)
+                {
+                    case "deleted": outcome.Deleted++; break;
+                    case "set": outcome.Set++; break;
+                    case "made": outcome.Made++; break;
+                    default: outcome.Same++; break;
+                }
+                continue;
+            }
+            // Refused and rolled back: what it made isn't there, its notes and sketch don't count.
+            if (step.Act == Act.Make) outcome.Unmake(step.Line.Unique);
+            for (var n = notesFrom; n < outcome.NotDone.Count; n++)
+                if (outcome.Place.TryGetValue(n, out var about) && ReferenceEquals(about, step.Line)) drop.Add(n);
+            outcome.Sketches.RemoveAll(k => ReferenceEquals(k.Line, step.Line));
+        }
+        outcome.Drop(drop);
+        for (var i = 0; i < work.Count && i < result.Items.Count; i++)
+        {
+            if (result.Items[i].Ok) continue;
+            var text = $"{result.Items[i].Item}: {result.Items[i].Error}";
+            outcome.Missed(work[i].Line, text);
+            outcome.Errors.Add(text);
+            outcome.Failed.Add((work[i], text));
         }
         foreach (var s in work.Where(s => s.Line.Approx && s.Act != Act.Delete))
             outcome.Missed(s.Line, $"{M.Describe(s.Line)}: its curved edges (a spline or ellipse) came back as short straight lines: check its shape");
@@ -188,24 +306,73 @@ internal static class ChangeReplay
         outcome.Sketches.Clear();
     }
 
+    /// <summary>
+    /// After the last chunk: names that were taken when their element was played (by an element the file deletes later)
+    /// are set now, in one more undo step. Call with no transaction open.
+    /// </summary>
+    public static void Settle(Document doc, Outcome outcome)
+    {
+        const string taken = "is taken: rename it by hand";
+        var waiting = Enumerable.Range(0, outcome.NotDone.Count)
+            .Where(i => outcome.NotDone[i].EndsWith(taken, StringComparison.Ordinal) && outcome.Place.TryGetValue(i, out var l) && l.Name is { Length: > 0 }).ToList();
+        if (waiting.Count == 0 || doc.IsModifiable) return;
+        var drop = new HashSet<int>();
+        using var t = new Transaction(doc, "Sketch ProMax: Replay change file (names)");
+        t.Start();
+        foreach (var i in waiting)
+        {
+            var line = outcome.Place[i];
+            try
+            {
+                if (Find(doc, line, outcome.MadeFor) is not { } element) continue;
+                if (element.Name != line.Name) element.Name = line.Name;
+                drop.Add(i);
+            }
+            catch (Exception) { /* still taken: it stays listed */ }
+        }
+        if (drop.Count > 0 && t.Commit() == TransactionStatus.Committed) outcome.Drop(drop);
+        else if (t.HasStarted() && !t.HasEnded()) t.RollBack();
+    }
+
     // ---- Setting an element to its state --------------------------------------------------------------------------------
 
     /// <summary>Sets what differs; true when anything changed.</summary>
     private static bool SetState(Document doc, Element element, M.Line line, Outcome outcome)
     {
         var changed = false;
-        if (element is not ElementType && line.Type is not null && Type(doc, line) is { } type && element.GetTypeId() != type.Id)
+        if (line.What == "family") return false;
+        if (element is not (ElementType or Material) && line.Type is not null && Type(doc, line, outcome) is { } type && element.GetTypeId() != type.Id)
         {
             element.ChangeTypeId(type.Id);
             changed = true;
         }
+        // A filled region's outline can't be edited by add-ins: one whose outline changed is drawn again in its place.
+        if (element is FilledRegion region && line.Loops is { Count: > 0 } outline)
+        {
+            var now = new M.Line();
+            try { ChangeShapes.Read(doc, region, now); } catch (Autodesk.Revit.Exceptions.ApplicationException) { now.Loops = outline; }
+            if (!M.SameLoops(now.Loops, outline))
+            {
+                var fresh = region.IsMasking
+                    ? FilledRegion.CreateMaskingRegion(doc, region.OwnerViewId, ChangeShapes.CurveLoops(outline))
+                    : FilledRegion.Create(doc, region.GetTypeId(), region.OwnerViewId, ChangeShapes.CurveLoops(outline));
+                doc.Delete(region.Id);
+                try { doc.Regenerate(); } catch (Exception) { }
+                outcome.MadeAgain(line.Unique, fresh);
+                element = fresh;
+                changed = true;
+            }
+        }
         switch (element)
         {
+            case Material material:
+                changed |= ChangeTypes.SetMaterial(doc, material, line, u => u is null ? null : outcome.MadeFor.TryGetValue(u, out var m) ? doc.GetElement(m) : doc.GetElement(u));
+                break;
             case not null when ChangeViews.Owns(line):
                 changed |= ChangeViews.Set(doc, element, line, outcome.NotDone);
                 break;
             case ElementType elementType:
-                changed |= ChangeTypes.Set(doc, elementType, line, u => u is null ? null : doc.GetElement(u), outcome.NotDone);
+                changed |= ChangeTypes.Set(doc, elementType, line, u => u is null ? null : outcome.MadeFor.TryGetValue(u, out var m) ? doc.GetElement(m) : doc.GetElement(u), outcome.NotDone);
                 break;
             case Autodesk.Revit.DB.Architecture.Stairs stairs:
                 changed |= ChangeStairs.Set(doc, stairs, line, outcome.NotDone);
@@ -253,7 +420,7 @@ internal static class ChangeReplay
             changed |= ChangeNotes.Set(doc, element, line, Remap(doc, outcome), outcome.NotDone, out var noteSketch);
             if (noteSketch is { } id) outcome.Sketches.Add((id, element.Id, line, false));
         }
-        else if (line.Loops is not null || line.Points is not null)
+        else if (element is not FilledRegion && (line.Loops is not null || line.Points is not null))
         {
             changed |= ChangeShapes.Set(doc, element, line, out var sketch);
             if (sketch is { } id) outcome.Sketches.Add((id, element.Id, line, false));
@@ -267,7 +434,7 @@ internal static class ChangeReplay
             }
             catch (Exception) { }
         }
-        if (element is Level or Grid && line.Name is { Length: > 0 } name && element.Name != name)
+        if (element is Level or Grid or Material && line.Name is { Length: > 0 } name && element.Name != name)
         {
             try { element.Name = name; changed = true; } catch (Exception) { /* the name is taken: left as it is */ }
         }
@@ -306,9 +473,11 @@ internal static class ChangeReplay
     private static Element Make(Document doc, M.Line line, Outcome outcome)
     {
         Element? Known(string? unique) => unique is null ? null : outcome.MadeFor.TryGetValue(unique, out var id) ? doc.GetElement(id) : doc.GetElement(unique);
-        if (ChangeShapes.Make(doc, line, Type(doc, line), LevelOf(doc, line), Known) is { } shaped) return shaped;
-        if (ChangeNotes.Make(doc, line, Type(doc, line), LevelOf(doc, line), Known, Remap(doc, outcome), outcome.NotDone) is { } note) return note;
-        if (ChangeViews.Make(doc, line, Type(doc, line), LevelOf(doc, line), Known, outcome.NotDone) is { } viewed) return viewed;
+        if (line.What == "family") return ChangeTypes.LoadFamily(doc, line, outcome.FamiliesFolder);
+        if (line.What == "material") return ChangeTypes.MakeMaterial(doc, line);
+        if (ChangeShapes.Make(doc, line, Type(doc, line, outcome), LevelOf(doc, line), Known) is { } shaped) return shaped;
+        if (ChangeNotes.Make(doc, line, Type(doc, line, outcome), LevelOf(doc, line), Known, Remap(doc, outcome), outcome.NotDone) is { } note) return note;
+        if (ChangeViews.Make(doc, line, Type(doc, line, outcome), LevelOf(doc, line), Known, outcome.NotDone) is { } viewed) return viewed;
         if (line.What == "type") return ChangeTypes.Make(doc, line);
         switch (line.What)
         {
@@ -319,7 +488,7 @@ internal static class ChangeReplay
                 return Grid.Create(doc, Line.CreateBound(X(line.P!), X(line.Q!)));
             case "wall":
             {
-                var type = Type(doc, line) ?? throw new InvalidOperationException($"the wall type {line.Type} isn't in this model");
+                var type = Type(doc, line, outcome) ?? throw new InvalidOperationException($"the wall type {line.Type} isn't in this model");
                 var lvl = LevelOf(doc, line) ?? throw new InvalidOperationException("its level isn't in this model");
                 if (line.Loops is { Count: > 0 } profile)
                     return Wall.Create(doc, profile[0].Select(ChangeShapes.ToCurve).ToList(), type.Id, lvl.Id, false);
@@ -327,7 +496,7 @@ internal static class ChangeReplay
             }
             default:
             {
-                if (Type(doc, line) is not FamilySymbol symbol) throw new InvalidOperationException($"the type {line.Type} isn't loaded in this model");
+                if (Type(doc, line, outcome) is not FamilySymbol symbol) throw new InvalidOperationException($"the type {line.Type} isn't loaded in this model");
                 if (!symbol.IsActive) symbol.Activate();
                 // Detail items and other families drawn in a view.
                 if (line.View is not null)
@@ -360,12 +529,13 @@ internal static class ChangeReplay
         return r => M.Remap(r, now);
     }
 
-    private static ElementType? Type(Document doc, M.Line line)
+    private static ElementType? Type(Document doc, M.Line line, Outcome outcome)
     {
-        if (line.TypeUnique is { } u && doc.GetElement(u) is ElementType byId) return byId;
+        if (line.TypeUnique is { } u && (outcome.MadeFor.TryGetValue(u, out var again) ? doc.GetElement(again) : doc.GetElement(u)) is ElementType byId) return byId;
         if (line.Type is not { } name) return null;
+        // By name: of the element's category (text and dimension types have no category of their own).
         return new FilteredElementCollector(doc).WhereElementIsElementType().Cast<ElementType>()
-            .FirstOrDefault(t => $"{t.FamilyName}: {t.Name}" == name && (line.CategoryId == 0 || t.Category?.Id.Value == line.CategoryId));
+            .FirstOrDefault(t => $"{t.FamilyName}: {t.Name}" == name && (line.CategoryId == 0 || t.Category is null || t.Category.Id.Value == line.CategoryId));
     }
 
     private static Level? LevelOf(Document doc, M.Line line)
