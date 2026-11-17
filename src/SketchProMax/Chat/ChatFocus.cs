@@ -41,7 +41,9 @@ internal static class ChatFocus
     private static readonly Regex Fine = new(@"^no[\s,]+(problem|need|worries|issue)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     private static readonly Regex Correcting = new(
-        @"^(no+\b|nope\b|wrong\b|incorrect\b|still\b|again\b|why (is|are|did|does|do|was|were|isn't|aren't|didn't|doesn't|no)\b)" +
+        // A plain "why ...?" is a question (answered, nothing changed); a why about work that didn't hold is a correction.
+        @"^(no+\b|nope\b|wrong\b|incorrect\b|still\b|again\b)" +
+        @"|^why\b.*\b(still|again|removed?|deleted?|missing|not (done|fixed|working|moved|changed|updated|applied))\b" +
         @"|\bstill (there|not|outside|inside|the same|showing|shown|missing|clashing|wrong|poor|bad)\b" +
         @"|\b(same|these|those) mistakes?\b|\brepeating\b|\bnot what i\b|\bi (told|said|asked)\b|\bas i (told|said|asked)\b|\bi meant\b" +
         @"|\b(did not|didn't|don't|do not) understand\b|\bi (did not|didn't|don't|do not) (want|need|mean|ask)\b" +

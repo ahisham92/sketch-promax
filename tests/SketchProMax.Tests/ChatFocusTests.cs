@@ -34,6 +34,7 @@ internal static class ChatFocusTests
                  {
                      "no problem for now keep the piles levels tag", "proceed with 2", "yes please", "continue",
                      "Can you rename this section into G6 and detail number to G6", "Move the selected piles between tie rods", "",
+                     "why is the selected beam showing 1995 although it is supposed to be 2000", "why is the selected grid not 2800 and 4200 ?",
                  })
             check("not a correction: \"" + said + "\"", !ChatFocus.IsCorrection(said), "");
 
@@ -89,6 +90,9 @@ internal static class ChatFocusTests
             chat.Contains("Check it as they see it") && chat.Split(["plan-only lines"], StringSplitOptions.None).Length >= 3, "");
         check("prompt: a job's report reaches the user in three lines, and nothing is written while jobs work",
             chat.Contains("don't write\n          about them") && chat.Contains("the result in three lines at most"), "");
+        check("prompt: the selection is the scope, the user's words are used, a why is answered without a change, open items are one list",
+            chat.Contains("The selection is the scope") && chat.Contains("Their words: use the names the user uses") && chat.Contains("is never used again")
+            && chat.Contains("\"Why ...?\" is a question") && chat.Contains("<where>: <problem> - <what to do>"), "");
         var pane = Read("src/SketchProMax/Chat/ChatPane.cs");
         var brief = Read("src/SketchProMax/Chat/ChatPane.Brief.cs");
         check("pane: a typed message carries the hint and a correction is learned from",
