@@ -218,5 +218,5 @@ internal static class FreeWorkers
         $"{job.Plan.Values.Count(v => v == JobPlan.ToDo)} steps it hasn't started. Nobody should wait while there is work: hand the " +
         "steps that don't depend on its current one to new jobs now (chat_jobs start, with the facts it found), and tell job " +
         $"{job.Number} (chat_jobs message) which steps moved so it leaves them. Changes still go into Revit one at a time by " +
-        "themselves. If nothing can be split off, say why in one line and carry on.";
+        "themselves. If nothing can be split off, answer only \"No split.\" and carry on: the user doesn't need the reason.";
 }

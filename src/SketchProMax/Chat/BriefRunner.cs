@@ -80,6 +80,22 @@ internal static class BriefRunner
     }
 
     /// <summary>
+    /// Distils a correction ("no", "still there") into one lesson and keeps it in the memory notes: Global when it holds
+    /// for every model, else under <paramref name="modelKey"/>. Every later chat and job reads the notes. Returns the
+    /// note kept, or "" when there was nothing to learn, it was already there, or Claude couldn't be asked.
+    /// </summary>
+    public static async Task<string> RememberLesson(ClaudeCli.Install? install, string request, string answer, string correction, string? modelKey, string? model)
+    {
+        if (install is null) return "";
+        var (text, error) = await Run(install, ChatFocus.LessonInstructions, ChatFocus.LessonMessage(request, answer, correction),
+            readTools: false, model, DistilTimeoutMs, CancellationToken.None).ConfigureAwait(false);
+        if (error.Length > 0 || ChatFocus.ParseLesson(text) is not { } lesson) return "";
+        var key = lesson.Global || string.IsNullOrEmpty(modelKey) ? null : modelKey;
+        try { return MemoryNotes.Change(sections => MemoryNotes.Add(sections, key, lesson.Note)) ? lesson.Note : ""; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException) { return ""; }
+    }
+
+    /// <summary>
     /// Distils an edited brief into one preference and saves it to the Global memory notes (the Notes tab). Returns the
     /// note saved, or "" when there was nothing general to keep. Falls back to the plain diff when Claude can't be asked.
     /// </summary>
