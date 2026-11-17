@@ -490,7 +490,7 @@ internal static class ChangeReplay
                         }
                     }
                 }
-                else if (element.Location is LocationCurve lc && line.P is { } a && line.Q is { } b && lc.Curve is Line or Arc)
+                else if (element.Location is LocationCurve lc && line.P is { } a && line.Q is { } b && lc.Curve is Line or Arc { IsBound: true })
                 {
                     var approx = false;
                     var now = ChangeShapes.Segs(lc.Curve, ref approx).ToList();

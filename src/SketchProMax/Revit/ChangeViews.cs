@@ -245,13 +245,18 @@ internal static class ChangeViews
             {
                 if (find(line.View) is not ViewSheet sheet) throw new InvalidOperationException("its sheet isn't in this model");
                 if (find(line.Host) is not View view) throw new InvalidOperationException("its view isn't in this model");
-                return Viewport.Create(doc, sheet.Id, view.Id, X(line.P!));
+                // Revit gives nothing back for a view or sheet made a moment ago until the model is regenerated.
+                var port = Viewport.Create(doc, sheet.Id, view.Id, X(line.P!));
+                if (port is null) { doc.Regenerate(); port = Viewport.Create(doc, sheet.Id, view.Id, X(line.P!)); }
+                return port ?? throw new InvalidOperationException("Revit didn't place the view on its sheet: place it by hand");
             }
             case "schedule-on-sheet":
             {
                 if (find(line.View) is not ViewSheet sheet) throw new InvalidOperationException("its sheet isn't in this model");
                 if (find(line.Host) is not ViewSchedule schedule) throw new InvalidOperationException("its schedule isn't in this model");
-                return ScheduleSheetInstance.Create(doc, sheet.Id, schedule.Id, X(line.P!));
+                var placed = ScheduleSheetInstance.Create(doc, sheet.Id, schedule.Id, X(line.P!));
+                if (placed is null) { doc.Regenerate(); placed = ScheduleSheetInstance.Create(doc, sheet.Id, schedule.Id, X(line.P!)); }
+                return placed ?? throw new InvalidOperationException("Revit didn't place the schedule on its sheet: place it by hand");
             }
             case "legendcomponent":
             {
