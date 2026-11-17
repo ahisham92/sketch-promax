@@ -768,6 +768,9 @@ internal static class ChangeFileMath
     {
         if (a is null || b is null) return a is null && b is null;
         if (a == b) return true;
+        // A spline through points is its points: older files also wrote end tangents, newer ones only when needed.
+        static string Points(string c) => c.StartsWith("H|", StringComparison.Ordinal) && c.Split('|') is { Length: >= 3 } h ? string.Join("|", h.Take(3)) : c;
+        (a, b) = (Points(a), Points(b));
         var (x, y) = (a.Split('|', ',', ';'), b.Split('|', ',', ';'));
         if (x.Length != y.Length) return false;
         for (var i = 0; i < x.Length; i++)

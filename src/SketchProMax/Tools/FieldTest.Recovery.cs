@@ -257,6 +257,8 @@ internal static partial class FieldTest
                 b = Grid.Create(doc, Line.CreateBound(new XYZ(230, 0, 0), new XYZ(230, 40, 0)));
                 edited = TextNote.Create(doc, plan.Id, new XYZ(200, 50, 0), "Field test note", textType);
                 goneText = TextNote.Create(doc, plan.Id, new XYZ(200, 60, 0), "Field test note made again", textType);
+                // Grids made a moment ago have nothing to dimension to until the model is regenerated.
+                doc.Regenerate();
                 var refs = new ReferenceArray();
                 refs.Append(new Reference(a));
                 refs.Append(new Reference(b));
@@ -327,11 +329,16 @@ internal static partial class FieldTest
                 var leader = note.AddLeader(TextNoteLeaderTypes.TNLT_STRAIGHT_R);
                 leader.End = new XYZ(3, -2, 0);
                 sheet = ViewSheet.Create(doc, ElementId.InvalidElementId);
+                // A view and a sheet made a moment ago can't be put together until the model is regenerated.
+                doc.Regenerate();
                 viewport = Viewport.Create(doc, sheet.Id, drafting.Id, new XYZ(1, 1, 0));
                 grid = Grid.Create(doc, Line.CreateBound(new XYZ(300, 0, 0), new XYZ(300, 40, 0)));
                 t.Commit();
             }
-            made.Add(grid.Id);
+            // Their ids and names now: a deleted element can't be asked for them.
+            var gridId = grid.Id;
+            var (draftingUnique, sheetUnique, noteUnique) = (drafting.UniqueId, sheet.UniqueId, note.UniqueId);
+            made.Add(gridId);
             var lines = new List<M.Line>();
             foreach (var e in new Element[] { drafting, sheet, viewport, note })
             {
@@ -347,20 +354,20 @@ internal static partial class FieldTest
                 t.Start();
                 doc.Delete(sheet.Id);
                 doc.Delete(drafting.Id);
-                doc.Delete(grid.Id);
+                doc.Delete(gridId);
                 t.Commit();
             }
-            made.Remove(grid.Id);
+            made.Remove(gridId);
             var model = new M.Line { Kind = M.Kinds.Model, At = DateTime.Now, Path = doc.PathName, Format = M.FormatNew };
             var parsed = M.Read(lines.Prepend(model).Select(M.Write));
             var outcome = new ChangeReplay.Outcome();
             ChangeReplay.Apply(doc, ChangeReplay.Plan(doc, parsed), outcome);
             made.AddRange(outcome.MadeFor.Values);
             var notDone = " (" + string.Join("; ", outcome.NotDone) + ")";
-            View? Again(Element e) => outcome.MadeFor.TryGetValue(e.UniqueId, out var id) ? doc.GetElement(id) as View : null;
-            if (Again(drafting) is not ViewDrafting draftingAgain || draftingAgain.Name != name) problems.Add("the drafting view wasn't made again with its name" + notDone);
-            if (Again(sheet) is not ViewSheet sheetAgain || sheetAgain.GetAllViewports().Count != 1) problems.Add("the sheet wasn't made again with its viewport" + notDone);
-            if (!outcome.MadeFor.TryGetValue(note.UniqueId, out var noteAgain) || doc.GetElement(noteAgain) is not TextNote noteBack || noteBack.LeaderCount != 1) problems.Add("the text note wasn't made again with its leader" + notDone);
+            View? Again(string unique) => outcome.MadeFor.TryGetValue(unique, out var id) ? doc.GetElement(id) as View : null;
+            if (Again(draftingUnique) is not ViewDrafting draftingAgain || draftingAgain.Name != name) problems.Add("the drafting view wasn't made again with its name" + notDone);
+            if (Again(sheetUnique) is not ViewSheet sheetAgain || sheetAgain.GetAllViewports().Count != 1) problems.Add("the sheet wasn't made again with its viewport" + notDone);
+            if (!outcome.MadeFor.TryGetValue(noteUnique, out var noteAgain) || doc.GetElement(noteAgain) is not TextNote noteBack || noteBack.LeaderCount != 1) problems.Add("the text note wasn't made again with its leader" + notDone);
             // Not marked as made in the session, yet gone: replay makes it again too (it never guesses someone else deleted it).
             if (!outcome.MadeFor.ContainsKey(gridLine.Unique!)) problems.Add("a grid gone from the model (not marked new) wasn't made again" + notDone);
             return problems.Count == 0
@@ -403,7 +410,8 @@ internal static partial class FieldTest
                 cs.SetLayerWidth(0, cs.GetLayerWidth(0) + 0.1);
                 ((HostObjAttributes)copy).SetCompoundStructure(cs);
                 marker = ElevationMarker.CreateElevationMarker(doc, elevationType.Id, new XYZ(400, 0, level.Elevation), 100);
-                elevation = marker.CreateElevation(doc, plan.Id, 1);
+                doc.Regenerate();
+                elevation = marker.CreateElevation(doc, plan.Id, 0);
                 top = Level.Create(doc, level.Elevation + 10);
                 t.Commit();
             }
@@ -756,7 +764,7 @@ internal static partial class FieldTest
             View3D view;
             ViewDrafting sheet;
             ParameterFilterElement filter;
-            DetailCurve spline;
+            CurveElement spline;
             Group group;
             GraphicsStyle style;
             using (var t = new Transaction(doc, "Field test: lifeline extras"))
@@ -785,7 +793,10 @@ internal static partial class FieldTest
                 view.HideElements([b.Id]);
                 sheet = ViewDrafting.Create(doc, drafting.Id);
                 sheet.Name = "SPM lifeline drafting " + stamp;
-                spline = doc.Create.NewDetailCurve(sheet, HermiteSpline.Create([new XYZ(0, 0, 0), new XYZ(2, 1, 0), new XYZ(4, -1, 0), new XYZ(6, 0, 0)], false));
+                // Revit gives nothing back for a spline through points drawn in a view: it is the one line in the view.
+                doc.Create.NewDetailCurve(sheet, HermiteSpline.Create([new XYZ(0, 0, 0), new XYZ(2, 1, 0), new XYZ(4, -1, 0), new XYZ(6, 0, 0)], false));
+                doc.Regenerate();
+                spline = new FilteredElementCollector(doc, sheet.Id).OfClass(typeof(CurveElement)).Cast<CurveElement>().First();
                 group = doc.Create.NewGroup([c.Id, d.Id]);
                 group.GroupType.Name = groupName;
                 t.Commit();
@@ -827,9 +838,10 @@ internal static partial class FieldTest
                 doc.Delete(filter.Id);
                 doc.Delete(style.GraphicsStyleCategory.Id);
                 doc.Delete(spline.Id);
-                var typeId = group.GroupType.Id;
+                // Ids first: the group's walls go with it, and a deleted element can't be asked for its id.
+                var (typeId, memberIds) = (group.GroupType.Id, new[] { c.Id, d.Id });
                 doc.Delete(group.Id);
-                foreach (var id in new[] { c.Id, d.Id }) if (doc.GetElement(id) is not null) doc.Delete(id);
+                foreach (var id in memberIds) if (doc.GetElement(id) is not null) doc.Delete(id);
                 doc.Delete(typeId);
                 t.Commit();
             }
@@ -840,7 +852,8 @@ internal static partial class FieldTest
             made.AddRange(outcome.MadeFor.Values);
             var notDone = " (" + string.Join("; ", outcome.NotDone) + ")";
             if (!JoinGeometryUtils.AreElementsJoined(doc, a, b)) problems.Add("the walls weren't joined again" + notDone);
-            var subAgain = lines.SubCategories.Cast<Category>().FirstOrDefault(k => k.Name == styleName);
+            // Asked afresh: a category in hand from before doesn't list a subcategory made since.
+            var subAgain = doc.Settings.Categories.get_Item(BuiltInCategory.OST_Lines).SubCategories.Cast<Category>().FirstOrDefault(k => k.Name == styleName);
             if (subAgain is null) problems.Add("the line style wasn't made again" + notDone);
             else
             {
@@ -857,7 +870,7 @@ internal static partial class FieldTest
             if (!view.GetCategoryHidden(new ElementId(BuiltInCategory.OST_Floors))) problems.Add("the view's hidden category isn't hidden again");
             if (!view.GetElementOverrides(a.Id).Halftone) problems.Add("the wall isn't drawn halftone in the view again");
             if (!b.IsHidden(view)) problems.Add("the wall hidden in the view isn't hidden again");
-            if (!outcome.MadeFor.TryGetValue(uniques.Spline, out var splineId) || doc.GetElement(splineId) is not DetailCurve { GeometryCurve: HermiteSpline }) problems.Add("the spline didn't come back as a spline" + notDone);
+            if (!outcome.MadeFor.TryGetValue(uniques.Spline, out var splineId) || doc.GetElement(splineId) is not CurveElement { GeometryCurve: HermiteSpline }) problems.Add("the spline didn't come back as a spline" + notDone);
             if (!outcome.MadeFor.TryGetValue(uniques.Group, out var groupId) || doc.GetElement(groupId) is not Group again) problems.Add("the group of a new type wasn't put together again" + notDone);
             else
             {

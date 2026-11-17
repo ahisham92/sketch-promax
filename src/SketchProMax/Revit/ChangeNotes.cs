@@ -268,10 +268,17 @@ internal static class ChangeNotes
             }
             case "dimension":
             {
+                // A grid or a level is dimensioned by the element itself: the reference the dimension reports for it
+                // ("…:0:SURFACE") reads back as one Revit then refuses ("Invalid number of references").
+                Reference DimRef(string stable)
+                {
+                    var r = Ref(stable);
+                    return doc.GetElement(r.ElementId) is DatumPlane datum ? new Reference(datum) : r;
+                }
                 var refs = new ReferenceArray();
-                foreach (var r in line.Refs!) refs.Append(Ref(r));
+                foreach (var r in line.Refs!) refs.Append(DimRef(r));
                 var view = ViewOf();
-                if (line.P is null || line.Q is null) return MakeArcDimension(doc, line, view, type, Ref);
+                if (line.P is null || line.Q is null) return MakeArcDimension(doc, line, view, type, DimRef);
                 var dimLine = Line.CreateBound(X(line.P!), X(line.Q!));
                 return type is DimensionType dt ? doc.Create.NewDimension(view, dimLine, refs, dt) : doc.Create.NewDimension(view, dimLine, refs);
             }

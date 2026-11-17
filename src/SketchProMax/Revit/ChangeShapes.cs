@@ -28,8 +28,17 @@ internal static class ChangeShapes
         Railing => "railing",
         ModelCurve => "modelcurve",
         DetailCurve => "detailcurve",
+        // A spline through points drawn in a view has no class of its own in Revit: it is a plain curve element.
+        CurveElement { ViewSpecific: true } when IsPlainLine(e) => "detailcurve",
+        CurveElement when IsPlainLine(e) => "modelcurve",
         _ => null,
     };
+
+    private static bool IsPlainLine(Element e) =>
+        e.GetType() == typeof(CurveElement) && e.Category?.Id.Value == (long)BuiltInCategory.OST_Lines;
+
+    /// <summary>True for a line element whose curve is a line or an arc with two ends (kept as P, Q and M).</summary>
+    private static bool Simple(Curve? c) => c is Line or Arc { IsBound: true };
 
     /// <summary>Lines that belong to a sketch are part of their element's line, never lines of their own.</summary>
     public static bool IsSketchLine(Element e) =>
@@ -100,8 +109,16 @@ internal static class ChangeShapes
                     var (t0, t1) = e.IsBound ? (e.GetEndParameter(0), e.GetEndParameter(1)) : (0.0, 2 * Math.PI);
                     return $"E|{V(e.Center)}|{N(e.RadiusX)}|{N(e.RadiusY)}|{V(e.XDirection)}|{V(e.YDirection)}|{N(t0)}|{N(t1)}";
                 case HermiteSpline h when h.ControlPoints.Count is >= 2 and <= MaxSplinePoints:
+                {
+                    // Written the way that draws the same curve again (checked here, in Revit 2025 the end tangents
+                    // alone drew a spline up to 50 mm off): through its points only, else with its end tangents, else
+                    // as the NURBS spline Revit says is the same curve.
+                    var points = string.Join(";", h.ControlPoints.Select(V));
                     var tangents = h.Tangents;
-                    return $"H|{(h.IsPeriodic ? 1 : 0)}|{string.Join(";", h.ControlPoints.Select(V))}|{V(tangents[0])}|{V(tangents[tangents.Count - 1])}";
+                    foreach (var text in new[] { $"H|{(h.IsPeriodic ? 1 : 0)}|{points}||", $"H|0|{points}|{V(tangents[0])}|{V(tangents[tangents.Count - 1])}" })
+                        try { if (FromExact(text) is { } again && SameCurve(h, again)) return text; } catch (Exception) { }
+                    return NurbSpline.Create(h) is { } same && SameCurve(h, same) ? Exact(same) : null;
+                }
                 case NurbSpline n when n.CtrlPoints.Count is >= 2 and <= MaxSplinePoints:
                     return $"N|{n.Degree}|{string.Join(",", n.Knots.Cast<double>().Select(N))}|{(n.isRational ? string.Join(",", n.Weights.Cast<double>().Select(N)) : "")}|{string.Join(";", n.CtrlPoints.Select(V))}";
                 default:
@@ -109,6 +126,15 @@ internal static class ChangeShapes
             }
         }
         catch (Exception) { return null; }
+    }
+
+    /// <summary>True when the two bound curves run through the same points (sampled along their length).</summary>
+    private static bool SameCurve(Curve a, Curve b)
+    {
+        if (!a.IsBound || !b.IsBound || Math.Abs(a.Length - b.Length) > 1e-6) return false;
+        for (var i = 0; i <= 16; i++)
+            if (a.Evaluate(i / 16.0, true).DistanceTo(b.Evaluate(i / 16.0, true)) > 1e-6) return false;
+        return true;
     }
 
     private static Curve? FromExact(string text)
@@ -124,6 +150,7 @@ internal static class ChangeShapes
             {
                 var points = p[2].Split(';').Select(Xyz).ToList();
                 if (p[1] == "1") return HermiteSpline.Create(points, true);
+                if (p.Length < 5 || p[3].Length == 0) return HermiteSpline.Create(points, false);
                 var tangents = new HermiteSplineTangents { StartTangent = Xyz(p[3]).Normalize(), EndTangent = Xyz(p[4]).Normalize() };
                 return HermiteSpline.Create(points, false, tangents);
             }
@@ -214,8 +241,15 @@ internal static class ChangeShapes
                 break;
             case CurveElement curve:
                 line.LineStyle = (curve.LineStyle as GraphicsStyle)?.Name;
-                if (curve is ModelCurve && curve.SketchPlane?.GetPlane() is { } plane) { line.PlaneOrigin = P(plane.Origin); line.PlaneNormal = P(plane.Normal); }
-                if (curve is DetailCurve) line.View = doc.GetElement(curve.OwnerViewId)?.UniqueId;
+                if (!curve.ViewSpecific && curve.SketchPlane?.GetPlane() is { } plane) { line.PlaneOrigin = P(plane.Origin); line.PlaneNormal = P(plane.Normal); }
+                if (curve.ViewSpecific) line.View = doc.GetElement(curve.OwnerViewId)?.UniqueId;
+                // A spline, an ellipse or a whole circle: its own numbers (a line or an arc is P, Q and M already).
+                if (Kind(curve) is not null && curve.GeometryCurve is { } own && !Simple(own))
+                {
+                    var whole = Segs(own, ref approx).ToList();
+                    line.Loops = [whole];
+                    (line.P, line.Q, line.M) = (whole[0].P, whole[^1].Q, null);
+                }
                 break;
             default:
                 if (SketchOf(doc, e) is { } sketch)
@@ -249,8 +283,8 @@ internal static class ChangeShapes
     {
         "floor" or "ceiling" or "topo" or "region" or "railing" or "roof" when line.Loops is { Count: > 0 } && line.Type is not null => null,
         "opening" when line.Loops is { Count: > 0 } || (line.P is not null && line.Q is not null) => null,
-        "modelcurve" when line.P is not null && line.Q is not null && line.PlaneNormal is not null => null,
-        "detailcurve" when line.P is not null && line.Q is not null && line.View is not null => null,
+        "modelcurve" when (line.Loops is { Count: > 0 } || (line.P is not null && line.Q is not null)) && line.PlaneNormal is not null => null,
+        "detailcurve" when (line.Loops is { Count: > 0 } || (line.P is not null && line.Q is not null)) && line.View is not null => null,
         "roof-other" => "an extrusion or other non-footprint roof made after the last save: make it again by hand",
         _ => "made after the last save, but the file has no sketch for it: make it again by hand",
     };
@@ -302,14 +336,15 @@ internal static class ChangeShapes
             case "modelcurve":
             {
                 var plane = Plane.CreateByNormalAndOrigin(X(line.PlaneNormal!), X(line.PlaneOrigin ?? line.P!));
-                var made = doc.Create.NewModelCurve(ToCurve(new M.Seg(line.P!, line.Q!, line.M)), SketchPlane.Create(doc, plane));
+                var sketchPlane = SketchPlane.Create(doc, plane);
+                var made = NewLines(doc, null, LineSegs(line), c => doc.Create.NewModelCurve(c, sketchPlane));
                 Style(doc, made, line);
                 return made;
             }
             case "detailcurve":
             {
                 if (find(line.View) is not View view2) throw new InvalidOperationException("the view it was drawn in isn't in this model");
-                var made = doc.Create.NewDetailCurve(view2, ToCurve(new M.Seg(line.P!, line.Q!, line.M)));
+                var made = NewLines(doc, view2, LineSegs(line), c => doc.Create.NewDetailCurve(view2, c));
                 Style(doc, made, line);
                 return made;
             }
@@ -317,6 +352,35 @@ internal static class ChangeShapes
                 return null;
         }
     }
+
+    /// <summary>The curve(s) of a model or detail line: its own numbers when it is a spline, an ellipse or a circle.</summary>
+    private static List<M.Seg> LineSegs(M.Line line) =>
+        line.Loops is { Count: > 0 } loops && loops[0].Count > 0 ? loops[0] : [new M.Seg(line.P!, line.Q!, line.M)];
+
+    /// <summary>
+    /// Draws a model or detail line. Revit gives nothing back for some curves it does draw (a spline through points in
+    /// a view), so the new line is then the curve element that wasn't there before. A curve written as short straight
+    /// lines (too many points to keep) comes back as those lines; the first is the element.
+    /// </summary>
+    private static CurveElement NewLines(Document doc, View? view, List<M.Seg> segs, Func<Curve, CurveElement?> draw)
+    {
+        CurveElement? first = null;
+        foreach (var seg in segs)
+        {
+            var before = first is null ? LineIds(doc, view) : null;
+            var made = draw(ToCurve(seg));
+            if (made is null && before is not null)
+            {
+                doc.Regenerate();
+                made = LineIds(doc, view).Where(id => !before.Contains(id)).Select(doc.GetElement).OfType<CurveElement>().FirstOrDefault();
+            }
+            first ??= made;
+        }
+        return first ?? throw new InvalidOperationException("Revit didn't draw the line");
+    }
+
+    private static HashSet<ElementId> LineIds(Document doc, View? view) =>
+        [.. (view is null ? new FilteredElementCollector(doc) : new FilteredElementCollector(doc, view.Id)).OfClass(typeof(CurveElement)).ToElementIds()];
 
     /// <summary>
     /// The sketch's slope arrow, when it has one: a line of the sketch that isn't a boundary edge and has the slope
@@ -392,6 +456,11 @@ internal static class ChangeShapes
             if (e is Railing railing) { railing.SetPath(CurveLoops(line.Loops).First()); changed = true; }
             // Only a roof's slopes changed: no sketch edit needed.
             else if (e is FootPrintRoof roof && now.Loops is not null && M.SameLoops(Unsloped(now.Loops), Unsloped(line.Loops))) { Slopes(roof, line); changed = true; }
+            else if (e is CurveElement ce && Kind(e) is not null)
+            {
+                // A spline, an ellipse or a circle drawn as a line: its curve set back as a whole.
+                if (line.Loops is [[var only]]) { ce.SetGeometryCurve(ToCurve(only), true); changed = true; }
+            }
             else if (SketchOf(doc, e) is { } s) sketch = s.Id;
         }
         if (line.Points is not null && !M.SamePoints(now.Points, line.Points)) { Points(e, line.Points); changed = true; }

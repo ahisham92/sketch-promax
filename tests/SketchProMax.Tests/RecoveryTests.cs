@@ -299,6 +299,24 @@ internal static class RecoveryTests
         check("lifeline: a spline is the same curve only with the same points", M.SameLoops([[spline]], [[splineSame]]) && !M.SameLoops([[spline]], [[splineOther]]) && !M.SameLoops([[spline]], [[new M.Seg(spline.P, spline.Q, null)]]), "");
         var segBack = M.Read(new[] { new M.Line { Kind = M.Kinds.State, At = at, Unique = "curve1", What = "detailcurve", Loops = [[spline]] } }.Select(M.Write)).Elements[0].Loops![0][0];
         check("lifeline: an exact curve is written in its line and read back", segBack.C == spline.C, segBack.C ?? "none");
+        // Found in Revit 2025 (bug 77).
+        check("lifeline: a spline's end tangents don't make two splines differ", M.SameCurve("H|0|0,0,0;2,1,0;6,0,0|0,1,0|1,0,0", "H|0|0,0,0;2,1,0;6,0,0||")
+            && !M.SameCurve("H|0|0,0,0;2,1,0;6,0,0||", "H|0|0,0,0;2,1.5,0;6,0,0||") && !M.SameCurve("H|1|0,0,0;2,1,0;6,0,0||", "H|0|0,0,0;2,1,0;6,0,0||"), "");
+        {
+            var shapes = Src("Revit", "ChangeShapes.cs");
+            check("lifeline: a spline, ellipse or circle drawn as a line is made again and set back", shapes.Contains("CurveElement { ViewSpecific: true } when IsPlainLine(e) => \"detailcurve\"")
+                && shapes.Contains("line.Loops = [whole];") && shapes.Contains("ce.SetGeometryCurve(ToCurve(only), true)")
+                && shapes.Contains("\"detailcurve\" when (line.Loops is { Count: > 0 } || (line.P is not null && line.Q is not null)) && line.View is not null => null"), "");
+            check("lifeline: a line Revit draws without handing it back is found", shapes.Contains("made = LineIds(doc, view).Where(id => !before.Contains(id))"), "");
+            check("lifeline: a spline is written the way that draws the same curve", shapes.Contains("FromExact(text) is { } again && SameCurve(h, again)") && shapes.Contains("NurbSpline.Create(h)"), "");
+            check("lifeline: a whole circle is never read as a line with two ends", Src("Revit", "ChangeFile.cs").Contains("LocationCurve { Curve: Line or Arc { IsBound: true } } lc")
+                && Src("Revit", "ChangeReplay.cs").Contains("lc.Curve is Line or Arc { IsBound: true })"), "");
+            check("lifeline: a dimension to a grid or level is made again on the element itself", Src("Revit", "ChangeNotes.cs").Contains("doc.GetElement(r.ElementId) is DatumPlane datum ? new Reference(datum) : r"), "");
+            check("lifeline: a view is placed on its sheet after a regenerate when Revit hands nothing back", Src("Revit", "ChangeViews.cs").Contains("if (port is null) { doc.Regenerate(); port = Viewport.Create("), "");
+            var probes = Src("Tools", "FieldTest.Recovery.cs");
+            check("lifeline: the Revit checks don't ask a deleted element for its id", probes.Contains("made.Remove(gridId);") && probes.Contains("Again(draftingUnique)") && probes.Contains("foreach (var id in memberIds)")
+                && probes.Contains("marker.CreateElevation(doc, plan.Id, 0)"), "");
+        }
         check("lifeline: splines and ellipses are written as they are, not as short lines", Src("Revit", "ChangeShapes.cs").Contains("HermiteSpline.Create(") && Src("Revit", "ChangeShapes.cs").Contains("NurbSpline.CreateCurve(") && Src("Revit", "ChangeShapes.cs").Contains("Ellipse.CreateCurve("), "");
         check("lifeline: a shape's signature tells a changed shape from the same one", M.SameSignature("0 0 0 10 1 10 100 6", "0 0 0 10.002 1 10 100.05 6") && !M.SameSignature("0 0 0 10 1 10 100 6", "0 0 0 12 1 10 120 6")
             && !M.SameSignature("0 0 0 10 1 10 100 6", "0 0 0 10 1 10 100 8") && !M.SameSignature("0 0 0 10 1 10 100 6", null), "");

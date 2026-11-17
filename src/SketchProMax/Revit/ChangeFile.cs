@@ -805,7 +805,7 @@ internal static class ChangeFile
                     line.P = P(lp.Point);
                     try { line.Rotation = M.Round(lp.Rotation); } catch (Exception) { }
                 }
-                else if (element.Location is LocationCurve { Curve: Line or Arc } lc)
+                else if (element.Location is LocationCurve { Curve: Line or Arc { IsBound: true } } lc)
                 {
                     var approx = false;
                     var seg = ChangeShapes.Segs(lc.Curve, ref approx).First();
