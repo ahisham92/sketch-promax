@@ -887,6 +887,7 @@ internal static partial class SelfTest
         new("update_text_notes", c => new { create = new[] { new { view_id = c.PlanId, x = c.At(0, -4000)[0], y = c.At(0, -4000)[1], text = "Self-test text" } } }),
         new("tag_elements_in_view", c => new { category = "Doors", view_id = c.PlanId }) { Heavy = true },
         new("arrange_tags", c => new { view_id = c.PlanId, action = "report_overlaps" }, Setup: ["tag_elements_in_view"]) { Heavy = true },
+        new("drawing_standard", c => new { action = "learn", view_ids = new[] { c.PlanId }, name = "Self-test standard", attach = false }, Setup: ["tag_elements_in_view"]),
         new("dimension_grids", c => new { view_id = c.PlanId }, Setup: ["create_grids"]),
         new("dimension_walls", c => new { view_id = c.PlanId, wall_ids = new[] { c.Id(c.Wall ?? throw new Skip("the model has no walls")) } }),
 
@@ -1066,6 +1067,9 @@ internal static partial class SelfTest
         // 0.31: ve_apply's default target (a copy) as a dry run: nothing is copied or opened.
         new("ve_apply", c => new { target = "copy", dry_run = true, changes = new[] { new { kind = "change_type", element_ids = new[] { c.Id(c.Wall) }, to_type = c.Wall!.Name } } })
             { Expect = r => r.GetProperty("dryRun").GetBoolean() ? null : "it was not a dry run" },
+        // The drawing standard learned from a view finds nothing to change in that same view.
+        new("drawing_standard", c => new { action = "check", view_ids = new[] { c.PlanId }, name = "Self-test standard" }, Setup: ["tag_elements_in_view", "drawing_standard"])
+            { Expect = r => r.GetProperty("matching").GetInt32() == 1 ? null : "the view it was learned from does not match it" },
         // 0.27: with no source given, an open active view is captured from the screen.
         new("capture_view_image", c => new { pixel_width = 800 }) { Heavy = true },
         // 0.26 regressions from the field bug log.

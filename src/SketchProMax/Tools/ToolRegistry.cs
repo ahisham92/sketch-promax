@@ -96,6 +96,7 @@ public sealed class ToolRegistry
         new SetViewGraphicsTool(),
         new AddAnnotationsTool(),
         new ArrangeTagsTool(),
+        new DrawingStandardTool(),
         new FormatScheduleTool(),
         new CreateSheetListTool(),
         new ExportFilesTool(),
