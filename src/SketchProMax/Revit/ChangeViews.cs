@@ -81,6 +81,13 @@ internal static class ChangeViews
             case View view:
                 line.ViewKind = view.ViewType.ToString();
                 try { line.Name = view.Name; } catch (Exception) { }
+                if (view.IsTemplate)
+                {
+                    // A view template: kept whole as a copy; what it leaves to each view is written here.
+                    var x = line.Extra ??= [];
+                    x["template"] = "1";
+                    try { x["free"] = string.Join(";", view.GetNonControlledTemplateParameterIds().Select(i => i.Value)); } catch (Exception) { }
+                }
                 if (view.GenLevel is { } level) { line.Level = level.Name; line.LevelUnique = level.UniqueId; }
                 // An area plan is made again in its area scheme.
                 if (view is ViewPlan { AreaScheme: { } scheme }) (line.Extra ??= [])["scheme"] = scheme.Name;
@@ -138,6 +145,13 @@ internal static class ChangeViews
                 break;
             case Group group:
                 if (group.Location is LocationPoint gp) line.P = P(gp.Point);
+                // Its members, so a group of a type made after the last save is put together again from them.
+                try
+                {
+                    var members = group.GetMemberIds().Take(MaxMembers).Select(doc.GetElement).Where(m => m is not null).Select(m => m!.UniqueId).ToList();
+                    if (members.Count > 0) (line.Extra ??= [])["members"] = string.Join(";", members);
+                }
+                catch (Exception) { }
                 break;
             case not null when line.What == "legendcomponent":
                 if (doc.GetElement(e.OwnerViewId) is View legend && e.get_BoundingBox(legend) is { } bb) line.P = P((bb.Min + bb.Max) / 2);
@@ -187,8 +201,11 @@ internal static class ChangeViews
 
     // ---- Making again -----------------------------------------------------------------------------------------------------
 
+    private const int MaxMembers = 3000;
+
     public static string? CanMake(M.Line line) => line.What switch
     {
+        "view" when M.IsTemplate(line) => "a view template made after the last save whose copy wasn't kept: make it again by hand",
         "view" when line.ViewKind is nameof(ViewType.Elevation) && (line.PlaneOrigin is null || line.PlaneNormal is null) => "an elevation made after the last save: make it again by hand",
         "view" when line.ViewKind is nameof(ViewType.Elevation) or nameof(ViewType.Legend) => null,
         "view" when line.ViewKind is nameof(ViewType.AreaPlan) && line.Host is null =>
@@ -265,8 +282,8 @@ internal static class ChangeViews
             }
             case "group":
             {
-                if (type is not GroupType groupType) throw new InvalidOperationException($"the group type {line.Type} isn't in this model");
-                return doc.Create.PlaceGroup(X(line.P!), groupType);
+                if (type is GroupType groupType) return doc.Create.PlaceGroup(X(line.P!), groupType);
+                return Regroup(doc, line, find, null);
             }
             case "link":
             {
@@ -289,6 +306,27 @@ internal static class ChangeViews
             default:
                 return null;
         }
+    }
+
+    /// <summary>
+    /// A group of a type that isn't in the model (made after the last save): its members, played one by one, are put
+    /// together again and the new type gets the name. <paramref name="type"/>: the type an earlier group of the same
+    /// kind got in this replay.
+    /// </summary>
+    public static Group Regroup(Document doc, M.Line line, Func<string?, Element?> find, GroupType? type)
+    {
+        var ids = M.Members(line).Select(u => find(u)).Where(m => m is not null && m.GroupId == ElementId.InvalidElementId).Select(m => m!.Id).Distinct().ToList();
+        if (ids.Count == 0) throw new InvalidOperationException($"the group type {line.Type} isn't in this model, and its members aren't either: group them again by hand");
+        var group = doc.Create.NewGroup(ids);
+        var own = group.GroupType;
+        if (type is not null)
+        {
+            // The same type as the first group of that kind, when Revit takes it (its own type then goes).
+            try { group.GroupType = type; if (own.Id != type.Id) doc.Delete(own.Id); return group; } catch (Exception) { }
+        }
+        var name = line.Type is { } t && t.IndexOf(": ", StringComparison.Ordinal) is var cut and > 0 ? t.Substring(cut + 2) : line.Type;
+        if (name is { Length: > 0 }) try { if (own.Name != name) own.Name = name; } catch (Exception) { }
+        return group;
     }
 
     private static Element MakeView(Document doc, M.Line line, Func<ElementId> typeId, Level? level, Func<string?, Element?> find, List<string> notes, string label)
@@ -539,6 +577,7 @@ internal static class ChangeViews
         {
             case View view when e is not ViewSheet:
                 if (line.Name is { Length: > 0 } name && view.Name != name) { try { view.Name = name; changed = true; } catch (Exception) { notes.Add($"{M.Describe(line)}: the name {name} is taken: rename it by hand"); } }
+                changed |= SetFrame(view, line);
                 break;
             case Viewport viewport when line.P is { } p && BoxCenter(viewport) is { } now && !M.Same(P(now), p):
                 viewport.SetBoxCenter(X(p));
@@ -559,6 +598,55 @@ internal static class ChangeViews
         }
         return changed;
     }
+
+    /// <summary>A view's crop, a 3D view's eye and section box, and what a template leaves to each view, as the line has them.</summary>
+    private static bool SetFrame(View view, M.Line line)
+    {
+        var changed = false;
+        try
+        {
+            if (view.IsTemplate)
+            {
+                if (line.Extra is { } x && x.TryGetValue("free", out var free))
+                {
+                    var want = free.Split([';'], StringSplitOptions.RemoveEmptyEntries).Select(t => new ElementId(long.Parse(t, System.Globalization.CultureInfo.InvariantCulture))).ToList();
+                    var now = view.GetNonControlledTemplateParameterIds();
+                    if (now.Count != want.Count || now.Except(want).Any()) { view.SetNonControlledTemplateParameterIds(want); changed = true; }
+                }
+                return changed;
+            }
+            if (view is View3D v3)
+            {
+                if (line.Box is { Eye: true, BasisY: { } up, BasisZ: { } forward } eye && !v3.IsLocked)
+                {
+                    var o = v3.GetOrientation();
+                    if (!M.Same(P(o.EyePosition), eye.Origin) || !M.Same(P(o.UpDirection), up) || !M.Same(P(o.ForwardDirection), forward))
+                    {
+                        v3.SetOrientation(new ViewOrientation3D(X(eye.Origin), X(up), X(forward)));
+                        changed = true;
+                    }
+                }
+                if (line.Box is { Eye: true } box)
+                {
+                    if (box.SectionBox is { Min: not null, Max: not null } sb)
+                    {
+                        if (!v3.IsSectionBoxActive || !SameBox(BoxOf(v3.GetSectionBox()), sb)) { v3.SetSectionBox(Bounding(sb)); changed = true; }
+                    }
+                    else if (v3.IsSectionBoxActive) { v3.IsSectionBoxActive = false; changed = true; }
+                }
+            }
+            else if (line.Box is { Eye: false, Min: not null, Max: not null } crop && view.CropBox is { } has && !SameBox(BoxOf(has), crop))
+            {
+                view.CropBox = Bounding(crop);
+                changed = true;
+            }
+        }
+        catch (Exception) { /* a view Revit won't frame this way (its template or scope box holds it): left */ }
+        return changed;
+    }
+
+    private static bool SameBox(M.Box a, M.Box b) =>
+        M.Same(a.Origin, b.Origin) && M.Same(a.BasisX, b.BasisX) && M.Same(a.BasisY, b.BasisY) && M.Same(a.BasisZ, b.BasisZ) && M.Same(a.Min, b.Min) && M.Same(a.Max, b.Max);
 
     private static M.Xyz P(XYZ p) => ChangeShapes.P(p);
 

@@ -27,6 +27,71 @@ internal static class ChangeKeeper
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return new(StringComparer.Ordinal); }
     }
 
+    /// <summary>A view template, a view filter, a line pattern or a fill pattern: kept whole as a copy, new or changed.</summary>
+    public static bool IsDocItem(Element e) => e is View { IsTemplate: true } or ParameterFilterElement or LinePatternElement or FillPatternElement;
+
+    /// <summary>An element that was in the model and can only be set back whole: an in-place family, or one with no point or line of its own to move (sketched stairs, an extrusion roof).</summary>
+    public static bool OnlyByCopy(Element e)
+    {
+        try { return e is FamilyInstance { Symbol.Family.IsInPlace: true } || e.Location is not (LocationPoint or LocationCurve); }
+        catch (Exception) { return false; }
+    }
+
+    /// <summary>The element of <paramref name="doc"/> that is the same thing as the line's by its kind and name (a template, filter or pattern of that name).</summary>
+    public static Element? ByName(Document doc, M.Line line)
+    {
+        if (line.Name is not { Length: > 0 } name) return null;
+        try
+        {
+            return line.What switch
+            {
+                "filter" => new FilteredElementCollector(doc).OfClass(typeof(ParameterFilterElement)).FirstOrDefault(e => e.Name == name),
+                "linepattern" => LinePatternElement.GetLinePatternElementByName(doc, name),
+                "fillpattern" => new FilteredElementCollector(doc).OfClass(typeof(FillPatternElement)).FirstOrDefault(e => e.Name == name),
+                "view" => new FilteredElementCollector(doc).OfClass(typeof(View)).Cast<View>().FirstOrDefault(v => v.IsTemplate && v.Name == name && v.ViewType.ToString() == line.ViewKind),
+                _ => null,
+            };
+        }
+        catch (Exception) { return null; }
+    }
+
+    /// <summary>
+    /// Gives a filter or pattern that is in the model what its kept copy has (its categories and rules, its dashes, its
+    /// lines): the copy is brought in for a moment and taken out again. Call inside a transaction.
+    /// </summary>
+    public static bool Refresh(Document keeper, Document doc, Element existing, string keptUnique)
+    {
+        if (existing is not (ParameterFilterElement or LinePatternElement or FillPatternElement)) return false;
+        if (keeper.GetElement(keptUnique) is not { } source) return false;
+        var copies = ElementTransformUtils.CopyElements(keeper, [source.Id], doc, Transform.Identity, Options());
+        var temp = copies.Select(doc.GetElement).FirstOrDefault(e => e is not null && e.GetType() == existing.GetType());
+        // Revit used the one in the model for the copy: nothing came in.
+        if (temp is null || temp.Id == existing.Id) return false;
+        var changed = false;
+        try
+        {
+            switch (existing)
+            {
+                case ParameterFilterElement filter when temp is ParameterFilterElement from:
+                    var (was, want) = (filter.GetCategories(), from.GetCategories());
+                    if (was.Count != want.Count || was.Except(want).Any()) { filter.SetCategories(want); changed = true; }
+                    var rules = from.GetElementFilter();
+                    if (rules is null) { if (filter.GetElementFilter() is not null) { filter.ClearRules(); changed = true; } }
+                    else { filter.SetElementFilter(rules); changed = true; }
+                    break;
+                case LinePatternElement pattern when temp is LinePatternElement from:
+                    var (a, b) = (pattern.GetLinePattern().GetSegments(), from.GetLinePattern().GetSegments());
+                    if (a.Count != b.Count || a.Zip(b, (x, y) => x.Type != y.Type || !M.Same(x.Length, y.Length)).Any(d => d)) { pattern.SetLinePattern(from.GetLinePattern()); changed = true; }
+                    break;
+                case FillPatternElement fill when temp is FillPatternElement from:
+                    if (!fill.GetFillPattern().IsEqual(from.GetFillPattern())) { fill.SetFillPattern(from.GetFillPattern()); changed = true; }
+                    break;
+            }
+        }
+        finally { try { doc.Delete(temp.Id); } catch (Exception) { } }
+        return changed;
+    }
+
     /// <summary>
     /// A new element that is kept as a copy: a model element (not drawn in a view, not a type, view, group, link or
     /// reinforcement) that the change file can't make again from its line, and every in-place family.
@@ -35,6 +100,7 @@ internal static class ChangeKeeper
     {
         try
         {
+            if (IsDocItem(e)) return true;
             if (e is View or ElementType or Family or Material or Level or Grid or Group or RevitLinkInstance or ImportInstance) return false;
             if (e.ViewSpecific || e.Category is not { CategoryType: CategoryType.Model }) return false;
             if (ChangeNotes.Owns(line) || ChangeViews.Owns(line)) return false;
@@ -79,7 +145,7 @@ internal static class ChangeKeeper
                     if (map.TryGetValue(unique, out var old) && keeper.GetElement(old) is { } was) keeper.Delete(was.Id);
                     map.Remove(unique);
                     var copies = ElementTransformUtils.CopyElements(doc, [e.Id], keeper, Transform.Identity, Options());
-                    var copy = Main(keeper, copies, e.Category?.Id.Value ?? 0) ?? throw new InvalidOperationException("Revit copied nothing");
+                    var copy = Main(keeper, copies, e, e.Category?.Id.Value ?? 0) ?? throw new InvalidOperationException("Revit copied nothing");
                     var copyUnique = copy.UniqueId;
                     if (t.Commit() != TransactionStatus.Committed) throw new InvalidOperationException("Revit refused the copy");
                     map[unique] = copyUnique;
@@ -120,7 +186,10 @@ internal static class ChangeKeeper
     {
         var source = keeper.GetElement(keptUnique) ?? throw new InvalidOperationException("its kept copy isn't there any more");
         var copies = ElementTransformUtils.CopyElements(keeper, [source.Id], doc, Transform.Identity, Options());
-        return Main(doc, copies, line.CategoryId) ?? throw new InvalidOperationException("Revit copied nothing back");
+        var made = Main(doc, copies, source, line.CategoryId) ?? throw new InvalidOperationException("Revit copied nothing back");
+        // A template, filter or pattern keeps its name (Revit adds a number when it thinks the name is taken).
+        if (M.IsDocItem(line) && line.Name is { Length: > 0 } name) try { if (made.Name != name) made.Name = name; } catch (Exception) { }
+        return made;
     }
 
     /// <summary>Deletes the folder's kept-elements project when no change file of the folder names a kept element any more.</summary>
@@ -147,9 +216,14 @@ internal static class ChangeKeeper
     }
 
     /// <summary>The copy itself among what Revit copied with it (its type, its family): of the element's category, not a type.</summary>
-    private static Element? Main(Document doc, ICollection<ElementId> copies, long categoryId)
+    private static Element? Main(Document doc, ICollection<ElementId> copies, Element like, long categoryId)
     {
         var elements = copies.Select(doc.GetElement).Where(e => e is not null and not ElementType and not Family).ToList();
+        if (IsDocItem(like))
+        {
+            var kin = elements.Where(e => e!.GetType() == like.GetType()).ToList();
+            return kin.FirstOrDefault(e => e!.Name == like.Name) ?? kin.FirstOrDefault();
+        }
         return elements.FirstOrDefault(e => categoryId != 0 && e!.Category?.Id.Value == categoryId) ?? elements.FirstOrDefault();
     }
 

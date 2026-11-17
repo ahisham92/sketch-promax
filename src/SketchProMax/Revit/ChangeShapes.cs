@@ -46,6 +46,12 @@ internal static class ChangeShapes
     {
         if (curve is Line line) return [new M.Seg(P(line.GetEndPoint(0)), P(line.GetEndPoint(1)), null, slope)];
         if (curve is Arc { IsBound: true } arc) return [new M.Seg(P(arc.GetEndPoint(0)), P(arc.GetEndPoint(1)), P(arc.Evaluate(0.5, true)), slope)];
+        // Splines, ellipses and whole circles exactly, by their own numbers.
+        if (Exact(curve) is { } exact)
+        {
+            var (from, to) = curve.IsBound ? (curve.GetEndPoint(0), curve.GetEndPoint(1)) : (curve.Evaluate(0, false), curve.Evaluate(0, false));
+            return [new M.Seg(P(from), P(to), null, slope, exact)];
+        }
         approx = true;
         var points = curve.Tessellate();
         var segs = new List<M.Seg>();
@@ -53,7 +59,84 @@ internal static class ChangeShapes
         return segs;
     }
 
-    public static Curve ToCurve(M.Seg s) => s.M is { } m ? Arc.Create(X(s.P), X(s.Q), X(m)) : Line.CreateBound(X(s.P), X(s.Q));
+    public static Curve ToCurve(M.Seg s)
+    {
+        if (s.C is { } exact)
+            try { if (FromExact(exact) is { } curve) return curve; } catch (Exception) { /* numbers Revit won't take: a straight line between its ends */ }
+        return s.M is { } m ? Arc.Create(X(s.P), X(s.Q), X(m)) : Line.CreateBound(X(s.P), X(s.Q));
+    }
+
+    private static readonly System.Globalization.CultureInfo Inv = System.Globalization.CultureInfo.InvariantCulture;
+
+    private static string N(double d) => d.ToString("G12", Inv);
+
+    private static string V(XYZ p) => $"{N(p.X)},{N(p.Y)},{N(p.Z)}";
+
+    private static double D(string text) => double.Parse(text, System.Globalization.NumberStyles.Float, Inv);
+
+    private static XYZ Xyz(string text)
+    {
+        var parts = text.Split(',');
+        return new XYZ(D(parts[0]), D(parts[1]), D(parts[2]));
+    }
+
+    /// <summary>The most control points of a spline that are written (longer ones come back as short straight lines).</summary>
+    private const int MaxSplinePoints = 400;
+
+    /// <summary>
+    /// A curve that is neither a line nor a bound arc, as text: A a whole circle (centre, radius, x and y directions);
+    /// E an ellipse (centre, the two radii, directions, where it starts and ends); H a spline through points (closed or
+    /// not, the points, its tangents at the ends); N a NURBS spline (degree, knots, weights, control points).
+    /// </summary>
+    private static string? Exact(Curve curve)
+    {
+        try
+        {
+            switch (curve)
+            {
+                case Arc { IsBound: false } circle:
+                    return $"A|{V(circle.Center)}|{N(circle.Radius)}|{V(circle.XDirection)}|{V(circle.YDirection)}";
+                case Ellipse e:
+                    var (t0, t1) = e.IsBound ? (e.GetEndParameter(0), e.GetEndParameter(1)) : (0.0, 2 * Math.PI);
+                    return $"E|{V(e.Center)}|{N(e.RadiusX)}|{N(e.RadiusY)}|{V(e.XDirection)}|{V(e.YDirection)}|{N(t0)}|{N(t1)}";
+                case HermiteSpline h when h.ControlPoints.Count is >= 2 and <= MaxSplinePoints:
+                    var tangents = h.Tangents;
+                    return $"H|{(h.IsPeriodic ? 1 : 0)}|{string.Join(";", h.ControlPoints.Select(V))}|{V(tangents[0])}|{V(tangents[tangents.Count - 1])}";
+                case NurbSpline n when n.CtrlPoints.Count is >= 2 and <= MaxSplinePoints:
+                    return $"N|{n.Degree}|{string.Join(",", n.Knots.Cast<double>().Select(N))}|{(n.isRational ? string.Join(",", n.Weights.Cast<double>().Select(N)) : "")}|{string.Join(";", n.CtrlPoints.Select(V))}";
+                default:
+                    return null;
+            }
+        }
+        catch (Exception) { return null; }
+    }
+
+    private static Curve? FromExact(string text)
+    {
+        var p = text.Split('|');
+        switch (p[0])
+        {
+            case "A":
+                return Arc.Create(Xyz(p[1]), D(p[2]), 0, 2 * Math.PI, Xyz(p[3]).Normalize(), Xyz(p[4]).Normalize());
+            case "E":
+                return Ellipse.CreateCurve(Xyz(p[1]), D(p[2]), D(p[3]), Xyz(p[4]).Normalize(), Xyz(p[5]).Normalize(), D(p[6]), D(p[7]));
+            case "H":
+            {
+                var points = p[2].Split(';').Select(Xyz).ToList();
+                if (p[1] == "1") return HermiteSpline.Create(points, true);
+                var tangents = new HermiteSplineTangents { StartTangent = Xyz(p[3]).Normalize(), EndTangent = Xyz(p[4]).Normalize() };
+                return HermiteSpline.Create(points, false, tangents);
+            }
+            case "N":
+            {
+                var knots = p[2].Split(',').Select(D).ToList();
+                var points = p[4].Split(';').Select(Xyz).ToList();
+                return p[3].Length > 0 ? NurbSpline.CreateCurve(int.Parse(p[1], Inv), knots, points, p[3].Split(',').Select(D).ToList()) : NurbSpline.CreateCurve(int.Parse(p[1], Inv), knots, points);
+            }
+            default:
+                return null;
+        }
+    }
 
     private static List<M.Seg> Loop(IEnumerable<Curve> curves, ref bool approx)
     {
