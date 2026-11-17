@@ -182,7 +182,8 @@ internal sealed class RecoverWindow : System.Windows.Window
         Say("Reading the model…", Brand.K.Muted);
         List<ChangeReplay.Step> steps;
         // What an earlier replay of this file made again is set, not made a second time; the file's kept families are next to it.
-        var outcome = new ChangeReplay.Outcome { FamiliesFolder = ChangeFile.FamiliesFolderOf(file) };
+        var folder = Path.GetDirectoryName(file) ?? "";
+        var outcome = new ChangeReplay.Outcome { FamiliesFolder = ChangeFile.FamiliesFolderOf(file), KeptFolder = folder, Kept = ChangeKeeper.ReadMap(folder) };
         var madeBefore = ChangeFile.ReadMade(file);
         try
         {
@@ -252,6 +253,10 @@ internal sealed class RecoverWindow : System.Windows.Window
             }
             catch (Exception ex) { LifelineBugs.Note("replay", "names couldn't be set at the end", target.Path, ex); }
         ChangeFile.WriteMade(file, outcome.MadeUnique);
+        // The kept-elements project a replay opened (no window) is closed again.
+        if (outcome.Keeper is not null)
+            try { await App.Dispatcher.InvokeAsync(_ => { ChangeKeeper.Close(outcome.Keeper); outcome.Keeper = null; return true; }); }
+            catch (Exception ex) { LifelineBugs.Note("replay", "the kept-elements project couldn't be closed", target.Path, ex); }
         var opened = stoppedBecause is null ? await OpenViews(parsed, outcome, target) : 0;
         WriteReport(file, target.Path, outcome, done, total, opened, stoppedBecause);
         // Lifeline's bug list: Revit's errors first, then what replay can't put back yet (what to build next).
@@ -259,51 +264,71 @@ internal sealed class RecoverWindow : System.Windows.Window
         foreach (var n in outcome.NotDone.Except(outcome.Errors)) LifelineBugs.Note("replay couldn't", n, target.Path, key: M.Reason(n));
         if (stoppedBecause is null) ChangeFile.MarkReplayed(file);
 
-        var line = $"Done: {outcome.Set} set back, {outcome.Made} made again, {outcome.Deleted} deleted, {outcome.Same} already right" +
-                   (opened > 0 ? $", {Plural(opened, "view")} opened" : "") + "." +
-                   (stoppedBecause is not null ? $" Stopped after {done} of {total} because {stoppedBecause}. Press Replay again to carry on: what is done already stays as it is." : "");
+        var line = M.ReplaySummary(outcome.Set + outcome.Made + outcome.Deleted + outcome.Same, outcome.NotDone.Count, stoppedBecause is null ? null : $"Stopped after {done} of {total} because {stoppedBecause}. Press Replay again to carry on.");
         Say(line, stoppedBecause is null && outcome.NotDone.Count == 0 ? Brand.K.SuccessText : Brand.K.WarningText);
         ShowNotDone(outcome);
-        // The owner asked for this alert: replay can't promise every change, so the user checks before saving.
-        MessageBox.Show(this,
-            line + (outcome.NotDone.Count > 0 ? $"\n\n{Plural(outcome.NotDone.Count, "item")} weren't done: they are listed in the Lifeline window, each with Show." + TopReasons(outcome.NotDone) : "") +
-            "\n\nPlease check in the model that every change you made is there before you save or synchronize.",
-            "Sketch ProMax: check the changes", MessageBoxButton.OK, MessageBoxImage.Warning);
+        // One alert, and only when something needs the user: all back is said in the window alone.
+        if (outcome.NotDone.Count > 0 || stoppedBecause is not null)
+            MessageBox.Show(this, line + TopReasons(outcome.NotDone), "Sketch ProMax: check the changes", MessageBoxButton.OK, MessageBoxImage.Warning);
     }
 
     /// <summary>The three commonest reasons, with counts, so a long list is understood at a glance.</summary>
     private static string TopReasons(List<string> notDone) =>
-        string.Concat(notDone.GroupBy(M.Reason).OrderByDescending(g => g.Count()).Take(3).Select(g => $"\n  {g.Count()}: {g.Key}"));
+        string.Concat(M.GroupReasons(notDone, 4).Select(g => $"\n  {g.Items.Count} × {g.Reason}"));
 
-    /// <summary>What wasn't done, each with Show (to the element, or to where it was in its view).</summary>
+    /// <summary>What wasn't done: one row for each reason with how many; List opens its items, each with Show (to the element, or to where it was in its view).</summary>
     private void ShowNotDone(ChangeReplay.Outcome outcome)
     {
         _results.Children.Clear();
         if (outcome.NotDone.Count == 0) return;
-        _results.Children.Add(Brand.Text($"Not done ({outcome.NotDone.Count})", Brand.K.Text, 13, bold: true));
-        // The reasons first, commonest first, so a long list is understood before it is read.
-        var reasons = outcome.NotDone.GroupBy(M.Reason).OrderByDescending(g => g.Count()).ToList();
-        if (reasons.Count > 1 && outcome.NotDone.Count > 5)
-            foreach (var g in reasons.Take(8)) _results.Children.Add(Wrap(Brand.Text($"{g.Count()} × {g.Key}", Brand.K.Muted, 11)));
-        for (var i = 0; i < outcome.NotDone.Count && i < 300; i++)
+        foreach (var (reason, items) in M.GroupReasons(outcome.NotDone))
         {
-            var text = Wrap(Brand.Text(outcome.NotDone[i], Brand.K.Text, 12));
+            if (items.Count == 1) { _results.Children.Add(ItemRow(outcome, items[0])); continue; }
+            var list = new StackPanel { Margin = new Thickness(12, 0, 0, 0), Visibility = System.Windows.Visibility.Collapsed };
+            var open = Brand.Button("List");
+            AutomationProperties.SetName(open, $"List the {items.Count} items: {reason}");
+            open.Click += (_, _) =>
+            {
+                // Filled the first time it is opened: a long list costs nothing until it is asked for.
+                if (list.Children.Count == 0)
+                {
+                    foreach (var i in items.Take(100)) list.Children.Add(ItemRow(outcome, i));
+                    if (items.Count > 100) list.Children.Add(Wrap(Brand.Text($"and {items.Count - 100} more in the report.", Brand.K.Muted, 11)));
+                }
+                var show = list.Visibility != System.Windows.Visibility.Visible;
+                list.Visibility = show ? System.Windows.Visibility.Visible : System.Windows.Visibility.Collapsed;
+                open.Content = show ? "Hide" : "List";
+            };
+            var text = Wrap(Brand.Text($"{items.Count} × {reason}", Brand.K.Text, 12));
             text.Margin = new Thickness(0, 0, 8, 0);
             text.VerticalAlignment = VerticalAlignment.Center;
             var row = new DockPanel { Margin = new Thickness(0, 4, 0, 0) };
-            if (outcome.Place.TryGetValue(i, out var where))
-            {
-                var show = Brand.Button("Show");
-                AutomationProperties.SetName(show, "Show " + outcome.NotDone[i]);
-                var made = outcome.MadeFor.TryGetValue(where.Unique ?? "", out var id) ? id : null;
-                show.Click += async (_, _) => Say(await GoTo(where, made), Brand.K.Muted);
-                DockPanel.SetDock(show, Dock.Right);
-                row.Children.Add(show);
-            }
+            DockPanel.SetDock(open, Dock.Right);
+            row.Children.Add(open);
             row.Children.Add(text);
             _results.Children.Add(row);
+            _results.Children.Add(list);
         }
-        if (outcome.NotDone.Count > 300) _results.Children.Add(Wrap(Brand.Text($"and {outcome.NotDone.Count - 300} more in the report.", Brand.K.Muted, 11)));
+    }
+
+    /// <summary>One item that wasn't done, with Show when its place is known.</summary>
+    private UIElement ItemRow(ChangeReplay.Outcome outcome, int i)
+    {
+        var text = Wrap(Brand.Text(outcome.NotDone[i], Brand.K.Text, 12));
+        text.Margin = new Thickness(0, 0, 8, 0);
+        text.VerticalAlignment = VerticalAlignment.Center;
+        var row = new DockPanel { Margin = new Thickness(0, 4, 0, 0) };
+        if (outcome.Place.TryGetValue(i, out var where))
+        {
+            var show = Brand.Button("Show");
+            AutomationProperties.SetName(show, "Show " + outcome.NotDone[i]);
+            var made = outcome.MadeFor.TryGetValue(where.Unique ?? "", out var id) ? id : null;
+            show.Click += async (_, _) => Say(await GoTo(where, made), Brand.K.Muted);
+            DockPanel.SetDock(show, Dock.Right);
+            row.Children.Add(show);
+        }
+        row.Children.Add(text);
+        return row;
     }
 
     /// <summary>Takes Revit to what a line is about: the element (selected and shown), else its view around where it was.</summary>

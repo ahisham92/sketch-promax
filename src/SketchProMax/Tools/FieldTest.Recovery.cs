@@ -612,6 +612,98 @@ internal static partial class FieldTest
         }
     }
 
+    /// <summary>
+    /// Kept copies and a schedule's look: in the test project, a wall is copied into a kept-elements project in a test
+    /// folder (as an in-place family or curved stairs would be), deleted, and copied back where it was by a replay; a
+    /// wall schedule with a heading, a sorting row and a filter, deleted, is made again with them. The kept-elements
+    /// project is closed again; what the test made is deleted.
+    /// </summary>
+    private static (string, string) RecoveryKept(UIApplication app, State s)
+    {
+        if (TestDoc(app, s, out var why) is not { } doc) return Fail(why);
+        if (BasicWallType(doc) is not { } type) return Fail("the test project has no basic wall type with layers");
+        if (new FilteredElementCollector(doc).OfClass(typeof(Level)).FirstElement() is not Level level) return Fail("the test project has no level");
+        var folder = Path.Combine(s.Folder, "change-files-kept");
+        var problems = new List<string>();
+        var made = new List<ElementId>();
+        ChangeReplay.Outcome? outcome = null;
+        try
+        {
+            Directory.CreateDirectory(folder);
+            Wall wall;
+            ViewSchedule schedule;
+            var sorted = false;
+            using (var t = new Transaction(doc, "Field test: lifeline kept things"))
+            {
+                t.Start();
+                wall = Wall.Create(doc, Line.CreateBound(new XYZ(0, -140, 0), new XYZ(20, -140, 0)), type.Id, level.Id, 10, 0, false, false);
+                schedule = ViewSchedule.CreateSchedule(doc, new ElementId(BuiltInCategory.OST_Walls));
+                schedule.Name = "SPM lifeline schedule " + DateTime.Now.ToString("HHmmss");
+                var definition = schedule.Definition;
+                if (definition.GetSchedulableFields().FirstOrDefault(f => f.ParameterId.Value == (long)BuiltInParameter.ALL_MODEL_MARK) is { } mark)
+                {
+                    var column = definition.AddField(mark);
+                    column.ColumnHeading = "SPM mark";
+                    definition.AddSortGroupField(new ScheduleSortGroupField(column.FieldId, ScheduleSortOrder.Descending));
+                    definition.AddFilter(new ScheduleFilter(column.FieldId, ScheduleFilterType.NotEqual, "zz"));
+                    sorted = true;
+                }
+                t.Commit();
+            }
+            var lines = new List<M.Line>();
+            if (ChangeFile.Capture(doc, wall) is { } wallLine) { wallLine.New = true; (wallLine.Extra ??= [])["kept"] = "1"; lines.Add(wallLine); }
+            else problems.Add("the wall wasn't captured");
+            if (ChangeFile.Capture(doc, schedule) is { } scheduleLine)
+            {
+                scheduleLine.New = true;
+                lines.Add(scheduleLine);
+                if (scheduleLine.Extra is not { } x || !x.ContainsKey("look")) problems.Add("the schedule's sorting and filters aren't in its line");
+            }
+            else problems.Add("the schedule wasn't captured");
+            var (wallUnique, scheduleUnique) = (wall.UniqueId, schedule.UniqueId);
+            var kept = ChangeKeeper.Keep(doc, folder, [wall]);
+            if (!kept.Contains(wallUnique) || !File.Exists(ChangeKeeper.FileOf(folder))) problems.Add("the wall wasn't copied into the kept-elements project");
+            using (var t = new Transaction(doc, "Field test: lifeline kept things gone"))
+            {
+                t.Start();
+                doc.Delete(wall.Id);
+                doc.Delete(schedule.Id);
+                t.Commit();
+            }
+            var model = new M.Line { Kind = M.Kinds.Model, At = DateTime.Now, Path = doc.PathName, Format = M.FormatNew };
+            var parsed = M.Read(lines.Prepend(model).Select(M.Write));
+            outcome = new ChangeReplay.Outcome { KeptFolder = folder, Kept = ChangeKeeper.ReadMap(folder) };
+            ChangeReplay.Apply(doc, ChangeReplay.Plan(doc, parsed, outcome), outcome);
+            made.AddRange(outcome.MadeFor.Values);
+            var notDone = " (" + string.Join("; ", outcome.NotDone) + ")";
+            if (!outcome.MadeFor.TryGetValue(wallUnique, out var wallId) || doc.GetElement(wallId) is not Wall back) problems.Add("the wall wasn't copied back from its kept copy" + notDone);
+            else if (back.Location is not LocationCurve { Curve: { } curve } || curve.GetEndPoint(0).DistanceTo(new XYZ(0, -140, curve.GetEndPoint(0).Z)) > 0.01 && curve.GetEndPoint(1).DistanceTo(new XYZ(0, -140, curve.GetEndPoint(1).Z)) > 0.01)
+                problems.Add("the wall copied back isn't where it was");
+            if (!outcome.MadeFor.TryGetValue(scheduleUnique, out var scheduleId) || doc.GetElement(scheduleId) is not ViewSchedule again) problems.Add("the schedule wasn't made again" + notDone);
+            else if (sorted)
+            {
+                var definition = again.Definition;
+                if (definition.GetSortGroupFieldCount() != 1 || definition.GetFilterCount() != 1) problems.Add($"the schedule came back with {definition.GetSortGroupFieldCount()} sorting rows and {definition.GetFilterCount()} filters, not 1 and 1");
+                if (!Enumerable.Range(0, definition.GetFieldCount()).Any(i => definition.GetField(i).ColumnHeading == "SPM mark")) problems.Add("the schedule's heading didn't come back");
+            }
+            if (outcome.NotDone.Count > 0) problems.Add("the replay listed" + notDone);
+            return problems.Count == 0
+                ? Pass("a wall copied into the kept-elements project and copied back where it was; a schedule made again with its heading, sorting and filter")
+                : Fail(string.Join("; ", problems));
+        }
+        finally
+        {
+            ChangeKeeper.Close(outcome?.Keeper);
+            if (app.Application.Documents.Cast<Document>().Any(d => { try { return ChangeKeeper.Is(d.PathName ?? ""); } catch (Exception) { return false; } }))
+                LifelineBugs.Note("field test", "the kept-elements project was left open");
+            using var t = new Transaction(doc, "Field test: lifeline tidy up");
+            t.Start();
+            foreach (var id in made)
+                try { if (doc.GetElement(id) is not null) doc.Delete(id); } catch (Exception) { }
+            t.Commit();
+        }
+    }
+
     /// <summary>Lifeline's bug list: a problem noted twice is one line under the header, in a test folder.</summary>
     private static (string, string) RecoveryBugs(State s)
     {

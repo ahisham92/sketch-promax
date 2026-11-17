@@ -83,7 +83,7 @@ internal static class RecoveryTests
         check("recovery: the change file starts and stops with the core", Src("App.cs").Contains("ChangeFile.Start(app)") && Src("App.cs").Contains("ChangeFile.Stop()"), "");
         check("recovery: Recover is on the pane", SketchProMax.UI.CoreRibbonManifest.Text.Split('\n').Count(l => l.StartsWith("pane\t") && l.Contains("\trecover\t")) == 1
             && Src("CoreEntry.cs").Contains("\"recover\" => RecoverWindow.Open()"), "");
-        check("recovery: the window warns to check every change after a replay", Src("UI", "RecoverWindow.cs").Contains("check in the model that every change"), "");
+        check("recovery: the window warns to check every change after a replay", M.ReplaySummary(3, 0, null).Contains("Check the model before you save") && M.ReplaySummary(3, 2, null).Contains("Check the model before you save"), "");
         check("recovery: the change file never saves the model", !Src("Revit", "ChangeFile.cs").Contains(".Save(") && !Src("Revit", "ChangeFile.cs").Contains("SynchronizeWithCentral"), "");
         check("lifeline: named Lifeline on the pane and in Settings", SketchProMax.UI.CoreRibbonManifest.Text.Contains("\tLifeline\t") && Src("UI", "SettingsLayout.cs").Contains("\"Lifeline\""), "");
         check("lifeline: can go in a shared pack for colleagues", SketchProMax.Sharing.SharedPackMath.Shareable("recover"), "");
@@ -144,7 +144,8 @@ internal static class RecoveryTests
             && Src("Revit", "ChangeReplay.cs").Contains("outcome.Same += steps.Count(s => s.Act == Act.Done)") && !Src("Revit", "ChangeReplay.cs").Contains("\"already not in the model\""), "");
         check("lifeline: Revit's energy model is never written or replayed", Src("Revit", "ChangeFile.cs").Contains("IsAnalysis(category.Id.Value)") && Src("Revit", "ChangeReplay.cs").Contains("ChangeFile.IsAnalysis(line.CategoryId)"), "");
         check("lifeline: lines marked new stay marked when a newer core carries on", Src("Revit", "ChangeFile.cs").Contains("else SeedAdded(model);"), "");
-        check("lifeline: the replay alert shows already right and the commonest reasons", Src("UI", "RecoverWindow.cs").Contains("already right\" +") && Src("UI", "RecoverWindow.cs").Contains("TopReasons(outcome.NotDone)"), "");
+        check("lifeline: the replay alert shows the commonest reasons, and only when something needs the user", Src("UI", "RecoverWindow.cs").Contains("TopReasons(outcome.NotDone)")
+            && Src("UI", "RecoverWindow.cs").Contains("if (outcome.NotDone.Count > 0 || stoppedBecause is not null)\n            MessageBox.Show(".Replace("\n", Environment.NewLine)) || Src("UI", "RecoverWindow.cs").Replace("\r\n", "\n").Contains("if (outcome.NotDone.Count > 0 || stoppedBecause is not null)\n            MessageBox.Show("), "");
         check("lifeline: a group made again brings its members (their lines aren't played)", Src("Revit", "ChangeReplay.cs").Contains("groupsMade.Contains(group)"), "");
         check("lifeline: a new local saved as it opens keeps last time's file", Src("Revit", "ChangeFile.cs").Contains("e.OriginalPath") && Src("Revit", "ChangeFile.cs").Contains("if (!watched) { Track(doc, opened: true); return; }"), "");
         check("lifeline: other locals of the same central are found", Src("Revit", "ChangeFile.cs").Contains("head.Central, model.Central") && Src("UI", "RecoverWindow.cs").Contains("ChangeFile.LeftoversFor(target.Path, target.Central)"), "");
@@ -193,7 +194,7 @@ internal static class RecoveryTests
         var perElement = (GC.GetTotalMemory(true) - memoryBefore) / 200_000.0;
         check("lifeline: noting an element takes tens of bytes, not its whole UniqueId", perElement < 80 && bulk.TryGet(199_999, out var lastNoted, out _) && lastNoted == episode + "-00030d3f", perElement.ToString("0") + " bytes each");
         check("lifeline: the model's elements are noted in short slices, after what changed is read", M.IndexBudgetMs is > 0 and <= 20
-            && Src("Revit", "ChangeFile.cs").Contains("if (!reading && For(doc) is { } model) more |= KeepFamily(doc, model) || NoteElements(doc, model);"), M.IndexBudgetMs.ToString());
+            && Src("Revit", "ChangeFile.cs").Contains("if (!reading && For(doc) is { } model) more |= KeepFamily(doc, model) || KeepElements(doc, model) || NoteElements(doc, model);"), M.IndexBudgetMs.ToString());
         check("lifeline: a deletion takes its UniqueId from the noted elements; one made and deleted after the save is marked",
             Src("Revit", "ChangeFile.cs").Contains("model.Known.TryGet(id.Value, out var unique, out var category)") && Src("Revit", "ChangeFile.cs").Contains("New = made,")
             && Src("Revit", "ChangeReplay.cs").Contains("line.Kind == M.Kinds.Deleted && line.New && line.Unique is not { Length: > 0 }"), "");
@@ -250,6 +251,47 @@ internal static class RecoveryTests
         check("lifeline: schedules of every kind are made by their own call", new[] { "CreateKeySchedule", "CreateMaterialTakeoff", "CreateSheetList", "CreateViewList", "CreateRevisionSchedule", "CreateKeynoteLegend" }.All(Src("Revit", "ChangeViews.cs").Contains), "");
         check("lifeline: a toposolid's shape editor is on before its points go back", Src("Revit", "ChangeShapes.cs").Replace("\r\n", "\n").Contains("if (!editor.IsEnabled) editor.Enable();\n        if (e is Toposolid)"), "");
         check("lifeline: a stopped replay says how to carry on", Src("UI", "RecoverWindow.cs").Contains("Press Replay again to carry on"), "");
+        // Fewer messages: one line at the end, one row for each reason.
+        check("lifeline: all back is one short line", M.ReplaySummary(350, 0, null) == "All 350 changes are back. Check the model before you save." && M.ReplaySummary(1, 0, null).StartsWith("The change is back."), M.ReplaySummary(350, 0, null));
+        check("lifeline: some not back says how many need the user", M.ReplaySummary(338, 12, null).StartsWith("338 of 350 changes are back; 12 need you (listed below).") && M.ReplaySummary(9, 1, null).Contains("1 needs you"), M.ReplaySummary(338, 12, null));
+        check("lifeline: a stopped replay's line says how to carry on", M.ReplaySummary(5, 0, "Stopped after 5 of 9 because you pressed Stop. Press Replay again to carry on.").Contains("Press Replay again to carry on. Check the model"), "");
+        var notDone = new List<string>
+        {
+            "05:48 Generic Models: Pile A (added or changed): the type \"Pile A: 600\" isn't loaded in this model",
+            "05:49 Generic Models: Pile B (added or changed): the type \"Pile B: 900\" isn't loaded in this model",
+            "05:27 element 1 (deleted, Change Type): deleted by a step Lifeline couldn't read; in the model now it is Walls \"W1\": delete it by hand if you deleted it",
+            "05:27 element 2 (deleted, Change Type): deleted by a step Lifeline couldn't read; in the model now it is Grids \"A\": delete it by hand if you deleted it",
+            "05:28 element 3 (deleted, Change Type): deleted by a step Lifeline couldn't read; in the model now it is Grids \"B\": delete it by hand if you deleted it",
+            "06:50 Walls: W2 (added or changed): its level isn't in this model",
+        };
+        var grouped = M.GroupReasons(notDone);
+        check("lifeline: what wasn't done is one row for each reason, commonest first", grouped.Count == 3 && grouped[0].Items.SequenceEqual([2, 3, 4]) && grouped[1].Items.SequenceEqual([0, 1]) && grouped[2].Items.SequenceEqual([5]),
+            string.Join(" | ", grouped.Select(g => g.Items.Count + " " + g.Reason)));
+        check("lifeline: a reason is told without the element's own name", M.Generic("the type \"Pile A: 600\" isn't loaded in this model") == "the type … isn't loaded in this model"
+            && M.Generic("deleted by a step Lifeline couldn't read; in the model now it is Walls \"W1\": delete it by hand if you deleted it") == "deleted by a step Lifeline couldn't read: delete it by hand if you deleted it", M.Generic(M.Reason(notDone[2])));
+        var manyReasons = Enumerable.Range(0, 40).Select(i => $"05:00 Walls: W (added or changed): reason {(char)('a' + i % 20)}{(char)('a' + i / 20)}").ToList();
+        var capped = M.GroupReasons(manyReasons, 12);
+        check("lifeline: a long list of reasons ends with one row for the rest", capped.Count == 12 && capped[11].Reason == "other reasons" && capped.Sum(g => g.Items.Count) == 40, capped.Count.ToString());
+        check("lifeline: the window lists reasons, and items only when asked", Src("UI", "RecoverWindow.cs").Contains("M.GroupReasons(outcome.NotDone)") && Src("UI", "RecoverWindow.cs").Contains("Brand.Button(\"List\")"), "");
+        check("lifeline: a slope arrow that came back is not a message", !Src("Revit", "ChangeReplay.cs").Contains("check its slope") && !Src("Revit", "ChangeNotes.cs").Contains("check which side its bars are on"), "");
+        // Kept copies: what can't be made from a line is copied next to the file and copied back.
+        var keptLine = new M.Line { Kind = M.Kinds.State, At = at, Unique = "inplace1", What = "instance", Category = "Generic Models", New = true, Extra = new() { ["kept"] = "1" } };
+        var keptBack = M.Read(new[] { keptLine }.Select(M.Write)).Elements[0];
+        check("lifeline: a line says its element has a kept copy", M.IsKept(keptBack) && !M.IsKept(pileLine) && M.KeptInUse([M.Write(keptLine)]) && !M.KeptInUse([M.Write(pileLine), M.Write(matLine)]), M.Write(keptLine));
+        check("lifeline: in-place families and what has no maker are kept as copies, the model only read", Src("Revit", "ChangeKeeper.cs").Contains("Symbol.Family.IsInPlace: true") && Src("Revit", "ChangeKeeper.cs").Contains("ChangeReplay.CanMake(line) is not null")
+            && Src("Revit", "ChangeKeeper.cs").Contains("ElementTransformUtils.CopyElements(doc, [e.Id], keeper, Transform.Identity, Options())") && Src("Revit", "ChangeKeeper.cs").Contains("keeper?.Close(false)"), "");
+        check("lifeline: a kept copy is copied back where it was", Src("Revit", "ChangeKeeper.cs").Contains("ElementTransformUtils.CopyElements(keeper, [source.Id], doc, Transform.Identity, Options())")
+            && Src("Revit", "ChangeReplay.cs").Contains("else if (FromKept(line, outcome))") && Src("UI", "RecoverWindow.cs").Contains("ChangeKeeper.Close(outcome.Keeper)"), "");
+        check("lifeline: the kept-elements project is never watched, and copies stop when one is slow", Src("Revit", "ChangeFile.cs").Contains("ChangeKeeper.Is(path)") && Src("Revit", "ChangeFile.cs").Contains("clock.ElapsedMilliseconds > M.KeepLimitMs")
+            && M.KeepLimitMs is > 0 and <= 30000, "");
+        check("lifeline: a family loaded again over itself is told by Revit's step", M.IsFamilyLoad("Load Family") && M.IsFamilyLoad("Reload Family") && M.IsFamilyLoad("Load into Project and Close") && !M.IsFamilyLoad("Modify element attributes") && !M.IsFamilyLoad("Move"), "");
+        check("lifeline: angle and radius dimensions, free form bars, area plans and view references are made again", Src("Revit", "ChangeNotes.cs").Contains("AngularDimension.Create(doc, view, arc,")
+            && Src("Revit", "ChangeNotes.cs").Contains("RadialDimension.Create(doc, view,") && Src("Revit", "ChangeNotes.cs").Contains("Rebar.CreateFreeForm(doc, barType, host, bars")
+            && Src("Revit", "ChangeViews.cs").Contains("ViewPlan.CreateAreaPlan(doc, scheme.Id,") && Src("Revit", "ChangeViews.cs").Contains("ReferenceableViewUtils.ChangeReferencedView(doc, copy.Id, target.Id)"), "");
+        var look = new M.Look { Itemized = false, GrandTotal = true, Cols = [new() { P = -1002050, H = "Mark", W = 0.2 }], Sorts = [new() { P = -1002050, Desc = true, Header = true }], Filters = [new() { P = -1002050, T = "Contains", K = "s", V = "P-" }] };
+        var lookBack = System.Text.Json.JsonSerializer.Deserialize<M.Look>(System.Text.Json.JsonSerializer.Serialize(look))!;
+        check("lifeline: a schedule's headings, sorting and filters are written in its line and read back", !lookBack.Itemized && lookBack.GrandTotal && lookBack.Title && lookBack.Cols[0].H == "Mark" && lookBack.Sorts[0].Desc && lookBack.Filters[0].V == "P-"
+            && Src("Revit", "ChangeViews.cs").Contains("SetLook(definition,"), System.Text.Json.JsonSerializer.Serialize(look));
         check("recovery: Help > Open folders lists the change files", SketchProMax.Bugs.UserFolders.List().Any(f => f.Title == "Change files" && f.Path.EndsWith(Path.Combine("Sketch ProMax", "Change files"))), "");
     }
 }

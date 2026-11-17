@@ -42,6 +42,12 @@ internal static class ChangeReplay
         public readonly List<(Step Step, string Text)> Failed = [];
         /// <summary>Where the file's kept families are.</summary>
         public string FamiliesFolder = "";
+        /// <summary>The kept copies of elements that can't be made from a line (<see cref="ChangeKeeper"/>): their folder, which copy is whose, and the project while a replay has it open.</summary>
+        public string KeptFolder = "";
+        public Dictionary<string, string> Kept = new(StringComparer.Ordinal);
+        public Document? Keeper;
+        /// <summary>The kept-elements project couldn't be opened (said once).</summary>
+        public string? KeeperError;
 
         /// <summary>Notes that <paramref name="old"/> is now <paramref name="made"/>.</summary>
         public void MadeAgain(string? old, Element made)
@@ -131,7 +137,9 @@ internal static class ChangeReplay
             if (line.What == "family" && line.Kind != M.Kinds.Deleted)
             {
                 // A family loaded after the last save: loaded again from its kept copy, unless one of that name is there.
-                if (found is not null || ChangeTypes.FamilyThere(doc, line) is not null) continue;
+                // One loaded again over itself (not new) is loaded again from its kept copy too.
+                var kept = ChangeTypes.CanMakeFamily(line, outcome.FamiliesFolder) is null;
+                if ((found is not null || ChangeTypes.FamilyThere(doc, line) is not null) && (line.New || !kept)) continue;
                 steps.Add(ChangeTypes.CanMakeFamily(line, outcome.FamiliesFolder) is { } missing ? new(line, Act.Skip, missing) : new(line, Act.Make, ""));
                 continue;
             }
@@ -155,6 +163,8 @@ internal static class ChangeReplay
                 continue;
             else if (line.What == "railing" && line.Host is { } onStairs && stairsMade.Contains(onStairs))
                 continue;
+            else if (FromKept(line, outcome))
+                steps.Add(new(line, Act.Make, ""));
             else if (CanMake(line) is { } why)
                 steps.Add(new(line, Act.Skip, why));
             else
@@ -179,8 +189,11 @@ internal static class ChangeReplay
         return element;
     }
 
+    /// <summary>The line's element is copied back from its kept copy (it can't be made from the line, or is an in-place family).</summary>
+    private static bool FromKept(M.Line line, Outcome outcome) => M.IsKept(line) && line.Unique is { Length: > 0 } u && outcome.Kept.ContainsKey(u);
+
     /// <summary>Null when the element can be made again from the line, else why not.</summary>
-    private static string? CanMake(M.Line line) => line.What switch
+    internal static string? CanMake(M.Line line) => line.What switch
     {
         "level" when line.Elevation is not null => null,
         "grid" when line.P is not null && line.Q is not null => null,
@@ -189,8 +202,8 @@ internal static class ChangeReplay
         "wall" or "instance" => "made after the last save, but its shape isn't a point or a straight line: make it again by hand",
         "type" => ChangeTypes.CanMake(line),
         "material" => ChangeTypes.CanMakeMaterial(line),
-        _ when line.CategoryId is (long)BuiltInCategory.OST_ReferenceViewer or (long)BuiltInCategory.OST_ReferenceViewerSymbol =>
-            "a view reference made after the last save: Revit has no way for add-ins to place one, place it again by hand",
+        _ when line.What != "viewref" && line.CategoryId is (long)BuiltInCategory.OST_ReferenceViewer or (long)BuiltInCategory.OST_ReferenceViewerSymbol =>
+            "a view reference made after the last save (written by an older version): place it again by hand",
         "stairs" => ChangeStairs.CanMake(line),
         "floor" or "ceiling" or "topo" or "region" or "railing" or "roof" or "roof-other" or "opening" or "modelcurve" or "detailcurve" => ChangeShapes.CanMake(line),
         _ when ChangeNotes.Owns(line) => ChangeNotes.CanMake(line),
@@ -206,7 +219,11 @@ internal static class ChangeReplay
         outcome.Same += steps.Count(s => s.Act == Act.Done);
         foreach (var s in steps.Where(s => s.Act == Act.Skip)) outcome.Missed(s.Line, $"{M.Describe(s.Line)}: {s.Why}");
         // Stairs first, each in a stairs edit scope of its own (it can't sit inside a transaction), so what is on them finds them.
-        foreach (var s in work.Where(s => s.Act == Act.Make && s.Line.What == "stairs").ToList())
+        // The kept-elements project is opened (once per replay) before any transaction starts.
+        if (outcome.Keeper is null && outcome.KeeperError is null && work.Any(s => s.Act == Act.Make && FromKept(s.Line, outcome)))
+            try { outcome.Keeper = ChangeKeeper.Open(doc.Application, outcome.KeptFolder); }
+            catch (Exception ex) { outcome.KeeperError = ex.Message; }
+        foreach (var s in work.Where(s => s.Act == Act.Make && s.Line.What == "stairs" && !FromKept(s.Line, outcome)).ToList())
         {
             work.Remove(s);
             try
@@ -254,10 +271,9 @@ internal static class ChangeReplay
                         try { doc.Regenerate(); } catch (Exception) { }
                         SetState(doc, made, s.Line, outcome);
                         did = "made";
-                        if (s.Line.SlopeArrow)
-                            outcome.NotDone.Add(s.Line.Arrow is not null && s.Line.ArrowSlope is not null
-                                ? $"{M.Describe(s.Line)}: made again with its slope arrow: check its slope"
-                                : $"{M.Describe(s.Line)}: made again without its slope arrow: add the slope by hand");
+                        // Only what didn't come back is said (a slope arrow that did is not a message).
+                        if (s.Line.SlopeArrow && (s.Line.Arrow is null || s.Line.ArrowSlope is null))
+                            outcome.NotDone.Add($"{M.Describe(s.Line)}: made again without its slope arrow: add the slope by hand");
                         break;
                 }
                 for (var i = notes; i < outcome.NotDone.Count; i++) outcome.Place[i] = s.Line;
@@ -474,6 +490,9 @@ internal static class ChangeReplay
     {
         Element? Known(string? unique) => unique is null ? null : outcome.MadeFor.TryGetValue(unique, out var id) ? doc.GetElement(id) : doc.GetElement(unique);
         if (line.What == "family") return ChangeTypes.LoadFamily(doc, line, outcome.FamiliesFolder);
+        if (FromKept(line, outcome))
+            return ChangeKeeper.Make(outcome.Keeper ?? throw new InvalidOperationException("its kept copy couldn't be opened" + (outcome.KeeperError is { } e ? $" ({e})" : "")),
+                doc, outcome.Kept[line.Unique!], line);
         if (line.What == "material") return ChangeTypes.MakeMaterial(doc, line);
         if (ChangeShapes.Make(doc, line, Type(doc, line, outcome), LevelOf(doc, line), Known) is { } shaped) return shaped;
         if (ChangeNotes.Make(doc, line, Type(doc, line, outcome), LevelOf(doc, line), Known, Remap(doc, outcome), outcome.NotDone) is { } note) return note;
