@@ -28,7 +28,7 @@ internal static class RedoLog
     {
         "redo_steps", "auto_sync", "ask_user", "save_model", "reload_links", "relinquish_mine", "borrow_elements", "make_worksets_editable",
         "memory_note", "chat_jobs", "work_progress", "berth_status", "berth_costing", "report_bug", "save_recipe", "save_as_tool",
-        "delete_learned_tool", "model_snapshot", "coordination_progress", "use_revit_model", "cancel_job", "wait_for_job",
+        "delete_learned_tool", "model_snapshot", "coordination_progress", "use_revit_model", "open_revit_model", "cancel_job", "wait_for_job",
     };
 
     public static string Folder => Path.Combine(

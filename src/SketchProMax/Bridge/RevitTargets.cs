@@ -82,6 +82,7 @@ internal sealed class RevitTargets
         var sessions = await DiscoverAsync(ct).ConfigureAwait(false);
         if (name == "list_revit_models") return Text(Describe(sessions), false);
         if (name == "use_revit_model") return Choose(sessions, arguments);
+        if (name == ConnectorTools.OpenTool) return await OpenAsync(sessions, arguments, ct).ConfigureAwait(false);
 
         if (sessions.Count == 0)
             return Text(_unresponsive > 0
@@ -165,6 +166,19 @@ internal sealed class RevitTargets
         var wanted = arguments is not null && arguments.TryGetValue("model", out var m) ? m.GetString() ?? "" : "";
         var version = arguments is not null && arguments.TryGetValue("revitVersion", out var v) ? v.ToString() : null;
 
+        // No model named: the Revit window itself, also one with no model open yet.
+        if (wanted.Trim().Length == 0)
+        {
+            var (index, why) = Window(sessions.Select(s => (s.RevitVersion, s.Pid)).ToList(), version, null);
+            if (index < 0) return Text(why + "\n" + Describe(sessions), true);
+            var window = sessions[index];
+            _target = new Target(window.Pid, null);
+            var active = window.Documents.FirstOrDefault(d => d.Active).Title ?? window.Documents.FirstOrDefault().Title;
+            return Text(window.Documents.Count == 0
+                ? $"Now working in Revit {window.RevitVersion}. It has no model open: open one with {ConnectorTools.OpenTool} (its file path)."
+                : $"Now working in Revit {window.RevitVersion}, on the model active in it ('{active}').", false);
+        }
+
         var matches = sessions
             .Where(s => string.IsNullOrEmpty(version) || s.RevitVersion == version)
             .SelectMany(s => s.Documents.Select(d => (Session: s, d.Title)))
@@ -174,7 +188,7 @@ internal sealed class RevitTargets
         if (exact.Count > 0) matches = exact;
 
         if (matches.Count == 0)
-            return Text($"No open model matches '{wanted}'.\n" + Describe(sessions), true);
+            return Text($"No open model matches '{wanted}'. A model that is not open yet: {ConnectorTools.OpenTool} with its file path.\n" + Describe(sessions), true);
         if (matches.Count > 1)
             return Text($"'{wanted}' matches more than one open model. Ask the user which one.\n" +
                 string.Join("\n", matches.Select(x => $"- {x.Title} (Revit {x.Session.RevitVersion})")), true);
@@ -182,6 +196,55 @@ internal sealed class RevitTargets
         _target = new Target(matches[0].Session.Pid, matches[0].Title);
         Touched?.Invoke(_caller.Job, matches[0].Title);
         return Text($"Now working on '{matches[0].Title}' in Revit {matches[0].Session.RevitVersion}.", false);
+    }
+
+    /// <summary>
+    /// Which Revit window is meant: the one of <paramref name="version"/> when given, else the one being worked in
+    /// (<paramref name="current"/>, its process id), else the only one. Its index, or -1 with why not.
+    /// </summary>
+    internal static (int Index, string Why) Window(IReadOnlyList<(string Version, int Pid)> windows, string? version, int? current)
+    {
+        if (windows.Count == 0) return (-1, "No Revit window with Sketch ProMax is running. Ask the user to start Revit.");
+        var asked = !string.IsNullOrWhiteSpace(version);
+        var fit = Enumerable.Range(0, windows.Count).Where(i => !asked || windows[i].Version == version!.Trim()).ToList();
+        if (fit.Count == 0) return (-1, $"No connected Revit window is Revit {version!.Trim()}.");
+        if (fit.Count == 1) return (fit[0], "");
+        var mine = fit.Where(i => windows[i].Pid == current).ToList();
+        if (mine.Count == 1) return (mine[0], "");
+        return (-1, asked
+            ? $"More than one Revit {version!.Trim()} window is open. Ask the user to close one, or choose a model that is open in the one meant (use_revit_model)."
+            : "Several Revit windows are open. Give revitVersion to say which one.");
+    }
+
+    /// <summary>Opens a model from its path in a Revit window (a workshared one as a detached copy) and works on it.</summary>
+    private async Task<ConnectorResult> OpenAsync(List<Session> sessions, IDictionary<string, JsonElement>? arguments, CancellationToken ct)
+    {
+        var path = arguments is not null && arguments.TryGetValue("path", out var p) && p.ValueKind == JsonValueKind.String ? (p.GetString() ?? "").Trim().Trim('"') : "";
+        var version = arguments is not null && arguments.TryGetValue("revitVersion", out var v) ? v.ToString() : null;
+        if (path.Length == 0) return Text("Give the model's full file path (path).", true);
+        if (!path.EndsWith(".rvt", StringComparison.OrdinalIgnoreCase)) return Text("Only Revit models (.rvt) can be opened this way.", true);
+        if (sessions.Count == 0)
+            return Text(_unresponsive > 0
+                ? "Revit is running but not responding: it may be busy with a long operation or frozen. Ask the user to check Revit, then try again."
+                : "No Revit window with Sketch ProMax is running. Ask the user to start Revit; a model need not be open.", true);
+        var (index, why) = Window(sessions.Select(s => (s.RevitVersion, s.Pid)).ToList(), version, _target?.Pid ?? _caller.PreferredPid);
+        if (index < 0) return Text(why + "\n" + Describe(sessions), true);
+        var window = sessions[index];
+
+        var answer = await SendAsync(window.Pipe, JsonSerializer.Serialize(new { method = "open_document", path }), 5000, ct, readTimeoutMs: 75000).ConfigureAwait(false);
+        if (answer is null)
+            return Text($"Revit {window.RevitVersion} didn't answer within about a minute. It may still be opening the model, or showing a dialog. " +
+                        "Call list_revit_models in a moment: when the model is listed, choose it with use_revit_model." +
+                        (window.Blocked is { } held ? $" Last seen: {held}." : ""), true);
+        using var doc = JsonDocument.Parse(answer);
+        var root = doc.RootElement;
+        var text = root.TryGetProperty("text", out var t) ? t.GetString() ?? "" : "";
+        if (root.TryGetProperty("isError", out var e) && e.GetBoolean()) return Text(text, true);
+        var title = root.TryGetProperty("title", out var tt) && tt.ValueKind == JsonValueKind.String ? tt.GetString() : null;
+        // Still opening: the window is chosen, the model when it is there.
+        _target = new Target(window.Pid, string.IsNullOrEmpty(title) ? null : title);
+        if (!string.IsNullOrEmpty(title)) Touched?.Invoke(_caller.Job, title!);
+        return Text(text, false);
     }
 
     private string Describe(List<Session> sessions)

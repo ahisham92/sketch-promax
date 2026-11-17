@@ -473,7 +473,7 @@ internal static partial class FieldTest
             t.Start();
             // The elevations' markers first, then the rest (the type last, once nothing uses it).
             foreach (var id in made.ToList())
-                if (doc.GetElement(id) is View v && new FilteredElementCollector(doc).OfClass(typeof(ElevationMarker)).Cast<ElevationMarker>().FirstOrDefault(m => Enumerable.Range(0, 4).Any(i => m.GetViewId(i) == v.Id)) is { } m)
+                if (doc.GetElement(id) is View v && new FilteredElementCollector(doc).OfClass(typeof(ElevationMarker)).Cast<ElevationMarker>().FirstOrDefault(m => Enumerable.Range(0, m.MaximumViewCount).Any(i => m.GetViewId(i) == v.Id)) is { } m)
                     try { doc.Delete(m.Id); } catch (Exception) { }
             foreach (var id in made.OrderBy(id => doc.GetElement(id) is ElementType ? 1 : 0).ToList()) try { if (doc.GetElement(id) is not null) doc.Delete(id); } catch (Exception) { }
             t.Commit();

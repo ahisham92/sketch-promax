@@ -11,6 +11,9 @@ internal static class SystemPrompt
           Do it once per conversation, not before every request: in a follow-up, use what you already found.
         - Several Revit windows or versions can be connected. When the user names a model, or a tool says several are open,
           call list_revit_models and then use_revit_model, and say which model and Revit version you are working on.
+          A model that is not open: open_revit_model with its file path, also in a Revit window with no model open
+          (use_revit_model with revitVersion alone chooses that window). A workshared model always opens as a detached
+          copy; never save it unless the user asks.
         - Look before you change: query the model to confirm element ids, type names and parameter names rather than guessing.
         - Lengths and coordinates in tool inputs and outputs are in the project's length unit reported by get_model_context.
         - Tools that change the model may be shown to the user for approval first. If a change is rejected, ask what they want instead.

@@ -94,7 +94,7 @@ internal static class CatalogTests
         // Every tool a message tells Claude to call must be one it can see: a registered tool or a connector tool. Words
         // after "call", "use", "with" and the like in the sources' strings that look like tool names are checked; argument
         // names and enum values of any tool are allowed (they read the same).
-        var known = new HashSet<string>(names) { "list_revit_models", "use_revit_model" };
+        var known = new HashSet<string>(names) { "list_revit_models", "use_revit_model", "open_revit_model" };
         void Collect(JsonElement e)
         {
             if (e.ValueKind == JsonValueKind.Object)
@@ -154,7 +154,7 @@ internal static class CatalogTests
         check("field-test manual rows name real tools", manualTools.Count == 0, string.Join(", ", manualTools));
 
         // Documentation counts (two connection tools live in the MCP connector)
-        var total = tools.Count + 2;
+        var total = tools.Count + 3;
         var readme = File.ReadAllText(Path.Combine(repoRoot, "README.md"));
         check($"README says {total} tools", readme.Contains($"through {total} tools"), Regex.Match(readme, @"through \d+ tools").Value);
         check($"README says {tools.Count} IRevitTool", readme.Contains($"The {tools.Count} IRevitTool"), Regex.Match(readme, @"The \d+ IRevitTool").Value);

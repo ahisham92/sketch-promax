@@ -316,6 +316,8 @@ internal static class RecoveryTests
             var probes = Src("Tools", "FieldTest.Recovery.cs");
             check("lifeline: the Revit checks don't ask a deleted element for its id", probes.Contains("made.Remove(gridId);") && probes.Contains("Again(draftingUnique)") && probes.Contains("foreach (var id in memberIds)")
                 && probes.Contains("marker.CreateElevation(doc, plan.Id, 0)"), "");
+            // A building elevation's marker holds one view (an interior one four): asking past its count throws.
+            check("lifeline: the types check asks an elevation marker only for the views it holds", probes.Contains("Enumerable.Range(0, m.MaximumViewCount).Any(i => m.GetViewId(i) == v.Id)") && !probes.Contains("Enumerable.Range(0, 4).Any(i => m.GetViewId(i)"), "");
         }
         check("lifeline: splines and ellipses are written as they are, not as short lines", Src("Revit", "ChangeShapes.cs").Contains("HermiteSpline.Create(") && Src("Revit", "ChangeShapes.cs").Contains("NurbSpline.CreateCurve(") && Src("Revit", "ChangeShapes.cs").Contains("Ellipse.CreateCurve("), "");
         check("lifeline: a shape's signature tells a changed shape from the same one", M.SameSignature("0 0 0 10 1 10 100 6", "0 0 0 10.002 1 10 100.05 6") && !M.SameSignature("0 0 0 10 1 10 100 6", "0 0 0 12 1 10 120 6")

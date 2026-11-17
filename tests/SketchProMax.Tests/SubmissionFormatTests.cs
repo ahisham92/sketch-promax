@@ -74,7 +74,7 @@ internal static class SubmissionFormatTests
         bad[3].Views.RemoveAt(1);
         bad[4].Views[0] = ("BERTH 10 - PART 2 FRAMING PLAN", 100);
         bad[5].Views.Clear();
-        bad[6].IssueDate = "16 OCT 2026";
+        bad[6].IssueDate = "16/10/26";
         bad[6].Cited.Add($"{P}-09-SC-305");
         bad[6].Cited.Add($"{P}-09-SC-301-0");
         bad[7].TypedDimensions = 2;
@@ -84,8 +84,17 @@ internal static class SubmissionFormatTests
         check("submission format: a part at another scale than the berth's other parts", Has("102", "Scale", "1:200") && Has("102", "Scale", "are at 1:100") && !Has("101", "Scale", ""), "");
         check("submission format: a framing sheet without its elevation; a view titled for another berth", Has("111", "Views", "PART <k> ELEVATION") && Has("112", "Names", "names another berth"), "");
         check("submission format: an empty sheet is one line, with the views to place", found.Count(i => i.Sheet == $"{P}-09-SC-301") == 1 && Has("301", "Views", "has no view"), "");
-        check("submission format: a different issue date; a drawing cited that is no sheet (a cited sheet with its revision is fine)",
+        check("submission format: an issue date written another way; a drawing cited that is no sheet (a cited sheet with its revision is fine)",
             Has("401", "Title block", "15 OCT 2026") && Has("401", "Cross-references", "SC-305") && !found.Any(i => i.Check == "Cross-references" && i.Problem.Contains("SC-301")), "");
+        var later = Good();
+        later[6].IssueDate = "30 NOV 2026";
+        check("submission format: a later date on a sheet added in a later revision is listed to look at, not a failure",
+            !SubmissionFormat.Check(later).Any(i => i.Check == "Title block") && SubmissionFormat.Look(later).Any(l => l.StartsWith("Issue dates:") && l.Contains("30 NOV 2026 on 1 sheet")),
+            string.Join(" | ", SubmissionFormat.Look(later)));
+        var slow = Good();
+        slow[1].Views[0].NotJudged = true;
+        check("submission format: a view whose tags were not read yet is said first, to run the check again",
+            SubmissionFormat.Look(slow).FirstOrDefault() is { } first && first.StartsWith("Not read yet:") && first.Contains("1 sheet") && !SubmissionFormat.Look(Good()).Any(l => l.StartsWith("Not read yet")), "");
         check("submission format: typed-over dimensions on a general sheet count too",
             found.Any(i => i.Sheet == $"{P}-00-SC-203" && i.Check == "Dimensions" && i.Problem.StartsWith("2 ")), "");
         check("submission format: sheets outside the format's numbering are left alone", !found.Any(i => i.Sheet.Contains("S-001")), "");
@@ -112,23 +121,56 @@ internal static class SubmissionFormatTests
         drawn[1].Views[0].OverlappingTags = 2;
         drawn[1].Views[0].MatchlinesPastCrop = 1;
         drawn[1].Views[0].Taggable = 120;
-        drawn[1].Views[0].Untagged = 14;
+        drawn[1].Views[0].UntaggedInside = 14;
+        drawn[1].Views[0].TaggedOutside = 6;
+        drawn[3].Views[0].Taggable = 40;
+        drawn[3].Views[0].UntaggedInside = 5;
         drawn[3].Views[1].OffSheet = true;
         drawn[1].KeyPlanFound = true;
-        drawn[1].KeyPlanBerths = [9];
+        drawn[1].KeyPlanOn = [(9, 1)];
+        drawn[1].KeyPlanParts = true;
         drawn[2].KeyPlanFound = true;
-        drawn[2].KeyPlanBerths = [9, 10];
+        drawn[2].KeyPlanOn = [(9, 0), (10, 0)];
         var seen = SubmissionFormat.Check(drawn);
         bool Seen(string sheet, string checkName, string says) => seen.Any(i => i.Sheet == $"{P}-09-SC-{sheet}" && i.Check == checkName && (i.Problem + i.Fix).Contains(says));
         check("submission format: empty tags, tags on top of each other and matchlines past the crop are listed with the tool that fixes them",
             Seen("101", "Tags", "3 empty tag") && Seen("101", "Tags", "arrange_tags") && Seen("101", "Matchlines", "trim_matchlines"), string.Join(" | ", seen.Select(i => i.Sheet + " " + i.Problem)));
         check("submission format: a view running off the sheet is listed", Seen("111", "Fit", "PART 1 ELEVATION") && Seen("111", "Fit", "next standard scale"), "");
         check("submission format: a key plan highlighting another berth too is listed; one highlighting only this berth is not",
-            Seen("102", "Key plan", "9, 10") && !seen.Any(i => i.Check == "Key plan" && i.Sheet.EndsWith("-101")) && seen.Count == 5, seen.Count + "");
+            Seen("102", "Key plan", "Berth 9, Berth 10") && Seen("102", "Key plan", "only Berth 9 - Part 2") && !seen.Any(i => i.Check == "Key plan" && i.Sheet.EndsWith("-101")) && seen.Count == 7, seen.Count + "");
+        check("submission format: piles inside the matchlines with no tag, and tags on piles beyond the matchline, are failures on a piles plan",
+            Seen("101", "Tags", "14 of 120 piles inside the matchlines have no tag") && Seen("101", "Tags", "6 tag(s) are on piles beyond the matchline") && Seen("101", "Tags", "Hide those tags")
+            && !seen.Any(i => i.Sheet.EndsWith("-111") && i.Check == "Tags"), "");
+        check("submission format: a title block's berth switch is read by its name, whatever the wording; other switches name no berth",
+            SubmissionFormat.SwitchBerths("Berth 9").SequenceEqual([9]) && SubmissionFormat.SwitchBerths("BERTH 09").SequenceEqual([9]) && SubmissionFormat.SwitchBerths("B10").SequenceEqual([10])
+            && SubmissionFormat.SwitchBerths("B-05").SequenceEqual([5]) && SubmissionFormat.SwitchBerths("KP 7").SequenceEqual([7]) && SubmissionFormat.SwitchBerths("Key Plan - Berth 5&6").SequenceEqual([5, 6])
+            && SubmissionFormat.SwitchBerths("12").SequenceEqual([12]) && SubmissionFormat.SwitchBerths("Show Logo").Count == 0 && SubmissionFormat.SwitchBerths("A1").Count == 0
+            && SubmissionFormat.SwitchBerths("Stamp 2026").Count == 0, string.Join(",", SubmissionFormat.SwitchBerths("Key Plan - Berth 5&6")));
+        var off = Good();
+        off[0].KeyPlanFound = off[0].KeyPlanSwitches = true;
+        off[1].OtherSwitches = ["Show Logo", "North Arrow"];
+        var allOff = SubmissionFormat.Check(off);
+        check("submission format: every berth switch off is a key plan with no berth; switches that name no berth are named for the user",
+            allOff.Count == 1 && allOff[0].Check == "Key plan" && allOff[0].Fix.Contains("Switch on Berth 9")
+            && SubmissionFormat.Look(off).Any(l => l.Contains("North Arrow, Show Logo") && !l.Contains("SC-100,")), string.Join(" | ", SubmissionFormat.Look(off)));
+        var parts = Good();
+        foreach (var sh in parts) { sh.KeyPlanFound = sh.KeyPlanSwitches = sh.KeyPlanParts = true; sh.KeyPlanOn = [(9, 0)]; }
+        parts[1].KeyPlanOn = [(9, 1)];
+        parts[2].KeyPlanOn = [(9, 1)];
+        parts[3].KeyPlanOn = [(9, 1)];
+        parts[5].KeyPlanOn = [(9, 2)];
+        var keyed = SubmissionFormat.Check(parts);
+        check("submission format: a part's sheet highlights its own part in the key plan, other sheets the whole berth",
+            keyed.Count == 3 && keyed.All(i => i.Check == "Key plan")
+            && keyed.Any(i => i.Sheet.EndsWith("-102") && i.Problem.Contains("Berth 9 - Part 1") && i.Fix.Contains("only Berth 9 - Part 2"))
+            && keyed.Any(i => i.Sheet.EndsWith("-112") && i.Problem.Contains("highlights Berth 9.") && i.Fix.Contains("Berth 9 - Part 2"))
+            && keyed.Any(i => i.Sheet.EndsWith("-301") && i.Fix.Contains("only Berth 9.")), string.Join(" | ", keyed.Select(i => i.Sheet + ": " + i.Problem + " " + i.Fix)));
+        check("submission format: the part a switch is for", SubmissionFormat.SwitchPart("Berth 6 - Part 2") == 2 && SubmissionFormat.SwitchPart("Berth 6") == 0
+            && SubmissionFormat.SwitchBerths("Berth 10 - Part 4").SequenceEqual([10]), "");
         var look = SubmissionFormat.Look(drawn);
-        check("submission format: untagged elements and a key plan the model doesn't describe are to look at, not failures",
-            look.Any(l => l.Contains("14 of 120") && l.Contains("SC-101")) && look.Any(l => l.StartsWith("Key plan:") && l.Contains("SC-100") && !l.Contains("SC-101"))
-            && !look.Any(l => l.Contains("00-SC-203")) && !seen.Any(i => i.Problem.Contains("14 of")), string.Join(" | ", look));
+        check("submission format: untagged elements on other sheets and a key plan the model doesn't describe are to look at, not failures",
+            look.Any(l => l.Contains("5 of 40") && l.Contains("SC-111")) && !look.Any(l => l.Contains("14 of 120")) && look.Any(l => l.StartsWith("Key plan:") && l.Contains("SC-100") && !l.Contains("SC-101"))
+            && !look.Any(l => l.Contains("00-SC-203")) && !seen.Any(i => i.Problem.Contains("5 of 40")), string.Join(" | ", look));
 
         var section = Good();
         section.Add(Sheet($"{P}-09-SC-302", "DESIGN SECTION 2 CROSS SECTION", "15 OCT 2026", ("BERTH 9 - DESIGN SECTION 2 CROSS SECTION", 75)));
