@@ -1609,7 +1609,7 @@ public sealed class TrimMatchlinesTool : IRevitTool
     }
 
     /// <summary>The matchline's curves as the view draws them, or its sketch curves when the view gives none (e.g. hidden).</summary>
-    private static List<Curve> Curves(Document doc, Element ml, View view)
+    internal static List<Curve> Curves(Document doc, Element ml, View view)
     {
         var list = new List<Curve>();
         void Walk(GeometryElement? g)
