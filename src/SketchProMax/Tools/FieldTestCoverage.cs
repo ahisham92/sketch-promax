@@ -820,6 +820,7 @@ internal static class FieldTestCoverage
         new(78, ["tool:berth_status"], "berth_status list on this PC's berth status setup fits a chat (under 24,000 characters)"),
         new(79, ["checklist.fix_more", "checklist.autotests"], "the checklist checks copy a column onto itself and finish in seconds with no Revit dialog; a Fix taking 5 s or more is named"),
         new(80, ["diagnostics.crash_ui"], "after Revit closed during a run, the notice is a corner hint that needs no click; the choices open from Field test"),
+        new(83, ["share.pack"], "a shared pack whose folder in the update folder was emptied is published again by itself, and an installed copy follows it"),
     ];
 
     /// <summary>

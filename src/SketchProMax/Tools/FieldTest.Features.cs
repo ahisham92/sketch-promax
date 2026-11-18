@@ -3128,6 +3128,16 @@ internal static partial class FieldTest
             var now = Sharing.SharedPacks.List().FirstOrDefault(p => p.Pack.Id == first.Pack.Id);
             if (now is null || now.Pack.Revision != 2 || followed.Count != 1) problems.Add($"the installed copy is at revision {now?.Pack.Revision.ToString() ?? "none"} after the update check");
             if (Sharing.SharedPacks.AutoPublish(Sharing.SharedTools.RibbonTool, Update.Updater.CurrentText).Count != 0) problems.Add("published again with nothing changed");
+            // The pack's folder in the update folder emptied (bug 83): it is published again by itself and followed.
+            if (second.Published is { } publishedFolder)
+            {
+                foreach (var file in Directory.GetFiles(publishedFolder, "*", SearchOption.AllDirectories)) File.Delete(file);
+                var healed = Sharing.SharedPacks.AutoPublish(Sharing.SharedTools.RibbonTool, Update.Updater.CurrentText);
+                if (healed.Count != 1 || Sharing.SharedPacks.Read(publishedFolder, out _)?.Revision != 3) problems.Add("an emptied update folder wasn't filled again as revision 3");
+                Sharing.SharedPacks.Sync();
+                if (Sharing.SharedPacks.List().FirstOrDefault(p => p.Pack.Id == first.Pack.Id)?.Pack.Revision != 3) problems.Add("the installed copy didn't follow the pack published again");
+                if (Sharing.SharedPacks.AutoPublish(Sharing.SharedTools.RibbonTool, Update.Updater.CurrentText).Count != 0) problems.Add("published a third time with nothing changed");
+            }
             return problems.Count == 0
                 ? Pass($"zip with installer and {first.Pack.Tools.Count} tools, published, installed, revision 2 followed by itself")
                 : Fail(string.Join("; ", problems));
