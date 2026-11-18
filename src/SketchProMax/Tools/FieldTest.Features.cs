@@ -537,6 +537,9 @@ internal static partial class FieldTest
         // Keeping a copy opens the kept-elements project (no window): from the external event.
         await ProbeCore(s, "recovery.kept", () => App.Dispatcher.InvokeFromEventAsync(app => RecoveryKept(app, s))).ConfigureAwait(false);
         await ProbeCore(s, "recovery.extras", () => App.Dispatcher.InvokeFromEventAsync(app => RecoveryExtras(app, s))).ConfigureAwait(false);
+        // Giving a group type its edit back opens the kept-elements project: from the external event.
+        await ProbeCore(s, "recovery.groups", () => App.Dispatcher.InvokeFromEventAsync(app => RecoveryGroups(app, s))).ConfigureAwait(false);
+        await ProbeCore(s, "recovery.where", () => App.Dispatcher.InvokeFromEventAsync(app => RecoveryWhere(app, s))).ConfigureAwait(false);
         await Probe(s, "recovery.bugs", () => RecoveryBugs(s)).ConfigureAwait(false);
         await Probe(s, "rescue.cause", RescueCause).ConfigureAwait(false);
         await Probe(s, "rescue.warn", RescueWarn).ConfigureAwait(false);
@@ -1754,11 +1757,14 @@ internal static partial class FieldTest
     // ---- Hand-off, Cancel and time tracking (in the test project) --------------------------------------------------------
 
     /// <summary>The test project when it is open and the active model; else null and why.</summary>
+    /// <summary>For trying one check on a project that is open without a window (nothing of the user's is touched): the test project needn't be the active model.</summary>
+    internal static bool TestDocNeedNotBeActive;
+
     private static Document? TestDoc(UIApplication app, State s, out string why)
     {
         why = "";
         if (s.Test is not { IsValidObject: true } test) { why = "the test project is not open (see the Test project notes)"; return null; }
-        if (app.ActiveUIDocument?.Document.Equals(test) != true) { why = "the test project is not the active model"; return null; }
+        if (!TestDocNeedNotBeActive && app.ActiveUIDocument?.Document.Equals(test) != true) { why = "the test project is not the active model"; return null; }
         return test;
     }
 

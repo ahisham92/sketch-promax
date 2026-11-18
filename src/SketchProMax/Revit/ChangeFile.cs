@@ -47,6 +47,11 @@ internal static class ChangeFile
         /// <summary>New elements waiting for their copy in the kept-elements project, and whether copies stopped for the session (one took too long).</summary>
         public readonly HashSet<long> Keeps = [];
         public bool KeepOff;
+        /// <summary>
+        /// What each group type is made of (<see cref="ChangeExtras.GroupShape"/>), by the type's id: as the model had it
+        /// (Unique null: noted after opening or at a save), or as edited since, with the group whose copy is kept.
+        /// </summary>
+        public readonly Dictionary<long, (string Shape, string? Unique)> GroupShapes = [];
         public int LastKeep = unchecked(Environment.TickCount - M.KeepEveryMs);
         /// <summary>The elements selected while each view was the active one (what Hide in View and Override Graphics act on): looked at when the view's graphics are read.</summary>
         public readonly Dictionary<long, HashSet<long>> Touched = [];
@@ -374,6 +379,8 @@ internal static class ChangeFile
     {
         if (For(doc) is not { } model) return;
         lock (Gate) { model.Pending.Clear(); model.Written.Clear(); model.Added.Clear(); model.Started = false; model.Families.Clear(); model.FamilyTries.Clear(); model.Reloaded.Clear(); model.Keeps.Clear(); model.Touched.Clear(); }
+        // What the groups are made of now is what the model has.
+        lock (Gate) foreach (var type in model.GroupShapes.Keys.ToList()) model.GroupShapes[type] = (model.GroupShapes[type].Shape, null);
         Queue(() =>
         {
             var current = System.IO.Path.Combine(model.Folder, M.CurrentName);
@@ -670,6 +677,7 @@ internal static class ChangeFile
             foreach (var id in ids) model.Pending.Remove(id);
         }
         var lines = new List<M.Line>();
+        var asked = new HashSet<long>();
         var clock = System.Diagnostics.Stopwatch.StartNew();
         for (var i = 0; i < ids.Count; i++)
         {
@@ -684,6 +692,9 @@ internal static class ChangeFile
             {
                 if (doc.GetElement(new ElementId(id)) is not { } element || Capture(doc, element) is not { } line) continue;
                 Remember(model, id, element.UniqueId, element.Category?.Name ?? line.Category);
+                // A member of a group changed: its group is looked at too (an edit inside the group is told by what the group is made of).
+                try { if (element.GroupId is { } inGroup && inGroup != ElementId.InvalidElementId && !ids.Contains(inGroup.Value) && asked.Add(inGroup.Value)) lock (Gate) model.Pending.Add(inGroup.Value); }
+                catch (Exception) { }
                 lock (Gate)
                 {
                     line.New = model.Added.Contains(id);
@@ -702,6 +713,25 @@ internal static class ChangeFile
                         (line.Extra ??= [])["kept"] = "1";
                         if (ChangeExtras.Signature(element) is { } shape) line.Extra["shape"] = shape;
                         model.Keeps.Add(id);
+                    }
+                    else if (element is Group grouped && !model.KeepOff && grouped.GroupType is { } groupType && !model.Added.Contains(groupType.Id.Value)
+                        && ChangeExtras.GroupShape(grouped) is { } made)
+                    {
+                        // A group of a type that was in the model: moved or copied, it is as the model has it and needs
+                        // nothing; edited (what it is made of changed), one group of the type is kept as a copy next to
+                        // the file, and a replay gives the type back what the copy has.
+                        var known = model.GroupShapes.TryGetValue(groupType.Id.Value, out var noted);
+                        if (!(known && noted.Shape == made && noted.Unique is null))
+                        {
+                            (line.Extra ??= [])["gshape"] = made;
+                            if (known && noted.Shape == made && noted.Unique is { } other && other != element.UniqueId) line.Extra["glike"] = other;
+                            else
+                            {
+                                line.Extra["gkept"] = "1";
+                                if (!(known && noted.Shape == made)) model.Keeps.Add(id);
+                                model.GroupShapes[groupType.Id.Value] = (made, element.UniqueId);
+                            }
+                        }
                     }
                     if (element is View drawn)
                     {
@@ -989,6 +1019,14 @@ internal static class ChangeFile
         }
     }
 
+    private static void NoteGroup(Model model, Group group)
+    {
+        var type = group.GroupType.Id.Value;
+        lock (Gate) if (model.Started || model.Pending.Count > 0 || model.GroupShapes.ContainsKey(type) || model.GroupShapes.Count >= 5000) return;
+        if (ChangeExtras.GroupShape(group) is not { } shape) return;
+        lock (Gate) if (!model.Started && model.Pending.Count == 0 && !model.GroupShapes.ContainsKey(type)) model.GroupShapes[type] = (shape, null);
+    }
+
     /// <summary>
     /// Notes the UniqueId and category of the model's elements, <see cref="ChangeFileMath.IndexBudgetMs"/> at a time, so
     /// a later deletion names what was deleted; true while some are left. Read only.
@@ -1024,6 +1062,8 @@ internal static class ChangeFile
                         if (category is null && element is not (ElementType or View or Family or ParameterFilterElement or LinePatternElement or FillPatternElement) && !ChangeExtras.IsStyle(element)) continue;
                         if (category is not null && (M.IsRevitsOwn(category.Id.Value) || IsAnalysis(category.Id.Value))) continue;
                         batch.Add((id, element.UniqueId, category?.Name));
+                        // What each group type is made of, while nothing has changed yet: a later edit inside a group is told from a move.
+                        if (element is Group group && group.GroupId == ElementId.InvalidElementId) NoteGroup(model, group);
                     }
                     catch (Exception) { }
                 }

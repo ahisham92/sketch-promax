@@ -21,7 +21,8 @@ internal static class ChangeReplay
 {
     /// <summary>Done: already as the file has it (a deletion of what isn't in the model), counted as already right.</summary>
     /// <summary>After: what is done once everything else is played (joins and cuts, a view's graphics, a changed shape put back from its copy).</summary>
-    public enum Act { Set, Make, Delete, Skip, Done, After }
+    /// <summary>Regroup: a group type edited after the last save is given what its kept copy has (before its groups and members are played).</summary>
+    public enum Act { Set, Make, Delete, Skip, Done, After, Regroup }
 
     public sealed record Step(M.Line Line, Act Act, string Why);
 
@@ -53,6 +54,10 @@ internal static class ChangeReplay
         public readonly HashSet<string> LateGroups = new(StringComparer.Ordinal);
         /// <summary>The lines with joins and cuts, by UniqueId (a join is only taken off when both elements' lines agree).</summary>
         public readonly Dictionary<string, M.Line> Relations = new(StringComparer.Ordinal);
+        /// <summary>Group types a replay gives back what their kept copy has (edited after the last save), with the lines of their groups: the members' own lines aren't played.</summary>
+        public readonly Dictionary<ElementId, List<M.Line>> Regrouped = [];
+        /// <summary>Where each NotDone entry is, in words (by its place in NotDone), once <see cref="ChangeWhere.Find"/> has looked.</summary>
+        public readonly Dictionary<int, string> Where = [];
         /// <summary>Lines whose own step found nothing to change: one that changes in its After step is counted as set back then.</summary>
         public readonly HashSet<M.Line> Unchanged = [];
 
@@ -135,6 +140,27 @@ internal static class ChangeReplay
         // Stairs made again bring their own railings.
         var stairsMade = new HashSet<string>(ordered.Where(l => l.What == "stairs" && l.Kind != M.Kinds.Deleted && l.Unique is not null
             && Find(doc, l) is null && CanMake(l) is null).Select(l => l.Unique!), StringComparer.Ordinal);
+        // Group types edited after the last save (what a group is made of isn't what its line says): one step gives the
+        // type what its kept copy has, and the members' own lines aren't played (they come with the type).
+        outcome.Regrouped.Clear();
+        var regroup = new List<Step>();
+        var noCopy = new HashSet<ElementId>();
+        foreach (var l in ordered.Where(l => l.Kind != M.Kinds.Deleted && M.GroupEdit(l) is not null))
+        {
+            var edit = M.GroupEdit(l)!.Value;
+            if (Find(doc, l) is not Group { GroupType: { } edited } placed) continue;
+            if (outcome.Regrouped.TryGetValue(edited.Id, out var others)) { others.Add(l); continue; }
+            if (ChangeExtras.GroupShape(placed) is not { } now || now == edit.Shape) continue;
+            outcome.Regrouped[edited.Id] = [l];
+            // (Revit quietly undoes a change an add-in makes to one member of a group, so without the copy nothing can be done.)
+            if (outcome.Kept.ContainsKey(edit.Key)) regroup.Add(new(l, Act.Regroup, ""));
+            else if (noCopy.Add(edited.Id)) regroup.Add(new(l, Act.Skip, "the group was edited after the last save and no copy of the edited group was kept: edit the group again by hand"));
+        }
+        bool InRegrouped(Element? e)
+        {
+            try { return e is not null && e.GroupId != ElementId.InvalidElementId && doc.GetElement(e.GroupId) is Group g && outcome.Regrouped.ContainsKey(g.GetTypeId()); }
+            catch (Exception) { return false; }
+        }
         foreach (var line in ordered)
         {
             // Older files can hold Revit's energy model (thousands of lines): Revit makes it again by itself.
@@ -152,6 +178,9 @@ internal static class ChangeReplay
             }
             // A group's or an image's type comes with the group or image.
             if (found is null && line.Kind != M.Kinds.Deleted && M.ComesWithInstance(line)) continue;
+            // A member of a group whose type is given back from its copy: it comes (or goes) with the type.
+            if (outcome.Regrouped.Count > 0 && line.What != "group" && (InRegrouped(found)
+                || (line.Kind != M.Kinds.Deleted && line.Group is { } inGroup && doc.GetElement(inGroup) is Group g && outcome.Regrouped.ContainsKey(g.GetTypeId())))) continue;
             if (line.What == "family" && line.Kind != M.Kinds.Deleted)
             {
                 // A family loaded after the last save: loaded again from its kept copy, unless one of that name is there.
@@ -191,6 +220,12 @@ internal static class ChangeReplay
                 steps.Add(new(line, Act.Make, ""));
         }
         steps.AddRange(late);
+        // The edited group types come right after what they may need (levels, grids, types, families, materials).
+        if (regroup.Count > 0)
+        {
+            var at = steps.FindIndex(s => s.Line.What is not ("level" or "grid" or "material" or "family" or "filter" or "linepattern" or "fillpattern" or "style" or "type"));
+            steps.InsertRange(at < 0 ? steps.Count : at, regroup);
+        }
         // Last: joins and cuts, views' graphics and shapes to check against their kept copies (everything they name is there by now).
         foreach (var line in M.AfterLines(file))
         {
@@ -293,6 +328,10 @@ internal static class ChangeReplay
                         // A line style or object style goes with its subcategory.
                         if (Find(doc, s.Line) is { } gone) doc.Delete(gone is GraphicsStyle { GraphicsStyleCategory: { } styled } ? styled.Id : gone.Id);
                         did = "deleted";
+                        break;
+                    case Act.Regroup:
+                        Regroup(doc, s.Line, outcome);
+                        did = "set";
                         break;
                     case Act.After:
                         did = "after";
@@ -625,9 +664,101 @@ internal static class ChangeReplay
 
     // ---- After everything else -------------------------------------------------------------------------------------------
 
+    /// <summary>
+    /// A group type edited after the last save gets what its kept copy has (<see cref="ChangeKeeper.Regroup"/>); the
+    /// members its groups had are then the new ones in the same places, so what points at them later in the file finds them.
+    /// </summary>
+    private static void Regroup(Document doc, M.Line line, Outcome outcome)
+    {
+        if (Find(doc, line, outcome.MadeFor) is not Group group) throw new InvalidOperationException("the group isn't in the model any more");
+        var keeper = outcome.Keeper ?? throw new InvalidOperationException("the kept copy of the edited group couldn't be opened" + (outcome.KeeperError is { } e ? $" ({e})" : ""));
+        var type = group.GroupType.Id;
+        outcome.Regrouped.TryGetValue(type, out var lines);
+        // The members as they are now, group by group, and the tags and dimensions on them: Revit takes those out with
+        // the old members, so each is read first and made again on the member that takes the old one's place.
+        var noted = new LogicalOrFilter(new ElementClassFilter(typeof(IndependentTag)), new ElementClassFilter(typeof(Dimension)));
+        var groups = new List<(Group Group, List<(string Unique, string Kind, XYZ? A, XYZ? B)> Members)>();
+        var notes = new Dictionary<ElementId, M.Line>();
+        foreach (var placed in new FilteredElementCollector(doc).OfClass(typeof(Group)).Where(g => g.GetTypeId() == type).Cast<Group>().ToList())
+        {
+            var members = new List<(string, string, XYZ?, XYZ?)>();
+            foreach (var id in placed.GetMemberIds())
+            {
+                if (doc.GetElement(id) is not { } member) continue;
+                var (a, b) = Ends(member);
+                members.Add((member.UniqueId, MemberKind(member), a, b));
+                foreach (var on in member.GetDependentElements(noted))
+                {
+                    if (on == id || notes.ContainsKey(on) || doc.GetElement(on) is not { } note || note.GroupId != ElementId.InvalidElementId) continue;
+                    if (ChangeFile.Capture(doc, note) is not { } noteLine || CanMake(noteLine) is not null)
+                        throw new InvalidOperationException("putting the group's edit back would take out a tag or dimension on its members that can't be made again: edit the group again by hand");
+                    notes[on] = noteLine;
+                }
+            }
+            groups.Add((placed, members));
+        }
+        ChangeKeeper.Regroup(keeper, doc, group, outcome.Kept[M.GroupEdit(line)!.Value.Key], () =>
+        {
+            // Which new member took which old one's place: by the group's line first (its members as the edit left them, in order)...
+            foreach (var l in lines ?? [])
+            {
+                if (Find(doc, l, outcome.MadeFor) is not Group placed) continue;
+                var (were, are) = (M.Members(l), placed.GetMemberIds().ToList());
+                if (were.Count != are.Count) continue;
+                for (var i = 0; i < were.Count; i++)
+                    if (doc.GetElement(were[i]) is null && doc.GetElement(are[i]) is { } member) outcome.MadeAgain(were[i], member);
+            }
+            // ...then, for a member the lines don't name, the new member of its kind in the same place.
+            foreach (var (placed, members) in groups)
+            {
+                var now = placed.GetMemberIds().Select(doc.GetElement).Where(m => m is not null).ToList();
+                var taken = new HashSet<ElementId>(members.Select(m => outcome.MadeFor.TryGetValue(m.Unique, out var id) ? id : ElementId.InvalidElementId));
+                foreach (var (unique, kind, a, b) in members)
+                {
+                    if (doc.GetElement(unique) is not null || outcome.MadeFor.ContainsKey(unique) || a is null) continue;
+                    var match = now.FirstOrDefault(n => !taken.Contains(n!.Id) && MemberKind(n) == kind && Ends(n) is var (na, nb) && na is not null
+                        && ((na.DistanceTo(a) < 0.003 && (b is null || nb is null || nb.DistanceTo(b) < 0.003)) || (b is not null && nb is not null && na.DistanceTo(b) < 0.003 && nb.DistanceTo(a) < 0.003)));
+                    if (match is null) continue;
+                    taken.Add(match.Id);
+                    outcome.MadeAgain(unique, match);
+                }
+            }
+            try { doc.Regenerate(); } catch (Exception) { }
+            var again = new HashSet<ElementId>();
+            foreach (var note in notes.Where(n => doc.GetElement(n.Key) is null))
+            {
+                Element made;
+                try { made = Make(doc, note.Value, outcome); }
+                catch (Exception) { continue; /* counted as lost: the edit isn't put back */ }
+                outcome.MadeAgain(note.Value.Unique, made);
+                try { doc.Regenerate(); } catch (Exception) { }
+                try { SetState(doc, made, note.Value, outcome, justMade: true); } catch (Exception) { }
+                again.Add(note.Key);
+            }
+            return again;
+        });
+    }
+
+    private static string MemberKind(Element e) => $"{e.Category?.Id.Value ?? 0}|{e.GetTypeId().Value}";
+
+    private static (XYZ? A, XYZ? B) Ends(Element e)
+    {
+        try
+        {
+            return e.Location switch
+            {
+                LocationPoint { Point: { } at } => (at, null),
+                LocationCurve { Curve: { IsBound: true } curve } => (curve.GetEndPoint(0), curve.GetEndPoint(1)),
+                _ => (null, null),
+            };
+        }
+        catch (Exception) { return (null, null); }
+    }
+
     /// <summary>True when the step needs the kept-elements project open (it must be opened before any transaction starts).</summary>
     private static bool NeedsKeeper(Document doc, Step s, Outcome outcome)
     {
+        if (s.Act == Act.Regroup) return true;
         if (!FromKept(s.Line, outcome)) return false;
         switch (s.Act)
         {
