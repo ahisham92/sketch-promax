@@ -23,7 +23,7 @@ public sealed class SubmissionFormatTool : IRevitTool
         "BEFORE planning or starting a berth's sheets, and build exactly that list. action=check reads the model's sheets " +
         "against it (berths: which ones; none = every berth with sheets) and lists every sheet missing, wrong name or view " +
         "title, scale that is not standard or differs between a berth's parts, view running off the sheet, missing " +
-        "schedule, empty sheet, empty or overlapping tag, pile inside the matchlines with no tag, tag on a pile beyond the matchline, matchline past the crop, key plan highlighting another berth, " +
+        "schedule, empty sheet, empty or overlapping tag, pile inside the matchlines with no tag, tag on a pile beyond the matchline, key plan highlighting another berth, " +
         "issue date written another way, drawing cited that is not a sheet, and typed-over dimension, with the fix: call it BEFORE " +
         "saying a submission is done; the work is done when it lists nothing. In a big model one call reads the tags of " +
         "only as many views as fit in about a minute: while its note says NOT COMPLETE, call check again. Scales are usual ones, not fixed: a view too " +

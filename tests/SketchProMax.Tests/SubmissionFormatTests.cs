@@ -152,8 +152,8 @@ internal static class SubmissionFormatTests
         drawn[2].KeyPlanOn = [(9, 0), (10, 0)];
         var seen = SubmissionFormat.Check(drawn);
         bool Seen(string sheet, string checkName, string says) => seen.Any(i => i.Sheet == $"{P}-09-SC-{sheet}" && i.Check == checkName && (i.Problem + i.Fix).Contains(says));
-        check("submission format: empty tags, tags on top of each other and matchlines past the crop are listed with the tool that fixes them",
-            Seen("101", "Tags", "3 empty tag") && Seen("101", "Tags", "arrange_tags") && Seen("101", "Matchlines", "trim_matchlines"), string.Join(" | ", seen.Select(i => i.Sheet + " " + i.Problem)));
+        check("submission format: empty tags and tags on top of each other are listed with the tool that fixes them; a matchline drawn longer than its part is fine",
+            Seen("101", "Tags", "3 empty tag") && Seen("101", "Tags", "arrange_tags") && !seen.Any(i => i.Check == "Matchlines"), string.Join(" | ", seen.Select(i => i.Sheet + " " + i.Problem)));
         check("submission format: a view running off the sheet is listed", Seen("111", "Fit", "PART 1 ELEVATION") && Seen("111", "Fit", "next standard scale"), "");
         drawn[3].Views[1].OffSheetAroundOnly = true;
         var around = SubmissionFormat.Check(drawn).Where(i => i.Check == "Fit").ToList();
@@ -161,7 +161,7 @@ internal static class SubmissionFormatTests
             around.Count == 1 && around[0].Problem.Contains("PART 1 ELEVATION") && around[0].Problem.Contains("the view itself is inside") && !around[0].Fix.Contains("standard scale"), string.Join(" | ", around.Select(i => i.Problem)));
         drawn[3].Views[1].OffSheetAroundOnly = false;
         check("submission format: a key plan highlighting another berth too is listed; one highlighting only this berth is not",
-            Seen("102", "Key plan", "Berth 9, Berth 10") && Seen("102", "Key plan", "only Berth 9 - Part 2") && !seen.Any(i => i.Check == "Key plan" && i.Sheet.EndsWith("-101")) && seen.Count == 7, seen.Count + "");
+            Seen("102", "Key plan", "Berth 9, Berth 10") && Seen("102", "Key plan", "only Berth 9 - Part 2") && !seen.Any(i => i.Check == "Key plan" && i.Sheet.EndsWith("-101")) && seen.Count == 6, seen.Count + "");
         check("submission format: piles inside the matchlines with no tag, and tags on piles beyond the matchline, are failures on a piles plan",
             Seen("101", "Tags", "14 of 120 piles inside the matchlines have no tag") && Seen("101", "Tags", "6 tag(s) are on piles beyond the matchline") && Seen("101", "Tags", "Hide those tags")
             && !seen.Any(i => i.Sheet.EndsWith("-111") && i.Check == "Tags"), "");
