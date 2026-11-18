@@ -839,7 +839,7 @@ public sealed class BridgeServer
             .FirstOrDefault(d => string.Equals(d.Title, title, StringComparison.OrdinalIgnoreCase));
         if (doc is null) return $"'{title}' is not open in this Revit session.";
         if (app.ActiveUIDocument?.Document.Equals(doc) == true) return null;
-        if (string.IsNullOrEmpty(doc.PathName)) return $"'{title}' has never been saved, so it can't be switched to automatically. Ask the user to click into its window in Revit.";
+        if (RevitTargets.NeverSaved(doc.PathName)) return $"'{title}' has never been saved (a new model or a detached copy), so Revit can't switch to it by itself. Ask the user to click its tab in Revit; nothing else is needed.";
         try
         {
             app.OpenAndActivateDocument(doc.PathName);

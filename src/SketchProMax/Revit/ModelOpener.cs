@@ -32,6 +32,9 @@ internal static class ModelOpener
             if (Newer(info.Format, year) is { } saved)
                 return ($"'{Path.GetFileName(path)}' was saved in Revit {saved}, which Revit {App.RevitYear} can't open. Open it in a Revit {saved} window (revitVersion).", "", "");
 
+            // A model that was never saved (a detached copy too) can't be made the active one again by Revit's API: once
+            // another model is opened over it, only the user's click on its tab brings it back.
+            var stranded = app.ActiveUIDocument?.Document is { } before && Bridge.RevitTargets.NeverSaved(before.PathName) ? before.Title : null;
             var options = new OpenOptions();
             if (info.IsWorkshared) options.DetachFromCentralOption = DetachFromCentralOption.DetachAndPreserveWorksets;
             app.DialogBoxShowing += OnDialog;
@@ -39,7 +42,8 @@ internal static class ModelOpener
             try { ui = app.OpenAndActivateDocument(ModelPathUtils.ConvertUserVisiblePathToModelPath(path), options, false); }
             finally { app.DialogBoxShowing -= OnDialog; }
             if (ui?.Document is not { } doc) return ($"Revit didn't open '{Path.GetFileName(path)}'.", "", "");
-            return (null, doc.Title, Opened(doc.Title, App.RevitYear, info.IsWorkshared, Older(info.Format, year)));
+            return (null, doc.Title, Opened(doc.Title, App.RevitYear, info.IsWorkshared, Older(info.Format, year)) +
+                                     (stranded is not null ? $" '{stranded}' is still open behind it, but it was never saved, so the tools can't switch back to it: when it is needed again, ask the user to click its tab in Revit." : ""));
         }
         catch (Exception ex) when (ex is Autodesk.Revit.Exceptions.ApplicationException or InvalidOperationException or IOException or UnauthorizedAccessException)
         {

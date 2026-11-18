@@ -563,13 +563,23 @@ internal static class SharedPacks
                     record.LastZip.Length > 0 ? Path.GetDirectoryName(record.LastZip)! : DefaultZipFolder, true, record.IncludeChecklist);
                 var (pack, files, _) = Build(record.Id, request, catalog, version);
                 if (pack.Tools.Count == 0) continue;
-                if (Fingerprint(pack, files.Where(f => f.Key is not (PackFile or ButtonsFile))) == record.Fingerprint) continue;
+                // Nothing changed and the update folder still holds this revision: nothing to do. A pack folder that was
+                // emptied or lost its pack.json there (seen on the owner's update folder) is published again, else the
+                // people who have the pack would never get another change.
+                if (Fingerprint(pack, files.Where(f => f.Key is not (PackFile or ButtonsFile))) == record.Fingerprint && StillPublished(record)) continue;
                 var result = Export(request, catalog, version, record.Id);
                 if (result.Published is not null) done.Add($"{result.Pack.Name}: revision {result.Pack.Revision}");
             }
             catch (Exception) { /* tried again at the next round */ }
         }
         return done;
+    }
+
+    /// <summary>True when the update folder holds the pack at the record's revision or later (unreadable counts as held: tried again later).</summary>
+    internal static bool StillPublished(Record record)
+    {
+        try { return Read(Path.Combine(record.UpdateFrom, record.Id), out _) is { } published && published.Revision >= record.Revision; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) { return true; }
     }
 
     /// <summary>Writes the pack into &lt;update folder&gt;\&lt;id&gt;: every other file first, pack.json last, so a PC that sees the new revision finds its files there.</summary>

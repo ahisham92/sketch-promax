@@ -537,6 +537,9 @@ internal static partial class FieldTest
         // Keeping a copy opens the kept-elements project (no window): from the external event.
         await ProbeCore(s, "recovery.kept", () => App.Dispatcher.InvokeFromEventAsync(app => RecoveryKept(app, s))).ConfigureAwait(false);
         await ProbeCore(s, "recovery.extras", () => App.Dispatcher.InvokeFromEventAsync(app => RecoveryExtras(app, s))).ConfigureAwait(false);
+        // Giving a group type its edit back opens the kept-elements project: from the external event.
+        await ProbeCore(s, "recovery.groups", () => App.Dispatcher.InvokeFromEventAsync(app => RecoveryGroups(app, s))).ConfigureAwait(false);
+        await ProbeCore(s, "recovery.where", () => App.Dispatcher.InvokeFromEventAsync(app => RecoveryWhere(app, s))).ConfigureAwait(false);
         await Probe(s, "recovery.bugs", () => RecoveryBugs(s)).ConfigureAwait(false);
         await Probe(s, "rescue.cause", RescueCause).ConfigureAwait(false);
         await Probe(s, "rescue.warn", RescueWarn).ConfigureAwait(false);
@@ -1754,11 +1757,14 @@ internal static partial class FieldTest
     // ---- Hand-off, Cancel and time tracking (in the test project) --------------------------------------------------------
 
     /// <summary>The test project when it is open and the active model; else null and why.</summary>
+    /// <summary>For trying one check on a project that is open without a window (nothing of the user's is touched): the test project needn't be the active model.</summary>
+    internal static bool TestDocNeedNotBeActive;
+
     private static Document? TestDoc(UIApplication app, State s, out string why)
     {
         why = "";
         if (s.Test is not { IsValidObject: true } test) { why = "the test project is not open (see the Test project notes)"; return null; }
-        if (app.ActiveUIDocument?.Document.Equals(test) != true) { why = "the test project is not the active model"; return null; }
+        if (!TestDocNeedNotBeActive && app.ActiveUIDocument?.Document.Equals(test) != true) { why = "the test project is not the active model"; return null; }
         return test;
     }
 
@@ -3128,6 +3134,16 @@ internal static partial class FieldTest
             var now = Sharing.SharedPacks.List().FirstOrDefault(p => p.Pack.Id == first.Pack.Id);
             if (now is null || now.Pack.Revision != 2 || followed.Count != 1) problems.Add($"the installed copy is at revision {now?.Pack.Revision.ToString() ?? "none"} after the update check");
             if (Sharing.SharedPacks.AutoPublish(Sharing.SharedTools.RibbonTool, Update.Updater.CurrentText).Count != 0) problems.Add("published again with nothing changed");
+            // The pack's folder in the update folder emptied (bug 83): it is published again by itself and followed.
+            if (second.Published is { } publishedFolder)
+            {
+                foreach (var file in Directory.GetFiles(publishedFolder, "*", SearchOption.AllDirectories)) File.Delete(file);
+                var healed = Sharing.SharedPacks.AutoPublish(Sharing.SharedTools.RibbonTool, Update.Updater.CurrentText);
+                if (healed.Count != 1 || Sharing.SharedPacks.Read(publishedFolder, out _)?.Revision != 3) problems.Add("an emptied update folder wasn't filled again as revision 3");
+                Sharing.SharedPacks.Sync();
+                if (Sharing.SharedPacks.List().FirstOrDefault(p => p.Pack.Id == first.Pack.Id)?.Pack.Revision != 3) problems.Add("the installed copy didn't follow the pack published again");
+                if (Sharing.SharedPacks.AutoPublish(Sharing.SharedTools.RibbonTool, Update.Updater.CurrentText).Count != 0) problems.Add("published a third time with nothing changed");
+            }
             return problems.Count == 0
                 ? Pass($"zip with installer and {first.Pack.Tools.Count} tools, published, installed, revision 2 followed by itself")
                 : Fail(string.Join("; ", problems));

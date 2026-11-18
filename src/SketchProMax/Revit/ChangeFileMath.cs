@@ -505,7 +505,80 @@ internal static class ChangeFileMath
     public static bool IsKept(Line l) => l.Extra is { } x && x.ContainsKey("kept");
 
     /// <summary>True while a change file of the folder still names a kept element (<paramref name="texts"/>: the folder's change files).</summary>
-    public static bool KeptInUse(IEnumerable<string> texts) => texts.Any(t => t.IndexOf("\"kept\":\"1\"", StringComparison.Ordinal) >= 0);
+    public static bool KeptInUse(IEnumerable<string> texts) =>
+        texts.Any(t => t.IndexOf("\"kept\":\"1\"", StringComparison.Ordinal) >= 0 || t.IndexOf("\"gkept\":\"1\"", StringComparison.Ordinal) >= 0);
+
+    // ---- A group edited after the last save -------------------------------------------------------------------------------
+
+    /// <summary>
+    /// What a group is made of, whichever way it lies: each member's kind and how far its point or ends are from the
+    /// group's origin (<paramref name="members"/>), as a count and a short print. Moving, turning or mirroring the
+    /// group leaves it as it is; an edit inside the group (a member moved, added, taken out, of another type) changes it.
+    /// </summary>
+    public static string GroupShape(IEnumerable<(string Kind, double[] Far)> members)
+    {
+        var parts = members.Select(m => m.Kind + "@" + string.Join(",", m.Far.OrderBy(d => d).Select(d => Math.Round(d, 2).ToString("0.##", CultureInfo.InvariantCulture))))
+            .OrderBy(p => p, StringComparer.Ordinal).ToList();
+        using var sha = SHA1.Create();
+        var hash = sha.ComputeHash(Encoding.UTF8.GetBytes(string.Join(";", parts)));
+        return parts.Count.ToString(CultureInfo.InvariantCulture) + ":" + string.Concat(hash.Take(8).Select(b => b.ToString("x2", CultureInfo.InvariantCulture)));
+    }
+
+    /// <summary>
+    /// A group's line whose type was edited after the last save: the UniqueId its kept copy is under (its own, or the
+    /// group of the same type that was copied), and what the group was made of then. Null when the line has neither.
+    /// </summary>
+    public static (string Key, string Shape)? GroupEdit(Line l)
+    {
+        if (l.What != "group" || l.Extra is not { } x || !x.TryGetValue("gshape", out var shape) || shape.Length == 0) return null;
+        if (x.TryGetValue("glike", out var like) && like.Length > 0) return (like, shape);
+        return x.ContainsKey("gkept") && l.Unique is { Length: > 0 } own ? (own, shape) : null;
+    }
+
+    // ---- Where something that wasn't done is ----------------------------------------------------------------------------
+
+    /// <summary>The revision the "not done" clouds are drawn on (one for the model; Remove clouds takes it out again).</summary>
+    public const string CloudRevision = "Lifeline: not done";
+
+    /// <summary>Half the side of a cloud around a point, in feet: about 6 mm on paper at the view's scale, never under half a metre.</summary>
+    public static double CloudHalf(int scale) => Math.Max(1.5, 0.02 * Math.Max(1, scale));
+
+    /// <summary>
+    /// The grids a point is next to (in plan): the nearest one and the nearest one crossing it, as "B / 3"; one name
+    /// when no grid crosses it; "" when the model has no grids. A grid counts past its ends.
+    /// </summary>
+    public static string NearGrids(Xyz p, IReadOnlyList<(string Name, Xyz P, Xyz Q)> grids)
+    {
+        (double X, double Y) Along((string Name, Xyz P, Xyz Q) g)
+        {
+            double dx = g.Q.X - g.P.X, dy = g.Q.Y - g.P.Y, length = Math.Sqrt(dx * dx + dy * dy);
+            return length < 1e-9 ? (0, 0) : (dx / length, dy / length);
+        }
+        double Far((string Name, Xyz P, Xyz Q) g)
+        {
+            var (ax, ay) = Along(g);
+            if (ax == 0 && ay == 0) return Math.Sqrt((p.X - g.P.X) * (p.X - g.P.X) + (p.Y - g.P.Y) * (p.Y - g.P.Y));
+            return Math.Abs((p.X - g.P.X) * ay - (p.Y - g.P.Y) * ax);
+        }
+        if (grids.Count == 0) return "";
+        var first = grids.OrderBy(Far).First();
+        var (fx, fy) = Along(first);
+        var crossing = grids.Where(g => { var (x, y) = Along(g); return Math.Abs(x * fy - y * fx) > 0.5; }).OrderBy(Far).ToList();
+        return crossing.Count == 0 ? first.Name : $"{first.Name} / {crossing[0].Name}";
+    }
+
+    /// <summary>Where something is, in words for the report and the window: view "Level 1", near grids B / 3, level L1. "" when nothing is known.</summary>
+    public static string WhereText(string? view, string? grids, string? level)
+    {
+        var parts = new List<string>();
+        if (view is { Length: > 0 }) parts.Add($"view \"{view}\"");
+        if (grids is { Length: > 0 }) parts.Add((grids.Contains(" / ") ? "near grids " : "near grid ") + grids);
+        if (level is { Length: > 0 }) parts.Add("level " + level);
+        return string.Join(", ", parts);
+    }
+
+    /// <summary>A report line for something not done, with where it is under it when that is known.</summary>
+    public static string ReportLine(string notDone, string? where) => "- " + notDone + (where is { Length: > 0 } ? Environment.NewLine + "    where: " + where : "");
 
     /// <summary>Revit's own step that loads a family (Load Family, Reload, Load into Project and Close): how a family loaded again over itself is told.</summary>
     public static bool IsFamilyLoad(string transaction) =>

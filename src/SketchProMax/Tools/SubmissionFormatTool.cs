@@ -23,7 +23,7 @@ public sealed class SubmissionFormatTool : IRevitTool
         "BEFORE planning or starting a berth's sheets, and build exactly that list. action=check reads the model's sheets " +
         "against it (berths: which ones; none = every berth with sheets) and lists every sheet missing, wrong name or view " +
         "title, scale that is not standard or differs between a berth's parts, view running off the sheet, missing " +
-        "schedule, empty sheet, empty or overlapping tag, pile inside the matchlines with no tag, tag on a pile beyond the matchline, matchline past the crop, key plan highlighting another berth, " +
+        "schedule, empty sheet, empty or overlapping tag, pile inside the matchlines with no tag, tag on a pile beyond the matchline, key plan highlighting another berth, " +
         "issue date written another way, drawing cited that is not a sheet, and typed-over dimension, with the fix: call it BEFORE " +
         "saying a submission is done; the work is done when it lists nothing. In a big model one call reads the tags of " +
         "only as many views as fit in about a minute: while its note says NOT COMPLETE, call check again. Scales are usual ones, not fixed: a view too " +
@@ -77,7 +77,7 @@ public sealed class SubmissionFormatTool : IRevitTool
                     sheetsWithOpenItems = matrix.Select(m => new { sheet = m.Key, checks = m.Value }).ToList(),
                     look = SubmissionFormat.Look(sheets, checkedBerths),
                     note = pending > 0
-                        ? $"NOT COMPLETE: the tags and matchlines of {pending} view(s) are not read yet (Revit takes long to draw a full plan the first time). Call check again with the same berths until this note goes; each call carries on from where the last stopped."
+                        ? $"NOT COMPLETE: {pending} view(s) are not read yet (Revit takes long to draw a full plan the first time). Call check again with the same berths until this note goes; each call carries on from where the last stopped."
                         : issues.Count == 0
                         ? "Every line of the format that can be read from the model holds. Go through 'look', and see each sheet once (capture_view_image) before saying it is done."
                         : "The submission is not done while this lists anything: fix each line, then check again.",
@@ -95,11 +95,13 @@ public sealed class SubmissionFormatTool : IRevitTool
     /// </summary>
     /// <remarks>
     /// Tags and matchlines need Revit to draw the view, which takes up to a minute the first time for a full plan of a
-    /// big model (measured on a berths model, 2026-11-17: 13 minutes for two berths). So they are read while
-    /// <paramref name="budgetMs"/> lasts; the views after that are marked not judged, and the next call carries on
-    /// quickly through the ones Revit has drawn already.
+    /// big model (measured on a berths model, 2026-11-17: 13 minutes for two berths; a viewport's box alone about 2 s
+    /// per view not drawn yet). So everything read inside a view (its box on the sheet, notes, dimensions, tags,
+    /// matchlines) is read while <paramref name="budgetMs"/> lasts; the views after that are marked not judged, and the
+    /// next call carries on quickly through the ones Revit has drawn already. The view being read when the time runs
+    /// out is finished, so a call can take up to a minute longer than the budget.
     /// </remarks>
-    internal static List<SubmissionFormat.Sheet> Read(Document doc, IReadOnlyCollection<int> berths, int budgetMs = 60000)
+    internal static List<SubmissionFormat.Sheet> Read(Document doc, IReadOnlyCollection<int> berths, int budgetMs = 40000)
     {
         var clock = System.Diagnostics.Stopwatch.StartNew();
         var all = new FilteredElementCollector(doc).OfClass(typeof(ViewSheet)).Cast<ViewSheet>().Where(s => !s.IsPlaceholder).ToList();
@@ -116,7 +118,9 @@ public sealed class SubmissionFormatTool : IRevitTool
             KeyPlan(doc, index, s, sheet);
             // The general sheets (berth 00) are read for their notes and dimensions only: the format has no rule for their views.
             var kind = at.Berth > 0 ? SubmissionFormat.KindOf(at.Series, sheet.Name)?.Key : null;
-            var frame = s.Outline;
+            // Past the time for drawing views, a sheet's views keep their title and scale only: asking a sheet for its
+            // outline or a viewport for its box also makes Revit draw what it has not drawn yet.
+            var frame = clock.ElapsedMilliseconds > budgetMs ? null : s.Outline;
             foreach (var port in index.Ports[s.Id.Value])
             {
                 if (doc.GetElement(port.ViewId) is not View view || view.ViewType == ViewType.Legend) continue;
@@ -125,12 +129,14 @@ public sealed class SubmissionFormatTool : IRevitTool
                 sheet.Views.Add(placed);
                 // A key plan placed as a view is not a drawing of the sheet: nothing more is read in it.
                 if (IsKeyPlan(view)) continue;
+                if (frame is null || clock.ElapsedMilliseconds > budgetMs) { placed.NotJudged = true; continue; }
                 try
                 {
                     var box = port.GetBoxOutline();
                     const double slack = 0.02; // about 6 mm on paper
-                    placed.OffSheet = frame is not null && (box.MinimumPoint.X < frame.Min.U - slack || box.MinimumPoint.Y < frame.Min.V - slack
+                    placed.OffSheet = (box.MinimumPoint.X < frame.Min.U - slack || box.MinimumPoint.Y < frame.Min.V - slack
                                                          || box.MaximumPoint.X > frame.Max.U + slack || box.MaximumPoint.Y > frame.Max.V + slack);
+                    if (placed.OffSheet) placed.OffSheetAroundOnly = CropOnSheet(view, port, frame, slack);
                 }
                 catch (Autodesk.Revit.Exceptions.ApplicationException) { /* a viewport with no box: not judged */ }
                 // A dependent view (one part of a plan) owns no annotation: its tags, notes and dimensions belong to its
@@ -140,7 +146,6 @@ public sealed class SubmissionFormatTool : IRevitTool
                 Notes(index.Notes[owner.Value].Where(x => here(x)), sheet);
                 sheet.TypedDimensions += TypedDimensions(index.Dimensions[owner.Value].Where(x => here(x)));
                 if (at.Berth == 0) continue;
-                if (clock.ElapsedMilliseconds > budgetMs) { placed.NotJudged = true; continue; }
                 // Asking a view what it shows is slow in a big model: once per plan for its matchlines, and once per tagged
                 // category on a piles plan. Tags, notes and dimensions come from the model's lists by their view.
                 var plan = view.ViewType is ViewType.FloorPlan or ViewType.EngineeringPlan or ViewType.CeilingPlan or ViewType.AreaPlan;
@@ -202,6 +207,30 @@ public sealed class SubmissionFormatTool : IRevitTool
     }
 
     /// <summary>The view's tags: empty ones, ones lying on another tag, and how many elements of the tagged categories have none.</summary>
+    /// <summary>
+    /// A viewport's box takes in what is drawn around the view (level heads, grid heads, tags, notes). True when the view's
+    /// own crop lies inside the sheet, so only something around it runs past the paper. False when that cannot be told
+    /// (no crop, or a view broken into several regions).
+    /// </summary>
+    private static bool CropOnSheet(View view, Viewport port, BoundingBoxUV frame, double slack)
+    {
+        try
+        {
+            if (!view.CropBoxActive || view.CropBox is not { } crop) return false;
+            var regions = view.GetModelToProjectionTransforms();
+            if (regions.Count != 1) return false;
+            var toSheet = port.GetProjectionToSheetTransform().Multiply(regions[0].GetModelToProjectionTransform());
+            foreach (var x in new[] { crop.Min.X, crop.Max.X })
+                foreach (var y in new[] { crop.Min.Y, crop.Max.Y })
+                {
+                    var at = toSheet.OfPoint(crop.Transform.OfPoint(new XYZ(x, y, crop.Max.Z)));
+                    if (at.X < frame.Min.U - slack || at.Y < frame.Min.V - slack || at.X > frame.Max.U + slack || at.Y > frame.Max.V + slack) return false;
+                }
+            return true;
+        }
+        catch (Autodesk.Revit.Exceptions.ApplicationException) { return false; }
+    }
+
     private static void Tags(Document doc, Index index, IEnumerable<IndependentTag> tags, View view, SubmissionFormat.PlacedView placed, bool piles, HashSet<long> shownMatchlines)
     {
         XYZ right = view.RightDirection, up = view.UpDirection;
@@ -224,10 +253,24 @@ public sealed class SubmissionFormatTool : IRevitTool
             }
             catch (Autodesk.Revit.Exceptions.ApplicationException) { /* a tag whose host is gone */ }
             if (tag.get_BoundingBox(view) is not { } box) continue;
-            var corners = new[] { box.Min, box.Max, new XYZ(box.Min.X, box.Max.Y, box.Min.Z), new XYZ(box.Max.X, box.Min.Y, box.Max.Z) };
-            double u0 = corners.Min(c => c.DotProduct(right)), u1 = corners.Max(c => c.DotProduct(right)), v0 = corners.Min(c => c.DotProduct(up)), v1 = corners.Max(c => c.DotProduct(up));
-            // Shrunk a little: tags that only touch are not on top of each other.
-            double du = (u1 - u0) * 0.1, dv = (v1 - v0) * 0.1;
+            // Revit gives the box along the model's axes. In a plan turned on the sheet that is bigger than the tag, and
+            // taking its corners along the view's axes would grow it again: the tag's own size is worked back from it.
+            var middle = (box.Min + box.Max) / 2;
+            var (w, h) = SubmissionFormat.Unturned(box.Max.X - box.Min.X, box.Max.Y - box.Min.Y, Math.Abs(right.X), Math.Abs(right.Y));
+            if (Math.Abs(right.Z) > 1e-6 || Math.Abs(up.Z) > 1e-6)
+            {
+                // A section or elevation: the box's corners along the view's axes.
+                var corners = from x in new[] { box.Min.X, box.Max.X } from y in new[] { box.Min.Y, box.Max.Y } from z in new[] { box.Min.Z, box.Max.Z } select new XYZ(x, y, z);
+                w = corners.Max(c => c.DotProduct(right)) - corners.Min(c => c.DotProduct(right));
+                h = corners.Max(c => c.DotProduct(up)) - corners.Min(c => c.DotProduct(up));
+            }
+            double u0 = middle.DotProduct(right) - w / 2, u1 = middle.DotProduct(right) + w / 2, v0 = middle.DotProduct(up) - h / 2, v1 = middle.DotProduct(up) + h / 2;
+            // A tag's box takes in its leader, which may cross another tag freely: only the text counts.
+            try { if (tag.HasLeader) (u0, v0, u1, v1) = SubmissionFormat.WithoutLeader(u0, v0, u1, v1, tag.TagHeadPosition.DotProduct(right), tag.TagHeadPosition.DotProduct(up)); }
+            catch (Autodesk.Revit.Exceptions.ApplicationException) { /* a tag with no head position: its whole box */ }
+            // Shrunk: Revit's box is a little bigger than the text, so tags that touch or sit close are not on top of each
+            // other (in the real model, slivers of 0.05 mm on paper between neighbours were reported at 10%).
+            double du = (u1 - u0) * 0.15, dv = (v1 - v0) * 0.15;
             if (u1 > u0 && v1 > v0) boxes.Add((u0 + du, v0 + dv, u1 - du, v1 - dv));
         }
         for (var i = 0; i < boxes.Count; i++)

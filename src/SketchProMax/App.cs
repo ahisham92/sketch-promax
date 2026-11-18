@@ -218,7 +218,7 @@ public sealed class App : IExternalApplication
         StartupTimings.StartDone(total.ElapsedMilliseconds);
         // The loader's ribbon queries follow in this same Idling; the line goes to the log at the next one.
         Dispatcher.Later(() => ActivityLog.Note("startup_timing",
-            $"Sketch ProMax {Updater.CurrentText} in Revit {RevitYear}: {StartupTimings.StartLine()}; first Idling {StartupTimings.SinceStart} ms after start"));
+            $"Sketch ProMax {Updater.CurrentText} in Revit {RevitYear}: {StartupTimings.StartLine()}; first Idling {StartupTimings.SinceStart} ms after start; cores loaded {CoresLoaded()}"));
         if (!shared)
         {
             // A Revit that closed by itself mid-call left that call behind: the log says which, with its arguments.
@@ -487,5 +487,22 @@ public sealed class App : IExternalApplication
             try { UpdateWindow.ShowFor(progress); }
             catch (Exception) { /* the ribbon still shows the state */ }
         }));
+    }
+
+    /// <summary>
+    /// The copies of SketchProMax.dll in this Revit, by version, like "0.35.76 x1, 0.35.77 x1": one each is expected (one
+    /// per in-session update). Written with each start so the log shows when extra copies appear.
+    /// </summary>
+    internal static string CoresLoaded()
+    {
+        try
+        {
+            return string.Join(", ", AppDomain.CurrentDomain.GetAssemblies()
+                .Where(a => !a.IsDynamic && a.GetName().Name == "SketchProMax")
+                .GroupBy(a => a.GetName().Version?.ToString(3) ?? "?")
+                .OrderBy(g => g.Key, StringComparer.Ordinal)
+                .Select(g => $"{g.Key} x{g.Count()}"));
+        }
+        catch (Exception) { return "?"; }
     }
 }

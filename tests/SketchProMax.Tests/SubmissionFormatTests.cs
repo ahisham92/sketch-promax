@@ -91,6 +91,25 @@ internal static class SubmissionFormatTests
         check("submission format: a later date on a sheet added in a later revision is listed to look at, not a failure",
             !SubmissionFormat.Check(later).Any(i => i.Check == "Title block") && SubmissionFormat.Look(later).Any(l => l.StartsWith("Issue dates:") && l.Contains("30 NOV 2026 on 1 sheet")),
             string.Join(" | ", SubmissionFormat.Look(later)));
+        var box = SubmissionFormat.WithoutLeader(0, 0, 10, 4, 8, 3);
+        check("submission format: a tag's leader is not part of the tag when looking for tags on top of each other",
+            box == (6, 2, 10, 4) && SubmissionFormat.WithoutLeader(0, 0, 10, 4, 12, 3) == (0, 0, 10, 4), box.ToString());
+        // A 10 x 2 tag in a plan turned 5 degrees: its box along the model's axes is bigger, and is worked back.
+        double c5 = Math.Cos(5 * Math.PI / 180), s5 = Math.Sin(5 * Math.PI / 180);
+        var back = SubmissionFormat.Unturned(10 * c5 + 2 * s5, 10 * s5 + 2 * c5, c5, s5);
+        var quarter = SubmissionFormat.Unturned(2, 10, 0, 1);
+        check("submission format: a tag's size in a turned plan is worked back from its box (not turned, a quarter turn and 45 degrees too)",
+            Math.Abs(back.W - 10) < 1e-9 && Math.Abs(back.H - 2) < 1e-9 && SubmissionFormat.Unturned(10, 2, 1, 0) == (10, 2)
+            && Math.Abs(quarter.W - 10) < 1e-9 && Math.Abs(quarter.H - 2) < 1e-9 && SubmissionFormat.Unturned(8, 8, Math.Sqrt(0.5), Math.Sqrt(0.5)) == (8, 8), $"{back} {quarter}");
+        var allOn = Good();
+        allOn[1].KeyPlanFound = allOn[1].KeyPlanSwitches = true;
+        for (var b = 1; b <= 10; b++) allOn[1].KeyPlanOn.Add((b, 0));
+        check("submission format: a key plan with every berth on is one short line",
+            SubmissionFormat.Check(allOn).Single(i => i.Check == "Key plan").Problem is { Length: < 90 } all && all.Contains("10 berths and parts"), SubmissionFormat.Check(allOn).FirstOrDefault(i => i.Check == "Key plan")?.Problem ?? "");
+        var mixed = Good();
+        mixed[6].IssueDate = "16/10/26";
+        check("submission format: a date written another way is a failure only, not listed as a later revision",
+            SubmissionFormat.Check(mixed).Any(i => i.Check == "Title block") && !SubmissionFormat.Look(mixed).Any(l => l.StartsWith("Issue dates:")), string.Join(" | ", SubmissionFormat.Look(mixed)));
         var slow = Good();
         slow[1].Views[0].NotJudged = true;
         check("submission format: a view whose tags were not read yet is said first, to run the check again",
@@ -133,11 +152,16 @@ internal static class SubmissionFormatTests
         drawn[2].KeyPlanOn = [(9, 0), (10, 0)];
         var seen = SubmissionFormat.Check(drawn);
         bool Seen(string sheet, string checkName, string says) => seen.Any(i => i.Sheet == $"{P}-09-SC-{sheet}" && i.Check == checkName && (i.Problem + i.Fix).Contains(says));
-        check("submission format: empty tags, tags on top of each other and matchlines past the crop are listed with the tool that fixes them",
-            Seen("101", "Tags", "3 empty tag") && Seen("101", "Tags", "arrange_tags") && Seen("101", "Matchlines", "trim_matchlines"), string.Join(" | ", seen.Select(i => i.Sheet + " " + i.Problem)));
+        check("submission format: empty tags and tags on top of each other are listed with the tool that fixes them; a matchline drawn longer than its part is fine",
+            Seen("101", "Tags", "3 empty tag") && Seen("101", "Tags", "arrange_tags") && !seen.Any(i => i.Check == "Matchlines"), string.Join(" | ", seen.Select(i => i.Sheet + " " + i.Problem)));
         check("submission format: a view running off the sheet is listed", Seen("111", "Fit", "PART 1 ELEVATION") && Seen("111", "Fit", "next standard scale"), "");
+        drawn[3].Views[1].OffSheetAroundOnly = true;
+        var around = SubmissionFormat.Check(drawn).Where(i => i.Check == "Fit").ToList();
+        check("submission format: when only a level head or a note around a view runs past the paper, the line says the view itself is inside",
+            around.Count == 1 && around[0].Problem.Contains("PART 1 ELEVATION") && around[0].Problem.Contains("the view itself is inside") && !around[0].Fix.Contains("standard scale"), string.Join(" | ", around.Select(i => i.Problem)));
+        drawn[3].Views[1].OffSheetAroundOnly = false;
         check("submission format: a key plan highlighting another berth too is listed; one highlighting only this berth is not",
-            Seen("102", "Key plan", "Berth 9, Berth 10") && Seen("102", "Key plan", "only Berth 9 - Part 2") && !seen.Any(i => i.Check == "Key plan" && i.Sheet.EndsWith("-101")) && seen.Count == 7, seen.Count + "");
+            Seen("102", "Key plan", "Berth 9, Berth 10") && Seen("102", "Key plan", "only Berth 9 - Part 2") && !seen.Any(i => i.Check == "Key plan" && i.Sheet.EndsWith("-101")) && seen.Count == 6, seen.Count + "");
         check("submission format: piles inside the matchlines with no tag, and tags on piles beyond the matchline, are failures on a piles plan",
             Seen("101", "Tags", "14 of 120 piles inside the matchlines have no tag") && Seen("101", "Tags", "6 tag(s) are on piles beyond the matchline") && Seen("101", "Tags", "Hide those tags")
             && !seen.Any(i => i.Sheet.EndsWith("-111") && i.Check == "Tags"), "");

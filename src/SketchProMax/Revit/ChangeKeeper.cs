@@ -144,8 +144,19 @@ internal static class ChangeKeeper
                 {
                     if (map.TryGetValue(unique, out var old) && keeper.GetElement(old) is { } was) keeper.Delete(was.Id);
                     map.Remove(unique);
+                    // A group edited again: the copy before it goes with its type, so this copy brings the type as it is now.
+                    if (e is Group edited)
+                    {
+                        var name = edited.GroupType.Name;
+                        foreach (var stale in new FilteredElementCollector(keeper).OfClass(typeof(GroupType)).Where(t => t.Name == name).Select(t => t.Id).ToList())
+                        {
+                            foreach (var placed in new FilteredElementCollector(keeper).OfClass(typeof(Group)).Where(g => g.GetTypeId() == stale).Select(g => g.Id).ToList()) keeper.Delete(placed);
+                            if (keeper.GetElement(stale) is not null) keeper.Delete(stale);
+                        }
+                    }
                     var copies = ElementTransformUtils.CopyElements(doc, [e.Id], keeper, Transform.Identity, Options());
-                    var copy = Main(keeper, copies, e, e.Category?.Id.Value ?? 0) ?? throw new InvalidOperationException("Revit copied nothing");
+                    var copy = (e is Group ? copies.Select(keeper.GetElement).OfType<Group>().FirstOrDefault(g => g.GroupId == ElementId.InvalidElementId) : null)
+                        ?? Main(keeper, copies, e, e.Category?.Id.Value ?? 0) ?? throw new InvalidOperationException("Revit copied nothing");
                     var copyUnique = copy.UniqueId;
                     if (t.Commit() != TransactionStatus.Committed) throw new InvalidOperationException("Revit refused the copy");
                     map[unique] = copyUnique;
@@ -190,6 +201,42 @@ internal static class ChangeKeeper
         // A template, filter or pattern keeps its name (Revit adds a number when it thinks the name is taken).
         if (M.IsDocItem(line) && line.Name is { Length: > 0 } name) try { if (made.Name != name) made.Name = name; } catch (Exception) { }
         return made;
+    }
+
+    /// <summary>
+    /// A group whose type was edited after the last save: the type as its kept copy has it is brought in, every group
+    /// of the old type is given it, and it takes the old type's name. Members come back as the copy has them (with new
+    /// ids; Revit takes the tags and dimensions on the old members out, and <paramref name="notes"/> makes them again
+    /// on the new ones). Refused when a tag or dimension is still missing after that, or when the members don't come
+    /// back as they were. Returns how many groups were given the type. Call inside a transaction of <paramref name="doc"/>.
+    /// </summary>
+    public static int Regroup(Document keeper, Document doc, Group group, string keptUnique, Func<HashSet<ElementId>>? notes = null)
+    {
+        if (keeper.GetElement(keptUnique) is not Group source) throw new InvalidOperationException("the kept copy of the group as it was edited isn't there any more: edit the group again by hand");
+        var want = ChangeExtras.GroupShape(source);
+        var old = group.GroupType;
+        var name = old.Name;
+        var placed = new FilteredElementCollector(doc).OfClass(typeof(Group)).Where(g => g.GetTypeId() == old.Id).Cast<Group>().ToList();
+        var before = ChangeExtras.Notes(doc);
+        // The old type steps aside, so the copy comes in under the name with what it is made of.
+        old.Name = (name.Length > 200 ? name.Substring(0, 200) : name) + " (before replay " + Guid.NewGuid().ToString("N").Substring(0, 6) + ")";
+        var copies = ElementTransformUtils.CopyElements(keeper, [source.Id], doc, Transform.Identity, Options());
+        var pasted = copies.Select(doc.GetElement).OfType<Group>().FirstOrDefault(g => g.GroupId == ElementId.InvalidElementId)
+            ?? throw new InvalidOperationException("Revit copied nothing back for the edited group: edit the group again by hand");
+        var fresh = pasted.GroupType;
+        if (fresh.Id == old.Id) throw new InvalidOperationException("Revit gave the copy of the edited group the model's own group type: edit the group again by hand");
+        foreach (var one in placed) one.GroupType = fresh;
+        doc.Delete(pasted.Id);
+        doc.Regenerate();
+        if (!new FilteredElementCollector(doc).OfClass(typeof(Group)).Any(g => g.GetTypeId() == old.Id)) doc.Delete(old.Id);
+        if (fresh.Name != name) fresh.Name = name;
+        doc.Regenerate();
+        if (want is not null && ChangeExtras.GroupShape(group) is { } now && now != want) throw new InvalidOperationException("the group's members didn't come back as they were edited: edit the group again by hand");
+        // Each tag or dimension that went with an old member is made again on the member in its place, or the edit isn't put back.
+        var again = notes?.Invoke() ?? [];
+        var lost = before.Count(id => doc.GetElement(id) is null && !again.Contains(id));
+        if (lost > 0) throw new InvalidOperationException($"putting the group's edit back would take out {lost} tag{(lost == 1 ? "" : "s")} or dimension{(lost == 1 ? "" : "s")} on its members: edit the group again by hand");
+        return placed.Count;
     }
 
     /// <summary>Deletes the folder's kept-elements project when no change file of the folder names a kept element any more.</summary>

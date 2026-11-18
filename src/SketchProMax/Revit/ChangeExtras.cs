@@ -43,6 +43,44 @@ internal static class ChangeExtras
     }
 
     /// <summary>
+    /// What a group is made of (<see cref="ChangeFileMath.GroupShape"/>): each member's category and type, and how far
+    /// its point or ends are from the group's origin (a member with neither: its volume). Null when it can't be read.
+    /// </summary>
+    public static string? GroupShape(Group group)
+    {
+        try
+        {
+            if (group.Location is not LocationPoint { Point: { } origin }) return null;
+            var doc = group.Document;
+            var members = new List<(string, double[])>();
+            foreach (var id in group.GetMemberIds())
+            {
+                if (doc.GetElement(id) is not { } member) continue;
+                var kind = (member.Category?.Name ?? member.GetType().Name) + "|" + (doc.GetElement(member.GetTypeId())?.Name ?? "");
+                double[] far;
+                switch (member.Location)
+                {
+                    case LocationPoint { Point: { } at }: far = [at.DistanceTo(origin)]; break;
+                    case LocationCurve { Curve: { IsBound: true } curve }: far = [curve.GetEndPoint(0).DistanceTo(origin), curve.GetEndPoint(1).DistanceTo(origin), curve.Length]; break;
+                    default:
+                        double volume = 0;
+                        var faces = 0;
+                        if (!member.ViewSpecific && member.get_Geometry(new Options { ComputeReferences = false, DetailLevel = ViewDetailLevel.Coarse }) is { } geometry) Count(geometry, ref volume, ref faces, 0);
+                        far = [volume, faces];
+                        break;
+                }
+                members.Add((kind, far));
+            }
+            return members.Count == 0 ? null : M.GroupShape(members);
+        }
+        catch (Exception) { return null; }
+    }
+
+    /// <summary>The tags, dimensions and spots of the model (what Revit takes out when the element they point at goes).</summary>
+    public static HashSet<ElementId> Notes(Document doc) =>
+        [.. new FilteredElementCollector(doc).WherePasses(new LogicalOrFilter(new ElementClassFilter(typeof(IndependentTag)), new ElementClassFilter(typeof(Dimension)))).ToElementIds()];
+
+    /// <summary>
     /// True when nothing of the user's hangs on the element (a tag, a dimension, a hosted family, bars, an opening), so
     /// it can be taken out and put back from its kept copy without losing anything else.
     /// </summary>

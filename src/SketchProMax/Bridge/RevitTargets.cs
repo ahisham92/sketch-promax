@@ -25,6 +25,14 @@ internal sealed record ConnectorCaller(bool FromChat, string? Job, int? Preferre
 /// </summary>
 internal sealed class RevitTargets
 {
+    /// <summary>
+    /// A model with no file behind it: a new one (no path) or a detached copy (Revit gives its bare name, "X_detached.rvt").
+    /// A cloud model's path is not a disk path but it is saved.
+    /// </summary>
+    internal static bool NeverSaved(string? pathName) =>
+        string.IsNullOrWhiteSpace(pathName) || !(pathName!.Contains("://") || pathName.StartsWith(@"\\", StringComparison.Ordinal)
+                                                || (pathName.Length > 2 && char.IsLetter(pathName[0]) && pathName[1] == ':' && pathName[2] is '\\' or '/'));
+
     private readonly ConnectorCaller _caller;
 
     /// <summary>This Revit window's pipe and its request handler, when this runs inside Revit; requests to it skip the pipe.</summary>
