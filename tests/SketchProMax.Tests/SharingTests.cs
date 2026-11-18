@@ -142,6 +142,9 @@ internal static class SharingTests
         // ---- Files that ship
         // ---- Only the owner's PC shares tools (Share tools and the automatic next revision)
         var sharedTools = Src("Sharing", "SharedTools.cs");
+        // Bug 83: a pack whose folder in the update folder was emptied is published again by itself.
+        check("sharing: a pack missing from its update folder is published again", Src("Sharing", "SharedPacks.cs").Contains("== record.Fingerprint && StillPublished(record)) continue;")
+            && Src("Sharing", "SharedPacks.cs").Contains("published.Revision >= record.Revision"), "");
         check("sharing: only the owner's PC can share tools or publish a pack's next revision",
             sharedTools.Contains("if (!OwnerPc())") && sharedTools.Contains("if (App.Shared || !OwnerPc()) return;")
             && sharedTools.Contains("LicenseState.IsOwnerPc"), "");
