@@ -35,6 +35,12 @@ internal static partial class SelfTest
         Directory.CreateDirectory(temp);
         var ctx = Collect(app, doc, registry, temp);
         ctx.Throwaway = true;
+        // The template brings its own levels (Imperial: Level 2 at 10'), which sit between the test project's ground
+        // level and its upper level at 4 m; the upper level is the one the test project's slab and columns are on.
+        if (ctx.Level is { } ground && ctx.Upper is { } next && !new FilteredElementCollector(doc).OfClass(typeof(Floor)).Cast<Floor>().Any(f => f.LevelId == next.Id))
+            ctx.Upper = new FilteredElementCollector(doc).OfClass(typeof(Level)).Cast<Level>()
+                .Where(l => l.Elevation > ground.Elevation + 1).OrderBy(l => l.Elevation)
+                .FirstOrDefault(l => new FilteredElementCollector(doc).OfClass(typeof(Floor)).Cast<Floor>().Any(f => f.LevelId == l.Id && !f.FloorType.IsFoundationSlab)) ?? next;
         LearnedTools.MarkApproved(LearnedToolCode);
         var run = new Run
         {
