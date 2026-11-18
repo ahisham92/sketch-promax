@@ -822,6 +822,7 @@ internal static class FieldTestCoverage
         new(79, ["checklist.fix_more", "checklist.autotests"], "the checklist checks copy a column onto itself and finish in seconds with no Revit dialog; a Fix taking 5 s or more is named"),
         new(80, ["diagnostics.crash_ui"], "after Revit closed during a run, the notice is a corner hint that needs no click; the choices open from Field test"),
         new(83, ["share.pack"], "a shared pack whose folder in the update folder was emptied is published again by itself, and an installed copy follows it"),
+        new(84, ["chat.open_model_ui"], "opening a model over a detached copy says that the copy can only be brought back by clicking its tab; asking for that copy afterwards says the same, not Revit's error"),
     ];
 
     /// <summary>
