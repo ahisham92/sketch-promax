@@ -12,7 +12,7 @@ namespace SketchProMax.Tools;
 /// read_drawing: a page of a drawing (PDF, scan or picture) as an image to read, the whole page with a labelled grid,
 /// then any part of it zoomed in until its dimensions, levels and notes can be read. Drawn by the add-in's own PDF engine
 /// (PDFium) in a second or two, even for large scanned as-built sets, where a whole page through Revit took minutes and
-/// came out too small to read (the 2026-10-30 Apapa as-built read: every try stopped after 10 minutes, so the existing
+/// came out too small to read (the 2026-10-30 as-built read of a port project: every try stopped after 10 minutes, so the existing
 /// model was guessed). Reads only; Revit's model is not touched.
 /// </summary>
 public sealed class ReadDrawingTool : IRevitTool

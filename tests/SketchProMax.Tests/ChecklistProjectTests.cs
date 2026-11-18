@@ -11,9 +11,9 @@ internal static class ChecklistProjectTests
     {
         check("checklist projects: the project is the code before the first dash",
             ChecklistProjects.ProjectKey(@"C:\Models\PRJ1-070-00-ABC-002-STR-3DM-0010_detached.rvt") == "PRJ1"
-            && ChecklistProjects.ProjectKey("prj2-0100D-RVT-TIN-SB_someone.rvt") == "PRJ2"
+            && ChecklistProjects.ProjectKey("prj2-0100D-RVT-HAR-SB_someone.rvt") == "PRJ2"
             && ChecklistProjects.ProjectKey("Office tower.rvt") == "Office tower",
-            ChecklistProjects.ProjectKey("prj2-0100D-RVT-TIN-SB_someone.rvt"));
+            ChecklistProjects.ProjectKey("prj2-0100D-RVT-HAR-SB_someone.rvt"));
         check("checklist projects: names become file names", ChecklistProjects.CleanName("  Ports: berth / quay  ") == "Ports_ berth _ quay", ChecklistProjects.CleanName("  Ports: berth / quay  "));
         check("checklist projects: the source marks a project checklist",
             ChecklistProjects.NameOf(ChecklistProjects.Source("Ports")) == "Ports" && ChecklistProjects.NameOf(EditedSource) is null && ChecklistProjects.NameOf(null) is null, "");

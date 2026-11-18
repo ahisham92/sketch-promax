@@ -899,7 +899,7 @@ internal sealed class SignaturePagesWindow : Window
         BuilderChanged();
     }
 
-    /// <summary>Adds the listed documents again for the other site (TIN to APA and so on), revisions and titles kept.</summary>
+    /// <summary>Adds the listed documents again for the other site (from one site to the other), revisions and titles kept.</summary>
     private void CopyForOtherSite()
     {
         var docs = Included();
