@@ -28,7 +28,7 @@ internal static class SubmissionFormat
         new("layout", 100, 100, "OVERALL LAYOUT", @"^OVERALL LAYOUT$", "usually 1:300", true,
             [new("BERTH <n> OVERALL PLAN", @"OVERALL PLAN", [300])],
             ["FURNITURE SCHEDULE"],
-            ["the whole berth with its parts named (PART 1, PART 2, ...) and matchlines inside the crop", "the quay wall furniture schedule (fenders, bollards, ladders, mooring rings)"]),
+            ["the whole berth with its parts named (PART 1, PART 2, ...) and matchlines (drawn longer than the part is fine)", "the quay wall furniture schedule (fenders, bollards, ladders, mooring rings)"]),
         new("piles", 101, 109, "PILES PLAN - PART <k>", @"^PILES PLAN - PART \d+$", "usually 1:100", true,
             [new("BERTH <n> - PART <k> PILES PLAN", @"PART \d+ PILES PLAN", [100])],
             ["PILES SCHEDULE"],
@@ -302,7 +302,8 @@ internal static class SubmissionFormat
                 else if (v.OffSheet) issues.Add(new(Bare(sheet.Number), "Fit", $"\"{title}\" runs outside the sheet's frame.", "Move it inside, tighten its crop, or take the next standard scale (the same for the berth's other views of this kind)."));
                 if (v.EmptyTags > 0) issues.Add(new(Bare(sheet.Number), "Tags", $"{v.EmptyTags} empty tag(s) in \"{title}\".", "Fill the value the tag reads (type mark, mark), or delete the tag."));
                 if (v.OverlappingTags > 0) issues.Add(new(Bare(sheet.Number), "Tags", $"{v.OverlappingTags} tag(s) lie on another tag in \"{title}\".", "arrange_tags action=fix_overlaps, then look at the view."));
-                if (v.MatchlinesPastCrop > 0) issues.Add(new(Bare(sheet.Number), "Matchlines", $"{v.MatchlinesPastCrop} matchline(s) run past the crop of \"{title}\".", "trim_matchlines on this view."));
+                // A matchline running past the crop is not reported (the owner, 2026-11-18: matchlines are typically drawn
+                // longer than each part, and that is fine). The count is still read for whoever looks.
             }
             if (sheet.TypedDimensions > 0)
                 issues.Add(new(Bare(sheet.Number), "Dimensions", $"{sheet.TypedDimensions} dimension(s) show a typed value, not what the model measures.", "Remove the typed value, and move the element if the model is off."));
