@@ -170,6 +170,8 @@ internal static class SubmissionFormat
         public int EmptyTags, OverlappingTags, MatchlinesPastCrop;
         /// <summary>The view's box runs outside the sheet's frame.</summary>
         public bool OffSheet;
+        /// <summary>With <see cref="OffSheet"/>: the view's own crop is inside the sheet, only something drawn around it (a level head, a tag, a note) runs past the paper.</summary>
+        public bool OffSheetAroundOnly;
         /// <summary>Its tags and matchlines were not read in this run (the time for drawing views ran out): the next run reads them.</summary>
         public bool NotJudged;
         /// <summary>
@@ -270,7 +272,7 @@ internal static class SubmissionFormat
                     // A part's sheet shows its part, where the title block has part switches at all.
                     var missingPart = partOf > 0 && wrong.Count == 0 && on.All(k => k.Part == 0) && sheet.KeyPlanParts;
                     if (wrong.Count > 0 || missingPart)
-                        issues.Add(new(name, "Key plan", $"The key plan highlights {string.Join(", ", on.Select(Says))}.", $"In the sheet's title block switch on only {Says((berth, partOf))}."));
+                        issues.Add(new(name, "Key plan", $"The key plan highlights {(on.Count > 6 ? $"{on.Count} berths and parts ({string.Join(", ", on.Take(3).Select(Says))}, ...)" : string.Join(", ", on.Select(Says)))}.", $"In the sheet's title block switch on only {Says((berth, partOf))}."));
                 }
             }
             // The same views of a berth share one scale: all its parts, all its sections.
@@ -296,7 +298,8 @@ internal static class SubmissionFormat
             foreach (var v in sheet.Views)
             {
                 var title = Clean(v.Title);
-                if (v.OffSheet) issues.Add(new(Bare(sheet.Number), "Fit", $"\"{title}\" runs outside the sheet's frame.", "Move it inside, tighten its crop, or take the next standard scale (the same for the berth's other views of this kind)."));
+                if (v.OffSheet && v.OffSheetAroundOnly) issues.Add(new(Bare(sheet.Number), "Fit", $"Something drawn around \"{title}\" (a level head, a grid head, a tag or a note) runs past the paper; the view itself is inside.", "Pull it back inside or hide it, or move the view."));
+                else if (v.OffSheet) issues.Add(new(Bare(sheet.Number), "Fit", $"\"{title}\" runs outside the sheet's frame.", "Move it inside, tighten its crop, or take the next standard scale (the same for the berth's other views of this kind)."));
                 if (v.EmptyTags > 0) issues.Add(new(Bare(sheet.Number), "Tags", $"{v.EmptyTags} empty tag(s) in \"{title}\".", "Fill the value the tag reads (type mark, mark), or delete the tag."));
                 if (v.OverlappingTags > 0) issues.Add(new(Bare(sheet.Number), "Tags", $"{v.OverlappingTags} tag(s) lie on another tag in \"{title}\".", "arrange_tags action=fix_overlaps, then look at the view."));
                 if (v.MatchlinesPastCrop > 0) issues.Add(new(Bare(sheet.Number), "Matchlines", $"{v.MatchlinesPastCrop} matchline(s) run past the crop of \"{title}\".", "trim_matchlines on this view."));
@@ -305,6 +308,32 @@ internal static class SubmissionFormat
                 issues.Add(new(Bare(sheet.Number), "Dimensions", $"{sheet.TypedDimensions} dimension(s) show a typed value, not what the model measures.", "Remove the typed value, and move the element if the model is off."));
         }
         return issues;
+    }
+
+    /// <summary>
+    /// A tag's box (u0, v0, u1, v1 in the view) without its leader: the text sits around the tag's head, and the leader
+    /// stretches the box to one side only, so on each axis the shorter way from the head to the box's edge is half the text.
+    /// </summary>
+    public static (double U0, double V0, double U1, double V1) WithoutLeader(double u0, double v0, double u1, double v1, double headU, double headV)
+    {
+        if (headU <= u0 || headU >= u1 || headV <= v0 || headV >= v1) return (u0, v0, u1, v1);
+        double du = Math.Min(headU - u0, u1 - headU), dv = Math.Min(headV - v0, v1 - headV);
+        return (headU - du, headV - dv, headU + du, headV + dv);
+    }
+
+    /// <summary>
+    /// The size of a rectangle lying along a view's axes, from the size of its box along the model's axes
+    /// (<paramref name="boxW"/>, <paramref name="boxH"/>) and the view's turn (cosine and sine of its angle, both
+    /// positive). The box itself when the view isn't turned, or is turned near 45 degrees (where it can't be told).
+    /// </summary>
+    public static (double W, double H) Unturned(double boxW, double boxH, double cos, double sin)
+    {
+        var d = cos * cos - sin * sin;
+        if (sin < 1e-6 || Math.Abs(d) < 0.2) return (boxW, boxH);
+        // Turned past 45 degrees the rectangle's sides swap roles.
+        if (d < 0) { (cos, sin) = (sin, cos); d = -d; var (w2, h2) = ((boxW * cos - boxH * sin) / d, (boxH * cos - boxW * sin) / d); return w2 > 0 && h2 > 0 ? (h2, w2) : (boxW, boxH); }
+        var (w, h) = ((boxW * cos - boxH * sin) / d, (boxH * cos - boxW * sin) / d);
+        return w > 0 && h > 0 ? (w, h) : (boxW, boxH);
     }
 
     /// <summary>How a date is written: digits as 9, letters as A ("14/05/2026" is 99/99/9999, "06/17/26" is 99/99/99).</summary>
@@ -329,14 +358,16 @@ internal static class SubmissionFormat
                     lines.Add($"{Bare(sheet.Number)}: {v.UntaggedInside} of {v.Taggable} elements of the tagged categories have no tag in \"{Clean(v.Title)}\". See whether they should have one.");
             if (!sheet.KeyPlanFound) { noKeyPlan.Add(Bare(sheet.Number)); switches.UnionWith(sheet.OtherSwitches); }
         }
-        var dates = all.Where(s => Parse(s.Number) is { } at && (at.Berth == 0 || wanted.Count == 0 || wanted.Contains(at.Berth)) && s.IssueDate.Trim().Length > 0)
-            .GroupBy(s => s.IssueDate.Trim()).OrderByDescending(g => g.Count()).ToList();
+        // Dates written like most of them only: one written another way is a failure of the check, not a later revision.
+        var dated = all.Where(s => Parse(s.Number) is { } at && (at.Berth == 0 || wanted.Count == 0 || wanted.Contains(at.Berth)) && s.IssueDate.Trim().Length > 0).ToList();
+        var form = dated.GroupBy(s => DateForm(s.IssueDate)).OrderByDescending(g => g.Count()).FirstOrDefault()?.Key;
+        var dates = dated.Where(s => DateForm(s.IssueDate) == form).GroupBy(s => s.IssueDate.Trim()).OrderByDescending(g => g.Count()).ToList();
         if (dates.Count > 1)
             lines.Add("Issue dates: " + string.Join("; ", dates.Select(g => $"{g.Key} on {g.Count()} sheet(s)" + (g != dates[0] ? $" ({string.Join(", ", g.Take(4).Select(s => Bare(s.Number)))}{(g.Count() > 4 ? ", ..." : "")})" : ""))) +
                       ". Right when those sheets were issued in another revision.");
-        var pending = all.Where(s => Parse(s.Number) is { Berth: > 0 } at && (wanted.Count == 0 || wanted.Contains(at.Berth)) && s.Views.Any(v => v.NotJudged)).Select(s => Bare(s.Number)).ToList();
+        var pending = all.Where(s => Parse(s.Number) is { } at && (at.Berth == 0 || wanted.Count == 0 || wanted.Contains(at.Berth)) && s.Views.Any(v => v.NotJudged)).Select(s => Bare(s.Number)).ToList();
         if (pending.Count > 0)
-            lines.Insert(0, $"Not read yet: the tags and matchlines on {pending.Count} sheet(s) ({string.Join(", ", pending.Take(6))}{(pending.Count > 6 ? ", ..." : "")}). Run the check again to carry on.");
+            lines.Insert(0, $"Not read yet: the views on {pending.Count} sheet(s) ({string.Join(", ", pending.Take(6))}{(pending.Count > 6 ? ", ..." : "")}). Run the check again to carry on.");
         if (noKeyPlan.Count > 0)
             lines.Add($"Key plan: the model doesn't say which berth it highlights on {noKeyPlan.Count} sheet(s) ({string.Join(", ", noKeyPlan.Take(6))}{(noKeyPlan.Count > 6 ? ", ..." : "")}). Look at one sheet per berth (capture_view_image): only that berth is highlighted." +
                       (switches.Count > 0 ? $" The title block's yes/no switches name no berth: {string.Join(", ", switches.Take(20))}. Tell the user, so the right ones can be read." : ""));
