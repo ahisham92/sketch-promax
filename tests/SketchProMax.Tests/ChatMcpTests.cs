@@ -127,6 +127,9 @@ internal static class ChatMcpTests
             check("revit windows: the version asked for, the only window, else the one being worked in",
                 RevitTargets.Window(two, "2024", null).Index == 0 && RevitTargets.Window(two, " 2025 ", 10).Index == 1
                 && RevitTargets.Window([("2024", 10)], null, null).Index == 0 && RevitTargets.Window(two, null, 20).Index == 1, "");
+            check("revit windows: a new model and a detached copy have no file to switch back to; a saved or cloud model has",
+                RevitTargets.NeverSaved("") && RevitTargets.NeverSaved(null) && RevitTargets.NeverSaved("PRJ1_detached.rvt")
+                && !RevitTargets.NeverSaved(@"C:\Models\PRJ1.rvt") && !RevitTargets.NeverSaved("Autodesk Docs://PRJ1/PRJ1.rvt") && !RevitTargets.NeverSaved(@"\\server\share\PRJ1.rvt"), "");
             check("revit windows: several and none said, a version that isn't connected, or no window, says why",
                 RevitTargets.Window(two, null, null) is { Index: -1 } several && several.Why.Contains("revitVersion")
                 && RevitTargets.Window(two, "2026", 10) is { Index: -1 } none && none.Why.Contains("Revit 2026")
