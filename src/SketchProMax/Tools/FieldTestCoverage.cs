@@ -626,6 +626,7 @@ internal static class FieldTestCoverage
         new("startup.timings", Updates, "Startup stays out of the way (bug #18)", How.Probe, "", "the time Sketch ProMax took at Revit start, and what it added to opening models, are under the limits (3 s, 1 s)"),
         new("update.fallback", Updates, "The update check falls back to github.com (bug #23)", How.Probe, "", "with GitHub's API made to fail, the check still finds the latest version from the github.com releases page"),
         new("update.resume", Updates, "An interrupted update continues where it stopped", How.Probe, "", "on this PC's disk, an unpack stopped part way is continued (the files already written are kept) and the finished version is marked so Try again goes straight to installing"),
+        new("job.lost", Updates, "A call cut off by an update switch never holds Revit busy (bug #87)", How.Probe, "", "in memory, with jobs made for the test: a call that never reached Revit stops counting after 30 s and ends with an error, one dropped by cancel_job no longer counts, and the update switch drops a queued call with its reason but never a running one"),
 
         // ---- Revit limits
         new("legend.components", Limits, "Legend components copied from one placed by hand", How.Manual, "", "the Revit API can't place a legend component from scratch, and the test project's template has none to copy (the field test looks in the Revit templates first)",
@@ -831,6 +832,7 @@ internal static class FieldTestCoverage
         new(84, ["chat.open_model_ui"], "opening a model over a detached copy says that the copy can only be brought back by clicking its tab; asking for that copy afterwards says the same, not Revit's error"),
         new(85, ["chat.submission_format_ui"], "the check of a berth whose matchlines run longer than its parts lists no matchline line"),
         new(86, ["recovery.groups", "recovery.where"], "an edit inside a group comes back in a replay from the group's kept copy, in every group of the type; what a replay couldn't do is named with its view, grids and level, and can be clouded"),
+        new(87, ["job.lost"], "a call cut off by an update switch no longer refuses every later call: it ends with an error after 30 s at most, cancel_job clears it at once, and a call still waiting for Revit when Sketch ProMax switches to an update is told so"),
     ];
 
     /// <summary>

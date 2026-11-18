@@ -578,6 +578,7 @@ internal static partial class FieldTest
         await Probe(s, "update.version", () => VersionCompare(latest)).ConfigureAwait(false);
         await Probe(s, "update.fallback", UpdateFallback).ConfigureAwait(false);
         await Probe(s, "update.resume", UpdateResumeProbe).ConfigureAwait(false);
+        await Probe(s, "job.lost", LostJobProbe).ConfigureAwait(false);
         await Probe(s, "diagnostics.journal", () => JournalProbe(s.Folder)).ConfigureAwait(false);
         await Probe(s, "diagnostics.running_call", () => RunningCallProbe(s.Folder)).ConfigureAwait(false);
         await Probe(s, "claude.msix", Msix).ConfigureAwait(false);

@@ -72,6 +72,23 @@ public sealed class Job
 
     internal bool Abandoned => System.Threading.Volatile.Read(ref _state) == 2;
 
+    /// <summary>Why the job was dropped before Revit started it, when something other than its caller dropped it.</summary>
+    internal volatile string? DropReason;
+
+    /// <summary>
+    /// The call could not be handed to Revit at all (the dispatcher refused it, for example while Sketch ProMax was
+    /// switching to an update): the job ends here with <paramref name="why"/>, so it never holds Revit "busy" (bug 87).
+    /// </summary>
+    internal ToolResult FailBeforeStart(string why)
+    {
+        DropReason = why;
+        TryAbandon();
+        var result = ToolResult.Error($"{why} Nothing was changed; call it again.");
+        if (Task is null) Task = System.Threading.Tasks.Task.FromResult(result);
+        Finished ??= DateTime.UtcNow;
+        return result;
+    }
+
     /// <summary>Where the job writes notes as it goes (run_revit_code's log); read for progress.</summary>
     internal StringBuilder? Log;
 
@@ -166,10 +183,59 @@ public static class Jobs
     {
         lock (Gate)
         {
-            busyWith = Recent.LastOrDefault(j => j.Task is null || !j.Task.IsCompleted && !j.Abandoned);
+            busyWith = Recent.LastOrDefault(InTheWay);
             if (busyWith is not null) return null;
             return Create(tool);
         }
+    }
+
+    /// <summary>
+    /// How long a job may stay created but never handed to Revit (its task not set) before it counts as lost: that gap is
+    /// normally a few microseconds, so a job still there after this was cut off by an exception or an update switch.
+    /// </summary>
+    internal static readonly TimeSpan LostAfter = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// True when the job keeps other calls waiting: queued or running, not dropped. A job dropped before it started
+    /// (cancel_job, an update switch) or lost before it reached Revit never does (bug 87: one such job refused every call).
+    /// </summary>
+    internal static bool InTheWay(Job j) => InTheWay(j, DateTime.UtcNow);
+
+    internal static bool InTheWay(Job j, DateTime now)
+    {
+        if (j.Abandoned) return false;
+        if (j.Task is null)
+        {
+            if (now - j.Queued < LostAfter) return true;
+            j.FailBeforeStart("The call never reached Revit (it was cut off, for example by an update switch).");
+            return false;
+        }
+        return !j.Task.IsCompleted;
+    }
+
+    /// <summary>
+    /// Drops every job still waiting for Revit, with <paramref name="why"/> as its answer. Called when this core stops
+    /// (an update switch): its dispatcher stops with it, so a queued job would otherwise wait for ever (bug 87).
+    /// </summary>
+    internal static int DropQueued(string why)
+    {
+        List<Job> all;
+        lock (Gate) all = Recent.ToList();
+        return Drop(all, why);
+    }
+
+    /// <summary>Drops those of <paramref name="jobs"/> that have not started; the number dropped.</summary>
+    internal static int Drop(IEnumerable<Job> jobs, string why)
+    {
+        var dropped = 0;
+        foreach (var job in jobs)
+        {
+            if (job.Started is not null || job.Abandoned) continue;
+            job.DropReason = why;
+            if (job.TryAbandon()) dropped++;
+            else job.DropReason = null;
+        }
+        return dropped;
     }
 
     internal static Job Create(string tool)
@@ -209,11 +275,13 @@ public static class Jobs
     {
         if (job.Task is { IsCompleted: true } done)
         {
-            if (done.IsCanceled) return ToolResult.Error($"Job {job.Id} ({job.Tool}) was cancelled before Revit started it; nothing was changed.");
+            if (done.IsCanceled) return ToolResult.Error($"Job {job.Id} ({job.Tool}) was {(job.DropReason is { } reason ? "dropped before Revit started it: " + reason : "cancelled before Revit started it.")} Nothing was changed; call it again if it is still needed.");
             if (done.IsFaulted) return ToolResult.Error($"Job {job.Id} ({job.Tool}) failed: {done.Exception?.GetBaseException().Message}");
             var r = done.Result;
             return r with { Text = $"Job {job.Id} ({job.Tool}) finished after {Duration(job.Elapsed)}{(job.CancelRequested ? " (stop was requested)" : "")}:\n{r.Text}" };
         }
+        if (job.Abandoned)
+            return ToolResult.Error($"Job {job.Id} ({job.Tool}) was dropped before Revit started it{(job.DropReason is { } why ? ": " + why : ".")} Nothing was changed; call it again if it is still needed.");
         return ToolResult.Ok(new
         {
             job = job.Id, tool = job.Tool,
@@ -287,7 +355,7 @@ public sealed class CancelJobTool : IRevitTool
     internal static ToolResult Cancel(ToolArgs args)
     {
         var job = args.OptLong("job_id") is { } id ? Jobs.Find((int)id) : Jobs.Running ?? Jobs.Find(null);
-        if (job is null || job.Task is { IsCompleted: true })
+        if (job is null || job.Task is { IsCompleted: true } || job.Abandoned)
             return ToolResult.Ok(new { status = "nothing to cancel", job = job?.Id });
         job.CancelRequested = true;
         if (job.TryAbandon())

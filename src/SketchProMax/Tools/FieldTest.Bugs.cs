@@ -316,6 +316,33 @@ internal static partial class FieldTest
     /// The field test's breadcrumbs, in a folder of the test folder: a run stopped as if Revit closed during a step is found
     /// as left behind, its interrupted rows end with the crash row, Continue carries what ran and skips the crashed step.
     /// </summary>
+    /// <summary>
+    /// Bug 87: a call that never reached Revit (cut off by an update switch) refused every later call for 30 minutes and
+    /// cancel_job couldn't clear it. With jobs made here only (not Revit's own list): such a job stops counting after
+    /// <see cref="Bridge.Jobs.LostAfter"/> and ends with an error, one dropped by cancel_job or by the switch no longer
+    /// counts, its status says dropped, and a running one is never dropped.
+    /// </summary>
+    private static (string, string) LostJobProbe()
+    {
+        var now = DateTime.UtcNow;
+        var lost = new Bridge.Job { Id = 9001, Tool = "run_revit_query_code" };
+        if (!Bridge.Jobs.InTheWay(lost, now)) return Fail("a job just made, not yet handed to Revit, didn't count as in the way");
+        if (Bridge.Jobs.InTheWay(lost, now + Bridge.Jobs.LostAfter + TimeSpan.FromSeconds(1)))
+            return Fail("a job that never reached Revit still counted as in the way after " + Bridge.Jobs.LostAfter.TotalSeconds + " s");
+        if (lost.Task is not { IsCompleted: true } || !Bridge.Jobs.Status(lost).IsError) return Fail("the lost job didn't end with an error");
+        var cancelled = new Bridge.Job { Id = 9002, Tool = "run_revit_query_code" };
+        if (!cancelled.TryAbandon() || Bridge.Jobs.InTheWay(cancelled, now)) return Fail("a queued job dropped by cancel_job still counted as in the way");
+        var queued = new Bridge.Job { Id = 9003, Tool = "rename_elements" };
+        var running = new Bridge.Job { Id = 9004, Tool = "rename_elements" };
+        running.TryStart();
+        var done = Bridge.Jobs.Drop([queued, running], "Sketch ProMax was switching to an update.");
+        if (done != 1 || !queued.Abandoned || running.Abandoned) return Fail($"the switch dropped {done} job(s); only the queued one should go");
+        if (Bridge.Jobs.Status(queued) is not { IsError: true } st || !st.Text.Contains("switching to an update"))
+            return Fail("a job dropped by the switch didn't say why");
+        return Pass("a call that never reached Revit stops holding Revit after " + Bridge.Jobs.LostAfter.TotalSeconds + " s and ends with an error, " +
+                    "one dropped by cancel_job no longer counts, the update switch drops a queued call with its reason and never a running one");
+    }
+
     private static (string, string) JournalProbe(string testFolder)
     {
         var folder = Path.Combine(testFolder, "journal");

@@ -460,10 +460,16 @@ public sealed class BridgeServer
                 : $"{tool.Name} waited more than {(int)TurnWait.TotalMinutes} minutes for its turn in Revit, so nothing was run. Call it again to wait again.");
         }
         job.Key = key;
+        // From here until job.Task is set, an exception would leave a job that holds Revit "busy" for ever (bug 87: the
+        // dispatcher refuses work while Sketch ProMax switches to an update): it ends the job with the reason instead.
+        CancellationTokenSource queued;
+        Task<ToolResult> firstCall;
+        try
+        {
         // Dropped while still queued if the caller goes away or cancel_job asks; once started it runs to the end.
-        var queued = CancellationTokenSource.CreateLinkedTokenSource(ct, job.Abandon.Token);
+        queued = CancellationTokenSource.CreateLinkedTokenSource(ct, job.Abandon.Token);
         job.CanContinue = true;
-        var firstCall = _dispatcher.InvokeAsync(app =>
+        firstCall = _dispatcher.InvokeAsync(app =>
         {
             if (!job.TryStart()) return ToolResult.Error("Dropped before Revit started it; nothing was changed.");
             Jobs.Running = job;
@@ -534,6 +540,13 @@ public sealed class BridgeServer
                 }
             }
         }, queued.Token);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            if (turn is not null) JobTurns.Shared.Leave(turn);
+            ActivityLog.Note("job_not_queued", $"job {job.Id} ({tool.Name}): {ex.GetBaseException().Message}");
+            return job.FailBeforeStart(ex is InvalidOperationException ? ex.Message : $"Revit couldn't take the call ({ex.GetBaseException().Message}).");
+        }
         job.Task = Jobs.Follow(job, firstCall);
         // A parallel job's call holds its turn until its Revit job ends (a "still running" answer doesn't give it back),
         // and Revit gets its breather before the next job's call, after any call (the main chat's too).

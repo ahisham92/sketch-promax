@@ -352,6 +352,9 @@ public sealed class App : IExternalApplication
         CentralAccess.Unwatch(app);
         UnattendedDialogs.Unwatch(app);
         ChatMcp.Stop();
+        // A call still waiting for Revit can't move to the next core (each core has its own jobs and dispatcher): its
+        // caller is told now, instead of waiting for a dispatcher that is about to stop (bug 87).
+        try { Jobs.DropQueued("Sketch ProMax was switching to an update."); } catch (Exception) { }
         // A shared-mode core never opened the connection point, and the session file named after this Revit is Sketch ProMax's.
         if (!Shared) Bridge?.Stop(keepSession: true);
         Bridge = null;
