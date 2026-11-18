@@ -481,7 +481,7 @@ internal static class ClaudeCli
           column letters): read them there. A PDF too large to send whole comes split
           into parts, with a text file of its pages: find the pages in the text, then ask the parts that cover them with
           read_pdf_part, which reads a part in full. Without parts, read the text file and look at a page's drawings
-          with redline_read (file and page), which shows any PDF page as a picture, not only redlines. Read other files
+          with read_drawing (file and page, then cell to zoom), which shows any PDF page or scan as a picture in seconds and zooms until small text can be read. Read other files
           with the Read tool. For DWG or DXF files, pass the path to the Revit tools (for example import_cad); don't try to
           Read them.
         - Files: when the user wants something to keep or send (an Excel sheet, a Word report or letter, a PowerPoint

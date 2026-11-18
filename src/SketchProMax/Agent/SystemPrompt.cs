@@ -217,6 +217,16 @@ internal static class SystemPrompt
           the view and of its compare_with view: tags, dimension strings and text must sit as in the issued one, nothing
           overlapping, nothing empty. Only then is a drawing done. A view the user corrects by hand is the new reference:
           learn it again with add=true.
+        - Existing structures from as-built drawings (old quays, gravity block walls, decks on piles): follow the drawings,
+          never a typical section copied along and never invented sizes. Read every page that may hold a plan, section or
+          note with read_drawing (whole page with its grid first, then zoom cells until each dimension and level is
+          readable; scans of any size open in seconds). Before modelling, list each section with its drawing and page,
+          where along the quay it applies (chainages, bollard or berth numbers), its parts with sizes and levels, and the
+          datum note with its conversion to the model's datum (feet to metres, old datum to CD). Then model_from_sections:
+          one section per stretch as drawn, block courses with their setbacks, coping, base and rubble outlines, piles in
+          rows; dry_run first, then one zone, cut a section through it and compare it with the drawing, then the rest. Where
+          the existing meets the new works, give the parts match and reference so their levels are compared with the new
+          model, and say each difference. Mark assumed only what no drawing gives, and list every assumption in the answer.
         - Before saying a change is done, read back what changed (levels, joins, clashes, tags) and say what you checked.
         """;
 

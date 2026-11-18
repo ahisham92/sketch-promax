@@ -259,6 +259,34 @@ internal static class PdfEngine
         finally { if (page != IntPtr.Zero) Native.FPDF_ClosePage(page); }
     }
 
+    /// <summary>
+    /// Draws a part of page <paramref name="index"/>: the whole page drawn fullWidth x fullHeight pixels, of which the
+    /// width x height picture at offset (x, y) is kept. Used to zoom into big drawings (scans) without drawing the whole
+    /// page at full size. On the PDF thread.
+    /// </summary>
+    public static Picture DrawPart(Doc doc, int index, int fullWidth, int fullHeight, int x, int y, int width, int height)
+    {
+        Ready();
+        var page = Native.FPDF_LoadPage(doc.Handle, index);
+        if (page == IntPtr.Zero) throw new ArgumentException($"Page {index + 1} could not be opened.");
+        try
+        {
+            var bitmap = Native.FPDFBitmap_Create(width, height, 0);
+            if (bitmap == IntPtr.Zero) throw new OutOfMemoryException("Not enough memory to draw the page.");
+            try
+            {
+                Native.FPDFBitmap_FillRect(bitmap, 0, 0, width, height, 0xFFFFFFFF);
+                Native.FPDF_RenderPageBitmap(bitmap, page, -x, -y, fullWidth, fullHeight, 0, Annotations);
+                var stride = Native.FPDFBitmap_GetStride(bitmap);
+                var pixels = new byte[stride * height];
+                Marshal.Copy(Native.FPDFBitmap_GetBuffer(bitmap), pixels, 0, pixels.Length);
+                return new Picture(width, height, stride, pixels);
+            }
+            finally { Native.FPDFBitmap_Destroy(bitmap); }
+        }
+        finally { Native.FPDF_ClosePage(page); }
+    }
+
     private const int Annotations = 0x01; // FPDF_ANNOT: comments and stamps show, as in a viewer
 
     // ---- Writing ------------------------------------------------------------------------------------------------
