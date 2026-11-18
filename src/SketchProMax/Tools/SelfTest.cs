@@ -589,6 +589,7 @@ internal static partial class SelfTest
         new("ve_register", c => new { folder = c.Temp, excel = false }),
         new("export_pdf", c => new { view_ids = new[] { c.Sheet?.Id.Value ?? c.PlanId }, folder = c.Temp, file_name = "sheets" }) { Heavy = true },
         new("redline_read", c => new { file = SelfTestPage(c.Temp), pixel_width = 800 }) { Expect = r => r.GetProperty("page").GetInt32() == 1 ? null : "it did not read page 1" },
+        new("read_drawing", c => new { file = SelfTestPage(c.Temp), cell = "B2", pixel_width = 800 }) { Expect = r => r.GetProperty("pages").GetInt32() == 1 ? null : "it did not read the picture" },
         new("export_files", c => new { format = "dwg", view_ids = new[] { c.PlanId }, folder = c.Temp, file_name = "plan" }) { Heavy = true },
         new("export_bcf", c => new { issues = new[] { new { title = "Self-test issue", element_ids = c.Wall is null ? Array.Empty<long>() : [c.Wall.Id.Value] } }, folder = c.Temp, file_name = "issues" }),
         new("save_recipe", _ => new { name = "sketch-promax-self-test", description = "Self-test", steps = new[] { new { tool = "get_model_context", arguments = new { } } } }),
@@ -822,6 +823,17 @@ internal static partial class SelfTest
         new("work_progress", _ => new { action = "get" }),
         new("create_piles", c => new { points = new[] { c.At(0, 40000), c.At(3000, 40000) }, shape = "round", size = c.P(600), cutoff_level = c.P(0), toe_level = c.P(-12000), rake = 5 }),
         new("marine_structure", c => new { kind = "revetment", alignment = new[] { c.At(0, 50000), c.At(20000, 50000) }, @params = new { crest_level = c.P(3000), toe_level = c.P(-4000), crest_width = c.P(4000), slope = 2 } }),
+        new("model_from_sections", c => new
+        {
+            alignment = new[] { c.At(0, 55000), c.At(20000, 55000) },
+            sections = new object[]
+            {
+                new { name = "A", source = "self-test", parts = new object[] { new { name = "Coping", category = "walls", points = new[] { new[] { c.P(0), c.P(1000) }, new[] { c.P(1500), c.P(1000) }, new[] { c.P(1500), c.P(3000) }, new[] { c.P(0), c.P(3000) } } },
+                    new { name = "Blocks", category = "walls", base_level = c.P(-3000), courses = new[] { new { height = c.P(2000), width = c.P(3000), setback = c.P(0) }, new { height = c.P(2000), width = c.P(2000), setback = c.P(200) } } } } },
+                new { name = "B", source = "self-test", piles = new object[] { new { name = "Piles", offsets = new[] { c.P(1000), c.P(4000) }, spacing = c.P(4000), start = c.P(1000), diameter = c.P(600), top_level = c.P(2000), toe_level = c.P(-10000) } } },
+            },
+            zones = new object[] { new { section = "A", from = c.P(0), to = c.P(10000) }, new { section = "B", from = c.P(10000), to = c.P(20000) } },
+        }) { Expect = r => r.GetProperty("zonesBuilt").GetInt32() == 2 ? null : "it did not build both zones" },
         new("port_furniture", c => new { item = "bollard", edge = new[] { c.At(0, 60000), c.At(40000, 60000) }, cope_level = c.P(3000) }),
         new("design_vessel", c => new { preset = "hopper_barge", position = c.At(20000, 80000) }),
         new("vessel_collision_check", c => new { channel = new[] { c.At(0, 80000), c.At(40000, 80000) }, dwt = 5000, velocity = 2.5 }),
