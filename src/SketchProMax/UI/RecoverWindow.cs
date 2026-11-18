@@ -110,6 +110,21 @@ internal sealed class RecoverWindow : System.Windows.Window
         if (items.Count == 0) { _body.Children.Add(Wrap(Brand.Text("Nothing to bring back: no changes recorded since the model was last saved."))); return; }
         highlight ??= items[0].File;
         foreach (var (file, parsed) in items) _body.Children.Add(Row(file, parsed, target, string.Equals(file, highlight, StringComparison.OrdinalIgnoreCase)));
+        await OfferUncloud(target);
+    }
+
+    /// <summary>Clouds an earlier replay drew are still in the model: said, with Remove clouds.</summary>
+    private async Task OfferUncloud(Target target)
+    {
+        try
+        {
+            var clouds = await App.Dispatcher.InvokeAsync(app =>
+                app.ActiveUIDocument?.Document is { } doc && string.Equals(doc.PathName ?? "", target.Path, StringComparison.OrdinalIgnoreCase) ? ChangeWhere.Clouds(doc) : 0);
+            if (clouds == 0) return;
+            _body.Children.Add(Wrap(Brand.Text($"{Plural(clouds, "cloud")} from an earlier replay still mark{(clouds == 1 ? "s" : "")} what wasn't done.", Brand.K.Muted, 11)));
+            _body.Children.Add(CloudRow(null, target));
+        }
+        catch (Exception) { /* the clouds stay; nothing to offer */ }
     }
 
     /// <summary>What a file is, in a few words: "Since the last save", "Before the last save (saved 13:38)", "Not saved, closed 26 Oct 14:30".</summary>
@@ -258,6 +273,17 @@ internal sealed class RecoverWindow : System.Windows.Window
             try { await App.Dispatcher.InvokeAsync(_ => { ChangeKeeper.Close(outcome.Keeper); outcome.Keeper = null; return true; }); }
             catch (Exception ex) { LifelineBugs.Note("replay", "the kept-elements project couldn't be closed", target.Path, ex); }
         var opened = stoppedBecause is null ? await OpenViews(parsed, outcome, target) : 0;
+        // Where each thing that wasn't done is (its view, the grids next to it, its level), for the report and the list.
+        if (outcome.NotDone.Count > 0)
+            try
+            {
+                await App.Dispatcher.InvokeAsync(app =>
+                {
+                    if (app.ActiveUIDocument?.Document is { } doc && string.Equals(doc.PathName ?? "", target.Path, StringComparison.OrdinalIgnoreCase)) ChangeWhere.Find(doc, outcome);
+                    return true;
+                });
+            }
+            catch (Exception ex) { LifelineBugs.Note("replay", "the places of what wasn't done couldn't be read", target.Path, ex, "where"); }
         WriteReport(file, target.Path, outcome, done, total, opened, stoppedBecause);
         // Lifeline's bug list: Revit's errors first, then what replay can't put back yet (what to build next).
         foreach (var error in outcome.Errors) LifelineBugs.Note("replay error", error, target.Path);
@@ -266,7 +292,7 @@ internal sealed class RecoverWindow : System.Windows.Window
 
         var line = M.ReplaySummary(outcome.Set + outcome.Made + outcome.Deleted + outcome.Same, outcome.NotDone.Count, stoppedBecause is null ? null : $"Stopped after {done} of {total} because {stoppedBecause}. Press Replay again to carry on.");
         Say(line, stoppedBecause is null && outcome.NotDone.Count == 0 ? Brand.K.SuccessText : Brand.K.WarningText);
-        ShowNotDone(outcome);
+        ShowNotDone(outcome, target);
         // One alert, and only when something needs the user: all back is said in the window alone.
         if (outcome.NotDone.Count > 0 || stoppedBecause is not null)
             MessageBox.Show(this, line + TopReasons(outcome.NotDone), "Sketch ProMax: check the changes", MessageBoxButton.OK, MessageBoxImage.Warning);
@@ -277,10 +303,11 @@ internal sealed class RecoverWindow : System.Windows.Window
         string.Concat(M.GroupReasons(notDone, 4).Select(g => $"\n  {g.Items.Count} × {g.Reason}"));
 
     /// <summary>What wasn't done: one row for each reason with how many; List opens its items, each with Show (to the element, or to where it was in its view).</summary>
-    private void ShowNotDone(ChangeReplay.Outcome outcome)
+    private void ShowNotDone(ChangeReplay.Outcome outcome, Target target)
     {
         _results.Children.Clear();
         if (outcome.NotDone.Count == 0) return;
+        _results.Children.Add(CloudRow(outcome, target));
         foreach (var (reason, items) in M.GroupReasons(outcome.NotDone))
         {
             if (items.Count == 1) { _results.Children.Add(ItemRow(outcome, items[0])); continue; }
@@ -311,7 +338,64 @@ internal sealed class RecoverWindow : System.Windows.Window
         }
     }
 
-    /// <summary>One item that wasn't done, with Show when its place is known.</summary>
+    /// <summary>
+    /// "Cloud them": a revision cloud in the model at every place something wasn't done (on a revision of their own,
+    /// each with its reason as its comment), and "Remove clouds" to take them out again once they are dealt with.
+    /// </summary>
+    private UIElement CloudRow(ChangeReplay.Outcome? outcome, Target target)
+    {
+        var cloud = Brand.Button("Cloud them");
+        AutomationProperties.SetName(cloud, "Draw a cloud in the model where each thing wasn't done");
+        cloud.ToolTip = $"Draws a revision cloud where each thing wasn't done, on a revision named \"{M.CloudRevision}\". Remove clouds takes them out again.";
+        var remove = Brand.Button("Remove clouds");
+        AutomationProperties.SetName(remove, "Remove the clouds a replay drew");
+        async Task<T?> InModel<T>(Func<Document, T> act) where T : struct =>
+            await App.Dispatcher.InvokeAsync(app =>
+                app.ActiveUIDocument?.Document is { IsModifiable: false, IsReadOnly: false } doc && string.Equals(doc.PathName ?? "", target.Path, StringComparison.OrdinalIgnoreCase) ? act(doc) : (T?)null);
+        cloud.Click += async (_, _) =>
+        {
+            if (_busy || outcome is null) return;
+            cloud.IsEnabled = false;
+            try
+            {
+                Say("Drawing the clouds…", Brand.K.Muted);
+                if (await InModel(doc => ChangeWhere.Cloud(doc, outcome)) is not { } made) { Say($"Make {target.Title} the active model (with no command running), then press Cloud them again.", Brand.K.DangerText); return; }
+                Say(CloudText(made.Drawn, made.Views, made.NoPlace), made.Drawn > 0 ? Brand.K.SuccessText : Brand.K.WarningText);
+                if (made.Drawn > 0) remove.Visibility = System.Windows.Visibility.Visible;
+            }
+            catch (Exception ex) { Say("Couldn't draw the clouds: " + ex.Message, Brand.K.DangerText); LifelineBugs.Note("replay", "the clouds couldn't be drawn", target.Path, ex, "clouds"); }
+            finally { cloud.IsEnabled = true; }
+        };
+        remove.Click += async (_, _) =>
+        {
+            if (_busy) return;
+            remove.IsEnabled = false;
+            try
+            {
+                if (await InModel(ChangeWhere.Uncloud) is not { } gone) { Say($"Make {target.Title} the active model (with no command running), then press Remove clouds again.", Brand.K.DangerText); return; }
+                Say(gone == 1 ? "1 cloud removed." : $"{gone} clouds removed.", Brand.K.Muted);
+                remove.Visibility = System.Windows.Visibility.Collapsed;
+            }
+            catch (Exception ex) { Say("Couldn't remove the clouds: " + ex.Message, Brand.K.DangerText); LifelineBugs.Note("replay", "the clouds couldn't be removed", target.Path, ex, "clouds"); }
+            finally { remove.IsEnabled = true; }
+        };
+        if (outcome is null) cloud.Visibility = System.Windows.Visibility.Collapsed;
+        else remove.Visibility = System.Windows.Visibility.Collapsed;
+        var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 6, 0, 2) };
+        row.Children.Add(cloud);
+        row.Children.Add(remove);
+        return row;
+    }
+
+    /// <summary>What Cloud them did, in one line.</summary>
+    internal static string CloudText(int drawn, int views, int noPlace)
+    {
+        var rest = noPlace == 0 ? "" : $" {Plural(noPlace, "item")} {(noPlace == 1 ? "has" : "have")} no place to cloud (see the list).";
+        if (drawn == 0) return "No clouds drawn: none of these has a place in a view." ;
+        return $"{Plural(drawn, "cloud")} drawn in {Plural(views, "view")}, on the revision \"{M.CloudRevision}\".{rest}";
+    }
+
+    /// <summary>One item that wasn't done (with where it is under it), with Show when its place is known.</summary>
     private UIElement ItemRow(ChangeReplay.Outcome outcome, int i)
     {
         var text = Wrap(Brand.Text(outcome.NotDone[i], Brand.K.Text, 12));
@@ -327,7 +411,17 @@ internal sealed class RecoverWindow : System.Windows.Window
             DockPanel.SetDock(show, Dock.Right);
             row.Children.Add(show);
         }
-        row.Children.Add(text);
+        if (outcome.Where.TryGetValue(i, out var place))
+        {
+            var both = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+            text.Margin = new Thickness(0, 0, 8, 0);
+            both.Children.Add(text);
+            var placed = Brand.Text("Where: " + place, Brand.K.Muted, 11);
+            placed.Margin = new Thickness(0, 0, 8, 0);
+            both.Children.Add(placed);
+            row.Children.Add(both);
+        }
+        else row.Children.Add(text);
         return row;
     }
 
@@ -421,8 +515,8 @@ internal sealed class RecoverWindow : System.Windows.Window
             text.AppendLine($"Done {done} of {total}: {outcome.Set} set back, {outcome.Made} made again, {outcome.Deleted} deleted, {outcome.Same} already right, {opened} views opened.");
             if (stopped is not null) text.AppendLine($"Stopped because {stopped}.");
             text.AppendLine();
-            text.AppendLine(outcome.NotDone.Count > 0 ? "Not done:" : "Nothing left to do by hand.");
-            foreach (var n in outcome.NotDone) text.AppendLine("- " + n);
+            text.AppendLine(outcome.NotDone.Count > 0 ? "Not done (each with where it is, when that is known):" : "Nothing left to do by hand.");
+            for (var i = 0; i < outcome.NotDone.Count; i++) text.AppendLine(M.ReportLine(outcome.NotDone[i], outcome.Where.TryGetValue(i, out var where) ? where : null));
             File.WriteAllText(report, text.ToString());
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }

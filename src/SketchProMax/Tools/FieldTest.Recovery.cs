@@ -893,4 +893,246 @@ internal static partial class FieldTest
             t.Commit();
         }
     }
+
+    /// <summary>
+    /// A group edited after the last save: in the test project a group type of two walls is placed twice (as the model
+    /// was saved); the same group with a third wall between them (as it was edited) is kept as a copy next to the
+    /// change file; a replay gives the type what the copy has, so both groups have the three walls, each where the
+    /// edit put it, the type keeps its name, a tag and a dimension on the first group's walls are made again on the
+    /// walls that took their place, and the walls' own lines aren't played. Without the copy the replay says so. What
+    /// the test made is deleted.
+    /// </summary>
+    private static (string, string) RecoveryGroups(UIApplication app, State s)
+    {
+        if (TestDoc(app, s, out var why) is not { } doc) return Fail(why);
+        if (BasicWallType(doc) is not { } type) return Fail("the test project has no basic wall type with layers");
+        if (new FilteredElementCollector(doc).OfClass(typeof(Level)).FirstElement() is not Level level) return Fail("the test project has no level");
+        var folder = Path.Combine(s.Folder, "change-files-groups");
+        var problems = new List<string>();
+        var made = new List<ElementId>();
+        ChangeReplay.Outcome? outcome = null;
+        var name = "SPM lifeline edited group " + DateTime.Now.ToString("HHmmss");
+        Wall W(double x, double y) => Wall.Create(doc, Line.CreateBound(new XYZ(x, y, 0), new XYZ(x + 20, y, 0)), type.Id, level.Id, 10, 0, false, false);
+        static XYZ Start(Element wall) => ((LocationCurve)wall.Location).Curve.GetEndPoint(0);
+        static XYZ Origin(Group g) => ((LocationPoint)g.Location).Point;
+        try
+        {
+            Directory.CreateDirectory(folder);
+            Group first, second, edited;
+            Wall a;
+            using (var t = new Transaction(doc, "Field test: lifeline group"))
+            {
+                t.Start();
+                a = W(0, -300);
+                var b = W(0, -290);
+                doc.Regenerate();
+                first = doc.Create.NewGroup([a.Id, b.Id]);
+                first.GroupType.Name = name;
+                second = doc.Create.PlaceGroup(Origin(first) + new XYZ(60, 0, 0), first.GroupType);
+                // The group as it was edited: the same two walls and one between them (drawn apart, so it can be copied).
+                var (c, d, e) = (W(0, -400), W(0, -390), W(0, -395));
+                doc.Regenerate();
+                edited = doc.Create.NewGroup([c.Id, d.Id, e.Id]);
+                t.Commit();
+            }
+            made.AddRange([first.Id, second.Id, first.GroupType.Id, edited.Id, edited.GroupType.Id]);
+            // A tag and a dimension on the first group's walls (Revit takes them out with the walls a new type replaces).
+            var plan = new FilteredElementCollector(doc).OfClass(typeof(ViewPlan)).Cast<ViewPlan>().FirstOrDefault(v => !v.IsTemplate && v.ViewType == ViewType.FloorPlan && v.GenLevel?.Id == level.Id);
+            var noted = false;
+            if (plan is not null)
+                using (var t = new Transaction(doc, "Field test: lifeline group notes"))
+                {
+                    t.Start();
+                    try
+                    {
+                        var walls = first.GetMemberIds().Select(doc.GetElement).ToList();
+                        IndependentTag.Create(doc, plan.Id, new Reference(walls[0]), false, TagMode.TM_ADDBY_CATEGORY, TagOrientation.Horizontal, Start(walls[0]) + new XYZ(10, 2, 0));
+                        var between = new ReferenceArray();
+                        between.Append(new Reference(walls[0]));
+                        between.Append(new Reference(walls[1]));
+                        doc.Create.NewDimension(plan, Line.CreateBound(Start(walls[0]) + new XYZ(5, -2, 0), Start(walls[0]) + new XYZ(5, 12, 0)), between);
+                        noted = t.Commit() == TransactionStatus.Committed;
+                    }
+                    catch (Exception) { if (t.GetStatus() == TransactionStatus.Started) t.RollBack(); /* no wall tag in this template: the walls alone are checked */ }
+                }
+            int NotesOn(Group g)
+            {
+                if (plan is null) return 0;
+                var members = new HashSet<ElementId>(g.GetMemberIds());
+                // (By the view they are drawn in: what a view shows can't be asked of a view Revit hasn't drawn.)
+                return new FilteredElementCollector(doc).OfClass(typeof(IndependentTag)).Cast<IndependentTag>().Count(tag => tag.OwnerViewId == plan.Id && tag.GetTaggedLocalElementIds().Any(members.Contains))
+                    + new FilteredElementCollector(doc).OfClass(typeof(Dimension)).Cast<Dimension>().Count(d => d.OwnerViewId == plan.Id && d.References.Cast<Reference>().Count(r => members.Contains(r.ElementId)) == 2 && Math.Abs((d.Value ?? 0) - 10) < 0.01);
+            }
+            if (noted && NotesOn(first) != 2) { problems.Add("the test's tag and dimension on the group's walls couldn't be read back"); noted = false; }
+            var want = ChangeExtras.GroupShape(edited);
+            var saved = ChangeExtras.GroupShape(first);
+            if (want is null || saved is null) return Fail("what the test groups are made of couldn't be read");
+            if (want == saved) problems.Add("a group with a third wall reads the same as the group without it");
+            if (ChangeExtras.GroupShape(second) != saved) problems.Add("the same group placed again doesn't read the same");
+            var offsets = edited.GetMemberIds().Select(id => Start(doc.GetElement(id)) - Origin(edited)).ToList();
+            var editedMembers = string.Join(";", edited.GetMemberIds().Select(id => doc.GetElement(id).UniqueId));
+            var keptAs = ChangeKeeper.Keep(doc, folder, [edited]);
+            if (!keptAs.Contains(edited.UniqueId)) return Fail("the edited group wasn't copied into the kept-elements project");
+            var written = new List<M.Line>();
+            M.Line Take(Element e)
+            {
+                var line = ChangeFile.Capture(doc, e) ?? throw new InvalidOperationException($"{e.GetType().Name} wasn't captured");
+                written.Add(line);
+                return line;
+            }
+            // The lines an edit leaves: each group of the type with what it is made of now, one of them with the copy; and a wall of the group.
+            var firstLine = Take(first);
+            (firstLine.Extra ??= [])["gshape"] = want;
+            firstLine.Extra["gkept"] = "1";
+            firstLine.Extra["members"] = editedMembers;
+            var secondLine = Take(second);
+            (secondLine.Extra ??= [])["gshape"] = want;
+            secondLine.Extra["glike"] = first.UniqueId;
+            var wallLine = Take(a);
+            if (wallLine.Group != first.UniqueId) problems.Add("a wall in a group doesn't name its group in its line");
+            var (firstUnique, editedUnique, editedMemberList) = (first.UniqueId, edited.UniqueId, M.Members(firstLine));
+            using (var t = new Transaction(doc, "Field test: lifeline group, the edited one taken out"))
+            {
+                t.Start();
+                var editedType = edited.GroupType.Id;
+                doc.Delete(edited.Id);
+                foreach (var id in new FilteredElementCollector(doc).OfClass(typeof(Wall)).Where(w => Start(w).Y < -380 && Start(w).Y > -410).Select(w => w.Id).ToList()) doc.Delete(id);
+                if (doc.GetElement(editedType) is not null) doc.Delete(editedType);
+                t.Commit();
+            }
+            var model = new M.Line { Kind = M.Kinds.Model, At = DateTime.Now, Path = doc.PathName, Format = M.FormatNew };
+            var parsed = M.Read(written.Prepend(model).Select(M.Write));
+            // Without the copy: said, and nothing played on the group's walls.
+            var bare = new ChangeReplay.Outcome { KeptFolder = folder };
+            var barePlan = ChangeReplay.Plan(doc, parsed, bare);
+            if (!barePlan.Any(p => p.Act == ChangeReplay.Act.Skip && p.Why.Contains("edit the group again by hand"))) problems.Add("an edited group with no kept copy isn't listed to edit again by hand");
+            // With it (the copy stands for the first group as edited).
+            var map = ChangeKeeper.ReadMap(folder);
+            map[firstUnique] = map[editedUnique];
+            outcome = new ChangeReplay.Outcome { KeptFolder = folder, Kept = map };
+            var steps = ChangeReplay.Plan(doc, parsed, outcome);
+            if (steps.Count(p => p.Act == ChangeReplay.Act.Regroup) != 1) problems.Add($"the plan has {steps.Count(p => p.Act == ChangeReplay.Act.Regroup)} steps giving the type its edit back, not 1");
+            if (steps.Any(p => ReferenceEquals(p.Line, parsed.Elements.FirstOrDefault(l => l.Unique == wallLine.Unique)))) problems.Add("the line of a wall inside the edited group is played by itself");
+            ChangeReplay.Apply(doc, steps, outcome);
+            var notDone = " (" + string.Join("; ", outcome.NotDone) + ")";
+            if (outcome.NotDone.Count > 0) problems.Add("the replay listed" + notDone);
+            if (!first.IsValidObject || !second.IsValidObject) problems.Add("a group is gone after the replay");
+            else
+            {
+                made.Add(first.GroupType.Id);
+                foreach (var (g, label) in new[] { (first, "the first group"), (second, "the second group") })
+                {
+                    var members = g.GetMemberIds().Select(doc.GetElement).ToList();
+                    if (members.Count != 3) { problems.Add($"{label} has {members.Count} walls after the replay, not 3" + notDone); continue; }
+                    if (ChangeExtras.GroupShape(g) != want) problems.Add($"{label} isn't made of what the edit made it of");
+                    for (var i = 0; i < members.Count; i++)
+                        if (Start(members[i]).DistanceTo(Origin(g) + offsets[i]) > 0.001) problems.Add($"{label}: wall {i + 1} is {Start(members[i]).DistanceTo(Origin(g) + offsets[i]) * 304.8:0} mm from where the edit put it");
+                }
+                if (noted && NotesOn(first) != 2) problems.Add($"the tag and the dimension on the group's walls didn't both come back ({NotesOn(first)} of 2)" + notDone);
+                if (first.GroupType.Name != name) problems.Add($"the group type is named {first.GroupType.Name} after the replay");
+                if (first.GroupType.Id != second.GroupType.Id) problems.Add("the two groups aren't of one type after the replay");
+                var types = new FilteredElementCollector(doc).OfClass(typeof(GroupType)).Count(t => t.Name.StartsWith(name, StringComparison.Ordinal));
+                if (types != 1) problems.Add($"{types} group types of that name are in the model after the replay, not 1");
+                // What pointed at a wall of the group finds the wall that took its place.
+                for (var i = 0; i < editedMemberList.Count && first.GetMemberIds().Count == editedMemberList.Count; i++)
+                    if (!outcome.MadeFor.TryGetValue(editedMemberList[i], out var now) || now != first.GetMemberIds().ElementAt(i)) problems.Add($"wall {i + 1} of the group isn't known as the wall that took its place");
+                // Played again, there is nothing to give back.
+                if (ChangeReplay.Plan(doc, parsed, new ChangeReplay.Outcome { KeptFolder = folder, Kept = map }).Any(p => p.Act == ChangeReplay.Act.Regroup)) problems.Add("a second replay would give the type its edit again");
+            }
+            return problems.Count == 0
+                ? Pass("a group edited after the save (a wall added inside it) came back from its kept copy in both groups of the type, each wall where the edit put it, under the type's name" + (noted ? ", with the tag and the dimension on its walls" : " (no tag could be placed in this template: tags not checked)") + "; without the copy the replay says to edit it by hand")
+                : Fail(string.Join("; ", problems));
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException) { return Fail(string.Join("; ", problems.Append(ex.Message))); }
+        finally
+        {
+            ChangeKeeper.Close(outcome?.Keeper);
+            using var t = new Transaction(doc, "Field test: lifeline tidy up");
+            t.Start();
+            foreach (var id in made.Distinct().OrderBy(id => doc.GetElement(id) switch { Group => 0, ElementType => 2, null => 3, _ => 1 }).ToList())
+                try
+                {
+                    var members = doc.GetElement(id) is Group g ? g.GetMemberIds().ToList() : [];
+                    doc.Delete(id);
+                    foreach (var m in members) if (doc.GetElement(m) is not null) doc.Delete(m);
+                }
+                catch (Exception) { /* gone already */ }
+            t.Commit();
+        }
+    }
+
+    /// <summary>
+    /// Where what a replay couldn't do is: in the test project, with two crossing grids, a wall that is in the model
+    /// and a column that is not (only its line says where it was) are listed as not done; each gets its plan view, the
+    /// grids next to it and its level in words, the report line carries them, Cloud them draws a cloud at each in that
+    /// plan on a revision of its own with the reason as its comment, and Remove clouds takes clouds and revision out.
+    /// </summary>
+    private static (string, string) RecoveryWhere(UIApplication app, State s)
+    {
+        if (TestDoc(app, s, out var why) is not { } doc) return Fail(why);
+        if (BasicWallType(doc) is not { } type) return Fail("the test project has no basic wall type with layers");
+        var plan = new FilteredElementCollector(doc).OfClass(typeof(ViewPlan)).Cast<ViewPlan>().FirstOrDefault(v => !v.IsTemplate && v.ViewType is ViewType.FloorPlan or ViewType.EngineeringPlan && v.GenLevel is not null);
+        if (plan?.GenLevel is not { } level) return Fail("the test project has no plan view of a level");
+        var problems = new List<string>();
+        var made = new List<ElementId>();
+        var stamp = DateTime.Now.ToString("HHmmss");
+        var (gridA, gridB) = ("LW" + stamp, "LX" + stamp);
+        var revisionsBefore = new FilteredElementCollector(doc).OfClass(typeof(Revision)).GetElementCount();
+        try
+        {
+            Wall wall;
+            using (var t = new Transaction(doc, "Field test: lifeline where"))
+            {
+                t.Start();
+                var a = Grid.Create(doc, Line.CreateBound(new XYZ(-500, -520, 0), new XYZ(-500, -480, 0)));
+                var b = Grid.Create(doc, Line.CreateBound(new XYZ(-520, -500, 0), new XYZ(-480, -500, 0)));
+                a.Name = gridA;
+                b.Name = gridB;
+                wall = Wall.Create(doc, Line.CreateBound(new XYZ(-499, -499, level.Elevation), new XYZ(-489, -499, level.Elevation)), type.Id, level.Id, 10, 0, false, false);
+                t.Commit();
+                made.AddRange([a.Id, b.Id, wall.Id]);
+            }
+            var wallLine = ChangeFile.Capture(doc, wall) ?? throw new InvalidOperationException("the wall wasn't captured");
+            var goneLine = new M.Line { Kind = M.Kinds.State, At = DateTime.Now, Unique = Guid.NewGuid().ToString(), Category = "Structural Columns", What = "instance", P = new M.Xyz(-501, -502, level.Elevation), LevelUnique = level.UniqueId, Level = level.Name };
+            var viewLine = new M.Line { Kind = M.Kinds.State, At = DateTime.Now, Unique = plan.UniqueId, Category = "Views", What = "view", Name = plan.Name };
+            var outcome = new ChangeReplay.Outcome();
+            outcome.Missed(wallLine, M.Describe(wallLine) + ": the test says this wall wasn't set back");
+            outcome.Missed(goneLine, M.Describe(goneLine) + ": the test says this column wasn't made again");
+            outcome.Missed(viewLine, M.Describe(viewLine) + ": the test says this view wasn't set back");
+            outcome.NotDone.Add("something with no line of its own");
+            ChangeWhere.Find(doc, outcome);
+            foreach (var i in new[] { 0, 1 })
+            {
+                if (!outcome.Where.TryGetValue(i, out var where)) { problems.Add($"entry {i + 1} has no place"); continue; }
+                if (!where.Contains("view \"") || !where.Contains(gridA) || !where.Contains(gridB) || !where.Contains("level " + level.Name)) problems.Add($"entry {i + 1} is placed as: {where}");
+            }
+            if (!outcome.Where.TryGetValue(2, out var ofView) || !ofView.Contains(plan.Name)) problems.Add("a view that wasn't set back isn't named as its own place");
+            if (outcome.Where.ContainsKey(3)) problems.Add("an entry with no line got a place");
+            if (outcome.Where.TryGetValue(0, out var said) && !M.ReportLine(outcome.NotDone[0], said).Contains("where: " + said)) problems.Add("the report line doesn't carry the place");
+            var (drawn, views, noPlace) = ChangeWhere.Cloud(doc, outcome);
+            if (drawn != 2 || views < 1 || noPlace != 2) problems.Add($"Cloud them drew {drawn} clouds in {views} views and left {noPlace} with no place (2, 1 or 2, and 2 were expected)");
+            var clouds = new FilteredElementCollector(doc).OfClass(typeof(RevisionCloud)).Cast<RevisionCloud>()
+                .Where(c => doc.GetElement(c.RevisionId) is Revision { Description: M.CloudRevision }).ToList();
+            if (clouds.Count != drawn || ChangeWhere.Clouds(doc) != drawn) problems.Add($"{clouds.Count} clouds are on the revision \"{M.CloudRevision}\", not {drawn}");
+            if (clouds.Count > 0 && !clouds.Any(c => c.get_Parameter(BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS)?.AsString() == "the test says this wall wasn't set back")) problems.Add("no cloud has its reason as its comment");
+            foreach (var c in clouds)
+                if (c.get_BoundingBox(doc.GetElement(c.OwnerViewId) as View) is { } box && (box.Max.X < -502 || box.Min.X > -489 || box.Max.Y < -502 || box.Min.Y > -499)) problems.Add("a cloud isn't around its place");
+            var gone = ChangeWhere.Uncloud(doc);
+            if (gone != drawn || ChangeWhere.Clouds(doc) != 0) problems.Add($"Remove clouds took out {gone} of {drawn}");
+            var revisionsAfter = new FilteredElementCollector(doc).OfClass(typeof(Revision)).GetElementCount();
+            if (revisionsAfter != Math.Max(1, revisionsBefore)) problems.Add($"the model has {revisionsAfter} revisions after Remove clouds, {revisionsBefore} before the clouds");
+            return problems.Count == 0
+                ? Pass("a wall in the model and a column that is gone, listed as not done, are each named with their plan view, the two grids next to them and their level; a cloud is drawn at each with its reason, and Remove clouds takes clouds and revision out")
+                : Fail(string.Join("; ", problems));
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException) { return Fail(string.Join("; ", problems.Append(ex.Message))); }
+        finally
+        {
+            try { ChangeWhere.Uncloud(doc); } catch (Exception) { }
+            using var t = new Transaction(doc, "Field test: lifeline tidy up");
+            t.Start();
+            foreach (var id in made) try { if (doc.GetElement(id) is not null) doc.Delete(id); } catch (Exception) { }
+            t.Commit();
+        }
+    }
 }

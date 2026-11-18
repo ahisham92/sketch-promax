@@ -351,6 +351,40 @@ internal static class RecoveryTests
         check("lifeline: a dimension that measures other things is made again; images and groups of new types come back", Src("Revit", "ChangeReplay.cs").Contains("ChangeNotes.MustRemake(doc, element, line, Remap(doc, outcome))")
             && Src("Revit", "ChangeNotes.cs").Contains("ImageInstance.Create(doc, ViewOf(), imageType.Id,") && Src("Revit", "ChangeViews.cs").Contains("doc.Create.NewGroup(ids)"), "");
         check("lifeline: copies are kept soon after a change", M.KeepEveryMs is > 0 and <= 20000, M.KeepEveryMs.ToString());
+        // ---- A group edited after the last save; where what wasn't done is ----
+        (string, double[]) Wall(double a, double b) => ("Walls|W200", [a, b, 20]);
+        var twoWalls = M.GroupShape([Wall(11.18, 11.18), Wall(11.18, 11.18)]);
+        check("lifeline: a group reads the same moved, turned or listed in another order, and differently once a member moved, came or went",
+            twoWalls == M.GroupShape([("Walls|W200", [20, 11.18, 11.18]), Wall(11.181, 11.184)]) && twoWalls.StartsWith("2:")
+            && twoWalls != M.GroupShape([Wall(11.18, 11.18), Wall(12.5, 11.18)]) && twoWalls != M.GroupShape([Wall(11.18, 11.18), Wall(11.18, 11.18), Wall(10, 10)])
+            && twoWalls != M.GroupShape([Wall(11.18, 11.18), ("Walls|W300", [11.18, 11.18, 20])]), twoWalls);
+        var editedOwn = new M.Line { Kind = M.Kinds.State, At = at, Unique = "g7", What = "group", Extra = new() { ["gshape"] = "3:ab", ["gkept"] = "1" } };
+        var editedLike = new M.Line { Kind = M.Kinds.State, At = at, Unique = "g8", What = "group", Extra = new() { ["gshape"] = "3:ab", ["glike"] = "g7" } };
+        check("lifeline: an edited group's line names its kept copy (its own, or the group of the type that was copied)", M.GroupEdit(editedOwn) == ("g7", "3:ab") && M.GroupEdit(editedLike) == ("g7", "3:ab")
+            && M.GroupEdit(groupLine) is null && M.GroupEdit(new M.Line { Kind = M.Kinds.State, At = at, Unique = "w", What = "wall", Extra = new() { ["gshape"] = "x", ["gkept"] = "1" } }) is null
+            && M.KeptInUse([M.Write(editedOwn)]) && !M.KeptInUse([M.Write(editedLike)]), "");
+        check("lifeline: a group edited after the save is kept as a copy and its type given back from it, members not played one by one",
+            Src("Revit", "ChangeFile.cs").Contains("line.Extra[\"gkept\"] = \"1\";") && Src("Revit", "ChangeFile.cs").Contains("if (!(known && noted.Shape == made && noted.Unique is null))")
+            && Src("Revit", "ChangeFile.cs").Contains("model.GroupShapes[type] = (model.GroupShapes[type].Shape, null);")
+            && Src("Revit", "ChangeReplay.cs").Contains("regroup.Add(new(l, Act.Regroup, \"\"));") && Src("Revit", "ChangeReplay.cs").Contains("no copy of the edited group was kept: edit the group again by hand")
+            && Src("Revit", "ChangeKeeper.cs").Contains("foreach (var one in placed) one.GroupType = fresh;"), "");
+        check("lifeline: giving a group type its edit back never takes a tag or dimension with it", Src("Revit", "ChangeKeeper.cs").Contains("var lost = before.Count(id => doc.GetElement(id) is null && !again.Contains(id));")
+            && Src("Revit", "ChangeReplay.cs").Contains("foreach (var on in member.GetDependentElements(noted))") && Src("Revit", "ChangeReplay.cs").Contains("made = Make(doc, note.Value, outcome);")
+            && Src("Revit", "ChangeKeeper.cs").Contains("if (lost > 0) throw new InvalidOperationException("), "");
+        var gridLines = new List<(string, M.Xyz, M.Xyz)> { ("A", new(0, 0, 0), new(0, 100, 0)), ("B", new(30, 0, 0), new(30, 100, 0)), ("1", new(-10, 0, 0), new(50, 0, 0)), ("2", new(-10, 40, 0), new(50, 40, 0)) };
+        check("lifeline: a place is named by the nearest grid and the nearest one crossing it", M.NearGrids(new(28, 37, 0), gridLines) == "B / 2" && M.NearGrids(new(2, 14, 0), gridLines) == "A / 1"
+            && M.NearGrids(new(31, 500, 0), gridLines) == "B / 2" && M.NearGrids(new(5, 5, 0), gridLines.Take(2).ToList()) == "A" && M.NearGrids(new(5, 5, 0), []) == "", M.NearGrids(new(28, 37, 0), gridLines));
+        check("lifeline: where something wasn't done is said as view, grids and level", M.WhereText("Level 1", "B / 2", "L1") == "view \"Level 1\", near grids B / 2, level L1" && M.WhereText(null, "A", null) == "near grid A"
+            && M.WhereText(null, "", null) == "" && M.ReportLine("17:42 Walls: W1 (added or changed): why", "view \"Level 1\"").Replace("\r", "") == "- 17:42 Walls: W1 (added or changed): why\n    where: view \"Level 1\""
+            && M.ReportLine("x", null) == "- x" && M.ReportLine("x", "") == "- x", M.WhereText("Level 1", "B / 2", "L1"));
+        check("lifeline: a cloud around a point is about 6 mm on paper, never under half a metre", M.CloudHalf(100) == 2 && M.CloudHalf(1) == 1.5 && M.CloudHalf(500) == 10 && M.CloudRevision == "Lifeline: not done", "");
+        check("lifeline: the replay's report and list say where each thing that wasn't done is, and clouds are drawn only when asked",
+            Src("UI", "RecoverWindow.cs").Contains("ChangeWhere.Find(doc, outcome);") && Src("UI", "RecoverWindow.cs").Contains("M.ReportLine(outcome.NotDone[i], outcome.Where.TryGetValue(i, out var where) ? where : null)")
+            && Src("UI", "RecoverWindow.cs").Contains("Brand.Button(\"Cloud them\")") && Src("UI", "RecoverWindow.cs").Contains("Brand.Button(\"Remove clouds\")")
+            && Src("UI", "RecoverWindow.cs").Contains("\"Where: \" + place") && Src("Revit", "ChangeWhere.cs").Contains("RevisionCloud.Create(doc, view, revision.Id, Around(view, at, spot.Box))"), "");
+        // Asking a view for a box makes Revit draw the view (minutes on a big plan): the report never does, only Cloud them.
+        check("lifeline: finding the places never makes Revit draw a view", Src("Revit", "ChangeWhere.cs").Contains("if (view is null || draw) box = element.get_BoundingBox(view);")
+            && Src("Revit", "ChangeWhere.cs").Contains("try { if (Of(doc, line, outcome, grids, plans).Text is { Length: > 0 } text) outcome.Where[i] = text; }"), "");
         check("recovery: Help > Open folders lists the change files", SketchProMax.Bugs.UserFolders.List().Any(f => f.Title == "Change files" && f.Path.EndsWith(Path.Combine("Sketch ProMax", "Change files"))), "");
     }
 }

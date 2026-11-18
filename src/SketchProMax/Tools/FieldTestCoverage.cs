@@ -584,6 +584,10 @@ internal static class FieldTestCoverage
             "in the test project, with a kept-elements project in a temporary folder: a wall is copied into it (as an in-place family, curved stairs or an extrusion roof would be), deleted, and copied back where it was by a replay; a wall schedule with a heading, a sorting row and a filter, deleted, is made again with all three; the kept-elements project is closed again and what the test made is deleted"),
         new("recovery.extras", Central, "Replay puts joins, view graphics, styles, filters, splines and new groups back", How.Probe, "",
             "in the test project, with a kept-elements project in a temporary folder: two joined walls are unjoined; a line style, a view filter, a spline in a drafting view and a group of a new type are deleted; a 3D view's hidden category, hidden wall, halftone wall and switched-off filter are cleared; a replay joins the walls, makes the style with its weight and colour, copies the filter back, sets the view's graphics, draws the spline as a spline and puts the group together under its name; what the test made is deleted"),
+        new("recovery.groups", Central, "Replay puts an edit inside a group back", How.Probe, "",
+            "in the test project, with a kept-elements project in a temporary folder: a group type of two walls is placed twice; the group as edited (a third wall inside it) is kept as a copy; a replay gives the type what the copy has, so both groups have the three walls where the edit put them, under the type's name, a tag and a dimension on the first group's walls are made again on the walls that took their place, and the walls' own lines aren't played; without the copy the replay lists the group to edit again by hand; what the test made is deleted afterwards"),
+        new("recovery.where", Central, "What a replay couldn't do is named with its view and place, and can be clouded", How.Probe, "",
+            "in the test project, with two crossing grids: a wall that is in the model and a column that is gone are listed as not done; each is named with its plan view, the two grids next to it and its level, and the report line carries that; Cloud them draws a cloud at each on a revision of its own with the reason as its comment; Remove clouds takes the clouds and the revision out; what the test made is deleted afterwards"),
         new("recovery.bugs", Central, "Lifeline keeps a list of its problems", How.Probe, "",
             "with the list sent to a test folder: a problem noted twice is written once, as one line (when, version, Revit, model, where, what) under the file's header"),
         new("recovery.ui", Central, "Recover after Revit closes by itself, on a real shared model", How.Manual, "", "needs Revit to close by itself and a real central model",
@@ -824,6 +828,7 @@ internal static class FieldTestCoverage
         new(83, ["share.pack"], "a shared pack whose folder in the update folder was emptied is published again by itself, and an installed copy follows it"),
         new(84, ["chat.open_model_ui"], "opening a model over a detached copy says that the copy can only be brought back by clicking its tab; asking for that copy afterwards says the same, not Revit's error"),
         new(85, ["chat.submission_format_ui"], "the check of a berth whose matchlines run longer than its parts lists no matchline line"),
+        new(86, ["recovery.groups", "recovery.where"], "an edit inside a group comes back in a replay from the group's kept copy, in every group of the type; what a replay couldn't do is named with its view, grids and level, and can be clouded"),
     ];
 
     /// <summary>
