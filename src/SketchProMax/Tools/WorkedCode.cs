@@ -19,10 +19,14 @@ namespace SketchProMax.Tools;
 internal static class WorkedCode
 {
     /// <summary>
-    /// The most entries kept (the oldest unused go first), the shortest code worth keeping, the longest kept. 400 filled
-    /// in two days on 19 Nov 2026 (every adapted copy was a new entry), so older code was being dropped.
+    /// The shortest code worth keeping and the longest kept. There is no limit on how many are kept (the owner, 19 Nov
+    /// 2026: "why don't we have something unlimited ... sorted so the search becomes easier"): a small index is searched
+    /// and each code is a file of its own, in a folder per topic (<see cref="Topic"/>).
     /// </summary>
-    public const int MaxEntries = 3000, MinLength = 150, MaxCode = 20000;
+    public const int MinLength = 150, MaxCode = 20000;
+
+    /// <summary>How many numbers sum up a code's shape in the index (<see cref="Signature"/>), to compare without reading it.</summary>
+    public const int SignatureSize = 32;
 
     /// <summary>
     /// How alike two pieces of code must be (shared runs of five words, 0 to 1) for the newer to count as the older one
@@ -43,6 +47,13 @@ internal static class WorkedCode
         public DateTime Last { get; set; }
         /// <summary>How many times code of this shape worked.</summary>
         public int Uses { get; set; }
+        /// <summary>What it works on, from the Revit categories and classes in its code ("Structural Columns", "Floors"): its folder.</summary>
+        public string Topic { get; set; } = "";
+        /// <summary>The shape of its code in a few numbers (<see cref="Signature"/>) and how many runs of five words it has.</summary>
+        public uint[]? Sig { get; set; }
+        public int Size { get; set; }
+        /// <summary>Changed since read: its code file is written with the index.</summary>
+        [System.Text.Json.Serialization.JsonIgnore] public bool Dirty { get; set; }
     }
 
     internal sealed record Match(Entry Entry, int Shared, double Score);
@@ -57,8 +68,7 @@ internal static class WorkedCode
     /// Keeps one run that worked in <paramref name="entries"/>; the entry, or null when it isn't worth keeping (a short
     /// snippet, no description, too long). Code of a shape already kept replaces the older code and counts as one more use.
     /// </summary>
-    public static Entry? Keep(List<Entry> entries, string code, string description, string tool, bool ownTransactions, string model, DateTime now,
-        Dictionary<Entry, HashSet<string>>? cache = null)
+    public static Entry? Keep(List<Entry> entries, string code, string description, string tool, bool ownTransactions, string model, DateTime now)
     {
         code = (code ?? "").Trim();
         description = (description ?? "").Trim();
@@ -66,13 +76,13 @@ internal static class WorkedCode
         var shape = CodeRepeats.Shape(code);
         if (shape.Length < MinLength) return null;
         var id = CodeRepeats.Key(shape).Substring(0, 8);
-        var entry = entries.FirstOrDefault(e => e.Id == id) ?? Adapted(entries, shape, description, tool, cache);
-        if (entry is null)
-        {
-            if (entries.Count >= MaxEntries) entries.Remove(entries.OrderBy(e => e.Uses > 1).ThenBy(e => e.Last).First());
-            entries.Add(entry = new Entry { Id = id, First = now });
-        }
-        cache?.Remove(entry);
+        var shingles = Shingles(shape);
+        var entry = entries.FirstOrDefault(e => e.Id == id) ?? Adapted(entries, shingles, description, tool);
+        if (entry is null) entries.Add(entry = new Entry { Id = id, First = now });
+        entry.Sig = Signature(shingles);
+        entry.Size = shingles.Count;
+        entry.Topic = Topic(code, description);
+        entry.Dirty = true;
         entry.Description = description;
         entry.Code = code;
         entry.Tool = tool;
@@ -89,25 +99,28 @@ internal static class WorkedCode
     /// and changed a little (one more filter, other ids) was kept as a new entry each time: 400 entries, nearly all "worked
     /// 1x", so nothing ever reached the three uses that make a ready-made tool.
     /// </summary>
-    internal static Entry? Adapted(List<Entry> entries, string shape, string description, string tool, Dictionary<Entry, HashSet<string>>? cache = null)
+    internal static Entry? Adapted(List<Entry> entries, HashSet<string> mine, string description, string tool)
     {
-        var mine = Shingles(shape);
         if (mine.Count == 0) return null;
+        var sig = Signature(mine);
         var words = Words(description);
         Entry? best = null;
         var bestScore = SameWork;
         foreach (var e in entries)
         {
             if (!e.Tool.Equals(tool, StringComparison.Ordinal) || (words.Count > 0 && !KnownWords(e.Description).Overlaps(words))) continue;
-            if (cache is null || !cache.TryGetValue(e, out var theirs))
+            // An entry kept before signatures: its signature from its code, once.
+            if (e.Sig is not { Length: SignatureSize } && e.Code.Length > 0)
             {
-                theirs = Known(e.Code);
-                if (cache is not null) cache[e] = theirs;
+                var theirs = Known(e.Code);
+                (e.Sig, e.Size) = (Signature(theirs), theirs.Count);
             }
-            // Too different in size to be alike enough: skip the count.
-            if (theirs.Count == 0 || Math.Min(theirs.Count, mine.Count) < SameWork * Math.Max(theirs.Count, mine.Count)) continue;
-            var shared = mine.Count(theirs.Contains);
-            var score = shared / (double)(mine.Count + theirs.Count - shared);
+            if (e.Sig is not { Length: SignatureSize } other || e.Size == 0) continue;
+            // Too different in size to be alike enough: skip it.
+            if (Math.Min(e.Size, mine.Count) < SameWork * Math.Max(e.Size, mine.Count)) continue;
+            var same = 0;
+            for (var i = 0; i < SignatureSize; i++) if (sig[i] == other[i]) same++;
+            var score = same / (double)SignatureSize;
             if (score >= bestScore) (best, bestScore) = (e, score);
         }
         return best;
@@ -121,7 +134,7 @@ internal static class WorkedCode
         lock (Seen)
         {
             if (Seen.TryGetValue(code, out var known)) return known;
-            if (Seen.Count > 2 * MaxEntries) Seen.Clear();
+            if (Seen.Count > 5000) Seen.Clear();
             return Seen[code] = Shingles(CodeRepeats.Shape(code));
         }
     }
@@ -133,12 +146,68 @@ internal static class WorkedCode
         lock (SeenWords)
         {
             if (SeenWords.TryGetValue(description, out var known)) return known;
-            if (SeenWords.Count > 2 * MaxEntries) SeenWords.Clear();
+            if (SeenWords.Count > 50000) SeenWords.Clear();
             return SeenWords[description] = Words(description);
         }
     }
 
     private static readonly Regex Token = new(@"[A-Za-z_][A-Za-z0-9_]*|\d+|[^\sA-Za-z0-9_]", RegexOptions.Compiled);
+
+    /// <summary>
+    /// The runs of five words of a code in <see cref="SignatureSize"/> numbers (MinHash): two codes agree in about as
+    /// many of them as the share of runs they have in common, so code is compared from the index without being read.
+    /// </summary>
+    internal static uint[] Signature(HashSet<string> shingles)
+    {
+        var sig = Enumerable.Repeat(uint.MaxValue, SignatureSize).ToArray();
+        foreach (var s in shingles)
+        {
+            var h = Fnv(s);
+            for (var i = 0; i < SignatureSize; i++)
+            {
+                var v = Mix(h ^ (0x9E3779B97F4A7C15UL * (ulong)(i + 1)));
+                if (v < sig[i]) sig[i] = v;
+            }
+        }
+        return sig;
+    }
+
+    private static ulong Fnv(string s)
+    {
+        var h = 14695981039346656037UL;
+        foreach (var c in s) { h ^= c; h *= 1099511628211UL; }
+        return h;
+    }
+
+    private static uint Mix(ulong z)
+    {
+        z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9UL;
+        z = (z ^ (z >> 27)) * 0x94D049BB133111EBUL;
+        return (uint)((z ^ (z >> 31)) >> 32);
+    }
+
+    private static readonly Regex Category = new(@"OST_([A-Za-z]+)", RegexOptions.Compiled);
+    private static readonly Regex OfType = new(@"typeof\(\s*(Floor|Wall|FamilyInstance|View\w*|ViewSheet|Grid|Level|RevitLinkInstance|ImportInstance|CurveElement|DetailLine|TextNote|IndependentTag|Dimension|SpotDimension|Rebar|Pipe|Duct|RoofBase|Ceiling|Room|Group|FilledRegion|ScheduleSheetInstance|Viewport)\s*\)", RegexOptions.Compiled);
+
+    /// <summary>
+    /// What a code works on, for its folder and the index: the Revit category it names most ("OST_StructuralColumns" is
+    /// "Structural Columns"), else the Revit class it collects ("Floor" is "Floors"), else "General".
+    /// </summary>
+    public static string Topic(string code, string description = "")
+    {
+        var named = Category.Matches(code ?? "").Cast<System.Text.RegularExpressions.Match>().Select(m => m.Groups[1].Value)
+            .GroupBy(c => c).OrderByDescending(g => g.Count()).Select(g => g.Key).FirstOrDefault();
+        if (named is { Length: > 0 }) return Spaced(named);
+        if (OfType.Match(code ?? "") is { Success: true } t)
+        {
+            var c = t.Groups[1].Value;
+            return c switch { "FamilyInstance" => "Family Instances", "RoofBase" => "Roofs", "ImportInstance" => "CAD Imports", "RevitLinkInstance" => "Revit Links",
+                "Viewport" => "Viewports", _ when c.StartsWith("View", StringComparison.Ordinal) => "Views and Sheets", _ => Spaced(c) + "s" };
+        }
+        return "General";
+    }
+
+    private static string Spaced(string name) => Regex.Replace(name, "(?<=[a-z])(?=[A-Z])", " ");
 
     /// <summary>Runs of five tokens of the code's shape, for <see cref="Adapted"/>.</summary>
     internal static HashSet<string> Shingles(string shape)
@@ -235,9 +304,65 @@ internal static class WorkedCode
                ". When this needs code, get it with worked_code (action=get, id) and adapt it instead of writing it again.]";
     }
 
-    // ---- The file on this PC -------------------------------------------------------------------------------------------
+    // ---- The library on this PC --------------------------------------------------------------------------------------
 
-    /// <summary><see cref="Keep"/> against the file on this PC. Never throws: keeping must not break a call.</summary>
+    /// <summary>The library's folder: index.json (what is searched) and a folder per topic with one .cs file per code.</summary>
+    public static string Folder => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "SketchProMax", "worked-code");
+
+    private static string IndexFile => Path.Combine(Folder, "index.json");
+
+    /// <summary>The code of a kept entry: in memory, else its file (its topic's folder, else wherever it is). "" when gone.</summary>
+    public static string CodeOf(Entry e)
+    {
+        if (e.Code.Length > 0) return e.Code;
+        try
+        {
+            var file = CodeFile(Folder, e);
+            if (File.Exists(file)) return File.ReadAllText(file);
+            if (Directory.Exists(Folder) && Directory.EnumerateFiles(Folder, e.Id + ".cs", SearchOption.AllDirectories).FirstOrDefault() is { } found)
+                return File.ReadAllText(found);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        return "";
+    }
+
+    internal static string CodeFile(string folder, Entry e)
+    {
+        var topic = new string((e.Topic.Length > 0 ? e.Topic : "General").Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '_' : c).ToArray());
+        return Path.Combine(folder, topic, e.Id + ".cs");
+    }
+
+    /// <summary>Writes the code files of changed entries, then the index (no code in it). Under <see cref="Gate"/>.</summary>
+    internal static void Save(string folder, List<Entry> entries)
+    {
+        Directory.CreateDirectory(folder);
+        foreach (var e in entries.Where(e => e.Dirty && e.Code.Length > 0))
+        {
+            var file = CodeFile(folder, e);
+            Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+            File.WriteAllText(file, e.Code, new UTF8Encoding(false));
+            e.Dirty = false;
+        }
+        var index = entries.Select(e => new Entry
+        {
+            Id = e.Id, Description = e.Description, Tool = e.Tool, OwnTransactions = e.OwnTransactions, Model = e.Model, First = e.First, Last = e.Last,
+            Uses = e.Uses, Topic = e.Topic, Sig = e.Sig, Size = e.Size,
+        }).OrderBy(e => e.Topic, StringComparer.Ordinal).ThenByDescending(e => e.Uses).ToList();
+        var path = Path.Combine(folder, "index.json");
+        var temp = path + ".tmp";
+        File.WriteAllText(temp, JsonSerializer.Serialize(index), new UTF8Encoding(false));
+        if (File.Exists(path)) File.Replace(temp, path, null);
+        else File.Move(temp, path);
+    }
+
+    /// <summary>The index of a library folder (entries without their code). Empty when there is none.</summary>
+    internal static List<Entry> ReadIndex(string folder)
+    {
+        var path = Path.Combine(folder, "index.json");
+        return File.Exists(path) ? JsonSerializer.Deserialize<List<Entry>>(File.ReadAllText(path)) ?? [] : [];
+    }
+
+    /// <summary><see cref="Keep"/> against the library on this PC. Never throws: keeping must not break a call.</summary>
     public static void Note(string code, string description, string tool, bool ownTransactions, string model) =>
         // Off Revit's thread: reading, comparing with every kept entry and writing the library takes a while.
         Task.Run(() => NoteNow(code, description, tool, ownTransactions, model));
@@ -250,11 +375,9 @@ internal static class WorkedCode
             {
                 var entries = Read();
                 if (Keep(entries, code, description, tool, ownTransactions, model, DateTime.UtcNow) is null) return;
-                Directory.CreateDirectory(Path.GetDirectoryName(StoreFile)!);
-                var temp = StoreFile + ".tmp";
-                File.WriteAllText(temp, JsonSerializer.Serialize(entries), new UTF8Encoding(false));
-                if (File.Exists(StoreFile)) File.Replace(temp, StoreFile, null);
-                else File.Move(temp, StoreFile);
+                Save(Folder, entries);
+                _cached = entries;
+                _cachedAt = File.GetLastWriteTimeUtc(IndexFile);
             }
         }
         catch (Exception) { /* not kept this time */ }
@@ -267,7 +390,6 @@ internal static class WorkedCode
     /// </summary>
     internal static int FromRedo(List<Entry> entries, IEnumerable<(string Model, RedoLog.Step Step)> steps)
     {
-        var cache = new Dictionary<Entry, HashSet<string>>();
         var taken = 0;
         foreach (var (model, step) in steps.OrderBy(s => s.Step.Time))
         {
@@ -278,7 +400,7 @@ internal static class WorkedCode
                 var r = doc.RootElement;
                 string Text(string name) => r.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? "" : "";
                 var own = r.TryGetProperty("own_transactions", out var o) && o.ValueKind == JsonValueKind.True;
-                if (Keep(entries, Text("code"), Text("description"), step.Tool, own, model, step.Time.ToUniversalTime(), cache) is not null) taken++;
+                if (Keep(entries, Text("code"), Text("description"), step.Tool, own, model, step.Time.ToUniversalTime()) is not null) taken++;
             }
             catch (JsonException) { /* an unreadable step is skipped */ }
         }
@@ -328,17 +450,19 @@ internal static class WorkedCode
         return worked;
     }
 
-    private static string BackfillMark => StoreFile + ".from-history";
+    private static string RebuiltMark => Path.Combine(Folder, "rebuilt from history.txt");
 
     /// <summary>
-    /// Once per PC, off Revit's thread: <see cref="FromRedo"/> over every model's redo log and every chat and job transcript
-    /// (<see cref="FromTranscript"/>), all of it, oldest first. Never throws.
+    /// Once per PC, off Revit's thread: the library is built again from all history: every model's redo log and every
+    /// chat and job transcript (<see cref="FromRedo"/>, <see cref="FromTranscript"/>), oldest first; then what was kept
+    /// before and isn't in that history (the desktop app's calls) is added as it was. Nothing is dropped any more (the
+    /// first import, 0.35.88, stopped at 3,000). Never throws; tried again next start if it didn't finish.
     /// </summary>
     public static void BackfillOnce() => Task.Run(() =>
     {
         try
         {
-            if (File.Exists(BackfillMark)) return;
+            if (File.Exists(RebuiltMark)) return;
             var steps = RedoLog.Models().SelectMany(m => RedoLog.Read(m.Model).Select(s => (m.Model, s))).ToList();
             // Claude Code's transcripts, and the archived copies of those it has since deleted (Chat.HistoryArchive).
             foreach (var lines in Chat.HistoryArchive.AllTranscripts())
@@ -346,26 +470,39 @@ internal static class WorkedCode
                 try { steps.AddRange(FromTranscript(lines())); }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException) { /* a file in use is skipped */ }
             }
+            var fresh = new List<Entry>();
+            var taken = FromRedo(fresh, steps);
             lock (Gate)
             {
-                var entries = Read();
-                var taken = FromRedo(entries, steps);
-                Directory.CreateDirectory(Path.GetDirectoryName(StoreFile)!);
-                var temp = StoreFile + ".tmp";
-                File.WriteAllText(temp, JsonSerializer.Serialize(entries), new UTF8Encoding(false));
-                if (File.Exists(StoreFile)) File.Replace(temp, StoreFile, null);
-                else File.Move(temp, StoreFile);
-                // The mark says when, and how much came in from how many models (the library's size after).
-                File.WriteAllText(BackfillMark, $"{DateTime.UtcNow:s} took in {taken} runs that worked (redo logs and chat transcripts); {entries.Count} kept");
+                var before = Read();
+                var have = new HashSet<string>(fresh.Select(e => e.Id), StringComparer.Ordinal);
+                var added = 0;
+                foreach (var old in before.Where(e => !have.Contains(e.Id)))
+                {
+                    old.Code = CodeOf(old);
+                    if (old.Code.Length == 0) continue;
+                    old.Dirty = true;
+                    fresh.Add(old);
+                    added++;
+                }
+                Save(Folder, fresh);
+                _cached = fresh;
+                _cachedAt = File.GetLastWriteTimeUtc(IndexFile);
+                foreach (var e in fresh) e.Code = "";
+                File.WriteAllText(RebuiltMark, $"{DateTime.UtcNow:s} took in {taken} runs that worked from the redo logs and chat transcripts, kept {added} more from before; {fresh.Count} entries, no limit");
             }
         }
         catch (Exception) { /* tried again next start */ }
     });
 
+    /// <summary>The kept entries (their code is read with <see cref="CodeOf"/>): a copy of the list, safe to search.</summary>
     public static List<Entry> Load()
     {
-        lock (Gate) return Read();
+        lock (Gate) return Read().ToList();
     }
+
+    private static List<Entry>? _cached;
+    private static DateTime _cachedAt;
 
     /// <summary>The pointer for a failed call, from the file; "" on any trouble.</summary>
     public static string PointerFor(string description, string failedCode)
@@ -381,14 +518,33 @@ internal static class WorkedCode
         catch (Exception) { return ""; }
     }
 
+    /// <summary>
+    /// The index, read again only when its file changed. The one-file library of 0.35.70 to 0.35.88 (worked-code.json,
+    /// code inside) is moved over once: its code goes into files, and the old file is renamed.
+    /// </summary>
     private static List<Entry> Read()
     {
         try
         {
-            if (File.Exists(StoreFile))
-                return JsonSerializer.Deserialize<List<Entry>>(File.ReadAllText(StoreFile)) ?? [];
+            if (!File.Exists(IndexFile) && File.Exists(StoreFile))
+            {
+                var old = JsonSerializer.Deserialize<List<Entry>>(File.ReadAllText(StoreFile)) ?? [];
+                foreach (var e in old)
+                {
+                    e.Dirty = true;
+                    if (e.Topic.Length == 0) e.Topic = Topic(e.Code, e.Description);
+                    var shingles = Shingles(CodeRepeats.Shape(e.Code));
+                    (e.Sig, e.Size) = (Signature(shingles), shingles.Count);
+                }
+                Save(Folder, old);
+                File.Move(StoreFile, StoreFile + ".moved");
+            }
+            if (!File.Exists(IndexFile)) return _cached = [];
+            var at = File.GetLastWriteTimeUtc(IndexFile);
+            if (_cached is not null && at == _cachedAt) return _cached;
+            _cachedAt = at;
+            return _cached = ReadIndex(Folder);
         }
-        catch (Exception) { /* a broken file starts again */ }
-        return [];
+        catch (Exception) { return _cached ?? []; }
     }
 }
