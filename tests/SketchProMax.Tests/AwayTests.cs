@@ -11,6 +11,9 @@ internal static class AwayTests
         check("away: the time said is kept, at most 12 hours, at least 10 minutes",
             Away.Asked("I'm away for 2 hours, handle the pop ups") == TimeSpan.FromHours(2) && Away.Asked("no pop ups for 30 minutes") == TimeSpan.FromMinutes(30)
             && Away.Asked("I'll be out for 20 hours") == Away.Longest && Away.Asked("no popups for 1 min") == TimeSpan.FromMinutes(10), "");
+        check("away: his words of 19 Nov evening start it too (won't, handle the waiting)",
+            Away.Asked("Continue as I won't be available and handle the waiting to apply or waiting for revit to be free") == TimeSpan.FromHours(1)
+            && Away.Asked("I wont be here for 2 hours") == TimeSpan.FromHours(2) && Away.Asked("skip any stuck command") is not null, "");
         check("away: ordinary messages don't start it",
             Away.Asked("why does the popup menu show lines") is null && Away.Asked("raise the approach slab by 100 mm") is null && Away.Asked("") is null, "");
         var now = new DateTime(2026, 11, 19, 11, 44, 0, DateTimeKind.Utc);
