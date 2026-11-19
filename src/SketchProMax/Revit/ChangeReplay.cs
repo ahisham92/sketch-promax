@@ -184,7 +184,8 @@ internal static class ChangeReplay
             // Older files can hold Revit's energy model (thousands of lines): Revit makes it again by itself.
             if (ChangeFile.IsAnalysis(line.CategoryId)) continue;
             // And what Revit makes with something else (a sketch's automatic dimensions, a title block's revision schedule...).
-            if (M.IsRevitsOwn(line.CategoryId) || ChangeViews.IsRevitsOwn(line)) continue;
+            // (A named sun setting is in such a category, and is the user's own.)
+            if (M.IsRevitsOwn(line.CategoryId) && !M.IsSetting(line) || ChangeViews.IsRevitsOwn(line)) continue;
             // Made after the last save and deleted again before Lifeline read it: there is nothing to delete.
             if (line.Kind == M.Kinds.Deleted && line.New && line.Unique is not { Length: > 0 }) { steps.Add(new(line, Act.Done, "")); continue; }
             var found = Find(doc, line);

@@ -445,7 +445,7 @@ internal static class ChangeFileMath
     /// </summary>
     public static List<Line> PlayOrder(Parsed file)
     {
-        int Rank(Line l) => l.Kind == Kinds.Deleted ? 9 : l.What switch { "level" => 0, "grid" or "material" or "family" or "filter" or "linepattern" or "fillpattern" or "style" or "setup" or "param" or "global" or "revision" => 1, "type" => 2, "view" when IsTemplate(l) => 2, "wall" or "view" or "sheet" or "group" or "link" or "stairs" => 3, "sheetset" or "startview" or "site" => 6, _ when IsNote(l) => 5, _ => 4 };
+        int Rank(Line l) => l.Kind == Kinds.Deleted ? 9 : l.What switch { "level" => 0, "grid" or "material" or "family" or "filter" or "linepattern" or "fillpattern" or "style" or "setup" or "param" or "global" or "revision" or "sun" => 1, "type" => 2, "view" when IsTemplate(l) => 2, "wall" or "view" or "sheet" or "group" or "link" or "stairs" => 3, "sheetset" or "startview" or "site" => 6, _ when IsNote(l) => 5, _ => 4 };
         var ranked = file.Elements.Select((l, i) => (Line: l, Index: i)).OrderBy(x => Rank(x.Line)).ThenBy(x => x.Index).Select(x => x.Line).ToList();
         // Hosted instances after their host, when the host is in the file.
         var position = ranked.Select((l, i) => (l.Unique, i)).Where(x => x.Unique is not null).GroupBy(x => x.Unique!).ToDictionary(g => g.Key, g => g.First().i);
@@ -508,11 +508,14 @@ internal static class ChangeFileMath
     public static bool IsDocItem(Line l) => l.What is "filter" or "linepattern" or "fillpattern" or "setup" || IsTemplate(l);
 
     /// <summary>The named setups kept whole as copies, as their lines' category says them (the order <see cref="ChangeKeeper.SetupKind"/> uses).</summary>
-    public static readonly string[] Setups = ["Print setup", "DWG export setup", "DGN export setup", "PDF export setup", "Phase filter", "Colour fill scheme"];
+    public static readonly string[] Setups = ["Print setup", "DWG export setup", "DGN export setup", "PDF export setup", "Phase filter", "Colour fill scheme", "IFC export setup"];
+
+    /// <summary>How the schema of a saved IFC export setup is named (Revit's IFC exporter: IFCExportConfigurationMap and its later forms).</summary>
+    public const string IfcSchemaStart = "IFCExportConfiguration";
 
     /// <summary>One unit's format in the project units, as a row of text, and back.</summary>
     /// <summary>A setting of the model with no element drawn anywhere: its line is read and set by ChangeSettings.</summary>
-    public static bool IsSetting(Line l) => l.What is "revision" or "global" or "startview" or "param" or "site" or "place" or "revsetting" or "areavol";
+    public static bool IsSetting(Line l) => l.What is "revision" or "global" or "startview" or "param" or "site" or "place" or "revsetting" or "areavol" or "sun";
 
     public static string UnitFormat(string spec, string unit, double accuracy, string symbol, int flags, string rounding) =>
         string.Join("|", spec, unit, accuracy.ToString("R", CultureInfo.InvariantCulture), symbol, flags.ToString(CultureInfo.InvariantCulture), rounding);

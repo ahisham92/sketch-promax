@@ -810,12 +810,12 @@ internal static class ChangeFile
         var viewKind = ChangeViews.Kind(element);
         var setup = ChangeKeeper.SetupKind(element);
         var setting = ChangeSettings.Kind(element);
-        if (element is SharedParameterElement shared && !ChangeSettings.Bound(doc, shared)) return null;
+        if (element is ParameterElement and not GlobalParameter && !ChangeSettings.Bound(doc, (ParameterElement)element)) return null;
         var item = element switch { ParameterFilterElement => "filter", LinePatternElement => "linepattern", FillPatternElement => "fillpattern", ViewSheetSet => "sheetset", _ => setup is not null ? "setup" : setting };
         if (category is null && element is not ElementType && viewKind is null && item is null) return null;
         // What Revit makes by itself with something else (a sketch's automatic dimensions, a view's camera and section
         // box, a loaded type's preview), and what belongs to a title block or isn't on a sheet.
-        if (category is not null && M.IsRevitsOwn(category.Id.Value)) return null;
+        if (category is not null && setting is null && M.IsRevitsOwn(category.Id.Value)) return null;
         if (ChangeViews.IsRevitsOwn(element)) return null;
         // Work plane grids and the marks of views (sections, callouts) change with the view or come with it: no line of their own.
         if (category is not null && element is not View && category.Id.Value is (long)BuiltInCategory.OST_IOSSketchGrid or (long)BuiltInCategory.OST_Viewers or (long)BuiltInCategory.OST_Views) return null;

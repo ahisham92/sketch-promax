@@ -1193,6 +1193,26 @@ internal static partial class FieldTest
             var plans = new FilteredElementCollector(doc).OfClass(typeof(ViewPlan)).Cast<View>().Where(v => !v.IsTemplate && v.CanBePrinted).Take(2).ToList();
             Round("a DWG export setup", () => ExportDWGSettings.Create(doc, "SPM lifeline dwg " + stamp, new DWGExportOptions()), kept: true);
             Round("a phase filter", () => PhaseFilter.Create(doc, "SPM lifeline phase filter " + stamp), kept: true);
+            // A saved IFC export setup is a data storage whose schema is named as the IFC exporter names its own.
+            var ifcSchema = Autodesk.Revit.DB.ExtensibleStorage.Schema.Lookup(new Guid("5b1d0c0e-7a35-4a5e-9a3b-2f6f0e1c7d41"));
+            if (ifcSchema is null)
+            {
+                var builder = new Autodesk.Revit.DB.ExtensibleStorage.SchemaBuilder(new Guid("5b1d0c0e-7a35-4a5e-9a3b-2f6f0e1c7d41"));
+                builder.SetSchemaName(M.IfcSchemaStart + "FieldTest");
+                builder.AddSimpleField("MapField", typeof(string));
+                ifcSchema = builder.Finish();
+            }
+            Round("an IFC export setup", () =>
+            {
+                var storage = Autodesk.Revit.DB.ExtensibleStorage.DataStorage.Create(doc);
+                var entity = new Autodesk.Revit.DB.ExtensibleStorage.Entity(ifcSchema);
+                entity.Set("MapField", "SPM lifeline " + stamp);
+                storage.SetEntity(entity);
+                return storage;
+            }, kept: true);
+            if (!new FilteredElementCollector(doc).OfClass(typeof(Autodesk.Revit.DB.ExtensibleStorage.DataStorage)).Cast<Autodesk.Revit.DB.ExtensibleStorage.DataStorage>()
+                    .Any(d => d.GetEntity(ifcSchema) is { } e && e.IsValid() && e.Get<string>("MapField") == "SPM lifeline " + stamp))
+                problems.Add("an IFC export setup: it came back without what it held");
             if (plans.Count > 0)
                 Round("a sheet set", () =>
                 {
@@ -1306,6 +1326,11 @@ internal static partial class FieldTest
             var rooms = AreaVolumeSettings.GetAreaVolumeSettings(doc);
             var volumes = rooms.ComputeVolumes;
             Single("the room volume setting", rooms, () => rooms.ComputeVolumes = !volumes, () => rooms.ComputeVolumes = volumes, () => rooms.ComputeVolumes != volumes);
+            if (new FilteredElementCollector(doc).OfClass(typeof(SunAndShadowSettings)).Cast<SunAndShadowSettings>().FirstOrDefault(p => p.Name is { Length: > 0 } n && !n.StartsWith("<", StringComparison.Ordinal)) is { } preset)
+            {
+                var relative = preset.RelativeToView;
+                Single("a sun setting", preset, () => preset.RelativeToView = !relative, () => preset.RelativeToView = relative, () => preset.RelativeToView != relative);
+            }
             // The project units: written with project information's line, and set from it.
             try
             {
@@ -1331,7 +1356,7 @@ internal static partial class FieldTest
             }
             catch (Exception ex) when (ex is not OutOfMemoryException) { problems.Add("the project units: " + ex.Message); }
             return problems.Count == 0
-                ? Pass("a DWG export setup and a phase filter came back from their kept copies, and a sheet set, an issued revision, a global parameter, a project parameter with its categories and a shared site were made again from their lines, each under its name and as it was; a sheet set, an issued revision, the site's place on Earth, the revision numbering, the room volume setting and the project units, edited after the save, were set back to the edit")
+                ? Pass("a DWG export setup, a phase filter and an IFC export setup came back from their kept copies, and a sheet set, an issued revision, a global parameter, a project parameter with its categories and a shared site were made again from their lines, each under its name and as it was; a sheet set, an issued revision, the site's place on Earth, the revision numbering, the room volume setting, a sun setting and the project units, edited after the save, were set back to the edit")
                 : Fail(string.Join("; ", problems));
         }
         catch (Exception ex) when (ex is not OutOfMemoryException) { return Fail(string.Join("; ", problems.Append(ex.Message))); }
