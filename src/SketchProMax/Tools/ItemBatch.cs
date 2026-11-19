@@ -19,6 +19,12 @@ internal static class ItemBatch
 {
     public sealed record Outcome(string Item, bool Ok, string? Error, object? Value);
 
+    /// <summary>What an item left for the next call says when the batch's time ran out (<c>budget</c>).</summary>
+    public const string TimeLeft = "not done: time for this call is up, call again for the rest";
+
+    /// <summary>True for an item left for the next call because the batch's time ran out.</summary>
+    public static bool LeftForLater(Outcome o) => !o.Ok && o.Error == TimeLeft;
+
     public sealed class Result
     {
         public List<Outcome> Items { get; } = [];
@@ -46,9 +52,12 @@ internal static class ItemBatch
     /// Such items are listed in <see cref="Result.Handoffs"/>; Continue on one runs that item again.</param>
     public static Result Run<T>(Document doc, string name, IEnumerable<T> items, Func<T, string> label,
         Func<T, IEnumerable<ElementId>> elements, Func<T, object?> apply, bool borrow = true, bool cancellable = true,
-        Func<T, string, HandoffStep?>? manual = null)
+        Func<T, string, HandoffStep?>? manual = null, TimeSpan? budget = null)
     {
         var list = items.ToList();
+        // A time limit (19 Nov 2026: one join call held Revit, and with it the chat window, for minutes): once it is used,
+        // the rest is left for the next call, so Revit is free in between.
+        var clock = System.Diagnostics.Stopwatch.StartNew();
         var result = new Result();
         if (doc.IsModifiable)
             throw new InvalidOperationException("ItemBatch needs to start its own transactions; a transaction is already open.");
@@ -89,6 +98,7 @@ internal static class ItemBatch
             }
             if (halted != JobState.Running) { result.Items.Add(new(what, false, JobControl.NotDone(halted), null)); continue; }
             if (stopped is not null) { result.Items.Add(new(what, false, "not done: " + stopped, null)); continue; }
+            if (budget is { } most && index > 1 && clock.Elapsed >= most) { result.Items.Add(new(what, false, TimeLeft, null)); continue; }
             if (cancellable && Jobs.CancelRequested) { result.Items.Add(new(what, false, "not done: stopped on request (cancel_job)", null)); continue; }
             if (list.Count > 20 && index % 10 == 0) Jobs.Report($"{name}: {index} of {list.Count}");
             if (index > 1) group.SyncIfDue();

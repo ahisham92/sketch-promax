@@ -49,6 +49,9 @@ public sealed class JoinElementsTool : IRevitTool
     public string[] Required => [];
     public bool ModifiesModel => true;
 
+    /// <summary>The most one call holds Revit before the rest waits for the next call.</summary>
+    internal static readonly TimeSpan Budget = TimeSpan.FromSeconds(20);
+
     private static readonly string[] DefaultCategories = ["Floors", "Structural Framing", "Structural Foundations", "Walls", "Generic Models"];
 
     public ToolResult Execute(UIApplication app, ToolArgs args)
@@ -116,6 +119,10 @@ public sealed class JoinElementsTool : IRevitTool
             pairs = pairs.Where(p => JoinGeometryUtils.AreElementsJoined(doc, p.A, p.B) || Touch(p.A, p.B, tol)).ToList();
         }
 
+        // A pair already joined the right way round needs no step (a call that goes on from where the last one stopped).
+        if (action == "join")
+            pairs = pairs.Where(p => !JoinGeometryUtils.AreElementsJoined(doc, p.A, p.B)
+                || (Winner(doc, p.A, p.B, order) is { } w && !JoinGeometryUtils.IsCuttingElementInJoin(doc, w.Win, w.Lose))).ToList();
         var truncated = pairs.Count > limit;
         if (truncated) pairs = pairs.Take(limit).ToList();
         var label = (Func<(Element A, Element B), string>)(p => $"{Geo.Describe(p.A)} / {Geo.Describe(p.B)}");
@@ -139,19 +146,25 @@ public sealed class JoinElementsTool : IRevitTool
             return ToolResult.Ok(new
             {
                 elements = set.Count, pairs = 0,
-                note = action == "unjoin" ? "None of these elements are joined to each other." : "No two of these elements touch (within the tolerance), so there was nothing to join.",
+                note = action == "unjoin" ? "None of these elements are joined to each other." : "Every touching pair is already joined (or no two of these elements touch), so there was nothing to join.",
                 skippedNever = skippedNever > 0 ? skippedNever : (int?)null,
             });
 
         // ---- Join or unjoin, one pair per step; then the refused joins once more the other way round.
+        // Each call holds Revit (and the chat window, which Revit draws) for about Budget at most: the rest waits for the next call.
         var first = ItemBatch.Run(doc, action == "join" ? "Join elements" : "Unjoin elements", pairs, label,
-            p => [p.A.Id, p.B.Id], p => action == "join" ? Join(doc, p.A, p.B, order, false) : Unjoin(doc, p.A, p.B));
+            p => [p.A.Id, p.B.Id], p => action == "join" ? Join(doc, p.A, p.B, order, false) : Unjoin(doc, p.A, p.B), budget: Budget);
+        var left = first.Items.Count(ItemBatch.LeftForLater);
         var refused = pairs.Zip(first.Items, (p, i) => (p, i)).Where(x => !x.i.Ok && !Skipped(x.i.Error)).Select(x => x.p).ToList();
         ItemBatch.Result? again = null;
-        if (action == "join" && refused.Count > 0)
-            again = ItemBatch.Run(doc, "Join elements (other order)", refused, label, p => [p.A.Id, p.B.Id], p => Join(doc, p.A, p.B, order, true));
+        if (action == "join" && refused.Count > 0 && left == 0)
+            again = ItemBatch.Run(doc, "Join elements (other order)", refused, label, p => [p.A.Id, p.B.Id], p => Join(doc, p.A, p.B, order, true), budget: Budget);
+        left += again?.Items.Count(ItemBatch.LeftForLater) ?? 0;
 
-        var failed = first.Items.Where(i => !i.Ok && Skipped(i.Error)).Concat(again?.Failed ?? (action == "join" ? [] : first.Failed)).ToList();
+        // Refused: what Revit refused (a join both ways round); a join refused once while pairs are left is tried again next call.
+        var firstFailed = first.Items.Where(i => !i.Ok && !ItemBatch.LeftForLater(i)).ToList();
+        var failed = action != "join" ? firstFailed
+            : firstFailed.Where(i => Skipped(i.Error)).Concat(again?.Failed.Where(i => !ItemBatch.LeftForLater(i)) ?? []).ToList();
         var done = first.Done + (again?.Done ?? 0);
         return ToolResult.Ok(new
         {
@@ -161,7 +174,10 @@ public sealed class JoinElementsTool : IRevitTool
             refusedPairs = failed.Count > 0 ? failed.Take(60).Select(f => new { pair = f.Item, reason = f.Error }) : null,
             skippedNever = skippedNever > 0 ? skippedNever : (int?)null,
             truncated = truncated ? $"Only the first {limit} pairs were done; call again for the rest." : null,
-            next = failed.Count > 0 && action == "join"
+            left = left > 0 ? left : (int?)null,
+            next = left > 0
+                ? $"{left} pairs are left (each call stops after about {Budget.TotalSeconds:0} s so Revit stays free): call join_elements again with the same arguments; the pairs already joined are skipped."
+                : failed.Count > 0 && action == "join"
                 ? "Report the refused pairs in a line (Revit can't join them as they are: often a third element already joined to both, or faces that only meet at an edge); don't unjoin or move other elements to force them unless the user asks."
                 : null,
         });
