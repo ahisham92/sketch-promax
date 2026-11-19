@@ -2212,6 +2212,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             Save();
             return;
         }
+        // A plain question while the chat is busy (answering, writing a brief, hearing a job): answered at once (ChatPane.Quick).
+        if (QuickAnswer(_input.Text)) return;
         if (_turn is not null)
         {
             // While a task runs the box stays open: the message reaches Claude at the next step boundary.
@@ -2253,7 +2255,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         LearnFrom(text); // a correction becomes a lesson for next time, in the background
         if (StartBrief(text, attachments)) return; // a brief card first; the choice on it runs the turn
         // Code that did this kind of work before is named with the message, so it is adapted and not written again.
-        await RunTurn(text, attachments, "", hint: FocusHint(text, attachments) + (Run is { Active: true } ? "" : SketchProMax.Tools.WorkedCode.HintFor(text)));
+        await RunTurn(text, attachments, "", hint: FocusHint(text, attachments) + TakeAsides() + (Run is { Active: true } ? "" : SketchProMax.Tools.WorkedCode.HintFor(text)));
     }
 
     /// <summary>The answer to a status question from the job list (ChatFocus.StatusLine); "" when it isn't one or nothing runs.</summary>

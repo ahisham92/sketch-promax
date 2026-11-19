@@ -218,15 +218,19 @@ internal static class AutoSync
         _retryAt = default;
         Rule.Synced(Key(doc));
         return Note(doc, $"Synchronized \"{doc.Title}\" with central after {count} changes (auto sync, Settings > Chat)" +
-                         (keepBorrowed ? ", in the middle of a step; the step carried on." : "; the work carried on where it stopped."));
+                         (keepBorrowed ? ", in the middle of a step; the step carried on." : "; the work carried on where it stopped.") + Prompted());
     }
 
     /// <summary>
     /// Synchronizes now, asked for (save_model: so another model that links this one can reload it): null when it went
     /// through, else why not. The count of changes since the last sync starts again either way it succeeded.
     /// </summary>
+    /// <summary>After <see cref="SyncNow"/>: what Revit asked during it and how it was answered ("" when nothing).</summary>
+    [ThreadStatic] public static string? LastPrompt;
+
     public static string? SyncNow(Document doc)
     {
+        LastPrompt = "";
         if (CentralAccess.Waiting(doc) is { } wait) return wait;
         var count = Rule.Count(Key(doc));
         string? failed;
@@ -238,8 +242,19 @@ internal static class AutoSync
         if (failed is not null) return failed;
         Syncs++;
         Rule.Synced(Key(doc));
-        Note(doc, $"Synchronized \"{doc.Title}\" with central (save_model)");
+        LastPrompt = Prompted();
+        Note(doc, $"Synchronized \"{doc.Title}\" with central (save_model)" + LastPrompt);
         return null;
+    }
+
+    /// <summary>What the last sync answered for Revit (PositionPrompt.Said), for its line; "" when nothing was asked.</summary>
+    [ThreadStatic] private static string? _prompted;
+
+    private static string Prompted()
+    {
+        var said = _prompted ?? "";
+        _prompted = null;
+        return said;
     }
 
     private static string? RevitSync(Document doc, bool keepBorrowed, int count)
@@ -255,7 +270,10 @@ internal static class AutoSync
             Compact = false,
         };
         options.SetRelinquishOptions(relinquish);
-        doc.SynchronizeWithCentral(new TransactWithCentralOptions(), options);
+        // Revit's "Location Position Changed" prompt is answered "Do not save" during our sync (PositionPrompt), so it
+        // no longer comes up at every auto sync; what was answered goes in the sync's line.
+        PositionPrompt.During(() => { doc.SynchronizeWithCentral(new TransactWithCentralOptions(), options); return 0; }, out var asked);
+        _prompted = PositionPrompt.Said(asked);
         return null;
     }
 

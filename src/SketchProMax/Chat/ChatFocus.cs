@@ -50,7 +50,9 @@ internal static class ChatFocus
         @"|\b(same|these|those) mistakes?\b|\brepeating\b|\bnot what i\b|\bi (told|said|asked)\b|\bas i (told|said|asked)\b|\bi meant\b" +
         @"|\b(did not|didn't|don't|do not) understand\b|\bi (did not|didn't|don't|do not) (want|need|mean|ask)\b" +
         @"|\b(is|are|was|were) (so |very |extremely |totally )?(wrong|poor|bad|incorrect)\b|\bnot correct\b|\bwas not done\b|\bwasn't done\b|\bnot done\b" +
-        @"|\b(should|shall) not have\b|\bshouldn't have\b|\bwhy did you\b|\bdoes not make sense\b|\bdoesn't make sense\b",
+        @"|\b(should|shall) not have\b|\bshouldn't have\b|\bwhy did you\b|\bdoes not make sense\b|\bdoesn't make sense\b" +
+        // "this is the fourth time" (19 Nov 2026: read as a new request, and the brief guessed what it was about).
+        @"|\b(second|third|fourth|fifth|sixth|tenth|\d+(st|nd|rd|th)) time\b|\bhow many times\b|\bagain and again\b|\bonce again\b|\b(we are|we're|i am|i'm|keep) repeating\b|\b(already|have already) (told|said|asked)\b",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     /// <summary>True when the message reads as a correction of the work before it ("no", "still there", "why is it...").</summary>
@@ -67,10 +69,17 @@ internal static class ChatFocus
     public static string Hint(string text, int selected, bool attachments, bool answered)
     {
         const string start = "\n\n[Sketch ProMax, not typed by the user: ";
+        if (answered && IsRepeat(text))
+            return start + "the user says they have raised this before. Find their earlier messages about it in this chat (and the " +
+                   "summary of earlier messages), say in one line what it is and why it came back, and fix the cause so it holds from " +
+                   "now on (a setting, a rule kept with memory_note, the whole scope), not only this once. Don't explain the earlier " +
+                   "attempts and don't offer options. Answer in two or three lines.]";
         if (answered && IsCorrection(text))
             return start + "this reads as a correction of your last work. Don't explain the earlier attempt and don't offer options. " +
                    "When what they want is clear, fix exactly that now, yourself; when it isn't, ask one short question. Before you answer, " +
                    "look at the result in the view they are looking at (capture_view_image), not only at numbers. Answer in one or two lines.]";
+        if (IsQuestion(text))
+            return start + QuestionRule + "]";
         if (IsExample(text))
             return start + "the user made an example by hand and wants the same. First read the example exactly: which elements or " +
                    "view they changed (the model note lists what the user changed), its types, parameter values, offsets, joins and " +
@@ -83,6 +92,84 @@ internal static class ChatFocus
                    "answer, look at the result in the active view (capture_view_image): what the user sees must be right, not only the numbers. " +
                    "Answer in at most three lines.]";
         return "";
+    }
+
+    // ---- Repeats and questions ---------------------------------------------------------------------------------------
+
+    private static readonly Regex Repeat = new(
+        @"\b(second|third|fourth|fifth|sixth|tenth|\d+(st|nd|rd|th)) time\b|\bhow many times\b|\bagain and again\b|\b(we are|we're|i am|i'm|keep) repeating\b|\b(i )?(already|have already) (told|said|asked)\b|\bas i (told|said) (you )?(before|already)\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    /// <summary>True when the user says they are raising something again ("this is the fourth time", "I already told you").</summary>
+    public static bool IsRepeat(string text) => Repeat.IsMatch((text ?? "").Trim());
+
+    /// <summary>
+    /// True for a plain question ("did you extend the piles...?", "is the model neat now?", "why ...?"): it is answered at
+    /// once, also while the chat or its jobs are busy, and never handed to a job. A status question has its own answer.
+    /// </summary>
+    public static bool IsQuestion(string text)
+    {
+        var t = (text ?? "").Trim();
+        return t.Length > 0 && !IsStatusAsk(t) && PromptBriefs.LooksReadOnly(t) == true;
+    }
+
+    /// <summary>How the chat takes a question (19 Nov 2026: "did you extend the piles...?" got "a job will check").</summary>
+    public const string QuestionRule =
+        "this is a question: answer it yourself in this turn, the answer first (yes or no when it asks yes or no), in one to " +
+        "three lines. Don't start a job and don't hand the question to one, and don't say a job will check: if a fact is " +
+        "missing, read it now with a quick read-only tool (get_activity_log, query_elements, get_element_parameters, chat_jobs " +
+        "action=ask), then answer. When part of it truly isn't known yet, say what is known and what isn't. Change nothing";
+
+    /// <summary>The instructions of the quick run that answers a question while the chat is busy with other work.</summary>
+    public const string QuickInstructions =
+        "You answer the user's question in the Sketch ProMax chat inside Revit while the main chat and its jobs are busy. " +
+        "The user is a structural engineer. You get the summary of the chat, its last messages and the jobs with their " +
+        "reports. Answer from those first; use a read-only Revit tool only when the answer is not there and one quick read " +
+        "settles it. Start with the answer (yes or no when it asks yes or no), then at most two short lines. Plain words, " +
+        "no tables, no headings, no element ids. Never change the model and never promise work: when something isn't done " +
+        "yet, say so plainly. When it truly can't be known yet, say what is known and which job is still on it.";
+
+    /// <summary>The message of that quick run: the question, then the chat's state.</summary>
+    public static string QuickMessage(string question, string recall, IEnumerable<(string Kind, string Text)> recent, IEnumerable<ChatJob> jobs)
+    {
+        var b = new System.Text.StringBuilder();
+        b.Append("The user's question:\n").Append(Cut(question, 1500)).Append("\n\n");
+        if ((recall ?? "").Trim().Length > 0) b.Append("Summary of the earlier chat:\n").Append(Cut(recall!, 4000)).Append("\n\n");
+        var last = recent.Where(r => (r.Text ?? "").Trim().Length > 0).ToList();
+        if (last.Count > 0)
+        {
+            b.Append("The last messages (oldest first):\n");
+            foreach (var (kind, text) in last) b.Append(kind == "user" ? "User: " : "Sketch ProMax: ").Append(Cut(text, 1200)).Append('\n');
+            b.Append('\n');
+        }
+        var all = jobs.OrderBy(j => j.Number).ToList();
+        if (all.Count > 0)
+        {
+            b.Append("The jobs (newest last):\n");
+            foreach (var j in all.Skip(Math.Max(0, all.Count - 15)))
+            {
+                b.Append("Job ").Append(j.Number).Append(" (").Append(j.State).Append("): ").Append(JobBoard.OneLine(j.Title, 80));
+                var now = JobBoard.OneLine(j.Now, 120);
+                if (j.Active && now.Length > 0) b.Append(". Now: ").Append(now);
+                if (j.Summary.Trim().Length > 0) b.Append(". Reported: ").Append(Cut(j.Summary, 1200));
+                b.Append('\n');
+            }
+        }
+        return b.ToString();
+    }
+
+    /// <summary>
+    /// What the main chat hears with the user's next message about questions answered while it was busy, so it knows the
+    /// user asked and what they were told (and doesn't answer again). "" when there were none.
+    /// </summary>
+    public static string Answered(IEnumerable<(string Question, string Answer)> asides)
+    {
+        var list = asides.ToList();
+        if (list.Count == 0) return "";
+        var b = new System.Text.StringBuilder("\n\n[Sketch ProMax, not typed by the user: while you were busy the user asked:");
+        foreach (var (q, a) in list)
+            b.Append("\n- ").Append(Cut(q, 300)).Append(a.Trim().Length > 0 ? " They were answered at once: " + Cut(a, 500) : " Not answered yet: answer it first, in a line.");
+        return b.Append("\nDon't answer the answered ones again; act on anything they show is still to do.]").ToString();
     }
 
     // ---- Their example -------------------------------------------------------------------------------------------------

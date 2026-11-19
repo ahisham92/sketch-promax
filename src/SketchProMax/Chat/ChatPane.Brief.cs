@@ -55,7 +55,7 @@ internal sealed partial class ChatPane
         EndTurn();
         if (result.Brief is { } plain && !PromptBriefs.ShowCard(mode, plain))
         {
-            if (_conv == conv) await RunTurn(text, attachments, ""); // a question: it runs as typed
+            if (_conv == conv) await RunTurn(text, attachments, "", hint: TakeAsides()); // a question: it runs as typed
             return;
         }
         var item = new ChatItem
@@ -303,7 +303,7 @@ internal sealed partial class ChatPane
         if (choice == BriefChoice.RunEdited && learn && PromptBriefs.IsEdit(shown, text)) Remember(brief.Request, shown, text);
         var attachments = item.Files.Where(System.IO.File.Exists).Select(p => new Attachment { Path = p, Name = System.IO.Path.GetFileName(p) }).ToList();
         // The approved brief's planned tools seed the job card's steps.
-        _ = RunTurn(text, attachments, choice == BriefChoice.RunAsTyped ? "" : text, choice == BriefChoice.RunAsTyped ? null : brief);
+        _ = RunTurn(text, attachments, choice == BriefChoice.RunAsTyped ? "" : text, choice == BriefChoice.RunAsTyped ? null : brief, hint: TakeAsides());
     }
 
     /// <summary>Distils the edit into a Global memory note in the background, and says what was kept.</summary>
