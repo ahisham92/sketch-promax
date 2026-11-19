@@ -58,14 +58,21 @@ internal static class RevitBlock
     /// <summary>How long Revit may take no work, with nobody at it, before Esc ends the command left open.</summary>
     public static readonly TimeSpan EndCommandAfter = TimeSpan.FromMinutes(2);
 
+    /// <summary>How long Revit must show no activity at all (processor, memory, files, journal) to count as waiting for a click.</summary>
+    public static readonly TimeSpan IdleFor = TimeSpan.FromSeconds(60);
+
     /// <summary>
     /// Whether to press Esc in Revit now for jobs that wait: only while nobody is at Revit (away mode or an Autopilot
-    /// run), only when Revit answers and shows no dialog and no edit mode (a placement command such as Spot Elevation
-    /// left waiting for a click: Esc loses nothing), after <see cref="EndCommandAfter"/>, at most three times, a minute
-    /// apart. Otherwise the user's command is never touched (standing rule: never block or cancel a Revit command).
+    /// run); only when Revit answers and shows no dialog and no edit mode; only when the command is doing nothing:
+    /// no processor, memory, file or journal activity for <see cref="IdleFor"/> (<paramref name="quiet"/>, FreezeCause.Judge),
+    /// which a command waiting for a click (Spot Elevation) shows and a working one (a sync, an export, a regeneration)
+    /// never does; never during Revit's known long work (<paramref name="longWork"/>: synchronizing, opening, saving,
+    /// loading links), whatever the figures. After <see cref="EndCommandAfter"/>, at most three times, a minute apart.
+    /// Otherwise nothing is touched (standing rule: never block or cancel a Revit command; the owner, 19 Nov 2026: "make
+    /// sure it doesn't end a command working, just commands that are doing nothing").
     /// </summary>
-    public static bool EndCommandNow(Kind kind, TimeSpan held, int tries, bool nobodyThere) =>
-        nobodyThere && kind == Kind.Unknown && tries < 3 && held >= EndCommandAfter + TimeSpan.FromMinutes(tries);
+    public static bool EndCommandNow(Kind kind, TimeSpan held, int tries, bool nobodyThere, TimeSpan quiet, bool longWork) =>
+        nobodyThere && kind == Kind.Unknown && !longWork && quiet >= IdleFor && tries < 3 && held >= EndCommandAfter + TimeSpan.FromMinutes(tries);
 
     /// <summary>What the chat says once when Revit takes no work from the jobs: what holds it and how to free it.</summary>
     public static string HeldLine(State state, string busy)

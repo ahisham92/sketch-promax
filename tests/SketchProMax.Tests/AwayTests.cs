@@ -14,6 +14,18 @@ internal static class AwayTests
         check("away: his words of 19 Nov evening start it too (won't, handle the waiting)",
             Away.Asked("Continue as I won't be available and handle the waiting to apply or waiting for revit to be free") == TimeSpan.FromHours(1)
             && Away.Asked("I wont be here for 2 hours") == TimeSpan.FromHours(2) && Away.Asked("skip any stuck command") is not null, "");
+        var ways = new[]
+        {
+            "I will be away", "I'll be away for 2 hours", "I won\u2019t be available", "I am not available now", "Im going home", "I'm leaving now",
+            "I'll be back in an hour", "I'm in a meeting", "I have to go to a meeting, continue", "I'm going to sleep, carry on", "don't wait for me",
+            "carry on without me", "I might not be around", "I'll be offline", "afk 30 min", "I'm stepping out", "I won't be at my desk", "I will not be here",
+            "I'm heading home", "while I'm away handle everything",
+        };
+        var missed = ways.Where(w => Away.Asked(w) is null).ToList();
+        check("away: any way of saying he isn't at Revit starts it", missed.Count == 0, string.Join(" | ", missed));
+        var wrong = new[] { "the bollard type is not available", "move the beam out by 100 mm", "is the slab here?", "I am checking the pile heads", "I need to see the sections", "leave the RoRo as is", "I'm here", "I am available now", "I'll be at my desk", "I need to leave the pile heads as they are" }
+            .Where(w => Away.Asked(w) is not null).ToList();
+        check("away: work messages that mention such words don't", wrong.Count == 0, string.Join(" | ", wrong));
         check("away: ordinary messages don't start it",
             Away.Asked("why does the popup menu show lines") is null && Away.Asked("raise the approach slab by 100 mm") is null && Away.Asked("") is null, "");
         var now = new DateTime(2026, 11, 19, 11, 44, 0, DateTimeKind.Utc);

@@ -61,13 +61,19 @@ internal static class LoaderTests
 
         // Why Revit didn't take a request.
         var two = RevitBlock.EndCommandAfter;
-        check("a command left open with nobody at Revit: Esc after two minutes, three tries a minute apart; never a dialog, an edit mode, a busy Revit or while the user is there",
-            !RevitBlock.EndCommandNow(RevitBlock.Kind.Unknown, two - TimeSpan.FromSeconds(1), 0, true) && RevitBlock.EndCommandNow(RevitBlock.Kind.Unknown, two, 0, true)
-            && !RevitBlock.EndCommandNow(RevitBlock.Kind.Unknown, two, 1, true) && RevitBlock.EndCommandNow(RevitBlock.Kind.Unknown, two + TimeSpan.FromMinutes(1), 1, true)
-            && !RevitBlock.EndCommandNow(RevitBlock.Kind.Unknown, TimeSpan.FromHours(1), 3, true)
-            && !RevitBlock.EndCommandNow(RevitBlock.Kind.Unknown, TimeSpan.FromHours(1), 0, false)
-            && !RevitBlock.EndCommandNow(RevitBlock.Kind.Dialog, TimeSpan.FromHours(1), 0, true) && !RevitBlock.EndCommandNow(RevitBlock.Kind.EditMode, TimeSpan.FromHours(1), 0, true)
-            && !RevitBlock.EndCommandNow(RevitBlock.Kind.NotResponding, TimeSpan.FromHours(1), 0, true), "");
+        var idle = RevitBlock.IdleFor;
+        bool End(RevitBlock.Kind k, TimeSpan held, int tries, bool away = true, double quietS = 600, bool longWork = false) =>
+            RevitBlock.EndCommandNow(k, held, tries, away, TimeSpan.FromSeconds(quietS), longWork);
+        var hour = TimeSpan.FromHours(1);
+        check("a command left doing nothing with nobody at Revit: Esc after two minutes, three tries a minute apart",
+            !End(RevitBlock.Kind.Unknown, two - TimeSpan.FromSeconds(1), 0) && End(RevitBlock.Kind.Unknown, two, 0)
+            && !End(RevitBlock.Kind.Unknown, two, 1) && End(RevitBlock.Kind.Unknown, two + TimeSpan.FromMinutes(1), 1) && !End(RevitBlock.Kind.Unknown, hour, 3), "");
+        check("never a working command: not while Revit's processor, memory, files or journal moved in the last minute, never during a sync, open, save or link load, however quiet",
+            !End(RevitBlock.Kind.Unknown, hour, 0, quietS: idle.TotalSeconds - 1) && !End(RevitBlock.Kind.Unknown, hour, 0, quietS: 0)
+            && !End(RevitBlock.Kind.Unknown, hour, 0, longWork: true) && End(RevitBlock.Kind.Unknown, hour, 0, quietS: idle.TotalSeconds), "");
+        check("never while the user is there, never a dialog, an edit mode or a Revit that isn't responding",
+            !End(RevitBlock.Kind.Unknown, hour, 0, away: false) && !End(RevitBlock.Kind.Dialog, hour, 0) && !End(RevitBlock.Kind.EditMode, hour, 0)
+            && !End(RevitBlock.Kind.NotResponding, hour, 0), "");
         var held = RevitBlock.HeldLine(new RevitBlock.State(RevitBlock.Kind.Unknown, null), "Create Spot Elevation");
         check("held: the chat names the command still running, says Esc, and that the jobs carry on by themselves",
             held.Contains("Create Spot Elevation is still running") && held.Contains("Press Esc") && held.Contains("carry on by themselves")

@@ -858,6 +858,7 @@ internal static class FieldTestCoverage
         new(101, ["chat.once_coded_ui"], "Claude Code's transcripts are copied for good into Sketch ProMax's history folder, and the kept-code library reads those copies (unit tests)"),
         new(102, ["chat.once_coded_ui"], "The kept-code library has no limit: an index plus one file per code in a folder per topic, rebuilt once from all history (unit tests)"),
         new(103, ["chat.away_ui", "chat.revit_held_ui"], "With nobody at Revit, a command left open is ended with Esc after two minutes and the jobs carry on; \"I won't be available\" starts away mode (unit tests)"),
+        new(104, ["chat.away_ui", "chat.revit_held_ui"], "Esc only for a command doing nothing (no processor, memory, file or journal activity for a minute), never during long work; any way of saying he is away starts away mode (unit tests)"),
         new(96, ["time.ui"], "a chat task's time runs from the user's message; one that changed nothing says Answered in, one that started jobs says Handed to, and no time is counted saved unless the model changed (unit tests)"),
     ];
 
