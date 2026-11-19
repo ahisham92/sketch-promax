@@ -43,7 +43,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     /// <summary>True while a turn or a parallel job runs: switching to a new core version waits for it.</summary>
     public static bool IsBusy => _instance is { } pane && pane.Sessions.Any(s => s.Turn is not null
         // Jobs waiting to start don't hold an update back while an autopilot waits for it: they carry on in the new version.
-        || (s.Conv.Autopilot is { Updating.Length: > 0 } || s.UpdateHold.Length > 0 ? s.Runs.Count > 0 : s.Runs.Count > 0 || (s.Board?.OpenCount ?? 0) > 0));
+        // Paused jobs (Pause all, or paused for the update itself) carry on in the new version: only a process still ending holds it.
+        || (s.Conv.Autopilot is { Updating.Length: > 0 } || s.UpdateHold.Length > 0 || JobPause.On ? s.Runs.Count > 0 : s.Runs.Count > 0 || (s.Board?.OpenCount ?? 0) > 0));
 
     /// <summary>The pane's chat element (created on first use).</summary>
     public static FrameworkElement Get() => _instance ??= new ChatPane();
@@ -52,6 +53,11 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     {
         try
         {
+            var folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "SketchProMax");
+            JobPause.StoreFile = Path.Combine(folder, "jobs-paused.txt");
+            JobPause.Restore(); // paused before a version switch: still paused, or carried on once the chat is up (PauseTick)
+            Away.StoreFile = Path.Combine(folder, "away.txt");
+            Away.Restore();
             HistoryArchive.Start(); // Claude Code deletes its transcripts after 30 days: they are kept here for good (19 Nov 2026)
             Tools.WorkedCode.BackfillOnce(); // all code written before the library began comes in once (19 Nov 2026)
             if (app.ActiveUIDocument?.Document is { } doc) SetModel(doc);
@@ -675,6 +681,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         pickers.Children.Add(_typePill);
         pickers.Children.Add(_effortPick);
         pickers.Children.Add(PhonePill());
+        pickers.Children.Add(AwayPill());
+        pickers.Children.Add(PausePill());
         settings.Children.Add(pickers);
         composer.Children.Add(settings);
         composer.Children.Add(_statusRow);

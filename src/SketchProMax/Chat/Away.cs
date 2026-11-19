@@ -19,6 +19,48 @@ internal static class Away
     private static DateTime _until;
     private static readonly List<string> Said = [];
 
+    /// <summary>The file the spell's end is kept in (set by the chat at start), so a version switch keeps it; null: memory only.</summary>
+    public static string? StoreFile { get; set; }
+
+    /// <summary>Raised (any thread) when away mode starts or ends, for the Away button.</summary>
+    public static event Action? Changed;
+
+    /// <summary>The Away button: on for <paramref name="span"/> (at most <see cref="Longest"/>), or off.</summary>
+    public static void Set(bool on, DateTime now, TimeSpan? span = null)
+    {
+        lock (Gate)
+        {
+            _until = on ? now + (span is { } t && t < Longest ? t : Longest) : default;
+            Write();
+        }
+        Changed?.Invoke();
+    }
+
+    /// <summary>Reads the spell back after a version switch or a restart.</summary>
+    public static void Restore()
+    {
+        try
+        {
+            if (StoreFile is not { } file || !System.IO.File.Exists(file)) return;
+            if (DateTime.TryParse(System.IO.File.ReadAllText(file).Trim(), System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal, out var until))
+                lock (Gate) _until = until;
+        }
+        catch (Exception) { /* not away */ }
+    }
+
+    private static void Write()
+    {
+        try
+        {
+            if (StoreFile is not { } file) return;
+            if (_until == default) { if (System.IO.File.Exists(file)) System.IO.File.Delete(file); return; }
+            System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(file)!);
+            System.IO.File.WriteAllText(file, _until.ToString("o", System.Globalization.CultureInfo.InvariantCulture));
+        }
+        catch (Exception) { /* kept in memory */ }
+    }
+
     /// <summary>The longest an away spell lasts, whatever was said.</summary>
     public static readonly TimeSpan Longest = TimeSpan.FromHours(12);
 
@@ -89,23 +131,29 @@ internal static class Away
     /// </summary>
     public static string? Heard(string text, DateTime now, Func<DateTime, DateTime>? local = null)
     {
+        string? note = null;
         lock (Gate)
         {
             if (Asked(text) is { } span)
             {
                 _until = now + span;
+                Write();
                 var end = (local ?? (t => t.ToLocalTime()))(_until);
-                return $"Away mode until {end:HH:mm}: nothing pops up. Revit's pop-ups during the jobs' work are answered (Cancel, else No, else OK), " +
+                note = $"Away mode until {end:HH:mm}: nothing pops up. Revit's pop-ups during the jobs' work are answered (Cancel, else No, else OK), " +
                        "steps only you can do are skipped, and risky changes (deletes) wait for you. You get the list when you write next.";
             }
-            if (_until != default && (IsBack(text) || now >= _until))
+            else if (_until != default && (IsBack(text) || now >= _until))
             {
                 var was = _until > now;
                 _until = default;
-                return was ? "Away mode is off: pop-ups and questions show again." : null;
+                Write();
+                note = was ? "Away mode is off: pop-ups and questions show again." : null;
+                if (!was) return null;
             }
-            return null;
+            else return null;
         }
+        Changed?.Invoke();
+        return note;
     }
 
     /// <summary>Something answered or skipped while away, for the list the user gets (any thread).</summary>
