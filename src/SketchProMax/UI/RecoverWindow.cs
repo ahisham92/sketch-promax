@@ -489,10 +489,12 @@ internal sealed class RecoverWindow : System.Windows.Window
                         return (on, $"Selected in the model, in the view \"{on.Name}\".", element.Id);
                     }
                     ui.Selection.SetElementIds([element.Id]);
-                    ui.ShowElements(element.Id);
+                    ZoomOn(ui, element);
                     return (null, "Selected in the model.", null);
                 }
                 if (element is View v) { ui.RequestViewChange(v); return (null, "Opened.", null); }
+                // It isn't in the model: what the step before left selected would look like it.
+                try { ui.Selection.SetElementIds([]); } catch (Exception) { }
                 var view = line.View is { } vu ? doc.GetElement(vu) as View : null;
                 view ??= PlanOf(doc, line);
                 if (view is null || line.P is null) return (null, "Its place isn't known: look for it by hand.", null);
@@ -507,10 +509,10 @@ internal sealed class RecoverWindow : System.Windows.Window
                 {
                     var ui = app.ActiveUIDocument;
                     if (ui is null) return true;
-                    if (p.Select is { } select && ui.Document.GetElement(select) is not null)
+                    if (p.Select is { } select && ui.Document.GetElement(select) is { } there)
                     {
                         ui.Selection.SetElementIds([select]);
-                        ui.ShowElements(select);
+                        ZoomOn(ui, there);
                         return true;
                     }
                     if (line.P is not { } at) return true;
@@ -523,6 +525,25 @@ internal sealed class RecoverWindow : System.Windows.Window
             return p.Say;
         }
         catch (Exception ex) { return "Couldn't go there: " + ex.Message; }
+    }
+
+    /// <summary>
+    /// Zooms the active view on the element, with room around it. (Revit's own ShowElements selected it but left the
+    /// view where it was when called from this window, bug 91; it is the fallback when the element has no box here.)
+    /// </summary>
+    private static void ZoomOn(Autodesk.Revit.UI.UIDocument ui, Element element)
+    {
+        try
+        {
+            var view = ui.Document.ActiveView;
+            var open = view is null ? null : ui.GetOpenUIViews().FirstOrDefault(o => o.ViewId == view.Id);
+            var box = (view is null ? null : element.get_BoundingBox(view)) ?? element.get_BoundingBox(null);
+            if (open is null || box is null) { ui.ShowElements(element.Id); return; }
+            var size = box.Max - box.Min;
+            var pad = Math.Max(3, Math.Max(Math.Abs(size.X), Math.Max(Math.Abs(size.Y), Math.Abs(size.Z))) * 0.5);
+            open.ZoomAndCenterRectangle(box.Min - new XYZ(pad, pad, pad), box.Max + new XYZ(pad, pad, pad));
+        }
+        catch (Exception) { try { ui.ShowElements(element.Id); } catch (Exception) { } }
     }
 
     /// <summary>A floor plan of the line's level, for a model element that is gone.</summary>

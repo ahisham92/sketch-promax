@@ -99,6 +99,7 @@ internal static class RecoveryTests
             check("lifeline: Next goes round and Previous goes back", M.Step(-1, 3, false) == 0 && M.Step(2, 3, false) == 0 && M.Step(0, 3, true) == 2 && M.Step(-1, 3, true) == 2 && M.Step(-1, 0, false) == -1 && M.StepOf(0, 3) == "1 of 3", "");
             check("lifeline: a detail group is copied view to view, both ways", Src("Revit", "ChangeKeeper.cs").Contains("ElementTransformUtils.CopyElements(drawnIn, [e.Id], Details(keeper)") && Src("Revit", "ChangeKeeper.cs").Contains("source.ViewSpecific && keeper.GetElement(source.OwnerViewId) is View from"), "");
             check("lifeline: the replay window has Next and Previous over what is left", Src("UI", "RecoverWindow.cs").Contains("Brand.Button(\"Next\", Brand.Weight.Primary)") && Src("UI", "RecoverWindow.cs").Contains("M.ToDo(line, outcome.NotDone[index])"), "");
+            check("lifeline: Next and Show zoom on the element's own box (bug 91)", Src("UI", "RecoverWindow.cs").Contains("open.ZoomAndCenterRectangle(box.Min - new XYZ(pad, pad, pad), box.Max + new XYZ(pad, pad, pad));") && Src("UI", "RecoverWindow.cs").Split(new[] { "ZoomOn(ui, " }, StringSplitOptions.None).Length == 3, "");
             check("lifeline: the kept-elements project under its other name isn't watched", M.KeptSwapName != M.KeptName && Src("Revit", "ChangeKeeper.cs").Contains("M.KeptSwapName, StringComparison.OrdinalIgnoreCase"), "");
         }
         // No idle moments in an edit mode: a change reads what is waiting itself (bug 89).
