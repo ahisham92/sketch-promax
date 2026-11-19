@@ -68,10 +68,31 @@ internal static class WorkedCodeTests
             taken == 2 && redo.Count == 1 && redo[0].Uses == 2 && redo[0].Model == "Berth 10" && redo[0].Code.Contains("graded")
             && WorkedCode.Find(redo, "grade the approach slabs to the grading").Count == 1, taken + " " + redo.Count);
 
+        string Use(string id, string tool, string code, string what) => System.Text.Json.JsonSerializer.Serialize(new
+        {
+            timestamp = "2026-10-20T09:00:00Z",
+            message = new { content = new object[] { new { type = "tool_use", id, name = "mcp__sketch-promax__" + tool, input = new { code, description = what } } } },
+        });
+        string Result(string id, bool error) => System.Text.Json.JsonSerializer.Serialize(new
+        {
+            message = new { content = new object[] { new { type = "tool_result", tool_use_id = id, is_error = error, content = "x" } } },
+        });
+        var transcript = new[]
+        {
+            Use("a", "run_revit_query_code", Code("OST_Floors", 1) + "\nvar clashes = 0;", "Check clashes between piles and beams"), Result("a", false),
+            Use("b", "run_revit_code", Code("OST_Walls", 1), "Move walls"), Result("b", true),
+            Use("c", "capture_view_image", "", "picture"), Result("c", false),
+            "not json", "{\"type\":\"summary\"}",
+        };
+        var fromChats = WorkedCode.FromTranscript(transcript);
+        check("from the chat transcripts: every code call that worked, reads too, with its whole code; failed calls and other tools left out",
+            fromChats.Count == 1 && fromChats[0].Step.Tool == "run_revit_query_code" && fromChats[0].Step.Arguments.Contains("clashes")
+            && fromChats[0].Step.Time == new DateTime(2026, 10, 20, 9, 0, 0, DateTimeKind.Utc), fromChats.Count + "");
+
         var many = new List<WorkedCode.Entry>();
         for (var i = 0; i < WorkedCode.MaxEntries + 5; i++)
             WorkedCode.Keep(many, Code("OST_Walls", 1).Replace("piles", "items" + i).Replace("moved", "count" + i).Replace(" p ", " q" + i + " ").Replace("p.", "q" + i + ".").Replace("lp", "at" + i),
-                "Work number " + i, "run_revit_code", false, "", now.AddMinutes(i));
-        check("kept: capped, the oldest go first", many.Count == WorkedCode.MaxEntries && many.All(e => e.Description != "Work number 0") && many.Any(e => e.Description == "Work number " + (WorkedCode.MaxEntries + 4)), many.Count + "");
+                "Work" + (char)('a' + i % 26) + (char)('a' + i / 26 % 26) + (char)('a' + i / 676 % 26) + " " + i, "run_revit_code", false, "", now.AddMinutes(i));
+        check("kept: capped, the oldest go first", many.Count == WorkedCode.MaxEntries && many.All(e => !e.Description.EndsWith(" 0")) && many.Any(e => e.Description.EndsWith(" " + (WorkedCode.MaxEntries + 4))), many.Count + "");
     }
 }

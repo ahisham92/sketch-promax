@@ -852,9 +852,10 @@ internal static class FieldTestCoverage
         new(94, ["chat.jobs_keep_moving_ui"], "\"No split.\" never shows in a chat answer: not at the end of a real reply, not on a line of its own, not in chats saved earlier; the rest of the reply stays"),
         new(95, ["chat.checked_to_the_end_ui"], "a check judges the look against the reference and the chat's agreed method, not only numbers; practice: AZ sheet piles flush with the soffit, grading with full-length voids; a correcting lesson or note replaces the old one (unit tests)"),
         new(97, ["chat.revit_held_ui"], "a job whose call Revit doesn't take is not stopped as stuck: it waits (Waiting for Revit to be free), the chat names what holds Revit once, and the call runs by itself once Revit is free (unit tests)"),
-        new(98, ["chat.once_coded_ui"], "code adapted from kept code counts as another use of it, so it reaches the ready-made tool; the library keeps 1500 and takes in once the code changes in the redo logs from before it began (unit tests)"),
+        new(98, ["chat.once_coded_ui"], "code adapted from kept code counts as another use of it, so it reaches the ready-made tool; the library keeps 3000 and takes in once all past code that worked, from the redo logs and every chat and job transcript (unit tests)"),
         new(99, ["chat.update_busy_ui"], "a newer version waiting while jobs work holds new jobs (at most 20 minutes) so it goes in, and the chat says so"),
         new(100, ["chat.away_ui"], "said away or no pop-ups in the chat: Revit's dialogs during the jobs' work are answered, steps only the user can do skipped, risky changes left for them, and what happened is listed when they write next (unit tests)"),
+        new(101, ["chat.once_coded_ui"], "Claude Code's transcripts are copied for good into Sketch ProMax's history folder, and the kept-code library reads those copies (unit tests)"),
         new(96, ["time.ui"], "a chat task's time runs from the user's message; one that changed nothing says Answered in, one that started jobs says Handed to, and no time is counted saved unless the model changed (unit tests)"),
     ];
 
