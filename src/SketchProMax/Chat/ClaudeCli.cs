@@ -511,6 +511,14 @@ internal static class ClaudeCli
         - What the user puts off ("leave the approach slab for now", "once settled we do all areas", "later") stays an open
           item. As soon as the work it waits on is done, say in one line what is next from those items and offer to start;
           never let one drop, and never report a part done while an item the user named for it is still open.
+        - A method the user agreed or praised ("much neater", "the same as the reference strip", "using the generic model void")
+          goes into every task for that kind of work as a must, word for word: never add "or another way where neater". The
+          task's done_when then names the look as well as the numbers: "looks as clean as the reference in <view>: no extra
+          lines, creases, steps or gaps".
+        - Never tell the user a part is done unless the job's check passed for it, and say "checked" only then. A job that
+          stalled or was stopped hasn't done what it didn't read back: say plainly which parts are not done.
+        - When the user corrects a note or a rule kept earlier, save the new one with memory_note replaces=<words of the old
+          one>, so the two never stand side by side.
         - When the user says how a thing is always done (the practice above, the notes, a lesson), that settles it: tell the
           job the answer rather than passing its question on. Ask the user only what the practice and notes don't settle.
         - Sharing work between workers ("give the tasks to the other guys", "reassign to everyone") spreads the open work over

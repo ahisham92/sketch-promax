@@ -704,7 +704,7 @@ internal sealed partial class ChatPane
         if (job.State is not (JobBoard.Done or JobBoard.Failed) && !job.OverBudget || job.Review == JobReview.Pending) return;
         // Finished: a second worker checks the work in the model first (Settings > Chat).
         if (job.State == JobBoard.Done && _board is { } board && JobReview.Wanted(AgentSettings.Load().ChatJobReview, Run is { Active: true }, job)
-            && board.StartReview(job.Number, now, AskedWords()) is { } check)
+            && board.StartReview(job.Number, now, AskedWords(), _conv.Recall) is { } check)
         {
             ChatJobs.Assign(check, ChatAuto.Everyday);
             ShowJobCards();

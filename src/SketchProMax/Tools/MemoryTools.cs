@@ -12,12 +12,15 @@ public sealed class MemoryNoteTool : IRevitTool
         "in their words, short and self-contained; when they say \"forget ...\" use action=forget with the note or a few " +
         "words of it. scope=model (default) keeps it for the open model only; scope=global for every model (their habits, " +
         "standards, preferences). Notes are given to every in-Revit chat at its start (global plus that model's) and can be " +
-        "seen and edited in the Notes tab of the Sketch ProMax pane. action=list shows them. Not a model change.";
+        "seen and edited in the Notes tab of the Sketch ProMax pane. action=list shows them. When the new note changes an earlier " +
+        "one (the user corrected it), pass replaces with words of the earlier note: it is taken out, in either scope, so the two never " +
+        "stand side by side. Not a model change.";
     public string PropertiesJson => """
     {
       "action": {"type": "string", "enum": ["remember", "forget", "list"], "description": "Default list."},
       "note": {"type": "string", "description": "remember: the note. forget: the note, or words that appear in it."},
-      "scope": {"type": "string", "enum": ["model", "global"], "description": "Default model (the open model); global for every model."}
+      "scope": {"type": "string", "enum": ["model", "global"], "description": "Default model (the open model); global for every model."},
+      "replaces": {"type": "string", "description": "remember: words of an earlier note this one changes; that note is removed (model or global)."}
     }
     """;
     public string[] Required => [];
@@ -44,10 +47,19 @@ public sealed class MemoryNoteTool : IRevitTool
             {
                 var note = MemoryNotes.Clean(args.OptString("note") ?? "");
                 if (note.Length == 0) return ToolResult.Error("Give the note to remember in 'note'.");
-                var added = MemoryNotes.Change(s => MemoryNotes.Add(s, key, note));
+                var old = args.OptString("replaces") ?? "";
+                var gone = new List<string>();
+                var added = MemoryNotes.Change(s =>
+                {
+                    if (MemoryNotes.Clean(old).Length > 0)
+                        foreach (var k in new[] { modelKey, null }.Distinct())
+                            foreach (var match in MemoryNotes.Matches(s, k, old).Where(n => !string.Equals(n, note, StringComparison.OrdinalIgnoreCase)))
+                                if (MemoryNotes.Remove(s, k, match)) gone.Add(match);
+                    return MemoryNotes.Add(s, key, note);
+                });
                 return ToolResult.Ok(new
                 {
-                    remembered = note, scope = global ? "global" : "model", added,
+                    remembered = note, scope = global ? "global" : "model", added, replaced = gone,
                     next = added ? $"Tell the user it is remembered {where}; it is in the Notes tab of the pane." : "It was already remembered.",
                 });
             }

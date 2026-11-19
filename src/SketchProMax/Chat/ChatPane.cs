@@ -307,6 +307,9 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     private DateTime _waitingSince;
     private DateTime _lastActivity { get => _s.LastActivity; set => _s.LastActivity = value; }
     private readonly List<Attachment> _pending = [];
+
+    /// <summary>When the user sent the message the running task answers (UTC); null for a turn Sketch ProMax started itself.</summary>
+    private DateTime? _askedAt;
     private readonly Dictionary<string, (ChatItem Item, MarkdownView View)> _texts = new();
     private readonly Dictionary<string, ToolRow> _tools = new();
     private readonly Dictionary<ChatItem, MarkdownView> _views = new();
@@ -2251,6 +2254,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         _pending.Clear();
         ShowChips();
         Add(new ChatItem { Kind = "user", Text = text, Name = string.Join(", ", attachments.Select(a => a.Name)), Files = attachments.Select(a => a.Path).ToList() });
+        _askedAt = DateTime.UtcNow; // the task's time runs from here, through any brief written first
         _conv.Name = ChatHistory.NameFor(_conv);
         Save(); // the request is on disk before Claude Code starts on it
         ShowTitle();
@@ -3027,7 +3031,17 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         // "Done in X. By hand: about Y. Saved: Z." when the task's tools saved any time: on the job card when it has one.
         string? time = null;
         // (A chat answering in the background has no task time: it ended when the chat was left.)
-        try { if (_turn is not null && !Hidden) time = Revit.TimeLog.EndChat(); } catch (Exception) { }
+        try
+        {
+            if (_turn is not null && !Hidden)
+            {
+                var since = _turn.Started;
+                var jobs = _board?.Snapshot().Count(j => j.ReviewOf == 0 && j.GoalCheck == 0 && j.Created >= since) ?? 0;
+                time = Revit.TimeLog.EndChat(Revit.JobUndo.ElementsChanged, _askedAt, jobs);
+            }
+        }
+        catch (Exception) { }
+        _askedAt = null;
         var stopped = _turn?.Stopping == true || _control?.State == JobState.Stopping;
         var left = new List<(string Id, string Text)>();
         if (_control is not null) left = EndJob(stopped ? "stopped" : _turn?.Outcome ?? "done", time);

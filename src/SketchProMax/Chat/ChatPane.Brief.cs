@@ -58,6 +58,7 @@ internal sealed partial class ChatPane
             if (_conv == conv) await RunTurn(text, attachments, "", hint: TakeAsides()); // a question: it runs as typed
             return;
         }
+        _askedAt = null; // the card waits for the user's choice: the task's time starts when they choose
         var item = new ChatItem
         {
             Kind = "brief", Files = attachments.Select(a => a.Path).ToList(),
