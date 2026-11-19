@@ -19,6 +19,8 @@ internal static class LostJobTests
         check("lost job: only InTheWay decides busy, and a dropped job never is",
             jobs.Contains("busyWith = Recent.LastOrDefault(InTheWay);") && jobs.Contains("if (j.Abandoned) return false;"), "");
         check("lost job: cancel_job answers for a dropped job", jobs.Contains("job.Task is { IsCompleted: true } || job.Abandoned"), "");
+        check("trito tab: only the core that runs TritoRevit writes its version on the tab",
+            Read("src/SketchProMax/UI/TritoBrand.cs").Contains("if (_done || _app is null || !App.Shared) return;"), "");
         var features = Read("src/SketchProMax/Tools/FieldTest.Features.cs");
         check("lost job: the field test runs the job.lost probe", features.Contains("\"job.lost\", LostJobProbe"), "");
     }

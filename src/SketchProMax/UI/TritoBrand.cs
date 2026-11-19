@@ -8,6 +8,8 @@ namespace SketchProMax.UI;
 /// "Update" over the version, so a colleague can say which version they have without opening anything (2026-11-19).
 /// Done by the core, which runs the tab with either add-in, so the byte-stable TritoRevit add-in doesn't change; a core
 /// switched to with Revit open writes its own version. Cosmetic: never throws, and a PC with no TritoRevit tab is left alone.
+/// Only the core that runs the TritoRevit tab (shared mode) writes it: on a PC with both add-ins the Sketch ProMax core
+/// would otherwise put its own version on a tab whose tools run another, older core (19 Nov 2026).
 /// </summary>
 internal static class TritoBrand
 {
@@ -25,7 +27,7 @@ internal static class TritoBrand
     /// <summary>Writes the version when the tab is there. Revit's thread; asked again while the tab may still be coming.</summary>
     public static void Apply()
     {
-        if (_done || _app is null) return;
+        if (_done || _app is null || !App.Shared) return;
         try
         {
             var version = TritoTabMath.Short(typeof(TritoBrand).Assembly.GetName().Version);
