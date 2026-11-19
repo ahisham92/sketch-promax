@@ -18,7 +18,7 @@ internal static class ChangeKeeper
     private static string MapOf(string folder) => Path.Combine(folder, M.KeptMapName);
 
     /// <summary>The kept-elements project itself (never watched, never offered).</summary>
-    public static bool Is(string path) => string.Equals(Path.GetFileName(path), M.KeptName, StringComparison.OrdinalIgnoreCase);
+    public static bool Is(string path) => Path.GetFileName(path) is { } name && (string.Equals(name, M.KeptName, StringComparison.OrdinalIgnoreCase) || string.Equals(name, M.KeptSwapName, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>Which copy is whose: the element's UniqueId to its copy's UniqueId in the kept-elements project.</summary>
     public static Dictionary<string, string> ReadMap(string folder)
@@ -123,6 +123,8 @@ internal static class ChangeKeeper
         var kept = new HashSet<string>(StringComparer.Ordinal);
         if (elements.Count == 0) return kept;
         Document? keeper = null;
+        string? swap = null;
+        Dictionary<string, string>? swapMap = null;
         try
         {
             Directory.CreateDirectory(folder);
@@ -154,7 +156,10 @@ internal static class ChangeKeeper
                             if (keeper.GetElement(stale) is not null) keeper.Delete(stale);
                         }
                     }
-                    var copies = ElementTransformUtils.CopyElements(doc, [e.Id], keeper, Transform.Identity, Options());
+                    // Something drawn in a view (a detail group) is copied view to view, into a drafting view of the kept-elements project.
+                    var copies = e.ViewSpecific && doc.GetElement(e.OwnerViewId) is View drawnIn
+                        ? ElementTransformUtils.CopyElements(drawnIn, [e.Id], Details(keeper), Transform.Identity, Options())
+                        : ElementTransformUtils.CopyElements(doc, [e.Id], keeper, Transform.Identity, Options());
                     var copy = (e is Group ? copies.Select(keeper.GetElement).OfType<Group>().FirstOrDefault(g => g.GroupId == ElementId.InvalidElementId) : null)
                         ?? Main(keeper, copies, e, e.Category?.Id.Value ?? 0) ?? throw new InvalidOperationException("Revit copied nothing");
                     var copyUnique = copy.UniqueId;
@@ -169,13 +174,27 @@ internal static class ChangeKeeper
                 }
             }
             if (fresh) keeper.SaveAs(file, new SaveAsOptions { OverwriteExistingFile = true, MaximumBackups = 1 });
-            else keeper.Save();
-            File.WriteAllLines(MapOf(folder), M.WriteMade(map));
+            else
+                try { keeper.Save(); }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    // Revit couldn't save the project over itself ("Saving failed"): saved under another name, which takes the file's place once it is closed.
+                    swap = Path.Combine(folder, M.KeptSwapName);
+                    keeper.SaveAs(swap, new SaveAsOptions { OverwriteExistingFile = true, MaximumBackups = 1 });
+                    swapMap = map;
+                }
+            if (swap is null) File.WriteAllLines(MapOf(folder), M.WriteMade(map));
         }
         finally
         {
             try { keeper?.Close(false); } catch (Exception) { }
             Backups(folder);
+        }
+        if (swap is not null && swapMap is not null)
+        {
+            File.Copy(swap, FileOf(folder), true);
+            File.WriteAllLines(MapOf(folder), M.WriteMade(swapMap));
+            try { File.Delete(swap); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
         }
         return kept;
     }
@@ -220,7 +239,10 @@ internal static class ChangeKeeper
         var before = ChangeExtras.Notes(doc);
         // The old type steps aside, so the copy comes in under the name with what it is made of.
         old.Name = (name.Length > 200 ? name.Substring(0, 200) : name) + " (before replay " + Guid.NewGuid().ToString("N").Substring(0, 6) + ")";
-        var copies = ElementTransformUtils.CopyElements(keeper, [source.Id], doc, Transform.Identity, Options());
+        // A detail group's copy sits in a drafting view of the kept-elements project: it comes back view to view, into the group's own view.
+        var copies = source.ViewSpecific && keeper.GetElement(source.OwnerViewId) is View from
+            ? ElementTransformUtils.CopyElements(from, [source.Id], doc.GetElement(group.OwnerViewId) as View ?? throw new InvalidOperationException("the view the group is drawn in isn't there: edit the group again by hand"), Transform.Identity, Options())
+            : ElementTransformUtils.CopyElements(keeper, [source.Id], doc, Transform.Identity, Options());
         var pasted = copies.Select(doc.GetElement).OfType<Group>().FirstOrDefault(g => g.GroupId == ElementId.InvalidElementId)
             ?? throw new InvalidOperationException("Revit copied nothing back for the edited group: edit the group again by hand");
         var fresh = pasted.GroupType;
@@ -257,7 +279,8 @@ internal static class ChangeKeeper
     {
         try
         {
-            foreach (var backup in Directory.GetFiles(folder, Path.GetFileNameWithoutExtension(M.KeptName) + ".0*.rvt")) File.Delete(backup);
+            foreach (var name in new[] { M.KeptName, M.KeptSwapName })
+                foreach (var backup in Directory.GetFiles(folder, Path.GetFileNameWithoutExtension(name) + ".0*.rvt")) File.Delete(backup);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
     }
@@ -297,6 +320,19 @@ internal static class ChangeKeeper
             t.Commit();
         }
         catch (Exception) { if (t.GetStatus() == TransactionStatus.Started) t.RollBack(); }
+    }
+
+    /// <summary>The drafting view of the kept-elements project that holds copies of things drawn in a view (made the first time). Call inside a transaction of <paramref name="keeper"/>.</summary>
+    private static View Details(Document keeper)
+    {
+        if (new FilteredElementCollector(keeper).OfClass(typeof(ViewDrafting)).Cast<View>().FirstOrDefault(v => !v.IsTemplate && v.Name == M.KeptDetailsView) is { } have) return have;
+        var kind = new FilteredElementCollector(keeper).OfClass(typeof(ViewFamilyType)).Cast<ViewFamilyType>().FirstOrDefault(k => k.ViewFamily == ViewFamily.Drafting)
+            ?? throw new InvalidOperationException("the kept-elements project has no drafting view type");
+        var made = ViewDrafting.Create(keeper, kind.Id);
+        made.Name = M.KeptDetailsView;
+        // The scale of 1:1 keeps what is drawn at its size whatever view it came from.
+        try { made.Scale = 1; } catch (Exception) { }
+        return made;
     }
 
     private static CopyPasteOptions Options()
