@@ -109,11 +109,21 @@ internal static class PromptBriefs
 
     private static readonly Regex Steps = new(@"(\band then\b|\bthen\b|\bafter that\b|;|^\s*(\d+[.)]|[-*])\s)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Multiline);
 
+    /// <summary>
+    /// A question about work already done ("did you extend the piles...?", "have you moved...", "is it joined?"): a change
+    /// word in it names what was asked about, not a new task (19 Nov 2026: "did you extend the piles just upwards...?" was
+    /// read as a change, so the answer waited behind a brief).
+    /// </summary>
+    private static readonly Regex AskDone = new(
+        @"^(and |also |so |but |ok(ay)?,? )?(did|didn't|have|haven't|has|hasn't|had|is|isn't|are|aren't|was|wasn't|were|weren't|does|doesn't|do|don't) (you|u|we|it|they|this|that|these|those|the|all|every|both|any|everything)\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
     /// <summary>A quick look at the words: Read for a plain question, Change when it clearly acts, null when unsure.</summary>
     public static bool? LooksReadOnly(string text)
     {
         var t = text.Trim();
         if (t.Length == 0) return null;
+        if (AskDone.IsMatch(t) && t.EndsWith("?", StringComparison.Ordinal) && !Steps.IsMatch(t)) return true;
         var acts = ChangeWord.IsMatch(t);
         var asks = QuestionStart.IsMatch(t) || t.EndsWith("?", StringComparison.Ordinal);
         if (asks && !acts && !Steps.IsMatch(t)) return true;

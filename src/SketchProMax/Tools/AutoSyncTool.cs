@@ -18,7 +18,8 @@ public sealed class AutoSyncTool : IRevitTool
         "pauses every job, synchronizes with central and carries on; an item batch bigger than what is left is split across syncs. " +
         "One code call can't be split: keep each run_revit_code call under the changes left. action=status says the rule and the " +
         "changes left. action=skip when the user says to do a big step in one go or not to sync for this task (no pause, no sync, " +
-        "no split until their next message); action=resume puts the rule back. Not a model change.";
+        "no split until their next message); action=resume puts the rule back. Revit's \"Location Position Changed\" prompt during " +
+        "Sketch ProMax's sync is answered \"Do not save\" by itself (nothing moves): don't skip the rule for that prompt. Not a model change.";
     public string PropertiesJson => """
     {
       "action": {"type": "string", "enum": ["status", "skip", "resume"], "description": "Default status."},

@@ -212,6 +212,7 @@ public sealed class App : IExternalApplication
         try { StartupTimings.Time("change file", () => ChangeFile.Start(app)); } catch (Exception ex) { Revit.LifelineBugs.Note("start", "Lifeline didn't start: no change file is kept", null, ex); }
         CentralAccess.Watch(app);
         UnattendedDialogs.Watch(app);
+        PositionPrompt.Watch(app);
         // Our exceptions that reach Revit's UI thread are caught and logged; one on a background thread is logged before Revit closes.
         if (!shared) CrashGuard.Start(Ui);
 
@@ -353,6 +354,7 @@ public sealed class App : IExternalApplication
         try { ChangeFile.Stop(); } catch (Exception) { }
         CentralAccess.Unwatch(app);
         UnattendedDialogs.Unwatch(app);
+        PositionPrompt.Unwatch(app);
         ChatMcp.Stop();
         // A call still waiting for Revit can't move to the next core (each core has its own jobs and dispatcher): its
         // caller is told now, instead of waiting for a dispatcher that is about to stop (bug 87).

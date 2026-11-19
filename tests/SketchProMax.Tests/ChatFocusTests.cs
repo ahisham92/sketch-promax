@@ -46,7 +46,7 @@ internal static class ChatFocusTests
         check("hint: a small ask runs without a job or options, checked in the active view, three lines",
             small.Contains("no job") && small.Contains("changes least") && small.Contains("capture_view_image") && small.Contains("three lines"), small);
         check("hint: a correction needs an answer to correct; else it is judged as an ask",
-            ChatFocus.Hint("why is the slab not joined", 0, false, answered: false).Length == 0
+            !ChatFocus.Hint("why is the slab not joined", 0, false, answered: false).Contains("correction")
             && ChatFocus.Hint("still the selected one", 1, false, answered: false) == small, "");
         check("hint: nothing for ordinary work", ChatFocus.Hint("prepare the submission sheets for berths 7 to 11", 0, false, answered: true).Length == 0, "");
         check("hint: starts on its own paragraph, so the message reads as typed", small.StartsWith("\n\n[Sketch ProMax"), "");
@@ -149,6 +149,64 @@ internal static class ChatFocusTests
         check("pane: a typed message carries the hint and a correction is learned from",
             pane.Contains("LearnFrom(text);") && pane.Contains("hint: FocusHint(text, attachments) + ") && pane.Contains("var sent = text + hint + "), "");
         check("pane: a small ask or a correction gets no brief card", brief.Contains("if (FocusHint(text, attachments).Length > 0) return false;"), "");
+        // ---- 19 Nov 2026: repeats and questions in a real chat ("this is the fourth time", "did you extend the piles...?")
+        foreach (var said in new[]
+                 {
+                     "this is the fourth time", "This is the 3rd time I say this", "how many times do I need to say it",
+                     "I feel we are repeating the same things", "I already told you piles are never joined",
+                 })
+            check("repeat: \"" + said + "\"", ChatFocus.IsRepeat(said) && ChatFocus.IsCorrection(said), "");
+        check("repeat: ordinary messages are not one",
+            !ChatFocus.IsRepeat("do it at the same time as the tags") && !ChatFocus.IsRepeat("the first time you open it, check the levels") && !ChatFocus.IsRepeat(""), "");
+        var repeat = ChatFocus.Hint("this is the fourth time", 0, true, answered: true);
+        check("repeat: the hint finds the earlier messages and fixes the cause so it holds",
+            repeat.Contains("raised this before") && repeat.Contains("fix the cause") && repeat.Contains("not only this once"), repeat);
+        foreach (var said in new[]
+                 {
+                     "did you extend the piles just upwards to catch the slab and beams but you kept the tip level correct ?",
+                     "did you move the piles and made all updates of the grading in berth 9 and approach slabs ?",
+                     "why clara is not working are all tasks finalized ?", "I extended the void is that okay now ?",
+                     "is the model neat now?", "are all the joints joined?",
+                 })
+            check("question: \"" + said.Substring(0, Math.Min(40, said.Length)) + "\"", ChatFocus.IsQuestion(said), "");
+        foreach (var said in new[]
+                 {
+                     "extend the piles 100 mm into the slab", "move the 0.1m is fine as long as it will fix things", "are you working?",
+                     "yes and also follow the levels as it was 100mm into the beam", "did you extend the piles? then join the slabs and tag them", "",
+                 })
+            check("not a question: \"" + said + "\"", !ChatFocus.IsQuestion(said), "");
+        var question = ChatFocus.Hint("did you extend the piles and keep the tips?", 0, false, answered: true);
+        check("question: answered now, answer first, never handed to a job, nothing changed",
+            question.Contains("answer it yourself in this turn") && question.Contains("yes or no") && question.Contains("Don't start a job")
+            && question.Contains("get_activity_log") && question.Contains("Change nothing"), question);
+        check("question: gets no brief", !PromptBriefs.ShouldPlan(BriefMode.ModelChanges, "did you extend the piles just upwards to catch the slab and beams ?"), "");
+        var quick = ChatFocus.QuickMessage("did you extend the piles?", "Rules: piles never joined.",
+            [("user", "raise the pile heads"), ("assistant", "Job 26 has the pile heads.")],
+            [new ChatJob { Number = 26, Title = "Berth 10 pile heads", State = JobBoard.Done, Summary = "257 piles raised, tips unchanged." },
+             new ChatJob { Number = 27, Title = "Approach slabs", State = JobBoard.Running, Now = "Shaping voids" }]);
+        check("quick answer: the question, the chat's summary, its last messages and each job's report go with it",
+            quick.StartsWith("The user's question:\ndid you extend the piles?") && quick.Contains("piles never joined") && quick.Contains("User: raise the pile heads")
+            && quick.Contains("Job 26 (done): Berth 10 pile heads. Reported: 257 piles raised") && quick.Contains("Now: Shaping voids"), quick);
+        check("quick answer: answers from what is known, answer first, never changes the model or promises work",
+            ChatFocus.QuickInstructions.Contains("Start with the answer") && ChatFocus.QuickInstructions.Contains("Never change the model")
+            && ChatFocus.QuickInstructions.Contains("never promise work"), "");
+        var told = ChatFocus.Answered([("is the pit joined?", "Yes, all three are joined."), ("did you do berth 9?", "")]);
+        check("quick answer: the main chat hears what was asked and answered, and what still needs an answer",
+            told.Contains("is the pit joined? They were answered at once: Yes") && told.Contains("did you do berth 9? Not answered yet: answer it first")
+            && told.Contains("Don't answer the answered ones again") && ChatFocus.Answered([]).Length == 0, told);
+        var quickPane = Read("src/SketchProMax/Chat/ChatPane.Quick.cs");
+        check("pane: a question while the chat is busy is answered at once by a read-only run, and the chat hears it next",
+            pane.Contains("if (QuickAnswer(_input.Text)) return;") && pane.IndexOf("if (QuickAnswer(_input.Text)) return;", StringComparison.Ordinal) < pane.IndexOf("if (_turn is not null)\n", StringComparison.Ordinal)
+            && quickPane.Contains("readTools: true") && pane.Contains("TakeAsides()") && brief.Contains("hint: TakeAsides()"), "");
+        check("prompt: questions answered by the chat itself, put-off items come back, practice settles a job's question, sharing work keeps every worker, a 'don't show' holds",
+            chat.Contains("Never hand a question to a job") && chat.Contains("stays an open\n          item") && chat.Contains("tell the\n          job the answer")
+            && chat.Contains("the named one too") && chat.Contains("holds for the whole chat") && chat.Contains("are not questions: apply them"), "");
+        var sync = Read("src/SketchProMax/Revit/AutoSync.cs");
+        var prompt = Read("src/SketchProMax/Revit/PositionPrompt.cs");
+        check("sync: Revit's Location Position Changed prompt is answered Do not save only during Sketch ProMax's own sync or save, and said",
+            sync.Contains("PositionPrompt.During(() => { doc.SynchronizeWithCentral(") && Read("src/SketchProMax/Tools/LinkedModelTools.cs").Contains("PositionPrompt.During(() => { doc.Save();")
+            && prompt.Contains("if (_depth == 0 ||") && prompt.Contains("DoNotSave = 1002") && Read("src/SketchProMax/App.cs").Contains("PositionPrompt.Watch(app);")
+            && sync.Contains("+ Prompted()"), "");
         check("pane: lessons go to the memory notes, global or this model's",
             Read("src/SketchProMax/Chat/BriefRunner.cs").Contains("MemoryNotes.Add(sections, key, lesson.Note)"), "");
     }

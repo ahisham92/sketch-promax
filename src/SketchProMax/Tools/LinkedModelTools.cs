@@ -49,11 +49,12 @@ public sealed class SaveModelTool : IRevitTool
         if (shared)
         {
             if (AutoSync.SyncNow(doc) is { } failed) return ToolResult.Error($"\"{doc.Title}\" couldn't be synchronized with central: {failed}");
-            return ToolResult.Ok(new { model = doc.Title, synchronized = true, next = "Models that link this one can now reload_links to see the changes." });
+            return ToolResult.Ok(new { model = doc.Title, synchronized = true, prompt = (AutoSync.LastPrompt ?? "").Trim(), next = "Models that link this one can now reload_links to see the changes." });
         }
         if (!doc.IsModified) return ToolResult.Ok(new { model = doc.Title, saved = false, note = "Nothing to save: the file already has every change." });
-        doc.Save();
-        return ToolResult.Ok(new { model = doc.Title, saved = true, next = "Models that link this one can now reload_links to see the changes." });
+        // Revit's "Location Position Changed" prompt is answered "Do not save" during our save (PositionPrompt).
+        PositionPrompt.During(() => { doc.Save(); return 0; }, out var asked);
+        return ToolResult.Ok(new { model = doc.Title, saved = true, prompt = PositionPrompt.Said(asked).Trim(), next = "Models that link this one can now reload_links to see the changes." });
     }
 
     /// <summary>
