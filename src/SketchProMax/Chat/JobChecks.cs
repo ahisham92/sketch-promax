@@ -113,12 +113,29 @@ internal static class JobReview
     public const string DoneWord = "DONE", NotDoneWord = "NOT DONE";
 
     /// <summary>
+    /// A part that isn't the job's to finish (the owner, 19 Nov 2026: the 1800 mm beam and the pipes took "multiple multiple
+    /// multiple chats"): it waits for the user's decision, or another job changed it. Listed for the user, never sent back.
+    /// </summary>
+    public const string WaitingWord = "WAITING";
+
+    /// <summary>
     /// The checking job's task: the job's task and report, what the user asked in their own words (<paramref name="asked"/>,
     /// so a part the task left out is still caught), and how to answer: every part listed and read back, one by one.
     /// </summary>
-    public static string Task(ChatJob done, string asked = "", string rules = "") =>
+    public static string Task(ChatJob done, string asked = "", string rules = "", IReadOnlyList<string>? alongside = null) =>
         $"Check the work of job {done.Number} (\"{done.Title}\"), which says it is finished, against what it was asked to do.\n\n" +
-        $"Its task:\n{done.Task.Trim()}\n\nIts report:\n{(done.Summary.Trim().Length > 0 ? done.Summary.Trim() : "(it gave none)")}\n\n" +
+        $"Its task:\n{done.Task.Trim()}\n\n" +
+        (LaterAsks(done) is { Length: > 0 } later ? $"What it was asked later, while it worked (part of its task too):\n{later}\n\n" : "") +
+        $"Its report:\n{(done.Summary.Trim().Length > 0 ? done.Summary.Trim() : "(it gave none)")}\n\n" +
+        (done.Reviews > 0 && done.LastIssues.Trim().Length > 0
+            ? $"This is check {done.Reviews + 1}. The last check found these parts not done, and the job was sent back to finish them:\n" +
+              $"{Cut(done.LastIssues.Trim(), 1500)}\nRead those parts again carefully. The parts the last check found {DoneWord} only need a quick " +
+              "read that they are still there (no pictures unless the job changed them since): don't check everything again from the start.\n\n"
+            : "") +
+        (alongside is { Count: > 0 }
+            ? $"Other jobs worked in the model at the same time: {string.Join(", ", alongside)}. A change one of them made (joins, cuts, " +
+              $"moved or new elements) is not this job's part: mark it {WaitingWord} with that job's number, never {NotDoneWord}.\n\n"
+            : "") +
         (asked.Trim().Length > 0
             ? "What the user asked, in their own words (the task above was written from this; a part of it that belongs to this job and is " +
               $"missing from the task still counts):\n{asked.Trim()}\n\n"
@@ -143,8 +160,34 @@ internal static class JobReview
         "5. Don't change the model: changes are refused for a check.\n\n" +
         $"Answer with the list, one line per part: \"<n>. <the part>: {DoneWord}\" with what you read, or \"<n>. <the part>: {NotDoneWord} - " +
         "<what is missing or wrong, and where>\". A part you could not check is NOT DONE with the reason.\n" +
-        $"End with one line: \"{PassedWord}\" only when every part is {DoneWord}, or \"{IssuesWord}: \" followed by the {NotDoneWord} parts, " +
-        "each with what to fix.";
+        $"A part that is not the job's to finish is \"<n>. <the part>: {WaitingWord} - <why>\": it needs the user's decision or yes that " +
+        "nobody has given (a choice the job asked about, a change the user must approve), or another job changed it or does it. " +
+        $"{NotDoneWord} is only for what the job itself can still finish now, without asking anyone.\n" +
+        "Read each part once, with the tool that reads it directly; don't read the same thing twice.\n" +
+        $"If any part is {WaitingWord}, write one line \"{WaitingWord}: \" with those parts, each with the one thing it waits for.\n" +
+        $"End with one line: \"{PassedWord}\" when no part is {NotDoneWord} ({WaitingWord} parts don't stop a pass), or \"{IssuesWord}: \" " +
+        $"followed by the {NotDoneWord} parts only, each with what to fix.";
+
+    /// <summary>The job's later asks: messages it was sent after its task, not the check's send-back or Continue.</summary>
+    public static string LaterAsks(ChatJob job)
+    {
+        var said = job.Items.Where(i => i.Kind == "user").Skip(1).Select(i => i.Text.Trim())
+            .Where(t => t.Length > 0 && !t.StartsWith("A teammate checked your work", StringComparison.Ordinal)
+                        && t != JobPause.CarryOn && !t.StartsWith("Carry on with your task", StringComparison.Ordinal))
+            .ToList();
+        return Cut(string.Join("\n", said.Skip(Math.Max(0, said.Count - 5))), 2000);
+    }
+
+    /// <summary>The parts a check found waiting on the user or on another job: its WAITING line, "" none.</summary>
+    public static string WaitingOf(ChatJob check)
+    {
+        if (check.State != JobBoard.Done) return "";
+        var lines = check.Summary.Split('\n').Select(l => l.Trim().Trim('*', '_', '`').Trim()).ToList();
+        var line = lines.LastOrDefault(l => l.StartsWith(WaitingWord + ":", StringComparison.OrdinalIgnoreCase));
+        if (line is null) return "";
+        var text = line.Substring(WaitingWord.Length + 1).Trim();
+        return text.Length == 0 || text.Equals("none", StringComparison.OrdinalIgnoreCase) ? "" : JobBoard.OneLine(text, 800);
+    }
 
     /// <summary>
     /// True when a job whose check found parts not done goes back to finish them by itself, without the user or the main
@@ -159,6 +202,7 @@ internal static class JobReview
         $"A teammate checked your work in the model, part by part, and it is not finished. {job.Review}\n\n" +
         "Finish exactly these parts now; leave what was found done as it is. After each one, read it back in the model (and look at " +
         "drawn work in its view) before you go on. A part that truly can't be done: say why in one line, don't call it done. " +
+        (job.WaitingOn.Length > 0 ? $"Leave the parts that wait for the user or another job ({job.WaitingOn}): they are not yours to do now. " : "") +
         "Then report each of these parts as done or not done. Your work is checked again.";
 
     /// <summary>The checking job's verdict, from its report: its last line when that says PASSED or ISSUES, else the whole report.</summary>
@@ -182,10 +226,12 @@ internal static class JobReview
     /// <summary>What the coordinator is told about the check of a job's work; "" when it wasn't checked.</summary>
     public static string ReportLine(ChatJob job) =>
         job.Review.Length == 0 || job.Review == Pending ? ""
-        : Passed(job.Review) ? $"A teammate (job {job.ReviewedBy}) checked the work in the model: it passed."
+        : Passed(job.Review) ? $"A teammate (job {job.ReviewedBy}) checked the work in the model: it passed." +
+          (job.WaitingOn.Length > 0 ? $" Waiting, not the job's to finish: {job.WaitingOn} Ask the user what only they can decide in one short question; don't send the job back for these." : "")
         : $"A teammate (job {job.ReviewedBy}) checked the work in the model, part by part" + (job.Reviews > 1 ? $" ({job.Reviews} checks, the job was sent back to finish in between)" : "") +
           $", and this is still not done: {job.Review} Tell the user these parts first, exactly as not done; don't say the work is finished. " +
-          $"Then send job {job.Number} a message to finish them another way, or ask the user the one thing that blocks them.";
+          $"Then send job {job.Number} a message to finish them another way, or ask the user the one thing that blocks them." +
+          (job.WaitingOn.Length > 0 ? $" Also waiting, not the job's to finish: {job.WaitingOn}" : "");
 }
 
 /// <summary>

@@ -172,6 +172,37 @@ internal static class JobChecksTests
         check("review: a passed job, a failed check or a job with no verdict is not sent back",
             !JobReview.SendBack(new ChatJob { State = JobBoard.Done, Review = JobReview.PassedWord }) && !JobReview.SendBack(new ChatJob { State = JobBoard.Done, Review = "The check couldn't finish: usage limit" })
             && !JobReview.SendBack(new ChatJob { State = JobBoard.Done }) && !JobReview.SendBack(new ChatJob { State = JobBoard.Done, Review = JobReview.Pending }), "");
+        check("review: the third check reads the last check's not-done parts again first (bug 106)",
+            check3.Task.Contains("This is check 3") && check3.Task.Contains("A104 has no view placed") && check3.Task.Contains("don't check everything again"), check3.Task);
+
+        // Bug 106: parts waiting on the user or on another job pass, are told to the user, and never send the job back.
+        var jobs3 = new List<ChatJob>();
+        var b3 = new JobBoard(jobs3);
+        var beam = b3.Start("1800 mm beam", "Make the front beam 1800 mm deep", now, force: true, out _)!;
+        var pipes = b3.Start("Pipes", "Place the pipes through the deck", now, force: true, out _)!;
+        b3.ToStart(3, now);
+        b3.RunEnded(beam, true, "Beam 1800 mm; corner beam added. The +1.30 to +1.40 step needs your yes.", now.AddMinutes(1));
+        if (beam.Items.Count(i => i.Kind == "user") == 0) beam.Items.Add(new ChatItem { Kind = "user", Text = "Make the front beam 1800 mm deep" });
+        beam.Items.Add(new ChatItem { Kind = "user", Text = "also add the corner beam" });
+        var c1 = b3.StartReview(beam.Number, now.AddMinutes(2), "make the front beam 1800 mm")!;
+        check("waiting: the check knows which jobs worked at the same time and that their changes aren't this job's",
+            c1.Task.Contains($"job {pipes.Number} \"Pipes\"") && c1.Task.Contains(JobReview.WaitingWord) && c1.Task.Contains("never NOT DONE"), c1.Task);
+        check("waiting: the check has what the job was asked later", c1.Task.Contains("also add the corner beam"), c1.Task);
+        check("waiting: a part needing the user's yes is WAITING, not NOT DONE", c1.Task.Contains("needs the user's decision or yes"), c1.Task);
+        b3.ToStart(3, now);
+        b3.RunEnded(c1, true, "1. Beam 1800 mm: DONE\n2. Corner beam: DONE\n3. +1.30 to +1.40 step: WAITING - needs the user's yes\n4. Pile joins: WAITING - job 2 made them\n" +
+            "WAITING: 3. the +1.30 to +1.40 step needs the user's yes; 4. pile joins made by job 2\nPASSED", now.AddMinutes(3));
+        b3.ReviewEnded(c1, now.AddMinutes(3));
+        check("waiting: it passes and keeps what waits", JobReview.Passed(beam.Review) && beam.WaitingOn.Contains("+1.30 to +1.40") && !JobReview.SendBack(beam), beam.Review + " | " + beam.WaitingOn);
+        var r3 = JobBoard.Report([beam], 0);
+        check("waiting: the coordinator asks the user, doesn't send the job back", r3.Contains("it passed") && r3.Contains("+1.30 to +1.40") && r3.Contains("don't send the job back"), r3);
+        check("waiting: a check without a WAITING line has none", JobReview.WaitingOf(new ChatJob { State = JobBoard.Done, Summary = "PASSED" }) == ""
+            && JobReview.WaitingOf(new ChatJob { State = JobBoard.Done, Summary = "WAITING: none\nPASSED" }) == "", "");
+        var sentBack = new ChatJob { State = JobBoard.Done, Review = "ISSUES: 2. corner beam missing", WaitingOn = "3. the step needs the user's yes", Reviews = 1 };
+        check("waiting: a job sent back for real parts is told to leave the waiting ones", JobReview.SendBack(sentBack) && JobReview.FixMessage(sentBack).Contains("Leave the parts that wait"), JobReview.FixMessage(sentBack));
+        check("waiting: the check's send-back and Continue aren't counted as later asks",
+            JobReview.LaterAsks(new ChatJob { Items = [new() { Kind = "user", Text = "task" }, new() { Kind = "user", Text = "A teammate checked your work in the model, part by part" }, new() { Kind = "user", Text = JobPause.CarryOn }] }) == "", "");
+
         var failed = new ChatJob { ReviewOf = 1, State = JobBoard.Failed, Summary = "usage limit" };
         check("review: a check that failed says so", JobReview.Verdict(failed).StartsWith("The check couldn't finish"), JobReview.Verdict(failed));
         var crew = new CrewPlan();

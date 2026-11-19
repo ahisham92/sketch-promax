@@ -140,7 +140,7 @@ internal static class ChatFocusTests
             code.Contains("WorkedCode.Note(code, description, Name") && code.Contains("WorkedCode.PointerFor(description, code)"), "");
         var jobsPane = Read("src/SketchProMax/Chat/ChatPane.Jobs.cs");
         check("jobs: a check that finds parts not done sends the job back by itself, and the check carries the user's words",
-            jobsPane.Contains("if (JobReview.SendBack(checkedJob))") && jobsPane.Contains("JobReview.FixMessage(checkedJob)") && jobsPane.Contains("StartReview(job.Number, now, AskedWords(), _conv.Recall)")
+            jobsPane.Contains("if (JobReview.SendBack(checkedJob))") && jobsPane.Contains("JobReview.FixMessage(checkedJob)") && jobsPane.Contains("StartReview(job.Number, now, AskedWords(job.Created), _conv.Recall)")
             && chat.Contains("each part of your task as done or not"), "");
         var pane = Read("src/SketchProMax/Chat/ChatPane.cs");
         check("pane: a status question is answered from the job list at once, and kept code is named with the message",
