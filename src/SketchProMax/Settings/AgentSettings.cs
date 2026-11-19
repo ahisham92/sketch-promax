@@ -180,6 +180,18 @@ public sealed class AgentSettings
     public bool ChangeFile { get; set; } = true;
 
     /// <summary>
+    /// Lifeline's hints (Revit/LifelineWatch): the server of a central model stopped answering, the PC is short of
+    /// memory or disk, Revit is close to its window-handle limit, or a lot is unsaved. Hints only; on by default.
+    /// </summary>
+    public bool LifelineWarnings { get; set; } = true;
+
+    /// <summary>Lifeline saves the local copy by itself (never a synchronize) every <see cref="LifelineAutoSaveMinutes"/> minutes when it has changes. Off by default.</summary>
+    public bool LifelineAutoSave { get; set; }
+
+    /// <summary>How often the local copy is saved by itself: 20 minutes by default, 5 to 240.</summary>
+    public int LifelineAutoSaveMinutes { get; set; } = 20;
+
+    /// <summary>
     /// The size a model should stay under, in MB (Storage & cleanup shows the model against it; a model can still pass it):
     /// 200 by default, 10 to 100000 (Tools.ModelStorageMath).
     /// </summary>

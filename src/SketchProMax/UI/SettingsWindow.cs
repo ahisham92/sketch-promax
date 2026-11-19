@@ -38,6 +38,9 @@ public sealed class SettingsWindow : Window
     private readonly CheckBox _timeOn = Check("Count working time and time saved in each model");
     private readonly TextBox _idle = new() { Width = 56, MinHeight = 26, Margin = new Thickness(6, 0, 6, 0) };
     private readonly CheckBox _changeFile = Check("Keep a change file for each model (cleared at every save)");
+    private readonly CheckBox _lifeWarn = Check("Warn me when the server can't be reached, a lot is unsaved, or the PC is close to a crash");
+    private readonly CheckBox _lifeSave = Check("Save my local copy by itself every");
+    private readonly TextBox _lifeMinutes = new() { Width = 48, MinHeight = 26, Margin = new Thickness(6, 0, 6, 0) };
     private readonly TextBox _sigName = new() { MinHeight = 26 };
     private readonly TextBox _phoneNames = new() { MinHeight = 26 };
     private readonly ComboBox _sigRole = new() { IsEditable = true, MinHeight = 26 };
@@ -84,6 +87,9 @@ public sealed class SettingsWindow : Window
         _idle.Text = _settings.IdleMinutes.ToString("0.#", System.Globalization.CultureInfo.CurrentCulture);
         _rates = _settings.TimeRates;
         _changeFile.IsChecked = _settings.ChangeFile;
+        _lifeWarn.IsChecked = _settings.LifelineWarnings;
+        _lifeSave.IsChecked = _settings.LifelineAutoSave;
+        _lifeMinutes.Text = Revit.LifelineWatchMath.ClampMinutes(_settings.LifelineAutoSaveMinutes).ToString(System.Globalization.CultureInfo.CurrentCulture);
         _sigName.Text = _settings.SignatureName ?? "";
         _phoneNames.Text = _settings.PhoneProjectNames ?? "";
         _sigRole.Text = _settings.SignatureRole ?? "";
@@ -758,7 +764,21 @@ public sealed class SettingsWindow : Window
         var page = new StackPanel();
         page.Children.Add(Place("ChangeFile", _changeFile));
         page.Children.Add(Hint("A text file in Documents\\Sketch ProMax\\Change files lists every element you add, move, change or delete, a few seconds after you do it. " +
-                               "Saving or synchronizing clears it. If the model is lost or damaged, open the last good copy and replay the file onto it. It never saves or changes the model by itself."));
+                               "Saving or synchronizing clears it. If the model is lost or damaged, open the last good copy and replay the file onto it. It never changes the model by itself."));
+        page.Children.Add(Place("LifelineWarnings", _lifeWarn));
+        var saveRow = new WrapPanel { Margin = new Thickness(0, 6, 0, 0) };
+        _lifeSave.Margin = new Thickness(0);
+        _lifeSave.VerticalAlignment = VerticalAlignment.Center;
+        saveRow.Children.Add(Place("LifelineAutoSave", _lifeSave));
+        AutomationProperties.SetName(_lifeMinutes, "Minutes between saves");
+        AutomationProperties.SetHelpText(_lifeMinutes, $"From {Revit.LifelineWatchMath.MinMinutes} to {Revit.LifelineWatchMath.MaxMinutes} minutes; {Revit.LifelineWatchMath.DefaultMinutes} is the default.");
+        saveRow.Children.Add(Place("LifelineAutoSaveMinutes", _lifeMinutes));
+        var minutesText = Brand.Text("minutes");
+        minutesText.VerticalAlignment = VerticalAlignment.Center;
+        saveRow.Children.Add(minutesText);
+        page.Children.Add(saveRow);
+        page.Children.Add(Hint("Warnings are small hints in the corner: they never ask and never stop a command. Saving by itself is off unless you turn it on: " +
+                               "it saves your local copy at a quiet moment with no tool open and nothing selected, and never synchronizes with central. The Lifeline window has the same choices."));
         var recover = Brand.Button("Lifeline…");
         recover.HorizontalAlignment = HorizontalAlignment.Left;
         recover.Margin = new Thickness(0, 10, 0, 0);
@@ -1145,6 +1165,17 @@ public sealed class SettingsWindow : Window
             return;
         }
         _settings.ModelSizeLimitMb = sizeLimit;
+        if (!int.TryParse(_lifeMinutes.Text.Trim(), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.CurrentCulture, out var lifeMinutes)
+            || lifeMinutes < Revit.LifelineWatchMath.MinMinutes || lifeMinutes > Revit.LifelineWatchMath.MaxMinutes)
+        {
+            _error.Text = $"Type the minutes between saves (Lifeline tab) as a whole number from {Revit.LifelineWatchMath.MinMinutes} to {Revit.LifelineWatchMath.MaxMinutes} ({Revit.LifelineWatchMath.DefaultMinutes} is the default), then press Save again.";
+            _error.Visibility = Visibility.Visible;
+            ShowOnTab(SettingsLayout.Recovery, _lifeMinutes);
+            return;
+        }
+        _settings.LifelineWarnings = _lifeWarn.IsChecked == true;
+        _settings.LifelineAutoSave = _lifeSave.IsChecked == true;
+        _settings.LifelineAutoSaveMinutes = lifeMinutes;
         _settings.AutoSync = _autoSync.IsChecked == true;
         _settings.AutopilotResumeWeekly = _autopilotWeekly.IsChecked == true;
         _settings.AutopilotJobBudget = Picked(_apJob, Chat.JobBudget.DefaultPercent);
@@ -1200,6 +1231,7 @@ public sealed class SettingsWindow : Window
         }
         Revit.TimeLog.ReadSettings();
         Revit.ChangeFile.ReadSettings();
+        Revit.LifelineWatch.ReadSettings();
         Revit.AutoSync.ReadSettings();
         Bridge.Approvals.RaiseLevelChanged();
         Chat.ChatUi.SetMotion(motion);

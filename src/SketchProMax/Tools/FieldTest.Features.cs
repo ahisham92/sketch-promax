@@ -543,6 +543,8 @@ internal static partial class FieldTest
         await ProbeCore(s, "recovery.settings", () => App.Dispatcher.InvokeFromEventAsync(app => RecoverySettings(app, s))).ConfigureAwait(false);
         await ProbeCore(s, "recovery.where", () => App.Dispatcher.InvokeFromEventAsync(app => RecoveryWhere(app, s))).ConfigureAwait(false);
         await Probe(s, "recovery.bugs", () => RecoveryBugs(s)).ConfigureAwait(false);
+        // Saving by itself is tried on a new project made for it (no window): from the external event.
+        await ProbeCore(s, "recovery.watch", () => App.Dispatcher.InvokeFromEventAsync(app => RecoveryWatch(app, s))).ConfigureAwait(false);
         await Probe(s, "rescue.cause", RescueCause).ConfigureAwait(false);
         await Probe(s, "rescue.warn", RescueWarn).ConfigureAwait(false);
         await Probe(s, "rescue.activity", RescueActivity).ConfigureAwait(false);

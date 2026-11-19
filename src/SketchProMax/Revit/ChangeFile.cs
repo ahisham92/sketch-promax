@@ -177,6 +177,13 @@ internal static class ChangeFile
     /// <summary>For the field test: watch <paramref name="doc"/> (its folder under <see cref="RootForTest"/>), read what changed now, and stop watching.</summary>
     internal static void TrackForTest(Document doc) => Track(doc, opened: false);
 
+    /// <summary>How many elements have changed since the model's last save, as Lifeline has them (0 for a model it doesn't watch).</summary>
+    public static int ChangedCount(Document doc)
+    {
+        if (For(doc) is not { } model) return 0;
+        lock (Gate) return model.Written.Count + model.Pending.Count;
+    }
+
     internal static void ReadNow(Document doc)
     {
         // What a read queues for the next one (project information, for the project units) is read too.

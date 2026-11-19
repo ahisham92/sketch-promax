@@ -196,6 +196,7 @@ SignaturePagesTests.Run((name, ok, detail) => Check(name, ok, detail));
     SharingTests.Run(File.Exists(Path.Combine(root, "README.md")) ? root : Directory.GetCurrentDirectory(), (name, ok, detail) => Check(name, ok, detail));
     CrashSafetyTests.Run(File.Exists(Path.Combine(root, "README.md")) ? root : Directory.GetCurrentDirectory(), (name, ok, detail) => Check(name, ok, detail));
     RecoveryTests.Run(File.Exists(Path.Combine(root, "README.md")) ? root : Directory.GetCurrentDirectory(), (name, ok, detail) => Check(name, ok, detail));
+    LifelineWatchTests.Run(File.Exists(Path.Combine(root, "README.md")) ? root : Directory.GetCurrentDirectory(), (name, ok, detail) => Check(name, ok, detail));
     AutopilotStallTests.RunSources(File.Exists(Path.Combine(root, "README.md")) ? root : Directory.GetCurrentDirectory(), (name, ok, detail) => Check(name, ok, detail));
     ChatWorkTests.RunSources(File.Exists(Path.Combine(root, "README.md")) ? root : Directory.GetCurrentDirectory(), (name, ok, detail) => Check(name, ok, detail));
     SyncLockTests.RunSources(File.Exists(Path.Combine(root, "README.md")) ? root : Directory.GetCurrentDirectory(), (name, ok, detail) => Check(name, ok, detail));

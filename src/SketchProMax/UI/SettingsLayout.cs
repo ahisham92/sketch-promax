@@ -72,6 +72,10 @@ internal static class SettingsLayout
         ["ChecklistPath"] = SignOff,
         ["ChecklistHelper"] = SignOff,
         ["ChangeFile"] = Recovery,
+        // Also in the Lifeline window, which everyone has (with TritoRevit alone too).
+        ["LifelineWarnings"] = Recovery,
+        ["LifelineAutoSave"] = Recovery,
+        ["LifelineAutoSaveMinutes"] = Recovery,
         ["ModelSizeLimitMb"] = Storage,
         ["AutoUpdate"] = Updates,
     };

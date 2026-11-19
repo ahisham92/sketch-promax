@@ -300,6 +300,7 @@ public sealed class RevitDispatcher : IExternalEventHandler
         "TimeLog" => "time log",
         "BimReady" => "BIM-ready filling",
         "FreezeWatch" => "freeze watch",
+        "LifelineWatch" => "Lifeline watch",
         { } other => other,
         null => "idle work",
     };
