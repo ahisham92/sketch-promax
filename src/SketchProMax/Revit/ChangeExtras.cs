@@ -406,6 +406,8 @@ internal static class ChangeExtras
         try
         {
             if (e is not GraphicsStyle { GraphicsStyleType: GraphicsStyleType.Projection } style || style.GraphicsStyleCategory is not { } c) return false;
+            // Revit's own unnamed styles (one comes with a new text type) are not the project's.
+            if (c.Name is not { Length: > 0 }) return false;
             return c.Parent is { } parent ? parent.Id.Value < 0 : c.Id.Value < 0;
         }
         catch (Exception) { return false; }
@@ -448,7 +450,7 @@ internal static class ChangeExtras
         var views = ViewsOf(line, known, out var missing);
         if (views.Size == 0) throw new InvalidOperationException("none of the sheet set's views and sheets is in this model: make it again by hand");
         ViewSheetSet? Named() => new FilteredElementCollector(doc).OfClass(typeof(ViewSheetSet)).Cast<ViewSheetSet>().FirstOrDefault(s => s.Name == name);
-        if (Named() is { } there) { there.Views = views; return there; }
+        if (Named() is { } there) { GiveViews(there, views); return there; }
         try
         {
             var print = doc.PrintManager;
@@ -469,8 +471,22 @@ internal static class ChangeExtras
         var have = new HashSet<ElementId>(set.Views.Cast<View>().Select(v => v.Id));
         var wanted = new HashSet<ElementId>(want.Cast<View>().Select(v => v.Id));
         if (have.SetEquals(wanted)) return false;
-        set.Views = want;
+        GiveViews(set, want);
         return true;
+    }
+
+    /// <summary>
+    /// A saved set takes its views only through the print manager (set on the element itself, Revit keeps the old
+    /// ones), and through one settings object: each read of PrintManager.ViewSheetSetting is a new one.
+    /// </summary>
+    private static void GiveViews(ViewSheetSet set, ViewSet views)
+    {
+        var print = set.Document.PrintManager;
+        print.PrintRange = PrintRange.Select;
+        var setting = print.ViewSheetSetting;
+        setting.CurrentViewSheetSet = set;
+        setting.CurrentViewSheetSet.Views = views;
+        setting.Save();
     }
 
     public static string? CanMakeStyle(M.Line line) =>

@@ -511,6 +511,9 @@ internal static class ChangeFileMath
     public static readonly string[] Setups = ["Print setup", "DWG export setup", "DGN export setup", "PDF export setup", "Phase filter", "Colour fill scheme"];
 
     /// <summary>One unit's format in the project units, as a row of text, and back.</summary>
+    /// <summary>A setting of the model with no element drawn anywhere: its line is read and set by ChangeSettings.</summary>
+    public static bool IsSetting(Line l) => l.What is "revision" or "global" or "startview" or "param" or "site" or "place" or "revsetting" or "areavol";
+
     public static string UnitFormat(string spec, string unit, double accuracy, string symbol, int flags, string rounding) =>
         string.Join("|", spec, unit, accuracy.ToString("R", CultureInfo.InvariantCulture), symbol, flags.ToString(CultureInfo.InvariantCulture), rounding);
 

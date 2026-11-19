@@ -8,7 +8,8 @@ namespace SketchProMax.Revit;
 
 /// <summary>
 /// Lifeline's part for settings that live in the model and aren't drawn anywhere: revisions, global parameters,
-/// project (shared) parameters, the starting view, shared sites and the project units. Each is written with what it
+/// project (shared) parameters, the starting view, shared sites, the site's place on Earth, the revision numbering,
+/// the room area and volume settings and the project units. Each is written with what it
 /// takes to make or set it again; a replay makes or sets it. (Print and export setups are kept as copies, see
 /// <see cref="ChangeKeeper.SetupKind"/>; sheet sets are in <see cref="ChangeExtras"/>.)
 /// </summary>
@@ -21,10 +22,11 @@ internal static class ChangeSettings
     /// <summary>What kind of setting the element is (its line's What); null for anything else.</summary>
     public static string? Kind(Element e) => e switch
     {
-        Revision => "revision", GlobalParameter => "global", StartingViewSettings => "startview", SharedParameterElement => "param", ProjectLocation => "site", _ => null,
+        Revision => "revision", GlobalParameter => "global", StartingViewSettings => "startview", SharedParameterElement => "param", ProjectLocation => "site",
+        SiteLocation => "place", RevisionSettings => "revsetting", AreaVolumeSettings => "areavol", _ => null,
     };
 
-    public static bool Owns(M.Line line) => line.What is "revision" or "global" or "startview" or "param" or "site";
+    public static bool Owns(M.Line line) => M.IsSetting(line);
 
     /// <summary>A shared parameter that is a project parameter (bound to categories); one that only came with a family has no line.</summary>
     public static bool Bound(Document doc, SharedParameterElement shared)
@@ -76,6 +78,21 @@ internal static class ChangeSettings
                 case ProjectLocation site:
                     var at = site.GetProjectPosition(XYZ.Zero);
                     x["pos"] = string.Join(";", R(at.EastWest), R(at.NorthSouth), R(at.Elevation), R(at.Angle));
+                    break;
+                case SiteLocation place:
+                    line.Name = "Site location";
+                    x["place"] = string.Join(";", place.Latitude.ToString("R", CultureInfo.InvariantCulture), place.Longitude.ToString("R", CultureInfo.InvariantCulture), place.TimeZone.ToString("R", CultureInfo.InvariantCulture));
+                    x["placename"] = place.PlaceName ?? "";
+                    break;
+                case RevisionSettings revisions:
+                    line.Name = "Revision settings";
+                    x["rnumbering"] = revisions.RevisionNumbering.ToString();
+                    x["rspacing"] = R(revisions.RevisionCloudSpacing);
+                    break;
+                case AreaVolumeSettings rooms:
+                    line.Name = "Area and volume settings";
+                    x["volumes"] = rooms.ComputeVolumes ? "1" : "0";
+                    x["roomedge"] = rooms.GetSpatialElementBoundaryLocation(SpatialElementType.Room).ToString();
                     break;
             }
         }
@@ -248,6 +265,32 @@ internal static class ChangeSettings
                 if (M.Same(now.EastWest, D(p[0])) && M.Same(now.NorthSouth, D(p[1])) && M.Same(now.Elevation, D(p[2])) && M.Same(now.Angle, D(p[3]))) return false;
                 site.SetProjectPosition(XYZ.Zero, new ProjectPosition(D(p[0]), D(p[1]), D(p[2]), D(p[3])));
                 return true;
+            }
+            case SiteLocation place when x.TryGetValue("place", out var where):
+            {
+                var p = where.Split(';');
+                if (p.Length != 3) return false;
+                if (place.Latitude != D(p[0])) { place.Latitude = D(p[0]); changed = true; }
+                if (place.Longitude != D(p[1])) { place.Longitude = D(p[1]); changed = true; }
+                if (place.TimeZone != D(p[2])) { place.TimeZone = D(p[2]); changed = true; }
+                if (x.TryGetValue("placename", out var called) && called.Length > 0 && place.PlaceName != called) { place.PlaceName = called; changed = true; }
+                return changed;
+            }
+            case RevisionSettings revisions:
+            {
+                if (x.TryGetValue("rnumbering", out var n) && Enum.TryParse<RevisionNumbering>(n, out var numbering) && revisions.RevisionNumbering != numbering) { revisions.RevisionNumbering = numbering; changed = true; }
+                if (x.TryGetValue("rspacing", out var sp) && !M.Same(revisions.RevisionCloudSpacing, D(sp))) { revisions.RevisionCloudSpacing = D(sp); changed = true; }
+                return changed;
+            }
+            case AreaVolumeSettings rooms:
+            {
+                if (x.TryGetValue("volumes", out var v) && rooms.ComputeVolumes != (v == "1")) { rooms.ComputeVolumes = v == "1"; changed = true; }
+                if (x.TryGetValue("roomedge", out var edge) && Enum.TryParse<SpatialElementBoundaryLocation>(edge, out var location) && rooms.GetSpatialElementBoundaryLocation(SpatialElementType.Room) != location)
+                {
+                    rooms.SetSpatialElementBoundaryLocation(location, SpatialElementType.Room);
+                    changed = true;
+                }
+                return changed;
             }
         }
         return false;

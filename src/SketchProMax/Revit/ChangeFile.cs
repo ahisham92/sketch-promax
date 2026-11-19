@@ -177,7 +177,11 @@ internal static class ChangeFile
     /// <summary>For the field test: watch <paramref name="doc"/> (its folder under <see cref="RootForTest"/>), read what changed now, and stop watching.</summary>
     internal static void TrackForTest(Document doc) => Track(doc, opened: false);
 
-    internal static void ReadNow(Document doc) => ReadPending(doc, int.MaxValue);
+    internal static void ReadNow(Document doc)
+    {
+        // What a read queues for the next one (project information, for the project units) is read too.
+        for (var round = 0; round < 4 && ReadPending(doc, int.MaxValue); round++) { }
+    }
 
     internal static void ForgetForTest(Document doc)
     {
@@ -821,7 +825,7 @@ internal static class ChangeFile
         var line = new M.Line
         {
             Kind = M.Kinds.State, At = Now, Id = element.Id.Value, Unique = element.UniqueId,
-            Category = setup ?? category?.Name ?? item switch { "filter" => "View filter", "linepattern" => "Line pattern", "fillpattern" => "Fill pattern", "sheetset" => "Sheet set", "global" => "Global parameter", "startview" => "Starting view", "param" => "Project parameter", _ => null }, CategoryId = category?.Id.Value ?? 0,
+            Category = setup ?? category?.Name ?? item switch { "filter" => "View filter", "linepattern" => "Line pattern", "fillpattern" => "Fill pattern", "sheetset" => "Sheet set", "global" => "Global parameter", "startview" => "Starting view", "place" => "Site location", "revsetting" => "Revision settings", "areavol" => "Area and volume settings", "param" => "Project parameter", _ => null }, CategoryId = category?.Id.Value ?? 0,
             What = item ?? ChangeShapes.Kind(element) ?? ChangeNotes.Kind(element) ?? viewKind ?? element switch
             {
                 Level => "level", Grid => "grid", ElementType => "type", Wall => "wall", FamilyInstance => "instance", Material => "material",
