@@ -87,6 +87,20 @@ internal static class RecoveryTests
         check("recovery: the change file never saves the model", !Src("Revit", "ChangeFile.cs").Contains(".Save(") && !Src("Revit", "ChangeFile.cs").Contains("SynchronizeWithCentral"), "");
         check("lifeline: named Lifeline on the pane and in Settings", SketchProMax.UI.CoreRibbonManifest.Text.Contains("\tLifeline\t") && Src("UI", "SettingsLayout.cs").Contains("\"Lifeline\""), "");
         check("lifeline: can go in a shared pack for colleagues", SketchProMax.Sharing.SharedPackMath.Shareable("recover"), "");
+        // Bug 90: what to do about each thing left, in one sentence; Next goes round; detail groups are copied view to view.
+        {
+            var goneLine = new M.Line { Kind = M.Kinds.Deleted, Category = "Spot Elevations", Name = "Target" };
+            var madeLine = new M.Line { Kind = M.Kinds.State, Category = "Walls", Type = "Generic 200", New = true };
+            check("lifeline: a refused deletion says to delete it by hand", M.ToDo(goneLine, "03:58 Spot Elevations (deleted, Finish sketch): " + M.CantDelete) == "Spot Elevations \"Target\": delete it by hand.", M.ToDo(goneLine, "03:58 Spot Elevations (deleted, Finish sketch): " + M.CantDelete));
+            check("lifeline: Revit's own error on a deletion still says what to do", M.ToDo(goneLine, "03:58 x (deleted): ElementId cannot be deleted.").StartsWith("Delete Spot Elevations \"Target\" by hand", StringComparison.Ordinal), "");
+            check("lifeline: something new that couldn't be madeLine says to make it again", M.ToDo(madeLine, "10:00 Walls (added or changed): Revit refused").StartsWith("Make Walls \"Generic 200\" again by hand", StringComparison.Ordinal), "");
+            check("lifeline: a reason that already says what to do is used as it is", M.ToDo(madeLine, "10:00 Walls (added or changed): the outline wasn't written: edit its outline again by hand") == "Walls \"Generic 200\": edit its outline again by hand.", M.ToDo(madeLine, "10:00 Walls (added or changed): the outline wasn't written: edit its outline again by hand"));
+            check("lifeline: with no line the sentence still stands", M.ToDo(null, "something odd").Contains("this one"), "");
+            check("lifeline: Next goes round and Previous goes back", M.Step(-1, 3, false) == 0 && M.Step(2, 3, false) == 0 && M.Step(0, 3, true) == 2 && M.Step(-1, 3, true) == 2 && M.Step(-1, 0, false) == -1 && M.StepOf(0, 3) == "1 of 3", "");
+            check("lifeline: a detail group is copied view to view, both ways", Src("Revit", "ChangeKeeper.cs").Contains("ElementTransformUtils.CopyElements(drawnIn, [e.Id], Details(keeper)") && Src("Revit", "ChangeKeeper.cs").Contains("source.ViewSpecific && keeper.GetElement(source.OwnerViewId) is View from"), "");
+            check("lifeline: the replay window has Next and Previous over what is left", Src("UI", "RecoverWindow.cs").Contains("Brand.Button(\"Next\", Brand.Weight.Primary)") && Src("UI", "RecoverWindow.cs").Contains("M.ToDo(line, outcome.NotDone[index])"), "");
+            check("lifeline: the kept-elements project under its other name isn't watched", M.KeptSwapName != M.KeptName && Src("Revit", "ChangeKeeper.cs").Contains("M.KeptSwapName, StringComparison.OrdinalIgnoreCase"), "");
+        }
         // No idle moments in an edit mode: a change reads what is waiting itself (bug 89).
         check("lifeline: with no idle moment for a while a change reads the waiting elements itself", M.ReadNow(M.NoIdleMs + 1, M.EagerEveryMs + 1) && !M.ReadNow(500, 5000) && !M.ReadNow(5000, 200), "");
         check("lifeline: a change reads what waits when Revit gave no idle moment, and outline lines aren't deleted one by one",

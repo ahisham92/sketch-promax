@@ -1054,8 +1054,54 @@ internal static partial class FieldTest
                 // Played again, there is nothing to give back.
                 if (ChangeReplay.Plan(doc, parsed, new ChangeReplay.Outcome { KeptFolder = folder, Kept = map }).Any(p => p.Act == ChangeReplay.Act.Regroup)) problems.Add("a second replay would give the type its edit again");
             }
+            // A detail group (lines drawn in a view) edited after the save: its copy is kept view to view, and gives the type its edit back.
+            var details = false;
+            if (plan is not null)
+                try
+                {
+                    ChangeKeeper.Close(outcome.Keeper);
+                    Group drawn, redrawn;
+                    using (var t = new Transaction(doc, "Field test: lifeline detail group"))
+                    {
+                        t.Start();
+                        var z = level.ProjectElevation;
+                        DetailCurve D(double y) => doc.Create.NewDetailCurve(plan, Line.CreateBound(new XYZ(0, y, z), new XYZ(20, y, z)));
+                        var (p, q) = (D(-500), D(-495));
+                        drawn = doc.Create.NewGroup([p.Id, q.Id]);
+                        drawn.GroupType.Name = name + " detail";
+                        var (u, v, w) = (D(-600), D(-595), D(-590));
+                        redrawn = doc.Create.NewGroup([u.Id, v.Id, w.Id]);
+                        t.Commit();
+                    }
+                    made.AddRange([drawn.Id, drawn.GroupType.Id, redrawn.Id, redrawn.GroupType.Id]);
+                    var wantDrawn = ChangeExtras.GroupShape(redrawn);
+                    if (wantDrawn is null) problems.Add("what a detail group is made of couldn't be read");
+                    else if (!ChangeKeeper.Keep(doc, folder, [redrawn]).Contains(redrawn.UniqueId)) problems.Add("a detail group wasn't copied into the kept-elements project");
+                    else
+                    {
+                        var copyOf = ChangeKeeper.ReadMap(folder)[redrawn.UniqueId];
+                        var keeper = ChangeKeeper.Open(app.Application, folder) ?? throw new InvalidOperationException("the kept-elements project isn't there");
+                        try
+                        {
+                            using var t = new Transaction(doc, "Field test: lifeline detail group, the edit put back");
+                            t.Start();
+                            ChangeKeeper.Regroup(keeper, doc, drawn, copyOf);
+                            t.Commit();
+                        }
+                        finally { ChangeKeeper.Close(keeper); }
+                        if (!drawn.IsValidObject) problems.Add("the detail group is gone after its edit was put back");
+                        else
+                        {
+                            made.Add(drawn.GroupType.Id);
+                            if (drawn.GetMemberIds().Count != 3 || ChangeExtras.GroupShape(drawn) != wantDrawn) problems.Add($"the detail group has {drawn.GetMemberIds().Count} lines after its edit was put back, not the 3 of the edit");
+                            if (drawn.GroupType.Name != name + " detail") problems.Add($"the detail group type is named {drawn.GroupType.Name} after its edit was put back");
+                            details = true;
+                        }
+                    }
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException) { problems.Add("a detail group edited after the save: " + ex.Message); }
             return problems.Count == 0
-                ? Pass("a group edited after the save (a wall added inside it) came back from its kept copy in both groups of the type, each wall where the edit put it, under the type's name" + (noted ? ", with the tag and the dimension on its walls" : " (no tag could be placed in this template: tags not checked)") + "; without the copy the replay says to edit it by hand")
+                ? Pass((details ? "a detail group's edit came back from its copy too; " : "") + "a group edited after the save (a wall added inside it) came back from its kept copy in both groups of the type, each wall where the edit put it, under the type's name" + (noted ? ", with the tag and the dimension on its walls" : " (no tag could be placed in this template: tags not checked)") + "; without the copy the replay says to edit it by hand")
                 : Fail(string.Join("; ", problems));
         }
         catch (Exception ex) when (ex is not OutOfMemoryException) { return Fail(string.Join("; ", problems.Append(ex.Message))); }

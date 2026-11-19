@@ -494,6 +494,12 @@ internal static class ChangeFileMath
     /// </summary>
     public const string KeptName = "kept elements.rvt";
     public const string KeptMapName = "kept elements.txt";
+    /// <summary>The drafting view of the kept-elements project that holds copies of things drawn in a view (detail groups).</summary>
+    public const string KeptDetailsView = "Kept details";
+    /// <summary>The kept-elements project saved under another name when Revit couldn't save it over itself; it takes the file's place once closed.</summary>
+    public const string KeptSwapName = "kept elements (new).rvt";
+    /// <summary>A deletion Revit doesn't let an add-in do (the view that is open, an element Revit holds).</summary>
+    public const string CantDelete = "you deleted it, but Revit doesn't let an add-in delete this one: delete it by hand";
 
     /// <summary>A view template's line.</summary>
     public static bool IsTemplate(Line l) => l.What == "view" && l.Extra is { } x && x.ContainsKey("template");
@@ -791,6 +797,35 @@ internal static class ChangeFileMath
         var at = reportLine.IndexOf("): ", StringComparison.Ordinal);
         return at >= 0 ? reportLine.Substring(at + 3) : reportLine;
     }
+
+    /// <summary>
+    /// What the user does about one thing a replay didn't do, as one plain instruction: the reason's own "… by hand"
+    /// when it has one, else by what the line is (deleted, made, changed), with what Revit said.
+    /// </summary>
+    public static string ToDo(Line? line, string notDone)
+    {
+        var reason = Reason(notDone).Replace("\r", " ").Replace("\n", " ").Trim();
+        var name = line?.Type ?? line?.Name;
+        var label = line is null ? "this one" : (line.Category is { Length: > 0 } c ? c : "the element") + (name is { Length: > 0 } ? $" \"{name}\"" : "");
+        var hand = reason.LastIndexOf("by hand", StringComparison.Ordinal);
+        if (hand >= 0)
+        {
+            var from = reason.LastIndexOf(": ", hand, StringComparison.Ordinal);
+            var clause = reason.Substring(from < 0 ? 0 : from + 2, hand + 7 - (from < 0 ? 0 : from + 2)).Trim();
+            if (from < 0 || clause.Length < 12) clause = reason.Substring(0, hand + 7);
+            return $"{label}: {clause}.";
+        }
+        var said = reason.Length > 200 ? reason.Substring(0, 200) + "…" : reason;
+        if (line?.Kind == Kinds.Deleted) return $"Delete {label} by hand: you had deleted it, and it is still in the model. Revit said: {said}";
+        if (line?.New == true) return $"Make {label} again by hand where it was. Revit said: {said}";
+        return $"Check {label} and set it by hand as you had changed it. Revit said: {said}";
+    }
+
+    /// <summary>Where the step-by-step row is: "3 of 12".</summary>
+    public static string StepOf(int index, int count) => $"{index + 1} of {count}";
+
+    /// <summary>The next (or previous) item of <paramref name="count"/>, going round; -1 (not started) goes to the first, or to the last going back.</summary>
+    public static int Step(int index, int count, bool back) => count <= 0 ? -1 : index < 0 ? (back ? count - 1 : 0) : ((index + (back ? -1 : 1)) % count + count) % count;
 
     /// <summary>The header and the newest <paramref name="max"/> lines.</summary>
     public static List<string> TrimBugs(List<string> lines, int max)
