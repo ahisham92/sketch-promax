@@ -40,6 +40,7 @@
     <Compile Include="../../src/SketchProMax/Chat/ChatFocus.cs" Link="ChatFocus.cs" />
     <Compile Include="../../src/SketchProMax/Chat/Autopilot.cs" Link="Autopilot.cs" />
     <Compile Include="../../src/SketchProMax/Chat/Away.cs" Link="Away.cs" />
+    <Compile Include="../../src/SketchProMax/Chat/JobPause.cs" Link="JobPause.cs" />
     <Compile Include="../../src/SketchProMax/Chat/HistoryArchive.cs" Link="HistoryArchive.cs" />
     <Compile Include="../../src/SketchProMax/Chat/SignInHealth.cs" Link="SignInHealth.cs" />
     <Compile Include="../../src/SketchProMax/Chat/JobChecks.cs" Link="JobChecks.cs" />
