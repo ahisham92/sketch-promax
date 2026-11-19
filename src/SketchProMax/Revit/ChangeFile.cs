@@ -785,7 +785,8 @@ internal static class ChangeFile
         if (element is GraphicsStyle style) return StyleLine(doc, style);
         var category = element.Category;
         var viewKind = ChangeViews.Kind(element);
-        var item = element switch { ParameterFilterElement => "filter", LinePatternElement => "linepattern", FillPatternElement => "fillpattern", _ => null };
+        var setup = ChangeKeeper.SetupKind(element);
+        var item = element switch { ParameterFilterElement => "filter", LinePatternElement => "linepattern", FillPatternElement => "fillpattern", ViewSheetSet => "sheetset", _ => setup is not null ? "setup" : null };
         if (category is null && element is not ElementType && viewKind is null && item is null) return null;
         // What Revit makes by itself with something else (a sketch's automatic dimensions, a view's camera and section
         // box, a loaded type's preview), and what belongs to a title block or isn't on a sheet.
@@ -799,7 +800,7 @@ internal static class ChangeFile
         var line = new M.Line
         {
             Kind = M.Kinds.State, At = Now, Id = element.Id.Value, Unique = element.UniqueId,
-            Category = category?.Name ?? item switch { "filter" => "View filter", "linepattern" => "Line pattern", "fillpattern" => "Fill pattern", _ => null }, CategoryId = category?.Id.Value ?? 0,
+            Category = setup ?? category?.Name ?? item switch { "filter" => "View filter", "linepattern" => "Line pattern", "fillpattern" => "Fill pattern", "sheetset" => "Sheet set", _ => null }, CategoryId = category?.Id.Value ?? 0,
             What = item ?? ChangeShapes.Kind(element) ?? ChangeNotes.Kind(element) ?? viewKind ?? element switch
             {
                 Level => "level", Grid => "grid", ElementType => "type", Wall => "wall", FamilyInstance => "instance", Material => "material",
@@ -807,6 +808,9 @@ internal static class ChangeFile
             },
         };
         try { line.Name = element.Name; } catch (Exception) { }
+        // A sheet/view set: the views and sheets in it.
+        if (element is ViewSheetSet sheetSet)
+            try { (line.Extra ??= [])["views"] = M.JoinViews(sheetSet.Views.Cast<View>().Select(v => v.UniqueId)); } catch (Exception) { }
         if (element is not ElementType && doc.GetElement(element.GetTypeId()) is ElementType type)
         {
             line.Type = $"{type.FamilyName}: {type.Name}";

@@ -425,6 +425,54 @@ internal static class ChangeExtras
         try { if (c.Material is { } material) x["material"] = material.UniqueId; } catch (Exception) { }
     }
 
+    // ---- Sheet/view sets ---------------------------------------------------------------------------------------------------
+
+    public static string? CanMakeSheetSet(M.Line line) =>
+        line.Name is not { Length: > 0 } ? "a sheet set with no name in the file: make it again by hand"
+        : M.SplitViews(line).Count == 0 ? "a sheet set with no views or sheets in the file: make it again by hand" : null;
+
+    private static ViewSet ViewsOf(M.Line line, Func<string?, Element?> known, out int missing)
+    {
+        var set = new ViewSet();
+        missing = 0;
+        foreach (var unique in M.SplitViews(line))
+            if (known(unique) is View view) set.Insert(view);
+            else missing++;
+        return set;
+    }
+
+    /// <summary>Makes the sheet/view set of the line again, through Revit's print manager (the only way Revit gives). Call inside a transaction.</summary>
+    public static Element MakeSheetSet(Document doc, M.Line line, Func<string?, Element?> known)
+    {
+        var name = line.Name!;
+        var views = ViewsOf(line, known, out var missing);
+        if (views.Size == 0) throw new InvalidOperationException("none of the sheet set's views and sheets is in this model: make it again by hand");
+        ViewSheetSet? Named() => new FilteredElementCollector(doc).OfClass(typeof(ViewSheetSet)).Cast<ViewSheetSet>().FirstOrDefault(s => s.Name == name);
+        if (Named() is { } there) { there.Views = views; return there; }
+        try
+        {
+            var print = doc.PrintManager;
+            print.PrintRange = PrintRange.Select;
+            var setting = print.ViewSheetSetting;
+            setting.CurrentViewSheetSet.Views = views;
+            setting.SaveAs(name);
+        }
+        catch (Exception ex) { throw new InvalidOperationException($"Revit couldn't save the sheet set \"{name}\" ({ex.Message}): make it again by hand"); }
+        return Named() ?? throw new InvalidOperationException($"Revit didn't keep the sheet set \"{name}\": make it again by hand");
+    }
+
+    /// <summary>Gives a sheet/view set that is in the model the views of its line; true when they differed. Call inside a transaction.</summary>
+    public static bool SetSheetSet(ViewSheetSet set, M.Line line, Func<string?, Element?> known)
+    {
+        var want = ViewsOf(line, known, out _);
+        if (want.Size == 0) return false;
+        var have = new HashSet<ElementId>(set.Views.Cast<View>().Select(v => v.Id));
+        var wanted = new HashSet<ElementId>(want.Cast<View>().Select(v => v.Id));
+        if (have.SetEquals(wanted)) return false;
+        set.Views = want;
+        return true;
+    }
+
     public static string? CanMakeStyle(M.Line line) =>
         line.Name is { Length: > 0 } && line.Extra is { } x && x.ContainsKey("parent") ? null : "a style made after the last save that the file can't make: make it again by hand";
 

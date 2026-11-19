@@ -102,6 +102,17 @@ internal static class RecoveryTests
             check("lifeline: Next and Show zoom on the element's own box (bug 91)", Src("UI", "RecoverWindow.cs").Contains("open.ZoomAndCenterRectangle(box.Min - new XYZ(pad, pad, pad), box.Max + new XYZ(pad, pad, pad));") && Src("UI", "RecoverWindow.cs").Split(new[] { "ZoomOn(ui, " }, StringSplitOptions.None).Length == 3, "");
             check("lifeline: the kept-elements project under its other name isn't watched", M.KeptSwapName != M.KeptName && Src("Revit", "ChangeKeeper.cs").Contains("M.KeptSwapName, StringComparison.OrdinalIgnoreCase"), "");
         }
+        // Settings that live in the model: print and export setups are kept as copies, sheet sets are made again from their views.
+        {
+            var setup = new M.Line { Kind = M.Kinds.State, What = "setup", Category = M.Setups[0], Name = "A1 black" };
+            var sheets = new M.Line { Kind = M.Kinds.State, What = "sheetset", Name = "Issue", Extra = new() { ["views"] = M.JoinViews(["b", "a", "b", ""]) } };
+            var wall = new M.Line { Kind = M.Kinds.State, What = "wall" };
+            check("lifeline: a print or export setup is a document item kept as a copy", M.IsDocItem(setup) && !M.IsDocItem(sheets) && M.Setups.Length == 5, "");
+            check("lifeline: a sheet set keeps its views once each, in a steady order", string.Join(",", M.SplitViews(sheets)) == "a,b" && M.SplitViews(wall).Count == 0, string.Join(",", M.SplitViews(sheets)));
+            var order = M.PlayOrder(M.Read(new[] { new M.Line { Kind = M.Kinds.Model, Path = "x", Format = M.FormatNew }, sheets, wall, setup }.Select(M.Write)));
+            check("lifeline: setups are played early and sheet sets after the views", order.Count == 3 && order[0].What == "setup" && order[2].What == "sheetset", string.Join(",", order.Select(l => l.What)));
+            check("lifeline: setups and sheet sets are recorded and replayed", Src("Revit", "ChangeFile.cs").Contains("ViewSheetSet => \"sheetset\"") && Src("Revit", "ChangeKeeper.cs").Contains("PrintSetting => M.Setups[0], ExportDWGSettings => M.Setups[1]") && Src("Revit", "ChangeReplay.cs").Contains("ChangeKeeper.Replace(from, doc, element") && Src("Revit", "ChangeExtras.cs").Contains("setting.SaveAs(name);"), "");
+        }
         // No idle moments in an edit mode: a change reads what is waiting itself (bug 89).
         check("lifeline: with no idle moment for a while a change reads the waiting elements itself", M.ReadNow(M.NoIdleMs + 1, M.EagerEveryMs + 1) && !M.ReadNow(500, 5000) && !M.ReadNow(5000, 200), "");
         check("lifeline: a change reads what waits when Revit gave no idle moment, and outline lines aren't deleted one by one",
