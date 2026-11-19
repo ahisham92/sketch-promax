@@ -312,6 +312,7 @@ internal sealed partial class ChatPane
             {
                 var item = new ChatItem { Kind = "assistant" };
                 Put(item);
+                if (turn is { Quiet: true }) turn.Held.Add((item, null));
                 s.Texts[start.Key] = item;
                 if (turn is not null) turn.SawText = true;
                 s.Now = "Writing";
@@ -324,7 +325,9 @@ internal sealed partial class ChatPane
             case AssistantTextEvent text:
                 if (text.Text.Trim().Length == 0) break;
                 if (turn is not null) turn.SawText = true;
-                Put(new ChatItem { Kind = "assistant", Text = text.Text });
+                var whole = new ChatItem { Kind = "assistant", Text = text.Text };
+                Put(whole);
+                if (turn is { Quiet: true }) turn.Held.Add((whole, null));
                 break;
             case ToolUseEvent tool:
             {

@@ -64,6 +64,13 @@ internal static class JobChecksTests
         check("free workers: the coordinator is told to hand steps to new jobs and tell the job", share.Contains("job 25") && share.Contains("3 steps") && share.Contains("chat_jobs start")
             && share.Contains("chat_jobs message") && share.Contains("not typed by the user"), share);
 
+        check("free workers: the coordinator's \"No split.\" is an internal answer the chat never shows",
+            FreeWorkers.IsNothing("No split.") && FreeWorkers.IsNothing("  no split\n") && FreeWorkers.IsNothing("**No split.**")
+            && FreeWorkers.IsNothing("No split: every step needs the one before.") && FreeWorkers.IsNothing("")
+            && share.Contains("never shown"), "");
+        check("free workers: a real answer after a nudge is still shown",
+            !FreeWorkers.IsNothing("Started job 26 for the fenders and told job 25 to leave them.") && !FreeWorkers.IsNothing("Split off steps 3 and 4 into job 26."), "");
+
         check("budget: 15 % by default, 0 is off", JobBudget.DefaultPercent == 15 && JobBudget.Share(0) == 0 && JobBudget.Share(15) == 0.15, "");
 
         var jobs = new List<ChatJob>();

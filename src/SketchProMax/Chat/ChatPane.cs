@@ -262,6 +262,12 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         public DateTime Started = DateTime.UtcNow;
         /// <summary>Where its time goes, for the activity log's answer_time line.</summary>
         public AnswerTiming? Timing;
+        /// <summary>
+        /// A turn Sketch ProMax sent on its own whose "nothing to do" answer the user mustn't see (FreeWorkers.Nudge): its
+        /// text is held out of sight while it streams and dropped at the end when it only says so (FreeWorkers.IsNothing).
+        /// </summary>
+        public bool Quiet;
+        public readonly List<(ChatItem Item, UIElement? Element)> Held = new();
     }
 
     /// <summary>A task at least this long that finishes gets the finished glow and, when you are in another program, the taskbar flash.</summary>
@@ -2260,19 +2266,22 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
 
     /// <summary>Sends a message to Claude Code as a new turn (from Send, or from a choice on a brief card).</summary>
     /// <param name="hint">What goes to Claude after the text and is never shown (ChatFocus.Hint): how to take a small ask or a correction.</param>
-    private async Task RunTurn(string text, List<Attachment> attachments, string brief, PromptBrief? plan = null, string hint = "")
+    /// <param name="quiet">A turn Sketch ProMax sent on its own (not the user's): no task card, and an answer that only says
+    /// there was nothing to do is never shown (<see cref="Turn.Quiet"/>).</param>
+    private async Task RunTurn(string text, List<Attachment> attachments, string brief, PromptBrief? plan = null, string hint = "", bool quiet = false)
     {
         if (DeliveryCapture is { } capture)
         {
             capture(text); // the field test's hook: what would be sent, never sent
             return;
         }
-        var turn = _turn = new Turn { Brief = brief };
+        var turn = _turn = new Turn { Brief = brief, Quiet = quiet };
         CrewHeard(); // the large chat's coordinator nods: your message, or a job reporting back
         // Automatic model and effort: picked for this request by its kind of work, and said in the chat when it changes.
         PickFor(text, attachments.Any(a => System.IO.Path.GetExtension(a.Path).ToLowerInvariant() is ".pdf" or ".docx" or ".pptx" or ".doc"));
         // A chat working in the background (a job's report, its Autopilot's next step) has no task card or task time.
-        if (!Hidden)
+        // Nor does a quiet turn: it isn't the user's task (it mustn't reset their Undo all or count task time).
+        if (!Hidden && !quiet)
         {
             Revit.TimeLog.BeginChat(brief);
             BeginJob(plan);
@@ -2631,6 +2640,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
                 JobWriting();
                 var item = new ChatItem { Kind = "assistant" };
                 Add(item);
+                Hold(turn, item);
                 _texts[start.Key] = (item, _views[item]);
                 if (turn is not null) turn.SawText = true;
                 if (turn is { Stopping: false }) ShowStatus("Sketch ProMax is writing…");
@@ -2647,7 +2657,9 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
                 if (text.Text.Trim().Length == 0) break;
                 JobWriting();
                 if (turn is not null) turn.SawText = true;
-                Add(new ChatItem { Kind = "assistant", Text = text.Text });
+                var said = new ChatItem { Kind = "assistant", Text = text.Text };
+                Add(said);
+                Hold(turn, said);
                 break;
             case ThinkingEvent:
                 JobThinking("", newBlock: true);
@@ -2754,9 +2766,41 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             Note("Stopped. Ask again, or say what to do instead.");
         else if (end.IsError)
             Failure(message, end.Subtype);
-        else if (!turn.SawText && message.Length > 0)
+        else if (!turn.SawText && message.Length > 0 && !(turn.Quiet && FreeWorkers.IsNothing(message)))
             Add(new ChatItem { Kind = "assistant", Text = message });
         EndTurn();
+    }
+
+    /// <summary>A quiet turn's text is drawn out of sight until the turn ends (<see cref="ReleaseHeld"/>).</summary>
+    private void Hold(Turn? turn, ChatItem item)
+    {
+        if (turn is not { Quiet: true }) return;
+        UIElement? element = null;
+        if (!Hidden && _messages.Children.Count > 0)
+        {
+            element = _messages.Children[_messages.Children.Count - 1];
+            element.Visibility = Visibility.Collapsed;
+        }
+        turn.Held.Add((item, element));
+    }
+
+    /// <summary>
+    /// A quiet turn ended: text that only says there was nothing to do ("No split.") is dropped from the chat and its
+    /// history; anything else it wrote is shown.
+    /// </summary>
+    private void ReleaseHeld(Turn turn)
+    {
+        foreach (var (item, element) in turn.Held)
+        {
+            if (FreeWorkers.IsNothing(item.Text))
+            {
+                _conv.Items.Remove(item);
+                if (element is not null) _messages.Children.Remove(element);
+                Forget([item]);
+            }
+            else if (element is not null) element.Visibility = Visibility.Visible;
+        }
+        turn.Held.Clear();
     }
 
     private void Failure(string message, string subtype)
@@ -2938,6 +2982,11 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     private void EndTurn()
     {
         var ended = _turn;
+        if (ended is { Quiet: true })
+        {
+            if (!Hidden) RenderDirty(); // the held text is complete before it is judged
+            ReleaseHeld(ended);
+        }
         if (_turn?.KillTimer is { } timer) timer.Stop();
         // An answer ended: the next message's model note counts changes from now (not after a brief's planning or a shrink).
         if (ended is { Planning: false, Shrinking: false }) Revit.ChatModelWatch.Mark(_conv.Key);
