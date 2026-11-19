@@ -678,6 +678,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         _usagePill.Margin = new Thickness(ChatUi.S1, 0, -ChatUi.S1, 0);
         settings.Children.Add(_usagePill);
         var pickers = new WrapPanel();
+        pickers.Children.Add(QuestionsPill());
         pickers.Children.Add(_typePill);
         pickers.Children.Add(_effortPick);
         pickers.Children.Add(PhonePill());
@@ -757,6 +758,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         // A job's own chat takes the conversation's place; the switcher and the job's bar sit above it.
         var jobTop = BuildJobView();
         _center.Children.Add(_jobScroll!);
+        _center.Children.Add(BuildQuestionsView());
         _center.Children.Add(_jump);
         // The history drawer slides over the conversation; the dimmed rest closes it when clicked.
         _scrim.Background = Brand.Brush(Color.FromArgb(0x55, 0, 0, 0));
@@ -773,6 +775,12 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         KeyDown += (_, e) =>
         {
             if (e.Key != Key.Escape || e.Handled) return;
+            if (_questionsShown)
+            {
+                e.Handled = true;
+                HideQuestions(focus: true);
+                return;
+            }
             if (_viewJob is not null)
             {
                 e.Handled = true;
@@ -2234,6 +2242,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         if (Away.Take() is { Length: > 0 } meanwhile) Note(meanwhile);
         if (Away.Heard(_input.Text, DateTime.UtcNow) is { } away) Note(away);
         // A plain question while the chat is busy (answering, writing a brief, hearing a job): answered at once (ChatPane.Quick).
+        // "4 yes" answers question 4 of the Questions tab (ChatPane.Questions), also while the chat is busy.
+        if (!_sample && TypedAnswers(_input.Text)) return;
         if (QuickAnswer(_input.Text)) return;
         if (_turn is not null)
         {

@@ -234,14 +234,17 @@ internal sealed partial class ChatPane
         if (_board is not null && ReferenceEquals(_boardJobs, _conv.Jobs))
         {
             HookJobs();
+            QuestionsChanged();
             return;
         }
         EndRuns("The chat was left, so this job stopped. Open the chat again and send it a message to carry on.");
         _boardJobs = _conv.Jobs;
-        _board = new JobBoard(_conv.Jobs);
+        _conv.Questions ??= [];
+        _board = new JobBoard(_conv.Jobs, _conv.Questions);
         _board.AfterReload(DateTime.UtcNow);
         _reports.Clear();
         HookJobs();
+        QuestionsChanged();
     }
 
     /// <summary>The bridge reaches this chat's jobs (again, when a failed version switch revived this pane).</summary>
@@ -382,6 +385,7 @@ internal sealed partial class ChatPane
             PumpJobs();
             ShowJobCards();
             RefreshJobView();
+            QuestionsChanged();
             SaveSoon();
             ShowElsewhere();
         }, DispatcherPriority.Background);
@@ -1099,6 +1103,7 @@ internal sealed partial class ChatPane
     private void OpenJobView(int number)
     {
         if (_board?.Find(number) is null || _jobScroll is null) return;
+        if (_questionsShown) HideQuestions(focus: false);
         CloseDrawer();
         if (_viewJob != number)
         {
