@@ -621,11 +621,20 @@ public sealed class BridgeServer
                 // Revit idled or ran other work meanwhile: it isn't held by a command, only busy; start the count again.
                 if (_dispatcher.Heard != heard) { heard = _dispatcher.Heard; heldSince = DateTime.UtcNow; continue; }
                 var now = await _dispatcher.BlockerAsync().ConfigureAwait(false);
-                if (!RevitBlock.EndCommandNow(now.Kind, DateTime.UtcNow - heldSince, tries, Chat.Away.On || Chat.Autopilot.Unattended)) continue;
+                var activity = Revit.FreezeWatch.Activity();
+                var cause = Revit.FreezeWatch.Cause();
+                if (!RevitBlock.EndCommandNow(now.Kind, DateTime.UtcNow - heldSince, tries, Chat.Away.On || Chat.Autopilot.Unattended,
+                        activity.Quiet, Revit.FreezeCause.IsLongWork(cause)))
+                {
+                    if (Chat.Away.On || Chat.Autopilot.Unattended)
+                        ActivityLog.Note("revit_esc_skipped", $"{tool.Name} (job {id}): Revit held {(int)(DateTime.UtcNow - heldSince).TotalSeconds} s, {now.Kind}, " +
+                                                              $"{FreezeCause.Verdict(activity)} ({activity.CpuPercent}% processor), last command {cause.What}: not ended");
+                    continue;
+                }
                 tries++;
                 Revit.FreezeWatch.EndLeftCommand();
                 ActivityLog.Note("revit_esc", $"{tool.Name} (job {id}): Revit took no work for {(int)(DateTime.UtcNow - heldSince).TotalMinutes} min while nobody was there " +
-                                              $"(last command {busy}); Esc pressed twice to end it (try {tries})");
+                                              $"(last command {cause.What}, {FreezeCause.Verdict(activity)}, {activity.CpuPercent}% processor); Esc pressed twice to end it (try {tries})");
                 if (tries == 1)
                     Chat.Away.Note($"Revit took no work for two minutes{(busy.Length > 0 ? $" ({busy} was still open)" : "")}; Esc ended it so the jobs could carry on");
             }
