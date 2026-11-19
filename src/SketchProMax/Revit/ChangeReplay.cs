@@ -305,6 +305,7 @@ internal static class ChangeReplay
         "linepattern" or "fillpattern" => "a pattern made after the last save whose copy wasn't kept: make it again by hand",
         "setup" => $"a {(line.Category ?? "setup").ToLowerInvariant()} made after the last save whose copy wasn't kept: make it again by hand",
         "sheetset" => ChangeExtras.CanMakeSheetSet(line),
+        _ when ChangeSettings.Owns(line) => ChangeSettings.CanMake(line),
         _ when line.What != "viewref" && line.CategoryId is (long)BuiltInCategory.OST_ReferenceViewer or (long)BuiltInCategory.OST_ReferenceViewerSymbol =>
             "a view reference made after the last save (written by an older version): place it again by hand",
         "stairs" => ChangeStairs.CanMake(line),
@@ -491,6 +492,9 @@ internal static class ChangeReplay
             return false;
         }
         if (line.What == "sheetset" && element is ViewSheetSet sheetSet) return !justMade && ChangeExtras.SetSheetSet(sheetSet, line, u => Known(u));
+        if (ChangeSettings.Owns(line)) return !justMade && ChangeSettings.Set(doc, element, line, u => Known(u));
+        // Project information carries the project units.
+        if (element is ProjectInfo && line.Extra is { } carried && carried.TryGetValue("units", out var units)) changed |= ChangeSettings.SetUnits(doc, units);
         // A filter or pattern that was in the model gets what its kept copy has.
         if (!justMade && line.What is "filter" or "linepattern" or "fillpattern")
         {
@@ -653,6 +657,7 @@ internal static class ChangeReplay
         if (line.What == "material") return ChangeTypes.MakeMaterial(doc, line);
         if (line.What == "style") return ChangeExtras.MakeStyle(doc, line);
         if (line.What == "sheetset") return ChangeExtras.MakeSheetSet(doc, line, Known);
+        if (ChangeSettings.Owns(line)) return ChangeSettings.Make(doc, line, Known);
         if (line.What == "group" && outcome.LateGroups.Contains(line.Unique!))
         {
             // The first group of a new type names the type; later ones of that type take it.

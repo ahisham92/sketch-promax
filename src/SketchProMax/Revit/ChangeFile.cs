@@ -46,6 +46,8 @@ internal static class ChangeFile
         public readonly HashSet<long> Reloaded = [];
         /// <summary>New elements waiting for their copy in the kept-elements project, and whether copies stopped for the session (one took too long).</summary>
         public readonly HashSet<long> Keeps = [];
+        /// <summary>The project units as last seen (<see cref="ChangeSettings.Units"/>): Revit names no element of their own when they change.</summary>
+        public string? Units;
         public bool KeepOff;
         /// <summary>
         /// What each group type is made of (<see cref="ChangeExtras.GroupShape"/>), by the type's id: as the model had it
@@ -206,6 +208,7 @@ internal static class ChangeFile
             if (opened && Models.TryGetValue(path, out var known)) model = known;
             else Models[path] = model = new Model { Path = path, Folder = FolderFor(path), Central = central };
         }
+        if (model.Units is null) model.Units = ChangeSettings.Units(doc);
         // Opened: a file left from before (Revit closed by itself, or closed without saving) is kept with its time.
         if (opened) Queue(() => KeepLeftover(model));
         // Carried on (a newer core while Revit runs): what the file marks as made in the session stays marked.
@@ -693,6 +696,7 @@ internal static class ChangeFile
         var lines = new List<M.Line>();
         var asked = new HashSet<long>();
         var clock = System.Diagnostics.Stopwatch.StartNew();
+        var unitsMaybe = false;
         for (var i = 0; i < ids.Count; i++)
         {
             var id = ids[i];
@@ -704,7 +708,10 @@ internal static class ChangeFile
             }
             try
             {
-                if (doc.GetElement(new ElementId(id)) is not { } element || Capture(doc, element) is not { } line) continue;
+                if (doc.GetElement(new ElementId(id)) is not { } element) continue;
+                // A nameless element of no category changed: the project units may have (they have no element of their own).
+                if (element.Category is null && element.GetType() == typeof(Element)) unitsMaybe = true;
+                if (Capture(doc, element) is not { } line) continue;
                 Remember(model, id, element.UniqueId, element.Category?.Name ?? line.Category);
                 // A member of a group changed: its group is looked at too (an edit inside the group is told by what the group is made of).
                 try { if (element.GroupId is { } inGroup && inGroup != ElementId.InvalidElementId && !ids.Contains(inGroup.Value) && asked.Add(inGroup.Value)) lock (Gate) model.Pending.Add(inGroup.Value); }
@@ -764,6 +771,18 @@ internal static class ChangeFile
             catch (Exception ex) { LifelineBugs.Note("capture", $"an element couldn't be read ({Safe(() => doc.GetElement(new ElementId(id))?.Category?.Name) ?? "no category"})", doc.PathName, ex); }
         }
         Append(model, lines);
+        // The project units changed: project information's line carries them, so it is read next.
+        if (unitsMaybe)
+            try
+            {
+                if (ChangeSettings.Units(doc) is { } units && doc.ProjectInformation is { } info)
+                    lock (Gate)
+                    {
+                        if (model.Units != units) model.Pending.Add(info.Id.Value);
+                        model.Units = units;
+                    }
+            }
+            catch (Exception) { }
         lock (Gate) return model.Pending.Count > 0;
     }
 
@@ -786,7 +805,9 @@ internal static class ChangeFile
         var category = element.Category;
         var viewKind = ChangeViews.Kind(element);
         var setup = ChangeKeeper.SetupKind(element);
-        var item = element switch { ParameterFilterElement => "filter", LinePatternElement => "linepattern", FillPatternElement => "fillpattern", ViewSheetSet => "sheetset", _ => setup is not null ? "setup" : null };
+        var setting = ChangeSettings.Kind(element);
+        if (element is SharedParameterElement shared && !ChangeSettings.Bound(doc, shared)) return null;
+        var item = element switch { ParameterFilterElement => "filter", LinePatternElement => "linepattern", FillPatternElement => "fillpattern", ViewSheetSet => "sheetset", _ => setup is not null ? "setup" : setting };
         if (category is null && element is not ElementType && viewKind is null && item is null) return null;
         // What Revit makes by itself with something else (a sketch's automatic dimensions, a view's camera and section
         // box, a loaded type's preview), and what belongs to a title block or isn't on a sheet.
@@ -800,7 +821,7 @@ internal static class ChangeFile
         var line = new M.Line
         {
             Kind = M.Kinds.State, At = Now, Id = element.Id.Value, Unique = element.UniqueId,
-            Category = setup ?? category?.Name ?? item switch { "filter" => "View filter", "linepattern" => "Line pattern", "fillpattern" => "Fill pattern", "sheetset" => "Sheet set", _ => null }, CategoryId = category?.Id.Value ?? 0,
+            Category = setup ?? category?.Name ?? item switch { "filter" => "View filter", "linepattern" => "Line pattern", "fillpattern" => "Fill pattern", "sheetset" => "Sheet set", "global" => "Global parameter", "startview" => "Starting view", "param" => "Project parameter", _ => null }, CategoryId = category?.Id.Value ?? 0,
             What = item ?? ChangeShapes.Kind(element) ?? ChangeNotes.Kind(element) ?? viewKind ?? element switch
             {
                 Level => "level", Grid => "grid", ElementType => "type", Wall => "wall", FamilyInstance => "instance", Material => "material",
@@ -808,6 +829,9 @@ internal static class ChangeFile
             },
         };
         try { line.Name = element.Name; } catch (Exception) { }
+        if (setting is not null) ChangeSettings.Read(doc, element, line);
+        // Project information carries the project units (Revit names no element of their own when they change).
+        if (element is ProjectInfo && ChangeSettings.Units(doc) is { } units) (line.Extra ??= [])["units"] = units;
         // A sheet/view set: the views and sheets in it.
         if (element is ViewSheetSet sheetSet)
             try { (line.Extra ??= [])["views"] = M.JoinViews(sheetSet.Views.Cast<View>().Select(v => v.UniqueId)); } catch (Exception) { }

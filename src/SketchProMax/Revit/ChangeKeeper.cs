@@ -36,10 +36,10 @@ internal static class ChangeKeeper
     /// </summary>
     public static string? SetupKind(Element e) => e switch
     {
-        PrintSetting => M.Setups[0], ExportDWGSettings => M.Setups[1], ExportDGNSettings => M.Setups[2], ExportPDFSettings => M.Setups[3], PhaseFilter => M.Setups[4], _ => null,
+        PrintSetting => M.Setups[0], ExportDWGSettings => M.Setups[1], ExportDGNSettings => M.Setups[2], ExportPDFSettings => M.Setups[3], PhaseFilter => M.Setups[4], ColorFillScheme => M.Setups[5], _ => null,
     };
 
-    private static readonly Type[] SetupClasses = [typeof(PrintSetting), typeof(ExportDWGSettings), typeof(ExportDGNSettings), typeof(ExportPDFSettings), typeof(PhaseFilter)];
+    private static readonly Type[] SetupClasses = [typeof(PrintSetting), typeof(ExportDWGSettings), typeof(ExportDGNSettings), typeof(ExportPDFSettings), typeof(PhaseFilter), typeof(ColorFillScheme)];
 
     /// <summary>
     /// A setup that is in the model is replaced by its kept copy (a setup has no parts an add-in can set one by one):
@@ -50,9 +50,31 @@ internal static class ChangeKeeper
     {
         if (SetupKind(existing) is not { } kind || keeper.GetElement(keptUnique) is not { } source) return null;
         var name = existing.Name;
+        // The one in the model steps aside for the moment, so Revit brings the copy in and doesn't use it instead.
+        var aside = false;
+        try { existing.Name = (name.Length > 200 ? name.Substring(0, 200) : name) + " (before replay " + Guid.NewGuid().ToString("N").Substring(0, 6) + ")"; aside = true; } catch (Exception) { }
         var copies = ElementTransformUtils.CopyElements(keeper, [source.Id], doc, Transform.Identity, Options());
         var fresh = copies.Select(doc.GetElement).FirstOrDefault(e => e is not null && e.Id != existing.Id && SetupKind(e) == kind);
-        if (fresh is null) return null;
+        if (fresh is null)
+        {
+            if (aside) try { existing.Name = name; } catch (Exception) { }
+            return null;
+        }
+        // Views use a phase filter or a colour scheme: it stays, and takes what the copy has.
+        if (existing is PhaseFilter filter && fresh is PhaseFilter like)
+        {
+            foreach (var status in new[] { ElementOnPhaseStatus.New, ElementOnPhaseStatus.Existing, ElementOnPhaseStatus.Demolished, ElementOnPhaseStatus.Temporary })
+                filter.SetPhaseStatusPresentation(status, like.GetPhaseStatusPresentation(status));
+            doc.Delete(fresh.Id);
+            if (aside) filter.Name = name;
+            return existing;
+        }
+        if (existing is ColorFillScheme scheme && fresh is ColorFillScheme from)
+        {
+            try { scheme.SetEntries(from.GetEntries()); }
+            finally { doc.Delete(fresh.Id); if (aside) try { scheme.Name = name; } catch (Exception) { } }
+            return existing;
+        }
         try { doc.Delete(existing.Id); }
         catch (Exception)
         {
@@ -137,6 +159,8 @@ internal static class ChangeKeeper
         {
             if (IsDocItem(e)) return true;
             if (e is View or ElementType or Family or Material or Level or Grid or Group or RevitLinkInstance or ImportInstance) return false;
+            // Project information, base points and settings are set from their lines: no copy.
+            if (e is ProjectInfo or BasePoint || ChangeSettings.Kind(e) is not null) return false;
             if (e.ViewSpecific || e.Category is not { CategoryType: CategoryType.Model }) return false;
             if (ChangeNotes.Owns(line) || ChangeViews.Owns(line)) return false;
             if (e.GroupId != ElementId.InvalidElementId) return false;

@@ -445,7 +445,7 @@ internal static class ChangeFileMath
     /// </summary>
     public static List<Line> PlayOrder(Parsed file)
     {
-        int Rank(Line l) => l.Kind == Kinds.Deleted ? 9 : l.What switch { "level" => 0, "grid" or "material" or "family" or "filter" or "linepattern" or "fillpattern" or "style" or "setup" => 1, "type" => 2, "view" when IsTemplate(l) => 2, "wall" or "view" or "sheet" or "group" or "link" or "stairs" => 3, "sheetset" => 6, _ when IsNote(l) => 5, _ => 4 };
+        int Rank(Line l) => l.Kind == Kinds.Deleted ? 9 : l.What switch { "level" => 0, "grid" or "material" or "family" or "filter" or "linepattern" or "fillpattern" or "style" or "setup" or "param" or "global" or "revision" => 1, "type" => 2, "view" when IsTemplate(l) => 2, "wall" or "view" or "sheet" or "group" or "link" or "stairs" => 3, "sheetset" or "startview" or "site" => 6, _ when IsNote(l) => 5, _ => 4 };
         var ranked = file.Elements.Select((l, i) => (Line: l, Index: i)).OrderBy(x => Rank(x.Line)).ThenBy(x => x.Index).Select(x => x.Line).ToList();
         // Hosted instances after their host, when the host is in the file.
         var position = ranked.Select((l, i) => (l.Unique, i)).Where(x => x.Unique is not null).GroupBy(x => x.Unique!).ToDictionary(g => g.Key, g => g.First().i);
@@ -508,7 +508,18 @@ internal static class ChangeFileMath
     public static bool IsDocItem(Line l) => l.What is "filter" or "linepattern" or "fillpattern" or "setup" || IsTemplate(l);
 
     /// <summary>The named setups kept whole as copies, as their lines' category says them (the order <see cref="ChangeKeeper.SetupKind"/> uses).</summary>
-    public static readonly string[] Setups = ["Print setup", "DWG export setup", "DGN export setup", "PDF export setup", "Phase filter"];
+    public static readonly string[] Setups = ["Print setup", "DWG export setup", "DGN export setup", "PDF export setup", "Phase filter", "Colour fill scheme"];
+
+    /// <summary>One unit's format in the project units, as a row of text, and back.</summary>
+    public static string UnitFormat(string spec, string unit, double accuracy, string symbol, int flags, string rounding) =>
+        string.Join("|", spec, unit, accuracy.ToString("R", CultureInfo.InvariantCulture), symbol, flags.ToString(CultureInfo.InvariantCulture), rounding);
+
+    public static (string Spec, string Unit, double Accuracy, string Symbol, int Flags, string Rounding)? ParseUnitFormat(string row)
+    {
+        var p = row.Split('|');
+        if (p.Length != 6 || !double.TryParse(p[2], NumberStyles.Float, CultureInfo.InvariantCulture, out var accuracy) || !int.TryParse(p[4], NumberStyles.Integer, CultureInfo.InvariantCulture, out var flags)) return null;
+        return (p[0], p[1], accuracy, p[3], flags, p[5]);
+    }
 
     /// <summary>A sheet/view set's views (UniqueIds) as its line keeps them, and back.</summary>
     public static string JoinViews(IEnumerable<string> uniques) => string.Join(";", uniques.Where(u => u.Length > 0).Distinct(StringComparer.Ordinal).OrderBy(u => u, StringComparer.Ordinal));
