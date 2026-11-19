@@ -22,14 +22,29 @@ internal static class ChangeSettings
     /// <summary>What kind of setting the element is (its line's What); null for anything else.</summary>
     public static string? Kind(Element e) => e switch
     {
-        Revision => "revision", GlobalParameter => "global", StartingViewSettings => "startview", SharedParameterElement => "param", ProjectLocation => "site",
+        Revision => "revision", GlobalParameter => "global", StartingViewSettings => "startview", ParameterElement => "param", ProjectLocation => "site", SunAndShadowSettings sun when IsSunPreset(sun) => "sun",
         SiteLocation => "place", RevisionSettings => "revsetting", AreaVolumeSettings => "areavol", _ => null,
     };
 
     public static bool Owns(M.Line line) => M.IsSetting(line);
 
-    /// <summary>A shared parameter that is a project parameter (bound to categories); one that only came with a family has no line.</summary>
-    public static bool Bound(Document doc, SharedParameterElement shared)
+    /// <summary>
+    /// What Revit gives no way to make from a line: a sun setting, and a project parameter that isn't shared. A new
+    /// one is kept as a copy (it comes back with its categories); one that was in the model is set from its line.
+    /// </summary>
+    public static bool MadeFromCopy(Element e) => e is SunAndShadowSettings sun && IsSunPreset(sun) || e is ParameterElement and not SharedParameterElement and not GlobalParameter;
+
+    /// <summary>
+    /// A sun setting saved under a name (a preset). The unnamed ones ("&lt;In-session, …&gt;") are each view's own:
+    /// Revit changes them by itself as views are opened, so they get no line.
+    /// </summary>
+    private static bool IsSunPreset(SunAndShadowSettings sun)
+    {
+        try { return sun.Name is { Length: > 0 } name && !name.StartsWith("<", StringComparison.Ordinal); } catch (Exception) { return false; }
+    }
+
+    /// <summary>A parameter that is a project parameter (bound to categories); one that only came with a family has no line.</summary>
+    public static bool Bound(Document doc, ParameterElement shared)
     {
         try { return doc.ParameterBindings.get_Item(shared.GetDefinition()) is ElementBinding; } catch (Exception) { return false; }
     }
@@ -62,10 +77,10 @@ internal static class ChangeSettings
                     line.Name = "Starting view";
                     x["view"] = doc.GetElement(start.ViewId)?.UniqueId ?? "";
                     break;
-                case SharedParameterElement shared:
+                case ParameterElement shared:
                     var definition = shared.GetDefinition();
                     line.Name = definition.Name;
-                    x["pguid"] = shared.GuidValue.ToString();
+                    if (shared is SharedParameterElement withGuid) x["pguid"] = withGuid.GuidValue.ToString();
                     x["spec"] = definition.GetDataType().TypeId;
                     x["pgroup"] = definition.GetGroupTypeId()?.TypeId ?? "";
                     x["pvary"] = definition.VariesAcrossGroups ? "1" : "0";
@@ -74,6 +89,9 @@ internal static class ChangeSettings
                         x["pinst"] = binding is InstanceBinding ? "1" : "0";
                         x["pcats"] = string.Join(";", binding.Categories.Cast<Category>().Select(c => c.Id.Value).OrderBy(c => c).Select(c => c.ToString(CultureInfo.InvariantCulture)));
                     }
+                    break;
+                case SunAndShadowSettings sun:
+                    foreach (var pair in SunValues(doc, sun)) x[pair.Key] = pair.Value;
                     break;
                 case ProjectLocation site:
                     var at = site.GetProjectPosition(XYZ.Zero);
@@ -99,6 +117,25 @@ internal static class ChangeSettings
         catch (Exception) { /* what could be read is written */ }
     }
 
+    private static readonly string[] SunKeys = ["stype", "srel", "sground", "slevel", "sstart", "send", "sstep", "saz", "salt"];
+
+    /// <summary>A sun setting's own values, each read by itself (which ones Revit has depends on the kind of study).</summary>
+    private static List<KeyValuePair<string, string>> SunValues(Document doc, SunAndShadowSettings sun)
+    {
+        var values = new List<KeyValuePair<string, string>>();
+        void Add(string key, Func<string?> read) { try { if (read() is { } value) values.Add(new(key, value)); } catch (Exception) { } }
+        Add("stype", () => sun.SunAndShadowType.ToString());
+        Add("srel", () => sun.RelativeToView ? "1" : "0");
+        Add("sground", () => sun.UsesGroundPlane ? "1" : "0");
+        Add("slevel", () => doc.GetElement(sun.GroundPlaneLevelId)?.UniqueId);
+        Add("sstart", () => sun.StartDateAndTime.ToString("o", CultureInfo.InvariantCulture));
+        Add("send", () => sun.EndDateAndTime.ToString("o", CultureInfo.InvariantCulture));
+        Add("sstep", () => sun.TimeInterval.ToString());
+        Add("saz", () => R(sun.Azimuth));
+        Add("salt", () => R(sun.Altitude));
+        return values;
+    }
+
     private static string? Value(Document doc, ParameterValue? value) => value switch
     {
         DoubleParameterValue d => "d:" + R(d.Value),
@@ -116,7 +153,10 @@ internal static class ChangeSettings
         {
             "revision" => null,
             "global" => line.Name is { Length: > 0 } && x is not null && x.ContainsKey("spec") ? null : "a global parameter whose kind isn't in the file: make it again by hand",
-            "param" => line.Name is { Length: > 0 } && x is not null && x.ContainsKey("pguid") && x.ContainsKey("pcats") ? null : "a project parameter whose categories aren't in the file: add it again by hand",
+            "param" => line.Name is { Length: > 0 } && x is not null && x.ContainsKey("pguid") && x.ContainsKey("pcats") ? null
+                : x is not null && x.ContainsKey("pcats") ? "a project parameter that isn't shared, made after the last save, whose copy wasn't kept: add it again by hand"
+                : "a project parameter whose categories aren't in the file: add it again by hand",
+            "sun" => "a sun setting made after the last save whose copy wasn't kept: make it again by hand",
             "site" => line.Name is { Length: > 0 } && x is not null && x.ContainsKey("pos") ? null : "a shared site whose position isn't in the file: make it again by hand",
             _ => "this setting can't be made from the file: set it again by hand",
         };
@@ -183,9 +223,11 @@ internal static class ChangeSettings
             try { if (Category.GetCategory(doc, new ElementId(long.Parse(id, CultureInfo.InvariantCulture))) is { AllowsBoundParameters: true } category) categories.Insert(category); } catch (Exception) { }
         if (categories.IsEmpty) throw new InvalidOperationException("none of the project parameter's categories is in this model: add it again by hand");
         ElementBinding binding = x.TryGetValue("pinst", out var inst) && inst == "0" ? doc.Application.Create.NewTypeBinding(categories) : doc.Application.Create.NewInstanceBinding(categories);
-        var group = x.TryGetValue("pgroup", out var g) && g.Length > 0 ? new ForgeTypeId(g) : GroupTypeId.Data;
-        var done = again ? doc.ParameterBindings.ReInsert(definition, binding, group) : doc.ParameterBindings.Insert(definition, binding, group);
-        if (!done && !(again && doc.ParameterBindings.Insert(definition, binding, group))) throw new InvalidOperationException("Revit refused the project parameter's categories: add it again by hand");
+        // A parameter under no group ("Other") is bound without one: Revit refuses an empty group.
+        var group = x.TryGetValue("pgroup", out var g) && g.Length > 0 ? new ForgeTypeId(g) : null;
+        bool Insert() => group is null ? doc.ParameterBindings.Insert(definition, binding) : doc.ParameterBindings.Insert(definition, binding, group);
+        var done = !again ? Insert() : group is null ? doc.ParameterBindings.ReInsert(definition, binding) : doc.ParameterBindings.ReInsert(definition, binding, group);
+        if (!done && !(again && Insert())) throw new InvalidOperationException("Revit refused the project parameter's categories: add it again by hand");
     }
 
     /// <summary>Sets the setting that is in the model to what its line says; true when anything changed. Call inside a transaction.</summary>
@@ -249,7 +291,34 @@ internal static class ChangeSettings
                 start.ViewId = id;
                 return true;
             }
-            case SharedParameterElement shared when x.ContainsKey("pcats"):
+            case SunAndShadowSettings sun:
+            {
+                var now = SunValues(doc, sun).ToDictionary(v => v.Key, v => v.Value);
+                // The kind of study first: it decides which of the others Revit takes.
+                foreach (var key in SunKeys)
+                {
+                    if (!x.TryGetValue(key, out var want) || (now.TryGetValue(key, out var have) && have == want)) continue;
+                    try
+                    {
+                        switch (key)
+                        {
+                            case "stype": if (Enum.TryParse<SunAndShadowType>(want, out var type)) sun.SunAndShadowType = type; break;
+                            case "srel": sun.RelativeToView = want == "1"; break;
+                            case "sground": sun.UsesGroundPlane = want == "1"; break;
+                            case "slevel": if (known(want) is Level level) sun.GroundPlaneLevelId = level.Id; break;
+                            case "sstart": sun.StartDateAndTime = DateTime.Parse(want, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind); break;
+                            case "send": sun.EndDateAndTime = DateTime.Parse(want, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind); break;
+                            case "sstep": if (Enum.TryParse<SunStudyTimeInterval>(want, out var step)) sun.TimeInterval = step; break;
+                            case "saz": sun.Azimuth = D(want); break;
+                            case "salt": sun.Altitude = D(want); break;
+                        }
+                        changed = true;
+                    }
+                    catch (Exception) { /* Revit takes this one only for another kind of study */ }
+                }
+                return changed;
+            }
+            case ParameterElement shared and not GlobalParameter when x.ContainsKey("pcats"):
             {
                 var before = new M.Line { Extra = [] };
                 Read(doc, shared, before);

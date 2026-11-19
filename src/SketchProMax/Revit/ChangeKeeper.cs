@@ -36,10 +36,21 @@ internal static class ChangeKeeper
     /// </summary>
     public static string? SetupKind(Element e) => e switch
     {
-        PrintSetting => M.Setups[0], ExportDWGSettings => M.Setups[1], ExportDGNSettings => M.Setups[2], ExportPDFSettings => M.Setups[3], PhaseFilter => M.Setups[4], ColorFillScheme => M.Setups[5], _ => null,
+        PrintSetting => M.Setups[0], ExportDWGSettings => M.Setups[1], ExportDGNSettings => M.Setups[2], ExportPDFSettings => M.Setups[3], PhaseFilter => M.Setups[4], ColorFillScheme => M.Setups[5],
+        Autodesk.Revit.DB.ExtensibleStorage.DataStorage storage when IsIfcSetup(storage) => M.Setups[6], _ => null,
     };
 
-    private static readonly Type[] SetupClasses = [typeof(PrintSetting), typeof(ExportDWGSettings), typeof(ExportDGNSettings), typeof(ExportPDFSettings), typeof(PhaseFilter), typeof(ColorFillScheme)];
+    /// <summary>
+    /// A saved IFC export setup: Revit's IFC exporter keeps each one as a data storage element whose schema is named
+    /// "IFCExportConfiguration…". Other add-ins' data storages are theirs and get no line.
+    /// </summary>
+    private static bool IsIfcSetup(Autodesk.Revit.DB.ExtensibleStorage.DataStorage storage)
+    {
+        try { return storage.GetEntitySchemaGuids().Any(g => Autodesk.Revit.DB.ExtensibleStorage.Schema.Lookup(g)?.SchemaName.StartsWith(M.IfcSchemaStart, StringComparison.OrdinalIgnoreCase) == true); }
+        catch (Exception) { return false; }
+    }
+
+    private static readonly Type[] SetupClasses = [typeof(PrintSetting), typeof(ExportDWGSettings), typeof(ExportDGNSettings), typeof(ExportPDFSettings), typeof(PhaseFilter), typeof(ColorFillScheme), typeof(Autodesk.Revit.DB.ExtensibleStorage.DataStorage)];
 
     /// <summary>
     /// A setup that is in the model is replaced by its kept copy (a setup has no parts an add-in can set one by one):
@@ -73,6 +84,17 @@ internal static class ChangeKeeper
         {
             try { scheme.SetEntries(from.GetEntries()); }
             finally { doc.Delete(fresh.Id); if (aside) try { scheme.Name = name; } catch (Exception) { } }
+            return existing;
+        }
+        // An IFC export setup is what its data storage holds: the one in the model takes what the copy holds.
+        if (existing is Autodesk.Revit.DB.ExtensibleStorage.DataStorage storage && fresh is Autodesk.Revit.DB.ExtensibleStorage.DataStorage held)
+        {
+            try
+            {
+                foreach (var guid in held.GetEntitySchemaGuids())
+                    if (Autodesk.Revit.DB.ExtensibleStorage.Schema.Lookup(guid) is { } schema && held.GetEntity(schema) is { } entity && entity.IsValid()) storage.SetEntity(entity);
+            }
+            finally { doc.Delete(fresh.Id); if (aside) try { storage.Name = name; } catch (Exception) { } }
             return existing;
         }
         try { doc.Delete(existing.Id); }
@@ -160,6 +182,8 @@ internal static class ChangeKeeper
             if (IsDocItem(e)) return true;
             if (e is View or ElementType or Family or Material or Level or Grid or Group or RevitLinkInstance or ImportInstance) return false;
             // Project information, base points and settings are set from their lines: no copy.
+            // A sun setting or a project parameter that isn't shared can't be made from a line: a new one is kept as a copy.
+            if (ChangeSettings.MadeFromCopy(e)) return line.New;
             if (e is ProjectInfo or BasePoint || ChangeSettings.Kind(e) is not null) return false;
             if (e.ViewSpecific || e.Category is not { CategoryType: CategoryType.Model }) return false;
             if (ChangeNotes.Owns(line) || ChangeViews.Owns(line)) return false;

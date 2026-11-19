@@ -107,7 +107,7 @@ internal static class RecoveryTests
             var setup = new M.Line { Kind = M.Kinds.State, What = "setup", Unique = "u-setup", Category = M.Setups[0], Name = "A1 black" };
             var sheets = new M.Line { Kind = M.Kinds.State, What = "sheetset", Unique = "u-set", Name = "Issue", Extra = new() { ["views"] = M.JoinViews(["b", "a", "b", ""]) } };
             var plainWall = new M.Line { Kind = M.Kinds.State, What = "wall", Unique = "u-wall" };
-            check("lifeline: a print or export setup is a document item kept as a copy", M.IsDocItem(setup) && !M.IsDocItem(sheets) && M.Setups.Length == 6, "");
+            check("lifeline: a print or export setup is a document item kept as a copy", M.IsDocItem(setup) && !M.IsDocItem(sheets) && M.Setups.Length == 7, "");
             check("lifeline: a sheet set keeps its views once each, in a steady order", string.Join(",", M.SplitViews(sheets)) == "a,b" && M.SplitViews(plainWall).Count == 0, string.Join(",", M.SplitViews(sheets)));
             var setupOrder = M.PlayOrder(M.Read(new[] { new M.Line { Kind = M.Kinds.Model, Path = "x", Format = M.FormatNew }, sheets, plainWall, setup }.Select(M.Write)));
             check("lifeline: setups are played early and sheet sets after the views", setupOrder.Count == 3 && setupOrder[0].What == "setup" && setupOrder[2].What == "sheetset", string.Join(",", setupOrder.Select(l => l.What)));
@@ -115,10 +115,16 @@ internal static class RecoveryTests
         }
         // Settings with no element drawn anywhere (bug 106): revisions, parameters, the starting view, sites, units and Revit's single settings.
         {
-            var kinds = new[] { "revision", "global", "startview", "param", "site", "place", "revsetting", "areavol" };
+            var settingsEarly = Src("Revit", "ChangeSettings.cs");
+            var kinds = new[] { "revision", "global", "startview", "param", "site", "place", "revsetting", "areavol", "sun" };
             check("lifeline: each model setting has its own kind of line", kinds.All(k => M.IsSetting(new M.Line { What = k })) && !M.IsSetting(new M.Line { What = "wall" }) && !M.IsSetting(new M.Line { What = "setup" }), "");
             check("lifeline: a revision can always be made again; a parameter or a site only with what the file has",
                 Src("Revit", "ChangeSettings.cs").Contains("\"revision\" => null,") && Src("Revit", "ChangeSettings.cs").Contains("x.ContainsKey(\"pguid\") && x.ContainsKey(\"pcats\") ? null") && Src("Revit", "ChangeSettings.cs").Contains("x.ContainsKey(\"pos\") ? null"), "");
+            // Bug 107: IFC setups, named sun settings, project parameters that aren't shared.
+            check("lifeline: only the IFC exporter's data storages are setups, by their schema's name", M.Setups[6] == "IFC export setup" && M.IfcSchemaStart == "IFCExportConfiguration" && Src("Revit", "ChangeKeeper.cs").Contains("SchemaName.StartsWith(M.IfcSchemaStart"), "");
+            check("lifeline: a sun setting or a parameter that isn't shared is kept as a copy only when new", Src("Revit", "ChangeKeeper.cs").Contains("if (ChangeSettings.MadeFromCopy(e)) return line.New;")
+                && settingsEarly.Contains("!name.StartsWith(\"<\", StringComparison.Ordinal)") && Src("Revit", "ChangeReplay.cs").Contains("M.IsRevitsOwn(line.CategoryId) && !M.IsSetting(line)"), "");
+            check("lifeline: a parameter under no group is bound without one", settingsEarly.Contains("group is null ? doc.ParameterBindings.Insert(definition, binding)"), "");
             var unitRow = M.UnitFormat("autodesk.spec.aec:length-2.0.1", "autodesk.unit.unit:millimeters-1.0.1", 0.5, "", 5, "Nearest");
             var unitBack = M.ParseUnitFormat(unitRow);
             check("lifeline: a unit's format is one row that reads back the same", unitBack is { Unit: "autodesk.unit.unit:millimeters-1.0.1", Accuracy: 0.5, Flags: 5, Rounding: "Nearest", Symbol: "" } && M.ParseUnitFormat("a|b") is null, unitRow);
@@ -255,7 +261,7 @@ internal static class RecoveryTests
         check("lifeline: a sketch's automatic dimensions, cameras, section boxes, sun paths and type previews are Revit's own",
             new long[] { -2000261, -2000262, -2000500, -2000301, -2009609, -2000576 }.All(M.IsRevitsOwn) && !M.IsRevitsOwn(-2000575) && !M.IsRevitsOwn(-2000011) && !M.IsRevitsOwn(0), "");
         check("lifeline: Revit's own elements get no line and older lines of them aren't played", Src("Revit", "ChangeFile.cs").Contains("M.IsRevitsOwn(category.Id.Value)") && Src("Revit", "ChangeFile.cs").Contains("ChangeViews.IsRevitsOwn(element)")
-            && Src("Revit", "ChangeReplay.cs").Contains("M.IsRevitsOwn(line.CategoryId) || ChangeViews.IsRevitsOwn(line)") && Src("Revit", "ChangeViews.cs").Contains("IsTitleblockRevisionSchedule")
+            && Src("Revit", "ChangeReplay.cs").Contains("M.IsRevitsOwn(line.CategoryId) && !M.IsSetting(line) || ChangeViews.IsRevitsOwn(line)") && Src("Revit", "ChangeViews.cs").Contains("IsTitleblockRevisionSchedule")
             && Src("Revit", "ChangeViews.cs").Contains("viewport.SheetId == ElementId.InvalidElementId"), "");
         // A type or a view never takes the sketch of an element of that type or in that view.
         check("lifeline: only an element drawn from a sketch of its own has an outline", Src("Revit", "ChangeShapes.cs").Contains("if (e is not (RoofBase or RevisionCloud or")
