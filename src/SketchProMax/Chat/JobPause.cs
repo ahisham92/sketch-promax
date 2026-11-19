@@ -31,6 +31,7 @@ internal static class JobPause
 
     private static readonly object Gate = new();
     private static readonly Dictionary<string, int> InCall = new(StringComparer.Ordinal);
+    private static readonly HashSet<string> WasRefused = new(StringComparer.Ordinal);
     private static string _why = "";
     private static DateTime _since;
 
@@ -94,7 +95,11 @@ internal static class JobPause
     {
         lock (Gate)
         {
-            if (_why.Length > 0) return Refused;
+            if (_why.Length > 0)
+            {
+                WasRefused.Add(jobKey);
+                return Refused;
+            }
             InCall[jobKey] = InCall.TryGetValue(jobKey, out var n) ? n + 1 : 1;
             return null;
         }
@@ -108,6 +113,17 @@ internal static class JobPause
             if (n <= 1) InCall.Remove(jobKey);
             else InCall[jobKey] = n - 1;
         }
+    }
+
+    /// <summary>
+    /// The job's run ended (or starts afresh): true when a call of its own was refused by the pause since it was last
+    /// asked, and the flag is cleared. Such a run ended because it was told to stop, not because its task is done, so it
+    /// is set aside as paused rather than finished (bug 111: a job that stopped at the pause was marked done, so Continue
+    /// never sent it on).
+    /// </summary>
+    public static bool TookRefusal(string jobKey)
+    {
+        lock (Gate) return WasRefused.Remove(jobKey);
     }
 
     /// <summary>True while the job has a call the bridge is working on.</summary>
@@ -158,6 +174,7 @@ internal static class JobPause
             _why = "";
             _since = default;
             InCall.Clear();
+            WasRefused.Clear();
         }
     }
 }

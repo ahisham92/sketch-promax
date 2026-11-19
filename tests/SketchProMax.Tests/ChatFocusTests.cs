@@ -147,6 +147,12 @@ internal static class ChatFocusTests
         check("joins: one call holds Revit (and the chat window) about 20 s at most, the rest waits for the next call, joined pairs skipped (bug 110)",
             joins.Contains("budget: Budget") && joins.Contains("TimeSpan.FromSeconds(20)") && joins.Contains("pairs already joined are skipped")
             && batch.Contains("clock.Elapsed >= most") && batch.Contains("result.Items.Add(new(what, false, TimeLeft, null))"), "");
+        var jobsPane111 = Read("src/SketchProMax/Chat/ChatPane.Jobs.cs");
+        check("pause (bug 111): a job that ended its turn because the pause refused its call is paused, not done, and carries on if Continue came first",
+            jobsPane111.Contains("JobPause.TookRefusal(run.Job.Key) && board.Pause(run.Job.Number, now)")
+            && jobsPane111.IndexOf("JobPause.TookRefusal(run.Job.Key) && board.Pause") < jobsPane111.IndexOf("if (board.RunEnded(run.Job, !end.IsError, summary, now)")
+            && jobsPane111.Contains("board.Message(run.Job.Number, JobPause.CarryOn, now)")
+            && Read("src/SketchProMax/Chat/ChatPane.Pause.cs").Contains("JobPause.TookRefusal(run.Job.Key); // set aside here"), "");
         var pane = Read("src/SketchProMax/Chat/ChatPane.cs");
         check("pane: a status question is answered from the job list at once, and kept code is named with the message",
             pane.Contains("StatusAnswer(_input.Text)") && pane.Contains("WorkedCode.HintFor(text)"), "");
