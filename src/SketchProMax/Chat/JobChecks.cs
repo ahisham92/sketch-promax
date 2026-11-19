@@ -258,5 +258,17 @@ internal static class FreeWorkers
         $"{job.Plan.Values.Count(v => v == JobPlan.ToDo)} steps it hasn't started. Nobody should wait while there is work: hand the " +
         "steps that don't depend on its current one to new jobs now (chat_jobs start, with the facts it found), and tell job " +
         $"{job.Number} (chat_jobs message) which steps moved so it leaves them. Changes still go into Revit one at a time by " +
-        "themselves. If nothing can be split off, answer only \"No split.\" and carry on: the user doesn't need the reason.";
+        "themselves. If nothing can be split off, answer only \"No split.\" and carry on: the user doesn't need the reason " +
+        "(this answer is never shown to them).";
+
+    /// <summary>
+    /// The coordinator's answer to <see cref="Nudge"/> when nothing could be split off ("No split.", perhaps with a short
+    /// reason): an internal decision, so the chat drops it instead of showing it as Sketch ProMax's answer.
+    /// </summary>
+    public static bool IsNothing(string text)
+    {
+        var said = (text ?? "").Trim().TrimEnd('.', '!', ' ', '\n', '\r').Trim('*', '_', '`', ' ').ToLowerInvariant();
+        if (said.Length == 0) return true;
+        return said.StartsWith("no split", StringComparison.Ordinal) && said.Length <= 200;
+    }
 }

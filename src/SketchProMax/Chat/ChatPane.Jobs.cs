@@ -805,7 +805,7 @@ internal sealed partial class ChatPane
         var jobs = board.Snapshot();
         if (FreeWorkers.ToShare(jobs, ChatJobs.Limit, _shareOffered) is not { } job) return;
         _shareOffered.Add(job.Number);
-        _ = RunTurn(FreeWorkers.Nudge(job, FreeWorkers.Free(jobs, ChatJobs.Limit)), [], "");
+        _ = RunTurn(FreeWorkers.Nudge(job, FreeWorkers.Free(jobs, ChatJobs.Limit)), [], "", quiet: true);
     }
 
     // ---- Cards ------------------------------------------------------------------------------------------------------
