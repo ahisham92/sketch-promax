@@ -315,6 +315,29 @@ internal static class FreezeWatch
     }
 
     /// <summary>
+    /// Ends a command left open in Revit while nobody is there (RevitBlock.EndCommandNow): Esc twice, as a person would end
+    /// a placement command. Posted to Revit's window and typed when Revit is in front; never throws.
+    /// </summary>
+    public static void EndLeftCommand()
+    {
+        if (_main == IntPtr.Zero) return;
+        try
+        {
+            for (var i = 0; i < 2; i++)
+            {
+                if (GetForegroundWindow() == _main)
+                {
+                    var inputs = new[] { Key(VkEscape, up: false), Key(VkEscape, up: true) };
+                    SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<Input>());
+                }
+                PostMessage(_main, WmKeyDown, (IntPtr)VkEscape, IntPtr.Zero);
+                PostMessage(_main, WmKeyUp, (IntPtr)VkEscape, IntPtr.Zero);
+            }
+        }
+        catch (Exception) { }
+    }
+
+    /// <summary>
     /// Closes Revit at once, without saving (Revit can't save while it is stuck). Lifeline's lines are written out first,
     /// so the changes since the last save are in the model's change file, offered for Replay when the model opens again.
     /// </summary>

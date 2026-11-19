@@ -9,7 +9,9 @@ namespace SketchProMax.Chat;
 /// are answered (Cancel, else No, else OK; Revit.UnattendedDialogs), a step only the user can do is skipped and listed
 /// (Handoff), a normal change isn't asked about, and a risky one (a delete, a big change) is not made but left for the
 /// user. What was answered or skipped is said in the chat when the user writes next. The user's own commands' dialogs are
-/// never touched. No Revit or WPF here (the tests compile it).
+/// never touched, except a command left open with nobody at Revit: when Revit has taken no work for two minutes while
+/// the user is away, Esc ends it (RevitBlock.EndCommandNow; "if there is an order like that, skip it", 19 Nov 2026,
+/// after a Spot Elevation left open held the jobs for 16 minutes). No Revit or WPF here (the tests compile it).
 /// </summary>
 internal static class Away
 {
@@ -34,7 +36,9 @@ internal static class Away
     private static readonly Regex Asks = new(
         @"\b(no\s+(need\s+(to|for)\s+)?(any\s+)?pop\s*-?\s*ups?|(do\s*n[o']?t|never)\s+(pop\s*(up)?|show|ask)\s+(me\s+)?(anything|any\w*)|" +
         @"no\s+pop\s*(up)?\s+anything|without\s+(any\s+)?(pop\s*-?\s*ups?|asking\s+me)|handle\s+(the\s+)?(pop\s*-?\s*ups?|dialogs?|prompts?)|" +
-        @"(i\s*'?\s*a?m|i\s+will|i\s*'?\s*ll)\s+(be\s+)?(away|out|offline|not\s+(be\s+)?(available|here|around|at\s+(my|the)\s+(pc|desk|computer))))",
+        @"(i\s*'?\s*a?m|i\s+will|i\s*'?\s*ll)\s+(be\s+)?(away|out|offline|not\s+(be\s+)?(available|here|around|at\s+(my|the)\s+(pc|desk|computer)))|" +
+        @"i\s+(won\s*['\u2019]?\s*t|wont)\s+be\s+(available|here|around|at\s+(my|the)\s+(pc|desk|computer))|i\s*['\u2019]?\s*m\s+not\s+(available|here|around)|" +
+        @"handle\s+(the\s+)?waiting|(skip|escape|end)\s+(any\s+)?(stuck|running|open)\s+commands?)",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     private static readonly Regex Back = new(@"\b(i\s*'?\s*a?m\s+back|back\s+now|i\s*'?\s*a?m\s+here\s+(now|again)|you\s+can\s+(ask|pop\s*up)\s+(me\s+)?(again|now))\b",

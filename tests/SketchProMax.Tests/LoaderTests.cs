@@ -60,6 +60,14 @@ internal static class LoaderTests
             && !LoaderCompat.RibbonOutdated(LoaderCompat.RibbonChangedIn.ToString(3)) && !LoaderCompat.RibbonOutdated("9.0.0"), "");
 
         // Why Revit didn't take a request.
+        var two = RevitBlock.EndCommandAfter;
+        check("a command left open with nobody at Revit: Esc after two minutes, three tries a minute apart; never a dialog, an edit mode, a busy Revit or while the user is there",
+            !RevitBlock.EndCommandNow(RevitBlock.Kind.Unknown, two - TimeSpan.FromSeconds(1), 0, true) && RevitBlock.EndCommandNow(RevitBlock.Kind.Unknown, two, 0, true)
+            && !RevitBlock.EndCommandNow(RevitBlock.Kind.Unknown, two, 1, true) && RevitBlock.EndCommandNow(RevitBlock.Kind.Unknown, two + TimeSpan.FromMinutes(1), 1, true)
+            && !RevitBlock.EndCommandNow(RevitBlock.Kind.Unknown, TimeSpan.FromHours(1), 3, true)
+            && !RevitBlock.EndCommandNow(RevitBlock.Kind.Unknown, TimeSpan.FromHours(1), 0, false)
+            && !RevitBlock.EndCommandNow(RevitBlock.Kind.Dialog, TimeSpan.FromHours(1), 0, true) && !RevitBlock.EndCommandNow(RevitBlock.Kind.EditMode, TimeSpan.FromHours(1), 0, true)
+            && !RevitBlock.EndCommandNow(RevitBlock.Kind.NotResponding, TimeSpan.FromHours(1), 0, true), "");
         var held = RevitBlock.HeldLine(new RevitBlock.State(RevitBlock.Kind.Unknown, null), "Create Spot Elevation");
         check("held: the chat names the command still running, says Esc, and that the jobs carry on by themselves",
             held.Contains("Create Spot Elevation is still running") && held.Contains("Press Esc") && held.Contains("carry on by themselves")

@@ -55,6 +55,18 @@ internal static class RevitBlock
         };
     }
 
+    /// <summary>How long Revit may take no work, with nobody at it, before Esc ends the command left open.</summary>
+    public static readonly TimeSpan EndCommandAfter = TimeSpan.FromMinutes(2);
+
+    /// <summary>
+    /// Whether to press Esc in Revit now for jobs that wait: only while nobody is at Revit (away mode or an Autopilot
+    /// run), only when Revit answers and shows no dialog and no edit mode (a placement command such as Spot Elevation
+    /// left waiting for a click: Esc loses nothing), after <see cref="EndCommandAfter"/>, at most three times, a minute
+    /// apart. Otherwise the user's command is never touched (standing rule: never block or cancel a Revit command).
+    /// </summary>
+    public static bool EndCommandNow(Kind kind, TimeSpan held, int tries, bool nobodyThere) =>
+        nobodyThere && kind == Kind.Unknown && tries < 3 && held >= EndCommandAfter + TimeSpan.FromMinutes(tries);
+
     /// <summary>What the chat says once when Revit takes no work from the jobs: what holds it and how to free it.</summary>
     public static string HeldLine(State state, string busy)
     {

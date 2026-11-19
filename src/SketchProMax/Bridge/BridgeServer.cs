@@ -607,10 +607,28 @@ public sealed class BridgeServer
         ActivityLog.Note("revit_held", $"{tool.Name} (job {id}) waits for Revit: {state.Kind}, last command {busy}");
         Chat.ChatPane.RevitHeld(line);
         var started = DateTime.UtcNow;
+        var tries = 0;
+        var heard = _dispatcher.Heard;
+        var heldSince = started - TimeSpan.FromMilliseconds(StartWaitMs);
         try
         {
             while (!pickedUp.IsCompleted && !ct.IsCancellationRequested && DateTime.UtcNow - started < TurnWait)
+            {
                 await _dispatcher.WaitForPickupAsync(pickedUp, $"{tool.Name} (job {id}, still waiting)", HeldStepMs, int.MaxValue / 2, ct).ConfigureAwait(false);
+                if (pickedUp.IsCompleted || ct.IsCancellationRequested) break;
+                // Nobody at Revit and a command left open (no dialog, no edit mode): Esc ends it, so the jobs don't wait for
+                // nothing (19 Nov 2026: a Spot Elevation left open held every job for 16 minutes while the user was away).
+                // Revit idled or ran other work meanwhile: it isn't held by a command, only busy; start the count again.
+                if (_dispatcher.Heard != heard) { heard = _dispatcher.Heard; heldSince = DateTime.UtcNow; continue; }
+                var now = await _dispatcher.BlockerAsync().ConfigureAwait(false);
+                if (!RevitBlock.EndCommandNow(now.Kind, DateTime.UtcNow - heldSince, tries, Chat.Away.On || Chat.Autopilot.Unattended)) continue;
+                tries++;
+                Revit.FreezeWatch.EndLeftCommand();
+                ActivityLog.Note("revit_esc", $"{tool.Name} (job {id}): Revit took no work for {(int)(DateTime.UtcNow - heldSince).TotalMinutes} min while nobody was there " +
+                                              $"(last command {busy}); Esc pressed twice to end it (try {tries})");
+                if (tries == 1)
+                    Chat.Away.Note($"Revit took no work for two minutes{(busy.Length > 0 ? $" ({busy} was still open)" : "")}; Esc ended it so the jobs could carry on");
+            }
         }
         catch (OperationCanceledException) { }
         if (pickedUp.IsCompleted)
@@ -624,7 +642,7 @@ public sealed class BridgeServer
     }
 
     /// <summary>How long each wait step of a held call lasts (one activity-log line per step).</summary>
-    private const int HeldStepMs = 300_000;
+    private const int HeldStepMs = 60_000;
 
     // ---- Auto sync ----------------------------------------------------------------------------------------------
 
