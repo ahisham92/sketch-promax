@@ -566,6 +566,9 @@ internal static class ChangeFile
         lock (Gate) model.Known.Remember(id, unique, category);
     }
 
+    // When Revit last gave an idle moment, and when a change last read the waiting elements itself (M.ReadNow).
+    private static int _lastIdle = Environment.TickCount, _lastEager = Environment.TickCount;
+
     private static void OnChanged(object? sender, DocumentChangedEventArgs e)
     {
         var start = UiCost.Start();
@@ -594,24 +597,34 @@ internal static class ChangeFile
                 foreach (var id in touched)
                     if (ChangeStairs.StairsOf(doc.GetElement(id)) is { } stairs) lock (Gate) model.Pending.Add(stairs.Value);
             var deleted = e.GetDeletedElementIds();
-            if (deleted.Count == 0) return;
-            var tx = string.Join(", ", e.GetTransactionNames().Distinct());
-            var lines = new List<M.Line>();
-            lock (Gate)
+            if (deleted.Count > 0)
             {
-                foreach (var id in deleted)
+                var tx = string.Join(", ", e.GetTransactionNames().Distinct());
+                var lines = new List<M.Line>();
+                lock (Gate)
                 {
-                    model.Pending.Remove(id.Value);
-                    var named = model.Known.TryGet(id.Value, out var unique, out var category);
-                    // Made after the last save and deleted again: marked New, so a replay knows there is nothing to delete.
-                    var made = model.Added.Remove(id.Value);
-                    model.Written.Remove(id.Value);
-                    // What Revit makes and deletes by itself (and was never noted) gets no line.
-                    if (!named && !made && model.Indexed) continue;
-                    lines.Add(new M.Line { Kind = M.Kinds.Deleted, At = Now, Id = id.Value, Unique = named ? unique : null, Category = category, New = made, Tx = tx.Length > 0 ? tx : null });
+                    foreach (var id in deleted)
+                    {
+                        model.Pending.Remove(id.Value);
+                        var named = model.Known.TryGet(id.Value, out var unique, out var category);
+                        // Made after the last save and deleted again: marked New, so a replay knows there is nothing to delete.
+                        var made = model.Added.Remove(id.Value);
+                        model.Written.Remove(id.Value);
+                        // What Revit makes and deletes by itself (and was never noted) gets no line.
+                        if (!named && !made && model.Indexed) continue;
+                        lines.Add(new M.Line { Kind = M.Kinds.Deleted, At = Now, Id = id.Value, Unique = named ? unique : null, Category = category, New = made, Tx = tx.Length > 0 ? tx : null });
+                    }
                 }
+                Append(model, lines);
             }
-            Append(model, lines);
+            // No idle moment for a while (a sketch, a group or a family is being edited, or a long job runs): what is
+            // waiting is read now, a little at a time, so it is in the file if Revit closes before the next idle moment.
+            var tick = Environment.TickCount;
+            if (M.ReadNow(unchecked(tick - _lastIdle), unchecked(tick - _lastEager)))
+            {
+                _lastEager = tick;
+                ReadPending(doc, M.ReadPerIdle, M.ReadBudgetMs);
+            }
         }
         catch (Exception ex) { LifelineBugs.Note("capture", "deleted elements couldn't be noted", Safe(() => e.GetDocument().PathName), ex); /* this change is missing from the file; the model is not affected */ }
         finally { UiCost.End("Lifeline noting a change", start); }
@@ -620,6 +633,7 @@ internal static class ChangeFile
     /// <summary>At Revit's idle moments: the elements changed since the last look are read and written.</summary>
     private static void OnIdle(UIApplication app)
     {
+        _lastIdle = Environment.TickCount;
         try
         {
             if (unchecked(Environment.TickCount - _lastSettings) > 60_000) ReadSettings();

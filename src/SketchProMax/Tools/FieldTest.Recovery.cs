@@ -197,6 +197,21 @@ internal static partial class FieldTest
                 new(new(110, 10, z), new(110, 20, z)), new(new(110, 20, z), new(100, 20, z)), new(new(100, 20, z), new(100, 0, z)),
             };
             lineEdited.Loops = [l];
+            // Lines of the outline deleted in Edit Sketch, as a file has them: with the floor's own line they go with the
+            // redrawn outline (no step of their own); with no line of the floor (Revit closed during the edit) the floor
+            // is named once and nothing is deleted.
+            var sketchLines = (ChangeShapes.SketchOf(doc, edited)?.GetAllElements() ?? []).Select(doc.GetElement).Where(e => e is not null && ChangeShapes.IsSketchLine(e)).Take(2)
+                .Select(e => new M.Line { Kind = M.Kinds.Deleted, At = DateTime.Now, Id = e.Id.Value, Unique = e.UniqueId, Category = e.Category?.Name, Tx = "Delete Selection" }).ToList();
+            if (sketchLines.Count < 2) problems.Add("the test floor's sketch lines weren't found");
+            else
+            {
+                var alone = ChangeReplay.Plan(doc, M.Read(sketchLines.Select(M.Write)));
+                if (alone.Count != 1 || alone[0].Act != ChangeReplay.Act.Skip || !alone[0].Why.Contains("outline") || !alone[0].Why.Contains("by hand"))
+                    problems.Add($"two outline lines deleted with no line of their floor gave {alone.Count} steps ({string.Join(", ", alone.Select(a => a.Act))}), not one that names the floor");
+                var with = ChangeReplay.Plan(doc, M.Read(sketchLines.Select(M.Write).Append(M.Write(lineEdited))));
+                if (with.Any(a => a.Act is ChangeReplay.Act.Skip or ChangeReplay.Act.Delete) || !with.Any(a => a.Act == ChangeReplay.Act.Set))
+                    problems.Add("outline lines deleted with their floor's line in the file aren't left to the floor's redrawn outline");
+            }
             var lineGone = ChangeFile.Capture(doc, gone)!;
             var goneUnique = gone.UniqueId;
             using (var t = new Transaction(doc, "Field test: replay delete floor"))

@@ -87,6 +87,11 @@ internal static class RecoveryTests
         check("recovery: the change file never saves the model", !Src("Revit", "ChangeFile.cs").Contains(".Save(") && !Src("Revit", "ChangeFile.cs").Contains("SynchronizeWithCentral"), "");
         check("lifeline: named Lifeline on the pane and in Settings", SketchProMax.UI.CoreRibbonManifest.Text.Contains("\tLifeline\t") && Src("UI", "SettingsLayout.cs").Contains("\"Lifeline\""), "");
         check("lifeline: can go in a shared pack for colleagues", SketchProMax.Sharing.SharedPackMath.Shareable("recover"), "");
+        // No idle moments in an edit mode: a change reads what is waiting itself (bug 89).
+        check("lifeline: with no idle moment for a while a change reads the waiting elements itself", M.ReadNow(M.NoIdleMs + 1, M.EagerEveryMs + 1) && !M.ReadNow(500, 5000) && !M.ReadNow(5000, 200), "");
+        check("lifeline: a change reads what waits when Revit gave no idle moment, and outline lines aren't deleted one by one",
+            Src("Revit", "ChangeFile.cs").Contains("if (M.ReadNow(unchecked(tick - _lastIdle), unchecked(tick - _lastEager)))") && Src("Revit", "ChangeFile.cs").Contains("        _lastIdle = Environment.TickCount;")
+            && Src("Revit", "ChangeReplay.cs").Contains("edit its outline again by hand"), "");
         check("lifeline: works without a license", Src("CoreEntry.cs").Contains("\"export-chats-bugs\", \"recover\","), "");
         var app = Src("App.cs");
         var startAt = app.IndexOf("ChangeFile.Start(app)", StringComparison.Ordinal);
