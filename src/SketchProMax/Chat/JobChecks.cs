@@ -116,12 +116,15 @@ internal static class JobReview
     /// The checking job's task: the job's task and report, what the user asked in their own words (<paramref name="asked"/>,
     /// so a part the task left out is still caught), and how to answer: every part listed and read back, one by one.
     /// </summary>
-    public static string Task(ChatJob done, string asked = "") =>
+    public static string Task(ChatJob done, string asked = "", string rules = "") =>
         $"Check the work of job {done.Number} (\"{done.Title}\"), which says it is finished, against what it was asked to do.\n\n" +
         $"Its task:\n{done.Task.Trim()}\n\nIts report:\n{(done.Summary.Trim().Length > 0 ? done.Summary.Trim() : "(it gave none)")}\n\n" +
         (asked.Trim().Length > 0
             ? "What the user asked, in their own words (the task above was written from this; a part of it that belongs to this job and is " +
               $"missing from the task still counts):\n{asked.Trim()}\n\n"
+            : "") +
+        (rules.Trim().Length > 0
+            ? $"The rules, methods and decisions agreed earlier in the chat (they hold for this job too):\n{Cut(rules.Trim(), 3000)}\n\n"
             : "") +
         "How to check, part by part:\n" +
         "1. Write the task as a numbered list of its parts: every thing it had to make, change, place, name or leave alone. Leave nothing " +
@@ -130,9 +133,14 @@ internal static class JobReview
         "and sheets. Where the task says all or gives a number (all piles, every sheet, berths 7 to 11), count what was done against what " +
         "was asked. For anything drawn (geometry, lines, tags, dimensions, text), also look at it in its view (capture_view_image): " +
         "overlapping tags, a missing dimension or a hidden element show there and not in the numbers.\n" +
-        "3. When the work was a berth's submission drawings or sheets, also call submission_format (action=check, berths): every line " +
+        "3. Check how it was done, not only the numbers: where the user agreed a method or pointed at a reference (\"the same as the " +
+        "reference strip\", \"neater like the decks\", generic model voids), the work must use that method, and it must look like that " +
+        "reference in the view: extra lines, a mesh of creases, steps or gaps that the reference doesn't show make the part NOT DONE " +
+        "even when every level matches. A method the task allows \"or another way\" doesn't excuse a result that looks worse than the " +
+        "reference.\n" +
+        "4. When the work was a berth's submission drawings or sheets, also call submission_format (action=check, berths): every line " +
         "it lists for those berths is a part that is NOT DONE.\n" +
-        "4. Don't change the model: changes are refused for a check.\n\n" +
+        "5. Don't change the model: changes are refused for a check.\n\n" +
         $"Answer with the list, one line per part: \"<n>. <the part>: {DoneWord}\" with what you read, or \"<n>. <the part>: {NotDoneWord} - " +
         "<what is missing or wrong, and where>\". A part you could not check is NOT DONE with the reason.\n" +
         $"End with one line: \"{PassedWord}\" only when every part is {DoneWord}, or \"{IssuesWord}: \" followed by the {NotDoneWord} parts, " +
@@ -166,6 +174,8 @@ internal static class JobReview
         var at = lines.LastIndexOf(marked);
         return JobBoard.OneLine(string.Join(" ", lines.Skip(at)), 1500);
     }
+
+    private static string Cut(string text, int max) => text.Length > max ? text.Substring(0, max) + "…" : text;
 
     public static bool Passed(string verdict) => string.Equals(verdict, PassedWord, StringComparison.Ordinal);
 

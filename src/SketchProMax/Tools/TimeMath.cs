@@ -153,6 +153,20 @@ internal static class TimeMath
     public static string Line(double tookSeconds, double estimateSeconds) =>
         $"Done in {Duration(tookSeconds)}. By hand: about {Duration(estimateSeconds)}. Saved: {Duration(Saved(estimateSeconds, tookSeconds))}.";
 
+    /// <summary>
+    /// The line after a chat task (19 Nov 2026: "Done in 25 s. By hand: about 12 min. Saved: 12 min. Nothing in the model
+    /// changed." on a turn that only handed work to jobs). Time is only said to be saved when the model changed; a turn
+    /// that started jobs says so, since their work and time are on their own cards. <paramref name="tookSeconds"/> runs
+    /// from the user's message. Null when there is nothing worth a line (the card then says how long it took).
+    /// </summary>
+    public static string? ChatLine(double tookSeconds, double estimateSeconds, int changed, int jobsStarted)
+    {
+        if (changed <= 0 && jobsStarted > 0)
+            return $"Handed to {jobsStarted} job{(jobsStarted == 1 ? "" : "s")} in {Duration(tookSeconds)}; the work and its time are on their cards.";
+        if (changed <= 0) return $"Answered in {Duration(tookSeconds)}.";
+        return estimateSeconds > 0 ? Line(tookSeconds, estimateSeconds) : null;
+    }
+
     /// <summary>Hours for the Project Information parameters, to two decimals.</summary>
     public static double Hours(double seconds) => Math.Round(seconds / 3600, 2);
 

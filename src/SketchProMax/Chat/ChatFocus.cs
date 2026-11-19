@@ -249,13 +249,35 @@ internal static class ChatFocus
         "assistant. You get the request, the assistant's answer, and the user's correction of it. Use no tools.";
 
     /// <summary>The message for the one-shot run that distils a correction.</summary>
-    public static string LessonMessage(string request, string answer, string correction) =>
+    public static string LessonMessage(string request, string answer, string correction, IReadOnlyList<string>? notes = null) =>
         "The request:\n" + Cut(request, 1500) + "\n\nThe assistant's answer:\n" + Cut(answer, 3000) + "\n\nThe user's correction:\n" + Cut(correction, 1500) +
+        NotesList(notes) +
         "\n\nWrite the one lesson that would have avoided this correction, as an instruction for next time: what to do, in one sentence of " +
         "plain words (at most 40 words), general enough to hold for the next similar task, with no element ids and no names of people. " +
+        "Keep to what the user said: don't widen it to things they didn't name, and where their words are unclear, keep only the clear part. " +
         "Start the line with GLOBAL: when it holds for any model (how to work, check or answer), or MODEL: when it is a fact about this " +
         "project only (its berths, levels, names, standards). When the message is not a correction, or teaches nothing for next time " +
-        "(a one-off choice, a question, new work), answer exactly NONE.";
+        "(a one-off choice, a question, new work), answer exactly NONE." +
+        (notes is { Count: > 0 } ? " When your lesson changes or contradicts a note kept so far, add a line REPLACES: <its number> for each such note." : "");
+
+    /// <summary>The notes kept so far, numbered, so a lesson that changes one replaces it (19 Nov 2026: "AZ piles 100 mm in" stayed beside "AZ piles at the soffit").</summary>
+    private static string NotesList(IReadOnlyList<string>? notes)
+    {
+        if (notes is not { Count: > 0 }) return "";
+        var b = new System.Text.StringBuilder("\n\nNotes kept so far:");
+        for (var i = 0; i < notes.Count && i < 60; i++) b.Append('\n').Append(i + 1).Append(". ").Append(Cut(notes[i], 300));
+        return b.ToString();
+    }
+
+    /// <summary>The numbers (from 1) of the kept notes the lesson replaces ("REPLACES: 3"), within <paramref name="count"/>.</summary>
+    public static List<int> ParseReplaces(string? answer, int count)
+    {
+        var found = new List<int>();
+        foreach (Match m in Regex.Matches(answer ?? "", @"REPLACES:\s*([\d,\s]+)", RegexOptions.IgnoreCase))
+            foreach (var part in m.Groups[1].Value.Split([',', ' '], StringSplitOptions.RemoveEmptyEntries))
+                if (int.TryParse(part, out var n) && n >= 1 && n <= count && !found.Contains(n)) found.Add(n);
+        return found;
+    }
 
     private static string Cut(string text, int max)
     {

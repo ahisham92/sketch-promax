@@ -518,8 +518,13 @@ internal static class TimeLog
         }
     }
 
-    /// <summary>The chat task ended: records it and returns the line to show when its tools saved anything, else null.</summary>
-    public static string? EndChat()
+    /// <summary>
+    /// The chat task ended: records it and returns its line (TimeMath.ChatLine), or null. <paramref name="changed"/>:
+    /// elements the task changed (-1 not known): time is only counted as saved when the model changed.
+    /// <paramref name="askedAt"/>: when the user sent the message (UTC), so the time includes the wait before the answer
+    /// started. <paramref name="jobs"/>: jobs the task started.
+    /// </summary>
+    public static string? EndChat(int changed = -1, DateTime? askedAt = null, int jobs = 0)
     {
         lock (Gate)
         {
@@ -529,11 +534,14 @@ internal static class TimeLog
             try
             {
                 var took = run.Watch.Elapsed.TotalSeconds;
+                if (askedAt is { } asked && DateTime.UtcNow - asked > TimeSpan.FromSeconds(took) && DateTime.UtcNow - asked < TimeSpan.FromHours(2))
+                    took = (DateTime.UtcNow - asked).TotalSeconds;
                 var now = DateTime.Now;
                 var day = TimeMath.Day(now);
                 var ledger = LedgerFor(run.Doc, run.Title);
                 ledger.Sheet.Add(day, TimeMath.ChatTool, ai: took, runs: 1);
-                var shares = TimeMath.SplitChat(took, run.Nested.Select(n => n.Estimate).ToList());
+                // Nothing changed in the model: no time was saved, whatever the tools it called would take by hand.
+                var shares = changed == 0 ? run.Nested.Select(_ => 0.0).ToList() : TimeMath.SplitChat(took, run.Nested.Select(n => n.Estimate).ToList());
                 for (var i = 0; i < run.Nested.Count; i++) ledger.Sheet.Add(day, run.Nested[i].Tool, saved: shares[i]);
                 ledger.Dirty = true;
                 if (run.Span is { } span) Clock.TaskEnd(span, run.Doc, now);
@@ -545,7 +553,7 @@ internal static class TimeLog
                     byHandMinutes = Math.Round(estimate / 60, 1), savedMinutes = Math.Round(shares.Sum() / 60, 1), brief = run.Brief,
                 });
                 SaveAll(force: true);
-                return estimate > 0 ? TimeMath.Line(took, estimate) : null;
+                return changed < 0 ? (estimate > 0 ? TimeMath.Line(took, estimate) : null) : TimeMath.ChatLine(took, estimate, changed, jobs);
             }
             catch (Exception)
             {

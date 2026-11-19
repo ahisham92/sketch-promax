@@ -844,6 +844,8 @@ internal static class FieldTestCoverage
         new(92, ["chat.position_prompt_ui"], "Revit's Location Position Changed prompt is answered \"Do not save\" during Sketch ProMax's own sync or save only, and the sync's line says it came up; the user's own Synchronize still shows it"),
         new(93, ["chat.quick_question_ui"], "a question typed while the chat is busy is answered at once by a quick read-only run, questions get no brief and are answered by the chat itself, and \"this is the fourth time\" is taken as a repeat (unit tests)"),
         new(94, ["chat.jobs_keep_moving_ui"], "\"No split.\" never shows in a chat answer: not at the end of a real reply, not on a line of its own, not in chats saved earlier; the rest of the reply stays"),
+        new(95, ["chat.checked_to_the_end_ui"], "a check judges the look against the reference and the chat's agreed method, not only numbers; practice: AZ sheet piles flush with the soffit, grading with full-length voids; a correcting lesson or note replaces the old one (unit tests)"),
+        new(96, ["time.ui"], "a chat task's time runs from the user's message; one that changed nothing says Answered in, one that started jobs says Handed to, and no time is counted saved unless the model changed (unit tests)"),
     ];
 
     /// <summary>

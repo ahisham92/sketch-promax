@@ -739,7 +739,7 @@ internal sealed class JobBoard
     /// Job <paramref name="number"/> finished: a teammate checks its work against its task before it is reported
     /// (JobReview). The checking job (it waits to start like any job), or null when there is nothing to check.
     /// </summary>
-    public ChatJob? StartReview(int number, DateTime now, string asked = "")
+    public ChatJob? StartReview(int number, DateTime now, string asked = "", string rules = "")
     {
         lock (Gate)
         {
@@ -749,7 +749,7 @@ internal sealed class JobBoard
             {
                 Number = _jobs.Max(j => j.Number) + 1,
                 Key = Guid.NewGuid().ToString("N").Substring(0, 12),
-                Title = OneLine("Check: " + done.Title, 60), Task = JobReview.Task(done, asked), Created = now, State = Queued, ReviewOf = done.Number,
+                Title = OneLine("Check: " + done.Title, 60), Task = JobReview.Task(done, asked, rules), Created = now, State = Queued, ReviewOf = done.Number,
                 RevitModel = done.RevitModel,
             };
             _jobs.Add(check);

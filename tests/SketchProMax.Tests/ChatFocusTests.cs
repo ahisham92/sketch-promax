@@ -140,7 +140,7 @@ internal static class ChatFocusTests
             code.Contains("WorkedCode.Note(code, description, Name") && code.Contains("WorkedCode.PointerFor(description, code)"), "");
         var jobsPane = Read("src/SketchProMax/Chat/ChatPane.Jobs.cs");
         check("jobs: a check that finds parts not done sends the job back by itself, and the check carries the user's words",
-            jobsPane.Contains("if (JobReview.SendBack(checkedJob))") && jobsPane.Contains("JobReview.FixMessage(checkedJob)") && jobsPane.Contains("StartReview(job.Number, now, AskedWords())")
+            jobsPane.Contains("if (JobReview.SendBack(checkedJob))") && jobsPane.Contains("JobReview.FixMessage(checkedJob)") && jobsPane.Contains("StartReview(job.Number, now, AskedWords(), _conv.Recall)")
             && chat.Contains("each part of your task as done or not"), "");
         var pane = Read("src/SketchProMax/Chat/ChatPane.cs");
         check("pane: a status question is answered from the job list at once, and kept code is named with the message",
@@ -207,6 +207,42 @@ internal static class ChatFocusTests
             sync.Contains("PositionPrompt.During(() => { doc.SynchronizeWithCentral(") && Read("src/SketchProMax/Tools/LinkedModelTools.cs").Contains("PositionPrompt.During(() => { doc.Save();")
             && prompt.Contains("if (_depth == 0 ||") && prompt.Contains("DoNotSave = 1002") && Read("src/SketchProMax/App.cs").Contains("PositionPrompt.Watch(app);")
             && sync.Contains("+ Prompted()"), "");
+        // ---- 19 Nov 2026 afternoon: "supposedly the work is done and when you check it was not done"
+        var notesAsk = ChatFocus.LessonMessage("raise the pile heads", "All 595 piles go 100 mm in, AZ included.", "az piles should stay at soffit",
+            ["Lesson: Extend every pile head, including AZ sheet piles, 100 mm into the soffit.", "Clash tolerance 10 mm."]);
+        check("lesson: the notes kept so far go with it, numbered, and a changed one is replaced, keeping to the user's words",
+            notesAsk.Contains("Notes kept so far:\n1. Lesson: Extend every pile head") && notesAsk.Contains("2. Clash tolerance") && notesAsk.Contains("REPLACES: <its number>")
+            && notesAsk.Contains("don't widen it to things they didn't name") && !ChatFocus.LessonMessage("a", "b", "c").Contains("REPLACES"), notesAsk);
+        check("lesson: the notes it replaces are read from its answer, in range, once each",
+            ChatFocus.ParseReplaces("GLOBAL: AZ sheet piles stop flush with the soffit.\nREPLACES: 1", 2).SequenceEqual([1])
+            && ChatFocus.ParseReplaces("GLOBAL: x\nREPLACES: 2, 5, 2", 2).SequenceEqual([2]) && ChatFocus.ParseReplaces("GLOBAL: x", 2).Count == 0, "");
+        var reviewTask = JobReview.Task(new ChatJob { Number = 27, Title = "Approach slabs grading", Task = "Grade the approach slabs.", Summary = "Done." },
+            "grade them", "- Method agreed: full-length generic model voids, as neat as the reference strip.");
+        check("check job: the look and the agreed method count, not only the numbers, and the chat's rules go with it",
+            reviewTask.Contains("Check how it was done, not only the numbers") && reviewTask.Contains("a mesh of creases") && reviewTask.Contains("NOT DONE")
+            && reviewTask.Contains("The rules, methods and decisions agreed earlier in the chat") && reviewTask.Contains("full-length generic model voids, as neat")
+            && reviewTask.Contains("5. Don't change the model") && !JobReview.Task(new ChatJob { Number = 1, Title = "t", Task = "x" }).Contains("agreed earlier in the chat"), reviewTask);
+        check("practice: AZ sheet piles flush with the soffit, grading with full-length voids not shape points, limits follow the drawing",
+            basePrompt.Contains("AZ sheet piles stop flush with the soffit") && basePrompt.Contains("never with dense slab shape points")
+            && basePrompt.Contains("not about reaching\n          the limits the drawing gives") && !basePrompt.Contains("sheet piles, combi-wall pipes and their"), "");
+        check("prompt: an agreed method is a must in every task with the look in done_when; done only when checked; a corrected note replaces the old",
+            chat.Contains("never add \"or another way where neater\"") && chat.Contains("looks as clean as the reference")
+            && chat.Contains("Never tell the user a part is done unless the job's check passed") && chat.Contains("memory_note replaces="), "");
+        check("memory_note: replaces takes the earlier note out", Read("src/SketchProMax/Tools/MemoryTools.cs").Contains("\"replaces\": {\"type\": \"string\"")
+            && Read("src/SketchProMax/Chat/BriefRunner.cs").Contains("foreach (var (k, n) in replaced) MemoryNotes.Remove(sections, k, n);"), "");
+        // ---- Task times (19 Nov 2026: "Done in 25 s. By hand: about 12 min. Saved: 12 min. Nothing in the model changed.")
+        check("time: a task that changed nothing claims no time saved",
+            SketchProMax.Tools.TimeMath.ChatLine(25, 720, 0, 0) == "Answered in 25 s.", SketchProMax.Tools.TimeMath.ChatLine(25, 720, 0, 0) ?? "null");
+        check("time: a task that only started jobs says so, their time is on their cards",
+            SketchProMax.Tools.TimeMath.ChatLine(25, 720, 0, 2) == "Handed to 2 jobs in 25 s; the work and its time are on their cards.", SketchProMax.Tools.TimeMath.ChatLine(25, 720, 0, 2) ?? "null");
+        check("time: a task that changed the model still says what it saved",
+            SketchProMax.Tools.TimeMath.ChatLine(180, 2400, 12, 0) == "Done in 3 min. By hand: about 40 min. Saved: 37 min." && SketchProMax.Tools.TimeMath.ChatLine(30, 0, 3, 0) is null, "");
+        var answered = new JobCardModel { State = "done", Started = new DateTime(2026, 11, 19, 12, 0, 0), Ended = new DateTime(2026, 11, 19, 12, 2, 0) };
+        check("time: a card that changed nothing reads 'Answered in', not 'Done in'", answered.FinalLine() == "Answered in 2 min. Nothing in the model changed.", answered.FinalLine());
+        var timeLog = Read("src/SketchProMax/Revit/TimeLog.cs");
+        check("time: the task's time runs from the user's message, and nothing is counted saved when nothing changed",
+            timeLog.Contains("var shares = changed == 0 ?") && timeLog.Contains("took = (DateTime.UtcNow - asked).TotalSeconds")
+            && pane.Contains("EndChat(Revit.JobUndo.ElementsChanged, _askedAt, jobs)") && pane.Contains("_askedAt = DateTime.UtcNow;"), "");
         check("pane: lessons go to the memory notes, global or this model's",
             Read("src/SketchProMax/Chat/BriefRunner.cs").Contains("MemoryNotes.Add(sections, key, lesson.Note)"), "");
     }

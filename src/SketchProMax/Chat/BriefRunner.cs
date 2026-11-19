@@ -87,11 +87,27 @@ internal static class BriefRunner
     public static async Task<string> RememberLesson(ClaudeCli.Install? install, string request, string answer, string correction, string? modelKey, string? model)
     {
         if (install is null) return "";
-        var (text, error) = await Run(install, ChatFocus.LessonInstructions, ChatFocus.LessonMessage(request, answer, correction),
+        // The notes kept so far go with it, so a lesson that changes one replaces it instead of standing beside it.
+        List<(string? Key, string Note)> kept;
+        try
+        {
+            var (g, m) = MemoryNotes.For(MemoryNotes.Load(), modelKey);
+            kept = g.Select(n => ((string?)null, n)).Concat(m.Select(n => ((string?)modelKey, n))).ToList();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException) { kept = []; }
+        var (text, error) = await Run(install, ChatFocus.LessonInstructions, ChatFocus.LessonMessage(request, answer, correction, kept.Select(k => k.Note).ToList()),
             readTools: false, model, DistilTimeoutMs, CancellationToken.None).ConfigureAwait(false);
         if (error.Length > 0 || ChatFocus.ParseLesson(text) is not { } lesson) return "";
         var key = lesson.Global || string.IsNullOrEmpty(modelKey) ? null : modelKey;
-        try { return MemoryNotes.Change(sections => MemoryNotes.Add(sections, key, lesson.Note)) ? lesson.Note : ""; }
+        var replaced = ChatFocus.ParseReplaces(text, kept.Count).Select(n => kept[n - 1]).ToList();
+        try
+        {
+            return MemoryNotes.Change(sections =>
+            {
+                foreach (var (k, n) in replaced) MemoryNotes.Remove(sections, k, n);
+                return MemoryNotes.Add(sections, key, lesson.Note);
+            }) ? lesson.Note : "";
+        }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException) { return ""; }
     }
 
