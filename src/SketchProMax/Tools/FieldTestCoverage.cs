@@ -843,6 +843,7 @@ internal static class FieldTestCoverage
         new(91, ["recovery.where"], "Next and Show zoom the view on the element's own box (Revit's ShowElements left the view where it was), and nothing stays selected for an element that is gone (unit test on the source; the zoom was run in Revit by hand)"),
         new(92, ["chat.position_prompt_ui"], "Revit's Location Position Changed prompt is answered \"Do not save\" during Sketch ProMax's own sync or save only, and the sync's line says it came up; the user's own Synchronize still shows it"),
         new(93, ["chat.quick_question_ui"], "a question typed while the chat is busy is answered at once by a quick read-only run, questions get no brief and are answered by the chat itself, and \"this is the fourth time\" is taken as a repeat (unit tests)"),
+        new(94, ["chat.jobs_keep_moving_ui"], "\"No split.\" never shows in a chat answer: not at the end of a real reply, not on a line of its own, not in chats saved earlier; the rest of the reply stays"),
     ];
 
     /// <summary>

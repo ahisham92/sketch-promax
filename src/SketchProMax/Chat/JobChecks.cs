@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.RegularExpressions;
 
 namespace SketchProMax.Chat;
 
@@ -265,10 +266,20 @@ internal static class FreeWorkers
     /// The coordinator's answer to <see cref="Nudge"/> when nothing could be split off ("No split.", perhaps with a short
     /// reason): an internal decision, so the chat drops it instead of showing it as Sketch ProMax's answer.
     /// </summary>
-    public static bool IsNothing(string text)
+    public static bool IsNothing(string text) => Strip(text).Length == 0;
+
+    /// <summary>
+    /// The text without the coordinator's "No split." (a line of its own, or the end of the last line), wherever it
+    /// appears: a reply that did real work can still end with it (bug 94). Text that is only "No split." becomes "".
+    /// </summary>
+    public static string Strip(string text)
     {
-        var said = (text ?? "").Trim().TrimEnd('.', '!', ' ', '\n', '\r').Trim('*', '_', '`', ' ').ToLowerInvariant();
-        if (said.Length == 0) return true;
-        return said.StartsWith("no split", StringComparison.Ordinal) && said.Length <= 200;
+        if (string.IsNullOrEmpty(text) || text.IndexOf("split", StringComparison.OrdinalIgnoreCase) < 0) return (text ?? "").Trim().Length == 0 ? "" : text ?? "";
+        var kept = OwnLine.Replace(text, "");
+        kept = AtEnd.Replace(kept, "");
+        return kept.Trim().Length == 0 ? "" : kept.TrimEnd();
     }
+
+    private static readonly Regex OwnLine = new(@"^[ \t>*_`]*no split(?:\b[^\n]{0,200})?$\r?\n?", RegexOptions.IgnoreCase | RegexOptions.Multiline);
+    private static readonly Regex AtEnd = new(@"[ \t]+[*_`]*no split[.!]?[*_`]*\s*$", RegexOptions.IgnoreCase);
 }

@@ -68,6 +68,14 @@ internal static class JobChecksTests
             FreeWorkers.IsNothing("No split.") && FreeWorkers.IsNothing("  no split\n") && FreeWorkers.IsNothing("**No split.**")
             && FreeWorkers.IsNothing("No split: every step needs the one before.") && FreeWorkers.IsNothing("")
             && share.Contains("never shown"), "");
+        var mixed = "Job 27 is reshaping the 6 Berth 10 approach slabs. Any slab joined to a rear beam gets unjoined.\n\nNo split.";
+        check("free workers: \"No split.\" at the end of a real answer is taken out, the answer stays (bug 94)",
+            FreeWorkers.Strip(mixed) == "Job 27 is reshaping the 6 Berth 10 approach slabs. Any slab joined to a rear beam gets unjoined."
+            && FreeWorkers.Strip("Handed steps 3-4 to job 26. No split.") == "Handed steps 3-4 to job 26."
+            && FreeWorkers.Strip("No split.\r\nJob 27 carries on.") == "Job 27 carries on." && !FreeWorkers.IsNothing(mixed), FreeWorkers.Strip(mixed));
+        check("free workers: text that only mentions splitting is left alone",
+            FreeWorkers.Strip("Split the wall at grid C.") == "Split the wall at grid C." && FreeWorkers.Strip("There is no split joint here.") == "There is no split joint here."
+            && FreeWorkers.Strip("Plain answer.") == "Plain answer.", "");
         check("free workers: a real answer after a nudge is still shown",
             !FreeWorkers.IsNothing("Started job 26 for the fenders and told job 25 to leave them.") && !FreeWorkers.IsNothing("Split off steps 3 and 4 into job 26."), "");
 

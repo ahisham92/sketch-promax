@@ -268,6 +268,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         /// </summary>
         public bool Quiet;
         public readonly List<(ChatItem Item, UIElement? Element)> Held = new();
+        /// <summary>Where the turn's items start in the conversation: its text is cleaned of "No split." when it ends.</summary>
+        public int FirstItem;
     }
 
     /// <summary>A task at least this long that finishes gets the finished glow and, when you are in another program, the taskbar flash.</summary>
@@ -1306,6 +1308,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         return item.Kind switch
         {
             "user" => UserMessage(item),
+            // An answer that was only the coordinator's "No split." (saved before 0.35.85) isn't drawn.
+            "assistant" when item.Text.Length > 0 && FreeWorkers.IsNothing(item.Text) => new Border { Visibility = Visibility.Collapsed },
             "assistant" => AssistantMessage(item, first),
             "tool" => ToolCard(item, first),
             "file" => FileCard(item),
@@ -1427,12 +1431,12 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         var panel = new StackPanel { Margin = new Thickness(0, header ? ChatUi.S6 : ChatUi.S2, 0, 0) };
         if (header) panel.Children.Add(ClaudeHeader(item));
         var view = new MarkdownView();
-        view.SetMarkdown(item.Text);
+        view.SetMarkdown(FreeWorkers.Strip(item.Text)); // never the coordinator's "No split." (chats saved before 0.35.85 have it)
         _views[item] = view;
         // Copy sits over the top right corner, shown on hover or when it has keyboard focus, so it takes no room.
         var grid = new Grid();
         grid.Children.Add(view);
-        var copy = ChatUi.CopyButton(() => item.Text, "the answer", null);
+        var copy = ChatUi.CopyButton(() => FreeWorkers.Strip(item.Text), "the answer", null);
         copy.HorizontalAlignment = HorizontalAlignment.Right;
         copy.VerticalAlignment = VerticalAlignment.Top;
         copy.Margin = new Thickness(0, -ChatUi.S1, 0, 0);
@@ -2022,7 +2026,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         _render.Stop();
         _throttle.Drawn(DateTime.UtcNow);
         foreach (var key in _dirty)
-            if (_texts.TryGetValue(key, out var t)) t.View.SetMarkdown(t.Item.Text, fade: ChatUi.Lively);
+            if (_texts.TryGetValue(key, out var t)) t.View.SetMarkdown(FreeWorkers.Strip(t.Item.Text), fade: ChatUi.Lively);
         _dirty.Clear();
         ScrollToEnd();
     }
@@ -2277,7 +2281,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             capture(text); // the field test's hook: what would be sent, never sent
             return;
         }
-        var turn = _turn = new Turn { Brief = brief, Quiet = quiet };
+        var turn = _turn = new Turn { Brief = brief, Quiet = quiet, FirstItem = _conv.Items.Count };
         CrewHeard(); // the large chat's coordinator nods: your message, or a job reporting back
         // Automatic model and effort: picked for this request by its kind of work, and said in the chat when it changes.
         PickFor(text, attachments.Any(a => System.IO.Path.GetExtension(a.Path).ToLowerInvariant() is ".pdf" or ".docx" or ".pptx" or ".doc"));
@@ -2768,12 +2772,12 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             Note("Stopped. Ask again, or say what to do instead.");
         else if (end.IsError)
             Failure(message, end.Subtype);
-        else if (!turn.SawText && message.Length > 0 && !(turn.Quiet && FreeWorkers.IsNothing(message)))
-            Add(new ChatItem { Kind = "assistant", Text = message });
+        else if (!turn.SawText && message.Length > 0 && !FreeWorkers.IsNothing(message))
+            Add(new ChatItem { Kind = "assistant", Text = FreeWorkers.Strip(message) });
         EndTurn();
     }
 
-    /// <summary>A quiet turn's text is drawn out of sight until the turn ends (<see cref="ReleaseHeld"/>).</summary>
+    /// <summary>A quiet turn's text is drawn out of sight until the turn ends (<see cref="CleanTurn"/>).</summary>
     private void Hold(Turn? turn, ChatItem item)
     {
         if (turn is not { Quiet: true }) return;
@@ -2787,22 +2791,50 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     }
 
     /// <summary>
-    /// A quiet turn ended: text that only says there was nothing to do ("No split.") is dropped from the chat and its
-    /// history; anything else it wrote is shown.
+    /// A turn ended: the coordinator's internal "No split." is taken out of everything it wrote (bugs 88, 94), and text
+    /// that said nothing else is dropped from the chat and its history. A quiet turn's held text is shown when it stays.
     /// </summary>
-    private void ReleaseHeld(Turn turn)
+    private void CleanTurn(Turn turn)
     {
-        foreach (var (item, element) in turn.Held)
+        var items = new List<ChatItem>();
+        for (var k = Math.Min(Math.Max(0, turn.FirstItem), _conv.Items.Count); k < _conv.Items.Count; k++)
+            if (_conv.Items[k].Kind == "assistant") items.Add(_conv.Items[k]);
+        foreach (var (item, _) in turn.Held) if (!items.Contains(item)) items.Add(item);
+        var gone = new List<ChatItem>();
+        foreach (var item in items)
         {
-            if (FreeWorkers.IsNothing(item.Text))
+            var held = turn.Held.FirstOrDefault(h => h.Item == item).Element;
+            var kept = FreeWorkers.Strip(item.Text);
+            if (kept.Length == 0)
             {
+                var element = held ?? ElementOf(item);
                 _conv.Items.Remove(item);
                 if (element is not null) _messages.Children.Remove(element);
-                Forget([item]);
+                gone.Add(item);
+                continue;
             }
-            else if (element is not null) element.Visibility = Visibility.Visible;
+            if (kept != item.Text)
+            {
+                item.Text = kept;
+                if (_views.TryGetValue(item, out var view)) view.SetMarkdown(kept);
+            }
+            if (held is not null) held.Visibility = Visibility.Visible;
         }
+        if (gone.Count > 0) Forget(gone);
         turn.Held.Clear();
+    }
+
+    /// <summary>The drawn element in the chat that holds an answer's text, or null when it isn't drawn.</summary>
+    private UIElement? ElementOf(ChatItem item)
+    {
+        if (Hidden || !_views.TryGetValue(item, out var view)) return null;
+        DependencyObject? at = view;
+        while (at is FrameworkElement fe && fe.Parent is { } parent)
+        {
+            if (ReferenceEquals(parent, _messages)) return fe;
+            at = parent;
+        }
+        return null;
     }
 
     private void Failure(string message, string subtype)
@@ -2984,10 +3016,10 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     private void EndTurn()
     {
         var ended = _turn;
-        if (ended is { Quiet: true })
+        if (ended is not null)
         {
-            if (!Hidden) RenderDirty(); // the held text is complete before it is judged
-            ReleaseHeld(ended);
+            if (!Hidden) RenderDirty(); // the turn's text is complete before it is cleaned
+            CleanTurn(ended);
         }
         if (_turn?.KillTimer is { } timer) timer.Stop();
         // An answer ended: the next message's model note counts changes from now (not after a brief's planning or a shrink).
