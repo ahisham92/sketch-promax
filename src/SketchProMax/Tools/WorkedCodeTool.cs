@@ -74,12 +74,12 @@ public sealed class WorkedCodeTool : IRevitTool
 
     private static object Header(WorkedCode.Entry e) => new
     {
-        id = e.Id, description = e.Description, tool = e.Tool, worked = e.Uses, last = e.Last.ToString("yyyy-MM-dd"), model = e.Model,
+        id = e.Id, description = e.Description, tool = e.Tool, worked = e.Uses, last = e.Last.ToString("yyyy-MM-dd"), model = e.Model, topic = e.Topic,
     };
 
     private static object Full(WorkedCode.Entry e) => new
     {
         id = e.Id, description = e.Description, tool = e.Tool, own_transactions = e.OwnTransactions, worked = e.Uses,
-        last = e.Last.ToString("yyyy-MM-dd"), model = e.Model, code = e.Code,
+        last = e.Last.ToString("yyyy-MM-dd"), model = e.Model, topic = e.Topic, code = WorkedCode.CodeOf(e),
     };
 }

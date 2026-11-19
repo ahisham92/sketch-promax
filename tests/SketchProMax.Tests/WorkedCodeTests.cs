@@ -90,9 +90,32 @@ internal static class WorkedCodeTests
             && fromChats[0].Step.Time == new DateTime(2026, 10, 20, 9, 0, 0, DateTimeKind.Utc), fromChats.Count + "");
 
         var many = new List<WorkedCode.Entry>();
-        for (var i = 0; i < WorkedCode.MaxEntries + 5; i++)
-            WorkedCode.Keep(many, Code("OST_Walls", 1).Replace("piles", "items" + i).Replace("moved", "count" + i).Replace(" p ", " q" + i + " ").Replace("p.", "q" + i + ".").Replace("lp", "at" + i),
-                "Work" + (char)('a' + i % 26) + (char)('a' + i / 26 % 26) + (char)('a' + i / 676 % 26) + " " + i, "run_revit_code", false, "", now.AddMinutes(i));
-        check("kept: capped, the oldest go first", many.Count == WorkedCode.MaxEntries && many.All(e => !e.Description.EndsWith(" 0")) && many.Any(e => e.Description.EndsWith(" " + (WorkedCode.MaxEntries + 4))), many.Count + "");
+        for (var i = 0; i < 3010; i++)
+            many.Add(new WorkedCode.Entry { Id = "x" + i, Description = "Old work " + i, Tool = "run_revit_code", Code = "", Uses = 1 });
+        WorkedCode.Keep(many, Code("OST_StructuralColumns", 1), "Mark columns over 3000", "run_revit_code", false, "", now);
+        check("no limit: 3,000 kept and one more is still kept, none dropped", many.Count == 3011 && many[0].Id == "x0", many.Count + "");
+
+        check("topic: the Revit category the code names most", WorkedCode.Topic("new FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_StructuralColumns)") == "Structural Columns"
+            && WorkedCode.Topic("new FilteredElementCollector(doc).OfClass(typeof(Floor))") == "Floors"
+            && WorkedCode.Topic("var x = 1;") == "General", WorkedCode.Topic("OST_StructuralColumns"));
+
+        var folder = Path.Combine(Path.GetTempPath(), "spm-worked-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var lib = new List<WorkedCode.Entry>();
+            var col = WorkedCode.Keep(lib, Code("OST_StructuralColumns", 1), "Mark the columns", "run_revit_code", false, "M", now)!;
+            var wal = WorkedCode.Keep(lib, "var walls = new FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_Walls).WhereElementIsNotElementType().ToList();\n" +
+                "var tall = walls.Where(w => w.get_Parameter(BuiltInParameter.WALL_USER_HEIGHT_PARAM)?.AsDouble() > 10).Select(w => w.Id.ToString()).ToList();\nreturn new { count = walls.Count, tall };", "Count the walls", "run_revit_query_code", false, "M", now)!;
+            WorkedCode.Save(folder, lib);
+            var index = WorkedCode.ReadIndex(folder);
+            var colFile = WorkedCode.CodeFile(folder, col);
+            check("library: one file per code in its topic's folder; the index has no code, is sorted by topic and keeps the shape numbers",
+                File.Exists(colFile) && Path.GetFileName(Path.GetDirectoryName(colFile)) == "Structural Columns" && File.ReadAllText(colFile) == col.Code
+                && File.Exists(WorkedCode.CodeFile(folder, wal)) && index.Count == 2 && index.All(e => e.Code.Length == 0 && e.Sig is { Length: WorkedCode.SignatureSize })
+                && index.Select(e => e.Topic).SequenceEqual(index.Select(e => e.Topic).OrderBy(t => t, StringComparer.Ordinal)), string.Join(",", index.Select(e => e.Topic)));
+            var reused = WorkedCode.Keep(index, Code("OST_StructuralColumns", 1), "Mark the columns", "run_revit_code", false, "M", now.AddHours(1));
+            check("library: read back from the index, the same code is one more use, not a new entry", reused?.Id == col.Id && index.Count == 2 && reused.Uses == 2, index.Count + "");
+        }
+        finally { try { Directory.Delete(folder, true); } catch (IOException) { } }
     }
 }

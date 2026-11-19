@@ -856,6 +856,7 @@ internal static class FieldTestCoverage
         new(99, ["chat.update_busy_ui"], "a newer version waiting while jobs work holds new jobs (at most 20 minutes) so it goes in, and the chat says so"),
         new(100, ["chat.away_ui"], "said away or no pop-ups in the chat: Revit's dialogs during the jobs' work are answered, steps only the user can do skipped, risky changes left for them, and what happened is listed when they write next (unit tests)"),
         new(101, ["chat.once_coded_ui"], "Claude Code's transcripts are copied for good into Sketch ProMax's history folder, and the kept-code library reads those copies (unit tests)"),
+        new(102, ["chat.once_coded_ui"], "The kept-code library has no limit: an index plus one file per code in a folder per topic, rebuilt once from all history (unit tests)"),
         new(96, ["time.ui"], "a chat task's time runs from the user's message; one that changed nothing says Answered in, one that started jobs says Handed to, and no time is counted saved unless the model changed (unit tests)"),
     ];
 
