@@ -120,8 +120,35 @@ internal sealed class RecoverWindow : System.Windows.Window
         AutomationProperties.SetLiveSetting(note, AutomationLiveSetting.Polite);
         section.Children.Add(note);
 
+        var syncRow = new WrapPanel { Margin = new Thickness(0, 8, 0, 0) };
+        const string syncLabel = "Synchronize with central by itself every";
+        var sync = new CheckBox { Content = Brand.Text(syncLabel), VerticalAlignment = VerticalAlignment.Center, IsChecked = settings.LifelineAutoSync };
+        AutomationProperties.SetName(sync, syncLabel + " so many minutes");
+        var syncMinutes = new TextBox
+        {
+            Width = 48, MinHeight = 26, Margin = new Thickness(6, 0, 6, 0), VerticalContentAlignment = VerticalAlignment.Center,
+            Text = LifelineWatchMath.ClampSyncMinutes(settings.LifelineAutoSyncMinutes).ToString(System.Globalization.CultureInfo.CurrentCulture),
+            IsEnabled = settings.LifelineAutoSync,
+        };
+        AutomationProperties.SetName(syncMinutes, "Minutes between synchronizes");
+        AutomationProperties.SetHelpText(syncMinutes, $"From {LifelineWatchMath.MinSyncMinutes} to {LifelineWatchMath.MaxSyncMinutes} minutes; {LifelineWatchMath.DefaultSyncMinutes} is the default.");
+        var syncUnit = Brand.Text("minutes");
+        syncUnit.VerticalAlignment = VerticalAlignment.Center;
+        syncRow.Children.Add(sync);
+        syncRow.Children.Add(syncMinutes);
+        syncRow.Children.Add(syncUnit);
+        section.Children.Add(syncRow);
+
+        var syncNote = Brand.Text("", Brand.K.Muted, 11);
+        syncNote.Margin = new Thickness(0, 6, 0, 0);
+        AutomationProperties.SetLiveSetting(syncNote, AutomationLiveSetting.Polite);
+        section.Children.Add(syncNote);
+
         void Keep()
         {
+            var syncValid = int.TryParse(syncMinutes.Text.Trim(), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.CurrentCulture, out var m)
+                            && m >= LifelineWatchMath.MinSyncMinutes && m <= LifelineWatchMath.MaxSyncMinutes;
+            syncMinutes.IsEnabled = sync.IsChecked == true;
             var typed = minutes.Text.Trim();
             var valid = int.TryParse(typed, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.CurrentCulture, out var n)
                         && n >= LifelineWatchMath.MinMinutes && n <= LifelineWatchMath.MaxMinutes;
@@ -133,17 +160,27 @@ internal sealed class RecoverWindow : System.Windows.Window
                 now.LifelineWarnings = warn.IsChecked == true;
                 now.LifelineAutoSave = save.IsChecked == true;
                 if (valid) now.LifelineAutoSaveMinutes = n;
+                now.LifelineAutoSync = sync.IsChecked == true;
+                if (syncValid) now.LifelineAutoSyncMinutes = m;
                 now.Save();
                 LifelineWatch.ReadSettings();
                 var every = LifelineWatchMath.ClampMinutes(now.LifelineAutoSaveMinutes);
                 note.Text = !valid
                     ? $"Type a whole number of minutes from {LifelineWatchMath.MinMinutes} to {LifelineWatchMath.MaxMinutes}. Until then it stays {every}."
                     : LifelineWatchMath.About(now.LifelineAutoSave, every);
+                var syncEvery = LifelineWatchMath.ClampSyncMinutes(now.LifelineAutoSyncMinutes);
+                syncNote.Text = !syncValid
+                    ? $"Type a whole number of minutes from {LifelineWatchMath.MinSyncMinutes} to {LifelineWatchMath.MaxSyncMinutes}. Until then it stays {syncEvery}."
+                    : LifelineWatchMath.AboutSync(now.LifelineAutoSync, syncEvery);
             }
             catch (Exception ex) { note.Text = "This couldn't be kept: " + ex.Message; }
         }
 
         note.Text = LifelineWatchMath.About(settings.LifelineAutoSave, LifelineWatchMath.ClampMinutes(settings.LifelineAutoSaveMinutes));
+        syncNote.Text = LifelineWatchMath.AboutSync(settings.LifelineAutoSync, LifelineWatchMath.ClampSyncMinutes(settings.LifelineAutoSyncMinutes));
+        sync.Click += (_, _) => Keep();
+        syncMinutes.LostFocus += (_, _) => Keep();
+        syncMinutes.TextChanged += (_, _) => { if (syncMinutes.IsKeyboardFocused) Keep(); };
         warn.Click += (_, _) => Keep();
         save.Click += (_, _) => Keep();
         minutes.LostFocus += (_, _) => Keep();

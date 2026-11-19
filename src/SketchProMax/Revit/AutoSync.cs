@@ -27,6 +27,9 @@ internal static class AutoSync
     /// <summary>True on Revit's thread while a Claude call runs (<see cref="InCallNow"/>): only then may a batch stop to sync.</summary>
     private static bool InCall;
 
+    /// <summary>A chat call is in the middle of its work on a model (Lifeline's own synchronize waits for it).</summary>
+    public static bool Working => InCall;
+
     /// <summary>For the field test: treats the model as a local copy of a central model (the test project isn't one).</summary>
     internal static bool SharedForTest;
 
@@ -228,7 +231,7 @@ internal static class AutoSync
     /// <summary>After <see cref="SyncNow"/>: what Revit asked during it and how it was answered ("" when nothing).</summary>
     [ThreadStatic] public static string? LastPrompt;
 
-    public static string? SyncNow(Document doc)
+    public static string? SyncNow(Document doc, string why = "save_model")
     {
         LastPrompt = "";
         if (CentralAccess.Waiting(doc) is { } wait) return wait;
@@ -243,7 +246,7 @@ internal static class AutoSync
         Syncs++;
         Rule.Synced(Key(doc));
         LastPrompt = Prompted();
-        Note(doc, $"Synchronized \"{doc.Title}\" with central (save_model)" + LastPrompt);
+        Note(doc, $"Synchronized \"{doc.Title}\" with central ({why})" + LastPrompt);
         return null;
     }
 

@@ -191,6 +191,12 @@ public sealed class AgentSettings
     /// <summary>How often the local copy is saved by itself: 20 minutes by default, 5 to 240.</summary>
     public int LifelineAutoSaveMinutes { get; set; } = 20;
 
+    /// <summary>Lifeline synchronizes a local copy with central by itself every <see cref="LifelineAutoSyncMinutes"/> minutes when it has changes. Off by default.</summary>
+    public bool LifelineAutoSync { get; set; }
+
+    /// <summary>How often a local copy is synchronized by itself: 60 minutes by default, 10 to 480.</summary>
+    public int LifelineAutoSyncMinutes { get; set; } = 60;
+
     /// <summary>
     /// The size a model should stay under, in MB (Storage & cleanup shows the model against it; a model can still pass it):
     /// 200 by default, 10 to 100000 (Tools.ModelStorageMath).

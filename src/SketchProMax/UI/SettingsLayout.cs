@@ -76,6 +76,8 @@ internal static class SettingsLayout
         ["LifelineWarnings"] = Recovery,
         ["LifelineAutoSave"] = Recovery,
         ["LifelineAutoSaveMinutes"] = Recovery,
+        ["LifelineAutoSync"] = Recovery,
+        ["LifelineAutoSyncMinutes"] = Recovery,
         ["ModelSizeLimitMb"] = Storage,
         ["AutoUpdate"] = Updates,
     };

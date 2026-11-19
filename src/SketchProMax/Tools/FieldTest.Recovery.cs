@@ -762,16 +762,28 @@ internal static partial class FieldTest
             LifelineWatch.HintsForTest = null;
             if (!saved || doc.IsModified) problems.Add("the test project wasn't saved");
             if (hints.Count != 1 || hints[0].Key != "saved") problems.Add("the save wasn't said in a hint (" + string.Join(", ", hints.Select(h => h.Key)) + ")");
+            // Synchronizing by itself, with a stand-in for Revit's synchronize (nothing is synchronized): one that goes through, one that doesn't.
+            hints.Clear();
+            var asked = 0;
+            LifelineWatch.HintsForTest = hints;
+            AutoSync.SyncForTest = (_, keep) => { asked++; return keep ? "kept what was borrowed" : null; };
+            var synced = LifelineWatch.Sync(doc);
+            AutoSync.SyncForTest = (_, _) => "the central model is busy";
+            var refused = LifelineWatch.Sync(doc);
+            LifelineWatch.HintsForTest = null;
+            if (!synced || asked != 1 || refused || !hints.Select(h => h.Key).SequenceEqual(["synced", "sync-failed"]))
+                problems.Add($"synchronizing by itself: went through {synced}, asked {asked}, refused one went through {refused}, hints {string.Join(", ", hints.Select(h => h.Key))}");
         }
         catch (Exception ex) { problems.Add(ex.GetType().Name + ": " + ex.Message); }
         finally
         {
             LifelineWatch.HintsForTest = null;
+            AutoSync.SyncForTest = null;
             try { doc?.Close(false); } catch (Exception) { }
             try { if (File.Exists(file)) File.Delete(file); } catch (Exception) { }
         }
         return problems.Count == 0
-            ? Pass($"signs read (Revit {signs.RevitMemoryMb:N0} MB, {signs.FreeMemoryMb:N0} MB free, drive {signs.Disk} {signs.FreeDiskMb:N0} MB free, {signs.Handles:N0} handles); a folder answers and a missing one doesn't; a test project was saved and the hint said so")
+            ? Pass($"signs read (Revit {signs.RevitMemoryMb:N0} MB, {signs.FreeMemoryMb:N0} MB free, drive {signs.Disk} {signs.FreeDiskMb:N0} MB free, {signs.Handles:N0} handles); a folder answers and a missing one doesn't; a test project was saved and the hint said so; synchronizing by itself said what went through and what didn't (stand-in, nothing synchronized)")
             : Fail(string.Join("; ", problems));
     }
 
