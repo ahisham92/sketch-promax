@@ -66,7 +66,8 @@ internal sealed partial class ChatPane
         _questionsLabel.Text = _questionsShown ? "Back to the chat" : open > 0 ? $"Questions ({open})" : "Questions";
         Brand.Fg(_questionsLabel, open > 0 && !_questionsShown ? Brand.K.Link : Brand.K.Muted);
         _questionsLabel.FontWeight = open > 0 && !_questionsShown ? FontWeights.SemiBold : FontWeights.Normal;
-        _questionsPill.Visibility = open > 0 || _questionsShown || (_board?.Questions.Find(1) is not null) ? Visibility.Visible : Visibility.Collapsed;
+        // Always there in a chat With coordinator, so the tab can be found before the first question.
+        _questionsPill.Visibility = open > 0 || _questionsShown || IsCoordinator ? Visibility.Visible : Visibility.Collapsed;
         var tip = _questionsShown ? "Back to the conversation." : open > 0
             ? $"{open} question{(open == 1 ? "" : "s")} for you, numbered. Tap an answer, or type it in the box as \"4 yes\"."
             : "No questions are waiting. Questions from the coordinator and the jobs come here.";
@@ -270,5 +271,30 @@ internal sealed partial class ChatPane
         Save();
         QuestionsChanged();
         _ = RunTurn(message, [], "");
+    }
+
+    /// <summary>
+    /// A turn ended with questions written in its text instead of the tab (chat_questions): they go in the tab too, so
+    /// every question can be answered there.
+    /// </summary>
+    private void CatchQuestions(Turn turn)
+    {
+        if (_board is not { } board || !IsCoordinator) return;
+        var items = _conv.Items.Skip(Math.Max(0, Math.Min(turn.FirstItem, _conv.Items.Count))).ToList();
+        if (items.Any(i => i.Kind == "tool" && i.Name.EndsWith(Tools.ChatQuestionsTool.ToolName, StringComparison.Ordinal))) return;
+        if (items.LastOrDefault(i => i.Kind == "assistant" && i.Text.Trim().Length > 0) is not { } reply) return;
+        var now = DateTime.UtcNow;
+        var added = new List<int>();
+        foreach (var (text, options) in ChatQuestions.FromReply(reply.Text))
+        {
+            var before = board.Questions.OpenCount;
+            var q = board.Questions.Ask(0, "Coordinator", text, options, -1, now);
+            if (board.Questions.OpenCount > before) added.Add(q.Number);
+        }
+        if (added.Count == 0) return;
+        Tools.ActivityLog.Note("questions_caught", string.Join(", ", added.Select(n => "Q" + n)));
+        Note(string.Join(", ", added.Select(n => "Q" + n)) + (added.Count == 1 ? " is" : " are") + " in Questions: answer there or type \"" + added[0] + " a\".");
+        QuestionsChanged();
+        SaveSoon();
     }
 }
