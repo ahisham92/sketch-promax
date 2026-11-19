@@ -213,6 +213,8 @@ public sealed class App : IExternalApplication
         }
         // Lifeline's change file, for everyone: with Sketch ProMax and with TritoRevit alone (shared packs), licensed or not.
         try { StartupTimings.Time("change file", () => ChangeFile.Start(app)); } catch (Exception ex) { Revit.LifelineBugs.Note("start", "Lifeline didn't start: no change file is kept", null, ex); }
+        // Lifeline's warnings (server lost, a lot unsaved, crash signs) and the local auto-save, when it is on. Hints only.
+        try { Revit.LifelineWatch.Start(app); } catch (Exception ex) { Revit.LifelineBugs.Note("start", "Lifeline's warnings didn't start", null, ex); }
         CentralAccess.Watch(app);
         UnattendedDialogs.Watch(app);
         PositionPrompt.Watch(app);
@@ -354,6 +356,7 @@ public sealed class App : IExternalApplication
         try { ChatModelWatch.Stop(); } catch (Exception) { }
         try { FreezeWatch.Stop(); } catch (Exception) { }
         try { HeavyCommands.Stop(); } catch (Exception) { }
+        try { Revit.LifelineWatch.Stop(); } catch (Exception) { }
         try { ChangeFile.Stop(); } catch (Exception) { }
         CentralAccess.Unwatch(app);
         UnattendedDialogs.Unwatch(app);

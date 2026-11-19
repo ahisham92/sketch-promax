@@ -14,18 +14,18 @@ internal sealed class CommandHint : Window
 {
     private static CommandHint? _shown;
 
-    public static void Show(string main, string details, Action dontShowAgain)
+    public static void Show(string main, string details, Action dontShowAgain, int seconds = 10, string never = "Don't show this again")
     {
         try
         {
             _shown?.Close();
-            _shown = new CommandHint(main, details, dontShowAgain);
+            _shown = new CommandHint(main, details, dontShowAgain, seconds, never);
             _shown.Show();
         }
         catch (Exception) { /* a hint is never worth an error */ }
     }
 
-    private CommandHint(string main, string details, Action dontShowAgain)
+    private CommandHint(string main, string details, Action dontShowAgain, int seconds, string label)
     {
         Title = "Sketch ProMax";
         WindowStyle = WindowStyle.None;
@@ -47,7 +47,7 @@ internal sealed class CommandHint : Window
         body.TextWrapping = TextWrapping.Wrap;
         body.Margin = new Thickness(0, 4, 0, 6);
         page.Children.Add(body);
-        var never = Brand.Button("Don't show this again");
+        var never = Brand.Button(label);
         never.HorizontalAlignment = HorizontalAlignment.Right;
         never.Click += (_, _) => { dontShowAgain(); Close(); };
         page.Children.Add(never);
@@ -61,7 +61,7 @@ internal sealed class CommandHint : Window
             Left = area.Right - ActualWidth - 16;
             Top = area.Bottom - ActualHeight - 16;
         };
-        var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(10) };
+        var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(seconds) };
         timer.Tick += (_, _) => { timer.Stop(); Close(); };
         timer.Start();
         Closed += (_, _) => { timer.Stop(); if (_shown == this) _shown = null; };

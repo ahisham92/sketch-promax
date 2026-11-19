@@ -727,6 +727,54 @@ internal static partial class FieldTest
         }
     }
 
+    /// <summary>
+    /// Lifeline's watch: the PC's signs are read and judged, a folder that is there answers and one that isn't doesn't,
+    /// and saving by itself saves a new project in the test folder (never an open model) and says so in a hint.
+    /// </summary>
+    private static (string, string) RecoveryWatch(UIApplication app, State s)
+    {
+        var problems = new List<string>();
+        var signs = LifelineWatch.Read(Path.Combine(s.Folder, "x.rvt"));
+        if (signs.RevitMemoryMb <= 0) problems.Add("Revit's memory couldn't be read");
+        if (signs.FreeMemoryMb < 0 || signs.TotalMemoryMb <= 0) problems.Add("the PC's memory couldn't be read");
+        if (signs.FreeDiskMb < 0 || signs.Disk.Length == 0) problems.Add("the disk's free space couldn't be read");
+        if (signs.Handles <= 0) problems.Add("Revit's window handles couldn't be read");
+        LifelineWatchMath.Judge(signs);
+        if (!LifelineWatch.Reachable(Path.Combine(s.Folder, "central.rvt"))) problems.Add("the test folder didn't answer");
+        if (LifelineWatch.Reachable(Path.Combine(s.Folder, "not there " + Guid.NewGuid().ToString("N"), "central.rvt"))) problems.Add("a folder that isn't there answered");
+
+        var file = Path.Combine(s.Folder, "lifeline-watch-" + DateTime.Now.ToString("HHmmss") + ".rvt");
+        var hints = new List<LifelineWatchMath.Warning>();
+        Document? doc = null;
+        try
+        {
+            doc = app.Application.NewProjectDocument(UnitSystem.Metric);
+            doc.SaveAs(file);
+            using (var t = new Transaction(doc, "Lifeline watch test"))
+            {
+                t.Start();
+                Level.Create(doc, 12.5);
+                t.Commit();
+            }
+            if (!doc.IsModified) problems.Add("the test project didn't count as changed");
+            LifelineWatch.HintsForTest = hints;
+            var saved = LifelineWatch.Save(doc);
+            LifelineWatch.HintsForTest = null;
+            if (!saved || doc.IsModified) problems.Add("the test project wasn't saved");
+            if (hints.Count != 1 || hints[0].Key != "saved") problems.Add("the save wasn't said in a hint (" + string.Join(", ", hints.Select(h => h.Key)) + ")");
+        }
+        catch (Exception ex) { problems.Add(ex.GetType().Name + ": " + ex.Message); }
+        finally
+        {
+            LifelineWatch.HintsForTest = null;
+            try { doc?.Close(false); } catch (Exception) { }
+            try { if (File.Exists(file)) File.Delete(file); } catch (Exception) { }
+        }
+        return problems.Count == 0
+            ? Pass($"signs read (Revit {signs.RevitMemoryMb:N0} MB, {signs.FreeMemoryMb:N0} MB free, drive {signs.Disk} {signs.FreeDiskMb:N0} MB free, {signs.Handles:N0} handles); a folder answers and a missing one doesn't; a test project was saved and the hint said so")
+            : Fail(string.Join("; ", problems));
+    }
+
     /// <summary>Lifeline's bug list: a problem noted twice is one line under the header, in a test folder.</summary>
     private static (string, string) RecoveryBugs(State s)
     {

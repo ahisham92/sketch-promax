@@ -62,6 +62,7 @@ internal sealed class RecoverWindow : System.Windows.Window
         AutomationProperties.SetLiveSetting(_result, AutomationLiveSetting.Polite);
         page.Children.Add(_result);
         page.Children.Add(_results);
+        page.Children.Add(WatchSection());
 
         _stopButton.Visibility = System.Windows.Visibility.Collapsed;
         _stopButton.Click += (_, _) => _stop?.Cancel();
@@ -77,6 +78,77 @@ internal sealed class RecoverWindow : System.Windows.Window
         root.Children.Add(new ScrollViewer { Content = page, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Focusable = false });
         Content = root;
         Closed += (_, _) => _stop?.Cancel();
+    }
+
+    /// <summary>
+    /// Lifeline's warnings and the saving of the local copy by itself (Revit/LifelineWatch). Each choice is kept the
+    /// moment it is made: this window has no OK.
+    /// </summary>
+    private static FrameworkElement WatchSection()
+    {
+        var settings = Settings.AgentSettings.Load();
+        var section = new StackPanel { Margin = new Thickness(0, 14, 0, 0) };
+        section.Children.Add(new Separator { Margin = new Thickness(0, 0, 0, 8) });
+        section.Children.Add(Brand.Text("Warnings and saving", size: 13, bold: true));
+
+        const string warnLabel = "Warn me when the server can't be reached, a lot is unsaved, or the PC is close to a crash";
+        var warn = new CheckBox { Content = Brand.Text(warnLabel), Margin = new Thickness(0, 8, 0, 0), IsChecked = settings.LifelineWarnings };
+        AutomationProperties.SetName(warn, warnLabel);
+        section.Children.Add(warn);
+
+        var row = new WrapPanel { Margin = new Thickness(0, 6, 0, 0) };
+        const string saveLabel = "Save my local copy by itself every";
+        var save = new CheckBox { Content = Brand.Text(saveLabel), VerticalAlignment = VerticalAlignment.Center, IsChecked = settings.LifelineAutoSave };
+        AutomationProperties.SetName(save, saveLabel + " so many minutes");
+        var minutes = new TextBox
+        {
+            Width = 48, MinHeight = 26, Margin = new Thickness(6, 0, 6, 0), VerticalContentAlignment = VerticalAlignment.Center,
+            Text = LifelineWatchMath.ClampMinutes(settings.LifelineAutoSaveMinutes).ToString(System.Globalization.CultureInfo.CurrentCulture),
+            IsEnabled = settings.LifelineAutoSave,
+        };
+        AutomationProperties.SetName(minutes, "Minutes between saves");
+        AutomationProperties.SetHelpText(minutes, $"From {LifelineWatchMath.MinMinutes} to {LifelineWatchMath.MaxMinutes} minutes; {LifelineWatchMath.DefaultMinutes} is the default.");
+        var unit = Brand.Text("minutes");
+        unit.VerticalAlignment = VerticalAlignment.Center;
+        row.Children.Add(save);
+        row.Children.Add(minutes);
+        row.Children.Add(unit);
+        section.Children.Add(row);
+
+        var note = Brand.Text("", Brand.K.Muted, 11);
+        note.Margin = new Thickness(0, 6, 0, 0);
+        AutomationProperties.SetLiveSetting(note, AutomationLiveSetting.Polite);
+        section.Children.Add(note);
+
+        void Keep()
+        {
+            var typed = minutes.Text.Trim();
+            var valid = int.TryParse(typed, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.CurrentCulture, out var n)
+                        && n >= LifelineWatchMath.MinMinutes && n <= LifelineWatchMath.MaxMinutes;
+            minutes.IsEnabled = save.IsChecked == true;
+            try
+            {
+                // A fresh read, so nothing else in the settings is written over.
+                var now = Settings.AgentSettings.Load();
+                now.LifelineWarnings = warn.IsChecked == true;
+                now.LifelineAutoSave = save.IsChecked == true;
+                if (valid) now.LifelineAutoSaveMinutes = n;
+                now.Save();
+                LifelineWatch.ReadSettings();
+                var every = LifelineWatchMath.ClampMinutes(now.LifelineAutoSaveMinutes);
+                note.Text = !valid
+                    ? $"Type a whole number of minutes from {LifelineWatchMath.MinMinutes} to {LifelineWatchMath.MaxMinutes}. Until then it stays {every}."
+                    : LifelineWatchMath.About(now.LifelineAutoSave, every);
+            }
+            catch (Exception ex) { note.Text = "This couldn't be kept: " + ex.Message; }
+        }
+
+        note.Text = LifelineWatchMath.About(settings.LifelineAutoSave, LifelineWatchMath.ClampMinutes(settings.LifelineAutoSaveMinutes));
+        warn.Click += (_, _) => Keep();
+        save.Click += (_, _) => Keep();
+        minutes.LostFocus += (_, _) => Keep();
+        minutes.TextChanged += (_, _) => { if (minutes.IsKeyboardFocused) Keep(); };
+        return section;
     }
 
     /// <summary>The open model: its title, path and central.</summary>
