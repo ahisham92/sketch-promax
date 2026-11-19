@@ -357,7 +357,13 @@ internal static class ChangeReplay
                 {
                     case Act.Delete:
                         // A line style or object style goes with its subcategory.
-                        if (Find(doc, s.Line) is { } gone) doc.Delete(gone is GraphicsStyle { GraphicsStyleCategory: { } styled } ? styled.Id : gone.Id);
+                        if (Find(doc, s.Line) is { } gone)
+                        {
+                            var goes = gone is GraphicsStyle { GraphicsStyleCategory: { } styled } ? styled.Id : gone.Id;
+                            // Revit's own "ElementId cannot be deleted" tells the user nothing: said as what to do.
+                            if (!DocumentValidation.CanDeleteElement(doc, goes)) throw new InvalidOperationException(M.CantDelete);
+                            doc.Delete(goes);
+                        }
                         did = "deleted";
                         break;
                     case Act.Regroup:

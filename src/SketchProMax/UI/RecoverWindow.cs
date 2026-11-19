@@ -307,6 +307,7 @@ internal sealed class RecoverWindow : System.Windows.Window
     {
         _results.Children.Clear();
         if (outcome.NotDone.Count == 0) return;
+        _results.Children.Add(StepRow(outcome));
         _results.Children.Add(CloudRow(outcome, target));
         foreach (var (reason, items) in M.GroupReasons(outcome.NotDone))
         {
@@ -395,6 +396,48 @@ internal sealed class RecoverWindow : System.Windows.Window
         return $"{Plural(drawn, "cloud")} drawn in {Plural(views, "view")}, on the revision \"{M.CloudRevision}\".{rest}";
     }
 
+    /// <summary>
+    /// "Next": goes through what wasn't done one by one. Each press takes Revit to the next one (its plan or the view
+    /// it is drawn in, zoomed on it, selected when it is there) and says what to do about it; Previous goes back.
+    /// </summary>
+    private UIElement StepRow(ChangeReplay.Outcome outcome)
+    {
+        var count = outcome.NotDone.Count;
+        var index = -1;
+        var title = Brand.Text($"Go through the {Plural(count, "thing")} left one by one: Next zooms to each and says what to do.", Brand.K.Text, 12, bold: true);
+        var item = Wrap(Brand.Text("", Brand.K.Text, 12));
+        var todo = Wrap(Brand.Text("", Brand.K.WarningText, 12, bold: true));
+        var where = Wrap(Brand.Text("", Brand.K.Muted, 11));
+        var back = Brand.Button("Previous");
+        var next = Brand.Button("Next", Brand.Weight.Primary);
+        AutomationProperties.SetName(next, "Next thing that wasn't done");
+        AutomationProperties.SetName(back, "Previous thing that wasn't done");
+        back.IsEnabled = false;
+        async Task Go(bool backwards)
+        {
+            index = M.Step(index, count, backwards);
+            if (index < 0) return;
+            back.IsEnabled = count > 1;
+            outcome.Place.TryGetValue(index, out var line);
+            item.Text = M.StepOf(index, count) + ": " + outcome.NotDone[index];
+            todo.Text = "What to do: " + M.ToDo(line, outcome.NotDone[index]);
+            where.Text = outcome.Where.TryGetValue(index, out var place) ? "Where: " + place : "";
+            if (line is null) { Say("Its place isn't known: look for it by hand.", Brand.K.Muted); return; }
+            next.IsEnabled = back.IsEnabled = false;
+            try { Say(await GoTo(line, outcome.MadeFor.TryGetValue(line.Unique ?? "", out var id) ? id : null), Brand.K.Muted); }
+            finally { next.IsEnabled = true; back.IsEnabled = count > 1; }
+        }
+        next.Click += async (_, _) => await Go(false);
+        back.Click += async (_, _) => await Go(true);
+        var panel = new StackPanel { Margin = new Thickness(0, 4, 0, 8) };
+        panel.Children.Add(Wrap(title));
+        panel.Children.Add(item);
+        panel.Children.Add(todo);
+        panel.Children.Add(where);
+        panel.Children.Add(Brand.ButtonRow(back, next));
+        return panel;
+    }
+
     /// <summary>One item that wasn't done (with where it is under it), with Show when its place is known.</summary>
     private UIElement ItemRow(ChangeReplay.Outcome outcome, int i)
     {
@@ -432,30 +475,48 @@ internal sealed class RecoverWindow : System.Windows.Window
         {
             var plan = await App.Dispatcher.InvokeAsync(app =>
             {
-                if (app.ActiveUIDocument is not { } ui) return ((View? View, string Say)?)null;
+                if (app.ActiveUIDocument is not { } ui) return ((View? View, string Say, ElementId? Select)?)null;
                 var doc = ui.Document;
                 var element = made is not null ? doc.GetElement(made) : line.Unique is { } u ? doc.GetElement(u) : line.Id != 0 ? doc.GetElement(new ElementId(line.Id)) : null;
                 if (element is not null && element is not View)
                 {
+                    // On its plan (or the view it is drawn in), then selected and zoomed on.
+                    View? on = null;
+                    try { on = element.ViewSpecific ? doc.GetElement(element.OwnerViewId) as View : PlanOf(doc, line) ?? PlanOf(doc, element.LevelId); } catch (Exception) { }
+                    if (on is { IsTemplate: false } && on.Id != doc.ActiveView?.Id)
+                    {
+                        ui.RequestViewChange(on);
+                        return (on, $"Selected in the model, in the view \"{on.Name}\".", element.Id);
+                    }
                     ui.Selection.SetElementIds([element.Id]);
-                    ui.ShowElements(element.Id);
-                    return (null, "Selected in the model.");
+                    ZoomOn(ui, element);
+                    return (null, "Selected in the model.", null);
                 }
-                if (element is View v) { ui.RequestViewChange(v); return (null, "Opened."); }
+                if (element is View v) { ui.RequestViewChange(v); return (null, "Opened.", null); }
+                // It isn't in the model: what the step before left selected would look like it.
+                try { ui.Selection.SetElementIds([]); } catch (Exception) { }
                 var view = line.View is { } vu ? doc.GetElement(vu) as View : null;
                 view ??= PlanOf(doc, line);
-                if (view is null || line.P is null) return (null, "Its place isn't known: look for it by hand.");
+                if (view is null || line.P is null) return (null, "Its place isn't known: look for it by hand.", null);
                 ui.RequestViewChange(view);
-                return (view, "This is where it was.");
+                return (view, $"This is where it was, in the view \"{view.Name}\".", null);
             });
             if (plan is not { } p) return "Open the model first.";
-            if (p.View is { } target && line.P is { } at)
+            if (p.View is { } target && (p.Select is not null || line.P is not null))
             {
                 await Task.Delay(700);
                 await App.Dispatcher.InvokeAsync(app =>
                 {
                     var ui = app.ActiveUIDocument;
-                    var open = ui?.GetOpenUIViews().FirstOrDefault(o => o.ViewId == target.Id);
+                    if (ui is null) return true;
+                    if (p.Select is { } select && ui.Document.GetElement(select) is { } there)
+                    {
+                        ui.Selection.SetElementIds([select]);
+                        ZoomOn(ui, there);
+                        return true;
+                    }
+                    if (line.P is not { } at) return true;
+                    var open = ui.GetOpenUIViews().FirstOrDefault(o => o.ViewId == target.Id);
                     var c = new XYZ(at.X, at.Y, at.Z);
                     open?.ZoomAndCenterRectangle(c - new XYZ(8, 8, 8), c + new XYZ(8, 8, 8));
                     return true;
@@ -466,10 +527,31 @@ internal sealed class RecoverWindow : System.Windows.Window
         catch (Exception ex) { return "Couldn't go there: " + ex.Message; }
     }
 
-    /// <summary>A floor plan of the line's level, for a model element that is gone.</summary>
-    private static View? PlanOf(Document doc, M.Line line)
+    /// <summary>
+    /// Zooms the active view on the element, with room around it. (Revit's own ShowElements selected it but left the
+    /// view where it was when called from this window, bug 91; it is the fallback when the element has no box here.)
+    /// </summary>
+    private static void ZoomOn(Autodesk.Revit.UI.UIDocument ui, Element element)
     {
-        if (line.LevelUnique is not { } u || doc.GetElement(u) is not Level level) return null;
+        try
+        {
+            var view = ui.Document.ActiveView;
+            var open = view is null ? null : ui.GetOpenUIViews().FirstOrDefault(o => o.ViewId == view.Id);
+            var box = (view is null ? null : element.get_BoundingBox(view)) ?? element.get_BoundingBox(null);
+            if (open is null || box is null) { ui.ShowElements(element.Id); return; }
+            var size = box.Max - box.Min;
+            var pad = Math.Max(3, Math.Max(Math.Abs(size.X), Math.Max(Math.Abs(size.Y), Math.Abs(size.Z))) * 0.5);
+            open.ZoomAndCenterRectangle(box.Min - new XYZ(pad, pad, pad), box.Max + new XYZ(pad, pad, pad));
+        }
+        catch (Exception) { try { ui.ShowElements(element.Id); } catch (Exception) { } }
+    }
+
+    /// <summary>A floor plan of the line's level, for a model element that is gone.</summary>
+    private static View? PlanOf(Document doc, M.Line line) => line.LevelUnique is { } u && doc.GetElement(u) is Level level ? PlanOf(doc, level.Id) : null;
+
+    private static View? PlanOf(Document doc, ElementId levelId)
+    {
+        if (doc.GetElement(levelId) is not Level level) return null;
         return new FilteredElementCollector(doc).OfClass(typeof(ViewPlan)).Cast<ViewPlan>()
             .FirstOrDefault(v => !v.IsTemplate && v.ViewType == ViewType.FloorPlan && v.GenLevel?.Id == level.Id);
     }
