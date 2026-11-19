@@ -3048,6 +3048,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         {
             if (!Hidden) RenderDirty(); // the turn's text is complete before it is cleaned
             CleanTurn(ended);
+            if (!ended.Planning && !ended.Shrinking) CatchQuestions(ended);
         }
         if (_turn?.KillTimer is { } timer) timer.Stop();
         // An answer ended: the next message's model note counts changes from now (not after a brief's planning or a shrink).

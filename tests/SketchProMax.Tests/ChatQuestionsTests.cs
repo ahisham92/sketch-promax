@@ -50,5 +50,20 @@ internal static class ChatQuestionsTests
         check("list: says when nothing is open", qs.Describe().StartsWith("No questions"), qs.Describe());
         check("numbers: never used again", qs.Ask(0, "Coordinator", "New one?", null, -1, now).Number == 4, "");
         check("unclear words", ChatQuestions.SaysUnclear("not clear") && ChatQuestions.SaysUnclear("?") && !ChatQuestions.SaysUnclear("yes, as you suggested"), "");
+
+        // Questions left in a reply's text go in the tab too (19 Nov 2026: no tab showed for "(a) ... or (b) ...").
+        var real = "I've restarted the four paused jobs:\n- **Job 55:** rebuilds the channels.\n- **Job 51:** sets the beam to 1850 mm.\n\n" +
+                   "Only 3 jobs run at a time, so one of these starts when another finishes.\n\n" +
+                   "The thickenings are still on hold until you choose: (a) lift all 15 whole by 500 mm, which moves their bottoms, or (b) keep the bottoms and fill the gap to the deck.";
+        var caught = ChatQuestions.FromReply(real);
+        check("reply: lettered choices become a question with its options", caught.Count == 1 && caught[0].Options.Count == 2
+            && caught[0].Options[0] == "lift all 15 whole by 500 mm, which moves their bottoms" && caught[0].Options[1] == "keep the bottoms and fill the gap to the deck"
+            && caught[0].Text.StartsWith("The thickenings are still on hold until you choose"), string.Join(" | ", caught.Select(c => c.Text + " => " + string.Join(" / ", c.Options))));
+        var yn = ChatQuestions.FromReply("Done: 12 piles moved.\n\nShould I also tag them on the plan?");
+        check("reply: a yes-or-no question gets Yes and No", yn.Count == 1 && yn[0].Text == "Should I also tag them on the plan?" && yn[0].Options.SequenceEqual(new[] { "Yes", "No" }), yn.Count + "");
+        check("reply: an open question gets no options", ChatQuestions.FromReply("Which level should the slab sit on?")[0].Options.Count == 0, "");
+        check("reply: no question, nothing", ChatQuestions.FromReply("All 15 thickenings are lifted and joined. Checked.").Count == 0, "");
+        check("reply: a reply that points at the tab adds nothing", ChatQuestions.FromReply("Q4 in Questions. Should I go on?").Count == 0, "");
+        check("reply: code is not read for questions", ChatQuestions.FromReply("Ran `x ? y : z` fine.").Count == 0, "");
     }
 }

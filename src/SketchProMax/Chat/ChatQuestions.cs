@@ -225,6 +225,60 @@ internal sealed class ChatQuestions
                "\nAct on these now. Reply in one or two lines; don't repeat the questions.";
     }
 
+    // ---- Questions left in a reply's text --------------------------------------------------------------------------
+
+    private static readonly Regex Marker = new(@"(?:^|[\s:;,])\(?([a-e])\)\s+", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex ChoiceWord = new(@"\b(?:choose|chose|pick|decide|decision|prefer|which|either|or)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex YesNoStart = new(@"^(?:do|does|did|should|shall|want|would|will|can|could|may|is|are|am|was|were|have|has)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex Tabbed = new(@"\bQ\d+\b.{0,40}\bQuestions\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    /// <summary>
+    /// The questions a reply asked in its text instead of the tab (19 Nov 2026: the coordinator wrote "until you choose:
+    /// (a) lift all 15 whole, or (b) keep the bottoms" and no tab showed): a paragraph with lettered choices, or a sentence
+    /// ending in "?". Each with its choices; a yes-or-no question gets Yes and No. At most four; none when the reply
+    /// already points at the tab.
+    /// </summary>
+    public static List<(string Text, List<string> Options)> FromReply(string reply)
+    {
+        var found = new List<(string, List<string>)>();
+        if (string.IsNullOrWhiteSpace(reply) || Tabbed.IsMatch(reply)) return found;
+        var plain = Regex.Replace(reply, @"```.*?```", " ", RegexOptions.Singleline);
+        plain = Regex.Replace(plain, @"`[^`]*`", " ");
+        plain = plain.Replace("**", "").Replace("__", "");
+        foreach (var raw in Regex.Split(plain, @"\n\s*\n|\n(?=\s*(?:[-*•]|\d+\.)\s)"))
+        {
+            var para = Regex.Replace(raw, @"^\s*(?:[-*•]|\d+\.)\s+", "").Replace("\n", " ").Trim();
+            if (para.Length < 8) continue;
+            var marks = Marker.Matches(para).Cast<Match>().ToList();
+            var letters = marks.Select(m => char.ToLowerInvariant(m.Groups[1].Value[0])).ToList();
+            if (marks.Count >= 2 && letters[0] == 'a' && letters[1] == 'b' && ChoiceWord.IsMatch(para))
+            {
+                var options = new List<string>();
+                for (var k = 0; k < marks.Count; k++)
+                {
+                    var from = marks[k].Index + marks[k].Length;
+                    var to = k + 1 < marks.Count ? marks[k + 1].Index : para.Length;
+                    var option = para.Substring(from, Math.Max(0, to - from)).Trim();
+                    option = Regex.Replace(option, @"[\s,;]*(?:,\s*)?\bor\s*$", "", RegexOptions.IgnoreCase).Trim().TrimEnd(',', ';', '.', '?', ' ');
+                    if (option.Length > 0) options.Add(option);
+                }
+                var ask = para.Substring(0, marks[0].Index).Trim().TrimEnd(':', ',', ';', ' ');
+                if (ask.Length == 0) ask = "Which one?";
+                if (!ask.EndsWith("?", StringComparison.Ordinal)) ask += ":";
+                if (options.Count >= 2) found.Add((ask, options));
+            }
+            else
+                foreach (Match q in Regex.Matches(para, @"[^.!?]*\?"))
+                {
+                    var text = q.Value.Trim();
+                    if (text.Length < 8 || text.IndexOf("http", StringComparison.OrdinalIgnoreCase) >= 0) continue;
+                    found.Add((text, YesNoStart.IsMatch(text) && !ChoiceWord.IsMatch(text) ? ["Yes", "No"] : []));
+                }
+            if (found.Count >= 4) break;
+        }
+        return found.Take(4).ToList();
+    }
+
     private static List<string> Options(IEnumerable<string>? options) =>
         (options ?? []).Select(o => Clip(o, MaxOption)).Where(o => o.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).Take(MaxOptions).ToList();
 
