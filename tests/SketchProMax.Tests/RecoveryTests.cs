@@ -104,13 +104,13 @@ internal static class RecoveryTests
         }
         // Settings that live in the model: print and export setups are kept as copies, sheet sets are made again from their views.
         {
-            var setup = new M.Line { Kind = M.Kinds.State, What = "setup", Category = M.Setups[0], Name = "A1 black" };
-            var sheets = new M.Line { Kind = M.Kinds.State, What = "sheetset", Name = "Issue", Extra = new() { ["views"] = M.JoinViews(["b", "a", "b", ""]) } };
-            var plainWall = new M.Line { Kind = M.Kinds.State, What = "wall" };
+            var setup = new M.Line { Kind = M.Kinds.State, What = "setup", Unique = "u-setup", Category = M.Setups[0], Name = "A1 black" };
+            var sheets = new M.Line { Kind = M.Kinds.State, What = "sheetset", Unique = "u-set", Name = "Issue", Extra = new() { ["views"] = M.JoinViews(["b", "a", "b", ""]) } };
+            var plainWall = new M.Line { Kind = M.Kinds.State, What = "wall", Unique = "u-wall" };
             check("lifeline: a print or export setup is a document item kept as a copy", M.IsDocItem(setup) && !M.IsDocItem(sheets) && M.Setups.Length == 5, "");
             check("lifeline: a sheet set keeps its views once each, in a steady order", string.Join(",", M.SplitViews(sheets)) == "a,b" && M.SplitViews(plainWall).Count == 0, string.Join(",", M.SplitViews(sheets)));
             var setupOrder = M.PlayOrder(M.Read(new[] { new M.Line { Kind = M.Kinds.Model, Path = "x", Format = M.FormatNew }, sheets, plainWall, setup }.Select(M.Write)));
-            check("lifeline: setups are setupOrder early and sheet sets after the views", setupOrder.Count == 3 && setupOrder[0].What == "setup" && setupOrder[2].What == "sheetset", string.Join(",", setupOrder.Select(l => l.What)));
+            check("lifeline: setups are played early and sheet sets after the views", setupOrder.Count == 3 && setupOrder[0].What == "setup" && setupOrder[2].What == "sheetset", string.Join(",", setupOrder.Select(l => l.What)));
             check("lifeline: setups and sheet sets are recorded and replayed", Src("Revit", "ChangeFile.cs").Contains("ViewSheetSet => \"sheetset\"") && Src("Revit", "ChangeKeeper.cs").Contains("PrintSetting => M.Setups[0], ExportDWGSettings => M.Setups[1]") && Src("Revit", "ChangeReplay.cs").Contains("ChangeKeeper.Replace(from, doc, element") && Src("Revit", "ChangeExtras.cs").Contains("setting.SaveAs(name);"), "");
         }
         // No idle moments in an edit mode: a change reads what is waiting itself (bug 89).
