@@ -706,7 +706,7 @@ internal sealed partial class ChatPane
         if (job.State is not (JobBoard.Done or JobBoard.Failed) && !job.OverBudget || job.Review == JobReview.Pending) return;
         // Finished: a second worker checks the work in the model first (Settings > Chat).
         if (job.State == JobBoard.Done && _board is { } board && JobReview.Wanted(AgentSettings.Load().ChatJobReview, Run is { Active: true }, job)
-            && board.StartReview(job.Number, now, AskedWords(), _conv.Recall) is { } check)
+            && board.StartReview(job.Number, now, AskedWords(job.Created), _conv.Recall) is { } check)
         {
             ChatJobs.Assign(check, ChatAuto.Everyday);
             ShowJobCards();
@@ -721,10 +721,15 @@ internal sealed partial class ChatPane
         _reportTimer.Start();
     }
 
-    /// <summary>What the user asked lately, in their own words, for a check (JobReview.Task): their last three messages.</summary>
-    private string AskedWords()
+    /// <summary>
+    /// What the user asked, in their own words, for a check (JobReview.Task): their last three messages before the job was
+    /// made (its task was written from those; a later message about other work isn't this job's part; what the job was
+    /// told later is read from the job itself).
+    /// </summary>
+    private string AskedWords(DateTime before)
     {
-        var said = _conv.Items.Where(i => i.Kind == "user" && i.Text.Trim().Length > 0 && !i.Text.TrimStart().StartsWith("[", StringComparison.Ordinal))
+        var said = _conv.Items.Where(i => i.Kind == "user" && i.Text.Trim().Length > 0 && !i.Text.TrimStart().StartsWith("[", StringComparison.Ordinal)
+                && (before == default || i.Time == default || i.Time <= before.AddSeconds(5)))
             .Select(i => i.Text.Trim()).ToList();
         var text = string.Join("\n", said.Skip(Math.Max(0, said.Count - 3)));
         return text.Length > 3000 ? text.Substring(text.Length - 3000) : text;

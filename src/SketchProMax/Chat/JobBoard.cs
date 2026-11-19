@@ -106,6 +106,13 @@ internal sealed class ChatJob
     public string Review { get; set; } = "";
     public int ReviewedBy { get; set; }
     public int Reviews { get; set; }
+    /// <summary>
+    /// Parts the last check found waiting on the user's decision, or changed by another job (JobReview.WaitingWord): told
+    /// to the user as one question, never a reason to send the job back. "" none. Saved.
+    /// </summary>
+    public string WaitingOn { get; set; } = "";
+    /// <summary>The previous check's not-done parts, kept when the job is sent back: the next check reads those again first. Saved.</summary>
+    public string LastIssues { get; set; } = "";
     /// <summary>It called a tool that changes the model since its work was last checked (the bridge, ModifiesModel). Saved.</summary>
     public bool ChangedModel { get; set; }
     /// <summary>
@@ -514,7 +521,11 @@ internal sealed class JobBoard
         if (job.OverBudget) job.BudgetFrom = job.Spent;
         job.OverBudget = false;
         job.Paused = false;
-        if (job.Review != JobReview.Pending) job.Review = "";
+        if (job.Review != JobReview.Pending)
+        {
+            if (job.Review.Length > 0 && !JobReview.Passed(job.Review)) job.LastIssues = job.Review;
+            job.Review = "";
+        }
     }
 
     /// <summary>
@@ -784,7 +795,7 @@ internal sealed class JobBoard
             {
                 Number = _jobs.Max(j => j.Number) + 1,
                 Key = Guid.NewGuid().ToString("N").Substring(0, 12),
-                Title = OneLine("Check: " + done.Title, 60), Task = JobReview.Task(done, asked, rules), Created = now, State = Queued, ReviewOf = done.Number,
+                Title = OneLine("Check: " + done.Title, 60), Task = JobReview.Task(done, asked, rules, Alongside(done, now)), Created = now, State = Queued, ReviewOf = done.Number,
                 RevitModel = done.RevitModel,
             };
             _jobs.Add(check);
@@ -797,6 +808,18 @@ internal sealed class JobBoard
             AddNote(done, $"Finished. Job {check.Number} checks the work against the task before it is reported.", now);
             return check;
         }
+    }
+
+    /// <summary>
+    /// The other jobs that worked in the model while <paramref name="done"/> did (for its check: a change one of them made
+    /// is not this job's part). One line each, "job n \"title\"".
+    /// </summary>
+    private List<string> Alongside(ChatJob done, DateTime now)
+    {
+        var from = done.Started == default ? done.Created : done.Started;
+        return _jobs.Where(j => j.Number != done.Number && j.ReviewOf == 0 && j.GoalCheck == 0 && !j.ReadOnly && j.Started != default
+                && j.Started < now && (j.Ended == default || j.Ended > from))
+            .Select(j => $"job {j.Number} \"{j.Title}\"").ToList();
     }
 
     /// <summary>
@@ -845,6 +868,8 @@ internal sealed class JobBoard
             var done = _jobs.FirstOrDefault(j => j.Number == check.ReviewOf);
             if (done is null || done.Review != JobReview.Pending || done.ReviewedBy != check.Number) return null;
             done.Review = JobReview.Verdict(check);
+            done.WaitingOn = JobReview.WaitingOf(check);
+            if (JobReview.Passed(done.Review)) done.LastIssues = "";
             AddNote(done, $"Checked by job {check.Number}: " + (JobReview.Passed(done.Review) ? "passed." : OneLine(done.Review, 300)), now);
             return done;
         }
@@ -997,7 +1022,7 @@ internal sealed class JobBoard
         Plan = new Dictionary<string, string>(j.Plan), Heard = j.Heard.ToList(), Visited = j.Visited.ToList(),
         Spent = j.Spent, BudgetFrom = j.BudgetFrom, OverBudget = j.OverBudget, ReviewOf = j.ReviewOf, Review = j.Review, ReviewedBy = j.ReviewedBy,
         Reviews = j.Reviews, Routine = j.Routine, RevitModel = j.RevitModel, GoalCheck = j.GoalCheck, ReadOnly = j.ReadOnly,
-        ChangedModel = j.ChangedModel, Unchecked = j.Unchecked,
+        ChangedModel = j.ChangedModel, Unchecked = j.Unchecked, WaitingOn = j.WaitingOn, LastIssues = j.LastIssues,
     };
 }
 
