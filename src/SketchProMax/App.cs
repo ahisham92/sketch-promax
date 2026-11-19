@@ -51,6 +51,9 @@ public sealed class App : IExternalApplication
     /// <summary>True while anything is running or queued, so switching to a new core must wait.</summary>
     internal static bool IsBusy => Jobs.Running is not null || Dispatcher.HasWork || SelfTest.IsRunning || Chat.ChatPane.IsBusy;
 
+    /// <summary>True while a call runs in Revit or waits for it (any chat's, any job's): Pause all ends a job's process only when false.</summary>
+    internal static bool RevitWorking => Jobs.Running is not null || Dispatcher.HasWork;
+
     public Result OnStartup(UIControlledApplication application)
     {
         try

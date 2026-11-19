@@ -11,6 +11,8 @@ namespace SketchProMax.Revit;
 /// someone used the mouse or keyboard in the last <see cref="Quiet"/> (they are working), or the ribbon shows a
 /// contextual tab (Modify | ..., shown while a tool runs, in an edit mode, or with something selected). The loader asks
 /// again at the next Idling, so the switch happens once Revit is quiet; Revit's next start uses the newer core anyway.
+/// Input counts only while Revit is the window in front (19 Nov 2026: the owner typing in another app kept 0.35.89 from
+/// going in for half an hour; a command of Revit's own shows the contextual tab anyway).
 /// </summary>
 internal static class SwitchGate
 {
@@ -19,7 +21,20 @@ internal static class SwitchGate
     /// <summary>True when switching cores now could land inside a running Revit command. Revit's UI thread.</summary>
     public static bool Wait() => RecentInput() || ContextualTab() != false;
 
-    private static bool RecentInput() => SinceInput() < Quiet;
+    private static bool RecentInput() => SinceInput() < Quiet && RevitInFront() != false;
+
+    /// <summary>True when the window in front belongs to Revit (this process); null when that can't be read.</summary>
+    internal static bool? RevitInFront()
+    {
+        try
+        {
+            var front = GetForegroundWindow();
+            if (front == IntPtr.Zero) return false;
+            GetWindowThreadProcessId(front, out var pid);
+            return pid == (uint)System.Diagnostics.Process.GetCurrentProcess().Id;
+        }
+        catch (Exception) { return null; }
+    }
 
     /// <summary>How long since the mouse or keyboard was last used on this PC (zero when that can't be read). Any thread.</summary>
     public static TimeSpan SinceInput()
@@ -64,4 +79,6 @@ internal static class SwitchGate
     }
 
     [DllImport("user32.dll")] private static extern bool GetLastInputInfo(ref LastInputInfo info);
+    [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint processId);
 }

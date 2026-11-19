@@ -332,7 +332,16 @@ public sealed class BridgeServer
                     var jobKey = fromChat && root.TryGetProperty("job", out var jk) && jk.ValueKind == JsonValueKind.String && jk.GetString() is { Length: > 0 } k ? k : null;
                     // The chat shown in the pane is the main chat; a chat left working in the background takes turns like a job.
                     jobKey = Chat.JobBoard.Caller(jobKey, Chat.ChatJobs.Shown);
-                    var result = await CallTool(name, args, fromChat, ct, jobKey: jobKey).ConfigureAwait(false);
+                    // Pause all (Chat.JobPause): a job's call while paused runs nothing; one that runs counts as in Revit, so
+                    // the job's process is ended only once it has none (never in the middle of a change).
+                    var paused = jobKey is not null && !Chat.JobBoard.IsChatKey(jobKey) ? Chat.JobPause.Enter(jobKey) : null;
+                    ToolResult result;
+                    if (paused is not null) result = ToolResult.Error(paused);
+                    else
+                    {
+                        try { result = await CallTool(name, args, fromChat, ct, jobKey: jobKey).ConfigureAwait(false); }
+                        finally { if (jobKey is not null && !Chat.JobBoard.IsChatKey(jobKey)) Chat.JobPause.Exit(jobKey); }
+                    }
                     // Messages the user typed while the chat task ran go with the answer Claude reads now (any tool's,
                     // "still running" too). Not when the caller has gone: they then stay queued, and the chat sends
                     // what is left when the turn ends. A job's calls never take them: they are the main chat's.

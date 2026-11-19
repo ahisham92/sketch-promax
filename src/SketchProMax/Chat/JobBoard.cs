@@ -95,6 +95,8 @@ internal sealed class ChatJob
     public double BudgetFrom { get; set; }
     /// <summary>It was paused for using its budget (JobBudget): stopped, and reported so the coordinator decides. Saved.</summary>
     public bool OverBudget { get; set; }
+    /// <summary>Paused by Pause all (or for an update): it carries on when Continue is pressed (Chat.JobPause).</summary>
+    public bool Paused { get; set; }
     /// <summary>A check of another job's finished work (JobReview): that job's number; 0 for ordinary work. Saved.</summary>
     public int ReviewOf { get; set; }
     /// <summary>
@@ -511,7 +513,34 @@ internal sealed class JobBoard
         job.Summary = "";
         if (job.OverBudget) job.BudgetFrom = job.Spent;
         job.OverBudget = false;
+        job.Paused = false;
         if (job.Review != JobReview.Pending) job.Review = "";
+    }
+
+    /// <summary>
+    /// Pause all: a running job whose process has ended is set aside as paused (nothing is lost: its session and what it
+    /// wrote are kept), to carry on with <see cref="Message"/> when Continue is pressed. False when it wasn't running.
+    /// </summary>
+    public bool Pause(int number, DateTime now)
+    {
+        lock (Gate)
+        {
+            var job = _jobs.FirstOrDefault(j => j.Number == number);
+            if (job is null || !job.Active) return false;
+            job.State = Stopped;
+            job.Paused = true;
+            job.Now = "";
+            job.Ahead = 0;
+            job.Activity = "";
+            AddItem(job, new ChatItem { Kind = "note", Text = "Paused. It carries on from here when you press Continue." }, now);
+            return true;
+        }
+    }
+
+    /// <summary>The paused jobs (Pause all), in job order.</summary>
+    public List<ChatJob> PausedJobs()
+    {
+        lock (Gate) return _jobs.Where(j => j.Paused && j.State == Stopped).OrderBy(j => j.Number).ToList();
     }
 
     /// <summary>Stops a job: it won't start, or its run ends now (the pane ends its process). Its state before; null when not found.</summary>
@@ -901,7 +930,7 @@ internal sealed class JobBoard
         Running => ActivityOf(job) switch { Reading => "Reading the model", Applying => "Applying changes", Syncing => "Synchronizing with central", Blocked => "Waiting for Revit to be free", _ => "Thinking" },
         Done => "Done",
         Failed => "Ended with a problem",
-        Stopped => job.OverBudget ? "Paused at its budget" : "Stopped",
+        Stopped => job.OverBudget ? "Paused at its budget" : job.Paused ? "Paused" : "Stopped",
         _ => job.State,
     };
 

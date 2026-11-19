@@ -859,6 +859,7 @@ internal static class FieldTestCoverage
         new(102, ["chat.once_coded_ui"], "The kept-code library has no limit: an index plus one file per code in a folder per topic, rebuilt once from all history (unit tests)"),
         new(103, ["chat.away_ui", "chat.revit_held_ui"], "With nobody at Revit, a command left open is ended with Esc after two minutes and the jobs carry on; \"I won't be available\" starts away mode (unit tests)"),
         new(104, ["chat.away_ui", "chat.revit_held_ui"], "Esc only for a command doing nothing (no processor, memory, file or journal activity for a minute), never during long work; any way of saying he is away starts away mode (unit tests)"),
+        new(105, ["chat.update_busy_ui", "chat.away_ui"], "Only input in Revit holds the switch; jobs pause for a ready update and carry on after; Pause all / Continue and Away buttons kept through a switch (unit tests)"),
         new(96, ["time.ui"], "a chat task's time runs from the user's message; one that changed nothing says Answered in, one that started jobs says Handed to, and no time is counted saved unless the model changed (unit tests)"),
     ];
 

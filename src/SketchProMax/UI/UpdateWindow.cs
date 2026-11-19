@@ -34,6 +34,8 @@ internal sealed class UpdateWindow : Window
     private readonly Button _cancel = Brand.Button("Cancel update", Brand.Weight.Danger);
     private readonly Button _retry = Brand.Button("Try again", Brand.Weight.Primary);
     private readonly Button _hide = Brand.Button("Hide", Brand.Weight.Primary);
+    // Applying waits while jobs work: pause them (they carry on by themselves once the update is in).
+    private readonly Button _pauseJobs = Brand.Button("Pause jobs and update now", Brand.Weight.Secondary);
     private readonly DispatcherTimer? _autoClose;
 
     private UpdateWindow(UpdateProgress? progress, TimeSpan? autoClose)
@@ -85,7 +87,15 @@ internal sealed class UpdateWindow : Window
         _hide.IsDefault = true;
         _hide.IsCancel = true;
         _hide.Click += (_, _) => { if (_isFinal) Close(); else Hide(); };
-        body.Children.Add(Brand.ButtonRow(_cancel, _hide, _retry));
+        _pauseJobs.Visibility = Visibility.Collapsed;
+        _pauseJobs.Click += (_, _) =>
+        {
+            Chat.ChatPane.PauseForUpdate();
+            _pauseJobs.Visibility = Visibility.Collapsed;
+            _next.Text = "The jobs pause once their current step in Revit is done, the update goes in, and they carry on by themselves.";
+            _next.Visibility = Visibility.Visible;
+        };
+        body.Children.Add(Brand.ButtonRow(_cancel, _pauseJobs, _hide, _retry));
 
         var root = new DockPanel();
         var header = Brand.Header(Product + " update", $"Installed: {Updater.CurrentText}. Revit stays usable while this runs.");
@@ -229,6 +239,14 @@ internal sealed class UpdateWindow : Window
             _ => "",
         };
         _next.Visibility = _next.Text.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
+
+        var jobsHold = s.Stage == UpdateStage.Applying && !Chat.JobPause.On && Chat.ChatPane.JobsWorking;
+        _pauseJobs.Visibility = jobsHold ? Visibility.Visible : Visibility.Collapsed;
+        if (jobsHold && _next.Text.Length == 0)
+        {
+            _next.Text = "Jobs are working, so it waits for them. Pause jobs and update now pauses them for a moment; they carry on by themselves after.";
+            _next.Visibility = Visibility.Visible;
+        }
 
         var cancellable = _progress is not null && s.Stage is UpdateStage.Checking or UpdateStage.Downloading;
         _cancel.Visibility = cancellable ? Visibility.Visible : Visibility.Collapsed;

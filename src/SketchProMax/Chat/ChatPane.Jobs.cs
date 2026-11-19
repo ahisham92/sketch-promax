@@ -394,6 +394,7 @@ internal sealed partial class ChatPane
         if (Run is { State: AutopilotRun.Paused }) return; // an autopilot paused at a usage limit starts nothing new
         if (Run is { Updating.Length: > 0 }) return; // nor one waiting for an update to go in
         if (_s.UpdateHold.Length > 0) return; // nor a chat whose jobs let a newer version go in (UpdateTick)
+        if (JobPause.On) return; // nor while paused (Pause all, or for an update)
         if (Run is { State: AutopilotRun.Planning or AutopilotRun.Approval }) _board.ReadOnlyUntilStarted(); // reading before the plan is approved
         foreach (var (job, message) in _board.ToStart(ChatJobs.Limit, DateTime.UtcNow)) _ = StartRun(job, message);
         if (_runs.Count > 0) StartJobClock();
@@ -766,29 +767,19 @@ internal sealed partial class ChatPane
 
     /// <summary>
     /// A newer Sketch ProMax waits to go in, but a chat with jobs is never idle (19 Nov 2026: Revit 2024 ran 0.35.80 all
-    /// day while 0.35.81 to 0.35.86 waited, so none of that day's fixes were in use). Like an Autopilot run: once a newer
-    /// version is ready, no new job starts (it waits, nothing is lost) and the running ones finish, so Revit's next quiet
-    /// moment switches it in; the chat says so. After <see cref="UpdateHoldMax"/> the work carries on without it, to try
-    /// again in an hour. Every 30 s while jobs work; an Autopilot run has its own.
+    /// day while 0.35.81 to 0.35.86 waited; then 0.35.89 waited half an hour for long jobs to finish). The jobs pause for
+    /// it (JobPause.ForUpdate: each job's process ends once it has nothing in Revit, nothing is lost), Revit's next quiet
+    /// moment switches it in, and they carry on by themselves in the new version (PauseTick). Every 30 s while jobs work;
+    /// an Autopilot run has its own.
     /// </summary>
     private void UpdateTick(JobBoard board)
     {
         if (Run is not null || _sample || !Update.Updater.CanSwitchLive) return;
         var now = DateTime.UtcNow;
-        if (_s.UpdateHold.Length > 0)
-        {
-            if (now - _s.UpdateHeldSince < UpdateHoldMax) return;
-            Note($"Sketch ProMax {_s.UpdateHold} is still waiting for a quiet moment, so the work carries on without it. It goes in when the jobs are done, or close and reopen Revit.");
-            _s.UpdateHold = "";
-            _updateRetryAt = now.AddHours(1);
-            Save();
-            PumpJobs();
-            return;
-        }
-        if (now < _updateRetryAt || Update.Updater.Staged is not { } ready || board.OpenCount == 0) return;
-        _s.UpdateHold = ready;
-        _s.UpdateHeldSince = now;
-        Note($"Sketch ProMax {ready} is ready with the latest fixes. New jobs wait for it to go in (a few minutes at most); the running jobs finish first and nothing is lost.");
+        if (now < _updateRetryAt || JobPause.On || Update.Updater.Staged is not { } ready || _runs.Count == 0 && board.OpenCount == 0) return;
+        Note($"Sketch ProMax {ready} is ready with the latest fixes. The jobs pause for a moment, each once it has nothing running in Revit, " +
+             "so it goes in; they carry on by themselves right after. Nothing is lost.");
+        PauseAll(JobPause.ForUpdate);
         Save();
     }
 
