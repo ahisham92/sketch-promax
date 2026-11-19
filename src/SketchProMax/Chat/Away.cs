@@ -33,12 +33,24 @@ internal static class Away
         get { lock (Gate) return _until; }
     }
 
+    // Any way of saying "I'm not at Revit": I (will|'ll|won't|am|'m|am going to|'ll be|might) be + away/out/off/not around/
+    // unavailable/busy/in a meeting/asleep..., going home/out/to sleep, leaving, back in an hour, don't wait for me, carry
+    // on without me, afk. The owner, 19 Nov 2026: "I won't be available, I will be away, everything I say regarding this".
+    private const string Me = @"(i|i\s*['’]?\s*m|i\s*['’]?\s*ll|i\s+am|i\s+will|i\s+shall|i\s+(might|may|could|would)|i\s*['’]?\s*m\s+going\s+to|i\s+am\s+going\s+to|i\s*['’]?\s*m\s+gonna|i\s+have\s+to|i\s+need\s+to|i\s+must)";
+    private const string MeNot = @"(i\s*['’]?\s*m\s+not|i\s+am\s+not|i\s+(won\s*['’]?\s*t|wont|will\s+not|shall\s+not)|i\s+(might|may|could|would)\s+not|i\s*['’]?\s*ll\s+not)";
+    // Said plainly ("I'll be away"): gone.
+    private const string Gone = @"(away|out(\s+of\s+(the\s+)?office)?|off(line)?|unavailable|unreachable|back\s+(soon|later|tomorrow|in|after)|" +
+                                @"busy|in\s+(a|the)\s+(meeting|call)|on\s+(a\s+)?(call|break|leave|site)|asleep|sleeping|leav(e|ing)(\s+now|\s+the\s+office)?\s*([,.!]|$)|" +
+                                @"go(ing)?\s+(home|out|offline|now|to\s+(sleep|bed|pray|lunch|a\s+meeting))|step(ping)?\s+(out|away)|head(ing)?\s+(home|out|off)|log(ging)?\s+off|sign(ing)?\s+off)";
+    // Said with a not ("I won't be available"): not there.
+    private const string There = @"(available|reachable|around|here|present|at\s+(my|the)\s+(pc|desk|computer|laptop|office)|in\s+(the\s+)?office|online)";
+
     private static readonly Regex Asks = new(
-        @"\b(no\s+(need\s+(to|for)\s+)?(any\s+)?pop\s*-?\s*ups?|(do\s*n[o']?t|never)\s+(pop\s*(up)?|show|ask)\s+(me\s+)?(anything|any\w*)|" +
-        @"no\s+pop\s*(up)?\s+anything|without\s+(any\s+)?(pop\s*-?\s*ups?|asking\s+me)|handle\s+(the\s+)?(pop\s*-?\s*ups?|dialogs?|prompts?)|" +
-        @"(i\s*'?\s*a?m|i\s+will|i\s*'?\s*ll)\s+(be\s+)?(away|out|offline|not\s+(be\s+)?(available|here|around|at\s+(my|the)\s+(pc|desk|computer)))|" +
-        @"i\s+(won\s*['\u2019]?\s*t|wont)\s+be\s+(available|here|around|at\s+(my|the)\s+(pc|desk|computer))|i\s*['\u2019]?\s*m\s+not\s+(available|here|around)|" +
-        @"handle\s+(the\s+)?waiting|(skip|escape|end)\s+(any\s+)?(stuck|running|open)\s+commands?)",
+        @"\b(no\s+(need\s+(to|for)\s+)?(any\s+)?pop\s*-?\s*ups?|(do\s*n[o'’]?t|never)\s+(pop\s*(up)?|show|ask)\s+(me\s+)?(anything|any\w*)|" +
+        @"no\s+pop\s*(up)?\s+anything|without\s+(any\s+)?(pop\s*-?\s*ups?|asking\s+me)|handle\s+(the\s+)?(pop\s*-?\s*ups?|dialogs?|prompts?|waiting)|" +
+        Me + @"\s+(be\s+)?(going\s+to\s+be\s+)?" + Gone + "|" + MeNot + @"\s+(be\s+)?(going\s+to\s+be\s+)?" + There + "|" +
+        @"(don\s*['’]?\s*t|do\s+not|no\s+need\s+to)\s+wait\s+(for|on)\s+me|(carry\s+on|continue|keep\s+going|work)\s+without\s+me|while\s+i\s*['’]?\s*(m|am)\s+(away|out|gone)|" +
+        @"\bafk\b|\bbrb\b|(skip|escape|end)\s+(any\s+)?(stuck|running|open)\s+commands?)",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     private static readonly Regex Back = new(@"\b(i\s*'?\s*a?m\s+back|back\s+now|i\s*'?\s*a?m\s+here\s+(now|again)|you\s+can\s+(ask|pop\s*up)\s+(me\s+)?(again|now))\b",
