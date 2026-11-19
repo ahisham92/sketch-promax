@@ -93,7 +93,7 @@ internal static class Approvals
     public static bool AskOwn(string tool)
     {
         var call = Call;
-        if (call is { Asked: true } || Chat.Autopilot.Unattended) return false;
+        if (call is { Asked: true } || Chat.Autopilot.Unattended || Chat.Away.On) return false;
         if (call?.Decision.Kind == AskKind.Change) return true;
         var level = Level;
         if (level is ApprovalLevel.RiskyOnly or ApprovalLevel.AlwaysAllow || Remembered().Contains(tool, StringComparer.Ordinal)) return false;
@@ -177,6 +177,13 @@ internal static class Approvals
             var (_, why) = Chat.Autopilot.Allows(decision.Reason);
             if (decision.Kind != AskKind.Change) Chat.Autopilot.Log(Chat.AutopilotEntry.Allowed, $"{friendly}: {why}");
             return true;
+        }
+        // The user said they are away (Chat.Away): a normal change goes ahead; a risky one is not made and waits for them.
+        if (Chat.Away.On && TestAnswer is null)
+        {
+            if (decision.Kind == AskKind.Change) return true;
+            Chat.Away.Note($"{friendly} was not done, it needs your OK ({decision.Reason})");
+            return false;
         }
         var level = Level;
         // "Always allow": nothing asks (the bridge already decided so); this catches the dialogs tools and the ribbon

@@ -564,6 +564,11 @@ public sealed class BridgeServer
         // which rather than time out. The wait asks Revit again every second.
         var pickedUp = Task.WhenAny(job.Task, job.StartedSignal.Task);
         var why = await _dispatcher.WaitForPickupAsync(pickedUp, $"{tool.Name} (job {job.Id})", StartWaitMs, DialogWaitMs, ct).ConfigureAwait(false);
+        // A parallel job's call isn't dropped or handed to a card nobody sees: it stays queued and runs as soon as Revit
+        // takes work again, the job shows Waiting for Revit to be free (JobWatch leaves it alone), and the chat says once
+        // what holds Revit (19 Nov 2026: Revit took nothing for 32 minutes and two jobs were stopped and split).
+        if (why is not null && jobKey is not null && !ct.IsCancellationRequested && !pickedUp.IsCompleted)
+            why = await WaitWhileHeldAsync(pickedUp, tool, job.Id, why, jobKey, ct).ConfigureAwait(false);
         // A read changes nothing, so before asking the user it is tried again quietly (it stays queued and Revit is asked
         // again), unless a dialog or a hung Revit says waiting can't help.
         for (var retry = 0; why is not null && !tool.ModifiesModel && retry < ReadRetries && !ct.IsCancellationRequested
@@ -572,6 +577,8 @@ public sealed class BridgeServer
         // Only "dropped" when the bridge, not Revit, won the race: otherwise the job is running and is waited for below.
         if (why is not null && !ct.IsCancellationRequested && job.TryAbandon())
         {
+            // A job's call that waited the whole time: nothing ran; it says so (WaitWhileHeldAsync told the user already).
+            if (jobKey is not null) return ToolResult.Error(why);
             // Only the user can end an edit mode or answer a dialog: hand it over, and send the call again on Continue.
             if (handoffs >= 3) return ToolResult.Error(why);
             return await HandOverBlocked(key + "\n#" + handoffs, name, args, fromChat, tool.Name, why, handoffs, ct, jobKey).ConfigureAwait(false);
@@ -581,6 +588,43 @@ public sealed class BridgeServer
         if (job.Task.IsCompleted) return Noted(job.Task.Status == TaskStatus.RanToCompletion ? job.Task.Result : Jobs.Status(job));
         return Noted(StillRunning(job));
     }
+
+    // ---- Revit taking no work ------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// A parallel job's call Revit didn't pick up (<see cref="StartWaitMs"/>): Revit takes no work at all, held by a
+    /// command, a dialog or an edit mode of its own. The call stays queued for up to <see cref="TurnWait"/> and runs the
+    /// moment Revit is free; meanwhile the job shows <see cref="Chat.JobBoard.Blocked"/> and the chat says once what holds
+    /// Revit and how to free it. Null when the call was picked up, else why it never was (nothing ran).
+    /// </summary>
+    private async Task<string?> WaitWhileHeldAsync(Task pickedUp, IRevitTool tool, int id, string why, string jobKey, CancellationToken ct)
+    {
+        var state = await _dispatcher.BlockerAsync().ConfigureAwait(false);
+        var busy = "";
+        try { busy = Revit.FreezeWatch.Cause().What; } catch (Exception) { /* the journal can't be read: no name */ }
+        Chat.ChatJobs.SetActivity(jobKey, Chat.JobBoard.Blocked);
+        var line = RevitBlock.HeldLine(state, busy);
+        ActivityLog.Note("revit_held", $"{tool.Name} (job {id}) waits for Revit: {state.Kind}, last command {busy}");
+        Chat.ChatPane.RevitHeld(line);
+        var started = DateTime.UtcNow;
+        try
+        {
+            while (!pickedUp.IsCompleted && !ct.IsCancellationRequested && DateTime.UtcNow - started < TurnWait)
+                await _dispatcher.WaitForPickupAsync(pickedUp, $"{tool.Name} (job {id}, still waiting)", HeldStepMs, int.MaxValue / 2, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) { }
+        if (pickedUp.IsCompleted)
+        {
+            Chat.ChatJobs.SetActivity(jobKey, tool.ModifiesModel ? Chat.JobBoard.Applying : Chat.JobBoard.Reading);
+            return null;
+        }
+        Chat.ChatJobs.SetActivity(jobKey, "");
+        return $"Revit took no work for {(int)TurnWait.TotalMinutes} minutes ({why}) Nothing was run. Tell the user in one sentence what " +
+               "holds Revit (" + line + "); don't start other Revit work meanwhile.";
+    }
+
+    /// <summary>How long each wait step of a held call lasts (one activity-log line per step).</summary>
+    private const int HeldStepMs = 300_000;
 
     // ---- Auto sync ----------------------------------------------------------------------------------------------
 

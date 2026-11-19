@@ -73,18 +73,18 @@ internal static class FieldTestCoverageTests
         var section = FieldTestCoverage.BugLogMarkdown(
         [
             new(1, "Chat button missing", "Fixed in 0.30"), new(3, "Raft on GF", "Fixed in 0.30"), new(4, "Views over the title", "Fixed in 0.30"),
-            new(17, "Always Load", "Fixed in 0.30"), new(18, "Slow open", "Fixed in 0.31"), new(20, "Nothing made", "Fixed in 0.31"), new(99, "New | thing", "Fixed in 0.40"),
+            new(17, "Always Load", "Fixed in 0.30"), new(18, "Slow open", "Fixed in 0.31"), new(20, "Nothing made", "Fixed in 0.31"), new(9099, "New | thing", "Fixed in 0.40"),
         ], rows);
         string Line(int n) => section.Split('\n').First(l => l.StartsWith($"| {n} |", StringComparison.Ordinal));
         check("bug log: passed rows can be confirmed", Line(3).Contains("| pass | mark Confirmed |") && Line(18).Contains("| pass | mark Confirmed |"), section);
         check("bug log: a failing case keeps the row open", Line(4).Contains("**fail**") && Line(4).Contains("keep open"), Line(4));
         check("bug log: passed with a checklist step waits for it", Line(1).Contains("once the checklist step passes") && Line(17).Contains("once the checklist step passes"), Line(1));
         check("bug log: a case not run says so", Line(20).Contains("| not run |"), Line(20));
-        check("bug log: a row with no check is listed as not checked, on one table row", Line(99).Contains("**not checked**") && Line(99).Contains("New / thing"), Line(99));
+        check("bug log: a row with no check is listed as not checked, on one table row", Line(9099).Contains("**not checked**") && Line(9099).Contains("New / thing"), Line(9099));
 
         // Gaps: a fixed row without a check, a tag no case has, a feature that isn't one.
-        var bugGaps = FieldTestCoverage.BugGaps([new(99, "x", "Fixed in 1"), new(3, "y", "Fixed in 1")], [3], ["ve_apply"]);
-        check("bug log gaps: a row without a check", bugGaps.Any(g => g.StartsWith("bug #99")), string.Join("; ", bugGaps));
+        var bugGaps = FieldTestCoverage.BugGaps([new(9099, "x", "Fixed in 1"), new(3, "y", "Fixed in 1")], [3], ["ve_apply"]);
+        check("bug log gaps: a row without a check", bugGaps.Any(g => g.StartsWith("bug #9099")), string.Join("; ", bugGaps));
         check("bug log gaps: a tag no case carries", bugGaps.Any(g => g.EndsWith("Bug = 2", StringComparison.Ordinal)) && !bugGaps.Any(g => g.EndsWith("Bug = 3", StringComparison.Ordinal)), string.Join("; ", bugGaps));
         check("bug log gaps: a tool with no case", bugGaps.Any(g => g.Contains("tool:ve_register")) && !bugGaps.Any(g => g.Contains("tool:ve_apply")), "");
         check("bug log gaps: every feature reference is a feature", !bugGaps.Any(g => g.Contains("is not a feature")), string.Join("; ", bugGaps.Where(g => g.Contains("is not a feature"))));

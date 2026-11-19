@@ -28,7 +28,8 @@ internal static class UnattendedDialogs
         try
         {
             // Only while our work runs on Revit's thread: the user's own commands' dialogs show as usual.
-            if (!Chat.Autopilot.Unattended || App.Dispatcher is not { IsRunning: true }) return;
+            // An autopilot, or the user said they are away (Chat.Away).
+            if (!(Chat.Autopilot.Unattended || Chat.Away.On) || App.Dispatcher is not { IsRunning: true }) return;
             var type = e is MessageBoxShowingEventArgs box ? box.DialogType : -1;
             var said = e switch
             {
@@ -39,7 +40,10 @@ internal static class UnattendedDialogs
             var result = Chat.Autopilot.SafeResult(type);
             if (!e.OverrideResult(result)) return;
             var what = said.Trim().Length > 0 ? Chat.JobBoard.OneLine(said, 160) : e.DialogId;
-            Chat.Autopilot.Log(Chat.AutopilotEntry.Popup, $"Revit asked \"{what}\": answered {Chat.Autopilot.ResultName(result)}.");
+            var line = $"Revit asked \"{what}\": answered {Chat.Autopilot.ResultName(result)}.";
+            if (Chat.Autopilot.Unattended) Chat.Autopilot.Log(Chat.AutopilotEntry.Popup, line);
+            else Chat.Away.Note(line);
+            try { Tools.ActivityLog.Note("popup_answered", line); } catch (Exception) { }
         }
         catch (Exception) { /* a dialog must never fail because of us */ }
     }

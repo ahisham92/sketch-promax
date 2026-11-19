@@ -161,7 +161,7 @@ internal static class FreezeWatch
     /// </summary>
     private static void CloseForAutopilot()
     {
-        if (!Chat.Autopilot.Unattended || _main == IntPtr.Zero || IsWindowEnabled(_main))
+        if (!(Chat.Autopilot.Unattended || Chat.Away.On) || _main == IntPtr.Zero || IsWindowEnabled(_main))
         {
             _blockedSince = DateTime.MaxValue;
             return;
@@ -172,7 +172,8 @@ internal static class FreezeWatch
         if (dialog == IntPtr.Zero) return;
         PostMessage(dialog, 0x0010, IntPtr.Zero, IntPtr.Zero); // WM_CLOSE
         _blockedSince = DateTime.Now;
-        Chat.Autopilot.Log(Chat.AutopilotEntry.Popup, "A window held Revit for a minute; it was closed.");
+        if (Chat.Autopilot.Unattended) Chat.Autopilot.Log(Chat.AutopilotEntry.Popup, "A window held Revit for a minute; it was closed.");
+        else Chat.Away.Note("A window held Revit for a minute; it was closed");
         Tools.ActivityLog.Note("autopilot_closed_dialog", "A dialog held Revit for a minute during autopilot; it was closed");
     }
 

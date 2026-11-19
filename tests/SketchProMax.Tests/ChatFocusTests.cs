@@ -223,8 +223,8 @@ internal static class ChatFocusTests
             && reviewTask.Contains("The rules, methods and decisions agreed earlier in the chat") && reviewTask.Contains("full-length generic model voids, as neat")
             && reviewTask.Contains("5. Don't change the model") && !JobReview.Task(new ChatJob { Number = 1, Title = "t", Task = "x" }).Contains("agreed earlier in the chat"), reviewTask);
         check("practice: AZ sheet piles flush with the soffit, grading with full-length voids not shape points, limits follow the drawing",
-            basePrompt.Contains("AZ sheet piles stop flush with the soffit") && basePrompt.Contains("never with dense slab shape points")
-            && basePrompt.Contains("not about reaching\n          the limits the drawing gives") && !basePrompt.Contains("sheet piles, combi-wall pipes and their"), "");
+            basePrompt.Contains("AZ sheet piles stop flush with the soffit") && basePrompt.Contains("never with dense slab shape points") && basePrompt.Contains("bottom follows its top at the same thickness")
+            && basePrompt.Contains("is about positions, not about") && basePrompt.Contains("reaching the limits the drawing gives") && !basePrompt.Contains("sheet piles, combi-wall pipes and their"), "");
         check("prompt: an agreed method is a must in every task with the look in done_when; done only when checked; a corrected note replaces the old",
             chat.Contains("never add \"or another way where neater\"") && chat.Contains("looks as clean as the reference")
             && chat.Contains("Never tell the user a part is done unless the job's check passed") && chat.Contains("memory_note replaces="), "");

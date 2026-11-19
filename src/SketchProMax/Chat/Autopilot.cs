@@ -238,7 +238,7 @@ internal static class Autopilot
     /// </summary>
     public static bool JobStalled(ChatJob job, int jobsBefore, DateTime reconnected, DateTime now) =>
         reconnected != default && job.Number > jobsBefore && job.GoalCheck == 0 && job.State == JobBoard.Running
-        && job.Activity is not (JobBoard.Syncing or JobBoard.Applying or JobBoard.Reading)
+        && job.Activity is not (JobBoard.Syncing or JobBoard.Applying or JobBoard.Reading or JobBoard.Blocked)
         && job.Items.LastOrDefault(i => i.Kind != "note") is not { Kind: "tool", State: "running" }
         && JobWatch.LastMove(job) < reconnected && now - reconnected >= AfterReconnect;
 

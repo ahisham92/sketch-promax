@@ -48,6 +48,9 @@ internal sealed partial class ChatPane
 
         // Its Autopilot's clock.
         public DateTime AutoIdleSince, ReconnectedAt, UpdateRetryAt;
+        // A newer version waiting to go in while jobs work (no Autopilot): new jobs wait for it (ChatPane.UpdateTick).
+        public string UpdateHold = "";
+        public DateTime UpdateHeldSince;
         public bool ReviewAgain, ModelChecking, Probing, GapsWaiting, BackfillWaiting;
         public int Stalls;
         public readonly ConnectionWatch Connection = new();

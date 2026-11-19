@@ -207,21 +207,27 @@ internal static class JobWatch
 
     public const string Fine = "", Finished = "finished", Stopped = "stuck";
 
-    /// <summary>When the job last did anything: its latest step or words, else when it started.</summary>
+    /// <summary>
+    /// When the job last did anything: its latest step or words, or when its Revit call began, waited or ended (a call that
+    /// waited 20 minutes for Revit must not make the job look stuck the moment it ends), else when it started.
+    /// </summary>
     public static DateTime LastMove(ChatJob job)
     {
         var last = job.Items.Count > 0 ? job.Items.Max(i => i.Time) : default;
+        if (job.Moved > last) last = job.Moved; // a Revit call that began or ended is a move too
         return last > job.Started ? last : job.Started;
     }
 
     /// <summary>
     /// What to do with a running job now: <see cref="Finished"/> (its last item is a long answer, no step runs, and
     /// nothing came for <see cref="Hung"/>), <see cref="Stopped"/> (nothing for <see cref="Stuck"/>), else <see cref="Fine"/>.
-    /// A job waiting its turn to change the model, or while the model synchronizes, is never judged: it isn't its doing.
+    /// A job waiting its turn to change the model, while the model synchronizes, or while Revit takes no work at all (a
+    /// command or dialog of Revit's own, <see cref="JobBoard.Blocked"/>) is never judged: it isn't its doing (19 Nov 2026: two
+    /// jobs were stopped and split while Revit took nothing for 32 minutes).
     /// </summary>
     public static string Judge(ChatJob job, DateTime now)
     {
-        if (job.State != JobBoard.Running || job.Activity is JobBoard.Syncing or JobBoard.Applying or JobBoard.Reading) return Fine;
+        if (job.State != JobBoard.Running || job.Activity is JobBoard.Syncing or JobBoard.Applying or JobBoard.Reading or JobBoard.Blocked) return Fine;
         var quiet = now - LastMove(job);
         var last = job.Items.LastOrDefault(i => i.Kind != "note");
         if (last is { Kind: "assistant" } && last.Text.Trim().Length >= ReportLength && quiet >= Hung) return Finished;

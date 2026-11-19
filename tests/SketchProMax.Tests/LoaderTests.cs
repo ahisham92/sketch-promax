@@ -60,6 +60,11 @@ internal static class LoaderTests
             && !LoaderCompat.RibbonOutdated(LoaderCompat.RibbonChangedIn.ToString(3)) && !LoaderCompat.RibbonOutdated("9.0.0"), "");
 
         // Why Revit didn't take a request.
+        var held = RevitBlock.HeldLine(new RevitBlock.State(RevitBlock.Kind.Unknown, null), "Create Spot Elevation");
+        check("held: the chat names the command still running, says Esc, and that the jobs carry on by themselves",
+            held.Contains("Create Spot Elevation is still running") && held.Contains("Press Esc") && held.Contains("carry on by themselves")
+            && RevitBlock.HeldLine(new(RevitBlock.Kind.Dialog, "Location Position Changed"), "").Contains("'Location Position Changed'")
+            && !RevitBlock.HeldLine(new(RevitBlock.Kind.Unknown, null), "something of its own").Contains("something of its own is"), held);
         var dialog = RevitBlock.Explain(new RevitBlock.State(RevitBlock.Kind.Dialog, " Save changes? "), "export_pdf (job 3)", 4);
         check("blocked: names the dialog", dialog.Contains("'Save changes?'") && dialog.StartsWith("export_pdf (job 3) could not start", StringComparison.Ordinal)
             && dialog.Contains("nothing was changed"), dialog);
