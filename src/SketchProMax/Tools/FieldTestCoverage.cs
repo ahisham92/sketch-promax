@@ -836,6 +836,7 @@ internal static class FieldTestCoverage
         new(88, ["chat.jobs_keep_moving_ui"], "the question to the coordinator when a worker is free is a quiet turn: a \"No split.\" answer is never shown or kept in the chat, a real hand-over still shows, and the turn starts no task card"),
         new(89, ["recovery.shapes"], "outline lines deleted in Edit Sketch are left to their floor's redrawn outline, and with no line of the floor in the file the floor is named once, nothing deleted; a change with no idle moment before it reads what is waiting (unit test)"),
         new(90, ["recovery.groups", "recovery.where"], "a detail group edited after the save is kept as a copy (view to view) and its edit put back; a refused deletion says to delete it by hand; Next in the replay window goes through what is left one by one with what to do (unit test for the sentences)"),
+        new(91, ["recovery.where"], "Next and Show zoom the view on the element's own box (Revit's ShowElements left the view where it was), and nothing stays selected for an element that is gone (unit test on the source; the zoom was run in Revit by hand)"),
     ];
 
     /// <summary>
