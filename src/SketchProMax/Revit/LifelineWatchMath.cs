@@ -18,6 +18,33 @@ internal static class LifelineWatchMath
 
     public static int ClampMinutes(int minutes) => minutes <= 0 ? DefaultMinutes : Math.Min(MaxMinutes, Math.Max(MinMinutes, minutes));
 
+    /// <summary>Synchronizing with central by itself: every 60 minutes unless the user sets it, 10 to 480.</summary>
+    public const int DefaultSyncMinutes = 60, MinSyncMinutes = 10, MaxSyncMinutes = 480;
+    public static readonly TimeSpan RetrySync = TimeSpan.FromMinutes(10);
+
+    public static int ClampSyncMinutes(int minutes) => minutes <= 0 ? DefaultSyncMinutes : Math.Min(MaxSyncMinutes, Math.Max(MinSyncMinutes, minutes));
+
+    /// <summary>
+    /// The local copy is synchronized with central now: it changed since its last synchronize, the time the user set
+    /// has passed, the server answered at the last look, nobody has touched the mouse or keyboard for a moment, no tool
+    /// is open, no chat step is in the middle of its work, and a synchronize that failed isn't tried again at once.
+    /// </summary>
+    public static bool SyncDue(bool changed, TimeSpan sinceSync, int minutes, TimeSpan sinceInput, bool toolOpen, bool working, bool serverAnswers, TimeSpan sinceFailed) =>
+        changed && serverAnswers && !toolOpen && !working && sinceSync >= TimeSpan.FromMinutes(ClampSyncMinutes(minutes)) && sinceInput >= QuietBeforeSave && sinceFailed >= RetrySync;
+
+    public static Warning Syncing(string model) => new("syncing", "Lifeline is synchronizing with central", $"{model}: Revit is busy for the time a synchronize takes.");
+
+    public static Warning Synced(string model, TimeSpan took, int minutes) => new("synced", "Lifeline synchronized with central",
+        $"{model}: synchronized in {Math.Max(1, (int)Math.Round(took.TotalSeconds))} s; what you borrowed is given back. Next one in {ClampSyncMinutes(minutes)} min if you change something.");
+
+    public static Warning SyncFailed(string model, string why) => new("sync-failed", "Lifeline couldn't synchronize with central",
+        $"{model}: {why} Your changes stay in your local. Lifeline tries again in {(int)RetrySync.TotalMinutes} min, or synchronize yourself.");
+
+    /// <summary>The line under the synchronize choice in the Lifeline window.</summary>
+    public static string AboutSync(bool on, int minutes) => on
+        ? $"On: every {ClampSyncMinutes(minutes)} min a local copy with changes is synchronized with central, at a quiet moment with no tool open and nothing selected. It waits while the server can't be reached."
+        : "Off: Sketch ProMax doesn't synchronize by itself here. (Settings > Chat has its own synchronize after a number of chat changes.)";
+
     /// <summary>What was read from the PC: memory and disk in MB (-1: couldn't be read), the drive's name, Revit's window handles (0: couldn't be read).</summary>
     public sealed record Signs(long RevitMemoryMb, long FreeMemoryMb, long TotalMemoryMb, long FreeDiskMb, string Disk, int Handles);
 

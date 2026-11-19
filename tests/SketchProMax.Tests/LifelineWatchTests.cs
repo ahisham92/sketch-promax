@@ -48,12 +48,28 @@ internal static class LifelineWatchTests
             && W.Saved("Port", TimeSpan.FromSeconds(12), 40).Detail.Contains("40 min"), "");
         check("lifeline watch: the window's line says on or off", W.About(true, 40).StartsWith("On: every 40 min") && W.About(false, 40).StartsWith("Off") && W.About(true, 40).Contains("never synchronizes"), "");
 
+        // Synchronizing by itself.
+        var quiet = TimeSpan.FromSeconds(6);
+        check("lifeline watch: synchronize minutes are kept between 10 and 480, 60 when unset", W.ClampSyncMinutes(0) == 60 && W.ClampSyncMinutes(3) == 10 && W.ClampSyncMinutes(90) == 90 && W.ClampSyncMinutes(9999) == 480, "");
+        check("lifeline watch: a synchronize is due after the user's minutes, at a quiet moment", W.SyncDue(true, Min(90), 90, quiet, false, false, true, Min(999)) && !W.SyncDue(true, Min(89), 90, quiet, false, false, true, Min(999)), "");
+        check("lifeline watch: no synchronize with nothing changed", !W.SyncDue(false, Min(900), 60, quiet, false, false, true, Min(999)), "");
+        check("lifeline watch: no synchronize while the server doesn't answer", !W.SyncDue(true, Min(900), 60, quiet, false, false, false, Min(999)), "");
+        check("lifeline watch: no synchronize while a tool is open, the user is working or a chat step is running", !W.SyncDue(true, Min(900), 60, quiet, true, false, true, Min(999))
+            && !W.SyncDue(true, Min(900), 60, TimeSpan.FromSeconds(1), false, false, true, Min(999)) && !W.SyncDue(true, Min(900), 60, quiet, false, true, true, Min(999)), "");
+        check("lifeline watch: a synchronize that failed waits ten minutes", !W.SyncDue(true, Min(900), 60, quiet, false, false, true, Min(9)) && W.SyncDue(true, Min(900), 60, quiet, false, false, true, Min(10)), "");
+        check("lifeline watch: the synchronize hints say what happened", W.Synced("Port", TimeSpan.FromSeconds(40), 90).Detail.Contains("90 min") && W.SyncFailed("Port", "Busy.").Detail.Contains("stay in your local")
+            && W.AboutSync(true, 90).StartsWith("On: every 90 min") && W.AboutSync(false, 90).StartsWith("Off"), "");
+
         // The wiring.
+        check("lifeline watch: synchronizing by itself is off unless turned on", Src("Settings", "AgentSettings.cs").Contains("public bool LifelineAutoSync { get; set; }\n")
+            && Src("Settings", "AgentSettings.cs").Contains("public int LifelineAutoSyncMinutes { get; set; } = 60;"), "");
+        check("lifeline watch: it synchronizes the way every Sketch ProMax synchronize does, at an idle moment", Src("Revit", "LifelineWatch.cs").Contains("AutoSync.SyncNow(doc,")
+            && Src("Revit", "LifelineWatch.cs").Contains("AutoSync.Working") && Src("Revit", "LifelineWatch.cs").Contains("AutoSync.Shared(doc)"), "");
         var watch = Src("Revit", "LifelineWatch.cs");
         var settings = Src("Settings", "AgentSettings.cs");
         check("lifeline watch: saving by itself is off unless turned on; warnings are on", settings.Contains("public bool LifelineAutoSave { get; set; }\n") && settings.Contains("public bool LifelineWarnings { get; set; } = true;")
             && settings.Contains("public int LifelineAutoSaveMinutes { get; set; } = 20;"), "");
-        check("lifeline watch: it saves the local copy and never synchronizes", watch.Contains("doc.Save();") && !watch.Contains("SynchronizeWithCentral(") && !watch.Contains("SaveAs("), "");
+        check("lifeline watch: the save saves the local copy and doesn't synchronize", watch.Contains("doc.Save();") && !watch.Contains("SynchronizeWithCentral(") && !watch.Contains("SaveAs("), "");
         check("lifeline watch: it only says, in the corner hint, and never asks", watch.Contains("UI.CommandHint.Show(") && !watch.Contains("TaskDialog") && !watch.Contains("MessageBox") && !watch.Contains(".Cancel"), "");
         check("lifeline watch: the save waits for an idle moment with no tool open, and not the central itself", watch.Contains("RevitDispatcher.Idle += OnIdle") && watch.Contains("SwitchGate.ContextualTab() != false")
             && watch.Contains("doc.IsModifiable") && watch.Contains("doc.IsReadOnly"), "");

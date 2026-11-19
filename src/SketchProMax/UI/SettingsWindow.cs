@@ -41,6 +41,8 @@ public sealed class SettingsWindow : Window
     private readonly CheckBox _lifeWarn = Check("Warn me when the server can't be reached, a lot is unsaved, or the PC is close to a crash");
     private readonly CheckBox _lifeSave = Check("Save my local copy by itself every");
     private readonly TextBox _lifeMinutes = new() { Width = 48, MinHeight = 26, Margin = new Thickness(6, 0, 6, 0) };
+    private readonly CheckBox _lifeSync = Check("Synchronize with central by itself every");
+    private readonly TextBox _lifeSyncMinutes = new() { Width = 48, MinHeight = 26, Margin = new Thickness(6, 0, 6, 0) };
     private readonly TextBox _sigName = new() { MinHeight = 26 };
     private readonly TextBox _phoneNames = new() { MinHeight = 26 };
     private readonly ComboBox _sigRole = new() { IsEditable = true, MinHeight = 26 };
@@ -89,6 +91,8 @@ public sealed class SettingsWindow : Window
         _changeFile.IsChecked = _settings.ChangeFile;
         _lifeWarn.IsChecked = _settings.LifelineWarnings;
         _lifeSave.IsChecked = _settings.LifelineAutoSave;
+        _lifeSync.IsChecked = _settings.LifelineAutoSync;
+        _lifeSyncMinutes.Text = Revit.LifelineWatchMath.ClampSyncMinutes(_settings.LifelineAutoSyncMinutes).ToString(System.Globalization.CultureInfo.CurrentCulture);
         _lifeMinutes.Text = Revit.LifelineWatchMath.ClampMinutes(_settings.LifelineAutoSaveMinutes).ToString(System.Globalization.CultureInfo.CurrentCulture);
         _sigName.Text = _settings.SignatureName ?? "";
         _phoneNames.Text = _settings.PhoneProjectNames ?? "";
@@ -777,8 +781,19 @@ public sealed class SettingsWindow : Window
         minutesText.VerticalAlignment = VerticalAlignment.Center;
         saveRow.Children.Add(minutesText);
         page.Children.Add(saveRow);
-        page.Children.Add(Hint("Warnings are small hints in the corner: they never ask and never stop a command. Saving by itself is off unless you turn it on: " +
-                               "it saves your local copy at a quiet moment with no tool open and nothing selected, and never synchronizes with central. The Lifeline window has the same choices."));
+        var syncRow = new WrapPanel { Margin = new Thickness(0, 6, 0, 0) };
+        _lifeSync.Margin = new Thickness(0);
+        _lifeSync.VerticalAlignment = VerticalAlignment.Center;
+        syncRow.Children.Add(Place("LifelineAutoSync", _lifeSync));
+        AutomationProperties.SetName(_lifeSyncMinutes, "Minutes between synchronizes");
+        AutomationProperties.SetHelpText(_lifeSyncMinutes, $"From {Revit.LifelineWatchMath.MinSyncMinutes} to {Revit.LifelineWatchMath.MaxSyncMinutes} minutes; {Revit.LifelineWatchMath.DefaultSyncMinutes} is the default.");
+        syncRow.Children.Add(Place("LifelineAutoSyncMinutes", _lifeSyncMinutes));
+        var syncMinutesText = Brand.Text("minutes");
+        syncMinutesText.VerticalAlignment = VerticalAlignment.Center;
+        syncRow.Children.Add(syncMinutesText);
+        page.Children.Add(syncRow);
+        page.Children.Add(Hint("Warnings are small hints in the corner: they never ask and never stop a command. Saving and synchronizing by themselves are off unless you turn them on: " +
+                               "each runs at a quiet moment with no tool open and nothing selected. Saving saves your local copy only. Synchronizing waits while the server can't be reached. The Lifeline window has the same choices."));
         var recover = Brand.Button("Lifeline…");
         recover.HorizontalAlignment = HorizontalAlignment.Left;
         recover.Margin = new Thickness(0, 10, 0, 0);
@@ -1176,6 +1191,16 @@ public sealed class SettingsWindow : Window
         _settings.LifelineWarnings = _lifeWarn.IsChecked == true;
         _settings.LifelineAutoSave = _lifeSave.IsChecked == true;
         _settings.LifelineAutoSaveMinutes = lifeMinutes;
+        if (!int.TryParse(_lifeSyncMinutes.Text.Trim(), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.CurrentCulture, out var lifeSyncMinutes)
+            || lifeSyncMinutes < Revit.LifelineWatchMath.MinSyncMinutes || lifeSyncMinutes > Revit.LifelineWatchMath.MaxSyncMinutes)
+        {
+            _error.Text = $"Type the minutes between synchronizes (Lifeline tab) as a whole number from {Revit.LifelineWatchMath.MinSyncMinutes} to {Revit.LifelineWatchMath.MaxSyncMinutes} ({Revit.LifelineWatchMath.DefaultSyncMinutes} is the default), then press Save again.";
+            _error.Visibility = Visibility.Visible;
+            ShowOnTab(SettingsLayout.Recovery, _lifeSyncMinutes);
+            return;
+        }
+        _settings.LifelineAutoSync = _lifeSync.IsChecked == true;
+        _settings.LifelineAutoSyncMinutes = lifeSyncMinutes;
         _settings.AutoSync = _autoSync.IsChecked == true;
         _settings.AutopilotResumeWeekly = _autopilotWeekly.IsChecked == true;
         _settings.AutopilotJobBudget = Picked(_apJob, Chat.JobBudget.DefaultPercent);

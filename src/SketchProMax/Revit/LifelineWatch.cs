@@ -14,6 +14,7 @@ namespace SketchProMax.Revit;
 /// sign that often comes before a crash (memory, disk, window handles), or when a lot is unsaved; and, when the user
 /// turns it on, saving the local copy by itself every so many minutes. A hint never asks, never takes the focus and
 /// never stops a command; the save runs only at one of Revit's idle moments with no tool open, and never synchronizes.
+/// Synchronizing with central by itself is its own choice, off unless turned on, at its own pace and the same idle moments.
 /// </summary>
 internal static class LifelineWatch
 {
@@ -22,8 +23,12 @@ internal static class LifelineWatch
     private static readonly object Gate = new();
     private static Autodesk.Revit.ApplicationServices.Application? _app;
     private static System.Threading.Timer? _timer;
-    private static bool _warn = true, _autoSave;
-    private static int _minutes = W.DefaultMinutes;
+    private static bool _warn = true, _autoSave, _autoSync;
+    private static int _minutes = W.DefaultMinutes, _syncMinutes = W.DefaultSyncMinutes;
+    private static readonly Dictionary<string, DateTime> Synced = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly HashSet<string> Unsynced = new(StringComparer.OrdinalIgnoreCase);
+    private static DateTime _syncFailed = DateTime.MinValue;
+    private static bool _savingIsSync;
     private static int _lastSettings, _lastLook, _sampling;
     private static List<Open> _models = [];
     private static readonly Dictionary<string, DateTime> Saved = new(StringComparer.OrdinalIgnoreCase);
@@ -47,6 +52,7 @@ internal static class LifelineWatch
         _app.DocumentSavedAs += OnSavedAs;
         _app.DocumentSynchronizedWithCentral += OnSynced;
         _app.DocumentClosed += OnClosed;
+        _app.DocumentChanged += OnChanged;
         RevitDispatcher.Idle += OnIdle;
         _timer = new System.Threading.Timer(_ => Sample(), null, 45_000, 60_000);
     }
@@ -65,6 +71,7 @@ internal static class LifelineWatch
                 app.DocumentSavedAs -= OnSavedAs;
                 app.DocumentSynchronizedWithCentral -= OnSynced;
                 app.DocumentClosed -= OnClosed;
+                app.DocumentChanged -= OnChanged;
             }
             catch (Exception) { }
         }
@@ -77,6 +84,8 @@ internal static class LifelineWatch
         _warn = s.LifelineWarnings;
         _autoSave = s.LifelineAutoSave;
         _minutes = W.ClampMinutes(s.LifelineAutoSaveMinutes);
+        _autoSync = s.LifelineAutoSync;
+        _syncMinutes = W.ClampSyncMinutes(s.LifelineAutoSyncMinutes);
         _lastSettings = Environment.TickCount;
     }
 
@@ -87,10 +96,22 @@ internal static class LifelineWatch
         if (PathOf(doc) is { Length: > 0 } path) lock (Gate) Saved[path] = DateTime.Now;
     }
 
-    private static void OnOpened(object? sender, DocumentOpenedEventArgs e) => Mark(e.Document);
+    private static void MarkSynced(Document? doc)
+    {
+        if (PathOf(doc) is { Length: > 0 } path) lock (Gate) { Synced[path] = DateTime.Now; Unsynced.Remove(path); }
+    }
+
+    private static void OnChanged(object? sender, DocumentChangedEventArgs e)
+    {
+        // Only a note that the model changed since its last synchronize: nothing is read here.
+        try { if (_autoSync && PathOf(e.GetDocument()) is { Length: > 0 } path) lock (Gate) Unsynced.Add(path); }
+        catch (Exception) { }
+    }
+
+    private static void OnOpened(object? sender, DocumentOpenedEventArgs e) { Mark(e.Document); MarkSynced(e.Document); }
     private static void OnSaved(object? sender, DocumentSavedEventArgs e) => Mark(e.Document);
     private static void OnSavedAs(object? sender, DocumentSavedAsEventArgs e) => Mark(e.Document);
-    private static void OnSynced(object? sender, DocumentSynchronizedWithCentralEventArgs e) => Mark(e.Document);
+    private static void OnSynced(object? sender, DocumentSynchronizedWithCentralEventArgs e) { Mark(e.Document); MarkSynced(e.Document); }
     private static void OnClosed(object? sender, DocumentClosedEventArgs e) { /* its time is dropped at the next look, when it isn't open any more */ }
 
     // ---- Revit's thread: what is open, and the save ---------------------------------------------------------------------
@@ -107,7 +128,11 @@ internal static class LifelineWatch
                 if (unchecked(tick - _savingAt) < 1200) { RevitDispatcher.IdleAgain(); return; }
                 _saving = null;
                 foreach (Document doc in app.Application.Documents)
-                    if (string.Equals(PathOf(doc), path, StringComparison.OrdinalIgnoreCase)) { Save(doc); break; }
+                    if (string.Equals(PathOf(doc), path, StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (_savingIsSync) Sync(doc); else Save(doc);
+                        break;
+                    }
                 return;
             }
             if (unchecked(tick - _lastLook) < 10_000) return;
@@ -118,12 +143,47 @@ internal static class LifelineWatch
                 if (!Watched(doc)) continue;
                 var at = PathOf(doc);
                 open.Add(new Open(at, doc.Title, ChangeFile.CentralOf(doc), ChangeFile.ChangedCount(doc), doc.IsModified));
-                lock (Gate) if (!Saved.ContainsKey(at)) Saved[at] = DateTime.Now;
+                lock (Gate)
+                {
+                    if (!Saved.ContainsKey(at)) Saved[at] = DateTime.Now;
+                    if (!Synced.ContainsKey(at)) Synced[at] = DateTime.Now;
+                }
             }
             lock (Gate)
             {
                 _models = open;
-                foreach (var gone in Saved.Keys.Where(k => !open.Any(o => string.Equals(o.Path, k, StringComparison.OrdinalIgnoreCase))).ToList()) Saved.Remove(gone);
+                foreach (var gone in Saved.Keys.Where(k => !open.Any(o => string.Equals(o.Path, k, StringComparison.OrdinalIgnoreCase))).ToList())
+                {
+                    Saved.Remove(gone);
+                    Synced.Remove(gone);
+                    Unsynced.Remove(gone);
+                    Servers.Remove(gone);
+                }
+            }
+            // A synchronize saves the local copy too, so it goes first when both are due.
+            if (_autoSync)
+            {
+                foreach (Document doc in app.Application.Documents)
+                {
+                    if (!Watched(doc) || !CanSave(doc) || !AutoSync.Shared(doc)) continue;
+                    var at = PathOf(doc);
+                    DateTime synced;
+                    bool changed, answers;
+                    lock (Gate)
+                    {
+                        synced = Synced.TryGetValue(at, out var s) ? s : DateTime.Now;
+                        changed = Unsynced.Contains(at);
+                        // Known to answer: looked at (every minute) and not one look failed. Cloud models and Revit Server aren't looked at: Revit says itself when they are away.
+                        answers = !W.IsServerPath(ChangeFile.CentralOf(doc), at) || (Servers.TryGetValue(at, out var server) && server.Fails == 0);
+                    }
+                    if (!W.SyncDue(changed, DateTime.Now - synced, _syncMinutes, SwitchGate.SinceInput(), SwitchGate.ContextualTab() != false, AutoSync.Working, answers, DateTime.Now - _syncFailed)) continue;
+                    Hint(W.Syncing(doc.Title), force: true);
+                    _saving = at;
+                    _savingIsSync = true;
+                    _savingAt = tick;
+                    RevitDispatcher.IdleAgain();
+                    return;
+                }
             }
             if (!_autoSave) return;
             foreach (Document doc in app.Application.Documents)
@@ -135,6 +195,7 @@ internal static class LifelineWatch
                 // First the hint, so the user sees why Revit is busy; the save at the next idle moment.
                 Hint(W.Saving(doc.Title), force: true);
                 _saving = PathOf(doc);
+                _savingIsSync = false;
                 _savingAt = tick;
                 RevitDispatcher.IdleAgain();
                 return;
@@ -182,16 +243,42 @@ internal static class LifelineWatch
         }
     }
 
+    /// <summary>
+    /// Synchronizes the local copy with central the way Synchronize Now does (AutoSync.SyncNow: what was borrowed is
+    /// given back, worksets the user owns are kept, the local is saved) and says so; one that doesn't go through is said
+    /// too, and tried again later. Revit's own questions during it are answered as in every Sketch ProMax synchronize.
+    /// </summary>
+    internal static bool Sync(Document doc)
+    {
+        var title = doc.Title;
+        var clock = Stopwatch.StartNew();
+        string? failed;
+        try { failed = AutoSync.SyncNow(doc, "Lifeline, every " + _syncMinutes + " min"); }
+        catch (Exception ex) { failed = ex.Message; }
+        if (failed is null)
+        {
+            Mark(doc);
+            MarkSynced(doc);
+            Hint(W.Synced(title, clock.Elapsed, _syncMinutes), force: true);
+            return true;
+        }
+        _syncFailed = DateTime.Now;
+        Hint(W.SyncFailed(title, failed.TrimEnd('.') + "."), force: true);
+        if (HintsForTest is null) LifelineBugs.Note("auto-sync", "the local copy couldn't be synchronized by itself: " + failed, PathOf(doc), null);
+        return false;
+    }
+
     // ---- Any thread: the signs ------------------------------------------------------------------------------------------
 
     private static void Sample()
     {
-        if (!_warn || System.Threading.Interlocked.Exchange(ref _sampling, 1) == 1) return;
+        // The server is looked at for the warnings and for synchronizing by itself (which waits while it doesn't answer).
+        if ((!_warn && !_autoSync) || System.Threading.Interlocked.Exchange(ref _sampling, 1) == 1) return;
         try
         {
             List<Open> models;
             lock (Gate) models = _models;
-            foreach (var warning in W.Judge(Read(models.FirstOrDefault()?.Path))) Hint(warning);
+            if (_warn) foreach (var warning in W.Judge(Read(models.FirstOrDefault()?.Path))) Hint(warning);
             foreach (var model in models)
             {
                 if (W.IsServerPath(model.Central, model.Path))
@@ -201,10 +288,12 @@ internal static class LifelineWatch
                     lock (Gate) before = Servers.TryGetValue(model.Path, out var b) ? b : (0, false);
                     var (fails, lost, say) = W.Server(before.Fails, before.Lost, reachable);
                     lock (Gate) Servers[model.Path] = (fails, lost);
+                    if (!_warn) continue;
                     if (say == "lost") Hint(W.ServerLost(model.Title), force: true);
                     else if (say == "back") Hint(W.ServerBack(model.Title), force: true);
                     else if (lost) Hint(W.ServerLost(model.Title));
                 }
+                if (!_warn) continue;
                 DateTime saved;
                 lock (Gate) saved = Saved.TryGetValue(model.Path, out var s) ? s : DateTime.Now;
                 // With saving by itself on, only when a save is long overdue (a tool was left open, or Revit refuses it).
