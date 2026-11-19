@@ -219,11 +219,15 @@ internal sealed class JobBoard
     private readonly List<ChatJob> _jobs;
 
     /// <summary>The board of a chat's saved jobs (the same list: changes are saved with the chat).</summary>
-    public JobBoard(List<ChatJob> jobs)
+    public JobBoard(List<ChatJob> jobs, List<UserAsk>? questions = null)
     {
         _jobs = jobs;
+        Questions = new ChatQuestions(questions);
         foreach (var job in _jobs) Migrate(job);
     }
+
+    /// <summary>The chat's Questions tab (chat_questions): the coordinator's and the jobs' questions to the user.</summary>
+    public ChatQuestions Questions { get; }
 
     /// <summary>A job saved before 0.34.33 kept its detail as lines: they become its conversation's items.</summary>
     internal static void Migrate(ChatJob job)

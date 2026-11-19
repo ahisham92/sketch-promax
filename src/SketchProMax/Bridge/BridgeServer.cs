@@ -407,6 +407,8 @@ public sealed class BridgeServer
         // A chat working in the background (its chat key) manages its own jobs as the shown chat does.
         if (name == ChatJobsTool.ToolName) return ChatJobsTool.Answer(new ToolArgs(args), coordinator: fromChat && (jobKey is null || Chat.JobBoard.IsChatKey(jobKey)), jobKey: fromChat ? jobKey : null);
         if (name == AutoSyncTool.ToolName) return AutoSyncTool.Answer(new ToolArgs(args));
+        // The chat's Questions tab: the coordinator's and the jobs' questions to the user.
+        if (name == ChatQuestionsTool.ToolName) return ChatQuestionsTool.Answer(new ToolArgs(args), fromChat, fromChat ? jobKey : null);
         // An autopilot's question to the user on their phone: answered here, it may wait for the reply.
         if (name == AskUserTool.ToolName) return await AskUserTool.AnswerAsync(new ToolArgs(args), fromChat, jobKey, ct).ConfigureAwait(false);
         // A call of the main chat's task (its card, Pause, Skip step, Stop, Undo all and typed notes); a job's calls are its own.

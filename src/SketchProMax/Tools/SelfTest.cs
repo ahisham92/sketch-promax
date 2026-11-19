@@ -535,6 +535,7 @@ internal static partial class SelfTest
         // Reads the rule only: a skip would change what the user's next chat task does.
         new("auto_sync", _ => new { action = "status" }),
         new("ask_user", _ => new { question = "Self-test: nothing is sent.", assumed = "nothing" }) { ExpectError = "only in the chat inside Revit" },
+        new("chat_questions", _ => new { question = "Self-test: nothing is asked." }) { ExpectError = "only in the chat inside Revit" },
         new("list_recipes", _ => new { }),
         new("list_learned_tools", _ => new { }),
         new("worked_code", _ => new { action = "list", max = 3 }),

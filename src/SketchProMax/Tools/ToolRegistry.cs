@@ -282,6 +282,7 @@ public sealed class ToolRegistry
         new BerthCostTool(),
         new RecallChatsTool(),
         new ChatJobsTool(),
+        new ChatQuestionsTool(),
         new AutoSyncTool(),
         new AskUserTool(),
         // Files for the user: Excel, Word, PowerPoint and PDF

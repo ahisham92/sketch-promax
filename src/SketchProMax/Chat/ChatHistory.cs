@@ -61,6 +61,8 @@ internal sealed class Conversation
     public string AttachedSession { get; set; } = "";
     /// <summary>The chat's parallel jobs (JobBoard): each its own hidden session, shown as a card ("pjob" item) in the chat.</summary>
     public List<ChatJob> Jobs { get; set; } = [];
+    /// <summary>The Questions tab's questions (ChatQuestions): numbered, answered ones leave the tab but stay here.</summary>
+    public List<UserAsk> Questions { get; set; } = [];
     /// <summary>
     /// What kind of chat it is (<see cref="ChatTypes"/>): "coordinator" (it hands work to parallel jobs) or "simple" (it
     /// does everything itself). "" in a chat saved before 0.34.33: <see cref="ChatTypes.Of"/> decides.
