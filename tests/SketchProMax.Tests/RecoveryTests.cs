@@ -102,6 +102,39 @@ internal static class RecoveryTests
             check("lifeline: Next and Show zoom on the element's own box (bug 91)", Src("UI", "RecoverWindow.cs").Contains("open.ZoomAndCenterRectangle(box.Min - new XYZ(pad, pad, pad), box.Max + new XYZ(pad, pad, pad));") && Src("UI", "RecoverWindow.cs").Split(new[] { "ZoomOn(ui, " }, StringSplitOptions.None).Length == 3, "");
             check("lifeline: the kept-elements project under its other name isn't watched", M.KeptSwapName != M.KeptName && Src("Revit", "ChangeKeeper.cs").Contains("M.KeptSwapName, StringComparison.OrdinalIgnoreCase"), "");
         }
+        // Settings that live in the model: print and export setups are kept as copies, sheet sets are made again from their views.
+        {
+            var setup = new M.Line { Kind = M.Kinds.State, What = "setup", Unique = "u-setup", Category = M.Setups[0], Name = "A1 black" };
+            var sheets = new M.Line { Kind = M.Kinds.State, What = "sheetset", Unique = "u-set", Name = "Issue", Extra = new() { ["views"] = M.JoinViews(["b", "a", "b", ""]) } };
+            var plainWall = new M.Line { Kind = M.Kinds.State, What = "wall", Unique = "u-wall" };
+            check("lifeline: a print or export setup is a document item kept as a copy", M.IsDocItem(setup) && !M.IsDocItem(sheets) && M.Setups.Length == 6, "");
+            check("lifeline: a sheet set keeps its views once each, in a steady order", string.Join(",", M.SplitViews(sheets)) == "a,b" && M.SplitViews(plainWall).Count == 0, string.Join(",", M.SplitViews(sheets)));
+            var setupOrder = M.PlayOrder(M.Read(new[] { new M.Line { Kind = M.Kinds.Model, Path = "x", Format = M.FormatNew }, sheets, plainWall, setup }.Select(M.Write)));
+            check("lifeline: setups are played early and sheet sets after the views", setupOrder.Count == 3 && setupOrder[0].What == "setup" && setupOrder[2].What == "sheetset", string.Join(",", setupOrder.Select(l => l.What)));
+            check("lifeline: setups and sheet sets are recorded and replayed", Src("Revit", "ChangeFile.cs").Contains("ViewSheetSet => \"sheetset\"") && Src("Revit", "ChangeKeeper.cs").Contains("PrintSetting => M.Setups[0], ExportDWGSettings => M.Setups[1]") && Src("Revit", "ChangeReplay.cs").Contains("ChangeKeeper.Replace(from, doc, element") && Src("Revit", "ChangeExtras.cs").Contains("setting.SaveAs(name);"), "");
+        }
+        // Settings with no element drawn anywhere (bug 106): revisions, parameters, the starting view, sites, units and Revit's single settings.
+        {
+            var kinds = new[] { "revision", "global", "startview", "param", "site", "place", "revsetting", "areavol" };
+            check("lifeline: each model setting has its own kind of line", kinds.All(k => M.IsSetting(new M.Line { What = k })) && !M.IsSetting(new M.Line { What = "wall" }) && !M.IsSetting(new M.Line { What = "setup" }), "");
+            check("lifeline: a revision can always be made again; a parameter or a site only with what the file has",
+                Src("Revit", "ChangeSettings.cs").Contains("\"revision\" => null,") && Src("Revit", "ChangeSettings.cs").Contains("x.ContainsKey(\"pguid\") && x.ContainsKey(\"pcats\") ? null") && Src("Revit", "ChangeSettings.cs").Contains("x.ContainsKey(\"pos\") ? null"), "");
+            var unitRow = M.UnitFormat("autodesk.spec.aec:length-2.0.1", "autodesk.unit.unit:millimeters-1.0.1", 0.5, "", 5, "Nearest");
+            var unitBack = M.ParseUnitFormat(unitRow);
+            check("lifeline: a unit's format is one row that reads back the same", unitBack is { Unit: "autodesk.unit.unit:millimeters-1.0.1", Accuracy: 0.5, Flags: 5, Rounding: "Nearest", Symbol: "" } && M.ParseUnitFormat("a|b") is null, unitRow);
+            var settingsSource = Src("Revit", "ChangeSettings.cs");
+            check("lifeline: the project units are written with project information and set by a replay",
+                Src("Revit", "ChangeFile.cs").Contains("if (element is ProjectInfo && ChangeSettings.Units(doc) is { } units) (line.Extra ??= [])[\"units\"] = units;")
+                && Src("Revit", "ChangeFile.cs").Contains("if (model.Units != units) model.Pending.Add(info.Id.Value);")
+                && Src("Revit", "ChangeReplay.cs").Contains("changed |= ChangeSettings.SetUnits(doc, units);"), "");
+            check("lifeline: an issued revision is un-issued for the moment of its edit", settingsSource.Contains("if (revision.Issued) revision.Issued = false;") && settingsSource.Contains("if (revision.Issued != issued) { revision.Issued = issued; changed = true; }"), "");
+            check("lifeline: a saved sheet set takes its views through one print settings object", Src("Revit", "ChangeExtras.cs").Contains("setting.CurrentViewSheetSet = set;") && Src("Revit", "ChangeExtras.cs").Contains("setting.Save();")
+                && !Src("Revit", "ChangeExtras.cs").Contains("there.Views = views"), "");
+            check("lifeline: Revit's own unnamed styles get no line", Src("Revit", "ChangeExtras.cs").Contains("if (c.Name is not { Length: > 0 }) return false;"), "");
+            var settingsOrder = M.PlayOrder(M.Read(new[] { new M.Line { Kind = M.Kinds.Model, Path = "x", Format = M.FormatNew }, new M.Line { Kind = M.Kinds.State, What = "startview", Unique = "u-start" },
+                new M.Line { Kind = M.Kinds.State, What = "view", Unique = "u-view" }, new M.Line { Kind = M.Kinds.State, What = "param", Unique = "u-param" } }.Select(M.Write)));
+            check("lifeline: parameters are played before the elements, the starting view after the views", settingsOrder.Count == 3 && settingsOrder[0].What == "param" && settingsOrder[2].What == "startview", string.Join(",", settingsOrder.Select(l => l.What)));
+        }
         // No idle moments in an edit mode: a change reads what is waiting itself (bug 89).
         check("lifeline: with no idle moment for a while a change reads the waiting elements itself", M.ReadNow(M.NoIdleMs + 1, M.EagerEveryMs + 1) && !M.ReadNow(500, 5000) && !M.ReadNow(5000, 200), "");
         check("lifeline: a change reads what waits when Revit gave no idle moment, and outline lines aren't deleted one by one",

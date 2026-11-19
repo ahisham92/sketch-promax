@@ -1123,6 +1123,232 @@ internal static partial class FieldTest
     }
 
     /// <summary>
+    /// Settings that live in the model come back: in the test project each kind is made, written as its line (and
+    /// kept as a copy where that is how it comes back), deleted, and made again from the line; then an existing one is
+    /// changed back and set from its line. A DWG export setup, a phase filter, a sheet set, a revision, a global
+    /// parameter, a project parameter, a shared site and the project units. What the test made is deleted.
+    /// </summary>
+    private static (string, string) RecoverySettings(UIApplication app, State s)
+    {
+        if (TestDoc(app, s, out var why) is not { } doc) return Fail(why);
+        var root = Path.Combine(s.Folder, "change-files-settings");
+        var problems = new List<string>();
+        var made = new List<string>();
+        var stamp = DateTime.Now.ToString("HHmmss");
+        ChangeFile.RootForTest = root;
+        ChangeFile.ForceForTest = true;
+        ChangeFile.TrackForTest(doc);
+        var folder = ChangeFile.FolderFor(doc.PathName);
+        var file = ChangeFile.CurrentFor(doc.PathName);
+        Element? Known(string? unique) => unique is null ? null : doc.GetElement(unique);
+        // The element's line as the change file has it: what Revit reported as changed, read and written.
+        M.Line? Written(string unique)
+        {
+            ChangeFile.ReadNow(doc);
+            ChangeFile.Flush(TimeSpan.FromSeconds(5));
+            return M.Read(ChangeFile.ReadLines(file)).Elements.LastOrDefault(l => l.Unique == unique && l.Kind == M.Kinds.State);
+        }
+        static string Details(M.Line? line) => line?.Extra is { } x ? string.Join(",", x.Where(k => k.Key is not ("kept" or "shape" or "units")).OrderBy(k => k.Key, StringComparer.Ordinal).Select(k => k.Key + "=" + k.Value)) : "";
+        T In<T>(string name, Func<T> act)
+        {
+            using var t = new Transaction(doc, "Field test: lifeline settings, " + name);
+            t.Start();
+            try { var result = act(); t.Commit(); return result; }
+            catch (Exception) { if (t.GetStatus() == TransactionStatus.Started) t.RollBack(); throw; }
+        }
+        // Made, written, deleted, made again: the same thing under the same name.
+        void Round(string what, Func<Element> make, bool kept)
+        {
+            try
+            {
+                var element = In(what, make);
+                var (unique, name) = (element.UniqueId, element.Name);
+                if (Written(unique) is not { } line) { problems.Add($"{what}: making it isn't written to the change file"); made.Add(unique); return; }
+                var before = Details(line);
+                string? copy = null;
+                if (kept)
+                {
+                    if (!ChangeKeeper.Keep(doc, folder, [element]).Contains(unique)) { problems.Add($"{what}: no copy was kept"); made.Add(unique); return; }
+                    copy = ChangeKeeper.ReadMap(folder)[unique];
+                }
+                else if (ChangeReplay.CanMake(line) is { } cant) { problems.Add($"{what}: {cant}"); made.Add(unique); return; }
+                In(what + " taken out", () => doc.Delete(element.Id));
+                Element back;
+                if (copy is not null)
+                {
+                    var keeper = ChangeKeeper.Open(doc.Application, folder) ?? throw new InvalidOperationException("the kept-elements project isn't there");
+                    try { back = In(what + " back", () => ChangeKeeper.Make(keeper, doc, copy, line)); }
+                    finally { ChangeKeeper.Close(keeper); }
+                }
+                else back = In(what + " back", () => line.What == "sheetset" ? ChangeExtras.MakeSheetSet(doc, line, Known) : ChangeSettings.Make(doc, line, Known));
+                made.Add(back.UniqueId);
+                if (back.Name != name) problems.Add($"{what}: came back named {back.Name}, not {name}");
+                if (Details(ChangeFile.Capture(doc, back)) != before) problems.Add($"{what}: didn't come back as it was ({before} then {Details(ChangeFile.Capture(doc, back))})");
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException) { problems.Add($"{what}: {ex.Message}"); }
+        }
+        try
+        {
+            Directory.CreateDirectory(folder);
+            var plans = new FilteredElementCollector(doc).OfClass(typeof(ViewPlan)).Cast<View>().Where(v => !v.IsTemplate && v.CanBePrinted).Take(2).ToList();
+            Round("a DWG export setup", () => ExportDWGSettings.Create(doc, "SPM lifeline dwg " + stamp, new DWGExportOptions()), kept: true);
+            Round("a phase filter", () => PhaseFilter.Create(doc, "SPM lifeline phase filter " + stamp), kept: true);
+            if (plans.Count > 0)
+                Round("a sheet set", () =>
+                {
+                    var print = doc.PrintManager;
+                    print.PrintRange = PrintRange.Select;
+                    // One settings object for both steps: each read of ViewSheetSetting is a new one.
+                    var setting = print.ViewSheetSetting;
+                    var views = new ViewSet();
+                    foreach (var plan in plans) views.Insert(plan);
+                    setting.CurrentViewSheetSet.Views = views;
+                    setting.SaveAs("SPM lifeline set " + stamp);
+                    var set = (ViewSheetSet)new FilteredElementCollector(doc).OfClass(typeof(ViewSheetSet)).First(e => e.Name == "SPM lifeline set " + stamp);
+                    if (set.Views.Size != plans.Count) throw new InvalidOperationException($"the test's own sheet set has {set.Views.Size} views, not {plans.Count}");
+                    return set;
+                }, kept: false);
+            // A sheet set that was in the model and edited after the save takes the views of its line.
+            if (plans.Count > 1)
+                try
+                {
+                    var set = In("sheet set", () =>
+                    {
+                        var setting = doc.PrintManager.ViewSheetSetting;
+                        doc.PrintManager.PrintRange = PrintRange.Select;
+                        var views = new ViewSet();
+                        foreach (var plan in plans) views.Insert(plan);
+                        setting.CurrentViewSheetSet.Views = views;
+                        setting.SaveAs("SPM lifeline edited set " + stamp);
+                        return (ViewSheetSet)new FilteredElementCollector(doc).OfClass(typeof(ViewSheetSet)).First(e => e.Name == "SPM lifeline edited set " + stamp);
+                    });
+                    made.Add(set.UniqueId);
+                    var name = set.Name;
+                    var line = Written(set.UniqueId) ?? throw new InvalidOperationException("it isn't written to the change file");
+                    var one = new M.Line { Kind = M.Kinds.State, Unique = line.Unique, What = "sheetset", Name = name, Extra = new() { ["views"] = plans[0].UniqueId } };
+                    In("sheet set edited", () => ChangeExtras.SetSheetSet(set, one, Known));
+                    ViewSheetSet Now() => (ViewSheetSet)new FilteredElementCollector(doc).OfClass(typeof(ViewSheetSet)).First(e => e.Name == name);
+                    if (Now().Views.Size != 1) problems.Add($"a sheet set given one view has {Now().Views.Size}");
+                    In("sheet set set", () => ChangeExtras.SetSheetSet(Now(), line, Known));
+                    if (Now().Views.Size != plans.Count) problems.Add($"a sheet set edited after the save isn't set back to its {plans.Count} views (it has {Now().Views.Size})");
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException) { problems.Add("a sheet set edited after the save: " + ex.Message); }
+            Round("a revision", () =>
+            {
+                var revision = Revision.Create(doc);
+                revision.Description = "SPM lifeline " + stamp;
+                revision.RevisionDate = "today";
+                revision.Issued = true;
+                return revision;
+            }, kept: false);
+            Round("a global parameter", () =>
+            {
+                var global = GlobalParameter.Create(doc, "SPM_lifeline_" + stamp, SpecTypeId.Length);
+                global.SetValue(new DoubleParameterValue(3.5));
+                return global;
+            }, kept: false);
+            Round("a project parameter", () =>
+            {
+                var revit = doc.Application;
+                var old = revit.SharedParametersFilename;
+                var temp = Path.Combine(folder, "shared.txt");
+                File.WriteAllText(temp, "");
+                try
+                {
+                    revit.SharedParametersFilename = temp;
+                    var definition = (ExternalDefinition)revit.OpenSharedParameterFile().Groups.Create("SPM").Definitions.Create(new ExternalDefinitionCreationOptions("SPM lifeline " + stamp, SpecTypeId.String.Text));
+                    var categories = revit.Create.NewCategorySet();
+                    categories.Insert(doc.Settings.Categories.get_Item(BuiltInCategory.OST_Walls));
+                    categories.Insert(doc.Settings.Categories.get_Item(BuiltInCategory.OST_Floors));
+                    doc.ParameterBindings.Insert(definition, revit.Create.NewInstanceBinding(categories), GroupTypeId.Data);
+                    return SharedParameterElement.Lookup(doc, definition.GUID);
+                }
+                finally { try { revit.SharedParametersFilename = old ?? ""; } catch (Exception) { } }
+            }, kept: false);
+            Round("a shared site", () =>
+            {
+                var site = doc.ActiveProjectLocation.Duplicate("SPM lifeline site " + stamp);
+                site.SetProjectPosition(XYZ.Zero, new ProjectPosition(10, 20, 3, 0.5));
+                return site;
+            }, kept: false);
+            // A revision that was in the model and edited after the save is set to its line, issued or not.
+            try
+            {
+                var revision = In("revision", () => Revision.Create(doc));
+                made.Add(revision.UniqueId);
+                In("revision edited", () => { revision.Description = "edited " + stamp; revision.Issued = true; return 0; });
+                var line = Written(revision.UniqueId) ?? throw new InvalidOperationException("the edit isn't written to the change file");
+                In("revision as it was", () => { revision.Issued = false; revision.Description = "as saved"; revision.Issued = true; return 0; });
+                if (!In("revision set", () => ChangeSettings.Set(doc, revision, line, Known)) || revision.Description != "edited " + stamp || !revision.Issued) problems.Add("an issued revision edited after the save isn't set back to the edit");
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException) { problems.Add("a revision edited after the save: " + ex.Message); }
+            // The settings Revit keeps one of: edited, written, put back as saved, and set from the line.
+            void Single(string what, Element setting, Action edit, Action undo, Func<bool> edited)
+            {
+                try
+                {
+                    In(what + " edited", () => { edit(); return 0; });
+                    if (Written(setting.UniqueId) is not { } line) { problems.Add($"{what}: the edit isn't written to the change file"); In(what + " tidy", () => { undo(); return 0; }); return; }
+                    In(what + " as saved", () => { undo(); return 0; });
+                    if (edited()) problems.Add($"{what}: the test couldn't put it back as saved");
+                    else if (!In(what + " set", () => ChangeSettings.Set(doc, setting, line, Known)) || !edited()) problems.Add($"{what}: not set back to the edit");
+                    In(what + " tidy", () => { undo(); return 0; });
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException) { problems.Add($"{what}: {ex.Message}"); }
+            }
+            var place = doc.SiteLocation;
+            var latitude = place.Latitude;
+            Single("the site's place on Earth", place, () => place.Latitude = latitude + 0.01, () => place.Latitude = latitude, () => Math.Abs(place.Latitude - latitude - 0.01) < 1e-9);
+            var numbering = RevisionSettings.GetRevisionSettings(doc);
+            var perSheet = numbering.RevisionNumbering;
+            var other = perSheet == RevisionNumbering.PerProject ? RevisionNumbering.PerSheet : RevisionNumbering.PerProject;
+            Single("the revision numbering", numbering, () => numbering.RevisionNumbering = other, () => numbering.RevisionNumbering = perSheet, () => numbering.RevisionNumbering == other);
+            var rooms = AreaVolumeSettings.GetAreaVolumeSettings(doc);
+            var volumes = rooms.ComputeVolumes;
+            Single("the room volume setting", rooms, () => rooms.ComputeVolumes = !volumes, () => rooms.ComputeVolumes = volumes, () => rooms.ComputeVolumes != volumes);
+            // The project units: written with project information's line, and set from it.
+            try
+            {
+                var saved = ChangeSettings.Units(doc) ?? throw new InvalidOperationException("the project units couldn't be read");
+                In("units edited", () =>
+                {
+                    var units = doc.GetUnits();
+                    var length = units.GetFormatOptions(SpecTypeId.Length);
+                    units.SetFormatOptions(SpecTypeId.Length, new FormatOptions(length.GetUnitTypeId() == UnitTypeId.Meters ? UnitTypeId.Millimeters : UnitTypeId.Meters) { Accuracy = length.GetUnitTypeId() == UnitTypeId.Meters ? 1 : 0.001 });
+                    doc.SetUnits(units);
+                    return 0;
+                });
+                var edited = Written(doc.ProjectInformation.UniqueId)?.Extra is { } x && x.TryGetValue("units", out var u) ? u : null;
+                if (edited is null || edited == saved) problems.Add("a change of the project units isn't written to the change file");
+                In("units as saved", () => ChangeSettings.SetUnits(doc, saved));
+                if (ChangeSettings.Units(doc) != saved) problems.Add("the project units couldn't be set back to how they were saved");
+                else if (edited is not null)
+                {
+                    In("units set", () => ChangeSettings.SetUnits(doc, edited));
+                    if (ChangeSettings.Units(doc) != edited) problems.Add("the project units aren't set to the edit");
+                    In("units tidy", () => ChangeSettings.SetUnits(doc, saved));
+                }
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException) { problems.Add("the project units: " + ex.Message); }
+            return problems.Count == 0
+                ? Pass("a DWG export setup and a phase filter came back from their kept copies, and a sheet set, an issued revision, a global parameter, a project parameter with its categories and a shared site were made again from their lines, each under its name and as it was; a sheet set, an issued revision, the site's place on Earth, the revision numbering, the room volume setting and the project units, edited after the save, were set back to the edit")
+                : Fail(string.Join("; ", problems));
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException) { return Fail(string.Join("; ", problems.Append(ex.Message))); }
+        finally
+        {
+            using var t = new Transaction(doc, "Field test: lifeline settings tidy up");
+            t.Start();
+            foreach (var unique in made)
+                try { if (doc.GetElement(unique) is { } e) doc.Delete(e.Id); } catch (Exception) { /* gone already, or Revit keeps it */ }
+            t.Commit();
+            ChangeFile.ForgetForTest(doc);
+            ChangeFile.RootForTest = null;
+            ChangeFile.ForceForTest = false;
+        }
+    }
+
+    /// <summary>
     /// Where what a replay couldn't do is: in the test project, with two crossing grids, a wall that is in the model
     /// and a column that is not (only its line says where it was) are listed as not done; each gets its plan view, the
     /// grids next to it and its level in words, the report line carries them, Cloud them draws a cloud at each in that

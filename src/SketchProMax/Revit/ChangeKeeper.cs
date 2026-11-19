@@ -28,7 +28,63 @@ internal static class ChangeKeeper
     }
 
     /// <summary>A view template, a view filter, a line pattern or a fill pattern: kept whole as a copy, new or changed.</summary>
-    public static bool IsDocItem(Element e) => e is View { IsTemplate: true } or ParameterFilterElement or LinePatternElement or FillPatternElement;
+    public static bool IsDocItem(Element e) => e is View { IsTemplate: true } or ParameterFilterElement or LinePatternElement or FillPatternElement || SetupKind(e) is not null;
+
+    /// <summary>
+    /// A named setup that lives in the model and is kept whole as a copy (a print setup, an export setup, a phase
+    /// filter): what it is, in words (its line's category); null for anything else.
+    /// </summary>
+    public static string? SetupKind(Element e) => e switch
+    {
+        PrintSetting => M.Setups[0], ExportDWGSettings => M.Setups[1], ExportDGNSettings => M.Setups[2], ExportPDFSettings => M.Setups[3], PhaseFilter => M.Setups[4], ColorFillScheme => M.Setups[5], _ => null,
+    };
+
+    private static readonly Type[] SetupClasses = [typeof(PrintSetting), typeof(ExportDWGSettings), typeof(ExportDGNSettings), typeof(ExportPDFSettings), typeof(PhaseFilter), typeof(ColorFillScheme)];
+
+    /// <summary>
+    /// A setup that is in the model is replaced by its kept copy (a setup has no parts an add-in can set one by one):
+    /// the copy comes in, the one in the model goes, and the copy takes its name. Returns the copy; null when Revit
+    /// used the one in the model for the copy (nothing came in). Call inside a transaction.
+    /// </summary>
+    public static Element? Replace(Document keeper, Document doc, Element existing, string keptUnique)
+    {
+        if (SetupKind(existing) is not { } kind || keeper.GetElement(keptUnique) is not { } source) return null;
+        var name = existing.Name;
+        // The one in the model steps aside for the moment, so Revit brings the copy in and doesn't use it instead.
+        var aside = false;
+        try { existing.Name = (name.Length > 200 ? name.Substring(0, 200) : name) + " (before replay " + Guid.NewGuid().ToString("N").Substring(0, 6) + ")"; aside = true; } catch (Exception) { }
+        var copies = ElementTransformUtils.CopyElements(keeper, [source.Id], doc, Transform.Identity, Options());
+        var fresh = copies.Select(doc.GetElement).FirstOrDefault(e => e is not null && e.Id != existing.Id && SetupKind(e) == kind);
+        if (fresh is null)
+        {
+            if (aside) try { existing.Name = name; } catch (Exception) { }
+            return null;
+        }
+        // Views use a phase filter or a colour scheme: it stays, and takes what the copy has.
+        if (existing is PhaseFilter filter && fresh is PhaseFilter like)
+        {
+            foreach (var status in new[] { ElementOnPhaseStatus.New, ElementOnPhaseStatus.Existing, ElementOnPhaseStatus.Demolished, ElementOnPhaseStatus.Temporary })
+                filter.SetPhaseStatusPresentation(status, like.GetPhaseStatusPresentation(status));
+            doc.Delete(fresh.Id);
+            if (aside) filter.Name = name;
+            return existing;
+        }
+        if (existing is ColorFillScheme scheme && fresh is ColorFillScheme from)
+        {
+            try { scheme.SetEntries(from.GetEntries()); }
+            finally { doc.Delete(fresh.Id); if (aside) try { scheme.Name = name; } catch (Exception) { } }
+            return existing;
+        }
+        try { doc.Delete(existing.Id); }
+        catch (Exception)
+        {
+            // Revit holds the one in the model (it is the setup in use): the copy goes out again, and the user is told.
+            try { doc.Delete(fresh.Id); } catch (Exception) { }
+            throw new InvalidOperationException($"the {kind.ToLowerInvariant()} \"{name}\" is in use and couldn't be replaced with how you had changed it: set it again by hand");
+        }
+        try { if (fresh.Name != name) fresh.Name = name; } catch (Exception) { }
+        return fresh;
+    }
 
     /// <summary>An element that was in the model and can only be set back whole: an in-place family, or one with no point or line of its own to move (sketched stairs, an extrusion roof).</summary>
     public static bool OnlyByCopy(Element e)
@@ -48,6 +104,7 @@ internal static class ChangeKeeper
                 "filter" => new FilteredElementCollector(doc).OfClass(typeof(ParameterFilterElement)).FirstOrDefault(e => e.Name == name),
                 "linepattern" => LinePatternElement.GetLinePatternElementByName(doc, name),
                 "fillpattern" => new FilteredElementCollector(doc).OfClass(typeof(FillPatternElement)).FirstOrDefault(e => e.Name == name),
+                "setup" => new FilteredElementCollector(doc).WherePasses(new ElementMulticlassFilter(SetupClasses)).FirstOrDefault(e => SetupKind(e) == line.Category && e.Name == name),
                 "view" => new FilteredElementCollector(doc).OfClass(typeof(View)).Cast<View>().FirstOrDefault(v => v.IsTemplate && v.Name == name && v.ViewType.ToString() == line.ViewKind),
                 _ => null,
             };
@@ -102,6 +159,8 @@ internal static class ChangeKeeper
         {
             if (IsDocItem(e)) return true;
             if (e is View or ElementType or Family or Material or Level or Grid or Group or RevitLinkInstance or ImportInstance) return false;
+            // Project information, base points and settings are set from their lines: no copy.
+            if (e is ProjectInfo or BasePoint || ChangeSettings.Kind(e) is not null) return false;
             if (e.ViewSpecific || e.Category is not { CategoryType: CategoryType.Model }) return false;
             if (ChangeNotes.Owns(line) || ChangeViews.Owns(line)) return false;
             if (e.GroupId != ElementId.InvalidElementId) return false;

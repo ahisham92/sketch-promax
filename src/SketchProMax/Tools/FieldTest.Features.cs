@@ -539,6 +539,8 @@ internal static partial class FieldTest
         await ProbeCore(s, "recovery.extras", () => App.Dispatcher.InvokeFromEventAsync(app => RecoveryExtras(app, s))).ConfigureAwait(false);
         // Giving a group type its edit back opens the kept-elements project: from the external event.
         await ProbeCore(s, "recovery.groups", () => App.Dispatcher.InvokeFromEventAsync(app => RecoveryGroups(app, s))).ConfigureAwait(false);
+        // Keeping a setup as a copy opens the kept-elements project: from the external event.
+        await ProbeCore(s, "recovery.settings", () => App.Dispatcher.InvokeFromEventAsync(app => RecoverySettings(app, s))).ConfigureAwait(false);
         await ProbeCore(s, "recovery.where", () => App.Dispatcher.InvokeFromEventAsync(app => RecoveryWhere(app, s))).ConfigureAwait(false);
         await Probe(s, "recovery.bugs", () => RecoveryBugs(s)).ConfigureAwait(false);
         await Probe(s, "rescue.cause", RescueCause).ConfigureAwait(false);

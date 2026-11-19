@@ -254,7 +254,7 @@ internal static class ChangeReplay
         // The edited group types come right after what they may need (levels, grids, types, families, materials).
         if (regroup.Count > 0)
         {
-            var at = steps.FindIndex(s => s.Line.What is not ("level" or "grid" or "material" or "family" or "filter" or "linepattern" or "fillpattern" or "style" or "type"));
+            var at = steps.FindIndex(s => s.Line.What is not ("level" or "grid" or "material" or "family" or "filter" or "linepattern" or "fillpattern" or "style" or "setup" or "type"));
             steps.InsertRange(at < 0 ? steps.Count : at, regroup);
         }
         // Last: joins and cuts, views' graphics and shapes to check against their kept copies (everything they name is there by now).
@@ -303,6 +303,9 @@ internal static class ChangeReplay
         "style" => ChangeExtras.CanMakeStyle(line),
         "filter" => "a view filter made after the last save whose copy wasn't kept: make it again by hand",
         "linepattern" or "fillpattern" => "a pattern made after the last save whose copy wasn't kept: make it again by hand",
+        "setup" => $"a {(line.Category ?? "setup").ToLowerInvariant()} made after the last save whose copy wasn't kept: make it again by hand",
+        "sheetset" => ChangeExtras.CanMakeSheetSet(line),
+        _ when ChangeSettings.Owns(line) => ChangeSettings.CanMake(line),
         _ when line.What != "viewref" && line.CategoryId is (long)BuiltInCategory.OST_ReferenceViewer or (long)BuiltInCategory.OST_ReferenceViewerSymbol =>
             "a view reference made after the last save (written by an older version): place it again by hand",
         "stairs" => ChangeStairs.CanMake(line),
@@ -478,6 +481,20 @@ internal static class ChangeReplay
         if (line.What == "family") return false;
         Element? Known(string? unique) => unique is null ? null : outcome.MadeFor.TryGetValue(unique, out var id) ? doc.GetElement(id) : doc.GetElement(unique);
         if (element is GraphicsStyle style) return ChangeExtras.SetStyle(doc, style, line, u => Known(u));
+        // A print or export setup that was in the model is replaced by its kept copy.
+        if (!justMade && line.What == "setup")
+        {
+            if (FromKept(line, outcome) && outcome.Keeper is { } from && ChangeKeeper.Replace(from, doc, element, outcome.Kept[line.Unique!]) is { } fresh)
+            {
+                outcome.MadeAgain(line.Unique, fresh);
+                return true;
+            }
+            return false;
+        }
+        if (line.What == "sheetset" && element is ViewSheetSet sheetSet) return !justMade && ChangeExtras.SetSheetSet(sheetSet, line, u => Known(u));
+        if (ChangeSettings.Owns(line)) return !justMade && ChangeSettings.Set(doc, element, line, u => Known(u));
+        // Project information carries the project units.
+        if (element is ProjectInfo && line.Extra is { } carried && carried.TryGetValue("units", out var units)) changed |= ChangeSettings.SetUnits(doc, units);
         // A filter or pattern that was in the model gets what its kept copy has.
         if (!justMade && line.What is "filter" or "linepattern" or "fillpattern")
         {
@@ -639,6 +656,8 @@ internal static class ChangeReplay
                 doc, outcome.Kept[line.Unique!], line);
         if (line.What == "material") return ChangeTypes.MakeMaterial(doc, line);
         if (line.What == "style") return ChangeExtras.MakeStyle(doc, line);
+        if (line.What == "sheetset") return ChangeExtras.MakeSheetSet(doc, line, Known);
+        if (ChangeSettings.Owns(line)) return ChangeSettings.Make(doc, line, Known);
         if (line.What == "group" && outcome.LateGroups.Contains(line.Unique!))
         {
             // The first group of a new type names the type; later ones of that type take it.
@@ -800,7 +819,7 @@ internal static class ChangeReplay
         switch (s.Act)
         {
             case Act.Make: return true;
-            case Act.Set: return s.Line.What is "filter" or "linepattern" or "fillpattern";
+            case Act.Set: return s.Line.What is "filter" or "linepattern" or "fillpattern" or "setup";
             case Act.After:
                 try { return s.Line.Extra!.TryGetValue("shape", out var shape) && Find(doc, s.Line, outcome.MadeFor) is { } e && !M.SameSignature(ChangeExtras.Signature(e), shape); }
                 catch (Exception) { return false; }
