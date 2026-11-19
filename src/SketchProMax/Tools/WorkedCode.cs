@@ -18,8 +18,17 @@ namespace SketchProMax.Tools;
 /// </summary>
 internal static class WorkedCode
 {
-    /// <summary>The most entries kept (the oldest unused go first), the shortest code worth keeping, the longest kept.</summary>
-    public const int MaxEntries = 400, MinLength = 150, MaxCode = 20000;
+    /// <summary>
+    /// The most entries kept (the oldest unused go first), the shortest code worth keeping, the longest kept. 400 filled
+    /// in two days on 19 Nov 2026 (every adapted copy was a new entry), so older code was being dropped.
+    /// </summary>
+    public const int MaxEntries = 1500, MinLength = 150, MaxCode = 20000;
+
+    /// <summary>
+    /// How alike two pieces of code must be (shared runs of five words, 0 to 1) for the newer to count as the older one
+    /// adapted: another use of the same entry, not a new one.
+    /// </summary>
+    public const double SameWork = 0.55;
 
     internal sealed class Entry
     {
@@ -48,7 +57,8 @@ internal static class WorkedCode
     /// Keeps one run that worked in <paramref name="entries"/>; the entry, or null when it isn't worth keeping (a short
     /// snippet, no description, too long). Code of a shape already kept replaces the older code and counts as one more use.
     /// </summary>
-    public static Entry? Keep(List<Entry> entries, string code, string description, string tool, bool ownTransactions, string model, DateTime now)
+    public static Entry? Keep(List<Entry> entries, string code, string description, string tool, bool ownTransactions, string model, DateTime now,
+        Dictionary<Entry, HashSet<string>>? cache = null)
     {
         code = (code ?? "").Trim();
         description = (description ?? "").Trim();
@@ -56,12 +66,13 @@ internal static class WorkedCode
         var shape = CodeRepeats.Shape(code);
         if (shape.Length < MinLength) return null;
         var id = CodeRepeats.Key(shape).Substring(0, 8);
-        var entry = entries.FirstOrDefault(e => e.Id == id);
+        var entry = entries.FirstOrDefault(e => e.Id == id) ?? Adapted(entries, shape, description, tool, cache);
         if (entry is null)
         {
             if (entries.Count >= MaxEntries) entries.Remove(entries.OrderBy(e => e.Uses > 1).ThenBy(e => e.Last).First());
             entries.Add(entry = new Entry { Id = id, First = now });
         }
+        cache?.Remove(entry);
         entry.Description = description;
         entry.Code = code;
         entry.Tool = tool;
@@ -70,6 +81,47 @@ internal static class WorkedCode
         entry.Last = now;
         entry.Uses++;
         return entry;
+    }
+
+    /// <summary>
+    /// The kept entry that <paramref name="shape"/> adapts, or null: the same tool, code that shares most of its runs of
+    /// five words (<see cref="SameWork"/>) and a description that shares a word. On 19 Nov 2026 code taken from the library
+    /// and changed a little (one more filter, other ids) was kept as a new entry each time: 400 entries, nearly all "worked
+    /// 1x", so nothing ever reached the three uses that make a ready-made tool.
+    /// </summary>
+    internal static Entry? Adapted(List<Entry> entries, string shape, string description, string tool, Dictionary<Entry, HashSet<string>>? cache = null)
+    {
+        var mine = Shingles(shape);
+        if (mine.Count == 0) return null;
+        var words = Words(description);
+        Entry? best = null;
+        var bestScore = SameWork;
+        foreach (var e in entries)
+        {
+            if (!e.Tool.Equals(tool, StringComparison.Ordinal) || (words.Count > 0 && !Words(e.Description).Overlaps(words))) continue;
+            if (cache is null || !cache.TryGetValue(e, out var theirs))
+            {
+                theirs = Shingles(CodeRepeats.Shape(e.Code));
+                if (cache is not null) cache[e] = theirs;
+            }
+            // Too different in size to be alike enough: skip the count.
+            if (theirs.Count == 0 || Math.Min(theirs.Count, mine.Count) < SameWork * Math.Max(theirs.Count, mine.Count)) continue;
+            var shared = mine.Count(theirs.Contains);
+            var score = shared / (double)(mine.Count + theirs.Count - shared);
+            if (score >= bestScore) (best, bestScore) = (e, score);
+        }
+        return best;
+    }
+
+    private static readonly Regex Token = new(@"[A-Za-z_][A-Za-z0-9_]*|\d+|[^\sA-Za-z0-9_]", RegexOptions.Compiled);
+
+    /// <summary>Runs of five tokens of the code's shape, for <see cref="Adapted"/>.</summary>
+    internal static HashSet<string> Shingles(string shape)
+    {
+        var tokens = Token.Matches(shape).Cast<System.Text.RegularExpressions.Match>().Select(m => m.Value).ToList();
+        var set = new HashSet<string>(StringComparer.Ordinal);
+        for (var i = 0; i + 5 <= tokens.Count; i++) set.Add(string.Join(" ", tokens.GetRange(i, 5)));
+        return set;
     }
 
     // ---- Finding -------------------------------------------------------------------------------------------------------
@@ -161,7 +213,11 @@ internal static class WorkedCode
     // ---- The file on this PC -------------------------------------------------------------------------------------------
 
     /// <summary><see cref="Keep"/> against the file on this PC. Never throws: keeping must not break a call.</summary>
-    public static void Note(string code, string description, string tool, bool ownTransactions, string model)
+    public static void Note(string code, string description, string tool, bool ownTransactions, string model) =>
+        // Off Revit's thread: reading, comparing with every kept entry and writing the library takes a while.
+        Task.Run(() => NoteNow(code, description, tool, ownTransactions, model));
+
+    private static void NoteNow(string code, string description, string tool, bool ownTransactions, string model)
     {
         try
         {
@@ -178,6 +234,56 @@ internal static class WorkedCode
         }
         catch (Exception) { /* not kept this time */ }
     }
+
+    /// <summary>
+    /// The code written before the library began (17 Nov 2026) is kept too: every code change that worked is in the redo
+    /// logs (RedoLog, the whole arguments), so it goes into the library once, oldest first, as if kept when it ran (19 Nov
+    /// 2026: grading done two weeks before was written again from nothing). Returns how many runs were taken in.
+    /// </summary>
+    internal static int FromRedo(List<Entry> entries, IEnumerable<(string Model, RedoLog.Step Step)> steps)
+    {
+        var cache = new Dictionary<Entry, HashSet<string>>();
+        var taken = 0;
+        foreach (var (model, step) in steps.OrderBy(s => s.Step.Time))
+        {
+            if (step.Tool is not ("run_revit_code" or "run_revit_query_code")) continue;
+            try
+            {
+                using var doc = JsonDocument.Parse(step.Arguments);
+                var r = doc.RootElement;
+                string Text(string name) => r.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? "" : "";
+                var own = r.TryGetProperty("own_transactions", out var o) && o.ValueKind == JsonValueKind.True;
+                if (Keep(entries, Text("code"), Text("description"), step.Tool, own, model, step.Time.ToUniversalTime(), cache) is not null) taken++;
+            }
+            catch (JsonException) { /* an unreadable step is skipped */ }
+        }
+        return taken;
+    }
+
+    private static string BackfillMark => StoreFile + ".from-redo";
+
+    /// <summary>Once per PC, off Revit's thread: <see cref="FromRedo"/> over every model's redo log. Never throws.</summary>
+    public static void BackfillOnce() => Task.Run(() =>
+    {
+        try
+        {
+            if (File.Exists(BackfillMark)) return;
+            var steps = RedoLog.Models().SelectMany(m => RedoLog.Read(m.Model).Select(s => (m.Model, s))).ToList();
+            lock (Gate)
+            {
+                var entries = Read();
+                var taken = FromRedo(entries, steps);
+                Directory.CreateDirectory(Path.GetDirectoryName(StoreFile)!);
+                var temp = StoreFile + ".tmp";
+                File.WriteAllText(temp, JsonSerializer.Serialize(entries), new UTF8Encoding(false));
+                if (File.Exists(StoreFile)) File.Replace(temp, StoreFile, null);
+                else File.Move(temp, StoreFile);
+                // The mark says when, and how much came in from how many models (the library's size after).
+                File.WriteAllText(BackfillMark, $"{DateTime.UtcNow:s} took in {taken} runs from {steps.Select(s => s.Model).Distinct().Count()} models; {entries.Count} kept");
+            }
+        }
+        catch (Exception) { /* tried again next start */ }
+    });
 
     public static List<Entry> Load()
     {

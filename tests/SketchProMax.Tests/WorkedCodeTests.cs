@@ -20,6 +20,14 @@ internal static class WorkedCodeTests
         check("kept: the same shape with other names and numbers is one entry, the newest code, counted twice",
             first is not null && again is not null && list.Count == 1 && list[0].Uses == 2 && list[0].Code.Contains("OST_StructuralColumns")
             && list[0].Model == "Model A" && list[0].OwnTransactions && list[0].Id.Length == 8, "");
+        var adapted = new List<WorkedCode.Entry>();
+        var basis = WorkedCode.Keep(adapted, Code("OST_StructuralColumns", 3), "Berth 9 AZ piles: head down to the cap underside", "run_revit_code", false, "", now);
+        WorkedCode.Keep(adapted, Code("OST_StructuralColumns", 3).Replace("var moved = 0;", "var moved = 0; var skipped = 0;"), "Restore 5 Berth 9 AZ piles to their heads", "run_revit_code", false, "", now.AddMinutes(1));
+        var third = WorkedCode.Keep(adapted, Code("OST_StructuralColumns", 3) + "\nlog.AppendLine(\"done\");", "Berth 10 AZ piles flush with the soffit", "run_revit_code", false, "", now.AddMinutes(2));
+        WorkedCode.Keep(adapted, Code("OST_StructuralColumns", 3) + "\nvar other = 1;", "Tag the doors on level 1", "run_revit_code", false, "", now.AddMinutes(3));
+        check("kept: code adapted a little (one more line, a description sharing a word) is another use of the same entry, so it reaches three uses",
+            basis is not null && third is not null && third.Id == basis.Id && third.Uses == 3 && third.Code.Contains("done")
+            && adapted.Count == 2 && adapted.Any(e => e.Description == "Tag the doors on level 1" && e.Uses == 1), string.Join(" | ", adapted.Select(e => e.Description + " " + e.Uses)));
         check("kept: not a short snippet, code with no description, or code too long to keep",
             WorkedCode.Keep(list, "return doc.Title;", "Model title", "run_revit_query_code", false, "", now) is null
             && WorkedCode.Keep(list, Code("OST_Walls", 1) + "\nreturn 1 + 2 + 3;", "", "run_revit_code", false, "", now) is null
@@ -46,9 +54,24 @@ internal static class WorkedCodeTests
             hint.StartsWith("\n\n[Sketch ProMax, not typed by the user:") && hint.Contains("Move the selected piles between the tie rods") && hint.Contains("worked 2x")
             && WorkedCode.Hint(list, "move the slab").Length == 0, hint);
 
+        var redo = new List<WorkedCode.Entry>();
+        string Args(string code, string what) => System.Text.Json.JsonSerializer.Serialize(new { code, description = what });
+        var past = new List<(string, RedoLog.Step)>
+        {
+            ("Berth 10", new RedoLog.Step(2, now.AddDays(-14).AddMinutes(5), "run_revit_code", Args(Code("OST_Floors", 4) + "\nvar graded = 1;", "Grade the Berth 10 approach slab tops to the grading CAD"), "{}")),
+            ("Berth 10", new RedoLog.Step(1, now.AddDays(-14), "run_revit_code", Args(Code("OST_Floors", 2), "Grade the Berth 10 deck to the grading CAD"), "{}")),
+            ("Berth 10", new RedoLog.Step(3, now.AddDays(-13), "create_floors", "{\"level\":\"L1\"}", "{}")),
+            ("Berth 9", new RedoLog.Step(4, now.AddDays(-12), "run_revit_code", "not json", "{}")),
+        };
+        var taken = WorkedCode.FromRedo(redo, past);
+        check("from the redo logs: code changes that worked before the library began are kept once, adapted copies as uses; other tools and broken lines skipped",
+            taken == 2 && redo.Count == 1 && redo[0].Uses == 2 && redo[0].Model == "Berth 10" && redo[0].Code.Contains("graded")
+            && WorkedCode.Find(redo, "grade the approach slabs to the grading").Count == 1, taken + " " + redo.Count);
+
         var many = new List<WorkedCode.Entry>();
         for (var i = 0; i < WorkedCode.MaxEntries + 5; i++)
-            WorkedCode.Keep(many, Code("OST_Walls", 1) + string.Concat(Enumerable.Repeat("\nlog.AppendLine(doc.Title);", i + 1)), "Work number " + i, "run_revit_code", false, "", now.AddMinutes(i));
+            WorkedCode.Keep(many, Code("OST_Walls", 1).Replace("piles", "items" + i).Replace("moved", "count" + i).Replace(" p ", " q" + i + " ").Replace("p.", "q" + i + ".").Replace("lp", "at" + i),
+                "Work number " + i, "run_revit_code", false, "", now.AddMinutes(i));
         check("kept: capped, the oldest go first", many.Count == WorkedCode.MaxEntries && many.All(e => e.Description != "Work number 0") && many.Any(e => e.Description == "Work number " + (WorkedCode.MaxEntries + 4)), many.Count + "");
     }
 }

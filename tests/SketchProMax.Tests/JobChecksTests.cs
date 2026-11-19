@@ -34,7 +34,14 @@ internal static class JobChecksTests
         check("watch: nothing for 20 minutes is stuck", JobWatch.Judge(slow, t0.AddMinutes(21)) == JobWatch.Stopped, "");
         slow.Activity = JobBoard.Applying;
         check("watch: a job whose change is being applied is never judged", JobWatch.Judge(slow, t0.AddHours(2)) == JobWatch.Fine, "");
+        slow.Activity = JobBoard.Blocked;
+        check("watch: a job whose call waits for Revit to take work (a command or dialog of Revit's own) is never judged; its card says so",
+            JobWatch.Judge(slow, t0.AddHours(1)) == JobWatch.Fine && JobBoard.ActivityOf(slow) == JobBoard.Blocked && JobBoard.StateLabel(slow).Contains("Waiting for Revit"), JobBoard.StateLabel(slow));
         slow.Activity = "";
+        slow.Moved = t0.AddMinutes(30);
+        check("watch: a Revit call that just ended after a long wait is a move: the job isn't stopped the moment its call ends",
+            JobWatch.Judge(slow, t0.AddMinutes(31)) == JobWatch.Fine && JobWatch.Judge(slow, t0.AddMinutes(51)) == JobWatch.Stopped, "");
+        slow.Moved = default;
         check("watch: a job waiting its turn or finished is never judged", JobWatch.Judge(new ChatJob { State = JobBoard.Waiting, Started = t0 }, t0.AddHours(2)) == JobWatch.Fine
             && JobWatch.Judge(new ChatJob { State = JobBoard.Done, Started = t0 }, t0.AddHours(2)) == JobWatch.Fine, "");
         var stuckReport = JobWatch.StuckReport(slow);

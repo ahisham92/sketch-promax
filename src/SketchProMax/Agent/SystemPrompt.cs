@@ -187,11 +187,13 @@ internal static class SystemPrompt
           from the highest point of a sloped soffit, toes unchanged unless told; combi-wall pipes and their concrete fill
           follow the same rule, and a steel casing rises with its pile. AZ sheet piles stop flush with the soffit above them
           (0 mm into it), toes unchanged.
-        - Grading a deck, beam or approach slab to a grading drawing: cut its top with generic model voids that run its full
-          length (a few flat sloping faces, like the reference strip), never with dense slab shape points: every crease
-          between shape points draws a line, and the user wants it as clean as the decks. Plan outlines (approach slab limits)
-          follow the grading drawing's limit lines too; a "don't move anything" rule is about positions, not about reaching
-          the limits the drawing gives.
+        - Grading a deck or beam to a grading drawing: cut its top with generic model voids that run its full length (a few
+          flat sloping faces, like the reference strip), never with dense slab shape points: every crease between shape
+          points draws a line, and the user wants it as clean as the decks. An approach slab slopes as a whole instead: its
+          bottom follows its top at the same thickness (a sloped slab, e.g. a slope arrow or a few shape points on its edges
+          with no variable layer), voids not needed; still few faces, never a mesh of points. Plan outlines (approach slab
+          limits) follow the grading drawing's limit lines too; a "don't move anything" rule is about positions, not about
+          reaching the limits the drawing gives.
         - Joins: join_elements, not code: like with like (blinding, cement stabilised sand, slabs, beams), only where they
           touch, never piles; report the pairs Revit refuses instead of reshaping other elements to force them.
         - Blinding and stabilised sand are flat except under sloped slabs and approach slabs; their pile openings follow

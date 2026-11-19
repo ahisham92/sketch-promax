@@ -55,6 +55,8 @@ internal sealed class ChatJob
     /// gives the whole picture, for the card and its animation.
     /// </summary>
     [JsonIgnore] public string Activity { get; set; } = "";
+    /// <summary>When <see cref="Activity"/> last changed (a Revit call began, waited or ended): a move for JobWatch.</summary>
+    [JsonIgnore] public DateTime Moved { get; set; }
     /// <summary>Which worker of the crew strip took it (0: the first name in Settings > Chat; -1: none yet). Saved.</summary>
     public int Worker { get; set; } = -1;
     /// <summary>Its plan's steps by id, each pending, in_progress or completed (JobPlan), as its Claude Code keeps it. Saved.</summary>
@@ -161,9 +163,12 @@ internal sealed class JobBoard
     /// What an active job is doing (<see cref="ActivityOf"/>): thinking (its Claude works on its own, in parallel with the
     /// others), reading the model (reads run as soon as Revit is free, between other jobs' changes), waiting to apply (its
     /// change waits its turn: changes are applied one at a time), applying (its change runs in Revit) and synchronizing (auto
-    /// sync, Revit.AutoSyncRule: every job's Revit work waits while the model is synchronized with central).
+    /// sync, Revit.AutoSyncRule: every job's Revit work waits while the model is synchronized with central), and waiting for
+    /// Revit (<see cref="Blocked"/>: Revit takes no work at all, a command or dialog of its own holds it; the call is sent
+    /// again by itself once Revit is free, 19 Nov 2026).
     /// </summary>
-    public const string Thinking = "thinking", Reading = "reading", WaitingToApply = "waiting", Applying = "applying", Syncing = "syncing";
+    public const string Thinking = "thinking", Reading = "reading", WaitingToApply = "waiting", Applying = "applying", Syncing = "syncing",
+        Blocked = "blocked";
 
     /// <summary>How many jobs may run at once (Settings, Chat tab): the default, and the range allowed.</summary>
     public const int DefaultLimit = 3, MinLimit = 1, MaxLimit = 6;
@@ -694,6 +699,7 @@ internal sealed class JobBoard
             var state = activity == WaitingToApply ? Waiting : Running;
             var count = activity == WaitingToApply ? Math.Max(1, ahead) : 0;
             if (job.Activity == activity && job.State == state && job.Ahead == count) return false;
+            if (job.Activity != activity) job.Moved = DateTime.UtcNow;
             job.Activity = activity;
             job.State = state;
             job.Ahead = count;
@@ -823,7 +829,7 @@ internal sealed class JobBoard
 
     /// <summary>What an active job is doing: thinking, reading, waiting (to apply) or applying; "" when it isn't active.</summary>
     public static string ActivityOf(ChatJob job) =>
-        !job.Active ? "" : job.State == Waiting ? WaitingToApply : job.Activity is Reading or Applying or Syncing ? job.Activity : Thinking;
+        !job.Active ? "" : job.State == Waiting ? WaitingToApply : job.Activity is Reading or Applying or Syncing or Blocked ? job.Activity : Thinking;
 
     /// <summary>Jobs saved while running (Revit closed, the chat was left): stopped, so a message carries them on.</summary>
     public void AfterReload(DateTime now)
@@ -892,7 +898,7 @@ internal sealed class JobBoard
     {
         Queued => "Waiting to start",
         Waiting => job.Ahead > 1 ? $"Waiting to apply ({job.Ahead - 1} ahead)" : "Waiting to apply",
-        Running => ActivityOf(job) switch { Reading => "Reading the model", Applying => "Applying changes", Syncing => "Synchronizing with central", _ => "Thinking" },
+        Running => ActivityOf(job) switch { Reading => "Reading the model", Applying => "Applying changes", Syncing => "Synchronizing with central", Blocked => "Waiting for Revit to be free", _ => "Thinking" },
         Done => "Done",
         Failed => "Ended with a problem",
         Stopped => job.OverBudget ? "Paused at its budget" : "Stopped",
@@ -958,7 +964,7 @@ internal sealed class JobBoard
     {
         Number = j.Number, Key = j.Key, Title = j.Title, Task = j.Task, State = j.State, Kind = j.Kind, Model = j.Model, Effort = j.Effort, Summary = j.Summary, Now = j.Now, Ahead = j.Ahead,
         Created = j.Created, Started = j.Started, Ended = j.Ended, HasSession = j.HasSession, Inbox = j.Inbox.ToList(), Asides = j.Asides.Select(a => new JobAside { Id = a.Id, Text = a.Text, Now = a.Now }).ToList(),
-        InboxFiles = j.InboxFiles.ToList(), Items = j.Items.ToList(), Activity = j.Activity, Worker = j.Worker,
+        InboxFiles = j.InboxFiles.ToList(), Items = j.Items.ToList(), Activity = j.Activity, Moved = j.Moved, Worker = j.Worker,
         Plan = new Dictionary<string, string>(j.Plan), Heard = j.Heard.ToList(), Visited = j.Visited.ToList(),
         Spent = j.Spent, BudgetFrom = j.BudgetFrom, OverBudget = j.OverBudget, ReviewOf = j.ReviewOf, Review = j.Review, ReviewedBy = j.ReviewedBy,
         Reviews = j.Reviews, Routine = j.Routine, RevitModel = j.RevitModel, GoalCheck = j.GoalCheck, ReadOnly = j.ReadOnly,

@@ -55,6 +55,23 @@ internal static class RevitBlock
         };
     }
 
+    /// <summary>What the chat says once when Revit takes no work from the jobs: what holds it and how to free it.</summary>
+    public static string HeldLine(State state, string busy)
+    {
+        var named = busy.Length > 0 && !busy.Equals("something of its own", StringComparison.OrdinalIgnoreCase);
+        var tail = " The jobs wait and carry on by themselves as soon as Revit is free; nothing is lost.";
+        return state.Kind switch
+        {
+            Kind.Dialog => "Revit isn't taking any work: it has a dialog open" +
+                                      (string.IsNullOrWhiteSpace(state.Title) ? "" : $" ('{state.Title!.Trim()}')") +
+                                      ". Answer or close it (it may be behind another window)." + tail,
+            Kind.EditMode => "Revit isn't taking any work while an edit mode is open. Finish or cancel it (the green tick or red cross on the Modify tab)." + tail,
+            Kind.NotResponding => "Revit is busy with a long task of its own" + (named ? $" ({busy})" : "") + ". Let it finish." + tail,
+            _ => "Revit isn't taking any work right now" + (named ? $", most likely because {busy} is still running" : ", most likely a command still running") +
+                 ". Press Esc in Revit once or twice." + tail,
+        };
+    }
+
     /// <summary>
     /// The tool, as the user would say it ("reading your model"), for the card: never the tool's id. Reads that aren't
     /// named here are "reading your model"; changes are "the change you asked for".

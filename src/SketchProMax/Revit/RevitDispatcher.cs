@@ -310,6 +310,9 @@ public sealed class RevitDispatcher : IExternalEventHandler
     // Diagnostics for a request Revit didn't take: how often Revit gave us Idling and ran the external event, and what
     // the last Raise() said (Accepted, Pending, Denied, TimedOut).
     private int _idlings, _executes;
+
+    /// <summary>How many times Revit gave us Idling or ran the external event so far: when it grows, Revit takes work again.</summary>
+    internal int Heard => Volatile.Read(ref _idlings) + Volatile.Read(ref _executes);
     private volatile string _lastRaise = "";
 
     private void Raise(ExternalEvent ev)

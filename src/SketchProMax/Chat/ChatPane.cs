@@ -43,7 +43,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     /// <summary>True while a turn or a parallel job runs: switching to a new core version waits for it.</summary>
     public static bool IsBusy => _instance is { } pane && pane.Sessions.Any(s => s.Turn is not null
         // Jobs waiting to start don't hold an update back while an autopilot waits for it: they carry on in the new version.
-        || (s.Conv.Autopilot is { Updating.Length: > 0 } ? s.Runs.Count > 0 : s.Runs.Count > 0 || (s.Board?.OpenCount ?? 0) > 0));
+        || (s.Conv.Autopilot is { Updating.Length: > 0 } || s.UpdateHold.Length > 0 ? s.Runs.Count > 0 : s.Runs.Count > 0 || (s.Board?.OpenCount ?? 0) > 0));
 
     /// <summary>The pane's chat element (created on first use).</summary>
     public static FrameworkElement Get() => _instance ??= new ChatPane();
@@ -52,6 +52,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     {
         try
         {
+            Tools.WorkedCode.BackfillOnce(); // code written before the library began comes in once (19 Nov 2026)
             if (app.ActiveUIDocument?.Document is { } doc) SetModel(doc);
             _viewActivated = (_, e) =>
             {
@@ -2219,6 +2220,10 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             Save();
             return;
         }
+        // "No pop-ups, I'm away for an hour" starts away mode (Chat.Away); "I'm back" or the time ends it. What was answered
+        // or skipped meanwhile is said before the message.
+        if (Away.Take() is { Length: > 0 } meanwhile) Note(meanwhile);
+        if (Away.Heard(_input.Text, DateTime.UtcNow) is { } away) Note(away);
         // A plain question while the chat is busy (answering, writing a brief, hearing a job): answered at once (ChatPane.Quick).
         if (QuickAnswer(_input.Text)) return;
         if (_turn is not null)

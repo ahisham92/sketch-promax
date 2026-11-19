@@ -393,6 +393,7 @@ internal sealed partial class ChatPane
         if (_board is null || _sample || _stopped || _setup != Setup.Ready || _install is null || !IsCoordinator) return;
         if (Run is { State: AutopilotRun.Paused }) return; // an autopilot paused at a usage limit starts nothing new
         if (Run is { Updating.Length: > 0 }) return; // nor one waiting for an update to go in
+        if (_s.UpdateHold.Length > 0) return; // nor a chat whose jobs let a newer version go in (UpdateTick)
         if (Run is { State: AutopilotRun.Planning or AutopilotRun.Approval }) _board.ReadOnlyUntilStarted(); // reading before the plan is approved
         foreach (var (job, message) in _board.ToStart(ChatJobs.Limit, DateTime.UtcNow)) _ = StartRun(job, message);
         if (_runs.Count > 0) StartJobClock();
@@ -760,6 +761,56 @@ internal sealed partial class ChatPane
 
     private DateTime _watchedAt { get => _s.WatchedAt; set => _s.WatchedAt = value; }
 
+    /// <summary>The longest new jobs wait for a newer version to go in before the work carries on without it.</summary>
+    internal static readonly TimeSpan UpdateHoldMax = TimeSpan.FromMinutes(20);
+
+    /// <summary>
+    /// A newer Sketch ProMax waits to go in, but a chat with jobs is never idle (19 Nov 2026: Revit 2024 ran 0.35.80 all
+    /// day while 0.35.81 to 0.35.86 waited, so none of that day's fixes were in use). Like an Autopilot run: once a newer
+    /// version is ready, no new job starts (it waits, nothing is lost) and the running ones finish, so Revit's next quiet
+    /// moment switches it in; the chat says so. After <see cref="UpdateHoldMax"/> the work carries on without it, to try
+    /// again in an hour. Every 30 s while jobs work; an Autopilot run has its own.
+    /// </summary>
+    private void UpdateTick(JobBoard board)
+    {
+        if (Run is not null || _sample || !Update.Updater.CanSwitchLive) return;
+        var now = DateTime.UtcNow;
+        if (_s.UpdateHold.Length > 0)
+        {
+            if (now - _s.UpdateHeldSince < UpdateHoldMax) return;
+            Note($"Sketch ProMax {_s.UpdateHold} is still waiting for a quiet moment, so the work carries on without it. It goes in when the jobs are done, or close and reopen Revit.");
+            _s.UpdateHold = "";
+            _updateRetryAt = now.AddHours(1);
+            Save();
+            PumpJobs();
+            return;
+        }
+        if (now < _updateRetryAt || Update.Updater.Staged is not { } ready || board.OpenCount == 0) return;
+        _s.UpdateHold = ready;
+        _s.UpdateHeldSince = now;
+        Note($"Sketch ProMax {ready} is ready with the latest fixes. New jobs wait for it to go in (a few minutes at most); the running jobs finish first and nothing is lost.");
+        Save();
+    }
+
+    private static DateTime _heldSaid;
+
+    /// <summary>
+    /// The bridge: Revit takes no work from the jobs (BridgeServer.WaitWhileHeldAsync). The shown chat says once (again
+    /// after 10 minutes at most) what holds Revit and how to free it; the jobs wait and carry on by themselves. Any thread.
+    /// </summary>
+    public static void RevitHeld(string line)
+    {
+        if (_instance is not { } pane || line.Length == 0) return;
+        pane.Dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (DateTime.UtcNow - _heldSaid < TimeSpan.FromMinutes(10)) return;
+            _heldSaid = DateTime.UtcNow;
+            pane.Note(line);
+            pane.ShowStatus(line);
+            pane.Save();
+        }));
+    }
+
     /// <summary>
     /// Every 30 s while jobs run (JobWatch): a job that wrote its report but never ended is finished with it, and one with
     /// no step for 20 minutes is stopped and reported, so the coordinator hands its work out again and nothing waits on it.
@@ -768,6 +819,7 @@ internal sealed partial class ChatPane
     {
         _watchedAt = DateTime.UtcNow;
         if (_board is not { } board) return;
+        UpdateTick(board);
         ShareWithFreeWorkers(board);
         foreach (var run in _runs.Values.ToList())
         {
