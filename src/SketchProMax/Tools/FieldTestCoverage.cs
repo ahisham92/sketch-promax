@@ -833,6 +833,7 @@ internal static class FieldTestCoverage
         new(85, ["chat.submission_format_ui"], "the check of a berth whose matchlines run longer than its parts lists no matchline line"),
         new(86, ["recovery.groups", "recovery.where"], "an edit inside a group comes back in a replay from the group's kept copy, in every group of the type; what a replay couldn't do is named with its view, grids and level, and can be clouded"),
         new(87, ["job.lost"], "a call cut off by an update switch no longer refuses every later call: it ends with an error after 30 s at most, cancel_job clears it at once, and a call still waiting for Revit when Sketch ProMax switches to an update is told so"),
+        new(88, ["chat.jobs_keep_moving_ui"], "the question to the coordinator when a worker is free is a quiet turn: a \"No split.\" answer is never shown or kept in the chat, a real hand-over still shows, and the turn starts no task card"),
     ];
 
     /// <summary>
