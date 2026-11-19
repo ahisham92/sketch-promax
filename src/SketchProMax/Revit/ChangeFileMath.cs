@@ -37,6 +37,18 @@ internal static class ChangeFileMath
     /// <summary>Milliseconds of Revit's time one idle moment may spend reading (a big change is read over many moments).</summary>
     public const int ReadBudgetMs = 40;
 
+    /// <summary>
+    /// Revit raises no idle moments while a sketch, a group or a family is being edited, so what changed there used to
+    /// wait unread until the edit mode was left, and was lost when Revit closed first (a real replay of 19 Nov 2026 held
+    /// only deletions: two floors' new outlines were never written). When no idle moment came for <see cref="NoIdleMs"/>,
+    /// the next change reads what is waiting right away, at most once every <see cref="EagerEveryMs"/> and within
+    /// <see cref="ReadBudgetMs"/>, so a long job of many steps pays a few percent at most.
+    /// </summary>
+    public const int NoIdleMs = 2000, EagerEveryMs = 1000;
+
+    /// <summary>True when a change should read the waiting elements itself, not wait for an idle moment.</summary>
+    public static bool ReadNow(int sinceIdleMs, int sinceEagerMs) => sinceIdleMs > NoIdleMs && sinceEagerMs > EagerEveryMs;
+
     /// <summary>Values kept per element.</summary>
     public const int MaxValues = 200;
 

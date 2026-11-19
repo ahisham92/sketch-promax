@@ -32,6 +32,8 @@ internal static class TritoTabOrder
             _timer.Tick += (_, _) =>
             {
                 Try();
+                // The tab's version text, for a tab that was made after this core started.
+                TritoBrand.Apply();
                 if (++_ticks >= 30 || _broken) Stop();
             };
             _timer.Start();

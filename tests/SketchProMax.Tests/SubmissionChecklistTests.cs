@@ -402,6 +402,11 @@ internal static class SubmissionChecklistTests
         check("tritorevit tab: after SketchPro without Sketch ProMax", T("Manage", "Add-Ins", "SketchPro", "Other", "TritoRevit") == 3 && T("Add-Ins", "Sketch Pro 2", "TritoRevit") == -1, "");
         check("tritorevit tab: first add-in tab without either", T("Manage", "Add-Ins", "Other", "TritoRevit") == 2 && T("Manage", "Other", "TritoRevit") == 1
             && T("Manage", "Add-Ins", "Other") == -1, "");
+        // The version that runs is on the tab: the first panel's title and the Update button.
+        check("tritorevit tab: the version is in the panel title and on Update", SketchProMax.Sharing.TritoTabMath.Short(new Version(0, 35, 80, 0)) == "0.35.80"
+            && SketchProMax.Sharing.TritoTabMath.PanelTitle("0.35.80") == "TritoRevit 0.35.80" && SketchProMax.Sharing.TritoTabMath.UpdateText("0.35.80") == "Update\n0.35.80"
+            && SketchProMax.Sharing.TritoTabMath.UpdateTip("0.35.80").StartsWith("TritoRevit 0.35.80 is running.") && SketchProMax.Sharing.TritoTabMath.PanelTitle("") == "TritoRevit"
+            && SketchProMax.Sharing.TritoTabMath.UpdateText("") == "Update", "");
     }
 
     private static UserRecord Copy(UserRecord r) => ReadRecord(ToJson(r))!;

@@ -433,7 +433,7 @@ internal static class FieldTestCoverage
             "Share again with Include my checklist ticked: within a few minutes the other PC's checklist is yours; edit yours (add a check) and it follows there too. " +
             "On the other PC edit its checklist, then edit yours again: theirs is kept. " +
             "Leave Revit open. On your PC change the learned tool and wait a few minutes: Revit on the other PC runs the new version, with no restart, " +
-            "and Shared tools on the TritoRevit tab shows revision 2. Click Update on the TritoRevit tab: a small window checks and says everything is up to date (or updates), and no Explorer window opens. Share again with Model check unticked: its button goes from the tab within a few minutes. " +
+            "and Shared tools on the TritoRevit tab shows revision 2. The first panel of the TritoRevit tab is titled TritoRevit and the version that runs (TritoRevit 0.35.80), and its Update button shows the same version under the word Update. Click Update on the TritoRevit tab: a small window checks and says everything is up to date (or updates), and no Explorer window opens. Share again with Model check unticked: its button goes from the tab within a few minutes. " +
             "On your own PC (Sketch ProMax installed) install the zip too: the TritoRevit tab works through Sketch ProMax. Shared tools > Remove: the panel goes."),
         new("pretest.default", BeforeSharing, "The Default checklist that ships", How.Probe, "",
             "every check has wording, unique id and number, a known automatic test its wording still picks; every stage has checks; rules and fields known; signatories set; JSON and renumbering keep it the same; no e-mail addresses (it is public)"),
@@ -834,6 +834,7 @@ internal static class FieldTestCoverage
         new(86, ["recovery.groups", "recovery.where"], "an edit inside a group comes back in a replay from the group's kept copy, in every group of the type; what a replay couldn't do is named with its view, grids and level, and can be clouded"),
         new(87, ["job.lost"], "a call cut off by an update switch no longer refuses every later call: it ends with an error after 30 s at most, cancel_job clears it at once, and a call still waiting for Revit when Sketch ProMax switches to an update is told so"),
         new(88, ["chat.jobs_keep_moving_ui"], "the question to the coordinator when a worker is free is a quiet turn: a \"No split.\" answer is never shown or kept in the chat, a real hand-over still shows, and the turn starts no task card"),
+        new(89, ["recovery.shapes"], "outline lines deleted in Edit Sketch are left to their floor's redrawn outline, and with no line of the floor in the file the floor is named once, nothing deleted; a change with no idle moment before it reads what is waiting (unit test)"),
     ];
 
     /// <summary>

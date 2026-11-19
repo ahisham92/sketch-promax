@@ -161,6 +161,24 @@ internal static class ChangeReplay
             try { return e is not null && e.GroupId != ElementId.InvalidElementId && doc.GetElement(e.GroupId) is Group g && outcome.Regrouped.ContainsKey(g.GetTypeId()); }
             catch (Exception) { return false; }
         }
+        // Sketch lines deleted by themselves (see below): the elements the file has a line of, and each sketch's element.
+        var inFile = new HashSet<string>(ordered.Where(l => l.Unique is { Length: > 0 }).Select(l => l.Unique!), StringComparer.Ordinal);
+        var outlineSaid = new HashSet<string>(StringComparer.Ordinal);
+        Dictionary<ElementId, ElementId>? sketchOf = null;
+        Element? SketchOwner(Element sketchLine)
+        {
+            try
+            {
+                if (sketchOf is null)
+                {
+                    sketchOf = [];
+                    foreach (var sketch in new FilteredElementCollector(doc).OfClass(typeof(Sketch)).Cast<Sketch>())
+                        foreach (var id in sketch.GetAllElements()) sketchOf[id] = sketch.OwnerId;
+                }
+                return sketchOf.TryGetValue(sketchLine.Id, out var owner) ? doc.GetElement(owner) : null;
+            }
+            catch (Exception) { return null; }
+        }
         foreach (var line in ordered)
         {
             // Older files can hold Revit's energy model (thousands of lines): Revit makes it again by itself.
@@ -170,6 +188,19 @@ internal static class ChangeReplay
             // Made after the last save and deleted again before Lifeline read it: there is nothing to delete.
             if (line.Kind == M.Kinds.Deleted && line.New && line.Unique is not { Length: > 0 }) { steps.Add(new(line, Act.Done, "")); continue; }
             var found = Find(doc, line);
+            // A line of a sketch (a floor's outline) deleted in Edit Sketch: it goes when its element's own line redraws
+            // the outline, or with its element. Deleted by itself it leaves a broken sketch ("Floor sketch is invalid"),
+            // so when the file has no line of its element (Revit closed during the edit), that is said once per element.
+            if (line.Kind == M.Kinds.Deleted && line.Unique is { Length: > 0 } && found is not null && ChangeShapes.IsSketchLine(found))
+            {
+                var owner = SketchOwner(found);
+                if (owner is not null && inFile.Contains(owner.UniqueId)) continue;
+                if (!outlineSaid.Add(owner?.UniqueId ?? "")) continue;
+                string whose;
+                try { whose = owner is null ? "an element" : $"{owner.Category?.Name ?? "an element"} \"{owner.Name}\""; } catch (Exception) { whose = "an element"; }
+                steps.Add(new(line, Act.Skip, $"the outline of {whose} was being edited when Revit closed, and its new outline wasn't written: edit its outline again by hand"));
+                continue;
+            }
             // A template, filter or pattern of that name is the same thing (one brought in by a copy, or made by hand since).
             if (found is null && line.Kind != M.Kinds.Deleted && M.IsDocItem(line) && ChangeKeeper.ByName(doc, line) is { } named)
             {
