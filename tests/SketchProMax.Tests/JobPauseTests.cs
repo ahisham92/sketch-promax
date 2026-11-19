@@ -17,6 +17,8 @@ internal static class JobPauseTests
         check("pause: a call already running isn't touched; a new one runs nothing and tells the job to stop",
             JobPause.Calling("job-1") && JobPause.Enter("job-2") is { } refused && refused.Contains("nothing was run") && !JobPause.Calling("job-2"), "");
         JobPause.Exit("job-1");
+        check("pause (bug 111): a job whose call was refused is known, once, so its run ending is a pause, not done",
+            JobPause.TookRefusal("job-2") && !JobPause.TookRefusal("job-2") && !JobPause.TookRefusal("job-1"), "");
         JobPause.Pause(JobPause.ForUpdate, now);
         check("pause: an update never takes over the user's own pause (it would carry on by itself)", JobPause.Why == JobPause.ForUser, JobPause.Why);
         check("pause: Continue ends it", JobPause.Continue() && !JobPause.On && JobPause.Enter("job-3") is null, "");

@@ -421,6 +421,7 @@ internal sealed partial class ChatPane
     private async Task StartRun(ChatJob job, JobMessage message, bool fresh = false)
     {
         var folder = JobsFolder(_conv);
+        JobPause.TookRefusal(job.Key); // a refusal from an earlier run doesn't count for this one
         var resume = job.HasSession && !fresh ? JobSessions.Get(folder, job.Key) : null;
         if (job.HasSession && resume is null) message = _board!.Restart(job, message);
         string? session = null;
@@ -567,6 +568,21 @@ internal sealed partial class ChatPane
             summary = JobSignInError;
         }
         else summary = (message.Length > 0 ? message : "It reported an error.") + " Send it a message to try again.";
+        // It stopped because Pause all refused its call (bug 111): set aside as paused, not finished, so Continue sends
+        // it on. Continue already pressed meanwhile: it carries on now.
+        if (!end.IsError && JobPause.TookRefusal(run.Job.Key) && board.Pause(run.Job.Number, now))
+        {
+            Tools.ActivityLog.Note("job_paused_at_stop", $"job {run.Job.Number}");
+            EndRun(run, kill: false, park: true);
+            if (!JobPause.On)
+            {
+                board.Message(run.Job.Number, JobPause.CarryOn, now);
+                JobsChanged();
+                PumpJobs();
+            }
+            Save();
+            return;
+        }
         // Messages sent while it ran: it carries on with them in the same process.
         if (board.RunEnded(run.Job, !end.IsError, summary, now) is { } next)
         {

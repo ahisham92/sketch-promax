@@ -207,6 +207,7 @@ internal sealed partial class ChatPane
                     {
                         if (JobPause.Calling(run.Job.Key) || App.RevitWorking) continue;
                         EndRun(run, kill: true);
+                        JobPause.TookRefusal(run.Job.Key); // set aside here: its refusal is spent
                         _board?.Pause(run.Job.Number, now);
                         ShowJobCard(run.Job.Number);
                         ended = true;
