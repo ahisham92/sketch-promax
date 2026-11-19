@@ -22,7 +22,7 @@ internal static class WorkedCode
     /// The most entries kept (the oldest unused go first), the shortest code worth keeping, the longest kept. 400 filled
     /// in two days on 19 Nov 2026 (every adapted copy was a new entry), so older code was being dropped.
     /// </summary>
-    public const int MaxEntries = 1500, MinLength = 150, MaxCode = 20000;
+    public const int MaxEntries = 3000, MinLength = 150, MaxCode = 20000;
 
     /// <summary>
     /// How alike two pieces of code must be (shared runs of five words, 0 to 1) for the newer to count as the older one
@@ -98,10 +98,10 @@ internal static class WorkedCode
         var bestScore = SameWork;
         foreach (var e in entries)
         {
-            if (!e.Tool.Equals(tool, StringComparison.Ordinal) || (words.Count > 0 && !Words(e.Description).Overlaps(words))) continue;
+            if (!e.Tool.Equals(tool, StringComparison.Ordinal) || (words.Count > 0 && !KnownWords(e.Description).Overlaps(words))) continue;
             if (cache is null || !cache.TryGetValue(e, out var theirs))
             {
-                theirs = Shingles(CodeRepeats.Shape(e.Code));
+                theirs = Known(e.Code);
                 if (cache is not null) cache[e] = theirs;
             }
             // Too different in size to be alike enough: skip the count.
@@ -111,6 +111,31 @@ internal static class WorkedCode
             if (score >= bestScore) (best, bestScore) = (e, score);
         }
         return best;
+    }
+
+    /// <summary>Shingles of code already seen in this Revit session, by the code itself (the library is read again for every keep).</summary>
+    private static readonly Dictionary<string, HashSet<string>> Seen = new(StringComparer.Ordinal);
+
+    private static HashSet<string> Known(string code)
+    {
+        lock (Seen)
+        {
+            if (Seen.TryGetValue(code, out var known)) return known;
+            if (Seen.Count > 2 * MaxEntries) Seen.Clear();
+            return Seen[code] = Shingles(CodeRepeats.Shape(code));
+        }
+    }
+
+    private static readonly Dictionary<string, HashSet<string>> SeenWords = new(StringComparer.Ordinal);
+
+    private static HashSet<string> KnownWords(string description)
+    {
+        lock (SeenWords)
+        {
+            if (SeenWords.TryGetValue(description, out var known)) return known;
+            if (SeenWords.Count > 2 * MaxEntries) SeenWords.Clear();
+            return SeenWords[description] = Words(description);
+        }
     }
 
     private static readonly Regex Token = new(@"[A-Za-z_][A-Za-z0-9_]*|\d+|[^\sA-Za-z0-9_]", RegexOptions.Compiled);
@@ -260,15 +285,67 @@ internal static class WorkedCode
         return taken;
     }
 
-    private static string BackfillMark => StoreFile + ".from-redo";
+    /// <summary>
+    /// Every code call that worked in Claude Code's own transcripts of the chats and jobs on this PC (…\.claude\projects\
+    /// …\&lt;session&gt;.jsonl, one JSON line per message: a tool_use with its whole input, then its tool_result with
+    /// is_error): reads too (clash checks, level checks), which the redo logs don't keep. The owner, 19 Nov 2026: "all,
+    /// meaning all, to avoid wasting time". The runs found, oldest first (model unknown: "").
+    /// </summary>
+    internal static List<(string Model, RedoLog.Step Step)> FromTranscript(IEnumerable<string> lines)
+    {
+        var calls = new Dictionary<string, (DateTime Time, string Tool, string Args)>(StringComparer.Ordinal);
+        var worked = new List<(string, RedoLog.Step)>();
+        foreach (var raw in lines)
+        {
+            if (raw.IndexOf("tool_", StringComparison.Ordinal) < 0) continue;
+            try
+            {
+                using var doc = JsonDocument.Parse(raw);
+                var r = doc.RootElement;
+                if (!r.TryGetProperty("message", out var message) || !message.TryGetProperty("content", out var content) || content.ValueKind != JsonValueKind.Array) continue;
+                var time = r.TryGetProperty("timestamp", out var ts) && ts.ValueKind == JsonValueKind.String && DateTime.TryParse(ts.GetString(),
+                    System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AdjustToUniversal, out var t) ? t : DateTime.MinValue;
+                foreach (var part in content.EnumerateArray())
+                {
+                    var type = part.TryGetProperty("type", out var ty) ? ty.GetString() : null;
+                    if (type == "tool_use" && part.TryGetProperty("name", out var name) && part.TryGetProperty("id", out var id) && part.TryGetProperty("input", out var input))
+                    {
+                        var tool = name.GetString() ?? "";
+                        var bare = tool.EndsWith("run_revit_query_code", StringComparison.Ordinal) ? "run_revit_query_code"
+                            : tool.EndsWith("run_revit_code", StringComparison.Ordinal) ? "run_revit_code" : null;
+                        if (bare is not null && id.GetString() is { Length: > 0 } key) calls[key] = (time, bare, input.GetRawText());
+                    }
+                    else if (type == "tool_result" && part.TryGetProperty("tool_use_id", out var use) && use.GetString() is { } key && calls.TryGetValue(key, out var call))
+                    {
+                        calls.Remove(key);
+                        var error = part.TryGetProperty("is_error", out var e) && e.ValueKind == JsonValueKind.True;
+                        if (!error) worked.Add(("", new RedoLog.Step(0, call.Time, call.Tool, call.Args, "")));
+                    }
+                }
+            }
+            catch (JsonException) { /* a line that isn't one message */ }
+        }
+        return worked;
+    }
 
-    /// <summary>Once per PC, off Revit's thread: <see cref="FromRedo"/> over every model's redo log. Never throws.</summary>
+    private static string BackfillMark => StoreFile + ".from-history";
+
+    /// <summary>
+    /// Once per PC, off Revit's thread: <see cref="FromRedo"/> over every model's redo log and every chat and job transcript
+    /// (<see cref="FromTranscript"/>), all of it, oldest first. Never throws.
+    /// </summary>
     public static void BackfillOnce() => Task.Run(() =>
     {
         try
         {
             if (File.Exists(BackfillMark)) return;
             var steps = RedoLog.Models().SelectMany(m => RedoLog.Read(m.Model).Select(s => (m.Model, s))).ToList();
+            // Claude Code's transcripts, and the archived copies of those it has since deleted (Chat.HistoryArchive).
+            foreach (var lines in Chat.HistoryArchive.AllTranscripts())
+            {
+                try { steps.AddRange(FromTranscript(lines())); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException) { /* a file in use is skipped */ }
+            }
             lock (Gate)
             {
                 var entries = Read();
@@ -279,7 +356,7 @@ internal static class WorkedCode
                 if (File.Exists(StoreFile)) File.Replace(temp, StoreFile, null);
                 else File.Move(temp, StoreFile);
                 // The mark says when, and how much came in from how many models (the library's size after).
-                File.WriteAllText(BackfillMark, $"{DateTime.UtcNow:s} took in {taken} runs from {steps.Select(s => s.Model).Distinct().Count()} models; {entries.Count} kept");
+                File.WriteAllText(BackfillMark, $"{DateTime.UtcNow:s} took in {taken} runs that worked (redo logs and chat transcripts); {entries.Count} kept");
             }
         }
         catch (Exception) { /* tried again next start */ }

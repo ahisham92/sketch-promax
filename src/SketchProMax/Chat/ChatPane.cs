@@ -52,7 +52,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     {
         try
         {
-            Tools.WorkedCode.BackfillOnce(); // code written before the library began comes in once (19 Nov 2026)
+            HistoryArchive.Start(); // Claude Code deletes its transcripts after 30 days: they are kept here for good (19 Nov 2026)
+            Tools.WorkedCode.BackfillOnce(); // all code written before the library began comes in once (19 Nov 2026)
             if (app.ActiveUIDocument?.Document is { } doc) SetModel(doc);
             _viewActivated = (_, e) =>
             {

@@ -28,3 +28,36 @@ internal static class AwayTests
         Away.Reset();
     }
 }
+
+/// <summary>Chat transcripts kept for good (Chat.HistoryArchive), in a temporary folder.</summary>
+internal static class HistoryArchiveTests
+{
+    public static void Run(Action<string, bool, string> check)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "spm-history-" + Guid.NewGuid().ToString("N"));
+        var source = Path.Combine(root, "projects");
+        var archive = Path.Combine(root, "archive");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(source, "C--Users-me"));
+            var a = Path.Combine(source, "C--Users-me", "one.jsonl");
+            var b = Path.Combine(source, "C--Users-me", "two.jsonl");
+            File.WriteAllText(a, "{\"n\":1}\n{\"n\":2}\n");
+            File.WriteAllText(b, "{\"n\":3}\n");
+            var first = SketchProMax.Chat.HistoryArchive.Copy(source, archive);
+            var again = SketchProMax.Chat.HistoryArchive.Copy(source, archive);
+            check("history: every transcript is copied, compressed, once until it changes", first == 2 && again == 0
+                && File.Exists(Path.Combine(archive, "C--Users-me", "one.jsonl.gz")), first + " " + again);
+            var bothLive = SketchProMax.Chat.HistoryArchive.All(source, archive);
+            File.Delete(a); // Claude Code's 30-day clean-up
+            var after = SketchProMax.Chat.HistoryArchive.All(source, archive);
+            var lines = after.SelectMany(f => f()).ToList();
+            check("history: a transcript Claude Code deleted is still read from its copy, and none is read twice",
+                bothLive.Count == 2 && after.Count == 2 && lines.Count == 3 && lines.Contains("{\"n\":1}") && lines.Contains("{\"n\":3}"), string.Join(",", lines));
+        }
+        finally
+        {
+            try { Directory.Delete(root, true); } catch (Exception) { }
+        }
+    }
+}
