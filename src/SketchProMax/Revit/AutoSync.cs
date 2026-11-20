@@ -23,6 +23,15 @@ internal static class AutoSync
     /// <summary>After a sync that failed, how long before the next try (so every call doesn't knock on a busy central model).</summary>
     public static readonly TimeSpan RetryAfter = TimeSpan.FromMinutes(2);
     private static DateTime _retryAt;
+    private static int _failures;
+
+    /// <summary>
+    /// How long auto sync waits after <paramref name="failures"/> syncs in a row didn't go through: 2, 4, 8, 16, then 30
+    /// minutes (bug 114: Revit's "An internal error has occurred" failed every 2 minutes for over an hour, each try holding
+    /// Revit, so the jobs barely moved).
+    /// </summary>
+    public static TimeSpan WaitAfter(int failures) =>
+        TimeSpan.FromMinutes(Math.Min(30, RetryAfter.TotalMinutes * Math.Pow(2, Math.Max(0, Math.Min(failures, 10) - 1))));
 
     /// <summary>True on Revit's thread while a Claude call runs (<see cref="InCallNow"/>): only then may a batch stop to sync.</summary>
     private static bool InCall;
@@ -188,7 +197,7 @@ internal static class AutoSync
     }
 
     /// <summary>For the field test: forget a failed sync's wait.</summary>
-    internal static void ResetForTest() => _retryAt = default;
+    internal static void ResetForTest() { _retryAt = default; _failures = 0; }
 
     private static bool Due(Document doc) =>
         DateTime.UtcNow >= _retryAt && Shared(doc) && !doc.IsModifiable && !doc.IsReadOnly && Rule.Due(Key(doc), Task, DateTime.Now);
@@ -213,11 +222,15 @@ internal static class AutoSync
         catch (Autodesk.Revit.Exceptions.ApplicationException ex) { failed = ex.Message; }
         if (failed is not null)
         {
-            _retryAt = DateTime.UtcNow + RetryAfter;
+            _failures++;
+            var later = WaitAfter(_failures);
+            _retryAt = DateTime.UtcNow + later;
             return Note(doc, $"Auto sync after {count} changes didn't go through: {failed.TrimEnd('.')}. The work carries on; it tries again in " +
-                             $"{RetryAfter.TotalMinutes:0} minutes, or the user can synchronize by hand.");
+                             $"{later.TotalMinutes:0} minutes, or the user can synchronize by hand" +
+                             (_failures >= 3 ? $" ({_failures} tries in a row failed: please synchronize by hand, and if Revit says the same, save the local file first)." : "."));
         }
         Syncs++;
+        _failures = 0;
         _retryAt = default;
         Rule.Synced(Key(doc));
         return Note(doc, $"Synchronized \"{doc.Title}\" with central after {count} changes (auto sync, Settings > Chat)" +

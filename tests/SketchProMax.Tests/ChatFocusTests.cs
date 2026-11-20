@@ -214,6 +214,9 @@ internal static class ChatFocusTests
             && chat.Contains("the named one too") && chat.Contains("holds for the whole chat") && chat.Contains("are not questions: apply them"), "");
         var sync = Read("src/SketchProMax/Revit/AutoSync.cs");
         var prompt = Read("src/SketchProMax/Revit/PositionPrompt.cs");
+        check("sync (bug 114): a failing auto sync waits longer each time (2, 4, 8, 16, 30 min) and asks for a sync by hand after 3",
+            sync.Contains("Math.Min(30, RetryAfter.TotalMinutes * Math.Pow(2,") && sync.Contains("var later = WaitAfter(_failures);")
+            && sync.Contains("_failures >= 3") && sync.Contains("_failures = 0;"), "");
         check("sync: Revit's Location Position Changed prompt is answered Do not save only during Sketch ProMax's own sync or save, and said",
             sync.Contains("PositionPrompt.During(() => { doc.SynchronizeWithCentral(") && Read("src/SketchProMax/Tools/LinkedModelTools.cs").Contains("PositionPrompt.During(() => { doc.Save();")
             && prompt.Contains("if (_depth == 0 ||") && prompt.Contains("DoNotSave = 1002") && Read("src/SketchProMax/App.cs").Contains("PositionPrompt.Watch(app);")
@@ -232,7 +235,7 @@ internal static class ChatFocusTests
         check("check job: the look and the agreed method count, not only the numbers, and the chat's rules go with it",
             reviewTask.Contains("Check how it was done, not only the numbers") && reviewTask.Contains("a mesh of creases") && reviewTask.Contains("NOT DONE")
             && reviewTask.Contains("The rules, methods and decisions agreed earlier in the chat") && reviewTask.Contains("full-length generic model voids, as neat")
-            && reviewTask.Contains("5. Don't change the model") && !JobReview.Task(new ChatJob { Number = 1, Title = "t", Task = "x" }).Contains("agreed earlier in the chat"), reviewTask);
+            && reviewTask.Contains("6. Don't change the model") && reviewTask.Contains("never ask for two things that can't both hold") && !JobReview.Task(new ChatJob { Number = 1, Title = "t", Task = "x" }).Contains("agreed earlier in the chat"), reviewTask);
         check("practice: AZ sheet piles flush with the soffit, grading with full-length voids not shape points, limits follow the drawing",
             basePrompt.Contains("AZ sheet piles stop flush with the soffit") && basePrompt.Contains("never with dense slab shape points") && basePrompt.Contains("bottom follows its top at the same thickness")
             && basePrompt.Contains("is about positions, not about") && basePrompt.Contains("reaching the limits the drawing gives") && !basePrompt.Contains("sheet piles, combi-wall pipes and their"), "");
