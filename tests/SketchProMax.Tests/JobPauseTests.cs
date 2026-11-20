@@ -49,6 +49,17 @@ internal static class JobPauseTests
             check("away button: kept through a version switch", Away.Until == now + Away.Longest, Away.Until.ToString("o"));
             Away.Set(false, now);
             check("away button: off", !Away.On && !File.Exists(Away.StoreFile), "");
+            check("away (bug 112): a window is closed only with nobody at the PC (no keyboard or mouse for 2 min)",
+                !Away.NobodyThere(true, TimeSpan.FromSeconds(30)) && Away.NobodyThere(true, TimeSpan.FromMinutes(3))
+                && !Away.NobodyThere(false, TimeSpan.FromHours(1)) && !Away.NobodyThere(true, TimeSpan.Zero), "");
+            var start = DateTime.UtcNow;
+            Away.Set(true, start);
+            var early = Away.Watch(TimeSpan.FromSeconds(1), start.AddSeconds(5)) || Away.Watch(TimeSpan.FromMinutes(10), start.AddMinutes(10))
+                        || Away.Watch(TimeSpan.FromSeconds(1), start.AddMinutes(10));
+            check("away (bug 112): a short quiet and back doesn't end it", !early && Away.On, "");
+            Away.Watch(TimeSpan.FromMinutes(20), start.AddMinutes(30));
+            check("away (bug 112): the PC used again after 15 quiet minutes ends it (the user is back)",
+                Away.Watch(TimeSpan.FromSeconds(1), start.AddMinutes(31)) && !Away.On, "");
         }
         finally
         {
