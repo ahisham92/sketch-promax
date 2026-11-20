@@ -113,6 +113,11 @@ internal sealed class ChatJob
     public string WaitingOn { get; set; } = "";
     /// <summary>The previous check's not-done parts, kept when the job is sent back: the next check reads those again first. Saved.</summary>
     public string LastIssues { get; set; } = "";
+    /// <summary>
+    /// When its work last passed a check (default: never). A later check, after a follow-up, checks only what it was asked
+    /// since then and that the passed work still holds (bug 113: a pass was followed by a check that raised new demands). Saved.
+    /// </summary>
+    public DateTime PassedAt { get; set; }
     /// <summary>It called a tool that changes the model since its work was last checked (the bridge, ModifiesModel). Saved.</summary>
     public bool ChangedModel { get; set; }
     /// <summary>
@@ -873,7 +878,11 @@ internal sealed class JobBoard
             if (done is null || done.Review != JobReview.Pending || done.ReviewedBy != check.Number) return null;
             done.Review = JobReview.Verdict(check);
             done.WaitingOn = JobReview.WaitingOf(check);
-            if (JobReview.Passed(done.Review)) done.LastIssues = "";
+            if (JobReview.Passed(done.Review))
+            {
+                done.LastIssues = "";
+                done.PassedAt = now;
+            }
             AddNote(done, $"Checked by job {check.Number}: " + (JobReview.Passed(done.Review) ? "passed." : OneLine(done.Review, 300)), now);
             return done;
         }
@@ -1026,7 +1035,7 @@ internal sealed class JobBoard
         Plan = new Dictionary<string, string>(j.Plan), Heard = j.Heard.ToList(), Visited = j.Visited.ToList(),
         Spent = j.Spent, BudgetFrom = j.BudgetFrom, OverBudget = j.OverBudget, ReviewOf = j.ReviewOf, Review = j.Review, ReviewedBy = j.ReviewedBy,
         Reviews = j.Reviews, Routine = j.Routine, RevitModel = j.RevitModel, GoalCheck = j.GoalCheck, ReadOnly = j.ReadOnly,
-        ChangedModel = j.ChangedModel, Unchecked = j.Unchecked, WaitingOn = j.WaitingOn, LastIssues = j.LastIssues,
+        ChangedModel = j.ChangedModel, Unchecked = j.Unchecked, WaitingOn = j.WaitingOn, LastIssues = j.LastIssues, PassedAt = j.PassedAt,
     };
 }
 

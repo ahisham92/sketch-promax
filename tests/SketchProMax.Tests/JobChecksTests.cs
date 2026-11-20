@@ -21,6 +21,14 @@ internal static class JobChecksTests
         check("budget: the same reset time (seconds apart) is no new window", !JobBudget.NewWindow(ref resets, at.AddSeconds(30)), "");
         check("budget: a reset time hours later is a new window", JobBudget.NewWindow(ref resets, at.AddHours(5)), "");
         check("budget: a rise is shared between the jobs and chat working", Math.Abs(JobBudget.ShareOf(0.09, 3) - 0.03) < 1e-9 && JobBudget.ShareOf(0.09, 0) == 0.09, "");
+        // ---- A check after a pass checks only the later asks (bug 113) ----
+        var passed = new ChatJob { Number = 112, Title = "Grading fix", Task = "Fix the slab.", Summary = "Done.", PassedAt = now };
+        passed.Items.Add(new ChatItem { Kind = "user", Text = "Fix the slab.", Time = now.AddMinutes(-40) });
+        passed.Items.Add(new ChatItem { Kind = "user", Text = "Don't change the working plan's crop.", Time = now.AddMinutes(2) });
+        var after = JobReview.Task(passed);
+        check("check (bug 113): after a pass it checks only what was asked since, and raises nothing new",
+            after.Contains("already PASSED") && after.Contains("Don't change the working plan's crop.")
+            && JobReview.AsksSince(passed, now) == "Don't change the working plan's crop." && !JobReview.Task(new ChatJob { Number = 1, Task = "x" }).Contains("already PASSED"), after);
         // ---- Jobs that stop moving (the 29-30 Oct run: two reports written, runs never ended, 12 hours lost) ----
         var t0 = new DateTime(2026, 10, 29, 23, 0, 0, DateTimeKind.Utc);
         var hung = new ChatJob { Number = 2, Title = "Read as-built", State = JobBoard.Running, Started = t0 };

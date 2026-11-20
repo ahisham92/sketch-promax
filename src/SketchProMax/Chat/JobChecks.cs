@@ -127,6 +127,11 @@ internal static class JobReview
         $"Its task:\n{done.Task.Trim()}\n\n" +
         (LaterAsks(done) is { Length: > 0 } later ? $"What it was asked later, while it worked (part of its task too):\n{later}\n\n" : "") +
         $"Its report:\n{(done.Summary.Trim().Length > 0 ? done.Summary.Trim() : "(it gave none)")}\n\n" +
+        (done.PassedAt != default
+            ? $"This work already PASSED a check. Since then the job was asked only this:\n{(AsksSince(done, done.PassedAt) is { Length: > 0 } since ? since : "(nothing new)")}\n" +
+              "Check only that, and that the parts that passed are still there. Don't raise a part or a demand the earlier check didn't " +
+              $"raise: what isn't in those asks is {DoneWord}.\n\n"
+            : "") +
         (done.Reviews > 0 && done.LastIssues.Trim().Length > 0
             ? $"This is check {done.Reviews + 1}. The last check found these parts not done, and the job was sent back to finish them:\n" +
               $"{Cut(done.LastIssues.Trim(), 1500)}\nRead those parts again carefully. The parts the last check found {DoneWord} only need a quick " +
@@ -157,7 +162,9 @@ internal static class JobReview
         "reference.\n" +
         "4. When the work was a berth's submission drawings or sheets, also call submission_format (action=check, berths): every line " +
         "it lists for those berths is a part that is NOT DONE.\n" +
-        "5. Don't change the model: changes are refused for a check.\n\n" +
+        "5. Where the task gives a way out (\"within 10 mm, or the remaining deviation noted with its cause\"), a part that took it is " +
+        $"{DoneWord}: never ask for the stricter way the task itself let go, and never ask for two things that can't both hold.\n" +
+        "6. Don't change the model: changes are refused for a check.\n\n" +
         $"Answer with the list, one line per part: \"<n>. <the part>: {DoneWord}\" with what you read, or \"<n>. <the part>: {NotDoneWord} - " +
         "<what is missing or wrong, and where>\". A part you could not check is NOT DONE with the reason.\n" +
         $"A part that is not the job's to finish is \"<n>. <the part>: {WaitingWord} - <why>\": it needs the user's decision or yes that " +
@@ -177,6 +184,12 @@ internal static class JobReview
             .ToList();
         return Cut(string.Join("\n", said.Skip(Math.Max(0, said.Count - 5))), 2000);
     }
+
+    /// <summary>The user's or the main chat's asks to the job after <paramref name="since"/> (not a check's send-back).</summary>
+    public static string AsksSince(ChatJob job, DateTime since) =>
+        Cut(string.Join("\n", job.Items.Where(i => i.Kind == "user" && i.Time > since).Select(i => i.Text.Trim())
+            .Where(t => t.Length > 0 && !t.StartsWith("A teammate checked your work", StringComparison.Ordinal)
+                        && t != JobPause.CarryOn && !t.StartsWith("Carry on with your task", StringComparison.Ordinal))), 2000);
 
     /// <summary>The parts a check found waiting on the user or on another job: its WAITING line, "" none.</summary>
     public static string WaitingOf(ChatJob check)
