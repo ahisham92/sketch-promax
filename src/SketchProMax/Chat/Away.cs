@@ -31,9 +31,55 @@ internal static class Away
         lock (Gate)
         {
             _until = on ? now + (span is { } t && t < Longest ? t : Longest) : default;
+            _quietest = TimeSpan.Zero;
             Write();
         }
         Changed?.Invoke();
+    }
+
+    /// <summary>
+    /// No keyboard or mouse on this PC for this long: nobody is at it. Only then is a window left open closed or a
+    /// command ended with Esc for an autopilot or while away (bug 112, 20 Nov 2026: away mode, still on in the morning,
+    /// closed the dialogs of the user's own model opening, so the model had to be opened again and again).
+    /// </summary>
+    public static readonly TimeSpan NoInputFor = TimeSpan.FromMinutes(2);
+
+    /// <summary>Away and the PC quiet for this long, then used again: the user is back and away mode ends by itself.</summary>
+    public static readonly TimeSpan BackAfter = TimeSpan.FromMinutes(15);
+
+    private static TimeSpan _quietest;
+
+    /// <summary>
+    /// Nobody at the PC: an autopilot or away mode (<paramref name="unattended"/>) and no keyboard or mouse for
+    /// <see cref="NoInputFor"/>. <paramref name="sinceInput"/> zero (it couldn't be read) counts as someone there.
+    /// </summary>
+    public static bool NobodyThere(bool unattended, TimeSpan sinceInput) => unattended && sinceInput >= NoInputFor;
+
+    /// <summary>
+    /// Every second (the freeze watch), with how long since the keyboard or mouse was used: away, and the PC used again
+    /// after <see cref="BackAfter"/> of quiet, ends away mode (the user is back). True when it ended now.
+    /// </summary>
+    public static bool Watch(TimeSpan sinceInput, DateTime now)
+    {
+        bool ended;
+        lock (Gate)
+        {
+            if (now >= _until)
+            {
+                _quietest = TimeSpan.Zero;
+                return false;
+            }
+            if (sinceInput > _quietest) _quietest = sinceInput;
+            ended = _quietest >= BackAfter && sinceInput < TimeSpan.FromSeconds(5);
+            if (ended)
+            {
+                _until = default;
+                _quietest = TimeSpan.Zero;
+                Write();
+            }
+        }
+        if (ended) Changed?.Invoke();
+        return ended;
     }
 
     /// <summary>Reads the spell back after a version switch or a restart.</summary>

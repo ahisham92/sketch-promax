@@ -634,7 +634,7 @@ public sealed class BridgeServer
                 var now = await _dispatcher.BlockerAsync().ConfigureAwait(false);
                 var activity = Revit.FreezeWatch.Activity();
                 var cause = Revit.FreezeWatch.Cause();
-                if (!RevitBlock.EndCommandNow(now.Kind, DateTime.UtcNow - heldSince, tries, Chat.Away.On || Chat.Autopilot.Unattended,
+                if (!RevitBlock.EndCommandNow(now.Kind, DateTime.UtcNow - heldSince, tries, Chat.Away.NobodyThere(Chat.Away.On || Chat.Autopilot.Unattended, Revit.SwitchGate.SinceInput()),
                         activity.Quiet, Revit.FreezeCause.IsLongWork(cause)))
                 {
                     if (Chat.Away.On || Chat.Autopilot.Unattended)

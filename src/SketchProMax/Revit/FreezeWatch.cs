@@ -108,6 +108,9 @@ internal static class FreezeWatch
             try
             {
                 Sample();
+                // Away and the PC used again after a quiet stretch: the user is back, away mode ends (bug 112).
+                if (Chat.Away.Watch(SwitchGate.SinceInput(), DateTime.UtcNow))
+                    Tools.ActivityLog.Note("away_ended", "The PC was used again after a quiet stretch: away mode ended by itself");
                 CloseForAutopilot();
                 var now = Read(_main);
                 if (now != kind)
@@ -161,7 +164,8 @@ internal static class FreezeWatch
     /// </summary>
     private static void CloseForAutopilot()
     {
-        if (!(Chat.Autopilot.Unattended || Chat.Away.On) || _main == IntPtr.Zero || IsWindowEnabled(_main))
+        // Someone at the PC (keyboard or mouse in the last 2 minutes): the window is theirs, never closed (bug 112).
+        if (!Chat.Away.NobodyThere(Chat.Autopilot.Unattended || Chat.Away.On, SwitchGate.SinceInput()) || _main == IntPtr.Zero || IsWindowEnabled(_main))
         {
             _blockedSince = DateTime.MaxValue;
             return;
@@ -174,7 +178,7 @@ internal static class FreezeWatch
         _blockedSince = DateTime.Now;
         if (Chat.Autopilot.Unattended) Chat.Autopilot.Log(Chat.AutopilotEntry.Popup, "A window held Revit for a minute; it was closed.");
         else Chat.Away.Note("A window held Revit for a minute; it was closed");
-        Tools.ActivityLog.Note("autopilot_closed_dialog", "A dialog held Revit for a minute during autopilot; it was closed");
+        Tools.ActivityLog.Note("autopilot_closed_dialog", "A dialog held Revit for a minute with nobody at the PC (autopilot or away); it was closed");
     }
 
     private static void Log(Kind kind, TimeSpan lasted, bool opened)
