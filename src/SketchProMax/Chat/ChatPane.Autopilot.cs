@@ -104,7 +104,7 @@ internal sealed partial class ChatPane
                 if (_instance == this && SessionOf(q.JobKey) is { } tab && JobBoard.ChatKey(tab.Conv.Id) == q.JobKey) In(tab, () => PhoneTabSent(q, error));
             }));
             // Each project has its own chat on the phone (PhoneProjects): a message goes to this window's chat on that project.
-            AskUser.UserWrote += (text, topic) => Dispatcher.BeginInvoke(new Action(() => ToPhoneChat(topic, () => FromPhone(text))));
+            AskUser.UserWrote += (text, topic, picture) => Dispatcher.BeginInvoke(new Action(() => ToPhoneChat(topic, () => FromPhone(text, picture))));
             AskUser.Command += (name, topic) => Dispatcher.BeginInvoke(new Action(() => ToPhoneChat(topic, () => PhoneCommand(name))));
             ChatJobs.TopicFor = key =>
             {
@@ -711,21 +711,25 @@ internal sealed partial class ChatPane
     /// The user wrote from the phone: shown in the chat as their message (from your phone). During a run the coordinator
     /// takes it in; otherwise the chat answers it as if typed here, and the answer goes back to the phone.
     /// </summary>
-    private void FromPhone(string text)
+    private void FromPhone(string text, string? picture = null)
     {
         if (_instance != this) return; // one chat takes it
+        if (text.Length == 0) text = "(a picture)";
         // An autopilot runs in one of this window's chats (shown or in the background): this runs in it (RunSession), so
         // its coordinator takes the message and the phone never talks to a chat that only sees "another chat" (31 Oct 2026).
         if (Run is not { Active: true } run)
         {
             _phoneAsks.Add(text);
+            if (picture is not null) _phoneFiles.Add(picture);
             // Busy with something else: say so, so the phone isn't left wondering.
             if (_turn is not null && _phoneAsks.Count == 1) _ = AskUser.SendUpdateAsync("Got it. Finishing the current task first, then this.", PhoneTopic);
             NextPhoneAsk();
             return;
         }
         const string how = "from your phone";
-        Add(new ChatItem { Kind = "user", Text = text + $"\n\n({how})" });
+        Add(new ChatItem { Kind = "user", Text = text + $"\n\n({how})", Files = picture is null ? [] : [picture], Name = picture is null ? "" : System.IO.Path.GetFileName(picture) });
+        // The run's coordinator reads the picture from its file.
+        if (picture is not null) text += $"\n\n[A picture came with it: {picture}. Look at it with Read.]";
         if (AutopilotStopTyped(text.Trim(), " " + how)) return;
         AutopilotLog(AutopilotEntry.Asked, $"You wrote {how}: " + (text.Length > 200 ? text.Substring(0, 199) + "…" : text));
         Autopilot.Heard(run, text);
@@ -737,6 +741,7 @@ internal sealed partial class ChatPane
     }
 
     private readonly List<string> _phoneAsks = [];
+    private readonly List<string> _phoneFiles = [];
     private Turn? _phoneTurn { get => _s.PhoneTurn; set => _s.PhoneTurn = value; }
 
     /// <summary>The next message from the phone, once the chat is free: answered as a turn of its own (no brief card: nobody is here to choose).</summary>
@@ -746,22 +751,26 @@ internal sealed partial class ChatPane
         if (_setup != Setup.Ready || !Licensing.LicenseState.Allowed)
         {
             _phoneAsks.Clear();
+            _phoneFiles.Clear();
             _ = AskUser.SendUpdateAsync("The chat on the PC isn't ready (it needs signing in or a license there), so your message wasn't taken in.", PhoneTopic);
             return;
         }
         var text = string.Join("\n\n", _phoneAsks);
         _phoneAsks.Clear();
-        Add(new ChatItem { Kind = "user", Text = text + "\n\n(from your phone)" });
+        var files = _phoneFiles.Where(System.IO.File.Exists).ToList();
+        _phoneFiles.Clear();
+        Add(new ChatItem { Kind = "user", Text = text + "\n\n(from your phone)", Files = files, Name = string.Join(", ", files.Select(System.IO.Path.GetFileName)) });
         _conv.Name = ChatHistory.NameFor(_conv);
         Save();
         ShowTitle();
         SupersedeBriefs();
-        _ = RunPhoneTurn(text);
+        _ = RunPhoneTurn(text, files);
     }
 
-    private async Task RunPhoneTurn(string text)
+    private async Task RunPhoneTurn(string text, List<string>? files = null)
     {
-        var run = RunTurn(AskRules.PhoneTurn(text, CrewStrip.Names.Coordinator, AskUser.History(PhoneTopic)), [], "");
+        var attachments = (files ?? []).Select(f => new Attachment { Path = f, Name = System.IO.Path.GetFileName(f) }).ToList();
+        var run = RunTurn(AskRules.PhoneTurn(text, CrewStrip.Names.Coordinator, AskUser.History(PhoneTopic)), attachments, "");
         _phoneTurn = _turn; // set before RunTurn's first wait
         await run;
     }
@@ -774,7 +783,15 @@ internal sealed partial class ChatPane
         {
             _phoneTurn = null;
             var last = _conv.Items.LastOrDefault(i => i.Kind == "assistant")?.Text ?? "";
-            _ = AskUser.SendUpdateAsync(AskRules.PhoneReply(last, stopped ? "stopped" : ended.Outcome), PhoneTopic);
+            var topic = PhoneTopic;
+            // The views it looked at while answering go with the reply (capture_view_image), at most two.
+            var pictures = Phone.PhonePictures.Take(JobBoard.ChatKey(_conv.Id), ReferenceEquals(_s, _shown), ended.Started).Select(PhoneJpeg).Where(p => p is not null).ToList();
+            var reply = AskRules.PhoneReply(last, stopped ? "stopped" : ended.Outcome);
+            _ = Task.Run(async () =>
+            {
+                await AskUser.SendUpdateAsync(reply, topic).ConfigureAwait(false);
+                foreach (var p in pictures) await AskUser.SendUpdateAsync("", topic, p).ConfigureAwait(false);
+            });
         }
         if (_phoneAsks.Count > 0) Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(NextPhoneAsk));
     }

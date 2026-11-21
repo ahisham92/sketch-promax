@@ -1,3 +1,4 @@
+using System.IO;
 using SketchProMax.Phone;
 
 /// <summary>The phone link (Iris): messages sealed the way the website's phone app and other clients read them, and the address the user types.</summary>
@@ -63,6 +64,36 @@ internal static class IrisTests
         check("phone routing: a closed Revit doesn't count", PhoneLink.TopicTaker("Lekki", claims, 100, null, Alive, now) == 100, "");
 
         Resend(check, key);
+        Pictures(check);
+    }
+
+    /// <summary>Ahmed, 21 Nov 2026: "I don't get pictures or send pictures" on the phone chat.</summary>
+    private static void Pictures(Action<string, bool, string> check)
+    {
+        var bytes = new byte[] { 0xFF, 0xD8, 0xFF, 1, 2, 3 };
+        var url = PhonePictures.DataUrl(bytes, "image/jpeg");
+        var got = PhonePictures.Decode(url);
+        check("phone pictures: a phone picture is read back", got is { } g && g.Bytes.SequenceEqual(bytes) && g.Extension == ".jpg", url);
+        check("phone pictures: a png keeps its kind", PhonePictures.Decode(PhonePictures.DataUrl(bytes, "image/png"))?.Extension == ".png", "");
+        check("phone pictures: not a picture is refused", PhonePictures.Decode("data:text/html;base64,PGI+") is null && PhonePictures.Decode("hello") is null && PhonePictures.Decode("data:image/jpeg;base64,***") is null, "");
+        var folder = Path.Combine(Path.GetTempPath(), "spm-phone-pics-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var path = PhonePictures.Save(url, folder, DateTime.UtcNow);
+            check("phone pictures: saved as a file the chat attaches", path is not null && File.Exists(path) && File.ReadAllBytes(path).SequenceEqual(bytes) && path.EndsWith(".jpg"), path ?? "");
+        }
+        finally { try { Directory.Delete(folder, true); } catch (IOException) { } }
+
+        var t0 = new DateTime(2026, 11, 21, 20, 0, 0, DateTimeKind.Utc);
+        PhonePictures.Keep("chat:a", [1], t0.AddMinutes(-5));   // before the reply's turn: not sent
+        PhonePictures.Keep(null, [2], t0.AddMinutes(1));        // the chat shown
+        PhonePictures.Keep("chat:b", [3], t0.AddMinutes(1));    // another chat's
+        PhonePictures.Keep("chat:a", [4], t0.AddMinutes(2));
+        PhonePictures.Keep("chat:a", [5], t0.AddMinutes(3));
+        var sent = PhonePictures.Take("chat:a", shown: true, t0);
+        check("phone pictures: the reply takes its own turn's last two views", sent.Count == 2 && sent[0][0] == 4 && sent[1][0] == 5, string.Join(",", sent.Select(p => p[0])));
+        check("phone pictures: taken once", PhonePictures.Take("chat:a", shown: true, t0).Count == 0, "");
+        check("phone pictures: another chat keeps its own", PhonePictures.Take("chat:b", shown: false, t0).Count == 1, "");
     }
 
     /// <summary>
