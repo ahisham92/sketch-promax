@@ -20,6 +20,8 @@ internal sealed partial class ChatPane
         public Conversation Conv = conv;
         public ChatEngine? Engine;
         public Turn? Turn;
+        /// <summary>Holds phone answers a moment while more of the same batch are being answered (PhoneTabAnswered).</summary>
+        public System.Windows.Threading.DispatcherTimer? PhoneGather;
         public DateTime LastActivity = DateTime.UtcNow;
         public string Model = ChatModels.DefaultId, Effort = "";
         public AutoPick? LastPick;
