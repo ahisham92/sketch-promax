@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 
 namespace SketchProMax.Chat;
@@ -31,6 +32,12 @@ internal sealed class UserAsk
 
     /// <summary>Shown in the Questions tab: not answered (or not understood) and not withdrawn. An answered one leaves the tab.</summary>
     public bool Open => !Closed && (Answer.Length == 0 || Unclear);
+
+    /// <summary>
+    /// When it last went to the phone (default: not yet). Not saved: after Revit starts again an open question goes to the
+    /// phone once more, because only this Revit session can take the phone's answer to it.
+    /// </summary>
+    [JsonIgnore] public DateTime PhoneAt { get; set; }
 }
 
 /// <summary>
@@ -132,6 +139,21 @@ internal sealed class ChatQuestions
             q.Sent = false;
             return q;
         }
+    }
+
+    /// <summary>
+    /// The open questions the phone hasn't had yet (asked, or written again, since they last went), by number: sent while the
+    /// phone is on. One the user didn't understand waits to be written again.
+    /// </summary>
+    public List<UserAsk> NotOnPhone()
+    {
+        lock (_gate) return _list.Where(q => q.Open && !q.Unclear && q.PhoneAt < (q.Rewritten > q.Asked ? q.Rewritten : q.Asked)).OrderBy(q => q.Number).ToList();
+    }
+
+    /// <summary>Question <paramref name="q"/> went to the phone.</summary>
+    public void MarkOnPhone(UserAsk q, DateTime now)
+    {
+        lock (_gate) q.PhoneAt = now;
     }
 
     /// <summary>The answers not passed on yet, marked as passed on.</summary>

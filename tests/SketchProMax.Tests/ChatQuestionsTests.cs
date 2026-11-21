@@ -65,5 +65,42 @@ internal static class ChatQuestionsTests
         check("reply: no question, nothing", ChatQuestions.FromReply("All 15 thickenings are lifted and joined. Checked.").Count == 0, "");
         check("reply: a reply that points at the tab adds nothing", ChatQuestions.FromReply("Q4 in Questions. Should I go on?").Count == 0, "");
         check("reply: code is not read for questions", ChatQuestions.FromReply("Ran `x ? y : z` fine.").Count == 0, "");
+
+        // The phone (21 Nov 2026: the owner switched the phone on and the coordinator's question never reached it).
+        var pq = new ChatQuestions([]);
+        var t = new DateTime(2026, 11, 21, 1, 30, 0, DateTimeKind.Utc);
+        var p1 = pq.Ask(0, "Coordinator", "Lift the 15 thickenings whole?", ["Lift whole", "Keep bottoms"], 0, t);
+        var p2 = pq.Ask(7, "Job 7: Pipes", "Which pipe size?", null, -1, t);
+        check("phone: open questions the phone hasn't had go there, by number", pq.NotOnPhone().Select(q => q.Number).SequenceEqual(new[] { 1, 2 }), "");
+        pq.MarkOnPhone(p1, t.AddSeconds(5));
+        check("phone: a question sent isn't sent again", pq.NotOnPhone().Select(q => q.Number).SequenceEqual(new[] { 2 }), "");
+        pq.Answer(2, "150 mm", t.AddSeconds(6));
+        check("phone: an answered question doesn't go", pq.NotOnPhone().Count == 0, "");
+        pq.Answer(1, "what do you mean?", t.AddSeconds(7));
+        check("phone: one not understood waits to be written again", pq.NotOnPhone().Count == 0, "");
+        pq.Rewrite(1, "Lift all 15 by 500 mm (bottoms move), or keep the bottoms?", null, -1, t.AddSeconds(30));
+        check("phone: written again, it goes again", pq.NotOnPhone().Select(q => q.Number).SequenceEqual(new[] { 1 }), "");
+        pq.MarkOnPhone(p1, default);
+        check("phone: switched on again, a question marked unsent goes again", pq.NotOnPhone().Count == 1, "");
+        check("phone: when it went is not saved with the chat (only this Revit can take the answer)",
+            !System.Text.Json.JsonSerializer.Serialize(p1).Contains("PhoneAt"), "");
+
+        var tab = new UserQuestion { Id = 9, TabNumber = 4, Asker = "Coordinator", Question = "Lift whole?", Options = ["Lift whole", "Keep bottoms"], Recommended = 1 };
+        check("phone: a tab question is named by its tab number", AskRules.Label(tab) == "Q4" && AskRules.PhoneText(tab).StartsWith("Q4 (Coordinator): Lift whole?"), AskRules.PhoneText(tab));
+        check("phone: a tab question shows its answers as buttons and the one suggested",
+            AskRules.PhoneOptions(tab).SequenceEqual(new[] { "Lift whole", "Keep bottoms" }) && AskRules.PhoneText(tab).EndsWith("Suggested: Keep bottoms"), AskRules.PhoneText(tab));
+        check("phone: 'yes' to a tab question stays 'yes' (it has no assumption)", AskRules.Keep("yes", tab) == "yes", "");
+        var job = new UserQuestion { Id = 3, Asker = "Job 2: x", Question = "q?", Assumed = "copy it" };
+        check("phone: an ask_user question keeps its one button and its Q number", AskRules.PhoneOptions(job).SequenceEqual(new[] { "copy it" }) && AskRules.Label(job) == "Q3"
+            && AskRules.Keep("ok", job).StartsWith("Keep your assumption"), "");
+
+        var root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../.."));
+        if (!File.Exists(Path.Combine(root, "README.md"))) root = Directory.GetCurrentDirectory();
+        string Src(string f) => File.ReadAllText(Path.Combine(root, "src/SketchProMax/Chat", f)).Replace("\r\n", "\n");
+        var pane = Src("ChatPane.Questions.cs");
+        check("phone: every change to the Questions tab syncs it with the phone", pane.Contains("try { SyncPhoneQuestions(); }") && pane.Contains("AskUser.AskTab(") && pane.Contains("AskUser.SettleTab("), "");
+        check("phone: switching the phone on sends the questions waiting", Src("ChatPane.Phone.cs").Contains("SyncPhoneQuestions(again: true)"), "");
+        check("phone: an answer from the phone reaches the tab, and the reply goes back to the phone",
+            Src("ChatPane.Autopilot.cs").Contains("PhoneTabAnswered(q)") && pane.Contains("if (fromPhone) _phoneTurn = _turn;"), "");
     }
 }
