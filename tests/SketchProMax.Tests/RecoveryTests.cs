@@ -414,7 +414,7 @@ internal static class RecoveryTests
         check("lifeline: no kept copies while the user works", !M.KeepNow(false, 60_000, TimeSpan.FromSeconds(5)) && !M.KeepNow(false, 60_000, TimeSpan.FromSeconds(30)), "");
         check("lifeline: kept copies go in when the user pauses", M.KeepNow(false, 60_000, TimeSpan.FromSeconds(50)) && !M.KeepNow(false, 5_000, TimeSpan.FromMinutes(5)), "");
         check("lifeline: kept copies always go in when the model closes", M.KeepNow(true, 0, TimeSpan.Zero), "");
-        check("lifeline: elements past one go's 60 wait for the next go", Src("Revit", "ChangeFile.cs").Contains("model.Keeps.ExceptWith(taking)") && !Src("Revit", "ChangeFile.cs").Contains("lock (Gate) model.Keeps.Clear();\n        var start"), "");
+        check("lifeline: elements past one go's 60 wait for the next go", Src("Revit", "ChangeFile.cs").Contains("model.Keeps.ExceptWith(taking)") && !Src("Revit", "ChangeFile.cs").Replace("\r\n", "\n").Contains("lock (Gate) model.Keeps.Clear();\n        var start"), "");
         check("lifeline: kept copies wait for a quiet keyboard and mouse", Src("Revit", "ChangeFile.cs").Contains("M.KeepNow(now, unchecked(Environment.TickCount - model.LastKeep), SwitchGate.SinceInput())"), "");
         // ---- A group edited after the last save; where what wasn't done is ----
         (string, double[]) Wall(double a, double b) => ("Walls|W200", [a, b, 20]);
