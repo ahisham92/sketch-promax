@@ -148,7 +148,7 @@ internal static class ChatFocusTests
             joins.Contains("budget: Budget") && joins.Contains("TimeSpan.FromSeconds(20)") && joins.Contains("pairs already joined are skipped")
             && batch.Contains("clock.Elapsed >= most") && batch.Contains("result.Items.Add(new(what, false, TimeLeft, null))"), "");
         var jobsPane111 = Read("src/SketchProMax/Chat/ChatPane.Jobs.cs");
-        check("exact (bug 117): jobs read 'exactly/follow/match/flush' as 1 mm and never borrow the clash tolerance",
+        check("exact (bug 118): jobs read 'exactly/follow/match/flush' as 1 mm and never borrow the clash tolerance",
             Read("src/SketchProMax/Chat/ClaudeCli.cs").Contains("never makes an element that is\n          a few mm off \"already matching\""), "");
         check("notes (bug 116): a note is saved while Revit is busy, by the bridge, not refused",
             Read("src/SketchProMax/Bridge/BridgeServer.cs").Contains("if (name == \"memory_note\" && (Jobs.Running is not null || _dispatcher.IsRunning)) return MemoryNoteTool.Answer(")
