@@ -165,7 +165,8 @@ internal sealed partial class ChatPane
         {
             var answer = q.Options[k];
             var label = $"{(char)('A' + k)}. {answer}" + (k == q.Recommended ? " (suggested)" : "");
-            var option = new Button { Content = new TextBlock { Text = label, TextWrapping = TextWrapping.Wrap }, Margin = new Thickness(0, 0, ChatUi.S1, ChatUi.S1) };
+            // A WrapPanel measures its children unbounded: the width cap lets a long (whole, bug 124) option wrap.
+            var option = new Button { Content = new TextBlock { Text = label, TextWrapping = TextWrapping.Wrap, MaxWidth = 420 }, Margin = new Thickness(0, 0, ChatUi.S1, ChatUi.S1) };
             option.SetResourceReference(StyleProperty, "SpmChatPill");
             if (k == q.Recommended) option.SetResourceReference(Control.BorderBrushProperty, Brand.K.Accent);
             AutomationProperties.SetName(option, $"Q{q.Number}: {answer}");

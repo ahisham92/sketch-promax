@@ -14,6 +14,9 @@ internal static class ChatQuestionsTests
         check("questions: numbered 1, 2, 3 in the order asked, kept in the chat", q1.Number == 1 && q2.Number == 2 && q3.Number == 3 && saved.Count == 3, "");
         check("questions: repeated options dropped, a suggestion out of range ignored", q1.Options.Count == 2 && q1.Recommended == 0 && q2.Recommended == -1, string.Join("|", q1.Options));
         check("questions: the same open question asked again isn't shown twice", qs.Ask(0, "Coordinator", "shift the deck +1.30 to +1.40 by 100 mm landward", null, -1, now) == q1 && qs.OpenCount == 3, "");
+        var longOption = "Keep the channel opening where it is: walls and base become 250, and the 400 mm gap to the existing slab is filled with mass concrete, joined flush";
+        var q9 = new ChatQuestions(new List<UserAsk>()).Ask(0, "Coordinator", "How should the channel change?", [longOption, "Move it"], 0, now);
+        check("questions: a long option is kept whole, never cut with an ellipsis (bug 124)", q9.Options[0] == longOption && ChatQuestions.MaxOption >= 400, q9.Options[0]);
         check("questions: the tab shows the open ones by number", string.Join(",", qs.Open().Select(q => q.Number)) == "1,2,3", "");
 
         qs.Answer(1, "Yes", now);
