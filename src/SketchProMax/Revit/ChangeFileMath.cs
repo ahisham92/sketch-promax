@@ -633,6 +633,17 @@ internal static class ChangeFileMath
     /// <summary>The least time between two goes of copying into the kept-elements project (it is opened and saved each time).</summary>
     public const int KeepEveryMs = 15000;
 
+    /// <summary>
+    /// How long the mouse and keyboard must have been still before a go of copying into the kept-elements project
+    /// starts: each go opens and saves that project and holds Revit for seconds, so it never runs while the user is
+    /// working (sketching, drawing lines). Copies still go in when the user pauses, and always when the model closes.
+    /// </summary>
+    public const int KeepQuietMs = 45000;
+
+    /// <summary>Whether a go of copying into the kept-elements project may start now (bug 119).</summary>
+    public static bool KeepNow(bool closing, int sinceLastKeepMs, TimeSpan sinceInput) =>
+        closing || sinceLastKeepMs >= KeepEveryMs && sinceInput.TotalMilliseconds >= KeepQuietMs;
+
     /// <summary>The most elements copied in one go.</summary>
     public const int KeepMost = 60;
 
