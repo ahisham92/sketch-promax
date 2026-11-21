@@ -303,7 +303,7 @@ internal sealed partial class ChatPane
         foreach (var q in board.Questions.NotOnPhone())
         {
             board.Questions.MarkOnPhone(q, now);
-            AskUser.AskTab(key, q.Number, q.From, q.Text, q.Options, q.Recommended, PhoneTopic);
+            AskUser.AskTab(key, q.Number, q.From, q.Text, q.Options, q.Recommended, PhoneTopic, q.Version);
         }
     }
 
@@ -325,12 +325,34 @@ internal sealed partial class ChatPane
         DeliverAnswers(now: true, fromPhone: true);
     }
 
-    /// <summary>A Questions tab question went to the phone, or couldn't: logged, and a failure is said in the chat.</summary>
+    /// <summary>
+    /// A Questions tab question went to the phone, or couldn't: logged; one that couldn't is sent again within a minute
+    /// (PhoneRetry) and the chat says so once. Before 21 Nov 2026 it waited for the Phone switch to be pressed again, so
+    /// Q61 to Q65 never reached the phone while the coordinator said it was waiting on their answers.
+    /// </summary>
     private void PhoneTabSent(UserQuestion q, string? error)
     {
         Tools.ActivityLog.Note("question_phone", $"Q{q.TabNumber} " + (error is null ? "went to the phone" : "couldn't go to the phone: " + error));
-        if (error is not null)
-            Note($"Q{q.TabNumber} couldn't go to your phone ({error}). It is in Questions here; switching Phone off and on sends it again.");
+        if (_board?.Questions.Find(q.TabNumber) is not { } ask) return;
+        if (error is null)
+        {
+            ask.PhoneFailSaid = false;
+            return;
+        }
+        // Still this version: marked not on the phone, so the next minute sends it again.
+        if (ask.Open && AskRules.TabCid(q.JobKey, ask.Number, ask.Version) == q.Cid) _board.Questions.MarkOnPhone(ask, default);
+        if (ask.PhoneFailSaid) return;
+        ask.PhoneFailSaid = true;
+        Note($"Q{q.TabNumber} couldn't go to your phone yet ({error}). It is in Questions here, and it is sent again every minute until it goes.");
+    }
+
+    /// <summary>Every minute while the phone is on: each chat's questions that didn't reach the phone go again.</summary>
+    private void PhoneRetry()
+    {
+        if (_sample || _instance != this || !Phone.PhoneLink.Active) return;
+        foreach (var s in Sessions.ToList())
+            try { In(s, () => SyncPhoneQuestions()); }
+            catch (Exception) { /* the next minute tries again */ }
     }
 
     /// <summary>

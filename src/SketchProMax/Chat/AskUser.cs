@@ -119,7 +119,7 @@ internal static class AskUser
         UserQuestion q;
         lock (Gate)
         {
-            q = new UserQuestion { Id = ++_next, JobKey = jobKey, Asker = asker, Question = question.Trim(), Assumed = assumed.Trim(), Asked = DateTime.UtcNow, Topic = topic.Trim() };
+            q = new UserQuestion { Id = ++_next, JobKey = jobKey, Asker = asker, Question = question.Trim(), Assumed = assumed.Trim(), Asked = DateTime.UtcNow, Topic = topic.Trim(), Cid = "ask-" + Guid.NewGuid().ToString("N") };
             Questions.Add(q);
             _loop ??= Task.Run(Loop);
         }
@@ -130,26 +130,30 @@ internal static class AskUser
     /// A question of a chat's Questions tab (chat_questions, or one caught in a reply) while the phone is on: it goes to the
     /// phone at once, with its answers as buttons, and the answer comes back to that chat's tab (<paramref name="chatKey"/>,
     /// JobBoard.ChatKey; through <see cref="Answered"/>). Asked again (written again): the one sent before is closed on the phone.
+    /// <paramref name="version"/>: when it was asked or last written again; the same version sent again is one message on the phone.
     /// </summary>
-    public static UserQuestion AskTab(string chatKey, int number, string asker, string question, IReadOnlyList<string> options, int recommended, string topic)
+    public static UserQuestion AskTab(string chatKey, int number, string asker, string question, IReadOnlyList<string> options, int recommended, string topic, DateTime version = default)
     {
         UserQuestion q;
         List<UserQuestion> old;
+        var cid = AskRules.TabCid(chatKey, number, version);
         lock (Gate)
         {
+            // The same version already waiting to go, or on the phone: nothing to send again.
+            if (Questions.FirstOrDefault(x => x.TabNumber == number && x.JobKey == chatKey && x.Answer is null && x.Cid == cid) is { } same) return same;
             old = Questions.Where(x => x.TabNumber == number && x.JobKey == chatKey && x.Answer is null).ToList();
             foreach (var o in old) Questions.Remove(o);
             q = new UserQuestion
             {
                 Id = ++_next, JobKey = chatKey, TabNumber = number, Asker = asker, Question = question.Trim(), Options = options.ToList(),
-                Recommended = recommended, Topic = topic.Trim(),
+                Recommended = recommended, Topic = topic.Trim(), Cid = cid,
                 // Not held to gather others: the coordinator asked them together already.
                 Asked = DateTime.UtcNow - AskRules.Gather,
             };
             Questions.Add(q);
             _loop ??= Task.Run(Loop);
         }
-        foreach (var o in old.Where(o => o.PhoneId != 0)) _ = PhoneLink.SettleAsync(o.PhoneId, $"{AskRules.Label(o)} was written again; see the new one.");
+        foreach (var o in old.Where(o => o.PhoneId != 0 && o.Cid != cid)) _ = PhoneLink.SettleAsync(o.PhoneId, $"{AskRules.Label(o)} was written again; see the new one.");
         return q;
     }
 
@@ -245,7 +249,7 @@ internal static class AskUser
             {
                 // A tab question has no deadline: the chat waits for its answer, from the phone or the PC.
                 var (id, error) = ByPhone
-                    ? await PhoneLink.AskAsync(AskRules.PhoneText(q), q.Assumed, q.TabNumber > 0 ? null : now.AddMinutes(wait), q.Topic, AskRules.PhoneOptions(q)).ConfigureAwait(false)
+                    ? await PhoneLink.AskAsync(AskRules.PhoneText(q), q.Assumed, q.TabNumber > 0 ? null : now.AddMinutes(wait), q.Topic, AskRules.PhoneOptions(q), q.Cid).ConfigureAwait(false)
                     : (0, "no phone is connected");
                 lock (Gate)
                 {

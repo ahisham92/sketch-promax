@@ -38,6 +38,12 @@ internal sealed class UserAsk
     /// phone once more, because only this Revit session can take the phone's answer to it.
     /// </summary>
     [JsonIgnore] public DateTime PhoneAt { get; set; }
+
+    /// <summary>When it was asked, or last written again: the version the phone has (Iris keeps one message per version).</summary>
+    [JsonIgnore] public DateTime Version => Rewritten > Asked ? Rewritten : Asked;
+
+    /// <summary>The chat already said this question couldn't go to the phone (said once, not every retry).</summary>
+    [JsonIgnore] public bool PhoneFailSaid { get; set; }
 }
 
 /// <summary>
@@ -147,7 +153,7 @@ internal sealed class ChatQuestions
     /// </summary>
     public List<UserAsk> NotOnPhone()
     {
-        lock (_gate) return _list.Where(q => q.Open && !q.Unclear && q.PhoneAt < (q.Rewritten > q.Asked ? q.Rewritten : q.Asked)).OrderBy(q => q.Number).ToList();
+        lock (_gate) return _list.Where(q => q.Open && !q.Unclear && q.PhoneAt < q.Version).OrderBy(q => q.Number).ToList();
     }
 
     /// <summary>Question <paramref name="q"/> went to the phone.</summary>

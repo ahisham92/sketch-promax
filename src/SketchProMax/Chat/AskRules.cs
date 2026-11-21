@@ -22,6 +22,11 @@ internal sealed class UserQuestion
     public DateTime Sent { get; set; }
     /// <summary>Its message id on the phone (Iris): the answer names it.</summary>
     public long PhoneId { get; set; }
+    /// <summary>
+    /// Its own id on Iris: sent again (the site didn't answer in time, the phone was switched on again, Revit started
+    /// again), Iris keeps the one already there instead of a second copy. A tab question's is its chat, number and version.
+    /// </summary>
+    public string Cid { get; set; } = "";
     /// <summary>The user's answer (null: none yet), and when it came.</summary>
     public string? Answer { get; set; }
     public DateTime Answered { get; set; }
@@ -95,6 +100,18 @@ internal static class AskRules
     }
 
     /// <summary>How the phone and the PC name the question: a tab question by its number in the Questions tab (Q4), so both say the same.</summary>
+    /// <summary>
+    /// Iris's id for tab question <paramref name="number"/> of chat <paramref name="chatKey"/> as written at
+    /// <paramref name="version"/> (asked or written again): the same question sent twice is one message on the phone
+    /// (21 Nov 2026: the site didn't answer in time, and Q60 showed twice while Q61 to Q65 never showed).
+    /// </summary>
+    public static string TabCid(string chatKey, int number, DateTime version)
+    {
+        uint h = 2166136261;
+        foreach (var c in chatKey) h = (h ^ c) * 16777619;
+        return $"tab-{h:x8}-{number}-{version.ToUniversalTime().Ticks:x}";
+    }
+
     public static string Label(UserQuestion q) => "Q" + (q.TabNumber > 0 ? q.TabNumber : q.Id);
 
     /// <summary>The question as the phone shows it: its number, who asks, the question (a tab question: its answers and the one suggested).</summary>
