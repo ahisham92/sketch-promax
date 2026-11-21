@@ -123,7 +123,8 @@ internal sealed class RevitTargets
 
         // Job questions don't touch a model, so they skip switching models (which would wait behind a busy Revit). Every
         // other call switches first; a busy Revit answers that at once with what it is running, so nothing runs on the wrong model.
-        if (chosen!.Model is not null && name is not ("wait_for_job" or "cancel_job"))
+        // Notes, questions, jobs and auto sync need no model either (bug 125: a note waited minutes behind a busy Revit).
+        if (chosen!.Model is not null && name is not ("wait_for_job" or "cancel_job" or "memory_note" or "chat_questions" or "chat_jobs" or "auto_sync"))
         {
             var activate = await SendAsync(target.Pipe, JsonSerializer.Serialize(new { method = "activate_document", title = chosen.Model }), 5000, ct,
                 readTimeoutMs: 15000).ConfigureAwait(false);

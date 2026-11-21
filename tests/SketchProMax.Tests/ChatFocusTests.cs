@@ -153,6 +153,8 @@ internal static class ChatFocusTests
         check("notes (bug 116): a note is saved while Revit is busy, by the bridge, not refused",
             Read("src/SketchProMax/Bridge/BridgeServer.cs").Contains("if (name == \"memory_note\" && (Jobs.Running is not null || _dispatcher.IsRunning)) return MemoryNoteTool.Answer(")
             && Read("src/SketchProMax/Tools/MemoryTools.cs").Contains("internal static ToolResult Answer(ToolArgs args)"), "");
+        check("notes (bug 125): notes, questions, jobs and auto sync skip the model switch, so a busy Revit never holds them",
+            Read("src/SketchProMax/Bridge/RevitTargets.cs").Contains("name is not (\"wait_for_job\" or \"cancel_job\" or \"memory_note\" or \"chat_questions\" or \"chat_jobs\" or \"auto_sync\")"), "");
         check("job (bug 115): a new job session gets the chat's rules with its task (not a check, which gets them already)",
             jobsPane111.Contains("if (job.ReviewOf == 0 && JobReview.RulesForJob(_conv.Recall) is { Length: > 0 } rules) message = message with { Text = message.Text + rules };"), "");
         check("pause (bug 111): a job that ended its turn because the pause refused its call is paused, not done, and carries on if Continue came first",

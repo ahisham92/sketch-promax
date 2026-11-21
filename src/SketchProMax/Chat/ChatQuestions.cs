@@ -61,7 +61,8 @@ internal sealed class ChatQuestions
     public ChatQuestions(List<UserAsk>? list) => _list = list ?? [];
 
     /// <summary>The longest a question or option may be.</summary>
-    public const int MaxText = 600, MaxOption = 120, MaxOptions = 6;
+    // An option is the whole answer the user taps: never cut short (bug 124, a 120 cut left "filled with…" for the coordinator to guess).
+    public const int MaxText = 600, MaxOption = 600, MaxOptions = 6;
 
     /// <summary>The questions shown in the tab, by number.</summary>
     public List<UserAsk> Open()
