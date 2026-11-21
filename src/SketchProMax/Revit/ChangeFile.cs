@@ -1032,7 +1032,8 @@ internal static class ChangeFile
         {
             if (model.Keeps.Count == 0 || model.KeepOff) return false;
             // Not after every change: the project is opened and saved each time, so what gathered goes in together.
-            if (!now && unchecked(Environment.TickCount - model.LastKeep) < M.KeepEveryMs) return false;
+            // Never while the user is working: each go holds Revit for seconds (bug 119).
+            if (!M.KeepNow(now, unchecked(Environment.TickCount - model.LastKeep), SwitchGate.SinceInput())) return false;
             model.LastKeep = Environment.TickCount;
             ids = model.Keeps.ToList();
         }

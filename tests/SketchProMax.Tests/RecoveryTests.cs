@@ -410,6 +410,11 @@ internal static class RecoveryTests
         check("lifeline: a dimension that measures other things is made again; images and groups of new types come back", Src("Revit", "ChangeReplay.cs").Contains("ChangeNotes.MustRemake(doc, element, line, Remap(doc, outcome))")
             && Src("Revit", "ChangeNotes.cs").Contains("ImageInstance.Create(doc, ViewOf(), imageType.Id,") && Src("Revit", "ChangeViews.cs").Contains("doc.Create.NewGroup(ids)"), "");
         check("lifeline: copies are kept soon after a change", M.KeepEveryMs is > 0 and <= 20000, M.KeepEveryMs.ToString());
+        // Bug 119: each go held Revit 3-12 s while the user was drawing sketch lines.
+        check("lifeline: no kept copies while the user works", !M.KeepNow(false, 60_000, TimeSpan.FromSeconds(5)) && !M.KeepNow(false, 60_000, TimeSpan.FromSeconds(30)), "");
+        check("lifeline: kept copies go in when the user pauses", M.KeepNow(false, 60_000, TimeSpan.FromSeconds(50)) && !M.KeepNow(false, 5_000, TimeSpan.FromMinutes(5)), "");
+        check("lifeline: kept copies always go in when the model closes", M.KeepNow(true, 0, TimeSpan.Zero), "");
+        check("lifeline: kept copies wait for a quiet keyboard and mouse", Src("Revit", "ChangeFile.cs").Contains("M.KeepNow(now, unchecked(Environment.TickCount - model.LastKeep), SwitchGate.SinceInput())"), "");
         // ---- A group edited after the last save; where what wasn't done is ----
         (string, double[]) Wall(double a, double b) => ("Walls|W200", [a, b, 20]);
         var twoWalls = M.GroupShape([Wall(11.18, 11.18), Wall(11.18, 11.18)]);
