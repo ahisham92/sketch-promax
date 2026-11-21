@@ -408,6 +408,8 @@ public sealed class BridgeServer
         if (name == ChatJobsTool.ToolName) return ChatJobsTool.Answer(new ToolArgs(args), coordinator: fromChat && (jobKey is null || Chat.JobBoard.IsChatKey(jobKey)), jobKey: fromChat ? jobKey : null);
         if (name == AutoSyncTool.ToolName) return AutoSyncTool.Answer(new ToolArgs(args));
         // The chat's Questions tab: the coordinator's and the jobs' questions to the user.
+        // A note needs nothing from Revit: while Revit is busy it is saved here instead of waiting (bug 116).
+        if (name == "memory_note" && (Jobs.Running is not null || _dispatcher.IsRunning)) return MemoryNoteTool.Answer(new ToolArgs(args));
         if (name == ChatQuestionsTool.ToolName) return ChatQuestionsTool.Answer(new ToolArgs(args), fromChat, fromChat ? jobKey : null);
         // An autopilot's question to the user on their phone: answered here, it may wait for the reply.
         if (name == AskUserTool.ToolName) return await AskUserTool.AnswerAsync(new ToolArgs(args), fromChat, jobKey, ct).ConfigureAwait(false);

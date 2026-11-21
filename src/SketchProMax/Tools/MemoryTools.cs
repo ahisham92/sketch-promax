@@ -29,19 +29,33 @@ public sealed class MemoryNoteTool : IRevitTool
     public ToolResult Execute(UIApplication app, ToolArgs args)
     {
         var doc = app.ActiveUIDocument?.Document;
-        var modelKey = doc is null ? null : ChatPane.ModelKey(doc);
+        return Run(doc is null ? null : ChatPane.ModelKey(doc), doc?.Title, args);
+    }
+
+    /// <summary>
+    /// The bridge's call while Revit is busy (bug 116: a note couldn't be saved for minutes while jobs kept Revit busy,
+    /// although it needs nothing from Revit): the model the chat is on stands for the open one.
+    /// </summary>
+    internal static ToolResult Answer(ToolArgs args)
+    {
+        var key = ChatPane.CurrentModelKey;
+        return Run(string.IsNullOrEmpty(key) ? null : key, string.IsNullOrEmpty(key) ? null : System.IO.Path.GetFileNameWithoutExtension(key), args);
+    }
+
+    private static ToolResult Run(string? modelKey, string? title, ToolArgs args)
+    {
         var action = (args.OptString("action") ?? "list").Trim().ToLowerInvariant();
         var global = string.Equals(args.OptString("scope"), "global", StringComparison.OrdinalIgnoreCase);
         if (!global && modelKey is null && action != "list") return ToolResult.Error("No model is open: use scope=global, or open the model first.");
         var key = global ? null : modelKey;
-        var where = global ? "for every model" : $"for this model ({doc!.Title})";
+        var where = global ? "for every model" : $"for this model ({title})";
 
         switch (action)
         {
             case "list":
             {
                 var (g, m) = MemoryNotes.For(MemoryNotes.Load(), modelKey);
-                return ToolResult.Ok(new { global = g, this_model = m, model = doc?.Title, file = MemoryNotes.File });
+                return ToolResult.Ok(new { global = g, this_model = m, model = title, file = MemoryNotes.File });
             }
             case "remember":
             {

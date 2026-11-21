@@ -185,6 +185,17 @@ internal static class JobReview
         return Cut(string.Join("\n", said.Skip(Math.Max(0, said.Count - 5))), 2000);
     }
 
+    /// <summary>
+    /// The rules agreed in the chat (its summary: methods, standing rules, decisions), given to a job when it starts, so it
+    /// works by the same rules its check judges by (bug 115, 21 Nov 2026: the user asked again and again for the grading
+    /// to be followed, EL and TL to be followed, no floor cut openings and neat modelling; the jobs never saw those rules,
+    /// only the coordinator's summary and the checks did, so each job made the same mistakes and was sent back). "" none.
+    /// </summary>
+    public static string RulesForJob(string recall) =>
+        recall.Trim().Length == 0 ? "" :
+        "\n\nThe rules, methods and decisions agreed earlier in the chat. They hold for your work too, and the teammate who checks " +
+        $"your work judges it by them:\n{Cut(recall.Trim(), 3000)}";
+
     /// <summary>The user's or the main chat's asks to the job after <paramref name="since"/> (not a check's send-back).</summary>
     public static string AsksSince(ChatJob job, DateTime since) =>
         Cut(string.Join("\n", job.Items.Where(i => i.Kind == "user" && i.Time > since).Select(i => i.Text.Trim())
