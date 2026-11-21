@@ -109,6 +109,11 @@ internal static class IrisTests
         check("iris: a tab question's version is when it was asked", ask.Version == asked, "");
         ask.Rewritten = asked.AddMinutes(5);
         check("iris: or last written again", ask.Version == asked.AddMinutes(5), "");
+
+        // 21 Nov 2026: four phone answers from one read went one by one, and the coordinator asked three of them again.
+        check("phone answers: none left on the phone, they go together at once", SketchProMax.Chat.AskRules.PhoneDeliverAfter(0) == TimeSpan.Zero, "");
+        check("phone answers: some still on the phone, they wait for them a while", SketchProMax.Chat.AskRules.PhoneDeliverAfter(2) == SketchProMax.Chat.AskRules.PhoneAnswerGather
+            && SketchProMax.Chat.AskRules.PhoneAnswerGather <= TimeSpan.FromMinutes(2), "");
     }
 
     /// <summary>The site: the first <c>fail</c> calls are lost (no answer), then it answers <c>status</c>.</summary>

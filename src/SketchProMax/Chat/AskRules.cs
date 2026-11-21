@@ -101,6 +101,17 @@ internal static class AskRules
 
     /// <summary>How the phone and the PC name the question: a tab question by its number in the Questions tab (Q4), so both say the same.</summary>
     /// <summary>
+    /// How long phone answers wait before they go to the coordinator, given how many of the chat's questions are still
+    /// unanswered on the phone: none, at once (with the rest of the same read); some, up to a minute for the user to answer
+    /// them too. 21 Nov 2026: four answers from one read went one by one, the coordinator answered the first saying "Q94 to
+    /// Q96 are still waiting for you", and then asked them again.
+    /// </summary>
+    public static TimeSpan PhoneDeliverAfter(int stillOnPhone) => stillOnPhone <= 0 ? TimeSpan.Zero : PhoneAnswerGather;
+
+    /// <summary>The longest phone answers wait for the rest of their batch.</summary>
+    public static readonly TimeSpan PhoneAnswerGather = TimeSpan.FromSeconds(60);
+
+    /// <summary>
     /// Iris's id for tab question <paramref name="number"/> of chat <paramref name="chatKey"/> as written at
     /// <paramref name="version"/> (asked or written again): the same question sent twice is one message on the phone
     /// (21 Nov 2026: the site didn't answer in time, and Q60 showed twice while Q61 to Q65 never showed).

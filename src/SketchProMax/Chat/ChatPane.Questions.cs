@@ -256,6 +256,7 @@ internal sealed partial class ChatPane
     {
         if (_sample || _stopped || _board is not { } board || !board.Questions.AnswersWaiting) return;
         if (!now && DateTime.UtcNow - _lastAnswer < AnswerGather) return;
+        if (!now && _s.PhoneGather is { IsEnabled: true }) return; // phone answers wait for the rest of their batch
         if (_setup != Setup.Ready) return;
         if (_turn is not null && (_turn.Planning || _control is null)) return;
         var answers = board.Questions.TakeAnswers();
@@ -322,7 +323,31 @@ internal sealed partial class ChatPane
         Tools.ActivityLog.Note("question_answered", $"Q{done.Number} on the phone{(done.Unclear ? " (not understood)" : "")}: {JobBoard.OneLine(done.Answer, 200)}");
         Save();
         QuestionsChanged();
-        DeliverAnswers(now: true, fromPhone: true);
+        PhoneAnswersSoon();
+    }
+
+    /// <summary>
+    /// Phone answers go to the coordinator together: after the rest of the same read is taken in (all the answers of one
+    /// read arrive one after the other on this thread), or, while other questions of this chat still wait on the phone,
+    /// when the user stops answering for a minute (AskRules.PhoneDeliverAfter).
+    /// </summary>
+    private void PhoneAnswersSoon()
+    {
+        var s = _s;
+        s.PhoneGather?.Stop();
+        var after = AskRules.PhoneDeliverAfter(AskUser.TabWaiting(JobBoard.ChatKey(_conv.Id)).Count);
+        if (after == TimeSpan.Zero)
+        {
+            Later(() => DeliverAnswers(now: true, fromPhone: true), DispatcherPriority.ContextIdle);
+            return;
+        }
+        s.PhoneGather ??= SessionTimer(after, () =>
+        {
+            s.PhoneGather?.Stop();
+            DeliverAnswers(now: true, fromPhone: true);
+        });
+        s.PhoneGather.Interval = after;
+        s.PhoneGather.Start();
     }
 
     /// <summary>
