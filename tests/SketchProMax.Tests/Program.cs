@@ -122,6 +122,7 @@ ChatFocusTests.Run((name, ok, detail) => Check(name, ok, detail));
 WorkedCodeTests.Run((name, ok, detail) => Check(name, ok, detail));
 AwayTests.Run((name, ok, detail) => Check(name, ok, detail));
 JobPauseTests.Run((name, ok, detail) => Check(name, ok, detail));
+UpdateResumeJobsTests.Run((name, ok, detail) => Check(name, ok, detail));
 ChatQuestionsTests.Run((name, ok, detail) => Check(name, ok, detail));
 HistoryArchiveTests.Run((name, ok, detail) => Check(name, ok, detail));
 SubmissionFormatTests.Run((name, ok, detail) => Check(name, ok, detail));

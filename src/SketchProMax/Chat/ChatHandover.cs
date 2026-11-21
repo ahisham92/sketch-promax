@@ -14,6 +14,15 @@ internal sealed class ChatHandoverState
     public string Draft { get; set; } = "";
     public List<string> Attachments { get; set; } = [];
     public DateTime At { get; set; }
+    /// <summary>
+    /// The model the pane was on (its Revit document), and its title. A chat continued from another model's history
+    /// keeps that model's key, so the next core matches the handover by either (21 Nov 2026: the chat with four paused
+    /// jobs came back as another chat, so they never carried on).
+    /// </summary>
+    public string PaneKey { get; set; } = "";
+    public string PaneTitle { get; set; } = "";
+    /// <summary>Chats that worked in the background (their jobs open or paused for the update): reopened there.</summary>
+    public List<string> Away { get; set; } = [];
 }
 
 /// <summary>
@@ -30,12 +39,16 @@ internal static class ChatHandover
     internal static readonly TimeSpan MaxAge = TimeSpan.FromMinutes(30);
 
     /// <summary>Leaves the (already saved) chat for the next core.</summary>
-    public static void Leave(Conversation conv, string draft, IEnumerable<string> attachments, DateTime? now = null)
+    public static void Leave(Conversation conv, string draft, IEnumerable<string> attachments, DateTime? now = null,
+        string paneKey = "", string paneTitle = "", IEnumerable<string>? away = null)
     {
         var state = new ChatHandoverState
         {
             File = conv.File, Key = conv.Key, Title = conv.Title, Draft = draft ?? "",
             Attachments = attachments.ToList(), At = now ?? DateTime.UtcNow,
+            PaneKey = paneKey ?? "", PaneTitle = paneTitle ?? "",
+            Away = (away ?? []).Where(f => f.Length > 0 && !string.Equals(f, conv.File, StringComparison.OrdinalIgnoreCase))
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
         };
         try { AppDomain.CurrentDomain.SetData(DataKey, JsonSerializer.Serialize(state)); }
         catch (Exception) { /* the next core opens the model's latest chat instead */ }
@@ -76,6 +89,22 @@ internal static class ChatHandover
                 return conv;
             }
         }
+        // The pane was on this model showing a chat of another (continued from that model's history): that same chat.
+        // From a version that didn't say which model the pane was on: that chat still, when its jobs wait to carry on.
+        if (state is { File.Length: > 0 } && ChatStore.Read(state.File) is { } other
+            && (state.PaneKey.Length > 0 ? string.Equals(state.PaneKey, key, StringComparison.OrdinalIgnoreCase)
+                : (other.Jobs ?? []).Any(j => j.Open || j.Paused)))
+            return other;
         return ChatStore.Load(key, title);
+    }
+
+    /// <summary>The background chats handed over that are still there, read from disk (missing or broken ones are left out).</summary>
+    public static List<Conversation> OpenAway(ChatHandoverState? state)
+    {
+        var list = new List<Conversation>();
+        if (state is null) return list;
+        foreach (var file in state.Away)
+            if (ChatStore.Read(file) is { } conv && !string.Equals(conv.File, state.File, StringComparison.OrdinalIgnoreCase)) list.Add(conv);
+        return list;
     }
 }

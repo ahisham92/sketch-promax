@@ -97,6 +97,13 @@ internal sealed class ChatJob
     public bool OverBudget { get; set; }
     /// <summary>Paused by Pause all (or for an update): it carries on when Continue is pressed (Chat.JobPause).</summary>
     public bool Paused { get; set; }
+    /// <summary>
+    /// Why it is paused: <see cref="JobPause.ForUser"/> (Pause all) or <see cref="JobPause.ForUpdate"/> (a newer version
+    /// went in). Only a job paused for an update carries on by itself; "" for jobs paused before this was kept. Saved.
+    /// </summary>
+    public string PausedBy { get; set; } = "";
+    /// <summary>When it was paused (UTC). Saved.</summary>
+    public DateTime PausedAt { get; set; }
     /// <summary>A check of another job's finished work (JobReview): that job's number; 0 for ordinary work. Saved.</summary>
     public int ReviewOf { get; set; }
     /// <summary>
@@ -530,6 +537,7 @@ internal sealed class JobBoard
         if (job.OverBudget) job.BudgetFrom = job.Spent;
         job.OverBudget = false;
         job.Paused = false;
+        job.PausedBy = "";
         if (job.Review != JobReview.Pending)
         {
             if (job.Review.Length > 0 && !JobReview.Passed(job.Review)) job.LastIssues = job.Review;
@@ -541,26 +549,57 @@ internal sealed class JobBoard
     /// Pause all: a running job whose process has ended is set aside as paused (nothing is lost: its session and what it
     /// wrote are kept), to carry on with <see cref="Message"/> when Continue is pressed. False when it wasn't running.
     /// </summary>
-    public bool Pause(int number, DateTime now)
+    public bool Pause(int number, DateTime now, string? why = null)
     {
         lock (Gate)
         {
             var job = _jobs.FirstOrDefault(j => j.Number == number);
             if (job is null || !job.Active) return false;
-            job.State = Stopped;
-            job.Paused = true;
-            job.Now = "";
-            job.Ahead = 0;
-            job.Activity = "";
-            AddItem(job, new ChatItem { Kind = "note", Text = "Paused. It carries on from here when you press Continue." }, now);
+            SetPaused(job, why ?? (JobPause.Why.Length > 0 ? JobPause.Why : JobPause.ForUser), now);
             return true;
         }
     }
 
-    /// <summary>The paused jobs (Pause all), in job order.</summary>
-    public List<ChatJob> PausedJobs()
+    public const string PausedNote = "Paused. It carries on from here when you press Continue.";
+    public const string PausedForUpdateNote = "Paused while Sketch ProMax updates. It carries on from here by itself once the update is in.";
+
+    private void SetPaused(ChatJob job, string why, DateTime now)
     {
-        lock (Gate) return _jobs.Where(j => j.Paused && j.State == Stopped).OrderBy(j => j.Number).ToList();
+        job.State = Stopped;
+        job.Paused = true;
+        job.PausedBy = why;
+        job.PausedAt = now;
+        job.Now = "";
+        job.Ahead = 0;
+        job.Activity = "";
+        AddItem(job, new ChatItem { Kind = "note", Text = why == JobPause.ForUpdate ? PausedForUpdateNote : PausedNote }, now);
+    }
+
+    /// <summary>
+    /// The paused jobs, in job order: all of them (Pause all's Continue), or only those paused for an update
+    /// (<paramref name="forUpdateOnly"/>: what carries on by itself once a newer version is in; a job the user paused waits
+    /// for Continue; one paused before the reason was kept counts as the update's, as versions before 0.35.105 paused
+    /// for an update only that way).
+    /// </summary>
+    public List<ChatJob> PausedJobs(bool forUpdateOnly = false)
+    {
+        lock (Gate)
+            return _jobs.Where(j => j.Paused && j.State == Stopped && (!forUpdateOnly || j.PausedBy != JobPause.ForUser))
+                .OrderBy(j => j.Number).ToList();
+    }
+
+    /// <summary>How long after its pause a job paused for an update still carries on by itself when its chat is opened.</summary>
+    public static readonly TimeSpan UpdateResumeWithin = TimeSpan.FromHours(12);
+
+    /// <summary>
+    /// Jobs paused for an update that this chat never sent on (it wasn't open when the update went in, or the pause
+    /// ended before the chat was up): they carry on now. Recent ones only (<see cref="UpdateResumeWithin"/>).
+    /// </summary>
+    public List<ChatJob> LeftPausedByUpdate(DateTime now)
+    {
+        lock (Gate)
+            return _jobs.Where(j => j.Paused && j.State == Stopped && j.PausedBy == JobPause.ForUpdate && now - j.PausedAt < UpdateResumeWithin)
+                .OrderBy(j => j.Number).ToList();
     }
 
     /// <summary>Stops a job: it won't start, or its run ends now (the pane ends its process). Its state before; null when not found.</summary>
@@ -899,11 +938,19 @@ internal sealed class JobBoard
         !job.Active ? "" : job.State == Waiting ? WaitingToApply : job.Activity is Reading or Applying or Syncing or Blocked ? job.Activity : Thinking;
 
     /// <summary>Jobs saved while running (Revit closed, the chat was left): stopped, so a message carries them on.</summary>
-    public void AfterReload(DateTime now)
+    public void AfterReload(DateTime now, bool afterUpdate = false)
     {
         lock (Gate)
             foreach (var job in _jobs.Where(j => j.Active || j.State == Queued))
             {
+                // Opened again by a newer version (an in-session update): nothing is lost. A job waiting to start still
+                // waits, and one cut off at work is paused for the update, so it carries on from where it was.
+                if (afterUpdate)
+                {
+                    if (job.State == Queued) continue;
+                    SetPaused(job, JobPause.ForUpdate, now);
+                    continue;
+                }
                 job.State = Stopped;
                 job.Ended = now;
                 job.Now = "";
