@@ -150,28 +150,56 @@ namespace SketchProMax.Phone
 
         // ---- talking -----------------------------------------------------------
 
-        /// <summary><paramref name="topic"/>: which of the tool's chats on the phone it goes to (a project, say); "" the main one.</summary>
-        public async Task<long> SendAsync(string kind, JsonObject value, long? replyTo = null, CancellationToken ct = default, string topic = "")
+        /// <summary>How often a message is sent again when the site didn't answer (a slow site, a dropped connection).</summary>
+        public static int SendTries { get; set; } = 3;
+
+        /// <summary>The wait before each try again (tests: none).</summary>
+        public static Func<int, TimeSpan> RetryDelay { get; set; } = attempt => TimeSpan.FromSeconds(3 * attempt);
+
+        /// <summary>
+        /// <paramref name="topic"/>: which of the tool's chats on the phone it goes to (a project, say); "" the main one.
+        /// <paramref name="cid"/>: this side's own id for the message (default a new one). When the site doesn't answer, the
+        /// message is sent again with the same id, and Iris keeps it once (21 Nov 2026: a slow site took a question, didn't
+        /// answer in time, and the question was sent again later, so it showed twice; or never again, so it never showed).
+        /// </summary>
+        public async Task<long> SendAsync(string kind, JsonObject value, long? replyTo = null, CancellationToken ct = default, string topic = "", string? cid = null)
         {
-            var body = new JsonObject { ["kind"] = kind, ["body"] = Seal(KeyBytes, value.ToJsonString()) };
+            var body = new JsonObject { ["kind"] = kind, ["body"] = Seal(KeyBytes, value.ToJsonString()), ["cid"] = string.IsNullOrWhiteSpace(cid) ? NewCid() : cid!.Trim() };
             if (replyTo != null) body["reply_to"] = replyTo.Value;
             if (!string.IsNullOrWhiteSpace(topic)) body["topic"] = topic.Trim();
-            var got = await CallAsync(HttpMethod.Post, "/api/tool/messages", body, null, ct).ConfigureAwait(false);
-            return got["id"]!.GetValue<long>();
+            for (var attempt = 1; ; attempt++)
+            {
+                try
+                {
+                    var got = await CallAsync(HttpMethod.Post, "/api/tool/messages", body, null, ct).ConfigureAwait(false);
+                    return got["id"]!.GetValue<long>();
+                }
+                catch (Exception e) when (attempt < SendTries && !ct.IsCancellationRequested && Retryable(e))
+                {
+                    await Task.Delay(RetryDelay(attempt), ct).ConfigureAwait(false);
+                }
+            }
         }
+
+        /// <summary>The site didn't answer, or answered that it is busy: worth sending again (never a refusal).</summary>
+        internal static bool Retryable(Exception e) =>
+            e is IrisException ie ? ie.Status is 429 or 502 or 503 or 504
+            : e is HttpRequestException or TaskCanceledException or System.IO.IOException;
+
+        static string NewCid() => "t-" + Guid.NewGuid().ToString("N");
 
         public Task<long> UpdateAsync(string text, CancellationToken ct = default, string topic = "") =>
             SendAsync("update", new JsonObject { ["text"] = text }, null, ct, topic);
 
         /// <summary>Ask a question. Returns its id; the answer arrives through InboxAsync with ReplyTo = that id.</summary>
-        public Task<long> AskAsync(string text, IEnumerable<string>? options = null, string? assumed = null, DateTime? deadlineUtc = null, CancellationToken ct = default, string topic = "")
+        public Task<long> AskAsync(string text, IEnumerable<string>? options = null, string? assumed = null, DateTime? deadlineUtc = null, CancellationToken ct = default, string topic = "", string? cid = null)
         {
             var value = new JsonObject { ["text"] = text };
             var opts = options?.Where(o => !string.IsNullOrWhiteSpace(o)).ToArray() ?? Array.Empty<string>();
             if (opts.Length > 0) value["options"] = new JsonArray(opts.Select(o => (JsonNode?)JsonValue.Create(o)).ToArray());
             if (!string.IsNullOrWhiteSpace(assumed)) value["assumed"] = assumed;
             if (deadlineUtc != null) value["deadline"] = deadlineUtc.Value.ToUniversalTime().ToString("o");
-            return SendAsync("question", value, null, ct, topic);
+            return SendAsync("question", value, null, ct, topic, cid);
         }
 
         /// <summary>Close a question on this side (went with the assumption, or answered on the PC).</summary>

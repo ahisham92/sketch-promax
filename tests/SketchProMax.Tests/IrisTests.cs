@@ -61,5 +61,75 @@ internal static class IrisTests
         check("phone routing: a stale claim doesn't count", PhoneLink.TopicTaker("Eastbay", claims, 100, null, Alive, now) == 100, "");
         claims[400] = new() { Projects = ["Lekki"], Beat = now };
         check("phone routing: a closed Revit doesn't count", PhoneLink.TopicTaker("Lekki", claims, 100, null, Alive, now) == 100, "");
+
+        Resend(check, key);
+    }
+
+    /// <summary>
+    /// 21 Nov 2026: the site took a question but didn't answer in time, so the PC thought it failed: it was sent again later
+    /// (shown twice) or never (Q61 to Q65 never reached the phone). Now a message is sent again at once with the same id
+    /// (cid), which Iris keeps once, and a tab question's id is the same each time it is sent.
+    /// </summary>
+    private static void Resend(Action<string, bool, string> check, byte[] key)
+    {
+        var was = IrisClient.RetryDelay;
+        IrisClient.RetryDelay = _ => TimeSpan.Zero;
+        try
+        {
+            var state = new IrisState { Site = "https://iris.test/iris", Key = IrisClient.B64u(key), Token = "t" };
+            var slow = new Fake(2, 200);
+            var id = new IrisClient(state, new HttpClient(slow)).AskAsync("Q4: 4 lengths or 3?", ["4", "3"], cid: "tab-1-4-a").GetAwaiter().GetResult();
+            check("iris: a question the site didn't answer is sent again until it goes", id == 77 && slow.Calls == 3, $"id {id}, calls {slow.Calls}");
+            check("iris: every try carries the same cid", slow.Cids.Distinct().Count() == 1 && slow.Cids[0] == "tab-1-4-a", string.Join(",", slow.Cids));
+
+            var update = new Fake(1, 200);
+            new IrisClient(state, new HttpClient(update)).UpdateAsync("Working on B9.").GetAwaiter().GetResult();
+            check("iris: an update gets its own cid, kept on the retry", update.Cids.Count == 2 && update.Cids[0] == update.Cids[1] && update.Cids[0].StartsWith("t-"), string.Join(",", update.Cids));
+
+            var refused = new Fake(0, 400);
+            var threw = false;
+            try { new IrisClient(state, new HttpClient(refused)).UpdateAsync("x").GetAwaiter().GetResult(); }
+            catch (IrisException) { threw = true; }
+            check("iris: a refusal isn't sent again", threw && refused.Calls == 1, $"calls {refused.Calls}");
+
+            var down = new Fake(9, 200);
+            threw = false;
+            try { new IrisClient(state, new HttpClient(down)).UpdateAsync("x").GetAwaiter().GetResult(); }
+            catch (HttpRequestException) { threw = true; }
+            check("iris: tries end after three", threw && down.Calls == 3, $"calls {down.Calls}");
+        }
+        finally { IrisClient.RetryDelay = was; }
+
+        var asked = new DateTime(2026, 11, 21, 15, 0, 0, DateTimeKind.Utc);
+        var cid = SketchProMax.Chat.AskRules.TabCid("chat:abc", 61, asked);
+        check("iris: a tab question has the same cid every time it is sent", cid == SketchProMax.Chat.AskRules.TabCid("chat:abc", 61, asked) && cid.Length <= 80, cid);
+        check("iris: written again, it is a new message", cid != SketchProMax.Chat.AskRules.TabCid("chat:abc", 61, asked.AddMinutes(5)), "");
+        check("iris: another chat's Q61 is another message", cid != SketchProMax.Chat.AskRules.TabCid("chat:xyz", 61, asked), "");
+        var ask = new SketchProMax.Chat.UserAsk { Number = 61, Asked = asked };
+        check("iris: a tab question's version is when it was asked", ask.Version == asked, "");
+        ask.Rewritten = asked.AddMinutes(5);
+        check("iris: or last written again", ask.Version == asked.AddMinutes(5), "");
+    }
+
+    /// <summary>The site: the first <c>fail</c> calls are lost (no answer), then it answers <c>status</c>.</summary>
+    private sealed class Fake(int fail, int status) : HttpMessageHandler
+    {
+        public int Calls;
+        public readonly List<string> Cids = [];
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Calls++;
+            if (request.Content is not null)
+            {
+                var body = System.Text.Json.Nodes.JsonNode.Parse(await request.Content.ReadAsStringAsync())!;
+                Cids.Add(body["cid"]?.GetValue<string>() ?? "");
+            }
+            if (Calls <= fail) throw new HttpRequestException("The underlying connection was closed.");
+            return new HttpResponseMessage((System.Net.HttpStatusCode)status)
+            {
+                Content = new StringContent(status == 200 ? "{\"id\": 77, \"created\": 1}" : "{\"error\": \"No.\"}"),
+            };
+        }
     }
 }

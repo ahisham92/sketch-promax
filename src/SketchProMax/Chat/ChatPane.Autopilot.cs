@@ -118,7 +118,7 @@ internal sealed partial class ChatPane
             _jobsTimer = new DispatcherTimer(DispatcherPriority.Background, Dispatcher) { Interval = TimeSpan.FromMinutes(1) };
             _jobsTimer.Tick += (_, _) =>
             {
-                try { ClaimPhoneProjects(); JobsProgress(); }
+                try { ClaimPhoneProjects(); PhoneRetry(); JobsProgress(); }
                 catch (Exception) { /* the next tick tries again */ }
             };
             _jobsTimer.Start();

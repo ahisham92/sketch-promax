@@ -144,11 +144,11 @@ internal static class PhoneLink
     public static Task<string?> UpdateAsync(string text, string topic = "") => Try(c => c.UpdateAsync(text, default, topic));
 
     /// <summary>A question with one-tap buttons (<paramref name="options"/>, else the assumed answer). The message id (0 when it couldn't go), and why not.</summary>
-    public static async Task<(long Id, string? Error)> AskAsync(string text, string assumed, DateTime? deadlineUtc, string topic = "", IReadOnlyList<string>? options = null)
+    public static async Task<(long Id, string? Error)> AskAsync(string text, string assumed, DateTime? deadlineUtc, string topic = "", IReadOnlyList<string>? options = null, string? cid = null)
     {
         long id = 0;
         var buttons = options is { Count: > 0 } ? options : assumed.Length > 0 ? [assumed] : null;
-        var error = await Try(async c => id = await c.AskAsync(text, buttons, assumed.Length > 0 ? assumed : null, deadlineUtc, default, topic).ConfigureAwait(false)).ConfigureAwait(false);
+        var error = await Try(async c => id = await c.AskAsync(text, buttons, assumed.Length > 0 ? assumed : null, deadlineUtc, default, topic, cid).ConfigureAwait(false)).ConfigureAwait(false);
         return (id, error);
     }
 
