@@ -427,6 +427,8 @@ internal sealed partial class ChatPane
         string? session = null;
         if (resume is null)
         {
+            // A new session: it gets the chat's agreed rules with its task, the same rules its check judges by (bug 115).
+            if (job.ReviewOf == 0 && JobReview.RulesForJob(_conv.Recall) is { Length: > 0 } rules) message = message with { Text = message.Text + rules };
             session = Guid.NewGuid().ToString();
             JobSessions.Set(folder, job.Key, session);
             job.HasSession = true;

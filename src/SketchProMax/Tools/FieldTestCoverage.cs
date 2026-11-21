@@ -866,6 +866,8 @@ internal static class FieldTestCoverage
         new(103, ["chat.away_ui", "chat.revit_held_ui"], "With nobody at Revit, a command left open is ended with Esc after two minutes and the jobs carry on; \"I won't be available\" starts away mode (unit tests)"),
         new(104, ["chat.away_ui", "chat.revit_held_ui"], "Esc only for a command doing nothing (no processor, memory, file or journal activity for a minute), never during long work; any way of saying he is away starts away mode (unit tests)"),
         new(109, ["chat.questions_ui"], "the Questions button always shows in a chat With coordinator; questions written in a reply (lettered choices, or a sentence ending in ?) go in the tab with their choices (unit tests)"),
+        new(116, ["chat.notes"], "memory_note while a long Revit call runs is saved at once, not refused (source check; try it during a long job by hand)"),
+        new(115, ["chat.checked_to_the_end_ui"], "a new job's first message ends with the chat's agreed rules (the chat summary), the same the check reads (unit tests; start a job in a chat with a summary and read its first message by hand)"),
         new(114, ["chat.auto_sync"], "a failing auto sync waits 2, 4, 8, 16, then 30 minutes and asks for a sync by hand after 3 in a row (source check)"),
         new(113, ["chat.checked_to_the_end_ui"], "a check after a pass reads only the asks since the pass; a part that took the task's way out is done (unit tests)"),
         new(112, ["chat.away_ui"], "with away mode or an autopilot on, a dialog of the user's own (opening a model) is never closed while the keyboard or mouse was used in the last 2 minutes; away ends by itself when the PC is used after 15 quiet minutes (unit tests; open a model with away on by hand)"),
