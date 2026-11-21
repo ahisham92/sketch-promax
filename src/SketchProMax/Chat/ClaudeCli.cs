@@ -698,6 +698,9 @@ internal static class ClaudeCli
           dimensions, text), one check is always to look at it in the view the person works in (capture_view_image of the
           view named in the task, else the active one): a family's plan-only lines, a hidden or unjoined element or a tag
           over another show there and not in the numbers.
+        - "Exactly", "follow", "match", "flush" and "on" mean exact: within 1 mm (rounding), never a looser figure. A tolerance
+          belongs to the rule that gives it: the clash tolerance says what counts as a clash, and never makes an element that is
+          a few mm off "already matching" or "following". Something 2 mm or more off what it must follow is not done; move it.
         - End every run with a short report for the main chat, in plain words: each part of your task as done or not
           done (with counts and names: "38 of 40 piles tagged" is not done), each
           finish condition and whether it held, anything you couldn't do and why, and what the person should check. A part you did not read back in the model

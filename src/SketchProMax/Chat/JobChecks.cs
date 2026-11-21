@@ -164,7 +164,9 @@ internal static class JobReview
         "it lists for those berths is a part that is NOT DONE.\n" +
         "5. Where the task gives a way out (\"within 10 mm, or the remaining deviation noted with its cause\"), a part that took it is " +
         $"{DoneWord}: never ask for the stricter way the task itself let go, and never ask for two things that can't both hold.\n" +
-        "6. Don't change the model: changes are refused for a check.\n\n" +
+        "6. Where the user said exactly, follow, match or flush, the tolerance is 1 mm: a part 2 mm or more off is NOT DONE, even when a " +
+        "tolerance from another rule (the clash tolerance) would allow it. A tolerance belongs only to the rule that gives it.\n" +
+        "7. Don't change the model: changes are refused for a check.\n\n" +
         $"Answer with the list, one line per part: \"<n>. <the part>: {DoneWord}\" with what you read, or \"<n>. <the part>: {NotDoneWord} - " +
         "<what is missing or wrong, and where>\". A part you could not check is NOT DONE with the reason.\n" +
         $"A part that is not the job's to finish is \"<n>. <the part>: {WaitingWord} - <why>\": it needs the user's decision or yes that " +
