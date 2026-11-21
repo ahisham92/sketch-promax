@@ -345,6 +345,10 @@ public sealed class BridgeServer
                     // Messages the user typed while the chat task ran go with the answer Claude reads now (any tool's,
                     // "still running" too). Not when the caller has gone: they then stay queued, and the chat sends
                     // what is left when the turn ends. A job's calls never take them: they are the main chat's.
+                    // A view the chat looked at: it goes to the phone with the reply when the phone asked (PhonePictures).
+                    if (fromChat && result is { IsError: false, PngImage: { Length: > 0 } png } && name.EndsWith("capture_view_image", StringComparison.Ordinal)
+                        && (jobKey is null || Chat.JobBoard.IsChatKey(jobKey)))
+                        Phone.PhonePictures.Keep(jobKey, png, DateTime.UtcNow);
                     if (fromChat && jobKey is null && !ct.IsCancellationRequested) result = result with { Text = JobNotes.Attach(name, result.Text) };
                     // A job's own: what the user or a teammate sent it while it worked goes with this step's answer.
                     else if (fromChat && jobKey is not null && !ct.IsCancellationRequested && Chat.ChatJobs.TakeAsides(jobKey, name) is { } aside)

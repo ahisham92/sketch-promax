@@ -141,7 +141,7 @@ internal static class PhoneLink
     }
 
     /// <summary>A progress update, in <paramref name="topic"/>'s chat on the phone (the project). Null when it went, else why not.</summary>
-    public static Task<string?> UpdateAsync(string text, string topic = "") => Try(c => c.UpdateAsync(text, default, topic));
+    public static Task<string?> UpdateAsync(string text, string topic = "", string? image = null) => Try(c => c.UpdateAsync(text, default, topic, image));
 
     /// <summary>A question with one-tap buttons (<paramref name="options"/>, else the assumed answer). The message id (0 when it couldn't go), and why not.</summary>
     public static async Task<(long Id, string? Error)> AskAsync(string text, string assumed, DateTime? deadlineUtc, string topic = "", IReadOnlyList<string>? options = null, string? cid = null)

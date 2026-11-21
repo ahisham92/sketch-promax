@@ -72,4 +72,23 @@ internal sealed partial class ChatPane
         AutomationProperties.SetName(_phonePill, _phoneLabel.Text);
         AutomationProperties.SetHelpText(_phonePill, tip);
     }
+
+    /// <summary>A captured view as the phone gets it: at most 1600 px, JPEG, as a data URL (null when it can't be read).</summary>
+    private static string? PhoneJpeg(byte[] png)
+    {
+        try
+        {
+            using var input = new System.IO.MemoryStream(png);
+            var frame = System.Windows.Media.Imaging.BitmapFrame.Create(input, System.Windows.Media.Imaging.BitmapCreateOptions.None, System.Windows.Media.Imaging.BitmapCacheOption.OnLoad);
+            System.Windows.Media.Imaging.BitmapSource image = frame;
+            var scale = Math.Min(1.0, 1600.0 / Math.Max(frame.PixelWidth, frame.PixelHeight));
+            if (scale < 1) image = new System.Windows.Media.Imaging.TransformedBitmap(frame, new ScaleTransform(scale, scale));
+            var encoder = new System.Windows.Media.Imaging.JpegBitmapEncoder { QualityLevel = 80 };
+            encoder.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(image));
+            using var output = new System.IO.MemoryStream();
+            encoder.Save(output);
+            return Phone.PhonePictures.DataUrl(output.ToArray(), "image/jpeg");
+        }
+        catch (Exception) { return null; }
+    }
 }

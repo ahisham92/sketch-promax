@@ -28,7 +28,8 @@ internal static class AskUser
     public static event Action<UserQuestion>? Answered;
 
     /// <summary>Raised (on the loop's thread) when the user wrote from the phone: what they wrote, and in which project's chat.</summary>
-    public static event Action<string, string>? UserWrote;
+    /// <summary>The third value: a picture sent with it, saved as a file (PhonePictures), or null.</summary>
+    public static event Action<string, string, string?>? UserWrote;
 
     /// <summary>Raised (on the loop's thread) when the user pressed one of PhoneLink.Commands on the phone, in which project's chat.</summary>
     public static event Action<string, string>? Command;
@@ -80,10 +81,10 @@ internal static class AskUser
     /// Sends a progress update or reply to <paramref name="topic"/>'s chat on the phone (the project, PhoneProjects; on a
     /// background thread). Null when sent, else why not.
     /// </summary>
-    public static async Task<string?> SendUpdateAsync(string body, string topic = "")
+    public static async Task<string?> SendUpdateAsync(string body, string topic = "", string? image = null)
     {
-        var error = await PhoneLink.UpdateAsync(body, topic).ConfigureAwait(false);
-        if (error is null) Remember("You sent", body, topic);
+        var error = await PhoneLink.UpdateAsync(body, topic, image).ConfigureAwait(false);
+        if (error is null) Remember("You sent", body + (image is null ? "" : " [with a picture]"), topic);
         return error;
     }
 
@@ -280,16 +281,20 @@ internal static class AskUser
             foreach (var m in await PhoneLink.InboxAsync().ConfigureAwait(false) ?? [])
             {
                 var text = m.Text.Trim();
-                if (m.Error.Length > 0 || text.Length == 0) continue;
+                if (m.Error.Length > 0 || text.Length == 0 && !(m.Kind == "message" && m.Image.Length > 0)) continue;
                 // Each project has its chat on the phone: the Revit with a chat for that project takes what is written there.
                 if (m.Kind is "command" or "message" && !PhoneLink.TakesTopic(m.Topic, takes, now)) continue;
                 if (m.Kind == "command") Command?.Invoke(text, m.Topic);
                 else if (m.Kind == "message")
                 {
-                    Remember("They wrote", text, m.Topic);
+                    string? picture = null;
+                    if (m.Image.Length > 0)
+                        try { picture = PhonePictures.Save(m.Image, ClaudeCli.AttachmentsFolder, now); }
+                        catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException) { /* the text still goes */ }
+                    Remember("They wrote", text + (picture is null ? "" : " [with a picture]"), m.Topic);
                     // Writing from the phone: read every 30 s for a while, so a conversation doesn't wait minutes per message.
                     _chatUntil = now + AskRules.ChatFor;
-                    UserWrote?.Invoke(text, m.Topic);
+                    UserWrote?.Invoke(text, m.Topic, picture);
                 }
                 else if (m.Kind == "answer")
                     lock (Gate)

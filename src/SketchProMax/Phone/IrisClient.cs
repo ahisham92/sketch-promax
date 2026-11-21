@@ -53,6 +53,8 @@ namespace SketchProMax.Phone
         public string Error { get; set; } = "";
         /// <summary>Which of the tool's chats on the phone it came from (Sketch ProMax: the project), "" for the main one.</summary>
         public string Topic { get; set; } = "";
+        /// <summary>A picture sent with it (data:image/jpeg;base64,...), "" none.</summary>
+        public string Image { get; set; } = "";
     }
 
     internal sealed class IrisException : Exception
@@ -188,8 +190,13 @@ namespace SketchProMax.Phone
 
         static string NewCid() => "t-" + Guid.NewGuid().ToString("N");
 
-        public Task<long> UpdateAsync(string text, CancellationToken ct = default, string topic = "") =>
-            SendAsync("update", new JsonObject { ["text"] = text }, null, ct, topic);
+        /// <summary>A progress line or reply; <paramref name="image"/>: a picture with it (a data URL, made at most 1600 px), or null.</summary>
+        public Task<long> UpdateAsync(string text, CancellationToken ct = default, string topic = "", string? image = null)
+        {
+            var value = new JsonObject { ["text"] = text };
+            if (!string.IsNullOrEmpty(image)) value["image"] = image;
+            return SendAsync("update", value, null, ct, topic);
+        }
 
         /// <summary>Ask a question. Returns its id; the answer arrives through InboxAsync with ReplyTo = that id.</summary>
         public Task<long> AskAsync(string text, IEnumerable<string>? options = null, string? assumed = null, DateTime? deadlineUtc = null, CancellationToken ct = default, string topic = "", string? cid = null)
@@ -225,6 +232,7 @@ namespace SketchProMax.Phone
                 {
                     var value = JsonNode.Parse(Open(KeyBytes, m["body"]!.GetValue<string>()))!;
                     msg.Text = (value["text"] ?? value["command"])?.GetValue<string>() ?? "";
+                    msg.Image = value["image"] is JsonValue img && img.TryGetValue<string>(out var pic) ? pic : "";
                 }
                 catch (Exception e) { msg.Error = e.Message; }
                 list.Add(msg);
