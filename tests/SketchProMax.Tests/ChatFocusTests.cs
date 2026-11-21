@@ -155,6 +155,8 @@ internal static class ChatFocusTests
             && Read("src/SketchProMax/Tools/MemoryTools.cs").Contains("internal static ToolResult Answer(ToolArgs args)"), "");
         check("sheets (bug 126): no issue or review print, and no 'ready', before every sheet was looked at as a drawing",
             Read("src/SketchProMax/Chat/ClaudeCli.cs").Contains("Never export sheets for an issue or a review print, and never say the drawings are ready for submission, until"), "");
+        check("jobs (bug 126): a job checks its own work, sheets as drawings, the way its check will before it reports",
+            Read("src/SketchProMax/Chat/ClaudeCli.cs").Contains("Get it right the first time: before you report, check your own work exactly as the teammate will."), "");
         check("notes (bug 125): notes, questions, jobs and auto sync skip the model switch, so a busy Revit never holds them",
             Read("src/SketchProMax/Bridge/RevitTargets.cs").Contains("name is not (\"wait_for_job\" or \"cancel_job\" or \"memory_note\" or \"chat_questions\" or \"chat_jobs\" or \"auto_sync\")"), "");
         check("job (bug 115): a new job session gets the chat's rules with its task (not a check, which gets them already)",

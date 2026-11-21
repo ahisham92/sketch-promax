@@ -707,6 +707,12 @@ internal static class ClaudeCli
           dimensions, text), one check is always to look at it in the view the person works in (capture_view_image of the
           view named in the task, else the active one): a family's plan-only lines, a hidden or unjoined element or a tag
           over another show there and not in the numbers.
+        - Get it right the first time: before you report, check your own work exactly as the teammate will. Every part of
+          the task read back, and every sheet your work shows on looked at as a drawing (capture_view_image on the sheet):
+          tags from the tag family the other sheets use, never typed text; nothing that was on the drawing before is gone;
+          no check or clash colours left on; rebar and sections follow the model as it is now; no stray lines; nothing from
+          outside the submission. Fix what you find before you report. Never write done for a part you didn't change and
+          read back: a report that says done when nothing changed costs the person a whole round.
         - "Exactly", "follow", "match", "flush" and "on" mean exact: within 1 mm (rounding), never a looser figure. A tolerance
           belongs to the rule that gives it: the clash tolerance says what counts as a clash, and never makes an element that is
           a few mm off "already matching" or "following". Something 2 mm or more off what it must follow is not done; move it.
