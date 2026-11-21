@@ -1039,13 +1039,15 @@ internal static class ChangeFile
         }
         // Revit is in the middle of something: at a later idle moment.
         if (doc.IsModifiable || doc.IsReadOnly) return false;
-        lock (Gate) model.Keeps.Clear();
+        // A few at a time: a step that made hundreds of such elements (a tool, a paste) is not copied one by one.
+        // The rest stay for the next go (bug 119: with copies waiting for a pause, more gather between goes).
+        var taking = ids.Take(M.KeepMost).ToList();
+        lock (Gate) model.Keeps.ExceptWith(taking);
         var start = UiCost.Start();
         var clock = System.Diagnostics.Stopwatch.StartNew();
         try
         {
-            // A few at a time: a step that made hundreds of such elements (a tool, a paste) is not copied one by one.
-            var elements = ids.Take(M.KeepMost).Select(id => doc.GetElement(new ElementId(id))).Where(e => e is not null).ToList();
+            var elements = taking.Select(id => doc.GetElement(new ElementId(id))).Where(e => e is not null).ToList();
             ChangeKeeper.Keep(doc, model.Folder, elements!);
         }
         catch (Exception ex) { LifelineBugs.Note("capture", "new elements couldn't be kept as copies next to the change file", Safe(() => doc.PathName), ex, "kept copies"); }
