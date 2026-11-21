@@ -162,11 +162,17 @@ internal static class JobReview
         "reference.\n" +
         "4. When the work was a berth's submission drawings or sheets, also call submission_format (action=check, berths): every line " +
         "it lists for those berths is a part that is NOT DONE.\n" +
-        "5. Where the task gives a way out (\"within 10 mm, or the remaining deviation noted with its cause\"), a part that took it is " +
+        "5. When the job changed anything that shows on a sheet (a view on a sheet, tags, rebar, dimensions, schedules, detail " +
+        "lines, colours), look at each such sheet as a drawing (capture_view_image on the sheet, zoomed to what changed): tags use " +
+        "the tag family the other sheets use, never typed text; nothing that was on the drawing before is gone (dowel lengths, " +
+        "notes, dimensions); no check or clash colours or overrides are left on; rebar and sections follow the model as it is now; " +
+        "no stray lines; nothing from outside the submission (RoRo, unless the user named it) shows in its views or schedules. " +
+        "Each problem seen there is NOT DONE, even when every number in the model is right (bug 126).\n" +
+        "6. Where the task gives a way out (\"within 10 mm, or the remaining deviation noted with its cause\"), a part that took it is " +
         $"{DoneWord}: never ask for the stricter way the task itself let go, and never ask for two things that can't both hold.\n" +
-        "6. Where the user said exactly, follow, match or flush, the tolerance is 1 mm: a part 2 mm or more off is NOT DONE, even when a " +
+        "7. Where the user said exactly, follow, match or flush, the tolerance is 1 mm: a part 2 mm or more off is NOT DONE, even when a " +
         "tolerance from another rule (the clash tolerance) would allow it. A tolerance belongs only to the rule that gives it.\n" +
-        "7. Don't change the model: changes are refused for a check.\n\n" +
+        "8. Don't change the model: changes are refused for a check.\n\n" +
         $"Answer with the list, one line per part: \"<n>. <the part>: {DoneWord}\" with what you read, or \"<n>. <the part>: {NotDoneWord} - " +
         "<what is missing or wrong, and where>\". A part you could not check is NOT DONE with the reason.\n" +
         $"A part that is not the job's to finish is \"<n>. <the part>: {WaitingWord} - <why>\": it needs the user's decision or yes that " +
