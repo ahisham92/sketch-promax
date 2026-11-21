@@ -3,7 +3,7 @@ using System.IO;
 namespace SketchProMax.Phone;
 
 /// <summary>
-/// Pictures on the phone chat (Ahmed, 21 Nov 2026: "I don't get pictures or send pictures"). A picture the user sends from
+/// Pictures on the phone chat (the user, 21 Nov 2026: "I don't get pictures or send pictures"). A picture the user sends from
 /// the phone is saved as a file and attached to the chat's message; a view the chat captured while answering the phone
 /// (capture_view_image) goes back with the reply. No WPF or Revit (the tests compile it).
 /// </summary>

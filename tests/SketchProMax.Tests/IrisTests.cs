@@ -67,7 +67,7 @@ internal static class IrisTests
         Pictures(check);
     }
 
-    /// <summary>Ahmed, 21 Nov 2026: "I don't get pictures or send pictures" on the phone chat.</summary>
+    /// <summary>The user, 21 Nov 2026: "I don't get pictures or send pictures" on the phone chat.</summary>
     private static void Pictures(Action<string, bool, string> check)
     {
         var bytes = new byte[] { 0xFF, 0xD8, 0xFF, 1, 2, 3 };
