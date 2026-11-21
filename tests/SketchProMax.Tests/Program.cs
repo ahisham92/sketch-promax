@@ -158,6 +158,7 @@ SignInTests.Run((name, ok, detail) => Check(name, ok, detail));
 ChatWorkTests.Run((name, ok, detail) => Check(name, ok, detail));
 AutopilotStallTests.Run((name, ok, detail) => Check(name, ok, detail));
 JobChecksTests.Run((name, ok, detail) => Check(name, ok, detail));
+JobTruthTests.Run((name, ok, detail) => Check(name, ok, detail));
 AskRulesTests.Run((name, ok, detail) => Check(name, ok, detail));
 IrisTests.Run((name, ok, detail) => Check(name, ok, detail));
 ConnectionWatchTests.Run((name, ok, detail) => Check(name, ok, detail));

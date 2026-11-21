@@ -287,6 +287,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         public readonly List<(ChatItem Item, UIElement? Element)> Held = new();
         /// <summary>Where the turn's items start in the conversation: its text is cleaned of "No split." when it ends.</summary>
         public int FirstItem;
+        /// <summary>The jobs as they were when the turn started: a reply calling one busy that finished meanwhile is corrected (<see cref="JobTruth"/>).</summary>
+        public List<ChatJob>? JobsAtStart;
     }
 
     /// <summary>A task at least this long that finishes gets the finished glow and, when you are in another program, the taskbar flash.</summary>
@@ -2325,7 +2327,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             capture(text); // the field test's hook: what would be sent, never sent
             return;
         }
-        var turn = _turn = new Turn { Brief = brief, Quiet = quiet, FirstItem = _conv.Items.Count };
+        var turn = _turn = new Turn { Brief = brief, Quiet = quiet, FirstItem = _conv.Items.Count, JobsAtStart = _board?.Snapshot() };
         CrewHeard(); // the large chat's coordinator nods: your message, or a job reporting back
         // Automatic model and effort: picked for this request by its kind of work, and said in the chat when it changes.
         PickFor(text, attachments.Any(a => System.IO.Path.GetExtension(a.Path).ToLowerInvariant() is ".pdf" or ".docx" or ".pptx" or ".doc"));
@@ -3057,6 +3059,22 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         foreach (var row in _tools.Values.Where(r => r.Item.State == "running").ToList()) SetTool(row, state, row.Item.Text, "");
     }
 
+    /// <summary>
+    /// The turn's last answer calls a job busy ("still drawing ...") that finished while it was being written (bug 123):
+    /// one line saying so is added to it, so the chat and the phone never leave a finished job looking busy.
+    /// </summary>
+    private void CorrectJobClaims(Turn turn)
+    {
+        if (turn.JobsAtStart is not { Count: > 0 } before || _board is null || turn.Planning || turn.Shrinking) return;
+        ChatItem? last = null;
+        for (var k = _conv.Items.Count - 1; k >= Math.Max(0, turn.FirstItem); k--)
+            if (_conv.Items[k].Kind == "assistant") { last = _conv.Items[k]; break; }
+        if (last is null || JobTruth.Correction(last.Text, before, _board.Snapshot()) is not { } line) return;
+        last.Text = last.Text.TrimEnd() + "\n\n" + line;
+        if (_views.TryGetValue(last, out var view)) view.SetMarkdown(last.Text);
+        Tools.ActivityLog.Note("job_claim_corrected", line);
+    }
+
     private void EndTurn()
     {
         var ended = _turn;
@@ -3064,6 +3082,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         {
             if (!Hidden) RenderDirty(); // the turn's text is complete before it is cleaned
             CleanTurn(ended);
+            CorrectJobClaims(ended);
             if (!ended.Planning && !ended.Shrinking) CatchQuestions(ended);
         }
         if (_turn?.KillTimer is { } timer) timer.Stop();
