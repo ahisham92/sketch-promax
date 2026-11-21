@@ -29,6 +29,15 @@ internal sealed class UserQuestion
     public bool Taken { get; set; }
     /// <summary>The answer was passed on to the job or the coordinator.</summary>
     public bool Delivered { get; set; }
+    /// <summary>
+    /// Its number in a chat's Questions tab (ChatQuestions), 0 when a job asked with ask_user. A tab question goes to the
+    /// phone while it is on, with its answers as buttons, and the answer comes back to that tab (21 Nov 2026: the owner
+    /// switched the phone on and the coordinator's question never reached it, because only ask_user went there).
+    /// </summary>
+    public int TabNumber { get; set; }
+    /// <summary>A tab question's answers to tap on the phone, and the one suggested (-1 none).</summary>
+    public List<string> Options { get; set; } = [];
+    public int Recommended { get; set; } = -1;
 }
 
 /// <summary>
@@ -85,13 +94,27 @@ internal static class AskRules
         return waiting.Count > 0 && now - waiting.Min(q => q.Asked) >= Gather ? waiting : [];
     }
 
-    /// <summary>The question as the phone shows it: its number, who asks, the question.</summary>
-    public static string PhoneText(UserQuestion q) =>
-        q.Asker.Length > 0 ? $"Q{q.Id} ({q.Asker}): {q.Question.Trim()}" : $"Q{q.Id}: {q.Question.Trim()}";
+    /// <summary>How the phone and the PC name the question: a tab question by its number in the Questions tab (Q4), so both say the same.</summary>
+    public static string Label(UserQuestion q) => "Q" + (q.TabNumber > 0 ? q.TabNumber : q.Id);
 
-    /// <summary>"ok", "yes", "fine", "go ahead" typed as the answer: the assumption stands, said in full so the job can't mistake it.</summary>
+    /// <summary>The question as the phone shows it: its number, who asks, the question (a tab question: its answers and the one suggested).</summary>
+    public static string PhoneText(UserQuestion q)
+    {
+        var text = q.Asker.Length > 0 ? $"{Label(q)} ({q.Asker}): {q.Question.Trim()}" : $"{Label(q)}: {q.Question.Trim()}";
+        if (q.TabNumber > 0 && q.Recommended >= 0 && q.Recommended < q.Options.Count) text += $"\nSuggested: {q.Options[q.Recommended]}";
+        return text;
+    }
+
+    /// <summary>The buttons the phone shows: a tab question's answers, else the assumed answer.</summary>
+    public static List<string> PhoneOptions(UserQuestion q) =>
+        q.TabNumber > 0 ? q.Options.Where(o => o.Trim().Length > 0).ToList() : q.Assumed.Trim().Length > 0 ? [q.Assumed.Trim()] : [];
+
+    /// <summary>
+    /// "ok", "yes", "fine", "go ahead" typed as the answer: the assumption stands, said in full so the job can't mistake it.
+    /// A tab question's answer is kept as written (it has no assumption; the tab picks an option from "2" or "b").
+    /// </summary>
     public static string Keep(string answer, UserQuestion q) =>
-        Regex.IsMatch(answer.Trim(), @"^(ok(ay)?|yes|yep|fine|agreed|go ahead|correct|good|as assumed|proceed)[.! ]*$", RegexOptions.IgnoreCase)
+        q.TabNumber == 0 && Regex.IsMatch(answer.Trim(), @"^(ok(ay)?|yes|yep|fine|agreed|go ahead|correct|good|as assumed|proceed)[.! ]*$", RegexOptions.IgnoreCase)
             ? $"Keep your assumption ({q.Assumed.Trim()})." : answer.Trim();
 
     // ---- Progress updates ---------------------------------------------------------------------------------------------
@@ -133,7 +156,7 @@ internal static class AskRules
         if (waiting.Count > 0)
         {
             sb.Append("\nWe need your input on:\n");
-            foreach (var q in waiting.OrderBy(q => q.Id)) sb.Append("Q").Append(q.Id).Append(": ").Append(Short(q.Question, 200)).Append('\n');
+            foreach (var q in waiting.OrderBy(q => q.Id)) sb.Append(Label(q)).Append(": ").Append(Short(q.Question, 200)).Append('\n');
         }
         return sb.ToString().Trim();
     }

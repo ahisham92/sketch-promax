@@ -105,6 +105,8 @@ internal sealed partial class ChatPane
     /// <summary>The questions changed (asked, rewritten, answered): the pill and the tab follow.</summary>
     private void QuestionsChanged()
     {
+        try { SyncPhoneQuestions(); }
+        catch (Exception) { /* the phone is a convenience: the tab still shows the questions */ }
         ShowQuestionsPill();
         // Drawn again only when the questions changed: the jobs' progress mustn't take the box away while the user types.
         if (_questionsShown && Signature() != _questionsDrawn) RenderQuestions();
@@ -250,7 +252,7 @@ internal sealed partial class ChatPane
     /// Sends the answers gathered to the coordinator as one message: its next turn when it is free, else with its next
     /// step. Kept for later while it plans or the chat isn't ready. <paramref name="now"/>: without waiting for more answers.
     /// </summary>
-    private void DeliverAnswers(bool now)
+    private void DeliverAnswers(bool now, bool fromPhone = false)
     {
         if (_sample || _stopped || _board is not { } board || !board.Questions.AnswersWaiting) return;
         if (!now && DateTime.UtcNow - _lastAnswer < AnswerGather) return;
@@ -267,10 +269,68 @@ internal sealed partial class ChatPane
             QuestionsChanged();
             return;
         }
-        Add(new ChatItem { Kind = "user", Text = shown });
+        Add(new ChatItem { Kind = "user", Text = shown + (fromPhone ? "\n\n(from your phone)" : "") });
         Save();
         QuestionsChanged();
-        _ = RunTurn(message, [], "");
+        _ = RunTurn(message + (fromPhone ? " " + AskRules.PhoneVoice(CrewStrip.Names.Coordinator) : ""), [], "");
+        if (fromPhone) _phoneTurn = _turn; // answered on the phone: the coordinator's reply goes back there
+    }
+
+    // ---- The phone (21 Nov 2026: the owner switched the phone on and the coordinator's question never reached it) ----
+
+    /// <summary>
+    /// While the phone is on, the Questions tab is on the phone too: each open question it hasn't had goes there with its
+    /// answers as buttons (AskUser.AskTab), and one answered here, withdrawn or being written again is closed there.
+    /// <paramref name="again"/> (the phone was just switched on): every open question the phone isn't waiting on goes again.
+    /// </summary>
+    private void SyncPhoneQuestions(bool again = false)
+    {
+        if (_sample || _instance != this || _board is not { } board || !Phone.PhoneLink.Active) return;
+        var key = JobBoard.ChatKey(_conv.Id);
+        if (key.Length == 0) return;
+        var onPhone = AskUser.TabWaiting(key);
+        foreach (var n in onPhone)
+        {
+            var q = board.Questions.Find(n);
+            if (q is { Open: true, Unclear: false }) continue;
+            AskUser.SettleTab(key, n, q is null || q.Closed ? $"Q{n} is no longer needed."
+                : q.Unclear ? $"Q{n} is being written more plainly; the new one follows."
+                : $"Q{n} was answered on the PC: {JobBoard.OneLine(q.Answer, 120)}");
+        }
+        if (again)
+            foreach (var q in board.Questions.Open().Where(q => !onPhone.Contains(q.Number))) board.Questions.MarkOnPhone(q, default);
+        var now = DateTime.UtcNow;
+        foreach (var q in board.Questions.NotOnPhone())
+        {
+            board.Questions.MarkOnPhone(q, now);
+            AskUser.AskTab(key, q.Number, q.From, q.Text, q.Options, q.Recommended, PhoneTopic);
+        }
+    }
+
+    /// <summary>A Questions tab question was answered on the phone: taken as if tapped here, and sent to the coordinator at once.</summary>
+    private void PhoneTabAnswered(UserQuestion q)
+    {
+        if (_board is not { } board) return;
+        if (board.Questions.Find(q.TabNumber) is not { Open: true } ask)
+        {
+            _ = AskUser.SendUpdateAsync($"Q{q.TabNumber} was already answered on the PC, so this answer wasn't used.", q.Topic);
+            return;
+        }
+        var done = board.Questions.Answer(ask.Number, ChatQuestions.PickOption(ask, q.Answer ?? ""), DateTime.UtcNow);
+        if (done is null) return;
+        _lastAnswer = DateTime.UtcNow;
+        Tools.ActivityLog.Note("question_answered", $"Q{done.Number} on the phone{(done.Unclear ? " (not understood)" : "")}: {JobBoard.OneLine(done.Answer, 200)}");
+        Save();
+        QuestionsChanged();
+        DeliverAnswers(now: true, fromPhone: true);
+    }
+
+    /// <summary>A Questions tab question went to the phone, or couldn't: logged, and a failure is said in the chat.</summary>
+    private void PhoneTabSent(UserQuestion q, string? error)
+    {
+        Tools.ActivityLog.Note("question_phone", $"Q{q.TabNumber} " + (error is null ? "went to the phone" : "couldn't go to the phone: " + error));
+        if (error is not null)
+            Note($"Q{q.TabNumber} couldn't go to your phone ({error}). It is in Questions here; switching Phone off and on sends it again.");
     }
 
     /// <summary>

@@ -36,6 +36,9 @@ internal static class AskUser
     /// <summary>Raised when a question or update went to the phone, or couldn't (text for the run's log).</summary>
     public static event Action<string>? Logged;
 
+    /// <summary>Raised (on the loop's thread) when a Questions tab question went to the phone (error null), or couldn't (why).</summary>
+    public static event Action<UserQuestion, string?>? TabSent;
+
     /// <summary>A phone is connected (Settings › Chat › Your phone) and switched on in the chat: questions and progress go there.</summary>
     public static bool ByPhone => PhoneLink.Active;
 
@@ -123,6 +126,51 @@ internal static class AskUser
         return q;
     }
 
+    /// <summary>
+    /// A question of a chat's Questions tab (chat_questions, or one caught in a reply) while the phone is on: it goes to the
+    /// phone at once, with its answers as buttons, and the answer comes back to that chat's tab (<paramref name="chatKey"/>,
+    /// JobBoard.ChatKey; through <see cref="Answered"/>). Asked again (written again): the one sent before is closed on the phone.
+    /// </summary>
+    public static UserQuestion AskTab(string chatKey, int number, string asker, string question, IReadOnlyList<string> options, int recommended, string topic)
+    {
+        UserQuestion q;
+        List<UserQuestion> old;
+        lock (Gate)
+        {
+            old = Questions.Where(x => x.TabNumber == number && x.JobKey == chatKey && x.Answer is null).ToList();
+            foreach (var o in old) Questions.Remove(o);
+            q = new UserQuestion
+            {
+                Id = ++_next, JobKey = chatKey, TabNumber = number, Asker = asker, Question = question.Trim(), Options = options.ToList(),
+                Recommended = recommended, Topic = topic.Trim(),
+                // Not held to gather others: the coordinator asked them together already.
+                Asked = DateTime.UtcNow - AskRules.Gather,
+            };
+            Questions.Add(q);
+            _loop ??= Task.Run(Loop);
+        }
+        foreach (var o in old.Where(o => o.PhoneId != 0)) _ = PhoneLink.SettleAsync(o.PhoneId, $"{AskRules.Label(o)} was written again; see the new one.");
+        return q;
+    }
+
+    /// <summary>The tab questions of chat <paramref name="chatKey"/> on the phone and not answered there yet (their numbers).</summary>
+    public static List<int> TabWaiting(string chatKey)
+    {
+        lock (Gate) return Questions.Where(q => q.TabNumber > 0 && q.JobKey == chatKey && q.Answer is null).Select(q => q.TabNumber).Distinct().ToList();
+    }
+
+    /// <summary>Tab question <paramref name="number"/> was answered on the PC or withdrawn: it is closed on the phone, with <paramref name="why"/>.</summary>
+    public static void SettleTab(string chatKey, int number, string why)
+    {
+        List<UserQuestion> done;
+        lock (Gate)
+        {
+            done = Questions.Where(q => q.TabNumber == number && q.JobKey == chatKey && q.Answer is null).ToList();
+            foreach (var q in done) Questions.Remove(q);
+        }
+        foreach (var q in done.Where(q => q.PhoneId != 0)) _ = PhoneLink.SettleAsync(q.PhoneId, why);
+    }
+
     /// <summary>The questions sent and not answered yet (for the progress update).</summary>
     public static List<UserQuestion> Waiting()
     {
@@ -160,7 +208,8 @@ internal static class AskUser
     /// <summary>The run ended: questions still open are dropped (the phone is still read for messages).</summary>
     public static void Clear()
     {
-        lock (Gate) Questions.RemoveAll(q => q.Answer is null || q.Delivered || q.Taken);
+        // A Questions tab question stays: the chat still waits for its answer after the run.
+        lock (Gate) Questions.RemoveAll(q => q.TabNumber == 0 && (q.Answer is null || q.Delivered || q.Taken) || q.TabNumber > 0 && (q.Delivered || q.Taken));
     }
 
     /// <summary>Every 15 s while questions are open or a phone is connected: send what is due, read the phone, pass on answers nobody took.</summary>
@@ -194,20 +243,25 @@ internal static class AskUser
             var failed = new List<string>();
             foreach (var q in due)
             {
+                // A tab question has no deadline: the chat waits for its answer, from the phone or the PC.
                 var (id, error) = ByPhone
-                    ? await PhoneLink.AskAsync(AskRules.PhoneText(q), q.Assumed, now.AddMinutes(wait), q.Topic).ConfigureAwait(false)
+                    ? await PhoneLink.AskAsync(AskRules.PhoneText(q), q.Assumed, q.TabNumber > 0 ? null : now.AddMinutes(wait), q.Topic, AskRules.PhoneOptions(q)).ConfigureAwait(false)
                     : (0, "no phone is connected");
                 lock (Gate)
                 {
                     q.PhoneId = id;
                     q.Sent = error is null ? now : now.AddYears(-1); // not sent: its wait is over at once
+                    if (error is not null && q.TabNumber > 0) Questions.Remove(q); // still in the tab on the PC; sent again when the phone works
                 }
                 if (error is null) Remember("You asked", AskRules.PhoneText(q) + (q.Assumed.Length > 0 ? " (if no answer: " + q.Assumed + ")" : ""), q.Topic);
-                if (error is not null) failed.Add($"Q{q.Id} ({error})");
+                if (q.TabNumber > 0) TabSent?.Invoke(q, error);
+                else if (error is not null) failed.Add($"Q{q.Id} ({error})");
             }
-            Logged?.Invoke(failed.Count == 0
-                ? $"Sent {(due.Count == 1 ? "Q" + due[0].Id : due.Count + " questions")} to your phone ({string.Join("; ", due.Select(q => Short(q.Question)))})."
-                : $"Couldn't send {string.Join(", ", failed)} to your phone; the work carried on with its assumptions.");
+            var asked = due.Where(q => q.TabNumber == 0).ToList();
+            if (asked.Count > 0)
+                Logged?.Invoke(failed.Count == 0
+                    ? $"Sent {(asked.Count == 1 ? "Q" + asked[0].Id : asked.Count + " questions")} to your phone ({string.Join("; ", asked.Select(q => Short(q.Question)))})."
+                    : $"Couldn't send {string.Join(", ", failed)} to your phone; the work carried on with its assumptions.");
         }
 
         List<UserQuestion> open;
@@ -237,7 +291,7 @@ internal static class AskUser
                     lock (Gate)
                         if (Questions.FirstOrDefault(q => q.PhoneId != 0 && q.PhoneId == m.ReplyTo) is { Answer: null } q)
                         {
-                            Said.Add((q.Topic, $"[{DateTime.Now:HH:mm}] They answered Q{q.Id}: {AskRules.Clip(text, 600)}"));
+                            Said.Add((q.Topic, $"[{DateTime.Now:HH:mm}] They answered {AskRules.Label(q)}: {AskRules.Clip(text, 600)}"));
                             q.Answer = AskRules.Keep(text, q);
                             q.Answered = now;
                         }

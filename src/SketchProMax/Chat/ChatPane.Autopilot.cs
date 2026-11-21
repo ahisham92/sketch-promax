@@ -87,7 +87,22 @@ internal sealed partial class ChatPane
             // The run's log, the phone's answers, messages and commands go to the chat the run works in, shown or not.
             Autopilot.Logged += (kind, text) => Dispatcher.BeginInvoke(new Action(() => In(RunSession, () => AutopilotLog(kind, text))));
             AskUser.Logged += text => Dispatcher.BeginInvoke(new Action(() => In(RunSession, () => AutopilotLog(AutopilotEntry.Asked, text))));
-            AskUser.Answered += q => Dispatcher.BeginInvoke(new Action(() => In(q.JobKey.Length > 0 && SessionOf(q.JobKey) is { } of ? of : RunSession, () => PhoneAnswered(q))));
+            AskUser.Answered += q => Dispatcher.BeginInvoke(new Action(() =>
+            {
+                if (q.TabNumber == 0)
+                {
+                    In(q.JobKey.Length > 0 && SessionOf(q.JobKey) is { } of ? of : RunSession, () => PhoneAnswered(q));
+                    return;
+                }
+                // A Questions tab question: to the tab of the chat that asked it.
+                if (_instance != this) return;
+                if (SessionOf(q.JobKey) is { } tab && JobBoard.ChatKey(tab.Conv.Id) == q.JobKey) In(tab, () => PhoneTabAnswered(q));
+                else _ = AskUser.SendUpdateAsync($"Q{q.TabNumber}'s chat isn't open in Sketch ProMax on the PC now, so this answer wasn't taken in.", q.Topic);
+            }));
+            AskUser.TabSent += (q, error) => Dispatcher.BeginInvoke(new Action(() =>
+            {
+                if (_instance == this && SessionOf(q.JobKey) is { } tab && JobBoard.ChatKey(tab.Conv.Id) == q.JobKey) In(tab, () => PhoneTabSent(q, error));
+            }));
             // Each project has its own chat on the phone (PhoneProjects): a message goes to this window's chat on that project.
             AskUser.UserWrote += (text, topic) => Dispatcher.BeginInvoke(new Action(() => ToPhoneChat(topic, () => FromPhone(text))));
             AskUser.Command += (name, topic) => Dispatcher.BeginInvoke(new Action(() => ToPhoneChat(topic, () => PhoneCommand(name))));

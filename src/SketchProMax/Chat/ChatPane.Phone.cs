@@ -28,7 +28,15 @@ internal sealed partial class ChatPane
         var pill = new Button { Content = row, Padding = new Thickness(ChatUi.S1, 0, ChatUi.S1, 0), Margin = new Thickness(-ChatUi.S1, 0, ChatUi.S2, 0), VerticalAlignment = VerticalAlignment.Center };
         pill.SetResourceReference(StyleProperty, "SpmChatGhost");
         pill.Click += (_, _) => PhoneClicked();
-        PhoneLink.Changed += () => Dispatcher.BeginInvoke(new Action(ShowPhone));
+        PhoneLink.Changed += () => Dispatcher.BeginInvoke(new Action(() =>
+        {
+            ShowPhone();
+            // Switched on (or connected): the questions waiting in the Questions tab go to the phone now.
+            if (!PhoneLink.Active || _instance != this) return;
+            foreach (var s in Sessions.ToList())
+                try { In(s, () => SyncPhoneQuestions(again: true)); }
+                catch (Exception) { /* the tab still shows them */ }
+        }));
         _phonePill = pill;
         ShowPhone();
         return pill;
@@ -45,7 +53,7 @@ internal sealed partial class ChatPane
         var on = !PhoneLink.On;
         PhoneLink.SetOn(on);
         if (on) AskUser.Listen();
-        Status(on ? "Phone on: questions, progress and replies go to your phone, and you can write to this chat from it."
+        Status(on ? "Phone on: questions (also those waiting in Questions), progress and replies go to your phone, and you can write to this chat from it."
                   : "Phone off: nothing goes to your phone while you work here.", spin: false);
     }
 

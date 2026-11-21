@@ -38,7 +38,7 @@ public sealed class AskUserTool : IRevitTool
     public ToolResult Execute(UIApplication app, ToolArgs args) => Refused(fromChat: false);
 
     private static ToolResult Refused(bool fromChat) => ToolResult.Error(fromChat
-        ? "ask_user works only during an autopilot, while the user is away. The user is here: ask in your answer instead."
+        ? "ask_user works only during an autopilot, while the user is away. Put the question in the Questions tab with chat_questions instead (it reaches their phone too while the phone is on)."
         : "ask_user works only in the chat inside Revit, during an autopilot.");
 
     internal static async Task<ToolResult> AnswerAsync(ToolArgs args, bool fromChat, string? jobKey, CancellationToken ct)
