@@ -141,6 +141,7 @@ public sealed class ChatJobsTool : IRevitTool
                     started = true, job = job.Number, title = job.Title, model = ChatAuto.ModelLabel(job.Model), effort = job.Effort,
                     state = waiting ? "waiting to start (others are running)" : "starting",
                     free_workers = free,
+                    other_jobs = JobTruth.Line(board.Snapshot(), job.Number),
                     next = free > 0
                         ? $"{free} worker(s) are still free. If this job's work can be divided (by level, zone, category, sheet range), divide it now: " +
                           $"message job {job.Number} to keep only its share, and start the other shares with parts. Then tell the user in one line which jobs started and end your turn."
@@ -159,7 +160,8 @@ public sealed class ChatJobsTool : IRevitTool
                 {
                     job = number, sent = true,
                     state = sent == JobBoard.Delivery.Reopened ? "it carries on with this message" : "it gets this when its current run ends",
-                    next = "Tell the user in one line that the job has it. It reports back when it finishes.",
+                    other_jobs = JobTruth.Line(board.Snapshot(), number.Value),
+                    next = "Tell the user in one line that the job has it. It reports back when it finishes. Mention other jobs only as other_jobs says, or not at all.",
                 });
             }
             default:

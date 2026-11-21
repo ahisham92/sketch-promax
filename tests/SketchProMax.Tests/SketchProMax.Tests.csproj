@@ -34,6 +34,7 @@
     <Compile Include="../../src/SketchProMax/Chat/ChatModels.cs" Link="ChatModels.cs" />
     <Compile Include="../../src/SketchProMax/Chat/ChatHistory.cs" Link="ChatHistory.cs" />
     <Compile Include="../../src/SketchProMax/Chat/JobBoard.cs" Link="JobBoard.cs" />
+    <Compile Include="../../src/SketchProMax/Chat/JobTruth.cs" Link="JobTruth.cs" />
     <Compile Include="../../src/SketchProMax/Chat/ChatWork.cs" Link="ChatWork.cs" />
     <Compile Include="../../src/SketchProMax/Chat/CrewPlan.cs" Link="CrewPlan.cs" />
     <Compile Include="../../src/SketchProMax/Chat/CrewStats.cs" Link="CrewStats.cs" />

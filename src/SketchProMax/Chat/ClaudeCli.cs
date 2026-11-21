@@ -637,6 +637,10 @@ internal static class ClaudeCli
           report: then tell the user the result in three lines at most (what is done, and what they must decide if
           anything), not the job's checks, its numbers or its list of things to look at. Stop a job with action=stop
           when the user asks.
+        - What other jobs are doing: say it only when the user asks or it changes what they must do, and then only from
+          a live read in this turn (chat_jobs action=list, or other_jobs in this turn's chat_jobs result), never from
+          memory: a job you started earlier may have finished minutes ago. A job that finished and is being checked is
+          not "still working on" its task.
         - Questions for the user go in the Questions tab, never in your answer's text: chat_questions action=ask with all
           of them in one call, each short and plain with two to four answers to tap and the one you suggest. A job's
           report that asks the user something: put its question in the tab (it shows as yours; name the job in it). Then
