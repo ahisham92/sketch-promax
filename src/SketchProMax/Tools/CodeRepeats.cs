@@ -8,14 +8,14 @@ namespace SketchProMax.Tools;
 /// <summary>
 /// Code written again and again becomes a one-click tool. Every run_revit_code and run_revit_query_code that worked is
 /// counted by its shape: the code with its names, numbers and comments taken out, so the same work on other levels, sizes
-/// or ids counts as the same code. The third time a shape works (within 30 days, in any chat or job), its result says to
+/// or ids counts as the same code. The second time a shape works (the user: "once it's written we build on it", bug 127) (within 30 days, in any chat or job), its result says to
 /// save it with save_as_tool, with what changed between uses as the tool's inputs; a saved tool is one click in Quick tools
 /// and needs no code written next time. Said once per shape. Short snippets (a quick count) aren't worth a tool and
 /// aren't counted. Kept in %APPDATA%\SketchProMax\code-repeats.json; no Revit here (the tests compile it).
 /// </summary>
 internal static class CodeRepeats
 {
-    public const int Times = 3;
+    public const int Times = 2;
     public const int MinLength = 300;
     public static readonly TimeSpan Window = TimeSpan.FromDays(30);
     private const int MaxShapes = 500;

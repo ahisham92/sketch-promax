@@ -304,6 +304,22 @@ internal static class WorkedCode
                ". When this needs code, get it with worked_code (action=get, id) and adapt it instead of writing it again.]";
     }
 
+    /// <summary>
+    /// What a job's task ends with when code that did its kind of work is kept (bug 127, 21 Nov 2026: the jobs wrote fresh
+    /// code 1,505 times in a day, 103 failed, and got kept code 42 times; the kept-code line only went with typed messages,
+    /// never to a job). "" when nothing is close: at least three of the task's words in one description.
+    /// </summary>
+    public static string JobHint(IEnumerable<Entry> entries, string task)
+    {
+        var found = Find(entries, task, 5, 3);
+        if (found.Count == 0) return "";
+        return "\n\nCode that already worked for this kind of work is kept on this PC:\n" +
+               string.Join("\n", found.Select(m => "- " + Line(m.Entry))) +
+               "\nStart from it: worked_code (action=get, id) and adapt it. Where it falls short, fix that code and run the fixed one " +
+               "(the fix is kept for next time) rather than starting over. Write new code only for what none of these does, and " +
+               "before writing any, try worked_code (action=find) with what you need.";
+    }
+
     // ---- The library on this PC --------------------------------------------------------------------------------------
 
     /// <summary>The library's folder: index.json (what is searched) and a folder per topic with one .cs file per code.</summary>
@@ -508,6 +524,13 @@ internal static class WorkedCode
     public static string PointerFor(string description, string failedCode)
     {
         try { return Pointer(Load(), description, failedCode); }
+        catch (Exception) { return ""; }
+    }
+
+    /// <summary>The kept-code lines for a job's task, from the file; "" on any trouble.</summary>
+    public static string JobHintFor(string task)
+    {
+        try { return JobHint(Load(), task); }
         catch (Exception) { return ""; }
     }
 

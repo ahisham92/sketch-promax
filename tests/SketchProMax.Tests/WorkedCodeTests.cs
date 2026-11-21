@@ -54,6 +54,11 @@ internal static class WorkedCodeTests
             hint.StartsWith("\n\n[Sketch ProMax, not typed by the user:") && hint.Contains("Move the selected piles between the tie rods") && hint.Contains("worked 2x")
             && WorkedCode.Hint(list, "move the slab").Length == 0, hint);
 
+        var jobHint = WorkedCode.JobHint(list, "Piles between tie rods: move the piles to the middle between the tie rods on Berth 9");
+        check("job (bug 127): a job's task gets the kept code for its kind of work, and nothing when nothing is alike",
+            jobHint.Contains("Move the selected piles between the tie rods") && jobHint.Contains("worked_code (action=get, id)") && jobHint.Contains("action=find")
+            && WorkedCode.JobHint(list, "export the sheets to PDF").Length == 0, jobHint);
+
         var redo = new List<WorkedCode.Entry>();
         string Args(string code, string what) => System.Text.Json.JsonSerializer.Serialize(new { code, description = what });
         var past = new List<(string, RedoLog.Step)>

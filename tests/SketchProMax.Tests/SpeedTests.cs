@@ -40,10 +40,10 @@ internal static class SpeedTests
         check("repeats: other names, numbers and comments give the same shape", CodeRepeats.Shape(a) == CodeRepeats.Shape(b), CodeRepeats.Shape(b));
         check("repeats: different code has another shape", CodeRepeats.Shape(a) != CodeRepeats.Shape(a.Replace("Wall", "Floor")), "");
         var shapes = new Dictionary<string, CodeRepeats.Entry>();
-        check("repeats: the first and second time say nothing", CodeRepeats.Count(shapes, a, "count walls", t0) is null && CodeRepeats.Count(shapes, b, "count walls", t0.AddDays(1)) is null, "");
-        var tip = CodeRepeats.Count(shapes, a, "count walls", t0.AddDays(2));
-        check("repeats: the third time it becomes a ready-made tool, without asking", tip is not null && tip.Contains("3 times") && tip.Contains("save_as_tool") && tip.Contains("without asking"), tip ?? "");
-        check("repeats: said once per shape", CodeRepeats.Count(shapes, a, "", t0.AddDays(3)) is null && shapes.Single().Value.Count == 4, "");
+        check("repeats: the first time says nothing", CodeRepeats.Count(shapes, a, "count walls", t0) is null, "");
+        var tip = CodeRepeats.Count(shapes, b, "count walls", t0.AddDays(1));
+        check("repeats: the second time it becomes a ready-made tool, without asking (bug 127: once written, build on it)", tip is not null && tip.Contains("2 times") && tip.Contains("save_as_tool") && tip.Contains("without asking"), tip ?? "");
+        check("repeats: said once per shape", CodeRepeats.Count(shapes, a, "", t0.AddDays(3)) is null && shapes.Single().Value.Count == 3, "");
         check("repeats: a short snippet isn't counted", CodeRepeats.Count(shapes, "return new FilteredElementCollector(doc).OfClass(typeof(Wall)).GetElementCount();", "", t0) is null && shapes.Count == 1, "");
         var later = new Dictionary<string, CodeRepeats.Entry>();
         CodeRepeats.Count(later, a, "", t0);
