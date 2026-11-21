@@ -21,8 +21,14 @@ internal sealed partial class ChatPane
     private bool BackgroundWorking => _away.Any(Working);
 
     /// <summary>Revit closes or Sketch ProMax updates: chats still working in the background stop, saying where.</summary>
-    private void StopBackground(string note, string jobNote, bool now)
+    /// <summary>
+    /// Ends every chat working in the background (Revit closes, or this version hands over to a newer one). For an update
+    /// (<paramref name="forUpdate"/>) their jobs are paused for it, not stopped, and the chats that have jobs to carry on
+    /// are returned (their files), for the next version to reopen in the background.
+    /// </summary>
+    private List<string> StopBackground(string note, string jobNote, bool now, bool forUpdate = false)
     {
+        var left = new List<string>();
         foreach (var s in _away.ToList())
         {
             In(s, () =>
@@ -40,13 +46,45 @@ internal sealed partial class ChatPane
                 _engine = null;
                 _reportTimer?.Stop();
                 _jobClock?.Stop();
-                EndRuns(jobNote, now);
+                if (forUpdate) PauseRunsForUpdate(now);
+                else EndRuns(jobNote, now);
                 if (_boardChat.Length > 0) ChatJobs.Boards.Remove(_boardChat);
                 Save();
+                if (forUpdate && _conv.File.Length > 0 && _board is { } board && (board.OpenCount > 0 || board.PausedJobs(forUpdateOnly: true).Count > 0))
+                    left.Add(_conv.File);
             });
         }
         _away.Clear();
         ChatJobs.WorkingElsewhere = "";
+        return left;
+    }
+
+    /// <summary>
+    /// After an update: the chats that worked in the background in the version before go to the background again, their
+    /// jobs as they were (waiting ones still waiting, paused ones paused for the update), so they carry on by themselves
+    /// (PauseTick). Nothing is drawn.
+    /// </summary>
+    private void ReopenAway(IEnumerable<Conversation> chats)
+    {
+        foreach (var conv in chats)
+        {
+            if (string.Equals(conv.File, _shown.Conv.File, StringComparison.OrdinalIgnoreCase) || AwayOf(conv.File) is not null) continue;
+            var s = new ChatSession(conv);
+            _away.Add(s);
+            In(s, () =>
+            {
+                _conv.Jobs ??= [];
+                _conv.Type = ChatTypes.Of(_conv);
+                _conv.Questions ??= [];
+                _boardJobs = _conv.Jobs;
+                _board = new JobBoard(_conv.Jobs, _conv.Questions);
+                _board.AfterReload(DateTime.UtcNow, afterUpdate: true);
+                RegisterBoard();
+                ResumeLeftPaused();
+                Save();
+            });
+            Tools.ActivityLog.Note("chat_reopened_after_update", $"{conv.Name}: {conv.Jobs?.Count(j => j.Open) ?? 0} job(s) waiting");
+        }
     }
 
     /// <summary>A model never saved was saved: its chats in the background belong to the file now.</summary>

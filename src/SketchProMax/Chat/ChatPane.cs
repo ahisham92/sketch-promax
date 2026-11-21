@@ -77,9 +77,18 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         // tells which model it is, so the pane doesn't open the "no model" chat instead of it.
         if (_modelKey.Length == 0 && _instance is null && _retired is null && ChatHandover.Peek() is { } left && left.Key != NoModelKey)
         {
-            _modelKey = left.Key;
-            _modelTitle = left.Title;
+            var onPane = left.PaneKey.Length > 0 && left.PaneKey != NoModelKey;
+            _modelKey = onPane ? left.PaneKey : left.Key;
+            _modelTitle = onPane ? left.PaneTitle : left.Title;
         }
+        // Jobs paused for this update (or chats handed over with jobs): the chat is made at once, even with the pane
+        // hidden, so they carry on by themselves in this version without the chat being opened first.
+        if (_instance is null && _retired is null && (JobPause.Why == JobPause.ForUpdate || ChatHandover.Peek() is { Away.Count: > 0 }))
+            System.Windows.Application.Current?.Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.ApplicationIdle, new Action(() =>
+            {
+                try { Get(); }
+                catch (Exception) { /* the chat is made when it is opened, and the jobs carry on then */ }
+            }));
         // An autopilot running when the version switched (or a run to take over): the chat is made at once, even with the
         // pane hidden, so the run carries on in this version.
         if (_instance is null && _retired is null && AutopilotShare.Any(DateTime.UtcNow) is not null)
@@ -824,12 +833,17 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         if (sample is not null) _setup = Setup.Ready;
         else _idle.Start();
 
+        _afterUpdate = handover is not null;
         ShowConversation();
+        _afterUpdate = false;
         ShowSetup();
         ShowStatus();
         if (sample is not null) return;
         if (handover is not null)
         {
+            // The chats that worked in the background before the update: there again, their jobs as they were.
+            try { ReopenAway(ChatHandover.OpenAway(handover)); }
+            catch (Exception) { /* those chats open from the history, their jobs paused */ }
             _input.Text = handover.Draft;
             _input.CaretIndex = _input.Text.Length;
             AddFiles(handover.Attachments.Where(File.Exists));
@@ -1056,6 +1070,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
                     var was = _setup;
                     if (_setup != Setup.Ready) RememberLeftOver();
                     _setup = Setup.Ready;
+                    // Jobs sent on before the chat was ready (carried on after an update while it checked): they start now.
+                    if (was != Setup.Ready) foreach (var s in Sessions.ToList()) In(s, JobsChanged);
                     if (waiting) Note("Sketch ProMax is ready. Ask your first question below.");
                     // An Autopilot paused because the sign-in stopped working carries on as soon as it works again.
                     if (was != Setup.Ready && Run is { State: AutopilotRun.Paused, AccessLost: true }) AutopilotResume("Signed in again.");
@@ -3387,6 +3403,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     /// </summary>
     private void Retire()
     {
+        List<string> awayFiles = [];
         // Large: back in the dock first, so the next core (or this one, revived) finds the pane where Revit shows it.
         CloseBig();
         _stopped = true;
@@ -3429,9 +3446,12 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             }
             _undoTimer?.Stop();
             _reportTimer?.Stop();
-            EndRuns("Sketch ProMax updated, so this job stopped. Send it a message to carry on.");
-            StopBackground("Sketch ProMax updated while this chat worked in the background, so it stopped here. Send your message again to carry on.",
-                "Sketch ProMax updated, so this job stopped. Send it a message to carry on.", now: false);
+            // The jobs carry on in the next version (21 Nov 2026, the owner: "when it updates it should continue jobs
+            // automatically"): one still at work is paused for the update rather than stopped, and the chats working in
+            // the background go over too (ChatHandover.Away), so the next version sends them all on by themselves.
+            PauseRunsForUpdate(now: false);
+            awayFiles = StopBackground("Sketch ProMax updated while this chat worked in the background, so it stopped here. Send your message again to carry on.",
+                "", now: false, forUpdate: true);
             if (ChatJobs.Board == _board) { ChatJobs.Board = null; ChatJobs.Changed = null; }
             if (_boardChat.Length > 0) ChatJobs.Boards.Remove(_boardChat);
         }
@@ -3442,7 +3462,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             CrewCoordinatorDoes(null);
             Save();
             _handedOver = true;
-            ChatHandover.Leave(_conv, _input.Text, _pending.Select(p => p.Path));
+            ChatHandover.Leave(_conv, _input.Text, _pending.Select(p => p.Path), paneKey: _modelKey, paneTitle: _modelTitle, away: awayFiles);
         }
         _engine?.Kill();
         _engine = null;

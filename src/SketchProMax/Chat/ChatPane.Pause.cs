@@ -151,7 +151,8 @@ internal sealed partial class ChatPane
             In(s, () =>
             {
                 if (_board is not { } board) return;
-                foreach (var job in board.PausedJobs())
+                // By itself (the update is in, or waited too long): only the jobs paused for the update; Continue: all.
+                foreach (var job in board.PausedJobs(forUpdateOnly: !byUser))
                 {
                     board.Message(job.Number, JobPause.CarryOn, now);
                     count++;

@@ -241,10 +241,48 @@ internal sealed partial class ChatPane
         _boardJobs = _conv.Jobs;
         _conv.Questions ??= [];
         _board = new JobBoard(_conv.Jobs, _conv.Questions);
-        _board.AfterReload(DateTime.UtcNow);
+        _board.AfterReload(DateTime.UtcNow, afterUpdate: _afterUpdate);
         _reports.Clear();
         HookJobs();
+        ResumeLeftPaused();
         QuestionsChanged();
+    }
+
+    /// <summary>True while the pane opens the chat a version switch handed over (AttachJobs keeps its jobs as they were).</summary>
+    private bool _afterUpdate;
+
+    /// <summary>
+    /// This chat's jobs paused for an update that went in while the chat wasn't open (or the pause ended before it was):
+    /// they carry on now. Never while anything is paused (Continue, or the update's own carry-on, sends them), and never a
+    /// job the user paused.
+    /// </summary>
+    private void ResumeLeftPaused()
+    {
+        if (_sample || _board is not { } board || JobPause.On) return;
+        var now = DateTime.UtcNow;
+        var jobs = board.LeftPausedByUpdate(now);
+        if (jobs.Count == 0) return;
+        foreach (var job in jobs) board.Message(job.Number, JobPause.CarryOn, now);
+        Tools.ActivityLog.Note("jobs_continued", $"update (chat opened): {jobs.Count} job(s)");
+        JobsChanged();
+    }
+
+    /// <summary>
+    /// This version hands over to a newer one: each job still at work is paused for the update (its session and what it
+    /// wrote are kept), so the next version sends it on by itself; its process ends.
+    /// </summary>
+    private void PauseRunsForUpdate(bool now)
+    {
+        foreach (var key in _parked.Keys.ToList()) DropParked(key);
+        var at = DateTime.UtcNow;
+        foreach (var run in _runs.Values.ToList())
+        {
+            _board?.Pause(run.Job.Number, at, JobPause.ForUpdate);
+            if (now) run.Engine.KillNow();
+            else run.Engine.Kill();
+        }
+        _runs.Clear();
+        _jobClock?.Stop();
     }
 
     /// <summary>The bridge reaches this chat's jobs (again, when a failed version switch revived this pane).</summary>
