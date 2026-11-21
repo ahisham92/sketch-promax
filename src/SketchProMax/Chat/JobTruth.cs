@@ -5,7 +5,7 @@ namespace SketchProMax.Chat;
 
 /// <summary>
 /// What the coordinator says about other jobs comes from the jobs as they are, not from its memory (bug 123, 21 Nov 2026:
-/// at 22:36 it told the phone "Your other worker is still drawing the existing connection detail on 00-SC-203"; that job
+/// at 22:36 it told the phone "Your other worker is still drawing the existing connection detail on A-101"; that job
 /// had finished two seconds earlier and was being checked, and the line was written from what it remembered of starting
 /// it). <see cref="Line"/> is the live state chat_jobs hands back with each start and message; <see cref="Correction"/>
 /// adds one line to a reply that calls a job busy when it finished while the coordinator was answering.
@@ -52,12 +52,12 @@ internal static class JobTruth
         "about", "there", "their", "which", "where", "after", "before", "drawing", "drawings", "update", "fix",
     };
 
-    /// <summary>True when the reply names the job: "job 254", a sheet or element mark from its title ("00-SC-203"), two of its words, or its worker.</summary>
+    /// <summary>True when the reply names the job: "job 254", a sheet or element mark from its title ("A-101"), two of its words, or its worker.</summary>
     internal static bool Mentions(string reply, ChatJob job, bool byWorker)
     {
         if (Regex.IsMatch(reply, $@"\bjob {job.Number}\b", RegexOptions.IgnoreCase)) return true;
         var words = Regex.Split(job.Title ?? "", @"[^\p{L}\p{Nd}\-]+").Where(w => w.Length > 0).ToList();
-        // A mark with a digit ("00-SC-203", "B10", "10-MP1") names it on its own.
+        // A mark with a digit ("A-101", "B10", "10-MP1") names it on its own.
         if (words.Any(w => w.Length >= 3 && w.Any(char.IsDigit) && Regex.IsMatch(reply, $@"(?<![\p{{L}}\p{{Nd}}]){Regex.Escape(w)}(?![\p{{L}}\p{{Nd}}])", RegexOptions.IgnoreCase)))
             return true;
         var plain = words.Where(w => w.Length >= 5 && !w.Any(char.IsDigit) && !Common.Contains(w)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
