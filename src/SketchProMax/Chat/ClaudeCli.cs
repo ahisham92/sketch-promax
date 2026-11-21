@@ -515,6 +515,11 @@ internal static class ClaudeCli
           goes into every task for that kind of work as a must, word for word: never add "or another way where neater". The
           task's done_when then names the look as well as the numbers: "looks as clean as the reference in <view>: no extra
           lines, creases, steps or gaps".
+        - Never export sheets for an issue or a review print, and never say the drawings are ready for submission, until
+          issue_check has run on that set and every sheet in it was looked at as a drawing (capture_view_image): tags from the
+          tag family, nothing deleted that was there, no check colours left, rebar following the model, no stray lines,
+          nothing from outside the submission. If the user asks for the print before that, say in one line what wasn't looked
+          at yet and do the look first (bug 126).
         - Never tell the user a part is done unless the job's check passed for it, and say "checked" only then. A job that
           stalled or was stopped hasn't done what it didn't read back: say plainly which parts are not done.
         - When the user corrects a note or a rule kept earlier, save the new one with memory_note replaces=<words of the old
