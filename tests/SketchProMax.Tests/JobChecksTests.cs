@@ -29,6 +29,9 @@ internal static class JobChecksTests
         check("check (bug 113): after a pass it checks only what was asked since, and raises nothing new",
             after.Contains("already PASSED") && after.Contains("Don't change the working plan's crop.")
             && JobReview.AsksSince(passed, now) == "Don't change the working plan's crop." && !JobReview.Task(new ChatJob { Number = 1, Task = "x" }).Contains("already PASSED"), after);
+        check("job (bug 115): a job starts with the chat's agreed rules, the ones its check judges by",
+            JobReview.RulesForJob("- Modelling rules: no floor cuts.") is { } jr && jr.Contains("no floor cuts") && jr.Contains("judges it by them")
+            && JobReview.RulesForJob("  ") == "", "");
         // ---- Jobs that stop moving (the 29-30 Oct run: two reports written, runs never ended, 12 hours lost) ----
         var t0 = new DateTime(2026, 10, 29, 23, 0, 0, DateTimeKind.Utc);
         var hung = new ChatJob { Number = 2, Title = "Read as-built", State = JobBoard.Running, Started = t0 };
