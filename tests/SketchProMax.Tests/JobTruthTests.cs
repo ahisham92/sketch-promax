@@ -44,6 +44,21 @@ internal static class JobTruthTests
                 line.Contains("job 254 (Kim)") && line.Contains("finished, a teammate is checking it") && !line.Contains("job 257"), line);
             check("job truth: no other job working says so",
                 JobTruth.Line([Job(252, "Cloud", JobBoard.Done, 0)], except: 253) == "No other job is working right now.", "");
+
+            // 22 Nov 2026 09:10: asked how many comments were left, the coordinator said nothing was in the model while the
+            // jobs had made 117 changes (bug 132).
+            var fixing = new List<ChatJob> { Job(370, "Rev1 fixes: B9 sheets", JobBoard.Running, 1), Job(372, "Rev1 fixes: B10 sheets", JobBoard.Running, 2) };
+            fixing[0].Changes = 41;
+            var note = JobTruth.Note(fixing);
+            check("job truth (bug 132): each message carries the jobs with the changes they made, and how to say it",
+                note.Contains("job 370 (Sam)") && note.Contains("41 changes made in the model so far (not checked yet)") && note.Contains("job 372 (Kim)")
+                && note.Contains("no model change yet") && note.Contains("never \"nothing in the model\""), note);
+            check("job truth: no note when no job is open", JobTruth.Note([Job(252, "Cloud", JobBoard.Done, 0)]) == "", "");
+            var board = new JobBoard([]);
+            var started = board.Start("Fix", "Fix it", t, force: true, out _)!;
+            board.MarkChanged(started.Key);
+            board.MarkChanged(started.Key);
+            check("job truth: model changes are counted per job", board.Snapshot().Single(j => j.Number == started.Number).Changes == 2, "");
         }
         finally { JobBoard.WorkerName = names; }
     }

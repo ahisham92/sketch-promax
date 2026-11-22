@@ -127,6 +127,8 @@ internal sealed class ChatJob
     public DateTime PassedAt { get; set; }
     /// <summary>It called a tool that changes the model since its work was last checked (the bridge, ModifiesModel). Saved.</summary>
     public bool ChangedModel { get; set; }
+    /// <summary>Model changes it made in all (never reset by a check), for what the coordinator says is done (bug 132). Saved.</summary>
+    public int Changes { get; set; }
     /// <summary>
     /// It finished work since its work was last checked: only then is it checked by a teammate (JobReview.Wanted), so the
     /// report after a check never asks for another, and a job sent back is checked again once it finishes. Saved.
@@ -770,7 +772,7 @@ internal sealed class JobBoard
     public void MarkChanged(string key)
     {
         lock (Gate)
-            if (_jobs.FirstOrDefault(j => j.Key == key) is { } job) job.ChangedModel = true;
+            if (_jobs.FirstOrDefault(j => j.Key == key) is { } job) { job.ChangedModel = true; job.Changes++; }
     }
 
     /// <summary>
@@ -1082,7 +1084,7 @@ internal sealed class JobBoard
         Plan = new Dictionary<string, string>(j.Plan), Heard = j.Heard.ToList(), Visited = j.Visited.ToList(),
         Spent = j.Spent, BudgetFrom = j.BudgetFrom, OverBudget = j.OverBudget, ReviewOf = j.ReviewOf, Review = j.Review, ReviewedBy = j.ReviewedBy,
         Reviews = j.Reviews, Routine = j.Routine, RevitModel = j.RevitModel, GoalCheck = j.GoalCheck, ReadOnly = j.ReadOnly,
-        ChangedModel = j.ChangedModel, Unchecked = j.Unchecked, WaitingOn = j.WaitingOn, LastIssues = j.LastIssues, PassedAt = j.PassedAt,
+        ChangedModel = j.ChangedModel, Changes = j.Changes, Unchecked = j.Unchecked, WaitingOn = j.WaitingOn, LastIssues = j.LastIssues, PassedAt = j.PassedAt,
     };
 }
 
