@@ -456,12 +456,8 @@ internal sealed partial class ChatPane
         }
     }
 
-    /// <summary>The ready-made tools on this PC, for a new job's hints (bug 128); none on any trouble.</summary>
-    private static List<SketchProMax.Tools.WorkedCode.ReadyTool> ReadyTools()
-    {
-        try { return SketchProMax.Tools.LearnedTools.All().Select(t => new SketchProMax.Tools.WorkedCode.ReadyTool(t.Name, t.Summary, t.Uses)).ToList(); }
-        catch (Exception) { return []; }
-    }
+    /// <summary>The ready-made tools on this PC, for a new job's hints (bug 128).</summary>
+    private static List<SketchProMax.Tools.WorkedCode.ReadyTool> ReadyTools() => SketchProMax.Tools.LearnedTools.Ready();
 
     private async Task StartRun(ChatJob job, JobMessage message, bool fresh = false)
     {

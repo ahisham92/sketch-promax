@@ -95,6 +95,16 @@ internal static class LearnedTools
         return list.OrderBy(t => t.Name).ToList();
     }
 
+    /// <summary>The saved tools as far as matching a task to them goes; none on any trouble.</summary>
+    public static List<WorkedCode.ReadyTool> Ready()
+    {
+        try { return All().Select(t => new WorkedCode.ReadyTool(t.Name, t.Summary, t.Uses)).ToList(); }
+        catch (Exception) { return []; }
+    }
+
+    /// <summary>The ready-made tools and kept code that do what <paramref name="what"/> says (bug 129); "" when none.</summary>
+    public static string ExistingFor(string what) => WorkedCode.JobHintFor(what, Ready());
+
     /// <summary>Converts JSON arguments to plain .NET values a snippet can use without System.Text.Json.</summary>
     public static object? Plain(JsonElement e) => e.ValueKind switch
     {

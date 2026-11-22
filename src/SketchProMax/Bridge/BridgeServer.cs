@@ -61,6 +61,7 @@ public sealed class BridgeServer
         // The chat's calls to a model open in another Revit window: that window doesn't know the chat's jobs, so this one
         // pins each job to its model, refuses a check job's changes, and delivers what the user sent it meanwhile.
         RevitTargets.JobModel = Chat.ChatJobs.ModelOf;
+        RevitTargets.ExistingFor = LearnedTools.ExistingFor;
         RevitTargets.Touched = Chat.ChatJobs.Touched;
         RevitTargets.RemoteGuard = (key, tool) => _registry.Find(tool) is { ModifiesModel: true } && Chat.ChatJobs.IsCheck(key)
             ? $"This job only reads (it checks work, or reads before the plan is approved), so it can't change the model ({tool} changes it). Read and check only, and put what needs changing in your answer, ending with the line your task asks for."
