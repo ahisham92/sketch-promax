@@ -101,6 +101,9 @@ internal sealed class RevitTargets
         try { existing = ExistingFor?.Invoke(what) ?? ""; } catch (Exception) { existing = ""; }
         return "Not run yet. Sketch ProMax asks each job once to use what already exists before writing code." +
                (existing.Length > 0 ? existing : "\n\nLook first: list_learned_tools for a ready-made tool, and worked_code (action=find) with what this code does.") +
+               (name == "run_revit_query_code" ? "\n\nFor a look at the model there are tools with no code: views_showing (which views and sheets show " +
+                   "elements), element_readback (an element's type, levels, joins, sketch, shape points, parameters) and find_in_views " +
+                   "(text, tags, clouds, dimensions in views or sheets)." : "") +
                "\n\nIf one of these does this step, use it (adapt kept code rather than rewriting it). If none fits, send this same call " +
                "again and it will run.";
     }

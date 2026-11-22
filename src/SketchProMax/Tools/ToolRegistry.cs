@@ -33,6 +33,9 @@ public sealed class ToolRegistry
         new ListTypesTool(),
         new ListRevisionsTool(),
         new ListTextNotesTool(),
+        new ViewsShowingTool(),
+        new ElementReadbackTool(),
+        new FindInViewsTool(),
         new ReadScheduleTool(),
         new SelectElementsTool(),
         // Read-only: QA and output
