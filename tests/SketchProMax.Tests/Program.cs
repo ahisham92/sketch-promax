@@ -120,6 +120,7 @@ HistoryLessonsTests.Run((name, ok, detail) => Check(name, ok, detail));
 PromptIdeasTests.Run((name, ok, detail) => Check(name, ok, detail));
 ChatFocusTests.Run((name, ok, detail) => Check(name, ok, detail));
 WorkedCodeTests.Run((name, ok, detail) => Check(name, ok, detail));
+BuildOnTests.Run((name, ok, detail) => Check(name, ok, detail));
 AwayTests.Run((name, ok, detail) => Check(name, ok, detail));
 JobPauseTests.Run((name, ok, detail) => Check(name, ok, detail));
 UpdateResumeJobsTests.Run((name, ok, detail) => Check(name, ok, detail));

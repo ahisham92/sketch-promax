@@ -13,6 +13,7 @@ internal static class Lookup
 {
     public const double Mm = 304.8;
     public static long R(double feet) => (long)Math.Round(feet * Mm);
+    public static long[] P(XYZ p) => [R(p.X), R(p.Y), R(p.Z)];
 
     public static object? Overrides(View view, Element e)
     {
@@ -209,15 +210,17 @@ public sealed class FindInViewsTool : IRevitTool
 {
     public string Name => "find_in_views";
     public string Description =>
-        "Read-only: the text notes, tags, revision clouds and dimensions drawn in views (or on sheets and every view placed on " +
-        "them), optionally only those whose text contains any of the given words, with their id, view, text and position " +
-        "(model mm). Dimensions give their value, any override, prefix and suffix. Use it instead of writing code to look for " +
-        "labels, notes, clouds or dimension texts.";
+        "Read-only: the text notes, tags, revision clouds, dimensions and spot levels drawn in views (or on sheets and every view " +
+        "placed on them), optionally only those whose text contains any of the given words, with their id, view, text and position " +
+        "(model mm). Dimensions give their value, any override, prefix and suffix. Also on request: detail lines (kind line: style, " +
+        "length and ends in mm, for bar lines), filled regions (kind region: type) and a sheet's viewports and schedules (kind " +
+        "viewport: the view, its box on the sheet). Use it instead of writing code to look for labels, notes, clouds, dimension " +
+        "texts, bar lines, hatches or what is placed on a sheet.";
     public string PropertiesJson => """
     {
       "view_ids": {"type": "array", "items": {"type": "integer"}, "description": "Views, or sheets (a sheet also checks its placed views)"},
       "words": {"type": "array", "items": {"type": "string"}, "description": "Optional: keep only items whose text has one of these (any case)"},
-      "kinds": {"type": "array", "items": {"type": "string"}, "description": "Optional: text, tag, cloud, dimension (default all)"},
+      "kinds": {"type": "array", "items": {"type": "string"}, "description": "Optional: text, tag, cloud, dimension, spot (default these five); also line, region, viewport"},
       "limit": {"type": "integer", "description": "Default 300"}
     }
     """;
@@ -228,7 +231,7 @@ public sealed class FindInViewsTool : IRevitTool
     {
         var doc = app.ActiveUIDocument.Document;
         var words = args.Has("words") ? args.StringList("words").Where(w => w.Length > 0).ToList() : [];
-        var kinds = args.Has("kinds") ? args.StringList("kinds").Select(k => k.ToLowerInvariant()).ToHashSet() : ["text", "tag", "cloud", "dimension"];
+        var kinds = args.Has("kinds") ? args.StringList("kinds").Select(k => k.ToLowerInvariant()).ToHashSet() : ["text", "tag", "cloud", "dimension", "spot"];
         var limit = (int)(args.OptLong("limit") ?? 300);
         var views = new List<View>();
         foreach (var id in args.LongList("view_ids"))
@@ -273,6 +276,29 @@ public sealed class FindInViewsTool : IRevitTool
                     var comments = c.get_Parameter(BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS)?.AsString();
                     var mark = c.get_Parameter(BuiltInParameter.ALL_MODEL_MARK)?.AsString();
                     return ("cloud", string.Join(" ", new[] { mark, comments }.Where(s => !string.IsNullOrEmpty(s))), new { revision = c.Document.GetElement(c.RevisionId)?.Name });
+                case SpotDimension spot:
+                    return ("spot", string.Join(" ", new[] { spot.Prefix, spot.ValueString, spot.Suffix }.Where(x => !string.IsNullOrEmpty(x))),
+                        new { value = spot.ValueString, value_override = string.IsNullOrEmpty(spot.ValueOverride) ? null : spot.ValueOverride, type = spot.Document.GetElement(spot.GetTypeId())?.Name });
+                case DetailCurve line:
+                    var curve = line.GeometryCurve;
+                    return ("line", line.LineStyle?.Name ?? "", new
+                    {
+                        style = line.LineStyle?.Name, length_mm = Lookup.R(curve.Length),
+                        from_mm = curve.IsBound ? Lookup.P(curve.GetEndPoint(0)) : null, to_mm = curve.IsBound ? Lookup.P(curve.GetEndPoint(1)) : null,
+                        group = line.GroupId == ElementId.InvalidElementId ? (long?)null : line.GroupId.Value,
+                    });
+                case FilledRegion region:
+                    return ("region", region.Document.GetElement(region.GetTypeId())?.Name ?? "", new { type = region.Document.GetElement(region.GetTypeId())?.Name, masking = region.IsMasking });
+                case Viewport vp:
+                    var shown = vp.Document.GetElement(vp.ViewId) as View;
+                    var outline = vp.GetBoxOutline();
+                    return ("viewport", shown?.Name ?? "", new
+                    {
+                        view_id = vp.ViewId.Value, view_type = shown?.ViewType.ToString(), scale = shown?.Scale,
+                        box_on_sheet_mm = new[] { Lookup.R(outline.MinimumPoint.X), Lookup.R(outline.MinimumPoint.Y), Lookup.R(outline.MaximumPoint.X), Lookup.R(outline.MaximumPoint.Y) },
+                    });
+                case ScheduleSheetInstance si:
+                    return ("viewport", si.Name, new { schedule_id = si.ScheduleId.Value, at_on_sheet_mm = Lookup.P(si.Point) });
                 case Dimension d:
                     var segments = d.Segments.Size > 0 ? d.Segments.Cast<DimensionSegment>().ToList() : null;
                     var value = segments is null ? d.ValueString : string.Join(" / ", segments.Select(s => s.ValueString));

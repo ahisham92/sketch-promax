@@ -86,6 +86,15 @@ internal sealed class RevitTargets
     public static Func<string, string>? ExistingFor;
 
     /// <summary>
+    /// For a chat's or job's code call: the kept code it should build on, as the held answer, or null to run it (bug 135).
+    /// Arguments: description, code, tool. Set by the add-in, where the library is.
+    /// </summary>
+    public static Func<string, string, string, string?>? StartFromFor;
+
+    // Code calls already held once to build on kept code (by their code): sent again, they run.
+    private readonly HashSet<string> _builtOn = new(StringComparer.Ordinal);
+
+    /// <summary>
     /// A job's first code call, when the job has not yet looked for a ready-made tool or kept code, is held once and
     /// answered with what already exists (bug 129, 22 Nov 2026: jobs wrote about three pieces of code a minute, most of
     /// them looks at the model that had been written before, while 40 ready-made tools went unused). null: run it.
@@ -94,8 +103,13 @@ internal sealed class RevitTargets
     public string? HoldFirstCode(string name, IDictionary<string, JsonElement>? arguments)
     {
         if (name is "worked_code" or "list_learned_tools" or "run_learned_tool" or "save_as_tool") { _looked = true; return null; }
-        if (_looked || name is not ("run_revit_code" or "run_revit_query_code") || !_caller.FromChat || _caller.Job is not { Length: > 0 }) return null;
+        if (name is not ("run_revit_code" or "run_revit_query_code") || !_caller.FromChat) return null;
+        if (_looked || _caller.Job is not { Length: > 0 }) return BuildOn(name, arguments);
         _looked = true;
+        // Kept code to build on says the most: that, else what exists. Either way the same call sent again runs.
+        if (BuildOn(name, arguments) is { } buildOn) return buildOn;
+        if (arguments is not null && arguments.TryGetValue("code", out var firstCode) && firstCode.ValueKind == JsonValueKind.String && firstCode.GetString() is { Length: > 0 } fc)
+            lock (_builtOn) _builtOn.Add(fc);
         var what = arguments is not null && arguments.TryGetValue("description", out var d) && d.ValueKind == JsonValueKind.String ? d.GetString() ?? "" : "";
         var existing = "";
         try { existing = ExistingFor?.Invoke(what) ?? ""; } catch (Exception) { existing = ""; }
@@ -103,9 +117,33 @@ internal sealed class RevitTargets
                (existing.Length > 0 ? existing : "\n\nLook first: list_learned_tools for a ready-made tool, and worked_code (action=find) with what this code does.") +
                (name == "run_revit_query_code" ? "\n\nFor a look at the model there are tools with no code: views_showing (which views and sheets show " +
                    "elements), element_readback (an element's type, levels, joins, sketch, shape points, parameters) and find_in_views " +
-                   "(text, tags, clouds, dimensions in views or sheets)." : "") +
+                   "(text, tags, clouds, dimensions, spot levels, bar lines, hatches and viewports in views or sheets)." : "") +
                "\n\nIf one of these does this step, use it (adapt kept code rather than rewriting it). If none fits, send this same call " +
                "again and it will run.";
+    }
+
+    /// <summary>
+    /// A code call whose code is not built on kept code, while kept code did this kind of work: held once and answered with
+    /// that code to change as little as needed (bug 135, the owner, 22 Nov 2026: "take from the library and do minimal
+    /// amendment"). The same call sent again runs. null: run it.
+    /// </summary>
+    private string? BuildOn(string name, IDictionary<string, JsonElement>? arguments)
+    {
+        if (StartFromFor is not { } startFrom || arguments is null) return null;
+        string Arg(string key) => arguments.TryGetValue(key, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? "" : "";
+        var code = Arg("code");
+        if (code.Length == 0) return null;
+        lock (_builtOn)
+        {
+            if (_builtOn.Contains(code)) return null;
+            if (_builtOn.Count > 2000) _builtOn.Clear();
+        }
+        string? held;
+        try { held = startFrom(Arg("description"), code, name); }
+        catch (Exception) { held = null; }
+        if (held is null) return null;
+        lock (_builtOn) _builtOn.Add(code);
+        return held;
     }
 
     /// <summary>A chat's job works in another Revit window now ("reading") or is back to thinking ("").</summary>

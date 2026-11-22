@@ -74,6 +74,21 @@ internal static class HistoryArchive
     /// </summary>
     public static IEnumerable<Func<IEnumerable<string>>> AllTranscripts() => All(Source, Folder);
 
+    /// <summary>One session's transcript: Claude Code's own file, else its archived copy; null when neither is there.</summary>
+    public static Func<IEnumerable<string>>? Find(string session)
+    {
+        if (string.IsNullOrEmpty(session)) return null;
+        try
+        {
+            if (Directory.Exists(Source) && Directory.EnumerateFiles(Source, session + ".jsonl", SearchOption.AllDirectories).FirstOrDefault() is { } live)
+                return () => ReadShared(live);
+            if (Directory.Exists(Folder) && Directory.EnumerateFiles(Folder, session + ".jsonl.gz", SearchOption.AllDirectories).FirstOrDefault() is { } kept)
+                return () => ReadZipped(kept);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        return null;
+    }
+
     internal static List<Func<IEnumerable<string>>> All(string source, string archive)
     {
         var list = new List<Func<IEnumerable<string>>>();
