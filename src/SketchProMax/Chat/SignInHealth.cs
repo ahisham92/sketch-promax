@@ -20,11 +20,61 @@ internal static class SignInHealth
     /// <summary>Raised (on any thread) when the state changes: a failure, a sign-in, a working answer.</summary>
     public static event Action? Changed;
 
-    /// <summary>Text that says the saved sign-in no longer works (expired, refused, signed out).</summary>
-    public static bool LooksExpired(string text) => Regex.IsMatch(text ?? "",
+    /// <summary>
+    /// Text that says the saved sign-in no longer works (expired, refused, signed out). A network that blocked the
+    /// request is not that (bug 137): Claude Code says "Failed to authenticate. API Error: 403 Web Page Blocked" when
+    /// the office web filter answers instead of the service, and the sign-in itself is still fine.
+    /// </summary>
+    public static bool LooksExpired(string text) => !LooksBlocked(text) && Regex.IsMatch(text ?? "",
         @"failed to authenticate|oauth session expired|session expired and could not be refreshed|oauth token (has )?expired|" +
         @"oauth token (has been )?revoked|invalid (oauth|bearer) token",
         RegexOptions.IgnoreCase);
+
+    /// <summary>
+    /// Text that says the network stopped the request before it reached the service: an office web filter or proxy page
+    /// ("403 Web Page Blocked"), or the connection failed. The sign-in is fine; the same request works once the network
+    /// lets it through, so it is tried again instead of asking the user to sign in (bug 137).
+    /// </summary>
+    public static bool LooksBlocked(string text) => Regex.IsMatch(text ?? "",
+        @"web ?page blocked|page (has been |is |was )?blocked|blocked by (your |the )?(administrator|admin|proxy|firewall|network|organi[sz]ation|policy)|" +
+        @"\b40[37]\b[^\n]{0,40}\b(blocked|proxy|firewall)\b|proxy authentication required|<\s*html|<!doctype html|" +
+        @"econnreset|econnrefused|econnaborted|etimedout|enotfound|eai_again|enetunreach|socket hang up|fetch failed|getaddrinfo|" +
+        @"unable to connect|connection (error|refused|reset|timed out)|network (error|is unreachable)|" +
+        @"unable to (get|verify) [^\n]{0,40}certificate|self[- ]signed certificate",
+        RegexOptions.IgnoreCase);
+
+    /// <summary>What the network said, short, for the user (the first line, at most <paramref name="max"/> characters).</summary>
+    public static string BlockedWords(string text, int max = 120)
+    {
+        var line = Regex.Replace((text ?? "").Trim(), @"\s+", " ");
+        line = Regex.Replace(line, @"^failed to authenticate\.?\s*", "", RegexOptions.IgnoreCase);
+        if (Regex.IsMatch(line, @"<\s*html|<!doctype", RegexOptions.IgnoreCase)) line = "a blocked-page reply";
+        return line.Length <= max ? line : line.Substring(0, max).TrimEnd() + "…";
+    }
+
+    public const string NetBlockedStart = "The network blocked the connection";
+
+    /// <summary>Times a job the network blocked is started again by itself before it is reported.</summary>
+    public const int NetRetries = 3;
+
+    /// <summary>What a job is sent when it carries on after the network blocked it.</summary>
+    public const string NetCarryOn = "The network blocked your last request for a moment (the sign-in is fine). Carry on from where you stopped " +
+                                     "(what you found or changed stays) and finish your task. Don't end without your report.";
+
+    /// <summary>A job's summary when the network blocked it.</summary>
+    public static string JobNetBlocked(string said) =>
+        $"{NetBlockedStart} ({BlockedWords(said)}). Your sign-in is fine. It tries again by itself; " +
+        "if it keeps happening, check the internet or VPN, or ask IT why the page is blocked.";
+
+    public static bool IsNetBlocked(string summary) => (summary ?? "").StartsWith(NetBlockedStart, StringComparison.Ordinal);
+
+    /// <summary>The wait before try <paramref name="attempt"/>: 1, 2, then 4 minutes, so a short block passes.</summary>
+    public static TimeSpan NetRetryWait(int attempt) => TimeSpan.FromMinutes(Math.Pow(2, Math.Max(0, Math.Min(attempt, NetRetries) - 1)));
+
+    /// <summary>The chat's message when the network blocked it (bug 137): not a sign-in problem, so no Sign in again.</summary>
+    public static string ChatNetBlocked(string said) =>
+        $"The network blocked the connection ({BlockedWords(said)}). Your sign-in is fine and the conversation is kept. " +
+        "Send your message again in a minute; if it keeps happening, check the internet or VPN, or ask IT why the page is blocked.";
 
     /// <summary>The chat's folder (ClaudeCli.Folder); a test points it at a temporary one.</summary>
     internal static string Folder { get; set; } = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SketchProMax", "chat");

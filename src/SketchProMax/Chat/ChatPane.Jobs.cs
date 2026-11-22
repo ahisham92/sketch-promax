@@ -609,6 +609,7 @@ internal sealed partial class ChatPane
         if (!end.IsError) summary = message.Length > 0 ? message : run.LastText;
         else if (System.Text.RegularExpressions.Regex.IsMatch(message, @"usage limit|rate limit|limit reached|out of (extra )?usage", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
             summary = $"Your plan's usage limit is reached: {message}. Send it a message to carry on when the limit resets.";
+        else if (SignInHealth.LooksBlocked(message)) summary = SignInHealth.JobNetBlocked(message);
         else if (LooksSignedOut(message))
         {
             SignInLost();
@@ -669,6 +670,7 @@ internal sealed partial class ChatPane
         var lost = LooksSignedOut(tail);
         if (lost) SignInLost();
         var why = lost ? JobSignInError
+            : SignInHealth.LooksBlocked(tail) ? SignInHealth.JobNetBlocked(tail)
             : "It stopped unexpectedly." + (detail.Length > 0 ? " " + detail : "") + " Send it a message to try again.";
         board.RunEnded(run.Job, false, why, DateTime.UtcNow);
         board.AddItem(run.Job, new ChatItem { Kind = "error", Text = why }, DateTime.UtcNow);
@@ -738,6 +740,33 @@ internal sealed partial class ChatPane
         // A job done is remembered so a job like it later replays its steps (bug 135); a check's verdict marks it passed.
         if (job.State == JobBoard.Done && job.GoalCheck == 0)
             SketchProMax.Tools.JobRecipes.Remember(job.Key, job.Title, job.Task, JobSessions.Get(JobsFolder(_conv), job.Key), job.PassedAt > DateTime.MinValue, now);
+        if (job.State == JobBoard.Done) job.NetRetries = 0;
+        // The network blocked it (an office web filter, a dropped connection; bug 137): the sign-in is fine, so it waits
+        // a little and carries on by itself, a few times, instead of stopping for a sign-in that never expired.
+        if (job.State == JobBoard.Failed && SignInHealth.IsNetBlocked(job.Summary) && job.NetRetries < SignInHealth.NetRetries && _board is { } net)
+        {
+            job.NetRetries++;
+            var wait = SignInHealth.NetRetryWait(job.NetRetries);
+            var number = job.Number;
+            Tools.ActivityLog.Note("job_net_retry", $"job {number} try {job.NetRetries} in {wait.TotalSeconds:0} s: {JobBoard.OneLine(job.Summary, 200)}");
+            net.AddNote(job, $"The network blocked it, so it tries again by itself in {(wait.TotalMinutes >= 1 ? $"{wait.TotalMinutes:0} min" : $"{wait.TotalSeconds:0} s")} " +
+                             $"(try {job.NetRetries} of {SignInHealth.NetRetries}).", now);
+            DispatcherTimer? once = null;
+            once = SessionTimer(wait, () =>
+            {
+                once?.Stop();
+                // Sent a message meanwhile, or stopped: nothing to do.
+                if (job.State != JobBoard.Failed || _board is not { } b) return;
+                b.Message(number, SignInHealth.NetCarryOn, DateTime.UtcNow);
+                JobsChanged();
+                PumpJobs();
+                SaveSoon();
+            });
+            once.Start();
+            RefreshJobView();
+            SaveSoon();
+            return;
+        }
         // During a run nobody is there to press "try again": a job that ended with a problem is started again by itself
         // (twice at most) before it counts as failed.
         if (Run is { State: AutopilotRun.Running } && _board is { } retry && Autopilot.RetryMessage(job) is { } again)
