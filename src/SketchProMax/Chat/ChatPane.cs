@@ -2888,6 +2888,11 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
 
     private void Failure(string message, string subtype)
     {
+        if (SignInHealth.LooksBlocked(message))
+        {
+            Error(SignInHealth.ChatNetBlocked(message));
+            return;
+        }
         if (Autopilot.LostAccess(message)) AutopilotLostAccess(message);
         if (LooksSignedOut(message))
         {
@@ -3038,6 +3043,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             SignInLost();
             Error(SignInError);
         }
+        else if (SignInHealth.LooksBlocked(tail)) Error(SignInHealth.ChatNetBlocked(tail));
         else if (Regex.IsMatch(tail, @"unknown option|unrecognized|invalid value", RegexOptions.IgnoreCase))
             Error("The chat engine (Claude Code) is too old for the Revit chat. Update it (open a Command Prompt and run: claude update), then send again." +
                   (detail.Length > 0 ? "\n\n" + detail : ""));

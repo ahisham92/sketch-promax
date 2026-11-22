@@ -189,7 +189,7 @@ internal static class Autopilot
     /// organisation that turned subscription access off. Every turn and job fails from then on, so the run pauses at once
     /// and tells the user, instead of failing job after job and ending with a "not done" list (1 Nov 2026: a 49-hour run).
     /// </summary>
-    public static bool LostAccess(string text) => System.Text.RegularExpressions.Regex.IsMatch(text,
+    public static bool LostAccess(string text) => !SignInHealth.LooksBlocked(text) && System.Text.RegularExpressions.Regex.IsMatch(text,
         @"disabled (claude )?subscription access|ask your admin to enable|organi[sz]ation has disabled|not logged in|/login\b|\blog ?in again|invalid api key|" +
         @"authentication_failed|authentication failed|oauth token (has )?expired|please run .*login|\bsign in again\b|not signed in",
         System.Text.RegularExpressions.RegexOptions.IgnoreCase) || SignInHealth.LooksExpired(text);

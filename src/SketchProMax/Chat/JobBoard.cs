@@ -141,6 +141,8 @@ internal sealed class ChatJob
     public int GoalCheck { get; set; }
     /// <summary>How many times an Autopilot run started it again by itself after it ended with a problem (Autopilot.RetryMessage).</summary>
     public int AutoRetries { get; set; }
+    /// <summary>How many times it was started again by itself after the network blocked it (bug 137; ChatPane.NetRetries).</summary>
+    public int NetRetries { get; set; }
     /// <summary>
     /// It may only read (an autopilot's reading before the plan is approved, a goal reviewer): the bridge refuses its
     /// changes, like a check's. Saved.
