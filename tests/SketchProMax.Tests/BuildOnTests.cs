@@ -44,16 +44,23 @@ internal static class BuildOnTests
 
         // StartFrom: code not built on kept code, while kept code did this work.
         var fresh = "var list = new List<string>();\nforeach (Floor f in new FilteredElementCollector(doc).OfClass(typeof(Floor))) { var box = f.get_BoundingBox(null); list.Add(f.Id + \": \" + box.Max.Z + \"/\" + box.Min.Z); }\nreturn string.Join(\";\", list);";
-        var start = WorkedCode.StartFrom(lib, "Read the deck slab tops and bottoms on Berth 9", fresh, "run_revit_query_code");
-        check("build on (bug 135): fresh code for work kept code already did is pointed to that code", start == a, start?.Description ?? "none");
+        // Written for the same work in much the same way (some lines the same), but not adapted from it.
+        var similar = "var floors = new FilteredElementCollector(doc).OfClass(typeof(Floor)).Cast<Floor>().Where(f => f.Name.Contains(\"DECK\")).ToList();\n" +
+                      "var rows = new List<string>();\nforeach (var f in floors) { var top = f.get_Parameter(BuiltInParameter.STRUCTURAL_ELEVATION_AT_TOP).AsDouble(); rows.Add(f.Id + \" \" + top * 304.8); }\n" +
+                      "log.AppendLine(string.Join(\"\\n\", rows));\nreturn rows.Count;";
+        var start = WorkedCode.StartFrom(lib, "Read the deck slab tops and bottoms on Berth 9", similar, "run_revit_query_code");
+        check("build on (bug 135): code that resembles kept code doing this work is pointed to that code, with how alike they are",
+            start?.Entry == a && start.Value.Alike >= WorkedCode.StartFromAt && start.Value.Alike < WorkedCode.SameWork, start is null ? "none" : start.Value.Entry.Description + " " + start.Value.Alike);
+        check("build on (bug 136): code written another way is not offered kept code on shared words alone (the 22 Nov offers taken once in 47)",
+            WorkedCode.StartFrom(lib, "Read the deck slab tops and bottoms on Berth 9", fresh, "run_revit_query_code") is null, "");
         check("build on (bug 135): code built on kept code runs as written",
             WorkedCode.StartFrom(lib, "Read the deck slab tops and bottoms", Slab("log.AppendLine(\"Berth 9\");\n"), "run_revit_query_code") is null, "");
         check("build on (bug 135): work nothing kept did runs as written",
-            WorkedCode.StartFrom(lib, "Export the drawing list to Excel", fresh, "run_revit_query_code") is null
-            && WorkedCode.StartFrom(lib, "Read the deck slab tops and bottoms", fresh, "run_revit_code") is null, "");
-        var text = WorkedCode.StartFromText(a, a.Code);
-        check("build on (bug 135): the held answer gives the kept code and says to change only what differs, and that sending again runs",
-            text.StartsWith("Not run yet") && text.Contains(a.Code) && text.Contains("change only") && text.Contains("send your own call again unchanged"), text);
+            WorkedCode.StartFrom(lib, "Export the drawing list to Excel", similar, "run_revit_query_code") is null
+            && WorkedCode.StartFrom(lib, "Read the deck slab tops and bottoms", similar, "run_revit_code") is null, "");
+        var text = WorkedCode.StartFromText(a, a.Code, 0.4);
+        check("build on (bug 135): the held answer gives the kept code, how alike it is, and says to change only what differs, and that sending again runs",
+            text.StartsWith("Not run yet") && text.Contains("40% the same") && text.Contains(a.Code) && text.Contains("change only") && text.Contains("send your own call again unchanged"), text);
 
         {
             static Dictionary<string, JsonElement> A(string what, string code) => new() { ["description"] = JsonSerializer.SerializeToElement(what), ["code"] = JsonSerializer.SerializeToElement(code) };

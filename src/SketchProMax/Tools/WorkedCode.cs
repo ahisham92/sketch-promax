@@ -373,29 +373,47 @@ internal static class WorkedCode
     }
 
     /// <summary>
-    /// The kept entry a code call should start from, or null to run it as written: kept code of the same tool whose
-    /// description shares at least half of the call's words (two at least), while the call's code is not built on any
-    /// kept code (no entry agrees with it at <see cref="SameWork"/>). The owner, 22 Nov 2026: "instead of searching for an
-    /// exact code or else creating a new one, take from the library and do minimal amendment".
+    /// How alike a call's code must already be to kept code (signature agreement) for that kept code to be offered to build
+    /// on. On 22 Nov 2026 offers made on two shared description words alone were taken once in 47: a job reading a grading
+    /// note was offered code about detail-line gaps. Code this alike does much the same thing the same way.
     /// </summary>
-    public static Entry? StartFrom(IEnumerable<Entry> entries, string description, string code, string tool)
+    public const double StartFromAt = 0.25;
+
+    /// <summary>
+    /// The kept entry a code call should start from, with how alike the codes are, or null to run it as written: kept code
+    /// of the same tool whose code already resembles the call's (agreement <see cref="StartFromAt"/> and more) and whose
+    /// description shares a word with the call's, while the call is not built on any kept code (no entry agrees at
+    /// <see cref="SameWork"/>). The most alike wins, code that worked more than once a little ahead. The owner, 22 Nov
+    /// 2026: "take from the library and do minimal amendment".
+    /// </summary>
+    public static (Entry Entry, double Alike)? StartFrom(IEnumerable<Entry> entries, string description, string code, string tool)
     {
         var shingles = Shingles(CodeRepeats.Shape(code ?? ""));
         if (shingles.Count == 0) return null;
-        var list = entries as IList<Entry> ?? entries.ToList();
         var sig = Signature(shingles);
-        if (list.Any(e => e.Sig is { Length: SignatureSize } other && Agree(sig, other) >= SameWork)) return null;
         var asked = Words(description);
-        if (asked.Count == 0) return null;
-        return Find(list.Where(e => e.Tool.Equals(tool, StringComparison.Ordinal)), description, 1, 2)
-            .FirstOrDefault(m => m.Shared * 2 >= asked.Count)?.Entry;
+        Entry? best = null;
+        double bestScore = 0, bestAlike = 0;
+        foreach (var e in entries)
+        {
+            if (e.Sig is not { Length: SignatureSize } other) continue;
+            var alike = Agree(sig, other);
+            if (alike >= SameWork) return null; // built on kept code already
+            if (alike < StartFromAt || !e.Tool.Equals(tool, StringComparison.Ordinal)) continue;
+            var shared = asked.Count == 0 ? 1 : asked.Count(KnownWords(e.Description).Contains);
+            if (shared == 0) continue;
+            var score = alike + 0.02 * Math.Min(shared, 5) + (e.Uses > 1 ? 0.03 : 0);
+            if (score > bestScore) (best, bestScore, bestAlike) = (e, score, alike);
+        }
+        return best is null ? null : (best, bestAlike);
     }
 
     /// <summary>What a held code call is answered with: the kept code to start from, whole when it fits.</summary>
-    public static string StartFromText(Entry e, string code)
+    public static string StartFromText(Entry e, string code, double alike = 0)
     {
         if (code.Length > 8000) code = code.Substring(0, 8000) + "\n// … (the rest: worked_code action=get id=" + e.Id + ")";
-        return "Not run yet. Kept code already did this kind of work: " + Line(e) + ".\nBuild on it: take this code and change only " +
+        return "Not run yet. Kept code already did this kind of work" + (alike > 0 ? $" (its code is about {Math.Round(alike * 100)}% the same as yours)" : "") +
+               ": " + Line(e) + ".\nBuild on it: take this code and change only " +
                "what differs (element ids, levels, names, sizes, one more filter), then send that. Changing little keeps what " +
                "already worked and fails less. If it truly can't be adapted, send your own call again unchanged and it runs.\n\n" + code;
     }
@@ -651,7 +669,7 @@ internal static class WorkedCode
     /// <summary>The held answer for a code call that should build on kept code, or null to run it; null on any trouble.</summary>
     public static string? StartFromFor(string description, string code, string tool)
     {
-        try { return StartFrom(Load(), description, code, tool) is { } e && CodeOf(e) is { Length: > 0 } kept ? StartFromText(e, kept) : null; }
+        try { return StartFrom(Load(), description, code, tool) is { } found && CodeOf(found.Entry) is { Length: > 0 } kept ? StartFromText(found.Entry, kept, found.Alike) : null; }
         catch (Exception) { return null; }
     }
 
