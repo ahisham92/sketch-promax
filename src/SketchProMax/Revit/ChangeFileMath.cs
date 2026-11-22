@@ -640,9 +640,19 @@ internal static class ChangeFileMath
     /// </summary>
     public const int KeepQuietMs = 45000;
 
-    /// <summary>Whether a go of copying into the kept-elements project may start now (bug 119).</summary>
-    public static bool KeepNow(bool closing, int sinceLastKeepMs, TimeSpan sinceInput) =>
-        closing || sinceLastKeepMs >= KeepEveryMs && sinceInput.TotalMilliseconds >= KeepQuietMs;
+    /// <summary>
+    /// The least time between two goes while the chat's jobs are working (a tool call ended in the last
+    /// <see cref="CallsQuietMs"/>): each go holds Revit 6 to 10 s on a big model, and every 15 s it took about a third of
+    /// Revit's time from the jobs (bug 133, 22 Nov 2026). What gathers goes in at the next go, at close, or when they stop.
+    /// </summary>
+    public const int KeepBusyEveryMs = 300000;
+
+    /// <summary>No tool call for this long: the jobs are not working.</summary>
+    public const int CallsQuietMs = 60000;
+
+    /// <summary>Whether a go of copying into the kept-elements project may start now (bugs 119, 133).</summary>
+    public static bool KeepNow(bool closing, int sinceLastKeepMs, TimeSpan sinceInput, int sinceCallMs = int.MaxValue) =>
+        closing || sinceLastKeepMs >= (sinceCallMs < CallsQuietMs ? KeepBusyEveryMs : KeepEveryMs) && sinceInput.TotalMilliseconds >= KeepQuietMs;
 
     /// <summary>The most elements copied in one go.</summary>
     public const int KeepMost = 60;
