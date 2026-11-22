@@ -159,6 +159,21 @@ internal static class ChatFocusTests
             Read("src/SketchProMax/Chat/ClaudeCli.cs").Contains("Get it right the first time: before you report, check your own work exactly as the teammate will."), "");
         check("job (bug 127): new job sessions get the kept code for their kind of work with their task",
             Read("src/SketchProMax/Chat/ChatPane.Jobs.cs").Contains("WorkedCode.JobHintFor(job.Title + \" \" + job.Task, ReadyTools())"), "");
+        {
+            static Dictionary<string, System.Text.Json.JsonElement> A(string what) => new() { ["description"] = System.Text.Json.JsonSerializer.SerializeToElement(what), ["code"] = System.Text.Json.JsonSerializer.SerializeToElement("return 1;") };
+            SketchProMax.Bridge.RevitTargets.ExistingFor = w => w.Contains("slab") ? "\n\nReady-made tools: check_slab_tops" : "";
+            var job = new SketchProMax.Bridge.RevitTargets(new SketchProMax.Bridge.ConnectorCaller(true, "job-1", null, null, null));
+            var held = job.HoldFirstCode("run_revit_query_code", A("Read the slab tops"));
+            var again = job.HoldFirstCode("run_revit_query_code", A("Read the slab tops"));
+            var looked = new SketchProMax.Bridge.RevitTargets(new SketchProMax.Bridge.ConnectorCaller(true, "job-2", null, null, null));
+            var afterFind = looked.HoldFirstCode("worked_code", null) is null && looked.HoldFirstCode("run_revit_code", A("slab")) is null;
+            var main = new SketchProMax.Bridge.RevitTargets(new SketchProMax.Bridge.ConnectorCaller(true, null, null, null, null)).HoldFirstCode("run_revit_code", A("slab"));
+            var plain = new SketchProMax.Bridge.RevitTargets(new SketchProMax.Bridge.ConnectorCaller(true, "job-3", null, null, null)).HoldFirstCode("run_revit_code", A("move walls"));
+            SketchProMax.Bridge.RevitTargets.ExistingFor = null;
+            check("code (bug 129): a job's first code call before it looked is held once with what exists; sent again it runs; looked first, never held; the main chat is never held",
+                held is not null && held.Contains("check_slab_tops") && held.Contains("send this same call again") && again is null && afterFind && main is null
+                && plain is not null && plain.Contains("list_learned_tools"), held + " | " + plain);
+        }
         check("notes (bug 125): notes, questions, jobs and auto sync skip the model switch, so a busy Revit never holds them",
             Read("src/SketchProMax/Bridge/RevitTargets.cs").Contains("name is not (\"wait_for_job\" or \"cancel_job\" or \"memory_note\" or \"chat_questions\" or \"chat_jobs\" or \"auto_sync\")"), "");
         check("job (bug 115): a new job session gets the chat's rules with its task (not a check, which gets them already)",

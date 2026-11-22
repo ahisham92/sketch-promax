@@ -57,6 +57,9 @@ internal sealed class RevitTargets
     // Revit windows that are running but did not answer the last ping (busy with a long operation, or frozen).
     private volatile int _unresponsive;
 
+    // A job looked for what already exists (a ready-made tool or kept code) before its first code call (bug 129).
+    private volatile bool _looked;
+
     private sealed record Session(int Pid, string Pipe, string RevitVersion, bool Busy, string? Blocked, List<(string Title, string Path, bool Active)> Documents);
 
     // ---- Set by the add-in (the connector program leaves them null) ------------------------------------------------
@@ -76,6 +79,32 @@ internal sealed class RevitTargets
     /// <summary>After a chat's call came back from another Revit window: its text with what the user sent meanwhile added.</summary>
     public static Func<string, string, string, string>? RemoteAfter;
 
+    /// <summary>
+    /// For a job's first code call before it looked for what exists: the ready-made tools and kept code that match what
+    /// the code says it does ("" when none). Set by the add-in, where the tools and the library are.
+    /// </summary>
+    public static Func<string, string>? ExistingFor;
+
+    /// <summary>
+    /// A job's first code call, when the job has not yet looked for a ready-made tool or kept code, is held once and
+    /// answered with what already exists (bug 129, 22 Nov 2026: jobs wrote about three pieces of code a minute, most of
+    /// them looks at the model that had been written before, while 40 ready-made tools went unused). null: run it.
+    /// Sending the same call again runs it, so a job is never stopped, only made to look first.
+    /// </summary>
+    public string? HoldFirstCode(string name, IDictionary<string, JsonElement>? arguments)
+    {
+        if (name is "worked_code" or "list_learned_tools" or "run_learned_tool" or "save_as_tool") { _looked = true; return null; }
+        if (_looked || name is not ("run_revit_code" or "run_revit_query_code") || !_caller.FromChat || _caller.Job is not { Length: > 0 }) return null;
+        _looked = true;
+        var what = arguments is not null && arguments.TryGetValue("description", out var d) && d.ValueKind == JsonValueKind.String ? d.GetString() ?? "" : "";
+        var existing = "";
+        try { existing = ExistingFor?.Invoke(what) ?? ""; } catch (Exception) { existing = ""; }
+        return "Not run yet. Sketch ProMax asks each job once to use what already exists before writing code." +
+               (existing.Length > 0 ? existing : "\n\nLook first: list_learned_tools for a ready-made tool, and worked_code (action=find) with what this code does.") +
+               "\n\nIf one of these does this step, use it (adapt kept code rather than rewriting it). If none fits, send this same call " +
+               "again and it will run.";
+    }
+
     /// <summary>A chat's job works in another Revit window now ("reading") or is back to thinking ("").</summary>
     public static Action<string, string>? RemoteActivity;
 
@@ -86,6 +115,8 @@ internal sealed class RevitTargets
 
         // Runs here, without Revit: a part of a large PDF read by its own chat.
         if (name == PdfPartReader.ToolName) return await PdfPartReader.CallAsync(arguments, _caller.Claude, _caller.Model, ct).ConfigureAwait(false);
+
+        if (HoldFirstCode(name, arguments) is { } held) return Text(held, true);
 
         var sessions = await DiscoverAsync(ct).ConfigureAwait(false);
         if (name == "list_revit_models") return Text(Describe(sessions), false);
