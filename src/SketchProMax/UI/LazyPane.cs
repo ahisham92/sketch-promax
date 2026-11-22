@@ -8,7 +8,8 @@ namespace SketchProMax.UI;
 /// A tab of the loader's dockable pane (CoreEntry.PaneContent) whose real content is made at Revit's next idle moment
 /// rather than when the loader asks: with the pane open at start, the loader asks while Revit is still starting or
 /// opening a model, and the chat reads its saved conversation and lays out every message. Until then (a moment) it
-/// shows a short "Loading" line. Clicking or tabbing into it makes the content at once.
+/// shows a short "Loading" line. Clicking or tabbing into it makes the content at once, and
+/// so does a timer after a few seconds when Revit gives no idle moment (bug 134).
 /// </summary>
 internal sealed class LazyPane : ContentControl
 {
@@ -61,7 +62,18 @@ internal sealed class LazyPane : ContentControl
         if (_filled || _scheduled) return;
         _scheduled = true;
         App.Dispatcher.Later(Fill);
+        // Revit can stop giving add-ins Idling for hours (bug 134, 22 Nov 2026: the chat showed "Loading" until clicked):
+        // fill it after a few seconds anyway, on the pane's own thread.
+        if (App.Ui is { } ui)
+        {
+            var timer = new System.Windows.Threading.DispatcherTimer(TimeSpan.FromSeconds(FallbackSeconds), System.Windows.Threading.DispatcherPriority.ApplicationIdle,
+                (sender, _) => { ((System.Windows.Threading.DispatcherTimer)sender!).Stop(); Fill(); }, ui);
+            timer.Start();
+        }
     }
+
+    /// <summary>Seconds after which the tab is filled even without Revit's idle moment.</summary>
+    internal const int FallbackSeconds = 5;
 
     private void Fill()
     {

@@ -240,6 +240,8 @@ public static class Updater
         {
             progress.Report(UpdateStage.Applying, "Switching over as soon as Revit is idle and no job is running…", version);
             AppDomain.CurrentDomain.SetData(LoaderPendingKey, core);
+            // Revit may give no Idling for a long time (bug 134): switch from the external event instead.
+            SwitchNow.Watch(core);
         }
         else
         {

@@ -75,5 +75,12 @@ internal static class LifelineWatchTests
             && watch.Contains("doc.IsModifiable") && watch.Contains("doc.IsReadOnly"), "");
         check("lifeline watch: started and stopped with Lifeline", Src("App.cs").Contains("Revit.LifelineWatch.Start(app)") && Src("App.cs").Contains("Revit.LifelineWatch.Stop()"), "");
         check("lifeline watch: set in the Lifeline window, kept at once", Src("UI", "RecoverWindow.cs").Contains("WatchSection()") && Src("UI", "RecoverWindow.cs").Contains("LifelineWatch.ReadSettings()"), "");
+        // Bug 134: Revit gave no Idling for 1.5 hours; the update and the chat tab must not wait for it.
+        var now = Src("Update", "SwitchNow.cs");
+        check("update: handed over, it is also switched from the external event", Src("Update", "Updater.cs").Contains("SwitchNow.Watch(core)") && now.Contains("InvokeFromEventAsync(TrySwitch)"), "");
+        check("update: the external-event switch checks what the loader checks", now.Contains("Bridge.Jobs.Running is not null || Tools.SelfTest.IsRunning || Chat.ChatPane.IsBusy || Revit.SwitchGate.Wait()"), "");
+        var loader = File.ReadAllText(Path.Combine(repoRoot, "src", "SketchProMax.Loader", "LoaderApp.cs"));
+        check("update: the loader still has the Pending and Swap the switch calls", loader.Contains("private static Candidate? Pending()") && loader.Contains("private static void Swap(UIApplication app, Candidate target)"), "");
+        check("chat tab: filled after a few seconds without Revit's idle moment", Src("UI", "LazyPane.cs").Contains("FallbackSeconds") && Src("UI", "LazyPane.cs").Contains("Fill(); }, ui)"), "");
     }
 }
