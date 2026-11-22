@@ -2346,7 +2346,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
                 : _conv.AttachedSession.Length == 0 || _conv.AttachedSession == _conv.SessionId ? new AttachedSoFar { Bytes = _conv.AttachedBytes, Pages = _conv.AttachedPages }
                 : new AttachedSoFar();
             // What changed since the last answer, the active view and the selection: a follow-up needn't read the model again to know.
-            var sent = text + hint + Revit.ChatModelWatch.Note(_conv.Key);
+            // And the jobs as they are, with the changes each made, so "what is done?" is answered from them (bug 132).
+            var sent = text + hint + (_board is { } jobs ? JobTruth.Note(jobs.Snapshot()) : "") + Revit.ChatModelWatch.Note(_conv.Key);
             turn.Line = await On(Task.Run(() => BuildMessage(sent, attachments, used)));
             (_conv.AttachedBytes, _conv.AttachedPages, _conv.AttachedSession) = (used.Bytes, used.Pages, _conv.SessionId);
         }

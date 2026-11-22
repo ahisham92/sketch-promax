@@ -33,11 +33,25 @@ internal static class JobTruth
                 : null;
             if (state is null) continue;
             var who = Who(j) is { Length: > 0 } name ? $" ({name})" : "";
-            parts.Add($"job {j.Number}{who} \"{j.Title}\": {state}");
+            var made = j.Changes > 0 ? $", {j.Changes} change{(j.Changes == 1 ? "" : "s")} made in the model so far (not checked yet)" : ", no model change yet";
+            parts.Add($"job {j.Number}{who} \"{j.Title}\": {state}{made}");
         }
         return parts.Count == 0
             ? "No other job is working right now."
             : "Other jobs right now (live, use only this): " + string.Join("; ", parts) + ".";
+    }
+
+    /// <summary>
+    /// What goes with each message to the coordinator while jobs are open (bug 132, 22 Nov 2026: asked from the phone
+    /// how many comments were left, it said "nothing has gone into the model so far" while the jobs had made 117 changes,
+    /// because no job had reported yet). "" when no job is open or being checked.
+    /// </summary>
+    public static string Note(IEnumerable<ChatJob> jobs)
+    {
+        var line = Line(jobs);
+        return line.StartsWith("No other", StringComparison.Ordinal) ? "" :
+            "\n\n[Sketch ProMax, not typed by the user: " + line.Replace("Other jobs right now", "Jobs right now") +
+            " Say what is done from this and the jobs' reports: changes made but not checked are \"in the model, not checked yet\", never \"nothing in the model\".]";
     }
 
     private static readonly Regex Busy = new(
