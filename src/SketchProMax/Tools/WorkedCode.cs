@@ -320,6 +320,86 @@ internal static class WorkedCode
                "before writing any, try worked_code (action=find) with what you need.";
     }
 
+    // ---- Building on kept code, not beside it (bug 135) --------------------------------------------------------------
+
+    /// <summary>
+    /// How alike two kept codes must be (their shapes' runs of five words, 0 to 1) to be one entry: the owner, 22 Nov 2026,
+    /// "instead of having the same code in the library duplicated, remove duplication and get the best out of it".
+    /// </summary>
+    public const double MergeAt = 0.6;
+
+    /// <summary>The share of signature numbers two codes agree on: about the share of their runs of five words in common.</summary>
+    internal static double Agree(uint[] a, uint[] b)
+    {
+        if (a.Length != SignatureSize || b.Length != SignatureSize) return 0;
+        var same = 0;
+        for (var i = 0; i < SignatureSize; i++) if (a[i] == b[i]) same++;
+        return same / (double)SignatureSize;
+    }
+
+    /// <summary>
+    /// Folds kept entries that are the same code written again into one, the most used (then the newest) staying with the
+    /// other's uses added, so the library holds each piece of work once, at its best. Same tool, signatures agreeing at
+    /// least <see cref="MergeAt"/>, and a word of the description in common (or agreeing at 0.8 and more). Entries with no
+    /// signature are left as they are. The entries removed.
+    /// </summary>
+    public static List<Entry> Merge(List<Entry> entries)
+    {
+        var removed = new List<Entry>();
+        var gone = new HashSet<Entry>();
+        var ordered = entries.Where(e => e.Sig is { Length: SignatureSize }).OrderByDescending(e => e.Uses).ThenByDescending(e => e.Last).ToList();
+        for (var i = 0; i < ordered.Count; i++)
+        {
+            var keeper = ordered[i];
+            if (gone.Contains(keeper)) continue;
+            var words = KnownWords(keeper.Description);
+            for (var j = i + 1; j < ordered.Count; j++)
+            {
+                var other = ordered[j];
+                if (gone.Contains(other) || !other.Tool.Equals(keeper.Tool, StringComparison.Ordinal)) continue;
+                if (Math.Min(keeper.Size, other.Size) < MergeAt * Math.Max(keeper.Size, other.Size)) continue;
+                var agree = Agree(keeper.Sig!, other.Sig!);
+                if (agree < MergeAt || agree < 0.8 && !KnownWords(other.Description).Overlaps(words)) continue;
+                keeper.Uses += other.Uses;
+                if (other.First < keeper.First) keeper.First = other.First;
+                if (other.Last > keeper.Last) keeper.Last = other.Last;
+                if (keeper.Model.Length == 0) keeper.Model = other.Model;
+                gone.Add(other);
+                removed.Add(other);
+            }
+        }
+        entries.RemoveAll(gone.Contains);
+        return removed;
+    }
+
+    /// <summary>
+    /// The kept entry a code call should start from, or null to run it as written: kept code of the same tool whose
+    /// description shares at least half of the call's words (two at least), while the call's code is not built on any
+    /// kept code (no entry agrees with it at <see cref="SameWork"/>). The owner, 22 Nov 2026: "instead of searching for an
+    /// exact code or else creating a new one, take from the library and do minimal amendment".
+    /// </summary>
+    public static Entry? StartFrom(IEnumerable<Entry> entries, string description, string code, string tool)
+    {
+        var shingles = Shingles(CodeRepeats.Shape(code ?? ""));
+        if (shingles.Count == 0) return null;
+        var list = entries as IList<Entry> ?? entries.ToList();
+        var sig = Signature(shingles);
+        if (list.Any(e => e.Sig is { Length: SignatureSize } other && Agree(sig, other) >= SameWork)) return null;
+        var asked = Words(description);
+        if (asked.Count == 0) return null;
+        return Find(list.Where(e => e.Tool.Equals(tool, StringComparison.Ordinal)), description, 1, 2)
+            .FirstOrDefault(m => m.Shared * 2 >= asked.Count)?.Entry;
+    }
+
+    /// <summary>What a held code call is answered with: the kept code to start from, whole when it fits.</summary>
+    public static string StartFromText(Entry e, string code)
+    {
+        if (code.Length > 8000) code = code.Substring(0, 8000) + "\n// … (the rest: worked_code action=get id=" + e.Id + ")";
+        return "Not run yet. Kept code already did this kind of work: " + Line(e) + ".\nBuild on it: take this code and change only " +
+               "what differs (element ids, levels, names, sizes, one more filter), then send that. Changing little keeps what " +
+               "already worked and fails less. If it truly can't be adapted, send your own call again unchanged and it runs.\n\n" + code;
+    }
+
     /// <summary>A ready-made (learned) tool on this PC, as far as matching a job's task to it goes.</summary>
     public sealed record ReadyTool(string Name, string Summary, int Uses);
 
@@ -562,10 +642,72 @@ internal static class WorkedCode
     public static string JobHintFor(string task, IEnumerable<ReadyTool>? tools = null)
     {
         var ready = "";
-        try { if (tools is not null) ready = ToolHint(tools, task); }
+        try { if (tools is not null) { var all = tools.ToList(); ready = ToolHint(all, task) + AllTools(all); } }
         catch (Exception) { ready = ""; }
         try { return ready + JobHint(Load(), task); }
         catch (Exception) { return ready; }
+    }
+
+    /// <summary>The held answer for a code call that should build on kept code, or null to run it; null on any trouble.</summary>
+    public static string? StartFromFor(string description, string code, string tool)
+    {
+        try { return StartFrom(Load(), description, code, tool) is { } e && CodeOf(e) is { Length: > 0 } kept ? StartFromText(e, kept) : null; }
+        catch (Exception) { return null; }
+    }
+
+    private static string MergedMark => Path.Combine(Folder, "merged.txt");
+
+    /// <summary>
+    /// Once a day, off Revit's thread: duplicates in the library are folded together (<see cref="Merge"/>) and the code
+    /// files of the ones folded away are removed. Never throws.
+    /// </summary>
+    public static void MergeDaily() => Task.Run(() =>
+    {
+        try
+        {
+            var today = DateTime.UtcNow.ToString("yyyy-MM-dd");
+            if (File.Exists(MergedMark) && File.ReadAllText(MergedMark).StartsWith(today, StringComparison.Ordinal)) return;
+            lock (Gate)
+            {
+                var entries = Read();
+                foreach (var e in entries.Where(e => e.Sig is not { Length: SignatureSize }))
+                {
+                    var code = CodeOf(e);
+                    if (code.Length == 0) continue;
+                    var shingles = Shingles(CodeRepeats.Shape(code));
+                    (e.Sig, e.Size) = (Signature(shingles), shingles.Count);
+                }
+                var before = entries.Count;
+                var removed = Merge(entries);
+                foreach (var e in removed)
+                {
+                    try { var file = CodeFile(Folder, e); if (File.Exists(file)) File.Delete(file); }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+                }
+                Save(Folder, entries);
+                _cached = entries;
+                _cachedAt = File.GetLastWriteTimeUtc(IndexFile);
+                File.WriteAllText(MergedMark, $"{today} {before} entries, {removed.Count} duplicates folded in, {entries.Count} kept");
+            }
+        }
+        catch (Exception) { /* tried again next start */ }
+    });
+
+    /// <summary>How many ready-made tools a new job is shown by name, most used first.</summary>
+    public const int AllToolsShown = 40;
+
+    /// <summary>
+    /// Every ready-made tool on this PC by name, for a new job (bug 135, 22 Nov 2026: six tools saved that day were never
+    /// run, since a job heard of a tool only when its task's words matched the tool's). "" when there are none.
+    /// </summary>
+    public static string AllTools(IEnumerable<ReadyTool> tools)
+    {
+        var list = tools.OrderByDescending(t => t.Uses).ThenBy(t => t.Name, StringComparer.Ordinal).ToList();
+        if (list.Count == 0) return "";
+        return "\n\nAll ready-made tools on this PC (run_learned_tool; list_learned_tools for their inputs): " +
+               string.Join("; ", list.Take(AllToolsShown).Select(t => t.Name + (t.Summary.Length > 0 ? " (" + OneLine(t.Summary, 60) + ")" : ""))) +
+               (list.Count > AllToolsShown ? $"; and {list.Count - AllToolsShown} more" : "") +
+               ". Use one wherever it does a step, before kept code or new code.";
     }
 
     /// <summary>The line for a typed message, from the file; "" on any trouble.</summary>

@@ -52,6 +52,7 @@
     <Compile Include="../../src/SketchProMax/Chat/AnswerTiming.cs" Link="AnswerTiming.cs" />
     <Compile Include="../../src/SketchProMax/Tools/CodeRepeats.cs" Link="CodeRepeats.cs" />
     <Compile Include="../../src/SketchProMax/Tools/WorkedCode.cs" Link="WorkedCode.cs" />
+    <Compile Include="../../src/SketchProMax/Tools/JobRecipes.cs" Link="JobRecipes.cs" />
     <Compile Include="../../src/SketchProMax/Tools/SubmissionFormatMath.cs" Link="SubmissionFormatMath.cs" />
     <Compile Include="../../src/SketchProMax/Chat/Routines.cs" Link="Routines.cs" />
     <Compile Include="../../src/SketchProMax/Chat/AutopilotShare.cs" Link="AutopilotShare.cs" />

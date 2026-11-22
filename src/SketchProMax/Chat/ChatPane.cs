@@ -60,6 +60,8 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
             Away.Restore();
             HistoryArchive.Start(); // Claude Code deletes its transcripts after 30 days: they are kept here for good (19 Nov 2026)
             Tools.WorkedCode.BackfillOnce(); // all code written before the library began comes in once (19 Nov 2026)
+            Tools.WorkedCode.MergeDaily(); // the same code kept twice is folded into one, once a day (bug 135)
+            Tools.JobRecipes.BackfillOnce(JobsFolder); // every finished job in every chat can be replayed (bug 135)
             if (app.ActiveUIDocument?.Document is { } doc) SetModel(doc);
             _viewActivated = (_, e) =>
             {

@@ -22,7 +22,7 @@ public sealed class WorkedCodeTool : IRevitTool
     {
       "action": {"type": "string", "enum": ["find", "get", "list"], "description": "Default find."},
       "query": {"type": "string", "description": "find: what the code should do, in a few words (the words of its description)."},
-      "id": {"type": "string", "description": "get: the entry's id, from find, list, or the note on a failed code call."},
+      "id": {"type": "string", "description": "get: the entry's id, from find, list, or the note on a failed code call; or a step of a job done before (key#N)."},
       "max": {"type": "integer", "description": "find and list: how many entries. Default 5 (find), 20 (list)."}
     }
     """;
@@ -39,6 +39,11 @@ public sealed class WorkedCodeTool : IRevitTool
             case "get":
             {
                 var id = (args.OptString("id") ?? "").Trim();
+                // A step of a job done before (JobRecipes, bug 135): its whole input.
+                if (id.Contains('#'))
+                    return JobRecipes.StepById(id) is { } step
+                        ? ToolResult.Ok(new { id, tool = step.Tool, did = step.What, input = step.Input, use = "Run it again with only what differs changed." })
+                        : ToolResult.Error($"No step '{id}'. The ids are in the job's task.");
                 var entry = entries.FirstOrDefault(e => string.Equals(e.Id, id, StringComparison.OrdinalIgnoreCase));
                 return entry is null ? ToolResult.Error($"No kept code with id '{id}'. Call worked_code action=find.") : ToolResult.Ok(Full(entry));
             }

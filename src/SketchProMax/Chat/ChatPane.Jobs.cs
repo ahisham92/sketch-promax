@@ -219,7 +219,7 @@ internal sealed partial class ChatPane
     /// <summary>The shown chat is With coordinator (ChatTypes).</summary>
     private bool IsCoordinator => ChatTypes.Of(_conv) == ChatTypes.Coordinator;
 
-    private static string JobsFolder(Conversation conv) => Path.Combine(ClaudeCli.Folder, "jobs", conv.Id.Length > 0 ? conv.Id : "chat");
+    internal static string JobsFolder(Conversation conv) => Path.Combine(ClaudeCli.Folder, "jobs", conv.Id.Length > 0 ? conv.Id : "chat");
 
     /// <summary>The shown chat's jobs: a chat opened from disk has none running (those saved running are stopped).</summary>
     private void AttachJobs()
@@ -471,6 +471,8 @@ internal sealed partial class ChatPane
             // A new session: it gets the chat's agreed rules with its task, the same rules its check judges by (bug 115).
             if (job.ReviewOf == 0 && JobReview.RulesForJob(_conv.Recall) is { Length: > 0 } rules) message = message with { Text = message.Text + rules };
             // And the kept code that did its kind of work, so it starts from that rather than writing it again (bug 127).
+            // A job like one done before (in any chat) replays its steps (bug 135).
+            if (SketchProMax.Tools.JobRecipes.HintFor(job.Title + " " + job.Task, job.Key) is { Length: > 0 } replay) message = message with { Text = message.Text + replay };
             if (SketchProMax.Tools.WorkedCode.JobHintFor(job.Title + " " + job.Task, ReadyTools()) is { Length: > 0 } kept) message = message with { Text = message.Text + kept };
             session = Guid.NewGuid().ToString();
             JobSessions.Set(folder, job.Key, session);
@@ -733,6 +735,9 @@ internal sealed partial class ChatPane
     private void Report(ChatJob job)
     {
         var now = DateTime.UtcNow;
+        // A job done is remembered so a job like it later replays its steps (bug 135); a check's verdict marks it passed.
+        if (job.State == JobBoard.Done && job.GoalCheck == 0)
+            SketchProMax.Tools.JobRecipes.Remember(job.Key, job.Title, job.Task, JobSessions.Get(JobsFolder(_conv), job.Key), job.PassedAt > DateTime.MinValue, now);
         // During a run nobody is there to press "try again": a job that ended with a problem is started again by itself
         // (twice at most) before it counts as failed.
         if (Run is { State: AutopilotRun.Running } && _board is { } retry && Autopilot.RetryMessage(job) is { } again)
