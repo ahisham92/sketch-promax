@@ -414,8 +414,11 @@ internal static class RecoveryTests
         check("lifeline: no kept copies while the user works", !M.KeepNow(false, 60_000, TimeSpan.FromSeconds(5)) && !M.KeepNow(false, 60_000, TimeSpan.FromSeconds(30)), "");
         check("lifeline: kept copies go in when the user pauses", M.KeepNow(false, 60_000, TimeSpan.FromSeconds(50)) && !M.KeepNow(false, 5_000, TimeSpan.FromMinutes(5)), "");
         check("lifeline: kept copies always go in when the model closes", M.KeepNow(true, 0, TimeSpan.Zero), "");
+        check("lifeline (bug 133): while jobs keep calling, kept copies go in every 5 minutes, not every 15 s; at close always",
+            !M.KeepNow(false, 60_000, TimeSpan.FromMinutes(5), sinceCallMs: 2_000) && M.KeepNow(false, 300_000, TimeSpan.FromMinutes(5), sinceCallMs: 2_000)
+            && M.KeepNow(false, 60_000, TimeSpan.FromMinutes(5), sinceCallMs: 120_000) && M.KeepNow(true, 0, TimeSpan.Zero, sinceCallMs: 0), "");
         check("lifeline: elements past one go's 60 wait for the next go", Src("Revit", "ChangeFile.cs").Contains("model.Keeps.ExceptWith(taking)") && !Src("Revit", "ChangeFile.cs").Replace("\r\n", "\n").Contains("lock (Gate) model.Keeps.Clear();\n        var start"), "");
-        check("lifeline: kept copies wait for a quiet keyboard and mouse", Src("Revit", "ChangeFile.cs").Contains("M.KeepNow(now, unchecked(Environment.TickCount - model.LastKeep), SwitchGate.SinceInput())"), "");
+        check("lifeline: kept copies wait for a quiet keyboard and mouse", Src("Revit", "ChangeFile.cs").Contains("M.KeepNow(now, unchecked(Environment.TickCount - model.LastKeep), SwitchGate.SinceInput(), unchecked(Environment.TickCount - RunningCall.LastEnded))"), "");
         // ---- A group edited after the last save; where what wasn't done is ----
         (string, double[]) Wall(double a, double b) => ("Walls|W200", [a, b, 20]);
         var twoWalls = M.GroupShape([Wall(11.18, 11.18), Wall(11.18, 11.18)]);

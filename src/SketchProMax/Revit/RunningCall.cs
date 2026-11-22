@@ -72,9 +72,13 @@ internal static class RunningCall
         }
     }
 
+    /// <summary>When the last call ended (Environment.TickCount), for work that waits while calls keep coming (bug 133).</summary>
+    public static volatile int LastEnded = Environment.TickCount - 3_600_000;
+
     /// <summary>The call ended (any way): the one around it is the running call again, or none.</summary>
     public static void End()
     {
+        LastEnded = Environment.TickCount;
         if (!Enabled) return;
         lock (Gate)
         {
