@@ -191,7 +191,7 @@ internal static class ChatFocusTests
                  {
                      "did you extend the piles just upwards to catch the slab and beams but you kept the tip level correct ?",
                      "did you move the piles and made all updates of the grading in berth 9 and approach slabs ?",
-                     "why clara is not working are all tasks finalized ?", "I extended the void is that okay now ?",
+                     "why kim is not working are all tasks finalized ?", "I extended the void is that okay now ?",
                      "is the model neat now?", "are all the joints joined?",
                  })
             check("question: \"" + said.Substring(0, Math.Min(40, said.Length)) + "\"", ChatFocus.IsQuestion(said), "");
