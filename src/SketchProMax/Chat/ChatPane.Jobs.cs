@@ -456,6 +456,13 @@ internal sealed partial class ChatPane
         }
     }
 
+    /// <summary>The ready-made tools on this PC, for a new job's hints (bug 128); none on any trouble.</summary>
+    private static List<SketchProMax.Tools.WorkedCode.ReadyTool> ReadyTools()
+    {
+        try { return SketchProMax.Tools.LearnedTools.All().Select(t => new SketchProMax.Tools.WorkedCode.ReadyTool(t.Name, t.Summary, t.Uses)).ToList(); }
+        catch (Exception) { return []; }
+    }
+
     private async Task StartRun(ChatJob job, JobMessage message, bool fresh = false)
     {
         var folder = JobsFolder(_conv);
@@ -468,7 +475,7 @@ internal sealed partial class ChatPane
             // A new session: it gets the chat's agreed rules with its task, the same rules its check judges by (bug 115).
             if (job.ReviewOf == 0 && JobReview.RulesForJob(_conv.Recall) is { Length: > 0 } rules) message = message with { Text = message.Text + rules };
             // And the kept code that did its kind of work, so it starts from that rather than writing it again (bug 127).
-            if (SketchProMax.Tools.WorkedCode.JobHintFor(job.Title + " " + job.Task) is { Length: > 0 } kept) message = message with { Text = message.Text + kept };
+            if (SketchProMax.Tools.WorkedCode.JobHintFor(job.Title + " " + job.Task, ReadyTools()) is { Length: > 0 } kept) message = message with { Text = message.Text + kept };
             session = Guid.NewGuid().ToString();
             JobSessions.Set(folder, job.Key, session);
             job.HasSession = true;

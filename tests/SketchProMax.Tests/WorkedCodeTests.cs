@@ -59,6 +59,16 @@ internal static class WorkedCodeTests
             jobHint.Contains("Move the selected piles between the tie rods") && jobHint.Contains("worked_code (action=get, id)") && jobHint.Contains("action=find")
             && WorkedCode.JobHint(list, "export the sheets to PDF").Length == 0, jobHint);
 
+        var ready = new List<WorkedCode.ReadyTool>
+        {
+            new("check_slab_tops_vs_grading_dwg", "Read-only check of floor tops in given berths against a linked grading DWG; compares slab top with the grading level", 15),
+            new("annotate_pile_section", "Bring a pile design section view up to the submission standard: spot levels, tags, dimensions", 12),
+        };
+        var toolHint = WorkedCode.ToolHint(ready, "Check the slab tops of Berth 10 against the grading DWG levels");
+        check("job (bug 128): a job's task names the ready-made tool for its kind of work, and nothing when none is alike",
+            toolHint.Contains("check_slab_tops_vs_grading_dwg") && !toolHint.Contains("annotate_pile_section") && toolHint.Contains("run_learned_tool")
+            && WorkedCode.ToolHint(ready, "export the sheets to PDF").Length == 0 && WorkedCode.ToolHint([], "Check the slab tops").Length == 0, toolHint);
+
         var redo = new List<WorkedCode.Entry>();
         string Args(string code, string what) => System.Text.Json.JsonSerializer.Serialize(new { code, description = what });
         var past = new List<(string, RedoLog.Step)>

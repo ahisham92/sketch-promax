@@ -320,6 +320,37 @@ internal static class WorkedCode
                "before writing any, try worked_code (action=find) with what you need.";
     }
 
+    /// <summary>A ready-made (learned) tool on this PC, as far as matching a job's task to it goes.</summary>
+    public sealed record ReadyTool(string Name, string Summary, int Uses);
+
+    /// <summary>
+    /// What a job's task starts its hints with when a ready-made tool on this PC does its kind of work (bug 128, 22 Nov
+    /// 2026: a day of 560 code calls used none of the 40 ready-made tools, because jobs were told only about kept code,
+    /// whose closest match was usually a one-off with element ids written in). "" when none is close: at least three of
+    /// the task's words in the tool's name and description.
+    /// </summary>
+    public static string ToolHint(IEnumerable<ReadyTool> tools, string task)
+    {
+        var asked = Words(task);
+        if (asked.Count == 0) return "";
+        var found = new List<(ReadyTool Tool, int Shared, double Score)>();
+        foreach (var tool in tools)
+        {
+            var has = Words(tool.Name.Replace('_', ' ') + " " + tool.Summary);
+            if (has.Count == 0) continue;
+            var shared = asked.Count(has.Contains);
+            if (shared < Math.Min(3, asked.Count)) continue;
+            found.Add((tool, shared, shared / (double)asked.Count + shared / (double)has.Count));
+        }
+        var best = found.OrderByDescending(f => f.Shared).ThenByDescending(f => f.Score).ThenByDescending(f => f.Tool.Uses).Take(3).ToList();
+        if (best.Count == 0) return "";
+        return "\n\nReady-made tools on this PC already do this kind of work, with no code to write:\n" +
+               string.Join("\n", best.Select(f => $"- {f.Tool.Name}: {OneLine(f.Tool.Summary, 220)} (used {f.Tool.Uses}x)")) +
+               "\nUse one of these first: call it by its name (load it with ToolSearch if it isn't loaded) or with run_learned_tool " +
+               "(name, arguments). Only when none fits, use kept code or write new code. When one falls short, fix its code and " +
+               "save it again with save_as_tool under the same name, so it is right next time.";
+    }
+
     // ---- The library on this PC --------------------------------------------------------------------------------------
 
     /// <summary>The library's folder: index.json (what is searched) and a folder per topic with one .cs file per code.</summary>
@@ -528,10 +559,13 @@ internal static class WorkedCode
     }
 
     /// <summary>The kept-code lines for a job's task, from the file; "" on any trouble.</summary>
-    public static string JobHintFor(string task)
+    public static string JobHintFor(string task, IEnumerable<ReadyTool>? tools = null)
     {
-        try { return JobHint(Load(), task); }
-        catch (Exception) { return ""; }
+        var ready = "";
+        try { if (tools is not null) ready = ToolHint(tools, task); }
+        catch (Exception) { ready = ""; }
+        try { return ready + JobHint(Load(), task); }
+        catch (Exception) { return ready; }
     }
 
     /// <summary>The line for a typed message, from the file; "" on any trouble.</summary>
