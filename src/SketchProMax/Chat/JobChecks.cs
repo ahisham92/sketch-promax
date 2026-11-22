@@ -107,7 +107,10 @@ internal static class JobReview
     public static bool Wanted(string? mode, bool autopilot, ChatJob job) =>
         Normal(mode) switch { Off => false, AutopilotOnly => autopilot, _ => true }
         && job.State == JobBoard.Done && job.ReviewOf == 0 && job.GoalCheck == 0 && job.Unchecked
-        && job.Review != Pending && job.Reviews < MaxReviews;
+        && job.Review != Pending && job.Reviews < MaxReviews
+        // A job that changed nothing in the model since its last check (a read, a triage) is checked once, not again and
+        // again (bug 131: read-only triage jobs were checked and sent back up to three times while nothing was fixed).
+        && (job.Reviews == 0 || job.ChangedModel);
 
     /// <summary>The words that mark a part in a check's list.</summary>
     public const string DoneWord = "DONE", NotDoneWord = "NOT DONE";

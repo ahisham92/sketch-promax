@@ -126,6 +126,11 @@ internal static class JobChecksTests
         b2.ToStart(3, now);
         b2.RunEnded(reader, true, "It has 12 parameters.", now);
         check("review: a job that only read is checked too", JobReview.Wanted(JobReview.Always, true, reader), "");
+        check("review (bug 131): a read-only job sent back and finished again without changing the model isn't checked again; one that changed it is",
+            !JobReview.Wanted(JobReview.Always, true, new ChatJob { State = JobBoard.Done, Unchecked = true, Reviews = 1 })
+            && JobReview.Wanted(JobReview.Always, true, new ChatJob { State = JobBoard.Done, Unchecked = true, Reviews = 1, ChangedModel = true }), "");
+        check("coordinator (bug 131): known work starts at once, long lists split across free workers",
+            System.IO.File.ReadAllText(System.IO.Path.Combine(AppContext.BaseDirectory, "../../../../../src/SketchProMax/Chat/ClaudeCli.cs")).Contains("Never hold known work back until a whole list is checked"), "");
         check("review: a job not marked as finished work isn't checked", !JobReview.Wanted(JobReview.Always, true, new ChatJob { State = JobBoard.Done }), "");
         b2.MarkChanged("nope");
         check("review: wanted for a finished job when on", JobReview.Wanted(JobReview.Always, false, work), "");
@@ -147,6 +152,7 @@ internal static class JobChecksTests
         b2.Message(work.Number, "add A104", now);
         check("review: a job carrying on is checked again later", work.Review == "", work.Review);
         b2.ToStart(3, now);
+        b2.MarkChanged(work.Key); // making A104 changes the model
         b2.RunEnded(work, true, "Made A104 too.", now);
         check("review: a job sent back is checked again once it finishes", JobReview.Wanted(JobReview.Always, true, work), "");
         var check2 = b2.StartReview(work.Number, now)!;

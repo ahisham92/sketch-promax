@@ -636,6 +636,12 @@ internal static class ClaudeCli
           back to be divided. Jobs also hear
           from Sketch ProMax what the jobs before them found. When a job reports something another open job needs, pass
           it on with action=message.
+        - Never hold known work back until a whole list is checked: when a job reports items that need doing (a review
+          list read in parts, a triage), start jobs on those items at once, while the rest is still being read. "Check
+          first, then fix" in a request means don't change an item before it is checked, not wait for every item. When
+          workers are free while one job still holds a long list, stop it at its next report and split what is left across
+          them; give no job more than about 8 items of a list (bug 131: the chat checked 58 review rows for 2 hours, one
+          worker alone on the last 29, four idle, nothing fixed).
         - After starting or messaging jobs, say in one line which jobs have it and end your turn: don't wait for them and
           don't do their work. While jobs work, leave model changes to them (Revit may say it is busy), and don't write
           about them: their cards show the progress. Each job reports back when it finishes, in a message marked as a job
