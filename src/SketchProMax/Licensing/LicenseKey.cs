@@ -10,7 +10,10 @@ namespace SketchProMax.Licensing;
 /// only the public half, so it can check a key but not make one. Pure logic, no Revit and no files (the tests run it).
 ///
 /// Key: "SPM1." + base64url(payload) + "." + base64url(ECDSA P-256 signature, 64 bytes), where payload is
-/// "1|id|pc code|name|issued yyyy-MM-dd|ends yyyy-MM-dd or -".
+/// "1|id|pc code|name|issued yyyy-MM-dd|ends yyyy-MM-dd or -" for a Sketch ProMax key, or (since 24 Nov 2026, the owner:
+/// a separate key per program) "2|...|programs" naming the programs it unlocks ("sketch,plaxis"). A key for Sketch ProMax
+/// alone is still made the first way, so Sketch ProMax versions from before keep reading it. Plaxis ProMax has a copy of
+/// this file (src/PlaxisProMax.Core/Licensing/LicenseKey.cs): change both.
 /// </summary>
 internal static class LicenseKey
 {
@@ -68,9 +71,26 @@ internal static class LicenseKey
         Array.IndexOf(OwnerHashes, Hex(Sha256("SketchProMax/owner/" + machineId!.Trim().ToLowerInvariant()))) >= 0;
 
     /// <summary>What a key says. <see cref="Ends"/> null: no end date.</summary>
-    internal sealed record License(string Id, string PcCode, string Name, DateTime Issued, DateTime? Ends);
+    /// <summary>What a key says. <see cref="Ends"/> null: no end date. <see cref="Programs"/> null or empty: Sketch ProMax only.</summary>
+    internal sealed record License(string Id, string PcCode, string Name, DateTime Issued, DateTime? Ends, IReadOnlyList<string>? Programs = null)
+    {
+        /// <summary>The programs this key unlocks.</summary>
+        public IReadOnlyList<string> For => Programs is { Count: > 0 } p ? p : [LicenseKey.Programs.Sketch];
 
-    internal enum Check { Valid, Expired, WrongPc, Cancelled, Invalid }
+        public bool Covers(string program) => For.Contains(program, StringComparer.Ordinal);
+    }
+
+    /// <summary>The programs a key can unlock, as they are written in a key.</summary>
+    internal static class Programs
+    {
+        public const string Sketch = "sketch", Plaxis = "plaxis";
+        public static readonly string[] All = [Sketch, Plaxis];
+
+        public static string Name(string program) => program switch { Sketch => "Sketch ProMax", Plaxis => "Plaxis ProMax", _ => program };
+    }
+
+    /// <summary><see cref="OtherProgram"/>: a good key for this PC that doesn't unlock this program.</summary>
+    internal enum Check { Valid, Expired, WrongPc, Cancelled, OtherProgram, Invalid }
 
     /// <summary>A short random id per key ("K7Q2M9XA"), so a key can be found in the list or cancelled without naming anyone.</summary>
     public static string NewId()
@@ -111,13 +131,14 @@ internal static class LicenseKey
     }
 
     /// <summary>Whether <paramref name="key"/> unlocks the PC with <paramref name="pcCode"/> on <paramref name="today"/>.</summary>
-    public static Check Verify(string? key, string pcCode, DateTime today, LicenseChanges? changes = null, ECDsa? verifier = null) =>
-        Verify(Read(key, verifier), pcCode, today, changes);
+    public static Check Verify(string? key, string pcCode, DateTime today, LicenseChanges? changes = null, ECDsa? verifier = null, string program = Programs.Sketch) =>
+        Verify(Read(key, verifier), pcCode, today, changes, program);
 
-    public static Check Verify(License? license, string pcCode, DateTime today, LicenseChanges? changes = null)
+    public static Check Verify(License? license, string pcCode, DateTime today, LicenseChanges? changes = null, string program = Programs.Sketch)
     {
         if (license is null) return Check.Invalid;
         if (!string.Equals(license.PcCode, pcCode, StringComparison.Ordinal)) return Check.WrongPc;
+        if (!license.Covers(program)) return Check.OtherProgram;
         if (changes?.IsCancelled(license.Id) == true) return Check.Cancelled;
         var ends = EndsOf(license, changes);
         if (ends is { } e && today.Date > e.Date) return Check.Expired;
@@ -132,14 +153,26 @@ internal static class LicenseKey
         return ends;
     }
 
-    internal static string Payload(License l) => string.Join("|",
-        "1", l.Id, l.PcCode, Clean(l.Name), l.Issued.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
-        l.Ends?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? "-");
+    internal static string Payload(License l)
+    {
+        var fields = new List<string>
+        {
+            "1", l.Id, l.PcCode, Clean(l.Name), l.Issued.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+            l.Ends?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? "-",
+        };
+        var programs = Programs.All.Where(l.Covers).ToList();
+        if (programs.Count == 0) throw new ArgumentException("Pick at least one program for the key.");
+        // Sketch ProMax alone: the first way, which every Sketch ProMax version reads.
+        if (programs.Count == 1 && programs[0] == Programs.Sketch) return string.Join("|", fields);
+        fields[0] = "2";
+        fields.Add(string.Join(",", programs));
+        return string.Join("|", fields);
+    }
 
     private static License? Parse(string text)
     {
         var f = text.Split('|');
-        if (f.Length != 6 || f[0] != "1") return null;
+        if (!(f.Length == 6 && f[0] == "1" || f.Length == 7 && f[0] == "2")) return null;
         if (!DateTime.TryParseExact(f[4], "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var issued)) return null;
         DateTime? ends = null;
         if (f[5] != "-")
@@ -147,7 +180,9 @@ internal static class LicenseKey
             if (!DateTime.TryParseExact(f[5], "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var e)) return null;
             ends = e;
         }
-        return new License(f[1], f[2], f[3], issued, ends);
+        if (f.Length == 6) return new License(f[1], f[2], f[3], issued, ends);
+        var programs = f[6].Split(',').Select(p => p.Trim()).Where(p => p.Length > 0).Distinct(StringComparer.Ordinal).ToList();
+        return programs.Count == 0 ? null : new License(f[1], f[2], f[3], issued, ends, programs);
     }
 
     /// <summary>A name as it goes into a key: one line, no field separator.</summary>

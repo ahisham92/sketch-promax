@@ -87,6 +87,7 @@ internal static class LicenseState
         LicenseKey.Check.WrongPc => "This key belongs to another PC. Send your PC code (above) to whoever gave you Sketch ProMax to get a key for this PC.",
         LicenseKey.Check.Expired => ends is { } e ? $"This key ended on {e:d MMM yyyy}. Ask for a new key." : "This key has ended. Ask for a new key.",
         LicenseKey.Check.Cancelled => "This key was cancelled. Ask whoever gave you Sketch ProMax for a new key.",
+        LicenseKey.Check.OtherProgram => "This key is for another program, not Sketch ProMax. Ask whoever gave it to you for a key that includes Sketch ProMax.",
         _ => "That isn't a Sketch ProMax key. Paste the whole key, starting with SPM1.",
     };
 

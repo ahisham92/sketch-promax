@@ -24,6 +24,8 @@ internal sealed class LicenseManagerWindow : Window
     private readonly TextBox _code = Field("PC code"), _name = Field("Name"), _note = Field("Note (optional)");
     private readonly DatePicker _ends = new() { MinHeight = 28, SelectedDate = DateTime.Today.AddYears(1) };
     private readonly CheckBox _noEnd = new() { Content = "No end date", Margin = new Thickness(10, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
+    private readonly CheckBox _forSketch = new() { Content = "Sketch ProMax", IsChecked = true, VerticalAlignment = VerticalAlignment.Center };
+    private readonly CheckBox _forPlaxis = new() { Content = "Plaxis ProMax", Margin = new Thickness(14, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
     private readonly TextBox _key = new() { IsReadOnly = true, TextWrapping = TextWrapping.Wrap, MinHeight = 54 };
     private readonly DatePicker _newEnds = new() { MinHeight = 28 };
     private readonly CheckBox _newNoEnd = new() { Content = "No end date", Margin = new Thickness(10, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
@@ -77,6 +79,12 @@ internal sealed class LicenseManagerWindow : Window
         _noEnd.Unchecked += (_, _) => _ends.IsEnabled = true;
         AddRow(grid, 2, "Ends", endsRow);
         AddRow(grid, 3, "Note", _note);
+        var programsRow = new StackPanel { Orientation = Orientation.Horizontal };
+        AutomationProperties.SetName(_forSketch, "Unlocks Sketch ProMax");
+        AutomationProperties.SetName(_forPlaxis, "Unlocks Plaxis ProMax");
+        programsRow.Children.Add(_forSketch);
+        programsRow.Children.Add(_forPlaxis);
+        AddRow(grid, 4, "Unlocks", programsRow);
         page.Children.Add(grid);
         var make = RichUi.Button(RichUi.Icon.Add, "Make key", Brand.Weight.Primary);
         make.Click += (_, _) => Make();
@@ -142,7 +150,7 @@ internal sealed class LicenseManagerWindow : Window
         page.Children.Add(Brand.ButtonRow(export, close));
 
         var root = new DockPanel();
-        var header = Brand.Header("License manager", "Keys for other PCs. Only your PC has this window.");
+        var header = Brand.Header("License manager", "Keys for other PCs, for Sketch ProMax, Plaxis ProMax or both. Only your PC has this window.");
         DockPanel.SetDock(header, Dock.Top);
         root.Children.Add(header);
         root.Children.Add(new ScrollViewer { Content = page, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, MaxHeight = 820 });
@@ -187,8 +195,9 @@ internal sealed class LicenseManagerWindow : Window
         foreach (var e in _list.Entries.OrderByDescending(e => e.Active).ThenByDescending(e => e.Issued).ThenBy(e => e.Name, StringComparer.CurrentCultureIgnoreCase))
         {
             var ends = e.Ends is { } d ? d.ToString("d MMM yyyy") : "no end";
-            var item = new ListBoxItem { Content = $"{e.Name}   ·   {e.PcCode}   ·   until {ends}   ·   {e.Status(DateTime.Today)}", Tag = e };
-            AutomationProperties.SetName(item, $"{e.Name}, {e.PcCode}, until {ends}, {e.Status(DateTime.Today)}");
+            var programs = string.Join(" + ", e.For.Select(p => p == LicenseKey.Programs.Plaxis ? "Plaxis" : "Sketch"));
+            var item = new ListBoxItem { Content = $"{e.Name}   ·   {programs}   ·   {e.PcCode}   ·   until {ends}   ·   {e.Status(DateTime.Today)}", Tag = e };
+            AutomationProperties.SetName(item, $"{e.Name}, {e.ProgramNames}, {e.PcCode}, until {ends}, {e.Status(DateTime.Today)}");
             _entries.Items.Add(item);
             if (e.Id == select) _entries.SelectedItem = item;
         }
@@ -203,7 +212,7 @@ internal sealed class LicenseManagerWindow : Window
         var e = Current();
         _selected.Visibility = e is null ? Visibility.Collapsed : Visibility.Visible;
         if (e is null) return;
-        _detail.Text = $"{e.Name}, PC {e.PcCode}. Key {e.Id}, made {e.Issued:d MMM yyyy}, " +
+        _detail.Text = $"{e.Name}, PC {e.PcCode}, for {e.ProgramNames}. Key {e.Id}, made {e.Issued:d MMM yyyy}, " +
                        (e.Ends is { } d ? $"ends {d:d MMM yyyy}" : "no end date") + $". {e.Status(DateTime.Today)}." +
                        (e.Note.Length > 0 ? " Note: " + e.Note : "");
         _key.Text = e.Key;
@@ -226,13 +235,17 @@ internal sealed class LicenseManagerWindow : Window
         if (_noEnd.IsChecked != true && ends is null) { Error("Pick an end date, or tick No end date."); _ends.Focus(); return; }
         try
         {
-            var entry = _list.Issue(_secret, _code.Text, _name.Text, ends, _note.Text, DateTime.Today);
+            var programs = new List<string>();
+            if (_forSketch.IsChecked == true) programs.Add(LicenseKey.Programs.Sketch);
+            if (_forPlaxis.IsChecked == true) programs.Add(LicenseKey.Programs.Plaxis);
+            if (programs.Count == 0) { Error("Tick the programs the key unlocks: Sketch ProMax, Plaxis ProMax or both."); return; }
+            var entry = _list.Issue(_secret, _code.Text, _name.Text, ends, _note.Text, DateTime.Today, programs);
             _list.Save();
             _code.Clear();
             _name.Clear();
             _note.Clear();
             Fill(entry.Id);
-            Copy(entry.Key, $"Key made for {entry.Name} and copied. Send it to them; it works only on PC {entry.PcCode}.");
+            Copy(entry.Key, $"Key made for {entry.Name} ({entry.ProgramNames}) and copied. Send it to them; it works only on PC {entry.PcCode}.");
         }
         catch (ArgumentException ex) { Error(ex.Message); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { Error($"The list couldn't be saved ({ex.Message})."); }

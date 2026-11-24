@@ -8,6 +8,12 @@ internal static class LicenseTests
     // key and the key format match what the owner's tools make.
     private const string RealKey = "SPM1.MXxNTTlGN0Y4OHxTUE0tVEVTVC0wMDAwLUFCQ0R8VGVzdCBQZXJzb258MjAyNi0xMC0yM3wyMDMwLTAxLTMx.LwwEbUCSRLPxG2IVG4VLn19xmOxoYVhhgg-KDulOIeyN5isyiKYwHARik7LkOnIvexx52SWlgL99rpfKB_H0Sw";
 
+    private static string Pad(string s)
+    {
+        s = s.Replace('-', '+').Replace('_', '/');
+        return s + new string('=', (4 - s.Length % 4) % 4);
+    }
+
     public static void Run(string root, Action<string, bool, string> check)
     {
         var today = new DateTime(2026, 10, 23);
@@ -56,6 +62,22 @@ internal static class LicenseTests
             check("license: publishing appends once", ChangesPublisher.Append("# head\nA cancelled", ["A cancelled", "B ends 2026-11-01", "B ends 2026-11-01"])
                 == "# head\nA cancelled\nB ends 2026-11-01\n", ChangesPublisher.Append("# head\nA cancelled", ["A cancelled", "B ends 2026-11-01"]));
 
+            // A separate key per program (the owner, 24 Nov 2026): old keys are Sketch ProMax's only; a Plaxis key names Plaxis.
+            check("license programs: a key made before is for Sketch ProMax only", real!.For.SequenceEqual([LicenseKey.Programs.Sketch])
+                && LicenseKey.Verify(RealKey, "SPM-TEST-0000-ABCD", today, program: LicenseKey.Programs.Plaxis) == LicenseKey.Check.OtherProgram, "");
+            var sketchOnly = LicenseKey.Sign(new LicenseKey.License("SKETCH01", code, "S", today, null, [LicenseKey.Programs.Sketch]), other);
+            check("license programs: a Sketch-only key is still made the old way (older versions read it)",
+                System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(Pad(sketchOnly.Split('.')[1]))).StartsWith("1|SKETCH01|"), sketchOnly);
+            var plaxisOnly = LicenseKey.Sign(new LicenseKey.License("PLAXIS01", code, "P", today, null, [LicenseKey.Programs.Plaxis]), other);
+            check("license programs: a Plaxis key unlocks Plaxis ProMax, not Sketch ProMax",
+                LicenseKey.Verify(plaxisOnly, code, today, verifier: other, program: LicenseKey.Programs.Plaxis) == LicenseKey.Check.Valid
+                && LicenseKey.Verify(plaxisOnly, code, today, verifier: other) == LicenseKey.Check.OtherProgram, "");
+            var both = LicenseKey.Sign(new LicenseKey.License("BOTH0001", code, "B", today, null, [LicenseKey.Programs.Plaxis, LicenseKey.Programs.Sketch]), other);
+            check("license programs: a key for both unlocks both", LicenseKey.Verify(both, code, today, verifier: other) == LicenseKey.Check.Valid
+                && LicenseKey.Verify(both, code, today, verifier: other, program: LicenseKey.Programs.Plaxis) == LicenseKey.Check.Valid
+                && LicenseKey.Read(both, other)!.For.SequenceEqual(LicenseKey.Programs.All), "");
+            check("license programs: still bound to its PC", LicenseKey.Verify(both, "SPM-TEST-0000-ABCD", today, verifier: other, program: LicenseKey.Programs.Plaxis) == LicenseKey.Check.WrongPc, "");
+
             // The License manager's list.
             var list = new IssuedList();
             var first = list.Issue(secret, "spm-7k2q-9xw4-m3td", "  Site  engineer | A ", new DateTime(2027, 1, 1), "note", today);
@@ -72,6 +94,18 @@ internal static class LicenseTests
             check("license manager: an earlier date needs the old key's change published", longer.PendingChange == $"{longer.Id} ends 2026-12-01" && shorter.Ends == new DateTime(2026, 12, 1), longer.PendingChange);
             list.Cancel(shorter);
             check("license manager: cancel", shorter.Status(today) == "Cancelled" && shorter.PendingChange == $"{shorter.Id} cancelled", shorter.PendingChange);
+            var plaxis = list.Issue(secret, "SPM-7K2Q-9XW4-M3TD", "Geotech", null, "", today, [LicenseKey.Programs.Plaxis]);
+            check("license manager: a key for Plaxis ProMax only", plaxis.ProgramNames == "Plaxis ProMax"
+                && LicenseKey.Verify(plaxis.Key, "SPM-7K2Q-9XW4-M3TD", today, verifier: other, program: LicenseKey.Programs.Plaxis) == LicenseKey.Check.Valid
+                && LicenseKey.Verify(plaxis.Key, "SPM-7K2Q-9XW4-M3TD", today, verifier: other) == LicenseKey.Check.OtherProgram, plaxis.ProgramNames);
+            var plaxisLater = list.ChangeEnd(secret, plaxis, new DateTime(2028, 1, 1), today);
+            check("license manager: a new end date keeps the programs", plaxisLater.ProgramNames == "Plaxis ProMax", plaxisLater.ProgramNames);
+            var noProgram = false;
+            try { list.Issue(secret, "SPM-7K2Q-9XW4-M3TD", "X", null, "", today, ["revit"]); } catch (ArgumentException) { noProgram = true; }
+            check("license manager: a key unlocks at least one program", noProgram, "");
+            list.Entries.Remove(plaxis);
+            list.Entries.Remove(plaxisLater);
+            check("license manager: keys made before are Sketch ProMax's", new IssuedList.Entry().ProgramNames == "Sketch ProMax", "");
             var file = Path.Combine(Path.GetTempPath(), "spm-issued-" + Guid.NewGuid().ToString("N") + ".json");
             try
             {
@@ -80,7 +114,7 @@ internal static class LicenseTests
                 check("license manager: the list is kept", back.Entries.Count == 3 && back.Entries[2].PendingChange == shorter.PendingChange && back.Entries[0].Key == first.Key, back.Entries.Count.ToString());
             }
             finally { File.Delete(file); }
-            check("license manager: Excel export", list.Csv(today).Split('\n')[0].StartsWith("Name,PC code,Issued,Ends,Status") && list.Csv(today).Contains("\"Site engineer / A\""), "");
+            check("license manager: Excel export", list.Csv(today).Split('\n')[0].StartsWith("Name,PC code,Programs,Issued,Ends,Status") && list.Csv(today).Contains("\"Site engineer / A\""), "");
         }
 
         // Wiring: the License button, the gate on buttons, tools and the chat, and no signing secret in the repository.

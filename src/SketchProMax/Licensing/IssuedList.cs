@@ -24,6 +24,13 @@ internal sealed class IssuedList
         public string ReplacedBy { get; set; } = "";
         /// <summary>The change line to publish for this key ("" = none needed), until the owner marks it published.</summary>
         public string PendingChange { get; set; } = "";
+        /// <summary>The programs the key unlocks (LicenseKey.Programs); empty for keys made before 24 Nov 2026: Sketch ProMax.</summary>
+        public List<string> Programs { get; set; } = [];
+
+        public IReadOnlyList<string> For => Programs.Count > 0 ? Programs : [LicenseKey.Programs.Sketch];
+
+        /// <summary>"Sketch ProMax and Plaxis ProMax".</summary>
+        public string ProgramNames => string.Join(" and ", For.Select(LicenseKey.Programs.Name));
 
         public bool Active => ReplacedBy.Length == 0;
 
@@ -57,18 +64,20 @@ internal sealed class IssuedList
     }
 
     /// <summary>Makes and lists a key for <paramref name="pcCode"/>. Throws ArgumentException with the user's words when an input is wrong.</summary>
-    public Entry Issue(string signingSecret, string pcCode, string name, DateTime? ends, string note, DateTime today)
+    public Entry Issue(string signingSecret, string pcCode, string name, DateTime? ends, string note, DateTime today, IReadOnlyList<string>? programs = null)
     {
+        var those = (programs is { Count: > 0 } ? programs : [LicenseKey.Programs.Sketch]).Where(LicenseKey.Programs.All.Contains).Distinct().ToList();
+        if (those.Count == 0) throw new ArgumentException("Pick at least one program for the key.");
         var code = LicenseKey.NormalizeCode(pcCode) ?? throw new ArgumentException("The PC code should look like SPM-7K2Q-9XW4-M3TD (12 letters and numbers).");
         var who = LicenseKey.Clean(name);
         if (who.Length == 0) throw new ArgumentException("Type who the key is for.");
         if (ends is { } e && e.Date < today.Date) throw new ArgumentException("The end date is in the past.");
         using var signer = LicenseKey.Signer(signingSecret) ?? throw new ArgumentException("The signing secret on this PC can't be read.");
-        var license = new LicenseKey.License(LicenseKey.NewId(), code, who, today.Date, ends?.Date);
+        var license = new LicenseKey.License(LicenseKey.NewId(), code, who, today.Date, ends?.Date, those);
         var entry = new Entry
         {
             Id = license.Id, Name = who, PcCode = code, Issued = license.Issued, Ends = license.Ends,
-            Key = LicenseKey.Sign(license, signer), Note = (note ?? "").Trim(),
+            Key = LicenseKey.Sign(license, signer), Note = (note ?? "").Trim(), Programs = those,
         };
         Entries.Add(entry);
         return entry;
@@ -80,7 +89,7 @@ internal sealed class IssuedList
     /// </summary>
     public Entry ChangeEnd(string signingSecret, Entry old, DateTime? ends, DateTime today)
     {
-        var next = Issue(signingSecret, old.PcCode, old.Name, ends, old.Note, today);
+        var next = Issue(signingSecret, old.PcCode, old.Name, ends, old.Note, today, old.For);
         old.ReplacedBy = next.Id;
         if (Shorter(ends, old.Ends)) old.PendingChange = LicenseChanges.Line(old.Id, ends ?? today.Date.AddDays(-1));
         return next;
@@ -100,9 +109,9 @@ internal sealed class IssuedList
     public string Csv(DateTime today)
     {
         static string Q(string s) => "\"" + s.Replace("\"", "\"\"") + "\"";
-        var sb = new StringBuilder("Name,PC code,Issued,Ends,Status,Key id,Note,Key\r\n");
+        var sb = new StringBuilder("Name,PC code,Programs,Issued,Ends,Status,Key id,Note,Key\r\n");
         foreach (var e in Entries)
-            sb.Append(string.Join(",", Q(e.Name), Q(e.PcCode), e.Issued.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+            sb.Append(string.Join(",", Q(e.Name), Q(e.PcCode), Q(e.ProgramNames), e.Issued.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
                 e.Ends?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? "No end", Q(e.Status(today)), e.Id, Q(e.Note), Q(e.Key))).Append("\r\n");
         return sb.ToString();
     }
