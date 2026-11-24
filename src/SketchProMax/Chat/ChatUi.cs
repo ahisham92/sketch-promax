@@ -32,6 +32,8 @@ internal static class ChatUi
     public const double BodySize = ChatStyles.Body, SmallSize = ChatStyles.Caption, CodeSize = ChatStyles.Caption, TitleSize = ChatStyles.Subtitle;
     public const double HeadingSize = ChatStyles.Title, GreetingSize = ChatStyles.Display;
     public const double RadiusSmall = 8, Radius = 12;
+    /// <summary>The message box's card: rounder than the cards, as the one place you type.</summary>
+    public const double RadiusComposer = 16;
 
     public static readonly FontFamily Icons = new("Segoe Fluent Icons, Segoe MDL2 Assets");
     public static readonly FontFamily Mono = new("Cascadia Mono, Consolas, Courier New");

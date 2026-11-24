@@ -128,14 +128,20 @@ internal sealed partial class ChatPane
             var failed = item.State == "failed";
 
             var head = new DockPanel { Margin = new Thickness(0, 0, 0, ChatUi.S1) };
-            var icon = ChatUi.Icon(ChatUi.Paths.Sparkle, 14);
-            icon.Margin = new Thickness(0, 0, ChatUi.S2, 0);
-            DockPanel.SetDock(icon, Dock.Left);
-            head.Children.Add(icon);
+            // "Brief" as a small tag in the accent tint, then what kind of request it is, in bold.
+            var tagText = new TextBlock { Text = "Brief", FontSize = ChatUi.SmallSize, FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center };
+            Brand.Fg(tagText, Brand.K.Link);
+            var tag = new Border
+            {
+                Child = tagText, CornerRadius = new CornerRadius(10), Padding = new Thickness(ChatUi.S2, 1, ChatUi.S2, 2), Margin = new Thickness(0, 0, ChatUi.S2, 0),
+                VerticalAlignment = VerticalAlignment.Center, SnapsToDevicePixels = true,
+            };
+            tag.SetResourceReference(Border.BackgroundProperty, Brand.K.AccentSoft);
+            DockPanel.SetDock(tag, Dock.Left);
+            head.Children.Add(tag);
             var kind = brief.Kind switch { "change" => "Changes the model", "multi_step" => "Several steps", "read_only" => "Reads only", _ => "May change the model" };
-            var title = new TextBlock { VerticalAlignment = VerticalAlignment.Center };
-            title.Inlines.Add(new Run("Brief") { FontWeight = FontWeights.SemiBold });
-            if (!failed) title.Inlines.Add(new Run(" · " + kind) { FontSize = ChatUi.SmallSize });
+            var title = new TextBlock { VerticalAlignment = VerticalAlignment.Center, FontWeight = FontWeights.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis };
+            if (!failed) title.Text = kind;
             head.Children.Add(title);
             panel.Children.Add(head);
 
@@ -157,7 +163,14 @@ internal sealed partial class ChatPane
                 var view = new MarkdownView();
                 view.SetMarkdown(item.Text);
                 view.SetMuted(item.State is "typed" or "stale");
-                panel.Children.Add(view);
+                // The brief's own text in a quiet inset panel, apart from the card's title and its buttons.
+                var inset = new Border
+                {
+                    Child = view, CornerRadius = new CornerRadius(ChatUi.RadiusSmall), Padding = new Thickness(ChatUi.S3, ChatUi.S2, ChatUi.S3, ChatUi.S2),
+                    Margin = new Thickness(0, 0, 0, ChatUi.S2), SnapsToDevicePixels = true,
+                };
+                inset.SetResourceReference(Border.BackgroundProperty, Brand.K.Canvas);
+                panel.Children.Add(inset);
             }
 
             // One-tap questions: the suggested option is picked until another is tapped; the brief above updates.

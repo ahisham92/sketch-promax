@@ -134,7 +134,7 @@ internal sealed class MarkdownView : RichTextBox
     private void FadeIn(Drawn drawn)
     {
         if (drawn.Element.ReadLocalValue(TextElement.ForegroundProperty) != DependencyProperty.UnsetValue) return; // a block with its own colour
-        if (TryFindResource(Brand.K.Text) is not SolidColorBrush text || TryFindResource(Brand.K.Bg) is not SolidColorBrush page) return;
+        if (TryFindResource(Brand.K.Text) is not SolidColorBrush text || TryFindResource(Brand.K.Canvas) is not SolidColorBrush page) return;
         var to = text.Color;
         var start = Color.FromRgb(Mix(page.Color.R, to.R), Mix(page.Color.G, to.G), Mix(page.Color.B, to.B));
         var brush = new SolidColorBrush(start);
@@ -299,7 +299,7 @@ internal sealed class MarkdownView : RichTextBox
         panel.Children.Add(bar);
         panel.Children.Add(scroll);
         var box = ChatUi.Opaque(new Border { Child = panel, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(ChatUi.RadiusSmall), SnapsToDevicePixels = true });
-        box.SetResourceReference(Border.BackgroundProperty, Brand.K.Surface);
+        box.SetResourceReference(Border.BackgroundProperty, Brand.K.Raised); // lifted off the tinted conversation area, under its deeper header bar
         box.SetResourceReference(Border.BorderBrushProperty, Brand.K.BorderSubtle);
         if (drawn is not null)
         {

@@ -24,6 +24,11 @@ internal sealed class JobCardView : ContentControl
     private readonly Border _fill = new() { CornerRadius = new CornerRadius(1.5), SnapsToDevicePixels = true };
     private readonly ColumnDefinition _filled = new() { Width = new GridLength(0, GridUnitType.Star) }, _rest = new() { Width = new GridLength(1, GridUnitType.Star) };
     private double _value = -1;
+    // Once the task has ended: a small badge (Done in green, a problem in red, Stopped quiet) in place of the sparkle.
+    private readonly Border _badge = new() { CornerRadius = new CornerRadius(10), Padding = new Thickness(ChatUi.S2, 1, ChatUi.S2, 2), Margin = new Thickness(0, 0, ChatUi.S2, 0), VerticalAlignment = VerticalAlignment.Center, Visibility = Visibility.Collapsed, SnapsToDevicePixels = true };
+    private readonly TextBlock _badgeText = new() { FontSize = ChatUi.SmallSize, FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center };
+    private System.Windows.Shapes.Path _headIcon = null!;
+    private string _badgeShown = "";
     private readonly TextBlock _headline = new() { FontSize = ChatUi.SmallSize, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
     private readonly TextBlock _clock = ChatUi.Small("");
     private readonly TextBlock _now = ChatUi.Small("", Brand.K.Text);
@@ -88,10 +93,13 @@ internal sealed class JobCardView : ContentControl
         panel.Children.Add(_bar);
 
         var head = new DockPanel { Margin = new Thickness(0, 0, 0, ChatUi.S1) };
-        var icon = ChatUi.Icon(ChatUi.Paths.Sparkle, 14);
+        var icon = _headIcon = ChatUi.Icon(ChatUi.Paths.Sparkle, 14);
         icon.Margin = new Thickness(0, 0, ChatUi.S2, 0);
         DockPanel.SetDock(icon, Dock.Left);
         head.Children.Add(icon);
+        _badge.Child = _badgeText;
+        DockPanel.SetDock(_badge, Dock.Left);
+        head.Children.Add(_badge);
         _clock.Margin = new Thickness(ChatUi.S2, 0, 0, 0);
         DockPanel.SetDock(_clock, Dock.Right);
         head.Children.Add(_clock);
@@ -197,9 +205,8 @@ internal sealed class JobCardView : ContentControl
             _rest.Width = new GridLength(100 - value, GridUnitType.Star);
             AutomationProperties.SetName(_bar, $"Task progress {(int)value} percent");
         }
-        _bar.Visibility = running || Model.State == "done" ? Visibility.Visible : Visibility.Collapsed;
-        // Blue while it works, green once done, so a finished task never reads as still running.
-        _fill.SetResourceReference(Border.BackgroundProperty, running ? Brand.K.Accent : Brand.K.SuccessText);
+        // The bar shows only while the task works; once it ends the badge says how.
+        _bar.Visibility = running ? Visibility.Visible : Visibility.Collapsed;
 
         // The headline and the time.
         var state = running
@@ -212,7 +219,8 @@ internal sealed class JobCardView : ContentControl
                 _ => Model.Headline(),
             }
             : Model.State switch { "stopped" => "Stopped", "failed" => "Ended with a problem", _ => "Done" };
-        Set(_headline, "Task · " + state);
+        Set(_headline, running ? "Task · " + state : "Task");
+        ShowBadge(running ? "" : state);
         var end = running ? now : Model.Ended == default ? now : Model.Ended;
         Set(_clock, Model.Started == default ? "" : JobMath.Duration(end - Model.Started));
         AutomationProperties.SetName(this, "Task: " + state);
@@ -236,6 +244,26 @@ internal sealed class JobCardView : ContentControl
 
         ShowSteps();
         ShowButtons(running, control);
+    }
+
+
+    /// <summary>The ended task's badge: its words, with the colours of how it ended ("" while it runs: the sparkle shows).</summary>
+    private void ShowBadge(string state)
+    {
+        if (_badgeShown == state && (state.Length == 0) == (_badge.Visibility != Visibility.Visible)) return;
+        _badgeShown = state;
+        _badge.Visibility = state.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+        _headIcon.Visibility = state.Length > 0 ? Visibility.Collapsed : Visibility.Visible;
+        if (state.Length == 0) return;
+        var (fill, text) = Model.State switch
+        {
+            "stopped" => (Brand.K.Surface, Brand.K.Muted),
+            "failed" => (Brand.K.DangerSoft, Brand.K.DangerText),
+            _ => (Brand.K.SuccessSoft, Brand.K.SuccessText),
+        };
+        _badgeText.Text = Model.State == "done" ? "\u2713 " + state : state;
+        _badge.SetResourceReference(Border.BackgroundProperty, fill);
+        Brand.Fg(_badgeText, text);
     }
 
     private static void Set(TextBlock block, string text)
