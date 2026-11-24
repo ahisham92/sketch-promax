@@ -21,6 +21,7 @@ internal sealed class JobCardView : ContentControl
 {
     // The thin bar: a track with a filled part (star columns), drawn by hand so nothing in it moves on its own.
     private readonly Border _bar = new() { Height = 3, CornerRadius = new CornerRadius(1.5), SnapsToDevicePixels = true };
+    private readonly Border _fill = new() { CornerRadius = new CornerRadius(1.5), SnapsToDevicePixels = true };
     private readonly ColumnDefinition _filled = new() { Width = new GridLength(0, GridUnitType.Star) }, _rest = new() { Width = new GridLength(1, GridUnitType.Star) };
     private double _value = -1;
     private readonly TextBlock _headline = new() { FontSize = ChatUi.SmallSize, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
@@ -75,7 +76,7 @@ internal sealed class JobCardView : ContentControl
 
         var panel = new StackPanel();
         // The thin bar runs along the top of the card.
-        var fill = new Border { CornerRadius = new CornerRadius(1.5), SnapsToDevicePixels = true };
+        var fill = _fill;
         fill.SetResourceReference(Border.BackgroundProperty, Brand.K.Accent);
         var bar = new Grid();
         bar.ColumnDefinitions.Add(_filled);
@@ -197,6 +198,8 @@ internal sealed class JobCardView : ContentControl
             AutomationProperties.SetName(_bar, $"Task progress {(int)value} percent");
         }
         _bar.Visibility = running || Model.State == "done" ? Visibility.Visible : Visibility.Collapsed;
+        // Blue while it works, green once done, so a finished task never reads as still running.
+        _fill.SetResourceReference(Border.BackgroundProperty, running ? Brand.K.Accent : Brand.K.SuccessText);
 
         // The headline and the time.
         var state = running

@@ -498,9 +498,12 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         // The Revit model. The chat's type, effort and the plan's usage sit under the message box, to keep this short.
         names.Children.Add(_modelLine);
         top.Children.Add(names);
-        SetDock(top, Dock.Top);
-        KeyboardNavigation.SetTabIndex(top, 0);
-        Children.Add(top);
+        // A hairline under the header, so the conversation scrolls away beneath it instead of running into the title.
+        var header = new Border { Child = top, BorderThickness = new Thickness(0, 0, 0, 1), SnapsToDevicePixels = true };
+        header.SetResourceReference(Border.BorderBrushProperty, Brand.K.BorderSubtle);
+        SetDock(header, Dock.Top);
+        KeyboardNavigation.SetTabIndex(header, 0);
+        Children.Add(header);
 
         SetDock(_setupCard, Dock.Top);
         KeyboardNavigation.SetTabIndex(_setupCard, 1);

@@ -136,6 +136,24 @@ internal static class ChatViewTests
         check("composer: plain hint that says what to do", ChatStyles.ComposerHint.StartsWith("Ask anything about your model", StringComparison.Ordinal) && !ChatStyles.ComposerHint.Contains("Sketch ProMax"), ChatStyles.ComposerHint);
         check("composer: about two lines at rest, grows to a limit", ChatStyles.ComposerMinHeight >= 2 * ChatStyles.Body * 1.33 + 2 * ChatStyles.ComposerPadY - 1
             && ChatStyles.ComposerMaxHeight >= 3 * ChatStyles.ComposerMinHeight, ChatStyles.ComposerMinHeight.ToString());
+        // The slim scroll bars: their own dictionary, an implicit ScrollBar style with a vertical and a horizontal template,
+        // a Track named PART_Track (WPF needs it to scroll), no arrow buttons and theme colours only.
+        var bars = ChatStyles.ScrollBarsXaml();
+        System.Xml.Linq.XDocument? barsDoc = null;
+        try { barsDoc = System.Xml.Linq.XDocument.Parse(bars); } catch (System.Xml.XmlException ex) { check("scroll bars: well formed", false, ex.Message); }
+        if (barsDoc is not null)
+        {
+            var implicitBar = barsDoc.Root!.Elements().FirstOrDefault(e => e.Name.LocalName == "Style" && (string?)e.Attribute("TargetType") == "ScrollBar"
+                && e.Attribute(System.Xml.Linq.XName.Get("Key", "http://schemas.microsoft.com/winfx/2006/xaml")) is null);
+            check("scroll bars: one implicit ScrollBar style", implicitBar is not null, "");
+            var tracks = barsDoc.Descendants().Where(e => e.Name.LocalName == "Track" && (string?)e.Attribute(System.Xml.Linq.XName.Get("Name", "http://schemas.microsoft.com/winfx/2006/xaml")) == "PART_Track").ToList();
+            check("scroll bars: vertical and horizontal tracks", tracks.Count == 2 && tracks.Any(t => (string?)t.Attribute("IsDirectionReversed") == "True") && tracks.Any(t => (string?)t.Attribute("IsDirectionReversed") == "False"), tracks.Count.ToString());
+            check("scroll bars: page on the track, no arrow buttons", bars.Contains("ScrollBar.PageUpCommand") && bars.Contains("ScrollBar.PageRightCommand") && !bars.Contains("LineUpCommand"), "");
+            check("scroll bars: theme colours only", !System.Text.RegularExpressions.Regex.IsMatch(bars, "#[0-9A-Fa-f]{6}") && bars.Contains("{DynamicResource SpmBorder}"), "");
+            check("scroll bars: slim", ChatStyles.ScrollThumbSize < ChatStyles.ScrollBarSize && ChatStyles.ScrollBarSize <= 12, "");
+            var leftBars = System.Text.RegularExpressions.Regex.Matches(bars, @"\b(SIZE|THUMBSIZE|REVERSED|LESS|MORE|VERTICAL|HORIZONTAL)\b").Cast<System.Text.RegularExpressions.Match>().Select(m => m.Value).ToList();
+            check("scroll bars: no placeholder left", leftBars.Count == 0, string.Join(",", leftBars));
+        }
         check("styles: every template has a hover layer", System.Text.RegularExpressions.Regex.Matches(xaml, "x:Name=\"hv\"").Count >= 8, "");
 
         // The type scale.
