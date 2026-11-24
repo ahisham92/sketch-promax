@@ -163,6 +163,13 @@ internal static class ChatUi
                 styles = new ResourceDictionary(); // never a pane that doesn't open
             }
         }
+        // The slim themed scroll bars, on their own: if WPF refuses them the chat keeps Windows' bars and every other style.
+        try { styles.MergedDictionaries.Add((ResourceDictionary)XamlReader.Parse(ChatStyles.ScrollBarsXaml())); }
+        catch (Exception ex)
+        {
+            StylesError = (StylesError is { Length: > 0 } e ? e + " | " : "") + "scroll bars: " + ex.Message;
+            System.Diagnostics.Trace.WriteLine("Sketch ProMax chat scroll bars: " + ex.Message);
+        }
         _styles[animate] = styles;
         return styles;
     }

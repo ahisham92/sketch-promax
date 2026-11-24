@@ -6,6 +6,7 @@ namespace SketchProMax.Chat;
 /// The XAML of the chat's control styles (see <see cref="ChatUi.Styles"/>): rounded quiet buttons, icon buttons, pills,
 /// cards with a soft shadow, the red pill for a task's Stop, the round Send and Stop buttons, the rounded search field, the composer's bare text box and the disclosure toggle, each
 /// with a rounded focus ring, a hover that fades in and a press that shrinks the chrome a little (never the label).
+/// The slim themed scroll bars are a dictionary of their own (<see cref="ScrollBarsXaml"/>), so a slip there never costs the rest.
 /// Also the chat's type scale. Plain text, so a test checks it is well formed without WPF. Colours are palette tokens only.
 /// </summary>
 internal static class ChatStyles
@@ -170,6 +171,76 @@ internal static class ChatStyles
         """.Replace("CHROME", Chrome("16", "{TemplateBinding Background}", hover)).Replace("FADE", HoverFade(animate))
         .Replace("PRESSROUND", Plain ? "" : "<Setter TargetName=\"chrome\" Property=\"RenderTransform\"><Setter.Value><ScaleTransform ScaleX=\"0.96\" ScaleY=\"0.96\"/></Setter.Value></Setter>")
         .Replace("KEY", key).Replace("BG", bg).Replace("FG", fg).Replace("PRESSED", pressed);
+
+    /// <summary>
+    /// The chat's scroll bars (an implicit style, so every list, code block, menu and the message box in the pane takes
+    /// it): a slim rounded thumb on a clear track with no arrow buttons, in the theme's colours, instead of Windows' wide
+    /// grey bar, which in the dark theme showed as a white stripe. The thumb darkens under the mouse and while dragged;
+    /// a click on the track still pages, and the wheel and keys scroll as before.
+    /// </summary>
+    public const double ScrollBarSize = 10, ScrollThumbSize = 6;
+
+    public static string ScrollBarsXaml()
+    {
+        static string Bar(bool vertical)
+        {
+            var thumbSize = vertical
+                ? "Width=\"" + N(ScrollThumbSize) + "\" Margin=\"0,2\" HorizontalAlignment=\"Center\""
+                : "Height=\"" + N(ScrollThumbSize) + "\" Margin=\"2,0\" VerticalAlignment=\"Center\"";
+            var (less, more) = vertical ? ("ScrollBar.PageUpCommand", "ScrollBar.PageDownCommand") : ("ScrollBar.PageLeftCommand", "ScrollBar.PageRightCommand");
+            return """
+                <ControlTemplate TargetType="ScrollBar">
+                  <Grid Background="Transparent" SnapsToDevicePixels="True">
+                    <Track x:Name="PART_Track" IsDirectionReversed="REVERSED">
+                      <Track.DecreaseRepeatButton><RepeatButton Style="{StaticResource SpmChatScrollPage}" Command="LESS"/></Track.DecreaseRepeatButton>
+                      <Track.IncreaseRepeatButton><RepeatButton Style="{StaticResource SpmChatScrollPage}" Command="MORE"/></Track.IncreaseRepeatButton>
+                      <Track.Thumb>
+                        <Thumb Focusable="False">
+                          <Thumb.Template>
+                            <ControlTemplate TargetType="Thumb">
+                              <Border x:Name="thumb" Background="{DynamicResource SpmBorder}" CornerRadius="3" THUMBSIZE SnapsToDevicePixels="True"/>
+                              <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="thumb" Property="Background" Value="{DynamicResource SpmInputBorder}"/></Trigger>
+                                <Trigger Property="IsDragging" Value="True"><Setter TargetName="thumb" Property="Background" Value="{DynamicResource SpmMuted}"/></Trigger>
+                              </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                          </Thumb.Template>
+                        </Thumb>
+                      </Track.Thumb>
+                    </Track>
+                  </Grid>
+                </ControlTemplate>
+                """.Replace("REVERSED", vertical ? "True" : "False").Replace("LESS", less).Replace("MORE", more).Replace("THUMBSIZE", thumbSize);
+        }
+        return """
+            <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                                xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+            <Style x:Key="SpmChatScrollPage" TargetType="RepeatButton">
+              <Setter Property="Focusable" Value="False"/>
+              <Setter Property="IsTabStop" Value="False"/>
+              <Setter Property="Template"><Setter.Value>
+                <ControlTemplate TargetType="RepeatButton"><Border Background="Transparent"/></ControlTemplate>
+              </Setter.Value></Setter>
+            </Style>
+            <Style TargetType="ScrollBar">
+              <Setter Property="Background" Value="Transparent"/>
+              <Setter Property="Stylus.IsFlicksEnabled" Value="False"/>
+              <Setter Property="Width" Value="SIZE"/>
+              <Setter Property="MinWidth" Value="SIZE"/>
+              <Setter Property="Template"><Setter.Value>VERTICAL</Setter.Value></Setter>
+              <Style.Triggers>
+                <Trigger Property="Orientation" Value="Horizontal">
+                  <Setter Property="Width" Value="Auto"/>
+                  <Setter Property="MinWidth" Value="0"/>
+                  <Setter Property="Height" Value="SIZE"/>
+                  <Setter Property="MinHeight" Value="SIZE"/>
+                  <Setter Property="Template"><Setter.Value>HORIZONTAL</Setter.Value></Setter>
+                </Trigger>
+              </Style.Triggers>
+            </Style>
+            </ResourceDictionary>
+            """.Replace("SIZE", N(ScrollBarSize)).Replace("VERTICAL", Bar(true)).Replace("HORIZONTAL", Bar(false));
+    }
 
     /// <summary>
     /// The whole resource dictionary, with buttons and fields at <paramref name="small"/> corners and cards at
