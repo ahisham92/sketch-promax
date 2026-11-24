@@ -95,9 +95,9 @@ internal static class ChatViewTests
         if (styles is not null)
         {
             var keys = styles.Descendants().Select(e => (string?)e.Attribute(System.Xml.Linq.XName.Get("Key", "http://schemas.microsoft.com/winfx/2006/xaml"))).Where(k => k is not null).ToList();
-            var wanted = new[] { "SpmChatFocus", "SpmChatFocusCard", "SpmChatFocusRound", "SpmChatGhost", "SpmChatIcon", "SpmChatPill", "SpmChatPrimary", "SpmChatFloat", "SpmChatCard", "SpmChatMenuItem", "SpmChatSend", "SpmChatStop", "SpmChatField", "SpmChatBare", "SpmChatDisclosure" };
+            var wanted = new[] { "SpmChatFocus", "SpmChatFocusCard", "SpmChatFocusRound", "SpmChatGhost", "SpmChatIcon", "SpmChatChip", "SpmChatPill", "SpmChatPrimary", "SpmChatFloat", "SpmChatCard", "SpmChatMenuItem", "SpmChatSend", "SpmChatStop", "SpmChatField", "SpmChatBare", "SpmChatDisclosure" };
             check("styles: well formed with every key", wanted.All(keys.Contains) && keys.Count == keys.Distinct().Count(), string.Join(",", keys));
-            var left = System.Text.RegularExpressions.Regex.Matches(xaml, @"\b(FOCUS|GHOST|PILL|PRIMARY|FLOAT|CARD|SEND|STOP|SMALL|KEY|BEHIND|RADIUS|HOVERBG|HOVERBORDER|BG|FG|HOVER|PRESSED)\b").Cast<System.Text.RegularExpressions.Match>().Select(m => m.Value).ToList();
+            var left = System.Text.RegularExpressions.Regex.Matches(xaml, @"\b(FOCUS|GHOST|CHIPTPL|CHIPHEIGHT|DISABLEDFILL|PILL|PRIMARY|FLOAT|CARD|SEND|STOP|SMALL|KEY|BEHIND|RADIUS|HOVERBG|HOVERBORDER|BG|FG|HOVER|PRESSED)\b").Cast<System.Text.RegularExpressions.Match>().Select(m => m.Value).ToList();
             check("styles: no placeholder left", left.Count == 0, string.Join(",", left));
             check("styles: corners from the spacing scale", xaml.Contains("CornerRadius=\"8\"") && xaml.Contains("CornerRadius=\"12\"") && xaml.Contains("RadiusX=\"10\""), "");
         }
@@ -153,6 +153,15 @@ internal static class ChatViewTests
             check("scroll bars: slim", ChatStyles.ScrollThumbSize < ChatStyles.ScrollBarSize && ChatStyles.ScrollBarSize <= 12, "");
             var leftBars = System.Text.RegularExpressions.Regex.Matches(bars, @"\b(SIZE|THUMBSIZE|REVERSED|LESS|MORE|VERTICAL|HORIZONTAL)\b").Cast<System.Text.RegularExpressions.Match>().Select(m => m.Value).ToList();
             check("scroll bars: no placeholder left", leftBars.Count == 0, string.Join(",", leftBars));
+        }
+        // The redesign's pieces: footer chips one height with a subtle outline; an icon button that can't be used shows no grey box.
+        if (styles is not null)
+        {
+            var chip = styles.Descendants().First(e => (string?)e.Attribute(System.Xml.Linq.XName.Get("Key", "http://schemas.microsoft.com/winfx/2006/xaml")) == "SpmChatChip");
+            string? ChipSetter(string property) => chip.Elements().Where(e => e.Name.LocalName == "Setter" && (string?)e.Attribute("Property") == property).Select(e => (string?)e.Attribute("Value")).FirstOrDefault();
+            check("chips: one height, outlined, round ends", ChipSetter("MinHeight") == "22" && ChipSetter("BorderBrush") == "{DynamicResource SpmBorderSubtle}" && chip.ToString().Contains("CornerRadius=\"11\""), chip.ToString().Length.ToString());
+            var ghost = styles.Descendants().First(e => (string?)e.Attribute(System.Xml.Linq.XName.Get("Key", "http://schemas.microsoft.com/winfx/2006/xaml")) == "SpmChatGhost").ToString();
+            check("ghost: no grey box when disabled", ghost.Contains("TargetName=\"fill\" Property=\"Background\" Value=\"Transparent\""), "");
         }
         check("styles: every template has a hover layer", System.Text.RegularExpressions.Regex.Matches(xaml, "x:Name=\"hv\"").Count >= 8, "");
 

@@ -377,6 +377,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     private readonly WrapPanel _chips = new();
     // The message box's frame (border and field colour) and its hint; built with the composer.
     private Border _field = null!;
+    private Border? _composerFrame, _composerGlow;
     private TextBlock _hint = null!;
     private readonly DockPanel _statusRow = new() { Margin = new Thickness(0, 0, 0, 4) };
     private readonly ContentControl _statusSpin = new() { Focusable = false, VerticalAlignment = VerticalAlignment.Center };
@@ -503,6 +504,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         header.SetResourceReference(Border.BorderBrushProperty, Brand.K.BorderSubtle);
         SetDock(header, Dock.Top);
         KeyboardNavigation.SetTabIndex(header, 0);
+        KeyboardNavigation.SetTabIndex(top, 0);
         Children.Add(header);
 
         SetDock(_setupCard, Dock.Top);
@@ -533,7 +535,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
 
         // Bottom: the saved prompts (when asked for), then one rounded card holding the attachments, the message box and
         // a row of icon buttons with the model and Send; the status line under it.
-        var composer = new StackPanel { Margin = new Thickness(ChatUi.S3, ChatUi.S2, ChatUi.S3, ChatUi.S3) };
+        var composer = new StackPanel { Margin = new Thickness(ChatUi.S3, ChatUi.S3, ChatUi.S3, ChatUi.S2) };
         KeyboardNavigation.SetTabIndex(composer, 4);
         KeyboardNavigation.SetTabNavigation(composer, KeyboardNavigationMode.Local);
         _status = Brand.Text("", Brand.K.Muted, ChatUi.SmallSize);
@@ -580,13 +582,11 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         _field = new Border
         {
             Child = field, CornerRadius = new CornerRadius(ChatUi.RadiusSmall), SnapsToDevicePixels = true,
-            Margin = new Thickness(ChatUi.S2, ChatUi.S2, ChatUi.S2, ChatUi.S1), Cursor = Cursors.IBeam,
+            Margin = new Thickness(ChatUi.S1, ChatUi.S1, ChatUi.S1, 0), Cursor = Cursors.IBeam,
         };
-        _field.SetResourceReference(Border.BackgroundProperty, Brand.K.ComposerField);
-        ShowFieldState();
-        _field.MouseEnter += (_, _) => ShowFieldState();
-        _field.MouseLeave += (_, _) => ShowFieldState();
-        _input.IsKeyboardFocusedChanged += (_, _) => ShowFieldState();
+        // One box: the card around it is the field (its border and glow show hover and focus, see ShowFieldState), so
+        // the message box itself has no border or fill of its own.
+        _field.Background = Brushes.Transparent;
 
         var buttons = new DockPanel { Margin = new Thickness(ChatUi.S1, 0, ChatUi.S2, ChatUi.S2) };
         _attach = ChatUi.IconButton(ChatUi.Paths.Plus, "Attach files", "Attach pictures, PDFs, Word, PowerPoint and Excel files, or drawings (DWG, DXF). You can also paste or drop them here.");
@@ -677,7 +677,20 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         inside.Children.Add(_chips);
         inside.Children.Add(_field);
         inside.Children.Add(buttons);
-        var card = ChatUi.Elevated(inside, out var frame);
+        var card = ChatUi.Elevated(inside, out var frame, ChatUi.RadiusComposer);
+        _composerFrame = frame;
+        // A soft glow around the box while the caret is in it, on a layer of its own behind the card (no text on it).
+        _composerGlow = new Border
+        {
+            CornerRadius = new CornerRadius(ChatUi.RadiusComposer + 3), Margin = new Thickness(-3), Opacity = 0.18,
+            IsHitTestVisible = false, Visibility = Visibility.Hidden, SnapsToDevicePixels = true,
+        };
+        _composerGlow.SetResourceReference(Border.BackgroundProperty, Brand.K.Focus);
+        card.Children.Insert(0, _composerGlow);
+        ShowFieldState();
+        frame.MouseEnter += (_, _) => ShowFieldState();
+        frame.MouseLeave += (_, _) => ShowFieldState();
+        _input.IsKeyboardFocusedChanged += (_, _) => ShowFieldState();
         // A click anywhere on the card that no button took (its empty parts, the space around the box, the attachments'
         // gaps) puts the caret in the box, at the end of the text, as in a text field.
         frame.AddHandler(MouseDownEvent, new MouseButtonEventHandler((_, e) =>
@@ -689,7 +702,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         composer.Children.Add(card);
         // Under the message box: the chat's type (a pill that switches it) and effort (Automatic unless picked here) on
         // the left, the plan's usage on the right. The model is picked on the pill in the box.
-        var settings = new DockPanel { Margin = new Thickness(ChatUi.S2, ChatUi.S1, 0, 0) };
+        var settings = new DockPanel { Margin = new Thickness(0, ChatUi.S2, 0, 0) };
         DockPanel.SetDock(_usagePill, Dock.Right);
         _usagePill.Margin = new Thickness(ChatUi.S1, 0, -ChatUi.S1, 0);
         settings.Children.Add(_usagePill);
@@ -700,12 +713,27 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         pickers.Children.Add(PhonePill());
         pickers.Children.Add(AwayPill());
         pickers.Children.Add(PausePill());
+        // Each a small outlined chip of the same height, so the row reads as one line of settings; the usage, top right,
+        // lines up with the first row when the chips wrap.
+        foreach (Button chip in pickers.Children)
+        {
+            chip.SetResourceReference(StyleProperty, "SpmChatChip");
+            chip.Padding = new Thickness(ChatUi.S2, 0, ChatUi.S2, 0);
+            chip.Margin = new Thickness(0, 0, ChatUi.S1, ChatUi.S1);
+        }
+        _usagePill.VerticalAlignment = VerticalAlignment.Top;
+        _usagePill.MinHeight = ChatStyles.ChipHeight;
         settings.Children.Add(pickers);
         composer.Children.Add(settings);
         composer.Children.Add(_statusRow);
         composer.Children.Add(_modelMenu);
-        SetDock(composer, Dock.Bottom);
-        Children.Add(composer);
+        // The conversation above is on the tinted canvas; the message box's area is the page colour, a hairline between.
+        var foot = new Border { Child = composer, BorderThickness = new Thickness(0, 1, 0, 0), SnapsToDevicePixels = true };
+        foot.SetResourceReference(Border.BackgroundProperty, Brand.K.Bg);
+        foot.SetResourceReference(Border.BorderBrushProperty, Brand.K.BorderSubtle);
+        KeyboardNavigation.SetTabIndex(foot, 4);
+        SetDock(foot, Dock.Bottom);
+        Children.Add(foot);
 
         // The conversation: "Show earlier", the messages, the typing indicator; "Jump to latest" floats over its foot.
         _earlier = ChatUi.Ghost(ChatUi.GlyphUp, null, "Show earlier messages", "Shows the earlier messages of this conversation.");
@@ -770,6 +798,7 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         _jump.Click += (_, _) => ScrollToEnd(force: true);
         _jumpText.Text = "Jump to latest";
         AutomationProperties.SetName(_jump, "Jump to latest");
+        _center.SetResourceReference(Panel.BackgroundProperty, Brand.K.Canvas);
         _center.Children.Add(_scroll);
         // A job's own chat takes the conversation's place; the switcher and the job's bar sit above it.
         var jobTop = BuildJobView();
@@ -1410,9 +1439,18 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         var more = new WrapPanel { HorizontalAlignment = HorizontalAlignment.Right, Visibility = Visibility.Collapsed };
         if (item.Text.Length > 0)
         {
+            // Copy and ⋯ show when the mouse is over the message or the keyboard is on them, as on the answers: the
+            // line above a message then reads as just who and when.
             var copy = ChatUi.CopyButton(() => item.Text, "your message", null);
-            head.Children.Add(copy);
-            head.Children.Add(MoreButton(item, more));
+            var tools = new StackPanel { Orientation = Orientation.Horizontal, Opacity = 0 };
+            tools.Children.Add(copy);
+            tools.Children.Add(MoreButton(item, more));
+            void ToolsShown() => tools.Opacity = panel.IsMouseOver || tools.IsKeyboardFocusWithin || more.Visibility == Visibility.Visible ? 1 : 0;
+            panel.MouseEnter += (_, _) => ToolsShown();
+            panel.MouseLeave += (_, _) => ToolsShown();
+            tools.IsKeyboardFocusWithinChanged += (_, _) => ToolsShown();
+            more.IsVisibleChanged += (_, _) => ToolsShown();
+            head.Children.Add(tools);
         }
         // In a job's view, what the coordinator (the main chat) sent the job is marked as such.
         var fromCoordinator = item.State == JobBoard.FromCoordinator;
@@ -1424,11 +1462,26 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         panel.Children.Add(head);
         panel.Children.Add(more);
 
+        // Your messages: a rounded bubble in the accent colour with white text, tail corner bottom right, so who said
+        // what shows at a glance; what the coordinator sent a job keeps the quiet raised bubble. Attachments sit under
+        // the bubble, on the page. The answers sit on the page under the chat's mark and name.
+        var solid = !fromCoordinator;
         var body = new StackPanel();
-        if (item.Text.Length > 0) body.Children.Add(ChatUi.Selectable(item.Text, "Your message"));
+        var below = new StackPanel { HorizontalAlignment = HorizontalAlignment.Right };
+        if (item.Text.Length > 0)
+        {
+            var text = ChatUi.Selectable(item.Text, "Your message");
+            if (solid)
+            {
+                text.SetResourceReference(Control.ForegroundProperty, Brand.K.OnAccent);
+                text.SetResourceReference(System.Windows.Controls.Primitives.TextBoxBase.SelectionBrushProperty, Brand.K.OnAccent);
+                text.SelectionOpacity = 0.3;
+            }
+            body.Children.Add(text);
+        }
         if (item.Files.Count > 0)
         {
-            var files = new WrapPanel { Margin = new Thickness(0, item.Text.Length > 0 ? ChatUi.S2 : 0, 0, 0) };
+            var files = new WrapPanel { Margin = new Thickness(0, item.Text.Length > 0 ? ChatUi.S1 : 0, 0, 0), HorizontalAlignment = HorizontalAlignment.Right };
             foreach (var path in item.Files)
             {
                 FrameworkElement shown;
@@ -1445,27 +1498,29 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
                     open.Click += (_, _) => ChatUi.Open(target);
                     shown = open;
                 }
-                shown.Margin = new Thickness(0, 0, ChatUi.S1, ChatUi.S1);
+                shown.Margin = new Thickness(ChatUi.S1, 0, 0, ChatUi.S1);
                 files.Children.Add(shown);
             }
-            body.Children.Add(files);
+            below.Children.Add(files);
         }
         else if (item.Name.Length > 0)
         {
             var files = Brand.Text("Attached: " + item.Name, Brand.K.Muted, ChatUi.SmallSize);
             files.Margin = new Thickness(0, 2, 0, 0);
-            body.Children.Add(files);
+            files.HorizontalAlignment = HorizontalAlignment.Right;
+            below.Children.Add(files);
         }
-        // Your messages: a rounded bubble in the accent tint, tail corner bottom right; Claude's answers sit on the page
-        // under Claude's mark and name.
-        var bubble = ChatUi.Opaque(new Border
+        if (body.Children.Count > 0)
         {
-            Child = body, Padding = new Thickness(ChatUi.S4, ChatUi.S2 + 2, ChatUi.S4, ChatUi.S2 + 2), CornerRadius = new CornerRadius(ChatUi.Radius, ChatUi.Radius, ChatUi.S1, ChatUi.Radius),
-            HorizontalAlignment = HorizontalAlignment.Right, SnapsToDevicePixels = true,
-        });
-        bubble.SetResourceReference(Border.BackgroundProperty, Brand.K.AccentSoft);
-        panel.Children.Add(bubble);
-        if (fromCoordinator) bubble.SetResourceReference(Border.BackgroundProperty, Brand.K.Raised);
+            var bubble = ChatUi.Opaque(new Border
+            {
+                Child = body, Padding = new Thickness(ChatUi.S3 + 2, ChatUi.S2, ChatUi.S3 + 2, ChatUi.S2 + 1), CornerRadius = new CornerRadius(ChatUi.Radius + 2, ChatUi.Radius + 2, ChatUi.S1, ChatUi.Radius + 2),
+                HorizontalAlignment = HorizontalAlignment.Right, SnapsToDevicePixels = true,
+            });
+            bubble.SetResourceReference(Border.BackgroundProperty, solid ? Brand.K.Accent : Brand.K.Raised);
+            panel.Children.Add(bubble);
+        }
+        if (below.Children.Count > 0) panel.Children.Add(below);
         AutomationProperties.SetName(panel, (fromCoordinator ? "From the coordinator" : "You") + When(item) + ": " + item.Text + (item.Name.Length > 0 ? ". Attached: " + item.Name : ""));
         return panel;
     }
@@ -1484,12 +1539,12 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
         copy.HorizontalAlignment = HorizontalAlignment.Right;
         copy.VerticalAlignment = VerticalAlignment.Top;
         copy.Margin = new Thickness(0, -ChatUi.S1, 0, 0);
-        copy.SetResourceReference(BackgroundProperty, Brand.K.Bg);
+        copy.SetResourceReference(BackgroundProperty, Brand.K.Canvas);
         var more = new WrapPanel { Visibility = Visibility.Collapsed };
         var moreButton = MoreButton(item, more);
         var tools = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top, Margin = copy.Margin };
         copy.Margin = new Thickness(0);
-        tools.SetResourceReference(BackgroundProperty, Brand.K.Bg);
+        tools.SetResourceReference(BackgroundProperty, Brand.K.Canvas);
         tools.Children.Add(copy);
         tools.Children.Add(moreButton);
         tools.Opacity = 0;
@@ -1924,12 +1979,15 @@ internal sealed partial class ChatPane : DockPanel, IHistoryHost
     /// <summary>The message box's border for its state: at rest, under the mouse, or with the caret in it.</summary>
     private void ShowFieldState()
     {
-        var (brush, thickness) = ChatStyles.ComposerBorder(_input.IsKeyboardFocused, _field.IsMouseOver);
-        _field.SetResourceReference(Border.BorderBrushProperty, brush);
-        _field.BorderThickness = new Thickness(thickness);
-        // The 2 px ring takes its extra pixel from the inside, so the text doesn't move when the box gets the caret.
+        if (_composerFrame is not { } frame) return;
+        var focused = _input.IsKeyboardFocused;
+        var (brush, thickness) = ChatStyles.ComposerBorder(focused, frame.IsMouseOver);
+        frame.SetResourceReference(Border.BorderBrushProperty, brush);
+        frame.BorderThickness = new Thickness(thickness);
+        // The 2 px ring takes its extra pixel from the inside, so nothing moves when the box gets the caret.
         var inset = 2 - thickness;
-        _field.Padding = new Thickness(inset);
+        frame.Padding = new Thickness(inset);
+        if (_composerGlow is { } glow) glow.Visibility = focused ? Visibility.Visible : Visibility.Hidden;
     }
 
     /// <summary>Puts the caret in the message box, after the text, with the keyboard really going to it (see <see cref="TakeKeyboard"/>).</summary>

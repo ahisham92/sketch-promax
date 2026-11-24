@@ -39,6 +39,19 @@ internal static class BrandTests
 
     public static void Run(string repoRoot, Action<string, bool, string> check)
     {
+        // The chat's palette: text on the conversation canvas, white on the accent (your messages) and badge text on
+        // its soft fill meet 4.5:1 in both themes. Read from Brand.cs's token table (key, light, dark).
+        {
+            static double Lum(uint c) { double F(uint v) { var x = v / 255.0; return x <= 0.03928 ? x / 12.92 : Math.Pow((x + 0.055) / 1.055, 2.4); } return 0.2126 * F((c >> 16) & 255) + 0.7152 * F((c >> 8) & 255) + 0.0722 * F(c & 255); }
+            static double Ratio(uint a, uint b) { var (x, y) = (Lum(a), Lum(b)); return (Math.Max(x, y) + 0.05) / (Math.Min(x, y) + 0.05); }
+            var brand = File.ReadAllText(Path.Combine(repoRoot, "src", "SketchProMax", "UI", "Brand.cs"));
+            var tokens = System.Text.RegularExpressions.Regex.Matches(brand, @"\(K\.(\w+), 0x([0-9A-Fa-f]{6}), 0x([0-9A-Fa-f]{6})\)").Cast<System.Text.RegularExpressions.Match>()
+                .ToDictionary(m => m.Groups[1].Value, m => (Light: Convert.ToUInt32(m.Groups[2].Value, 16), Dark: Convert.ToUInt32(m.Groups[3].Value, 16)));
+            var pairs = new[] { ("OnAccent", "Accent"), ("SuccessText", "SuccessSoft"), ("DangerText", "DangerSoft"), ("Link", "AccentSoft"), ("Muted", "Canvas"), ("Text", "Canvas"), ("WarningText", "Canvas"), ("SuccessText", "Canvas"), ("DangerText", "Canvas"), ("Link", "Canvas") };
+            var weak = pairs.Where(p => !tokens.ContainsKey(p.Item1) || !tokens.ContainsKey(p.Item2) || Ratio(tokens[p.Item1].Light, tokens[p.Item2].Light) < 4.5 || Ratio(tokens[p.Item1].Dark, tokens[p.Item2].Dark) < 4.5).Select(p => p.Item1 + " on " + p.Item2).ToList();
+            check("palette: text on the chat canvas, the accent bubble and the badges meets 4.5:1 in both themes", tokens.Count > 30 && weak.Count == 0, tokens.Count + " tokens; " + string.Join(", ", weak));
+        }
+
         // ---- The loader's words, rewritten where they show
         check("brand: the pane header", BrandText.Rewrite("Claude: connected") == "Sketch ProMax: connected"
             && BrandText.Rewrite("Claude: not running") == "Sketch ProMax: not running", BrandText.Rewrite("Claude: connected"));

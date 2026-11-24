@@ -41,6 +41,8 @@ internal static class Brand
         public const string Raised = "SpmRaised", BorderSubtle = "SpmBorderSubtle", AccentSoft = "SpmAccentSoft";
         // The composer's message box: a field a shade off the card, so it reads as the place to type.
         public const string ComposerField = "SpmComposerField";
+        /// <summary>The chat's conversation area (cards and the message box sit raised on it) and the soft fills of its status badges.</summary>
+        public const string Canvas = "SpmCanvas", SuccessSoft = "SpmSuccessSoft", DangerSoft = "SpmDangerSoft";
     }
 
     /// <summary>
@@ -86,6 +88,12 @@ internal static class Brand
         (K.AccentSoft, 0xE8EFFD, 0x2C3B5A),
         // Text 17:1 / 13:1, Muted (the hint) 7.2:1 / 7.8:1, InputBorder 4.5:1 / 4.8:1, Focus 6.4:1 / 7.3:1 on it.
         (K.ComposerField, 0xF8FAFC, 0x23272D),
+        // The chat's conversation area: Text 16:1 / 13:1, Muted 7.0:1 / 7.8:1, Link 6.2:1, WarningText and SuccessText
+        // 4.6:1, DangerText 6.0:1 on it. Badges: SuccessText on SuccessSoft 4.6:1 / 7.4:1, DangerText on DangerSoft
+        // 5.5:1 / 6.8:1, Link on AccentSoft 5.8:1 / 5.4:1.
+        (K.Canvas, 0xF4F6FA, 0x23272D),
+        (K.SuccessSoft, 0xECF8F0, 0x22382C),
+        (K.DangerSoft, 0xFDE8E8, 0x3F2628),
     ];
 
     public enum Weight { Secondary, Primary, Danger }

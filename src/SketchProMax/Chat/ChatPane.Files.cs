@@ -36,9 +36,15 @@ internal sealed partial class ChatPane
         var name = Path.GetFileName(path);
         var row = new StackPanel { Margin = new Thickness(0, separated ? ChatUi.S3 : 0, 0, 0) };
         var head = new DockPanel();
-        var icon = ChatUi.Glyph(ChatUi.GlyphFile, Brand.K.Accent, 18);
-        icon.VerticalAlignment = VerticalAlignment.Top;
-        icon.Margin = new Thickness(0, 2, ChatUi.S3, 0);
+        // The file's icon on a small tile in the accent tint, as the home screen's tiles.
+        var glyph = ChatUi.Glyph(ChatUi.GlyphFile, Brand.K.Link, 16);
+        glyph.HorizontalAlignment = HorizontalAlignment.Center;
+        var icon = new Border
+        {
+            Child = glyph, Width = 32, Height = 32, CornerRadius = new CornerRadius(ChatUi.RadiusSmall), VerticalAlignment = VerticalAlignment.Top,
+            Margin = new Thickness(0, 1, ChatUi.S3, 0), SnapsToDevicePixels = true,
+        };
+        icon.SetResourceReference(Border.BackgroundProperty, Brand.K.AccentSoft);
         DockPanel.SetDock(icon, Dock.Left);
         head.Children.Add(icon);
         var text = new StackPanel();

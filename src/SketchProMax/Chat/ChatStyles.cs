@@ -45,6 +45,9 @@ internal static class ChatStyles
     public static (string Brush, double Thickness) ComposerBorder(bool focused, bool hover) =>
         focused ? ("SpmFocus", 2) : hover ? ("SpmText", 1) : ("SpmInputBorder", 1);
 
+    /// <summary>The small outlined chips under the message box (chat type, effort, phone, …): one height for all.</summary>
+    public const double ChipHeight = 22;
+
     /// <summary>How long hover, colour, opacity and size changes take (ease-out); 0 when Windows' animations are off.</summary>
     public const int MotionMs = 160;
 
@@ -89,7 +92,7 @@ internal static class ChatStyles
     /// A button template: a rounded chrome (see <see cref="Chrome"/>), and with <paramref name="shadow"/> a soft shadow
     /// on a layer behind it (never on the layer holding the text, which would lose ClearType).
     /// </summary>
-    private static string Template(double radius, bool animate, bool shadow = false, string hoverBg = "SpmSurfaceHover", string? hoverBorder = null)
+    private static string Template(double radius, bool animate, bool shadow = false, string hoverBg = "SpmSurfaceHover", string? hoverBorder = null, bool clearWhenDisabled = false)
     {
         var r = N(radius);
         var behind = shadow && !Plain
@@ -116,14 +119,14 @@ internal static class ChatStyles
                   </Trigger>
                   PRESS
                   <Trigger Property="IsEnabled" Value="False">
-                    <Setter TargetName="fill" Property="Background" Value="{DynamicResource SpmSurface}"/>
+                    <Setter TargetName="fill" Property="Background" Value="DISABLEDFILL"/>
                     <Setter Property="Foreground" Value="{DynamicResource SpmMuted}"/>
                     <Setter Property="Cursor" Value="Arrow"/>
                   </Trigger>
                 </ControlTemplate.Triggers>
               </ControlTemplate>
             </Setter.Value></Setter>
-            """.Replace("BEHIND", behind).Replace("CHROME", Chrome(r, "{TemplateBinding Background}", hoverBg))
+            """.Replace("DISABLEDFILL", clearWhenDisabled ? "Transparent" : "{DynamicResource SpmSurface}").Replace("BEHIND", behind).Replace("CHROME", Chrome(r, "{TemplateBinding Background}", hoverBg))
             .Replace("FADE", HoverFade(animate)).Replace("PRESS", Press).Replace("HOVERBORDER", border);
     }
 
@@ -286,6 +289,13 @@ internal static class ChatStyles
             <Setter Property="MinHeight" Value="32"/>
             <Setter Property="Padding" Value="0"/>
           </Style>
+          <Style x:Key="SpmChatChip" TargetType="Button" BasedOn="{StaticResource SpmChatGhost}">
+            <Setter Property="FocusVisualStyle" Value="{StaticResource SpmChatFocusRound}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource SpmBorderSubtle}"/>
+            <Setter Property="MinHeight" Value="CHIPHEIGHT"/>
+            <Setter Property="Padding" Value="8,0"/>
+            CHIPTPL
+          </Style>
           <Style x:Key="SpmChatPill" TargetType="Button" BasedOn="{StaticResource SpmChatGhost}">
             <Setter Property="FocusVisualStyle" Value="{StaticResource SpmChatFocusRound}"/>
             <Setter Property="Background" Value="{DynamicResource SpmRaised}"/>
@@ -428,7 +438,9 @@ internal static class ChatStyles
         .Replace("DISCLOSURECHROME", Chrome("SMALL", "{TemplateBinding Background}", "SpmSurfaceHover"))
         .Replace("DISCLOSUREFADE", HoverFade(animate))
         .Replace("DISCLOSUREPRESS", Press)
-        .Replace("GHOST", Template(small, animate))
+        .Replace("CHIPTPL", Template(ChipHeight / 2, animate, hoverBorder: "SpmBorder", clearWhenDisabled: true))
+        .Replace("CHIPHEIGHT", N(ChipHeight))
+        .Replace("GHOST", Template(small, animate, clearWhenDisabled: true))
         .Replace("PILL", Template(14, animate, hoverBorder: "SpmBorder"))
         .Replace("PRIMARY", Template(14, animate, hoverBg: "SpmAccentHover", hoverBorder: "SpmAccentHover"))
         .Replace("FLOAT", Template(14, animate, shadow: true, hoverBorder: "SpmBorder"))
