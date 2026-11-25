@@ -16,7 +16,7 @@
     <LangVersion>latest</LangVersion>
     <RootNamespace>SketchProMax</RootNamespace>
     <AssemblyName>SketchProMax</AssemblyName>
-    <Version>0.35.120</Version>
+    <Version>0.35.121</Version>
     <!-- Copy NuGet dependencies (System.Text.Json on Revit 2024) next to the add-in DLL. -->
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
@@ -131,11 +131,11 @@
 
 
   <!--
-    CDT SDK (Dar Structural Computational Design, private repository): the theme, control styles and controls every
+    CDT SDK (a private repository): the theme, control styles and controls every
     Sketch ProMax window uses (UI/CdtTheme.cs). Only its compiled DLLs live here, in lib/cdt-sdk/<framework>/, built in
     Release from the commit named in cdt-sdk.ref (scripts/update-cdt-sdk.sh refreshes them); its source never comes into
     this public repository, and the build needs no access to the private one. ILRepack then merges CDT.Core, CDT.Wpf and
-    WpfMath into SketchProMax.dll, so the add-in never shares a CDT.Wpf with another Dar add-in in the same Revit, and a
+    WpfMath into SketchProMax.dll, so the add-in never shares a CDT.Wpf with another add-in built on the SDK in the same Revit, and a
     hot-swapped core reads the theme from its own copy (the theme's pack URIs carry this DLL's version). Only those four
     are merged: Roslyn, PdfPig and the rest stay beside the DLL as before.
   -->

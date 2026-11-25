@@ -2,7 +2,7 @@ using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
 
 /// <summary>
-/// The CDT SDK (Dar, private repository) inside Sketch ProMax: its compiled DLLs (lib/cdt-sdk, built from the pinned commit) merged into
+/// The CDT SDK (a private repository) inside Sketch ProMax: its compiled DLLs (lib/cdt-sdk, built from the pinned commit) merged into
 /// SketchProMax.dll (no CDT.Wpf.dll beside it for another add-in to swap), its theme XAML inside the DLL, and every
 /// window themed by it through Brand (UI/CdtTheme.cs). No SDK source is committed to this public repository.
 /// </summary>
@@ -26,7 +26,7 @@ internal static class CdtSdkTests
 
         var release = File.ReadAllText(Path.Combine(repoRoot, ".github", "workflows", "release.yml"));
         check("cdt sdk: the release build needs no secret or private checkout for it",
-            !release.Contains("CDT_SDK_TOKEN") && !release.Contains("Dar-Structural-Computational-Design/CDT-SDK"), "");
+            !release.Contains("CDT_SDK_TOKEN") && !release.Contains("/CDT-SDK"), "");
 
         var brand = File.ReadAllText(Path.Combine(repoRoot, "src", "SketchProMax", "UI", "Brand.cs"));
         check("cdt sdk: every themed window gets its style sheet and palette",

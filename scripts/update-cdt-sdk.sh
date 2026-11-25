@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Refreshes lib/cdt-sdk/ (the compiled CDT SDK DLLs Sketch ProMax merges into SketchProMax.dll) from a checkout of
-# Dar-Structural-Computational-Design/CDT-SDK at the commit in cdt-sdk.ref. Only the DLLs are copied: the SDK's source
+# the private CDT-SDK repository at the commit in cdt-sdk.ref. Only the DLLs are copied: the SDK's source
 # never goes into this repository. Usage: scripts/update-cdt-sdk.sh /path/to/CDT-SDK
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
