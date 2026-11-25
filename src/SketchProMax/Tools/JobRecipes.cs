@@ -166,9 +166,15 @@ internal static class JobRecipes
         {
             lock (Gate)
             {
-                var index = ReadIndex();
+                // An index that can't be read now (another Revit writing it) is never written over with a short list.
+                if (TryReadIndex(Folder) is not { } index) return;
                 var r = index.FirstOrDefault(x => x.Key == key);
-                if (r is null) index.Add(r = new Recipe { Key = key });
+                if (r is null)
+                {
+                    index.Add(r = new Recipe { Key = key });
+                    // Its steps may still be kept from before (a rebuilt index): used as they are, not read again.
+                    if (ReadSteps(key) is { } kept) (r.Session, r.Steps) = (session!, kept.Count);
+                }
                 if (r.Session != session) r.Steps = -1; // a new session: read again
                 (r.Title, r.Task, r.Session, r.Ended) = (title, task, session!, ended);
                 r.Passed |= passed;
@@ -206,9 +212,13 @@ internal static class JobRecipes
             Directory.CreateDirectory(Path.GetDirectoryName(StepsFile(r.Key))!);
             File.WriteAllText(StepsFile(r.Key), JsonSerializer.Serialize(steps), new UTF8Encoding(false));
             r.Steps = steps.Count;
-            var fresh = ReadIndex();
-            if (fresh.FirstOrDefault(x => x.Key == r.Key) is { } same) same.Steps = steps.Count;
-            WriteIndex(fresh);
+            // Bug 138 (25 Nov 2026): a read that failed here (the index being replaced by the other Revit window) came back
+            // empty and was written back, wiping every done job. Now an unreadable index is left alone.
+            if (TryReadIndex(Folder) is { } fresh && fresh.FirstOrDefault(x => x.Key == r.Key) is { } same)
+            {
+                same.Steps = steps.Count;
+                WriteIndex(fresh);
+            }
         }
         return steps;
     }
@@ -253,11 +263,18 @@ internal static class JobRecipes
 
     private static List<Recipe> ReadIndex() => ReadIndex(Folder);
 
-    private static List<Recipe> ReadIndex(string folder)
+    private static List<Recipe> ReadIndex(string folder) => TryReadIndex(folder) ?? [];
+
+    /// <summary>The index; empty when there is none yet, null when it is there but can't be read now (tried a few times).</summary>
+    internal static List<Recipe>? TryReadIndex(string folder)
     {
         var file = Path.Combine(folder, "index.json");
-        try { return File.Exists(file) ? JsonSerializer.Deserialize<List<Recipe>>(File.ReadAllText(file)) ?? [] : []; }
-        catch (Exception) { return []; }
+        for (var attempt = 0; ; attempt++)
+        {
+            try { return File.Exists(file) ? JsonSerializer.Deserialize<List<Recipe>>(File.ReadAllText(file)) ?? [] : []; }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException && attempt < 4) { System.Threading.Thread.Sleep(150); }
+            catch (Exception) { return null; }
+        }
     }
 
     private static void WriteIndex(List<Recipe> index)
@@ -285,7 +302,9 @@ internal static class JobRecipes
     {
         try
         {
-            if (File.Exists(BackfillMark)) return;
+            // Done once, unless the index is empty while steps are kept (bug 138 wiped it): then rebuilt from the chats again.
+            if (File.Exists(BackfillMark) && !(ReadIndex().Count == 0 && Directory.Exists(Path.Combine(Folder, "steps")) &&
+                Directory.EnumerateFiles(Path.Combine(Folder, "steps"), "*.json").Any())) return;
             var count = 0;
             foreach (var conv in Chat.ChatStore.All())
             {
