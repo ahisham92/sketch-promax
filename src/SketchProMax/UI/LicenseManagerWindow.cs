@@ -26,6 +26,10 @@ internal sealed class LicenseManagerWindow : Window
     private readonly CheckBox _noEnd = new() { Content = "No end date", Margin = new Thickness(10, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
     private readonly TextBox _key = new() { IsReadOnly = true, TextWrapping = TextWrapping.Wrap, MinHeight = 54 };
     private readonly DatePicker _newEnds = new() { MinHeight = 28 };
+    /// <summary>Which apps a new key unlocks (all three by default): one key and one PC code for every app ticked.</summary>
+    private readonly CheckBox _appSketch = new() { Content = "Sketch ProMax", IsChecked = true, Margin = new Thickness(0, 0, 14, 0) };
+    private readonly CheckBox _appCsi = new() { Content = "CSI ProMax", IsChecked = true, Margin = new Thickness(0, 0, 14, 0) };
+    private readonly CheckBox _appPlaxis = new() { Content = "Plaxis ProMax", IsChecked = true };
     private readonly CheckBox _newNoEnd = new() { Content = "No end date", Margin = new Thickness(10, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
     private readonly TextBlock _detail = Brand.Text("", Brand.K.Muted, 12);
     private readonly TextBlock _pending = Brand.Text("", Brand.K.WarningText, 12);
@@ -77,6 +81,9 @@ internal sealed class LicenseManagerWindow : Window
         _noEnd.Unchecked += (_, _) => _ends.IsEnabled = true;
         AddRow(grid, 2, "Ends", endsRow);
         AddRow(grid, 3, "Note", _note);
+        var apps = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 4, 0, 0) };
+        foreach (var box in new[] { _appSketch, _appCsi, _appPlaxis }) apps.Children.Add(box);
+        AddRow(grid, 4, "Apps", apps);
         page.Children.Add(grid);
         var make = RichUi.Button(RichUi.Icon.Add, "Make key", Brand.Weight.Primary);
         make.Click += (_, _) => Make();
@@ -195,8 +202,8 @@ internal sealed class LicenseManagerWindow : Window
         foreach (var e in _list.Entries.OrderByDescending(e => e.Active).ThenByDescending(e => e.Issued).ThenBy(e => e.Name, StringComparer.CurrentCultureIgnoreCase))
         {
             var ends = e.Ends is { } d ? d.ToString("d MMM yyyy") : "no end";
-            var item = new ListBoxItem { Content = $"{e.Name}   ·   {e.PcCode}   ·   until {ends}   ·   {e.Status(DateTime.Today)}", Tag = e };
-            AutomationProperties.SetName(item, $"{e.Name}, {e.PcCode}, until {ends}, {e.Status(DateTime.Today)}");
+            var item = new ListBoxItem { Content = $"{e.Name}   ·   {e.PcCode}   ·   {e.Apps}   ·   until {ends}   ·   {e.Status(DateTime.Today)}", Tag = e };
+            AutomationProperties.SetName(item, $"{e.Name}, {e.PcCode}, {e.Apps}, until {ends}, {e.Status(DateTime.Today)}");
             _entries.Items.Add(item);
             if (e.Id == select) _entries.SelectedItem = item;
         }
@@ -234,13 +241,18 @@ internal sealed class LicenseManagerWindow : Window
         if (_noEnd.IsChecked != true && ends is null) { Error("Pick an end date, or tick No end date."); _ends.Focus(); return; }
         try
         {
-            var entry = _list.Issue(_secret, _code.Text, _name.Text, ends, _note.Text, DateTime.Today);
+            var picked = new List<string>();
+            if (_appSketch.IsChecked == true) picked.Add(LicenseKey.Programs.Sketch);
+            if (_appCsi.IsChecked == true) picked.Add(LicenseKey.Programs.Csi);
+            if (_appPlaxis.IsChecked == true) picked.Add(LicenseKey.Programs.Plaxis);
+            if (picked.Count == 0) { Error("Tick at least one app for the key."); return; }
+            var entry = _list.Issue(_secret, _code.Text, _name.Text, ends, _note.Text, DateTime.Today, picked);
             _list.Save();
             _code.Clear();
             _name.Clear();
             _note.Clear();
             Fill(entry.Id);
-            Copy(entry.Key, $"Key made for {entry.Name} and copied. Send it to them; it works only on PC {entry.PcCode}.");
+            Copy(entry.Key, $"Key made for {entry.Name} ({entry.Apps}) and copied. Send it to them; it works only on PC {entry.PcCode}, in each app ticked.");
         }
         catch (ArgumentException ex) { Error(ex.Message); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { Error($"The list couldn't be saved ({ex.Message})."); }

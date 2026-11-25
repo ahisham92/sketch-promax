@@ -68,6 +68,8 @@ internal static class Library
     /// </summary>
     public static async Task Publish(CancellationToken ct)
     {
+        using var gate = Gate();
+        if (gate is null) return; // another Revit window on this PC is doing it
         try
         {
             if (!LicenseState.IsOwnerPc) return;
@@ -176,6 +178,8 @@ internal static class Library
     /// </summary>
     public static async Task Receive(CancellationToken ct)
     {
+        using var gate = Gate();
+        if (gate is null) return; // another Revit window on this PC is doing it
         try
         {
             var status = LicenseState.Current;
@@ -262,13 +266,20 @@ internal static class Library
                 var what = LibraryMath.Decide(localHash, had, libraryHash);
                 if (what == "keep")
                 {
-                    if (localHash == libraryHash) given[key] = libraryHash;
+                    if (localHash == libraryHash)
+                    {
+                        given[key] = libraryHash;
+                        if (part == "learned-tools") try { LearnedTools.MarkApproved(LearnedTool.FromJson(text).Code); } catch (Exception) { }
+                    }
                     else if (localHash is not null) notes.Add($"kept this PC's own {Path.GetFileNameWithoutExtension(name)}");
                     continue;
                 }
                 Directory.CreateDirectory(target);
                 SafeFile.Write(local, text);
                 given[key] = libraryHash;
+                // The library is signed by the owner's key (its MAC), so the owner's tools run as on the owner's PC,
+                // without asking first (the owner, 25 Nov 2026: "work with him as it works with me exactly").
+                if (part == "learned-tools") try { LearnedTools.MarkApproved(LearnedTool.FromJson(text).Code); } catch (Exception) { }
             }
         }
         WriteGiven(given);
@@ -306,6 +317,17 @@ internal static class Library
     }
 
     private static void WriteGiven(Dictionary<string, string> given) => SafeFile.Write(GivenFile, JsonSerializer.Serialize(given));
+
+    /// <summary>One Revit window at a time does the library's work (bug 138: two windows at once wiped the done jobs' index).</summary>
+    private static FileStream? Gate()
+    {
+        try
+        {
+            Directory.CreateDirectory(Roaming);
+            return new FileStream(Path.Combine(Roaming, "library.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return null; }
+    }
 
     private static string? ReadText(string file)
     {
