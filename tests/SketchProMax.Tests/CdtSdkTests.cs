@@ -2,7 +2,7 @@ using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
 
 /// <summary>
-/// The CDT SDK (Dar, private repository) inside Sketch ProMax: built in from the pinned commit, merged into
+/// The CDT SDK (Dar, private repository) inside Sketch ProMax: its compiled DLLs (lib/cdt-sdk, built from the pinned commit) merged into
 /// SketchProMax.dll (no CDT.Wpf.dll beside it for another add-in to swap), its theme XAML inside the DLL, and every
 /// window themed by it through Brand (UI/CdtTheme.cs). No SDK source is committed to this public repository.
 /// </summary>
@@ -14,12 +14,19 @@ internal static class CdtSdkTests
         var pin = File.Exists(refFile) ? File.ReadAllText(refFile).Trim() : "";
         check("cdt sdk: the build pins one SDK commit (cdt-sdk.ref)", System.Text.RegularExpressions.Regex.IsMatch(pin, "^[0-9a-f]{40}$"), pin);
 
-        var ignore = File.ReadAllText(Path.Combine(repoRoot, ".gitignore"));
-        check("cdt sdk: its source folder is git-ignored (the repository is public)", ignore.Split('\n').Any(l => l.Trim() == "external/"), "");
+        var libDir = Path.Combine(repoRoot, "lib", "cdt-sdk");
+        var missing = new[] { "net48", "net8.0-windows", "net10.0-windows" }
+            .SelectMany(f => new[] { "CDT.Core.dll", "CDT.Wpf.dll" }.Select(d => Path.Combine(f, d)))
+            .Where(p => !File.Exists(Path.Combine(libDir, p))).ToList();
+        check("cdt sdk: its compiled DLLs are in lib/cdt-sdk for every Revit framework", missing.Count == 0, string.Join(", ", missing));
+        var source = Directory.Exists(libDir)
+            ? Directory.GetFiles(libDir, "*", SearchOption.AllDirectories).Where(f => !f.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)).Select(Path.GetFileName).ToList()
+            : new List<string?>();
+        check("cdt sdk: only its DLLs are committed, never its source (the repository is public)", source.Count == 0, string.Join(", ", source));
 
         var release = File.ReadAllText(Path.Combine(repoRoot, ".github", "workflows", "release.yml"));
-        check("cdt sdk: the release build checks it out with the CDT_SDK_TOKEN secret",
-            release.Contains("Dar-Structural-Computational-Design/CDT-SDK") && release.Contains("secrets.CDT_SDK_TOKEN") && release.Contains("external/CDT-SDK"), "");
+        check("cdt sdk: the release build needs no secret or private checkout for it",
+            !release.Contains("CDT_SDK_TOKEN") && !release.Contains("Dar-Structural-Computational-Design/CDT-SDK"), "");
 
         var brand = File.ReadAllText(Path.Combine(repoRoot, "src", "SketchProMax", "UI", "Brand.cs"));
         check("cdt sdk: every themed window gets its style sheet and palette",
