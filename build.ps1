@@ -11,6 +11,7 @@ param(
     [int[]]$Versions = @(2024, 2025, 2026, 2027)
 )
 $ErrorActionPreference = "Stop"
+
 $dist = Join-Path $PSScriptRoot "dist"
 $addin = Join-Path $PSScriptRoot "src\SketchProMax\SketchProMax.csproj"
 $mcp = Join-Path $PSScriptRoot "src\SketchProMax.Mcp\SketchProMax.Mcp.csproj"

@@ -206,6 +206,7 @@ SignaturePagesTests.Run((name, ok, detail) => Check(name, ok, detail));
     SubmissionFormatTests.RunSources(File.Exists(Path.Combine(root, "README.md")) ? root : Directory.GetCurrentDirectory(), (name, ok, detail) => Check(name, ok, detail));
     LicenseTests.Run(File.Exists(Path.Combine(root, "README.md")) ? root : Directory.GetCurrentDirectory(), (name, ok, detail) => Check(name, ok, detail));
     LibraryTests.Run(File.Exists(Path.Combine(root, "README.md")) ? root : Directory.GetCurrentDirectory(), (name, ok, detail) => Check(name, ok, detail));
+    CdtSdkTests.Run(File.Exists(Path.Combine(root, "README.md")) ? root : Directory.GetCurrentDirectory(), (name, ok, detail) => Check(name, ok, detail));
 }
 
 // With --addin <folder of a built SketchProMax.dll>, also check the whole tool catalogue.
@@ -215,6 +216,7 @@ if (addinAt >= 0 && addinAt + 1 < args.Length)
     var repoRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../.."));
     if (!File.Exists(Path.Combine(repoRoot, "README.md"))) repoRoot = Directory.GetCurrentDirectory();
     CatalogTests.Run(Path.GetFullPath(args[addinAt + 1]), repoRoot, (name, ok, detail) => Check(name, ok, detail));
+    CdtSdkTests.RunAddin(Path.GetFullPath(args[addinAt + 1]), (name, ok, detail) => Check(name, ok, detail));
 }
 
 Console.WriteLine(failures == 0 ? "All tests passed." : $"{failures} test(s) failed.");
