@@ -12,6 +12,9 @@ namespace SketchProMax.Licensing;
 /// Key: "SPM1." + base64url(payload) + "." + base64url(ECDSA P-256 signature, 64 bytes), where payload is
 /// "1|id|pc code|name|issued yyyy-MM-dd|ends yyyy-MM-dd or -", and from 0.35.119 a seventh field: the key that opens
 /// the owner's locked library (Sharing/Library), base64url, made from the signing secret (<see cref="LibraryKey"/>).
+/// A key for more than Sketch ProMax (the owner, 25 Nov 2026: one License manager for every app) is
+/// "2|id|pc code|name|issued|ends|programs|library", programs like "sketch,csi,plaxis". CSI ProMax and Plaxis ProMax
+/// read the same keys with the same public half and the same PC code (their copies of this logic: change all three).
 /// </summary>
 internal static class LicenseKey
 {
@@ -69,9 +72,28 @@ internal static class LicenseKey
         Array.IndexOf(OwnerHashes, Hex(Sha256("SketchProMax/owner/" + machineId!.Trim().ToLowerInvariant()))) >= 0;
 
     /// <summary>What a key says. <see cref="Ends"/> null: no end date.</summary>
-    internal sealed record License(string Id, string PcCode, string Name, DateTime Issued, DateTime? Ends, string Library = "");
+    internal sealed record License(string Id, string PcCode, string Name, DateTime Issued, DateTime? Ends, string Library = "", IReadOnlyList<string>? Programs = null)
+    {
+        /// <summary>The apps this key unlocks (none named: Sketch ProMax only).</summary>
+        public IReadOnlyList<string> For => Programs is { Count: > 0 } p ? p : [LicenseKey.Programs.Sketch];
 
-    internal enum Check { Valid, Expired, WrongPc, Cancelled, Invalid }
+        public bool Covers(string program) => For.Contains(program, StringComparer.Ordinal);
+    }
+
+    /// <summary>The apps a key can unlock, as written in a key.</summary>
+    internal static class Programs
+    {
+        public const string Sketch = "sketch", Csi = "csi", Plaxis = "plaxis";
+        public static readonly string[] All = [Sketch, Csi, Plaxis];
+
+        public static string Name(string program) => program switch
+        {
+            Sketch => "Sketch ProMax", Csi => "CSI ProMax", Plaxis => "Plaxis ProMax", _ => program,
+        };
+    }
+
+    /// <summary><see cref="Check.OtherProgram"/>: a good key for this PC that doesn't unlock Sketch ProMax.</summary>
+    internal enum Check { Valid, Expired, WrongPc, Cancelled, OtherProgram, Invalid }
 
     /// <summary>A short random id per key ("K7Q2M9XA"), so a key can be found in the list or cancelled without naming anyone.</summary>
     public static string NewId()
@@ -119,6 +141,7 @@ internal static class LicenseKey
     {
         if (license is null) return Check.Invalid;
         if (!string.Equals(license.PcCode, pcCode, StringComparison.Ordinal)) return Check.WrongPc;
+        if (!license.Covers(Programs.Sketch)) return Check.OtherProgram;
         if (changes?.IsCancelled(license.Id) == true) return Check.Cancelled;
         var ends = EndsOf(license, changes);
         if (ends is { } e && today.Date > e.Date) return Check.Expired;
@@ -133,14 +156,31 @@ internal static class LicenseKey
         return ends;
     }
 
-    internal static string Payload(License l) => string.Join("|",
-        "1", l.Id, l.PcCode, Clean(l.Name), l.Issued.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
-        l.Ends?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? "-") + (l.Library.Length > 0 ? "|" + l.Library : "");
+    internal static string Payload(License l)
+    {
+        var fields = new List<string>
+        {
+            "1", l.Id, l.PcCode, Clean(l.Name), l.Issued.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+            l.Ends?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? "-",
+        };
+        var programs = Programs.All.Where(l.Covers).ToList();
+        if (programs.Count == 0) throw new ArgumentException("Tick at least one app for the key.");
+        if (programs.Count == 1 && programs[0] == Programs.Sketch)
+        {
+            // Sketch ProMax alone: the first way, which every Sketch ProMax version reads.
+            if (l.Library.Length > 0) fields.Add(l.Library);
+            return string.Join("|", fields);
+        }
+        fields[0] = "2";
+        fields.Add(string.Join(",", programs));
+        if (l.Library.Length > 0) fields.Add(l.Library);
+        return string.Join("|", fields);
+    }
 
     private static License? Parse(string text)
     {
         var f = text.Split('|');
-        if (f.Length is not (6 or 7) || f[0] != "1") return null;
+        if (!(f[0] == "1" && f.Length is 6 or 7 || f[0] == "2" && f.Length is 7 or 8)) return null;
         if (!DateTime.TryParseExact(f[4], "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var issued)) return null;
         DateTime? ends = null;
         if (f[5] != "-")
@@ -148,7 +188,9 @@ internal static class LicenseKey
             if (!DateTime.TryParseExact(f[5], "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var e)) return null;
             ends = e;
         }
-        return new License(f[1], f[2], f[3], issued, ends, f.Length == 7 ? f[6] : "");
+        if (f[0] == "1") return new License(f[1], f[2], f[3], issued, ends, f.Length == 7 ? f[6] : "");
+        var programs = f[6].Split(',').Select(p => p.Trim()).Where(p => p.Length > 0).Distinct(StringComparer.Ordinal).ToList();
+        return programs.Count == 0 ? null : new License(f[1], f[2], f[3], issued, ends, f.Length == 8 ? f[7] : "", programs);
     }
 
     /// <summary>A name as it goes into a key: one line, no field separator.</summary>

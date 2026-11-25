@@ -80,7 +80,7 @@ internal static class LicenseTests
                 check("license manager: the list is kept", back.Entries.Count == 3 && back.Entries[2].PendingChange == shorter.PendingChange && back.Entries[0].Key == first.Key, back.Entries.Count.ToString());
             }
             finally { File.Delete(file); }
-            check("license manager: Excel export", list.Csv(today).Split('\n')[0].StartsWith("Name,PC code,Issued,Ends,Status") && list.Csv(today).Contains("\"Site engineer / A\""), "");
+            check("license manager: Excel export", list.Csv(today).Split('\n')[0].StartsWith("Name,PC code,Apps,Issued,Ends,Status") && list.Csv(today).Contains("\"Site engineer / A\""), "");
         }
 
         // Wiring: the License button, the gate on buttons, tools and the chat, and no signing secret in the repository.

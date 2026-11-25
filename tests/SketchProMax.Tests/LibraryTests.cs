@@ -34,6 +34,35 @@ internal static class LibraryTests
         var issued = list.Issue(secret, "SPM-TEST-0000-ABCD", "Test Friend", null, "", today);
         check("library: every key the License manager makes opens the library", LicenseKey.Read(issued.Key, signer)?.Library == libKey, issued.Key);
 
+        // One key for several apps (the owner, 25 Nov 2026): Sketch ProMax reads it and checks it covers Sketch ProMax.
+        var all3 = list.Issue(secret, "SPM-TEST-0000-ABCD", "Test Friend", null, "", today, [LicenseKey.Programs.Sketch, LicenseKey.Programs.Csi, LicenseKey.Programs.Plaxis]);
+        var read3 = LicenseKey.Read(all3.Key, signer);
+        check("license: a key for all three apps carries them and the library", read3 is not null && read3.For.SequenceEqual(["sketch", "csi", "plaxis"])
+            && read3.Library == libKey && LicenseKey.Payload(read3).StartsWith("2|", StringComparison.Ordinal)
+            && LicenseKey.Verify(all3.Key, "SPM-TEST-0000-ABCD", today, verifier: signer) == LicenseKey.Check.Valid
+            && all3.Apps == "Sketch ProMax, CSI ProMax, Plaxis ProMax", read3 is null ? "null" : LicenseKey.Payload(read3));
+        var csiOnly = list.Issue(secret, "SPM-TEST-0000-ABCD", "Test Friend", null, "", today, [LicenseKey.Programs.Csi]);
+        check("license: a key for CSI ProMax only doesn't unlock Sketch ProMax", LicenseKey.Verify(csiOnly.Key, "SPM-TEST-0000-ABCD", today, verifier: signer) == LicenseKey.Check.OtherProgram, "");
+        check("license: Sketch ProMax alone is still the first way (older versions read it)", LicenseKey.Payload(LicenseKey.Read(issued.Key, signer)!).StartsWith("1|", StringComparison.Ordinal)
+            && issued.Apps == "Sketch ProMax", "");
+        var changedEnd = list.ChangeEnd(secret, all3, new DateTime(2027, 1, 1), today);
+        check("license: a new end date keeps the apps", changedEnd.Programs.SequenceEqual(all3.Programs), string.Join(",", changedEnd.Programs));
+        bool threw;
+        try { list.Issue(secret, "SPM-TEST-0000-ABCD", "X", null, "", today, ["other"]); threw = false; } catch (ArgumentException) { threw = true; }
+        check("license: a key needs at least one app", threw, "");
+
+        // Bug 138: the done jobs' index is never written over with an empty list when it can't be read.
+        var jr = Path.Combine(Path.GetTempPath(), "spm-jr-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(jr);
+        check("job recipes: no index yet is an empty list", JobRecipes.TryReadIndex(jr) is { Count: 0 }, "");
+        File.WriteAllText(Path.Combine(jr, "index.json"), "[{\"Key\":\"k1\",\"Steps\":2}]");
+        check("job recipes: an index reads", JobRecipes.TryReadIndex(jr) is { Count: 1 }, "");
+        using (new FileStream(Path.Combine(jr, "index.json"), FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            check("job recipes: an index that can't be read now is null, not empty", OperatingSystem.IsWindows() ? JobRecipes.TryReadIndex(jr) is null : true, "");
+        File.WriteAllText(Path.Combine(jr, "index.json"), "not json");
+        check("job recipes: a damaged index is null, not empty", JobRecipes.TryReadIndex(jr) is null, "");
+        Directory.Delete(jr, true);
+
         // The lock.
         var files = new List<(string, byte[])>
         {
