@@ -3,6 +3,7 @@ using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Data;
 using System.Windows.Documents;
 using System.Windows.Interop;
@@ -470,9 +471,32 @@ internal static class Brand
         Base("SpmPrimaryButton", typeof(Button), "CDT.PrimaryButton");
         Base("SpmDangerButton", typeof(Button), "CDT.DangerButton");
         Base("SpmGhostButton", typeof(Button), "CDT.GhostButton");
+        // Text boxes: the SDK's, without its one-line height cap (35 px). Boxes that hold several lines (AcceptsReturn or
+        // wrapping) keep Sketch ProMax's own template, which lays the text out from the top and scrolls.
+        try
+        {
+            var multiLine = (styles[typeof(TextBox)] as Style)?.Setters.OfType<Setter>().FirstOrDefault(x => x.Property == Control.TemplateProperty)?.Value;
+            if (CdtTheme.Style("CDT.TextBox") is { } cdtText)
+            {
+                var text = new Style(typeof(TextBox), cdtText);
+                text.Setters.Add(new Setter(FrameworkElement.MaxHeightProperty, double.PositiveInfinity));
+                text.Setters.Add(new Setter(Control.BorderBrushProperty, new DynamicResourceExtension(K.InputBorder)));
+                if (multiLine is ControlTemplate template)
+                {
+                    var returns = new Trigger { Property = TextBoxBase.AcceptsReturnProperty, Value = true };
+                    returns.Setters.Add(new Setter(Control.TemplateProperty, template));
+                    var wraps = new Trigger { Property = TextBox.TextWrappingProperty, Value = TextWrapping.Wrap };
+                    wraps.Setters.Add(new Setter(Control.TemplateProperty, template));
+                    text.Triggers.Add(returns);
+                    text.Triggers.Add(wraps);
+                }
+                styles[typeof(TextBox)] = text;
+            }
+        }
+        catch (Exception) { /* keep Sketch ProMax's text box */ }
         foreach (var (type, cdt) in new (Type, string)[]
         {
-            (typeof(Button), "CDT.SecondaryButton"), (typeof(TextBox), "CDT.TextBox"),
+            (typeof(Button), "CDT.SecondaryButton"),
             (typeof(CheckBox), "CDT.CheckBox"), (typeof(RadioButton), "CDT.RadioButton"), (typeof(System.Windows.Controls.Primitives.ToggleButton), "CDT.ToggleButton"),
             (typeof(ComboBox), "CDT.ComboBox"), (typeof(ComboBoxItem), "CDT.ComboBoxItem"), (typeof(ProgressBar), "CDT.ProgressBar"),
             (typeof(Hyperlink), "CDT.Hyperlink"), (typeof(ListBox), "CDT.ListBox"), (typeof(ListBoxItem), "CDT.ListBoxItem"),
@@ -484,6 +508,11 @@ internal static class Brand
             (typeof(GridSplitter), "CDT.GridSplitter"), (typeof(Menu), "CDT.Menu"), (typeof(System.Windows.Controls.Primitives.StatusBar), "CDT.StatusBar"), (typeof(RichTextBox), "CDT.RichTextBox"),
         })
             Base(type, type, cdt);
+        // Field outlines at 3:1 against the window (the UI rules): the SDK draws them in its hairline Stroke colour,
+        // which an unticked box or an empty field nearly loses in the dark theme.
+        foreach (var type in new[] { typeof(CheckBox), typeof(RadioButton), typeof(ComboBox) })
+            if (styles[type] is Style field && !field.IsSealed)
+                field.Setters.Add(new Setter(Control.BorderBrushProperty, new DynamicResourceExtension(K.InputBorder)));
     }
 
     // ---- Logo and window chrome --------------------------------------------------------------------------------
