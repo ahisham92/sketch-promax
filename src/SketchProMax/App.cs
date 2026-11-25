@@ -262,6 +262,8 @@ public sealed class App : IExternalApplication
         if (stop.IsCancellationRequested) return;
         // Shared tools: packs this PC shared are republished when they change, packs it received follow their updates.
         _ = Task.Run(() => SharedLoopAsync(stop));
+        // The owner's library: uploaded locked from the owner's PC, fetched by licensed PCs (Sharing/Library).
+        _ = Task.Run(() => LibraryLoopAsync(stop));
         // Check at every start, then hourly while Revit stays open; the bug log is fetched with each check. With
         // automatic updates off a newer version is only announced (UI/UpdateNotice), never downloaded.
         await UpdateLoopAsync(stop).ConfigureAwait(false);
@@ -300,6 +302,30 @@ public sealed class App : IExternalApplication
             }
             catch (Exception) { /* tried again at the next round */ }
             try { await Task.Delay(SharedEvery, stop).ConfigureAwait(false); }
+            catch (OperationCanceledException) { return; }
+        }
+    }
+
+    /// <summary>How often the owner's PC looks for library changes to upload, and licensed PCs for a newer library.</summary>
+    internal static readonly TimeSpan LibraryEvery = TimeSpan.FromMinutes(30);
+
+    /// <summary>
+    /// The owner's library (Sharing/Library), a few minutes after start and then every <see cref="LibraryEvery"/>: the
+    /// owner's PC uploads it when it changed, a licensed PC fetches it when a newer one is up. Background only.
+    /// </summary>
+    private static async Task LibraryLoopAsync(CancellationToken stop)
+    {
+        try { await Task.Delay(TimeSpan.FromMinutes(2), stop).ConfigureAwait(false); }
+        catch (OperationCanceledException) { return; }
+        while (!stop.IsCancellationRequested)
+        {
+            try
+            {
+                if (Licensing.LicenseState.IsOwnerPc) await Sharing.Library.Publish(stop).ConfigureAwait(false);
+                else await Sharing.Library.Receive(stop).ConfigureAwait(false);
+            }
+            catch (Exception) { /* tried again at the next round */ }
+            try { await Task.Delay(LibraryEvery, stop).ConfigureAwait(false); }
             catch (OperationCanceledException) { return; }
         }
     }

@@ -152,6 +152,7 @@
     <Compile Include="../../src/SketchProMax/Tools/FieldTestJournal.cs" Link="FieldTestJournal.cs" />
     <EmbeddedResource Include="../../src/SketchProMax/Data/field-test-proven.json" LogicalName="SketchProMax.field-test-proven.json" />
     <Compile Include="../../src/SketchProMax/Sharing/SharedPackMath.cs" Link="SharedPackMath.cs" />
+    <Compile Include="../../src/SketchProMax/Sharing/LibraryMath.cs" Link="LibraryMath.cs" />
     <Compile Include="../../src/SketchProMax/Sharing/TritoTabMath.cs" Link="TritoTabMath.cs" />
     <Compile Include="../../src/TritoRevit/PackButtons.cs" Link="PackButtons.cs" />
     <Compile Include="../../src/SketchProMax/Bridge/JobControl.cs" Link="JobControl.cs" />

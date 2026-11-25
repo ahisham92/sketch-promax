@@ -11,8 +11,9 @@ namespace SketchProMax.Tools;
 /// pointer on a failed code call, the line that goes with a typed message) and adapts it instead of starting from an
 /// empty page. The 2026-11-17 review: 1,166 code calls in a month, 161 failed, the same failures met again and again,
 /// and only one call of a saved tool, because code written a little differently each time never counted as "the same".
-/// The library stays on this PC, inside Sketch ProMax (the owner's choice, 2026-11-17: not shared between users);
-/// code that worked three times becomes a ready-made tool (CodeRepeats). One entry per shape (CodeRepeats.Shape), the
+/// The library is kept on this PC; from 2026-11-25 a licensed PC also reads the owner's kept code from the locked shared
+/// library (Sharing/Library, the owner's ask), beside its own and never into it. Code that worked again becomes a
+/// ready-made tool (CodeRepeats). One entry per shape (CodeRepeats.Shape), the
 /// newest code kept. In %APPDATA%\SketchProMax\worked-code.json; no Revit
 /// here (the tests compile it).
 /// </summary>
@@ -52,6 +53,8 @@ internal static class WorkedCode
         /// <summary>The shape of its code in a few numbers (<see cref="Signature"/>) and how many runs of five words it has.</summary>
         public uint[]? Sig { get; set; }
         public int Size { get; set; }
+        /// <summary>From the owner's shared library (Sharing/Library), not this PC's own: its code is read from there, it is never saved here.</summary>
+        [System.Text.Json.Serialization.JsonIgnore] public bool Shared { get; set; }
         /// <summary>Changed since read: its code file is written with the index.</summary>
         [System.Text.Json.Serialization.JsonIgnore] public bool Dirty { get; set; }
     }
@@ -272,7 +275,7 @@ internal static class WorkedCode
 
     public static string Line(Entry e) =>
         $"{e.Id}: {OneLine(e.Description, 140)} ({e.Tool}{(e.OwnTransactions ? ", own_transactions" : "")}, worked {e.Uses}x, last {e.Last:yyyy-MM-dd}" +
-        (e.Model.Length > 0 ? $", in {e.Model}" : "") + ")";
+        (e.Model.Length > 0 ? $", in {e.Model}" : "") + (e.Shared ? ", from the shared library" : "") + ")";
 
     private static string OneLine(string text, int max)
     {
@@ -462,7 +465,7 @@ internal static class WorkedCode
         if (e.Code.Length > 0) return e.Code;
         try
         {
-            var file = CodeFile(Folder, e);
+            var file = CodeFile(e.Shared ? SharedFolder : Folder, e);
             if (File.Exists(file)) return File.ReadAllText(file);
             if (Directory.Exists(Folder) && Directory.EnumerateFiles(Folder, e.Id + ".cs", SearchOption.AllDirectories).FirstOrDefault() is { } found)
                 return File.ReadAllText(found);
@@ -640,10 +643,44 @@ internal static class WorkedCode
         catch (Exception) { /* tried again next start */ }
     });
 
-    /// <summary>The kept entries (their code is read with <see cref="CodeOf"/>): a copy of the list, safe to search.</summary>
+    /// <summary>
+    /// The kept entries (their code is read with <see cref="CodeOf"/>): a copy of the list, safe to search. This PC's own
+    /// first, then the shared library's for code this PC doesn't have (<see cref="WithShared"/>).
+    /// </summary>
     public static List<Entry> Load()
     {
-        lock (Gate) return Read().ToList();
+        lock (Gate) return WithShared(Read(), ReadShared());
+    }
+
+    /// <summary>The owner's kept code a licensed PC got with the shared library (Sharing/Library): its worked-code folder.</summary>
+    public static string SharedFolder => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "SketchProMax", "library", "worked-code");
+
+    /// <summary>This PC's entries, then the shared library's whose id this PC doesn't have, marked <see cref="Entry.Shared"/>.</summary>
+    internal static List<Entry> WithShared(List<Entry> mine, List<Entry> shared)
+    {
+        var all = new List<Entry>(mine);
+        var have = new HashSet<string>(mine.Select(e => e.Id), StringComparer.Ordinal);
+        foreach (var e in shared)
+            if (e.Id.Length > 0 && e.Description.Length > 0 && have.Add(e.Id)) { e.Shared = true; all.Add(e); }
+        return all;
+    }
+
+    private static List<Entry>? _shared;
+    private static DateTime _sharedAt;
+
+    /// <summary>The shared library's index, read again only when it changed; empty when there is none.</summary>
+    private static List<Entry> ReadShared()
+    {
+        try
+        {
+            var path = Path.Combine(SharedFolder, "index.json");
+            if (!File.Exists(path)) return _shared = [];
+            var at = File.GetLastWriteTimeUtc(path);
+            if (_shared is not null && at == _sharedAt) return _shared;
+            _sharedAt = at;
+            return _shared = ReadIndex(SharedFolder);
+        }
+        catch (Exception) { return _shared ?? []; }
     }
 
     private static List<Entry>? _cached;

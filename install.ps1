@@ -168,3 +168,29 @@ Write-Host "Next steps:" -ForegroundColor Cyan
 Write-Host "  1. Quit the Claude desktop app completely (system tray > Quit) and open it again to load the Revit tools."
 Write-Host "  2. Open Revit$(if ($installed.Count -gt 0) { ' ' + (($installed | ForEach-Object { $_.Revit }) -join ' / ') }) and a model. If Revit asks about loading Sketch ProMax, choose 'Always Load'; it asks again only when the loader itself changes."
 Write-Host "  3. On the Sketch ProMax ribbon tab click Claude > Status: it should say 'Ready' or 'Connected'. Then ask Claude something about the model."
+
+# This PC's code for its license key (the same as Sketch ProMax's License window: Licensing/LicenseKey.PcCode), shown
+# and copied here so a new user can send it straight away. The owner's own PCs need no key and skip it.
+function Get-PcCode {
+    try { $guid = (Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Cryptography" -Name MachineGuid -ErrorAction Stop).MachineGuid } catch { return $null }
+    if (-not $guid) { return $null }
+    $id = $guid.Trim().ToLowerInvariant()
+    $sha = [Security.Cryptography.SHA256]::Create()
+    $owner = -join ($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes("SketchProMax/owner/" + $id)) | ForEach-Object { $_.ToString("x2") })
+    if ($owner -eq "e20b89e45536d9edd3356fbcec7b6132ec910045122da81533dfea0599deaf4f") { return "" }
+    $hash = $sha.ComputeHash([Text.Encoding]::UTF8.GetBytes("SketchProMax/pc/" + $id))
+    $bits = -join ($hash[0..7] | ForEach-Object { [Convert]::ToString($_, 2).PadLeft(8, "0") })
+    $alphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+    $s = -join (0..11 | ForEach-Object { $alphabet[[Convert]::ToInt32($bits.Substring(5 * $_, 5), 2)] })
+    "SPM-$($s.Substring(0, 4))-$($s.Substring(4, 4))-$($s.Substring(8, 4))"
+}
+$pcCode = Get-PcCode
+if ($pcCode) {
+    $copied = $false
+    try { Set-Clipboard -Value $pcCode -ErrorAction Stop; $copied = $true } catch { }
+    Write-Host ""
+    Write-Host "==== Your PC code: $pcCode ====" -ForegroundColor Cyan
+    Write-Host ("  {0}Send it to whoever gave you Sketch ProMax. They send back a key for this PC." -f $(if ($copied) { "It is copied: paste it in a message. " } else { "" }))
+    Write-Host "  In Revit, on the Sketch ProMax tab click License, paste the key and click Activate. The shared library then arrives by itself."
+    Write-Host "  For the chat, sign in once with your own Claude account when the chat asks."
+}

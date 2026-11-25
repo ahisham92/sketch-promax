@@ -150,7 +150,10 @@ internal sealed class LicenseWindow : Window
         }
         ShowState();
         _key.Clear();
-        Info("Activated. Sketch ProMax is ready to use on this PC.");
+        // The owner's library arrives now, in the background, rather than at the next round.
+        var shared = LicenseState.Current.License?.Library is { Length: > 0 };
+        if (shared) _ = Task.Run(() => Sharing.Library.Receive(CancellationToken.None));
+        Info("Activated. Sketch ProMax is ready to use on this PC." + (shared ? " The shared library is being downloaded in the background." : ""));
         button.IsEnabled = false;
     }
 

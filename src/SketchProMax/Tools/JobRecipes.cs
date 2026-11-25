@@ -26,6 +26,8 @@ internal static class JobRecipes
         public DateTime Ended { get; set; }
         /// <summary>How many steps it has, once read (-1: not read yet).</summary>
         public int Steps { get; set; } = -1;
+        /// <summary>From the owner's shared library (Sharing/Library): its steps are read from there.</summary>
+        [System.Text.Json.Serialization.JsonIgnore] public bool Shared { get; set; }
     }
 
     /// <summary>One call of the job's that worked: the tool (bare name), what it said it did, and its whole input (JSON).</summary>
@@ -50,7 +52,11 @@ internal static class JobRecipes
 
     public static string Folder => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "SketchProMax", "job-recipes");
     private static string IndexFile => Path.Combine(Folder, "index.json");
-    private static string StepsFile(string key) => Path.Combine(Folder, "steps", Safe(key) + ".json");
+    private static string StepsFile(string key) => StepsFile(Folder, key);
+    private static string StepsFile(string folder, string key) => Path.Combine(folder, "steps", Safe(key) + ".json");
+
+    /// <summary>The owner's done jobs a licensed PC got with the shared library (Sharing/Library).</summary>
+    public static string SharedFolder => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "SketchProMax", "library", "job-recipes");
     private static string Safe(string key) => new((key ?? "").Select(c => char.IsLetterOrDigit(c) || c is '-' or '_' ? c : '_').ToArray());
 
     /// <summary>
@@ -129,7 +135,7 @@ internal static class JobRecipes
     {
         if (steps.Count == 0) return "";
         var sb = new StringBuilder();
-        sb.Append("\n\nThis kind of job was done before on this PC").Append(r.Passed ? " and passed its check" : "")
+        sb.Append(r.Shared ? "\n\nThis kind of job was done before (the shared library)" : "\n\nThis kind of job was done before on this PC").Append(r.Passed ? " and passed its check" : "")
           .Append($": \"{OneLine(r.Title, 120)}\" ({r.Ended:yyyy-MM-dd}). Its calls that worked, in order:\n");
         for (var i = 0; i < steps.Count && i < ShownSteps; i++)
             sb.Append($"{i + 1}. {steps[i].Tool}{(steps[i].What.Length > 0 ? ": " + OneLine(steps[i].What, 120) : "")} [id {r.Key}#{i + 1}]\n");
@@ -145,7 +151,8 @@ internal static class JobRecipes
     {
         var hash = (id ?? "").LastIndexOf('#');
         if (hash <= 0 || !int.TryParse(id!.Substring(hash + 1), out var n) || n < 1) return null;
-        var steps = ReadSteps(id.Substring(0, hash));
+        var key = id.Substring(0, hash);
+        var steps = ReadSteps(key) ?? ReadSteps(SharedFolder, key);
         return steps is not null && n <= steps.Count ? steps[n - 1] : null;
     }
 
@@ -178,9 +185,10 @@ internal static class JobRecipes
         {
             List<Recipe> index;
             lock (Gate) index = ReadIndex();
-            foreach (var (r, _) in Best(index, text, exceptKey, 3))
+            var all = WithShared(index, ReadIndex(SharedFolder));
+            foreach (var (r, _) in Best(all, text, exceptKey, 3))
             {
-                var steps = StepsOf(r, index);
+                var steps = r.Shared ? ReadSteps(SharedFolder, r.Key) ?? [] : StepsOf(r, index);
                 if (steps.Count > 0) return Hint(r, steps);
             }
         }
@@ -205,19 +213,50 @@ internal static class JobRecipes
         return steps;
     }
 
-    private static List<Step>? ReadSteps(string key)
+    /// <summary>This PC's done jobs, then the shared library's (with their steps read) whose key this PC doesn't have.</summary>
+    internal static List<Recipe> WithShared(List<Recipe> mine, List<Recipe> shared)
+    {
+        var all = new List<Recipe>(mine);
+        var have = new HashSet<string>(mine.Select(r => r.Key), StringComparer.Ordinal);
+        foreach (var r in shared)
+            if (r.Key.Length > 0 && r.Steps > 0 && have.Add(r.Key)) { r.Shared = true; all.Add(r); }
+        return all;
+    }
+
+    /// <summary>
+    /// The owner's PC, before the library is uploaded: every done job whose steps were never read has them read from its
+    /// transcript now, so it travels with them. Never throws.
+    /// </summary>
+    public static void FillSteps()
     {
         try
         {
-            var file = StepsFile(key);
+            List<Recipe> index;
+            lock (Gate) index = ReadIndex();
+            foreach (var r in index.Where(r => r.Steps < 0).ToList())
+                try { StepsOf(r, index); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException) { }
+        }
+        catch (Exception) { }
+    }
+
+    private static List<Step>? ReadSteps(string key) => ReadSteps(Folder, key);
+
+    private static List<Step>? ReadSteps(string folder, string key)
+    {
+        try
+        {
+            var file = StepsFile(folder, key);
             return File.Exists(file) ? JsonSerializer.Deserialize<List<Step>>(File.ReadAllText(file)) : null;
         }
         catch (Exception) { return null; }
     }
 
-    private static List<Recipe> ReadIndex()
+    private static List<Recipe> ReadIndex() => ReadIndex(Folder);
+
+    private static List<Recipe> ReadIndex(string folder)
     {
-        try { return File.Exists(IndexFile) ? JsonSerializer.Deserialize<List<Recipe>>(File.ReadAllText(IndexFile)) ?? [] : []; }
+        var file = Path.Combine(folder, "index.json");
+        try { return File.Exists(file) ? JsonSerializer.Deserialize<List<Recipe>>(File.ReadAllText(file)) ?? [] : []; }
         catch (Exception) { return []; }
     }
 
