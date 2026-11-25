@@ -144,7 +144,10 @@ jobs:
           $repo = "${{ github.repository }}"
           gh release view "v$v" --repo $repo *> $null
           if ($LASTEXITCODE -ne 0) {
-            gh release create "v$v" --draft --repo $repo --target "${{ github.sha }}" --title "Sketch ProMax $v" --generate-notes --notes $notes
+            # Notes start at the last published version, never at the "library" pre-release's tag.
+            $start = gh api "repos/$repo/releases/latest" -q .tag_name 2> $null
+            $from = if ($start -match '^v\d') { @("--notes-start-tag", $start) } else { @() }
+            gh release create "v$v" --draft --repo $repo --target "${{ github.sha }}" --title "Sketch ProMax $v" --generate-notes @from --notes $notes
             if ($LASTEXITCODE -ne 0) { throw "Could not create the draft release" }
           }
           foreach ($a in $assets) {
