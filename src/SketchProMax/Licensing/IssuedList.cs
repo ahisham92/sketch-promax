@@ -64,7 +64,8 @@ internal sealed class IssuedList
         if (who.Length == 0) throw new ArgumentException("Type who the key is for.");
         if (ends is { } e && e.Date < today.Date) throw new ArgumentException("The end date is in the past.");
         using var signer = LicenseKey.Signer(signingSecret) ?? throw new ArgumentException("The signing secret on this PC can't be read.");
-        var license = new LicenseKey.License(LicenseKey.NewId(), code, who, today.Date, ends?.Date);
+        // Every key opens the owner's locked library (Sharing/Library): the owner's ask, 2026-11-25.
+        var license = new LicenseKey.License(LicenseKey.NewId(), code, who, today.Date, ends?.Date, LicenseKey.LibraryKey(signingSecret));
         var entry = new Entry
         {
             Id = license.Id, Name = who, PcCode = code, Issued = license.Issued, Ends = license.Ends,

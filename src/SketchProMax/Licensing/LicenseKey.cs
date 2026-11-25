@@ -10,7 +10,8 @@ namespace SketchProMax.Licensing;
 /// only the public half, so it can check a key but not make one. Pure logic, no Revit and no files (the tests run it).
 ///
 /// Key: "SPM1." + base64url(payload) + "." + base64url(ECDSA P-256 signature, 64 bytes), where payload is
-/// "1|id|pc code|name|issued yyyy-MM-dd|ends yyyy-MM-dd or -".
+/// "1|id|pc code|name|issued yyyy-MM-dd|ends yyyy-MM-dd or -", and from 0.35.119 a seventh field: the key that opens
+/// the owner's locked library (Sharing/Library), base64url, made from the signing secret (<see cref="LibraryKey"/>).
 /// </summary>
 internal static class LicenseKey
 {
@@ -68,7 +69,7 @@ internal static class LicenseKey
         Array.IndexOf(OwnerHashes, Hex(Sha256("SketchProMax/owner/" + machineId!.Trim().ToLowerInvariant()))) >= 0;
 
     /// <summary>What a key says. <see cref="Ends"/> null: no end date.</summary>
-    internal sealed record License(string Id, string PcCode, string Name, DateTime Issued, DateTime? Ends);
+    internal sealed record License(string Id, string PcCode, string Name, DateTime Issued, DateTime? Ends, string Library = "");
 
     internal enum Check { Valid, Expired, WrongPc, Cancelled, Invalid }
 
@@ -134,12 +135,12 @@ internal static class LicenseKey
 
     internal static string Payload(License l) => string.Join("|",
         "1", l.Id, l.PcCode, Clean(l.Name), l.Issued.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
-        l.Ends?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? "-");
+        l.Ends?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? "-") + (l.Library.Length > 0 ? "|" + l.Library : "");
 
     private static License? Parse(string text)
     {
         var f = text.Split('|');
-        if (f.Length != 6 || f[0] != "1") return null;
+        if (f.Length is not (6 or 7) || f[0] != "1") return null;
         if (!DateTime.TryParseExact(f[4], "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var issued)) return null;
         DateTime? ends = null;
         if (f[5] != "-")
@@ -147,7 +148,7 @@ internal static class LicenseKey
             if (!DateTime.TryParseExact(f[5], "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var e)) return null;
             ends = e;
         }
-        return new License(f[1], f[2], f[3], issued, ends);
+        return new License(f[1], f[2], f[3], issued, ends, f.Length == 7 ? f[6] : "");
     }
 
     /// <summary>A name as it goes into a key: one line, no field separator.</summary>
@@ -175,6 +176,31 @@ internal static class LicenseKey
             });
         }
         catch (Exception ex) when (ex is FormatException or CryptographicException or ArgumentException) { return null; }
+    }
+
+    /// <summary>
+    /// The key of the owner's locked library (base64url of 32 bytes): HMAC-SHA256 of a fixed label with the signing
+    /// secret's private number, so only the owner can make it, and the same secret always gives the same key. "" when the
+    /// text isn't a signing secret.
+    /// </summary>
+    public static string LibraryKey(string? secret)
+    {
+        var f = (secret ?? "").Trim().Split(':');
+        if (f.Length != 4 || f[0] != "SPMSIGN1") return "";
+        try
+        {
+            using var mac = new HMACSHA256(Convert.FromBase64String(f[1]));
+            return Base64Url(mac.ComputeHash(Encoding.UTF8.GetBytes("SketchProMax/library/v1")));
+        }
+        catch (FormatException) { return ""; }
+    }
+
+    /// <summary>The 32 bytes of a library key, or null when it isn't one.</summary>
+    public static byte[]? LibraryBytes(string? key)
+    {
+        if (string.IsNullOrWhiteSpace(key)) return null;
+        try { var b = FromBase64Url(key!.Trim()); return b.Length == 32 ? b : null; }
+        catch (FormatException) { return null; }
     }
 
     /// <summary>True when <paramref name="secret"/> is the private half of the key built into this add-in.</summary>

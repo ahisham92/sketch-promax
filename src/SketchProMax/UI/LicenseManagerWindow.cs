@@ -134,6 +134,14 @@ internal sealed class LicenseManagerWindow : Window
 
         page.Children.Add(TokenBox());
 
+        // The locked library every key opens (Sharing/Library): uploaded by itself from this PC with the token above.
+        var library = Brand.Text(Sharing.Library.PublishedText() is { Length: > 0 } said ? said
+            : "Your library (ready-made tools, kept code, done jobs, checklist) is uploaded locked a few minutes after Revit starts; every key you make opens it.",
+            Brand.K.Muted, 12);
+        library.TextWrapping = TextWrapping.Wrap;
+        library.Margin = new Thickness(0, 10, 0, 0);
+        page.Children.Add(library);
+
         var export = RichUi.Button(RichUi.Icon.Export, "Export to Excel");
         export.Click += (_, _) => Export();
         var close = RichUi.Button(RichUi.Icon.Close, "Close");
