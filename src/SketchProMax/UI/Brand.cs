@@ -23,7 +23,7 @@ namespace SketchProMax.UI;
 internal static class Brand
 {
     /// <summary>The header band's gradient: the same in both themes (it is the brand, with white text on it).</summary>
-    public static readonly Color Blue = Color.FromRgb(0x1D, 0x4E, 0xD8);
+    public static readonly Color Blue = Color.FromRgb(0x1C, 0x63, 0xBC); // the CDT SDK accent
     public static readonly Color Navy = Color.FromRgb(0x0B, 0x1E, 0x4F);
 
     /// <summary>Resource keys of the palette. Use them with SetResourceReference so colours follow the theme.</summary>
@@ -46,54 +46,57 @@ internal static class Brand
     }
 
     /// <summary>
-    /// The palette: (key, light, dark). Every text pair meets WCAG AA 4.5:1 in both themes, hover and disabled states
+    /// The palette: (key, light, dark), taken from the CDT SDK's palette (CDT.Wpf Palette.Light / Palette.Dark: Surface0
+    /// for Bg, Surface2 for Field and Raised, Text0 / Text2 for Text / Muted, its accent, status and soft colours) so the
+    /// windows' own surfaces match the SDK's controls; InputBorder, SurfaceHover and light Muted are a shade off the SDK's
+    /// to keep the ratios below. Every text pair meets WCAG AA 4.5:1 in both themes, hover and disabled states
     /// included (disabled text is Muted on Surface); the focus ring and input borders meet 3:1 against the background.
     /// Recheck the ratios when changing a value.
     /// </summary>
     public static readonly (string Key, uint Light, uint Dark)[] Tokens =
     [
-        (K.Bg, 0xFFFFFF, 0x2B2F36),
-        (K.Surface, 0xF1F5F9, 0x353A42),
-        (K.SurfaceHover, 0xE2E8F0, 0x424852),
-        (K.Border, 0xCBD5E1, 0x4B525C),
-        (K.Field, 0xFFFFFF, 0x23272D),
-        (K.InputBorder, 0x64748B, 0x8A93A0),
-        (K.Text, 0x0F172A, 0xECEFF3),
-        (K.Muted, 0x475569, 0xB4BCC8),
-        (K.Accent, 0x1D4ED8, 0x2563EB),
-        (K.AccentHover, 0x1E40AF, 0x1D4ED8),
-        (K.AccentPressed, 0x1E3A8A, 0x1E40AF),
-        (K.OnAccent, 0xFFFFFF, 0xFFFFFF),
-        (K.Link, 0x1D4ED8, 0x93B4FF),
-        (K.Danger, 0xB91C1C, 0xC62828),
-        (K.DangerHover, 0x991B1B, 0xB71C1C),
-        (K.DangerPressed, 0x7F1D1D, 0x991B1B),
-        (K.OnDanger, 0xFFFFFF, 0xFFFFFF),
-        (K.DangerText, 0xB91C1C, 0xFF9A92),
-        (K.SuccessText, 0x15803D, 0x6EDC9A),
-        (K.WarningText, 0xB45309, 0xFBC96B),
-        (K.Focus, 0x1D4ED8, 0x93B4FF),
-        (K.NoticeBg, 0xFFF7E0, 0x3A3220),
-        (K.NoticeBorder, 0xD97706, 0xB7791F),
-        (K.BadgeOk, 0x15803D, 0x15803D),
-        (K.BadgeWarn, 0xB45309, 0xB45309),
-        (K.BadgeMuted, 0x475569, 0x475569),
-        (K.BadgeError, 0xB91C1C, 0xB91C1C),
+        (K.Bg, 0xF2F0E8, 0x1B1B19),
+        (K.Surface, 0xE7E4DA, 0x2A2A27),
+        (K.SurfaceHover, 0xE2DFD4, 0x323230),
+        (K.Border, 0xDED9CC, 0x353532),
+        (K.Field, 0xFFFFFF, 0x232321),
+        (K.InputBorder, 0x7D786B, 0x7A766E),
+        (K.Text, 0x1E1D1A, 0xF2EFE9),
+        (K.Muted, 0x5F5C55, 0x9F9B92),
+        (K.Accent, 0x1C63BC, 0x4B9FF3),
+        (K.AccentHover, 0x1958A8, 0x3A96F2),
+        (K.AccentPressed, 0x164E94, 0x2A8DF1),
+        (K.OnAccent, 0xFFFFFF, 0x1B1B19),
+        (K.Link, 0x1C63BC, 0x84BEF7),
+        (K.Danger, 0xC42020, 0xF87171),
+        (K.DangerHover, 0xB01D1D, 0xF76060),
+        (K.DangerPressed, 0x9D1A1A, 0xF64F4F),
+        (K.OnDanger, 0xFFFFFF, 0x1B1B19),
+        (K.DangerText, 0xC42020, 0xFAA2A2),
+        (K.SuccessText, 0x207410, 0x6BDE4A),
+        (K.WarningText, 0x8D5918, 0xFB9B24),
+        (K.Focus, 0x1C63BC, 0x84BEF7),
+        (K.NoticeBg, 0xF4EEE8, 0x3D3121),
+        (K.NoticeBorder, 0x8D5918, 0xFB9B24),
+        (K.BadgeOk, 0x207410, 0x207410),
+        (K.BadgeWarn, 0x8D5918, 0x8D5918),
+        (K.BadgeMuted, 0x67645C, 0x67645C),
+        (K.BadgeError, 0xC42020, 0xC42020),
         (K.HeaderText, 0xFFFFFF, 0xFFFFFF),
-        (K.HeaderSub, 0xE0E7FF, 0xE0E7FF),
-        // Core only (the loader's pane doesn't use them). Text and Muted on Raised and AccentSoft stay above 5.8:1 in
+        (K.HeaderSub, 0xE4ECF7, 0xE4ECF7),
+        // Core only (the loader's pane doesn't use them). Text and Muted on Raised and AccentSoft stay above 4.7:1 in
         // both themes; BorderSubtle is decorative (a focused field turns to Focus).
-        (K.Raised, 0xFFFFFF, 0x32373F),
-        (K.BorderSubtle, 0xE2E8F0, 0x434A54),
-        (K.AccentSoft, 0xE8EFFD, 0x2C3B5A),
-        // Text 17:1 / 13:1, Muted (the hint) 7.2:1 / 7.8:1, InputBorder 4.5:1 / 4.8:1, Focus 6.4:1 / 7.3:1 on it.
-        (K.ComposerField, 0xF8FAFC, 0x23272D),
-        // The chat's conversation area: Text 16:1 / 13:1, Muted 7.0:1 / 7.8:1, Link 6.2:1, WarningText and SuccessText
-        // 4.6:1, DangerText 6.0:1 on it. Badges: SuccessText on SuccessSoft 4.6:1 / 7.4:1, DangerText on DangerSoft
-        // 5.5:1 / 6.8:1, Link on AccentSoft 5.8:1 / 5.4:1.
-        (K.Canvas, 0xF4F6FA, 0x23272D),
-        (K.SuccessSoft, 0xECF8F0, 0x22382C),
-        (K.DangerSoft, 0xFDE8E8, 0x3F2628),
+        (K.Raised, 0xFFFFFF, 0x2A2A27),
+        (K.BorderSubtle, 0xDED9CC, 0x353532),
+        (K.AccentSoft, 0xE4ECF7, 0x28323A),
+        // Text 16:1 / 14:1, Muted (the hint) 6.4:1 / 5.7:1, InputBorder 4.2:1 / 3.5:1, Focus 5.6:1 / 8.0:1 on it.
+        (K.ComposerField, 0xFBFAF6, 0x232321),
+        // The chat's conversation area: Text 15:1, Muted 5.8:1 / 6.2:1, Link, WarningText, SuccessText and DangerText 5.1:1
+        // or more on it. Badges: SuccessText on SuccessSoft 5.1:1 / 7.1:1, DangerText on DangerSoft 5.4:1 / 7.7:1, Link on
+        // AccentSoft 5.0:1 / 6.6:1.
+        (K.Canvas, 0xF2F0E8, 0x1B1B19),
+        (K.SuccessSoft, 0xE9F1E7, 0x2C3926),
+        (K.DangerSoft, 0xFDF3F3, 0x332321),
     ];
 
     public enum Weight { Secondary, Primary, Danger }
@@ -136,13 +139,20 @@ internal static class Brand
     /// </summary>
     public static void UseTheme(FrameworkElement root)
     {
+        // The CDT SDK's style sheet first, then Sketch ProMax's (its implicit and Spm* button styles are based on the
+        // SDK's, see Styles), so a window gets every SDK style by key and the SDK look on plain controls.
+        var cdt = CdtTheme.Styles;
+        if (cdt is not null && !root.Resources.MergedDictionaries.Contains(cdt)) root.Resources.MergedDictionaries.Add(cdt);
         var styles = Styles();
         if (!root.Resources.MergedDictionaries.Contains(styles)) root.Resources.MergedDictionaries.Add(styles);
-        Apply(root, IsDark);
+        var dark = IsDark;
+        Apply(root, dark);
+        CdtTheme.Follow(dark);
         if (root is Control control)
         {
             control.SetResourceReference(Control.BackgroundProperty, K.Bg);
             control.SetResourceReference(Control.ForegroundProperty, K.Text);
+            if (cdt is not null) control.SetResourceReference(Control.FontFamilyProperty, "CDT.UIFont");
         }
         if (Themed.Contains(root)) return;
         Themed.Add(root);
@@ -176,7 +186,33 @@ internal static class Brand
     private static void Recheck()
     {
         var dark = IsDark;
+        CdtTheme.Follow(dark);
         foreach (var root in Themed.ToList()) Apply(root, dark);
+    }
+
+    /// <summary>
+    /// Themes a root that something else themes too (the loader's pane, which writes its own older copy of the palette
+    /// when Revit's theme changes): applies the theme, and writes it again whenever the other writer has put its colours
+    /// back. Cheap enough for a timer: one brush is compared.
+    /// </summary>
+    public static void Claim(FrameworkElement root)
+    {
+        UseTheme(root);
+        var dark = IsDark;
+        var (_, light, darkValue) = Tokens[0];
+        var want = Rgb(dark ? darkValue : light);
+        if (root.Resources[K.Bg] is SolidColorBrush b && b.Color == want) return;
+        DarkShown.Remove(root);
+        Apply(root, dark);
+    }
+
+    /// <summary>Takes this core's styles back off a root it claimed (the core is being replaced).</summary>
+    public static void Unclaim(FrameworkElement root)
+    {
+        ReleaseTheme(root);
+        if (CdtTheme.Styles is { } cdt) root.Resources.MergedDictionaries.Remove(cdt);
+        if (_styles is not null) root.Resources.MergedDictionaries.Remove(_styles);
+        DarkShown.Remove(root);
     }
 
     private static void Apply(FrameworkElement root, bool dark)
@@ -185,6 +221,8 @@ internal static class Brand
         DarkShown.Remove(root);
         DarkShown.Add(root, dark);
         foreach (var (key, light, darkValue) in Tokens) root.Resources[key] = Brush(Rgb(dark ? darkValue : light));
+        CdtTheme.WritePalette(root.Resources, dark);
+        if (root is Window window) CdtTheme.TitleBar(window, dark);
     }
 
     /// <summary>
@@ -195,6 +233,11 @@ internal static class Brand
     {
         var dictionary = new ResourceDictionary();
         foreach (var (key, light, darkValue) in Tokens) dictionary[key] = Brush(Rgb(dark ? darkValue : light));
+        // The SDK's palette too, as frozen copies (the SDK's own brushes belong to this thread).
+        var cdt = new ResourceDictionary();
+        CdtTheme.WritePalette(cdt, dark);
+        foreach (System.Collections.DictionaryEntry e in cdt)
+            dictionary[e.Key] = e.Value is SolidColorBrush b ? Brush(b.Color) : e.Value;
         return dictionary;
     }
 
@@ -406,7 +449,41 @@ internal static class Brand
         // Never let a styling problem stop a window or the pane from opening: fall back to the plain WPF look.
         try { _styles = (ResourceDictionary)XamlReader.Parse(xaml); }
         catch (Exception) { _styles = new ResourceDictionary(); }
+        UseCdtStyles(_styles);
         return _styles;
+    }
+
+    /// <summary>
+    /// The plain controls and the Spm* button styles take the CDT SDK's styles (CDT.SecondaryButton, CDT.TextBox,
+    /// CDT.ComboBox, CDT.DataGrid, …): every state, the focus ring and the validation template come from the SDK, and the
+    /// colours from the palette each window carries. A style the SDK doesn't have keeps Sketch ProMax's own.
+    /// </summary>
+    private static void UseCdtStyles(ResourceDictionary styles)
+    {
+        if (CdtTheme.Styles is null) return;
+        void Base(object key, Type type, string cdt)
+        {
+            try { if (CdtTheme.Style(cdt) is { } basedOn && basedOn.TargetType.IsAssignableFrom(type)) styles[key] = new Style(type, basedOn); }
+            catch (Exception) { /* keep Sketch ProMax's style */ }
+        }
+        Base("SpmSecondaryButton", typeof(Button), "CDT.SecondaryButton");
+        Base("SpmPrimaryButton", typeof(Button), "CDT.PrimaryButton");
+        Base("SpmDangerButton", typeof(Button), "CDT.DangerButton");
+        Base("SpmGhostButton", typeof(Button), "CDT.GhostButton");
+        foreach (var (type, cdt) in new (Type, string)[]
+        {
+            (typeof(Button), "CDT.SecondaryButton"), (typeof(TextBox), "CDT.TextBox"),
+            (typeof(CheckBox), "CDT.CheckBox"), (typeof(RadioButton), "CDT.RadioButton"), (typeof(System.Windows.Controls.Primitives.ToggleButton), "CDT.ToggleButton"),
+            (typeof(ComboBox), "CDT.ComboBox"), (typeof(ComboBoxItem), "CDT.ComboBoxItem"), (typeof(ProgressBar), "CDT.ProgressBar"),
+            (typeof(Hyperlink), "CDT.Hyperlink"), (typeof(ListBox), "CDT.ListBox"), (typeof(ListBoxItem), "CDT.ListBoxItem"),
+            (typeof(ListView), "CDT.ListView"), (typeof(ListViewItem), "CDT.ListViewItem"), (typeof(GridViewColumnHeader), "CDT.GridViewColumnHeader"),
+            (typeof(TreeView), "CDT.TreeView"), (typeof(TreeViewItem), "CDT.TreeViewItem"), (typeof(TabControl), "CDT.TabControl"), (typeof(TabItem), "CDT.TabItem"),
+            (typeof(DataGrid), "CDT.DataGrid"), (typeof(System.Windows.Controls.Primitives.DataGridColumnHeader), "CDT.DataGridColumnHeader"), (typeof(DataGridRow), "CDT.DataGridRow"),
+            (typeof(DataGridCell), "CDT.DataGridCell"), (typeof(ToolTip), "CDT.ToolTip"), (typeof(ContextMenu), "CDT.ContextMenu"), (typeof(MenuItem), "CDT.MenuItem"),
+            (typeof(Expander), "CDT.Expander"), (typeof(GroupBox), "CDT.GroupBox"), (typeof(Slider), "CDT.Slider"), (typeof(DatePicker), "CDT.DatePicker"),
+            (typeof(GridSplitter), "CDT.GridSplitter"), (typeof(Menu), "CDT.Menu"), (typeof(System.Windows.Controls.Primitives.StatusBar), "CDT.StatusBar"), (typeof(RichTextBox), "CDT.RichTextBox"),
+        })
+            Base(type, type, cdt);
     }
 
     // ---- Logo and window chrome --------------------------------------------------------------------------------
@@ -458,6 +535,7 @@ internal static class Brand
         if (Icon is { } icon) window.Icon = icon;
         window.ShowInTaskbar = false;
         UseTheme(window);
+        CdtTheme.Focus(window);
         var main = App.MainWindow;
         if (main != IntPtr.Zero)
         {

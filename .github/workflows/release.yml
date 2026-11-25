@@ -50,6 +50,23 @@ jobs:
             8.0.x
             10.0.x
 
+      # The CDT SDK (Dar's private theme and controls library) at the commit cdt-sdk.ref names. Its source stays out of
+      # this public repository; the build merges it into SketchProMax.dll. CDT_SDK_TOKEN: a read-only token for that repo.
+      - name: Read the CDT SDK commit
+        id: cdt
+        if: steps.version.outputs.exists == 'false' || github.event_name == 'workflow_dispatch'
+        shell: pwsh
+        run: '"ref=$((Get-Content cdt-sdk.ref -Raw).Trim())" >> $env:GITHUB_OUTPUT'
+
+      - uses: actions/checkout@v4
+        if: steps.version.outputs.exists == 'false' || github.event_name == 'workflow_dispatch'
+        with:
+          repository: Dar-Structural-Computational-Design/CDT-SDK
+          ref: ${{ steps.cdt.outputs.ref }}
+          token: ${{ secrets.CDT_SDK_TOKEN }}
+          path: external/CDT-SDK
+          persist-credentials: false
+
       - name: Build add-in (2024 to 2027) and connector
         if: steps.version.outputs.exists == 'false' || github.event_name == 'workflow_dispatch'
         shell: pwsh

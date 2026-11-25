@@ -129,4 +129,36 @@
     <Copy SourceFiles="@(DeployFiles)" DestinationFolder="$(AddinRoot)SketchProMax\%(RecursiveDir)" />
   </Target>
 
+
+  <!--
+    CDT SDK (Dar Structural Computational Design, private repository): the theme, control styles and controls every
+    Sketch ProMax window uses (UI/CdtTheme.cs). Its source is never committed here: the release build checks out the
+    commit named in cdt-sdk.ref into external/CDT-SDK (secret CDT_SDK_TOKEN), and build.ps1 does the same on a PC that
+    can read the repository. ILRepack then merges CDT.Core, CDT.Wpf and WpfMath into SketchProMax.dll, so the add-in
+    never shares a CDT.Wpf with another Dar add-in in the same Revit, and a hot-swapped core reads the theme from its
+    own copy (the theme's pack URIs carry this DLL's version). Only those four are merged: Roslyn, PdfPig and the rest
+    stay beside the DLL as before.
+  -->
+  <PropertyGroup>
+    <CdtSdkDir>$(MSBuildThisFileDirectory)..\..\external\CDT-SDK\</CdtSdkDir>
+    <SpmRepackNames>;CDT.Core.dll;CDT.Wpf.dll;WpfMath.dll;XamlMath.Shared.dll;</SpmRepackNames>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="$(CdtSdkDir)CDT.Wpf\CDT.Wpf.csproj" SetConfiguration="Configuration=Release" />
+    <PackageReference Include="ILRepack.Lib.MSBuild.Task" Version="2.0.48" PrivateAssets="all" ExcludeAssets="build;buildMultiTargeting" GeneratePathProperty="true" />
+  </ItemGroup>
+  <Target Name="SpmCheckCdtSdk" BeforeTargets="PrepareForBuild;_CheckForInvalidConfigurationAndPlatform">
+    <Error Condition="!Exists('$(CdtSdkDir)CDT.Wpf\CDT.Wpf.csproj')"
+           Text="The CDT SDK is missing from external\CDT-SDK. Run .\build.ps1 (it checks out the commit in cdt-sdk.ref; you need read access to Dar-Structural-Computational-Design/CDT-SDK), or clone it there yourself." />
+  </Target>
+  <UsingTask TaskName="ILRepack" AssemblyFile="$(PkgILRepack_Lib_MSBuild_Task)\build\ILRepack.Lib.MSBuild.Task.dll" />
+  <Target Name="SpmRepackCdt" AfterTargets="Build">
+    <ItemGroup>
+      <_SpmRepack Include="@(ReferenceCopyLocalPaths)" Condition="'%(ReferenceCopyLocalPaths.Extension)' == '.dll' and '%(ReferenceCopyLocalPaths.DestinationSubDirectory)' == '' and $(SpmRepackNames.Contains(';%(ReferenceCopyLocalPaths.Filename)%(ReferenceCopyLocalPaths.Extension);'))" />
+    </ItemGroup>
+    <ILRepack Condition="'@(_SpmRepack)' != ''" InputAssemblies="@(IntermediateAssembly->'%(FullPath)');@(_SpmRepack)" OutputFile="$(TargetPath)"
+              LibraryPath="@(ReferencePath->'%(RootDir)%(Directory)'->Distinct())" TargetKind="SameAsPrimaryAssembly" DebugInfo="true" Parallel="true" />
+    <Delete Files="@(_SpmRepack->'$(OutDir)%(Filename).dll');@(_SpmRepack->'$(OutDir)%(Filename).pdb');@(_SpmRepack->'$(OutDir)%(Filename).xml')" />
+  </Target>
+
 </Project>

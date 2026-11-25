@@ -11,6 +11,21 @@ param(
     [int[]]$Versions = @(2024, 2025, 2026, 2027)
 )
 $ErrorActionPreference = "Stop"
+
+# The CDT SDK (Dar's private theme and controls library, merged into SketchProMax.dll) at the commit cdt-sdk.ref names,
+# in external\CDT-SDK (git-ignored: its source never goes into this public repository). Needs read access to the repo.
+$cdtRef = (Get-Content (Join-Path $PSScriptRoot "cdt-sdk.ref") -Raw).Trim()
+$cdtDir = Join-Path $PSScriptRoot "external\CDT-SDK"
+if (-not (Test-Path (Join-Path $cdtDir ".git"))) {
+    if (Test-Path $cdtDir) { throw "external\CDT-SDK exists but is not a git checkout: remove it or put the SDK at commit $cdtRef there" }
+    git clone --quiet https://github.com/Dar-Structural-Computational-Design/CDT-SDK.git $cdtDir
+    if ($LASTEXITCODE -ne 0) { throw "Couldn't clone the CDT SDK: you need read access to Dar-Structural-Computational-Design/CDT-SDK" }
+}
+if ((git -C $cdtDir rev-parse HEAD) -ne $cdtRef) {
+    git -C $cdtDir fetch --quiet origin $cdtRef
+    git -C $cdtDir checkout --quiet $cdtRef
+    if ($LASTEXITCODE -ne 0) { throw "Couldn't check out CDT SDK commit $cdtRef" }
+}
 $dist = Join-Path $PSScriptRoot "dist"
 $addin = Join-Path $PSScriptRoot "src\SketchProMax\SketchProMax.csproj"
 $mcp = Join-Path $PSScriptRoot "src\SketchProMax.Mcp\SketchProMax.Mcp.csproj"

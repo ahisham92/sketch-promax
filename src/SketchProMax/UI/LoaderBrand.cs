@@ -45,6 +45,7 @@ internal static class LoaderBrand
                 if (Owner(tab) is not { } page) return;
                 _page = new WeakReference<Page>(page);
                 Scan(page);
+                Brand.Claim(page); // the pane around the chat in the SDK theme too
                 if (_timer is null)
                 {
                     _timer = new DispatcherTimer(DispatcherPriority.Background, tab.Dispatcher) { Interval = TimeSpan.FromSeconds(1) };
@@ -67,6 +68,7 @@ internal static class LoaderBrand
                 if (weak.TryGetTarget(out var block))
                     foreach (var d in Watched) d?.RemoveValueChanged(block, OnText);
             Hooked.Clear();
+            if (_page is not null && _page.TryGetTarget(out var page)) Brand.Unclaim(page); // the next core claims it with its own copy
             _page = null;
         }
         catch (Exception) { /* cosmetic */ }
@@ -124,7 +126,9 @@ internal static class LoaderBrand
         try
         {
             if (_page is null || !_page.TryGetTarget(out var page)) { _timer?.Stop(); _timer = null; return; }
-            if (page.IsVisible) Scan(page);
+            if (!page.IsVisible) return;
+            Scan(page);
+            Brand.Claim(page);
         }
         catch (Exception) { /* cosmetic */ }
     }
